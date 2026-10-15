@@ -19,10 +19,9 @@ import type { ScreenContext } from './types.ts';
 beforeEach(() => initDatabase(':memory:', { quiet: true }));
 afterEach(() => closeDb());
 
+import { captureRoutine as capture } from './opportunity-test-fixtures.ts';
+
 const day = 86_400_000;
-function capture(timestamp: number, title = 'Overdue invoices', appName = 'Accounting') {
-  return createCapture({ timestamp, pixelChangePct: 0.5, appName, windowTitle: title });
-}
 function seed(title = 'Overdue invoices') {
   const now = Date.now();
   return [capture(now - 3 * day, title), capture(now - 2 * day, title), capture(now - day, title)];
@@ -49,6 +48,8 @@ describe('evidence-backed hypotheses', () => {
   test('sidecar ingestion emits an explainable suggestion using actual persisted capture IDs', async () => {
     capture(Date.now() - 2 * day);
     capture(Date.now() - day);
+    createCapture({ timestamp: Date.now() - 120_000, pixelChangePct: 0.5, sidecarId: 'fixture-sidecar', windowTitle: 'Overdue invoices' });
+    createCapture({ timestamp: Date.now() - 60_000, pixelChangePct: 0.5, sidecarId: 'fixture-sidecar', windowTitle: 'Overdue invoices', ocrText: 'Checking payment status' });
     const events: AwarenessEvent[] = [];
     const service = new AwarenessService(awarenessConfig(), {} as LLMManager, event => events.push(event));
     await service.start();
@@ -56,7 +57,7 @@ describe('evidence-backed hypotheses', () => {
       await service.handleSidecarEvent('fixture-sidecar', {
         type: 'sidecar_event', event_type: 'screen_capture', timestamp: Date.now(),
         payload: { capture_id: 'producer-capture-id', image_path: '/fixture/capture.png',
-          pixel_change_pct: 0.9, app_name: 'Accounting', window_title: 'Overdue invoices', ocr_text: 'Overdue invoices' },
+          pixel_change_pct: 0.9, app_name: 'Accounting', window_title: 'Overdue invoices', ocr_text: 'Invoice follow-up draft' },
       });
       const emitted = events.find(e => e.type === 'suggestion_ready');
       expect(emitted).toBeDefined();
@@ -196,7 +197,7 @@ describe('evidence-backed hypotheses', () => {
   test('capture retention keeps only minimal cues, and duplicate ingestion is idempotent', () => {
     const rows = seed();
     recordOpportunityObservation({ captureId: rows[0]!.id, timestamp: rows[0]!.timestamp, windowTitle: 'Overdue invoices secret-client', ocrText: 'secret-password' });
-    expect(getOpportunityObservations()).toHaveLength(3);
+    expect(getOpportunityObservations()).toHaveLength(9);
     deleteCapturesBefore(Date.now(), 'full');
     expect(getCapture(rows[0]!.id)).toBeNull();
     expect(JSON.stringify(getOpportunityObservations())).not.toContain('secret');
@@ -237,7 +238,7 @@ describe('validation and real-work feedback boundary', () => {
       expect(getCapture(rows[0]!.id)!.window_title).toBe('Overdue invoices');
       expect(assessOpportunities().abstention).toBe('no_job_evidence');
       capture(Date.now());
-      expect(getOpportunityObservations()).toHaveLength(1);
+      expect(getOpportunityObservations()).toHaveLength(3);
       expect(assessOpportunities().abstention).toBe('insufficient_recurrence');
     } finally { closeDb(); rmSync(dir, { recursive: true, force: true }); }
   });

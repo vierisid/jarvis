@@ -13,6 +13,7 @@ import { getWorkflowDb } from './db/index.ts';
 import { enqueue } from './db/repos/job-queue.ts';
 import { getFlowRun } from './db/repos/flow-run.ts';
 import { listDueTimerWaitpoints, markWaitpointResumed } from './db/repos/waitpoint.ts';
+import { resumeCompletedChildRuns } from './runtime/child-run-scheduler';
 import { resumeResolvedWorkflowEffects } from './runtime/effect-approval-scheduler';
 
 export class TimerWaitpointScheduler {
@@ -43,6 +44,8 @@ export class TimerWaitpointScheduler {
     let resumed = 0;
     try { resumed += resumeResolvedWorkflowEffects(); }
     catch (error) { console.error('[Workflow Authority] approval recovery failed:', error); }
+    try { resumed += resumeCompletedChildRuns(); }
+    catch (error) { console.error('[TimerScheduler] child continuation failed:', error); }
     let due;
     try {
       due = listDueTimerWaitpoints(new Date(now).toISOString());

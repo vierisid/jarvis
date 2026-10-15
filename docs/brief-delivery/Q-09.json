@@ -1,0 +1,180 @@
+{
+  "task": "Q-09",
+  "title": "Verify desktop outcomes and device affinity",
+  "date": "2026-10-12",
+  "branch": "brief/q-09",
+  "worktree": "Dedicated .worktrees/jarvis-q-09; owner main checkout unchanged. Managed tool unavailable from the non-Git Projects chat root; used a dedicated Git worktree.",
+  "baseline": "75bf90b1bf92849c3f1c18f90e5f05d2e61f8fb0",
+  "baseline_ref": "origin/main",
+  "head": {
+    "ref": "commit containing this receipt",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-09.json",
+    "core_implementation_sha": "d24d6cd4963432fbc682551a701c5648588706ab",
+    "implementation_resolve": "git log -1 --format=%H -- src/actions"
+  },
+  "status": {
+    "implementation": "verified locally",
+    "merge": "not_merged",
+    "release_enabled": false,
+    "publication": "one PR from brief/q-09 to main; resolve URL with gh pr view brief/q-09 --json url"
+  },
+  "merge_after": [],
+  "enable_after": [],
+  "contract": "docs/UI_OUTCOME_VERIFICATION.md",
+  "integration": [
+    "Live PR audit found Q-07 #940, Q-08 #891, F-21 #939 and D-26 #941 open; no Q-09 before publication. Q-07 latest b8731bdc02fa7ab657c94ffdbd87b35dc7dac3d1 passed CI.",
+    "Main has desktop bridge removal/bounds (#899/#892), snapshot serialization (#874), reviewed browser binding (#825), and stale native element protection (#713). Q-09 has no card prerequisite; preserve these fixes rather than base it on the older Q-07/Q-08 stack.",
+    "No full-stack merge/rebase. Q-07/Q-08 integration must retain verification on effect completion/replay/API replies alongside their existing held/recovery outcomes; F-21 remains a read-only consumer.",
+    "Approved remote click/type/hover require browser_action_outcomes plus existing reviewed snapshot binding. Update/rebuild sidecar for this feature. Older sidecars keep read support; older brains retain legacy protocol with updated sidecars."
+  ],
+  "acceptance": [
+    {
+      "check": "Offline, changed or reconnected device cannot redirect a fresh effect or report new success",
+      "status": "passed",
+      "evidence": "workflow-machine-binding and UI verification tests cover frozen target/session, default-device reorder, capability loss, approval/restart, real manager socket generations, real engine/outer worker and retained historical receipts. Approved desktop/browser calls now independently bind the canonical machine/session; reconnect, offline/capability change and automatic-default replacement tests dispatch zero RPCs."
+    },
+    {
+      "check": "Supported postconditions use actual page/document or explicit structural native confirmation",
+      "status": "passed",
+      "evidence": "Page URL + loader identity; actual redirect landing page; strict visible-window/PID receipt; absent/malformed/legacy claims unverified. Three OS protocol fixtures; unknown launch never relaunched."
+    },
+    {
+      "check": "Stale references fail safely; partial effects stay uncertain",
+      "status": "passed",
+      "evidence": "Go negotiated stale-document and focus-loss fixtures; real isolated Chromium field-clear/focus-loss regression; no business claim from normal click; typed failure receipts do not commit success."
+    },
+    {
+      "check": "Sidecar compatibility and current approval/emergency controls are preserved",
+      "status": "passed",
+      "evidence": "Feature negotiation, old protocol opt-in compatibility, positive reviewed click, existing raw UI prohibition, 785 affected TS tests including approval/pause/kill/no-replay tests."
+    },
+    {
+      "check": "Native Windows/macOS execution",
+      "status": "not_run",
+      "evidence": "Linux host lacks platform WebView/cgo toolchains; delegated to PR platform CI without local certification."
+    }
+  ],
+  "validation": [
+    {
+      "command": "NODE_ENV=test JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q09-engine-cache bun test src/actions/action-verification.test.ts src/actions/browser src/actions/tools/sidecar-route.test.ts src/actions/tools/remote-snapshot-binding.test.ts src/actions/tools/sidecar-browser-playbook.test.ts src/actions/tools/browser-approval-guard.test.ts src/actions/tools/local-browser-guard.test.ts src/actions/tools/browser-template-delivery.test.ts src/authority src/workflows/runtime/ui-verification.test.ts src/workflows/runtime/desktop-outcomes.test.ts src/workflows/runtime/workflow-machine-binding.test.ts src/workflows/runtime/effect-boundary.test.ts src/util/model-exec-env.test.ts src/roles/persisted-frame.test.ts",
+      "result": "785 passed, 0 failed, 3223 assertions, 41 files, 117.18s"
+    },
+    {
+      "command": "bun test src/authority/ui-verification.test.ts",
+      "result": "11 passed, 0 failed; final extra positive control"
+    },
+    {
+      "command": "xvfb-run -a go test -json -count=1 ./...",
+      "cwd": "sidecar",
+      "result": {
+        "pass": 1116,
+        "skip": 8
+      },
+      "passed_packages": [
+        "github.com/jarvis/sidecar/internal/psquote",
+        "github.com/jarvis/sidecar/internal/brand",
+        "github.com/jarvis/sidecar/internal/winchrome",
+        "github.com/jarvis/sidecar/installer",
+        "github.com/jarvis/sidecar/internal/update",
+        "github.com/jarvis/sidecar"
+      ],
+      "skipped": [
+        "TestDumpWizardPage",
+        "TestWizardPanelSaysWhatIsOnTheMachine",
+        "TestDumpBrandPages",
+        "TestProbeWindowOnceFlagsAMissingToolAsUnavailable",
+        "TestLinuxXHotkeyTestsAreEnforcedHere",
+        "TestPlatformOCRRunsWhenTesseractAvailable",
+        "TestIsBlockedPathCaseFolding",
+        "TestTitlebarGesture"
+      ]
+    },
+    {
+      "command": "go test -run 'TestReviewedClickOnTheReviewedSnapshotProceeds|TestBrowserOutcome' -count=1 .",
+      "cwd": "sidecar",
+      "result": "passed; current typed success/refusal protocol"
+    },
+    {
+      "command": "JARVIS_REQUIRE_X_HOTKEY_TESTS=1 xvfb-run -a go test -run TestLinuxXHotkeyTestsAreEnforcedHere -count=1 .",
+      "cwd": "sidecar",
+      "result": "passed"
+    },
+    {
+      "command": "bunx tsc --noEmit --pretty false",
+      "result": "passed"
+    },
+    {
+      "command": "required implementation commit hooks",
+      "result": "270 passed, 1 optional engine-build skip, 0 failed; typecheck and four guards passed"
+    },
+    {
+      "command": "NODE_ENV=test JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q09-engine-cache bun test src/authority src/actions/tools/browser-approval-guard.test.ts src/actions/tools/remote-snapshot-binding.test.ts src/actions/tools/sidecar-route.test.ts src/workflows/runtime/workflow-machine-binding.test.ts",
+      "result": "484 passed, 0 failed, 2089 assertions, 18 files, 24.44s; final device-session guards"
+    },
+    {
+      "command": "NODE_ENV=test JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q09-engine-cache bun test src/workflows/runtime/workflow-authority.test.ts src/workflows/runtime/cancellation-authority.integration.test.ts src/workflows/runtime/workflow-skill-effect.test.ts src/workflows/runtime/cancellation.test.ts",
+      "result": "107 passed, 0 failed, 433 assertions, 4 files, 24.38s"
+    },
+    {
+      "command": "required device-affinity commit hooks",
+      "result": "175 passed, 0 failed; typecheck and four guards passed"
+    },
+    {
+      "command": "NODE_ENV=test JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q09-engine-cache bun test src/actions/tools/desktop-launch-directive.test.ts src/workflows/runtime/bounded-tools.test.ts src/authority/ui-verification.test.ts src/workflows/runtime/desktop-outcomes.test.ts src/actions/tools/browser-approval-guard.test.ts src/workflows/runtime/workflow-machine-binding.test.ts",
+      "result": "113 passed, 0 failed, 473 assertions, 6 files, 22.52s; CI integration corrections"
+    }
+  ],
+  "evidence": [
+    "evidence/Q-09/validation.log"
+  ],
+  "limitations": [
+    "No guarantee for arbitrary third-party UI; page_observed/window_visible do not certify a send, payment or save.",
+    "Workflow raw UI writes stay prohibited. Supported reads gain durable verification; approved UI actions use the existing approval executor.",
+    "Unapproved legacy chat browser calls retain their previous text format. Native desktop application functionality differs by host and is not expanded.",
+    "Action succeeded/approval committed still describes execution completion. Consumers must inspect the exact postcondition or a typed connector receipt for a business outcome.",
+    "Native Windows/macOS execution, full repository and packaging checks are left to PR CI; no live-provider or paid-model evaluation."
+  ],
+  "rollback": "Revert Q-09 commits and restart daemon. No schema migration. Old readers ignore additive fields; updated sidecars retain legacy protocol. Rollback removes these verification guarantees and never authorizes retry of an uncertain action.",
+  "quick_verify": [
+    "Use Bun 1.4.2 and bun install --frozen-lockfile.",
+    "NODE_ENV=test JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q09-engine-cache bun test src/actions/action-verification.test.ts src/actions/browser src/actions/tools/sidecar-route.test.ts src/actions/tools/remote-snapshot-binding.test.ts src/actions/tools/sidecar-browser-playbook.test.ts src/actions/tools/browser-approval-guard.test.ts src/actions/tools/local-browser-guard.test.ts src/actions/tools/browser-template-delivery.test.ts src/authority src/workflows/runtime/ui-verification.test.ts src/workflows/runtime/desktop-outcomes.test.ts src/workflows/runtime/workflow-machine-binding.test.ts src/workflows/runtime/effect-boundary.test.ts src/util/model-exec-env.test.ts src/roles/persisted-frame.test.ts",
+    "Run the sidecar command under xvfb-run -a in an isolated session.",
+    "Confirm PR targets main and remains unmerged; do not activate Brief."
+  ],
+  "ci": {
+    "previous_head": "da0cd3a2c99881e3f0cf23956d6c9248c1f533b5",
+    "run": "https://github.com/vierisid/jarvis/actions/runs/38303394520",
+    "result": "8733 passed, 32 skipped, 3 failed; all platform/build jobs passed. Guard metadata narrowed to reviewed desktop writes and the inline launch fixture now supplies its connection session. The failing cases and affected machine/approval checks pass locally; current receipt head requires a new full CI run."
+  },
+  "review_correction": {
+    "reviewed_head": "dd016dfcbdfdd1be385dfa0daf50353dc9e313f2",
+    "finding": "P2: approved browser_evaluate exceptions bypassed the page-controlled message cap when the typed failure helper threw before truncation.",
+    "fix": "Format and truncate ordinary error messages before converting them to typed failures. Preserve existing ActionOutcomeError and WorkflowCancellationError instances.",
+    "regression": "Before the fix: 3 failures and 2 passes in the new approval regression file. After the fix: 70 passed, zero failed, 238 assertions across six focused files, including 2.1 MB Error/string failures through the real DeferredExecutor, bounded live/stored receipts, uncertainty, ordinary reply compatibility and no duplicate dispatch.",
+    "previous_ci": "Full CI passed on reviewed head dd016dfc (8736 pass, 32 skip, 0 fail). The correction commit requires a fresh CI run; see PR #942 for its final result."
+  },
+  "rebase_2026_10_14": {
+    "onto": "5024ea7455a5613be0514475be32c0dee6de0edd",
+    "original_head": "2659d9af1a029de2852e71864b728f7f0aee5142",
+    "decision": "Owner approved combining main one-call runAsApproved scope with Q09 collectActionVerification around the same runAsReviewed dispatch. Approved Spawn/Stop retain their grant; evidence does not cause a second execution.",
+    "range_diff": "All five original commits retained; approved execution wrapper combined.",
+    "validation": {
+      "affected_ts": "987 passed, 3 skipped, one existing Chrome navigation race failed across 51 files; affected browser file rerun by the final normal commit hook. No product failure found.",
+      "browser_race": "Unchanged main reproduced the same transitional colon URL in 10/10 targeted runs. Wait now skips that placeholder without relaxing blocked-page or file-content assertions; 10/10 targeted repetitions pass.",
+      "sidecar": "11 top-level tests / 19 test and subtest completions passed: typed outcomes, stale documents, focus-loss uncertainty, legacy protocol and reviewed snapshots.",
+      "typecheck": "passed",
+      "environment": "Bun 1.4.3 (c6da4a4d3); cached Google Chrome for Testing 143.0.7499.4. Initial Snap Chromium startup failed; cached Chrome ran the fixtures. Missing libx11-xcb-dev extracted from Ubuntu package into task cache for targeted Go tests, without changing system packages.",
+      "limits": "Three host launchChrome sandbox tests skip on this environment. No full repository suite or native Windows/macOS runtime certification locally; PR CI remains required."
+    },
+    "evidence_root": "/home/vierisid/.cache/codex/brief-rebase-20261014",
+    "evidence": [
+      "q-09-focused-chrome.log",
+      "q-09-main-browser-baseline.log",
+      "q-09-main-browser-race.log",
+      "q-09-browser-race-fixed.log",
+      "q-09-sidecar-targeted.log",
+      "q-09-typecheck.log",
+      "q-09-commit.log"
+    ]
+  }
+}

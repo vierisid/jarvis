@@ -58,7 +58,10 @@ const REPO_ROOT = resolve(__dirname, "../../../..");
 const VENDOR_PACKAGES = resolve(REPO_ROOT, "src/workflows/activepieces/packages");
 const ENGINE_DIR = resolve(VENDOR_PACKAGES, "server/engine");
 
-const CACHE_ROOT = resolve(homedir(), ".jarvis/cache");
+// Isolate generated engine/piece outputs when multiple worktrees run tests.
+const CACHE_ROOT = process.env.NODE_ENV === 'test' && process.env.JARVIS_TEST_ENGINE_CACHE_ROOT
+  ? resolve(process.env.JARVIS_TEST_ENGINE_CACHE_ROOT)
+  : resolve(homedir(), ".jarvis/cache");
 const STAGING_DIR = resolve(CACHE_ROOT, "engine-build");
 const BUNDLE_ROOT = resolve(CACHE_ROOT, "engine");
 
