@@ -22,7 +22,7 @@ function useBriefLiveThread(client: BriefConversationClient, enabled: boolean, c
     chat: status.mode === 'scoped' ? client.adapter : undefined });
   const current = state.activeId ? state.conversations[state.activeId] ?? null : null;
   const messages = status.mode === 'legacy' ? ws.messages : (current?.messages ?? []).map(row => ({
-    id: row.id, role: row.role, content: row.content, timestamp: row.created_at,
+    id: row.id, role: row.role, content: row.content, timestamp: row.created_at, attachments: row.attachments,
     isStreaming: Object.values(current?.turns ?? {}).some(turn => turn.assistantMessageId === row.id && (turn.state === 'queued' || turn.state === 'running')),
   }));
   const items = messages.map(messageToThreadItem).filter(item => item !== null).map(({ __ts: _time, ...item }) => {
