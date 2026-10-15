@@ -79,7 +79,7 @@ are not restyled. Domain actions, approvals, Authority and async lifecycles stay
 | `BriefSwitch` | Controlled `checked` and callback, domain `onLabel`/`offLabel` | Button with `role="switch"` |
 | `BriefTabs` | Stable item values, panels, selected value and callback | Manual activation (arrows/Home/End move focus, Enter/Space select), disabled tabs skipped, hidden panels stay mounted |
 | `BriefSegments` | Controlled value, options and a group label | Native radio group in a labelled fieldset |
-| `BriefMenu` | Stable item ids, labels, callbacks, disabled/destructive intent | Top-layer portal that follows the invoking root's theme; arrows, Home/End, typeahead, Escape, Tab and outside-click dismissal with focus return |
+| `BriefMenu` | Stable item ids, labels, callbacks, disabled/destructive/`current` intent; optionally a `trigger` render function, `placement`, `dismissKey` and `reveal` | Top-layer portal that follows the invoking root's theme; arrows, Home/End, typeahead, Escape, Tab and outside-click dismissal with focus return |
 | `BriefTooltip` | One focusable child and a short description | 500ms hover delay, immediate on focus, Escape dismisses |
 
 - `pending` is a presentation and duplicate-click guard, not server idempotency.
@@ -87,6 +87,10 @@ are not restyled. Domain actions, approvals, Authority and async lifecycles stay
   clipping. Translated action labels belong in `stateLabels` too.
 - Native-disabled controls are not focusable. Explain important unavailability in visible text.
 - Tabs keep mounted state only; they do not persist anything.
+- A custom `BriefMenu` trigger must spread the props it receives onto one native `<button>` and give
+  it an accessible name. Change `dismissKey` (for example the route hash) to close an open menu when
+  something outside it navigates; focus returns to the trigger only if it was inside the menu.
+  `reveal` keeps the surface mounted for the D-04 exit and makes it `inert` immediately.
 - `BriefSwitch` uses its `label` as the accessible name. Show the same words visibly next to it.
 - `components/controls/figma-reference.json` records the extracted Figma geometry and colors (UI-04,
   UI-05).
@@ -118,3 +122,55 @@ queue or timeline engine.
 `?brief=preview&specimen=motion#/_brief_preview` opens the interactive motion reference. Its examples
 are local fixtures; "Run 20-cycle check" records browser frames (`motion/trace.ts`) and is not a
 frame-rate or performance claim.
+
+## Navigation shell
+
+`shell/navigation/NavigationShell.tsx` lays out the sidebar (232px, 72px rail), the breadcrumb header
+and the account menu (`shell/account-menu/AccountMenu.tsx`) around the room. `DashboardEntry` always
+renders it, so the room's ancestors stay mounted; only the navigation chrome is gated.
+
+- The chrome mounts only when `canMountNavigation` passes: a `navigation` binding whose view is
+  `source: "live"` and whose F-01 snapshot has `navigationCompatibility` enabled. Without a binding
+  (the default today) the released layout is unchanged and no extra API read happens. Fixture
+  bindings are accepted only in `mode: "preview"`.
+- Navigation data (`BriefNavigationData` in `shell/navigation/model.ts`) is read-only. Loading,
+  unavailable and stale reads show "unavailable", never a healthy connection, a plan or zero counts.
+  `planFromBilling` adapts the existing `/api/billing` snapshot (`v2/billing/useBilling`) to a plan
+  name; do not fetch billing again or add a plan tier.
+- The account menu only navigates to the Profile, Settings and Billing rooms. It performs no account
+  action and puts no email or token in the DOM.
+- Changing rooms resets the content scroll to the top; sidebar, theme, chat and same-room selection
+  changes keep it. Below 700px the rail is forced without changing the saved preference.
+- `shell/navigation/figma-reference.json` records the UI-08/UI-09 geometry.
+
+`?brief=preview&specimen=navigation#/_brief_preview` opens the shell with local fixture data. It
+starts no API read, socket or account action.
+
+## Pebble workspace
+
+`shell/pebble-layout/PebbleLayout.tsx` wraps the room inside `NavigationShell`. Opening Pebble grows
+one clipped 58px surface from the workspace's bottom-right corner into a conversation panel (360-447px)
+and reserves that width beside the room; closing reverses toward the same corner. The room, its
+selection and drafts, and the supplied conversation stay mounted through open/close, route, theme and
+sidebar changes.
+
+- The conversation comes only from the composition root as `conversation: BriefConversationBinding`
+  (`source` plus `content`). The host creates no thread, socket, microphone, request or persistence.
+  Without a binding (the default today, `main.tsx` passes none) the opener is hidden and inert and the
+  released Talk/Pebble overlay is untouched. `source` must be `"live"` in live mode and `"fixture"` in
+  preview mode, otherwise nothing mounts.
+- The opener is gated by the same `canMountNavigation` check as the navigation chrome. Losing that
+  capability hides the panel without remounting the room or the conversation.
+- `shell.chatOpen` is the only open state. Escape inside the panel closes it unless an inner control
+  already handled it; focus moves to an element marked `data-pebble-focus` (else the panel) on open and
+  back to the initiating control (else the opener) on close.
+- Below 960px of workspace width (`PEBBLE_SPLIT_MIN` in `layout.ts`) the same panel replaces the work
+  viewport; the hidden room stays mounted, `inert` and keeps its scroll.
+- Width/height use D-04 `reflow` motion and the reading body a `reveal` fade; resizing the workspace
+  follows immediately. `reducedMotion` and the OS setting place every change at once.
+- Rooms read `usePebbleWorkspace()` (open, split/single, working and conversation widths) or the
+  `brief-work` CSS container to adapt without remounting.
+- `shell/pebble-layout/figma-reference.json` records the UI-11 source values.
+
+`?brief=preview&specimen=pebble#/_brief_preview` opens an illustrative review with fixture rooms
+(Today, canvas, list, detail, form) and a fixture conversation. It starts no API read, socket or voice.

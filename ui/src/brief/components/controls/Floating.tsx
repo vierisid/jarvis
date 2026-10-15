@@ -1,13 +1,19 @@
 import React, { cloneElement, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { HTMLAttributes, ReactElement, ReactNode, RefObject } from "react";
+import type { HTMLAttributes, KeyboardEvent as ReactKeyboardEvent, ReactElement, ReactNode, RefObject } from "react";
 import { ChevronDown } from "lucide-react";
 import { BriefButton } from "./Buttons";
+import { BRIEF_MOTION, useBriefMotion, useBriefReducedMotion } from "../../motion";
+
+/** Default: menus open below and end-align, tooltips prefer above. `top-start` sits above and
+ * start-aligned; `right`/`right-end` sit beside a rail target. */
+export type BriefFloatingPlacement = "top-start" | "right-end" | "right";
 
 /** Portals escape clipping; native popovers also escape other stacking contexts.
  * The portal explicitly follows the invoking Brief root's chosen appearance. */
-function FloatingSurface({ anchor, kind, children, onReady, ...props }:
+function FloatingSurface({ anchor, kind, children, onReady, placement, className, ...props }:
   HTMLAttributes<HTMLDivElement> & { anchor: RefObject<HTMLElement | null>; kind: "menu" | "tooltip";
+    placement?: BriefFloatingPlacement;
     children: ReactNode; onReady?: (element: HTMLDivElement) => void }) {
   const surface = useRef<HTMLDivElement>(null);
   const [theme, setTheme] = useState("light");
@@ -33,9 +39,14 @@ function FloatingSurface({ anchor, kind, children, onReady, ...props }:
       const preferAbove = kind === "tooltip";
       const top = preferAbove && above >= padding ? above
         : below + box.height <= window.innerHeight - padding ? below : Math.max(padding, above);
+      const desiredLeft = placement === "top-start" ? rect.left
+        : placement === "right" ? rect.right : placement === "right-end" ? rect.right + 24 : rect.right - box.width;
+      const desiredTop = placement === "top-start" ? above
+        : placement === "right-end" ? rect.bottom - box.height
+        : placement === "right" ? rect.top + (rect.height - box.height) / 2 : top;
       setPosition({
-        left: Math.max(padding, Math.min(rect.right - box.width, window.innerWidth - box.width - padding)),
-        top,
+        left: Math.max(padding, Math.min(desiredLeft, window.innerWidth - box.width - padding)),
+        top: Math.max(padding, Math.min(desiredTop, window.innerHeight - box.height - padding)),
       });
     };
     place();
@@ -49,14 +60,14 @@ function FloatingSurface({ anchor, kind, children, onReady, ...props }:
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
     };
-  }, [anchor, kind]);
+  }, [anchor, kind, placement]);
   return createPortal(<div className="brief-root brief-control-layer" data-brief-theme={theme}>
-    <div {...props} ref={surface} popover="manual" className={`brief-floating brief-floating--${kind}`}
+    <div {...props} data-placement={placement} ref={surface} popover="manual" className={["brief-floating", `brief-floating--${kind}`, className].filter(Boolean).join(" ")}
       style={{ left: position.left, top: position.top }}>{children}</div>
   </div>, document.body);
 }
 
-export function BriefTooltip({ label, children }: { label: string; children: ReactElement<HTMLAttributes<HTMLElement>> }) {
+export function BriefTooltip({ label, children, placement, disabled = false }: { label: string; children: ReactElement<HTMLAttributes<HTMLElement>>; placement?: "right"; disabled?: boolean }) {
   const id = useId();
   const anchor = useRef<HTMLSpanElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -73,6 +84,7 @@ export function BriefTooltip({ label, children }: { label: string; children: Rea
     timer.current = setTimeout(() => setOpen(false), 80);
   };
   useEffect(() => () => clear(), []);
+  useEffect(() => { if (disabled) close(); }, [disabled]);
   useEffect(() => {
     if (!open) return;
     const escape = (event: KeyboardEvent) => {
@@ -84,16 +96,16 @@ export function BriefTooltip({ label, children }: { label: string; children: Rea
   return <span ref={anchor} className="brief-tooltip-anchor"
     onPointerEnter={event => {
       hovering.current = true;
-      if (event.pointerType === "touch" || suppressed.current) return;
+      if (disabled || event.pointerType === "touch" || suppressed.current) return;
       clear(); timer.current = setTimeout(() => setOpen(true), 500);
     }} onPointerLeave={leave}
-    onFocus={() => { clear(); focused.current = true; suppressed.current = false; setOpen(true); }}
+    onFocus={() => { clear(); focused.current = true; suppressed.current = false; if (!disabled) setOpen(true); }}
     onBlur={() => { focused.current = false; if (!hovering.current) { suppressed.current = false; close(); } }}
     onClickCapture={() => { suppressed.current = true; close(); }}>
     {/* A tooltip that repeats the accessible name would be announced twice. */}
     {cloneElement(children, { "aria-describedby": [children.props["aria-describedby"],
-      open && children.props["aria-label"] !== label ? id : null].filter(Boolean).join(" ") || undefined })}
-    {open && <FloatingSurface anchor={anchor} kind="tooltip" onPointerEnter={() => { clear(); hovering.current = true; }} onPointerLeave={leave}>
+      open && !disabled && children.props["aria-label"] !== label ? id : null].filter(Boolean).join(" ") || undefined })}
+    {open && !disabled && <FloatingSurface anchor={anchor} kind="tooltip" placement={placement} onPointerEnter={() => { clear(); hovering.current = true; }} onPointerLeave={leave}>
       <span role="tooltip" id={id} className="brief-tooltip__body">{label}</span>
     </FloatingSurface>}
   </span>;
@@ -105,44 +117,107 @@ export interface BriefMenuItem {
   icon?: ReactNode;
   disabled?: boolean;
   destructive?: boolean;
+  /** Marks the item that names the current page (aria-current="page"). */
+  current?: boolean;
   onSelect: () => void;
 }
-export function BriefMenu({ label, items }: { label: string; items: readonly BriefMenuItem[] }) {
+/** Props a custom trigger must spread onto its single native button. */
+export interface BriefMenuTriggerProps {
+  "aria-haspopup": "menu";
+  "aria-expanded": boolean;
+  "aria-controls"?: string;
+  onClick: () => void;
+  onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => void;
+}
+export interface BriefMenuProps {
+  label: string;
+  items: readonly BriefMenuItem[];
+  /** Renders the trigger; defaults to a secondary BriefButton showing `label`. */
+  trigger?: (props: BriefMenuTriggerProps) => ReactElement;
+  placement?: BriefFloatingPlacement;
+  className?: string;
+  /** A change (for example the current route) dismisses an open menu. */
+  dismissKey?: string;
+  /** D-04 reveal on open and close; the surface stays mounted through the exit. */
+  reveal?: "up" | "left";
+}
+
+function MenuReveal({ open, from, children }: { open: boolean; from: "up" | "left"; children: ReactNode }) {
+  const [entered, setEntered] = useState(false);
+  useLayoutEffect(() => { setEntered(open); }, [open]);
+  const ref = useBriefMotion<HTMLDivElement>({ opacity: entered ? 1 : 0,
+    transform: entered ? "translate(0px, 0px)" : from === "left" ? "translate(-6px, 0px)" : "translate(0px, 6px)" },
+  { kind: "reveal", active: entered });
+  // Semantic state changes immediately; only the visual exit waits.
+  return <div ref={ref} inert={!open} aria-hidden={open ? undefined : true}>{children}</div>;
+}
+
+export function BriefMenu({ label, items, trigger, placement, className, dismissKey, reveal }: BriefMenuProps) {
   const id = useId();
   const anchor = useRef<HTMLSpanElement>(null);
   const menu = useRef<HTMLDivElement | null>(null);
   const initial = useRef<"first" | "last">("first");
   const typeahead = useRef({ text: "", at: 0 });
   const [open, setOpen] = useState(false);
-  const trigger = () => anchor.current?.querySelector<HTMLButtonElement>("button");
-  const close = (restore: boolean) => { setOpen(false); if (restore) trigger()?.focus(); };
+  const [present, setPresent] = useState(false);
+  const reduced = useBriefReducedMotion();
+  const triggerButton = () => anchor.current?.querySelector<HTMLButtonElement>("button");
+  const close = (restore: boolean) => { setOpen(false); if (restore) triggerButton()?.focus(); };
   const options = () => [...menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? []];
+  const focusInitial = () => { const rows = options(); (initial.current === "last" ? rows.at(-1) : rows[0])?.focus(); };
+  const show = (which: "first" | "last") => {
+    initial.current = which; typeahead.current = { text: "", at: 0 };
+    if (reveal) setPresent(true);
+    setOpen(true);
+    if (open) focusInitial();
+  };
+  // Reopening during a reveal exit reuses the mounted surface, so onReady does not run again.
+  useLayoutEffect(() => { if (open && menu.current?.isConnected) focusInitial(); }, [open]);
+  useEffect(() => {
+    if (open || !present || !reveal) return;
+    const timer = setTimeout(() => { setPresent(false); menu.current = null; }, reduced ? 0 : BRIEF_MOTION.reveal.exit);
+    return () => clearTimeout(timer);
+  }, [open, present, reveal, reduced]);
+  const dismissed = useRef(dismissKey);
+  useEffect(() => {
+    if (dismissed.current === dismissKey) return;
+    dismissed.current = dismissKey;
+    if (open) close(menu.current?.contains(document.activeElement) ?? false);
+  }, [dismissKey]);
   useEffect(() => {
     if (!open) return;
-    const outside = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (!anchor.current?.contains(target) && !menu.current?.contains(target)) close(false);
-    };
-    const focus = (event: FocusEvent) => {
+    const outside = (event: PointerEvent | FocusEvent) => {
       const target = event.target as Node;
       if (!anchor.current?.contains(target) && !menu.current?.contains(target)) close(false);
     };
     document.addEventListener("pointerdown", outside);
-    document.addEventListener("focusin", focus);
-    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("focusin", focus); };
+    document.addEventListener("focusin", outside);
+    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("focusin", outside); };
   }, [open]);
+  const triggerProps: BriefMenuTriggerProps = {
+    "aria-haspopup": "menu", "aria-expanded": open, "aria-controls": open ? id : undefined,
+    onClick: () => { if (open) close(true); else show("first"); },
+    onKeyDown: event => {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault(); show(event.key === "ArrowUp" ? "last" : "first");
+      } else if (event.key === "Escape" && open) { event.preventDefault(); close(true); }
+    },
+  };
+  const list = (
+    <div role="menu" id={id} aria-label={label} className="brief-menu__body">
+      {items.map(item => <button type="button" role="menuitem" key={item.id} tabIndex={-1} disabled={item.disabled}
+        aria-current={item.current ? "page" : undefined}
+        data-intent={item.destructive ? "destructive" : undefined} onClick={() => { close(true); item.onSelect(); }}>
+        <span className="brief-menu__icon" aria-hidden="true">{item.icon}</span><span>{item.label}</span>
+      </button>)}
+    </div>
+  );
   return <span ref={anchor} className="brief-menu-anchor">
-    <BriefButton variant="secondary" aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined}
-      icon={<ChevronDown size={16} />} onClick={() => { initial.current = "first"; setOpen(!open); }}
-      onKeyDown={event => {
-        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-          event.preventDefault(); initial.current = event.key === "ArrowUp" ? "last" : "first"; setOpen(true);
-        } else if (event.key === "Escape" && open) { event.preventDefault(); close(true); }
-      }}>{label}</BriefButton>
-    {open && <FloatingSurface anchor={anchor} kind="menu" onReady={element => {
+    {trigger ? trigger(triggerProps)
+      : <BriefButton variant="secondary" icon={<ChevronDown size={16} />} {...triggerProps}>{label}</BriefButton>}
+    {(open || (!!reveal && present)) && <FloatingSurface anchor={anchor} kind="menu" placement={placement} className={className} onReady={element => {
       menu.current = element;
-      typeahead.current = { text: "", at: 0 };
-      const rows = options(); (initial.current === "last" ? rows.at(-1) : rows[0])?.focus();
+      if (open && !element.contains(document.activeElement)) focusInitial();
     }} onKeyDown={event => {
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(true); return; }
       if (event.key === "Tab") { close(true); return; }
@@ -161,12 +236,7 @@ export function BriefMenu({ label, items }: { label: string; items: readonly Bri
         ordered.find(row => row.textContent?.trim().toLowerCase().startsWith(text))?.focus();
       }
     }}>
-      <div role="menu" id={id} aria-label={label} className="brief-menu__body">
-        {items.map(item => <button type="button" role="menuitem" key={item.id} tabIndex={-1} disabled={item.disabled}
-          data-intent={item.destructive ? "destructive" : undefined} onClick={() => { close(true); item.onSelect(); }}>
-          <span className="brief-menu__icon" aria-hidden="true">{item.icon}</span><span>{item.label}</span>
-        </button>)}
-      </div>
+      {reveal ? <MenuReveal open={open} from={reveal}>{list}</MenuReveal> : list}
     </FloatingSurface>}
   </span>;
 }

@@ -171,6 +171,8 @@ export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
   'JARVIS_REQUIRE_ENCRYPTED_CREDENTIALS', 'JARVIS_LOG_LEVEL',
   'JARVIS_TELEMETRY', 'JARVIS_TELEMETRY_DEBUG', 'JARVIS_TOOL_FILTER',
   'JARVIS_WAKE_ENGINE', 'JARVIS_REALTIME_VOICE', 'JARVIS_AMBIENT_UI',
+  // Preserve the owner's Brief lifecycle opt-in when the CLI restarts the daemon.
+  'JARVIS_BRIEF_CONVERSATIONS',
   'JARVIS_ALLOW_LEAKED_ENGINES',
   // The Linux Chrome sandbox opt-out (actions/browser/chrome-sandbox.ts, #521).
   // A daemon or browser started from the model's shell must keep the user's
