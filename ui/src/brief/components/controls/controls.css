@@ -1,0 +1,167 @@
+/* UI-04/05 control roles. Base materials remain owned by D-02. */
+.brief-root {
+  --brief-control-radius: 8px 0 8px 8px;
+  --brief-primary-hover: #2B3036; --brief-primary-pressed: #080A0C;
+  --brief-control-hover: #EDF1F5; --brief-control-pressed: #E2E7EC;
+  --brief-control-disabled: #F0F3F6; --brief-control-dim: #747C84;
+  --brief-switch-off: #BEC7D1;
+  --brief-danger-tint: #FCEBEB; --brief-danger-ink: #B33238;
+  --brief-danger-strong: #B33238; --brief-danger-pressed: #8D252A;
+  --brief-control-duration: 160ms; --brief-control-ease: cubic-bezier(.2,.8,.2,1);
+  --brief-layer-menu: 60; --brief-layer-tooltip: 70;
+}
+:root[data-theme="dark"] .brief-root, :root .brief-root[data-brief-theme="dark"] {
+  --brief-primary-hover: #D9E0E7; --brief-primary-pressed: #C3CCD6;
+  --brief-control-hover: #272D35; --brief-control-pressed: #333B46;
+  --brief-control-disabled: #20252C; --brief-control-dim: #7D8792;
+  --brief-switch-off: #45505D;
+  --brief-danger-tint: #392426; --brief-danger-ink: #FF999E;
+}
+:root .brief-root[data-brief-theme="light"] {
+  --brief-primary-hover: #2B3036; --brief-primary-pressed: #080A0C;
+  --brief-control-hover: #EDF1F5; --brief-control-pressed: #E2E7EC;
+  --brief-control-disabled: #F0F3F6; --brief-control-dim: #747C84;
+  --brief-switch-off: #BEC7D1;
+  --brief-danger-tint: #FCEBEB; --brief-danger-ink: #B33238;
+}
+.brief-root :is(.brief-button,.brief-icon-button,.brief-link,.brief-switch,.brief-tabs button,.brief-segments,.brief-field *, .brief-menu__body) { box-sizing: border-box; }
+.brief-root :is(.brief-button,.brief-icon-button,.brief-link,.brief-switch,.brief-tabs button,.brief-tabs__panel,.brief-menu__body button):focus-visible,
+.brief-root .brief-segment:has(input:focus-visible) {
+  outline: 2px solid var(--brief-focus); outline-offset: 3px;
+}
+.brief-root :is(.brief-button,.brief-icon-button,.brief-link,.brief-switch,.brief-tabs button,.brief-segment > span,.brief-menu__body button) {
+  -webkit-tap-highlight-color: transparent;
+  /* Ink and surfaces must switch theme in the same frame. Interpolating ink
+     through gray against an already-dark canvas briefly destroys contrast. */
+  transition: none;
+}
+.brief-root :is(.brief-button,.brief-icon-button,.brief-switch,.brief-tabs button,.brief-menu__body button) { cursor: pointer; font-family: var(--brief-sans); }
+.brief-root .brief-button {
+  --control-height: 40px; --control-pad: 16px;
+  display: inline-flex; justify-content: center; align-items: center; gap: 8px;
+  min-block-size: var(--control-height); max-inline-size: 100%; padding: 9px var(--control-pad);
+  border: 1px solid transparent; border-radius: var(--brief-control-radius);
+  font-size: calc(.875rem * var(--brief-text-scale, 1)); font-weight: 700; line-height: calc(20px * var(--brief-text-scale, 1));
+  background: transparent; color: var(--brief-ink); vertical-align: middle;
+}
+.brief-root .brief-button.brief-control--sm { --control-height: 32px; --control-pad: 12px; padding-block: 5px; font-size: calc(.8125rem * var(--brief-text-scale, 1)); }
+.brief-root .brief-button--primary { background: var(--brief-ink); color: var(--brief-card); }
+.brief-root .brief-button--secondary { background: var(--brief-card); border-color: var(--brief-card-edge); }
+.brief-root .brief-button--danger { background: var(--brief-danger-strong); color: #FFFFFF; }
+.brief-root .brief-button__labels, .brief-root .brief-switch__value { display: inline-grid; min-width: 0; }
+.brief-root .brief-button__labels > *, .brief-root .brief-switch__value > * { grid-area: 1/1; overflow-wrap: anywhere; }
+.brief-root .brief-button__reserve { visibility: hidden; pointer-events: none; }
+.brief-root .brief-button__icon { display: grid; place-items: center; inline-size: 16px; block-size: 20px; flex: none; }
+.brief-root .brief-button[data-state="error"] { box-shadow: inset 0 0 0 1px var(--brief-danger-ink); }
+.brief-root .brief-icon-button {
+  display: inline-grid; place-items: center; inline-size: 44px; block-size: 44px; padding: 0; flex: none;
+  border: 1px solid transparent; border-radius: var(--brief-control-radius); background: transparent; color: var(--brief-secondary);
+}
+.brief-root .brief-icon-button.brief-control--sm { inline-size: 36px; block-size: 36px; }
+.brief-root .brief-icon-button > span { display: flex; }
+.brief-root .brief-icon-button svg { width: 16px; height: 16px; stroke-width: 1.5; }
+.brief-root .brief-link { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; color: var(--brief-ink); font: 700 .875rem/20px var(--brief-sans); border-radius: var(--brief-control-radius); text-decoration: none; }
+.brief-root .brief-link svg { flex: none; transition: transform var(--brief-control-duration) var(--brief-control-ease); }
+.brief-root .brief-link:focus-visible { text-decoration: underline; text-underline-offset: 4px; }
+@media (hover: hover) {
+  .brief-root :is(.brief-button,.brief-icon-button):not(:disabled):not([aria-disabled="true"]):hover { background: var(--brief-control-hover); }
+  .brief-root .brief-button--primary:not(:disabled):not([aria-disabled="true"]):hover { background: var(--brief-primary-hover); }
+  .brief-root .brief-button--danger:not(:disabled):not([aria-disabled="true"]):hover { background: var(--brief-danger-pressed); }
+  .brief-root .brief-icon-button[data-intent="destructive"]:not(:disabled):hover { background: var(--brief-danger-tint); color: var(--brief-danger-ink); }
+  .brief-root .brief-link:hover svg { transform: translateX(3px); }
+  .brief-root .brief-link[data-direction="back"]:hover svg { transform: translateX(-3px); }
+  .brief-root .brief-link:hover { text-decoration: underline; text-underline-offset: 4px; }
+}
+.brief-root :is(.brief-button,.brief-icon-button):not(:disabled):not([aria-disabled="true"]):active { background: var(--brief-control-pressed); }
+.brief-root .brief-button--primary:not(:disabled):not([aria-disabled="true"]):active { background: var(--brief-primary-pressed); }
+.brief-root .brief-button--danger:not(:disabled):not([aria-disabled="true"]):active { background: var(--brief-danger-pressed); }
+.brief-root .brief-icon-button[data-intent="destructive"]:not(:disabled):is(:focus-visible,:active) { background: var(--brief-danger-tint); color: var(--brief-danger-ink); }
+.brief-root :is(.brief-button,.brief-icon-button)[aria-disabled="true"] { cursor: progress; }
+.brief-root :is(.brief-button,.brief-icon-button):disabled { cursor: not-allowed; background: var(--brief-control-disabled); color: var(--brief-control-dim); border-color: transparent; box-shadow: none; }
+.brief-root .brief-icon-button:disabled { background: transparent; }
+.brief-root .brief-control__busy { animation: brief-control-busy 900ms linear infinite; }
+@keyframes brief-control-busy { to { transform: rotate(360deg); } }
+.brief-root .brief-field { min-inline-size: 0; display: grid; gap: 6px; font: 400 calc(.875rem * var(--brief-text-scale, 1))/calc(20px * var(--brief-text-scale, 1)) var(--brief-sans); }
+.brief-root .brief-field__label { color: var(--brief-secondary); font-size: calc(.75rem * var(--brief-text-scale, 1)); }
+.brief-root .brief-field__surface { position: relative; border-radius: var(--brief-control-radius); }
+.brief-root .brief-field__surface :is(input,textarea,select) {
+  width: 100%; min-width: 0; min-height: 44px; margin: 0; padding: 11px 42px 11px 14px;
+  background: var(--brief-card); color: var(--brief-ink); border: 1px solid var(--brief-field-edge); border-radius: inherit;
+  font: inherit; appearance: none; outline: none;
+  transition: none;
+}
+.brief-root .brief-field.brief-control--sm .brief-field__surface :is(input,select) { min-height: 40px; padding-block: 9px; }
+.brief-root .brief-field__surface textarea { min-height: 84px; resize: vertical; display: block; }
+.brief-root .brief-field__surface [type="search"] { padding-left: 40px; }
+.brief-root .brief-field__surface [type="search"]::-webkit-search-cancel-button { appearance: none; }
+.brief-root .brief-field__surface select { padding-right: 64px; cursor: pointer; }
+.brief-root .brief-field__surface :is(input,textarea)::placeholder { color: var(--brief-secondary); opacity: 1; }
+.brief-root .brief-field__surface :is(input,textarea,select):focus-visible { outline: 2px solid var(--brief-focus); outline-offset: 3px; }
+@media (hover: hover) { .brief-root .brief-field__surface :is(input,textarea,select):not(:disabled):hover { background: var(--brief-soft); } }
+.brief-root .brief-field[data-invalid="true"] .brief-field__surface :is(input,textarea,select) { border-color: var(--brief-danger-ink); }
+.brief-root .brief-field__surface :is(input,textarea,select):disabled { color: var(--brief-control-dim); background: var(--brief-control-disabled); cursor: not-allowed; }
+.brief-root .brief-field__leading, .brief-root .brief-field__chevron, .brief-root .brief-field__adornment { position: absolute; top: 14px; pointer-events: none; color: var(--brief-secondary); }
+.brief-root .brief-control--sm :is(.brief-field__leading,.brief-field__chevron,.brief-field__adornment) { top: 12px; }
+.brief-root .brief-field__leading { left: 14px; }
+.brief-root .brief-field__chevron { right: 14px; }
+.brief-root .brief-field__adornment { right: 14px; width: 16px; height: 16px; display: flex; color: var(--brief-danger-ink); }
+.brief-root .brief-field__surface[data-select="true"] .brief-field__adornment { right: 40px; }
+.brief-root .brief-control__saved { color: var(--brief-success-text); }
+.brief-root .brief-field__feedback { min-block-size: 32px; display: grid; font-size: calc(.75rem * var(--brief-text-scale, 1)); line-height: calc(16px * var(--brief-text-scale, 1)); color: var(--brief-secondary); overflow-wrap: anywhere; }
+.brief-root .brief-field__feedback > * { grid-area: 1/1; }
+.brief-root .brief-field__reserve { visibility: hidden; pointer-events: none; }
+.brief-root .brief-field__feedback[data-error="true"] { color: var(--brief-danger-ink); }
+.brief-root .brief-field__feedback[data-saved="true"] { color: var(--brief-success-text); }
+.brief-root .brief-switch-row { display: inline-flex; align-items: center; gap: 10px; }
+.brief-root .brief-switch { display: grid; place-items: center; width: 44px; height: 40px; padding: 0; border: 0; background: transparent; border-radius: 12px 0 12px 12px; flex: none; }
+.brief-root .brief-switch__track { display: block; position: relative; width: 44px; height: 24px; border-radius: 12px 0 12px 12px; background: var(--brief-switch-off); }
+.brief-root .brief-switch__thumb { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 9px 0 9px 9px; background: var(--brief-ink); transition: transform var(--brief-control-duration) var(--brief-control-ease); }
+.brief-root .brief-switch[aria-checked="true"] .brief-switch__track { background: var(--brief-ink); }
+.brief-root .brief-switch[aria-checked="true"] .brief-switch__thumb { transform: translateX(20px); background: var(--brief-card); }
+.brief-root .brief-switch:disabled { cursor: not-allowed; }
+.brief-root .brief-switch:disabled .brief-switch__track { background: var(--brief-control-disabled); box-shadow: inset 0 0 0 1px var(--brief-card-edge); }
+.brief-root .brief-switch:disabled .brief-switch__thumb { background: var(--brief-control-dim); }
+.brief-root .brief-switch__value { font: 400 .75rem/16px var(--brief-sans); color: var(--brief-secondary); }
+.brief-root .brief-switch-row[data-disabled="true"] .brief-switch__value { color: var(--brief-control-dim); }
+.brief-root .brief-tabs__list { display: flex; gap: 4px; overflow-x: auto; padding: 5px; margin: -5px; border-bottom: 1px solid var(--brief-card-edge); }
+.brief-root .brief-tabs button { position: relative; flex: none; background: transparent; color: var(--brief-secondary); border: 0; border-radius: var(--brief-control-radius); min-height: 44px; padding: 12px 14px; font-size: .875rem; line-height: 20px; }
+.brief-root :is(.brief-tabs button > span,.brief-segment > span) { display: grid; }
+.brief-root :is(.brief-tabs button > span,.brief-segment > span)::after { content: attr(data-label); font-weight: 700; visibility: hidden; height: 0; overflow: hidden; }
+.brief-root .brief-tabs button[aria-selected="true"] { color: var(--brief-ink); font-weight: 700; }
+.brief-root .brief-tabs button[aria-selected="true"]::after { content: ""; position: absolute; bottom: 0; left: 14px; right: 14px; height: 2px; background: var(--brief-ink); }
+.brief-root .brief-tabs button:disabled { color: var(--brief-control-dim); cursor: not-allowed; }
+.brief-root .brief-tabs__panel { padding-block: 20px 0; border-radius: var(--brief-control-radius); }
+.brief-root .brief-tabs__panel[hidden] { display: none; }
+.brief-root .brief-segments { display: flex; gap: 4px; padding: 4px; min-width: 0; margin: 0; border: 1px solid var(--brief-card-edge); border-radius: var(--brief-control-radius); background: var(--brief-soft); }
+.brief-root .brief-segment { position: relative; display: flex; flex: 1; min-width: 0; border-radius: var(--brief-control-radius); cursor: pointer; }
+.brief-root .brief-segment > span { padding: 12px 10px; min-height: 44px; width: 100%; text-align: center; justify-content: center; align-content: center; overflow-wrap: anywhere; border-radius: inherit; color: var(--brief-secondary); font: 400 .875rem/20px var(--brief-sans); }
+.brief-root .brief-segment input { position: absolute; inset: 0; z-index: 1; margin: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
+.brief-root .brief-segment input:disabled { cursor: not-allowed; }
+.brief-root .brief-segment input:checked + span { background: var(--brief-ink); color: var(--brief-card); font-weight: 700; }
+.brief-root .brief-segment input:disabled + span { color: var(--brief-control-dim); background: var(--brief-control-disabled); cursor: not-allowed; }
+@media (hover: hover) {
+  .brief-root .brief-tabs button:not(:disabled):hover { background: var(--brief-control-hover); }
+  .brief-root .brief-segment:hover input:not(:checked):not(:disabled) + span { background: var(--brief-control-hover); cursor: pointer; }
+  .brief-root .brief-switch:not(:disabled):hover .brief-switch__track { box-shadow: inset 0 0 0 1px var(--brief-secondary); }
+}
+.brief-root .brief-tabs button:not(:disabled):active { background: var(--brief-control-pressed); }
+.brief-root .brief-tooltip-anchor, .brief-root .brief-menu-anchor { display: inline-flex; max-width: 100%; }
+.brief-root.brief-control-layer { display: contents; }
+.brief-root .brief-floating { position: fixed; inset: auto; margin: 0; padding: 8px 0; border: none; background: transparent; color: var(--brief-ink); max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow: visible; }
+.brief-root .brief-floating:not([popover]) { display: block; }
+.brief-root .brief-floating--menu { z-index: var(--brief-layer-menu); width: max-content; min-width: min(220px, calc(100vw - 16px)); }
+.brief-root .brief-floating--tooltip { z-index: var(--brief-layer-tooltip); width: max-content; }
+.brief-root .brief-tooltip__body { display: block; padding: 8px 10px; max-width: 32ch; border-radius: var(--brief-control-radius); background: #13161A; color: #FFFFFF; font: 400 .75rem/16px var(--brief-sans); overflow-wrap: anywhere; }
+.brief-root .brief-menu__body { padding: 6px; border: 1px solid var(--brief-menu-edge); border-radius: var(--brief-corner-menu); background: var(--brief-menu); box-shadow: 3px 5px 0 var(--brief-menu-shadow); max-height: calc(100dvh - 48px); overflow-y: auto; }
+.brief-root .brief-menu__body button { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 10px; width: 100%; text-align: left; border: 0; border-radius: var(--brief-control-radius); background: transparent; color: var(--brief-ink); font: 400 .875rem/20px var(--brief-sans); }
+.brief-root .brief-menu__icon { display: flex; width: 16px; flex: none; }
+.brief-root .brief-menu__body button > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.brief-root .brief-menu__body button:not(:disabled):is(:hover,:focus-visible) { background: var(--brief-control-hover); outline-offset: -2px; }
+.brief-root .brief-menu__body button[data-intent="destructive"]:not(:disabled):is(:hover,:focus-visible,:active) { color: var(--brief-danger-ink); background: var(--brief-danger-tint); }
+.brief-root .brief-menu__body button:disabled { color: var(--brief-control-dim); cursor: not-allowed; }
+.brief-root .brief-menu__body button:not(:disabled):active { background: var(--brief-control-pressed); }
+.brief-root .brief-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .brief-root :is(.brief-button,.brief-icon-button,.brief-link,.brief-link svg,.brief-switch,.brief-switch__track,.brief-switch__thumb,.brief-tabs button,.brief-segment > span,.brief-menu__body button,.brief-field input,.brief-field textarea,.brief-field select) { transition: none; }
+  .brief-root .brief-control__busy { animation: none; }
+}

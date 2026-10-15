@@ -8,6 +8,7 @@
  * The LLM sees these IDs and references them in click/type commands.
  */
 
+import { browserActionFailure } from './action-failure';
 import { CDPClient } from './cdp.ts';
 import { STEALTH_SCRIPT } from './stealth.ts';
 import { launchChrome, stopChrome, type RunningBrowser } from './chrome-launcher.ts';
@@ -48,6 +49,8 @@ export type PageSnapshot = {
    * the wrong site's instructions while believing it had the current one.
    */
   browserUrl: string | null;
+  /** Browser loader identity held across this read, absent for an unverified snapshot. */
+  browserDocumentId?: string | null;
   /** Page text, truncated by the formatter. Outside content. */
   text: string;
   elements: PageElement[];
@@ -815,13 +818,13 @@ export class BrowserController {
    */
   private async refuseIfDocumentMoved(elementId: number, usesCoordinates: boolean): Promise<string | null> {
     if (!this.elementDoc.loaderId) {
-      return `Error: Element [${elementId}] not found. Run browser_snapshot first.`;
+      return browserActionFailure(`Error: Element [${elementId}] not found. Run browser_snapshot first.`);
     }
     let now: { url: string; loaderId: string; frameStamp: string };
     try {
       now = await this.readFrameState();
     } catch {
-      return `Error: Could not confirm the browser is still on the page element [${elementId}] came from, so nothing was done. Take a browser_snapshot and try again.`;
+      return browserActionFailure(`Error: Could not confirm the browser is still on the page element [${elementId}] came from, so nothing was done. Take a browser_snapshot and try again.`);
     }
     const moved = this.documentMovedReason(elementId, now);
     if (moved) {
@@ -830,7 +833,7 @@ export class BrowserController {
       // and nothing stale is left clickable. A FRAME that moved leaves the
       // main document's ids usable, so that one does not clear.
       if (moved.fatal) this.forgetSnapshotElements();
-      return `Error: ${moved.reason}`;
+      return browserActionFailure(`Error: ${moved.reason}`);
     }
     // AND THE DOCUMENT MAY HAVE BEEN REPLACED WITHOUT A NEW loaderId, or the
     // page may have scrolled (#603). Neither moves anything the frame tree
@@ -843,21 +846,21 @@ export class BrowserController {
     const generation = await this.domGeneration(elementId);
     if (generation === 'gone') {
       this.forgetSnapshotElements();
-      return `Error: Element [${elementId}] cannot be addressed any more. Take a browser_snapshot first.`;
+      return browserActionFailure(`Error: Element [${elementId}] cannot be addressed any more. Take a browser_snapshot first.`);
     }
     if (generation === 'busy') {
       // Retryable, and said so: telling the model to take a snapshot would send
       // it at a renderer that will not serve that either.
-      return `Error: The page was too busy to confirm where element [${elementId}] is, so nothing was done. Try again.`;
+      return browserActionFailure(`Error: The page was too busy to confirm where element [${elementId}] is, so nothing was done. Try again.`);
     }
     if (generation === 'dom') {
       this.forgetSnapshotElements();
-      return `Error: The page replaced the document element [${elementId}] came from, so it no longer exists. Take a browser_snapshot first.`;
+      return browserActionFailure(`Error: The page replaced the document element [${elementId}] came from, so it no longer exists. Take a browser_snapshot first.`);
     }
     // 'moved' concerns only a caller that DISPATCHES AT the coordinate: see
     // `usesCoordinates` and the sentinel's own docblock.
     if (generation === 'moved' && usesCoordinates) {
-      return `Error: Element [${elementId}] has moved since the snapshot, so its position can no longer be trusted. Take a browser_snapshot first.`;
+      return browserActionFailure(`Error: Element [${elementId}] has moved since the snapshot, so its position can no longer be trusted. Take a browser_snapshot first.`);
     }
     return null;
   }
@@ -1214,6 +1217,7 @@ export class BrowserController {
       // caller handed the PREVIOUS document's URL is the failure this field's
       // docblock rules out, so a lost race costs a site playbook, not a wrong one.
       browserUrl: sameDocument && before.url ? before.url : null,
+      browserDocumentId: sameDocument && before.url ? before.loaderId : null,
       text: data.text,
       elements: cleanElements,
     };
@@ -1460,7 +1464,7 @@ export class BrowserController {
 
     const coords = this.elementCoords.get(elementId);
     if (!coords) {
-      return `Error: Element [${elementId}] not found. Run browser_snapshot first.`;
+      return browserActionFailure(`Error: Element [${elementId}] not found. Run browser_snapshot first.`);
     }
     // The coordinates are only the click's input while the document they were
     // measured in is still the one on screen (#592) and the page has not
@@ -1517,7 +1521,7 @@ export class BrowserController {
 
     const coords = this.elementCoords.get(elementId);
     if (!coords) {
-      return `Error: Element [${elementId}] not found. Run browser_snapshot first.`;
+      return browserActionFailure(`Error: Element [${elementId}] not found. Run browser_snapshot first.`);
     }
     // Hover dispatches at the stored coordinate too.
     const moved = await this.refuseIfDocumentMoved(elementId, true);
@@ -1552,7 +1556,7 @@ export class BrowserController {
 
     const parsed = parseKeyCombo(combo);
     if (!parsed) {
-      return `Error: Unsupported key "${combo}". Supported: ${SUPPORTED_KEYS_HINT}.`;
+      return browserActionFailure(`Error: Unsupported key "${combo}". Supported: ${SUPPORTED_KEYS_HINT}.`);
     }
 
     const base = {
@@ -1613,7 +1617,7 @@ export class BrowserController {
 
     const coords = this.elementCoords.get(elementId);
     if (!coords) {
-      return `Error: Element [${elementId}] not found. Run browser_snapshot first.`;
+      return browserActionFailure(`Error: Element [${elementId}] not found. Run browser_snapshot first.`);
     }
     // That lookup is the MEMBERSHIP test and is load-bearing even though the
     // coordinate itself is unused here: `refuseIfDocumentMoved` never consults
@@ -1640,7 +1644,7 @@ export class BrowserController {
       ? await world.contextId
       : null;
     if (contextId === null) {
-      return `Error: Element [${elementId}] cannot be addressed any more. Take a browser_snapshot first.`;
+      return browserActionFailure(`Error: Element [${elementId}] cannot be addressed any more. Take a browser_snapshot first.`);
     }
 
     // Focus the element via the DOM ref the snapshot stored, in the isolated
@@ -1756,13 +1760,13 @@ export class BrowserController {
     if (focusStatus !== 'ok') {
       switch (focusStatus) {
         case 'gone':
-          return `Error: Element [${elementId}] has been removed from the page, so nothing was typed. Take a browser_snapshot first.`;
+          return browserActionFailure(`Error: Element [${elementId}] has been removed from the page, so nothing was typed. Take a browser_snapshot first.`);
         case 'not_typable':
-          return `Error: Element [${elementId}] is a frame, not a field, so nothing was typed. Take a browser_snapshot and name an element inside it instead.`;
+          return browserActionFailure(`Error: Element [${elementId}] is a frame, not a field, so nothing was typed. Take a browser_snapshot and name an element inside it instead.`);
         case 'not_focused':
-          return `Error: Element [${elementId}] did not take focus -- the page moved focus elsewhere -- so nothing was typed. Take a browser_snapshot and check the page.`;
+          return browserActionFailure(`Error: Element [${elementId}] did not take focus -- the page moved focus elsewhere -- so nothing was typed. Take a browser_snapshot and check the page.`);
         default:
-          return `Error: Element [${elementId}] is no longer addressable, so nothing was typed. Take a browser_snapshot first.`;
+          return browserActionFailure(`Error: Element [${elementId}] is no longer addressable, so nothing was typed. Take a browser_snapshot first.`, 'may_have_occurred');
       }
     }
     await Bun.sleep(200);
@@ -1794,7 +1798,8 @@ export class BrowserController {
     // which is why they matter more than this bracket.
     const stillFocused = await this.verifyFocus(elementId, contextId);
     if (stillFocused !== 'ok') {
-      return `Error: Element [${elementId}] lost focus before anything was typed -- the page moved focus elsewhere -- so nothing was typed. Take a browser_snapshot and check the page.`;
+      // The focus script may already have cleared the previous field value.
+      return browserActionFailure(`Error: Element [${elementId}] lost focus before anything was typed -- the page moved focus elsewhere -- so nothing was typed. Take a browser_snapshot and check the page.`, 'may_have_occurred');
     }
 
     // Insert text (like paste — much more reliable than char-by-char).
@@ -1807,7 +1812,7 @@ export class BrowserController {
       // The text has already gone somewhere. Nothing can un-type it, so the one
       // thing that must not happen is reporting success: a silent wrong
       // delivery is exactly what #592 is about.
-      return `Error: Element [${elementId}] lost focus while the text was being typed, so the text may have gone to another element. Take a browser_snapshot and check the page before retrying.`;
+      return browserActionFailure(`Error: Element [${elementId}] lost focus while the text was being typed, so the text may have gone to another element. Take a browser_snapshot and check the page before retrying.`, 'may_have_occurred');
     }
 
     let result = `${append ? 'Appended' : 'Typed'} "${text}" into element [${elementId}]`;
@@ -1916,13 +1921,13 @@ export class BrowserController {
     const before = await this.readTopFrame();
     // (1) a page that cannot legitimately receive a file at all.
     const opaque = uploadTargetRefusal(before.url);
-    if (opaque) return `Error: Refusing to upload to this page: ${opaque}`;
+    if (opaque) return browserActionFailure(`Error: Refusing to upload to this page: ${opaque}`);
     // (2) nothing reviewed. Allowing it would skip the origin check altogether,
     // and it is reachable: after a daemon restart against a Chrome that outlived
     // it, `connect()` adopts whatever tab was left open.
     if (reviewed === null) {
-      return 'Error: Refusing to upload: no page has been reported by the browser yet, so the approval could not name '
-        + 'the page that would receive the file. Take a browser_snapshot first, then ask again.';
+      return browserActionFailure('Error: Refusing to upload: no page has been reported by the browser yet, so the approval could not name '
+        + 'the page that would receive the file. Take a browser_snapshot first, then ask again.');
     }
     // (3) a page that is not the one the click was given for. Compared by
     // ORIGIN, not by URL: the sites people upload to (Gmail, Drive, GitHub)
@@ -1945,7 +1950,7 @@ export class BrowserController {
     });
 
     if (!node.nodeId) {
-      return `Error: No file input found matching "${query}". Click the upload/attach button first to trigger the file input.`;
+      return browserActionFailure(`Error: No file input found matching "${query}". Click the upload/attach button first to trigger the file input.`);
     }
 
     // The origin check above and the handoff below are separate round trips, so a
@@ -1955,8 +1960,8 @@ export class BrowserController {
     // comparison cannot.
     const after = await this.readTopFrame();
     if (after.loaderId !== before.loaderId || pageOrigin(after.url) !== reviewedOrigin) {
-      return 'Error: Refusing to upload: the page loaded a new document while the upload was being set up. '
-        + 'Take a browser_snapshot and ask again.';
+      return browserActionFailure('Error: Refusing to upload: the page loaded a new document while the upload was being set up. '
+        + 'Take a browser_snapshot and ask again.');
     }
 
     // Set the file on the input element via CDP
@@ -1966,7 +1971,7 @@ export class BrowserController {
         nodeId: node.nodeId,
       });
     } catch (err) {
-      return `Error setting file: ${err instanceof Error ? err.message : String(err)}`;
+      return browserActionFailure(`Error setting file: ${err instanceof Error ? err.message : String(err)}`, 'may_have_occurred');
     }
 
     await Bun.sleep(1000); // Wait for the app to process the file

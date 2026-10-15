@@ -1,0 +1,41 @@
+/* Developer reference only. None of these compositions is a dashboard room. */
+.brief-specimen { height:100%; overflow:auto; }
+.brief-specimen__inner { max-width:1160px; margin:auto; padding:40px 32px 64px; }
+.brief-specimen__header { display:grid; gap:24px; padding-bottom:40px; }
+.brief-specimen__header h1 { margin:8px 0 12px; }
+.brief-specimen__controls, .brief-specimen__statuses { display:flex; flex-wrap:wrap; gap:12px; }
+.brief-specimen__controls .v2-btn { height:auto; min-height:40px; padding:8px 16px; white-space:normal; }
+.brief-specimen__section { padding:32px 0; border-top:1px solid var(--brief-card-edge); }
+.brief-specimen__section > p { margin-top:8px; }
+.brief-specimen__materials { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:32px; padding:28px 8px 16px 0; }
+.brief-specimen__material { padding:22px; min-height:246px; height:100%; }
+.brief-specimen__material p { margin:18px 0; }
+.brief-specimen__menu-rows { margin-top:28px; }
+.brief-specimen__paper-stage { display:grid; grid-template-columns:minmax(0,420px) minmax(0,1fr); gap:48px; align-items:center; margin-top:28px; padding:0 8px 16px 0; }
+.brief-specimen__paper-stage--compact { grid-template-columns:minmax(0,284px) minmax(0,1fr); }
+.brief-specimen__document { padding:24px; display:grid; gap:18px; }
+.brief-specimen__document-heading { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding-bottom:16px; border-bottom:1px solid var(--brief-card-edge); }
+.brief-specimen__document .brief-paper-highlight { padding:12px; border-radius:var(--brief-corner-control); }
+.brief-specimen__paper-note p { margin-top:16px; }
+.brief-specimen__progress-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:24px; margin:24px 0 40px; }
+.brief-specimen__progress-grid p { margin:8px 0 18px; }
+.brief-specimen__outcomes { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:48px; margin:20px 0 32px; align-items:center; }
+.brief-specimen__figure { display:flex; align-items:baseline; gap:16px; flex-wrap:wrap; }
+.brief-specimen__outcomes .brief-progress { margin:16px 0; }
+.brief-specimen__type-list { margin:20px 0 28px; }
+.brief-specimen__type-list > div { display:grid; grid-template-columns:180px minmax(0,1fr); gap:24px; padding:16px 0; align-items:baseline; border-bottom:1px solid var(--brief-card-edge); }
+.brief-specimen__long-values { padding:24px; display:grid; gap:18px; }
+.brief-specimen :is(p,h1,h2,h3,h4,span) { overflow-wrap:anywhere; }
+.brief-specimen__return { display:inline-block; color:var(--brief-ink); text-underline-offset:4px; }
+.brief-specimen a:focus-visible { outline:2px solid var(--brief-focus); outline-offset:4px; }
+@media (max-width:800px) {
+  .brief-specimen__materials { grid-template-columns:1fr; }
+  .brief-specimen__material { min-height:200px; }
+  .brief-specimen__paper-stage, .brief-specimen__paper-stage--compact { grid-template-columns:minmax(0,1fr); }
+  .brief-specimen__paper-stage--compact .brief-paper-object { max-width:284px; }
+  .brief-specimen__progress-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media (max-width:500px) {
+  .brief-specimen__inner { padding:24px 20px 40px; }
+  .brief-specimen__outcomes, .brief-specimen__type-list > div { grid-template-columns:1fr; gap:12px; }
+}

@@ -1,0 +1,26 @@
+@import url("https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600;700&family=Spline+Sans+Mono:wght@400;500&display=swap");
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; min-height: 100%; font-family: "Familjen Grotesk", system-ui, sans-serif; }
+.tour-preview-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 20px; background: #edf1f6; color: #26313f; font-size: 13px; }
+.tour-preview-tools button, .tour-preview-tools select { font: inherit; min-height: 32px; padding: 4px 8px; }
+.tour-preview-tools output { width: 100%; color: #536378; }
+.tour-preview-stage { height: max(860px, calc(100dvh - 100px)); }
+.tour-fixture { height: 100%; display: grid; grid-template-columns: 232px 1fr; color: var(--on-tour-text); }
+.tour-fixture[data-sidebar="rail"] { grid-template-columns: 72px 1fr; }
+.tour-fixture__rail { display: flex; flex-direction: column; gap: 8px; padding: 24px 12px; background: var(--on-tour-surface); border-right: 1px solid #8996a526; }
+.tour-fixture__rail span { padding: 12px; font-size: 14px; border-radius: 10px 0 10px 10px; }
+.tour-fixture__rail span[data-selected="true"] { background: var(--on-tour-hover); font-weight: 600; }
+.tour-fixture__rail span:first-child { margin-bottom: 28px; font-size: 22px; font-weight: 600; }
+.tour-fixture__content { padding: 40px; max-width: 900px; }
+.tour-fixture__content h1 { margin: 10px 0 16px; font-size: 32px; }
+.tour-fixture__content p { color: var(--on-tour-muted); max-width: 550px; }
+.tour-fixture__label { font-size: 12px; letter-spacing: .06em; }
+.tour-fixture__subject { margin-top: 24px; padding: 24px; border-radius: 18px 0 18px 18px; border: 1px solid #8996a540; background: var(--on-tour-surface); }
+.tour-fixture__subject span { display: block; color: var(--on-tour-muted); font-size: 13px; margin-top: 10px; }
+@media (max-width: 699px) {
+  .tour-fixture, .tour-fixture[data-sidebar="rail"] { grid-template-columns: 1fr; }
+  .tour-fixture__rail { display: none; }
+  .tour-fixture__content { padding: 20px; }
+  .tour-fixture__content p, .tour-fixture__subject { display: none; }
+  .tour-preview-stage { height: auto; min-height: calc(100dvh - 180px); }
+}

@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "ON-B-03",
+  "kind": "provider",
+  "entry": "./index.ts",
+  "provides": ["google-state.v1"],
+  "requires": []
+}
