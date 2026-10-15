@@ -175,8 +175,11 @@ describe.skipIf(!chromiumExe)('page-writable element refs (#592, integration)', 
     const reviewed = await idOf('reviewed');
     await browser.evaluate(`document.getElementById('reviewed').addEventListener('focus', () => {
       setTimeout(() => document.getElementById('attacker').focus(), 40); }); 'armed'`);
-    await expect(collectActionVerification('browser_type', 'browser', () => browser.type(reviewed, 'approved text')))
-      .rejects.toMatchObject({ outcome: { status: 'unknown', code: 'BROWSER_ACTION_UNCERTAIN', effect: 'may_have_occurred' } });
+    // Settle first, then assert: a pending promise handed to `expect().rejects`
+    // can close this live CDP socket mid-call on some Bun versions.
+    const thrown = await collectActionVerification('browser_type', 'browser', () => browser.type(reviewed, 'approved text'))
+      .then(() => null, (error: unknown) => error);
+    expect(thrown).toMatchObject({ outcome: { status: 'unknown', code: 'BROWSER_ACTION_UNCERTAIN', effect: 'may_have_occurred' } });
     expect(await valueOf('reviewed')).toBe('');
     expect(await valueOf('attacker')).toBe('');
   });
