@@ -1,0 +1,14 @@
+{
+  "task": "D-04",
+  "file": "eNfKeirIKLZLlZEasrurZa",
+  "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+  "source": "UI-07 · Motion rules and examples",
+  "native_library": "531:95191",
+  "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=531-95191",
+  "reviewed_export": "dashboard-brief-figma-2026-09-14-v6-1/ui-07-motion-2026-10-01/README.md",
+  "easing": "EASE_OUT, CSS cubic-bezier(0, 0, 0.58, 1)",
+  "pairs_ms": {"press": [100, 80], "reveal": [200, 160], "selection": [180, 180], "reflow": [320, 280], "transfer": [280, 220], "settle": [180, 160]},
+  "anchors": {"press": "Button bounds and label baseline", "reveal": "Trigger", "selection": "Labels and targets", "reflow": "Work left edge and top baseline", "transfer": "Origin and destination slots", "settle": "Final slot and neighbors"},
+  "contract": ["No mount choreography", "Latest intent replaces current target from rendered position", "No text scaling, bounce or queued hover", "Reduced motion keeps identical immediate endpoints", "Theme ink and surfaces change together without color interpolation"],
+  "adaptation": "React-owned state, native WAAPI for bounded wrappers, OS media-query subscription. Isolated browser harness adds runtime evidence; room adoption is later work."
+}
