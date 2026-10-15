@@ -14,6 +14,7 @@ const ICONS = { today: House, workflows: GitBranch, opportunities: Eye, "needs-y
   goals: Target, memory: FileText, "connected-workspace": Laptop, authority: ShieldCheck };
 const NARROW_QUERY = "(max-width: 699px)";
 function subscribeWidth(changed: () => void) {
+  if (typeof window.matchMedia !== "function") return () => {};
   const media = window.matchMedia(NARROW_QUERY); media.addEventListener("change", changed);
   return () => media.removeEventListener("change", changed);
 }
