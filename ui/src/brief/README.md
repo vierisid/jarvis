@@ -26,7 +26,7 @@ Rollback: remove the `brief` query parameter.
 - `adapters/view.tsx` binds a room-local read hook to a typed component. The live host refuses to show
   a fixture view as business data. This is a presentation guard, not a security boundary or a
   substitute for provider authorization.
-- `components/controls.tsx` re-exports the existing v2 Button.
+- `components/controls.tsx` is the barrel for the Brief control family (see Controls below).
 
 ## Adding a room
 
@@ -62,3 +62,34 @@ rule escapes that root.
 
 `?brief=preview&specimen=styles#/_brief_preview` opens the style specimen. Its content is
 illustrative; the text-size control scales Brief text only, not browser zoom.
+
+## Controls
+
+Import from `components/controls` and render inside a `brief-root`. The barrel loads
+`components/controls/controls.css`; every rule is scoped under `.brief-root` and covered by
+`styles/scope.test.ts`. These controls are Brief-only: v2's `ui/` components keep their own look and
+are not restyled. Domain actions, approvals, Authority and async lifecycles stay with the caller.
+
+| Control | Caller supplies | Control supplies |
+| --- | --- | --- |
+| `BriefButton` | `onClick`, `variant`, `state`, and every label it can show in `stateLabels` | Native button, default `type="button"`; `pending` keeps focus and blocks repeat click and submit; labels reserve the widest width |
+| `BriefIconButton` | A short `label`, the icon, `intent="destructive"` when it deletes | 44px (36px compact) target; the label is the accessible name and a tooltip |
+| `BriefLink` | A real `href` | Native link with a directional arrow |
+| `BriefInput` / `BriefTextarea` / `BriefSelect` | Native value handling, `label`, `hint`/`error`/`saved`, `reserveMessage` for the longest known error | Label association, `aria-invalid`, `aria-describedby`, reserved feedback space |
+| `BriefSwitch` | Controlled `checked` and callback, domain `onLabel`/`offLabel` | Button with `role="switch"` |
+| `BriefTabs` | Stable item values, panels, selected value and callback | Manual activation (arrows/Home/End move focus, Enter/Space select), disabled tabs skipped, hidden panels stay mounted |
+| `BriefSegments` | Controlled value, options and a group label | Native radio group in a labelled fieldset |
+| `BriefMenu` | Stable item ids, labels, callbacks, disabled/destructive intent | Top-layer portal that follows the invoking root's theme; arrows, Home/End, typeahead, Escape, Tab and outside-click dismissal with focus return |
+| `BriefTooltip` | One focusable child and a short description | 500ms hover delay, immediate on focus, Escape dismisses |
+
+- `pending` is a presentation and duplicate-click guard, not server idempotency.
+- Reserve feedback for the longest error you actually author; longer runtime text expands instead of
+  clipping. Translated action labels belong in `stateLabels` too.
+- Native-disabled controls are not focusable. Explain important unavailability in visible text.
+- Tabs keep mounted state only; they do not persist anything.
+- `BriefSwitch` uses its `label` as the accessible name. Show the same words visibly next to it.
+- `components/controls/figma-reference.json` records the extracted Figma geometry and colors (UI-04,
+  UI-05).
+
+`?brief=preview&specimen=controls#/_brief_preview` opens the interactive control specimen. All of its
+actions are local fixtures.

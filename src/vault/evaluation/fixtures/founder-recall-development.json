@@ -1,0 +1,706 @@
+{
+  "version": "founder-recall-v1",
+  "split": "development",
+  "provenance": "Author-visible synthetic repository cases, frozen before candidate tuning. Heldout is a withheld evaluation split, not independent/blinded field data. No live customer content.",
+  "now": 1791892800000,
+  "orders": [
+    0,
+    7,
+    29
+  ],
+  "tokenizer": "cl100k_base",
+  "maxTokens": 4096,
+  "cases": [
+    {
+      "id": "dev-meeting",
+      "category": "meeting-preparation",
+      "queries": [
+        "Prepare my meeting with Mira Solis: agenda and preference"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "Mira Solis",
+          "type": "person",
+          "facts": [
+            {
+              "key": "agenda",
+              "predicate": "meeting_agenda",
+              "object": "Review Cobalt Studio delivery milestones",
+              "options": {
+                "basis": "reported",
+                "source": "meeting_notes",
+                "scope": "work"
+              }
+            },
+            {
+              "key": "preference",
+              "predicate": "meeting_preference",
+              "object": "Send a short written agenda first",
+              "options": {
+                "basis": "reported",
+                "source": "client_email"
+              }
+            }
+          ]
+        },
+        {
+          "key": "other",
+          "name": "Nina Solis",
+          "type": "person",
+          "facts": [
+            {
+              "key": "other-agenda",
+              "predicate": "meeting_agenda",
+              "object": "Discuss a different account renewal",
+              "options": {
+                "confirmed": true
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "agenda",
+        "preference"
+      ],
+      "forbiddenSubjects": [
+        "other"
+      ],
+      "expectOmission": true
+    },
+    {
+      "id": "dev-similar-surname",
+      "category": "similar-names",
+      "queries": [
+        "What is Mira Solis email?"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "Mira Solis",
+          "type": "person",
+          "facts": [
+            {
+              "key": "email",
+              "predicate": "email",
+              "object": "dev.target@example.test",
+              "options": {
+                "confirmed": true,
+                "scope": "work"
+              }
+            }
+          ]
+        },
+        {
+          "key": "other",
+          "name": "Nina Solis",
+          "type": "person",
+          "facts": [
+            {
+              "key": "wrong-email",
+              "predicate": "email",
+              "object": "dev.other@example.test",
+              "options": {
+                "confirmed": true,
+                "scope": "work"
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "email"
+      ],
+      "forbiddenSubjects": [
+        "other"
+      ],
+      "bindings": [
+        {
+          "subject": "Mira Solis",
+          "predicate": "email",
+          "scope": "work",
+          "expected": "email"
+        }
+      ],
+      "expectOmission": true
+    },
+    {
+      "id": "dev-similar-first",
+      "category": "similar-names",
+      "queries": [
+        "Evan Moss phone for a followup"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "Evan Moss",
+          "type": "person",
+          "facts": [
+            {
+              "key": "phone",
+              "predicate": "phone",
+              "object": "+1-202-555-0101",
+              "options": {
+                "confirmed": true
+              }
+            }
+          ]
+        },
+        {
+          "key": "other",
+          "name": "Evan Lake",
+          "type": "person",
+          "facts": [
+            {
+              "key": "wrong-phone",
+              "predicate": "phone",
+              "object": "+1-202-555-0188",
+              "options": {
+                "confirmed": true
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "phone"
+      ],
+      "forbiddenSubjects": [
+        "other"
+      ],
+      "bindings": [
+        {
+          "subject": "Evan Moss",
+          "predicate": "phone",
+          "expected": "phone"
+        }
+      ],
+      "expectOmission": true
+    },
+    {
+      "id": "dev-missing-contact",
+      "category": "sparse-memory",
+      "queries": [
+        "What is Mira Solis email?"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "Mira Solis",
+          "type": "person",
+          "facts": []
+        },
+        {
+          "key": "other",
+          "name": "Nina Solis",
+          "type": "person",
+          "facts": [
+            {
+              "key": "wrong-email",
+              "predicate": "email",
+              "object": "dev.wrong@example.test",
+              "options": {
+                "confirmed": true
+              }
+            }
+          ]
+        }
+      ],
+      "required": [],
+      "forbiddenSubjects": [
+        "other"
+      ],
+      "bindings": [
+        {
+          "subject": "Mira Solis",
+          "predicate": "email",
+          "expected": null
+        }
+      ],
+      "expectOmission": true,
+      "expectEmptySubject": true
+    },
+    {
+      "id": "dev-stale-preference",
+      "category": "stale-preferences",
+      "queries": [
+        "Mira Solis meeting preference"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "Mira Solis",
+          "type": "person",
+          "facts": [
+            {
+              "key": "expired",
+              "predicate": "meeting_preference",
+              "object": "Calls at dawn",
+              "options": {
+                "confirmed": true,
+                "validTo": 1791806400000
+              }
+            },
+            {
+              "key": "future",
+              "predicate": "meeting_preference",
+              "object": "Calls at midnight",
+              "options": {
+                "confirmed": true,
+                "validFrom": 1791979200000
+              }
+            },
+            {
+              "key": "current",
+              "predicate": "meeting_preference",
+              "object": "Written agenda before the afternoon call",
+              "options": {
+                "confirmed": true,
+                "validFrom": 1791806400000,
+                "validTo": 1791979200000
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "current"
+      ],
+      "forbidden": [
+        "expired",
+        "future"
+      ],
+      "expectOmission": true
+    },
+    {
+      "id": "dev-corrected-preference",
+      "category": "stale-preferences",
+      "queries": [
+        "Mira Solis preferred tool"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "Mira Solis",
+          "type": "person",
+          "facts": [
+            {
+              "key": "old",
+              "predicate": "preferred_tool",
+              "object": "Old client workspace",
+              "correction": {
+                "key": "corrected",
+                "object": "Cobalt Studio portal"
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "corrected"
+      ],
+      "forbidden": [
+        "old"
+      ],
+      "expectOmission": true,
+      "bindings": [
+        {
+          "subject": "Mira Solis",
+          "predicate": "preferred_tool",
+          "expected": "corrected"
+        }
+      ]
+    },
+    {
+      "id": "dev-contested-contact",
+      "category": "qualification",
+      "queries": [
+        "Mira Solis email"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "Mira Solis",
+          "type": "person",
+          "facts": [
+            {
+              "key": "confirmed",
+              "predicate": "email",
+              "object": "dev.verified@example.test",
+              "options": {
+                "confirmed": true,
+                "scope": "work"
+              },
+              "followups": [
+                {
+                  "key": "inference",
+                  "predicate": "email",
+                  "object": "dev.guess@example.test",
+                  "options": {
+                    "basis": "inferred",
+                    "source": "llm_extraction",
+                    "confidence": 1,
+                    "scope": "work"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "required": [
+        "confirmed",
+        "inference"
+      ],
+      "bindings": [
+        {
+          "subject": "Mira Solis",
+          "predicate": "email",
+          "scope": "work",
+          "expected": null
+        }
+      ]
+    },
+    {
+      "id": "dev-sparse-unknown",
+      "category": "sparse-memory",
+      "queries": [
+        "Cobalt Studio launch checklist"
+      ],
+      "entities": [
+        {
+          "key": "unrelated",
+          "name": "Unrelated household inventory",
+          "type": "person",
+          "facts": [
+            {
+              "key": "unrelated",
+              "predicate": "favorite_food",
+              "object": "Apricots"
+            }
+          ]
+        }
+      ],
+      "required": [],
+      "abstain": true
+    },
+    {
+      "id": "dev-long-history",
+      "category": "long-histories",
+      "queries": [
+        "Cobalt Studio renewal deadline"
+      ],
+      "entities": [
+        {
+          "key": "project",
+          "name": "Cobalt Studio",
+          "type": "project",
+          "facts": [
+            {
+              "key": "deadline",
+              "predicate": "renewal_deadline",
+              "object": "2027-03-18",
+              "options": {
+                "confirmed": true
+              },
+              "repeats": 24
+            }
+          ]
+        }
+      ],
+      "required": [
+        "deadline"
+      ],
+      "noise": {
+        "entities": 40,
+        "factsPerEntity": 4,
+        "predicate": "archive_note",
+        "object": "Historic unrelated administrative record"
+      },
+      "expectOmission": false
+    },
+    {
+      "id": "dev-crowded-subject",
+      "category": "long-histories",
+      "queries": [
+        "Mira Solis renewal deadline"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "Mira Solis",
+          "type": "person",
+          "facts": [
+            {
+              "key": "deadline",
+              "predicate": "renewal_deadline",
+              "object": "2027-04-22",
+              "options": {
+                "confirmed": true
+              }
+            },
+            {
+              "key": "note-0",
+              "predicate": "archive_note",
+              "object": "Closed ticket 0 background history"
+            },
+            {
+              "key": "note-1",
+              "predicate": "archive_note",
+              "object": "Closed ticket 1 background history"
+            },
+            {
+              "key": "note-2",
+              "predicate": "archive_note",
+              "object": "Closed ticket 2 background history"
+            },
+            {
+              "key": "note-3",
+              "predicate": "archive_note",
+              "object": "Closed ticket 3 background history"
+            },
+            {
+              "key": "note-4",
+              "predicate": "archive_note",
+              "object": "Closed ticket 4 background history"
+            },
+            {
+              "key": "note-5",
+              "predicate": "archive_note",
+              "object": "Closed ticket 5 background history"
+            },
+            {
+              "key": "note-6",
+              "predicate": "archive_note",
+              "object": "Closed ticket 6 background history"
+            },
+            {
+              "key": "note-7",
+              "predicate": "archive_note",
+              "object": "Closed ticket 7 background history"
+            },
+            {
+              "key": "note-8",
+              "predicate": "archive_note",
+              "object": "Closed ticket 8 background history"
+            },
+            {
+              "key": "note-9",
+              "predicate": "archive_note",
+              "object": "Closed ticket 9 background history"
+            },
+            {
+              "key": "note-10",
+              "predicate": "archive_note",
+              "object": "Closed ticket 10 background history"
+            },
+            {
+              "key": "note-11",
+              "predicate": "archive_note",
+              "object": "Closed ticket 11 background history"
+            },
+            {
+              "key": "note-12",
+              "predicate": "archive_note",
+              "object": "Closed ticket 12 background history"
+            },
+            {
+              "key": "note-13",
+              "predicate": "archive_note",
+              "object": "Closed ticket 13 background history"
+            },
+            {
+              "key": "note-14",
+              "predicate": "archive_note",
+              "object": "Closed ticket 14 background history"
+            },
+            {
+              "key": "note-15",
+              "predicate": "archive_note",
+              "object": "Closed ticket 15 background history"
+            },
+            {
+              "key": "note-16",
+              "predicate": "archive_note",
+              "object": "Closed ticket 16 background history"
+            },
+            {
+              "key": "note-17",
+              "predicate": "archive_note",
+              "object": "Closed ticket 17 background history"
+            },
+            {
+              "key": "note-18",
+              "predicate": "archive_note",
+              "object": "Closed ticket 18 background history"
+            },
+            {
+              "key": "note-19",
+              "predicate": "archive_note",
+              "object": "Closed ticket 19 background history"
+            },
+            {
+              "key": "note-20",
+              "predicate": "archive_note",
+              "object": "Closed ticket 20 background history"
+            },
+            {
+              "key": "note-21",
+              "predicate": "archive_note",
+              "object": "Closed ticket 21 background history"
+            },
+            {
+              "key": "note-22",
+              "predicate": "archive_note",
+              "object": "Closed ticket 22 background history"
+            },
+            {
+              "key": "note-23",
+              "predicate": "archive_note",
+              "object": "Closed ticket 23 background history"
+            },
+            {
+              "key": "note-24",
+              "predicate": "archive_note",
+              "object": "Closed ticket 24 background history"
+            },
+            {
+              "key": "note-25",
+              "predicate": "archive_note",
+              "object": "Closed ticket 25 background history"
+            },
+            {
+              "key": "note-26",
+              "predicate": "archive_note",
+              "object": "Closed ticket 26 background history"
+            },
+            {
+              "key": "note-27",
+              "predicate": "archive_note",
+              "object": "Closed ticket 27 background history"
+            },
+            {
+              "key": "note-28",
+              "predicate": "archive_note",
+              "object": "Closed ticket 28 background history"
+            },
+            {
+              "key": "note-29",
+              "predicate": "archive_note",
+              "object": "Closed ticket 29 background history"
+            },
+            {
+              "key": "note-30",
+              "predicate": "archive_note",
+              "object": "Closed ticket 30 background history"
+            },
+            {
+              "key": "note-31",
+              "predicate": "archive_note",
+              "object": "Closed ticket 31 background history"
+            },
+            {
+              "key": "note-32",
+              "predicate": "archive_note",
+              "object": "Closed ticket 32 background history"
+            },
+            {
+              "key": "note-33",
+              "predicate": "archive_note",
+              "object": "Closed ticket 33 background history"
+            },
+            {
+              "key": "note-34",
+              "predicate": "archive_note",
+              "object": "Closed ticket 34 background history"
+            }
+          ]
+        }
+      ],
+      "required": [
+        "deadline"
+      ],
+      "expectOmission": true
+    },
+    {
+      "id": "dev-tight-budget",
+      "category": "context-budget",
+      "queries": [
+        "Cobalt Studio deadline"
+      ],
+      "entities": [
+        {
+          "key": "project",
+          "name": "Cobalt Studio",
+          "type": "project",
+          "facts": [
+            {
+              "key": "deadline",
+              "predicate": "deadline",
+              "object": "2027-05-14",
+              "options": {
+                "confirmed": true
+              }
+            },
+            {
+              "key": "detail",
+              "predicate": "deadline_detail",
+              "object": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+              "options": {
+                "basis": "reported"
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "deadline"
+      ],
+      "allowed": [
+        "deadline",
+        "detail"
+      ],
+      "maxChars": 1800,
+      "expectOmission": true
+    },
+    {
+      "id": "dev-unconfirmed-binding",
+      "category": "qualification",
+      "queries": [
+        "Mira Solis email"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "Mira Solis",
+          "type": "person",
+          "facts": [
+            {
+              "key": "reported",
+              "predicate": "email",
+              "object": "dev.reported@example.test",
+              "options": {
+                "basis": "reported",
+                "source": "meeting_notes",
+                "confidence": 1,
+                "scope": "work"
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "reported"
+      ],
+      "bindings": [
+        {
+          "subject": "Mira Solis",
+          "predicate": "email",
+          "scope": "work",
+          "expected": null
+        }
+      ]
+    }
+  ]
+}

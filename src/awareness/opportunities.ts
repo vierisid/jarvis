@@ -7,6 +7,8 @@ import { GOAL_CONTEXT_LIMIT, rankOpportunityGoals } from './goal-relevance.ts';
 import type { Goal } from '../goals/types.ts';
 import type { JobHypothesis, Opportunity, OpportunityValidation } from './opportunity-types.ts';
 import type { Suggestion } from './types.ts';
+import { readOpportunityFeedbackEvidence } from './opportunity-feedback-evidence.ts';
+import { applyOpportunityFeedbackPolicy, summarizeOpportunityFeedback } from './opportunity-feedback-policy.ts';
 
 export class OpportunityError extends Error {
   constructor(message: string, public status = 400) { super(message); }
@@ -49,9 +51,8 @@ export function listOpportunities(limit = 50): Opportunity[] {
 }
 
 export function assessOpportunities(now = Date.now()) {
-  const known = getDb().prepare('SELECT pattern_key FROM opportunity_hypotheses').all() as Array<{ pattern_key: string }>;
-  return assessJobHypotheses(getOpportunityObservations(now), findGoals({ status: 'active', limit: GOAL_CONTEXT_LIMIT }),
-    new Set(known.map(r => r.pattern_key)), now);
+  return applyOpportunityFeedbackPolicy(assessJobHypotheses(getOpportunityObservations(now),
+    findGoals({ status: 'active', limit: GOAL_CONTEXT_LIMIT }), new Set(), now), readOpportunityFeedbackEvidence(), now);
 }
 
 export function opportunitySuggestion(hypothesis: JobHypothesis): Suggestion {
@@ -69,6 +70,20 @@ export function opportunitySuggestion(hypothesis: JobHypothesis): Suggestion {
 export function publishOpportunity(hypothesis: JobHypothesis): Suggestion | null {
   const db = getDb();
   return db.transaction(() => {
+    // Recheck durable decisions in the publishing transaction: a stale assessment
+    // or renamed pattern key cannot race a dismissal or bypass its cooldown.
+    const now = Date.now();
+    const current = applyOpportunityFeedbackPolicy({ schemaVersion: 1, assessedAt: now,
+      proposals: [hypothesis], abstention: null }, readOpportunityFeedbackEvidence(), now).proposals[0];
+    if (!current) return null;
+    hypothesis = current;
+    // Older writers only know the family key. Keep that first-row tombstone so
+    // rolling back cannot rediscover a dismissed report under generic wording.
+    // Q-14 derives semantic identity from the immutable kind/cadence instead.
+    if (hypothesis.kind === 'recurring_report'
+      && !db.query('SELECT 1 FROM opportunity_hypotheses WHERE pattern_key = ?').get('job-v1:recurring_report')) {
+      hypothesis = { ...hypothesis, patternKey: 'job-v1:recurring_report' };
+    }
     if (db.prepare('SELECT 1 FROM opportunity_hypotheses WHERE pattern_key = ?').get(hypothesis.patternKey)) return null;
     const candidate = opportunitySuggestion(hypothesis);
     // createSuggestion dedupes on the durable automation identity and returns a
@@ -205,5 +220,6 @@ export function getOpportunityMetrics() {
     recurringJobsWithOutcomes: [...perOpportunity.values()].filter(n => n >= 2).length,
     usefulReportRate: outcomes.length ? useful / outcomes.length : null,
     evidenceBasis: 'user_report', verifiedResults: 0,
+    quality: summarizeOpportunityFeedback(readOpportunityFeedbackEvidence()),
   };
 }
