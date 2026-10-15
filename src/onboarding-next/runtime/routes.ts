@@ -25,10 +25,14 @@ async function envelope(req: Request): Promise<unknown> {
   let length = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: () => void = () => {};
+  let readFailure: RuntimeError | undefined;
   const stopped = new Promise<never>((_, reject) => {
     const stop = (status: number) => {
+      readFailure ??= new RuntimeError('invalid_request', status);
+      // Cancellation resolves a pending read as EOF. Settle the failure first
+      // and retain it so that an EOF racing with cancellation cannot dispatch.
+      reject(readFailure);
       void reader.cancel().catch(() => {});
-      reject(new RuntimeError('invalid_request', status));
     };
     onAbort = () => stop(400);
     req.signal.addEventListener('abort', onAbort, { once: true });
@@ -38,6 +42,7 @@ async function envelope(req: Request): Promise<unknown> {
   try {
     while (true) {
       const { value, done } = await Promise.race([reader.read(), stopped]);
+      if (readFailure) throw readFailure;
       if (done) break;
       length += value.byteLength;
       if (length > LIMIT) { void reader.cancel().catch(() => {}); throw new RuntimeError('request_too_large', 413); }

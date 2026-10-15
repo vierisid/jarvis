@@ -39,8 +39,10 @@ import { EventCoalescer } from "./event-coalescer.ts";
 import { CommitmentExecutor } from "./commitment-executor.ts";
 import { classifyEvent } from "./event-classifier.ts";
 import { createApiRoutes, setCorsOrigin } from "./api-routes.ts";
+import { createPostSetupServices } from "./post-setup-services.ts";
 import { createDaemonOnboardingRuntime } from "../onboarding-next/runtime/daemon.ts";
 import { runtimeModules } from "../onboarding-next/runtime/generated/catalog.ts";
+import { createBriefCapabilities } from '../brief/registrations/index.ts';
 import { GoogleAuth } from "../integrations/google-auth.ts";
 import { classifyGoogle, googleIdentity, makeGoogleAuth } from "../integrations/google-managed-refresh.ts";
 import { ResearchQueue } from "./research-queue.ts";
@@ -4769,6 +4771,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 9b. Set up API routes + dashboard static files
     const apiContext: import('./api-routes.ts').ApiContext & Record<string, unknown> = {
+      briefCapabilities: createBriefCapabilities(),
       daemonStartedAt: Date.now(),
       healthMonitor,
       agentService,
@@ -5416,8 +5419,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // Idempotent constructor for the LLM-dependent services. Safe to call
     // multiple times; returns immediately if `bgAgent` is already running.
-    let onboardingStartupCompleted = false;
-    const startPostSetupServices = async (): Promise<void> => {
+    const startCorePostSetupServices = async (): Promise<void> => {
       if (bgAgent) return; // already running
 
       // 10b. Background agent (needs LLM providers from agentService.start())
@@ -5456,12 +5458,6 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       wsService.setCommitmentExecutor(executor);
       executor.start();
       commitmentExecutor = executor;
-
-      // 10e. Awareness Service (M13). Skipped when --no-local-tools is set
-      //       (headless / Docker) or explicitly disabled in config.
-      if (jarvisConfig.awareness?.enabled !== false && !config.noLocalTools) {
-        await startAwarenessService();
-      }
     };
 
     // Awareness service construction extracted so the post-setup helper
@@ -5755,22 +5751,23 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         console.error('[Daemon] Awareness service failed to start:', err instanceof Error ? err.message : err);
         // Non-fatal — daemon continues without awareness
       }
-      onboardingStartupCompleted = true;
     };
 
     // Expose the helper to the API layer so /api/onboarding/setup can
     // bring services online at the end of onboarding without a restart.
-    let onboardingStartInFlight: Promise<void> | null = null;
-    apiContext.startPostSetupServices = () => {
-      if (!onboardingStartInFlight) onboardingStartInFlight = startPostSetupServices().finally(() => { onboardingStartInFlight = null; });
-      return onboardingStartInFlight;
-    };
+    const postSetupServices = createPostSetupServices({
+      startCore: startCorePostSetupServices,
+      coreRunning: () => bgAgent?.status() === 'running' && agentService.status() === 'running',
+      noLocalTools: config.noLocalTools,
+      awareness: {
+        enabled: () => jarvisConfig.awareness?.enabled,
+        start: startAwarenessService,
+        running: () => apiContext.awarenessService?.status() === 'running',
+      },
+    });
+    apiContext.startPostSetupServices = postSetupServices.start;
     apiContext.isPostSetupServicesReady = () => bgAgent !== null;
-    apiContext.onboardingServiceReadiness = () => {
-      if (!onboardingStartupCompleted || bgAgent?.status() !== 'running' || agentService.status() !== 'running') return 'stopped';
-      if (jarvisConfig.awareness?.enabled && apiContext.awarenessService?.status() !== 'running') return 'unavailable';
-      return 'running';
-    };
+    apiContext.onboardingServiceReadiness = postSetupServices.readiness;
 
     // Boot-time path: setup was completed in a prior run, so spin services
     // up now. Skipped in setup mode — the onboarding endpoint will call

@@ -1,0 +1,64 @@
+.on-tour-frame { container: onboarding-tour / inline-size; height: 100%; min-width: 0; }
+.on-tour {
+  /* Approved Brief values, local so an opposite-theme ancestor cannot bleed in. */
+  --on-tour-canvas: #fafbfc;
+  --on-tour-surface: #fff;
+  --on-tour-text: #13161a;
+  --on-tour-muted: #535b63;
+  --on-tour-blue: #2d78ff;
+  --on-tour-shadow: 0 6px 18px #18273814;
+  --on-tour-hover: #edf1f5;
+  --on-tour-button: #13161a;
+  --on-tour-button-text: #fff;
+  position: relative; isolation: isolate; display: grid; grid-template-rows: auto minmax(0, 1fr);
+  min-height: 640px; height: 100%; background: var(--on-tour-canvas); color: var(--on-tour-text);
+  font: 400 16px/1.5 "Familjen Grotesk", system-ui, sans-serif;
+}
+.on-tour[data-theme="dark"] {
+  --on-tour-canvas: #121417; --on-tour-surface: #1a1d22; --on-tour-text: #eef1f4;
+  --on-tour-muted: #a4abb3; --on-tour-blue: #6fa4ff; --on-tour-shadow: 0 6px 18px #0004;
+  --on-tour-hover: #222831; --on-tour-button: #eef1f4; --on-tour-button-text: #13161a;
+}
+.on-tour, .on-tour__dock, .on-tour__sandbox-label, .on-tour__card, .on-tour__card * { box-sizing: border-box; }
+.on-tour__sandbox-label { padding: 7px 16px; color: var(--on-tour-muted); font-size: 12px; text-align: center; border-bottom: 1px solid color-mix(in srgb, var(--on-tour-muted) 20%, transparent); }
+.on-tour__room { min-height: 0; overflow: auto; pointer-events: none; user-select: none; }
+.on-tour__dock { position: absolute; z-index: 1; left: calc(var(--on-tour-sidebar) + 40px); bottom: 36px; width: min(648px, calc(100% - var(--on-tour-sidebar) - 80px)); }
+.on-tour__card { background: var(--on-tour-surface); border-radius: 18px 0 18px 18px; box-shadow: inset 0 0 0 2px var(--on-tour-blue), var(--on-tour-shadow); padding: 24px; }
+.on-tour__eyebrow { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin: 0 0 16px; color: var(--on-tour-muted); font: 400 12px/1.5 "Spline Sans Mono", ui-monospace, monospace; text-transform: uppercase; }
+.on-tour__count { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.on-tour__card h2 { margin: 0 0 10px; font-size: 24px; line-height: 1.25; font-weight: 600; letter-spacing: -.025em; overflow-wrap: anywhere; }
+.on-tour__card h2:focus { outline: none; }
+.on-tour__body { margin: 0; min-height: 48px; color: var(--on-tour-muted); overflow-wrap: anywhere; }
+.on-tour__status { margin: 6px 0 8px; font-size: 13px; min-height: 20px; color: var(--on-tour-muted); }
+.on-tour__actions { display: grid; grid-template-columns: 1fr 72px 164px; gap: 12px; align-items: center; }
+.on-tour__card button { appearance: none; border: 0; font: 500 14px/1.4 "Familjen Grotesk", system-ui, sans-serif; cursor: pointer; min-height: 44px; padding: 10px 16px; border-radius: 10px 0 10px 10px; transition: background-color 180ms ease, opacity 120ms ease; }
+.on-tour__card button:focus-visible { outline: 2px solid var(--on-tour-blue); outline-offset: 3px; }
+.on-tour__quiet { color: var(--on-tour-muted); background: transparent; }
+.on-tour__skip { justify-self: start; margin-inline-start: -12px; }
+.on-tour__quiet:hover:not([aria-disabled="true"]) { background: var(--on-tour-hover); color: var(--on-tour-text); }
+.on-tour__primary { background: var(--on-tour-button); color: var(--on-tour-button-text); }
+.on-tour__primary:hover:not([aria-disabled="true"]) { opacity: .87; }
+.on-tour__card button:active:not([aria-disabled="true"]) { opacity: .7; }
+.on-tour__card button[aria-disabled="true"] { opacity: .45; cursor: default; }
+@container onboarding-tour (max-width: 1024px) {
+  .on-tour { grid-template-rows: auto minmax(180px, 1fr) auto; min-height: 0; }
+  .on-tour__dock { position: relative; left: auto; bottom: auto; width: auto; margin: 16px 24px 24px; }
+  .on-tour__card { max-width: 648px; margin-inline: auto; }
+}
+@media (max-height: 800px) {
+  .on-tour { grid-template-rows: auto minmax(180px, 1fr) auto; min-height: 0; }
+  .on-tour__dock { position: relative; left: auto; bottom: auto; width: auto; margin: 16px 24px 24px; }
+  .on-tour__card { max-width: 648px; margin-inline: auto; }
+}
+@container onboarding-tour (max-width: 540px) {
+  .on-tour { height: auto; min-height: 100%; grid-template-rows: auto minmax(160px, 28vh) auto; }
+  .on-tour__dock { margin: 12px 12px 20px; }
+  .on-tour__card { padding: 20px; }
+  .on-tour__eyebrow { gap: 6px; min-height: 42px; margin-bottom: 12px; }
+  .on-tour__card h2 { font-size: 22px; min-height: 55px; }
+  .on-tour__body { min-height: 96px; }
+  .on-tour__actions { grid-template-columns: 1fr 60px minmax(100px, 1.25fr); gap: 4px; }
+  .on-tour__card button { padding-inline: 10px; }
+}
+@media (prefers-reduced-motion: reduce) { .on-tour__card button { transition: none; } }
+.on-tour[data-reduced-motion="true"] .on-tour__card button { transition: none; }

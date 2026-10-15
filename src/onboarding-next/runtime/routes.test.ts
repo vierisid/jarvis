@@ -44,6 +44,33 @@ test('aborting a stalled request body cancels reading without dispatching', asyn
   expect((await result).status).toBe(400); expect(cancelled).toBe(true);
   expect(o.calls.some(c => c.startsWith('execute:'))).toBe(false);
 });
+for (const stop of ['timeout', 'abort'] as const) test(`${stop} rejects valid JSON whose stream never finishes`, async () => {
+  const o = fixtureOptions(), controller = new AbortController();
+  let cancelled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const req = new Request(`http://localhost${path}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, signal: controller.signal,
+    body: new ReadableStream({
+      start(stream) { stream.enqueue(new TextEncoder().encode(payload({ requestId: 'unfinished' }))); },
+      pull() {
+        // Abort only once the reader has consumed the valid prefix and is
+        // waiting for EOF. Cancellation must not turn that wait into success.
+        if (stop === 'abort') timer ??= setTimeout(() => controller.abort(), 10);
+      },
+      cancel() { cancelled = true; },
+    }),
+  });
+  try {
+    const response = await createOnboardingRoutes(createOnboardingRuntime(o))[path]!.POST!(req);
+    expect(response.status).toBe(stop === 'timeout' ? 408 : 400);
+    expect(await response.json()).toEqual({ schemaVersion: 1, error: 'invalid_request' });
+    expect(cancelled).toBe(true);
+    expect(o.calls.filter(c => c.startsWith('execute:'))).toEqual([]);
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+}, 10_000);
 test('approved complete assembly dispatches exactly the allowlisted operation', async () => {
   const o = fixtureOptions(); const response = await createOnboardingRoutes(createOnboardingRuntime(o))[path]!.POST!(post(payload({ requestId: 'test' })));
   expect(response.status).toBe(200); expect(await response.json()).toEqual({ schemaVersion: 1, result: { actor: 'owner' } });

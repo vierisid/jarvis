@@ -11,7 +11,7 @@
   "implementation_parent": "118ed5d30f264e79f5364ab9143ee1f93e0079ed",
   "delivery_head": {
     "resolve": "git log -1 --format=%H -- docs/onboarding-delivery/ON-B-11.json",
-    "reason": "This commit also contains the reviewed probe coalescing fix. Exact final-head checks live on the PR."
+    "reason": "This commit includes the startup-readiness and body-cancellation review fixes and the main conflict resolution. Inspect CI on the current PR head."
   },
   "status": "implemented_unmerged_default_off",
   "merge_after": [],
@@ -33,7 +33,8 @@
       "passed": 92,
       "skipped": 3,
       "failed": 0,
-      "skip_reason": "real B02 integration tests are absent-module cases on main"
+      "skip_reason": "real B02 integration tests are absent-module cases on main",
+      "at_head": "ad0b3c23cc0ec61c46bd469a557924ebc8a03d1f"
     },
     "combined": {
       "passed": 220,
@@ -65,8 +66,30 @@
         "confirm internal setup acknowledgement only after service readiness",
         "reject corrupt legacy facts and dangling manifest symlinks",
         "bound stalled request bodies",
-        "coalesce shared dependency probes per observation"
+        "coalesce shared dependency probes per observation",
+        "track startup completion outside optional Awareness, including headless mode",
+        "settle and retain body-read failure before cancelling the stream"
       ]
+    },
+    "review_fixes": {
+      "passed": 335,
+      "skipped": 0,
+      "failed": 0,
+      "scope": "onboarding runtime/providers/views and manifest generator; daemon startup, legacy hosted onboarding, Brief routes, settings reload and agent lifecycle",
+      "focused": {
+        "passed": 52,
+        "failed": 0,
+        "scope": "startup coordinator and runtime"
+      },
+      "regressions": [
+        "Hosted Awareness-off and headless startup become ready after core startup; required Awareness still gates readiness.",
+        "Concurrent starts share one attempt; failures remain unready and retries recover.",
+        "Valid JSON in a never-closed body returns 408 on timeout or 400 on abort, with reader cancellation and no provider dispatch.",
+        "B02 canonical setup persistence confirms readiness through the real startup coordinator, including already-running services."
+      ],
+      "typecheck": "passed",
+      "build_ui": "passed; existing Tailwind warnings",
+      "main_integration": "Preserved both Brief and onboarding registrations; B02/B03 are now present from merged main."
     }
   },
   "evidence": {
@@ -78,7 +101,7 @@
     ],
     "doubles": [
       "panel identity resolver",
-      "service startup/readiness and reload appliers",
+      "agent/Awareness services and reload appliers; review fixes exercise the actual startup coordinator",
       "complete future-provider and release decision fixtures"
     ],
     "not_run": [
@@ -99,9 +122,10 @@
   ],
   "rollback": "Disable/remove runtime registration and regenerate catalog. Retain legacy endpoints and all additive journey/session/draft records. No token revocation or record deletion.",
   "quick_verify": {
-    "command": "bun run generate:onboarding-runtime && bun test scripts/onboarding-next-runtime-manifest.test.ts src/onboarding-next/runtime",
+    "command": "bun run generate:onboarding-runtime && bun test scripts/onboarding-next-runtime-manifest.test.ts src/daemon/post-setup-services.test.ts src/onboarding-next/runtime",
     "url_path": "/api/onboarding-next/v1/status",
     "expected": "With an enrolled panel session: schemaVersion 1; enabled, released and ready false. No session: 401. No status write or public creation effect."
   },
-  "next_card": "ON-U-10; not started"
+  "next_card": "ON-U-10; not started",
+  "integrated_main": "6b6aa8169d3b3e7c261146ceb9063898a5b152f2"
 }

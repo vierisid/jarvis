@@ -6,6 +6,7 @@ import { initDatabase, getDb, closeDb } from '../../vault/schema.ts';
 import { DEFAULT_CONFIG } from '../../config/types.ts';
 import { createApiRoutes, type ApiContext } from '../../daemon/api-routes.ts';
 import { saveUserSection } from '../../daemon/user-settings.ts';
+import { createPostSetupServices } from '../../daemon/post-setup-services.ts';
 import { setSetting } from '../../vault/settings.ts';
 import { PANEL_SESSION_COOKIE } from '../../sidecar/panel-sessions.ts';
 import { USER_PROFILE_SETTING_KEY } from '../../user/profile.ts';
@@ -100,8 +101,14 @@ for (const initiallyRunning of [false, true]) test.skipIf(!setupEntry)(`real opt
   c.config.usejarvis_ai = { base_url: 'https://proxy.example.test', api_key: 'fixture' };
   saveUserSection('tts', { enabled: false });
   let running = initiallyRunning, fail = true, starts = 0;
-  c.onboardingServiceReadiness = () => running ? 'running' : 'stopped';
-  c.startPostSetupServices = async () => { starts++; running = true; };
+  const services = createPostSetupServices({
+    startCore: async () => { starts++; running = true; },
+    coreRunning: () => running,
+    awareness: { enabled: () => c.config.awareness?.enabled, start: async () => {}, running: () => true },
+  });
+  if (initiallyRunning) { await services.start(); starts = 0; }
+  c.onboardingServiceReadiness = services.readiness;
+  c.startPostSetupServices = services.start;
   c.settingsReload = {
     reloadAll: async () => ({ applied: [], errors: [] }),
     applyNow: async (section: string) => { applied.push(section); return fail && section === 'tts' ? { message: 'fixture' } : null; },

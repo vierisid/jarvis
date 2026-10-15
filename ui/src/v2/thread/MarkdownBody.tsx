@@ -1,6 +1,5 @@
 import React from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { SafeMarkdown } from "../../components/SafeMarkdown";
 import "./MarkdownBody.css";
 
 /**
@@ -12,8 +11,7 @@ import "./MarkdownBody.css";
 export function MarkdownBody({ text }: { text: string }) {
   return (
     <div className="v2-md">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+      <SafeMarkdown text={text}
         components={{
           // Strip the default paragraph wrapper on single-line messages;
           // users rarely care and the extra margin looks loose in short replies.
@@ -30,11 +28,8 @@ export function MarkdownBody({ text }: { text: string }) {
               </code>
             );
           },
-          a: ({ node, ...props }) => <a className="v2-md__link" {...props} target="_blank" rel="noreferrer" />,
         }}
-      >
-        {text}
-      </ReactMarkdown>
+      />
     </div>
   );
 }

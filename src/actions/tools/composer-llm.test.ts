@@ -180,7 +180,7 @@ describe("createComposerLlmClient: request shape", () => {
     const messages = high.calls[1]!.messages;
     expect(messages.map(message => message.role)).toEqual(["system", "user"]);
     const prompt = messages[1]!.content as string;
-    const context = JSON.parse(prompt.split("Composition context (JSON):\n")[1]!);
+    const context = JSON.parse(prompt.split("Composition context (JSON):\n")[1]!.split('\n')[0]!);
     expect(context.jobSpecification).toEqual({ schemaVersion: 1, ...request });
     expect(context.previousResponse).toBe(first);
     expect(context.errors[0]).toContain("not valid JSON");

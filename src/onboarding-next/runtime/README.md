@@ -44,8 +44,9 @@ refresh OAuth, call a model, or create a workflow. Unknown configuration remains
 `routes.ts` lists the fixed POST operations. Each uses
 `{"schemaVersion":1,"input":{...}}` and returns
 `{"schemaVersion":1,"result":...}`. Provider inputs retain the owning module's
-contract. The envelope is limited to 32 KiB and a five-second read; unsupported
-versions receive 409. Errors contain a fixed safe category, never exceptions,
+contract. The envelope is limited to 32 KiB and a five-second read; timeout or
+abort cancels the reader and rejects without dispatch, even if all JSON bytes
+arrived before the stream stalled. Unsupported versions receive 409. Errors contain a fixed safe category, never exceptions,
 tokens or provider payloads. Responses are uncached. There is no public journey
 acknowledgement or composition-commit operation.
 
@@ -71,8 +72,10 @@ has been verified. Old servers are not modified by this PR.
   configuration and existing settings reload/startup functions. Setup completion
   rechecks live authorization at persistence and service boundaries, applies
   bindings even when B02 has already updated the live config, and verifies
-  completion of startup plus running agent/background services and configured
-  Awareness. Only a confirmed setup result can trigger an internal B01 setup
+  completion of startup plus running agent/background services. Awareness is
+  required only when enabled (including its default) and local tools are available;
+  hosted Awareness-off and headless startup can complete without it. Only a
+  confirmed setup result can trigger an internal B01 setup
   acknowledgement. Retry preserves the timestamp and handles acknowledgement
   conflicts without re-running setup writes. Existing Permissions routes stay
   independent; no OS permission request occurs on discovery or status.
@@ -105,7 +108,7 @@ service readiness and release permission are separate states.
 
 ```sh
 bun run generate:onboarding-runtime
-bun test scripts/onboarding-next-runtime-manifest.test.ts src/onboarding-next/runtime src/onboarding-next/journey src/daemon/api-onboarding-hosted.test.ts
+bun test scripts/onboarding-next-runtime-manifest.test.ts src/daemon/post-setup-services.test.ts src/onboarding-next/runtime src/onboarding-next/journey src/daemon/api-onboarding-hosted.test.ts
 bunx tsc --noEmit
 bun run build:ui
 bun run check:package

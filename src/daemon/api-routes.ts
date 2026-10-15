@@ -141,12 +141,17 @@ import { GoalValidationError, number as goalNumber, keys as goalKeys, record as 
 
 import { createSuggestionFeedbackRoutes } from '../awareness/suggestion-feedback-routes.ts';
 import { approvalIntentFields } from '../authority/approval-delivery.ts';
+import { createBriefRoutes } from '../brief/routes.ts';
+import { createBriefCapabilities } from '../brief/registrations/index.ts';
+import type { BriefCapabilities } from '../brief/capabilities.ts';
 
 export type ApiContext = {
   /** Optional B11 runtime. Default-off; legacy routes remain independent. */
   onboardingNext?: OnboardingRuntime;
   /** Strong readiness for B02, not the legacy background-agent existence test. */
   onboardingServiceReadiness?: () => 'running' | 'stopped' | 'unavailable';
+  /** Optional for old callers; F-01 defaults to no installed or enabled features. */
+  briefCapabilities?: BriefCapabilities;
   suggestionComposer?: import('../awareness/suggestion-composer.ts').SuggestionComposer | null;
   /**
    * Daemon process boot time (Date.now() at start). Surfaced via the
@@ -409,6 +414,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
   return {
     ...createOpportunityRoutes(json),
+    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json),
     // --- Health ---
     '/api/health': {
       GET: () => json(ctx.healthMonitor.getHealth()),

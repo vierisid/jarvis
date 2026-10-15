@@ -1,7 +1,10 @@
 # ON-B-11 verification — 15 October 2026
 
-Baseline: `02727336b50bd2f89469d06b7fd6f3947d1b47d7` on main. The PR has no
-sibling onboarding commits. See the receipt for pinned B02/B03/B04 candidate heads.
+Original baseline: `02727336b50bd2f89469d06b7fd6f3947d1b47d7` on main. Review
+corrections integrate main `6b6aa8169d3b3e7c261146ceb9063898a5b152f2`, preserving
+both Brief and onboarding registrations. B02/B03 are now merged on that base.
+The original checks below describe the earlier candidate; the correction checks
+follow them. See the receipt for the original pinned B02/B03/B04 candidate heads.
 
 | Check | Evidence |
 | --- | --- |
@@ -14,6 +17,20 @@ sibling onboarding commits. See the receipt for pinned B02/B03/B04 candidate hea
 | Compatibility regressions | 72 package, session-liveness and TCP/unix WebSocket tests pass. |
 | Packaging | Package dry-run includes generator and ignored generated catalog. Source-free dependency-stage invocation skips safely. Docker runtime COPY retains the start/dev generator; no image build run. |
 | Review | Direct implementer review, no independent approval. Corrections and their regression coverage are listed in the receipt. Normal commit hooks run. |
+
+Review corrections: 335 targeted tests pass, zero skips or failures, including
+52 startup/runtime tests. TypeScript and the UI build pass (existing Tailwind
+warnings). The new timeout regression failed before the fix with HTTP 200 instead
+of 408; the abort regression returned 401 instead of 400. Both now cancel the
+reader and reject without provider dispatch even after receiving valid JSON.
+
+Startup completion now belongs to the shared startup coordinator, independently
+of optional Awareness. Tests cover hosted Awareness-off and headless startup,
+required/default Awareness, pending and failed startup, concurrent calls, retries,
+and later service failure. The real B02 setup tests now use this coordinator with
+explicit underlying service doubles instead of a mocked readiness callback; all
+three previously absent-module cases run on the updated main base. Live daemon,
+model and native service startup remain outside these tests.
 
 The real setup tests check both initially stopped and already-running host services.
 An injected TTS rebind failure preserves durable setup but leaves journey setup
