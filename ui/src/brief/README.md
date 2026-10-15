@@ -93,3 +93,28 @@ are not restyled. Domain actions, approvals, Authority and async lifecycles stay
 
 `?brief=preview&specimen=controls#/_brief_preview` opens the interactive control specimen. All of its
 actions are local fixtures.
+
+## Motion
+
+Import from `motion/` (`useBriefMotion`, `useBriefReducedMotion`, `createBriefMotion`). It is a thin
+Web Animations wrapper with the approved UI-07 timings in `BRIEF_MOTION` (enter/exit ms per kind:
+`press`, `reveal`, `selection`, `reflow`, `transfer`, `settle`) and one ease-out curve. No package,
+queue or timeline engine.
+
+- One animation per owned element. A new intent reads the current rendered value, cancels the old
+  animation and starts from there, so a reversal never jumps to the old endpoint.
+- The final style is committed before the animation starts and no completion callback changes state.
+  Update semantic state, focus, `inert` and `aria-hidden` immediately; never wait for an animation.
+- The first render is placed without animation. An unchanged endpoint does not animate.
+- `prefers-reduced-motion: reduce` places every change immediately; a live OS change finishes any
+  running animation at its latest target. `useBriefReducedMotion(true)` can ask for less motion but
+  cannot override an OS request for less.
+- Animate `transform` and `opacity` on text-bearing objects; `width`/`height` only on bounded
+  surfaces. Never scale text, blur or interpolate colors. Keep the same properties across calls.
+- Keep the ref'd element mounted during an exit. Unmounting cancels the animation and restores the
+  inline properties the wrapper owned.
+- `motion/figma-reference.json` records the UI-07 source values.
+
+`?brief=preview&specimen=motion#/_brief_preview` opens the interactive motion reference. Its examples
+are local fixtures; "Run 20-cycle check" records browser frames (`motion/trace.ts`) and is not a
+frame-rate or performance claim.

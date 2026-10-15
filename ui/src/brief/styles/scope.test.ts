@@ -7,6 +7,7 @@ import { join } from "node:path";
 const SHEETS = [
   "index.css", "specimen.css",
   "../components/controls/controls.css", "../components/controls/specimen.css",
+  "../motion/specimen.css",
 ];
 
 function selectors(css: string): string[] {
