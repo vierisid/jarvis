@@ -1,7 +1,7 @@
 # ON-U-07: First-workflow prompt
 
-Optional, unregistered presentation module. Target `main` independently; no
-imports of sibling onboarding or unmerged D/F/Q code. Existing onboarding and
+Optional, unregistered presentation module. It imports no sibling onboarding
+module and no unmerged D/F/Q code. Existing onboarding and
 its Talk path are unchanged until ON-U-10 explicitly replaces that entry.
 
 ## Design
@@ -12,8 +12,7 @@ Native Figma file `eNfKeirIKLZLlZEasrurZa`, page `1097:16402`, checkpoint
 `1097:48110`, investor update `1097:48130`, competitor brief `1097:48150`.
 Heading, example text, review note and action labels follow those screens.
 Dark values follow the established onboarding/Brief palette. The static mark
-uses the unchanged official path from D-16's `styles/assets/usejarvis-light.svg`
-at `20e4d1a30fea4b24a753320dd313fdc680f2f697`; no logo redraw or D UI fork.
+inlines the official usejarvis logo path unchanged; no logo redraw or D UI fork.
 
 ## Controlled host contract
 
@@ -91,4 +90,3 @@ zoom or a WebView accessibility certification.
 Enable only after ON-U-10, ON-B-07, ON-B-08, ON-B-11 registration and verified
 D/F/Q assembly. Rollback: disable this optional view, then revert its own files;
 retain journey/request/draft data and the previous onboarding entry.
-Exact evidence and limitations: `docs/onboarding-delivery/ON-U-07.json`.
