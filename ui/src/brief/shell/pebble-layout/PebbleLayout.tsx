@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useId, useLayoutEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import type { BriefShellPort } from "../../contracts";
-import { BriefTooltip } from "../../components/controls";
+import { BriefIconButton, BriefTooltip } from "../../components/controls";
 import { BriefBrand } from "../../styles/BriefBrand";
 import { useBriefMotion } from "../../motion";
 import { pebbleGeometry, PEBBLE_SIZE } from "./layout";
@@ -102,9 +102,7 @@ export function PebbleLayout({ shell, enabled, conversation, children, reducedMo
               event.preventDefault(); event.stopPropagation(); close();
             }
           }}>
-          <button type="button" className="brief-pebble-close" aria-label="Close conversation" onClick={close}>
-            <X size={16} aria-hidden="true" />
-          </button>
+          <BriefIconButton className="brief-pebble-close" label="Close conversation" icon={<X />} tooltip={false} onClick={close} />
           <div className="brief-pebble-content">{valid ? conversation?.content : null}</div>
         </div>
       </section>
