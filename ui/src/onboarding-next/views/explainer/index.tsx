@@ -20,14 +20,21 @@ export interface ExplainerCopy {
   alternativeDescription: string;
 }
 
-/** Approved Figma 1097:16424. These are illustrative benefits, not live activity. */
+/**
+ * Layout from Figma 1097:16424. The copy is held to what Awareness does on main
+ * (docs/opportunity-routines.md): it recognizes a few ordered, multi-step routines
+ * from screen captures, asks before anything is built, and only drafts a workflow
+ * after the user accepts. It never runs one automatically or measures time saved.
+ * The example uses a supported routine (lead follow-up); research and reading
+ * contexts are deliberately ignored by the classifier.
+ */
 export const explainerCopy: Readonly<ExplainerCopy> = {
   title: "Less repetition. More room to build.",
-  description: "With Awareness on, Jarvis watches your screen, finds repeated work, and prepares workflows for you to review.",
+  description: "With Awareness on, Jarvis looks for multi-step routines you repeat on screen and asks whether to turn one into a workflow. Nothing is built until you say yes.",
   steps: [
-    { title: "Jarvis notices", description: "The same research before every sales call." },
-    { title: "A workflow takes shape", description: "Context and questions, prepared before the call." },
-    { title: "Your goal moves forward", description: "More time to win your next design partner." },
+    { title: "Jarvis notices", description: "The same lead follow-up, repeated over several days." },
+    { title: "A workflow takes shape", description: "Say yes and Jarvis drafts the steps for you to review." },
+    { title: "Your goal moves forward", description: "Less time on follow-ups, more on your next design partner." },
   ],
   alternativeTitle: "Already know what to automate?",
   alternativeDescription: "Describe it in Workflows. Jarvis builds the steps with you.",

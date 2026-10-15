@@ -8,7 +8,7 @@ An independently mergeable, controlled onboarding explanation. Source: Jarvis on
 
 The view is an ordinary labelled, vertically scrollable section, not a modal. Its default height is `100dvh`; an embedded host can set `--on-setup-height: 100%` inside a bounded flex/grid area with `min-height: 0`. It does not steal focus on mount. ON-U-10 owns focus transfer when changing pages.
 
-There are no service calls, permission requests, setup writes, route imports or imports from sibling onboarding PRs. "With Awareness on" is conditional, not an active-observation indicator. The self-directed alternative explains the later Workflows room; it does not skip setup. The three cards are an illustrative sequence and need no animation to make sense.
+There are no service calls, permission requests, setup writes, route imports or imports from sibling onboarding PRs. "With Awareness on" is conditional, not an active-observation indicator. The copy must stay within what Awareness does on main (see `docs/opportunity-routines.md`): it proposes a recognized multi-step routine and drafts a workflow only after the user accepts; it does not run workflows automatically or claim time saved. The self-directed alternative explains the later Workflows room; it does not skip setup. The three cards are an illustrative sequence and need no animation to make sense.
 
 ## Integration and rollback
 
@@ -35,4 +35,4 @@ bun run build:ui
 bun build ui/src/onboarding-next/views/explainer/preview/index.html --outdir /tmp/on-u-02-preview-build
 ```
 
-The delivery receipt and evidence are under `docs/onboarding-delivery/ON-U-02.json` and `docs/onboarding-delivery/evidence/ON-U-02/`. Missing optional assembly is recorded as blocked, never counted as a runtime pass.
+Missing optional assembly is blocked, never counted as a runtime pass.

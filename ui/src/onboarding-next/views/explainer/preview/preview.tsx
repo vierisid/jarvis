@@ -31,9 +31,9 @@ function Preview() {
       <main>
         <ExplainerView model={model} onBack={() => setIntents([...intents, "Back"])} onContinue={() => setIntents([...intents, "Continue"])}
           copy={longCopy ? { ...explainerCopy, title: "Less repetition in your everyday work. More room for everything you are building.", steps: [
-            { ...explainerCopy.steps[0], description: "The same research, meeting notes and background reading before every conversation with a prospective design partner." },
-            { ...explainerCopy.steps[1], title: "A workflow prepares the context you need", description: "Context and questions, gathered together and prepared before the call for you to review." },
-            { ...explainerCopy.steps[2], description: "More time to meet prospective partners, learn what they need and move your company forward." },
+            { ...explainerCopy.steps[0], description: "The same lead follow-up, checked against contact history and drafted again, several days a week." },
+            { ...explainerCopy.steps[1], title: "A workflow draft takes shape for you to review", description: "Say yes and Jarvis drafts the steps, with every one waiting for your review before anything runs." },
+            { ...explainerCopy.steps[2], description: "Less time on repeated follow-ups and more time to meet prospective partners and learn what they need." },
           ] } : undefined} />
       </main>
     </div>

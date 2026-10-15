@@ -68,6 +68,14 @@ describe("ON-U-02 optional explainer", () => {
     expect(host.querySelector("input")).toBeNull();
     expect(networkCalls).toBe(0);
   });
+  test("copy stays within what Awareness does: asks first, drafts on yes, no automatic or measured claims", () => {
+    const text = [explainerCopy.description, ...explainerCopy.steps.flatMap(s => [s.title, s.description])].join(" ");
+    expect(explainerCopy.description).toContain("Nothing is built until you say yes");
+    expect(text).toMatch(/for you to review/);
+    // Research/reading contexts are excluded by the routine classifier, so they cannot be the example.
+    expect(text).not.toMatch(/\b(?:research|reading)\b/i);
+    expect(text).not.toMatch(/\b(?:automatically|watches|records everything|saves you \d)/i);
+  });
   test.each(["Back", "Continue"])("%s emits exactly one intent without setup, permissions or theme writes", async label => {
     await mount();
     localStorage.setItem("jarvis-theme", "dark");
