@@ -6,14 +6,6 @@
   "status": "implemented",
   "merged": false,
   "release_enabled": false,
-  "pull_request": "https://github.com/vierisid/jarvis/pull/701",
-  "ci_followup": {
-    "reason": "User-requested repair of the failed release-version cache assertion",
-    "change": "Warm a unique source manifest version before comparing the release rebuild; cache assertions unchanged",
-    "local_tests": "14 cache-check tests / 86 assertions; 49 combined cache, Brief and onboarding tests / 409 assertions; 25 workflow-hardening checks",
-    "evidence": "evidence/D-01/cache-check.md",
-    "remote_verdict": "Read the latest check on the current PR head; this receipt does not claim a future CI result."
-  },
   "repository": "https://github.com/vierisid/jarvis",
   "branch": "brief/d-01",
   "baseline": "05039c3e90d8670f90527f6c58f0a0ab684024b7",
@@ -127,28 +119,9 @@
     "Connection-owner preservation is tested with an instrumented legacy root; no live hosted WebSocket, voice, sidecar or OAuth session was exercised.",
     "Onboarding regression tests and gate ownership are checked; a full real onboarding-to-workflow handoff within future Brief rooms is not implemented or certified.",
     "Preview toggles demonstrate shell state, not the later sidebar/Pebble layouts or Figma animations.",
-    "Remote tests passed on the original D-01 head; Docker cache failure prompted the documented follow-up. Current-head CI is recorded on PR #701.",
-    "No deployment, PR merge, real workflow execution or account mutation."
+    "The full repository suite and remote CI were not run.",
+    "No deployment, push, PR, real workflow execution or account mutation."
   ],
   "rollback": "Remove the brief query parameter to return to the existing dashboard. Revert the D-01 commit for code rollback; no data migration or cleanup is required.",
-  "next": "D-02 is draft PR #703 against brief/foundations (D-01 plus F-01). Keep all PRs unmerged; D-03 is not started.",
-  "rebase_2026_10_14": {
-    "baseline": "5024ea7455a5613be0514475be32c0dee6de0edd",
-    "original_head": "2e9d829e415df803703cdd0ff39c46a40c7847c1",
-    "worktree": "/home/vierisid/.cache/codex/jarvis-rebase-d-01-20261014",
-    "owner_decision": "Combine main dedicated Docker builder and explanation with D-01 manifest warm-up; adapt the test fixture to the builder lifecycle.",
-    "conflict": "The script header conflicted. Existing test fixture rejected buildx create from main; reproduced before adaptation.",
-    "resolution": "Retain main builder creation/use/removal and all fail-closed checks. Preserve package.json plus VERSION warm-up. Test the same dedicated builder for every build and cleanup on success or failure.",
-    "validation": {
-      "targeted_tests": "49 passed, 0 failed, 492 assertions; cache-check, Brief boundary and legacy onboarding",
-      "upstream_shell_guard": "14 checks passed",
-      "typecheck_and_repository_guards": "passed normal pre-commit hook: 14 cache tests, TypeScript, EE import guard, migration guard, 100 template lint and package-content guard",
-      "ui_build": "passed; existing @theme/@tailwind warnings"
-    },
-    "limitations": [
-      "Real Docker builds are left to GitHub CI; local tests use a fake Docker executable.",
-      "No new visual design; browser screenshots in this receipt are historical, not rerun for this rebase.",
-      "No merge, release activation or deployment."
-    ]
-  }
+  "next": "D-02 in a separate worktree based on D-01; stacked PRs can be developed and reviewed before the foundation merges."
 }
