@@ -5,6 +5,116 @@ import { fixture } from './test-fixture.ts';
 import { parseJourney } from './policy.ts';
 import { createDraftStore } from './drafts.ts';
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
+async function until(done: () => boolean) {
+  const deadline = Date.now() + 1000;
+  while (!done()) {
+    if (Date.now() > deadline) throw new Error('Session did not settle');
+    await new Promise(resolve => setTimeout(resolve, 1));
+  }
+}
+
+test('coalesces provider events received during a read and observes the terminal update', async () => {
+  const f = fixture(), captured = deferred(), release = deferred();
+  f.setJourney({ stepId: 'build' });
+  let notify = () => {}, reads = 0, version = 0;
+  f.config.adapters.build!.create = () => ({
+    available: () => true, command: async () => {},
+    read: async () => {
+      const model = { version, outcome: version ? 'succeeded' : 'working' };
+      if (++reads === 2) { captured.resolve(); await release.promise; }
+      return { model };
+    },
+    subscribe: changed => { notify = changed; return () => {}; },
+  });
+  const s = createSession(f.config);
+  try {
+    await s.start();
+    const refresh = s.refresh(); await captured.promise;
+    version = 1; notify(); notify(); notify(); release.resolve();
+    await refresh; await until(() => !s.state().busy);
+    expect(s.state().presentation!.model).toEqual({ version: 1, outcome: 'succeeded' });
+    expect(reads).toBe(3);
+  } finally { release.resolve(); s.dispose(); }
+});
+
+test('drains an invalidation after a command without replaying the command', async () => {
+  const f = fixture(), captured = deferred(), release = deferred();
+  f.setJourney({ stepId: 'build' });
+  let notify = () => {}, reads = 0, commands = 0, version = 0;
+  f.config.adapters.build!.create = () => ({
+    available: () => true, command: async () => { commands++; },
+    read: async () => {
+      const model = { version };
+      if (++reads === 2) { captured.resolve(); await release.promise; }
+      return { model };
+    },
+    subscribe: changed => { notify = changed; return () => {}; },
+  });
+  const s = createSession(f.config);
+  try {
+    await s.start(); const action = s.act(s.key(), 'resume'); await captured.promise;
+    version = 1; notify(); release.resolve(); await action; await until(() => !s.state().busy);
+    expect(s.state().presentation!.model.version).toBe(1); expect(commands).toBe(1);
+  } finally { release.resolve(); s.dispose(); }
+});
+
+for (const dispose of [false, true]) test(`invalidation during the first read is drained unless disposed (${dispose})`, async () => {
+  const f = fixture(), captured = deferred(), release = deferred();
+  f.setJourney({ stepId: 'build' });
+  let notify = () => {}, reads = 0, version = 0;
+  f.config.adapters.build!.create = () => ({
+    available: () => true, command: async () => {},
+    read: async () => {
+      const model = { version };
+      if (++reads === 1) { captured.resolve(); await release.promise; }
+      return { model };
+    },
+    subscribe: changed => { notify = changed; return () => {}; },
+  });
+  const s = createSession(f.config);
+  const start = s.start(); await captured.promise;
+  version = 1; notify();
+  if (dispose) s.dispose();
+  release.resolve(); await start;
+  try {
+    if (dispose) { expect(reads).toBe(1); expect(s.state().journey).toBeNull(); }
+    else {
+      await until(() => !s.state().busy);
+      expect(s.state().presentation!.model.version).toBe(1); expect(reads).toBe(2);
+    }
+  } finally { if (!dispose) s.dispose(); }
+});
+
+for (const failure of ['journey', 'adapter'] as const) test(`initial ${failure} read failure retains subscriptions through recovery`, async () => {
+  const f = fixture(); f.setJourney({ stepId: 'build' });
+  let fail = true, notify = () => {}, subscriptions = 0, unsubscribes = 0, version = 0;
+  const call = f.config.transport.call;
+  f.config.transport.call = async (...args) => {
+    if (failure === 'journey' && fail && args[0] === 'journey.read') throw new Error('Offline');
+    return call(...args);
+  };
+  f.config.adapters.build!.create = () => ({
+    available: () => true, command: async () => {},
+    read: async () => { if (failure === 'adapter' && fail) throw new Error('Offline'); return { model: { version } }; },
+    subscribe: changed => { subscriptions++; notify = changed; return () => { unsubscribes++; }; },
+  });
+  const s = createSession(f.config);
+  try {
+    await s.start(); expect(s.state().blocked).toBe(true);
+    fail = false; await s.refresh(); expect(s.state().blocked).toBe(false);
+    expect(subscriptions).toBe(1);
+    version = 1; notify(); await until(() => !s.state().busy);
+    expect(s.state().presentation!.model.version).toBe(1);
+    await s.refresh(); expect(subscriptions).toBe(1);
+  } finally { s.dispose(); }
+  expect(unsubscribes).toBe(1);
+});
+
 test('default off and absent release decision do no reads, loads or writes', async () => {
   for (const enabled of [false, true]) {
     const f = fixture(); f.config.enabled = enabled; f.config.authorizeRelease = undefined;

@@ -58,6 +58,29 @@ test('disconnection masks the view and restores the persisted activation draft w
   assembly.reconnect(); await click('Reconnect'); await wait(() => !!host.querySelector('textarea'));
   expect(host.querySelector('textarea')!.value).toBe(before);
 });
+for (const moveFocus of [false, true]) test(`background refresh restores draft focus and selection unless focus moved (${moveFocus})`, async () => {
+  const assembly = fixture({ start: 'activation' }); await mount(assembly);
+  await click('Meeting follow-up');
+  const input = host.querySelector('textarea')!;
+  input.focus(); input.setSelectionRange(6, 13, 'backward');
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const status = assembly.config.transport.status;
+  assembly.config.transport.status = async signal => { await pending; return status(signal); };
+  const elsewhere = document.createElement('button'); document.body.append(elsewhere);
+  try {
+    await React.act(async () => assembly.advance());
+    expect(host.querySelector('[aria-busy="true"]')).not.toBeNull();
+    // Happy DOM does not implement inert's native focus loss; emulate the
+    // browser effect while the request is pending, before asserting recovery.
+    input.blur();
+    if (moveFocus) elsewhere.focus();
+    await React.act(async () => { release(); });
+    await wait(() => host.querySelector('[aria-busy]')?.getAttribute('aria-busy') === 'false');
+    expect(document.activeElement === (moveFocus ? elsewhere : input)).toBe(true);
+    expect([input.selectionStart, input.selectionEnd, input.selectionDirection]).toEqual([6, 13, 'backward']);
+  } finally { release(); elsewhere.remove(); }
+});
 test('real build view opens the exact fixture result once its terminal event is newer', async () => {
   const assembly = fixture({ start: 'activation' }); await mount(assembly);
   await click('Meeting follow-up'); await click('Create my workflow'); await wait(() => !!host.querySelector('.on-build'));

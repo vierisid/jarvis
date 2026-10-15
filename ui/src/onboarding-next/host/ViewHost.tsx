@@ -1,4 +1,4 @@
-import React, { Component, useEffect, useRef, useSyncExternalStore } from 'react';
+import React, { Component, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 import type { ComponentType, ReactNode } from 'react';
 import { useTheme } from '../../v2/shell/useTheme.ts';
 import type { Session } from './session.ts';
@@ -25,6 +25,29 @@ export function ViewHost({ session, legacy, children }: { session: Session; lega
   const [theme, setTheme] = useTheme();
   const headingHost = useRef<HTMLDivElement>(null);
   const focusedView = useRef<string | null>(null);
+  // Capture before React commits `inert`, which makes browsers blur controls.
+  // A same-screen refresh should return the user's cursor, unless they moved
+  // focus elsewhere while waiting. Navigation keeps the new-heading behavior.
+  const active = typeof document === 'undefined' ? null : document.activeElement;
+  const priorFocus = state.busy && active && active instanceof HTMLElement && headingHost.current?.contains(active)
+    ? { element: active, view: state.view, selection: active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement
+      ? { start: active.selectionStart, end: active.selectionEnd, direction: active.selectionDirection } : null } : null;
+  const busyFocus = useRef<typeof priorFocus>(null);
+  useLayoutEffect(() => {
+    if (state.blocked) { busyFocus.current = null; return; }
+    if (state.busy) { busyFocus.current ??= priorFocus; return; }
+    const saved = busyFocus.current; busyFocus.current = null;
+    if (saved && saved.view === state.view && saved.element.isConnected
+      && headingHost.current?.contains(saved.element) && !saved.element.closest('[inert]')
+      && document.activeElement === document.body) {
+      saved.element.focus({ preventScroll: true });
+      const selection = saved.selection;
+      if (selection && selection.start !== null && selection.end !== null
+        && (saved.element instanceof HTMLInputElement || saved.element instanceof HTMLTextAreaElement)) {
+        saved.element.setSelectionRange(selection.start, selection.end, selection.direction ?? undefined);
+      }
+    }
+  }, [state.busy, state.blocked, state.view]);
   useEffect(() => {
     if (state.mode !== 'checking') window.dispatchEvent(new Event('jarvis:boot-ready'));
   }, [state.mode]);

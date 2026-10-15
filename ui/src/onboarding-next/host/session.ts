@@ -14,7 +14,7 @@ export interface HostState {
 export function createSession(config: Configuration) {
   let state: HostState = { mode: 'checking', journey: null, view: null, presentation: null, busy: false, blocked: false };
   let status: Status | null = null, views: LoadedViews | null = null;
-  let disposed = false, started = false, inFlight = false;
+  let disposed = false, started = false, inFlight = false, refreshQueued = false;
   const adapters: Partial<Record<keyof Configuration['adapters'], FeatureAdapter>> = {};
   let editing = false;
   const abort = new AbortController(), listeners = new Set<() => void>(), unsubscribes: Array<() => void> = [];
@@ -61,12 +61,25 @@ export function createSession(config: Configuration) {
     parseJourney(result);
   }
   const key = () => state.journey ? `${state.journey.journeyId}:${state.journey.revision}:${state.view}` : '';
+  function finishFlight() {
+    inFlight = false;
+    // An invalidation during a command/start still needs a fresh authoritative
+    // read. Keep the view locked until it settles; never replay the mutation.
+    if (refreshQueued && !disposed && !state.blocked && state.mode === 'journey') void refresh();
+    else { refreshQueued = false; update({ busy: false }); }
+  }
   async function refresh() {
-    if (inFlight || disposed || !started || state.mode === 'legacy' || state.mode === 'complete') return;
+    if (disposed || !started || state.mode === 'legacy' || state.mode === 'complete') return;
+    if (inFlight) { refreshQueued = true; return; }
     inFlight = true; update({ busy: true });
-    try { await check(); await read(); }
+    try {
+      do {
+        refreshQueued = false;
+        await check(); await read();
+      } while (refreshQueued && !disposed && state.mode === 'journey');
+    }
     catch { update({ blocked: true }); }
-    finally { inFlight = false; update({ busy: false }); }
+    finally { finishFlight(); }
   }
   async function act(expected: string, action: string, input?: unknown) {
     if (disposed || inFlight || state.mode !== 'journey' || state.blocked || expected !== key()) return;
@@ -109,7 +122,7 @@ export function createSession(config: Configuration) {
       }
       await read();
     } catch { update({ blocked: true }); }
-    finally { inFlight = false; update({ busy: false }); }
+    finally { finishFlight(); }
   }
   return {
     state: () => state,
@@ -136,12 +149,14 @@ export function createSession(config: Configuration) {
         // Select once before the first journey read (which may initialize B01).
         // Failures after this point must not silently start the old journey.
         update({ mode: 'journey', busy: true });
-        await read();
+        // Subscribe before reading so a transient first read cannot leave a
+        // recovered session permanently disconnected from provider events.
         for (const adapter of Object.values(adapters)) {
           if (adapter?.subscribe) unsubscribes.push(adapter.subscribe(() => { if (!editing) void refresh(); }));
         }
+        await read();
       } catch { if (state.mode === 'checking') update({ mode: 'legacy' }); else update({ blocked: true }); }
-      finally { inFlight = false; update({ busy: false }); }
+      finally { finishFlight(); }
     },
     refresh, act,
     draft(expected: string, value: unknown) {
@@ -156,7 +171,7 @@ export function createSession(config: Configuration) {
       finally { editing = false; }
     },
     dispose() {
-      disposed = true; abort.abort(); listeners.clear(); unsubscribes.forEach(fn => fn());
+      disposed = true; refreshQueued = false; abort.abort(); listeners.clear(); unsubscribes.forEach(fn => fn());
       for (const adapter of Object.values(adapters)) adapter?.dispose?.();
     },
   };

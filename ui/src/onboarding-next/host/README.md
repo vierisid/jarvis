@@ -61,7 +61,10 @@ must be inert and tolerate React StrictMode recreation. Adapters validate owner
 responses, map serializable view models, supply trusted local render ports, and
 own scoped drafts, event ordering, cancellation and idempotency. `available()`
 includes required services and renderers, not just source presence. Adapter
-subscriptions request an authoritative refresh; only the active feature is read.
+subscriptions are installed before the first journey read, so reconnecting after
+an initial read failure retains live updates. Notifications received during a
+read or command are coalesced into a subsequent authoritative read; commands are
+never replayed by this queue. Only the active feature is read.
 Commands receive server-returned journey identity/revision plus the session's
 abort signal. An adapter must reconcile a timed-out operation before permitting
 another attempt, preserving its original request key/body. Disposal stops its
@@ -82,7 +85,9 @@ Google skip/back cancels through its owner before navigation. Interview Continue
 and result Finish remain guarded by B01. Back/Explore from activation persist the
 current draft first. Render callbacks carry the current journey/revision/view key;
 old callbacks and overlapping actions cannot advance a newer screen. Focus moves
-to the new heading after saving, while background updates preserve input focus.
+to the new heading after saving. A same-screen refresh restores the prior control
+and text selection after the interaction lock clears, unless the user moved
+focus elsewhere or the control was removed.
 The build's automatic result callback waits until the host can accept it.
 
 `createDraftStore` is an optional per-tab storage helper, keyed by server scope,
