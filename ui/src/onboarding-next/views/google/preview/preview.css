@@ -1,0 +1,9 @@
+html, body, #root { margin: 0; inline-size: 100%; block-size: 100%; overflow: hidden; }
+.google-preview-root { display: flex; flex-direction: column; background: #fafbfc; }
+.google-preview-tools { flex: 0 0 auto; position: relative; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 16px; background: #fff; color: #13161a; border-bottom: 1px solid #e2e7ec; font: 12px/20px 'Spline Sans Mono', monospace; }
+.google-preview-tools label { display: flex; align-items: center; gap: 6px; }
+.google-preview-tools select { padding: 4px; background: #fff; color: #13161a; }
+.google-preview-tools input { appearance: auto; }
+.google-preview-root main { flex: 1; min-height: 0; }
+.google-preview-root .on-google { --on-setup-height: 100%; }
+.google-preview-root[data-reduced="true"] .on-google * { transition: none !important; animation: none !important; }
