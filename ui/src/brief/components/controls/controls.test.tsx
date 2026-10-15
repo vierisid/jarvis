@@ -186,14 +186,23 @@ test("an open menu follows a local appearance change", async () => {
   expect(document.querySelector('[role="menu"]')?.closest("[data-brief-theme]")?.getAttribute("data-brief-theme")).toBe("dark");
 });
 
-test("tooltip is immediate on focus, has a description, and Escape retains focus", async () => {
+test("tooltip is immediate on focus, does not repeat the name, and Escape retains focus", async () => {
   await mount(<C.BriefIconButton label="Close panel" icon={<span>X</span>} />);
   const button = host.querySelector("button")!;
   await React.act(async () => button.focus());
   const tip = document.querySelector('[role="tooltip"]')!;
-  expect(tip.textContent).toBe("Close panel"); expect(button.getAttribute("aria-describedby")).toBe(tip.id);
+  expect(tip.textContent).toBe("Close panel"); expect(button.getAttribute("aria-label")).toBe("Close panel");
+  expect(button.hasAttribute("aria-describedby")).toBe(false);
   await key(button, "Escape");
   expect(document.querySelector('[role="tooltip"]')).toBeNull(); expect(document.activeElement).toBe(button);
+});
+
+test("tooltip describes its child when it adds information", async () => {
+  await mount(<C.BriefTooltip label="Saves to this device only"><button>Save</button></C.BriefTooltip>);
+  const button = host.querySelector("button")!;
+  await React.act(async () => button.focus());
+  const tip = document.querySelector('[role="tooltip"]')!;
+  expect(button.getAttribute("aria-describedby")).toBe(tip.id);
 });
 
 test("unmount removes a menu and its portaled content", async () => {

@@ -90,7 +90,9 @@ export function BriefTooltip({ label, children }: { label: string; children: Rea
     onFocus={() => { clear(); focused.current = true; suppressed.current = false; setOpen(true); }}
     onBlur={() => { focused.current = false; if (!hovering.current) { suppressed.current = false; close(); } }}
     onClickCapture={() => { suppressed.current = true; close(); }}>
-    {cloneElement(children, { "aria-describedby": [children.props["aria-describedby"], open ? id : null].filter(Boolean).join(" ") || undefined })}
+    {/* A tooltip that repeats the accessible name would be announced twice. */}
+    {cloneElement(children, { "aria-describedby": [children.props["aria-describedby"],
+      open && children.props["aria-label"] !== label ? id : null].filter(Boolean).join(" ") || undefined })}
     {open && <FloatingSurface anchor={anchor} kind="tooltip" onPointerEnter={() => { clear(); hovering.current = true; }} onPointerLeave={leave}>
       <span role="tooltip" id={id} className="brief-tooltip__body">{label}</span>
     </FloatingSurface>}
