@@ -129,6 +129,15 @@ jobs:
       # carrying the orphaned chrome processes the previous attempt leaked --
       # slower, and less likely to pass.
       - run: bun test --retry=2
+      # The real engine (Q-08): a step held while Jarvis is paused must come
+      # back the way it was about to run, which only the engine itself shows.
+      # Engine tests skip without a built bundle and pieces, so this builds
+      # them (seconds) and runs those files. After the full run on purpose:
+      # built first, they would un-skip engine suites that need more pieces.
+      - run: >-
+          JARVIS_TEST_ENGINE_BUILD=1 bun test --retry=2
+          src/workflows/runner/engine-runtime/emergency-hold-engine.test.ts
+          src/workflows/runner/engine-runtime/outer-worker-delay.test.ts
       # Not retried: deterministic.
       - run: bunx tsc --noEmit
 

@@ -183,9 +183,12 @@ export class AuthorityEngine {
     // 4. Numeric level check
     // Use the higher of the agent's role level and the config's default_level,
     // so the dashboard authority slider acts as the effective authority floor.
-    const effectiveLevel = Math.max(agentAuthorityLevel, this.config.default_level);
+    // A level that is not a number counts for nothing: `NaN < required` is
+    // false, so it used to pass every level check (Q-08).
+    const levels = [agentAuthorityLevel, this.config.default_level].filter((level) => Number.isFinite(level));
+    const effectiveLevel = levels.length ? Math.max(...levels) : 0;
     const requiredLevel = AUTHORITY_REQUIREMENTS[actionCategory];
-    if (effectiveLevel < requiredLevel) {
+    if (!(effectiveLevel >= requiredLevel)) {
       return {
         allowed: false,
         requiresApproval: false,

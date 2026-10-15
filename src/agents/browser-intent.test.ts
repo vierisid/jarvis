@@ -95,7 +95,8 @@ describe('ambiguous UI effects require review at real agent gates', () => {
     await exec(f.orch, 'browser_scroll', { direction: 'down' });
     const card = f.approvals.getPending()[0]!;
     expect(JSON.parse(card.tool_arguments)).toEqual({ direction: 'down' });
-    f.approvals.approve(card.id, 'user');
+    // A click-only card: the decision has to come from the dashboard (Q-08).
+    f.approvals.approve(card.id, 'dashboard');
     const executor = new DeferredExecutor(f.approvals, f.audit);
     executor.setToolRegistry(f.registry);
     await executor.executeApproved(card.id);
@@ -141,6 +142,8 @@ describe('ambiguous UI effects require review at real agent gates', () => {
     executor.setToolRegistry(f.registry);
     expect(await executor.executeApproved(old.id)).toContain('predates the required UI review');
     expect(f.calls).toEqual([]);
+    // Refused after the claim, and the receipt is audited like every other one (Q-08).
+    expect(f.audit.query({ limit: 5 })).toContainEqual(expect.objectContaining({ approval_id: old.id, authority_decision: 'approval_required', executed: 0 }));
   });
 });
 
