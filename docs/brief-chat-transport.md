@@ -171,28 +171,11 @@ Review regressions additionally cover actual specialist cancellation, speech
 subscription changes, 64 queued cancellations, nested signals and limiter handoff.
 No visible UI changed, so no screenshot is applicable.
 
-The review-fix affected run passed 843 tests with one platform skip, including
-workflow cancellation/authority and specialist paths. TypeScript passed. The four
-new transport/delegation regression cases first failed against the reviewed head
-and now pass. Commands and results are in
-`brief-delivery/evidence/F-03/review-fixes.json`; the original checks remain in
-`brief-delivery/evidence/F-03/`. Three unsafe
-mutations failed the routing, history-isolation and terminal-idempotency tests;
-the restored implementation passes. These results do not certify real hosted
-model quality or live microphone playback.
+These tests do not certify real hosted model quality or live microphone playback.
 
-## Integration and rollback
-
-Initial main check: `2d2d6f34831897ae14a77f84022e4c7938fec6f3`. Refreshed main:
-`98ad1e70884b665008e1255ee15aa79c82e23dca`. PR #716 merged during implementation;
-its approval label helpers are separate from these routing edits. The actual base
-remains F-02.1, following the owner's instruction to stage unmerged dependencies.
-Rebase/retarget the stack after the foundation merges, preserving main's label
-changes and rerunning the affected checks.
+## Rollback
 
 To roll back, unset `JARVIS_BRIEF_CHAT_TRANSPORT` and restart. Keep all additive
 tables, event IDs and canonical history. Old code can still write legacy messages.
 Do not drop tables, clear messages or replay accepted effects. New clients should
 respect the capability response and reopen a legacy connection when falling back.
-
-See `brief-delivery/F-03.json` for the exact receipt and evidence paths.
