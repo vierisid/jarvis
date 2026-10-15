@@ -110,6 +110,18 @@ test('canceling a parent before its required child starts closes both queue jobs
   expect(resumeCompletedChildRuns()).toBe(0);
 });
 
+test('a stop reason is kept on the parent only, and its required child still stops with it', async () => {
+  const f = fixture();
+  const result = await f.start();
+  expect(cancelFlowRun(f.run.id, { reason: 'The workflow was turned off, so this run was stopped.', reasonLabel: 'Workflow turned off' }).accepted).toBe(true);
+  expect(getFlowRun(f.run.id)).toMatchObject({ status: 'STOPPED',
+    failedStep: { name: '<lifecycle>', displayName: 'Workflow turned off', errorMessage: 'The workflow was turned off, so this run was stopped.' } });
+  const child = getFlowRun(result.runId!)!;
+  expect(child.status).toBe('STOPPED');
+  expect(child.failedStep ?? null).toBeNull();
+  expect(listWaitpointsByFlowRun(f.run.id, false)).toHaveLength(0);
+});
+
 test('malformed required-child mode is rejected before the backend runs', async () => {
   let calls = 0;
   const route = createJarvisWorkflowsStartRoute({ workflowsStart: async () => { calls++; return { runId: 'never' }; } });
