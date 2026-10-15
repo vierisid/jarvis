@@ -128,7 +128,7 @@ describe('composition job and draft recovery', () => {
     let calls = 0;
     worker = new SuggestionComposer(request => composePersistedFlow({
       pieceRegistry: sampleCatalog(), llm: { async chat({ prompt }) {
-        const context = JSON.parse(prompt.split('Composition context (JSON):\n')[1]!);
+        const context = JSON.parse(prompt.split('Composition context (JSON):\n')[1]!.split('\n')[0]!);
         expect(context.jobSpecification.name).toBe(acceptance.name);
         expect(context.jobSpecification.description).toContain(acceptance.description);
         expect(context.jobSpecification.description).toContain(acceptance.expectedOutcome);
