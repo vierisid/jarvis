@@ -45,10 +45,13 @@ function preparedValid(v: unknown): v is PreparedTurn {
     && v.facts.every(f => object(f) && typeof f.theme === 'string' && typeof f.summary === 'string'
       && (f.raw_quote === undefined || typeof f.raw_quote === 'string'));
 }
+// Stored checkpoints never carry a system prompt; the live interviewer supplies it.
+// A persisted system message would otherwise be replayed into the model as instructions.
+const hasSystem = (v: unknown) => object(v) && Array.isArray(v.messages) && v.messages.some(m => object(m) && m.role === 'system');
 function readRecord(v: unknown, scope: Scope): RecordV1 {
   if (!object(v) || v.schemaVersion !== 1) throw new Failure('unavailable', 'unsupported_record');
   if (JSON.stringify(v).length > MAX_RECORD) throw new Failure('unavailable', 'record_limit');
-  if (v.scopeKey !== scopeKey(scope) || !object(v.snapshot) || !checkpointValid(v.checkpoint)
+  if (v.scopeKey !== scopeKey(scope) || !object(v.snapshot) || !checkpointValid(v.checkpoint) || hasSystem(v.checkpoint)
     || !Array.isArray(v.receipts) || v.receipts.length > MAX_TURNS) throw new Failure('unavailable', 'invalid_record');
   const s = v.snapshot;
   if (s.schemaVersion !== 1 || !identity(s.sessionId) || !identity(s.turnId) || !Number.isSafeInteger(s.cursor)
@@ -59,7 +62,7 @@ function readRecord(v: unknown, scope: Scope): RecordV1 {
   }
   if (v.pending !== null && (!object(v.pending) || !identity(v.pending.turnId) || !identity(v.pending.clientRequestId)
     || !identity(v.pending.attemptId) || (v.pending.text !== null && typeof v.pending.text !== 'string')
-    || (v.pending.prepared !== undefined && !preparedValid(v.pending.prepared))
+    || (v.pending.prepared !== undefined && (!preparedValid(v.pending.prepared) || hasSystem(v.pending.prepared.session)))
     || (v.pending.lease !== undefined && (!object(v.pending.lease) || !identity(v.pending.lease.id)
       || !Number.isFinite(v.pending.lease.expiresAt))))) throw new Failure('unavailable', 'invalid_record');
   if (v.receipts.some(r => !object(r) || !identity(r.clientRequestId) || !identity(r.turnId)
