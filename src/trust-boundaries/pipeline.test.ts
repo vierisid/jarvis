@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { initWorkflowDb, closeWorkflowDb, getWorkflowDb } from '../workflows/db';
-import { createCapture } from '../vault/awareness';
+import { captureRoutine } from '../awareness/opportunity-test-fixtures';
 import { refreshOpportunity, getOpportunity } from '../awareness/opportunities';
 import { acceptSuggestion, getCompositionRow } from '../awareness/suggestion-feedback';
 import { SuggestionComposer } from '../awareness/suggestion-composer';
@@ -37,8 +37,7 @@ const role = { id: 'personal-assistant', name: 'Fixture', description: 'Fixture'
 for (const attack of attacks) {
   test(`${attack.id}: capture to proposed opportunity to accepted disabled draft grants no code permission`, async () => {
     const now = Date.now();
-    for (let day = 1; day <= 3; day++) createCapture({ timestamp: now - day * 86400000,
-      pixelChangePct: 1, appName: 'Synthetic accounting', windowTitle: `Overdue invoices ${attack.text}` });
+    for (let day = 1; day <= 3; day++) captureRoutine(now - day * 86400000, `Overdue invoices ${attack.text}`, 'Synthetic accounting');
     const suggestion = refreshOpportunity()!;
     expect(suggestion).not.toBeNull();
     expect(getOpportunity(suggestion.id)).toMatchObject({ status: 'proposed', validation: null,
