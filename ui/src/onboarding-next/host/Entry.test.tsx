@@ -93,3 +93,33 @@ test('real build view opens the exact fixture result once its terminal event is 
   expect(host.textContent).toContain('fixture-flow'); expect(host.textContent).toContain('fixture-version');
   await click('Continue to dashboard'); await wait(() => host.textContent === 'Dashboard shell');
 });
+
+test('tutorial replay preserves the mounted workspace selection and unsent draft', async () => {
+  const { fixture: sessionFixture } = await import('./test-fixture.ts');
+  const { createSession } = await import('./session.ts'); const { ViewHost } = await import('./ViewHost.tsx');
+  const f = sessionFixture(); f.setJourney({ stepId: 'exited', completion: 'completed', setupState: 'completed', interviewState: 'done' });
+  const session = createSession(f.config); await session.start();
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  let mounts = 0;
+  function Workspace() { React.useEffect(() => { mounts++; }, []); return <main data-real-room="workflows" data-selection="saved-version"><textarea defaultValue="unsent work" /></main>; }
+  try {
+    await React.act(async () => root!.render(<ViewHost session={session} legacy={null}><Workspace /></ViewHost>));
+    const room = host.querySelector('[data-real-room]')!, draft = room.querySelector('textarea')!; draft.value = 'Keep my edited draft';
+    f.setJourney({ stepId: 'tour', replayReturnStepId: 'exited', tourState: 'pending', revision: 1 });
+    await React.act(async () => session.refresh());
+    expect(room.isConnected).toBe(true); expect(room.closest('[hidden][inert]')).not.toBeNull(); expect(mounts).toBe(1);
+    f.setJourney({ stepId: 'exited', replayReturnStepId: null, tourState: 'done', revision: 2 });
+    await React.act(async () => session.refresh());
+    expect(host.querySelector('[data-real-room]')).toBe(room); expect(host.querySelector('textarea')).toBe(draft);
+    expect(draft.value).toBe('Keep my edited draft'); expect(mounts).toBe(1); expect(room.closest('[hidden]')).toBeNull();
+  } finally { session.dispose(); }
+});
+test('fresh onboarding does not mount the live workspace before setup', async () => {
+  const { fixture: sessionFixture } = await import('./test-fixture.ts');
+  const { createSession } = await import('./session.ts'); const { ViewHost } = await import('./ViewHost.tsx');
+  const f = sessionFixture(), session = createSession(f.config); await session.start();
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host); let mounts = 0;
+  function Workspace() { React.useEffect(() => { mounts++; }, []); return <main>Live workspace</main>; }
+  try { await React.act(async () => root!.render(<ViewHost session={session} legacy={null}><Workspace /></ViewHost>)); expect(mounts).toBe(0); }
+  finally { session.dispose(); }
+});

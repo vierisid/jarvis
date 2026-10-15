@@ -22,6 +22,21 @@ function Recovery({ retry }: { retry: () => void }) {
  * select a component, callback, capability, account or project. */
 export function ViewHost({ session, legacy, children }: { session: Session; legacy: ReactNode; children: ReactNode }) {
   const state = useSyncExternalStore(session.subscribe, session.state, session.state);
+  const workspace = useRef({ session, mounted: false, generation: 0 });
+  if (workspace.current.session !== session) workspace.current = { session, mounted: false, generation: workspace.current.generation + 1 };
+  if (state.mode === 'complete') workspace.current.mounted = true;
+  // Replay overlays the existing workspace instead of replacing its room and
+  // conversation instances. Fresh setup must not start the live app early.
+  const visible = state.mode === 'complete';
+  return <>
+    <div key={workspace.current.generation} hidden={!visible} inert={!visible} style={{ display: visible ? 'contents' : 'none' }}>
+      {workspace.current.mounted ? children : null}
+    </div>
+    <OnboardingViewHost session={session} legacy={legacy}>{null}</OnboardingViewHost>
+  </>;
+}
+function OnboardingViewHost({ session, legacy, children }: { session: Session; legacy: ReactNode; children: ReactNode }) {
+  const state = useSyncExternalStore(session.subscribe, session.state, session.state);
   const [theme, setTheme] = useTheme();
   const headingHost = useRef<HTMLDivElement>(null);
   const focusedView = useRef<string | null>(null);
