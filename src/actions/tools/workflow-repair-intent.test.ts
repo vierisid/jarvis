@@ -32,7 +32,7 @@ const malformed = valid.slice(0, -1);
 const marker = "Composition context (JSON):\n";
 function context(prompt: string) {
   expect(prompt).toContain(marker);
-  return JSON.parse(prompt.slice(prompt.indexOf(marker) + marker.length));
+  return JSON.parse(prompt.slice(prompt.indexOf(marker) + marker.length).split('\n')[0]!);
 }
 function expectIntent(prompt: string) {
   expect(context(prompt).jobSpecification).toEqual({ schemaVersion: 1, ...request });
