@@ -1,0 +1,419 @@
+{
+  "schemaVersion": 1,
+  "split": "development",
+  "provenance": "Hand-authored synthetic screen text; no customer data, paid model, or observed user behavior.",
+  "labelPolicy": "A useful routine requires repeated operational source/operation/output activity. Reading, privacy-excluded, incomplete, stale, future, and one-day activity are negative. Unsupported useful routines remain positive in the missed-routine denominator.",
+  "cases": [
+    {
+      "id": "dev-invoices",
+      "usefulRoutine": "invoice_review",
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Overdue invoices\nCustomer balance list"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Overdue invoices\nChecking payment status"
+        },
+        {
+          "app": "Editor",
+          "text": "Invoice follow-up draft\nReview before sending"
+        }
+      ]
+    },
+    {
+      "id": "dev-leads",
+      "usefulRoutine": "lead_followup",
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Lead follow-up\nCRM prospects"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Lead follow-up\nReviewing last contact"
+        },
+        {
+          "app": "Editor",
+          "text": "Lead follow-up email draft"
+        }
+      ]
+    },
+    {
+      "id": "dev-report",
+      "usefulRoutine": "recurring_report",
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Weekly sales report\nSales metrics"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Weekly sales report\nComparing figures"
+        },
+        {
+          "app": "Editor",
+          "text": "Weekly sales report draft"
+        }
+      ]
+    },
+    {
+      "id": "dev-meeting",
+      "usefulRoutine": "meeting_followup",
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Meeting notes\nTeam sync"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Meeting notes\nExtracting action items"
+        },
+        {
+          "app": "Editor",
+          "text": "Meeting action list draft"
+        }
+      ]
+    },
+    {
+      "id": "dev-expenses",
+      "usefulRoutine": "expense_reconciliation",
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Expense receipts\nMay purchases"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Expense receipts\nMatching transactions"
+        },
+        {
+          "app": "Editor",
+          "text": "Expense reconciliation draft"
+        }
+      ]
+    },
+    {
+      "id": "dev-support",
+      "usefulRoutine": "support_triage",
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Support tickets\nOpen queue"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Support tickets\nCategorizing requests"
+        },
+        {
+          "app": "Editor",
+          "text": "Support reply drafts"
+        }
+      ]
+    },
+    {
+      "id": "dev-invoices-it",
+      "usefulRoutine": "invoice_review",
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Fatture scadute\nElenco clienti"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Fatture scadute\nVerifica pagamenti"
+        },
+        {
+          "app": "Editor",
+          "text": "Bozza sollecito fatture"
+        }
+      ]
+    },
+    {
+      "id": "dev-meeting-it",
+      "usefulRoutine": "meeting_followup",
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Note riunione\nRiepilogo"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Note riunione\nEstrazione azioni"
+        },
+        {
+          "app": "Editor",
+          "text": "Bozza azioni riunione"
+        }
+      ]
+    },
+    {
+      "id": "dev-hiring",
+      "usefulRoutine": "candidate_screening",
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Applicant resumes"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Compare candidate qualifications"
+        },
+        {
+          "app": "Editor",
+          "text": "Interview shortlist draft"
+        }
+      ]
+    },
+    {
+      "id": "dev-inventory",
+      "usefulRoutine": "inventory_ordering",
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Stock levels"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Compare stock to reorder points"
+        },
+        {
+          "app": "Editor",
+          "text": "Purchase order draft"
+        }
+      ]
+    },
+    {
+      "id": "dev-reading",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Article: Overdue invoices"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Article: Checking payment status for overdue invoices"
+        },
+        {
+          "app": "Editor",
+          "text": "Article: Invoice follow-up draft"
+        }
+      ]
+    },
+    {
+      "id": "dev-app-switching",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Mail inbox"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Sheet1"
+        },
+        {
+          "app": "Editor",
+          "text": "Document1"
+        }
+      ]
+    },
+    {
+      "id": "dev-static",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Overdue invoices\nChecking payment status\nInvoice follow-up draft"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Overdue invoices\nChecking payment status\nInvoice follow-up draft"
+        },
+        {
+          "app": "Editor",
+          "text": "Overdue invoices\nChecking payment status\nInvoice follow-up draft"
+        }
+      ]
+    },
+    {
+      "id": "dev-source-only",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Overdue invoices"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Overdue invoices"
+        },
+        {
+          "app": "Editor",
+          "text": "Overdue invoices"
+        }
+      ]
+    },
+    {
+      "id": "dev-reverse",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Support reply drafts"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Support tickets\nCategorizing requests"
+        },
+        {
+          "app": "Editor",
+          "text": "Support tickets"
+        }
+      ]
+    },
+    {
+      "id": "dev-private",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Private browsing: Meeting notes"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Private browsing: Meeting notes extracting action items"
+        },
+        {
+          "app": "Editor",
+          "text": "Private browsing: Meeting action list draft"
+        }
+      ]
+    },
+    {
+      "id": "dev-unrelated-languages",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Il museo conserva fatture storiche"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Le prospect du parc est magnifique"
+        },
+        {
+          "app": "Editor",
+          "text": "昨日は本を読みました"
+        }
+      ]
+    },
+    {
+      "id": "dev-app-name-only",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Inbox"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Unread"
+        },
+        {
+          "app": "Editor",
+          "text": "Saved"
+        }
+      ],
+      "appOverride": "Overdue invoices"
+    },
+    {
+      "id": "dev-single-day",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Meeting notes"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Meeting notes extracting action items"
+        },
+        {
+          "app": "Editor",
+          "text": "Meeting action list draft"
+        }
+      ],
+      "dayOffsets": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "dev-two-episodes",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Support tickets"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Support tickets categorizing requests"
+        },
+        {
+          "app": "Editor",
+          "text": "Support reply drafts"
+        }
+      ],
+      "dayOffsets": [
+        -2,
+        -1
+      ]
+    },
+    {
+      "id": "dev-device-mixing",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Expense receipts"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Expense receipts matching transactions"
+        },
+        {
+          "app": "Editor",
+          "text": "Expense reconciliation draft"
+        }
+      ],
+      "devices": [
+        "laptop",
+        "desktop",
+        "tablet"
+      ]
+    },
+    {
+      "id": "dev-missing-output",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Weekly sales report"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Weekly sales report comparing figures"
+        },
+        {
+          "app": "Editor",
+          "text": "Dashboard"
+        }
+      ]
+    }
+  ]
+}

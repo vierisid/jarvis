@@ -52,7 +52,8 @@ describe('an approved call that returns an image (#709)', () => {
     const row = mgr.getRequest(req.id)!;
     expect(row.execution_outcome).toBe('committed');
     expect(row.execution_result).not.toContain('iVBORw0KGgo');
-    expect(row.execution_result).toBe(receipt.result);
+    expect(row.execution_result).toBe('[UI verification: unverified; inspect the current state before continuing or repeating the action]\n' + receipt.result);
+    expect(receipt.verification).toMatchObject({ status: 'unverified' });
     expect(notified).toEqual([receipt.result]);
   });
 

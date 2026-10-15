@@ -1,0 +1,19 @@
+{
+  "status": "passed",
+  "kind": "synthetic browser probe using production React components",
+  "browser": "Chrome on Linux via Codex browser tools",
+  "surfaces": [
+    "MarkdownBody",
+    "AnswerRoom",
+    "TaskResultRoom"
+  ],
+  "imageRequests": 0,
+  "activeElements": 0,
+  "executableLinks": 0,
+  "imageLinks": 3,
+  "tables": 3,
+  "scriptExecuted": false,
+  "screenshot": "browser.png",
+  "designCertification": false,
+  "nativeWebviewMatrix": "not_run"
+}

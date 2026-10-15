@@ -9,10 +9,11 @@
  * handles platform-specific implementation details internally.
  */
 
+import { recordActionVerification, observedWindow } from '../action-verification';
 import type { AppController, UIElement, WindowInfo } from '../app-control/interface.ts';
 import { getAppController } from '../app-control/interface.ts';
 import type { ToolDefinition, ToolResult } from './registry.ts';
-import { routeToSidecarAction as routeToSidecar, routeToSidecarActionReply, routeScreenshotToSidecar, resolveToolTarget } from './sidecar-route.ts';
+import { routeToSidecarAction as routeToSidecar, routeToSidecarActionReply, routeScreenshotToSidecar, resolveToolTarget, captureMachineApprovalGuard } from './sidecar-route.ts';
 import { withTrustedTrailer } from '../../roles/untrusted.ts';
 import { ActionOutcomeError } from '../action-outcome.ts';
 import { WorkflowCancellationError } from '../../workflows/runtime/cancellation-error.ts';
@@ -636,6 +637,7 @@ export const desktopLaunchAppTool: ToolDefinition = {
     const target = resolveDesktopTarget(params.target, 'desktop', 'desktop_launch_app');
     if (target) {
       const { text, reply } = await routeToSidecarActionReply(target, 'launch_app', params, 'desktop');
+      recordActionVerification('desktop_launch_app', observedWindow(reply));
       const directive = launchDirective(reply);
       return directive ? withTrustedTrailer(text, directive) : text;
     }
@@ -644,6 +646,7 @@ export const desktopLaunchAppTool: ToolDefinition = {
         throw new Error(`Local app launch is not supported on ${process.platform}`);
       }
       const result = await controller.launchApp(params.executable as string, params.args as string | undefined);
+      recordActionVerification('desktop_launch_app', observedWindow(result));
       return typeof result === 'string' ? result : JSON.stringify(result, null, 2);
     });
   },
@@ -790,3 +793,9 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
   desktopFocusWindowTool,
   desktopFindElementTool,
 ];
+
+// The approval stays on the device/session the user reviewed. This also refuses
+// a local-to-remote default change; native element guards remain authoritative.
+for (const tool of [desktopClickTool, desktopTypeTool, desktopPressKeysTool, desktopLaunchAppTool, desktopFocusWindowTool]) {
+  tool.captureApprovalGuard = params => captureMachineApprovalGuard(params.target, 'desktop', tool.name);
+}
