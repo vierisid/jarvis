@@ -15,6 +15,7 @@ bun run scripts/check-package-files.ts
 
 echo "[pre-commit] Checking the committed onboarding-next catalog matches its manifests..."
 bun run scripts/onboarding-next-runtime-manifest.ts --check
+bun run scripts/onboarding-next-ui-manifest.ts --check
 
 # Run the tests that belong to what is being committed, not the whole suite.
 #
