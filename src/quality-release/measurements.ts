@@ -18,6 +18,7 @@ export function measurementMet(row: QualityResult, q01: any, supplement: any, pr
       if (m.kind !== 'rate' || m.denominator < 1) return false;
       const expected = row.check === 'negative-proposals' ? row.negativeTasks : row.supportedTasks;
       if (m.denominator !== expected) return false;
+      if (row.check !== 'negative-proposals' && m.numerator > (row.taskDispositions.passed ?? 0)) return false;
       const value = rate(m.numerator, m.denominator);
       if (row.check === 'negative-proposals') return (lowerBound ? value.ci95![1]! : value.rate!) <= supplement.maxNegativeProposalRate;
       const target = row.check === 'first-intent' ? q01.intent.minFirstCandidateCorrect : row.check === 'repaired-intent' ? q01.intent.minCorrectAfterRepair

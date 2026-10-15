@@ -153,3 +153,9 @@ test('renaming a profile cannot reuse receipts under another budget entry', () =
   const f = fixture(); f.record.profiles[0]!.id = 'another-budget';
   expect(assess(f).profiles[0]!.status).toBe('blocked');
 });
+
+test('rate successes cannot exceed the reported passed task population', () => {
+  const f = fixture(), row = f.record.profiles[0]!.quality[0]!;
+  row.taskDispositions = { provider_error: 60 }; f.seal();
+  expect(assess(f).profiles[0]!.quality[0]!.disposition).toBe('failed');
+});

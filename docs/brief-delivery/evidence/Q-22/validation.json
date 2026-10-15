@@ -11,13 +11,13 @@
   },
   "afterReviewFixes": {
     "command": "bun test src/quality-release scripts/check-product-quality.test.ts",
-    "passed": 130,
+    "passed": 131,
     "failed": 0,
-    "assertions": 271,
+    "assertions": 272,
     "files": 3
   },
   "typecheck": "passed",
-  "normalHooks": "passed: EE, migrations, templates, package, 130 related tests, TypeScript",
+  "normalHooks": "passed on implementation; final correction hooks recorded in PR CI evidence",
   "sourceAudit": {
     "exitCode": 2,
     "status": "blocked",
@@ -29,5 +29,6 @@
     "deploymentAuthorized": false
   },
   "visualCheck": "not_applicable: no UI or visible flow changes",
-  "liveHostedAndPaidEvaluation": "not_run"
+  "liveHostedAndPaidEvaluation": "not_run",
+  "finalCorrection": "Rate successes may not exceed passed task counts; targeted removal fails its regression."
 }

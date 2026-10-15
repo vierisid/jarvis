@@ -16,5 +16,11 @@
     "test": "renaming a profile",
     "removedFixExitCode": 1,
     "detected": true
+  },
+  {
+    "guard": "rate-count-consistency",
+    "test": "rate successes cannot exceed the reported passed task population",
+    "removedFixExitCode": 1,
+    "detected": true
   }
 ]
