@@ -1,5 +1,9 @@
 /** Versioned C6 contract. Observations and user reports never imply verified progress. */
-export type JobKind = 'invoice_review' | 'lead_followup' | 'recurring_report';
+import type { RoutineSignalEvidence } from './routine-signals.ts';
+import type { RoutineStage } from './routine-catalog.ts';
+
+export type JobKind = 'invoice_review' | 'lead_followup' | 'recurring_report'
+  | 'meeting_followup' | 'expense_reconciliation' | 'support_triage';
 
 export type JobSignal = {
   captureId: string;
@@ -7,6 +11,7 @@ export type JobSignal = {
   app: string;
   kind: JobKind;
   cue: string;
+  routine?: RoutineSignalEvidence;
 };
 
 export type JobHypothesis = {
@@ -16,6 +21,11 @@ export type JobHypothesis = {
   kind: JobKind;
   job: { title: string; proposedOutcome: string; question: string };
   evidence: JobSignal[];
+  /** Optional for stored v1 hypotheses; new proposals include all three evidence roles. */
+  routine?: {
+    policy: 'routine-cues-v2';
+    episodes: Array<Record<RoutineStage, { captureId: string; observedAt: number; cue: string }>>;
+  };
   recurrence: {
     episodes: number;
     distinctDays: number;

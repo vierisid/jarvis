@@ -1,5 +1,6 @@
 import { getDb } from './schema.ts';
 import { classifyJobSignals, OPPORTUNITY_WINDOW_MS } from '../awareness/job-hypotheses.ts';
+import { parseRoutineEvidence } from '../awareness/routine-signals.ts';
 import type { JobSignal } from '../awareness/opportunity-types.ts';
 
 /** Retain only allowlisted job cues and provenance, never raw OCR, URLs or titles. */
@@ -8,15 +9,16 @@ export function recordOpportunityObservation(input: Parameters<typeof classifyJo
   for (const signal of classifyJobSignals(input)) {
     if (signal.observedAt > Date.now() || signal.observedAt < Date.now() - OPPORTUNITY_WINDOW_MS) continue;
     db.prepare(`INSERT OR IGNORE INTO opportunity_observations
-      (capture_id, kind, observed_at, app, cue) VALUES (?, ?, ?, ?, ?)`)
-      .run(signal.captureId, signal.kind, signal.observedAt, signal.app, signal.cue);
+      (capture_id, kind, observed_at, app, cue, routine_evidence) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(signal.captureId, signal.kind, signal.observedAt, signal.app, signal.cue, JSON.stringify(signal.routine));
   }
 }
 
 export function getOpportunityObservations(now = Date.now()): JobSignal[] {
-  return getDb().prepare(`SELECT capture_id AS captureId, kind, observed_at AS observedAt, app, cue
+  const rows = getDb().prepare(`SELECT capture_id AS captureId, kind, observed_at AS observedAt, app, cue, routine_evidence
     FROM opportunity_observations WHERE observed_at >= ? AND observed_at <= ?
-    ORDER BY observed_at, capture_id`).all(now - OPPORTUNITY_WINDOW_MS, now) as JobSignal[];
+    ORDER BY observed_at, capture_id`).all(now - OPPORTUNITY_WINDOW_MS, now) as Array<JobSignal & { routine_evidence: string | null }>;
+  return rows.map(({ routine_evidence, ...signal }) => ({ ...signal, routine: parseRoutineEvidence(routine_evidence) }));
 }
 
 export function pruneOpportunityObservations(now = Date.now()): void {

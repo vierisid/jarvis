@@ -1001,7 +1001,7 @@ func makeBrowserClickHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, err
 		}
 		if refusal != "" {
-			return &RPCResult{Result: refusal}, nil
+			return browserActionRefusal(params, refusal, false)
 		}
 
 		if err := dispatchClick(cdp, el.x, el.y, button, double); err != nil {
@@ -1074,7 +1074,7 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, err
 		}
 		if refusal != "" {
-			return &RPCResult{Result: refusal}, nil
+			return browserActionRefusal(params, refusal, false)
 		}
 		_ = el // the identity comes from the ref below, not from a coordinate
 
@@ -1181,21 +1181,21 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
 		case "ok":
 			time.Sleep(200 * time.Millisecond)
 		case "gone":
-			return &RPCResult{Result: fmt.Sprintf(
+			return browserActionRefusal(params, fmt.Sprintf(
 				"Error: Element [%d] has been removed from the page, so nothing was typed. "+
-					"Run browser_snapshot first.", id)}, nil
+					"Run browser_snapshot first.", id), false)
 		case "not_typable":
-			return &RPCResult{Result: fmt.Sprintf(
+			return browserActionRefusal(params, fmt.Sprintf(
 				"Error: Element [%d] is a frame, not a field, so nothing was typed. "+
-					"Run browser_snapshot and name an element inside it instead.", id)}, nil
+					"Run browser_snapshot and name an element inside it instead.", id), false)
 		case "not_focused":
-			return &RPCResult{Result: fmt.Sprintf(
+			return browserActionRefusal(params, fmt.Sprintf(
 				"Error: Element [%d] did not take focus -- the page moved focus elsewhere -- so nothing was typed. "+
-					"Run browser_snapshot and check the page.", id)}, nil
+					"Run browser_snapshot and check the page.", id), false)
 		default:
-			return &RPCResult{Result: fmt.Sprintf(
+			return browserActionRefusal(params, fmt.Sprintf(
 				"Error: Element [%d] is no longer addressable, so nothing was typed. "+
-					"Run browser_snapshot first.", id)}, nil
+					"Run browser_snapshot first.", id), true)
 		}
 
 		// RE-VERIFY focus immediately before the insert, and again after it.
@@ -1209,9 +1209,10 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
 		// the reviewed element held it immediately before AND after, the text
 		// went there. Keep in step with the daemon's local type.
 		if !cdp.focusStillOnElement(id, contextID) {
-			return &RPCResult{Result: fmt.Sprintf(
+			// The focus script may already have cleared the previous field value.
+			return browserActionRefusal(params, fmt.Sprintf(
 				"Error: Element [%d] lost focus before anything was typed -- the page moved focus "+
-					"elsewhere -- so nothing was typed. Run browser_snapshot and check the page.", id)}, nil
+					"elsewhere -- so nothing was typed. Run browser_snapshot and check the page.", id), true)
 		}
 
 		// Insert text (paste-like — same as the daemon's Input.insertText).
@@ -1225,9 +1226,9 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
 			// The text has already gone somewhere and nothing can un-type it, so
 			// the one thing that must not happen is reporting success: a silent
 			// wrong delivery is exactly what #592 is about.
-			return &RPCResult{Result: fmt.Sprintf(
+			return browserActionRefusal(params, fmt.Sprintf(
 				"Error: Element [%d] lost focus while the text was being typed, so the text may have "+
-					"gone to another element. Run browser_snapshot and check the page before retrying.", id)}, nil
+					"gone to another element. Run browser_snapshot and check the page before retrying.", id), true)
 		}
 		releaseSnap()
 

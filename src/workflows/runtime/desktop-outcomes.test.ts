@@ -116,7 +116,7 @@ describe('desktop outcome API and durable receipts', () => {
     const f = fixture(true);
     const response = await f.call();
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ toolName: 'desktop_list_windows', result: 'Desktop windows', outcome: { status: 'succeeded' } });
+    expect(await response.json()).toEqual({ toolName: 'desktop_list_windows', result: 'Desktop windows', outcome: { status: 'succeeded', verification: { status: 'unverified', reason: 'no_supported_postcondition' } } });
     expect(listWorkflowEffects(f.run.id)[0]?.status).toBe('succeeded');
   });
 
