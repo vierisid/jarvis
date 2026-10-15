@@ -1,8 +1,7 @@
 # ON-U-03: Google connection view
 
 Controlled, optional Google-only onboarding screen. Not registered or activated.
-Targets `main` at `5024ea7455a5613be0514475be32c0dee6de0edd` and builds without
-another onboarding PR. Owns only this directory and its delivery receipt/evidence.
+Builds without another onboarding PR and owns only this directory.
 
 ## Design
 
