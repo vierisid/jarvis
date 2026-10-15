@@ -1,0 +1,9 @@
+/* Development fixture only. Never imported by the welcome view. */
+body { margin: 0; }
+.welcome-preview-root { display: flex; flex-direction: column; }
+.welcome-preview-root > main { flex: 1; min-block-size: 0; }
+.welcome-preview-tools { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 10px 18px; background: #fff; color: #13161a; border-bottom: 1px solid #e2e7ec; font: 12px/1.5 'Spline Sans Mono', monospace; }
+.welcome-preview-tools label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.welcome-preview-tools select { font: inherit; max-width: 100%; }
+.welcome-preview-tools output { overflow-wrap: anywhere; }
+.on-welcome { --on-setup-height: 100%; }

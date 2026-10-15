@@ -1,0 +1,100 @@
+/* ON-U-02: approved Figma 1097:16424 / 1097:68538. Local tokens keep
+   this view independently mergeable without importing unmerged D/U modules. */
+.on-explainer {
+  --oe-bg: #fafbfc;
+  --oe-paper: #fff;
+  --oe-panel: #f6f8fa;
+  --oe-ink: #13161a;
+  --oe-muted: #677077;
+  --oe-rule: #e2e7ec;
+  --oe-focus: #1e5fd8;
+  --oe-error: #c2301f;
+  --oe-ease: cubic-bezier(.2, .7, .2, 1);
+  color-scheme: light;
+  box-sizing: border-box;
+  inline-size: 100%;
+  block-size: var(--on-setup-height, 100dvh);
+  min-block-size: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow-y: auto;
+  padding: 48px 24px;
+  background: var(--oe-bg);
+  color: var(--oe-ink);
+  font-family: 'Familjen Grotesk', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.on-explainer[data-theme="dark"] {
+  --oe-bg: #121417;
+  --oe-paper: #1a1d22;
+  --oe-panel: #1e2128;
+  --oe-ink: #eef1f4;
+  --oe-muted: #8a919a;
+  --oe-rule: #272c33;
+  --oe-focus: #6fa4ff;
+  --oe-error: #ff6a5c;
+  color-scheme: dark;
+}
+.on-explainer *, .on-explainer *::before, .on-explainer *::after { box-sizing: border-box; }
+.on-explainer__content { flex-shrink: 0; margin-block: auto; inline-size: 100%; max-inline-size: 840px; min-inline-size: 0; overflow-wrap: anywhere; }
+.on-explainer__pebble { inline-size: 48px; block-size: 48px; margin-inline: auto; background: var(--oe-ink); border-radius: 50% 3px 50% 50%; }
+.on-explainer h1 { margin: 35px 0 0; text-align: center; font-size: clamp(28px, 3.5vw, 34px); font-weight: 600; line-height: 48px; letter-spacing: -.025em; text-wrap: balance; }
+.on-explainer__description { max-inline-size: 740px; margin: 12px auto 0; text-align: center; color: var(--oe-muted); font-size: 19px; line-height: 27px; text-wrap: balance; }
+.on-explainer__steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; list-style: none; margin: 46px 0 0; padding: 0; }
+.on-explainer__step { position: relative; min-inline-size: 0; min-block-size: 176px; padding: 18px 21px 24px; border: 1px solid var(--oe-rule); border-radius: 14px 3px 14px 14px; background: var(--oe-paper); }
+.on-explainer__number { color: var(--oe-muted); font: 400 12px/17px 'Spline Sans Mono', monospace; }
+.on-explainer__step h2 { margin: 15px 0 10px; font-size: 19px; line-height: 27px; font-weight: 600; letter-spacing: -.015em; }
+.on-explainer__step p { margin: 0; max-inline-size: 190px; color: var(--oe-muted); font-size: 16px; line-height: 22px; }
+.on-explainer__arrow { position: absolute; inset-inline-end: -22px; inset-block-start: 66px; inline-size: 20px; text-align: center; color: var(--oe-muted); font-size: 19px; line-height: 27px; }
+.on-explainer__alternative { max-inline-size: 660px; margin: 37px auto 0; padding: 16px 24px 21px; border-radius: 14px 3px 14px 14px; background: var(--oe-panel); }
+.on-explainer__alternative h2 { margin: 0 0 4px; font-size: 18px; line-height: 25px; font-weight: 600; }
+.on-explainer__alternative p { margin: 0; color: var(--oe-muted); font-size: 16px; line-height: 22px; }
+.on-explainer__actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 24px; max-inline-size: 660px; margin: 47px auto 0; }
+.on-explainer .on-explainer__control {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0; min-block-size: 44px; block-size: auto; max-inline-size: 100%;
+  margin: 0; padding: 10px 18px; border: 1px solid transparent;
+  border-radius: 9px 2px 9px 9px; background: transparent; color: var(--oe-ink);
+  font: 600 14px/22px 'Familjen Grotesk', system-ui, sans-serif;
+  white-space: normal; text-align: center; cursor: pointer;
+  box-shadow: none; transform: none;
+  /* Surface and text change together when Appearance changes. */
+  transition: border-color 160ms var(--oe-ease);
+}
+.on-explainer .on-explainer__back { min-inline-size: 80px; color: var(--oe-muted); font-weight: 400; }
+.on-explainer .on-explainer__continue { inline-size: 180px; background: var(--oe-ink); color: var(--oe-bg); }
+.on-explainer .on-explainer__control:focus-visible { outline: 2px solid var(--oe-focus); outline-offset: 3px; }
+.on-explainer .on-explainer__control[aria-disabled="true"] { opacity: .5; cursor: default; }
+/* Beat v2 primitive specificity in either stylesheet order. No lift or glow. */
+.on-explainer .on-explainer__control[type="button"]:hover { box-shadow: none; border-color: transparent; }
+.on-explainer .on-explainer__back[type="button"]:hover { background: var(--oe-panel); }
+.on-explainer .on-explainer__continue[type="button"]:hover { background: color-mix(in srgb, var(--oe-ink) 88%, var(--oe-bg)); }
+.on-explainer .on-explainer__back[aria-disabled="true"]:hover { background: transparent; }
+.on-explainer .on-explainer__continue[aria-disabled="true"]:hover { background: var(--oe-ink); }
+.on-explainer .on-explainer__control:not([aria-disabled="true"]):active { border-color: var(--oe-focus); }
+.on-explainer__feedback { max-inline-size: 660px; min-block-size: 36px; margin: 8px auto 0; }
+.on-explainer__feedback p { margin: 0; color: var(--oe-muted); font-size: 12px; line-height: 18px; }
+.on-explainer__feedback [role="alert"] { color: var(--oe-error); }
+@media (min-width: 701px) and (max-width: 860px) {
+  .on-explainer__step h2 { min-block-size: 54px; }
+}
+@media (max-width: 700px) {
+  .on-explainer { padding: 32px 20px; }
+  .on-explainer h1 { margin-block-start: 24px; line-height: 1.2; }
+  .on-explainer__description { font-size: 17px; line-height: 25px; }
+  .on-explainer__steps { grid-template-columns: minmax(0, 1fr); gap: 24px; margin-block-start: 32px; }
+  .on-explainer__step { min-block-size: 0; padding: 16px 20px; }
+  .on-explainer__step h2 { margin: 6px 0; }
+  .on-explainer__step p { max-inline-size: none; }
+  .on-explainer__arrow { inset-inline-end: calc(50% - 10px); inset-block-start: auto; inset-block-end: -26px; transform: rotate(90deg); }
+  .on-explainer__alternative { margin-block-start: 24px; padding-inline: 20px; }
+  .on-explainer__actions { margin-block-start: 24px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .on-explainer .on-explainer__control { transition: none; }
+}
+@media (max-width: 380px) {
+  .on-explainer__actions { flex-direction: column; gap: 8px; }
+  .on-explainer .on-explainer__control { inline-size: 100%; }
+}
