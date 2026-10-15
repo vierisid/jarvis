@@ -184,6 +184,23 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  *                                     whose `sampleData` is empty by
  *                                     construction. It writes a draft; it reads
  *                                     no run.
+ *   brief/contracts.ts                BENIGN. Imports only workflow status
+ *                                     TYPES for wire references. It fetches no
+ *                                     run/version and exports no captured step
+ *                                     payload. contracts.test.ts checks that
+ *                                     the browser bundle cannot import a
+ *                                     workflow repository at runtime.
+ *   brief/adapters.ts                 BENIGN. projectWorkflowRef receives a
+ *                                     version but copies only its id, flowId
+ *                                     ownership check and state into an exact
+ *                                     identity/status projection. It never
+ *                                     forwards the object or captured payload
+ *                                     to a model. adapters.test.ts supplies
+ *                                     hostile extra fields and verifies none
+ *                                     are read or returned. readBriefProvider
+ *                                     is a generic gated reader, with no live
+ *                                     provider registered in F-01; future
+ *                                     providers still need boundary review.
  *   daemon/api-routes.ts               BENIGN. Holds a whole `FlowVersion` but
  *                                     reads only `displayName`/`schemaVersion`
  *                                     off it, and answers HTTP rather than a
@@ -200,6 +217,8 @@ const REVIEWED_STEP_OUTPUT_READERS = [
   'actions/tools/manage-workflow.ts',
   'actions/tools/workflow-composer.ts',
   'awareness/suggestion-composer.ts',
+  'brief/adapters.ts',
+  'brief/contracts.ts',
   'daemon/api-routes.ts',
   'goals/work-items.ts',
   'goals/workflow-bridge.ts',
