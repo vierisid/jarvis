@@ -59,7 +59,8 @@ export function createCapture(data: {
     );
 
     recordOpportunityObservation({ captureId: id, timestamp: data.timestamp,
-      app: data.appName, windowTitle: data.windowTitle, ocrText: data.ocrText });
+      app: data.appName, windowTitle: data.windowTitle, ocrText: data.ocrText,
+      sidecarId: data.sidecarId, excluded: data.retentionTier === 'metadata_only' });
   })();
 
   return {
