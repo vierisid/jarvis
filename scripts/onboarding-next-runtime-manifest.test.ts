@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { assertAcyclic, generateRuntimeManifest, writeRuntimeManifest } from './onboarding-next-runtime-manifest.ts';
+import { assertAcyclic, CATALOG_PATH, catalogIsCurrent, generateRuntimeManifest, writeRuntimeManifest } from './onboarding-next-runtime-manifest.ts';
 import { PROVIDERS } from '../src/onboarding-next/runtime/contract.ts';
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -79,4 +79,14 @@ test('graph validator rejects cycles and duplicate providers but permits absent 
   expect(() => assertAcyclic([{ provides: ['a'], requires: ['b'] }])).not.toThrow();
   expect(() => assertAcyclic([{ provides: ['a'], requires: ['b'] }, { provides: ['b'], requires: ['a'] }])).toThrow('Cyclic');
   expect(() => assertAcyclic([{ provides: ['a'], requires: [] }, { provides: ['a'], requires: [] }])).toThrow('Duplicate');
+});
+test('the committed catalog equals the generator output for this checkout', async () => {
+  // Installs and builds never regenerate it, so a stale commit would ship.
+  expect(readFileSync(join(import.meta.dir, '..', CATALOG_PATH), 'utf8')).toBe(await generateRuntimeManifest(join(import.meta.dir, '..')));
+});
+test('the freshness check fails on a stale or missing catalog', async () => {
+  const r = root(); module(r, 0);
+  expect(await catalogIsCurrent(r)).toBe(false);
+  await writeRuntimeManifest(r); expect(await catalogIsCurrent(r)).toBe(true);
+  module(r, 1); expect(await catalogIsCurrent(r)).toBe(false);
 });

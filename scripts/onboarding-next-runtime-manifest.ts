@@ -62,17 +62,28 @@ export async function generateRuntimeManifest(repo: string): Promise<string> {
 }
 export async function writeRuntimeManifest(repo: string): Promise<void> {
   const text = await generateRuntimeManifest(repo);
-  const out = resolve(repo, 'src/onboarding-next/runtime/generated/catalog.ts');
+  const out = resolve(repo, CATALOG_PATH);
   mkdirSync(dirname(out), { recursive: true });
   if (existsSync(out) && readFileSync(out, 'utf8') === text) return;
   const temp = `${out}.${process.pid}.tmp`;
   writeFileSync(temp, text); renameSync(temp, out);
 }
+export const CATALOG_PATH = 'src/onboarding-next/runtime/generated/catalog.ts';
+/** The committed catalog must equal the generator output (CI and pre-commit). */
+export async function catalogIsCurrent(repo: string): Promise<boolean> {
+  const out = resolve(repo, CATALOG_PATH);
+  return existsSync(out) && readFileSync(out, 'utf8') === await generateRuntimeManifest(repo);
+}
 if (import.meta.main) {
+  // The catalog is committed; installs, start and builds never run this.
+  // `bun run generate:onboarding-runtime` after adding/removing a module.
   const repo = resolve(import.meta.dir, '..');
-  // Docker's dependency-only stage has scripts but no source. Its UI build
-  // generates after COPY src; source installs and published packages do too.
-  if (!process.argv.includes('--if-present') || existsSync(join(repo, 'src/onboarding-next/runtime/contract.ts'))) {
+  if (process.argv.includes('--check')) {
+    if (!await catalogIsCurrent(repo)) {
+      console.error(`[onboarding-runtime] ${CATALOG_PATH} is stale; run \`bun run generate:onboarding-runtime\` and commit it.`);
+      process.exit(1);
+    }
+  } else {
     await writeRuntimeManifest(repo);
   }
 }

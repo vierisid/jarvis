@@ -13,13 +13,13 @@ requirements, fit in 4 KiB, and resolve to regular files without symlinks or pat
 traversal. Discovery neither imports providers nor calls factories. Missing
 manifests produce no imports. Malformed present manifests fail the build.
 
-The ignored `generated/catalog.ts` contains literal lazy imports. It is generated
-during source install, UI build, start and dev; regenerate after adding/removing a
-module or changing branches if invoking Bun/TypeScript directly. Docker's initial
-source-free dependency stage skips generation; its source build generates it.
-Published packages explicitly ship the catalog for read-only installs. The
-package-file guard checks both it and the generator. No startup filesystem scan
-or arbitrary runtime import is used.
+The committed `generated/catalog.ts` contains literal lazy imports. Install, start,
+dev, Docker and UI builds never run the generator, so a package install cannot
+run or fail on it. After adding/removing a module or changing a manifest, run
+`bun run generate:onboarding-runtime` and commit the result. The pre-commit hook
+(`bun run check:onboarding-runtime`) and a `bun test` in CI fail when the committed
+catalog differs from the generator output. The package-file guard checks the
+catalog ships. No startup filesystem scan or arbitrary runtime import is used.
 
 B01's allowlist also loads its owned `settings.ts` companion (the persistence
 factory). Other modules use their public entry only.
@@ -107,7 +107,7 @@ service readiness and release permission are separate states.
 ## Verification and rollback
 
 ```sh
-bun run generate:onboarding-runtime
+bun run check:onboarding-runtime
 bun test scripts/onboarding-next-runtime-manifest.test.ts src/daemon/post-setup-services.test.ts src/onboarding-next/runtime src/onboarding-next/journey src/daemon/api-onboarding-hosted.test.ts
 bunx tsc --noEmit
 bun run build:ui

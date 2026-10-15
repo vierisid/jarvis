@@ -30,15 +30,13 @@
     "ui/public/",
     "scripts/ensure-bun.cjs",
     "scripts/build-shared-runtime.ts",
-    "README.md",
-    "scripts/onboarding-next-runtime-manifest.ts",
-    "src/onboarding-next/runtime/generated/"
+    "README.md"
   ],
   "scripts": {
     "start": "bun run src/daemon/index.ts",
     "dev": "bun --hot run src/daemon/index.ts",
     "copy:models": "mkdir -p ui/public/openwakeword/models ui/public/ort && cp node_modules/openwakeword-wasm-browser/models/melspectrogram.onnx node_modules/openwakeword-wasm-browser/models/embedding_model.onnx node_modules/openwakeword-wasm-browser/models/silero_vad.onnx node_modules/openwakeword-wasm-browser/models/hey_jarvis_v0.1.onnx ui/public/openwakeword/models/ && cp node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.wasm node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.mjs node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs ui/public/ort/",
-    "prebuild:ui": "bun run generate:onboarding-runtime && bun run copy:models",
+    "prebuild:ui": "bun run copy:models",
     "build:ui": "bun build ui/index.html ui/pebble.html --outdir ui/dist",
     "test": "bun test --preload ./src/test-preload.ts",
     "check:no-ee": "bun run scripts/check-no-ee-imports.ts",
@@ -55,12 +53,11 @@
     "test:llm": "bun run src/llm/test.ts",
     "examples": "bun run examples/llm-integration.ts",
     "setup:google": "bun run src/scripts/google-setup.ts",
-    "postinstall": "node scripts/ensure-bun.cjs && (bun run copy:models 2>/dev/null || true) && bun run scripts/onboarding-next-runtime-manifest.ts --if-present",
+    "postinstall": "node scripts/ensure-bun.cjs && (bun run copy:models 2>/dev/null || true)",
     "prepare": "git config core.hooksPath .githooks 2>/dev/null || true",
     "prepublishOnly": "bun run copy:models && bun run build:ui && bun run build:workflows",
     "generate:onboarding-runtime": "bun run scripts/onboarding-next-runtime-manifest.ts",
-    "prestart": "bun run generate:onboarding-runtime",
-    "predev": "bun run generate:onboarding-runtime"
+    "check:onboarding-runtime": "bun run scripts/onboarding-next-runtime-manifest.ts --check"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",
