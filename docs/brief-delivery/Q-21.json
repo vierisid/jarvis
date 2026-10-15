@@ -105,7 +105,9 @@
     "evidence/Q-21/revert-checks.json",
     "evidence/Q-21/review.md",
     "evidence/Q-21/browser.json",
-    "evidence/Q-21/browser.png"
+    "evidence/Q-21/browser.png",
+    "evidence/Q-21/review-fixes.json",
+    "evidence/Q-21/review-fixes-browser.png"
   ],
   "limitations": [
     "No deployed-model prompt-injection certification or paid calls.",
@@ -117,5 +119,6 @@
   ],
   "rollback": "Revert Q-21 commits and rebuild daemon/UI together. No migrations; preserve durable records and do not replay effects.",
   "verification": "docs/TRUST_BOUNDARIES.md",
-  "ci": "See exact-head checks on https://github.com/vierisid/jarvis/pull/1065; pending at receipt creation."
+  "ci": "See exact-head checks on https://github.com/vierisid/jarvis/pull/1065; pending at receipt creation.",
+  "reviewCorrections": "evidence/Q-21/review-fixes.json"
 }

@@ -71,7 +71,7 @@ export type ComposerChatReply = Pick<LLMResponse, "content" | "tool_calls"> & {
 };
 import {
   osCheckContextFor,
-  renderExecutionEnvironment,
+  renderExecutionEnvironmentSections,
   stepOsIssues,
   type ExecutionTarget,
   type OsCheckContext,
@@ -447,7 +447,7 @@ async function composeOneShot(
   const catalogText = renderCatalog(deps.pieceRegistry);
   const toolsText = renderTools(deps.tools, deps.toolNames);
   const rolesText = renderSpecialistRoles(deps.specialistRoles);
-  const envText = renderExecutionEnvironment(deps.executionTargets ?? []).join("\n");
+  const envText = composerExecutionEnvironment(deps.executionTargets ?? []);
   const system = planningPrompt(buildSystemPrompt(catalogText, toolsText, rolesText, envText), deps.planningPolicy);
   const toolSpecs = toolSpecMap(deps);
   const validRoleIds = validRoleIdSet(deps);
@@ -569,7 +569,7 @@ async function composeWithTools(
   const rolesText = renderSpecialistRoles(deps.specialistRoles);
   const hasLibrary = (deps.library?.length ?? 0) > 0;
   const toolDefs = buildComposerToolDefs(toolSpecs !== null, hasLibrary);
-  const envText = renderExecutionEnvironment(deps.executionTargets ?? []).join("\n");
+  const envText = composerExecutionEnvironment(deps.executionTargets ?? []);
   const system = planningPrompt(buildToolLoopSystemPrompt(rolesText, hasLibrary, envText), deps.planningPolicy);
 
   const messages: ComposerChatMessage[] = [
@@ -1222,6 +1222,12 @@ const EXAMPLE_SECTION_LINES = [
   "The event payload is read via {{trigger.payload.*}} (envelope rule); children[0] pairs with the 'invoice' branch; the null child makes the fallback branch do nothing.",
 ];
 
+function composerExecutionEnvironment(targets: ExecutionTarget[]): string {
+  const { inventory, rules } = renderExecutionEnvironmentSections(targets);
+  if (inventory.length === 0) return '';
+  return [wrapUntrusted(inventory.join('\n'), 'execution environment'), ...rules].join('\n');
+}
+
 function buildSystemPrompt(
   catalog: string,
   toolsText: string,
@@ -1231,7 +1237,7 @@ function buildSystemPrompt(
   return [
     "You are the Jarvis workflow composer. Convert the user's description into a workflow definition.",
     "",
-    wrapUntrusted(envText, 'execution environment'),
+    envText,
     ...sharedRuleSections("one-shot", rolesText.length > 0),
     "",
     "## Output contract",
@@ -1271,7 +1277,7 @@ function buildToolLoopSystemPrompt(
       : "  4. If no installed piece or Jarvis tool covers the request, call report_blocked explaining what is missing.\n     Never force a wrong piece to fit.",
     "  Keep detail lookups targeted -- fetch the pieces you shortlisted, not the whole catalog.",
     "",
-    wrapUntrusted(envText, 'execution environment'),
+    envText,
     ...sharedRuleSections("tools", rolesText.length > 0),
     rolesText ? wrapUntrusted(rolesText, 'specialist role descriptions') : '',
   ].filter((s) => s !== "").join("\n");

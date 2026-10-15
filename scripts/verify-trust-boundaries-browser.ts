@@ -1,7 +1,8 @@
 /** Local-only synthetic probe. No daemon, credentials, provider or live effects.
  * bun scripts/verify-trust-boundaries-browser.ts; open the printed URL and click
  * Check boundaries. Expect zero image requests/active elements/executable links,
- * three image links/tables, scriptExecuted false. Ctrl-C stops the fixture.
+ * three image links/tables/footnote round-trips/unique reference IDs,
+ * hashPreserved true and scriptExecuted false. Ctrl-C stops the fixture.
  */
 import { richAttack } from '../src/trust-boundaries/fixtures';
 const build = await Bun.build({ entrypoints: [new URL('./fixtures/q21-render.tsx', import.meta.url).pathname],

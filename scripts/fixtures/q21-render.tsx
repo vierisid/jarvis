@@ -13,11 +13,24 @@ function Probe() {
     <button onClick={async () => {
       const metrics = await (await fetch('/metrics')).json();
       const results = document.querySelector('#results')!;
+      const hashBefore = window.location.hash;
+      const references = [...results.querySelectorAll<HTMLAnchorElement>('a[data-footnote-ref]')];
+      let footnoteRoundTrips = 0;
+      for (const reference of references) {
+        reference.click();
+        const definition = document.activeElement;
+        const backlink = definition?.querySelector<HTMLAnchorElement>('a[data-footnote-backref]');
+        backlink?.click();
+        if (backlink && document.activeElement === reference) footnoteRoundTrips++;
+      }
       setReport(JSON.stringify({ imageRequests: metrics.imageRequests,
         activeElements: results.querySelectorAll('img,script,iframe,object,embed,link').length,
         executableLinks: [...results.querySelectorAll('a')].filter(a => /^(javascript|data|file|jarvis):/i.test(a.href)).length,
         imageLinks: [...results.querySelectorAll('a')].filter(a => a.textContent?.startsWith('Image:')).length,
         tables: results.querySelectorAll('table').length,
+        footnoteRoundTrips,
+        uniqueFootnoteIds: new Set(references.map(reference => reference.id)).size,
+        hashPreserved: window.location.hash === hashBefore,
         scriptExecuted: Boolean((globalThis as unknown as { q21Executed?: boolean }).q21Executed),
       }, null, 2));
     }}>Check boundaries</button>

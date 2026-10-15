@@ -13,4 +13,5 @@ export const richAttack = '<script>globalThis.q21Executed = true</script>\n'
   + '![private result](/q21-image-probe?data=synthetic)\n\n'
   + '[run](javascript:alert%281%29) [settings](jarvis://settings)\n\n'
   + '[safe reference](https://example.invalid/reference)\n\n'
-  + '| Status | Evidence |\n| --- | --- |\n| Unknown | fixture:piece-account |';
+  + '| Status | Evidence |\n| --- | --- |\n| Unknown | fixture:piece-account |\n\n'
+  + 'Source reference[^q21].\n\n[^q21]: Synthetic supporting evidence.';
