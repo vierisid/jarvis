@@ -86,6 +86,16 @@ for (const [piece, action] of [[GMAIL, 'send_email'], [GMAIL, 'gmail_send_email'
   });
 }
 
+test('a tracked send leaves an audit row at authorization, before any completion receipt', async () => {
+  const f = fixture(); f.dropReceipt();
+  await expect(f.invoke()).rejects.toThrow('lost before receipt');
+  // The engine may have sent: the trail must say the dispatch was handed out
+  // even though no completion receipt ever arrives.
+  const rows = new AuditTrail().query({ agentId: `workflow:${f.run.id}` });
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ tool_name: 'piece:gmail/send_email', authority_decision: 'allowed', executed: 1 });
+});
+
 test('receipt persists before an engine reply is lost; replay returns the stored result without a second send', async () => {
   const f = fixture(); f.loseReply();
   await expect(f.invoke()).rejects.toThrow('lost after receipt');

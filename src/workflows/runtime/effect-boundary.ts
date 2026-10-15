@@ -464,8 +464,10 @@ export class WorkflowEffectBoundary {
         () => withExecutionScope(checkpoint,
           () => input.execute(JSON.parse(canonicalJson(record.arguments)), checkpoint)));
       // The provider has not run yet. Leave the durable dispatch fence closed
-      // even if this reply is lost or the engine retries the step.
-      if (input.externalDispatch) return { result };
+      // even if this reply is lost or the engine retries the step. The trail
+      // records the hand-off now, as it does for every piece authorization:
+      // a lost completion receipt must not leave a send with no audit row.
+      if (input.externalDispatch) { log(true); return { result }; }
       if (verification) record.outcome = { status: 'succeeded', verification };
       // NOT bounded and NOT defanged, deliberately: this is replay and
       // idempotency state that a resumed run reads back instead of acting again,
