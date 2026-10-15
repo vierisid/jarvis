@@ -12,11 +12,10 @@ streams. Those integrations belong to the later D/F chat tasks.
 
 ## Quick verification
 
-In WSL, run:
+From the repository root, run:
 
 ```bash
-cd /home/vierisid/.cache/codex/jarvis-f-02
-/home/vierisid/.bun/bin/bun test src/vault/conversation-lifecycle.test.ts src/vault/conversation-schema.test.ts src/daemon/api-brief-conversations.test.ts
+bun test src/vault/conversation-lifecycle.test.ts src/vault/conversation-schema.test.ts src/daemon/api-brief-conversations.test.ts
 ```
 
 Expected: 18 passing tests. They use temporary SQLite files, memory databases and
@@ -122,7 +121,7 @@ The closed chat remains in history. PATCH the same tab with `open: true` to reop
 it. Restarting the development daemon preserves it. With the flag absent, writes
 return 503 with `reason: disabled`; old API callers with no provider get 501.
 
-## Migration, rollback and evidence
+## Migration and rollback
 
 The migration adds nullable `conversations.workspace_id`, three metadata tables
 and two ordinary indexes. It keeps existing messages and conversation fields.
@@ -135,7 +134,6 @@ IDs and history. Reverting the binary leaves legacy channel selection operationa
 it does not make that older binary understand explicit Brief chat selection.
 Do not drop tables, replay work or delete user conversations as rollback.
 
-Task receipt: `docs/brief-delivery/F-02.json`. Figma reference:
+Figma reference:
 [chat lifecycle, node 81:212](https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-212).
-Merge prerequisite F-01 is supplied by the approved shared `brief/foundations`
-base. No F-03 transport or F-04 client-state implementation is included.
+No F-03 transport or F-04 client-state implementation is included.
