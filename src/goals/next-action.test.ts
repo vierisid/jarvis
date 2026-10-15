@@ -416,8 +416,9 @@ describe('live observation', () => {
     expect(result(dismissed.id)).toBeNull();
     expect(snapshot.work).toEqual([]);
     const p = planNextAction(snapshot);
-    expect(p.considered.filter(c => c.kind === 'close_goal').map(c => c.title))
-      .toEqual(['Record whether "Send invoice reminders" is done', 'Record whether "Call Ana about invoice 1042" is done']);
+    // Both goals may be created in the same millisecond, when the title breaks the tie, so the order is not pinned here.
+    expect(p.considered.filter(c => c.kind === 'close_goal').map(c => c.title).sort())
+      .toEqual(['Record whether "Call Ana about invoice 1042" is done', 'Record whether "Send invoice reminders" is done']);
     expect(p.considered).toContainEqual(expect.objectContaining({ kind: 'start_step', title: 'Start "Update pricing page"' }));
   });
 
