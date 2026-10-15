@@ -21,8 +21,8 @@ Published packages explicitly ship the catalog for read-only installs. The
 package-file guard checks both it and the generator. No startup filesystem scan
 or arbitrary runtime import is used.
 
-B01's current entry does not export its persistence factory; the allowlist adds
-its owned `settings.ts` companion. Other modules use their public entry only.
+B01's allowlist also loads its owned `settings.ts` companion (the persistence
+factory). Other modules use their public entry only.
 Every provider must remain inert on import/construction. Build registration and
 host service binding are separate: source presence alone never means supported.
 
@@ -120,7 +120,6 @@ release revocation and scope changes, and ensure no handler runs while blocked.
 The real B01 factory uses isolated SQLite. Optional real B02 tests skip when its
 module is absent and run in the temporary combined candidate; service-start
 functions there are explicit doubles, not a live deployment or paid provider test.
-See `docs/onboarding-delivery/ON-B-11.json` for the exact evidence and limits.
 
 For a safe daemon check with an existing panel session, read only the status URL:
 `enabled`, `released` and overall `ready` must be false. Missing modules should
