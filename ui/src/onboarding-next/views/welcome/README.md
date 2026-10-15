@@ -75,6 +75,6 @@ registry exists on this baseline, so actual discovery/revert integration
 remains blocked until those owners supply it; the standalone test host is
 not a substitute for that evidence.
 
-To roll back this PR before activation, remove this view folder and its
-delivery receipt. There are no route, database, provider or account changes.
+To roll back this PR before activation, remove this view folder.
+There are no route, database, provider or account changes.
 Once registered, disable its optional entry through ON-U-10 first.
