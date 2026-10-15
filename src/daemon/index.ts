@@ -39,6 +39,9 @@ import { EventCoalescer } from "./event-coalescer.ts";
 import { CommitmentExecutor } from "./commitment-executor.ts";
 import { classifyEvent } from "./event-classifier.ts";
 import { createApiRoutes, setCorsOrigin } from "./api-routes.ts";
+import { createPostSetupServices } from "./post-setup-services.ts";
+import { createDaemonOnboardingRuntime } from "../onboarding-next/runtime/daemon.ts";
+import { runtimeModules } from "../onboarding-next/runtime/generated/catalog.ts";
 import { createBriefCapabilities } from '../brief/registrations/index.ts';
 import { registerConversations } from '../brief/registrations/conversations.ts';
 import { BriefConversationProvider } from '../brief/conversations.ts';
@@ -5074,6 +5077,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           }
         : undefined;
 
+    apiContext.onboardingNext = createDaemonOnboardingRuntime(apiContext, runtimeModules);
+
     const apiRoutes = {
       ...createApiRoutes(apiContext),
       ...createWorkflowRoutes({
@@ -5439,7 +5444,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // Idempotent constructor for the LLM-dependent services. Safe to call
     // multiple times; returns immediately if `bgAgent` is already running.
-    const startPostSetupServices = async (): Promise<void> => {
+    const startCorePostSetupServices = async (): Promise<void> => {
       if (bgAgent) return; // already running
 
       // 10b. Background agent (needs LLM providers from agentService.start())
@@ -5478,12 +5483,6 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       wsService.setCommitmentExecutor(executor);
       executor.start();
       commitmentExecutor = executor;
-
-      // 10e. Awareness Service (M13). Skipped when --no-local-tools is set
-      //       (headless / Docker) or explicitly disabled in config.
-      if (jarvisConfig.awareness?.enabled !== false && !config.noLocalTools) {
-        await startAwarenessService();
-      }
     };
 
     // Awareness service construction extracted so the post-setup helper
@@ -5781,14 +5780,25 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // Expose the helper to the API layer so /api/onboarding/setup can
     // bring services online at the end of onboarding without a restart.
-    apiContext.startPostSetupServices = startPostSetupServices;
+    const postSetupServices = createPostSetupServices({
+      startCore: startCorePostSetupServices,
+      coreRunning: () => bgAgent?.status() === 'running' && agentService.status() === 'running',
+      noLocalTools: config.noLocalTools,
+      awareness: {
+        enabled: () => jarvisConfig.awareness?.enabled,
+        start: startAwarenessService,
+        running: () => apiContext.awarenessService?.status() === 'running',
+      },
+    });
+    apiContext.startPostSetupServices = postSetupServices.start;
     apiContext.isPostSetupServicesReady = () => bgAgent !== null;
+    apiContext.onboardingServiceReadiness = postSetupServices.readiness;
 
     // Boot-time path: setup was completed in a prior run, so spin services
     // up now. Skipped in setup mode — the onboarding endpoint will call
     // the same helper when the user finishes.
     if (!inSetupMode) {
-      await startPostSetupServices();
+      await apiContext.startPostSetupServices();
     }
 
     // 10a-2. Site Builder Service

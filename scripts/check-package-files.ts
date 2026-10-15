@@ -57,6 +57,10 @@ export interface Requirement {
  */
 export const REQUIRED: Requirement[] = [
   {
+    path: "src/onboarding-next/runtime/generated/catalog.ts",
+    why: "src/daemon/index.ts imports the committed onboarding registry; installs never generate it",
+  },
+  {
     path: "bin/jarvis.ts",
     why: "the hosting fleet's install-version refuses a tarball without it, and the jarvis@ unit's ExecStart runs it",
   },
