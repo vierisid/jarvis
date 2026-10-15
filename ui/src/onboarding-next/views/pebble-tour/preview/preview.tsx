@@ -26,7 +26,7 @@ function Conversation() {
 }
 function Room() {
   return <div className="demo-room" data-selected-object="sample-follow-up" tabIndex={-1}>
-    <p className="demo-date">Thursday, 17 September</p><h1>Good morning, Vieri.</h1>
+    <p className="demo-date">Thursday, 17 September</p><h1>Good morning, Sam.</h1>
     <div className="demo-grid">
       <section className="demo-hero"><div><span className="demo-status">Needs your review</span>
         <h2>The follow-up is ready.<br />One detail needs your eyes.</h2><p>Your email to Alex is drafted.<br />Confirm the pilot date before sending.</p></div>
@@ -55,8 +55,8 @@ function Preview() {
       <button onClick={() => { setIntent(null); setSession(n => n + 1); setOpen(false); }}>Restart tutorial</button>
     </div>
     <div className="demo-shell" data-sidebar={sidebar}>
-      <aside className="demo-sidebar"><BriefBrand /><nav aria-label="Illustrative navigation">{["Today", "Workflows", "Opportunities", "Needs you", "Goals", "Memory"].map((name, i) => <span key={name} data-active={i === 0}>{sidebar === "rail" ? name.slice(0, 1) : name}</span>)}</nav><span className="demo-account">{sidebar === "rail" ? "VB" : "Vieri Balboni · Pro plan"}</span></aside>
-      <div className="demo-main"><header>Vieri’s workspace <span>/</span> <strong>Today</strong><i aria-label="Sample connected state" /></header>
+      <aside className="demo-sidebar"><BriefBrand /><nav aria-label="Illustrative navigation">{["Today", "Workflows", "Opportunities", "Needs you", "Goals", "Memory"].map((name, i) => <span key={name} data-active={i === 0}>{sidebar === "rail" ? name.slice(0, 1) : name}</span>)}</nav><span className="demo-account">{sidebar === "rail" ? "S" : "Sample account · Pro plan"}</span></aside>
+      <div className="demo-main"><header>Sample workspace <span>/</span> <strong>Today</strong><i aria-label="Sample connected state" /></header>
         {intent ? <div className="demo-handoff"><p>Preview handoff · no journey completed</p><h1>{intent.to === "first-workflow" ? "Let’s make room for your work." : "Return to Billing tour step"}</h1><p>The host receives <code>{intent.action} → {intent.to}</code>. The first-workflow prompt belongs to ON-U-07.</p><button onClick={() => { setIntent(null); setRevision(n => n + 1); }}>Return to Pebble tutorial</button></div>
           : <PebbleTourView model={{ sessionId: `preview-${session}`, revision, phase: "ready", theme, sidebar }}
             adapter={!missing && available ? { isolation: "tutorial-sandbox", status: "ready", open, Surface, onOpenChange: setOpen } : undefined}
