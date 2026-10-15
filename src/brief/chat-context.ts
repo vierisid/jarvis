@@ -9,3 +9,5 @@ export interface BriefExecutionContext extends BriefTurnRef {
 const current = new AsyncLocalStorage<BriefExecutionContext>();
 export const currentBriefTurn = () => current.getStore();
 export function withBriefTurn<T>(turn: BriefExecutionContext, run: () => T): T { return current.run(turn, run); }
+/** Detached work (a background agent task) outlives the turn that started it and reports on its own. */
+export function outsideBriefTurn<T>(run: () => T): T { return current.exit(run); }

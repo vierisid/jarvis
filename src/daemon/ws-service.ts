@@ -851,10 +851,6 @@ export class WebSocketService implements Service {
     data: unknown;
   }): void {
     const turn = currentBriefTurn();
-    if (turn) {
-      turn.progress(event.type === 'done' ? 'completed' : 'started');
-      return;
-    }
     const message: WSMessage = {
       type: 'stream',
       payload: {
@@ -863,7 +859,10 @@ export class WebSocketService implements Service {
       },
       timestamp: Date.now(),
     };
-    this.broadcastLegacyChat(message);
+    // A Brief turn's delegation is reported on that turn's own stream only,
+    // but it is still Agents Room activity and is recorded below either way.
+    if (turn) turn.progress(event.type === 'done' ? 'completed' : 'started');
+    else this.broadcastLegacyChat(message);
 
     // Persist for the Agents Room activity timeline (Phase 6.3). Same tick
     // as the broadcast so a fresh dashboard reload + a live tab can never

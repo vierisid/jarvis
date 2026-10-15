@@ -13,6 +13,7 @@ import { registerConversations } from '../brief/registrations/conversations.ts';
 import { createBriefCapabilities } from '../brief/registrations/index.ts';
 import type { BriefChatEvent } from '../brief/contracts.ts';
 import type { LLMStreamEvent } from '../llm/provider.ts';
+import { listAgentActivity } from '../vault/agent-activity.ts';
 
 const done = (): LLMStreamEvent => ({ type: 'done', response: { content: 'Answer', tool_calls: [], usage: { input_tokens: 0, output_tokens: 0 }, model: 'fixture', finish_reason: 'stop' } });
 async function until(check: () => boolean) { const end = Date.now() + 2000; while (!check()) { if (Date.now() > end) throw new Error('WebSocket fixture timed out'); await Bun.sleep(1); } }
@@ -73,6 +74,8 @@ test('authenticated WebSocket routing gates the feature, scopes approvals and pr
     expect(mirror.frames.some(frame => frame.type === 'brief_chat_event')).toBe(false);
     expect(JSON.stringify(scoped.frames)).not.toContain('hidden-tool-arguments');
     expect(JSON.stringify(scoped.frames)).not.toContain('Private task intent');
+    // Scoped delivery hides the event from other sockets, not from the Agents Room timeline.
+    expect(listAgentActivity('agent-a').map(row => row.event_type)).toEqual(['tool_call']);
     // Changing the saved active tab does not reassign the approval's origin.
     conversations.repository.activate(b.conversationId);
     service.broadcastApprovalUpdate({ ...approval, status: 'approved' });
