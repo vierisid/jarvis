@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "ON-U-05",
+  "kind": "view",
+  "entry": "./index.tsx",
+  "provides": ["tour-view.v1"],
+  "requires": ["tour.v1"]
+}

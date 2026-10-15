@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "ON-U-04",
+  "kind": "view",
+  "entry": "./index.tsx",
+  "provides": ["interview-view.v1"],
+  "requires": ["interview-session.v1", "interview-profile.v1"]
+}
