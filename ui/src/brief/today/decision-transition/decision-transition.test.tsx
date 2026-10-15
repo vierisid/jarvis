@@ -267,3 +267,16 @@ test("capability loss clears a retained document and cannot expose an old writer
   expect(host.querySelector("article")).toBeNull(); expect(button("Approve & send")).toBeUndefined();
   expect(host.textContent).toContain("Decisions unavailable");
 });
+
+test("Refresh decisions releases a blocked paper to the owner's view without retrying or claiming completion", async () => {
+  let refreshes = 0;
+  binding = { ...binding, refresh: () => { refreshes++; }, onAction: async (decision, action, requestId) => {
+    requests.push({ decisionId: decision.decisionId, revision: decision.revision, requestId: requestId!, action }); throw new Error("connection lost"); } };
+  await render(); await click("Approve & send"); expect(phase()).toBe("blocked");
+  // The owner's authoritative view moved on (no remount); the held paper must not stay on screen forever.
+  binding = { ...binding, state: next() }; await render();
+  expect(phase()).toBe("blocked"); expect(section().dataset.decisionId).toBe("fixture-decision-follow-up");
+  await click("Refresh decisions");
+  expect(refreshes).toBe(1); expect(phase()).toBe("idle"); expect(section().dataset.decisionId).toBe("fixture-decision-invitation");
+  expect(host.textContent).not.toContain("Execution confirmed"); expect(requests).toHaveLength(1);
+});

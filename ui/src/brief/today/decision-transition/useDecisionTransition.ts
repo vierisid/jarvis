@@ -68,5 +68,12 @@ export function useDecisionTransition(binding: DecisionBinding, forceReduced: bo
     }
   }, [binding, transition]);
 
-  return { transition, arriving, act, reduced };
+  // An explicit refresh hands a blocked paper back to the owner's authoritative view. It
+  // never retries and never plays a receipt; canAct still refuses the same unsettled revision.
+  const refresh = useCallback(() => {
+    if (transition?.phase === "blocked") { setTransition(null); lock.current = false; attempt.current = null; }
+    binding.refresh?.();
+  }, [binding, transition]);
+
+  return { transition, arriving, act, refresh, reduced };
 }

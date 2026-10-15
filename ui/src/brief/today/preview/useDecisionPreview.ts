@@ -61,7 +61,7 @@ function samples(scenario: string, long: boolean) {
     first.actionLabels = { approve: "Accept step", reject: "Reject" };
     first.title = "Plan the pilot"; first.summary = "A useful next step\nis ready to accept.";
     first.description = "Accept the proposed work. Nothing starts automatically."; first.reviewLabel = "Review step";
-    first.document = { subject: "Agree the pilot scope", paragraphs: ["Confirm the success criteria with Alex before preparing the pilot."] };
+    first.document = { subject: "Agree the pilot scope", paragraphs: ["Confirm the success criteria with Jordan before preparing the pilot."] };
   } else if (scenario === "permission") {
     first.approveResult = "permission_granted";
     first.actionLabels = { approve: "Grant permission", reject: "Reject" };

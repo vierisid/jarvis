@@ -25,7 +25,7 @@ export function HeroPaper({ binding, reducedMotion = false }: { binding: Decisio
   if (held || state.status === "ready" || state.status === "stale") {
     // New source identity, not theme/layout, resets transient review intent.
     return <div ref={stack} tabIndex={-1} className="brief-decision-stack"><Decision key={`${item!.decision.decisionId}:${item!.decision.revision}`} item={item!} binding={binding} reducedMotion={controller.reduced}
-      transition={controller.transition} arriving={controller.arriving} request={action => {
+      transition={controller.transition} arriving={controller.arriving} refresh={controller.refresh} request={action => {
         const active = document.activeElement;
         if (active && stack.current?.contains(active)) focusReturn.current = active;
         controller.act(item!, action);
@@ -39,8 +39,8 @@ export function HeroPaper({ binding, reducedMotion = false }: { binding: Decisio
   </section></div>;
 }
 
-function Decision({ item, binding, reducedMotion, transition, arriving, request }: { item: DecisionPaper; binding: DecisionBinding; reducedMotion: boolean;
-  transition: DecisionTransition | null; arriving: boolean; request: (action: DecisionAction) => void }) {
+function Decision({ item, binding, reducedMotion, transition, arriving, refresh, request }: { item: DecisionPaper; binding: DecisionBinding; reducedMotion: boolean;
+  transition: DecisionTransition | null; arriving: boolean; refresh: () => void; request: (action: DecisionAction) => void }) {
   const id = useId();
   const [hover, setHover] = useState(false);
   const [focus, setFocus] = useState(false);
@@ -111,7 +111,7 @@ function Decision({ item, binding, reducedMotion, transition, arriving, request 
       {unresolved && <p className="brief-today-decision-notice">Approval is not confirmation that this action completed. Check the outcome before trying again.</p>}
       <BriefButton ref={reviewButton} className="brief-today-review-trigger" variant="primary" aria-controls={review ? `${id}-review` : undefined} aria-expanded={review}
         onClick={event => { if (review) closeReview(event); else { setReview(true); setSuppressed(false); } }}>{item.reviewLabel}</BriefButton>
-      <span className="brief-today-action-feedback brief-type-utility">{!transition && operation && operation.state !== "confirmed" ? operation.message ?? "" : ""}</span>
+      <span className="brief-today-action-feedback brief-type-utility" role="status">{!transition && operation && operation.state !== "confirmed" ? operation.message ?? "" : ""}</span>
     </div>
     <div className="brief-today-paper-stage" ref={region} data-raised={raised}
       onPointerEnter={event => { if (event.pointerType !== "touch") setHover(true); }}
@@ -145,7 +145,7 @@ function Decision({ item, binding, reducedMotion, transition, arriving, request 
     </div>
     {(transition?.phase === "blocked" || transition?.phase === "awaiting") && <div className="brief-decision-recovery">
       <p className="brief-type-utility">{transition.phase === "awaiting" ? "Confirmed. Waiting for the refreshed decision stack." : transition.message}</p>
-      {binding.refresh && <BriefButton variant="secondary" size="sm" onClick={binding.refresh}>Refresh decisions</BriefButton>}
+      {binding.refresh && <BriefButton variant="secondary" size="sm" onClick={refresh}>Refresh decisions</BriefButton>}
     </div>}
     {review && <div ref={reviewContent} id={`${id}-review`} className="brief-today-document-review" role="region" aria-label={`Review ${item.title}`} tabIndex={-1}
       onKeyDown={event => { if (event.key === "Escape" && !event.defaultPrevented) { event.preventDefault(); event.stopPropagation(); closeReview(); } }}>
