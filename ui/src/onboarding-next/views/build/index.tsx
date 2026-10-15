@@ -146,7 +146,7 @@ function BuildSession({ model, onIntent, reducedMotion = false }: BuildViewProps
   let commentary = "You’ll land directly on the canvas when it’s ready.";
   if (!available) { heading = "Build status is unavailable."; commentary = "Your request is still here. The build service needs to reconnect."; }
   else if (opening) { heading = "Your draft is saved."; commentary = "Opening your workflow…"; }
-  else if (current?.outcome === "succeeded") { heading = reference ? "Your draft is saved." : "Finishing your workflow."; commentary = reference ? "Your workflow is ready to review." : "Checking the saved workflow before opening it."; }
+  else if (current?.outcome === "succeeded") { heading = reference ? "Your draft is saved." : "Finishing your workflow."; commentary = reference ? "Your workflow is ready to review." : "Checking that your draft was saved before opening it."; }
   else if (current?.outcome === "failed") { heading = model.timedOut ? "The build timed out." : "The build needs another try."; commentary = current.safeError || "Your request is still here. Nothing has been enabled or run."; }
   else if (current?.outcome === "cancelled") { heading = "The build was cancelled."; commentary = reference ? "A draft was saved before the build stopped. You can still review it." : "Your request is still here."; }
   else if (cancelling) { heading = "Stopping the build."; commentary = "Waiting for confirmation. The build may still finish."; }
@@ -163,7 +163,8 @@ function BuildSession({ model, onIntent, reducedMotion = false }: BuildViewProps
       <p className="on-build__name">{model.title}</p>
       <ol className="on-build__phases" aria-label="Workflow build phases">
         {phases.map(phase => {
-          const complete = current?.completedPhases?.includes(phase.id);
+          // Saving is shown complete only once the host verified the saved draft.
+          const complete = current?.completedPhases?.includes(phase.id) && (phase.id !== "saving" || Boolean(reference));
           const isCurrent = current?.phase === phase.id && current.outcome === "working";
           return <li key={phase.id} className="on-build__phase" data-state={complete ? "complete" : isCurrent ? "current" : "waiting"}
             data-active={active && isCurrent} aria-current={isCurrent ? "step" : undefined}>

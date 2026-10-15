@@ -112,6 +112,11 @@ test("missing details keep the request accessible without sending or modifying i
 test.each(["pending", "unavailable"] as const)("succeeded with %s result does not open a fake canvas", async state => {
   await mount({ status: success, result: { state } });
   expect(intents).toEqual([]); expect(host.textContent).toContain("Finishing your workflow");
+  // A reported saving phase is not a saved draft until the host verifies it.
+  const saving = [...host.querySelectorAll(".on-build__phase")].at(-1);
+  expect(saving?.getAttribute("data-state")).toBe("waiting"); expect(host.textContent).not.toContain("draft is saved");
+  await render({ result: { state: "ready", reference } });
+  expect([...host.querySelectorAll(".on-build__phase")].at(-1)?.getAttribute("data-state")).toBe("complete");
 });
 test("mismatched result never opens, matching saved result opens once without a timer", async () => {
   await mount({ status: success, result: { state: "ready", reference: { ...reference, jobId: "other" } } });
