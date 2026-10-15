@@ -5,6 +5,7 @@ import { bindBriefView, unavailableView } from "../adapters/view";
 import type { BriefRoomProps, BriefShellPort } from "../contracts";
 import { legacyHref } from "../entry/route";
 import { StyleSpecimen } from "../styles/StyleSpecimen";
+import { ControlSpecimen } from "../components/controls/ControlSpecimen";
 
 interface PreviewModel { note: string }
 const PreviewBody = bindBriefView<PreviewModel>(() => ({ ...unavailableView<PreviewModel>("No live provider is connected in this preview."), source: "fixture" }),
@@ -28,8 +29,8 @@ const PreviewBody = bindBriefView<PreviewModel>(() => ({ ...unavailableView<Prev
 
 /** Explicit fixture-only URL. Never used as the fallback for real business data. */
 export function FoundationPreview() {
-  return new URLSearchParams(window.location.search).get("specimen") === "styles"
-    ? <StyleSpecimen /> : <FoundationControls />;
+  const specimen = new URLSearchParams(window.location.search).get("specimen");
+  return specimen === "controls" ? <ControlSpecimen /> : specimen === "styles" ? <StyleSpecimen /> : <FoundationControls />;
 }
 
 function FoundationControls() {
@@ -48,6 +49,7 @@ function FoundationControls() {
       <p>This checks the dashboard boundary and shared controls. It is not the finished dashboard. It does not connect to your brain, voice, or workflows.</p>
       <PreviewBody shell={shell} />
       <a className="brief-foundation__return" href="?brief=preview&specimen=styles#/_brief_preview">Open style reference</a>{" · "}
+      <a className="brief-foundation__return" href="?brief=preview&specimen=controls#/_brief_preview">Try shared controls</a>{" · "}
       <a className="brief-foundation__return" href={legacyHref(window.location.href)}>Return to current dashboard</a>
     </section>
   </main>;

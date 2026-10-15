@@ -1,0 +1,999 @@
+{
+  "version": "founder-recall-v1",
+  "split": "heldout",
+  "provenance": "Author-visible synthetic repository cases, frozen before candidate tuning. Heldout is a withheld evaluation split, not independent/blinded field data. No live customer content.",
+  "now": 1791892800000,
+  "orders": [
+    0,
+    7,
+    29
+  ],
+  "tokenizer": "cl100k_base",
+  "maxTokens": 4096,
+  "cases": [
+    {
+      "id": "held-meeting",
+      "category": "meeting-preparation",
+      "queries": [
+        "Prepare my meeting with Leila Navarro: agenda and preference"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "Leila Navarro",
+          "type": "person",
+          "facts": [
+            {
+              "key": "agenda",
+              "predicate": "meeting_agenda",
+              "object": "Review Juniper Delivery delivery milestones",
+              "options": {
+                "basis": "reported",
+                "source": "meeting_notes",
+                "scope": "work"
+              }
+            },
+            {
+              "key": "preference",
+              "predicate": "meeting_preference",
+              "object": "Send a short written agenda first",
+              "options": {
+                "basis": "reported",
+                "source": "client_email"
+              }
+            }
+          ]
+        },
+        {
+          "key": "other",
+          "name": "Tessa Navarro",
+          "type": "person",
+          "facts": [
+            {
+              "key": "other-agenda",
+              "predicate": "meeting_agenda",
+              "object": "Discuss a different account renewal",
+              "options": {
+                "confirmed": true
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "agenda",
+        "preference"
+      ],
+      "forbiddenSubjects": [
+        "other"
+      ],
+      "expectOmission": true
+    },
+    {
+      "id": "held-similar-surname",
+      "category": "similar-names",
+      "queries": [
+        "What is Leila Navarro email?"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "Leila Navarro",
+          "type": "person",
+          "facts": [
+            {
+              "key": "email",
+              "predicate": "email",
+              "object": "held.target@example.test",
+              "options": {
+                "confirmed": true,
+                "scope": "work"
+              }
+            }
+          ]
+        },
+        {
+          "key": "other",
+          "name": "Tessa Navarro",
+          "type": "person",
+          "facts": [
+            {
+              "key": "wrong-email",
+              "predicate": "email",
+              "object": "held.other@example.test",
+              "options": {
+                "confirmed": true,
+                "scope": "work"
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "email"
+      ],
+      "forbiddenSubjects": [
+        "other"
+      ],
+      "bindings": [
+        {
+          "subject": "Leila Navarro",
+          "predicate": "email",
+          "scope": "work",
+          "expected": "email"
+        }
+      ],
+      "expectOmission": true
+    },
+    {
+      "id": "held-similar-first",
+      "category": "similar-names",
+      "queries": [
+        "Owen Price phone for a followup"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "Owen Price",
+          "type": "person",
+          "facts": [
+            {
+              "key": "phone",
+              "predicate": "phone",
+              "object": "+1-202-555-0101",
+              "options": {
+                "confirmed": true
+              }
+            }
+          ]
+        },
+        {
+          "key": "other",
+          "name": "Owen Brooks",
+          "type": "person",
+          "facts": [
+            {
+              "key": "wrong-phone",
+              "predicate": "phone",
+              "object": "+1-202-555-0188",
+              "options": {
+                "confirmed": true
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "phone"
+      ],
+      "forbiddenSubjects": [
+        "other"
+      ],
+      "bindings": [
+        {
+          "subject": "Owen Price",
+          "predicate": "phone",
+          "expected": "phone"
+        }
+      ],
+      "expectOmission": true
+    },
+    {
+      "id": "held-missing-contact",
+      "category": "sparse-memory",
+      "queries": [
+        "What is Leila Navarro email?"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "Leila Navarro",
+          "type": "person",
+          "facts": []
+        },
+        {
+          "key": "other",
+          "name": "Tessa Navarro",
+          "type": "person",
+          "facts": [
+            {
+              "key": "wrong-email",
+              "predicate": "email",
+              "object": "held.wrong@example.test",
+              "options": {
+                "confirmed": true
+              }
+            }
+          ]
+        }
+      ],
+      "required": [],
+      "forbiddenSubjects": [
+        "other"
+      ],
+      "bindings": [
+        {
+          "subject": "Leila Navarro",
+          "predicate": "email",
+          "expected": null
+        }
+      ],
+      "expectOmission": true,
+      "expectEmptySubject": true
+    },
+    {
+      "id": "held-stale-preference",
+      "category": "stale-preferences",
+      "queries": [
+        "Leila Navarro meeting preference"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "Leila Navarro",
+          "type": "person",
+          "facts": [
+            {
+              "key": "expired",
+              "predicate": "meeting_preference",
+              "object": "Calls at dawn",
+              "options": {
+                "confirmed": true,
+                "validTo": 1791806400000
+              }
+            },
+            {
+              "key": "future",
+              "predicate": "meeting_preference",
+              "object": "Calls at midnight",
+              "options": {
+                "confirmed": true,
+                "validFrom": 1791979200000
+              }
+            },
+            {
+              "key": "current",
+              "predicate": "meeting_preference",
+              "object": "Written agenda before the afternoon call",
+              "options": {
+                "confirmed": true,
+                "validFrom": 1791806400000,
+                "validTo": 1791979200000
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "current"
+      ],
+      "forbidden": [
+        "expired",
+        "future"
+      ],
+      "expectOmission": true
+    },
+    {
+      "id": "held-corrected-preference",
+      "category": "stale-preferences",
+      "queries": [
+        "Leila Navarro preferred tool"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "Leila Navarro",
+          "type": "person",
+          "facts": [
+            {
+              "key": "old",
+              "predicate": "preferred_tool",
+              "object": "Old client workspace",
+              "correction": {
+                "key": "corrected",
+                "object": "Juniper Delivery portal"
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "corrected"
+      ],
+      "forbidden": [
+        "old"
+      ],
+      "expectOmission": true,
+      "bindings": [
+        {
+          "subject": "Leila Navarro",
+          "predicate": "preferred_tool",
+          "expected": "corrected"
+        }
+      ]
+    },
+    {
+      "id": "held-contested-contact",
+      "category": "qualification",
+      "queries": [
+        "Leila Navarro email"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "Leila Navarro",
+          "type": "person",
+          "facts": [
+            {
+              "key": "confirmed",
+              "predicate": "email",
+              "object": "held.verified@example.test",
+              "options": {
+                "confirmed": true,
+                "scope": "work"
+              },
+              "followups": [
+                {
+                  "key": "inference",
+                  "predicate": "email",
+                  "object": "held.guess@example.test",
+                  "options": {
+                    "basis": "inferred",
+                    "source": "llm_extraction",
+                    "confidence": 1,
+                    "scope": "work"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "required": [
+        "confirmed",
+        "inference"
+      ],
+      "bindings": [
+        {
+          "subject": "Leila Navarro",
+          "predicate": "email",
+          "scope": "work",
+          "expected": null
+        }
+      ]
+    },
+    {
+      "id": "held-sparse-unknown",
+      "category": "sparse-memory",
+      "queries": [
+        "Juniper Delivery launch checklist"
+      ],
+      "entities": [
+        {
+          "key": "unrelated",
+          "name": "Unrelated household inventory",
+          "type": "person",
+          "facts": [
+            {
+              "key": "unrelated",
+              "predicate": "favorite_food",
+              "object": "Apricots"
+            }
+          ]
+        }
+      ],
+      "required": [],
+      "abstain": true
+    },
+    {
+      "id": "held-long-history",
+      "category": "long-histories",
+      "queries": [
+        "Juniper Delivery renewal deadline"
+      ],
+      "entities": [
+        {
+          "key": "project",
+          "name": "Juniper Delivery",
+          "type": "project",
+          "facts": [
+            {
+              "key": "deadline",
+              "predicate": "renewal_deadline",
+              "object": "2027-03-18",
+              "options": {
+                "confirmed": true
+              },
+              "repeats": 24
+            }
+          ]
+        }
+      ],
+      "required": [
+        "deadline"
+      ],
+      "noise": {
+        "entities": 40,
+        "factsPerEntity": 4,
+        "predicate": "archive_note",
+        "object": "Historic unrelated administrative record"
+      },
+      "expectOmission": false
+    },
+    {
+      "id": "held-crowded-subject",
+      "category": "long-histories",
+      "queries": [
+        "Leila Navarro renewal deadline"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "Leila Navarro",
+          "type": "person",
+          "facts": [
+            {
+              "key": "deadline",
+              "predicate": "renewal_deadline",
+              "object": "2027-04-22",
+              "options": {
+                "confirmed": true
+              }
+            },
+            {
+              "key": "note-0",
+              "predicate": "archive_note",
+              "object": "Closed ticket 0 background history"
+            },
+            {
+              "key": "note-1",
+              "predicate": "archive_note",
+              "object": "Closed ticket 1 background history"
+            },
+            {
+              "key": "note-2",
+              "predicate": "archive_note",
+              "object": "Closed ticket 2 background history"
+            },
+            {
+              "key": "note-3",
+              "predicate": "archive_note",
+              "object": "Closed ticket 3 background history"
+            },
+            {
+              "key": "note-4",
+              "predicate": "archive_note",
+              "object": "Closed ticket 4 background history"
+            },
+            {
+              "key": "note-5",
+              "predicate": "archive_note",
+              "object": "Closed ticket 5 background history"
+            },
+            {
+              "key": "note-6",
+              "predicate": "archive_note",
+              "object": "Closed ticket 6 background history"
+            },
+            {
+              "key": "note-7",
+              "predicate": "archive_note",
+              "object": "Closed ticket 7 background history"
+            },
+            {
+              "key": "note-8",
+              "predicate": "archive_note",
+              "object": "Closed ticket 8 background history"
+            },
+            {
+              "key": "note-9",
+              "predicate": "archive_note",
+              "object": "Closed ticket 9 background history"
+            },
+            {
+              "key": "note-10",
+              "predicate": "archive_note",
+              "object": "Closed ticket 10 background history"
+            },
+            {
+              "key": "note-11",
+              "predicate": "archive_note",
+              "object": "Closed ticket 11 background history"
+            },
+            {
+              "key": "note-12",
+              "predicate": "archive_note",
+              "object": "Closed ticket 12 background history"
+            },
+            {
+              "key": "note-13",
+              "predicate": "archive_note",
+              "object": "Closed ticket 13 background history"
+            },
+            {
+              "key": "note-14",
+              "predicate": "archive_note",
+              "object": "Closed ticket 14 background history"
+            },
+            {
+              "key": "note-15",
+              "predicate": "archive_note",
+              "object": "Closed ticket 15 background history"
+            },
+            {
+              "key": "note-16",
+              "predicate": "archive_note",
+              "object": "Closed ticket 16 background history"
+            },
+            {
+              "key": "note-17",
+              "predicate": "archive_note",
+              "object": "Closed ticket 17 background history"
+            },
+            {
+              "key": "note-18",
+              "predicate": "archive_note",
+              "object": "Closed ticket 18 background history"
+            },
+            {
+              "key": "note-19",
+              "predicate": "archive_note",
+              "object": "Closed ticket 19 background history"
+            },
+            {
+              "key": "note-20",
+              "predicate": "archive_note",
+              "object": "Closed ticket 20 background history"
+            },
+            {
+              "key": "note-21",
+              "predicate": "archive_note",
+              "object": "Closed ticket 21 background history"
+            },
+            {
+              "key": "note-22",
+              "predicate": "archive_note",
+              "object": "Closed ticket 22 background history"
+            },
+            {
+              "key": "note-23",
+              "predicate": "archive_note",
+              "object": "Closed ticket 23 background history"
+            },
+            {
+              "key": "note-24",
+              "predicate": "archive_note",
+              "object": "Closed ticket 24 background history"
+            },
+            {
+              "key": "note-25",
+              "predicate": "archive_note",
+              "object": "Closed ticket 25 background history"
+            },
+            {
+              "key": "note-26",
+              "predicate": "archive_note",
+              "object": "Closed ticket 26 background history"
+            },
+            {
+              "key": "note-27",
+              "predicate": "archive_note",
+              "object": "Closed ticket 27 background history"
+            },
+            {
+              "key": "note-28",
+              "predicate": "archive_note",
+              "object": "Closed ticket 28 background history"
+            },
+            {
+              "key": "note-29",
+              "predicate": "archive_note",
+              "object": "Closed ticket 29 background history"
+            },
+            {
+              "key": "note-30",
+              "predicate": "archive_note",
+              "object": "Closed ticket 30 background history"
+            },
+            {
+              "key": "note-31",
+              "predicate": "archive_note",
+              "object": "Closed ticket 31 background history"
+            },
+            {
+              "key": "note-32",
+              "predicate": "archive_note",
+              "object": "Closed ticket 32 background history"
+            },
+            {
+              "key": "note-33",
+              "predicate": "archive_note",
+              "object": "Closed ticket 33 background history"
+            },
+            {
+              "key": "note-34",
+              "predicate": "archive_note",
+              "object": "Closed ticket 34 background history"
+            }
+          ]
+        }
+      ],
+      "required": [
+        "deadline"
+      ],
+      "expectOmission": true
+    },
+    {
+      "id": "held-tight-budget",
+      "category": "context-budget",
+      "queries": [
+        "Juniper Delivery deadline"
+      ],
+      "entities": [
+        {
+          "key": "project",
+          "name": "Juniper Delivery",
+          "type": "project",
+          "facts": [
+            {
+              "key": "deadline",
+              "predicate": "deadline",
+              "object": "2027-05-14",
+              "options": {
+                "confirmed": true
+              }
+            },
+            {
+              "key": "detail",
+              "predicate": "deadline_detail",
+              "object": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+              "options": {
+                "basis": "reported"
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "deadline"
+      ],
+      "allowed": [
+        "deadline",
+        "detail"
+      ],
+      "maxChars": 1800,
+      "expectOmission": true
+    },
+    {
+      "id": "held-unconfirmed-binding",
+      "category": "qualification",
+      "queries": [
+        "Leila Navarro email"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "Leila Navarro",
+          "type": "person",
+          "facts": [
+            {
+              "key": "reported",
+              "predicate": "email",
+              "object": "held.reported@example.test",
+              "options": {
+                "basis": "reported",
+                "source": "meeting_notes",
+                "confidence": 1,
+                "scope": "work"
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "reported"
+      ],
+      "bindings": [
+        {
+          "subject": "Leila Navarro",
+          "predicate": "email",
+          "scope": "work",
+          "expected": null
+        }
+      ]
+    },
+    {
+      "id": "held-multi-person",
+      "category": "meeting-preparation",
+      "queries": [
+        "Meeting with Ada West and Theo North: agenda"
+      ],
+      "entities": [
+        {
+          "key": "ada",
+          "name": "Ada West",
+          "type": "person",
+          "facts": [
+            {
+              "key": "ada-agenda",
+              "predicate": "meeting_agenda",
+              "object": "Review support response targets",
+              "options": {
+                "basis": "reported"
+              }
+            }
+          ]
+        },
+        {
+          "key": "theo",
+          "name": "Theo North",
+          "type": "person",
+          "facts": [
+            {
+              "key": "theo-agenda",
+              "predicate": "meeting_agenda",
+              "object": "Agree the onboarding checklist",
+              "options": {
+                "confirmed": true
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "ada-agenda",
+        "theo-agenda"
+      ]
+    },
+    {
+      "id": "held-unicode",
+      "category": "similar-names",
+      "queries": [
+        "José Aranda reunión agenda"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "José Aranda",
+          "type": "person",
+          "facts": [
+            {
+              "key": "agenda",
+              "predicate": "reunión_agenda",
+              "object": "Revisar entregables del cliente",
+              "options": {
+                "basis": "reported"
+              }
+            }
+          ]
+        },
+        {
+          "key": "other",
+          "name": "Lucía Aranda",
+          "type": "person",
+          "facts": [
+            {
+              "key": "wrong-agenda",
+              "predicate": "reunión_agenda",
+              "object": "Otro proyecto",
+              "options": {
+                "confirmed": true
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "agenda"
+      ],
+      "forbiddenSubjects": [
+        "other"
+      ],
+      "expectOmission": true
+    },
+    {
+      "id": "held-cjk",
+      "category": "qualification",
+      "queries": [
+        "林雨 会議 議題"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "林雨",
+          "type": "person",
+          "facts": [
+            {
+              "key": "agenda",
+              "predicate": "会議_議題",
+              "object": "納品予定を確認する",
+              "options": {
+                "basis": "reported",
+                "source": "call_notes"
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "agenda"
+      ]
+    },
+    {
+      "id": "held-alias",
+      "category": "qualification",
+      "queries": [
+        "Harborlead meeting agenda"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "Dana Rivers",
+          "type": "person",
+          "facts": [
+            {
+              "key": "alias",
+              "predicate": "alias",
+              "object": "Harborlead",
+              "options": {
+                "basis": "inferred",
+                "source": "llm_extraction"
+              }
+            },
+            {
+              "key": "agenda",
+              "predicate": "meeting_agenda",
+              "object": "Review handover risks",
+              "options": {
+                "confirmed": true
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "alias",
+        "agenda"
+      ]
+    },
+    {
+      "id": "held-work-personal",
+      "category": "qualification",
+      "queries": [
+        "Morgan Flint email"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "Morgan Flint",
+          "type": "person",
+          "facts": [
+            {
+              "key": "work",
+              "predicate": "email",
+              "object": "morgan.work@example.test",
+              "options": {
+                "confirmed": true,
+                "scope": "work"
+              }
+            },
+            {
+              "key": "personal",
+              "predicate": "email",
+              "object": "morgan.personal@example.test",
+              "options": {
+                "confirmed": true,
+                "scope": "personal"
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "work",
+        "personal"
+      ],
+      "bindings": [
+        {
+          "subject": "Morgan Flint",
+          "predicate": "email",
+          "scope": "work",
+          "expected": "work"
+        }
+      ]
+    },
+    {
+      "id": "held-duplicate-name",
+      "category": "similar-names",
+      "queries": [
+        "Rory Lane phone"
+      ],
+      "entities": [
+        {
+          "key": "one",
+          "name": "Rory Lane",
+          "type": "person",
+          "facts": [
+            {
+              "key": "one",
+              "predicate": "phone",
+              "object": "+1-202-555-0102",
+              "options": {
+                "confirmed": true
+              }
+            }
+          ]
+        },
+        {
+          "key": "two",
+          "name": "Rory Lane",
+          "type": "person",
+          "facts": [
+            {
+              "key": "two",
+              "predicate": "phone",
+              "object": "+1-202-555-0182",
+              "options": {
+                "confirmed": true
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "one",
+        "two"
+      ],
+      "bindings": [
+        {
+          "subject": "Rory Lane",
+          "predicate": "phone",
+          "expected": null
+        }
+      ]
+    },
+    {
+      "id": "held-cross-reference",
+      "category": "meeting-preparation",
+      "queries": [
+        "What is Anika Stone renewal deadline?"
+      ],
+      "entities": [
+        {
+          "key": "target",
+          "name": "Anika Stone",
+          "type": "person",
+          "facts": []
+        },
+        {
+          "key": "project",
+          "name": "Willow Account",
+          "type": "project",
+          "facts": [
+            {
+              "key": "deadline",
+              "predicate": "renewal_deadline",
+              "object": "Anika Stone renewal deadline is 2027-06-19",
+              "options": {
+                "basis": "reported"
+              }
+            }
+          ]
+        }
+      ],
+      "required": [
+        "deadline"
+      ]
+    },
+    {
+      "id": "held-empty-vault",
+      "category": "sparse-memory",
+      "queries": [
+        "Prepare tomorrow client meeting"
+      ],
+      "entities": [],
+      "required": [],
+      "abstain": true
+    }
+  ]
+}
