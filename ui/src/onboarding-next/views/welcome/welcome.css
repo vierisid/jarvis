@@ -1,0 +1,111 @@
+/* ON-U-01. Scoped equivalents of the merged brand tokens; no D-line import.
+   Figma 1097:16403 / 1097:68522. No styles escape this surface. */
+.on-welcome {
+  --on-bg: #fafbfc;
+  --on-ink: #13161a;
+  --on-muted: #677077;
+  --on-panel: #f6f8fa;
+  --on-rule: #e2e7ec;
+  --on-focus: #1e5fd8;
+  --on-error: #c2301f;
+  --on-shadow: 0 6px 18px -4px rgb(20 30 45 / 30%);
+  --on-ease: cubic-bezier(.2, .7, .2, 1);
+  color-scheme: light;
+  box-sizing: border-box;
+  block-size: var(--on-setup-height, 100dvh);
+  min-block-size: 0;
+  inline-size: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow-y: auto;
+  padding: clamp(32px, 16vh, 176px) 24px clamp(32px, 8vh, 88px);
+  background: var(--on-bg);
+  color: var(--on-ink);
+  font-family: 'Familjen Grotesk', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.on-welcome[data-theme="dark"] {
+  --on-bg: #121417;
+  --on-ink: #eef1f4;
+  --on-muted: #8a919a;
+  --on-panel: #1e2128;
+  --on-rule: #272c33;
+  --on-focus: #6fa4ff;
+  --on-error: #ff6a5c;
+  --on-shadow: 0 8px 22px -4px rgb(0 0 0 / 60%);
+  color-scheme: dark;
+}
+
+.on-welcome *, .on-welcome *::before, .on-welcome *::after { box-sizing: border-box; }
+.on-welcome__content { flex-shrink: 0; margin-block: auto; inline-size: 100%; max-inline-size: 400px; min-inline-size: 0; text-align: center; overflow-wrap: anywhere; }
+.on-welcome__mark-space { block-size: 84px; display: grid; place-items: center; }
+/* The existing onboarding mark's geometry, also used by the approved Figma
+   welcome. Static brand illustration, not a microphone/listening state. */
+.on-welcome__pebble {
+  inline-size: 60px;
+  block-size: 60px;
+  border-radius: 50% 50% 50% 12px;
+  /* Figma's positive rotation is counter-clockwise; CSS uses clockwise. */
+  transform: rotate(-45deg);
+  background: radial-gradient(circle at 50% 40%, #ff6e60, #e63b2e 58%, #b81e16);
+  box-shadow: var(--on-shadow);
+}
+.on-welcome__wordmark { margin-block-start: 8px; font-size: 15px; font-weight: 700; line-height: 22px; letter-spacing: -.045em; }
+.on-welcome__wordmark span { color: var(--on-muted); }
+.on-welcome__heading { margin: 10px 0 0; font-size: 22px; font-weight: 700; line-height: 1.15; letter-spacing: -.028em; text-wrap: balance; }
+.on-welcome__description { margin: 10px 0 0; color: var(--on-muted); font-size: 13px; line-height: 1.45; }
+/* Keep the approved copy, but lift the 10.5px pale hint to readable utility type. */
+.on-welcome__note { margin: 32px 0 0; color: var(--on-muted); font-size: 12px; line-height: 1.5; }
+.on-welcome__appearance { margin-block-start: 36px; }
+.on-welcome__label { margin: 0 0 6px; color: var(--on-muted); font-size: 12px; line-height: 18px; }
+.on-welcome__themes { display: flex; justify-content: center; }
+.on-welcome .on-welcome__control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-block-size: 44px;
+  block-size: auto;
+  max-inline-size: 100%;
+  margin: 0;
+  padding: 10px 18px;
+  border: 1px solid transparent;
+  border-radius: 9px 2px 9px 9px;
+  background: transparent;
+  color: var(--on-ink);
+  font: 600 13px/1.45 'Familjen Grotesk', system-ui, sans-serif;
+  white-space: normal;
+  text-align: center;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  box-shadow: none;
+  transform: none;
+  transition: background-color 160ms var(--on-ease), border-color 160ms var(--on-ease);
+}
+.on-welcome .on-welcome__control:focus-visible { outline: 2px solid var(--on-focus); outline-offset: 3px; }
+.on-welcome .on-welcome__control[aria-disabled="true"] { opacity: .5; cursor: default; }
+.on-welcome .on-welcome__theme { min-inline-size: 72px; background: var(--on-panel); border-color: var(--on-rule); color: var(--on-muted); }
+.on-welcome .on-welcome__theme[aria-pressed="true"], .on-welcome .on-welcome__start { background: var(--on-ink); color: var(--on-bg); }
+.on-welcome .on-welcome__theme[aria-pressed="false"]:hover { border-color: var(--on-muted); }
+/* Override the merged v2 primitive's hover in either stylesheet order. */
+.on-welcome .on-welcome__control[type="button"]:hover { box-shadow: none; }
+.on-welcome .on-welcome__theme[aria-pressed="true"]:hover { background: var(--on-ink); border-color: transparent; }
+.on-welcome .on-welcome__theme[aria-pressed="false"]:hover { background: var(--on-panel); }
+.on-welcome .on-welcome__start[aria-disabled="true"]:hover { background: var(--on-ink); border-color: transparent; }
+.on-welcome .on-welcome__exit[aria-disabled="true"]:hover { background: transparent; border-color: transparent; }
+.on-welcome__actions { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-block-start: 20px; }
+.on-welcome .on-welcome__start { inline-size: 208px; }
+.on-welcome .on-welcome__start:not([aria-disabled="true"]):hover { background: color-mix(in srgb, var(--on-ink) 88%, var(--on-bg)); }
+.on-welcome .on-welcome__exit { inline-size: 200px; color: var(--on-muted); font-weight: 400; font-size: 12px; }
+.on-welcome .on-welcome__exit:not([aria-disabled="true"]):hover { background: var(--on-panel); color: var(--on-ink); border-color: transparent; }
+.on-welcome .on-welcome__control:not([aria-disabled="true"]):active { border-color: var(--on-focus); }
+.on-welcome__feedback { min-block-size: 36px; margin-block-start: 8px; }
+.on-welcome__feedback p { margin: 0; font-size: 12px; line-height: 18px; color: var(--on-muted); }
+.on-welcome__feedback [role="alert"] { color: var(--on-error); }
+@media (max-width: 600px), (max-height: 700px) {
+  .on-welcome { padding-block: 32px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .on-welcome .on-welcome__control { transition: none; }
+}
