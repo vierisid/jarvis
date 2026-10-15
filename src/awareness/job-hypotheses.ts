@@ -3,6 +3,7 @@ import type { JobHypothesis, JobSignal, OpportunityAssessment } from './opportun
 
 import { ROUTINES, ROUTINE_POLICY } from './routine-catalog.ts';
 import { groupRoutineEpisodes, OPPORTUNITY_WINDOW_MS } from './routine-episodes.ts';
+import { rankOpportunityGoals } from './goal-relevance.ts';
 export { OPPORTUNITY_WINDOW_MS } from './routine-episodes.ts';
 export { classifyJobSignals } from './routine-signals.ts';
 
@@ -22,15 +23,7 @@ export function assessJobHypotheses(
     const patternKey = `job-v1:${job.kind}`;
     if (knownPatterns.has(patternKey)) continue;
     const evidence = episodes.map(e => e.output);
-    const goalCandidates = goals.filter(g => g.status === 'active' && job.goalPattern?.test(
-      `${g.title} ${g.description} ${g.success_criteria}`,
-    )).slice(0, 5).map(g => ({
-      goalId: g.id, title: g.title,
-      reason: `The goal and observed activity both mention ${job.cue}. This does not establish that the activity serves the goal.`,
-      evidenceCaptureIds: evidence.map(e => e.captureId),
-      basis: 'text_overlap_requires_confirmation' as const,
-    }));
-    proposals.push({
+    const hypothesis: JobHypothesis = {
       schemaVersion: 1, assessedAt: now, patternKey, kind: job.kind,
       job: { title: job.title, proposedOutcome: job.proposedOutcome, question: job.question },
       evidence,
@@ -48,7 +41,7 @@ export function assessJobHypotheses(
         lastObservedAt: episodes.at(-1)!.output.observedAt,
         windowDays: 14, basis: 'observed_activity',
       },
-      goalCandidates,
+      goalCandidates: [],
       feasibility: {
         status: 'unverified',
         requiredChecks: ['source_access', 'output_destination', 'authority', 'workflow_preflight', 'model_profile_quality'],
@@ -60,9 +53,10 @@ export function assessJobHypotheses(
         'The job, scope and expected outcome need user confirmation.',
         'Goal candidates are possible relevance only; no goal is linked automatically.',
       ],
-    });
+    };
+    proposals.push({ ...hypothesis, ...rankOpportunityGoals(hypothesis, goals, now) });
   }
-  // Goal relevance breaks ties without inventing a probability or a business score.
+  // Only one defensible contribution improves priority; competing links never inflate it.
   proposals.sort((a, b) => b.goalCandidates.length - a.goalCandidates.length
     || b.recurrence.distinctDays - a.recurrence.distinctDays || a.patternKey.localeCompare(b.patternKey));
   return {
