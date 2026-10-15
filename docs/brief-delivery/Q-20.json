@@ -1,0 +1,68 @@
+{
+  "task": "Q-20",
+  "title": "Bound background work and keep the system responsive",
+  "status": "implemented_unmerged",
+  "base": {
+    "branch": "main",
+    "sha": "5024ea7455a5613be0514475be32c0dee6de0edd"
+  },
+  "head": "eba7350fc3fb7797f3177f5f66164b12e95a95f6",
+  "headMeaning": "Implementation commit; a following documentation-only commit adds this receipt. Final PR head/checks are recorded in the PR description.",
+  "branch": "brief/q-20",
+  "figma": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-3",
+  "capabilityGate": "No new flag: bounds apply at daemon startup after integration; PR remains unmerged. No deployment or Brief activation performed.",
+  "mergeAfter": [],
+  "enableAfter": [],
+  "tests": {
+    "affected": "802 passed, 0 failed, 2574 assertions across 53 files",
+    "commitHook": "171 passed, 0 failed, 502 assertions across 9 files; TypeScript and repository guards passed",
+    "types": "bunx tsc --noEmit passed",
+    "uiBuild": "bun run build:ui passed, existing CSS at-rule warnings",
+    "revertChecks": "5 of 5 guard removals detected, restored afterward",
+    "ci": "Full final-head CI required before delivery; see PR checks/description"
+  },
+  "acceptance": [
+    {
+      "check": "Bound background work and preserve foreground responsiveness",
+      "evidence": "evidence/Q-20/resource-envelope.json; src/llm/background-budget.test.ts",
+      "result": "200-call synthetic burst admitted 2 background calls; two foreground calls settled (one cancelled), real SQLite approval denial completed within the recorded 250 ms threshold."
+    },
+    {
+      "check": "Deduplicate and bound durable preparation",
+      "evidence": "src/awareness/composition-budget.test.ts; src/awareness/suggestion-feedback.test.ts",
+      "result": "20 pending jobs, one database lease, 12 rolling-day attempts, 3 attempts/job; deduplicated acceptance and restart accounting; paused jobs remain queued."
+    },
+    {
+      "check": "Paginate heavy reads and pause hidden polling",
+      "evidence": "src/vault/memory-page.test.ts; ui/src/v2/rooms/memory/useMemoryData.test.tsx; RoutineRequestsPanel.test.tsx",
+      "result": "100-row keyset pages; complete refresh only; old snapshot retained on failure; hidden/overlapping polling blocked and pending memory reads aborted."
+    }
+  ],
+  "review": {
+    "method": "Local Review Agent instructions, direct read-only implementer review",
+    "result": "No remaining actionable findings after corrections",
+    "independentHumanApproval": false,
+    "evidence": "evidence/Q-20/review.md"
+  },
+  "evidence": [
+    "evidence/Q-20/integration-base.json",
+    "evidence/Q-20/resource-envelope.json",
+    "evidence/Q-20/revert-checks.json",
+    "evidence/Q-20/validation.json"
+  ],
+  "manualChecks": "No live provider/daemon, paid model call, external side effect, deployment or full-stack certification. Synthetic service and mounted UI fixtures only.",
+  "limitations": [
+    "Per-process concurrency assumes existing single-daemon ownership; transactional rolling allowances survive restarts.",
+    "Limits bound attempts, serialized input bytes and requested output tokens, not monetary charges or provider tokenization. Hosting remains billing authority.",
+    "Foreground priority does not preempt two existing background calls or reserve upstream provider capacity.",
+    "Opportunistic refused enrichment gains no new durable replay queue.",
+    "Memory graph/search still stores the full loaded vault; pagination is a live read across edits.",
+    "F09/F02/Q19/F19 stacks remain separate and require integration checks; new background_throttled code should be mapped by Q19 upon assembly."
+  ],
+  "rollback": "Revert Q-20 and rebuild daemon/UI together; keep additive budget/attempt tables and all jobs, journals and effect history. Never replay effects as rollback.",
+  "quickVerify": {
+    "command": "bun test src/llm/background-budget.test.ts src/awareness/composition-budget.test.ts src/vault/memory-page.test.ts ui/src/v2/rooms/memory/useMemoryData.test.tsx",
+    "measure": "bun scripts/measure-background-work.ts",
+    "ui": "Workflows > Routine requests: inspect waiting/preparing counts and pause reason; Memory: switch to a hidden tab and return."
+  }
+}
