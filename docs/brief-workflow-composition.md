@@ -1,6 +1,6 @@
 # F-07: workflow composition jobs
 
-F-07 supplies the authenticated API and durable service that turns a natural-language prompt into a populated, disabled draft. It uses the existing high-tier composer, composition journal and canonical draft repositories. This PR follows the owner's unmerged stack on F-06 (`23979f3bebab09a68c140aad3cb1843865fef150`).
+F-07 supplies the authenticated API and durable service that turns a natural-language prompt into a populated, disabled draft. It uses the existing high-tier composer, composition journal and canonical draft repositories.
 
 There is no production UI change. D-16 owns the workflow prompt presentation and should consume this API. The old WorkflowsRoom creation handler is not rewired here. F-08 connection/library ingredient selection is not implemented; extra request fields are rejected instead of silently ignored.
 
@@ -37,10 +37,7 @@ If a runtime storage error prevents both the terminal job update and interruptio
 
 ## Quick verification
 
-From WSL, run:
-
 ```bash
-cd /home/vierisid/.cache/codex/jarvis-f-07
 bun test src/brief/composition.test.ts src/daemon/api-brief-composition.test.ts src/actions/tools/persisted-workflow-composer.test.ts
 ```
 
@@ -50,7 +47,6 @@ For a D-16 integration host with the flag deliberately enabled, POST a prompt su
 
 The workflow data-access audit lists this service as a creator that keeps only the new version ID. A capture-canary regression verifies that later workflow output cannot appear in job receipts, replay or subsequent composition prompts; returning an entire version is rejected. The existing model-boundary framing rules are unchanged.
 
-Verification commands, counts, five rejected unsafe mutations and logs are recorded in `docs/brief-delivery/F-07.json` and `docs/brief-delivery/evidence/F-07/`. Exact pushed-head CI is recorded in the PR description. The runtime storage-recovery correction and its final regression evidence are in `docs/brief-delivery/evidence/F-07/review-fixes.json`.
 
 ## Rollback
 
