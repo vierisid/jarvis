@@ -193,6 +193,18 @@ is unchanged.
   never shown as done.
 - Review opens the full document in place below the summary; Escape or Close returns focus to the
   Review button. A new decision id or revision resets hover and review state.
+- Confirm and settle (`today/decision-transition/`): a press calls `onAction(decision, action, requestId)`
+  with a fresh opaque `requestId` and holds the same paper ("Confirming decision"). It is a correlation
+  token only; durable idempotency and execution belong to the owner (F-14). A resolved promise means
+  nothing. The paper shows a receipt only when `binding.operation` is `confirmed` for the same decision
+  id, revision, `requestId` and action, with the expected `effect` (`committed` only for an executing
+  approve) and, for approve, the `result` matching `DecisionPaper.approveResult` (`accepted`,
+  `permission_granted`, or `executed` when omitted). Anything else, or a failed/unknown execution
+  outcome in the view, blocks on the same paper with Refresh decisions; nothing is retried. After the
+  receipt (380ms) the paper settles (220ms) and waits for a ready different decision or `empty` before
+  the next one arrives. Refresh decisions on a blocked paper hands it back to the owner's view.
+  Reduced motion drops settlement travel and the arrival animation but keeps the receipt. Reject is
+  offered only inside Review. The preview's `useDecisionPreview` simulates the owner; it sends nothing.
 - Slots are plain nodes supplied and gated by their owners; the layout invents no fallback cards.
   `slots.goal` renders through `PebbleCompanion` into the one companion slot `PebbleLayout` keeps above
   the conversation, so the goal stays mounted and above Pebble when chat opens. While chat is closed,
