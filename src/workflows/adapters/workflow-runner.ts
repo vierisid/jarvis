@@ -21,7 +21,8 @@ import type {
   PieceWorkflowStartInput,
   PieceWorkflowStartResult,
 } from "../jarvis-pieces/types";
-import { DEFAULT_IDS } from "../db";
+import { DEFAULT_IDS, getWorkflowDb } from "../db";
+import { createWaitpoint } from "../db/repos/waitpoint";
 import { getFlowInProject } from "../db/repos/flow";
 import { getFlowVersion, getLatestDraft } from "../db/repos/flow-version";
 import { createFlowRun, getFlowRun } from "../db/repos/flow-run";
@@ -82,6 +83,7 @@ export class JarvisWorkflowRunnerAdapter implements PieceWorkflowRunner {
      * which is the same shape of fail-open.
      */
     callerProjectId?: string,
+    continuation?: { effectId: string; stepName: string },
   ): Promise<PieceWorkflowStartResult> {
     if (callerRunId) assertRunNotCanceled(callerRunId);
     if (!input.flowId) {
@@ -136,28 +138,42 @@ export class JarvisWorkflowRunnerAdapter implements PieceWorkflowRunner {
     // grant, so a published child flow carries it and keeps running.
     assertCodeStepsAllowed(flow.id, versionId, "run");
     assertVersionReady(flow.id, versionId);
-    const run = createFlowRun({
-      flowId: flow.id,
-      flowVersionId: versionId,
-      triggeredBy: "workflow:run_workflow",
-      startTime: Date.now(),
-      // Link back to the caller so the recursion guard above can walk
-      // the chain on the NEXT run_workflow firing further down the
-      // chain. Without this every nested run looks like a top-level
-      // run and cycles wouldn't be detectable.
-      parentRunId: callerRunId ?? null,
-    });
-    enqueue({
-      jobType: RUN_FLOW,
-      payload: { runId: run.id, payload: input.payload ?? {} },
-      flowRunId: run.id,
-      flowId: flow.id,
-      flowVersionId: versionId,
-      // No auto-retry: a flow with side effects (sending email, hitting an
-      // API) would duplicate those effects on retry. The user gets a clear
-      // FAILED status and can re-run manually.
-      maxAttempts: 1,
-    });
-    return { runId: run.id };
+    if (input.waitForCompletion && (!callerRunId || !continuation)) {
+      throw new WorkflowRunnerError("MISSING_REF", "Required child work needs a parent step identity");
+    }
+    // The run, queue job and parent continuation either all exist or none do.
+    return getWorkflowDb().transaction(() => {
+      if (callerRunId) assertRunNotCanceled(callerRunId);
+      const run = createFlowRun({
+        flowId: flow.id,
+        flowVersionId: versionId,
+        triggeredBy: "workflow:run_workflow",
+        failParentOnFailure: input.waitForCompletion === true,
+        // Link back to the caller so the recursion guard above can walk
+        // the chain on the NEXT run_workflow firing further down the
+        // chain. Without this every nested run looks like a top-level
+        // run and cycles wouldn't be detectable.
+        parentRunId: callerRunId ?? null,
+      });
+      enqueue({
+        jobType: RUN_FLOW,
+        payload: { runId: run.id, payload: input.payload ?? {} },
+        flowRunId: run.id,
+        flowId: flow.id,
+        flowVersionId: versionId,
+        // No auto-retry: a flow with side effects (sending email, hitting an
+        // API) would duplicate those effects on retry. The user gets a clear
+        // FAILED status and can re-run manually.
+        maxAttempts: 1,
+      });
+      const waitpoint = input.waitForCompletion ? createWaitpoint({
+        flowRunId: callerRunId!, projectId: callerProjectId ?? DEFAULT_IDS.project,
+        stepName: continuation!.stepName, type: "MANUAL",
+      }) : null;
+      if (continuation) getWorkflowDb().run(
+        'INSERT INTO workflow_child_run (effect_id, child_run_id, waitpoint_id) VALUES (?, ?, ?)',
+        [continuation.effectId, run.id, waitpoint?.id ?? null]);
+      return { runId: run.id, ...(waitpoint ? { waitpointId: waitpoint.id } : {}) };
+    }).immediate();
   }
 }
