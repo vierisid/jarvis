@@ -7,20 +7,60 @@ import { fingerprint, snapshotComposition, type PlanningPolicy } from '../../act
 import type { ComposerLlmClient } from '../../actions/tools/workflow-composer';
 import { estimatedCost, type HostedProfile } from './hosted';
 import { staticChecks, passed } from './checks';
+import { environmentFor } from './environment';
 import type { EvaluationRow, EffectExecutor, QualityTask, TransportAttempt, TransportStop, CallTrace } from './types';
 
-export function loadTasks(split: QualityTask['split']): { version: string; sha256: string; tasks: QualityTask[] } {
-  if (!['development', 'heldout'].includes(split)) throw new Error('Unknown task split');
-  const text = readFileSync(new URL('./tasks/' + split + '.json', import.meta.url), 'utf8');
-  const data = JSON.parse(text);
-  if (data.schemaVersion !== 1 || !Array.isArray(data.tasks) || !data.tasks.length) throw new Error('Invalid task set');
+/** Named task sets. W8 keeps its original files; later sets name their environment. */
+export const TASK_SETS: Record<string, Record<QualityTask['split'], string>> = {
+  w8: { development: 'development.json', heldout: 'heldout.json' },
+  founder: { development: 'founder-development-1.json', heldout: 'founder-heldout-1.json' },
+};
+export interface TaskSet { name: string; version: string; sha256: string; environment: string; tasks: QualityTask[] }
+
+/** Rejects a fixture that could not be graded fairly: unknown tools, pieces or
+ * machines, graph-only tasks with scenarios, or duplicate ids. */
+export function validateTaskSet(data: any, split: QualityTask['split'], name: string): TaskSet {
+  if (data?.schemaVersion !== 1 || !Array.isArray(data.tasks) || !data.tasks.length) throw new Error('Invalid task set');
+  const environment = environmentFor(data.environment);
+  const tools = new Set(environment.tools.map(t => t.name)), targets = new Set(environment.targets.map(t => t.name));
+  const external = new Map(environment.external.map(e => [e.name, new Set(Object.keys(e.actions))]));
   const ids = new Set<string>();
   for (const t of data.tasks) {
+    const fail = (why: string): never => { throw new Error('Invalid task fixture ' + (t?.id ?? '?') + ': ' + why); };
     if (t.split !== split || !t.id || ids.has(t.id) || !t.specification?.description
-      || !t.expectation || !Array.isArray(t.scenarios)) throw new Error('Invalid task fixture');
+      || !t.expectation || !Array.isArray(t.scenarios)) fail('identity, split, specification or scenarios');
     ids.add(t.id);
+    const graphOnly = (t.expectation.external ?? []).length > 0;
+    if ((graphOnly || t.expectation.blocked) && t.scenarios.length) fail('graph-only and abstention tasks have no scenarios');
+    if (!graphOnly && !t.expectation.blocked && !t.scenarios.length) fail('an executable task needs scenarios');
+    for (const step of t.expectation.external ?? [])
+      if (!external.get(step.piece)?.has(step.action) || !step.connection || typeof step.input !== 'object') fail('unknown external step');
+    for (const s of t.scenarios) {
+      if (!s.id || typeof s.payload !== 'object' || !Array.isArray(s.notifications)) fail('scenario shape');
+      for (const call of s.tools ?? []) {
+        if (!tools.has(call.toolName)) fail('tool ' + call.toolName + ' is not in environment ' + environment.id);
+        if (call.params?.target !== undefined && !targets.has(call.params.target)) fail('unknown target ' + call.params.target);
+      }
+      for (const target of s.sandbox?.offlineTargets ?? []) if (!targets.has(target)) fail('unknown offline target ' + target);
+    }
   }
-  return { version: data.version, sha256: fingerprint(data), tasks: data.tasks };
+  return { name, version: data.version, sha256: fingerprint(data), environment: environment.id, tasks: data.tasks };
+}
+
+export function loadTasks(split: QualityTask['split'], name = 'w8'): TaskSet {
+  if (!['development', 'heldout'].includes(split)) throw new Error('Unknown task split');
+  const file = TASK_SETS[name]?.[split];
+  if (!file) throw new Error('Unknown task set ' + name);
+  return validateTaskSet(JSON.parse(readFileSync(new URL('./tasks/' + file, import.meta.url), 'utf8')), split, name);
+}
+
+/** The sealed replacement holdout lives outside the repository; only its hash
+ * is committed, so a reserve that was edited or swapped is refused. */
+export function loadReserve(path: string, commitmentPath: string | URL = new URL('./tasks/founder-reserve-1.commitment.json', import.meta.url)): TaskSet {
+  const commitment = JSON.parse(readFileSync(commitmentPath, 'utf8'));
+  const data = JSON.parse(readFileSync(path, 'utf8'));
+  if (fingerprint(data) !== commitment.sha256 || data.version !== commitment.version) throw new Error('Reserve does not match its committed hash');
+  return validateTaskSet(data, 'heldout', 'founder-reserve');
 }
 export interface EvaluationOptions {
   manager: LLMManager; engine: EffectExecutor; kind: EvaluationRow['kind']; policy: PlanningPolicy;
@@ -76,7 +116,11 @@ export async function evaluateTask(task: QualityTask, opts: EvaluationOptions): 
     chatTools: (messages, tools, signal, checkDeadline) => trace('tools', { messages, tools },
       () => base.chatTools!(messages, tools, signal, checkDeadline)),
   };
+  // The composer sees exactly the environment the task set names: tools and machines included.
+  const environment = opts.engine.environment ?? environmentFor('w8');
   const deps = { llm, pieceRegistry: opts.engine.catalog, planningPolicy: opts.policy,
+    ...(environment.tools.length ? { tools: environment.tools } : {}),
+    ...(environment.targets.length ? { executionTargets: environment.targets } : {}),
     onCandidate(candidate: EvaluationRow['candidates'][number]) {
       candidates.push(structuredClone(candidate));
       opts.onEvent?.({ type: 'candidate', id, candidate });
@@ -99,9 +143,10 @@ export async function evaluateTask(task: QualityTask, opts: EvaluationOptions): 
   row.promptSha256s = [...new Set(calls.map(promptFingerprint))].sort();
   const cost = estimatedCost(row.transport, opts.profile);
   row.estimatedCostUsd = cost.usd; row.costComplete = cost.complete && cost.usd !== null;
-  const checks = staticChecks(task, row.result, row.result?.ok === false && row.result.blocked === true);
+  const checks = staticChecks(task, row.result, row.result?.ok === false && row.result.blocked === true, environment);
   row.staticChecks = checks.checks; row.aiSteps = checks.aiSteps;
-  if (row.result?.ok && !task.expectation.blocked) {
+  // A step on a connection-bound integration cannot run here; such tasks are graded on the graph.
+  if (row.result?.ok && !task.expectation.blocked && !(task.expectation.external ?? []).length) {
     try { row.scenarios = await opts.engine.execute(row.result.flow.trigger, task.scenarios); }
     catch (error) { row.error = String(error); }
   }
