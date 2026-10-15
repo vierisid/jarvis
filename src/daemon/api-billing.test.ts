@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { createApiRoutes, type ApiContext } from './api-routes.ts';
 import type { JarvisConfig } from '../config/types.ts';
+import { createHmac } from 'node:crypto';
 
 /**
  * GET /api/billing (control plane: docs/BILLING.md "Billing inside the brain").
@@ -42,6 +43,26 @@ afterEach(() => {
 });
 
 describe('GET /api/billing', () => {
+  it('source-supplied instance/account overrides cannot change the signed owner read', async () => {
+    const block = billingBlock();
+    let signedBody = '';
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      signedBody = String(init?.body);
+      expect(new Headers(init?.headers).get('x-jarvis-signature')).toBe(
+        createHmac('sha256', block.secret).update(signedBody).digest('hex'));
+      return new Response(JSON.stringify({ account: { email: 'fixture@example.invalid' },
+        subscription: null, plans: [], paymentMethods: [], payments: [] }));
+    }) as typeof fetch;
+    const response = await handlerFor({ usejarvis_billing: block } as Partial<JarvisConfig>)(new Request(
+      'http://localhost/api/billing?instanceId=other-instance&userId=other-user&account=other-account&approved=true'));
+    expect(response.status).toBe(200);
+    expect(JSON.parse(signedBody)).toEqual({ instanceId: block.instance_id, at: expect.any(String) });
+    const body = await response.text();
+    expect(body).not.toContain(block.secret);
+    expect(body).not.toContain(block.instance_id);
+    expect(body).not.toContain('other-account');
+  });
+
   it('is 503 on a self-hosted install', async () => {
     expect((await handlerFor({})(req())).status).toBe(503);
   });
