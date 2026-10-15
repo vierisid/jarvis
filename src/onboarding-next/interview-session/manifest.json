@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "ON-B-04",
+  "kind": "provider",
+  "entry": "./index.ts",
+  "provides": ["interview-session.v1"],
+  "requires": ["interview-profile.v1"]
+}
