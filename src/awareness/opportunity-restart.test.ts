@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
-import { createCapture, getRecentSuggestions, markSuggestionDelivered } from '../vault/awareness.ts';
+import { captureRoutine } from './opportunity-test-fixtures.ts';
+import { getRecentSuggestions, markSuggestionDelivered } from '../vault/awareness.ts';
 import { refreshOpportunity } from './opportunities.ts';
 
 test.each(['pending', 'legacy'])('a fresh service recovers a %s proposal without captures or workflow events', async state => {
@@ -12,8 +13,7 @@ test.each(['pending', 'legacy'])('a fresh service recovers a %s proposal without
   try {
     initDatabase(dbPath, { quiet: true });
     for (let days = 1; days <= 3; days++) {
-      createCapture({ timestamp: Date.now() - days * 86_400_000, pixelChangePct: 0.5,
-        appName: 'Accounting', windowTitle: 'Overdue invoices' });
+      captureRoutine(Date.now() - days * 86_400_000);
     }
     const item = refreshOpportunity()!;
     expect(getRecentSuggestions()[0]!.delivered).toBe(0);

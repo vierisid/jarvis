@@ -39,3 +39,26 @@ Use `shell.route.selection` for source identities and `shell.navigate` for Brief
 appearance, sidebar and chat state live above the room and survive room navigation.
 
 Sample data must stay in `mode: "preview"` and must never become the fallback for missing live data.
+
+## Styles
+
+`styles/index.css` holds the approved Brief type roles (`brief-type-*`), Light/Dark materials
+(`--brief-*`), asymmetric corner families, progress bands and status chips. Every rule is scoped under
+`.brief-root`, so the released dashboard's tokens are untouched; `styles/scope.test.ts` fails if a
+rule escapes that root.
+
+- Put `brief-root` on a Brief surface. It follows the app's `data-theme`; an explicit
+  `data-brief-theme` overrides it for isolated references. Inside the root, D-01's wrapper aliases
+  (`--bg`, `--ink`, `--corner` and so on) resolve to Brief materials.
+- Use `brief-secondary`, not `brief-tertiary`, for important text on raised paper and menus: Dark
+  tertiary on those materials is below 4.5:1 at 12px.
+- A paper is `brief-paper-object` around `brief-surface brief-surface--paper`; the outer isolation
+  keeps the backing behind the face, and `brief-surface__clip` carries the same radius for clipping.
+- Progress bands are visual classes only (near zero 0-19%, early 20-39%, middle 40-74%, near
+  complete 75-100%). Always show the value and unit next to the bar; do not reuse a band for errors.
+- Fonts come from the app's existing loading (`--sans`, `--mono`). The logo SVGs in `styles/assets/`
+  embed Familjen Grotesk (SIL OFL 1.1, license in the font's name table); do not redraw the mark.
+- `styles/figma-reference.json` records the extracted Figma values (Brief v6.1, UI-35 checkpoint).
+
+`?brief=preview&specimen=styles#/_brief_preview` opens the style specimen. Its content is
+illustrative; the text-size control scales Brief text only, not browser zoom.

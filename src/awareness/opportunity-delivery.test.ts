@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
-import { createCapture, getRecentSuggestions, markSuggestionActedOn, markSuggestionDelivered, markSuggestionDismissed } from '../vault/awareness.ts';
+import { captureRoutine } from './opportunity-test-fixtures.ts';
+import { getRecentSuggestions, markSuggestionActedOn, markSuggestionDelivered, markSuggestionDismissed } from '../vault/awareness.ts';
 import { getOpportunityMetrics, recordOpportunityFeedback, refreshOpportunity } from './opportunities.ts';
 import { OpportunityDelivery, type DeliverOpportunity } from './opportunity-delivery.ts';
 import { AwarenessService } from './service.ts';
@@ -13,8 +14,7 @@ afterEach(async () => { await Promise.all(workers.splice(0).map(w => w.stop()));
 
 function proposal() {
   for (let days = 1; days <= 3; days++) {
-    createCapture({ timestamp: Date.now() - days * 86_400_000, pixelChangePct: 0.5,
-      appName: 'Accounting', windowTitle: 'Overdue invoices' });
+    captureRoutine(Date.now() - days * 86_400_000);
   }
   return refreshOpportunity()!;
 }
@@ -151,7 +151,7 @@ test.each(['enable', 'disable', 'shutdown'])('pending delivery honors the last l
         pixel_change_pct: 0.9, app_name: 'Editor', window_title: 'Notes', ocr_text: 'Notes' },
     });
     expect(getDb().query('SELECT COUNT(*) AS n FROM screen_captures').get())
-      .toEqual({ n: lastRequest === 'enable' ? 4 : 3 });
+      .toEqual({ n: lastRequest === 'enable' ? 10 : 9 });
     expect(sends).toBe(1);
   } finally { finish('websocket'); await svc.stop(); }
 });

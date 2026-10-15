@@ -8,6 +8,7 @@ import { BRIEF_ROOMS } from "../rooms/registry";
 import { FoundationPreview } from "../preview/FoundationPreview";
 import { briefHash, legacyHref, resolveBriefEntry } from "./route";
 import "./foundation.css";
+import "../styles/index.css";
 
 function subscribeLocation(changed: () => void) {
   window.addEventListener("hashchange", changed);
@@ -51,7 +52,7 @@ function BriefHost({ route, rooms }: { route: BriefRoute; rooms: BriefRoomRegist
   const room = rooms[route.room];
   const Body = room?.Body;
   return (
-    <main className="brief-foundation" data-brief-room={route.room}>
+    <main className="brief-root brief-foundation" data-brief-room={route.room}>
       {Body ? <Body key={route.room} shell={shell} /> : (
         <section className="brief-foundation__notice" aria-labelledby="brief-unavailable-title">
           <p className="brief-foundation__label">Brief preview</p>
