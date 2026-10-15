@@ -9,3 +9,5 @@ An initial review found that turning an image into a link could nest anchors whe
 Checks: 912 wider regressions passed before that final UI correction; 157 focused tests passed afterward, along with TypeScript and UI build. Three removed fixes were each detected and restored. The final browser probe was rebuilt and rerun on all three production components: zero automatic image requests/active elements/executable links, three image links/tables, no script execution. Normal implementation hooks ran 197 tests with zero failures.
 
 Limits: deterministic mocked model output is not measured resistance of a deployed model; existing workflow-template provenance, live hosting, combined Brief integration and native-webview verification remain unverified. See docs/TRUST_BOUNDARIES.md.
+
+Final test review moved the billing signature assertion outside the transport callback (the product catches callback failures) and asserts the success response. This prevents a broken signer from producing a false-green regression. No production behavior changed in this test correction.

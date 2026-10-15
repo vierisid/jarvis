@@ -16,7 +16,7 @@
     "review": "complete_implementer_read_only",
     "merged": false,
     "productionActivated": false,
-    "ci": "pending_PR_creation"
+    "ci": "external_exact_head_checks"
   },
   "capabilityGate": "No new flag or migration. Changes take effect only when this daemon/UI revision is deployed; no deployment performed.",
   "tests": {
@@ -74,7 +74,7 @@
       }
     ],
     "sanitization": "Only synthetic fixture IDs and outcomes; no customer content, production credentials or raw captured text.",
-    "ci": "pending_PR_creation",
+    "ci": "See exact-head checks on https://github.com/vierisid/jarvis/pull/1065; pending at receipt creation.",
     "liveProvider": "not_run",
     "liveHosting": "not_run",
     "paidCalls": 0,
@@ -116,5 +116,6 @@
     "Combined Brief stack and native webview matrix not_run; Q-22 remains a separate gate."
   ],
   "rollback": "Revert Q-21 commits and rebuild daemon/UI together. No migrations; preserve durable records and do not replay effects.",
-  "verification": "docs/TRUST_BOUNDARIES.md"
+  "verification": "docs/TRUST_BOUNDARIES.md",
+  "ci": "See exact-head checks on https://github.com/vierisid/jarvis/pull/1065; pending at receipt creation."
 }

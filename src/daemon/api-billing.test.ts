@@ -46,10 +46,10 @@ describe('GET /api/billing', () => {
   it('source-supplied instance/account overrides cannot change the signed owner read', async () => {
     const block = billingBlock();
     let signedBody = '';
+    let signature = '';
     globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
       signedBody = String(init?.body);
-      expect(new Headers(init?.headers).get('x-jarvis-signature')).toBe(
-        createHmac('sha256', block.secret).update(signedBody).digest('hex'));
+      signature = new Headers(init?.headers).get('x-jarvis-signature') ?? '';
       return new Response(JSON.stringify({ account: { email: 'fixture@example.invalid' },
         subscription: null, plans: [], paymentMethods: [], payments: [] }));
     }) as typeof fetch;
@@ -57,7 +57,9 @@ describe('GET /api/billing', () => {
       'http://localhost/api/billing?instanceId=other-instance&userId=other-user&account=other-account&approved=true'));
     expect(response.status).toBe(200);
     expect(JSON.parse(signedBody)).toEqual({ instanceId: block.instance_id, at: expect.any(String) });
+    expect(signature).toBe(createHmac('sha256', block.secret).update(signedBody).digest('hex'));
     const body = await response.text();
+    expect(JSON.parse(body).ok).toBe(true);
     expect(body).not.toContain(block.secret);
     expect(body).not.toContain(block.instance_id);
     expect(body).not.toContain('other-account');

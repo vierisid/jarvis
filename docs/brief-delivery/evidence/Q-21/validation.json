@@ -53,7 +53,7 @@
     }
   ],
   "sanitization": "Only synthetic fixture IDs and outcomes; no customer content, production credentials or raw captured text.",
-  "ci": "pending_PR_creation",
+  "ci": "See exact-head checks on https://github.com/vierisid/jarvis/pull/1065; pending at receipt creation.",
   "liveProvider": "not_run",
   "liveHosting": "not_run",
   "paidCalls": 0,
