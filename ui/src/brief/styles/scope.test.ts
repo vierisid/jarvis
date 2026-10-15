@@ -11,6 +11,7 @@ const SHEETS = [
   "../shell/navigation/navigation.css", "../shell/navigation/specimen.css",
   "../shell/pebble-layout/pebble.css", "../shell/pebble-layout/specimen.css",
   "../today/hero-paper/hero-paper.css", "../today/layout/today-layout.css", "../today/preview/specimen.css",
+  "../today/decision-transition/decision-transition.css",
 ];
 
 function selectors(css: string): string[] {
