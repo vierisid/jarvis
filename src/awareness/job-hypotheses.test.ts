@@ -7,6 +7,7 @@ import { createCapture, deleteCapturesBefore } from '../vault/awareness.ts';
 import { getOpportunityObservations, pruneOpportunityObservations } from '../vault/opportunity-observations.ts';
 import { assessJobHypotheses, classifyJobSignals, OPPORTUNITY_WINDOW_MS } from './job-hypotheses.ts';
 import { groupRoutineEpisodes } from './routine-episodes.ts';
+import { MAX_ROUTINE_OCR_CHARS } from './routine-signals.ts';
 import { assessOpportunities, getOpportunity, refreshOpportunity } from './opportunities.ts';
 import { caseCaptures, EVALUATION_NOW, evaluateRoutines, proportion, type RoutineCase } from './evaluation/routine-evaluation.ts';
 import type { JobSignal } from './opportunity-types.ts';
@@ -52,6 +53,15 @@ test('structured hypotheses reference every role and never certify execution, re
   expect(proposal.uncertainty.join(' ')).toContain('do not prove completed repetitions');
   expect(proposal.goalCandidates).toEqual([]);
   expect(assess(signals(), new Set(['job-v1:meeting_followup'])).abstention).toBe('already_proposed');
+});
+
+test('a full-screen OCR longer than 2,000 characters still classifies, and qualifiers past it still abstain', () => {
+  const chrome = 'File Edit View Window Help sidebar item '.repeat(100);
+  expect(chrome.length).toBeGreaterThan(2000);
+  const base = { captureId: 'long', timestamp: EVALUATION_NOW, windowTitle: 'Notes' };
+  expect(classifyJobSignals({ ...base, ocrText: `${chrome}\nMeeting notes extracting action items` })[0]?.routine?.stage)
+    .toBe('operation');
+  expect(classifyJobSignals({ ...base, ocrText: `Meeting notes extracting action items\n${chrome}\nTutorial` })).toEqual([]);
 });
 
 test('static repeated screenshots, including all phases on one page, never make an episode', () => {
@@ -109,7 +119,7 @@ test('privacy, reading, app-only and input overflow abstain before producing ret
   for (const overrides of [
     { excluded: true }, { app: 'Bitwarden' }, { windowTitle: 'Private browsing' },
     { windowTitle: 'Research paper' }, { windowTitle: 'Tutorial' },
-    { ocrText: 'x'.repeat(2001) }, { windowTitle: 'x'.repeat(241) },
+    { ocrText: 'x'.repeat(MAX_ROUTINE_OCR_CHARS + 1) }, { windowTitle: 'x'.repeat(241) },
     { app: 'x'.repeat(101) }, { sidecarId: 'x'.repeat(201) },
     { app: 'Meeting notes extracting action items', ocrText: 'Inbox' },
   ]) expect(classifyJobSignals({ ...base, ...overrides })).toEqual([]);

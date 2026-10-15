@@ -33,8 +33,8 @@ owns improved relevance.
 
 The bounded classifier abstains on explicit reading/research/tutorial contexts,
 recognized private windows/password managers, metadata-only captures, excluded
-inputs, and oversized input. Bounds are 240 title characters, 2,000 OCR characters,
-100 app characters and 200 sidecar-ID characters. No truncation can conceal a
+inputs, and oversized input. Bounds are 240 title characters, 20,000 OCR characters
+(full-screen OCR often exceeds 2,000), 100 app characters and 200 sidecar-ID characters. No truncation can conceal a
 qualifier beyond a bound. These lexical exclusions supplement the existing awareness
 enable/disable boundary; they cannot identify every private app or unmarked article.
 

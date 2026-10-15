@@ -12,6 +12,9 @@ export type RoutineCapture = {
   excluded?: boolean;
 };
 const PRIVATE_CONTEXT = /\b(?:incognito|private browsing|inprivate|private window|1password|bitwarden|keepass|password manager|navigazione privata)\b/i;
+// Full-screen OCR routinely carries thousands of characters of window chrome, so
+// the OCR bound is generous; the whole bounded text is scanned for qualifiers.
+export const MAX_ROUTINE_OCR_CHARS = 20_000;
 const READING_CONTEXT = /\b(?:article|tutorial|research|guide|how to|documentation|blog|articolo|ricerca|guida|tutoriel|recherche|artículo|investigación)\b/i;
 
 export function classifyJobSignals(input: RoutineCapture): JobSignal[] {
@@ -20,7 +23,7 @@ export function classifyJobSignals(input: RoutineCapture): JobSignal[] {
   const ocr = input.ocrText ?? '';
   const app = input.app || 'Unknown app';
   // Overflow abstains instead of truncating away a privacy/research qualifier.
-  if (title.length > 240 || ocr.length > 2000 || app.length > 100
+  if (title.length > 240 || ocr.length > MAX_ROUTINE_OCR_CHARS || app.length > 100
     || (input.sidecarId?.length ?? 0) > 200) return [];
   const text = `${title}\n${ocr}`;
   if (PRIVATE_CONTEXT.test(`${app}\n${text}`) || READING_CONTEXT.test(text)) return [];
