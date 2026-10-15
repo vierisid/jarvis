@@ -1,0 +1,61 @@
+{
+  "implementationHead": "25e2e8196af29e3e72b7df74174c37a2953a9212",
+  "widerRegression": {
+    "passed": 912,
+    "failed": 0,
+    "files": 38,
+    "assertions": 6745,
+    "phase": "before final linked-image correction"
+  },
+  "finalFocused": {
+    "passed": 157,
+    "failed": 0,
+    "files": 8,
+    "assertions": 749
+  },
+  "implementationHooks": {
+    "passed": 197,
+    "failed": 0,
+    "files": 11,
+    "assertions": 975
+  },
+  "typescript": "passed",
+  "uiBuild": "passed_with_existing_css_at_rule_warnings",
+  "review": "no_remaining_findings",
+  "fixtures": [
+    {
+      "id": "screen-authority",
+      "outcome": "passed"
+    },
+    {
+      "id": "document-fact",
+      "outcome": "passed"
+    },
+    {
+      "id": "piece-account",
+      "outcome": "passed"
+    },
+    {
+      "id": "delimiter-spoof",
+      "outcome": "passed"
+    },
+    {
+      "id": "rich-rendering",
+      "outcome": "passed"
+    },
+    {
+      "id": "linked-image",
+      "outcome": "passed"
+    },
+    {
+      "id": "billing-owner-selection",
+      "outcome": "passed"
+    }
+  ],
+  "sanitization": "Only synthetic fixture IDs and outcomes; no customer content, production credentials or raw captured text.",
+  "ci": "pending_PR_creation",
+  "liveProvider": "not_run",
+  "liveHosting": "not_run",
+  "paidCalls": 0,
+  "realExternalEffects": 0
+}
