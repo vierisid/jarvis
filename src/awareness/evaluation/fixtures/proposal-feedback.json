@@ -1,0 +1,23 @@
+{
+  "provenance": "Author-visible synthetic development cases. Policy checks, not blinded usefulness or field accuracy.",
+  "cases": [
+    { "id": "no-feedback-is-unknown", "history": [], "expected": { "eligible": true, "priority": 0, "rate": null } },
+    { "id": "same-dismissed-routine-stays-suppressed", "cadence": "weekly", "history": [{ "event": "dismiss", "daysAgo": 100, "reason": "Already covered" }], "expected": { "eligible": false } },
+    { "id": "legacy-unknown-cadence-keeps-suppression", "history": [{ "event": "dismiss", "cadence": null, "daysAgo": 20 }], "expected": { "eligible": false } },
+    { "id": "changed-cadence-inside-dismiss-cooldown", "history": [{ "event": "dismiss", "daysAgo": 6 }], "expected": { "eligible": false } },
+    { "id": "changed-cadence-at-cooldown-boundary", "history": [{ "event": "dismiss", "daysAgo": 7 }], "expected": { "eligible": true, "priority": 0 } },
+    { "id": "clicks-are-not-usefulness", "history": [{ "event": "interest", "daysAgo": 0 }], "expected": { "eligible": true, "priority": 0, "rate": null } },
+    { "id": "acceptance-without-outcome", "history": [{ "event": "accept", "daysAgo": 2 }], "expected": { "eligible": true, "priority": 0, "rate": null } },
+    { "id": "recent-acceptance-cools-related-proposals", "history": [{ "event": "accept", "daysAgo": 0 }], "expected": { "eligible": false, "rate": null } },
+    { "id": "recent-delivery-cools-related-proposals", "history": [{ "event": "delivery", "daysAgo": 0 }], "expected": { "eligible": false, "rate": null } },
+    { "id": "repeated-distinct-useful-reports", "history": [{ "event": "outcome", "daysAgo": 3, "workRef": "report/1", "useful": true }, { "event": "outcome", "daysAgo": 2, "workRef": "report/2", "useful": true }], "expected": { "eligible": true, "priority": 1, "rate": 1, "reportedUses": 2 } },
+    { "id": "one-use-is-not-repeated-use", "history": [{ "event": "outcome", "daysAgo": 2, "workRef": "report/1", "useful": true }], "expected": { "eligible": true, "priority": 0, "rate": 1, "reportedUses": 1 } },
+    { "id": "unhelpful-result-cooldown", "history": [{ "event": "outcome", "daysAgo": 3, "workRef": "report/1", "useful": false }], "expected": { "eligible": false, "rate": 0 } },
+    { "id": "unhelpful-cooldown-is-bounded", "history": [{ "event": "outcome", "daysAgo": 14, "workRef": "report/1", "useful": false }], "expected": { "eligible": true, "priority": 0, "rate": 0 } },
+    { "id": "duplicate-work-reference-is-one-use", "history": [{ "event": "outcome", "daysAgo": 3, "workRef": "report/1", "useful": true }, { "event": "outcome", "daysAgo": 2, "workRef": "report/1", "useful": true }], "expected": { "eligible": true, "priority": 0, "rate": 1, "reportedUses": 1 } },
+    { "id": "conflicting-work-reference-is-unknown", "history": [{ "event": "outcome", "daysAgo": 20, "workRef": "report/1", "useful": true }, { "event": "outcome", "daysAgo": 19, "workRef": "report/1", "useful": false }], "expected": { "eligible": true, "priority": 0, "rate": null, "reportedUses": 0 } },
+    { "id": "other-routine-rejection-is-isolated", "history": [{ "event": "dismiss", "kind": "invoice_review", "daysAgo": 0 }], "expected": { "eligible": true, "priority": 0 } },
+    { "id": "future-feedback-cannot-steer-ranking", "history": [{ "event": "dismiss", "daysAgo": -1 }], "expected": { "eligible": true, "priority": 0 } },
+    { "id": "old-reports-stay-in-census-not-priority", "history": [{ "event": "outcome", "daysAgo": 92, "workRef": "report/1", "useful": true }, { "event": "outcome", "daysAgo": 91, "workRef": "report/2", "useful": true }], "expected": { "eligible": true, "priority": 0, "rate": 1, "reportedUses": 2 } }
+  ]
+}
