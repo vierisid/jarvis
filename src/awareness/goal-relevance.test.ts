@@ -148,6 +148,18 @@ test('current path is loaded beyond the old 100-goal page and invalidated when a
   expect(getOpportunity(id)!.hypothesis.goalCandidates).toEqual([]);
 });
 
+test('accumulated inactive goals do not exhaust the goal reader cap', () => {
+  seed();
+  const insert = getDb().prepare(`INSERT INTO goals (id, title, level, status, created_at, updated_at, sort_order)
+    VALUES (?, ?, 'objective', 'completed', ?, ?, -1)`);
+  for (let i = 0; i < GOAL_CONTEXT_LIMIT; i++) insert.run(`done-${i}`, `Finished goal ${i}`, Date.now(), Date.now());
+  const g = createGoal('Collect unpaid invoices', 'objective', { status: 'active' });
+  expect(assessOpportunities().proposals[0]!.goalCandidates[0]!.goalId).toBe(g.id);
+  const id = refreshOpportunity()!.id;
+  expect(getOpportunity(id)!.hypothesis.goalCandidates[0]!.goalId).toBe(g.id);
+  expect(listOpportunities()[0]!.hypothesis.goalRelevance!.status).toBe('candidate');
+});
+
 test('proposal and read projection never write goal scores, progress or goal events', () => {
   seed();
   const app = getGoalApplication();

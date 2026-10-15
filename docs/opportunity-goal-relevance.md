@@ -23,9 +23,10 @@ recent human review**; ordinary canonical goal writes also update that timestamp
 It may exclude still-useful long-running objectives. No timestamps are refreshed by
 this policy.
 
-The existing vault reader supplies up to 1,000 goals, including inactive ancestors.
-At that cap, relevance abstains with `incomplete_goal_context`, including when the
-true total is exactly 1,000. This avoids selecting a winner from a possibly partial
+The existing vault reader supplies up to 1,000 active goals. Inactive goals are not
+loaded, so an inactive ancestor leaves its path incomplete and abstains, and
+completed history cannot fill the cap. At that cap, relevance abstains with
+`incomplete_goal_context`, including when the true active total is exactly 1,000. This avoids selecting a winner from a possibly partial
 set. The previous first-100 active-goal page is no longer used for ranking.
 
 ## Ranking and explanation
@@ -111,14 +112,6 @@ SQLite tests cover restart, current read projection, nullable historical fields,
 ancestor changes, the old pagination boundary, immutable history, explicit user
 confirmation, and unchanged goal scores/progress/events. Q-11's recurrence, privacy,
 delivery and retention tests remain in the affected suite.
-
-Q-12 is stacked on Q-11 PR #967 at `8ea4bc6d`. The source card has no mandatory merge
-or enable prerequisite; this implementation deliberately reuses Q-11's structured
-evidence contract, so this PR now requires Q-11 first. Latest main `4aee7e6b` was
-rechecked; its new catalog-license checks do not overlap these files. F-09 and Q-13
-remain separate, unmerged integrations. Preserve Q-11's documented constraint-map
-additions when integrating those branches. This card does not activate Brief or
-identify/certify the deployed runtime.
 
 Rollback: disable awareness for immediate containment. Restore the prior relevance
 policy's ranking seam if needed, while retaining Q-11's privacy/recurrence guards

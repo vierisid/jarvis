@@ -38,11 +38,11 @@ const SELECT = `SELECT h.*, s.dismissed, s.acted_on FROM opportunity_hypotheses 
 
 export function getOpportunity(id: string): Opportunity | null {
   const row = getDb().prepare(`${SELECT} WHERE h.suggestion_id = ?`).get(id) as Row | null;
-  return row ? fromRow(row, findGoals({ limit: GOAL_CONTEXT_LIMIT }), Date.now()) : null;
+  return row ? fromRow(row, findGoals({ status: 'active', limit: GOAL_CONTEXT_LIMIT }), Date.now()) : null;
 }
 
 export function listOpportunities(limit = 50): Opportunity[] {
-  const goals = findGoals({ limit: GOAL_CONTEXT_LIMIT });
+  const goals = findGoals({ status: 'active', limit: GOAL_CONTEXT_LIMIT });
   const now = Date.now();
   return (getDb().prepare(`${SELECT} ORDER BY h.created_at DESC, h.suggestion_id LIMIT ?`)
     .all(limit) as Row[]).map(row => fromRow(row, goals, now));
@@ -50,7 +50,7 @@ export function listOpportunities(limit = 50): Opportunity[] {
 
 export function assessOpportunities(now = Date.now()) {
   const known = getDb().prepare('SELECT pattern_key FROM opportunity_hypotheses').all() as Array<{ pattern_key: string }>;
-  return assessJobHypotheses(getOpportunityObservations(now), findGoals({ limit: GOAL_CONTEXT_LIMIT }),
+  return assessJobHypotheses(getOpportunityObservations(now), findGoals({ status: 'active', limit: GOAL_CONTEXT_LIMIT }),
     new Set(known.map(r => r.pattern_key)), now);
 }
 
