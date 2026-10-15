@@ -42,6 +42,7 @@ export interface BriefTurnRef {
   requestId: string;
 }
 export interface BriefCancelTurn extends BriefTurnRef {}
+export interface BriefSendTurn extends BriefTurnRef { text: string; speak?: boolean }
 export type BriefTurnState = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 export interface BriefMessage extends BriefTurnRef {
   messageId: string;
@@ -58,8 +59,11 @@ export interface BriefActivity {
 }
 export type BriefChatPayload =
   | { kind: 'message'; message: BriefMessage }
+  | { kind: 'delta'; messageId: string; text: string }
+  | { kind: 'status'; state: 'queued' | 'running' }
   | { kind: 'activity'; activity: BriefActivity }
-  | { kind: 'terminal'; state: Extract<BriefTurnState, 'completed' | 'failed' | 'cancelled'> };
+  | { kind: 'approval'; approvalId: string; status: ApprovalStatus }
+  | { kind: 'terminal'; state: Extract<BriefTurnState, 'completed' | 'failed' | 'cancelled'>; error?: { code: string; message: string } };
 export interface BriefChatEvent extends BriefTurnRef {
   eventId: string;
   /** Safe integer, strictly increasing per conversation, including terminal events. */

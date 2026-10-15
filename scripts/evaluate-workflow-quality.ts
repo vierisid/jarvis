@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { parseArgs } from 'node:util';
-import { mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+import { dirname, resolve, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import type { EvaluationRow } from '../src/workflows/evaluation/types';
 import type { PlanningPolicy } from '../src/actions/tools/composition-provenance';
@@ -11,15 +11,16 @@ const { values } = parseArgs({ options: {
   mode: { type: 'string', default: 'plan' }, out: { type: 'string' },
   split: { type: 'string', default: 'heldout' }, policy: { type: 'string', default: 'both' },
   condition: { type: 'string', default: 'natural' }, repeats: { type: 'string', default: '1' },
-  profile: { type: 'string' }, 'max-requests': { type: 'string', default: '100' },
-  results: { type: 'string' }, reviews: { type: 'string' }, help: { type: 'boolean' },
+  profile: { type: 'string' }, authorization: { type: 'string' }, rubric: { type: 'string' }, 'max-requests': { type: 'string' },
+  results: { type: 'string' }, reviews: { type: 'string' }, runs: { type: 'string' }, help: { type: 'boolean' },
 } });
 if (values.help) {
-  console.log('Workflow quality: --mode plan|smoke|hosted|review --out NEW_DIRECTORY\n'
+  console.log('Workflow quality: --mode plan|smoke|hosted|review|baseline --out NEW_DIRECTORY\n'
     + '--split development|heldout --policy both|baseline-v1|deterministic-first-v1\n'
-    + '--condition natural|malformed-first --repeats 1..20\n'
-    + 'Hosted: --profile PROFILE.json --max-requests 1..1000\n'
+    + '--condition natural|malformed-first --repeats 1..20 [--rubric RUBRIC.json]\n'
+    + 'Hosted: --profile PROFILE.json --authorization SPEND.json [--max-requests N, at most the authorized limit]\n'
     + 'Review: --results RUN/rows.jsonl --reviews REVIEWS.json\n'
+    + 'Baseline: --runs RUN_OR_REVIEWED_DIRECTORY[,...]\n'
     + 'Plan is the default and makes no provider requests. Smoke requires development.');
   process.exit(0);
 }
@@ -28,14 +29,14 @@ function integer(value: string, max: number, name: string) {
   if (!Number.isSafeInteger(n) || n < 1 || n > max) throw new Error(name + ' must be 1..' + max);
   return n;
 }
-if (!['plan', 'smoke', 'hosted', 'review'].includes(values.mode!)) throw new Error('Invalid mode');
+if (!['plan', 'smoke', 'hosted', 'review', 'baseline'].includes(values.mode!)) throw new Error('Invalid mode');
 if (!['development', 'heldout'].includes(values.split!)) throw new Error('Invalid split');
 if (!['natural', 'malformed-first'].includes(values.condition!)) throw new Error('Invalid condition');
 const policies: PlanningPolicy[] = values.policy === 'both' ? ['baseline-v1', 'deterministic-first-v1']
   : ['baseline-v1', 'deterministic-first-v1'].includes(values.policy!) ? [values.policy as PlanningPolicy]
   : (() => { throw new Error('Invalid policy'); })();
 const repeats = integer(values.repeats!, 20, 'repeats');
-const maxRequests = integer(values['max-requests']!, 1000, 'max-requests');
+const requestedMaxRequests = values['max-requests'] === undefined ? undefined : integer(values['max-requests'], 1000, 'max-requests');
 if (values.mode === 'smoke' && values.split !== 'development') throw new Error('Smoke fixtures are development-only');
 if (!values.out) throw new Error('--out must be a new directory');
 const out = resolve(values.out);
@@ -47,8 +48,14 @@ const { fingerprintSource } = await import('../src/workflows/evaluation/source')
 const { sanitizedEnv } = await import('../src/util/subprocess-env');
 const { loadTasks, evaluateTask } = await import('../src/workflows/evaluation/runner');
 const { report, applyReviews } = await import('../src/workflows/evaluation/report');
-const { validateProfile, MeasuredHostedProvider } = await import('../src/workflows/evaluation/hosted');
+const { validateProfile, resolveAdminEvidence, MeasuredHostedProvider, COMPOSITION_ALIAS } = await import('../src/workflows/evaluation/hosted');
+const { validateAuthorization, authorizationProblems } = await import('../src/workflows/evaluation/authorization');
+const { loadRubric, rubricProblems } = await import('../src/workflows/evaluation/rubric');
+const { baselineReport } = await import('../src/workflows/evaluation/baseline');
+const startedAt = new Date();
 const profile = values.profile ? validateProfile(JSON.parse(readFileSync(values.profile, 'utf8'))) : undefined;
+const evidence = profile?.admin ? resolveAdminEvidence(profile) : null;
+const authorization = values.authorization ? validateAuthorization(JSON.parse(readFileSync(values.authorization, 'utf8'))) : null;
 const key = profile ? process.env[profile.apiKeyEnv] : undefined;
 const json = (value: unknown) => {
   return JSON.stringify(value, (_name, item) =>
@@ -60,42 +67,91 @@ const append = (name: string, value: unknown) => {
   appendFileSync(join(out, name), serialized + '\n', { mode: 0o600 });
   return serialized;
 };
+const readJson = (path: string) => JSON.parse(readFileSync(path, 'utf8'));
+const readRows = (path: string): EvaluationRow[] => readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
 
 if (values.mode === 'review') {
   if (!values.results || !values.reviews) throw new Error('Review needs --results and --reviews');
-  const rows: EvaluationRow[] = readFileSync(values.results, 'utf8').trim().split('\n').map(line => JSON.parse(line));
-  const reviewed = applyReviews(rows, JSON.parse(readFileSync(values.reviews, 'utf8')));
+  const rows = readRows(values.results);
+  const reviewed = applyReviews(rows, readJson(values.reviews));
+  // Carry the run's own manifest and task set, so reviewed results remain a complete, comparable run.
+  const run = dirname(resolve(values.results));
+  const known = ['manifest.json', 'taskset.json', 'report.json'].every(name => existsSync(join(run, name)));
   write('reviewed-rows.json', reviewed);
-  write('report.json', report(reviewed));
+  if (known) {
+    const manifest = readJson(join(run, 'manifest.json')), taskset = readJson(join(run, 'taskset.json'));
+    write('manifest.json', manifest); write('taskset.json', taskset);
+    write('report.json', { ...readJson(join(run, 'report.json')), reviewedAt: new Date().toISOString(),
+      results: report(reviewed, { tasks: taskset.tasks, scheduled: manifest.scheduled,
+        run: { kind: manifest.mode === 'smoke' ? 'harness-smoke' : 'hosted', split: manifest.taskset.split, profileId: manifest.profile?.id ?? null } }) });
+  } else write('report.json', report(reviewed));
   console.log('Review report: ' + out);
   process.exit(0);
 }
+if (values.mode === 'baseline') {
+  if (!values.runs) throw new Error('Baseline needs --runs');
+  const runs = values.runs.split(',').filter(Boolean).map(directory => {
+    const at = resolve(directory);
+    return { source: directory, manifest: readJson(join(at, 'manifest.json')), report: readJson(join(at, 'report.json')),
+      taskset: readJson(join(at, 'taskset.json')),
+      rows: existsSync(join(at, 'reviewed-rows.json')) ? readJson(join(at, 'reviewed-rows.json'))
+        : existsSync(join(at, 'rows.jsonl')) ? readRows(join(at, 'rows.jsonl')) : [] };
+  });
+  const baseline = baselineReport(runs);
+  write('baseline-report.json', baseline);
+  console.log('Baseline ' + baseline.status + ': ' + out);
+  process.exit(baseline.status === 'completed' ? 0 : baseline.status === 'refused' ? 1 : 2);
+}
+const rubric = loadRubric(values.rubric ? resolve(values.rubric) : undefined);
 const taskset = loadTasks(values.split as 'development' | 'heldout');
 const scheduled = policies.flatMap(policy => Array.from({ length: repeats }, (_, index) =>
-  taskset.tasks.filter(task => values.condition !== 'malformed-first' || !task.expectation.blocked).map(task => ({ taskId: task.id, policy, repeat: index + 1, condition: values.condition })))).flat();
+  taskset.tasks.filter(task => values.condition !== 'malformed-first' || !task.expectation.blocked).map(task => ({ taskId: task.id, policy, repeat: index + 1, condition: values.condition! })))).flat();
+// A hosted run spends money and claims to measure a deployed profile, so it
+// starts only when the spend is authorized and, for the held-out set, the
+// profile is evidenced and the rubric was frozen first. Otherwise: not_run.
+const reasons: string[] = [];
+if (values.mode === 'hosted') {
+  if (!profile) reasons.push('Hosted profile is missing (--profile).');
+  else if (!key) reasons.push('The credential named by ' + profile.apiKeyEnv + ' is not set.');
+  if (!authorization) reasons.push('Spend authorization is missing (--authorization).');
+  else if (profile) reasons.push(...authorizationProblems(authorization, { profileId: profile.id, split: values.split!, now: startedAt }));
+  if (values.split === 'heldout') {
+    if (profile && !evidence) reasons.push('A held-out run needs admin evidence for the plan profile (profile.admin).');
+    reasons.push(...rubricProblems(rubric.rubric, startedAt));
+  }
+}
+if (authorization && requestedMaxRequests !== undefined && requestedMaxRequests > authorization.maxRequests)
+  throw new Error('--max-requests exceeds the authorized request limit');
+const maxRequests = values.mode === 'hosted' ? requestedMaxRequests ?? authorization?.maxRequests ?? null : null;
+const maxTokens = values.mode === 'hosted' ? authorization?.maxTokens ?? null : null;
 const root = resolve(import.meta.dir, '..');
 const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, env: sanitizedEnv(), encoding: 'utf8' }).trim();
 const source = fingerprintSource(root, [
   'src/actions/tools', 'src/workflows', 'src/llm', 'scripts/evaluate-workflow-quality.ts', 'package.json', 'bun.lock', 'bun.lockb',
 ]);
 const manifest = {
-  schemaVersion: 1, startedAt: new Date().toISOString(), mode: values.mode,
+  schemaVersion: 1, startedAt: startedAt.toISOString(), mode: values.mode, argv: process.argv.slice(2), bunVersion: Bun.version,
   head, ...source,
   taskset: { version: taskset.version, sha256: taskset.sha256, split: values.split },
-  profile: profile ?? null, requestedAlias: values.mode === 'smoke' ? 'controlled-fixture' : 'uj-high', maxRequests, scheduled,
+  rubric: { id: rubric.rubric.id, sha256: rubric.sha256, status: rubric.rubric.status, value: rubric.rubric },
+  profile: profile ?? null, profileEvidence: evidence, authorization,
+  requestedAlias: values.mode === 'smoke' ? 'controlled-fixture' : COMPOSITION_ALIAS, maxRequests, maxTokens, scheduled,
   limitations: ['Synthetic tasks and simulated effects only; no live integration certification.',
     'Schedule encoding and event subscriptions are inspected, not clock/event-bus delivery.',
     'Ask responses are simulated; this tests wiring, not summarization quality.',
     'Automatic checks do not establish human intent correctness; review is initially unmeasured.',
-    'Opaque aliases do not verify the intended backend model. Unknown usage or prices mean unknown cost.'],
+    'Opaque aliases do not verify the intended backend model. Unknown usage or prices mean unknown cost.',
+    'Hosted requests are pinned to the profile alias; a fallback to another alias is refused and recorded, never measured.'],
 };
 write('manifest.json', manifest);
 write('taskset.json', taskset);
-if (values.mode === 'plan' || (values.mode === 'hosted' && (!profile || !key))) {
-  write('report.json', { status: 'not_run', scheduled: scheduled.length, completed: 0, results: {},
-    reason: values.mode === 'plan' ? 'Plan only; no model calls requested.' : 'Hosted profile or its credential is unavailable.',
-    liveModelQuality: 'unmeasured', supervision: 'unmeasured' });
-  console.log('Evaluation not run. Manifest: ' + out);
+const context = { tasks: taskset.tasks, scheduled,
+  run: { kind: (values.mode === 'smoke' ? 'harness-smoke' : 'hosted') as EvaluationRow['kind'], split: values.split as 'development' | 'heldout', profileId: profile?.id ?? null } };
+if (values.mode === 'plan' || reasons.length) {
+  const why = values.mode === 'plan' ? ['Plan only; no model calls requested.'] : reasons;
+  write('report.json', { status: 'not_run', scheduled: scheduled.length, completed: 0, results: report([], context),
+    reason: why.join(' '), reasons: why, liveModelQuality: 'unmeasured', supervision: 'unmeasured' });
+  console.log('Evaluation not run' + (values.mode === 'plan' ? '' : ': ' + why.join(' ')) + ' Manifest: ' + out);
   if (values.mode === 'hosted') process.exitCode = 2;
 } else {
   const { initWorkflowDb, closeWorkflowDb } = await import('../src/workflows/db');
@@ -106,10 +162,10 @@ if (values.mode === 'plan' || (values.mode === 'hosted' && (!profile || !key))) 
   const db = initWorkflowDb(join(out, 'evaluation.sqlite'));
   setUsageDatabase(db);
   const manager = new LLMManager();
-  const provider = values.mode === 'smoke' ? new SmokeProvider() : new MeasuredHostedProvider(profile!.baseUrl, key!, maxRequests,
-    event => append('events.jsonl', event));
+  const provider = values.mode === 'smoke' ? new SmokeProvider() : new MeasuredHostedProvider(profile!.baseUrl, key!, maxRequests!,
+    event => append('events.jsonl', event), { maxTokens: maxTokens!, pinnedModel: COMPOSITION_ALIAS });
   manager.registerProvider(provider);
-  manager.setTierAssignment('high', { provider: provider.name, model: values.mode === 'smoke' ? 'controlled-fixture' : 'uj-high' });
+  manager.setTierAssignment('high', { provider: provider.name, model: values.mode === 'smoke' ? 'controlled-fixture' : COMPOSITION_ALIAS });
   const rows: EvaluationRow[] = [];
   let engine: Awaited<ReturnType<typeof createEvaluationEngine>> | undefined;
   let failure: string | null = null;
@@ -118,14 +174,19 @@ if (values.mode === 'plan' || (values.mode === 'hosted' && (!profile || !key))) 
     write('catalog.json', { entries: engine.catalog.list(), sha256: fingerprint(engine.catalog.list()),
       bundleHash: engine.bundleHash, readinessValidator: engine.readiness });
     for (const item of scheduled) {
-      if (provider instanceof MeasuredHostedProvider && provider.attempts.length >= maxRequests) {
-        failure = 'Request budget exhausted; remaining tasks were not run'; break;
+      if (provider instanceof MeasuredHostedProvider && (provider.attempts.length >= provider.maxRequests || provider.stops.length)) {
+        failure = provider.stops.some(s => s.reason === 'routing_fallback')
+          ? 'The profile alias failed over to another alias; remaining tasks were not run'
+          : 'Spend limit reached; remaining tasks were not run';
+        break;
       }
       if (provider instanceof SmokeProvider) provider.taskId = item.taskId;
       const task = taskset.tasks.find(t => t.id === item.taskId)!;
       const row = await evaluateTask(task, { manager, engine, kind: values.mode === 'smoke' ? 'harness-smoke' : 'hosted',
         policy: item.policy, condition: values.condition as EvaluationRow['condition'], repeat: item.repeat,
         profile, transport: provider instanceof MeasuredHostedProvider ? provider.attempts : undefined,
+        stops: provider instanceof MeasuredHostedProvider ? provider.stops : undefined,
+        profileIdentity: profile ? { id: profile.id, revisionSha256: evidence?.revisionSha256 ?? null } : null,
         onEvent: event => append('events.jsonl', event) });
       // Reports and review hashes must use exactly the redacted row persisted
       // to disk, not the original object that may still contain a provider secret.
@@ -140,10 +201,10 @@ if (values.mode === 'plan' || (values.mode === 'hosted' && (!profile || !key))) 
     write('report.json', { status: failure ? 'incomplete' : 'completed', finishedAt: new Date().toISOString(),
       scheduled: scheduled.length, completed: rows.length, notRun: scheduled.slice(rows.length), failure,
       liveModelQuality: values.mode === 'smoke' ? 'unmeasured' : 'automatic checks only; human review required',
-      results: report(rows), modelRouting: provider instanceof MeasuredHostedProvider ? provider.attempts.map(a => ({
+      results: report(rows, context), modelRouting: provider instanceof MeasuredHostedProvider ? provider.attempts.map(a => ({
         request: a.index, requested: a.requestedModel, reported: a.reportedModel,
         intendedModelVerified: a.reportedModel && !a.reportedModel.startsWith('uj-') ? a.reportedModel === profile!.intendedModel : null,
-      })) : [] });
+      })) : [], refusedRequests: provider instanceof MeasuredHostedProvider ? provider.stops : [] });
     write('review-template.json', rows.map(row => ({ rowId: row.id, rowSha256: fingerprint(row), reviewer: '',
       intentCorrect: null, elapsedMs: null, edits: null, notes: '' })));
     if (failure || rows.some(r => !r.intentChecksPassed)) process.exitCode = 1;

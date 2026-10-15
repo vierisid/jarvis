@@ -229,6 +229,7 @@ export class AgentOrchestrator {
    * Empty and inert unless the relevance filter is switched on.
    */
   private exposureLedgers = new Map<string, ToolExposureLedger>();
+  private conversationLedgers = new Map<string, ToolExposureLedger>();
   /**
    * Provider entries from the post-DB-merge `llm` config, for model-class
    * eligibility. Absent is safe: the classifier then reads a provider's KIND
@@ -908,6 +909,7 @@ export class AgentOrchestrator {
     /** When resuming, pass the conversation captured at the pause + the new user reply. */
     history?: LLMMessage[];
     signal?: AbortSignal;
+    contextKey?: string;
     /**
      * Opt in to the two anti-announcement layers: TASK_EXECUTOR_FRAMING on
      * the way in, and the bounded NO_WORK_NUDGE push-back when the model
@@ -993,7 +995,8 @@ export class AgentOrchestrator {
     // the same for the second result" is offered none of it. Grow-only, so
     // concurrent tasks sharing it can only widen each other.
     const primaryAgent = this.getPrimary();
-    const ledger = primaryAgent ? this.ledgerFor(primaryAgent.id) : new ToolExposureLedger();
+    const ledger = opts.contextKey ? this.conversationLedgerFor(opts.contextKey)
+      : primaryAgent ? this.ledgerFor(primaryAgent.id) : new ToolExposureLedger();
     // Seeding writes into the long-lived primary ledger, so it follows the
     // same rule as noteToolUse: nothing at all while the filter is off.
     if (getToolFilterPolicy().enabled) {
@@ -1034,8 +1037,9 @@ export class AgentOrchestrator {
         opts.tier,
         opts.subsystem,
         messages,
-        { tools },
+        { tools, signal: opts.signal },
       );
+      opts.signal?.throwIfAborted();
 
       if (llmResponse.finish_reason === 'tool_use' && llmResponse.tool_calls.length > 0) {
         // First, scan tool calls for `ask_for_clarification` - that breaks
@@ -1236,6 +1240,7 @@ export class AgentOrchestrator {
     // orchestrator serves every chat and a field would let a general turn
     // clear a site turn's scope mid-loop (#561).
     scope?: TurnToolScope | null,
+    conversation?: { history: LLMMessage[]; contextKey: string; signal: AbortSignal },
   ): AsyncIterable<LLMStreamEvent> {
     const primary = this.getPrimary();
     if (!primary) {
@@ -1255,13 +1260,14 @@ export class AgentOrchestrator {
     const turnScope = scope ?? null;
 
     // Add user message to persistent history
-    primary.addMessage('user', message);
+    conversation?.signal.throwIfAborted();
+    if (!conversation) primary.addMessage('user', message);
 
     // If no LLM manager, yield placeholder
     if (!this.llmManager) {
       const stub = typeof message === 'string' ? message : '[image+text content]';
       const response = `[No LLM configured] Received: ${stub}`;
-      primary.addMessage('assistant', response);
+      if (!conversation) primary.addMessage('assistant', response);
       yield { type: 'text', text: response };
       yield {
         type: 'done',
@@ -1279,7 +1285,7 @@ export class AgentOrchestrator {
     // Build local messages array for this turn
     const messages: LLMMessage[] = [
       ...toSystemMessages(systemPrompt),
-      ...primary.getMessages(),
+      ...(conversation ? [...conversation.history, { role: 'user' as const, content: message }] : primary.getMessages()),
     ];
 
     // `fallbackTier` MUST reach the gate. It is a caller-supplied retry
@@ -1288,7 +1294,7 @@ export class AgentOrchestrator {
     // deliberately empty. Without it the gate would clear a small local
     // conversation model and then hand the filtered list to the frontier
     // task model the instant the local one died before first output.
-    const ledger = this.ledgerFor(primary.id);
+    const ledger = conversation ? this.conversationLedgerFor(conversation.contextKey) : this.ledgerFor(primary.id);
     let decided = this.decideTurnTools(messages, tier, ledger, fallbackTier, turnScope);
     let tools = decided.llm;
     const totalUsage = { input_tokens: 0, output_tokens: 0 };
@@ -1303,6 +1309,7 @@ export class AgentOrchestrator {
 
     // Tool execution loop
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+      conversation?.signal.throwIfAborted();
       let accumulatedText = '';
       const toolCalls: LLMToolCall[] = [];
       let doneResponse: LLMResponse | null = null;
@@ -1313,9 +1320,10 @@ export class AgentOrchestrator {
         fallbackTier,
         subsystem,
         messages,
-        { tools },
+        { tools, signal: conversation?.signal },
         () => { activeTier = fallbackTier!; },
       )) {
+        conversation?.signal.throwIfAborted();
         if (event.type === 'text') {
           accumulatedText += event.text;
           yield event; // Forward text chunks to client
@@ -1368,7 +1376,7 @@ export class AgentOrchestrator {
           },
         };
         // Add final response to persistent history (only user-facing text)
-        primary.addMessage('assistant', finalText);
+        if (!conversation) primary.addMessage('assistant', finalText);
         return;
       }
 
@@ -1397,6 +1405,7 @@ export class AgentOrchestrator {
       // Execute each tool and add results
       let widened = false;
       for (const tc of toolCalls) {
+        conversation?.signal.throwIfAborted();
         const discovery = this.handleDiscoveryCall(tc, decided.exposed, ledger, turnScope);
         if (discovery) {
           widened ||= discovery.grew;
@@ -1410,7 +1419,8 @@ export class AgentOrchestrator {
           continue;
         }
         this.noteToolUse(ledger, tc.name, turnScope);
-        const result = await withSnapshotReadLog(turnReads, () => this.executeTool(tc, undefined, turnTaint, turnScope));
+        const result = await withSnapshotReadLog(turnReads, () => this.executeTool(tc, conversation?.signal, turnTaint, turnScope));
+        conversation?.signal.throwIfAborted();
         messages.push({
           role: 'tool',
           content: result,
@@ -1442,7 +1452,7 @@ export class AgentOrchestrator {
         finish_reason: 'stop',
       },
     };
-    primary.addMessage('assistant', finalText);
+    if (!conversation) primary.addMessage('assistant', finalText);
   }
 
   /**
@@ -1489,6 +1499,15 @@ export class AgentOrchestrator {
       this.exposureLedgers.set(agentId, l);
     }
     return l;
+  }
+
+  /** Bounded, conversation-specific cache; never share the primary history/ledger. */
+  private conversationLedgerFor(key: string): ToolExposureLedger {
+    const ledger = this.conversationLedgers.get(key) ?? new ToolExposureLedger();
+    this.conversationLedgers.delete(key);
+    this.conversationLedgers.set(key, ledger);
+    if (this.conversationLedgers.size > 100) this.conversationLedgers.delete(this.conversationLedgers.keys().next().value!);
+    return ledger;
   }
 
   /**
@@ -1701,6 +1720,7 @@ export class AgentOrchestrator {
     signal: AbortSignal | undefined,
     scope: TurnToolScope | null,
   ): Promise<string | ContentBlock[]> {
+    signal?.throwIfAborted();
     if (!this.toolRegistry) {
       return `Error: No tool registry configured`;
     }
