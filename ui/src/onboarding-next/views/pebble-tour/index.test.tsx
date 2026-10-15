@@ -52,6 +52,8 @@ test("closed card uses approved copy and requests the existing shell without opt
   await click("Open Pebble"); expect(opens).toEqual([true]); expect(intents).toEqual([]);
   expect(host.querySelector("h2")?.textContent).toBe("A conversation beside your work.");
   await open(true); expect(host.querySelector("h2")?.textContent).toBe("Your work makes room for the conversation.");
+  // Main has one Talk thread; the copy must not promise conversation tabs.
+  expect(host.querySelector(".on-pebble-tour__body")?.textContent).toBe("Chat stays beside the page. Close Pebble to return to the full workspace.");
   expect(host.textContent).not.toContain("Skip tour");
   await click("Let’s build your first workflow");
   expect(intents).toEqual([{ sessionId: "journey-1", revision: 1, from: "pebble", action: "next", to: "first-workflow" }]);

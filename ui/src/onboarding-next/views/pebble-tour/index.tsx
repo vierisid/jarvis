@@ -110,7 +110,7 @@ function PebbleTourSession({ model, adapter, reducedMotion, onNavigate }: Pebble
         <h2 className="on-pebble-tour__title" id={titleId} ref={title} tabIndex={-1} onBlur={() => { waitingForFocus.current = false; }}>
           {open ? "Your work makes room for the conversation." : "A conversation beside your work."}</h2>
         <p className="on-pebble-tour__body">{open
-          ? "Chat stays beside the page. Use tabs for separate conversations, and close Pebble to return to the full workspace."
+          ? "Chat stays beside the page. Close Pebble to return to the full workspace."
           : "Open the Pebble in the lower-right corner. Ask for help, refine a workflow or think through a decision."}</p>
         <div className="on-pebble-tour__notice" role="status" aria-live="polite">
           {error ?? (!ready ? adapter?.status === "loading" ? "Preparing the workspace preview…"
