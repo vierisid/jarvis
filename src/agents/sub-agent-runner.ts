@@ -18,8 +18,9 @@
 
 import type { AgentInstance } from './agent.ts';
 import type { LLMManager } from '../llm/manager.ts';
-import type { LLMMessage, LLMResponse, LLMToolCall, LLMTool } from '../llm/provider.ts';
-import { ToolRegistry, type ToolDefinition } from '../actions/tools/registry.ts';
+import type { ContentBlock, LLMMessage, LLMResponse, LLMToolCall, LLMTool } from '../llm/provider.ts';
+import { guardImageSize } from '../llm/provider.ts';
+import { ToolRegistry, isToolResult, type ToolDefinition } from '../actions/tools/registry.ts';
 import { checkpointExecution } from '../actions/execution-scope.ts';
 import type { TierMap } from '../llm/tiers.ts';
 import type { LLMProviderEntry } from '../config/types.ts';
@@ -38,9 +39,10 @@ import type { AuditTrail } from '../authority/audit.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import { freezeToolArguments, getActionForTool, resolveToolGate, substituteAboveLevel } from '../authority/tool-action-map.ts';
 import { combineDecisions } from '../authority/engine.ts';
-import { markUntrustedToolResult, markUntrustedToolFailure, isTaintSourceTool, splitToolReturn } from '../roles/untrusted.ts';
+import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFailure, isTaintSourceTool, splitToolReturn } from '../roles/untrusted.ts';
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { mergeProfiles, taintProfile, type TaintGating } from '../authority/taint-gating.ts';
+import { runAsActingAgent } from './acting-agent.ts';
 
 const MAX_TOOL_ITERATIONS = 100; // Lower than primary's 200 — sub-agents should be focused
 const MAX_TOOL_RESULT_CHARS = 6000;
@@ -210,6 +212,13 @@ export type RunSubAgentOptions = {
   onTurn?: (state: SubAgentCheckpoint) => void;
   /** Continue a run from its saved state instead of starting one. */
   resume?: SubAgentResume;
+  /**
+   * Stops the run (#963). Aborts the model call in flight and is checked at
+   * every point the loop would start something new, so once it fires the run
+   * makes no further model call and dispatches no further tool. A tool already
+   * running is not interrupted; the loop stops when it returns.
+   */
+  signal?: AbortSignal;
 };
 
 /**
@@ -326,9 +335,51 @@ class SubAgentCanceled extends Error {
   constructor(readonly raised: unknown) { super(raised instanceof Error ? raised.message : String(raised)); this.name = 'SubAgentCanceled'; }
 }
 
+/**
+ * `blocks` is set for a multi-modal result (#709) and is what the model is sent;
+ * `text` is then its log line. Everything else is text only.
+ */
 type ToolDispatch =
-  | { text: string; failed?: boolean }
+  | { text: string; failed?: boolean; blocks?: ContentBlock[] }
   | { paused: Omit<SubAgentPause, 'remaining' | 'iteration'> };
+
+/**
+ * What an image block becomes once the model has answered the turn that showed
+ * it (#709). Same rule as the primary agent's history (`releaseImagePayloads` in
+ * agents/agent.ts): a screenshot is up to 5 MB of base64 and is needed for
+ * exactly one provider call.
+ */
+const RELEASED_IMAGE_TEXT = '[image from an earlier step - no longer available; take a new screenshot if you need to see the screen again]';
+
+/**
+ * What an image the model has NOT been shown yet becomes in a checkpoint or a
+ * returned result. Those are durable rows (`onTurn`, the delegation repo), so
+ * they never carry base64; and a run that pauses mid-batch -- a screenshot, then
+ * a governed click -- resumes from them, so the model must not be told it saw a
+ * picture it never received.
+ */
+const UNSHOWN_IMAGE_TEXT = '[a screenshot was taken here but could not be kept across a pause; take a new one if you need to see the screen]';
+
+/** Every image still in `messages` has been shown: release it, keeping the block shape. */
+function releaseShownImages(messages: LLMMessage[]): LLMMessage[] {
+  return messages.map((m) => (typeof m.content === 'string' || !m.content.some((b) => b.type === 'image')
+    ? m
+    : { ...m, content: m.content.map((b): ContentBlock => (b.type === 'image' ? { type: 'text', text: RELEASED_IMAGE_TEXT } : b)) }));
+}
+
+/**
+ * The transcript as it is written down or handed back: text only, in the
+ * string shape every consumer of a checkpoint or `SubAgentResult.messages`
+ * reads (`extractToolCallsTrace` in workflows/adapters/m7-agent-delegator.ts
+ * indexes only string tool results, so a block array there read as a call
+ * whose response never landed). Any image still present is one the model has
+ * not seen, because `releaseShownImages` runs after every provider call.
+ */
+function durableMessages(messages: LLMMessage[]): LLMMessage[] {
+  return messages.map((m) => (typeof m.content === 'string'
+    ? m
+    : { ...m, content: m.content.map((b) => (b.type === 'text' ? b.text : UNSHOWN_IMAGE_TEXT)).join('\n') }));
+}
 
 const denialText = (name: string, reason: string) =>
   `[APPROVAL DENIED] ${name}: ${reason} Do not retry the action; report that it was not performed.`;
@@ -399,8 +450,23 @@ async function executeTool(
     // browsing specialist that read a page cannot then write or run clean.
     const profile = mergeProfiles(authorityCtx.profile ?? null, taintProfile(taintGating ?? null, taint));
 
-    // Emergency check
+    // Emergency check. Audited (#730): a suspension is the system refusing
+    // this call, and it used to leave no row at all, so a halted delegation's
+    // attempts were invisible in the audit trail. Only for a tool that
+    // exists -- an unknown name is not a governance decision, as below, and
+    // has no category to record.
     if (emergencyController && !emergencyController.canExecute()) {
+      const suspended = registry.get(toolCall.name);
+      if (suspended) {
+        auditTrail?.log({
+          agent_id: agent.id,
+          agent_name: agent.agent.role.name,
+          tool_name: toolCall.name,
+          action_category: resolveToolGate(suspended, toolCall.name, toolCall.arguments).actionCategory,
+          authority_decision: 'denied',
+          executed: false,
+        });
+      }
       return { text: `[SYSTEM ${emergencyController.getState().toUpperCase()}] Tool execution suspended.`, failed: true };
     }
 
@@ -496,6 +562,14 @@ async function executeTool(
     const category = registry.get(toolCall.name)?.category;
     if (authorityCtx && isTaintSourceTool(toolCall.name, category)) authorityCtx.taint.add(toolCall.name);
     audit?.('allowed', true);
+    // A picture (#709), sized and framed the way the orchestrator's direct
+    // path does it. `boundedResult` would JSON-stringify the ToolResult and
+    // cap it, so the model got a 6000-character prefix of base64 instead of
+    // an image.
+    if (isToolResult(raw)) {
+      const blocks = markUntrustedToolBlocks(toolCall.name, category, raw.content.map(guardImageSize));
+      return { text: blocks.map((b) => (b.type === 'text' ? b.text : `[${b.type}]`)).join('\n'), blocks };
+    }
     const bounded = boundedResult(raw);
     return { text: markUntrustedToolResult(toolCall.name, category, bounded.text) + bounded.trailer };
   } catch (err) {
@@ -549,6 +623,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     governedTools,
     onTurn,
     resume,
+    signal,
   } = opts;
 
   // Build authority context if engine provided
@@ -592,6 +667,18 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
    */
   const inDeliveryScope = <T>(fn: () => Promise<T>): Promise<T> =>
     withTemplateDeliveryScope(`sub-agent:${agentId}`, fn);
+  /**
+   * Run one tool dispatch as this agent's call (#1014), so a spawn or stop it
+   * reaches is judged as this agent, and a child it starts is capped by it and
+   * runs under what it runs under: the profile it was given, and what it has
+   * read. Both dispatches below go through here, for the reason above. The
+   * profile is computed at the call, as `executeTool` computes its own.
+   */
+  const asThisAgent = <T>(fn: () => Promise<T>): Promise<T> => runAsActingAgent({
+    agentId,
+    profile: mergeProfiles(profile ?? null, taintProfile(taintGating ?? null, taint)),
+    taint: [...taint],
+  }, fn);
   const toolsUsed: string[] = resume ? [...resume.toolsUsed] : [];
   const totalUsage = resume ? { ...resume.tokensUsed } : { input: 0, output: 0 };
   const failedToolCalls: string[] = resume ? [...resume.failedToolCalls] : [];
@@ -637,13 +724,13 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
   let reachedFinal = false;
 
   const state = (iteration: number): SubAgentCheckpoint => ({
-    messages, toolsUsed: [...toolsUsed], tokensUsed: { ...totalUsage }, sequence, iteration,
+    messages: durableMessages(messages), toolsUsed: [...toolsUsed], tokensUsed: { ...totalUsage }, sequence, iteration,
     taint: [...taint], failedToolCalls: [...failedToolCalls],
   });
   const finish = (partial: Pick<SubAgentResult, 'success' | 'response' | 'terminationReason'> & Partial<SubAgentResult>): SubAgentResult => ({
     toolsUsed: [...new Set(toolsUsed)],
     tokensUsed: totalUsage,
-    messages,
+    messages: durableMessages(messages),
     sequence,
     failedToolCalls: [...failedToolCalls],
     taint: [...taint],
@@ -652,7 +739,19 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
 
   // A cancellation is not an agent error: the caller stopped the run and
   // must not record anything for it.
-  const fence = () => { try { checkpointExecution(); } catch (err) { throw new SubAgentCanceled(err); } };
+  // Latched for the run, so a Kill followed by a Reset before the next fence
+  // still stops it. Optional call: tests stand in partial controllers.
+  let killed = emergencyController?.getState() === 'killed';
+  const stopListening = emergencyController?.subscribe?.((state) => { if (state === 'killed') killed = true; });
+  const fence = () => {
+    if (signal?.aborted) throw new SubAgentCanceled(signal.reason ?? 'cancelled');
+    // Kill stops every sub-agent loop here, at the sink (#987), not only the
+    // task manager's: a synchronous delegate_task or a workflow delegation has
+    // no signal, and under Kill it otherwise ran on to its iteration cap with
+    // every tool refused. Pause does not stop it (left to the owner).
+    if (killed || emergencyController?.getState() === 'killed') throw new SubAgentCanceled('the system was killed');
+    try { checkpointExecution(); } catch (err) { throw new SubAgentCanceled(err); }
+  };
 
   const noteToolCall = (tc: LLMToolCall) => {
     toolsUsed.push(tc.name);
@@ -661,8 +760,8 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     }
   };
 
-  const record = (tc: LLMToolCall, dispatched: { text: string; failed?: boolean }) => {
-    messages.push({ role: 'tool', content: dispatched.text, tool_call_id: tc.id });
+  const record = (tc: LLMToolCall, dispatched: { text: string; failed?: boolean; blocks?: ContentBlock[] }) => {
+    messages.push({ role: 'tool', content: dispatched.blocks ?? dispatched.text, tool_call_id: tc.id });
     if (dispatched.failed) failedToolCalls.push(tc.id);
     console.log(`[SubAgent:${agentName}] Tool ${tc.name} -> ${dispatched.text.slice(0, 100)}...`);
   };
@@ -762,7 +861,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       }
       noteToolCall(tc);
       sequence += 1;
-      const dispatched = await inDeliveryScope(() => executeTool(toolRegistry, tc, sequence, authorityCtx));
+      const dispatched = await asThisAgent(() => inDeliveryScope(() => executeTool(toolRegistry, tc, sequence, authorityCtx)));
       if ('paused' in dispatched) {
         return { ...dispatched.paused, remaining: calls.slice(index + 1), iteration, offered: [...offered] };
       }
@@ -784,9 +883,9 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       fence();
       let governed: GovernedToolResult;
       try {
-        governed = await inDeliveryScope(() => governedTools({ toolCall: pending.toolCall, sequence: pending.sequence,
+        governed = await asThisAgent(() => inDeliveryScope(() => governedTools({ toolCall: pending.toolCall, sequence: pending.sequence,
           actionCategory: pending.actionCategory, toolCategory: pending.toolCategory, principal: pending.principal,
-          reason: pending.reason }));
+          reason: pending.reason })));
       } catch (err) {
         throw new GovernedDispatchError(err instanceof Error ? err.message : String(err), err);
       }
@@ -824,8 +923,12 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     // Tool execution loop
     for (let iteration = startIteration; iteration < maxIterations; iteration++) {
       fence();
-      const llmResponse: LLMResponse = await llmManager.chatTier('medium', 'sub_agent', messages, { tools });
+      const llmResponse: LLMResponse = await llmManager.chatTier('medium', 'sub_agent', messages, { tools, ...(signal ? { signal } : {}) });
       fence();
+      // The model has now been shown every image in the transcript (#709).
+      // Replaced, not mutated in place: the request just made held these.
+      const released = releaseShownImages(messages);
+      for (let i = 0; i < released.length; i++) messages[i] = released[i]!;
 
       totalUsage.input += llmResponse.usage.input_tokens;
       totalUsage.output += llmResponse.usage.output_tokens;
@@ -873,8 +976,14 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     console.error(`[SubAgent:${agentName}] Error:`, errorMsg);
 
     return finish({ success: false, response: `Sub-agent error: ${errorMsg}`, terminationReason: 'error',
-      ...(err instanceof GovernedDispatchError ? { dispatchError: true } : err instanceof SubAgentCanceled ? { canceled: true } : {}) });
+      ...(err instanceof GovernedDispatchError ? { dispatchError: true }
+        // An aborted model call rejects with the provider's abort error, not
+        // SubAgentCanceled; the signal says which it was. An unrelated error
+        // that lands after the abort is reported as the cancel too: the run
+        // was being stopped either way.
+        : err instanceof SubAgentCanceled || signal?.aborted ? { canceled: true } : {}) });
   } finally {
+    stopListening?.();
     agent.idle();
   }
 }

@@ -9,9 +9,9 @@
  * variables already in its real startup environment.
  *
  * Each site is pointed at a fake executable the test wrote into `<workDir>/bin`
- * that dumps the environment it received. The fake browser and fake sidecar
- * then hand over to model-exec-fake-server.ts, so that launchChrome and
- * launchSidecar see the port they poll for and return normally.
+ * that dumps the environment it received. The fake browser then hands over to
+ * model-exec-fake-server.ts, so that launchChrome sees the port it polls for
+ * and returns normally.
  *
  * argv: <site> <workDir>
  */
@@ -21,8 +21,8 @@ import { TerminalExecutor } from '../actions/terminal/executor.ts';
 import { LinuxAppController } from '../actions/app-control/linux.ts';
 import { defaultExec } from '../actions/app-control/native-exec.ts';
 import { launchChrome, stopChrome } from '../actions/browser/chrome-launcher.ts';
-import { launchSidecar, stopSidecar } from '../actions/app-control/sidecar-launcher.ts';
 import { sendDesktopNotificationWithReceipt } from '../comms/desktop-notify.ts';
+import { WSLBridge, __setWindowsDirForTests } from '../actions/terminal/wsl-bridge.ts';
 
 const site = process.argv[2]!;
 const workDir = process.argv[3]!;
@@ -39,7 +39,7 @@ async function waitForDump(prefix: string): Promise<void> {
   throw new Error(`no ${prefix} dump within 10s`);
 }
 
-/** A port nothing is listening on, for the fake browser and sidecar to take. */
+/** A port nothing is listening on, for the fake browser to take. */
 function freePort(): number {
   const s = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data() {} } });
   const { port } = s;
@@ -82,7 +82,7 @@ switch (site) {
   // native-exec.ts: the seam behind Windows `launch-app` (powershell
   // Start-Process) and macOS `open -a`, and every other fallback script.
   case 'native-exec': {
-    const r = defaultExec([bin('fake-app'), 'native-exec'], '');
+    const r = await defaultExec([bin('fake-app'), 'native-exec'], '');
     if (r.status !== 0) throw new Error(`defaultExec exited ${r.status}: ${r.stderr}`);
     break;
   }
@@ -94,19 +94,15 @@ switch (site) {
     break;
   }
 
-  // sidecar-launcher.ts: desktop-bridge, which launches apps for the model
-  // on Windows and hands them its own environment.
-  case 'sidecar': {
-    const running = await launchSidecar(freePort(), bin('fake-sidecar'));
-    await stopSidecar(running);
-    break;
-  }
-
   // desktop-notify.ts: the PowerShell toast, an interpreter run for model- or
-  // workflow-authored text (as base64 data since #515). The test puts a fake `which` (no
-  // notify-send, yes powershell.exe) and a fake powershell.exe first on PATH,
-  // which is how this path is chosen on WSL.
+  // workflow-authored text (as base64 data since #515). The test puts a fake
+  // `which` that finds no notify-send first on PATH, and a fake powershell.exe
+  // in <workDir>/Windows, the Windows directory windowsSystemExe is pointed at
+  // here (#896); this process is made to look like WSL, which is how this
+  // path is chosen.
   case 'desktop-notify': {
+    WSLBridge.isWSL = () => true;
+    __setWindowsDirForTests(join(workDir, 'Windows'));
     if (!await sendDesktopNotificationWithReceipt('model title', 'model body')) throw new Error('toast not accepted');
     break;
   }

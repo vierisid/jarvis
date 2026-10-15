@@ -19,6 +19,8 @@ export type Conversation = {
   last_message_at: number;
   message_count: number;
   metadata: Record<string, unknown> | null;
+  /** The channel sender this conversation belongs to, or null (#884). */
+  sender: string | null;
 };
 
 type ConversationRow = {
@@ -29,6 +31,7 @@ type ConversationRow = {
   last_message_at: number;
   message_count: number;
   metadata: string | null;
+  sender: string | null;
 };
 
 type MessageRow = {
@@ -44,6 +47,7 @@ function parseConversation(row: ConversationRow): Conversation {
   return {
     ...row,
     metadata: row.metadata ? JSON.parse(row.metadata) : null,
+    sender: row.sender ?? null,
   };
 }
 
@@ -55,18 +59,36 @@ function parseMessage(row: MessageRow): ConversationMessage {
 }
 
 /**
- * Get or create the active conversation for a channel.
- * Returns the most recent conversation for the channel, or creates a new one.
+ * Who a conversation belongs to, within its channel (#884). External channels
+ * pass one so that each person who messages the bot has their own thread:
+ * every sender used to share the channel's one conversation, so on a channel
+ * anyone may message, a stranger could ask about the owner's earlier turns.
+ *
+ * Stored in the `sender` column. A conversation with a sender is found only by
+ * that sender; one without (the dashboard's, or a channel conversation saved
+ * before #884) is never handed to a sender, nor a sender's to a caller that
+ * names none.
  */
-export function getOrCreateConversation(channel: string): Conversation {
+export type ConversationOwner = { sender?: string };
+
+/**
+ * Get or create the active conversation for a channel, or for one sender on
+ * it. Returns the most recent one, or creates a new one.
+ */
+export function getOrCreateConversation(channel: string, owner?: ConversationOwner): Conversation {
   const db = getDb();
   const now = Date.now();
+  const sender = owner?.sender;
 
   // Look for a recent conversation on this channel (within last 4 hours)
   const cutoff = now - 4 * 60 * 60 * 1000;
-  const existing = db.prepare(
-    'SELECT * FROM conversations WHERE channel = ? AND last_message_at > ? ORDER BY last_message_at DESC LIMIT 1'
-  ).get(channel, cutoff) as ConversationRow | null;
+  const existing = (sender === undefined
+    ? db.prepare(
+      'SELECT * FROM conversations WHERE channel = ? AND sender IS NULL AND last_message_at > ? ORDER BY last_message_at DESC LIMIT 1'
+    ).get(channel, cutoff)
+    : db.prepare(
+      'SELECT * FROM conversations WHERE channel = ? AND sender = ? AND last_message_at > ? ORDER BY last_message_at DESC LIMIT 1'
+    ).get(channel, sender, cutoff)) as ConversationRow | null;
 
   if (existing) {
     return parseConversation(existing);
@@ -75,8 +97,8 @@ export function getOrCreateConversation(channel: string): Conversation {
   // Create new conversation
   const id = generateId();
   db.prepare(
-    'INSERT INTO conversations (id, channel, started_at, last_message_at, message_count) VALUES (?, ?, ?, ?, 0)'
-  ).run(id, channel, now, now);
+    'INSERT INTO conversations (id, channel, started_at, last_message_at, message_count, sender) VALUES (?, ?, ?, ?, 0, ?)'
+  ).run(id, channel, now, now, sender ?? null);
 
   return {
     id,
@@ -86,6 +108,7 @@ export function getOrCreateConversation(channel: string): Conversation {
     last_message_at: now,
     message_count: 0,
     metadata: null,
+    sender: sender ?? null,
   };
 }
 

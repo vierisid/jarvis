@@ -33,7 +33,7 @@ import { hostedRealtimeIncluded, warmRealtimeGateFor } from './realtime-gate.ts'
 import { resolveRealtimeVoice } from "../config/realtime.ts";
 import { pebbleHotkeyRequestKey, resolvePebbleHotkeys, shouldCloseBeforeSpawn } from "../config/pebble-hotkeys.ts";
 import { isHostedInstall, realtimeEnablement } from "./usejarvis-ai.ts";
-import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from "./realtime-nav-tools.ts";
+import { pebbleRoomActionResult, REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from "./realtime-nav-tools.ts";
 import { EventReactor } from "./event-reactor.ts";
 import { EventCoalescer } from "./event-coalescer.ts";
 import { CommitmentExecutor } from "./commitment-executor.ts";
@@ -43,24 +43,23 @@ import { GoogleAuth } from "../integrations/google-auth.ts";
 import { classifyGoogle, googleIdentity, makeGoogleAuth } from "../integrations/google-managed-refresh.ts";
 import { ResearchQueue } from "./research-queue.ts";
 import { researchQueueTool, setResearchQueueRef } from "../actions/tools/research.ts";
-import { spawnPersistentAgent, assignPersistentAgentTask } from "../actions/tools/agents.ts";
+import { startPersistentAgent, stopCall } from "../actions/tools/agents.ts";
 import { collectExecutionTargets } from "../actions/tools/sidecar-route.ts";
 import { ChannelService } from "./channel-service.ts";
 import { BackgroundAgentService } from "./background-agent-service.ts";
 import { AuthorityEngine } from "../authority/engine.ts";
 import { ApprovalManager } from "../authority/approval.ts";
 import { AuditTrail } from "../authority/audit.ts";
-import { impactFromCategory } from "../roles/authority.ts";
 import { wrapUntrusted, inlineUntrusted } from "../roles/untrusted.ts";
 import { isUpdateAvailable, SIDECAR_LATEST_VERSION, SIDECAR_RECOMMENDED_VERSION } from "../sidecar/compat.ts";
 import { containsWakePhrase, hasSpokenContent, wakeCommandFrom } from "../voice/wake-phrase.ts";
 import { AuthorityLearner } from "../authority/learning.ts";
 import { EmergencyController } from "../authority/emergency.ts";
-import { APPROVAL_LABEL_DELIVERY_MAX_CHARS, ApprovalDelivery, approvalNotificationText, boundedApprovalLabel } from "../authority/approval-delivery.ts";
+import { ApprovalDelivery, approvalToast, taskCompleteBody } from "../authority/approval-delivery.ts";
 import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { buildBackgroundProfile } from "../authority/background-profile.ts";
 import { buildTaintGating } from "../authority/taint-gating.ts";
-import { applyApprovalDecision } from "./approval-decision.ts";
+import { channelApprovalReply, notificationApprovalDecision } from "./approval-decision.ts";
 import { sendDesktopNotification } from "../comms/desktop-notify.ts";
 import { ensureUiBuilt } from "./ui-autobuild.ts";
 import { deliverOpportunityNotification } from './opportunity-notification.ts';
@@ -108,6 +107,11 @@ import { remoteBrowserNarration } from "../actions/browser/remote-element-point.
 import {
   logSafeLabel, MAX_POINT_COORD, PEBBLE_SCREEN_SPACE, pointingGuidance, pointTagRegex,
 } from "./pebble-point-prompt.ts";
+import {
+  backgroundRefusalReply, cancelCardReply, cancelRefusalReply, parseBackgroundTask, parseSettingsIntent, planInPanelAction, planSubPebbleClose, planWindowAction, tabSwitchReply,
+  SUB_PEBBLE_COLORS, PEBBLE_ROOMS, exactRoomKey, findRoomKey, type PanelLookups, type SubPebbleCand,
+} from "./pebble-intents.ts";
+import { makeSpeakConfirmation } from "./pebble-confirmation.ts";
 import { osFamily } from "../util/execution-environment.ts";
 import { isLocalBrowserDisabled, isNoLocalTools } from "../actions/tools/local-tools-guard.ts";
 
@@ -1021,9 +1025,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           case 'open_dashboard_room':
             return openRoom(String(args.room ?? ''));
           case 'dashboard_room_action':
-            // In-room actions target the dashboard SPA, which a native panel
-            // doesn't receive — opening the room is the useful part here.
-            return openRoom(String(args.room ?? ''));
+            // Only the room is opened here; the action itself is not sent. The
+            // model is told so, or "Opened Settings." reads as the TTS toggle
+            // it asked for having happened (#965).
+            return pebbleRoomActionResult(await openRoom(String(args.room ?? '')), String(args.action ?? ''));
           case 'control_dashboard_window': {
             const action = String(args.action ?? '');
             const target = findPanel(sidecarId, args.target ? String(args.target) : undefined);
@@ -1085,6 +1090,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           if (nav !== null) return nav;
           return agentService.getOrchestrator().executeRealtimeToolCall(name, args, { blockedCategories });
         },
+        // Voice has no turn objects: the user starting to speak is the taint
+        // gating boundary, and on this surface nothing else clears it. Without
+        // it one `capture_screen` (or any page read) left every later
+        // machine-changing action refused as taint-gated for the rest of the
+        // daemon's life, at any authority level.
+        onUserTurnStart: () => { agentService.getOrchestrator().resetRealtimeTaint(); },
         onState: (sidecarId, state, text) => { void setState(sidecarId, state, text); },
         onStatus: (sidecarId, status, detail) => {
           console.log(`[pebble-realtime] ${sidecarId} ${status}${detail ? `: ${detail}` : ''}`);
@@ -1600,7 +1611,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // keyed off the task id hash so the same task always wears the same
       // color across paint cycles.
       const subPebbleSlots = new Map<string, Map<string, number>>(); // sidecarId -> (taskId -> slot)
-      const SUB_PEBBLE_PALETTE: string[] = ['amber', 'sage', 'violet', 'mustard', 'teal', 'vermilion'];
+      const SUB_PEBBLE_PALETTE: readonly string[] = SUB_PEBBLE_COLORS;
       const colorForTask = (taskId: string): string => {
         let hash = 0;
         for (let i = 0; i < taskId.length; i++) hash = ((hash << 5) - hash + taskId.charCodeAt(i)) | 0;
@@ -1900,10 +1911,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                   state: 'working',
                 });
                 console.log(`[sub-pebble] spawn task=${task.id} agent=${task.agentName} slot=${slot}`);
-              } else if (event === 'complete' || event === 'fail') {
+              } else if (event === 'complete' || event === 'fail' || event === 'cancel') {
                 // Success turns the drop green (the brand "done" state) so the
                 // rail shows finished work at a glance; failures stop the pulse
-                // (idle) and recolor to vermilion so the user sees red.
+                // (idle) and recolor to vermilion so the user sees red. A
+                // cancelled task (#963) stops the pulse and keeps its colour:
+                // it was stopped on purpose, not failed.
                 await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.set_state', {
                   id: task.id, state: event === 'complete' ? 'done' : 'idle',
                 });
@@ -2205,95 +2218,42 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // for most rooms (workflows, goals, settings, authority, etc.);
       // we broadcast a `room_action` over WS and the panel-mode bridge
       // (PanelRoomActionBridge in AppShellV2) forwards it to whichever
-      // room's handler is mounted. Rooms internally validate the tab
-      // name and silently reject unknown tabs, so we can be liberal
-      // about matching.
+      // room's handler is mounted. The plan only names tabs the room
+      // has (room-tabs.ts), and the panel answers whether it switched,
+      // so the reply says what happened rather than assuming it (#933).
       const tryHandleInPanelAction = async (
         sidecarId: string,
         userText: string,
         ctrl: { cancelled: boolean },
       ): Promise<boolean> => {
-        const t = userText.toLowerCase();
-        // Verbs that mean "navigate inside the current panel". Distinct
-        // from "open <room>" (that spawns a new window). The match
-        // optionally captures a trailing room hint so "switch to the
-        // editor tab in workflows" routes to the workflows panel even
-        // when it isn't the most-recent. **Imperative only** — we
-        // explicitly reject interrogative phrasings ("show me where the
-        // editor tab is"), which should fall through to the LLM with
-        // pointer guidance instead of being parsed as a tab-switch.
-        if (/\b(where|how|when|which|why|what)\b.*\b(tab|view|section)\b/i.test(t)) {
-          return false;
-        }
-        const re = /\b(?:switch to|go to|jump to|open|click on|select)\s+(?:the\s+)?([a-z][a-z0-9 \-_]{0,30}?)\s+(?:tab|view|section|page)\b(?:\s+(?:in|of)\s+(?:the\s+)?([a-z][a-z ]{0,30}?)(?:\s+(?:window|panel|page))?)?/i;
-        const m = re.exec(t);
-        if (!m) return false;
-
-        const tabRaw = (m[1] || '').trim();
-        const roomHint = (m[2] || '').trim() || undefined;
-        if (!tabRaw) return false;
-
-        const target = findPanel(sidecarId, roomHint);
-        if (!target) {
-          await speakConfirmation(
-            sidecarId,
-            roomHint
-              ? `I don't see a ${roomHint} window open.`
-              : "There's no panel open to navigate inside.",
-            ctrl,
-          );
+        // Verbs that mean "navigate inside the current panel". Distinct from
+        // "open <room>" (that spawns a new window). The plan, and when it may
+        // claim the turn at all, lives in pebble-intents.ts (#926).
+        const plan = planInPanelAction(userText, panelLookups(sidecarId));
+        if (!plan) return false;
+        if (plan.kind === 'say') {
+          await speakConfirmation(sidecarId, plan.text, ctrl);
           return true;
         }
-
-        // Recognized tab synonyms across the dashboard rooms. Match is
-        // STRICT — if the captured tab name isn't in this list, fall
-        // through to the LLM. Without this, phrases like "open Gmail on
-        // a new Chrome tab window" would be parsed as `switch_tab` with
-        // tab="gmail_on_a_new_chrome" because the regex captures
-        // anything that ends with "… tab".
-        const tabSyn: Record<string, string> = {
-          editor: 'editor',
-          'edit': 'editor',
-          'edit view': 'editor',
-          builder: 'builder',
-          'agent builder': 'agent_builder',
-          list: 'list',
-          all: 'list',
-          logs: 'logs',
-          history: 'logs',
-          settings: 'settings',
-          general: 'general',
-          tts: 'tts',
-          stt: 'stt',
-          voice: 'voice',
-          llm: 'llm',
-          tools: 'tools',
-          channels: 'channels',
-        };
-        // Disqualify common false-positive contexts: anything mentioning
-        // a real browser/window/app makes "tab" almost certainly the
-        // browser-tab sense, not a JARVIS panel sub-tab.
-        const browserContext = /\b(chrome|firefox|edge|safari|browser|gmail|google|mail|youtube|github|window)\b/i;
-        if (browserContext.test(t)) return false;
-        const known = tabSyn[tabRaw];
-        if (!known) {
-          // Captured tab name isn't a known panel sub-tab — fall through
-          // to the LLM rather than dispatch a bogus switch_tab.
-          return false;
-        }
-        const tab = known;
+        const { target, tab, tabRaw, roomHint } = plan;
 
         console.log(`[ambient-ui] in-panel action: switch_tab tab="${tab}" on ${target.title} (id=${target.id}${roomHint ? `, hint="${roomHint}"` : ''})`);
         try {
           // The bus broadcasts to all dashboard clients (including all
           // open panels). useRoomActions is keyed on `room`, so only
-          // the matching room's handler fires.
-          wsService.broadcastRoomAction({
+          // the matching room's handler fires, and the panel answers
+          // whether it switched (#933). The wait is normally a round trip
+          // but can run to the bus's queue TTL, so show it is working, and
+          // drop the reply if the turn was cancelled meanwhile.
+          await setState(sidecarId, 'thinking', '');
+          const outcome = await wsService.requestRoomAction({
             room: target.key,
             action: 'switch_tab',
             args: { tab },
           });
-          await speakConfirmation(sidecarId, `Switched ${target.title} to ${tabRaw}.`, ctrl);
+          console.log(`[ambient-ui] in-panel action: switch_tab tab="${tab}" on ${target.title}: ${outcome}`);
+          if (ctrl.cancelled) return true;
+          await speakConfirmation(sidecarId, tabSwitchReply(target.title, tabRaw, outcome), ctrl);
         } catch (err) {
           console.warn('[ambient-ui] in-panel action failed:', err);
           await speakConfirmation(sidecarId, "I couldn't navigate the panel.", ctrl);
@@ -2308,61 +2268,31 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         userText: string,
         ctrl: { cancelled: boolean },
       ): Promise<boolean> => {
-        const t = userText.toLowerCase();
-
-        // TTS on / off. Match leniently so "turn off text to speech in
-        // the settings" hits too — extra trailing words don't break.
-        const ttsOff = /\b(turn off|disable|switch off|deactivate)\s+(?:the\s+)?(text[- ]to[- ]speech|tts|voice (?:output|response)?|speech|tts response)\b/.test(t);
-        const ttsOn  = /\b(turn on|enable|switch on|activate|reactivate)\s+(?:the\s+)?(text[- ]to[- ]speech|tts|voice (?:output|response)?|speech|tts response)\b/.test(t);
-        if (ttsOff) {
-          const ok = await applyTTSEnabled(false);
-          // Speak the confirmation BEFORE shutting TTS down — temp
+        // Which commands count, and what they must name, lives in
+        // pebble-intents.ts (#926).
+        const intent = parseSettingsIntent(userText);
+        if (!intent) return false;
+        if (intent.kind === 'tts') {
+          const ok = await applyTTSEnabled(intent.enabled);
+          // Speak the confirmation BEFORE shutting TTS down -- temp
           // restore a one-shot provider so the user hears acknowledgment.
           await speakConfirmation(
             sidecarId,
-            ok ? "Text-to-speech turned off." : "I couldn't save that setting.",
+            ok ? `Text-to-speech turned ${intent.enabled ? 'on' : 'off'}.` : "I couldn't save that setting.",
             ctrl,
           );
           return true;
         }
-        if (ttsOn) {
-          const ok = await applyTTSEnabled(true);
-          await speakConfirmation(
-            sidecarId,
-            ok ? "Text-to-speech turned on." : "I couldn't save that setting.",
-            ctrl,
-          );
-          return true;
-        }
-
-        // STT provider switch.
-        const sttMatch =
-          /\b(switch|change)\s+(?:the\s+)?(stt|speech[- ]to[- ]text|transcription|speech recognition|listening)\s+(?:to|provider to)\s+(openai|whisper|groq|sarvam|local|usejarvis|use jarvis|jarvis)\b/.exec(t) ||
-          /\buse\s+(openai|whisper|groq|sarvam|local|usejarvis|use jarvis|jarvis)\s+(?:for\s+(?:stt|speech[- ]to[- ]text|transcription|speech recognition|listening|hearing))\b/.exec(t);
-        if (sttMatch) {
-          // 'whisper' → openai; 'jarvis' / 'use jarvis' (how STT typically
-          // transcribes the brand name) → the hosted usejarvis provider.
-          type SttTarget = 'openai' | 'groq' | 'sarvam' | 'local' | 'usejarvis';
-          const canonical = (name: string): SttTarget =>
-            (name === 'whisper' ? 'openai' : name === 'use jarvis' || name === 'jarvis' ? 'usejarvis' : name) as SttTarget;
-          let target = canonical(sttMatch[2]!);
-          // The first capture group depends on which alternative matched.
-          const candidate = (sttMatch[3] || sttMatch[1]) as string;
-          if (candidate && /^(openai|whisper|groq|sarvam|local|usejarvis|use jarvis|jarvis)$/.test(candidate)) {
-            target = canonical(candidate);
-          }
-          const ok = await applySTTProvider(target);
-          await speakConfirmation(
-            sidecarId,
-            ok
-              ? `Switched transcription to ${target}.`
-              : `I couldn't switch to ${target} — it may not have an API key configured.`,
-            ctrl,
-          );
-          return true;
-        }
-
-        return false;
+        const target = intent.target;
+        const ok = await applySTTProvider(target);
+        await speakConfirmation(
+          sidecarId,
+          ok
+            ? `Switched transcription to ${target}.`
+            : `I couldn't switch to ${target} — it may not have an API key configured.`,
+          ctrl,
+        );
+        return true;
       };
 
       // T18 / T18b — voice-triggered panel control. The daemon checks
@@ -2378,31 +2308,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       //   • focus|where did it go|bring it back — focus last-spawned panel
       // "It / the window / that" pronouns refer to the most-recently-
       // spawned panel for this sidecar, tracked in `lastPanelBySidecar`.
-      type RoomMeta = { aliases: string[]; title: string; w: number; h: number; alwaysOnTop?: boolean };
-      const ROOMS: Record<string, RoomMeta> = {
-        settings:    { aliases: ['settings', 'preferences'],                title: 'Settings',    w: 560, h: 600 },
-        workflows:   { aliases: ['workflows', 'workflow', 'flows'],         title: 'Workflows',   w: 900, h: 600 },
-        memory:      { aliases: ['memory', 'vault', 'knowledge'],           title: 'Memory',      w: 480, h: 700 },
-        tools:       { aliases: ['tools', 'tool catalog', 'tool catalogue'],title: 'Tools',       w: 560, h: 600 },
-        agents:      { aliases: ['agents', 'agent monitor'],                title: 'Agents',      w: 600, h: 600 },
-        agent_strip: { aliases: ['agent strip', 'agents strip', 'agent panel', 'agent dock', 'background agents'], title: 'Agent Strip', w: 290, h: 440, alwaysOnTop: true },
-        authority:   { aliases: ['authority', 'approvals', 'permissions'],  title: 'Authority',   w: 480, h: 600 },
-        logs:        { aliases: ['logs', 'log stream', 'log'],              title: 'Logs',        w: 800, h: 500 },
-        calendar:    { aliases: ['calendar', 'schedule'],                   title: 'Calendar',    w: 720, h: 600 },
-        goals:       { aliases: ['goals', 'okrs', 'goal'],                  title: 'Goals',       w: 600, h: 600 },
-        tasks:       { aliases: ['tasks', 'todos', 'task list', 'task'],    title: 'Tasks',       w: 500, h: 600 },
-        content:     { aliases: ['content', 'content pipeline', 'notes'],   title: 'Content',     w: 800, h: 600 },
-        workspaces:  { aliases: ['workspaces', 'workspace', 'sites'],       title: 'Workspaces',  w: 800, h: 600 },
-        usage:       { aliases: ['token usage', 'usage room'],              title: 'Usage',       w: 800, h: 600 },
-      };
-
-      // Match aliases longest-first so "tool catalog" wins over "tools" when
-      // both appear in the input.
-      const orderedAliases: { alias: string; key: string }[] = [];
-      for (const [key, meta] of Object.entries(ROOMS)) {
-        for (const alias of meta.aliases) orderedAliases.push({ alias, key });
-      }
-      orderedAliases.sort((a, b) => b.alias.length - a.alias.length);
+      // The room table lives in pebble-intents.ts so the planners resolve the
+      // same aliases the daemon does (#926).
+      const ROOMS = PEBBLE_ROOMS;
 
       const dashboardURL = (key: string): string => {
         // _panel_<key> renders ONLY the RoomBody inside the spawned native
@@ -2787,7 +2695,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           '',
           'When the user asks for something that genuinely requires a click on a non-UIA surface (desktop icon, system tray, popup), prefer asking them to do it themselves rather than wrestling with coordinate clicks — coordinate clicks move the OS cursor and steal control from the user.',
           '',
-          '**Sidecar is primary.** The Go sidecar is connected and exposes desktop / browser / filesystem / clipboard / system_info / screenshot capabilities. Tools auto-route to it — you never need to specify a `target` parameter unless you want to override. If a tool returns "Sidecar not running" / "Desktop bridge not found", that\'s the legacy local-only path leaking through; mention it in your reply but try the same call again — the auto-route should pick up the connected sidecar on the second attempt.',
+          '**Sidecar is primary.** The Go sidecar is connected and exposes desktop / browser / filesystem / clipboard / system_info / screenshot capabilities. Tools auto-route to it — you never need to specify a `target` parameter unless you want to override. If a tool returns "Local desktop control is not available", that\'s the local-only path leaking through; mention it in your reply but try the same call again — the auto-route should pick up the connected sidecar on the second attempt.',
           '',
           'When you finish a multi-step task, give a short verbal confirmation ("Done — Chrome is up.") rather than re-narrating each step. The pebble already showed each step visually.',
           '',
@@ -2832,16 +2740,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         return sections.join('\n');
       };
 
+      const roomKeyForHint = (hint: string): string | null => findRoomKey(hint);
+
       const findPanel = (sidecarId: string, hint?: string): PanelEntry | null => {
         const list = panelsBySidecar.get(sidecarId);
         if (!list || list.length === 0) return null;
-        if (!hint) return list[list.length - 1] ?? null; // pronoun → last
-        // Resolve hint to a room key via the alias table.
-        let targetKey: string | null = null;
-        for (const { alias, key } of orderedAliases) {
-          const aliasRe = new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\b`);
-          if (aliasRe.test(hint)) { targetKey = key; break; }
-        }
+        if (!hint) return list[list.length - 1] ?? null; // pronoun -> last
+        const targetKey = roomKeyForHint(hint);
         if (!targetKey) return null;
         for (let i = list.length - 1; i >= 0; i--) {
           if (list[i]!.key === targetKey) return list[i]!;
@@ -2849,128 +2754,109 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         return null;
       };
 
-      // Try to match a window-management intent (expand / minimize /
-      // restore / close / focus). Returns null when no intent matches.
-      // The `roomHint` captures any explicit room reference in the same
-      // utterance ("expand the workflows window") so we can target a
-      // specific panel when several are open. Without a hint, the caller
-      // resolves to the most-recently-spawned panel.
-      type WindowAction = 'maximized' | 'minimized' | 'normal' | 'close' | 'focus';
-      const tryParseWindowAction = (text: string): { action: WindowAction; roomHint?: string } | null => {
-        const t = text.toLowerCase().trim();
-        // Optional trailing room phrase: "the X window", "the X", "X".
-        // `(?:[^.!?]*?)` is a tail catch-all up to the first sentence-end,
-        // letting the alias matcher inside findPanel pick out the room.
-        const roomTail = '(?:\\s+(?:the\\s+|my\\s+)?([a-z][a-z ]{0,40}?)(?:\\s+(?:window|panel|page|view))?)?';
+      // What the fast-path planners in pebble-intents.ts may ask about panels.
+      const panelLookups = (sidecarId: string): PanelLookups => ({
+        findPanel: (hint) => findPanel(sidecarId, hint),
+        openPanels: () => [...(panelsBySidecar.get(sidecarId) ?? [])].reverse(),
+        roomTitle: (phrase) => {
+          const key = exactRoomKey(phrase);
+          return key ? ROOMS[key]!.title : null;
+        },
+      });
 
-        const verb = (re: string): { action: WindowAction; roomHint?: string } | null => {
-          const m = new RegExp(`\\b${re}${roomTail}\\b`, 'i').exec(t);
-          if (!m) return null;
-          const hint = (m[1] || '').trim();
-          // Strip pronouns; only return as hint if it might be a real room name.
-          const pronoun = /^(it|that|the window|the panel)$/.test(hint);
-          return { action: 'maximized', roomHint: pronoun ? undefined : (hint || undefined) };
-        };
-
-        // Maximize / expand / fullscreen
-        const maxRes = verb('(?:expand|maximi[sz]e|enlarge|blow it up|go full ?screen|full ?screen)');
-        if (maxRes) return { ...maxRes, action: 'maximized' };
-        // "make it bigger / fullscreen" — different shape; match separately.
-        const makeBig = /\bmake\s+(?:it|that|the window)\s+(?:bigger|big|larger|huge|fullscreen|full ?screen)\b/.exec(t);
-        if (makeBig) return { action: 'maximized' };
-
-        // Minimize
-        const minRes = verb('(?:minimi[sz]e|hide(?: it| that)?|put it away|tuck it away|send it to (?:the )?taskbar)');
-        if (minRes) return { ...minRes, action: 'minimized' };
-
-        // Restore / shrink / normal
-        const restoreRes = verb('(?:restore|shrink|un ?maxim(?:i[sz]e)?|normalize|reset (?:the )?(?:window|size)|normal size)');
-        if (restoreRes) return { ...restoreRes, action: 'normal' };
-        const makeSmall = /\bmake\s+(?:it|that|the window)\s+(?:smaller|small|normal)\b/.exec(t);
-        if (makeSmall) return { action: 'normal' };
-
-        // Close (deictic — pronoun-anchored only). Plain "close <room>"
-        // stays in the open/close room path so the alias matcher there
-        // can drive title-vs-key selection cleanly.
-        if (/\b(close it|close that|close the window|close the panel|dismiss( it)?|shut it|kill it|get rid of it|throw it away)\b/.test(t)) {
-          return { action: 'close' };
-        }
-
-        // Focus / bring back
-        const focusRes = verb('(?:focus|raise|surface|bring it (?:back|forward|to the front)|show me the window)');
-        if (focusRes) return { ...focusRes, action: 'focus' };
-        if (/\bwhere did (?:it|the window) go\b/.test(t)) return { action: 'focus' };
-
-        return null;
-      };
-
-      const speakConfirmation = async (sidecarId: string, text: string, ctrl: { cancelled: boolean }) => {
-        await setState(sidecarId, 'speaking', text);
-        try { wsService.broadcastHeartbeat(text); } catch { /* ignore */ }
-        if (pebbleTTS && !ctrl.cancelled) {
-          try {
-            const audio = await pebbleTTS.synthesize(text);
-            await sidecarManager.dispatchRPC(sidecarId, 'pebble.play_audio', {
-              data: audio.toString('base64'),
-              mime_type: ttsMimeType(jarvisConfig.tts),
-              blocking: false,
-            });
-          } catch (err) {
-            console.warn('[ambient-ui] confirmation TTS failed:', err);
-          }
-        }
-        if (ctrl.cancelled) return;
-        await new Promise<void>(r => setTimeout(r, Math.max(800, text.length * 60)));
-        if (!ctrl.cancelled) await setState(sidecarId, 'idle', '');
-      };
+      // The one confirmation every fast path speaks; a cancelled turn leaves
+      // the pebble to whoever cancelled it (#964). See pebble-confirmation.ts.
+      const speakConfirmation = makeSpeakConfirmation({
+        setState,
+        heartbeat: (text) => wsService.broadcastHeartbeat(text),
+        synthesizer: () => {
+          const tts = pebbleTTS;
+          return tts ? (text) => tts.synthesize(text) : null;
+        },
+        play: async (sidecarId, audio) => {
+          await sidecarManager.dispatchRPC(sidecarId, 'pebble.play_audio', {
+            data: audio.toString('base64'),
+            mime_type: ttsMimeType(jarvisConfig.tts),
+            blocking: false,
+          });
+        },
+        hold: (ms) => new Promise<void>((r) => setTimeout(r, ms)),
+        warn: (message, err) => console.warn(message, err),
+      });
 
       // tryHandleSubPebbleCloseIntent — close one or more backgrounded
       // sub-agents by voice. Matches:
-      //   "close (this|that|the) background agent"     → most-recent
-      //   "close all background agents" / "close all"  → every active sub-pebble
-      //   "close the (amber|sage|...) one"             → close by color
-      //   "close the (research|legal|...) one"         → close by agent-name
-      //                                                  substring match
-      //   "dismiss / kill / get rid of" — same verbs
+      //   "close the background agent" / "the sub-agent" -> most-recent
+      //   "close all background agents"                -> every active sub-pebble
+      //   "close the (amber|sage|...) one"             -> close by color
+      //   "close the (research|legal|...) one|agent"   -> close by agent-name
+      //                                                   substring match
+      //   "dismiss / get rid of" -- same verbs
+      //   "cancel / kill" (or stop, abort, ...) -- never hides (#934): it
+      //     raises an approval card to stop the agent, and stops nothing
+      //     itself (#963)
+      // A bare "this"/"that" or "agents" no longer counts (#926); see
+      // planSubPebbleClose.
       // Returns true when handled (skips LLM).
       const tryHandleSubPebbleCloseIntent = async (
         sidecarId: string,
         userText: string,
         ctrl: { cancelled: boolean },
       ): Promise<boolean> => {
-        const t = userText.toLowerCase().trim();
-        // Cheap pre-filter — needs a close verb + a backgrounded-agent noun.
-        if (!/\b(close|dismiss|kill|get rid of|cancel)\b/.test(t)) return false;
-        if (!/\b(background|sub.?agent|sub.?pebble|agents?\b)/.test(t) && !/\b(this|that)\b/.test(t)) {
-          return false;
-        }
-
-        const list = panelsBySidecar; // not used here, but reference kept for parity
-        void list;
-
-        // Build the active sub-pebble list from the slot table.
+        // Build the active sub-pebble list from the slot table. The plan, and
+        // what an utterance must name before it may close one, lives in
+        // pebble-intents.ts (#926).
         const used = subPebbleSlots.get(sidecarId);
-        if (!used || used.size === 0) {
-          await speakConfirmation(sidecarId, "There are no background agents running.", ctrl);
+        let cands: SubPebbleCand[] | null = null;
+        if (used && used.size > 0) {
+          const tm = agentService.getTaskManager();
+          if (!tm) return false;
+          cands = [];
+          for (const [id, slot] of used.entries()) {
+            const task = tm.getTask(id);
+            if (!task) continue;
+            cands.push({ id, slot, color: colorForTask(id), agentName: task.agentName, running: task.status === 'running' });
+          }
+        }
+        const plan = planSubPebbleClose(userText, cands);
+        if (!plan) return false;
+        if (plan.kind === 'say') {
+          await speakConfirmation(sidecarId, plan.text, ctrl);
           return true;
         }
-        const tm = agentService.getTaskManager();
-        if (!tm) return false;
-
-        // Collect candidates: id + spawn order + color + agentName
-        type Cand = { id: string; slot: number; color: string; agentName: string };
-        const cands: Cand[] = [];
-        for (const [id, slot] of used.entries()) {
-          const task = tm.getTask(id);
-          if (!task) continue;
-          cands.push({ id, slot, color: colorForTask(id), agentName: task.agentName });
-        }
-        if (cands.length === 0) {
-          await speakConfirmation(sidecarId, "There are no background agents to close.", ctrl);
+        if (plan.kind === 'cancel') {
+          // Voice may stop a background agent only through a card (#963):
+          // one per running agent, raised at the stop sink, and nothing is
+          // stopped or hidden here. The card runs the same governed stop the
+          // dashboard and the model use once the person clicks it.
+          const tm = agentService.getTaskManager();
+          const orchestrator = agentService.getOrchestrator();
+          // Distinct cards: asking twice answers with the card already waiting.
+          const raised = new Set<string>();
+          let refusal: unknown = null;
+          for (const cand of plan.cands) {
+            const agentId = tm?.getTask(cand.id)?.agentId;
+            if (!agentId || !orchestrator.getAgent(agentId)) continue;
+            try {
+              // Pinned to the task the person named, so a late click cannot
+              // stop whatever the agent is doing by then.
+              raised.add(orchestrator.requestTerminationApproval(agentId, stopCall(agentId, cand.id)).id);
+            } catch (err) {
+              console.warn(`[sub-pebble] could not ask to stop ${cand.id}:`, err);
+              refusal = err;
+            }
+          }
+          const reply = raised.size > 0
+            ? cancelCardReply(plan.label, raised.size) + (refusal ? ` ${cancelRefusalReply(refusal)}` : '')
+            : refusal ? cancelRefusalReply(refusal) : 'That background agent is no longer running.';
+          await speakConfirmation(sidecarId, reply, ctrl);
           return true;
         }
+        if (!used) return false;
 
-        const closeOne = async (cand: Cand, label: string): Promise<void> => {
+        // Closing destroys the overlay only; the task keeps running, and the
+        // plan's reply says so (#934).
+        const closeOne = async (cand: SubPebbleCand, reply: string): Promise<void> => {
           try {
             await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.close', { id: cand.id });
             const closedSlot = used.get(cand.id);
@@ -2985,60 +2871,26 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                 if (slot > closedSlot) used.set(otherId, slot - 1);
               }
             }
-            await speakConfirmation(sidecarId, `Closed the ${label} background agent.`, ctrl);
+            await speakConfirmation(sidecarId, reply, ctrl);
           } catch (err) {
             console.warn(`[sub-pebble] close ${cand.id} failed:`, err);
-            await speakConfirmation(sidecarId, "I couldn't close that background agent.", ctrl);
+            await speakConfirmation(sidecarId, "I couldn't hide that background agent.", ctrl);
           }
         };
 
-        // "close all"
-        if (/\b(all|every|everything)\b/.test(t) && /\b(background|sub.?agent|agents?|sub.?pebble)/.test(t)) {
+        if (plan.kind === 'close_all') {
           try {
             await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.close_all', {});
             used.clear();
-            await speakConfirmation(sidecarId, `Closed all ${cands.length} background ${cands.length === 1 ? 'agent' : 'agents'}.`, ctrl);
+            await speakConfirmation(sidecarId, plan.reply, ctrl);
           } catch (err) {
             console.warn('[sub-pebble] close_all failed:', err);
-            await speakConfirmation(sidecarId, "I couldn't close them.", ctrl);
+            await speakConfirmation(sidecarId, "I couldn't hide them.", ctrl);
           }
           return true;
         }
-
-        // Color match — "close the amber one"
-        const colorWords = ['amber', 'sage', 'violet', 'mustard', 'teal', 'vermilion'];
-        for (const cw of colorWords) {
-          if (new RegExp(`\\b${cw}\\b`).test(t)) {
-            const match = cands.find(c => c.color === cw);
-            if (match) {
-              await closeOne(match, cw);
-              return true;
-            }
-          }
-        }
-
-        // Agent-name substring match — "close the research one" → matches
-        // "Research Analyst", "close the legal" → "Legal Advisor".
-        const m = /\bclose (?:the )?([a-z]+)(?:\s+one|\s+agent|\s+background|\s+sub.?agent)?/i.exec(t);
-        if (m && m[1]) {
-          const hint = m[1].toLowerCase();
-          const reserved = new Set(['this', 'that', 'the', 'a', 'an', 'background', 'all', 'every']);
-          if (!reserved.has(hint)) {
-            const match = cands.find(c => c.agentName.toLowerCase().includes(hint));
-            if (match) {
-              await closeOne(match, match.agentName.toLowerCase());
-              return true;
-            }
-          }
-        }
-
-        // "this" / "that" / "the background agent" — close most recent.
-        const newest = cands.slice().sort((a, b) => b.slot - a.slot)[0];
-        if (newest) {
-          await closeOne(newest, 'most recent');
-          return true;
-        }
-        return false;
+        await closeOne(plan.cand, plan.reply);
+        return true;
       };
 
       // Keyword routing table — each specialist id maps to phrases that
@@ -3103,12 +2955,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         userText: string,
         ctrl: { cancelled: boolean },
       ): Promise<boolean> => {
-        // Match the trigger phrase + capture everything after.
-        const re = /\b(?:in the background[,:]?\s*|background[,:]?\s+|spawn (?:a |an )?background\s+(?:agent|task)\s+(?:to\s+|that\s+)?)(.+)/i;
-        const m = re.exec(userText);
-        if (!m) return false;
-        const task = (m[1] ?? '').trim();
-        if (task.length < 3) return false;
+        // What counts as a background command lives in pebble-intents.ts
+        // (#926): a loose trigger here spawns an agent on a misheard task.
+        const task = parseBackgroundTask(userText);
+        if (!task) return false;
 
         const orchestrator = agentService.getOrchestrator();
         const taskManagerLocal = agentService.getTaskManager();
@@ -3147,14 +2997,17 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         }
         console.log(`[background-intent] routed task "${task.slice(0, 60)}…" → ${specialistId}`);
 
+        // The spawn sink gates this like every other path (#932): Pause/Kill,
+        // the engine, and a card when the spawn needs approval. No model and
+        // no gesture stands between the wake word and this call, so it must
+        // never be the way round a `requires_approval` setting.
         try {
-          const spawned = spawnPersistentAgent(deps, specialistId);
-          await assignPersistentAgentTask(deps, { agentId: spawned.agent.id, task, context: '' });
+          await startPersistentAgent(deps, { specialist: specialistId, task });
           await speakConfirmation(sidecarId, `Got it. Running in the background.`, ctrl);
           console.log(`[ambient-ui] background-intent: spawned ${specialistId} for "${task.slice(0, 60)}"`);
         } catch (err) {
           console.warn('[ambient-ui] background-intent dispatch failed:', err);
-          await speakConfirmation(sidecarId, "I couldn't start that background task.", ctrl);
+          await speakConfirmation(sidecarId, backgroundRefusalReply(err), ctrl);
         }
         return true;
       };
@@ -3175,17 +3028,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // ("expand it") or named ("expand the workflows window") — the
         // parser surfaces an optional `roomHint` we resolve via the
         // alias table, falling back to the most-recently-spawned panel.
-        const parsed = tryParseWindowAction(lower);
-        if (parsed) {
-          const { action, roomHint } = parsed;
-          const target = findPanel(sidecarId, roomHint);
-          if (!target) {
-            const reason = roomHint
-              ? `I don't see a ${roomHint} window open.`
-              : "There's no window open to do that with.";
-            await speakConfirmation(sidecarId, reason, ctrl);
-            return true;
-          }
+        // When the phrase may claim the turn lives in pebble-intents.ts (#926).
+        const windowPlan = planWindowAction(lower, panelLookups(sidecarId));
+        if (windowPlan?.kind === 'say') {
+          await speakConfirmation(sidecarId, windowPlan.text, ctrl);
+          return true;
+        }
+        if (windowPlan) {
+          const { action, target, roomHint } = windowPlan;
           console.log(`[ambient-ui] window-action intent: ${action} on ${target.title} (id=${target.id}${roomHint ? `, hint="${roomHint}"` : ''})`);
           try {
             if (action === 'close') {
@@ -3233,13 +3083,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         const tail = m[2];
         if (!tail) return false;
 
-        let key: string | null = null;
-        for (const { alias, key: roomKey } of orderedAliases) {
-          // Word-boundary match against the captured tail so "open settings page"
-          // matches "settings" cleanly without grabbing the trailing words.
-          const aliasRe = new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\b`);
-          if (aliasRe.test(tail)) { key = roomKey; break; }
-        }
+        // Word-boundary match against the captured tail, longest alias first,
+        // so "open settings page" matches "settings" cleanly without grabbing
+        // the trailing words. findRoomKey escapes each alias properly; the
+        // copy that lived here did not (#933).
+        const key = findRoomKey(tail);
         if (!key) return false;
 
         const meta = ROOMS[key]!;
@@ -3247,7 +3095,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         console.log(`[ambient-ui] panel intent: ${roomAction} ${key} (matched "${m[0]}")`);
 
         // Speak the confirmation through the queue-based TTS path so the
-        // user hears feedback even before the window finishes spawning.
+        // user hears feedback even before the window finishes spawning. A turn
+        // already cancelled is left to whoever cancelled it (#964).
+        if (ctrl.cancelled) return true;
         await setState(sidecarId, 'thinking', '');
         try { wsService.broadcastHeartbeat(confirm); } catch { /* ignore */ }
 
@@ -3290,27 +3140,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           }
         }
 
-        if (ctrl.cancelled) return true;
-
-        // Speak the confirmation (single sentence, fits in one TTS clip).
-        if (pebbleTTS) {
-          try {
-            const audio = await pebbleTTS.synthesize(confirm);
-            await sidecarManager.dispatchRPC(sidecarId, 'pebble.play_audio', {
-              data: audio.toString('base64'),
-              mime_type: ttsMimeType(jarvisConfig.tts),
-              blocking: false,
-            });
-          } catch (err) {
-            console.warn('[ambient-ui] panel-intent TTS failed:', err);
-          }
-        }
-        await setState(sidecarId, 'speaking', confirm);
-        // Hold speaking just long enough for the short confirmation to play.
-        const holdMs = Math.max(800, confirm.length * 60);
-        await new Promise<void>(r => setTimeout(r, holdMs));
-        if (ctrl.cancelled) return true;
-        await setState(sidecarId, 'idle', '');
+        // Speak the confirmation (single sentence, fits in one TTS clip). This
+        // was its own copy, which set `speaking` after the clip was synthesized
+        // without looking at the flag again, so a turn cancelled meanwhile was
+        // left in `speaking` (#964). The confirm was already broadcast above, so
+        // no second heartbeat.
+        await speakConfirmation(sidecarId, confirm, ctrl, { heartbeat: false });
         return true;
       };
 
@@ -4739,6 +4574,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Approve/Deny to ordinary actions and gave irreversible ones "Review in
     // Jarvis" only; the founder opted to allow Approve/Deny on every approval
     // notification (the impact still shows in the body's meta as a risk cue).
+    // Since #791 a toast too long to read whole is review-only whatever its
+    // impact (approvalToast, TOAST_APPROVABLE_MAX_COLUMNS).
     // All four reasons are wired: approval, done (an approved action finished),
     // sidecar-offline, and update (a connecting sidecar that is behind and
     // cannot update itself; see the onSidecarConnected handler below).
@@ -4760,26 +4597,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           if (notifiedApprovalIds.has(req.id)) continue;
           notifiedApprovalIds.add(req.id);
           if (Date.now() - req.created_at > 60_000) continue; // skip the backlog
-          // Product call (founder): Approve/Deny on every approval notification,
-          // including irreversible ones — the review-only candor exception is
-          // dropped. The impact still rides along in `meta` ("destructive ·
-          // delete_data") so the toast reads the risk even when it's approvable.
-          const impact = impactFromCategory(req.action_category);
-          // Reduced like the channel card (#696): `reason` can be the model's
-          // own request_approval intent, and this toast has an Approve button.
-          const text = approvalNotificationText(req);
-          notifyAll({
-            id: req.id,
-            kind: 'approval',
-            title: text.title,
-            body: text.body,
-            meta: `${impact} · ${boundedApprovalLabel(req.tool_name, APPROVAL_LABEL_DELIVERY_MAX_CHARS)}`,
-            destructive: impact === 'destructive',
-            actions: [
-              { id: 'deny', label: 'Deny' },
-              { id: 'approve', label: 'Approve', primary: true },
-            ],
-          });
+          // Product call (founder): Approve/Deny on approval notifications,
+          // including irreversible ones; the impact rides along in `meta`
+          // ("destructive · delete_data") so the toast reads the risk. Since
+          // #791 only when the toast can show what is being approved: above
+          // TOAST_APPROVABLE_MAX_COLUMNS it is review-only (approvalToast).
+          const { approvable: _approvable, ...toast } = approvalToast(req);
+          notifyAll(toast);
         }
         if (notifiedApprovalIds.size > 200) {
           const pending = new Set(approvalManager.getPending().map((r) => r.id));
@@ -4802,7 +4626,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             id: `done:${req.id}`,
             kind: 'done',
             title: 'Task complete',
-            body: boundedApprovalLabel(req.reason?.trim() ?? '', APPROVAL_LABEL_DELIVERY_MAX_CHARS) || `${trayHumanizeTool(req.tool_name)} finished.`,
+            // What it did, not why it needed approval (#813).
+            body: taskCompleteBody(req) || `${trayHumanizeTool(req.tool_name)} finished.`,
             actions: [
               { id: 'view', label: 'View', primary: true },
               { id: 'dismiss', label: 'Dismiss' },
@@ -4898,12 +4723,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // are handled sidecar-side (it opened the app) so there's nothing to do here.
     sidecarManager.onEvent((_sidecarId, event) => {
       if (event.event_type !== 'notify.action') return;
-      const p = (event.payload ?? {}) as { id?: string; kind?: string; action?: string };
-      if (p.kind === 'approval' && p.id && (p.action === 'approve' || p.action === 'deny')) {
-        const { id, action } = p;
-        void applyApprovalDecision(action, id, 'notification', { approvalManager, deferredExecutor, wsService })
-          .catch((err) => console.error('[Daemon] notification approval decision failed:', err));
-      }
+      void notificationApprovalDecision(event.payload, { approvalManager, deferredExecutor, wsService })
+        .catch((err) => console.error('[Daemon] notification approval decision failed:', err));
     });
 
     // Wire authority engine into orchestrator
@@ -4934,17 +4755,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Note: toolRegistry set after startAll() below
 
     // Wire channel approval handler
-    channelService.setApprovalHandler(async (action, shortId, channel) => {
-      const request = approvalManager.findByShortId(shortId);
-      if (!request) return `No pending approval found for ID ${shortId}`;
-
-      const outcome = await applyApprovalDecision(action, request.id, channel, { approvalManager, deferredExecutor, wsService });
-      if (outcome.status === 'already_decided') return 'Request already decided';
-      if (outcome.status === 'denied') return `Denied: ${request.tool_name}`;
-      if (outcome.executed) return `Approved and executed. Result: ${outcome.result.slice(0, 200)}`;
-      if (outcome.error) return `Approved, but execution failed: ${outcome.error.slice(0, 200)}`;
-      return 'Approved. The agent will continue and report back in chat.';
-    });
+    channelService.setApprovalHandler((action, shortId, channel) =>
+      channelApprovalReply(action, shortId, channel, { approvalManager, deferredExecutor, wsService }));
 
     console.log(`[Daemon] Authority engine initialized (governed: ${authorityEngine.getConfig().governed_categories.join(', ')})`);
 

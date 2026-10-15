@@ -17,6 +17,9 @@ export type WSMessage = {
       // send `interview_listen`; the daemon answers `interview_listen_state`
       // with reason 'text-only' so it stops waiting on a microphone.
       | 'interview_listen' | 'interview_listen_stop' | 'interview_listen_state'
+      // A native panel's answer to a room_action that carried a resultId:
+      // { resultId, accepted }. See src/daemon/room-action-results.ts.
+      | 'room_action_result'
       | 'thinking_start' | 'thinking_end'
       | 'workflow_event'
       | 'goal_event'
@@ -61,10 +64,6 @@ export type WSMessage = {
       // (needs_input) are NOT emitted as task_event - the conv LLM handles
       // them by asking the user via the regular chat stream.
       | 'task_event'
-      // Emitted when a pending voice confirmation (clarifier / repeat-back)
-      // expires from the server-side TTL sweep. Payload: { id: string }.
-      // Clients should dismiss the corresponding card from their UI.
-      | 'voice_confirmation_expired'
       // Emitted after DB-backed settings are hot-applied to the running
       // daemon (per-section apply or POST /api/config/reload / SIGHUP).
       // Payload: { sections: string[], ok: boolean, errors?: { section, error }[] }
@@ -782,12 +781,16 @@ export class WebSocketServer {
     this.broadcastWithReceipt(message);
   }
 
-  /** Number of sockets accepting the frame, including queued backpressure. Not a read receipt. */
-  broadcastWithReceipt(message: WSMessage): number {
+  /**
+   * Number of sockets accepting the frame, including queued backpressure. Not a
+   * read receipt. `except` is left out: the caller sends it its own copy.
+   */
+  broadcastWithReceipt(message: WSMessage, except?: ServerWebSocket<unknown>): number {
     const payload = JSON.stringify(message);
     let sent = 0;
 
     for (const client of this.clients) {
+      if (client === except) continue;
       try {
         if (client.send(payload) !== 0) sent++;
       } catch (error) {
@@ -796,7 +799,7 @@ export class WebSocketServer {
     }
 
     // Only log errors or when no clients received the message
-    if (sent === 0 && this.clients.size > 0) {
+    if (sent === 0 && this.clients.size > (except && this.clients.has(except) ? 1 : 0)) {
       console.warn(`[WebSocketServer] Broadcast failed: 0/${this.clients.size} clients received message`);
     }
     return sent;
@@ -812,12 +815,14 @@ export class WebSocketServer {
 
   /**
    * Unicast a JSON message to a specific client (e.g. tts_start/tts_end signals).
+   * True when the socket accepted the frame (as broadcastWithReceipt counts it).
    */
-  sendToClient(ws: ServerWebSocket<unknown>, message: WSMessage): void {
+  sendToClient(ws: ServerWebSocket<unknown>, message: WSMessage): boolean {
     try {
-      ws.send(JSON.stringify(message));
+      return ws.send(JSON.stringify(message)) !== 0;
     } catch (error) {
       console.error('[WebSocketServer] Error unicasting to client:', error);
+      return false;
     }
   }
 

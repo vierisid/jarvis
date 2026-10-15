@@ -628,6 +628,27 @@ Its validator accepts `PIECE`, `LOOP_ON_ITEMS` and `ROUTER` for action steps
 and nothing else, so the LLM path produces CODE-free flows and the gate is
 never in the composer's way.
 
+### A CODE step imports only what its package.json declares (#837)
+
+A CODE step used to `require()` any package at all: with no `node_modules`
+above the step, Bun auto-installed the name from the npm registry at its
+latest version and ran it. Now:
+
+- Only the `dependencies` field of the step's `package.json` is read. Each
+  entry must be a registry version, range or dist-tag (`1.2.3`, `^4.0.0`,
+  `>=1 <2`, `latest`). `file:`, `link:`, `workspace:`, `npm:` aliases, git,
+  URL, GitHub `user/repo`, folder (`.`, `..`) and local tarball specs are
+  refused, and so is a manifest that is not valid JSON. Readiness reports a
+  refused manifest on the step when the flow is saved.
+- Before the run, the daemon installs exactly those dependencies beside the
+  step from a manifest it writes itself (the step's own `scripts`,
+  `overrides` or `workspaces` never reach the install), with
+  `--ignore-scripts` and a 5 minute limit. One install runs at a time.
+- The step itself runs with `--no-install`. Requiring a package the manifest
+  does not declare fails the step with
+  `CODE step requires package "<name>", which its package.json does not declare`.
+  Nothing is fetched at run time.
+
 ### `{{ ... }}` expressions are data, not JavaScript
 
 The vendored engine's expression evaluator used `Function(...)`, so any inline

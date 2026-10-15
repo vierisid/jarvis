@@ -51,23 +51,23 @@ describe('gateContext and the approval helpers', () => {
     const ctx = gateContext(gate, 'record_skill', { action: 'start' });
     expect(JSON.parse(ctx)).toEqual({ intent: 'Start recording a skill', confirm: 'always' });
     expect(approvalNeedsClick({ context: ctx })).toBe(true);
-    expect(approvalIntentFromContext({ context: ctx })).toBe('Start recording a skill');
+    expect(approvalIntentFromContext({ tool_name: 'x', context: ctx })).toBe('Start recording a skill');
   });
 
   test('an above_level gate is not click-only', () => {
     const gate = resolveToolGate(tool('run_skill', { authorityGate: () => ({ actionCategory: 'send_email', intent: 'Run skill', confirm: 'above_level' }) }), 'run_skill', {});
     const ctx = gateContext(gate, 'run_skill', {});
     expect(approvalNeedsClick({ context: ctx })).toBe(false);
-    expect(approvalIntentFromContext({ context: ctx })).toBe('Run skill');
+    expect(approvalIntentFromContext({ tool_name: 'x', context: ctx })).toBe('Run skill');
   });
 
   test('an ungated call keeps the plain context and neither helper fires', () => {
     const ctx = gateContext(resolveToolGate(tool('read_file'), 'read_file', { path: '/tmp/a' }), 'read_file', { path: '/tmp/a' });
     expect(ctx.startsWith('Agent attempted: read_file(')).toBe(true);
     expect(approvalNeedsClick({ context: ctx })).toBe(false);
-    expect(approvalIntentFromContext({ context: ctx })).toBeNull();
+    expect(approvalIntentFromContext({ tool_name: 'x', context: ctx })).toBeNull();
     expect(approvalNeedsClick({ context: '{not json' })).toBe(false);
-    expect(approvalIntentFromContext({ context: '{"target":{"to":"x"}}' })).toBeNull();
+    expect(approvalIntentFromContext({ tool_name: 'x', context: '{"target":{"to":"x"}}' })).toBeNull();
   });
 });
 

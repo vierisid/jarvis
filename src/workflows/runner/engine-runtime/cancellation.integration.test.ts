@@ -27,6 +27,7 @@ const skipE2eTests = (initialCached === null || !piecesAlreadyBuilt) && !buildOp
 
 describe("Engine cancellation (real engine)", () => {
   let bundlePath: string | null = null;
+  let expectedDigest: string | null = null;
 
   beforeAll(async () => {
     let cached = initialCached;
@@ -34,6 +35,7 @@ describe("Engine cancellation (real engine)", () => {
     if (!cached) return;
     if (buildOptIn) await buildAllJarvisPieces();
     bundlePath = cached.bundlePath;
+    expectedDigest = cached.digest;
   });
 
   test.skipIf(skipE2eTests)("real engine stops after cancellation while daemon work is in flight", async () => {
@@ -48,7 +50,7 @@ describe("Engine cancellation (real engine)", () => {
       llmChat: async () => { entered(); await pending; return { text: "late answer" }; },
     } });
     await api.start({ port: 0 });
-    const runtime = new EngineRuntime({ api, bundlePath: bundlePath!, pool: true });
+    const runtime = new EngineRuntime({ api, bundlePath: bundlePath!, expectedDigest, pool: true });
     const action = (name: string, piece: string, actionName: string, input: Record<string, unknown>, nextAction?: FlowTriggerNode): FlowTriggerNode => ({
       name, type: "PIECE", displayName: name,
       settings: { pieceName: `@jarvispieces/piece-jarvis-${piece}`, pieceVersion: "0.0.1", actionName, input },

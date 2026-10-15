@@ -24,7 +24,7 @@ type NotifyAction struct {
 
 type Notification struct {
 	ID          string // approval id, or a synthetic id for done/sidecar/update
-	Kind        string // approval | done | sidecar | update | usage
+	Kind        string // approval | approval_review | done | sidecar | update | usage
 	Title       string
 	Body        string
 	Meta        string // e.g. "external · send_email" (shown inline on Windows)

@@ -289,6 +289,35 @@ export function createSchema(db: Database): void {
   db.exec("PRAGMA foreign_keys=ON");
   for (const stmt of STATEMENTS) db.exec(stmt);
   applyAdditiveColumnMigrations(db);
+  backfillRunProjects(db);
+}
+
+/**
+ * Put every run in its flow's project (#843).
+ *
+ * Before #843 `createFlowRun` wrote `DEFAULT_IDS.project` into
+ * `flow_run.project_id` whatever project the flow was in, and that column is
+ * what a run's engine token is minted from on every start AND every resume
+ * (`engine-flow-executor.ts`), so an old run of another project's flow would
+ * keep resuming with the default project's store and connections. #843 fixed
+ * the writer; this fixes the rows it wrote.
+ *
+ * Safe for a run that is PAUSED mid-flight, which is the case that matters: a
+ * resume mints a fresh token from the column as it is then, `effect-context`
+ * and the machine binding compare that token with the same column, an
+ * existing effect record is matched on its digests and never on its
+ * `projectId`, and `waitpoint.project_id` has no reader. It runs here, at
+ * boot, before any engine can hold a token. Data only, no DDL, and harmless
+ * to roll back from: older code reads this column only to mint tokens, and the
+ * flow's project is the right value for that too.
+ *
+ * Idempotent, and a no-op for a store that only ever had one project, which
+ * is every store today. Measured on an in-memory store with every row already
+ * matching: 1.1 ms for 10k runs, 11 ms for 100k, 73 ms for 500k (median of 5).
+ */
+function backfillRunProjects(db: Database): void {
+  db.run(`UPDATE flow_run SET project_id = (SELECT f.project_id FROM flow f WHERE f.id = flow_run.flow_id)
+    WHERE project_id <> (SELECT f.project_id FROM flow f WHERE f.id = flow_run.flow_id)`);
 }
 
 /**

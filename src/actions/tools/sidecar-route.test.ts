@@ -7,6 +7,7 @@ import { routeToSidecarAction } from './sidecar-route.ts';
 import { DESKTOP_TOOLS } from './desktop.ts';
 import { SidecarRPCError } from '../../sidecar/rpc.ts';
 import { captureScreenTool } from './builtin.ts';
+import { withMachineScope, type MachineScope } from '../machine-scope.ts';
 import { isToolResult, type ToolResult } from './registry.ts';
 
 const mac: SidecarInfo = {
@@ -97,6 +98,31 @@ describe('typed desktop outcomes', () => {
     }));
     await expect(routeToSidecarAction(mac.id, 'click_element', { element_id: 3 }, 'desktop')).rejects.toMatchObject({
       outcome: { status: 'error', code: 'DESKTOP_STALE_ELEMENT', effect: 'not_started' },
+    });
+  });
+
+  test('a click refused because another window covers the element is not started (#705)', async () => {
+    // sidecar/desktop_linux.go and uia_actions_windows.go check the window under
+    // the element's centre before any button goes down.
+    setSidecarManagerRef(stubManager([mac], async () => {
+      throw new SidecarRPCError('DESKTOP_TARGET_OBSCURED',
+        'element [3] is covered by a window of another program (pid 9999, not 4242) at its centre (40, 50), so nothing was clicked.');
+    }));
+    await expect(routeToSidecarAction(mac.id, 'click_element', { element_id: 3 }, 'desktop')).rejects.toMatchObject({
+      outcome: { status: 'error', code: 'DESKTOP_TARGET_OBSCURED', effect: 'not_started' },
+    });
+  });
+
+  test('a reviewed browser action refused for a superseded snapshot is not started (#676)', async () => {
+    // sidecar/browser_snapshot.go's refuseStaleElement sends
+    // BROWSER_SNAPSHOT_SUPERSEDED before its first CDP command
+    // (browser_elem_gen_test.go pins that nothing reached the browser).
+    setSidecarManagerRef(stubManager([{ ...mac, capabilities: ['browser'] }], async () => {
+      throw new SidecarRPCError('BROWSER_SNAPSHOT_SUPERSEDED',
+        'element [3] was reviewed against a browser snapshot that has since been replaced or dropped, so nothing was done.');
+    }));
+    await expect(routeToSidecarAction(mac.id, 'browser_click', { element_id: 3 }, 'browser')).rejects.toMatchObject({
+      outcome: { status: 'error', code: 'BROWSER_SNAPSHOT_SUPERSEDED', effect: 'not_started' },
     });
   });
 
@@ -596,6 +622,50 @@ describe("resolveToolTarget", () => {
     expect(lines[0]).toContain("auto");
     expect(lines[1]).toContain("desktop_screenshot -> local stack");
   });
+
+  // #675: `quiet` is for callers that resolve only to compare routes. It must
+  // drop the line and change nothing else, and the default must stay loud --
+  // this function is on the path of every desktop_* and browser_* tool.
+  test("quiet resolves identically and drops only the line; the default still logs", () => {
+    setSidecarManagerRef(stubManager([pc]));
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => {
+      lines.push(args.join(" "));
+    };
+    let loud: string | null = null;
+    let quiet: string | null = null;
+    let quietLocal: string | null = "unset";
+    try {
+      quiet = resolveToolTarget(undefined, "browser", "browser_click", { quiet: true });
+      quietLocal = resolveToolTarget(undefined, "screenshot", "desktop_screenshot", { quiet: true });
+      expect(lines).toEqual([]);
+      loud = resolveToolTarget(undefined, "browser", "browser_click", {});
+      resolveToolTarget(undefined, "browser", "browser_click", { quiet: false });
+    } finally {
+      console.log = original;
+    }
+    expect(quiet).toBe("sc-pc");
+    expect(loud).toBe("sc-pc");
+    expect(quietLocal).toBeNull();
+    expect(lines.length).toBe(2);
+    expect(lines.every((l) => l.includes("browser_click -> sidecar stack"))).toBe(true);
+  });
+
+  // Quiet must not skip the machine scope's fence: `browserCallGuard` relies on
+  // a refused dispatch THROWING out of its quiet resolution so it can fail the
+  // approval closed. An early return placed above `assertDispatch` would turn
+  // that refusal into a silently approvable route.
+  test("a quiet resolution still runs the machine scope's fence", () => {
+    setSidecarManagerRef(stubManager([pc]));
+    const refusing: MachineScope = {
+      resolveTarget: (explicit) => (typeof explicit === "string" ? explicit : null),
+      assertDispatch: () => { throw new Error("outside this run's machine"); },
+      binding: () => null,
+    };
+    expect(() => withMachineScope(refusing, () =>
+      resolveToolTarget("sc-pc", "browser", "browser_click", { quiet: true }))).toThrow("outside this run's machine");
+  });
 });
 
 /**
@@ -639,6 +709,26 @@ describe('a routed screenshot delivers an image (#658)', () => {
     const out = await captureScreenTool.execute({ target: shooter.id }) as ToolResult;
     expect(out.content[0]).toEqual({ type: 'text', text: 'Screenshot captured.' });
     expect(out.content[1]).toMatchObject({ type: 'image' });
+  });
+
+  // #710: the sidecar's capture_screen has no window capture, so a routed
+  // desktop_screenshot({pid}) used to come back as the WHOLE desktop with
+  // nothing saying so. Refused before anything is captured instead: the other
+  // windows' pixels never leave the machine on a request that named one window.
+  test('a routed desktop_screenshot with a pid is refused before any capture', async () => {
+    let calls = 0;
+    setSidecarManagerRef(stubManager([shooter], async () => { calls++; return reply({ type: 'inline', mime_type: 'image/png', data: PIXELS }); }));
+    // pid 0 too, so a later `if (params.pid)` cannot reopen this.
+    for (const pid of [4242, 0]) {
+      const err = await rejection(() => screenshotTools()[0]!.execute({ target: shooter.id, pid }));
+      expect(err.outcome).toMatchObject({ status: 'blocked', code: 'SCREENSHOT_WINDOW_UNSUPPORTED', effect: 'not_started' });
+      expect(err.message).toContain('without pid');
+    }
+    expect(calls).toBe(0);
+    // Without a pid it is the ordinary whole-desktop capture.
+    const out = await screenshotTools()[0]!.execute({ target: shooter.id }) as ToolResult;
+    expect(out.content[1]).toMatchObject({ type: 'image' });
+    expect(calls).toBe(1);
   });
 
   // A raw PNG of a large display can pass guardImageSize's 5 MB cap, and the
@@ -707,6 +797,36 @@ describe('a routed screenshot delivers an image (#658)', () => {
           { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PIXELS } },
         ],
       });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // #711: the same local branch with a capture over the cap. A raw PNG used
+  // to go out as-is and reach the model as `[Image too large...]`.
+  test.skipIf(process.platform !== 'linux')('capture_screen without a sidecar compacts an over-cap capture', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const { encodePng, noiseRgbRows } = await import('../app-control/fixtures/png.ts');
+    const dir = mkdtempSync(join(tmpdir(), 'jarvis-fake-scrot-'));
+    try {
+      const png = join(dir, 'shot.png');
+      const bytes = encodePng(2000, 1000, 2, 8, noiseRgbRows(2000, 1000));
+      expect(bytes.toString('base64').length).toBeGreaterThan(5 * 1024 * 1024);
+      writeFileSync(png, bytes);
+      writeFileSync(join(dir, 'scrot'), `#!/bin/sh\nexec /bin/cp '${png}' "$1"\n`, { mode: 0o755 });
+      const builtin = new URL('./builtin.ts', import.meta.url).pathname;
+      const script = `const { captureScreenTool } = await import(${JSON.stringify(builtin)});\n`
+        + `process.stdout.write(JSON.stringify(await captureScreenTool.execute({})));`;
+      const child = Bun.spawnSync(['bun', '-e', script], {
+        env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+      });
+      expect({ exitCode: child.exitCode, stderr: child.stderr.toString() }).toMatchObject({ exitCode: 0 });
+      const out = JSON.parse(child.stdout.toString());
+      expect(out.content[0]).toEqual({ type: 'text', text: 'Screenshot captured (1600x800, downscaled from 2000x1000 to fit).' });
+      expect(out.content[1].source.media_type).toBe('image/jpeg');
+      expect(out.content[1].source.data.length).toBeLessThanOrEqual(5 * 1024 * 1024);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

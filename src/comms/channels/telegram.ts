@@ -1,4 +1,5 @@
 import type { STTProvider } from '../voice.ts';
+import { telegramAllowList, type AllowList } from './allow-list.ts';
 
 export type ChannelMessage = {
   id: string;
@@ -7,15 +8,36 @@ export type ChannelMessage = {
   text: string;
   timestamp: number;
   metadata: Record<string, unknown>;
+  /**
+   * True only when the channel's `allowed_users` list is non-empty and names
+   * this sender (#811). An empty list admits everyone, which is a convenience
+   * for chatting and the wrong default for deciding an approval, so
+   * `approve <id>` and `deny <id>` replies are refused unless this is true.
+   * Absent means false: an adapter that does not say is not trusted to decide.
+   */
+  senderAllowListed?: boolean;
 };
 
 export type ChannelHandler = (message: ChannelMessage) => Promise<string>;
+
+/**
+ * How a message is rendered. By default a channel renders its own markup
+ * (Telegram Markdown, Discord markdown), which is what a chat reply wants.
+ *
+ * `literal` is for text a person must read exactly as written before acting
+ * on it -- the approval card (#718). The channel shows every character as
+ * sent: no markup is interpreted (a `[text](url)` no longer shows only its
+ * text, a `||spoiler||` no longer hides a clause, `_`/`*` pairs no longer
+ * vanish), no mention notifies or renders as a name, and no link preview is
+ * attached, since a preview shows text the linked page chose beside the card.
+ */
+export type SendOptions = { literal?: boolean };
 
 export interface ChannelAdapter {
   name: string;
   connect(): Promise<void>;
   disconnect(): Promise<void>;
-  sendMessage(to: string, text: string): Promise<void>;
+  sendMessage(to: string, text: string, options?: SendOptions): Promise<void>;
   onMessage(handler: ChannelHandler): void;
   isConnected(): boolean;
 }
@@ -53,16 +75,35 @@ export function telegramErrorFromResponse(status: number, body: unknown): Telegr
   return new TelegramSendError(`Telegram API error: ${description}`, { status });
 }
 
+/**
+ * The `sendMessage` body. Literal text omits `parse_mode`, which is the only
+ * way to stop Telegram interpreting markup: with no `parse_mode` it shows the
+ * text exactly as sent, so there is nothing to escape. Link previews are off
+ * for it too (`link_preview_options`, Bot API 7.0).
+ */
+export function telegramSendBody(chatId: string, text: string, options?: SendOptions): Record<string, unknown> {
+  return options?.literal
+    ? { chat_id: chatId, text, link_preview_options: { is_disabled: true } }
+    : { chat_id: chatId, text, parse_mode: 'Markdown' };
+}
+
 type TelegramUpdate = {
   update_id: number;
   message?: {
     message_id: number;
-    from: {
+    /**
+     * Optional in the Bot API. For a message sent on behalf of a chat it is a
+     * placeholder shared by every such sender (`GroupAnonymousBot`,
+     * `Channel_Bot`), never the person (#885).
+     */
+    from?: {
       id: number;
       first_name: string;
       last_name?: string;
       username?: string;
     };
+    /** Set when the message was sent on behalf of a chat: an anonymous group admin, or a channel (#885). */
+    sender_chat?: { id: number; type: string; title?: string };
     chat: {
       id: number;
       type: string;
@@ -96,17 +137,44 @@ export class TelegramAdapter implements ChannelAdapter {
   private token: string;
   private handler: ChannelHandler | null = null;
   private polling: boolean = false;
+  /**
+   * The next `getUpdates` offset. Telegram confirms an update only when a
+   * later call passes an offset above it, so this is also what decides which
+   * updates are delivered again.
+   */
   private offset: number = 0;
+  /** The long poll in flight, aborted by disconnect() (#882). */
+  private pollAbort: AbortController | null = null;
+  /** Told each update id as this adapter starts handling it (#882). */
+  private onUpdateTaken: ((updateId: number) => void) | null = null;
   private baseUrl: string;
   private pollingInterval: number = 1000;
   private sttProvider: STTProvider | null = null;
-  private allowedUsers: number[];
+  /** Parsed, never the raw setting: a string there was a substring match (#883). */
+  private allowList: AllowList<number>;
 
-  constructor(token: string, opts?: { sttProvider?: STTProvider; allowedUsers?: number[] }) {
+  /**
+   * `startOffset` (#882): the first update id this adapter may handle. A new
+   * adapter used to start at 0, and Telegram had not been told the old one
+   * took the update it was in the middle of (that is only said by the NEXT
+   * call), so a settings save re-ran that update: the same message answered,
+   * or the same action requested, twice. The channel service passes one past
+   * the last update an adapter took, reported through `onUpdateTaken`.
+   */
+  constructor(token: string, opts?: {
+    sttProvider?: STTProvider;
+    allowedUsers?: unknown;
+    startOffset?: number;
+    onUpdateTaken?: (updateId: number) => void;
+  }) {
     this.token = token;
     this.baseUrl = `https://api.telegram.org/bot${token}`;
     this.sttProvider = opts?.sttProvider ?? null;
-    this.allowedUsers = opts?.allowedUsers ?? [];
+    this.allowList = telegramAllowList(opts?.allowedUsers);
+    if (opts?.startOffset !== undefined && Number.isSafeInteger(opts.startOffset) && opts.startOffset > 0) {
+      this.offset = opts.startOffset;
+    }
+    this.onUpdateTaken = opts?.onUpdateTaken ?? null;
   }
 
   setSTTProvider(provider: STTProvider): void {
@@ -143,10 +211,16 @@ export class TelegramAdapter implements ChannelAdapter {
 
   async disconnect(): Promise<void> {
     this.polling = false;
+    // Abort the long poll rather than leave it running for up to 30s (#882).
+    // Whatever it would have returned is unconfirmed, so Telegram hands it to
+    // the next adapter; left running, it could land after the new adapter's
+    // first poll and be dropped here only by the check in startPolling.
+    this.pollAbort?.abort();
+    this.pollAbort = null;
     console.log('[TelegramAdapter] Disconnected');
   }
 
-  async sendMessage(chatId: string, text: string): Promise<void> {
+  async sendMessage(chatId: string, text: string, options?: SendOptions): Promise<void> {
     // Telegram has a 4096 char limit per message
     const chunks = splitText(text, 4096);
     for (let i = 0; i < chunks.length; i++) {
@@ -155,11 +229,7 @@ export class TelegramAdapter implements ChannelAdapter {
         const response = await fetchWithTimeout(`${this.baseUrl}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: chatId,
-            text: chunk,
-            parse_mode: 'Markdown',
-          }),
+          body: JSON.stringify(telegramSendBody(chatId, chunk, options)),
         }, 15_000);
 
         // A proxy/outage 5xx can carry a non-JSON body; map it through the
@@ -168,7 +238,7 @@ export class TelegramAdapter implements ChannelAdapter {
 
         if (!data?.ok) {
           // Retry without Markdown if parsing failed
-          if (data?.description?.includes('parse')) {
+          if (!options?.literal && data?.description?.includes('parse')) {
             const fallback = await fetchWithTimeout(`${this.baseUrl}/sendMessage`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -210,12 +280,31 @@ export class TelegramAdapter implements ChannelAdapter {
         const updates = await this.getUpdates();
 
         for (const update of updates) {
+          // A long poll outlives disconnect() by up to its 30s timeout, and a
+          // settings save disconnects this adapter and builds a new one with
+          // the new allow-list (#860). A batch that lands afterwards belongs
+          // to the new adapter: handled here, it would be judged against the
+          // OLD list, so a user just removed from it could still approve.
+          // Left unhandled it is never confirmed (the offset only advances on
+          // the next call), so Telegram hands it to the new adapter instead.
+          if (!this.polling) break;
+          // Taken from here on: the next adapter must not handle it again,
+          // even though it is still being answered (#882). Only updates
+          // reached HERE count, never the poll offset, which also covers the
+          // updates the check above just left for the new adapter.
+          try {
+            this.onUpdateTaken?.(update.update_id);
+          } catch (err) {
+            console.error('[TelegramAdapter] onUpdateTaken threw:', err);
+          }
           await this.processUpdate(update);
         }
       } catch (error) {
-        console.error('[TelegramAdapter] Polling error:', error);
+        // An aborted poll is disconnect() doing its job, not an error.
+        if (this.polling) console.error('[TelegramAdapter] Polling error:', error);
       }
 
+      if (!this.polling) break;
       await new Promise(resolve => setTimeout(resolve, this.pollingInterval));
     }
 
@@ -225,17 +314,25 @@ export class TelegramAdapter implements ChannelAdapter {
   private async getUpdates(): Promise<TelegramUpdate[]> {
     // Bound: server long-poll `timeout: 30` + ~5s slack. If the body's
     // `timeout` value changes, raise this bound to match.
-    const response = await fetchWithTimeout(`${this.baseUrl}/getUpdates`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        offset: this.offset,
-        timeout: 30,
-        allowed_updates: ['message'],
-      }),
-    }, 35_000);
-
-    const data: TelegramGetUpdatesResponse = await response.json() as TelegramGetUpdatesResponse;
+    const abort = new AbortController();
+    this.pollAbort = abort;
+    let data: TelegramGetUpdatesResponse;
+    try {
+      // The body is read inside the timeout and the abort too: reading it
+      // outside left a stalled body able to hold the loop forever.
+      data = await fetchWithTimeout(`${this.baseUrl}/getUpdates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          offset: this.offset,
+          timeout: 30,
+          allowed_updates: ['message'],
+        }),
+        signal: abort.signal,
+      }, 35_000, (r) => r.json() as Promise<TelegramGetUpdatesResponse>);
+    } finally {
+      if (this.pollAbort === abort) this.pollAbort = null;
+    }
 
     if (!data.ok) {
       throw new Error('Failed to get updates');
@@ -253,9 +350,24 @@ export class TelegramAdapter implements ChannelAdapter {
 
     const { message } = update;
 
-    // Security: check allowed users
-    if (this.allowedUsers.length > 0 && !this.allowedUsers.includes(message.from.id)) {
-      console.log(`[TelegramAdapter] Ignoring message from unauthorized user: ${message.from.id} (${message.from.username ?? message.from.first_name})`);
+    // A message sent on behalf of a chat -- an anonymous group admin, a
+    // "send as channel" post, a linked channel's automatic forward -- carries
+    // `sender_chat`, and its `from` is a placeholder id that every such sender
+    // shares (#885). Listing that id would list every anonymous admin of every
+    // group, and this list decides who may approve a gated action, so a
+    // message that cannot be traced to one person is not handled at all: it
+    // can neither chat, decide, nor become the broadcast recipient.
+    if (message.sender_chat || !message.from) {
+      console.log(`[TelegramAdapter] Ignoring a message sent on behalf of a chat (${message.sender_chat?.title ?? message.sender_chat?.id ?? 'no sender'}): it cannot be attributed to one person`);
+      return;
+    }
+    const from = message.from;
+
+    // Security: check allowed users. Empty admits everyone for chat, but not
+    // for deciding an approval (senderAllowListed below, #811). A setting that
+    // names nobody (a string, a quoted id) restricts to nobody (#883).
+    if (this.allowList.restricted && !this.allowList.ids.includes(from.id)) {
+      console.log(`[TelegramAdapter] Ignoring message from unauthorized user: ${from.id} (${from.username ?? from.first_name})`);
       return;
     }
 
@@ -290,17 +402,18 @@ export class TelegramAdapter implements ChannelAdapter {
     const channelMessage: ChannelMessage = {
       id: message.message_id.toString(),
       channel: 'telegram',
-      from: message.from.username || message.from.first_name,
+      from: from.username || from.first_name,
       text,
       timestamp: message.date * 1000,
       metadata: {
         chatId: message.chat.id,
-        userId: message.from.id,
+        userId: from.id,
         chatType: message.chat.type,
-        firstName: message.from.first_name,
-        lastName: message.from.last_name,
+        firstName: from.first_name,
+        lastName: from.last_name,
         isVoice: !!voiceFile,
       },
+      senderAllowListed: this.allowList.ids.includes(from.id),
     };
 
     console.log('[TelegramAdapter] Message from', channelMessage.from, ':', channelMessage.text.slice(0, 80));
@@ -347,13 +460,37 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
+/**
+ * `fetch` bounded by `ms`, and aborted early when `init.signal` aborts. With
+ * `read`, the body is read inside the same bound, and its result returned.
+ */
+async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response>;
+async function fetchWithTimeout<T>(url: string, init: RequestInit, ms: number, read: (r: Response) => Promise<T>): Promise<T>;
+async function fetchWithTimeout<T>(url: string, init: RequestInit, ms: number, read?: (r: Response) => Promise<T>): Promise<Response | T> {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), ms);
+  const outer = init.signal;
+  const onOuterAbort = () => controller.abort();
+  if (outer) {
+    if (outer.aborted) controller.abort();
+    else outer.addEventListener('abort', onOuterAbort, { once: true });
+  }
+  // Settles when either the request or the abort does: a body read does
+  // not always notice its signal, so the abort is raced, not just passed on.
+  const aborted = new Promise<never>((_, reject) => {
+    controller.signal.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')), { once: true });
+  });
+  aborted.catch(() => {});
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const run = (async () => {
+      const response = await fetch(url, { ...init, signal: controller.signal });
+      return read ? await read(response) : response;
+    })();
+    run.catch(() => {});
+    return await Promise.race([run, aborted]);
   } finally {
     clearTimeout(t);
+    outer?.removeEventListener('abort', onOuterAbort);
   }
 }
 

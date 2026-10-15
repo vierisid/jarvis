@@ -556,3 +556,76 @@ describe('ui_act compares the document, not the page\'s own url and title (#640)
     expect(out).not.toContain('the UI surface changed since review');
   });
 });
+
+/**
+ * #677: `get_value` skips the surface and control refusals by design -- it is
+ * the one UI action with no effect -- so the reply has to say what those checks
+ * found instead, or the model takes a value read off a replaced window for the
+ * reviewed element's. Desktop only, because a browser `get_value` is refused
+ * outright (`BROWSER_ACTIONS`), before either comparison runs.
+ */
+describe('ui_act get_value says whether its id still names what it named (#677)', () => {
+  beforeEach(() => resetUiSnapshots());
+
+  const reads = (calls: Call[]) => acts(calls).filter((c) => c.params.action === 'get_value');
+
+  it('reads, and reports it, when the window was retitled since the snapshot', async () => {
+    const calls: Call[] = [];
+    setSidecarManagerRef(fakeManager(
+      [[el(1, 'File'), el(2, 'Subject')], [el(1, 'File'), el(2, 'Subject')]],
+      calls,
+      ['Draft - Mail', 'Inbox - Mail'],
+    ));
+    const snap = await uiSnapshotTool.execute({ kind: 'desktop' }) as string;
+    const out = await uiActTool.execute({ element_id: idOf(snap, 'Subject'), action: 'get_value' }) as string;
+    // Still a read, never a refusal.
+    expect(reads(calls)).toHaveLength(1);
+    expect(out).not.toContain('nothing was done');
+    expect(out).toContain('surface_changed_since_snapshot: true');
+    expect(out).toContain('may come from a different surface');
+    expect(out).toContain('element_changed_since_snapshot: false');
+  });
+
+  it('reports the element moving under its ref', async () => {
+    const calls: Call[] = [];
+    setSidecarManagerRef(fakeManager([
+      [el(1, 'File'), el(2, 'Subject', { sig: 'sig-field' })],
+      [el(1, 'File'), el(2, 'Password', { sig: 'sig-field' })],
+    ], calls));
+    const snap = await uiSnapshotTool.execute({ kind: 'desktop' }) as string;
+    const out = await uiActTool.execute({ element_id: idOf(snap, 'Subject'), action: 'get_value' }) as string;
+    expect(reads(calls)).toHaveLength(1);
+    expect(out).toContain('surface_changed_since_snapshot: false');
+    expect(out).toContain('element_changed_since_snapshot: true');
+    expect(out).toContain('may be a different element');
+  });
+
+  it('reports an element re-found by something other than its identity', async () => {
+    // Security review WEB-003: same role and name, different node. Comparing
+    // role and name alone said false for another element's value.
+    const calls: Call[] = [];
+    setSidecarManagerRef(fakeManager([
+      [el(1, 'File'), el(2, 'Amount', { sig: 'sig-first-amount' })],
+      [el(1, 'File'), el(5, 'Amount', { sig: 'sig-second-amount' })],
+    ], calls));
+    const snap = await uiSnapshotTool.execute({ kind: 'desktop' }) as string;
+    const out = await uiActTool.execute({ element_id: idOf(snap, 'Amount'), action: 'get_value' }) as string;
+    expect(reads(calls)).toHaveLength(1);
+    expect(out).toContain('element_changed_since_snapshot: true');
+    expect(out).toContain('not by its address or stable id');
+  });
+
+  it('says false, explicitly, when nothing moved', async () => {
+    // The field is on EVERY read, so its absence cannot be mistaken for
+    // "checked and unchanged", and a held surface says false rather than
+    // reading as one that moved.
+    const calls: Call[] = [];
+    setSidecarManagerRef(fakeManager([[el(1, 'File'), el(2, 'Subject')]], calls));
+    const snap = await uiSnapshotTool.execute({ kind: 'desktop' }) as string;
+    const out = await uiActTool.execute({ element_id: idOf(snap, 'Subject'), action: 'get_value' }) as string;
+    expect(out).toContain('get_value -> {"success":true}');
+    expect(out).toContain('surface_changed_since_snapshot: false');
+    expect(out).toContain('element_changed_since_snapshot: false');
+    expect(out).not.toContain('take a fresh ui_snapshot');
+  });
+});

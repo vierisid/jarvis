@@ -141,8 +141,14 @@
 }
 
 /* ── Suggestions ── */
+/* Gives way first when the rail is short (#719 review): the pending
+   confirmations above can now scroll and shrink, and without this they would
+   be the only section that did, collapsing before these hints. */
 .v2-rail__sugs {
   padding: var(--s-3) var(--s-4) var(--s-3);
+  min-height: 0;
+  overflow: hidden;
+  flex-shrink: 1000;
 }
 
 .v2-rail__sugs-label {

@@ -40,16 +40,22 @@ const read = (rel: string): string => readFileSync(join(SRC, rel), 'utf8');
 
 describe('who decides a site-playbook delivery scope, derived from the source', () => {
   test('exactly these files enter a delivery scope', () => {
-    // The reader of the scope, plus the four dispatch boundaries that set one.
+    // The two readers of the scope, plus the four dispatch boundaries that set one.
     expect(importersOf('template-delivery-scope.ts')).toEqual([
+      // Reads it as the identity of the READER of a remote snapshot, so a
+      // sub-agent's or a workflow's snapshot cannot become the generation a
+      // chat card binds (#676). Enters no scope.
+      'actions/tools/sidecar-route.ts',
       // Reads it: refuses a suppressed scope before resolving a template, and
       // keys the redelivery memory by the rest.
       'actions/tools/webapp-template-injection.ts',
       // A sub-agent is its own conversation on the CHAT's tool objects, so it
       // gets its own named scope at both of its dispatch sites.
       'agents/sub-agent-runner.ts',
-      // Cannot place a trailer outside the untrusted block (it collapses to one
-      // string for a DB receipt), so it must not record a delivery either.
+      // Suppresses delivery for every approval that is not INLINE (#830): a
+      // deferred receipt reaches a person or a row, never a model, so it must
+      // not record a delivery. An inline one goes back to the gate, which
+      // places the trailer after the frame (#708).
       'authority/deferred-executor.ts',
       // The workflow tool step: drops the trailer (#581), so it never wants a
       // playbook and must not spend one.
@@ -65,11 +71,22 @@ describe('who decides a site-playbook delivery scope, derived from the source', 
    * `toolReturnText`, which puts a repo-authored trailer back IN BAND. A
    * delivery is recorded when the tool offers one, not when a consumer places
    * it, so an unwrapped call here spends a slot on a copy that arrives
-   * disclaimed. Pinned on the source because neither has a cheap unit seam.
+   * disclaimed. Pinned on the source because the two workflow boundaries have
+   * no cheap unit seam. The approval executor is a collapse boundary for every
+   * mode but inline (#830), and has a behavioural seam besides, in
+   * authority/approved-navigate-playbook.test.ts.
    */
-  test('both collapse boundaries dispatch with delivery suppressed', () => {
+  test('the collapse boundaries dispatch with delivery suppressed, the executor for every mode but inline', () => {
+    // The approval executor is a collapse boundary for every mode but INLINE
+    // (#830). This assertion used to pin unconditional suppression,
+    // `withoutTemplateDelivery(() => registry.execute(request.tool_name, args))`;
+    // it now pins that the ONLY exemption is the execution mode, so a widening
+    // to a tool name or a caller -- or to every mode -- fails here as well as
+    // in authority/approved-navigate-playbook.test.ts.
     const executor = read('authority/deferred-executor.ts');
-    expect(executor).toContain('withoutTemplateDelivery(() => registry.execute(request.tool_name, args))');
+    expect(executor).toContain('const dispatch = () => registry.execute(request.tool_name, args);');
+    expect(executor).toContain("request.execution_mode === 'inline' ? dispatch() : withoutTemplateDelivery(dispatch)");
+    expect(executor.match(/dispatch\(\)/g)?.length).toBe(1);
     // ...and that is the only place it dispatches, so none is left unwrapped.
     expect(executor.match(/registry\.execute\(/g)?.length).toBe(1);
 

@@ -1567,6 +1567,291 @@ describe("#692: the connections routes share one project scope", () => {
   });
 });
 
+/**
+ * #729. The flow, version and run routes found their row by bare id -- so a
+ * flow, version or run in another project was readable and writable by id --
+ * while the flow listing showed only `DEFAULT_IDS.project`. The same scope
+ * disagreement #692 fixed for connections, one resource over. Latent while
+ * `project_id` is a constant; these write a second project directly, which is
+ * the state the day it is not.
+ */
+describe("#729: the flow, version and run routes share one project scope", () => {
+  const OTHER_PROJECT = "proj_other_729";
+  const MISSING_FLOW = "flow_does_not_exist_729";
+  const MISSING_VERSION = "ver_does_not_exist_729";
+  const MISSING_RUN = "run_does_not_exist_729";
+
+  type Call = {
+    name: string;
+    route: string;
+    method: "GET" | "POST" | "PATCH" | "DELETE";
+    body?: unknown;
+    /** The kind of id the route takes, which picks the missing id and the message. */
+    kind: "flow" | "version" | "run";
+  };
+
+  // Every route an authenticated caller reaches with a flow, version or run id.
+  // The two webhook ingress routes are not here on purpose: see
+  // `callerProjectId`'s docblock.
+  const CALLS: Call[] = [
+    { name: "flow GET", route: "/api/workflows/:id", method: "GET", kind: "flow" },
+    { name: "flow PATCH status", route: "/api/workflows/:id", method: "PATCH", body: { status: "DISABLED" }, kind: "flow" },
+    { name: "flow PATCH metadata", route: "/api/workflows/:id", method: "PATCH", body: { metadata: { hijacked: true } }, kind: "flow" },
+    { name: "flow DELETE", route: "/api/workflows/:id", method: "DELETE", kind: "flow" },
+    { name: "versions GET", route: "/api/workflows/:id/versions", method: "GET", kind: "flow" },
+    { name: "versions POST", route: "/api/workflows/:id/versions", method: "POST", body: { displayName: "Planted" }, kind: "flow" },
+    { name: "code-steps POST", route: "/api/workflows/:id/code-steps", method: "POST", body: { enabled: true }, kind: "flow" },
+    { name: "publish POST", route: "/api/workflows/:id/publish", method: "POST", body: {}, kind: "flow" },
+    { name: "run POST", route: "/api/workflows/:id/run", method: "POST", body: {}, kind: "flow" },
+    { name: "runs GET", route: "/api/workflows/:id/runs", method: "GET", kind: "flow" },
+    { name: "version GET", route: "/api/workflows/:id/versions/:versionId", method: "GET", kind: "version" },
+    { name: "version PATCH", route: "/api/workflows/:id/versions/:versionId", method: "PATCH", body: { displayName: "Hijacked" }, kind: "version" },
+    { name: "version readiness", route: "/api/workflows/:id/versions/:versionId/readiness", method: "GET", kind: "version" },
+    { name: "version lock", route: "/api/workflows/:id/versions/:versionId/lock", method: "POST", kind: "version" },
+    { name: "sample-data PATCH", route: "/api/workflows/:id/versions/:versionId/sample-data/:stepName", method: "PATCH", body: { output: { planted: 1 } }, kind: "version" },
+    { name: "sample-data DELETE", route: "/api/workflows/:id/versions/:versionId/sample-data/:stepName", method: "DELETE", kind: "version" },
+    { name: "sample-input PATCH", route: "/api/workflows/:id/versions/:versionId/sample-input/:stepName", method: "PATCH", body: { input: { planted: 1 } }, kind: "version" },
+    { name: "run GET", route: "/api/workflow-runs/:runId", method: "GET", kind: "run" },
+    { name: "run effects", route: "/api/workflow-runs/:runId/effects", method: "GET", kind: "run" },
+    { name: "run cancel", route: "/api/workflow-runs/:runId/cancel", method: "POST", kind: "run" },
+    { name: "run waitpoints", route: "/api/workflow-runs/:runId/waitpoints", method: "GET", kind: "run" },
+  ];
+
+  const MESSAGE = { flow: "flow not found", version: "version not found in flow", run: "run not found" } as const;
+
+  async function seedForeign() {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion, setSampleDataEntry } = await import("../db/repos/flow-version");
+    const { createFlowRun } = await import("../db/repos/flow-run");
+    const flow = createFlow({ projectId: OTHER_PROJECT });
+    const version = createDraftVersion({
+      flowId: flow.id,
+      displayName: "Theirs",
+      trigger: { name: "trigger", type: "EMPTY", displayName: "Manual" },
+    });
+    // Something for the sample-data DELETE to destroy if it gets through.
+    setSampleDataEntry(version.id, "trigger", { theirs: true });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, environment: "TESTING" });
+    return { flowId: flow.id, versionId: version.id, runId: run.id };
+  }
+
+  /** Every row the foreign project owns that any of these routes could write. */
+  async function foreignState(flowId: string) {
+    const { getWorkflowDb } = await import("../db/index");
+    const db = getWorkflowDb();
+    return {
+      flow: db.query("SELECT * FROM flow WHERE id = ?").all(flowId),
+      versions: db.query("SELECT * FROM flow_version WHERE flow_id = ? ORDER BY id").all(flowId),
+      runs: db.query("SELECT * FROM flow_run WHERE flow_id = ? ORDER BY id").all(flowId),
+      cancellations: db.query("SELECT * FROM workflow_run_cancellation").all(),
+      jobs: db.query("SELECT COUNT(*) AS n FROM workflow_job").get(),
+    };
+  }
+
+  function paramsFor(call: Call, ids: { flowId: string; versionId: string; runId: string }): Record<string, string> {
+    if (call.kind === "run") return { runId: ids.runId };
+    if (call.kind === "version") return { id: ids.flowId, versionId: ids.versionId, stepName: "trigger" };
+    return { id: ids.flowId };
+  }
+
+  /** Status, content type and the body as BYTES, so "identical" means identical. */
+  async function rawCall(map: WorkflowRouteMap, call: Call, ids: { flowId: string; versionId: string; runId: string }) {
+    const handler = (map as Record<string, Record<string, unknown> | undefined>)[call.route]?.[call.method];
+    if (!handler) throw new Error(`no handler for ${call.method} ${call.route}`);
+    const res = await (handler as (r: Request) => Promise<Response> | Response)(
+      reqWithParams(call.method, "http://x/", paramsFor(call, ids), call.body),
+    );
+    return { status: res.status, contentType: res.headers.get("content-type"), body: await res.text() };
+  }
+
+  test("a foreign id answers byte-identically to a missing one, on every route, and writes nothing", async () => {
+    const missing = { flowId: MISSING_FLOW, versionId: MISSING_VERSION, runId: MISSING_RUN };
+    // Collected rather than asserted one by one, so a failure names every
+    // route that leaks rather than only the first.
+    const notMissingShaped: string[] = [];
+    const distinguishable: string[] = [];
+    const wrote: string[] = [];
+    for (const call of CALLS) {
+      // Fresh foreign rows per call: one route that gets through (a DELETE)
+      // would otherwise make every later route see a missing flow and pass.
+      const foreign = await seedForeign();
+      const before = await foreignState(foreign.flowId);
+      const fromForeign = await rawCall(routes, call, foreign);
+      const fromMissing = await rawCall(routes, call, missing);
+      // The missing-id answer is pinned exactly, so the comparison below
+      // cannot pass by both sides failing the same way for some reason that
+      // is not the scope.
+      const expected = { status: 404, contentType: "application/json", body: JSON.stringify({ error: MESSAGE[call.kind] }) };
+      if (!Bun.deepEquals(fromMissing, expected)) notMissingShaped.push(call.name);
+      if (!Bun.deepEquals(fromForeign, fromMissing)) distinguishable.push(call.name);
+      // Byte-exact: same flow row, same versions (name, sample data, state),
+      // same run, no cancellation and no job queued.
+      if (!Bun.deepEquals(await foreignState(foreign.flowId), before)) wrote.push(call.name);
+    }
+    expect({ notMissingShaped, distinguishable, wrote }).toEqual({ notMissingShaped: [], distinguishable: [], wrote: [] });
+  });
+
+  test("a caller in that project gets past the scope on every one of the same routes", async () => {
+    // The control for the 404s above: they are about the project, not the
+    // route, the body or the ids. Each call is made by a caller IN the
+    // flow's project and must not be the scope's 404.
+    const scoped = createWorkflowRoutes({ callerProjectId: () => OTHER_PROJECT });
+    const refused: string[] = [];
+    for (const call of CALLS) {
+      // Fresh rows per call: a DELETE or a lock would otherwise change what
+      // the next call sees.
+      const own = await seedForeign();
+      const res = await rawCall(scoped, call, own);
+      if (res.status === 404) refused.push(call.name);
+    }
+    expect(refused).toEqual([]);
+  });
+
+  test("the flow listing, the readiness listing and create act in the caller's project", async () => {
+    const { createFlow } = await import("../db/repos/flow");
+    const { DEFAULT_IDS } = await import("../db/schema");
+    const inDefault = createFlow({ projectId: DEFAULT_IDS.project, status: "ENABLED" });
+    const inOther = createFlow({ projectId: OTHER_PROJECT, status: "ENABLED" });
+    const scoped = createWorkflowRoutes({ callerProjectId: () => OTHER_PROJECT });
+    const ids = (body: unknown) => (body as Array<{ id: string }>).map((f) => f.id);
+    const readinessIds = (body: unknown) => (body as { items: Array<{ flowId: string }> }).items.map((i) => i.flowId);
+
+    const listed = await callJson(scoped["/api/workflows"]?.GET, plainReq("GET", "http://x/api/workflows"));
+    expect(listed.status).toBe(200);
+    expect(ids(listed.body)).toEqual([inOther.id]);
+    const ready = await callJson(scoped["/api/workflows/readiness"]?.GET, plainReq("GET", "http://x/api/workflows/readiness"));
+    expect(readinessIds(ready.body)).toEqual([inOther.id]);
+
+    const created = await callJson(scoped["/api/workflows"]?.POST, plainReq("POST", "http://x/api/workflows", { displayName: "Mine" }));
+    expect(created.status).toBe(201);
+    expect(created.body.flow.projectId).toBe(OTHER_PROJECT);
+
+    // And the default caller still sees only the default project.
+    const defaultList = await callJson(routes["/api/workflows"]?.GET, plainReq("GET", "http://x/api/workflows"));
+    expect(ids(defaultList.body)).toEqual([inDefault.id]);
+    const defaultReady = await callJson(routes["/api/workflows/readiness"]?.GET, plainReq("GET", "http://x/api/workflows/readiness"));
+    expect(readinessIds(defaultReady.body)).toEqual([inDefault.id]);
+  });
+
+  test("the trigger listing shows only the caller's project's flows", async () => {
+    // The subscriptions carry flow ids, and a webhook flow's id is its
+    // capability when it has no HMAC secret, so a listing of every project's
+    // subscriptions handed out other projects' webhooks.
+    const { createFlow } = await import("../db/repos/flow");
+    const { DEFAULT_IDS } = await import("../db/schema");
+    const mine = createFlow({ projectId: DEFAULT_IDS.project });
+    const theirs = createFlow({ projectId: OTHER_PROJECT });
+    const subs = [{ flowId: mine.id, kind: "webhook" as const }, { flowId: theirs.id, kind: "webhook" as const }];
+    const triggerManager = { list: () => subs } as unknown as NonNullable<Parameters<typeof createWorkflowRoutes>[0]>["triggerManager"];
+    const listed = async (callerProjectId?: string) => (await callJson(
+      createWorkflowRoutes({ triggerManager, ...(callerProjectId ? { callerProjectId: () => callerProjectId } : {}) })["/api/workflows/triggers"]?.GET,
+      plainReq("GET", "http://x/api/workflows/triggers"),
+    )).body;
+    expect(await listed()).toEqual([subs[0]]);
+    expect(await listed(OTHER_PROJECT)).toEqual([subs[1]]);
+  });
+
+  test("a run is scoped by its flow's project, not by flow_run.project_id", async () => {
+    // Before #843 no caller of `createFlowRun` passed a project, so every run
+    // row said `DEFAULT_IDS.project` whatever its flow's project was. #843
+    // fixes the writer and backfills old rows at boot, but the scope is kept
+    // on the flow so it does not depend on the column being right. A
+    // mismatched row is made here directly, and the test asserts that it was,
+    // so it cannot pass vacuously against a column that happens to be right.
+    const { DEFAULT_IDS } = await import("../db/schema");
+    const foreign = await seedForeign();
+    const { getWorkflowDb } = await import("../db/index");
+    getWorkflowDb().run("UPDATE flow_run SET project_id = ? WHERE id = ?", [DEFAULT_IDS.project, foreign.runId]);
+    const row = getWorkflowDb().query<{ project_id: string }, [string]>("SELECT project_id FROM flow_run WHERE id = ?").get(foreign.runId);
+    expect(row?.project_id).toBe(DEFAULT_IDS.project);
+    const call = CALLS.find((c) => c.name === "run GET")!;
+    expect((await rawCall(routes, call, foreign)).status).toBe(404);
+    const scoped = createWorkflowRoutes({ callerProjectId: () => OTHER_PROJECT });
+    expect((await rawCall(scoped, call, foreign)).status).toBe(200);
+  });
+
+  test("a run started from the route is in its flow's project (#843)", async () => {
+    // The column the engine token's projectId is minted from, and that every
+    // effect record copies. Before #843 it was DEFAULT_IDS.project here.
+    const own = await seedForeign();
+    const scoped = createWorkflowRoutes({ callerProjectId: () => OTHER_PROJECT });
+    const started = await callJson(scoped["/api/workflows/:id/run"]?.POST,
+      reqWithParams("POST", "http://x/", { id: own.flowId }, {}));
+    expect(started.status).toBe(202);
+    expect(started.body.projectId).toBe(OTHER_PROJECT);
+    const { getWorkflowDb } = await import("../db/index");
+    const row = getWorkflowDb().query<{ project_id: string }, [string]>("SELECT project_id FROM flow_run WHERE id = ?").get(started.body.id);
+    expect(row?.project_id).toBe(OTHER_PROJECT);
+  });
+});
+
+/**
+ * #846. Since #729 the scope check runs before the body is read, so an
+ * ordinary missing flow is answered 404 by the route. What was left is a flow
+ * deleted DURING the body await: the write then threw from the repo and
+ * `trapErrors` sent its message, which names the function. The race is made
+ * deterministic here with a body stream that deletes the flow when it is read.
+ */
+describe("#846: a flow deleted while its body is read gets the route's own 404", () => {
+  const MISSING = "flow_does_not_exist_846";
+  const CALLS: Array<{ name: string; route: string; body: unknown }> = [
+    { name: "PATCH status", route: "/api/workflows/:id", body: { status: "DISABLED" } },
+    { name: "PATCH metadata", route: "/api/workflows/:id", body: { metadata: { a: 1 } } },
+    { name: "code-steps POST", route: "/api/workflows/:id/code-steps", body: { enabled: true } },
+    { name: "run POST", route: "/api/workflows/:id/run", body: {} },
+  ];
+  const methodOf = (route: string) => (route === "/api/workflows/:id" ? "PATCH" : "POST");
+
+  /**
+   * A request whose body deletes `flowId` the moment the route reads it.
+   * `highWaterMark: 0` is what makes that true: with the default of 1 the
+   * stream pulls on the first microtask after it is built, before the route
+   * reads anything, and the delete would land wherever that happened to fall.
+   */
+  function racing(route: string, flowId: string, body: unknown, during: () => void) {
+    const bytes = new TextEncoder().encode(JSON.stringify(body));
+    const stream = new ReadableStream({ pull(c) { during(); c.enqueue(bytes); c.close(); } }, { highWaterMark: 0 });
+    const req = new Request("http://x/", { method: methodOf(route), body: stream,
+      headers: { "Content-Type": "application/json" }, duplex: "half" } as RequestInit);
+    return Object.assign(req, { params: { id: flowId } });
+  }
+
+  async function answer(route: string, req: Request) {
+    const handler = (routes as Record<string, Record<string, unknown> | undefined>)[route]?.[methodOf(route)];
+    const res = await (handler as (r: Request) => Promise<Response>)(req);
+    return { status: res.status, contentType: res.headers.get("content-type"), body: await res.text() };
+  }
+
+  test("each write route answers exactly what a missing flow gets", async () => {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const { getWorkflowDb } = await import("../db/index");
+    const expected = { status: 404, contentType: "application/json", body: JSON.stringify({ error: "flow not found" }) };
+    const wrong: string[] = [];
+    let raced = 0;
+    for (const call of CALLS) {
+      const flow = createFlow();
+      createDraftVersion({ flowId: flow.id, displayName: "v", trigger: { name: "trigger", type: "EMPTY", displayName: "Manual" } });
+      const req = racing(call.route, flow.id, call.body, () => {
+        getWorkflowDb().run("DELETE FROM flow WHERE id = ?", [flow.id]);
+        raced++;
+      });
+      // Nothing has pulled yet: the delete is still to come, inside the read.
+      await Promise.resolve();
+      expect(raced).toBe(CALLS.indexOf(call));
+      const got = await answer(call.route, req);
+      if (!Bun.deepEquals(got, expected)) wrong.push(`${call.name}: ${got.status} ${got.body}`);
+      // The pinned answer is the missing-id one, not merely a 404.
+      const missing = await answer(call.route, reqWithParams(methodOf(call.route), "http://x/", { id: MISSING }, call.body));
+      if (!Bun.deepEquals(missing, expected)) wrong.push(`${call.name} (missing): ${missing.status} ${missing.body}`);
+    }
+    // The deletion really happened inside each body read, so this is the race
+    // and not an ordinary missing flow answered by the first check.
+    expect(raced).toBe(CALLS.length);
+    expect(wrong).toEqual([]);
+  });
+});
+
 describe("workflow API: waitpoints surface", () => {
   test("GET /api/workflow-runs/:runId/waitpoints lists active waitpoints with resume URLs", async () => {
     const { createFlow } = await import("../db/repos/flow");
@@ -1814,6 +2099,40 @@ describe("#693: writes to a LOCKED version answer 409 and write nothing", () => 
     expect(status).toBe(409);
     expect(body.error).toMatch(/LOCKED/);
     expect(await flowVersionRow(versionId)).toEqual(before);
+  });
+
+  /**
+   * #732. These bodies carried the repo function that threw --
+   * `updateDraftVersion: cannot modify LOCKED version (id=...)` -- straight to
+   * the HTTP client, before #693 as 500s and since as 409s. Reworded to say
+   * what the client can do, KEEPING the `LOCKED` token the tests above and
+   * clients match on. Pinned whole, so neither half can drift.
+   */
+  test("the 409 says what is locked in client terms, names no repo function, and keeps LOCKED (#732)", async () => {
+    const { flowId, versionId } = await lockedVersion();
+    const params = { id: flowId, versionId, stepName: "step_a" };
+    const url = `http://x/api/workflows/${flowId}/versions/${versionId}`;
+    const answers = [
+      await callJson(routes["/api/workflows/:id/versions/:versionId"]?.PATCH,
+        reqWithParams("PATCH", url, params, { displayName: "renamed" })),
+      await callJson(routes["/api/workflows/:id/versions/:versionId/sample-data/:stepName"]?.PATCH,
+        reqWithParams("PATCH", `${url}/sample-data/step_a`, params, { output: { x: 1 } })),
+      await callJson(routes["/api/workflows/:id/versions/:versionId/sample-data/:stepName"]?.DELETE,
+        reqWithParams("DELETE", `${url}/sample-data/_all`, params)),
+      await callJson(routes["/api/workflows/:id/versions/:versionId/sample-input/:stepName"]?.PATCH,
+        reqWithParams("PATCH", `${url}/sample-input/step_a`, params, { input: { changed: true } })),
+    ];
+    expect(answers).toEqual([
+      { status: 409, body: { error: `version ${versionId} is LOCKED and cannot be edited; create a new draft to change it` } },
+      { status: 409, body: { error: `version ${versionId} is LOCKED; its sample data cannot be changed` } },
+      { status: 409, body: { error: `version ${versionId} is LOCKED; its sample data cannot be changed` } },
+      { status: 409, body: { error: `version ${versionId} is LOCKED; its sample input cannot be changed` } },
+    ]);
+    // And, independent of the exact wording: no `name:` prefix of the kind a
+    // repo function puts on its throws.
+    for (const { body } of answers) {
+      expect(body.error).not.toMatch(/updateDraftVersion|setSampleDataEntry|setSampleInputEntry|replaceSampleData|^\w+:/);
+    }
   });
 });
 

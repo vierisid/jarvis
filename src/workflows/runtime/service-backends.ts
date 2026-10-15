@@ -40,15 +40,15 @@ import type { SandboxApiServices } from "../sandbox-api/server";
 import type { CredentialResolver } from "../credentials/adapter";
 import { WorkflowEventBuffer } from "./event-buffer";
 import { cancellableWorkflowService } from "./cancellation";
-import { WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
-import { getWorkflowEffect } from '../db/repos/workflow-effect';
+import { closeEffectApproval, WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
+import { getWorkflowEffect, saveWorkflowEffect, type WorkflowEffect } from '../db/repos/workflow-effect';
 import { resolveToolGate, severityRank } from '../../authority/tool-action-map';
 import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, surfaceBoundRefusal, toolEffectCapability } from './effect-capabilities';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceActionName, reprojectPieceInput,
   resolveGovernedPieceAction } from './piece-effects';
 import { defangPieceProjection } from './piece-effect-receipt';
-import { getFlow } from '../db/repos/flow';
+import { getFlowInProject } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
 import { digest, resolveEffectContext, type WorkflowEffectContext } from './effect-context';
 import { evaluateLlmOutput } from './llm-output-contract';
@@ -57,6 +57,8 @@ import { getMachineScope } from '../../actions/machine-scope';
 import type { SidecarCapability } from '../../sidecar/types';
 import { toolReturnText } from '../../roles/untrusted.ts';
 import { withoutTemplateDelivery } from '../../actions/tools/template-delivery-scope.ts';
+import { outsideApprovalScope, runAsApproved } from '../../authority/approved-action-scope.ts';
+import type { ActionCategory } from '../../roles/authority';
 
 export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependencies {
   credentialResolver: CredentialResolver;
@@ -396,13 +398,13 @@ export function buildSandboxServiceBackends(
       dispatch: async (registry, call) => {
         // Every refusal below goes through here, so each one is audited under
         // the RUN as well (#672). A call this route parks or dispatches gets a
-        // `workflow:<runId>` row from the boundary; one it refuses got only the
-        // sub-agent gate's row, under the spawned child's id and the role's
-        // name, which names neither the run nor the step -- so the run's own
-        // audit showed the delegation allowed and then nothing. `toolsInvoke`
-        // and `pieceAuthorize` audit their refusals the same way.
+        // `workflow:<runId>` row from the boundary; one it refused got only the
+        // sub-agent gate's row, which before #730 was under the spawned
+        // child's id and named neither the run nor the step -- so the run's
+        // own audit showed the delegation allowed and then nothing.
+        // `toolsInvoke` and `pieceAuthorize` audit their refusals the same way.
         //
-        // On a first pass `sub-agent-runner.ts` also writes the child's row.
+        // On a first pass `sub-agent-runner.ts` also writes the gate's row.
         // On a RESUME it does not: it hands the parked call straight back here
         // without re-running its gate or writing a row, so for a refusal on
         // resume this row is the only one -- before #672 there was none. The
@@ -412,24 +414,55 @@ export function buildSandboxServiceBackends(
         // two calls), when the tool's gate changed while the call was parked.
         //
         // The category is the worse of the parked call's (the runner's gate at
-        // park time, which is what the child row says) and the gate recomputed
+        // park time, which is what the gate's row says) and the gate recomputed
         // now, which is what the last refusal decides on. On a first pass the
         // two are the same; on resume the parked one alone could record a
         // write that was refused as a command.
         //
-        // What this does NOT cover, so the rule is "every call that reaches
-        // this route has a row under the run" and not "every sub-agent decision
-        // does": anything the runner decides itself never reaches here -- any
-        // denial by its gate (level, profile, taint, override, context rule),
-        // an off-list refusal, any call it allows outright -- and keeps only
-        // the child's row; and an emergency suspension or an unknown tool name
-        // returns before the runner audits at all, so has no row anywhere.
-        // Closing those needs the runner to know the run, which it does not.
+        // What the runner decides itself never reaches here -- any denial by
+        // its gate (level, profile, taint, override, context rule), an
+        // off-list refusal, any call it allows outright, an emergency
+        // suspension. Those rows are under the run too since #730, not here:
+        // `m7-agent-delegator.ts` hands the runner `runScopedAuditTrail`,
+        // which writes them as `workflow:<runId>` with the step and the child
+        // in the name. An unknown tool name still writes no row anywhere, on
+        // purpose: it is not a governance decision and has no category.
+        // #731. A call refused HERE on a resume was parked by the first pass,
+        // so it has an `agent-tool:N` record, `pending`, whose approval was
+        // then granted. The boundary never sees the refusal, so nothing moved
+        // that record: it stayed pending with its approval approved for good,
+        // and the run's effects gave an operator no way to tell it had been
+        // refused. It is marked `blocked`, denied, with the refusal as its
+        // reason -- what the boundary writes for its own refusals -- which is
+        // terminal: `invoke` throws a non-pending record's error rather than
+        // dispatching it, and the approval scheduler resumes only `pending`.
+        //
+        // Only THIS call's record: the same route, still pending, with the
+        // request digest the dispatch below would have bound. A refusal on a
+        // first pass has no record and gets none. Since #845 the approval gets
+        // its `blocked` receipt too, as every boundary refusal's does: it was
+        // granted and will never be acted on, and leaving it `approved` showed
+        // the approvals surface a granted call that never ran. The effect
+        // record is still where the detail lives; the receipt names it.
+        // Synchronous from the read to the write, so nothing can claim the
+        // record in between.
+        const blockParkedEffect = (reason: string): void => {
+          const parked = getWorkflowEffect(
+            workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, `agent-tool:${call.sequence}`));
+          if (!parked || parked.status !== 'pending') return;
+          if (parked.requestDigest !== digest({ toolName: call.toolCall.name, arguments: call.toolCall.arguments })) return;
+          const blocked: WorkflowEffect = { ...parked, status: 'blocked', decision: 'denied', error: reason, reason, finishedAt: Date.now() };
+          saveWorkflowEffect(blocked);
+          // The approval that parked it was granted and is now never acted on
+          // (#845): its receipt, as the boundary gives its own refusals.
+          closeEffectApproval(opts.approvalManager, blocked, 'blocked');
+        };
         const gate = resolveToolGate(registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
         const refusedCategory = severityRank(gate.actionCategory) > severityRank(call.actionCategory)
           ? gate.actionCategory : call.actionCategory;
         const refuse = (reason: string) => {
           effects.auditRefusal({ context: ctx, toolName: call.toolCall.name, category: refusedCategory });
+          blockParkedEffect(reason);
           return { kind: 'denied' as const, reason };
         };
         // The same rule as the direct tool piece: a category cannot describe
@@ -494,6 +527,8 @@ export function buildSandboxServiceBackends(
         if (gate.confirm === 'always') {
           return refuse(`Unsupported workflow capability: ${call.toolCall.name} requires the user's explicit confirmation, which a delegated agent cannot ask for; call it as a flow step so the approval is raised by the step that names it.`);
         }
+        // Set once the call is dispatched; read by `validateTarget` below.
+        let dispatched = false;
         try {
           const inner = await effects.invoke({ context: ctx, piece: AGENT_PIECE, action: 'delegate',
             route: `agent-tool:${call.sequence}`, toolName: call.toolCall.name, category: call.actionCategory,
@@ -516,22 +551,43 @@ export function buildSandboxServiceBackends(
             ...(gate.confirm ? { aboveLevelFloor: gate.floorCategory } : {}),
             // The target names who asked, so the card and the record are bound
             // to the principal and not only to the tool.
+            //
+            // And what the call does, when its gate says (#988): the card
+            // shows `target.intent` as its sentence. Before, it read only the
+            // tool's name -- "Manage agents" for a spawn that also starts a
+            // task -- which was harmless while the spawn sink asked again on
+            // its own card. That approval now answers the sink (`execute`
+            // below), so the card it buys has to say what it buys.
             prepare: () => ({ arguments: { ...call.toolCall.arguments }, target: { tool: call.toolCall.name, sequence: call.sequence,
-              principal: { agentId: call.principal.agentId, agentRoleId: call.principal.agentRoleId, agentAuthorityLevel: call.principal.agentAuthorityLevel } } }),
+              principal: { agentId: call.principal.agentId, agentRoleId: call.principal.agentRoleId, agentAuthorityLevel: call.principal.agentAuthorityLevel },
+              ...(gate.intent ? { intent: gate.intent } : {}) } }),
             // The arguments are frozen but a path in them is resolved only
             // when the tool runs, possibly long after review. A write that now
             // reaches a stricter category than the gate judged (a relative
             // path under a different cwd, a file that became a shell rc or a
             // hook, #522) is not the call that was approved.
-            validateTarget: (args) => {
+            validateTarget: (args, target) => {
               const now = resolveToolGate(registry.get(call.toolCall.name), call.toolCall.name, args);
               if (severityRank(now.actionCategory) > severityRank(call.actionCategory)) {
                 throw new ActionOutcomeError({ status: 'blocked', code: 'EFFECT_CHANGED_AFTER_REVIEW', effect: 'not_started',
                   message: `${call.toolCall.name} now reaches ${now.actionCategory}, not the ${call.actionCategory} it was reviewed as; dispatch blocked` });
               }
+              // A card that carried a sentence was an approval of THAT
+              // sentence, the deferred executor's rule (#988): a stop whose
+              // agent is now on a different task is not the stop approved.
+              // A record from before cards carried one has nothing to hold.
+              // Before dispatch only: this fence also runs at every checkpoint
+              // inside the call, where a sentence the call's own effect
+              // changed is not a change after approval.
+              const approved = typeof target.intent === 'string' ? target.intent.trim() : null;
+              if (!dispatched && approved !== null && (now.intent?.trim() ?? '') !== approved) {
+                throw new ActionOutcomeError({ status: 'blocked', code: 'EFFECT_CHANGED_AFTER_REVIEW', effect: 'not_started',
+                  message: `${call.toolCall.name}: what it would do changed after approval (approved: ${JSON.stringify(approved)}; now: ${JSON.stringify(now.intent?.trim() ?? '')}); dispatch blocked` });
+              }
             },
             execute: async (args, checkpoint) => {
               checkpoint();
+              dispatched = true;
               try {
                 // Delivery off (#586): the collapse below cannot keep a trusted
                 // trailer out of band, and a delivery is recorded when the tool
@@ -541,7 +597,36 @@ export function buildSandboxServiceBackends(
                 // sub-agent's. Suppressing nests inside that scope, which is the
                 // right way round: the innermost caller knows what happens to
                 // the value.
-                const raw = await withoutTemplateDelivery(() => registry.execute(call.toolCall.name, args));
+                const run = () => withoutTemplateDelivery(() => registry.execute(call.toolCall.name, args));
+                // Inside the approval this call was dispatched under (#988),
+                // as the deferred executor runs an approved card: a spawn or
+                // stop sink the call reaches reads it instead of asking a
+                // second time. Without it an approved `manage_agents spawn`
+                // raised another card and an approved `delegate_task` was
+                // refused. Only a card that named the act (`target.intent`,
+                // checked unchanged by `validateTarget` just before this),
+                // for the category it was approved as, spent by the first
+                // lifecycle decision and closed when this call settles.
+                //
+                // Source 'approval', not 'workflow_effect': this is a card a
+                // person approved for exactly this call, through the same
+                // surfaces as a deferred card, now naming the act. So it
+                // answers a taint-driven decision or a stop at the sink, as an
+                // approved deferred card does. Like one, it was judged for its
+                // own principal (the sub-agent), and the sink judges that same
+                // sub-agent, under its restrictions and taint (#1014).
+                //
+                // Otherwise outside any approval: this runs inside the
+                // delegation's own scope (`m7.delegate` below), whose grant
+                // was for starting THIS sub-agent and is not one for a call
+                // the sub-agent makes. Its spawn spends it today; this does
+                // not depend on that.
+                const record = getWorkflowEffect(workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, `agent-tool:${call.sequence}`));
+                const approval = record?.approvalId && typeof record.target.intent === 'string'
+                  ? opts.approvalManager?.getRequest(record.approvalId) ?? null : null;
+                const raw = approval?.status === 'approved' && approval.execution_mode === 'workflow'
+                  ? await runAsApproved({ categories: [approval.action_category as ActionCategory], approvalId: approval.id, source: 'approval' }, run)
+                  : await outsideApprovalScope(run);
                 // One string only: this crosses the durable effect boundary, so a
                 // carrier would not survive it anyway. Collapsing puts any
                 // repo-authored trailer back in band, where the sub-agent runner
@@ -575,7 +660,15 @@ export function buildSandboxServiceBackends(
         }
       },
     };
-    return m7.delegate(req, continuation);
+    // When the boundary above parked this delegation on a card and the person
+    // approved it, the spawn sink inside must not ask again (#932). Only then:
+    // the boundary judged the workflow's principal, not the primary the sink
+    // judges, so an authorisation that was never an approval cannot answer an
+    // approval the sink asks for. Spent by that one spawn.
+    const delegation = getWorkflowEffect(workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, 'agent'));
+    if (!delegation?.approvalId) return m7.delegate(req, continuation);
+    return runAsApproved({ categories: ['spawn_agent'], approvalId: delegation.approvalId, source: 'workflow_effect' },
+      () => m7.delegate(req, continuation));
   };
 
   const eventsPoll: EventsPollFn = async (req) => {
@@ -595,8 +688,16 @@ export function buildSandboxServiceBackends(
   };
 
   const runnerAdapter = new JarvisWorkflowRunnerAdapter();
-  const childVersion = (flowId: string) => {
-    const flow = getFlow(flowId);
+  // The target flow is looked up in the CALLER's project only (#843 review).
+  // `ctx.projectId` is the engine token's, which `resolveEffectContext` has
+  // already checked against the caller run before `prepare` runs. Before #843
+  // this mattered less: every child run was put in the default project
+  // whatever its flow's was. Since #843 a child runs under its own flow's
+  // project token, so an unscoped lookup let a flow in one project start
+  // another project's flow, with that project's store and connections, on
+  // input it chose. A foreign id gets what a missing one gets.
+  const childVersion = (flowId: string, projectId: string) => {
+    const flow = getFlowInProject(projectId, flowId);
     const versionId = flow?.published_version_id ?? (flow ? getLatestDraft(flow.id)?.id : null);
     const version = versionId ? getFlowVersion(versionId) : null;
     if (!version) throw new Error('Target workflow version is unavailable');
@@ -606,13 +707,13 @@ export function buildSandboxServiceBackends(
     const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-trigger', action: 'run_workflow',
       route: 'workflow', toolName: 'workflow_start', category: 'spawn_agent', toolCategory: 'delegation',
       request: { ...req }, prepare: () => {
-        const pinned = childVersion(req.flowId);
+        const pinned = childVersion(req.flowId, ctx.projectId);
         return { arguments: { ...req, pinned }, target: { flowId: req.flowId, ...pinned } };
       },
       execute: async (args, checkpoint) => {
         checkpoint();
-        if (digest(childVersion(args.flowId as string)) !== digest(args.pinned)) throw new Error('Target workflow changed after approval; start a new run');
-        return runnerAdapter.start(args as unknown as Parameters<typeof runnerAdapter.start>[0], ctx.runId);
+        if (digest(childVersion(args.flowId as string, ctx.projectId)) !== digest(args.pinned)) throw new Error('Target workflow changed after approval; start a new run');
+        return runnerAdapter.start(args as unknown as Parameters<typeof runnerAdapter.start>[0], ctx.runId, ctx.projectId);
       },
     });
     return reply.approval ? { runId: null, approval: reply.approval }

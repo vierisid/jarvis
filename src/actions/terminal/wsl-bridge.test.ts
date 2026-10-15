@@ -3,9 +3,10 @@
  * `$()` or a backtick in a path ran in the Linux shell, and a `"` in a
  * PowerShell script crossed the Windows command-line layer unprotected.
  *
- * These tests run the real class against fake `wslpath`, `cmd.exe` and
- * `powershell.exe` executables first on PATH, each of which records the argv
- * and environment it actually received. Hostile input must arrive as exactly
+ * These tests run the real class against fake `wslpath` (first on PATH),
+ * `cmd.exe` and `powershell.exe` (in a fake Windows directory, since #896 they
+ * are not looked up on PATH), each of which records the argv and environment
+ * it actually received. Hostile input must arrive as exactly
  * one argv element, byte for byte, and nothing may be executed along the way:
  * every payload tries to create the same marker file, which must never exist.
  *
@@ -19,7 +20,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, te
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { WSLBridge, buildPowerShellCommand, POWERSHELL_COMMAND_MAX, runArgv } from './wsl-bridge.ts';
+import {
+  WSLBridge, buildPowerShellCommand, POWERSHELL_COMMAND_MAX, runArgv,
+  __setMountTableForTests, __setWindowsDirForTests, drvfsDriveRoots, windowsSystemExe,
+} from './wsl-bridge.ts';
 
 const IS_WINDOWS = process.platform === 'win32';
 
@@ -33,12 +37,23 @@ const CANARY_NAME = 'JARVIS_WSL_BRIDGE_TEST_API_KEY';
 const CANARY_VALUE = 'sentinel-do-not-log';
 
 /**
+ * A fake Windows directory. cmd.exe and powershell.exe are run from here, by
+ * absolute path, never found on PATH (#896); windowsSystemExe() is pointed at
+ * it in beforeEach.
+ */
+const winDir = join(root, 'Windows');
+const WIN_PATHS: Record<string, string> = {
+  'cmd.exe': join(winDir, 'System32', 'cmd.exe'),
+  'powershell.exe': join(winDir, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+};
+
+/**
  * Each fake writes its argv (NUL-separated) and its environment (env -0) to
- * log/<name>.argv and log/<name>.env, found relative to the script itself
- * because the sanitized env would drop any variable naming the log dir.
+ * log/<name>.argv and log/<name>.env. The log dir is written into the script
+ * text, because the sanitized env would drop any variable naming it.
  */
 const RECORD = `#!/bin/sh
-log="$(dirname "$0")/../log/$(basename "$0")"
+log="${logDir}/$(basename "$0")"
 : > "$log.argv"
 for a in "$@"; do printf '%s\\0' "$a" >> "$log.argv"; done
 env -0 > "$log.env"
@@ -62,7 +77,7 @@ printf 'ps-ok\\r\\n'
   // timeout must not wait out. `exec` makes the sleeper the pid runArgv kills;
   // the grandchild's pid is recorded so the test can reap it.
   'hang.exe': `#!/bin/sh
-log="$(dirname "$0")/../log"
+log="${logDir}"
 sleep 5 &
 echo $! > "$log/hang.child"
 echo $$ > "$log/hang.pid"
@@ -70,12 +85,26 @@ exec sleep 5
 `,
 };
 
+/**
+ * What a planted cmd.exe or powershell.exe earlier on PATH would be (#896):
+ * one that records it ran, and answers as convincingly as the real fake.
+ */
+const PLANTED = (name: string, reply: string) => `#!/bin/sh
+: > "${logDir}/planted.${name}"
+printf '${reply}'
+`;
+
 mkdirSync(binDir);
 mkdirSync(logDir);
 for (const [name, body] of Object.entries(FAKES)) {
-  const path = join(binDir, name);
+  const path = WIN_PATHS[name] ?? join(binDir, name);
+  mkdirSync(join(path, '..'), { recursive: true });
   writeFileSync(path, body);
   chmodSync(path, 0o755);
+}
+for (const [name, reply] of [['cmd.exe', 'C:\\\\Users\\\\planted\\r\\n'], ['powershell.exe', 'planted\\r\\n']] as const) {
+  writeFileSync(join(binDir, name), PLANTED(name, reply));
+  chmodSync(join(binDir, name), 0o755);
 }
 
 afterAll(() => {
@@ -115,7 +144,9 @@ beforeEach(() => {
   for (const name of Object.keys(FAKES)) {
     rmSync(join(logDir, `${name}.argv`), { force: true });
     rmSync(join(logDir, `${name}.env`), { force: true });
+    rmSync(join(logDir, `planted.${name}`), { force: true });
   }
+  __setWindowsDirForTests(winDir);
 });
 
 afterEach(() => {
@@ -124,6 +155,7 @@ afterEach(() => {
     else process.env[name] = value;
   }
   saved.clear();
+  __setWindowsDirForTests(null);
   isWSLSpy?.mockRestore();
   isWSLSpy = undefined;
 });
@@ -261,6 +293,125 @@ describe.skipIf(IS_WINDOWS)('WSLBridge Windows home detection', () => {
   });
 });
 
+/**
+ * #896: a bare `powershell.exe` or `cmd.exe` ran whichever came first on PATH,
+ * and WSL's PATH puts the user's own bin dirs and third-party Windows dirs
+ * ahead of System32. The fakes in bin/ stand for one planted there.
+ */
+describe.skipIf(IS_WINDOWS)('WSLBridge runs Windows programs from System32, not PATH (#896)', () => {
+  test('a powershell.exe planted first on PATH is never run', async () => {
+    const bridge = bridgeWithoutDetection();
+    const result = await bridge.runPowerShell('Get-Date');
+    expect(existsSync(join(logDir, 'planted.powershell.exe'))).toBe(false);
+    expect(result.stdout).toBe('ps-ok\r\n');
+    expect(recordedArgv('powershell.exe')).not.toBeNull();
+  });
+
+  test('a cmd.exe planted first on PATH does not decide the Windows home', async () => {
+    stubWSL(true);
+    const bridge = new WSLBridge();
+    const deadline = Date.now() + 4000;
+    while (bridge.getWindowsHome() === null && Date.now() < deadline) await Bun.sleep(10);
+    expect(existsSync(join(logDir, 'planted.cmd.exe'))).toBe(false);
+    expect(bridge.getWindowsHome()).toBe('/mnt/c/Users/tester');
+  });
+
+  test('with no Windows directory to run it from, nothing runs, and it says why', async () => {
+    const bridge = bridgeWithoutDetection();
+    __setWindowsDirForTests(null);
+    // No drvfs mount in this table (and never this machine's own, which on
+    // WSL would find the real one): the planted one on PATH is still not a
+    // fallback.
+    __setMountTableForTests('tmpfs /tmp tmpfs rw 0 0\n');
+    try {
+      await expect(bridge.runPowerShell('Get-Date')).rejects.toThrow(
+        /powershell\.exe was not run: no mounted drive holds a Windows installation/,
+      );
+    } finally {
+      __setMountTableForTests(null);
+    }
+    expect(existsSync(join(logDir, 'planted.powershell.exe'))).toBe(false);
+  });
+});
+
+describe.skipIf(IS_WINDOWS)('windowsSystemExe and the mount table (#896)', () => {
+  // As measured on WSL2 (/proc/self/mounts): drive roots are 9p with a
+  // `C:\` source (escaped `C:\134`), a Docker Desktop folder mount is not a
+  // drive root, and a mount point with a space is escaped `\040`.
+  const drives = join(root, 'drives');
+  const c = join(drives, 'c');
+  const e = join(drives, 'e drive');
+  const docker = join(drives, 'docker');
+  const later = join(drives, 'later-c');
+  const line = (source: string, mountPoint: string, path: string) =>
+    `${source} ${mountPoint.replaceAll(' ', '\\040')} 9p rw,noatime,aname=drvfs;path=${path};uid=1000 0 0`;
+  const mounts = [
+    'drivers /usr/lib/wsl/drivers 9p ro,nosuid,nodev,noatime,aname=drivers;fmask=222 0 0',
+    line('C:\\134Program\\040Files\\134Docker', docker, 'C:\\Program Files\\Docker'),
+    line('E:\\134', e, 'E:\\'),
+    line('C:\\134', c, 'C:\\'),
+    'tmpfs /tmp tmpfs rw 0 0',
+  ].join('\n');
+  const put = (path: string) => { mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, ''); };
+  const kernel = (drive: string) => join(drive, 'Windows', 'System32', 'ntoskrnl.exe');
+
+  beforeAll(() => {
+    put(kernel(c));
+    put(join(c, 'Windows', 'System32', 'clip.exe'));
+    // A second drive with a Windows-shaped tree of its own: not the system drive.
+    put(kernel(e));
+    put(join(e, 'Windows', 'System32', 'clip.exe'));
+    put(join(e, 'Windows', 'System32', 'cmd.exe'));
+    put(kernel(docker));
+    put(join(docker, 'Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'));
+    put(kernel(later));
+    put(join(later, 'Windows', 'System32', 'clip.exe'));
+  });
+
+  beforeEach(() => __setWindowsDirForTests(null));
+
+  test('reads only drive roots, C: first, unescaping the mount point', () => {
+    expect(drvfsDriveRoots(mounts)).toEqual([{ drive: 'C', mountPoint: c }, { drive: 'E', mountPoint: e }]);
+  });
+
+  test('the program comes from the system drive, never from another drive that has it', () => {
+    expect(windowsSystemExe('clip.exe', mounts)).toBe(join(c, 'Windows', 'System32', 'clip.exe'));
+    // Only E: has a cmd.exe. C: holds the Windows installation, so there is none to run.
+    expect(() => windowsSystemExe('cmd.exe', mounts)).toThrow(/cmd\.exe was not run: it is not in the Windows directory of the system drive C:/);
+  });
+
+  test('a drive other than C: is the system drive only when C: holds no Windows', () => {
+    const noWindowsOnC = [line('C:\\134', join(drives, 'empty-c'), 'C:\\'), line('E:\\134', e, 'E:\\')].join('\n');
+    expect(windowsSystemExe('cmd.exe', noWindowsOnC)).toBe(join(e, 'Windows', 'System32', 'cmd.exe'));
+  });
+
+  test('a folder mount is never treated as a drive, whatever it holds', () => {
+    const onlyDocker = line('C:\\134Program\\040Files\\134Docker', docker, 'C:\\Program Files\\Docker');
+    expect(() => windowsSystemExe('powershell.exe', onlyDocker)).toThrow(/no mounted drive holds a Windows installation/);
+  });
+
+  test('the first mount of a drive is the one used, and nothing under /mnt/wsl is', () => {
+    // Pinned against a comparator that returned -1 both ways for two C:
+    // entries, which put the LAST one listed first (#896 review).
+    const twoCs = [line('C:\\134', c, 'C:\\'), line('C:\\134', later, 'C:\\')].join('\n');
+    expect(drvfsDriveRoots(twoCs)).toEqual([{ drive: 'C', mountPoint: c }]);
+    const twelve = Array.from({ length: 12 }, (_, i) => line('C:\\134', i === 0 ? c : `${later}-${i}`, 'C:\\')).join('\n');
+    expect(drvfsDriveRoots(twelve)).toEqual([{ drive: 'C', mountPoint: c }]);
+    // Another distro's mount under the shared /mnt/wsl is listed here too.
+    const shared = [line('C:\\134', '/mnt/wsl/evil', 'C:\\'), line('C:\\134', c, 'C:\\')].join('\n');
+    expect(drvfsDriveRoots(shared)).toEqual([{ drive: 'C', mountPoint: c }]);
+  });
+
+  test('a directory where the program should be is not the program', () => {
+    mkdirSync(join(c, 'Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), { recursive: true });
+    try {
+      expect(() => windowsSystemExe('powershell.exe', mounts)).toThrow(/not in the Windows directory of the system drive C:/);
+    } finally {
+      rmSync(join(c, 'Windows', 'System32', 'WindowsPowerShell'), { recursive: true, force: true });
+    }
+  });
+});
+
 describe.skipIf(IS_WINDOWS)('WSLBridge outside WSL', () => {
   test('every spawning method refuses without running anything', async () => {
     stubWSL(false);
@@ -335,17 +486,18 @@ function psLiteral(text: string): string {
 }
 
 describe.skipIf(!PWSH)('WSLBridge.runPowerShell under a real PowerShell', () => {
-  const pwshBin = join(root, 'pwsh-bin');
+  const pwshWin = join(root, 'pwsh-Windows');
+  const shim = join(pwshWin, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 
   beforeAll(() => {
-    mkdirSync(pwshBin);
+    mkdirSync(join(shim, '..'), { recursive: true });
     const quoted = `'${PWSH!.replaceAll("'", "'\\''")}'`;
-    writeFileSync(join(pwshBin, 'powershell.exe'), `#!/bin/sh\nexec ${quoted} "$@"\n`);
-    chmodSync(join(pwshBin, 'powershell.exe'), 0o755);
+    writeFileSync(shim, `#!/bin/sh\nexec ${quoted} "$@"\n`);
+    chmodSync(shim, 0o755);
   });
 
   beforeEach(() => {
-    process.env.PATH = `${pwshBin}:${process.env.PATH}`;
+    __setWindowsDirForTests(pwshWin);
   });
 
   const ROUND_TRIP = [...HOSTILE, 'ünïcödé ✓ 😀 ‚high‛', "it's ‘both’"];

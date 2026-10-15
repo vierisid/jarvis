@@ -2,6 +2,8 @@ import React, { useState } from "react";
 import { Check, ShieldAlert, MessageSquare, X } from "lucide-react";
 import { Icon } from "../ui";
 import { useLiveData } from "../shell/LiveDataContext";
+import { ApprovalWhy } from "../thread/ApprovalWhy";
+import { newestFirst, voiceHint } from "./shownApproval";
 import "./RailConfirmationStack.css";
 
 /**
@@ -16,14 +18,19 @@ import "./RailConfirmationStack.css";
  *
  * Voice-driven resolution (Phase 6.3.5b daemon-side): the user can also
  * say "approve" or "cancel" and the daemon resolves the most-recent
- * pending action server-side via `resolveLatestPendingByVoice`.
+ * pending action server-side via `resolveLatestPendingByVoice` -- only when
+ * it is still the approval on top of this stack when they started speaking
+ * (#809), and only while it is the one approval pending (#855); otherwise the
+ * reply says why nothing was decided. With several approvals up, the hint
+ * below says to decide each on its card instead of offering voice.
  */
 export function RailConfirmationStack() {
   const { approvals, clarifiers, repeatBacks } = useLiveData();
 
   // Sort each kind newest-first; render in priority order: approval >
   // clarifier > repeat-back. Same priority the daemon uses for voice.
-  const sortedApprovals = [...approvals].sort((a, b) => b.timestamp - a.timestamp);
+  // The same order the id sent with a spoken answer uses (#809, shownApproval).
+  const sortedApprovals = newestFirst(approvals);
   const sortedClarifiers = [...clarifiers].sort((a, b) => b.timestamp - a.timestamp);
   const sortedRepeatBacks = [...repeatBacks].sort((a, b) => b.timestamp - a.timestamp);
 
@@ -38,7 +45,7 @@ export function RailConfirmationStack() {
       </div>
       <div className="v2-rail-confirm__list">
         {sortedApprovals.map((a) => (
-          <ApprovalRow key={a.id} id={a.id} intent={a.intent} category={a.category} impact={a.impact} />
+          <ApprovalRow key={a.id} id={a.id} intent={a.intent} reason={a.intentReason} category={a.category} impact={a.impact} />
         ))}
         {sortedClarifiers.map((c) => (
           <VoiceConfirmRow
@@ -54,13 +61,17 @@ export function RailConfirmationStack() {
             key={r.id}
             kind="repeat-back"
             id={r.id}
-            title="Confirm what I heard"
+            title={r.action ? `Confirm before I do it: ${r.action}` : "Confirm what I heard"}
             transcript={r.transcript}
           />
         ))}
       </div>
       <div className="v2-rail-confirm__voice-hint">
-        Or say <em>“approve”</em> / <em>“cancel”</em>
+        {voiceHint(sortedApprovals.length) === "cards" ? (
+          <>Several approvals are waiting: decide each on its card</>
+        ) : (
+          <>Or say <em>“approve”</em> / <em>“cancel”</em></>
+        )}
       </div>
     </div>
   );
@@ -71,11 +82,13 @@ export function RailConfirmationStack() {
 function ApprovalRow({
   id,
   intent,
+  reason,
   category,
   impact,
 }: {
   id: string;
   intent: string;
+  reason?: string;
   category: string;
   impact: "read" | "write" | "destructive" | "external";
 }) {
@@ -106,6 +119,7 @@ function ApprovalRow({
         </span>
       </div>
       <div className="v2-rail-confirm__card-title">{intent}</div>
+      <ApprovalWhy reason={reason} />
       {category && <div className="v2-rail-confirm__card-sub">{category}</div>}
       {error && <div className="v2-rail-confirm__card-error">{error}</div>}
       <div className="v2-rail-confirm__card-actions">

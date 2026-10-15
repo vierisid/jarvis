@@ -9,6 +9,16 @@ export function withExecutionScope<T>(checkpoint: () => void, execute: () => T):
   return scope.run(() => { parent?.(); checkpoint(); }, execute);
 }
 
+/**
+ * Run `fn` outside any dispatch fence. For work that outlives the call that
+ * started it -- a background agent task -- whose own fences (its abort
+ * signal, emergency state) are what stop it. Inherited, a workflow effect's
+ * fence refused the task's first dispatch once that effect had settled (#988).
+ */
+export function outsideExecutionScope<T>(fn: () => T): T {
+  return scope.exit(fn);
+}
+
 /** Call synchronously immediately before dispatch, and again after any await. */
 export function checkpointExecution(): void {
   scope.getStore()?.();

@@ -70,6 +70,8 @@
   color: var(--ink);
   margin: 0;
   font-weight: 400;
+  /* A long unbroken token wraps instead of being clipped (#719). */
+  overflow-wrap: anywhere;
 }
 
 .v2-approval__intent mark {

@@ -155,3 +155,23 @@ describe('DialogueCompactor', () => {
     expect(provider.callCount).toBe(1);
   });
 });
+
+/**
+ * #884 review (CH-004). An expired summary was ignored but never removed, and
+ * with one conversation per channel sender the keys grow with the number of
+ * people who message the bot.
+ */
+describe('#884 review: expired summaries are removed, not just ignored', () => {
+  it('building a summary drops the ones past their TTL and keeps fresh ones', async () => {
+    const provider = new StubProvider();
+    const compactor = new DialogueCompactor(makeManager(provider), 8, 14);
+    const cache = (compactor as unknown as { cache: Map<string, { headCount: number; summary: string; builtAt: number }> }).cache;
+    cache.set('stale-stranger', { headCount: 1, summary: 's', builtAt: Date.now() - 31 * 60_000 });
+    cache.set('fresh-owner', { headCount: 1, summary: 'f', builtAt: Date.now() - 60_000 });
+
+    await compactor.compact('new-thread', mkTurns(20));
+    await settle();
+
+    expect([...cache.keys()].sort()).toEqual(['fresh-owner', 'new-thread']);
+  });
+});

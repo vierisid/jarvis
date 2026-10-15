@@ -278,7 +278,7 @@ export const manageSkillsTool: ToolDefinition = {
     // to impersonate, which quoting mid-sentence could not promise (a
     // look-alike quote is not escaped). Everything before it is a number or
     // the card's own words.
-    const shown = (value: unknown) => forCard(value) || '(a name made only of invisible characters)';
+    const shown = (value: unknown) => forCard(value) || '(a name made only of invisible or formatting characters)';
     const name = typeof params.name === 'string' ? params.name.trim() : '';
     const skill = name ? getSkillByName(name) : null;
     const intent = skill

@@ -107,6 +107,23 @@ export function getFlow(id: string): FlowRow | null {
     .get(id);
 }
 
+/**
+ * The flow with this id IN this project, or null (#729). What an API route
+ * keyed by a flow id must use, for the reason #692 gave for connections: a bare
+ * `getFlow(id)` finds a flow in any project, so a route whose listing shows one
+ * project could still read or write another's.
+ *
+ * Every route-level write that follows this check is synchronous with it or
+ * re-checks after an await, and nothing ever UPDATEs `flow.project_id`, so a
+ * flow seen here in a project is still in that project, or gone, when the
+ * write lands.
+ */
+export function getFlowInProject(projectId: string, id: string): FlowRow | null {
+  return db()
+    .query<FlowRow, [string, string]>(`SELECT * FROM flow WHERE id = ? AND project_id = ?`)
+    .get(id, projectId);
+}
+
 export function listFlows(
   projectId: string = DEFAULT_IDS.project,
   opts: ListFlowsOptions = {},
@@ -208,6 +225,18 @@ export function updateFlowMetadata(id: string, metadata: Record<string, unknown>
 
 export function deleteFlow(id: string): void {
   db().run(`DELETE FROM flow WHERE id = ?`, [id]);
+}
+
+/**
+ * Delete the flow with this id in this project. Returns whether a row went, so
+ * the route answers its 404 from the delete itself rather than from a read
+ * before it (#729, the shape #692 gave `deleteConnectionInProject`).
+ */
+export function deleteFlowInProject(projectId: string, id: string): boolean {
+  // `> 0`, not `=== 1`: bun:sqlite's `changes` counts the rows the ON DELETE
+  // CASCADE removes as well (a flow with one version reports 2), and it is 0
+  // exactly when no flow row matched, because nothing cascades from nothing.
+  return db().run(`DELETE FROM flow WHERE id = ? AND project_id = ?`, [id, projectId]).changes > 0;
 }
 
 /**

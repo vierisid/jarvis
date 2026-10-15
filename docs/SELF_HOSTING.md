@@ -799,8 +799,8 @@ a sandbox.
 
 ### Commands, apps and the browser the assistant runs
 
-`run_command`, apps the assistant launches, the local Chrome it drives and the
-Windows desktop bridge get your full environment (`PATH`, nvm and virtualenv
+`run_command`, apps the assistant launches and the local Chrome it drives
+get your full environment (`PATH`, nvm and virtualenv
 settings, `SSH_AUTH_SOCK`, `DISPLAY`, proxies, your own `GITHUB_TOKEN` or
 `AWS_*`) **minus the daemon's own secrets**:
 

@@ -12,10 +12,28 @@ name: Update webview_go
 # path). A green run means the bump is safe -- but the PR is always left for a
 # human to review and merge (no auto-merge).
 #
-# Optional: set a PAT in secret WEBVIEW_BOT_TOKEN (repo + workflow scope) so the
-# bot's PR also triggers test.yml as a visible check on the PR. PRs opened with
-# the default GITHUB_TOKEN do not trigger other workflows; the in-workflow compat
-# gate below runs either way.
+# The PR is opened with RELEASE_PR_TOKEN (#983), as the release and catalog PRs
+# are (#981). It used to take `secrets.WEBVIEW_BOT_TOKEN || secrets.GITHUB_TOKEN`,
+# and WEBVIEW_BOT_TOKEN was never a repository secret, so every PR opened with
+# GITHUB_TOKEN: its CI sat `action_required` until someone approved it, main's
+# required `test` check never ran, and the PR could not merge on its own. With
+# no fallback, a missing secret now fails the run with a reason instead.
+#
+# Three jobs past `check`, so the PAT never shares a job with upstream code:
+#   build    re-vendors, patches and compiles and tests the new upstream code,
+#            holding a read-only token and no secret, and uploads the vendored
+#            tree as an artifact.
+#   publish  holds the PAT and opens the PR. It copies that tree into its own
+#            checkout and runs nothing else: no Go, no script of this repo or
+#            of upstream, so the only code that ever runs with the PAT is the
+#            SHA-pinned create-pull-request. A PAT outlives the run and its
+#            pushes start workflows (a v* tag starts release-exec.yml), so
+#            unlike GITHUB_TOKEN it is worth stealing from a job long after.
+#   report   holds issues: write and opens the tracking issue when either
+#            failed.
+# The tree still crosses from a job that ran upstream code into the PR -- that
+# is the point of the workflow -- as data, which nothing in `publish` runs. The
+# first thing to build it after that is the PR's own test.yml, read-only.
 
 on:
   schedule:
@@ -27,10 +45,11 @@ on:
         required: false
         type: string
 
+# Read-only by default; only `report` asks for more. The branch push and the
+# PR go through RELEASE_PR_TOKEN, so no GITHUB_TOKEN here needs contents or
+# pull-requests write.
 permissions:
-  contents: write
-  pull-requests: write
-  issues: write
+  contents: read
 
 # Serialize runs (a manual dispatch landing on top of the monthly cron) so two
 # jobs don't race on the bot branch / open competing PRs.
@@ -39,7 +58,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  GO_VERSION: "1.25"
   MODULE: github.com/webview/webview_go
 
 jobs:
@@ -51,7 +69,10 @@ jobs:
       current: ${{ steps.cmp.outputs.current }}
       version: ${{ steps.cmp.outputs.version }}
     steps:
+      # persist-credentials: false, as in build below (#982).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - id: cmp
         # Read the dispatch input through env (never interpolate untrusted
         # ${{ }} straight into the shell -- it would allow command injection).
@@ -72,6 +93,12 @@ jobs:
           case "$latest" in
             *[!A-Za-z0-9.+_-]*) echo "refusing suspicious version: $latest" >&2; exit 1 ;;
           esac
+          # The same for the pinned one (security review of #983): the
+          # build job, which runs upstream code, writes that file into the
+          # PR, so a later run reads what it wrote.
+          case "$current" in
+            "" | *[!A-Za-z0-9.+_-]*) echo "refusing suspicious pinned version: $current" >&2; exit 1 ;;
+          esac
           echo "current=$current" >> "$GITHUB_OUTPUT"
           echo "version=$latest"  >> "$GITHUB_OUTPUT"
           if [ "$current" != "$latest" ]; then
@@ -81,15 +108,27 @@ jobs:
           fi
           echo "current=$current  latest=$latest"
 
-  # ─── Re-vendor, re-patch, prove it still builds, open the PR ────
-  update:
+  # --- Re-vendor, re-patch, prove it still builds ---
+  # Runs upstream code (the Go build and tests link it), so it holds a
+  # read-only token and no secret (#983).
+  build:
     needs: check
     if: needs.check.outputs.changed == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
+      # persist-credentials: false (#982): nothing here needs the token on
+      # disk, and this job runs the code it fetched.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
+          # The Actions cache is writable by any run on main, and Go reuses
+          # cached modules and build output without re-verifying them (#681).
+          cache: false
           # Track sidecar/go.mod as the single source of the Go version.
           go-version-file: sidecar/go.mod
           cache-dependency-path: sidecar/go.sum
@@ -150,11 +189,112 @@ jobs:
           export CGO_CFLAGS="-I$(pwd)/include" CGO_CXXFLAGS="-I$(pwd)/include"
           go build -o /tmp/jarvis-sidecar.exe .
 
+      # Only the paths the PR commits, as the add-paths below list them. The
+      # vendor dir carries a .gitattributes, which upload-artifact leaves out
+      # unless asked, and the PR would then delete it.
+      - name: Collect the vendored tree
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/webview-bump"
+          mkdir -p "$out"
+          cp -R sidecar/third_party/webview_go "$out/webview_go"
+          cp sidecar/go.mod sidecar/go.sum "$out/"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: webview-bump
+          path: ${{ runner.temp }}/webview-bump
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  # --- Open / update the bump PR ---
+  # Holds RELEASE_PR_TOKEN and runs no upstream or repository code (#983):
+  # the refusal, a checkout, the artifact, a copy, and create-pull-request.
+  publish:
+    needs: [check, build]
+    if: needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      # Refuse now, with a reason, rather than open a PR whose CI never runs
+      # and that can never merge (main requires `test`). Through env, not an
+      # `if:`: the secrets context is not dependable in a step condition.
+      # Same shape as the catalog PR (#981). This catches only an empty
+      # secret; an expired or revoked PAT fails loudly inside
+      # create-pull-request instead.
+      - name: Refuse without the webview PR token
+        env:
+          WEBVIEW_PR_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+        run: |
+          if [ -z "$WEBVIEW_PR_TOKEN" ]; then
+            echo "::error::RELEASE_PR_TOKEN is not set, so the webview_go bump PR would open without CI and could never merge (#983)."
+            echo "Add a fine-grained PAT with Contents: read and write, and Pull requests: read and write, on this repository."
+            exit 1
+          fi
+
+      # No token left in .git/config (#821, #982): this job copies in files a
+      # job running upstream code produced, and create-pull-request
+      # configures git from its own token input.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: webview-bump
+          path: ${{ runner.temp }}/webview-bump
+
+      # The artifact is exactly the vendor dir and the two module files:
+      # regular files and directories only (a link would point the copy
+      # anywhere); no .git anywhere in it, in any case (git would take a
+      # nested one as a repository of its own, under the PAT); names in a
+      # plain alphabet only (a newline in one could fake the listing); and
+      # the version it records is the one `check` resolved. All of it before
+      # anything in the checkout is touched.
+      - name: Put the vendored tree in place
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          in="$RUNNER_TEMP/webview-bump"
+          if [ -n "$(find "$in" -mindepth 1 -not -type f -not -type d -print -quit)" ]; then
+            echo "::error::the webview-bump artifact holds something other than files and directories"
+            exit 1
+          fi
+          if [ -n "$(find "$in" -mindepth 1 -iname .git -print -quit)" ]; then
+            echo "::error::the webview-bump artifact holds a .git"
+            exit 1
+          fi
+          if [ -n "$(LC_ALL=C find "$in" -mindepth 1 -name '*[!A-Za-z0-9._+-]*' -print -quit)" ]; then
+            echo "::error::the webview-bump artifact holds a name outside A-Za-z0-9._+-"
+            exit 1
+          fi
+          if [ "$(find "$in" -mindepth 1 -maxdepth 1 | wc -l)" != 3 ] || [ ! -f "$in/go.mod" ] || [ ! -f "$in/go.sum" ] || [ ! -d "$in/webview_go" ]; then
+            echo "::error::the webview-bump artifact is not the vendor dir and the two module files"
+            exit 1
+          fi
+          if [ "$(cat "$in/webview_go/UPSTREAM_VERSION" 2>/dev/null)" != "$VERSION" ]; then
+            echo "::error::the vendored tree records another version than ${VERSION}"
+            exit 1
+          fi
+          rm -rf sidecar/third_party/webview_go
+          cp -R "$in/webview_go" sidecar/third_party/webview_go
+          cp "$in/go.mod" "$in/go.sum" sidecar/
+
+      # Opened with RELEASE_PR_TOKEN, not GITHUB_TOKEN: GitHub holds the
+      # `pull_request` CI of a PR that GITHUB_TOKEN opens or pushes for a
+      # maintainer to approve, so main's required `test` check never runs and
+      # the PR cannot merge (#935, measured there). With the PAT the push and
+      # the PR are by a real user and CI starts natively. The PAT reaches only
+      # this step and the refusal at the top of the job.
       - name: Open / update the bump PR
         id: pr
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
-          token: ${{ secrets.WEBVIEW_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.RELEASE_PR_TOKEN }}
           branch: bot/update-webview-go
           delete-branch: true
           add-paths: |
@@ -183,12 +323,25 @@ jobs:
             runtime hidden-window behavior. Skim the `jarvis.patch` hunk in the
             diff to confirm the SW_HIDE edit still sits in the win32 constructor.
 
-      # If anything above failed (patch no longer applies, or upstream broke the
-      # build), surface it instead of failing silently in a scheduled run.
+  # If the bump failed (patch no longer applies, upstream broke the build,
+  # or the PR could not be opened), surface it instead of failing silently in
+  # a scheduled run. Only once `check` found a bump, as before the split.
+  # A job that runs past its timeout-minutes is cancelled, not failed, and
+  # failure() alone would skip this (review of #983), so either result of
+  # either job counts; a run cancelled by hand files an issue too.
+  report:
+    needs: [check, build, publish]
+    if: always() && needs.check.outputs.changed == 'true' && (contains(fromJSON('["failure","cancelled"]'), needs.build.result) || contains(fromJSON('["failure","cancelled"]'), needs.publish.result))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
       - name: Report failure
-        if: failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No checkout here, so gh is told the repository.
+          GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.check.outputs.version }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -201,5 +354,5 @@ jobs:
             exit 0
           fi
           gh issue create --title "$title" --label automated,dependencies \
-            --body "The monthly webview_go update to \`${VERSION}\` failed (patch no longer applies, or the bump broke the build). Re-apply the SW_HIDE patch, regenerate \`sidecar/third_party/webview_go/jarvis.patch\`, then re-run. Run: ${RUN_URL}" \
+            --body "The monthly webview_go update to \`${VERSION}\` failed: the patch no longer applies, the bump broke the build, or the PR could not be opened (RELEASE_PR_TOKEN unset or expired). If it is the patch, re-apply the SW_HIDE patch, regenerate \`sidecar/third_party/webview_go/jarvis.patch\`, then re-run. Run: ${RUN_URL}" \
             || true

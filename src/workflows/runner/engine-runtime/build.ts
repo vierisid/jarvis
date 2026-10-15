@@ -15,9 +15,11 @@
  * Staging lives outside the repo (under `~/.jarvis/cache/engine-build`) so
  * `node_modules` from the engine build never pollutes the project tree.
  *
- * Bundle output is content-addressed: hash of the synthesized package.json +
- * UPSTREAM.md (which pins the activepieces commit). Re-running with the same
- * inputs short-circuits to the cached bundle.
+ * Bundle output is content-addressed: hash of the synthesized package.json,
+ * the committed staging lockfile, the upstream pin, our patched sources and the
+ * build config. Re-running with the same inputs short-circuits to the cached
+ * bundle, and since #836 every third-party module comes from the staging
+ * install alone, so those inputs are ALL of what goes in.
  */
 
 import { spawn } from "node:child_process";
@@ -26,16 +28,28 @@ import {
   existsSync,
   writeFileSync,
   readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
   utimesSync,
+  openSync,
+  writeSync,
+  fsyncSync,
+  closeSync,
+  mkdtempSync,
+  symlinkSync,
 } from "node:fs";
-import { resolve, dirname } from "node:path";
-import { homedir } from "node:os";
-import { createHash } from "node:crypto";
+import { resolve, dirname, relative, sep } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { createHash, randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { builtinModules } from "node:module";
 import { UPSTREAM_PIN_SHA, UPSTREAM_PIN_TAG } from "../../activepieces/upstream-pin";
 import { ENGINE_LIFECYCLE_SHIM } from "./engine-lifecycle";
 import { sanitizedEnv } from "../../../util/subprocess-env";
 import { BUN_INSTALL_ARGS, SANITIZED_INSTALL_HINT } from "../../../util/sanitized-install";
+import { sha256OfFile } from "./bundle-integrity";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -47,6 +61,48 @@ const ENGINE_DIR = resolve(VENDOR_PACKAGES, "server/engine");
 const CACHE_ROOT = resolve(homedir(), ".jarvis/cache");
 const STAGING_DIR = resolve(CACHE_ROOT, "engine-build");
 const BUNDLE_ROOT = resolve(CACHE_ROOT, "engine");
+
+/**
+ * The committed lockfile for the staging install (#836): every package the
+ * engine bundle compiles in, at the exact version and integrity hash, so the
+ * bytes a build produces are a function of this install and nothing else.
+ *
+ * WHY. The synthesized package.json declares RANGES (`ai: ^6.0.0`) and says
+ * nothing about transitive versions, so two builders resolving it at
+ * different times inlined different code under one `bundleHash()` -- measured
+ * on 2026-10-08: a staging installed in June held ai@6.0.194, a fresh resolve
+ * of the same package.json gave ai@6.0.302 plus a nested undici@6.29.0 the
+ * older tree did not have (the Dockerfile's own note records two builds two
+ * hours apart differing by ~9.7 KB). Since #761/#762 a daemon PINS the bytes
+ * it built, so a second builder at the same path is not a slightly different
+ * bundle but a refused spawn.
+ *
+ * Regenerate after an upstream sync changes the vendored manifests (the
+ * consistency test in build.test.ts fails until you do):
+ *   bun run scripts/update-engine-staging-lock.ts
+ */
+const STAGING_LOCK_PATH = resolve(__dirname, "engine-staging.lock");
+
+/** The committed staging lockfile's text. */
+export function stagingLockfile(): string {
+  return readFileSync(STAGING_LOCK_PATH, "utf8");
+}
+
+/**
+ * `bun install` for the staging dir: the daemon's sanitized install, held to
+ * the committed lockfile. `--frozen-lockfile` fails the install rather than
+ * resolve anything the lockfile does not already name.
+ *
+ * `--linker=hoisted`: the lockfile pins versions, not the LAYOUT, and a
+ * `[install] linker = "isolated"` in `~/.bunfig.toml` (which `bun install`
+ * reads) turns the tree into `node_modules/.bun/` plus symlinked package dirs
+ * (found in review, reproduced). Under the build's `preserveSymlinks`, a
+ * package's own imports would then resolve from the top level -- a failed
+ * build, or a top-level version standing in for the nested one it asked for.
+ * The flag wins over any bunfig, and `ensureStagingInstalled` refuses a tree
+ * with a symlinked package anyway.
+ */
+export const STAGING_INSTALL_ARGS = [...BUN_INSTALL_ARGS, "--frozen-lockfile", "--linker=hoisted"] as const;
 
 /**
  * Optional read-only SHARED bundle root (multi-tenant hosting): the host
@@ -71,6 +127,14 @@ export interface EngineBundle {
   hash: string;
   /** Absolute path to the directory containing the bundle (useful as cwd for the spawned engine). */
   bundleDir: string;
+  /**
+   * sha256 of `main.js` as this daemon VERIFIED it (a shared bundle that
+   * matched its manifest) or BUILT it, or `null` for a per-user bundle that was
+   * adopted from the cache and that nothing verified. Hand it to
+   * `EngineRuntime` as `expectedDigest`, which re-checks it at every spawn
+   * (#671, #762; see bundle-integrity.ts).
+   */
+  digest: string | null;
 }
 
 /**
@@ -152,7 +216,7 @@ function versionMeetsFloor(declared: string, floor: string): boolean {
  * the latest entry wins -- we'd flag in CI if this ever matters, but in
  * practice the workspace pkgs all share pinned versions.
  */
-function buildStagingPackageJson(): string {
+export function buildStagingPackageJson(): string {
   const deps: Record<string, string> = {};
   for (const rel of WORKSPACE_PKG_RELS) {
     const pkg = JSON.parse(
@@ -227,6 +291,10 @@ export const PATCHED_VENDOR_SOURCES = [
   // invalidates every cached engine bundle and compiled piece, on every
   // instance and shared root.
   '../../../util/subprocess-env.ts',
+  // CACHE INVALIDATION (#837): the CODE-step child now runs with `--no-install`
+  // and names an undeclared package, so every cached engine bundle and shared
+  // root rebuilds once. Intended: an old bundle still lets a step's bare
+  // `require` auto-install from the npm registry.
   'server/engine/src/lib/core/code/no-op-code-sandbox.ts',
   'server/engine/src/lib/variables/props-resolver.ts',
   'server/engine/src/lib/variables/props-processor.ts',
@@ -312,7 +380,10 @@ export const PATCHED_VENDOR_SOURCES = [
  * while leaving the constant in the file changes what the engine executes and
  * leaves the key untouched, which is the same stale-bundle trap
  * PATCHED_VENDOR_SOURCES exists to close. Paths stay out because they differ
- * per machine and must not fragment the cache.
+ * per machine and must not fragment the cache -- but the working directory DOES
+ * change the output (module keys are relative to it), which is why the build
+ * runs in a fixed view of the repo and staging (BUILD_VIEW) and `bundleHash`
+ * records that it does.
  */
 export const ENGINE_ESBUILD_CONFIG = {
   bundle: true,
@@ -323,9 +394,8 @@ export const ENGINE_ESBUILD_CONFIG = {
   minifySyntax: true,
   minifyWhitespace: true,
   metafile: true,
-  // isolated-vm intentionally excluded -- we only run SANDBOX_PROCESS mode
-  // (see SPIKE-SANDBOXING.md). utf-8-validate / bufferutil are optional ws deps.
-  external: ["isolated-vm", "utf-8-validate", "bufferutil"],
+  // Nothing is left external any more (#759): the optional modules that used
+  // to be are compiled in as ABSENT instead -- see ENGINE_ABSENT_MODULES.
   get banner() {
     // Lifecycle shim FIRST: it installs the SIGTERM/SIGINT handlers and the
     // orphan watchdog, and its handler must be registered before upstream's
@@ -353,6 +423,329 @@ export const ENGINE_REQUEST_BASE_SHIM = `(() => {
 })();`;
 
 /**
+ * Optional modules the engine bundle must never load from OUTSIDE itself
+ * (#759). Each is compiled in as a module that throws MODULE_NOT_FOUND, which
+ * is exactly what the code requiring it already handles: each one that is
+ * reached at all is reached inside a `try`, and the `catch` is the pure-JS
+ * fallback -- the same path a machine without the package takes.
+ *
+ * WHY. A name the bundle leaves to `require()` at run time is resolved from the
+ * `node_modules` directories ABOVE `main.js`, and when there are none -- the
+ * per-user cache, `~/.jarvis/cache/engine/<hash>/`, has none -- Bun AUTO-
+ * INSTALLS it: fetches the latest version from the npm registry into
+ * `~/.bun/install/cache` and runs it. Measured on a real engine spawned
+ * through `spawnEngine`, with an empty scratch HOME: one flow run fetched
+ * `bufferutil@4.1.0`, `node-gyp-build@4.8.4` and `supports-color@11.0.0`, and
+ * `bufferutil` loads a prebuilt native addon. With `node_modules` planted above
+ * a copy of the bundle, the same run loaded the planted `bufferutil` and
+ * `supports-color` instead. Either way it is code that no digest, manifest or
+ * pin ever covered -- they all cover `main.js` alone.
+ *
+ * The four names, and how each is reached:
+ *   - `bufferutil`: `ws`'s buffer-util, at module load, unless
+ *     WS_NO_BUFFER_UTIL is set. Observed loading at every spawn.
+ *   - `supports-color`: `debug`'s node entry, at module load, UNCONDITIONALLY.
+ *     No environment variable turns it off, which is why the environment route
+ *     the issue proposed (spawn.ts sets WS_NO_* too) cannot close this alone,
+ *     and why this list exists. It was never in `external`: esbuild leaves an
+ *     unresolvable `require` inside a `try` external on its own, silently.
+ *   - `utf-8-validate`: unreachable today -- `ws` prefers `buffer.isUtf8`,
+ *     which Bun has, and Bun also shadows the name with a builtin -- but it was
+ *     declared external, so it is held to the same rule rather than to luck.
+ *   - `isolated-vm`: never required, because `v8-isolate-code-sandbox.ts` is
+ *     stubbed by the sync. Listed so a sync that stops stubbing it fails here,
+ *     loudly, instead of reaching for a native addon from beside the bundle.
+ *
+ * `assertSelfContainedBundle` refuses a build that leaves any OTHER bare name to
+ * run-time resolution, so the next optional `require` a dependency grows is
+ * caught at build time rather than found by reading a bundle.
+ *
+ * CACHE INVALIDATION: this list and the stub's source are hashed into
+ * `bundleHash()`, and the change that introduced them also changed
+ * ENGINE_ESBUILD_CONFIG, so every cached engine bundle -- per-user caches and
+ * every shared root -- rebuilds once, and a shared root has to be republished
+ * for the new hash (a host that has not done so sees a MISS and a per-user
+ * build, not a refusal). That is intended: an old bundle still carries the bare
+ * `require`s.
+ */
+export const ENGINE_ABSENT_MODULES = ["bufferutil", "utf-8-validate", "supports-color", "isolated-vm"] as const;
+
+/**
+ * The whole body of an absent module: what Node throws for a missing one, on
+ * EVERY require of it.
+ *
+ * Throwing once is not enough. esbuild's CommonJS wrapper assigns the module
+ * record before running the body and returns `module.exports` on every later
+ * call, so a stub that only threw would hand its SECOND requirer an empty `{}`
+ * -- and `ws` given `{}` as `bufferutil` installs `bufferUtil.mask`, undefined,
+ * and throws on the first large frame, outside any `try`. The bundle already
+ * requires `supports-color` from two copies of `debug`. Making `exports` a
+ * getter that throws the same error turns every later require into the same
+ * catchable MODULE_NOT_FOUND, at the require, inside the caller's `try`.
+ */
+export function absentModuleSource(name: string): string {
+  const message = `Cannot find module '${name}' (compiled out of the Jarvis engine bundle, #759)`;
+  return `var e = new Error(${JSON.stringify(message)}); e.code = "MODULE_NOT_FOUND"; ` +
+    `Object.defineProperty(module, "exports", { get: function () { throw e; } }); throw e;`;
+}
+
+const ABSENT_NAMESPACE = "jarvis-absent-module";
+
+/** esbuild plugin resolving every ENGINE_ABSENT_MODULES name to its stub. */
+export function absentModulesPlugin(): { name: string; setup(build: EsbuildPluginBuild): void } {
+  const names = new Set<string>(ENGINE_ABSENT_MODULES);
+  return {
+    name: "jarvis-absent-modules",
+    setup(build) {
+      build.onResolve({ filter: /^[^./]/u }, (args) =>
+        names.has(args.path) ? { path: args.path, namespace: ABSENT_NAMESPACE } : undefined);
+      build.onLoad({ filter: /.*/u, namespace: ABSENT_NAMESPACE }, (args) =>
+        ({ contents: absentModuleSource(args.path), loader: "js" }));
+    },
+  };
+}
+
+/** The slice of esbuild's plugin API `absentModulesPlugin` uses. */
+interface EsbuildPluginBuild {
+  onResolve(
+    opts: { filter: RegExp; namespace?: string },
+    cb: (args: { path: string }) => { path: string; namespace: string } | undefined,
+  ): void;
+  onLoad(
+    opts: { filter: RegExp; namespace?: string },
+    cb: (args: { path: string }) => { contents: string; loader: "js" },
+  ): void;
+}
+
+/** The slice of an esbuild metafile `assertSelfContainedBundle` reads. */
+export interface EngineMetafile {
+  outputs: Record<string, { imports?: Array<{ path: string; kind: string; external?: boolean }> }>;
+  /** Every module compiled in, keyed as esbuild names it. */
+  inputs?: Record<string, unknown>;
+}
+
+/**
+ * The build sees the repo and the staging install through ONE directory of two
+ * symlinks, `<view>/repo` and `<view>/staging`, with `preserveSymlinks` and
+ * `<view>` as esbuild's working directory (#836).
+ *
+ * WHY. esbuild names every module by its path relative to the working
+ * directory and writes that name into the bundle (`__commonJS({"<name>"() ...`).
+ * The staging dir is under HOME and the repo can be anywhere, so before this a
+ * staging module was named `../../../../../.jarvis/cache/engine-build/node_modules/...`
+ * from a worktree and something else from the main checkout or an npm install:
+ * different bytes under one hash. Through the view every name is
+ * `repo/src/...` or `staging/node_modules/...` wherever either directory is.
+ *
+ * Symlinks rather than an esbuild namespace for staging modules: a namespace
+ * fixes the names too, but loses the package.json `type` of the file, and
+ * esbuild uses that for ESM/CommonJS interop -- measured, the namespaced bundle
+ * differed from the plain one by exactly that (`__toESM(require_x())` instead
+ * of `__toESM(require_x(), 1)` for xmlhttprequest-ssl, imported from an ESM
+ * file in a `"type": "module"` package). The view changes names and nothing else.
+ */
+export const BUILD_VIEW = { repo: "repo", staging: "staging" } as const;
+
+/** Bumped when the resolution rules below change what is compiled in. */
+const STAGING_RESOLUTION_VERSION = "staging-only-view/v1";
+
+/** Workspace packages the build aliases to vendored source (never staging), under `repoRoot`. */
+export function engineAliases(repoRoot: string = REPO_ROOT): Record<string, string> {
+  const vendor = resolve(repoRoot, relative(REPO_ROOT, VENDOR_PACKAGES));
+  return {
+    "@activepieces/shared": resolve(vendor, "shared/src"),
+    "@activepieces/pieces-framework": resolve(vendor, "pieces/framework/src"),
+    "@activepieces/pieces-common": resolve(vendor, "pieces/common/src"),
+  };
+}
+
+const isBareSpecifier = (path: string): boolean => !path.startsWith(".") && !path.startsWith("/");
+const isNodeBuiltin = (path: string): boolean => path.startsWith("node:") || NODE_BUILTINS.has(path);
+
+/** The slice of esbuild's plugin API `stagingResolutionPlugin` uses. */
+interface EsbuildResolveArgs {
+  path: string;
+  kind: string;
+  namespace: string;
+  importer: string;
+  pluginData?: unknown;
+}
+interface EsbuildResolvingBuild {
+  resolve(path: string, opts: { kind: string; resolveDir: string; pluginData?: unknown }): Promise<{
+    path: string;
+    namespace: string;
+    external: boolean;
+    sideEffects: boolean;
+    errors: Array<{ text: string }>;
+  }>;
+  onResolve(opts: { filter: RegExp }, cb: (args: EsbuildResolveArgs) => Promise<unknown> | unknown): void;
+}
+
+/** Marks this plugin's own `build.resolve` calls so it does not intercept them. */
+const OWN_RESOLVE = Symbol("jarvis-staging-resolve");
+
+/**
+ * Resolve every package OUR sources import from the staging install, and only
+ * from there (#836). `stagingDir` is the path the build sees staging at (the
+ * view's `staging` link).
+ *
+ * WHY. esbuild resolves a bare import by walking up from the importing file,
+ * and the vendored engine source lives in the daemon's own tree -- so before
+ * this, every package the daemon ALSO depends on came from the daemon's
+ * `node_modules` (from a worktree, the main checkout's), and `nodePaths`
+ * reached staging only for the rest. Measured from this repo's bundle
+ * metafile: 200 inputs from 15 packages came from there, and not at the
+ * versions the engine declares -- undici 6.21.3 where the engine pins 7.24.6,
+ * nanoid 5.1.11 for 3.3.8, socket.io-client 4.8.3 for 4.8.1, semver 7.7.4 for
+ * 7.6.0. None of it was in `bundleHash()`, SECURITY_FLOOR could not reach it,
+ * and an image build (which has no root `node_modules`) compiled the declared
+ * versions instead: a different engine under the same hash.
+ *
+ * A staging module's own imports need no help: they walk up from inside
+ * staging and find staging first. What they could find beyond it, and anything
+ * else that slips past this plugin, `assertInputsFromStaging` refuses.
+ *
+ * Fails closed: a package that is not in staging, or that resolves to a file
+ * outside it, is a build error rather than a fallback.
+ */
+export function stagingResolutionPlugin(stagingDir: string): { name: string; setup(build: EsbuildResolvingBuild): void } {
+  const modulesRoot = resolve(stagingDir, "node_modules") + sep;
+  const aliases = Object.keys(engineAliases());
+  const isAliased = (path: string) => aliases.some((a) => path === a || path.startsWith(a + "/"));
+  return {
+    name: "jarvis-staging-resolution",
+    setup(build) {
+      build.onResolve({ filter: /^[^./]/u }, async (args) => {
+        if (args.pluginData === OWN_RESOLVE || args.namespace !== "file") return undefined;
+        // Staging's own imports, builtins, aliases to vendored source, and
+        // tsconfig's `@/` (a path, not a package) resolve as esbuild would.
+        if (args.importer.startsWith(modulesRoot)) return undefined;
+        if (!isBareSpecifier(args.path) || isNodeBuiltin(args.path) || isAliased(args.path) || args.path.startsWith("@/")) {
+          return undefined;
+        }
+        const resolved = await build.resolve(args.path, { kind: args.kind, resolveDir: stagingDir, pluginData: OWN_RESOLVE });
+        if (resolved.errors.length > 0) {
+          return {
+            errors: [{
+              text: `${JSON.stringify(args.path)} is not in the engine staging install (#836): ` +
+                resolved.errors.map((e) => e.text).join("; "),
+            }],
+          };
+        }
+        // Another plugin's answer (a compiled-out module), or external.
+        if (resolved.external || resolved.namespace !== "file") return resolved;
+        if (!resolved.path.startsWith(modulesRoot)) {
+          return {
+            errors: [{
+              text: `${JSON.stringify(args.path)} resolved to ${resolved.path}, outside the engine staging install ` +
+                `${modulesRoot}; refusing to compile code no bundle hash covers (#836)`,
+            }],
+          };
+        }
+        return { path: resolved.path, sideEffects: resolved.sideEffects };
+      });
+    },
+  };
+}
+
+/**
+ * Refuse a bundle that compiled in anything but our own sources, the staging
+ * install, and the compiled-out stubs (#836). Input names are relative to the
+ * build view, so each allowed origin has exactly one spelling. The plugin above
+ * is what keeps other modules out; this reads the OUTCOME, so a resolution path
+ * the plugin does not see (a staging module reaching past staging, a future
+ * esbuild option, a second plugin) is caught too.
+ */
+export function assertInputsResolveInside(
+  metafile: EngineMetafile,
+  viewDir: string,
+  stagingDir: string,
+  repoRoot: string = REPO_ROOT,
+): void {
+  // The names alone are checked by assertInputsFromStaging; with
+  // `preserveSymlinks` a symlink INSIDE staging or `src/` would keep an
+  // acceptable name while pointing anywhere (found in review). So resolve each
+  // through the view and hold the real file to the real roots.
+  const roots = [realpathSync(resolve(stagingDir, "node_modules")) + sep, realpathSync(resolve(repoRoot, "src")) + sep];
+  const stray = Object.keys(metafile.inputs ?? {}).filter((key) => {
+    if (key.startsWith(`${ABSENT_NAMESPACE}:`)) return false;
+    let real: string;
+    try {
+      real = realpathSync(resolve(viewDir, key));
+    } catch {
+      return true;
+    }
+    return !roots.some((r) => real.startsWith(r));
+  });
+  if (stray.length > 0) {
+    throw new Error(
+      `engine bundle REFUSED: ${stray.length} input(s) are links to files outside the staging install and the repo's ` +
+        `sources, e.g. ${stray.slice(0, 5).map((k) => JSON.stringify(k)).join(", ")} (#836).`,
+    );
+  }
+}
+
+/** The name half of the check above: every input NAMED as one of the allowed origins. */
+export function assertInputsFromStaging(metafile: EngineMetafile): void {
+  const stray = Object.keys(metafile.inputs ?? {}).filter((key) => {
+    if (key.startsWith(`${ABSENT_NAMESPACE}:`)) return false;
+    if (key.startsWith(`${BUILD_VIEW.staging}/node_modules/`) && !key.includes("/../")) return false;
+    if (key.startsWith(`${BUILD_VIEW.repo}/src/`) && !key.includes("/../") && !/\/node_modules\//u.test(key)) return false;
+    return true;
+  });
+  if (stray.length > 0) {
+    const shown = stray.slice(0, 5).map((k) => JSON.stringify(k)).join(", ");
+    throw new Error(
+      `engine bundle REFUSED: ${stray.length} input(s) came from outside the staging install and the repo's sources, ` +
+        `e.g. ${shown} -- code bundleHash() does not cover (#836).`,
+    );
+  }
+}
+
+/**
+ * Every bare module name an esbuild OUTPUT still resolves at run time, other
+ * than Node's builtins. The OUTPUT's imports and not the inputs': an input
+ * lists type-only imports that never reach the bundle.
+ */
+export function runtimeResolvedModules(metafile: EngineMetafile): string[] {
+  const found = new Set<string>();
+  for (const output of Object.values(metafile.outputs)) {
+    for (const imp of output.imports ?? []) {
+      if (!imp.external) continue;
+      const name = imp.path;
+      if (name.startsWith("node:") || NODE_BUILTINS.has(name)) continue;
+      found.add(name);
+    }
+  }
+  return [...found].sort();
+}
+
+/**
+ * Node's builtins, not the runtime's. Under Bun `builtinModules` also lists
+ * `bun`, `bun:*`, `ws` and `undici`: Bun shadows those names with its own
+ * implementations, so a bundle that left `ws` external would load Bun's `ws`
+ * instead of the one it was built with, and under a non-Bun runtime it would
+ * resolve it from disk beside the bundle. The bundle targets node, so those
+ * count as run-time resolution like any other package.
+ */
+const RUNTIME_ONLY_BUILTINS = new Set(["bun", "ws", "undici"]);
+const NODE_BUILTINS = new Set(
+  builtinModules.filter((name) => !RUNTIME_ONLY_BUILTINS.has(name) && !name.startsWith("bun:")),
+);
+
+/** Refuse a bundle that would load anything from beside itself (#759). */
+export function assertSelfContainedBundle(metafile: EngineMetafile): void {
+  const leaked = runtimeResolvedModules(metafile);
+  if (leaked.length > 0) {
+    throw new Error(
+      `engine bundle REFUSED: it would resolve ${leaked.map((n) => JSON.stringify(n)).join(", ")} at run time, ` +
+        `from node_modules beside the bundle or by Bun auto-install -- code no integrity check covers. ` +
+        `Bundle it, or add it to ENGINE_ABSENT_MODULES if the code requiring it has a fallback (#759).`,
+    );
+  }
+}
+
+/**
  * Cache key combines the synthesized package.json (which captures dep versions),
  * the vendored upstream pin (tag + SHA shipped as a generated TS constant
  * by `sync-activepieces.ts`), and the content of any vendored source files
@@ -360,7 +753,7 @@ export const ENGINE_REQUEST_BASE_SHIM = `(() => {
  * that crashed on npm-installed daemons -- markdown files get filtered
  * out by `.npmignore`, but a TS constant ships as code.
  */
-export function bundleHash(): string {
+export function bundleHash(opts?: { stagingLock?: string }): string {
   const pkg = buildStagingPackageJson();
   const hasher = createHash("sha256")
     .update(pkg)
@@ -383,52 +776,156 @@ export function bundleHash(): string {
     .update("esbuild-config")
     .update("\0")
     .update(JSON.stringify(ENGINE_ESBUILD_CONFIG));
+  // The absent-module plugin is a function, which JSON.stringify would drop, so
+  // what it compiles in is hashed here instead (#759).
+  // The esbuild working directory is the build view (see BUILD_VIEW); its
+  // location is a path and stays out, the fact that it is used is in.
+  hasher.update("\0").update("abs-working-dir=build-view");
+  hasher.update("\0").update("absent-modules");
+  for (const name of ENGINE_ABSENT_MODULES) hasher.update("\0").update(absentModuleSource(name));
+  // #836: what goes in is the staging install and nothing else, so the key
+  // covers exactly what that install holds -- every version and integrity hash
+  // in the committed lockfile -- and the rule that confines resolution to it.
+  //
+  // CACHE INVALIDATION: this changes `bundleHash()`, so every cached engine
+  // bundle, per-user and shared root, rebuilds once (the second such change in
+  // this area after #834's). Intended: an old bundle carries whatever the
+  // builder's own `node_modules` held -- undici 6 where the engine pins 7 --
+  // and its bytes depended on where the builder's checkout was.
+  // `opts.stagingLock` exists so a test can show the key moves with it.
+  hasher.update("\0").update("staging-lock").update("\0").update(opts?.stagingLock ?? stagingLockfile());
+  hasher.update("\0").update(STAGING_RESOLUTION_VERSION).update("\0").update(STAGING_INSTALL_ARGS.join(" "));
   return hasher.digest("hex").slice(0, 16);
 }
 
-// Memoized install promise: every caller awaits the SAME pending
-// `bun install` and we never spawn two concurrent installs against the
+// Memoized install promise, one per staging dir: every caller awaits the SAME
+// pending `bun install` and we never spawn two concurrent installs against the
 // same staging dir. Cleared on rejection so a transient failure can be
 // retried by the next caller.
-let stagingInstallInFlight: Promise<void> | null = null;
+const stagingInstallInFlight = new Map<string, Promise<void>>();
 
-export function ensureStagingInstalled(): Promise<void> {
-  if (stagingInstallInFlight) return stagingInstallInFlight;
-  stagingInstallInFlight = (async (): Promise<void> => {
-    mkdirSync(STAGING_DIR, { recursive: true });
-    const pkgPath = resolve(STAGING_DIR, "package.json");
-    const desired = buildStagingPackageJson();
-    const existing = existsSync(pkgPath) ? readFileSync(pkgPath, "utf8") : null;
-    const haveNodeModules = existsSync(resolve(STAGING_DIR, "node_modules"));
-    if (existing === desired && haveNodeModules) return;
+/**
+ * Written into the staging `node_modules` after an install completes, holding
+ * `stagingInstallStamp()`: what makes a staging dir count as installed.
+ */
+export const STAGING_INSTALLED_MARKER = ".jarvis-staging-installed";
 
-    writeFileSync(pkgPath, desired);
-
-    await new Promise<void>((res, rej) => {
-      // Third-party packages, none of which need the daemon's secrets. The
-      // allowlist keeps what bun needs (PATH, HOME, proxies, registry and CA
-      // settings); lifecycle scripts are skipped -- see BUN_INSTALL_ARGS.
-      const child = spawn("bun", [...BUN_INSTALL_ARGS], {
-        cwd: STAGING_DIR,
-        stdio: "inherit",
-        env: sanitizedEnv(),
-      });
-      child.on("close", (code) => {
-        if (code === 0) res();
-        else rej(new Error(`bun install (engine staging) exited with code ${code}. ${SANITIZED_INSTALL_HINT}`));
-      });
-      child.on("error", rej);
-    });
-  })().catch((e) => {
-    stagingInstallInFlight = null;
-    throw e;
-  });
-  return stagingInstallInFlight;
+/** Identifies the package.json + lockfile pair a completed install was for. */
+export function stagingInstallStamp(): string {
+  return createHash("sha256")
+    .update(buildStagingPackageJson()).update("\0")
+    .update(stagingLockfile()).update("\0")
+    .update(STAGING_INSTALL_ARGS.join(" "))
+    .digest("hex");
 }
 
+/**
+ * Refuse a staging tree with a symlinked package directory (#836): the build
+ * resolves through `preserveSymlinks`, which is only sound for the hoisted
+ * layout of real directories that STAGING_INSTALL_ARGS asks for.
+ */
+export function assertHoistedStaging(nodeModules: string): void {
+  const linked: string[] = [];
+  for (const entry of readdirSync(nodeModules, { withFileTypes: true })) {
+    if (entry.name === ".bin") continue;
+    const path = resolve(nodeModules, entry.name);
+    if (entry.isSymbolicLink()) linked.push(entry.name);
+    else if (entry.name.startsWith("@") && entry.isDirectory()) {
+      for (const scoped of readdirSync(path, { withFileTypes: true })) {
+        if (scoped.isSymbolicLink()) linked.push(`${entry.name}/${scoped.name}`);
+      }
+    }
+  }
+  if (linked.length > 0) {
+    throw new Error(
+      `engine staging install REFUSED: ${linked.slice(0, 5).join(", ")} ${linked.length > 1 ? "are" : "is"} a symlink, ` +
+        `not the hoisted layout the build resolves through (#836). Is a bunfig.toml overriding the linker?`,
+    );
+  }
+}
+
+/** Runs the staging install in `dir` with `args`. Injectable for tests. */
+export type StagingInstaller = (dir: string, args: readonly string[]) => Promise<void>;
+
+const bunStagingInstall: StagingInstaller = (dir, args) =>
+  new Promise<void>((res, rej) => {
+    // Third-party packages, none of which need the daemon's secrets. The
+    // allowlist keeps what bun needs (PATH, HOME, proxies, registry and CA
+    // settings); lifecycle scripts are skipped -- see BUN_INSTALL_ARGS.
+    const child = spawn("bun", [...args], {
+      cwd: dir,
+      stdio: "inherit",
+      env: sanitizedEnv(),
+    });
+    child.on("close", (code) => {
+      if (code === 0) res();
+      else rej(new Error(`bun install (engine staging) exited with code ${code}. ${SANITIZED_INSTALL_HINT}`));
+    });
+    child.on("error", rej);
+  });
+
+/**
+ * `stagingDir` defaults to STAGING_DIR; only tests pass another, with a tree
+ * already seeded so the install below is skipped (see `buildEngineBundle`).
+ *
+ * Installed exactly as the committed lockfile says (#836). A staging dir is
+ * current only when BOTH its package.json and its bun.lock are the committed
+ * ones: the package.json alone was the old test, and it accepted a tree
+ * resolved months earlier against floating ranges.
+ */
+export function ensureStagingInstalled(
+  stagingDir: string = STAGING_DIR,
+  installer: StagingInstaller = bunStagingInstall,
+): Promise<void> {
+  const inFlight = stagingInstallInFlight.get(stagingDir);
+  if (inFlight) return inFlight;
+  const install = (async (): Promise<void> => {
+    mkdirSync(stagingDir, { recursive: true });
+    const pkgPath = resolve(stagingDir, "package.json");
+    const lockPath = resolve(stagingDir, "bun.lock");
+    const nodeModules = resolve(stagingDir, "node_modules");
+    const marker = resolve(nodeModules, STAGING_INSTALLED_MARKER);
+    const desired = buildStagingPackageJson();
+    const desiredLock = stagingLockfile();
+    const stamp = stagingInstallStamp();
+    const existing = existsSync(pkgPath) ? readFileSync(pkgPath, "utf8") : null;
+    const existingLock = existsSync(lockPath) ? readFileSync(lockPath, "utf8") : null;
+    const existingStamp = existsSync(marker) ? readFileSync(marker, "utf8") : null;
+    if (existing === desired && existingLock === desiredLock && existingStamp === stamp) return;
+
+    // From scratch: a tree installed for another lockfile can hold packages
+    // this one does not name, and the build would compile them in.
+    rmSync(nodeModules, { recursive: true, force: true });
+    writeFileSync(pkgPath, desired);
+    writeFileSync(lockPath, desiredLock);
+    await installer(stagingDir, STAGING_INSTALL_ARGS);
+    mkdirSync(nodeModules, { recursive: true });
+    assertHoistedStaging(nodeModules);
+    // Last, so an install that died half way is never mistaken for a finished one.
+    writeFileSync(marker, stamp);
+  })().catch((e) => {
+    stagingInstallInFlight.delete(stagingDir);
+    throw e;
+  });
+  stagingInstallInFlight.set(stagingDir, install);
+  return install;
+}
+
+/**
+ * `bundleRoot` and `stagingDir` override the per-user cache root (default
+ * BUNDLE_ROOT) and the staging install (default STAGING_DIR) -- the seam
+ * `findCachedBundle` got in #673, extended to the builder (#761). Production
+ * never passes either. They exist so the builder's own contracts can be held
+ * on behaviour, against a staging dir seeded with a stand-in esbuild, rather
+ * than by building into the developer's real cache: that a self-built bundle
+ * is pinned, that a refused shared root is answered by a build and not by an
+ * adoption, and that an ordinary per-user bundle is adopted with no manifest.
+ */
 export async function buildEngineBundle(opts?: {
   force?: boolean;
   sharedRoot?: string | null;
+  bundleRoot?: string;
+  stagingDir?: string;
 }): Promise<EngineBundle> {
   // A shared prebuilt bundle short-circuits the whole build — including the
   // staging install, which would otherwise cost every tenant a ~47 MB
@@ -436,10 +933,11 @@ export async function buildEngineBundle(opts?: {
   const shared = opts?.force ? { kind: "miss" as const } : findSharedBundle(opts?.sharedRoot);
   if (shared.kind === "hit") return shared.bundle;
 
-  await ensureStagingInstalled();
+  const stagingDir = opts?.stagingDir ?? STAGING_DIR;
+  await ensureStagingInstalled(stagingDir);
 
   const hash = bundleHash();
-  const bundleDir = resolve(BUNDLE_ROOT, hash);
+  const bundleDir = resolve(opts?.bundleRoot ?? BUNDLE_ROOT, hash);
   const bundlePath = resolve(bundleDir, "main.js");
 
   // A REFUSED shared bundle must not be answered by ADOPTING whatever sits in
@@ -455,12 +953,12 @@ export async function buildEngineBundle(opts?: {
   // So a refusal degrades to a BUILD, not to an adoption. That costs the
   // staging install, which is the cost the warning already announces.
   if (!opts?.force && shared.kind !== "refused" && existsSync(bundlePath)) {
-    return { bundlePath, hash, bundleDir };
+    return { bundlePath, hash, bundleDir, digest: null };
   }
 
   mkdirSync(bundleDir, { recursive: true });
 
-  const esbuildEntry = resolve(STAGING_DIR, "node_modules/esbuild/lib/main.js");
+  const esbuildEntry = resolve(stagingDir, "node_modules/esbuild/lib/main.js");
   if (!existsSync(esbuildEntry)) {
     throw new Error(
       `esbuild not found at ${esbuildEntry}. Did the staging install fail?`,
@@ -470,29 +968,119 @@ export async function buildEngineBundle(opts?: {
   // direct dep on it at the project level. Declared locally with the surface
   // we actually use rather than pulling in @types/esbuild.
   const esbuild = (await import(esbuildEntry)) as {
-    build(options: Record<string, unknown>): Promise<{ metafile: unknown }>;
+    build(options: Record<string, unknown>): Promise<{
+      metafile: EngineMetafile;
+      outputFiles?: Array<{ path: string; contents: Uint8Array }>;
+    }>;
   };
 
-  const result = await esbuild.build({
-    // The hashed config first, then only the path-dependent options. Anything
-    // that changes the output must live in ENGINE_ESBUILD_CONFIG or it is
-    // outside the cache key.
-    ...ENGINE_ESBUILD_CONFIG,
-    entryPoints: [resolve(ENGINE_DIR, "src/main.ts")],
-    outfile: bundlePath,
-    alias: {
-      "@activepieces/shared": resolve(VENDOR_PACKAGES, "shared/src"),
-      "@activepieces/pieces-framework": resolve(VENDOR_PACKAGES, "pieces/framework/src"),
-      "@activepieces/pieces-common": resolve(VENDOR_PACKAGES, "pieces/common/src"),
-    },
-    nodePaths: [resolve(STAGING_DIR, "node_modules")],
-    logLevel: "warning",
-  });
+  // The build view (see BUILD_VIEW): a private directory, gone after the build,
+  // whose two links are the only paths esbuild is given.
+  const view = mkdtempSync(resolve(tmpdir(), "jarvis-engine-view-"));
+  // esbuild is told the bundle lands IN the view, so the sourcemap's paths are
+  // view-relative too (`../repo/src/...`) and the map is as reproducible as
+  // the bundle; the bytes are published to bundleDir below. The cost, taken
+  // deliberately: a stack trace through the map names `repo/src/...` and
+  // `staging/node_modules/...` beside the bundle, files that do not exist
+  // there. Read them as repo-relative and staging-relative paths.
+  const viewOut = resolve(view, "out");
+  let result: Awaited<ReturnType<typeof esbuild.build>>;
+  try {
+    const viewRepo = resolve(view, BUILD_VIEW.repo);
+    const viewStaging = resolve(view, BUILD_VIEW.staging);
+    symlinkSync(REPO_ROOT, viewRepo, "dir");
+    symlinkSync(resolve(stagingDir), viewStaging, "dir");
+    result = await esbuild.build({
+      // The hashed config first, then only the path-dependent options. Anything
+      // that changes the output must live in ENGINE_ESBUILD_CONFIG or it is
+      // outside the cache key.
+      ...ENGINE_ESBUILD_CONFIG,
+      // The view is the working directory, so the module names written into
+      // the bundle depend neither on the builder's cwd (#761: since then a
+      // daemon pins the bytes it built, and a rebuild of the same path by a
+      // process elsewhere refused every later spawn) nor on where the repo and
+      // the staging dir are (#836). `bundleHash` marks this choice.
+      absWorkingDir: view,
+      preserveSymlinks: true,
+      entryPoints: [resolve(viewRepo, relative(REPO_ROOT, ENGINE_DIR), "src/main.ts")],
+      outfile: resolve(viewOut, "main.js"),
+      alias: engineAliases(viewRepo),
+      // Absent modules FIRST: esbuild asks plugins in order, and a compiled-out
+      // name must never be looked up in staging at all. No `nodePaths`: staging
+      // is the ONLY place a package comes from (#836), not a fallback.
+      plugins: [absentModulesPlugin(), stagingResolutionPlugin(viewStaging)],
+      // In memory, not to disk: the bundle is checked, hashed and only then
+      // published (below). esbuild writing `main.js` in place would leave a
+      // window in which a refused or half-written bundle sat at the path the
+      // next call adopts on `existsSync` alone.
+      write: false,
+      logLevel: "warning",
+    });
+    // While the view still exists: what each input name actually IS on disk.
+    assertInputsResolveInside(result.metafile, view, stagingDir);
+  } finally {
+    rmSync(view, { recursive: true, force: true });
+  }
 
-  writeFileSync(bundlePath + ".meta.json", JSON.stringify(result.metafile));
+  // Refused before anything is written, so a refusal leaves nothing to adopt.
+  assertSelfContainedBundle(result.metafile);
+  assertInputsFromStaging(result.metafile);
+  const outputs = (result.outputFiles ?? []).map((f) => ({ target: resolve(bundleDir, relative(viewOut, f.path)), contents: f.contents }));
+  for (const f of outputs) {
+    if (dirname(f.target) !== bundleDir) throw new Error(`esbuild produced ${f.target}, outside ${bundleDir}`);
+  }
+  const main = outputs.find((f) => f.target === bundlePath);
+  if (!main) throw new Error(`esbuild produced no ${bundlePath}`);
 
-  return { bundlePath, hash, bundleDir };
+  // Pin what was just built (#761), so every later spawn re-checks these bytes
+  // exactly as a verified shared bundle's are (#671). This path is the one that
+  // exists FOR safety -- it is how a refused shared root is answered -- and it
+  // writes into BUNDLE_ROOT, the tenant-writable tree that refusal declined to
+  // adopt from; without the pin the bundle it produces was spawned unchecked
+  // for the daemon's lifetime. The digest is of the bytes esbuild produced, in
+  // memory, NOT re-read from disk after the write: a re-read is exactly the
+  // window in which another writer of that tree (or a second builder of the
+  // same predictable path) would get its bytes pinned as "built".
+  const digest = createHash("sha256").update(main.contents).digest("hex");
+  // Published by rename, `main.js` LAST: the sourcemap and metafile first, so
+  // the file whose existence means "built" never appears before its siblings,
+  // and a reader (or a crash) never sees it torn.
+  for (const f of outputs) if (f !== main) publishAtomically(f.target, f.contents);
+  publishAtomically(bundlePath + ".meta.json", JSON.stringify(result.metafile));
+  publishAtomically(bundlePath, main.contents);
+  return { bundlePath, hash, bundleDir, digest };
 }
+
+/**
+ * Write `data` beside `target` under a name no one else picks (O_EXCL), then
+ * rename it over `target`. Rename within a directory is atomic, so `target`
+ * is either its old bytes or all of the new ones.
+ */
+function publishAtomically(target: string, data: Uint8Array | string): void {
+  const tmp = `${target}.${process.pid}.${randomBytes(6).toString("hex")}${PUBLISH_TMP_SUFFIX}`;
+  // Outside the cleanup below: if this fails (EEXIST), the name is someone
+  // else's file and not ours to remove.
+  const fd = openSync(tmp, "wx");
+  try {
+    try {
+      writeSync(fd, typeof data === "string" ? Buffer.from(data) : data);
+      // Data durable BEFORE the rename: without it some filesystems persist the
+      // rename first, and a power loss leaves a short `main.js` at the final
+      // path -- which the next boot adopts on existsSync alone, and nothing
+      // rebuilds because the hash is unchanged.
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(tmp, target);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
+}
+
+/** Suffix of an in-flight publish; a copy of a bundle dir must skip these. */
+export const PUBLISH_TMP_SUFFIX = ".publish.tmp";
 
 export const ENGINE_BUILD_PATHS = {
   REPO_ROOT,
@@ -525,13 +1113,25 @@ type SharedBundleLookup =
  * disclaim whatever follows. Same reasoning as `boundedReceiptText` (#634),
  * done locally because this module is the engine BUILDER and must not grow an
  * import into the daemon's role machinery.
+ *
+ * Exported only so `log-safe-path.probe.test.ts` can hold it to the same probe
+ * vector as the daemon's `inlineUntrusted` / `defangDelimiters` (#674): the two
+ * are deliberately separate implementations, so a shared test is what stops
+ * this copy drifting. Change one, run that test.
  */
-function logSafePath(value: string): string {
+export function logSafePath(value: string): string {
   // `Zl`/`Zp` as well as `Cc`/`Cf`: U+2028 LINE SEPARATOR and U+2029 PARAGRAPH
   // SEPARATOR are line terminators to a JavaScript parser and to several log
   // shippers, and neither is a control or format character, so the first two
   // classes miss exactly the two code points a forger would reach for next.
-  const flat = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, "?").replaceAll("<<<", "(((").replaceAll(">>>", ")))");
+  //
+  // And every Default_Ignorable_Code_Point (#763), the same widening
+  // `inlineUntrusted` got: `Cf` keeps the combining grapheme joiner, the
+  // variation selectors and the Hangul fillers, all of which render as nothing,
+  // so a path could carry text the operator reading the line cannot see. Mapped
+  // to `?` like the rest, so the line shows that something was there.
+  const flat = value.replace(/[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\p{Zl}\p{Zp}]/gu, "?")
+    .replaceAll("<<<", "(((").replaceAll(">>>", ")))");
   // `.toWellFormed()` AFTER the cut, for the reason `defangDelimiters` repairs
   // ill-formed UTF-16 at all: a fixed-length slice can land between the halves
   // of a surrogate pair, and a lone surrogate is rejected outright by some
@@ -617,14 +1217,20 @@ function refuseSharedBundle(bundlePath: string, reason: string, detail: string):
  * check (a truncated copy, a bad layer pull, a tree published without its
  * digest) where it used to be opt-in, and the removal of a fail-open.
  *
- * ALSO NOT execution-time integrity. Verification happens once, HERE, at
- * resolution; the path is then carried on the `EngineRuntime` and spawned many
- * times over the daemon's whole life, re-read from disk each time, with no
- * re-verification. `piece-catalog`'s cache key re-hashes the same file with no
- * manifest check at all. So the window between check and use is the daemon's
- * lifetime, not microseconds, and requiring the manifest does not narrow it.
- * Closing that is re-hashing in `spawnEngine`, or an immutable mount, and is
- * its own issue.
+ * EXECUTION-TIME INTEGRITY is pinned, not re-derived (#671). Verification
+ * happens once, HERE, at resolution, and the path is then carried on the
+ * `EngineRuntime` and spawned many times over the daemon's whole life. So a hit
+ * returns the digest it just computed (`EngineBundle.digest`), the runtime
+ * carries it, and `spawnEngine` re-hashes the file and refuses bytes that
+ * differ -- which narrows the window
+ * between check and use from the daemon's lifetime to the spawn itself. It
+ * does not close it (the engine opens the file after the check -- see
+ * bundle-integrity.ts); that is an immutable mount. Nor would it mean much if
+ * the bundle loaded code from beside itself, which is why it no longer does
+ * (ENGINE_ABSENT_MODULES, #759). `piece-catalog`'s cache key also re-hashes this
+ * file with no manifest check. That executes nothing: on a cache miss the
+ * metadata is extracted by an engine `spawnEngine` checks, and on a hit no
+ * engine runs and the key is computed at boot, right after this verification.
  *
  * COST, scoped honestly: zero for in-tree producers. Both write the manifest
  * unconditionally in the same step as the bundle --
@@ -677,7 +1283,7 @@ function findSharedBundle(sharedRoot?: string | null): SharedBundleLookup {
   let got: string;
   try {
     want = manifestDigest(readFileSync(manifestPath, "utf8"));
-    got = createHash("sha256").update(readFileSync(bundlePath)).digest("hex");
+    got = sha256OfFile(bundlePath);
   } catch (err) {
     // `err instanceof Error ? err.message : String(err)`, the shape used
     // everywhere else, and not `String((err as Error).message)`: that cast
@@ -698,7 +1304,10 @@ function findSharedBundle(sharedRoot?: string | null): SharedBundleLookup {
     return refuseSharedBundle(bundlePath, "digest_mismatch",
       `manifest says ${shown}, bytes hash to ${got}`);
   }
-  return { kind: "hit", bundle: { bundlePath, hash, bundleDir } };
+  // Return the digest that just verified, so every later spawn of this bundle
+  // is checked against THESE bytes and not merely against whatever the
+  // manifest beside them says by then (#671, #762, bundle-integrity.ts).
+  return { kind: "hit", bundle: { bundlePath, hash, bundleDir, digest: got } };
 }
 
 /**
@@ -711,19 +1320,28 @@ function findSharedBundle(sharedRoot?: string | null): SharedBundleLookup {
  * the install tree + compiled-in constants; the old `STAGING_DIR/package.json`
  * guard was unsound and forced a pointless per-user staging install before a
  * prebuilt bundle could even be discovered.
+ *
+ * `bundleRoot` overrides the per-user cache root (default BUNDLE_ROOT,
+ * `~/.jarvis/cache/engine`), mirroring `sharedRoot` (#673). Production never
+ * passes it; it exists so the per-user cache's contract -- a bundle with NO
+ * manifest beside it is still returned -- can be asserted on behaviour, without
+ * a unit test seeding the developer's own cache.
  */
 export function findCachedBundle(opts?: {
   sharedRoot?: string | null;
-}): { bundlePath: string; hash: string } | null {
+  bundleRoot?: string;
+}): { bundlePath: string; hash: string; digest: string | null } | null {
   const shared = findSharedBundle(opts?.sharedRoot);
-  if (shared.kind === "hit") return { bundlePath: shared.bundle.bundlePath, hash: shared.bundle.hash };
+  if (shared.kind === "hit") {
+    return { bundlePath: shared.bundle.bundlePath, hash: shared.bundle.hash, digest: shared.bundle.digest };
+  }
   // A REFUSED shared bundle is answered by "nothing is cached", never by the
   // per-user copy (#624): that tree is tenant-writable and unverified, so
   // adopting it would answer a failed integrity check by lowering the trust
   // level. The caller's `buildEngineBundle` then BUILDS rather than adopts.
   if (shared.kind === "refused") return null;
   const hash = bundleHash();
-  const bundleDir = resolve(BUNDLE_ROOT, hash);
+  const bundleDir = resolve(opts?.bundleRoot ?? BUNDLE_ROOT, hash);
   const bundlePath = resolve(bundleDir, "main.js");
   if (!existsSync(bundlePath)) return null;
   // Mark it as in use for the cache pruner (#491): a daemon that resolves a
@@ -735,5 +1353,6 @@ export function findCachedBundle(opts?: {
   } catch {
     /* read-only or gone */
   }
-  return { bundlePath, hash };
+  // `digest: null`: adopted, and nothing verified it (see EngineBundle.digest).
+  return { bundlePath, hash, digest: null };
 }

@@ -44,7 +44,12 @@ test('status and listings surface an approval that never started, with its state
   expect(status).toMatchObject({ pending_approvals: 0, unresolved_approvals: 1 });
   const unresolved = await (await h.call('/api/authority/approvals', 'GET', '?status=unresolved')).json() as Record<string, unknown>[];
   expect(unresolved).toHaveLength(1);
-  expect(unresolved[0]).toMatchObject({ id: h.req.id, status: 'approved', execution_state: 'not_started', intent: 'Send the invoice' });
+  // The route used to take `intent` from `wsService.computeApprovalIntent`,
+  // which this harness does not stub, so it pinned the reason-only fallback no
+  // daemon ever served. It now computes the sentence itself, and since #792
+  // also sends its two parts apart.
+  expect(unresolved[0]).toMatchObject({ id: h.req.id, status: 'approved', execution_state: 'not_started',
+    intent: 'Send email to x@example.com (Send the invoice)', intent_action: 'Send email to x@example.com', intent_reason: 'Send the invoice' });
   expect(await (await h.call('/api/authority/approvals', 'GET', '?status=pending')).json()).toEqual([]);
   const history = await (await h.call('/api/authority/approvals', 'GET', '?limit=5')).json() as Record<string, unknown>[];
   expect(history[0]).toMatchObject({ id: h.req.id, execution_state: 'not_started' });

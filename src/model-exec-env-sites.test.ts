@@ -1,8 +1,8 @@
 /**
  * Issue #514: the spawns the MODEL directs -- run_command's shell, an app it
- * launches, the Chrome it drives over CDP, and the desktop-bridge that
- * launches apps for it -- no longer hand their child the daemon's own
- * secrets, and still hand it the user's shell and desktop.
+ * launches, and the Chrome it drives over CDP -- no longer hand their child
+ * the daemon's own secrets, and still hand it the user's shell and desktop.
+ * (The desktop-bridge launcher that was also here went with the bridge, #799.)
  *
  * Same method as src/spawn-env-sites.test.ts (#512): assert at EACH CALL SITE,
  * against the environment a real child received. See
@@ -112,14 +112,18 @@ async function runProbe(site: string, fakesFirstOnPath = false): Promise<ProbeRe
   fake(join(binDir, 'fake-shell'), [...dumpTo(dumpDir, 'shell'), 'echo ok']);
   // A launched app: its first argument names the dump.
   fake(join(binDir, 'fake-app'), [...dumpTo(dumpDir, '${1:-app}')]);
-  // Browser and bridge: dump, then become the listener the launcher polls, so
-  // that the launcher's kill reaches it.
+  // Browser: dump, then become the listener the launcher polls, so that the
+  // launcher's kill reaches it.
   const serve = `exec "${process.execPath}" --no-env-file "${FAKE_SERVER}" "$@"`;
   fake(join(binDir, 'fake-chrome'), [...dumpTo(dumpDir, 'chrome'), serve]);
-  fake(join(binDir, 'fake-sidecar'), [...dumpTo(dumpDir, 'sidecar'), serve]);
-  // The toast: WSL's view of the machine, no notify-send and a powershell.exe.
-  fake(join(binDir, 'which'), ['case "$1" in powershell.exe) echo "$0"; exit 0;; *) exit 1;; esac']);
-  fake(join(binDir, 'powershell.exe'), [...dumpTo(dumpDir, 'powershell')]);
+  // The toast: WSL's view of the machine, no notify-send, and a powershell.exe
+  // in the Windows directory the probe points windowsSystemExe at (#896). One
+  // planted first on PATH as well, which must not be the one that runs.
+  fake(join(binDir, 'which'), ['exit 1']);
+  const psDir = join(root, 'Windows', 'System32', 'WindowsPowerShell', 'v1.0');
+  mkdirSync(psDir, { recursive: true });
+  fake(join(psDir, 'powershell.exe'), [...dumpTo(dumpDir, 'powershell')]);
+  fake(join(binDir, 'powershell.exe'), [...dumpTo(dumpDir, 'planted-powershell')]);
   const env = userEnv(root);
   if (fakesFirstOnPath) env.PATH = `${binDir}:${env.PATH}`;
 
@@ -220,11 +224,10 @@ describe('model-directed spawns strip the daemon secrets and keep the user env (
     expectModelExecEnv(await runProbe('chrome'), 'chrome');
   }, 45_000);
 
-  test('desktop-bridge, which launches apps for the model: launchSidecar', async () => {
-    expectModelExecEnv(await runProbe('sidecar'), 'sidecar');
-  }, 45_000);
-
   test('the PowerShell toast, an interpreter run for model text: sendViaPowerShell', async () => {
-    expectModelExecEnv(await runProbe('desktop-notify', true), 'powershell');
+    const result = await runProbe('desktop-notify', true);
+    expectModelExecEnv(result, 'powershell');
+    // The System32 one ran, not the one first on PATH (#896).
+    expect(result.dumps.map(d => d.name)).not.toContain('planted-powershell');
   }, 45_000);
 });

@@ -1,4 +1,4 @@
-import type { ChannelAdapter, ChannelHandler, ChannelMessage } from './telegram.ts';
+import type { ChannelAdapter, ChannelHandler, ChannelMessage, SendOptions } from './telegram.ts';
 
 export class WhatsAppAdapter implements ChannelAdapter {
   name = 'whatsapp';
@@ -29,7 +29,11 @@ export class WhatsAppAdapter implements ChannelAdapter {
     this.connected = false;
   }
 
-  async sendMessage(to: string, text: string): Promise<void> {
+  // A real implementation must honour `options.literal` (no markup, mentions
+  // or previews): the approval card is sent that way and approved by reply.
+  // WhatsApp renders *bold*, _italic_ and ~strike~ with no escape, so literal
+  // text there needs more than a flag.
+  async sendMessage(to: string, text: string, _options?: SendOptions): Promise<void> {
     throw new Error('WhatsApp adapter not yet implemented.');
 
     // Future implementation:

@@ -33,8 +33,10 @@ import {
   type PerActionOverride,
 } from "./useAuthorityData";
 import "./AuthorityRoom.css";
+import { ApprovalWhy } from "../../thread/ApprovalWhy";
+import { isRoomTab, type RoomTab } from "../../../../../src/daemon/room-tabs";
 
-type TabId = "approvals" | "audit" | "grants" | "learning";
+type TabId = RoomTab<"authority">;
 
 const TAB_LABEL: Record<TabId, string> = {
   approvals: "Approvals",
@@ -83,12 +85,15 @@ export function AuthorityRoomBody({ mode }: { mode: RoomBodyMode }) {
 
   // Phase 6.3.5 — voice room actions for Authority. Emergency commands
   // are intentionally excluded (per the safety constraint locked in
-  // Phase 6.6 plan): pause/kill/reset only via the buttons.
+  // Phase 6.6 plan): pause/kill/reset only via the buttons. So are grants
+  // and revokes (#969): they write a lasting override into config.yaml, no
+  // voice path is gated by the authority engine, and inline this room has no
+  // Grants tab on screen to show what changed. They are clicks only.
   useRoomActions("authority", (action, args) => {
     switch (action) {
       case "switch_tab": {
-        const t = String(args.tab);
-        if (t === "approvals" || t === "audit" || t === "grants" || t === "learning") {
+        const t = args.tab;
+        if (isRoomTab("authority", t)) {
           setActiveTab(t);
           return true;
         }
@@ -102,17 +107,6 @@ export function AuthorityRoomBody({ mode }: { mode: RoomBodyMode }) {
           return true;
         }
         return false;
-      }
-      case "grant_access":
-      case "revoke_access": {
-        const cat = String(args.action) as ActionCategory;
-        if (!ACTION_CATEGORIES.includes(cat)) return false;
-        const allow = action === "grant_access";
-        (async () => {
-          const r = await data.quickOverride(cat, allow);
-          setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
-        })();
-        return true;
       }
       default:
         return false;
@@ -475,6 +469,20 @@ function ApprovalsTab({
   );
 }
 
+/**
+ * The sentence and, apart from it, why approval was needed (#792). A daemon
+ * that predates `intent_action` sends only the joined `intent`, shown whole.
+ */
+export function ApprovalSentenceBlock({ approval }: { approval: { intent?: string; intent_action?: string; intent_reason?: string; reason: string } }) {
+  const split = typeof approval.intent_action === "string" && approval.intent_action !== "";
+  return (
+    <>
+      <div className="v2-auth__pending-intent">{split ? approval.intent_action : (approval.intent ?? approval.reason)}</div>
+      {split && <ApprovalWhy reason={approval.intent_reason} />}
+    </>
+  );
+}
+
 function PendingApprovalCard({
   approval,
   onApprove,
@@ -504,7 +512,7 @@ function PendingApprovalCard({
         </div>
         <span className="v2-auth__pending-agent">{approval.agent_name}</span>
       </header>
-      <div className="v2-auth__pending-intent">{approval.intent ?? approval.reason}</div>
+      <ApprovalSentenceBlock approval={approval} />
       <div className="v2-auth__pending-meta-row">
         <span className="v2-auth__pending-tool">{approval.tool_name}</span>
         <span className="v2-auth__pending-cat">{approval.action_category}</span>
@@ -564,7 +572,7 @@ function UnresolvedApprovalCard({
         </div>
         <span className="v2-auth__pending-agent">{approval.agent_name}</span>
       </header>
-      <div className="v2-auth__pending-intent">{approval.intent ?? approval.reason}</div>
+      <ApprovalSentenceBlock approval={approval} />
       <div className="v2-auth__pending-meta-row">
         <span className="v2-auth__pending-tool">{approval.tool_name}</span>
         <span className="v2-auth__pending-cat">

@@ -1,5 +1,6 @@
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
 import { ActionOutcomeError } from '../action-outcome.ts';
+import { awaitCaptureTool, awaitCaptureToolOutput, CaptureTimeoutError, captureViaPrivateFileAsync } from './capture-file.ts';
 import { $ } from 'bun';
 import { modelExecEnv } from '../../util/model-exec-env.ts';
 
@@ -149,6 +150,49 @@ export function toXdotoolKeySequence(keys: string[]): string {
   return sequence;
 }
 
+/**
+ * How every call that talks to the X server is spawned, and bounded: the
+ * captures, and since #895 the input and window calls too. Bun `$` has no
+ * timeout, so on a wedged X server those calls never settled and the agent
+ * waited on them forever (without blocking the event loop: `$` is async).
+ *
+ * The bound is CAPTURE_TIMEOUT_MS, 30 s, killed with SIGKILL. These calls are
+ * far quicker than a capture -- measured against WSLg's X server, n=30 each:
+ * `xdotool getmouselocation` median 3.2 ms (max 3.8), `getdisplaygeometry`
+ * 3.4 (max 207), `search --name .` 3.7, `xprop -root` 1.8 -- so the bound
+ * leaves ample room and only ever cuts off a call that is not coming back.
+ * The exception is `xdotool type`, whose time grows with the text: see
+ * TYPE_MS_PER_CHAR.
+ *
+ * CAPTURE_TOOL discards stdout (awaitCaptureTool); LOOKUP_TOOL returns it
+ * (awaitCaptureToolOutput).
+ */
+const CAPTURE_TOOL = { stdin: 'ignore', stdout: 'ignore', stderr: 'pipe' } as const;
+const LOOKUP_TOOL = { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' } as const;
+
+/**
+ * How much longer `xdotool type` may run per character, on top of the bound.
+ * xdotool types with a 12 ms delay between keys by default; measured here as
+ * 12.8 ms per character, linear (50, 200 and 800 characters: 643, 2559 and
+ * 10220 ms median of 3 each). A flat 30 s would stop a text of about 2300
+ * characters part-way through; twice the measured rate keeps a slower machine
+ * clear of that too. Characters outside the keymap, which xdotool types by
+ * remapping a spare keycode for each, cost barely more (#895 review; 100
+ * characters, median of 3: e-acute 13.2 ms each, a CJK ideograph 13.3, an
+ * emoji 13.3, against 12.9 for "x"). Not measured: a remote X server, where
+ * each remap is a network round trip.
+ */
+const TYPE_MS_PER_CHAR = 26;
+
+/**
+ * Added to a typing or key-press timeout. The kill can land between a key's
+ * press and its release, or before --clearmodifiers puts the modifiers back,
+ * so a key can be left held down in the X server (#895 review). On a wedged
+ * server nothing could release it anyway, and which key it was is not known,
+ * so this says so rather than guessing at a clean-up.
+ */
+const KILLED_MID_INPUT = '. Some of the input may already have been sent, and a key may still be held down.';
+
 export class LinuxAppController implements AppController {
   private async checkTool(tool: string): Promise<boolean> {
     try {
@@ -175,24 +219,26 @@ export class LinuxAppController implements AppController {
     await this.ensureTool('xprop');
 
     try {
-      const windowId = (await $`xdotool getactivewindow`.text()).trim();
-      // Never interpolate an empty id below: `$` drops an empty argument (see
-      // typeText), so `xdotool getwindowgeometry ${windowId}` would run with no
-      // window operand at all. xdotool's window operand is OPTIONAL -- it
-      // defaults to `%1`, the window stack -- so that call does not reliably
-      // fail, and whatever geometry it prints is not this window's. Those
-      // bounds are what clickElement turns into mousemove coordinates, so a
-      // missing id has to be an error rather than a plausible-looking rectangle.
+      const windowId = (await awaitCaptureToolOutput(Bun.spawn(['xdotool', 'getactivewindow'], LOOKUP_TOOL), 'xdotool getactivewindow')).trim();
+      // Never pass an empty id below. Under Bun `$`, which these calls used
+      // to go through, an empty argument was dropped (see typeText), so
+      // `xdotool getwindowgeometry` ran with no window operand at all; argv
+      // would now pass "" instead, which is no better. xdotool's window
+      // operand is OPTIONAL -- it defaults to `%1`, the window stack -- so
+      // that call does not reliably fail, and whatever geometry it prints is
+      // not this window's. Those bounds are what clickElement turns into
+      // mousemove coordinates, so a missing id has to be an error rather than
+      // a plausible-looking rectangle.
       if (!windowId) {
         throw new Error('xdotool getactivewindow reported no window id');
       }
 
-      const xpropOutput = await $`xprop -id ${windowId}`.text();
+      const xpropOutput = await awaitCaptureToolOutput(Bun.spawn(['xprop', '-id', windowId], LOOKUP_TOOL), 'xprop');
 
       const title = this.extractXpropValue(xpropOutput, 'WM_NAME') || 'Unknown';
       const className = this.extractXpropValue(xpropOutput, 'WM_CLASS') || 'Unknown';
 
-      const geometryOutput = await $`xdotool getwindowgeometry ${windowId}`.text();
+      const geometryOutput = await awaitCaptureToolOutput(Bun.spawn(['xdotool', 'getwindowgeometry', windowId], LOOKUP_TOOL), 'xdotool getwindowgeometry');
       const bounds = this.parseGeometry(geometryOutput);
 
       const pid = parseInt(this.extractXpropValue(xpropOutput, '_NET_WM_PID') || '0', 10);
@@ -226,7 +272,7 @@ export class LinuxAppController implements AppController {
       let windowIds: string[];
 
       if (hasWmctrl) {
-        const wmctrlOutput = await $`wmctrl -l -p`.text();
+        const wmctrlOutput = await awaitCaptureToolOutput(Bun.spawn(['wmctrl', '-l', '-p'], LOOKUP_TOOL), 'wmctrl');
         windowIds = wmctrlOutput
           .split('\n')
           .filter(line => line.trim())
@@ -236,18 +282,18 @@ export class LinuxAppController implements AppController {
       }
 
       const windows: WindowInfo[] = [];
-      const activeWindowId = (await $`xdotool getactivewindow`.text()).trim();
+      const activeWindowId = (await awaitCaptureToolOutput(Bun.spawn(['xdotool', 'getactivewindow'], LOOKUP_TOOL), 'xdotool getactivewindow')).trim();
 
       for (const windowId of windowIds) {
         if (!windowId) continue;
 
         try {
-          const xpropOutput = await $`xprop -id ${windowId}`.text();
+          const xpropOutput = await awaitCaptureToolOutput(Bun.spawn(['xprop', '-id', windowId], LOOKUP_TOOL), 'xprop');
           const title = this.extractXpropValue(xpropOutput, 'WM_NAME') || 'Unknown';
           const className = this.extractXpropValue(xpropOutput, 'WM_CLASS') || 'Unknown';
           const pid = parseInt(this.extractXpropValue(xpropOutput, '_NET_WM_PID') || '0', 10);
 
-          const geometryOutput = await $`xdotool getwindowgeometry ${windowId}`.text();
+          const geometryOutput = await awaitCaptureToolOutput(Bun.spawn(['xdotool', 'getwindowgeometry', windowId], LOOKUP_TOOL), 'xdotool getwindowgeometry');
           const bounds = this.parseGeometry(geometryOutput);
 
           windows.push({
@@ -257,8 +303,10 @@ export class LinuxAppController implements AppController {
             bounds,
             focused: windowId === activeWindowId,
           });
-        } catch {
-          // Skip windows that can't be queried
+        } catch (error) {
+          // Skip windows that can't be queried. A hung X server is not a
+          // window to skip, and would cost the bound once per window.
+          if (error instanceof CaptureTimeoutError) throw error;
           continue;
         }
       }
@@ -287,16 +335,16 @@ export class LinuxAppController implements AppController {
       const centerX = element.bounds.x + element.bounds.width / 2;
       const centerY = element.bounds.y + element.bounds.height / 2;
 
-      await $`xdotool mousemove ${Math.round(centerX)} ${Math.round(centerY)}`;
+      await awaitCaptureTool(Bun.spawn(['xdotool', 'mousemove', String(Math.round(centerX)), String(Math.round(centerY))], CAPTURE_TOOL), 'xdotool mousemove');
       if (action === 'double_click') {
-        await $`xdotool click --repeat 2 1`;
+        await awaitCaptureTool(Bun.spawn(['xdotool', 'click', '--repeat', '2', '1'], CAPTURE_TOOL), 'xdotool click');
         return;
       }
       if (action === 'right_click') {
-        await $`xdotool click 3`;
+        await awaitCaptureTool(Bun.spawn(['xdotool', 'click', '3'], CAPTURE_TOOL), 'xdotool click');
         return;
       }
-      await $`xdotool click 1`;
+      await awaitCaptureTool(Bun.spawn(['xdotool', 'click', '1'], CAPTURE_TOOL), 'xdotool click');
     } catch (error) {
       throw new Error(`Failed to click element: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -308,12 +356,13 @@ export class LinuxAppController implements AppController {
     // anything real would fail.
     await this.ensureTool('xdotool');
 
-    // Nothing to type. Bun's `$` DROPS an empty interpolated argument instead
-    // of passing "" (Bun 1.3.8), so the call below would reach xdotool as
-    // `type --clearmodifiers --` with no text operand: it prints its usage,
-    // exits non-zero, and desktop_type_text reported "Failed to type text" for
-    // a request that asked for nothing (#554). Returning here makes it the
-    // no-op it should be, and does not depend on how `$` treats "".
+    // Nothing to type. Under Bun `$` (which this used before #895) an empty
+    // interpolated argument was DROPPED rather than passed as "" (Bun
+    // 1.3.8), so the call reached xdotool as `type --clearmodifiers --` with
+    // no text operand: it printed its usage, exited non-zero, and
+    // desktop_type_text reported "Failed to type text" for a request that
+    // asked for nothing (#554). Returning here makes it the no-op it should
+    // be, whatever the spawn does with "".
     //
     // This DIVERGES from the sidecars, which reject "" as
     // "missing required parameter: text" (handleTypeText in
@@ -331,9 +380,11 @@ export class LinuxAppController implements AppController {
       // `--` ends xdotool's option parsing, so text such as "-h" or
       // "--file=/home/me/.ssh/id_ed25519" is typed literally instead of
       // being read as an option (--file would type out the named file).
-      await $`xdotool type --clearmodifiers -- ${text}`;
+      // The bound grows with the text: see TYPE_MS_PER_CHAR.
+      await awaitCaptureTool(Bun.spawn(['xdotool', 'type', '--clearmodifiers', '--', text], CAPTURE_TOOL), 'xdotool type',
+        [...text].length * TYPE_MS_PER_CHAR);
     } catch (error) {
-      throw new Error(`Failed to type text: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Failed to type text: ${error instanceof Error ? error.message : String(error)}${error instanceof CaptureTimeoutError ? KILLED_MID_INPUT : ''}`);
     }
   }
 
@@ -346,9 +397,9 @@ export class LinuxAppController implements AppController {
       // The trailing "+" is an empty last key, which libxdo skips. It keeps
       // the argument from equalling any xdotool command name, so `xdotool key`
       // cannot chain into a command, whatever commands a later xdotool adds.
-      await $`xdotool key --clearmodifiers -- ${keyString}+`;
+      await awaitCaptureTool(Bun.spawn(['xdotool', 'key', '--clearmodifiers', '--', `${keyString}+`], CAPTURE_TOOL), 'xdotool key');
     } catch (error) {
-      throw new Error(`Failed to press keys: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Failed to press keys: ${error instanceof Error ? error.message : String(error)}${error instanceof CaptureTimeoutError ? KILLED_MID_INPUT : ''}`);
     }
   }
 
@@ -365,18 +416,16 @@ export class LinuxAppController implements AppController {
     }
 
     try {
-      const tmpFile = `/tmp/jarvis-screen-${Date.now()}.png`;
-
-      if (hasImport) {
-        await $`import -window root ${tmpFile}`;
-      } else {
-        await $`scrot ${tmpFile}`;
-      }
-
-      const buffer = await Bun.file(tmpFile).arrayBuffer();
-      await $`rm ${tmpFile}`;
-
-      return Buffer.from(buffer);
+      // Through a private, unpredictable file (#746): see capture-file.ts.
+      // Bun.spawn rather than `$`, which has no timeout: a hung import or
+      // scrot never settled (#802). See CAPTURE_TIMEOUT_MS.
+      return await captureViaPrivateFileAsync(async (file) => {
+        if (hasImport) {
+          await awaitCaptureTool(Bun.spawn(['import', '-window', 'root', file], CAPTURE_TOOL), 'import');
+        } else {
+          await awaitCaptureTool(Bun.spawn(['scrot', file], CAPTURE_TOOL), 'scrot');
+        }
+      });
     } catch (error) {
       throw new Error(`Failed to capture screen: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -396,13 +445,9 @@ export class LinuxAppController implements AppController {
     try {
       const windowId = await this.findWindowByPid(pid);
 
-      const tmpFile = `/tmp/jarvis-window-${pid}-${Date.now()}.png`;
-      await $`import -window ${windowId} ${tmpFile}`;
-
-      const buffer = await Bun.file(tmpFile).arrayBuffer();
-      await $`rm ${tmpFile}`;
-
-      return Buffer.from(buffer);
+      return await captureViaPrivateFileAsync(async (file) => {
+        await awaitCaptureTool(Bun.spawn(['import', '-window', windowId, file], CAPTURE_TOOL), 'import');
+      });
     } catch (error) {
       throw new Error(`Failed to capture window: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -413,7 +458,7 @@ export class LinuxAppController implements AppController {
 
     try {
       const windowId = await this.findWindowByPid(pid);
-      await $`xdotool windowactivate ${windowId}`;
+      await awaitCaptureTool(Bun.spawn(['xdotool', 'windowactivate', windowId], CAPTURE_TOOL), 'xdotool windowactivate');
     } catch (error) {
       throw new Error(`Failed to focus window: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -453,12 +498,14 @@ export class LinuxAppController implements AppController {
    * One copy for both callers, which had the same parse written twice. Trimmed
    * so a stray "\r" or space cannot travel as part of the id into `xprop -id`
    * or `import -window`; `filter(Boolean)` then makes non-empty an invariant of
-   * what this returns, which `import -window ${windowId} ${tmpFile}` relies on
+   * what this returns, which `import -window ${windowId} ${file}` relies on
    * -- an empty id is the one value `$` would DROP, sliding the temp path into
    * the -window slot rather than passing an empty operand (see typeText).
    */
   private async searchWindowIds(): Promise<string[]> {
-    return (await $`xdotool search --name "."`.text())
+    // Bounded like a capture (#802 review): it talks to the X server, so it
+    // hangs when a capture would, and captureWindow runs it first.
+    return (await awaitCaptureToolOutput(Bun.spawn(['xdotool', 'search', '--name', '.'], LOOKUP_TOOL), 'xdotool search'))
       .split('\n')
       .map(id => id.trim())
       .filter(Boolean);
@@ -469,13 +516,16 @@ export class LinuxAppController implements AppController {
 
     for (const windowId of windowIds) {
       try {
-        const xpropOutput = await $`xprop -id ${windowId}`.text();
+        const xpropOutput = await awaitCaptureToolOutput(Bun.spawn(['xprop', '-id', windowId], LOOKUP_TOOL), 'xprop');
         const windowPid = parseInt(this.extractXpropValue(xpropOutput, '_NET_WM_PID') || '0', 10);
 
         if (windowPid === pid) {
           return windowId;
         }
-      } catch {
+      } catch (error) {
+        // A window that cannot be read is skipped; a hung X server is not a
+        // window to skip, and would cost the bound once per window.
+        if (error instanceof CaptureTimeoutError) throw error;
         continue;
       }
     }

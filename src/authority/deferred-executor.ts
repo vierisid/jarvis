@@ -2,7 +2,8 @@
  * Deferred Executor — Runs approved tool calls that were waiting for approval.
  */
 
-import type { ToolRegistry } from '../actions/tools/registry.ts';
+import { isToolResult, type ToolRegistry } from '../actions/tools/registry.ts';
+import type { ContentBlock } from '../llm/provider.ts';
 import { executionState, approvalIntentFromContext, approvalNeedsClick, type ApprovalManager, type ApprovalRequest } from './approval.ts';
 import { ABOVE_LEVEL_SUBSTITUTION, resolveToolGate, severityRank } from './tool-action-map.ts';
 import { rawUiGate } from './ui-intent';
@@ -11,14 +12,28 @@ import type { AuthorityLearner } from './learning.ts';
 import type { EmergencyController } from './emergency.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import { TAINT_PROFILE_LABEL } from './taint-gating.ts';
-import { boundedReceiptText, toolReturnText } from '../roles/untrusted.ts';
+import { boundedReceiptText, splitToolReturn } from '../roles/untrusted.ts';
 import { withoutTemplateDelivery } from '../actions/tools/template-delivery-scope.ts';
+import { runAsReviewed } from '../actions/tools/reviewed-call-scope.ts';
+import { runAsApproved } from './approved-action-scope.ts';
 
 // Defined next to substituteAboveLevel, which writes it; re-exported here,
 // where the approval learner reads it.
 export { ABOVE_LEVEL_SUBSTITUTION };
 
 export type ExecutionResultCallback = (requestId: string, request: ApprovalRequest, result: string) => void;
+
+/** What `executeApprovedWithReceipt` reports; see its docblock for each field. */
+export type ApprovedReceipt = {
+  claimed: boolean;
+  result: string;
+  failed?: boolean;
+  content?: ContentBlock[];
+  /** The untrusted half of a trailed return (#708); `result` minus `trailer`. */
+  outside?: string;
+  /** Repo-authored text a tool handed over to sit AFTER the frame (#708). */
+  trailer?: string;
+};
 
 /**
  * Budget for what `approval_requests.execution_result` stores. 2000 characters,
@@ -49,6 +64,47 @@ export type ExecutionResultCallback = (requestId: string, request: ApprovalReque
  * rather than a second constant that can drift from it.
  */
 export const RECEIPT_MAX_CHARS = 2000;
+
+/**
+ * The text form of a multi-modal result (#709): its text blocks as written,
+ * and each image as a marker naming its type and size -- never its base64.
+ *
+ * Every consumer of the executor's one string except the inline gate has no
+ * model to show a picture to: the receipt column, the dashboard notification,
+ * the chat-channel relay, the execute route's HTTP body. `toolReturnText`
+ * flattened a ToolResult to JSON, so each of them got a prefix of a base64 blob
+ * (2000 characters in the row, 200 in the notification) and the inline gate got
+ * the whole of it as text, which the model receives as a truncated string
+ * rather than an image. The blocks themselves go back to the inline gate
+ * separately, as `content`.
+ */
+function multiModalReceiptText(content: ContentBlock[]): string {
+  // Read defensively: `isToolResult` checks only that `content` is an array,
+  // and this runs after the tool did, where a throw would record a committed
+  // effect as a failed one.
+  return content.map((block) => (block.type === 'text'
+    ? String(block.text)
+    : block.type === 'image'
+      ? `[image: ${block.source?.media_type ?? 'unknown type'}, ${block.source?.data?.length ?? 0} base64 characters, not stored]`
+      : `[${String((block as { type?: unknown }).type)}]`)).join('\n');
+}
+
+/**
+ * An approved `manage_agents terminate` and nothing else: the exact call the
+ * stop sink raises a card for (`stopCall` in actions/tools/agents.ts), with no
+ * other key, so the emergency exemption cannot carry anything but a stop.
+ */
+export function isAgentStopCard(request: Pick<ApprovalRequest, 'tool_name' | 'action_category' | 'tool_arguments'>): boolean {
+  if (request.tool_name !== 'manage_agents' || request.action_category !== 'terminate_agent') return false;
+  try {
+    const args = JSON.parse(request.tool_arguments) as Record<string, unknown>;
+    const keys = Object.keys(args).sort().join(',');
+    return args.action === 'terminate' && typeof args.agent_id === 'string'
+      && (keys === 'action,agent_id' || (keys === 'action,agent_id,task_id' && typeof args.task_id === 'string'));
+  } catch {
+    return false;
+  }
+}
 
 export class DeferredExecutor {
   private toolRegistry: ToolRegistry | null = null;
@@ -97,8 +153,17 @@ export class DeferredExecutor {
    * model in front of it can frame that text as data without re-reading the row
    * (#608). It is deliberately not set for the `blocked` branches: those strings
    * are repo-authored, so there is nothing to disclaim.
+   *
+   * `content` is set only when the tool returned a multi-modal result (#709):
+   * the blocks as the tool returned them, for the one caller with a model in
+   * front of it (the orchestrator's inline gate). `result` is then the text
+   * form every other consumer stores or shows.
+   *
+   * `outside` and `trailer` are set only when the tool returned a trusted
+   * trailer (#708), for that same caller: it frames `outside` and appends
+   * `trailer` after the block. `result` is still their concatenation.
    */
-  async executeApprovedWithReceipt(requestId: string, claimedBy = 'deferred-executor'): Promise<{ claimed: boolean; result: string; failed?: boolean }> {
+  async executeApprovedWithReceipt(requestId: string, claimedBy = 'deferred-executor'): Promise<ApprovedReceipt> {
     const request = this.approvalManager.getRequest(requestId);
     if (!request || request.status !== 'approved') {
       return { claimed: false, result: `Error: Request ${requestId} not found or not in approved state` };
@@ -123,7 +188,13 @@ export class DeferredExecutor {
     // Emergency gate: an approval clicked while the system is paused/killed
     // must not execute. Close the request out (mirroring the error path)
     // so it doesn't linger as an approved-but-never-executed zombie.
-    if (this.emergencyController && !this.emergencyController.canExecute()) {
+    // One exemption (#963): a card that only STOPS a background agent. Under
+    // Pause the agent's model loop still runs, and at the shipped levels a
+    // card is the only way to stop it, so blocking that card would leave the
+    // paused system spending tokens with no way to end it. Under Kill the
+    // task is already cancelled (#987); a stop card then still removes the
+    // agent itself, which Kill does not, and that is harmless.
+    if (this.emergencyController && !this.emergencyController.canExecute() && !isAgentStopCard(request)) {
       const state = this.emergencyController.getState();
       const blocked = `[SYSTEM ${state.toUpperCase()}] Approved action ${request.tool_name} was NOT executed: all tool execution is suspended because the user has ${state} the system.`;
       this.approvalManager.markExecuted(requestId, boundedReceiptText(blocked, RECEIPT_MAX_CHARS), 'blocked');
@@ -136,7 +207,11 @@ export class DeferredExecutor {
     try {
       const args = JSON.parse(request.tool_arguments);
       const uiCall = rawUiGate(request.tool_name, args);
-      const registry = uiCall ? this.approvalManager.getUiExecutionRegistry(request) : this.toolRegistry;
+      // A UI call runs on the registry AND inside the scope its guard bound at
+      // review (#676): a reviewed remote click carries the snapshot generation
+      // the person approved, which only the guard captured.
+      const uiExecution = uiCall ? this.approvalManager.getUiExecution(request) : null;
+      const registry = uiCall ? uiExecution?.registry ?? null : this.toolRegistry;
       const gate = resolveToolGate(registry?.get(request.tool_name), request.tool_name, args);
       if (gate.confirm === 'always' && !approvalNeedsClick(request)) {
         const blocked = `Approved action ${request.tool_name} was NOT executed: this approval predates the required UI review. Request a fresh dashboard review.`;
@@ -175,30 +250,66 @@ export class DeferredExecutor {
         this.onResult?.(requestId, request, blocked);
         return { claimed: true, result: blocked };
       }
-      // Delivery off for the duration (#586). This path CANNOT place a trusted
-      // trailer outside the untrusted block -- see the collapse below -- and a
-      // delivery is recorded when the tool OFFERS one, not when a consumer
-      // places it. `browser_navigate` always takes a card (authority/
-      // ui-intent.ts) and an inline approval comes through here too
-      // (orchestrator.ts), so every approved navigation was recording a playbook
-      // it then disclaimed, and the chat model's own snapshot got nothing for
-      // the next 30 minutes.
+      // Site-playbook delivery ON for an INLINE approval and OFF for every
+      // other one (#830, reversing #586 for inline only, on the owner's call).
       //
-      // SAID PLAINLY, because it changes what the model sees: `browser_navigate`
-      // now delivers no playbook at all, and the playbook arrives with the first
-      // `browser_snapshot` instead (which takes no card, so it can place the
-      // trailer outside the block). What is given up is a copy the model was
-      // told to distrust; what is gained is that an authoritative copy is still
-      // available at all, which is what burning the slot used to cost.
-      const raw = await withoutTemplateDelivery(() => registry.execute(request.tool_name, args));
-      // Collapsed to one string: this path records a DB receipt and returns a
-      // single value, so it cannot carry a trusted trailer separately. The
-      // trailer therefore goes back in band and is framed as data along with the
-      // page when the orchestrator frames this result. That loses a site
-      // playbook on an approved browser call; what it cannot do is put attacker
-      // text OUTSIDE a block, because only trusted code that received a trailer
-      // as a trailer ever places one there (roles/untrusted.ts).
-      const result = toolReturnText(raw);
+      // #586 turned it off everywhere because this path could not place a
+      // trusted trailer outside the untrusted block: every approved
+      // `browser_navigate` recorded a playbook it then disclaimed, and the chat
+      // model's own snapshot got nothing for the next 30 minutes. A delivery is
+      // recorded when the tool OFFERS one, not when a consumer places it, so a
+      // consumer that cannot place it must not be offered it.
+      //
+      // INLINE: since #708 the gate that runs it (`runApproved` in
+      // orchestrator.ts) receives the trailer separately below and places it
+      // AFTER the frame, so the reason no longer holds. It runs in the async
+      // context of the loop that raised the card, so the delivery is recorded
+      // against that loop's scope -- the model that will read it.
+      //
+      // EVERY OTHER MODE keeps the suppression, and the condition is the MODE,
+      // never the tool or the caller. A deferred approval -- including an
+      // inline one demoted after its wait timed out -- returns to a person or
+      // a stored row, never a model, so #586's argument still holds there in
+      // full. And before #829 the `executed` fallbacks re-read this row with
+      // the trailer in band, which is why this could not land first.
+      //
+      // `inline` therefore has to mean "a live gate owns this", and a restart
+      // is where it stopped meaning that: an approved inline row run from the
+      // dashboard afterwards (the execute route) reaches no model. So
+      // `reconcileAfterRestart` demotes approved inline rows to deferred along
+      // with pending ones (authority/approval.ts). A reviewed UI call such as
+      // navigate would be refused above anyway, its binding gone with the old
+      // process; `browser_snapshot` is not one, and is why the demotion exists.
+      const dispatch = () => registry.execute(request.tool_name, args);
+      // Inside the approval it bought (#932, #963): a lifecycle sink this
+      // call reaches (spawn, terminate) reads the scope instead of raising a
+      // second card for the act the person just approved.
+      const grant = { categories: [request.action_category as ActionCategory], approvalId: requestId, source: 'approval' as const };
+      const raw = await runAsApproved(grant, () => runAsReviewed(uiExecution?.reviewed,
+        () => request.execution_mode === 'inline' ? dispatch() : withoutTemplateDelivery(dispatch)));
+      // Collapsed to one string for the consumers that show it -- the
+      // notification and the execute route -- with any trusted trailer back
+      // in band, where it is framed as data along with the rest if anything
+      // ever frames it. The ROW stores the payload without the trailer (#829,
+      // below). What that cannot do is put attacker text
+      // OUTSIDE a block, because only trusted code that received a trailer as
+      // a trailer ever places one there (roles/untrusted.ts).
+      //
+      // The trailer ALSO travels separately, as `outside` and `trailer`, for
+      // the one consumer that frames this for a model: the orchestrator's
+      // inline gate, which every reviewed UI call goes through (#708). Without
+      // this a repo-authored sentence a tool handed over as a trailer -- the
+      // directive `desktop_launch_app` must not have disclaimed -- reached the
+      // model inside the block that tells it to follow no instruction there.
+      // Only an `instanceof` carrier yields one (`splitToolReturn`), so a
+      // sidecar's JSON cannot.
+      //
+      // A multi-modal result (a screenshot) is the other exception: its text
+      // form names the image instead of carrying it, and the blocks travel back
+      // to the inline gate untouched (#709).
+      const content = isToolResult(raw) ? raw.content : undefined;
+      const split = content ? null : splitToolReturn(raw);
+      const result = content ? multiModalReceiptText(content) : split!.outside + split!.trailer;
 
       const executionTimeMs = Date.now() - startTime;
 
@@ -212,7 +323,21 @@ export class DeferredExecutor {
       // rather than only its own payload. The helper rewrites the delimiters to
       // their inert spelling instead, so the row keeps the preamble that says
       // the payload is data and carries no boundary at all.
-      this.approvalManager.markExecuted(requestId, boundedReceiptText(result, RECEIPT_MAX_CHARS), 'committed');
+      //
+      // WITHOUT the trailer (#829). The row is re-read and framed whole by the
+      // inline gate's `executed` fallbacks (orchestrator.ts), so a trailer kept
+      // here reached the model inside the block whose preamble disclaims it --
+      // a repo-authored directive the model is told to ignore. Dropped, it is
+      // simply absent there, which is the better failure: a directive the
+      // model never sees cannot be one it is taught to distrust. Nothing else
+      // reading the row wants it either -- it is addressed to a model, and the
+      // row is a receipt for people and for the commitment that awaited it.
+      // The live receipt below still carries it, separately, for `runApproved`.
+      // Only a TRAILED return changes; every other one stores `result` exactly
+      // as before (a tool returning undefined still stores "undefined", where
+      // `split.outside` would be undefined itself and throw in the bound).
+      const stored = split?.trailer ? split.outside : result;
+      this.approvalManager.markExecuted(requestId, boundedReceiptText(stored, RECEIPT_MAX_CHARS), 'committed');
 
       // Log to audit trail
       this.auditTrail.log({
@@ -255,7 +380,8 @@ export class DeferredExecutor {
       // Notify
       this.onResult?.(requestId, request, result);
 
-      return { claimed: true, result };
+      if (content) return { claimed: true, result, content };
+      return split?.trailer ? { claimed: true, result, outside: split.outside, trailer: split.trailer } : { claimed: true, result };
     } catch (err) {
       // RAW, and framed nowhere in this method (#608). This one string has six
       // consumers and only two of them are a model: the row below, the

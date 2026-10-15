@@ -54,6 +54,8 @@
   font-size: 16px;
   line-height: 1.45;
   color: var(--ink);
+  /* A long unbroken token wraps instead of being clipped (#719). */
+  overflow-wrap: anywhere;
 }
 
 .v2-repeatback__heard-text em {

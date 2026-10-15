@@ -18,10 +18,13 @@
  *      categories are callable.
  *   5. `runSubAgent(...)` with the goal as the task. Authority engine,
  *      audit trail, and emergency controller all flow in if configured.
+ *      With a continuation the audit trail is the run's
+ *      (`runScopedAuditTrail`), so the sub-agent's decisions are recorded
+ *      under the workflow run that caused them.
  *   6. Walk the agent's message log to extract `{name, args, result, error}`
  *      tuples for each tool call (zip assistant `tool_calls` with subsequent
  *      `tool` messages by `tool_call_id`).
- *   7. `orchestrator.terminateAgent(child.id)` in `finally` so a thrown
+ *   7. `orchestrator.reapAgent(child.id)` in `finally` so a thrown
  *      exception still cleans up the hierarchy.
  *
  * Concurrency: each `delegate()` call spawns + terminates its own sub-agent;
@@ -47,6 +50,8 @@ import type { LLMMessage } from "../../llm/provider";
 import type { AgentOrchestrator } from "../../agents/orchestrator";
 import type { AuthorityEngine } from "../../authority/engine";
 import type { AuditTrail } from "../../authority/audit";
+import { boundedApprovalLabel } from "../../authority/approval-delivery";
+import { outsideApprovalScope } from "../../authority/approved-action-scope";
 import type { EmergencyController } from "../../authority/emergency";
 import type { ActionCategory } from "../../roles/authority";
 import type { RoleDefinition } from "../../roles/types";
@@ -142,6 +147,44 @@ const DEFAULT_TRACE_RESULT_MAX_CHARS = 1000;
 function boundedTraceText(text: string, maxChars: number): string {
   const safe = boundedReceiptText(text, maxChars);
   return text.length > maxChars ? safe + `... (truncated, was ${text.length} chars)` : safe;
+}
+
+/**
+ * The audit trail a delegated sub-agent writes to when a workflow run is
+ * behind it (#730): every row its runner writes -- a gate denial, a call run
+ * without approval, an approval it parked, a suspension, a discovery
+ * admission or refusal -- goes under the RUN, where the route's own refusals
+ * (`WorkflowEffectBoundary.auditRefusal`) and the boundary's dispatches
+ * already are.
+ *
+ * Without it those rows carried only the spawned child's id and the role's
+ * name. A new child is spawned on every resume and nothing records which
+ * child belonged to which run, so a query for the run
+ * (`/api/authority/audit?agent_id=workflow:<runId>`) showed the delegation
+ * allowed and then nothing of what the sub-agent decided.
+ *
+ * BOTH columns are rewritten, not only `agent_name`: the audit API filters on
+ * `agent_id` alone, so a name prefix would be readable by a person but still
+ * missing from the run's query. The child id and the role, which the id
+ * column used to carry, move into the name, so the row still says which
+ * sub-agent decided. The name starts with exactly what `auditRefusal` writes,
+ * `Workflow <runId> / <step>`, bounded the same way, so the two kinds of row
+ * for one step share a prefix.
+ */
+export function runScopedAuditTrail(base: AuditTrail, run: { runId: string; stepName: string }): AuditTrail {
+  // The step name is engine-supplied and bounded before it reaches a row, as
+  // `auditRefusal` bounds it (120, one line, no open delimiter).
+  const prefix = `Workflow ${run.runId} / ${boundedApprovalLabel(run.stepName || "unknown step", 120)}`;
+  const scoped = Object.create(base) as AuditTrail;
+  scoped.log = (entry) => base.log({
+    ...entry,
+    agent_id: `workflow:${run.runId}`,
+    // The role name is bounded the same way: it comes from role YAML, so it
+    // is operator-authored, but it is the one free-text part of this label
+    // that is not repo-authored or a pinned graph node.
+    agent_name: `${prefix} / ${boundedApprovalLabel(entry.agent_name, 120)} (sub-agent ${entry.agent_id})`,
+  });
+  return scoped;
 }
 
 const errorResult = (error: string, toolCalls: PieceAgentToolCall[] = []): PieceAgentDelegateResult =>
@@ -261,7 +304,12 @@ export class M7AgentDelegator implements PieceAgentDelegator {
         dispatch: (call: GovernedToolCall) => continuation.dispatch(registry, call),
       } : null;
 
-      const result: SubAgentResult = await this.runSubAgentFn({
+      // Outside the delegation's approval (#988): a workflow boundary runs
+      // this call inside a grant for starting the child, which the spawn
+      // above has just used. Nothing the child's loop does is that act, so
+      // the loop does not see the grant, spent or not. A governed call it
+      // makes runs inside its own card's approval (service-backends.ts).
+      const result: SubAgentResult = await outsideApprovalScope(() => this.runSubAgentFn({
         agent: child,
         task: input.goal,
         context: "",
@@ -274,7 +322,10 @@ export class M7AgentDelegator implements PieceAgentDelegator {
         // reachable without it, and 200 is the primary loop's own ceiling.
         maxIterations: Math.min(input.maxIterations ?? this.defaultMaxIterations, 200),
         ...(this.authorityEngine ? { authorityEngine: this.authorityEngine } : {}),
-        ...(this.auditTrail ? { auditTrail: this.auditTrail } : {}),
+        // Under the run when there is one (#730); see `runScopedAuditTrail`.
+        ...(this.auditTrail
+          ? { auditTrail: continuation ? runScopedAuditTrail(this.auditTrail, continuation.identity) : this.auditTrail }
+          : {}),
         ...(this.emergencyController ? { emergencyController: this.emergencyController } : {}),
         ...(this.temporaryGrants ? { temporaryGrants: this.temporaryGrants } : {}),
         ...(durable ? {
@@ -284,7 +335,7 @@ export class M7AgentDelegator implements PieceAgentDelegator {
           onTurn: state => durable.save({ ...state, status: "running" }),
         } : {}),
         ...(resume ? { resume } : {}),
-      });
+      }));
 
       // Walk the runSubAgent-supplied message log (NOT child.getMessages(),
       // which only carries user/assistant turns). The local log has every
@@ -310,8 +361,9 @@ export class M7AgentDelegator implements PieceAgentDelegator {
       }
 
       if (result.terminationReason === "error" && result.canceled) {
-        // The run was stopped between turns. Its delegation rows are already
-        // gone; nothing is written back.
+        // The run was stopped between turns. By a run cancel: its delegation
+        // rows are already gone, and nothing is written back. By an emergency
+        // Kill (#987): the last checkpoint is left as a crash would leave it.
         const canceled: PieceAgentDelegateResult = { finalMessage: "", toolCalls, status: "canceled", error: result.response };
         canceled.outcome = delegationOutcome(canceled, input.requiredTools);
         return canceled;
@@ -331,12 +383,14 @@ export class M7AgentDelegator implements PieceAgentDelegator {
       const msg = e instanceof Error ? e.message : String(e);
       return errorResult(`delegate failed: ${msg}`);
     } finally {
-      // Always clean up. terminateAgent recursively removes children, so even
-      // if runSubAgent itself spawned grand-children (it doesn't today), they
-      // get torn down too.
+      // Always clean up. reapAgent (not gated: this is our own finished
+      // child) recursively removes its children. An agent the child starts
+      // through `manage_agents` is the primary's child, not this one's, so it
+      // outlives the delegation, carrying the child's restrictions (#1014);
+      // a `delegate_task` specialist is reaped by that call itself.
       if (childId !== null) {
         try {
-          this.orchestrator.terminateAgent(childId);
+          this.orchestrator.reapAgent(childId);
         } catch {
           // Ignore cleanup errors -- the orchestrator will surface them via
           // its own logging; we don't want to mask the original return.

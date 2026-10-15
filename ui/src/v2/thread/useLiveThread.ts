@@ -52,6 +52,7 @@ export function useLiveThread() {
         kind: "approval",
         id: a.id,
         intent: a.intent,
+        reason: a.intentReason,
         category: a.category,
         impact: a.impact as Impact,
         t: formatTime(a.timestamp),
@@ -78,6 +79,7 @@ export function useLiveThread() {
         id: r.id,
         transcript: r.transcript,
         confidence: r.confidence,
+        ...(r.action ? { action: r.action } : {}),
         t: formatTime(r.timestamp),
       }),
     );

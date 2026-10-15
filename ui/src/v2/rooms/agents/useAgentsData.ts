@@ -148,8 +148,17 @@ export interface SpawnInput {
 }
 
 export interface SpawnResult {
+  /** The request went through: the agent started, or a card is waiting for it. */
   ok: boolean;
   message: string;
+  /**
+   * The agent was actually started (#991). False for a card raised (202) as
+   * well as for every refusal, so a caller that confirms a spawn -- voice --
+   * says so only when one happened.
+   */
+  started?: boolean;
+  /** Not started, and not refused: a card is waiting on the person (202, #1016). */
+  awaitingApproval?: boolean;
 }
 
 export function useAgentsData() {
@@ -243,13 +252,24 @@ export function useAgentsData() {
         const text = await resp.text();
         throw new Error(text || `HTTP ${resp.status}`);
       }
-      const data = await resp.json() as { assignment?: { message?: string } | null };
+      const data = await resp.json() as {
+        assignment?: { message?: string } | null;
+        approval_required?: boolean;
+        message?: string;
+      };
+      // 202: the spawn needs approval and a card is waiting for it. Nothing
+      // was spawned, so say that rather than "Agent spawned." (#932).
+      if (data.approval_required) {
+        return { ok: true, started: false, awaitingApproval: true, message: data.message ?? "Spawning this agent needs your approval. A card is waiting." };
+      }
       // Refresh roster so the new agent shows up immediately.
       refresh();
-      return { ok: true, message: data.assignment?.message ?? "Agent spawned." };
+      // 201 is the route's "spawned"; any other success is not one it makes.
+      return { ok: true, started: resp.status === 201, message: data.assignment?.message ?? "Agent spawned." };
     } catch (err) {
       return {
         ok: false,
+        started: false,
         message: err instanceof Error ? err.message : "Failed to spawn agent.",
       };
     }
@@ -264,8 +284,14 @@ export function useAgentsData() {
         const text = await resp.text();
         throw new Error(text || `HTTP ${resp.status}`);
       }
+      const data = await resp.json() as { approval_required?: boolean; message?: string };
+      // 202: stopping needs approval and a card is waiting; the agent keeps
+      // running until it is approved (#963).
+      if (data.approval_required) {
+        return { ok: true, message: data.message ?? "Stopping this agent needs your approval. A card is waiting." };
+      }
       refresh();
-      return { ok: true, message: "Agent terminated." };
+      return { ok: true, message: data.message ?? "Agent terminated." };
     } catch (err) {
       return {
         ok: false,

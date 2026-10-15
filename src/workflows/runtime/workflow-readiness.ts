@@ -2,6 +2,7 @@ import { validateCronExpression } from '../../lib/cron-scheduler';
 import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from './piece-catalog';
 import { evaluateWorkflowExpression, workflowExpressionReferences } from './safe-expression';
 import { emptyInput, inputIssue } from './input-validation';
+import { declaredDependencies } from './code-step-manifest';
 
 export interface ReadinessIssue {
   node: string;
@@ -296,6 +297,14 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     }
     if (type === 'CODE' && (!object(settings.sourceCode) || typeof settings.sourceCode.code !== 'string' || typeof settings.sourceCode.packageJson !== 'string')) {
       issue(node, 'settings.sourceCode', 'CODE', 'CODE requires a source bundle');
+    } else if (type === 'CODE') {
+      // The same rule the run applies (#837), reported when the flow is saved
+      // instead of failing every run of it.
+      try {
+        declaredDependencies(node, settings.sourceCode.packageJson);
+      } catch (e) {
+        issue(node, 'settings.sourceCode.packageJson', 'CODE', (e as Error).message);
+      }
     }
     if (type === 'LOOP_ON_ITEMS') {
       const dynamic = expressions(settings.items, node, 'settings.items', scope, '');

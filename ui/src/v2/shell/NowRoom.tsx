@@ -5,6 +5,7 @@ import { useAuthorityInbox } from "../rooms/authority/useAuthorityData";
 import { availabilityLabel, combinedAvailability, readArray, readObject, useRemoteData, type RemoteSource } from "../hooks/useRemoteData";
 import { RemoteNotice, RemoteSection } from "../ui/RemoteSection";
 import type { ConnectionState } from "./Header";
+import { ApprovalWhy } from "../thread/ApprovalWhy";
 
 /**
  * Now — the home surface you compose. A grid of widgets, each a room's
@@ -241,7 +242,7 @@ function inboxSummary(live: LiveData, inbox: ReturnType<typeof useAuthorityInbox
   return { count: ids.size, state: state === "ready" && connection !== "live" ? "stale" as const : state };
 }
 
-function WaitingWidget({ live, inbox, connection, onApprove, onCancel }: RenderCtx) {
+export function WaitingWidget({ live, inbox, connection, onApprove, onCancel }: RenderCtx) {
   const { count, state } = inboxSummary(live, inbox, connection);
   const liveIds = new Set(live.approvals.map(a => a.id));
   const saved = (inbox.pending.data ?? []).filter(a => !liveIds.has(a.id));
@@ -253,6 +254,7 @@ function WaitingWidget({ live, inbox, connection, onApprove, onCancel }: RenderC
     {live.approvals.slice(0, 3).map(a => <div className="rs-apr" key={a.id}>
       <div className="t1"><span className="rs-dot" />{a.category} · {a.toolName}</div>
       <div className="t2">{a.intent}</div>
+      <ApprovalWhy reason={a.intentReason} />
       <div className="bs"><button className="b1" disabled={connection !== "live"} onClick={() => onApprove(a.id)}>Yes · approve</button><button className="b2" disabled={connection !== "live"} onClick={() => onCancel(a.id)}>Cancel</button></div>
     </div>)}
     {saved.slice(0, 3).map(a => <Row key={a.id} room="authority" dot="var(--hold)"><b>{a.tool_name}</b> · {a.reason}</Row>)}

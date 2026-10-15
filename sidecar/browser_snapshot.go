@@ -1,10 +1,13 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -193,6 +196,12 @@ type pageSnapshot struct {
 	URL      string        `json:"url"`
 	Text     string        `json:"text"`
 	Elements []pageElement `json:"elements"`
+
+	// gen is the generation token this snapshot filled the element map under
+	// (#676), taken in the SAME critical section as the fill. Unexported, so
+	// the page's own JSON can never set it. Read later instead, it could name a
+	// snapshot that refilled the map in between.
+	gen string
 }
 
 // takePageSnapshot runs the snapshot script, stores element coordinates on
@@ -207,6 +216,16 @@ type pageSnapshot struct {
 // the model reads, and a page that wants a playbook is exactly the party that
 // would lie about which site it is on.
 func takePageSnapshot(cdp *cdpClient) (*pageSnapshot, pageIdentity, error) {
+	// One snapshot at a time per browser, from the frame-tree read through the
+	// fill (#826, snapMu on cdpClient). Taken FIRST so the deferred cleanup
+	// below, which may forget an armed world, runs before it is released:
+	// otherwise a waiting snapshot could arm the world and then have this one's
+	// cleanup wipe it.
+	if err := cdp.lockSnapshots(); err != nil {
+		return nil, pageIdentity{}, err
+	}
+	defer cdp.snapMu.Unlock()
+
 	// Before running anything in the page: a page showing local content is not
 	// read back to the model (#526, browser_read_guard.go). Every snapshot
 	// path goes through here -- browser_snapshot and the one navigate returns.
@@ -332,12 +351,56 @@ func takePageSnapshot(cdp *cdpClient) (*pageSnapshot, pageIdentity, error) {
 	cdp.elemIdentity = checked
 	cdp.elemFrameStamp = frameStamp
 	cdp.elemGen++
+	snap.gen = cdp.elemGenTokenLocked()
 	cdp.elemMu.Unlock()
 
 	// Both halves now describe this same reading, so the deferred cleanup above
 	// must not undo it.
 	committed = true
 	return &snap, checked, nil
+}
+
+// How long a snapshot or a reviewed type waits for snapMu before refusing
+// (#826). A holder normally keeps it for one snapshot (measured ~8-10ms against
+// headless Chromium on a 1200-element page) or one type (its four round trips
+// plus a fixed 200ms settle), so ten seconds is far past any ordinary wait. It
+// exists for the abnormal one: a renderer that stops answering keeps the holder
+// inside a 30-second send, and without a bound every later snapshot queued
+// behind it, each then taking its own 30 seconds, long after the brain stopped
+// waiting for any of them.
+var snapshotLockTimeout = 10 * time.Second
+
+// lockSnapshots takes snapMu, or refuses once snapshotLockTimeout has passed.
+// Polled rather than a channel so a zero-value cdpClient stays usable.
+func (c *cdpClient) lockSnapshots() error {
+	deadline := time.Now().Add(snapshotLockTimeout)
+	for !c.snapMu.TryLock() {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("another browser snapshot or typed input is still running on this browser, so nothing " +
+				"was done. Try again in a moment")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return nil
+}
+
+// refuseStaleCoordinate is refuseStaleElement for a caller that dispatches AT
+// the stored coordinate (click, hover), run with snapshots excluded (#826).
+//
+// The coordinate itself is copied out under elemMu and cannot change, but the
+// moved/replaced sentinel inside the check reads the isolated world, which a
+// concurrent snapshot's script re-arms before its fill moves the generation:
+// the sentinel would then judge the NEW reading's element against the NEW
+// reading's point, answer "ok" for an element the page has moved off the
+// reviewed coordinate, and the trusted click would land on whatever is there
+// now. Held only for the check; the dispatch after it uses the copy alone.
+func refuseStaleCoordinate(cdp *cdpClient, id int, reviewed string) (snapshotElement, string, error) {
+	if err := cdp.lockSnapshots(); err != nil {
+		return snapshotElement{}, "", err
+	}
+	defer cdp.snapMu.Unlock()
+	el, _, refusal, err := refuseStaleElement(cdp, id, true, reviewed)
+	return el, refusal, err
 }
 
 // How long a world mint may hold worldMu. Generous for a browser-side call
@@ -455,17 +518,24 @@ type snapshotElement struct {
 	gen      uint64
 	inFrame  bool
 	stamp    string
+	// token is the map's generation as the wire spells it (#676), read in the
+	// same critical section as everything above.
+	token string
 }
 
 // snapshotElementFor reads one element id out of the map in a single critical
 // section, so the coordinate, the document it belongs to and the generation it
 // was minted in cannot be torn apart by a concurrent snapshot.
+//
+// `token` is filled even when the id is not in the map, so a caller holding a
+// reviewed generation can tell "this id was never in the snapshot you reviewed"
+// from "the snapshot you reviewed is not the one in the map any more".
 func (c *cdpClient) snapshotElementFor(id int) (snapshotElement, bool) {
 	c.elemMu.Lock()
 	defer c.elemMu.Unlock()
 	coords, ok := c.elemCoords[id]
 	if !ok {
-		return snapshotElement{}, false
+		return snapshotElement{token: c.elemGenTokenLocked()}, false
 	}
 	return snapshotElement{
 		x: coords[0], y: coords[1],
@@ -473,7 +543,79 @@ func (c *cdpClient) snapshotElementFor(id int) (snapshotElement, bool) {
 		gen:      c.elemGen,
 		inFrame:  c.elemFrames[id],
 		stamp:    c.elemFrameStamp,
+		token:    c.elemGenTokenLocked(),
 	}, true
+}
+
+// elemGenTokenLocked is the element map's generation as it travels on the wire
+// (#676): `<epoch>.<elemGen>`. The caller holds elemMu.
+//
+// AN OPAQUE STRING, not the counter, for two reasons. The counter restarts at
+// zero on every cdpClient -- a relaunched browser, a headless switch, a
+// restarted sidecar -- so two different maps would hand out equal numbers, and
+// a generation the brain reviewed against one would pass against the next. The
+// epoch makes the token name this client's map and no other. And a string is
+// compared for equality and nothing else on both sides, which is all either
+// side may do with it: the brain does not order generations, it carries one.
+func (c *cdpClient) elemGenTokenLocked() string {
+	if c.elemEpoch == "" {
+		var b [8]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			// crypto/rand does not fail on a supported platform; if it ever
+			// does, a time-derived epoch still differs between clients.
+			c.elemEpoch = strconv.FormatInt(time.Now().UnixNano(), 16)
+		} else {
+			c.elemEpoch = hex.EncodeToString(b[:])
+		}
+	}
+	return c.elemEpoch + "." + strconv.FormatUint(c.elemGen, 10)
+}
+
+// browserSnapshotSupersededCode marks an element action refused because the
+// snapshot the call was REVIEWED against is not the one in the map (#676).
+// Returned before anything is dispatched -- before the frame-tree read, even --
+// so the daemon may report it as not started (NOT_STARTED_RPC_CODES in
+// src/actions/tools/sidecar-route.ts).
+const browserSnapshotSupersededCode = "BROWSER_SNAPSHOT_SUPERSEDED"
+
+// maxWireElemGen bounds the reviewed generation an action accepts. A real
+// token is at most 37 bytes (16 hex, a dot, a uint64); anything longer is not
+// one this sidecar minted.
+const maxWireElemGen = 64
+
+// reviewedElemGen reads the generation an element action was reviewed against
+// (#676), or "" when the brain sent none.
+//
+// ABSENT means "nothing was reviewed": a brain older than #676, or a call that
+// took no approval card. That is the behaviour before this existed, and it is
+// the brain's job, not this one's, to refuse a reviewed call on a sidecar that
+// cannot compare -- it knows which calls were reviewed and this side does not.
+//
+// PRESENT BUT MALFORMED is refused rather than ignored. A key that is there and
+// not a usable string was meant to bind the call to something, and treating it
+// as absent would be the fail-open this whole check exists to remove.
+func reviewedElemGen(params map[string]any) (string, error) {
+	raw, present := params["elem_gen"]
+	if !present {
+		return "", nil
+	}
+	gen, ok := raw.(string)
+	if !ok || gen == "" || len(gen) > maxWireElemGen {
+		return "", &codedError{code: browserSnapshotSupersededCode, err: fmt.Errorf(
+			"the snapshot this action was reviewed against could not be read from the request, so nothing was done. " +
+				"Run browser_snapshot and review the action again")}
+	}
+	return gen, nil
+}
+
+// browserSnapshotSuperseded is the refusal for a reviewed generation that is
+// not the map's. Worded for the model: the ids it holds are from a snapshot
+// that has been replaced, and only a fresh snapshot and a fresh review fix it.
+func browserSnapshotSuperseded(id int) error {
+	return &codedError{code: browserSnapshotSupersededCode, err: fmt.Errorf(
+		"element [%d] was reviewed against a browser snapshot that has since been replaced or dropped, so "+
+			"nothing was done: the id may now name a different element. Run browser_snapshot and review the "+
+			"action again", id)}
 }
 
 // refuseStaleElement is the guard every ACTION on a snapshot element id runs
@@ -502,8 +644,30 @@ func (c *cdpClient) snapshotElementFor(id int) (snapshotElement, bool) {
 // coordinate (click, hover) or only use the id to find its element ref
 // (type). It decides whether a scroll since the snapshot is disqualifying:
 // a scroll moves every coordinate and invalidates no ref (#603).
-func refuseStaleElement(cdp *cdpClient, id int, usesCoordinates bool) (snapshotElement, float64, string, error) {
+//
+// `reviewed` is the generation the call was REVIEWED against (#676), or "" for
+// a call nobody reviewed. It is compared FIRST, against the token read in the
+// same critical section as the element, and the generation check at the end of
+// this function then holds the map to that same generation -- so a call that
+// passes both acted on the COORDINATE MAP the person approved. The isolated
+// world's refs are that same snapshot's because takePageSnapshot holds snapMu
+// from before its script arms the refs until after its fill mints the
+// generation (#826): without that, two snapshots in flight at once could
+// interleave as A-evaluate, B-evaluate, B-fill, A-fill and leave B's refs under
+// A's generation, which browser_type, acting through a ref, would have typed
+// into. Every caller runs this with snapshots excluded, because the
+// moved/replaced sentinel below reads the world too: click and hover through
+// refuseStaleCoordinate, for the check alone, and browser_type, which then
+// acts THROUGH the refs, from before this call to its last focus verify. The world
+// can still be FORGOTTEN between the two (a scroll), and that
+// fails closed: elementWorldFor below refuses. The comparison lives here,
+// on the side that owns the counter, because nothing brain-side can read it at
+// the instant that matters.
+func refuseStaleElement(cdp *cdpClient, id int, usesCoordinates bool, reviewed string) (snapshotElement, float64, string, error) {
 	el, found := cdp.snapshotElementFor(id)
+	if reviewed != "" && el.token != reviewed {
+		return snapshotElement{}, 0, "", browserSnapshotSuperseded(id)
+	}
 	if !found {
 		return snapshotElement{}, 0, fmt.Sprintf("Error: Element [%d] not found. Run browser_snapshot first.", id), nil
 	}
@@ -1162,12 +1326,15 @@ func formatBrowserSnapshot(snap *pageSnapshot) string {
 
 // takeFormattedSnapshot snapshots the page and returns the LLM-facing text
 // together with the browser-confirmed identity of the document it came from.
-func takeFormattedSnapshot(cdp *cdpClient) (string, pageIdentity, error) {
+//
+// The third value is the generation the snapshot filled the element map under
+// (#676), for the reply.
+func takeFormattedSnapshot(cdp *cdpClient) (string, pageIdentity, string, error) {
 	snap, id, err := takePageSnapshot(cdp)
 	if err != nil {
-		return "", id, err
+		return "", id, "", err
 	}
-	return formatBrowserSnapshot(snap), id, nil
+	return formatBrowserSnapshot(snap), id, snap.gen, nil
 }
 
 // ── The browser reply's shape (#583) ─────────────────────────────────
@@ -1191,10 +1358,16 @@ func takeFormattedSnapshot(cdp *cdpClient) (string, pageIdentity, error) {
 // the daemon accepts a URL only when a loader id came with it, because the loader
 // id is what makes the URL name THIS document rather than whichever one the page
 // has become since.
+//
+// `elem_gen` is the generation of the element map THIS read filled (#676). The
+// brain records it at review time and hands it back on the element action it
+// approved, and refuseStaleElement compares the two. It travels independently
+// of the identity pair: it names the map, not the document.
 type pageReply struct {
 	Text     string `json:"text"`
 	PageURL  string `json:"page_url,omitempty"`
 	LoaderID string `json:"loader_id,omitempty"`
+	ElemGen  string `json:"elem_gen,omitempty"`
 }
 
 // Wire bounds for the identity fields. These are NOT URL policy -- the daemon
@@ -1246,11 +1419,11 @@ func wantsPageIdentity(params map[string]any) bool {
 // pre-commit initial document, or a reply whose shape `json.Unmarshal` fills
 // only partly), and a field this cheap to re-check should not depend on which
 // guard the caller happened to run. It costs at most one site playbook.
-func browserPageResult(formatted string, id pageIdentity, params map[string]any) *RPCResult {
+func browserPageResult(formatted string, id pageIdentity, gen string, params map[string]any) *RPCResult {
 	if !wantsPageIdentity(params) {
 		return &RPCResult{Result: formatted}
 	}
-	reply := pageReply{Text: formatted}
+	reply := pageReply{Text: formatted, ElemGen: gen}
 	if id.loaderID != "" && len(id.loaderID) <= maxWireLoaderID && len(id.url) <= maxWirePageURL {
 		reply.PageURL = id.url
 		reply.LoaderID = id.loaderID

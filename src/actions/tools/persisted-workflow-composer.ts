@@ -5,11 +5,13 @@ import { composeFlow, jobSpecification, type ComposeDeps, type ComposeRequest, t
 /** Production entrypoint for both chat and opportunity composition. Validation
  * is only structural; it does not prove semantic fidelity to a free-text job.
  */
-export async function composePersistedFlow(deps: ComposeDeps, input: ComposeRequest): Promise<ComposeResult & { compositionRecordId: string }> {
+export async function composePersistedFlow(deps: ComposeDeps, input: ComposeRequest,
+  /** The project the journal is recorded in: the one the composed flow will be created in (#844). */
+  projectId?: string): Promise<ComposeResult & { compositionRecordId: string }> {
   const request = { ...input };
   request.signal?.throwIfAborted();
   const snapshot = snapshotComposition(deps);
-  const journal = createCompositionJournal({ ...jobSpecification(request), provenance: snapshot.provenance });
+  const journal = createCompositionJournal({ ...jobSpecification(request), provenance: snapshot.provenance }, projectId);
   try {
     const result = await composeFlow({ ...snapshot.deps, onCandidate(candidate) {
       request.signal?.throwIfAborted();

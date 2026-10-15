@@ -299,9 +299,16 @@ function createTables(db: Database): void {
       last_message_at INTEGER NOT NULL,
       message_count INTEGER DEFAULT 0,
       metadata TEXT,
+      sender TEXT,
       CHECK(message_count >= 0)
     )
   `);
+  // Migration: whose conversation this is within its channel (#884), for
+  // external channels, where each sender has their own. A column, not a key
+  // in `metadata`: an index or a WHERE over json_extract throws on a single
+  // malformed metadata value, which would stop the daemon starting, or stop
+  // every message on the channel being answered.
+  try { db.run('ALTER TABLE conversations ADD COLUMN sender TEXT'); } catch { /* already present */ }
 
   db.run(`
     CREATE INDEX IF NOT EXISTS idx_conversations_agent ON conversations(agent_id)
@@ -309,6 +316,15 @@ function createTables(db: Database): void {
 
   db.run(`
     CREATE INDEX IF NOT EXISTS idx_conversations_channel ON conversations(channel)
+  `);
+
+  // One conversation per channel sender (#884), looked up on every inbound
+  // message by sender and recency. Without this the lookup scanned every
+  // conversation the channel ever had, which anyone who can message the bot
+  // grows: 42ms per message at 200k rows, measured.
+  db.run(`
+    CREATE INDEX IF NOT EXISTS idx_conversations_sender
+      ON conversations(channel, sender, last_message_at)
   `);
 
   // Conversation messages table: individual chat messages

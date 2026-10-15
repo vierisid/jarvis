@@ -63,6 +63,8 @@ export type ThreadItem =
       id: string;
       /** Short imperative sentence, e.g. "Delete 14 files in ~/Downloads". */
       intent: string;
+      /** Why approval was needed, rendered apart from the sentence (#792). */
+      reason?: string;
       /** Soft-gate category, e.g. "authority.approve", "send_email". */
       category: string;
       impact: Impact;
@@ -107,6 +109,8 @@ export type ThreadItem =
       id: string;
       transcript: string;
       confidence: number;
+      /** What confirming runs, when the daemon held a room action (#973). */
+      action?: string;
       t: string;
     }
   | {

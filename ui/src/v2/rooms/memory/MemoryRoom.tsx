@@ -26,8 +26,9 @@ import {
 } from "./useMemoryData";
 import "./MemoryRoom.css";
 import { FactDetails } from './FactDetails';
+import { isRoomTab, type RoomTab } from "../../../../../src/daemon/room-tabs";
 
-type TabId = "constellation" | "explorer" | "browser";
+type TabId = RoomTab<"memory">;
 
 const TAB_LABEL: Record<TabId, string> = {
   constellation: "Constellation",
@@ -142,8 +143,8 @@ export function MemoryRoomBody({ mode }: { mode: RoomBodyMode }) {
   useRoomActions("memory", (action, args) => {
     switch (action) {
       case "switch_tab": {
-        const t = String(args.tab);
-        if (t === "constellation" || t === "explorer" || t === "browser") {
+        const t = args.tab;
+        if (isRoomTab("memory", t)) {
           setActiveTab(t);
           return true;
         }
@@ -176,12 +177,11 @@ export function MemoryRoomBody({ mode }: { mode: RoomBodyMode }) {
         const predicate = typeof args.predicate === "string" ? args.predicate : "";
         const object = typeof args.object === "string" ? args.object : "";
         if (!subject || !predicate || !object) return false;
-        // Fire-and-forget; the rememberThat helper toasts on success/failure.
-        (async () => {
-          const r = await data.rememberThat(subject, predicate, object);
+        // Answered once the write has settled, with whether it worked (#1015).
+        return data.rememberThat(subject, predicate, object).then((r) => {
           setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
-        })();
-        return true;
+          return r.ok;
+        });
       }
       default:
         return false;

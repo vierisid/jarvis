@@ -81,6 +81,16 @@ test('invalid graphs, unknown actions and known input types fail without trustin
   expect(compile(graph(step('send', '{{null}}'))).ready).toBe(false);
   expect(compile(graph({ name: 'loop', type: 'LOOP_ON_ITEMS', settings: { items: '{{123}}' } })).ready).toBe(false);
 });
+test('a CODE step whose package.json the run would refuse is not ready, and says why (#837)', () => {
+  const code = (packageJson: string): any => graph({ name: 'calc', type: 'CODE', settings: { sourceCode: { code: 'exports.code = async () => 1', packageJson }, input: {} } });
+  expect(compile(code('{}')).ready).toBe(true);
+  expect(compile(code(JSON.stringify({ dependencies: { 'is-number': '^7.0.0' } }))).ready).toBe(true);
+  for (const bad of [JSON.stringify({ dependencies: { a: 'file:../x' } }), JSON.stringify({ dependencies: { a: '..' } }), '{not json']) {
+    const result = compile(code(bad));
+    expect(result.ready).toBe(false);
+    expect(result.issues).toContainEqual(expect.objectContaining({ node: 'calc', path: 'settings.sourceCode.packageJson', code: 'CODE' }));
+  }
+});
 test('dynamic data is an explicit runtime check, not a fabricated output schema', () => {
   const result = compile(graph());
   expect(result.ready).toBe(true);

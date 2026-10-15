@@ -613,8 +613,6 @@ async function writePrReport(
     verified: new Set([...VERIFIED].filter((id) => !Object.hasOwn(VERSION_PIN, id))),
     checked: new Set(assessments.filter((a) => a.ok).map((a) => a.id)),
   });
-  const server = process.env.GITHUB_SERVER_URL;
-  const repo = process.env.GITHUB_REPOSITORY;
   const lineIndex = buildLineIndex(rendered);
   const { verdict, markdown } = renderReport(diff, {
     shortSha: PINNED_SHA.slice(0, 7),
@@ -623,9 +621,6 @@ async function writePrReport(
     lineOf: (id) => lineIndex.get(id) ?? null,
     carriedForward,
     verifiedUpgrades: assessments,
-    ...(server && repo
-      ? { testsUrl: `${server}/${repo}/actions/workflows/test.yml?query=branch%3Achore%2Fsync-pieces-catalog` }
-      : {}),
   });
 
   mkdirSync(dirname(reportPath), { recursive: true });

@@ -6,6 +6,7 @@ import { Tabs, StatusChip, Select, EmptyState, Toast, Skeleton, type Tone } from
 import { RoomShell } from "../RoomShell";
 import { useRoomActions } from "../useRoomActionBus";
 import { parseRelativeDate } from "../../../../../src/voice/parse-date";
+import { pickRoomActionTarget } from "../../../../../src/daemon/room-action-targets";
 import {
   useContentData, type ContentItem, type ContentStage, type ContentType, type ContentStageNote, type ContentAttachment,
 } from "./useContentData";
@@ -53,6 +54,10 @@ export function ContentRoomBody({ mode }: { mode: RoomBodyMode }) {
   const listItems = useMemo(() => data.items.filter(match).sort((a, b) => b.updated_at - a.updated_at), [data.items, match]);
   const selected = useMemo(() => data.items.find((i) => i.id === selectedId) ?? null, [data.items, selectedId]);
 
+  // A voice action is answered once its request has settled, with whether it
+  // worked (#1015).
+  const answered = (r: { ok: boolean; message: string }): boolean => { setToast({ text: r.message, tone: r.ok ? "ok" : "warn" }); return r.ok; };
+
   useRoomActions("content", (action, args) => {
     switch (action) {
       case "switch_view": { const v = String(args.view); if (v === "kanban" || v === "list") { setView(v); return true; } return false; }
@@ -66,20 +71,23 @@ export function ContentRoomBody({ mode }: { mode: RoomBodyMode }) {
       case "select": { const it = data.findByName(typeof args.name === "string" ? args.name : ""); if (!it) return false; setSelectedId(it.id); return true; }
       case "create_content": {
         const title = typeof args.title === "string" ? args.title.trim() : ""; if (!title) return false;
-        (async () => { const r = await data.createContent({ title, content_type: (args.type as ContentType) ?? undefined }); if (r.ok) setSelectedId(r.item.id); setToast({ text: r.ok ? `Created "${title}"` : r.message, tone: r.ok ? "ok" : "warn" }); })();
-        return true;
+        return data.createContent({ title, content_type: (args.type as ContentType) ?? undefined }).then((r) => {
+          if (r.ok) setSelectedId(r.item.id);
+          return answered(r.ok ? { ok: true, message: `Created "${title}"` } : r);
+        });
       }
+      // The item a held voice action was approved for is pinned by id
+      // (#1008). A name that matches nothing is nothing, not the selection.
       case "advance": case "regress": {
-        const it = (typeof args.name === "string" && args.name ? data.findByName(args.name) : null) ?? selected; if (!it) return false;
-        (async () => { const r = await (action === "advance" ? data.advance(it.id) : data.regress(it.id)); setToast({ text: r.message, tone: r.ok ? "ok" : "warn" }); })();
-        return true;
+        const it = pickRoomActionTarget(data.items, args, data.findByName, selected); if (!it) return false;
+        return (action === "advance" ? data.advance(it.id) : data.regress(it.id)).then(answered);
       }
       case "schedule": {
-        const it = (typeof args.name === "string" && args.name ? data.findByName(args.name) : null) ?? selected; if (!it) return false;
+        const it = pickRoomActionTarget(data.items, args, data.findByName, selected); if (!it) return false;
         const parsed = typeof args.when === "string" ? parseRelativeDate(args.when) : null;
-        if (!parsed) { setToast({ text: "Couldn't parse that date.", tone: "warn" }); return true; }
-        (async () => { const r = await data.schedule(it.id, parsed.ts); setToast({ text: r.message, tone: r.ok ? "ok" : "warn" }); })();
-        return true;
+        // Not scheduled, so not a yes (#1015).
+        if (!parsed) { setToast({ text: "Couldn't parse that date.", tone: "warn" }); return false; }
+        return data.schedule(it.id, parsed.ts).then(answered);
       }
       default: return false;
     }

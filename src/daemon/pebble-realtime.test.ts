@@ -30,6 +30,7 @@ const makeManager = (over: Partial<ConstructorParameters<typeof PebbleRealtimeMa
     tools: () => [],
     instructions: () => 'test',
     executeToolCall: async () => 'ok',
+    onUserTurnStart: () => {},
     ...over,
   });
 
@@ -170,6 +171,42 @@ describe('a session that never becomes usable downgrades the summon hotkey', () 
     fake.deps().onClose?.('code 1000');
     expect(unusable).toEqual([]);
     expect(mgr.isActive('sidecar-1')).toBe(false);
+  });
+});
+
+// A voice session has no turn objects, so the user starting to speak is the
+// only thing that clears the session taint -- and executeRealtimeToolCall
+// refuses a taint-gated call outright instead of auto-approving it. The
+// dashboard wired that boundary; the pebble did not, so after one
+// capture_screen (or any page read) every later machine-changing action came
+// back "[BLOCKED] ... voice cannot approve it" for the rest of the daemon's
+// life, however high the authority level was set, and the refusal told the
+// user to say it again -- which could never help.
+describe('the user-turn taint boundary', () => {
+  test('the manager hands the voice session a turn-start handler bound to its own dep', async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ data: [{ id: 'uj-realtime' }] }), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    })) as unknown as typeof fetch;
+
+    const resets: string[] = [];
+    let captured: RealtimeVoiceDeps | null = null;
+    const mgr = makeManager({
+      createSession: ((_r: unknown, _t: unknown, deps: RealtimeVoiceDeps) => {
+        captured = deps;
+        return { connect: async () => {}, close: () => {}, interrupt: () => {} } as unknown as RealtimeVoiceSession;
+      }) as NonNullable<ConstructorParameters<typeof PebbleRealtimeManager>[0]['createSession']>,
+      onUserTurnStart: (id) => { resets.push(id); },
+    });
+    await mgr.start('sidecar-1');
+
+    // Present at all: a session built without it can never clear its taint.
+    const voiceDeps = captured!;
+    expect(typeof voiceDeps.onUserTurnStart).toBe('function');
+    // And it names the sidecar it belongs to, rather than a bare call.
+    voiceDeps.onUserTurnStart();
+    voiceDeps.onUserTurnStart();
+    expect(resets).toEqual(['sidecar-1', 'sidecar-1']);
+    mgr.stop('sidecar-1');
   });
 });
 

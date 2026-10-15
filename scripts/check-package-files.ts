@@ -64,6 +64,10 @@ export const REQUIRED: Requirement[] = [
     path: "scripts/build-shared-runtime.ts",
     why: "the hosting fleet's install-version SILENTLY skips building the shared engine/pieces/metadata artifacts when it is absent",
   },
+  {
+    path: "src/workflows/runner/engine-runtime/engine-staging.lock",
+    why: "bundleHash() and every engine build read it by path (#836); without it no installed daemon can name or build its engine bundle",
+  },
 ];
 
 /**

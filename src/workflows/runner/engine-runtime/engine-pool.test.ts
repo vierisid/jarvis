@@ -58,7 +58,7 @@ describe("EngineRuntime pool", () => {
     if (buildOptIn) await buildAllJarvisPieces();
     runtime = new EngineRuntime({
       api,
-      bundlePath: cached.bundlePath,
+      bundlePath: cached.bundlePath, expectedDigest: cached.digest,
       pool: true,
     });
   });
@@ -78,7 +78,7 @@ describe("EngineRuntime pool", () => {
       if (!cached) cached = await buildEngineBundle();
       const ttlRuntime = new EngineRuntime({
         api,
-        bundlePath: cached.bundlePath,
+        bundlePath: cached.bundlePath, expectedDigest: cached.digest,
         pool: true,
         // 300ms TTL: long enough that a slow CI doesn't accidentally
         // expire the engine before the "still alive" assertion below
@@ -119,7 +119,7 @@ describe("EngineRuntime pool", () => {
       if (!cached) cached = await buildEngineBundle();
       const ttlRuntime = new EngineRuntime({
         api,
-        bundlePath: cached.bundlePath,
+        bundlePath: cached.bundlePath, expectedDigest: cached.digest,
         pool: true,
         poolIdleTtlMs: 300,
       });
@@ -205,7 +205,7 @@ describe("EngineRuntime pool", () => {
       // above, and this test needs a live warm slot across two acquires.
       let cached = findCachedBundle();
       if (!cached) cached = await buildEngineBundle();
-      const pooled = new EngineRuntime({ api, bundlePath: cached.bundlePath, pool: true });
+      const pooled = new EngineRuntime({ api, bundlePath: cached.bundlePath, expectedDigest: cached.digest, pool: true });
       const trigger = { name: "trigger", type: "EMPTY" as const, settings: {} };
       const runIds: string[] = [];
       let sandbox: string | null = null;

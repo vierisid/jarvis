@@ -1,6 +1,9 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { closeWorkflowDb, DEFAULT_IDS, getWorkflowDb, initWorkflowDb } from "../index";
 import { setEncryptionKey } from "../encryption";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createFlow,
   deleteFlow,
@@ -225,6 +228,77 @@ describe("flow-run repo", () => {
     expect(run.status).toBe("QUEUED");
     expect(run.projectId).toBe(DEFAULT_IDS.project);
     expect(run.steps).toBeNull();
+  });
+
+  /**
+   * #843. Before, no caller passed a project and `createFlowRun` fell back to
+   * DEFAULT_IDS.project, so a run of another project's flow landed in the
+   * default project -- and the engine token and effect records are scoped by
+   * this column. The flow is put in a project that is NOT the default, so a
+   * fallback to the default cannot pass.
+   */
+  test("a run belongs to its flow's project, not the default (#843)", () => {
+    const other = "proj_other_843";
+    const flow = createFlow({ projectId: other });
+    const v = createDraftVersion({ flowId: flow.id, displayName: "v1" });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: v.id });
+    expect(run.projectId).toBe(other);
+    const stored = getWorkflowDb()
+      .query<{ project_id: string }, [string]>("SELECT project_id FROM flow_run WHERE id = ?").get(run.id);
+    expect(stored?.project_id).toBe(other);
+  });
+
+  test("opening the store backfills an old run to its flow's project, and leaves the rest alone (#843)", () => {
+    // Rows written before #843 say DEFAULT_IDS.project whatever their flow's
+    // project is, and the column is what a resumed run's engine token is
+    // minted from. A file-backed store, reopened, is what a daemon restart is.
+    closeWorkflowDb();
+    const dir = mkdtempSync(join(tmpdir(), "jarvis-843-backfill-"));
+    try {
+      initWorkflowDb(join(dir, "workflow.db"));
+      const other = "proj_other_843";
+      const theirs = createFlow({ projectId: other });
+      const mine = createFlow();
+      const tv = createDraftVersion({ flowId: theirs.id, displayName: "t" });
+      const mv = createDraftVersion({ flowId: mine.id, displayName: "m" });
+      const old = createFlowRun({ flowId: theirs.id, flowVersionId: tv.id, status: "PAUSED" });
+      const ok = createFlowRun({ flowId: mine.id, flowVersionId: mv.id });
+      getWorkflowDb().run("UPDATE flow_run SET project_id = ? WHERE id = ?", [DEFAULT_IDS.project, old.id]);
+      const before = getWorkflowDb().query("SELECT * FROM flow_run WHERE id = ?").get(ok.id);
+      expect(getFlowRun(old.id)?.projectId).toBe(DEFAULT_IDS.project);
+      closeWorkflowDb();
+      initWorkflowDb(join(dir, "workflow.db"));
+      expect(getFlowRun(old.id)?.projectId).toBe(other);
+      expect(getFlowRun(old.id)?.status).toBe("PAUSED");
+      expect(getWorkflowDb().query("SELECT * FROM flow_run WHERE id = ?").get(ok.id)).toEqual(before);
+    } finally {
+      closeWorkflowDb();
+      rmSync(dir, { recursive: true, force: true });
+      initWorkflowDb(":memory:");
+    }
+  });
+
+  test("a run naming another flow's version is refused and writes nothing (#843 review)", () => {
+    // Since the run's project comes from its flow, a version from a different
+    // flow would run that flow's definition under this flow's project.
+    const a = createFlow();
+    const b = createFlow({ projectId: "proj_other_843" });
+    createDraftVersion({ flowId: a.id, displayName: "a" });
+    const bv = createDraftVersion({ flowId: b.id, displayName: "b" });
+    const count = () => getWorkflowDb().query<{ n: number }, []>("SELECT COUNT(*) AS n FROM flow_run").get()!.n;
+    const before = count();
+    expect(() => createFlowRun({ flowId: a.id, flowVersionId: bv.id })).toThrow(`version ${bv.id} is not a version of flow ${a.id}`);
+    expect(count()).toBe(before);
+    // The control: the same version with its own flow is accepted.
+    expect(createFlowRun({ flowId: b.id, flowVersionId: bv.id }).projectId).toBe("proj_other_843");
+  });
+
+  test("a run of a flow that does not exist is refused and writes nothing (#843)", () => {
+    const flow = createFlow();
+    const v = createDraftVersion({ flowId: flow.id, displayName: "v1" });
+    const before = getWorkflowDb().query<{ n: number }, []>("SELECT COUNT(*) AS n FROM flow_run").get()!.n;
+    expect(() => createFlowRun({ flowId: "no_such_flow", flowVersionId: v.id })).toThrow(/flow not found/);
+    expect(getWorkflowDb().query<{ n: number }, []>("SELECT COUNT(*) AS n FROM flow_run").get()!.n).toBe(before);
   });
 
   test("updateRun applies status, steps, failed_step, finishTime", () => {

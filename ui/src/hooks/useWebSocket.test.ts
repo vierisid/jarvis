@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { extractNestedMessage, finalizeStreamMessage, formatProviderErrorMessage, mergeRestoredHistory, nextStreamBuffer } from "./useWebSocket.ts";
+import { readFileSync } from "node:fs";
+import { extractNestedMessage, finalizeStreamMessage, formatProviderErrorMessage, mergeRestoredHistory, nextStreamBuffer, retiredVoiceConfirmationId, roomActionRequestFrom, stillPendingVoiceConfirmations } from "./useWebSocket.ts";
 
 describe("finalizeStreamMessage", () => {
   test("recovers text from the done frame when every stream chunk was missed", () => {
@@ -298,5 +299,97 @@ describe("formatProviderErrorMessage — status-code brittleness fix", () => {
   test("DOES match '\\b401\\b' when it is a real status code", () => {
     const r = formatProviderErrorMessage("HTTP 401 Unauthorized");
     expect(r.summary).toContain("Check your API key and model settings");
+  });
+});
+
+describe("a voice confirmation card comes down when it can no longer be answered (#1011)", () => {
+  test("resolved, expired, or its dashboard gone", () => {
+    expect(retiredVoiceConfirmationId({ source: "voice_confirmation_resolved", id: "a", decision: "confirm" })).toBe("a");
+    expect(retiredVoiceConfirmationId({ source: "voice_confirmation_expired", id: "b", reason: "expired" })).toBe("b");
+    expect(retiredVoiceConfirmationId({ source: "voice_confirmation_expired", id: "c", reason: "disconnected" })).toBe("c");
+    for (const bad of [null, {}, { source: "voice_confirmation_expired" }, { source: "voice_confirmation_expired", id: 7 }, { source: "repeat_back_request", id: "a" }]) {
+      expect(retiredVoiceConfirmationId(bad)).toBeNull();
+    }
+  });
+
+  test("the hook takes the card down for both", () => {
+    const src = readFileSync(new URL("./useWebSocket.ts", import.meta.url), "utf8");
+    const at = src.indexOf('payload.source === "voice_confirmation_resolved" || payload.source === "voice_confirmation_expired"');
+    expect(at).toBeGreaterThanOrEqual(0);
+    const branch = src.slice(at);
+    const body = branch.slice(0, branch.indexOf("} else if"));
+    expect(body).toContain("const id = retiredVoiceConfirmationId(payload);");
+    expect(body).toContain("setClarifiers((prev) => prev.filter((c) => c.id !== id));");
+    expect(body).toContain("setRepeatBacks((prev) => prev.filter((r) => r.id !== id));");
+  });
+
+  test("on reconnect, a card that ended while the socket was down comes down, and a newer one stays", () => {
+    const keep = stillPendingVoiceConfirmations({ ids: ["live"], at: 1_000 })!;
+    expect(keep({ id: "live", timestamp: 500 })).toBe(true);
+    // Swept or expired while this dashboard could not hear it.
+    expect(keep({ id: "dead", timestamp: 500 })).toBe(false);
+    // Arrived after the list was read: not judged by it.
+    expect(keep({ id: "new", timestamp: 1_001 })).toBe(true);
+    // Stamped in the same millisecond the list was read: it was not in the
+    // list, so it is still waiting and must stay.
+    expect(keep({ id: "same-ms", timestamp: 1_000 })).toBe(true);
+    // A reply it cannot read takes nothing down.
+    for (const bad of [null, {}, { ids: ["x"] }, { ids: "x", at: 1 }, { at: 1 }]) {
+      expect(stillPendingVoiceConfirmations(bad)).toBeNull();
+    }
+  });
+
+  test("the hook rechecks its cards whenever a socket opens", () => {
+    const src = readFileSync(new URL("./useWebSocket.ts", import.meta.url), "utf8");
+    const at = src.indexOf("ws.onopen = async () => {");
+    expect(at).toBeGreaterThanOrEqual(0);
+    const onopen = src.slice(at, src.indexOf("ws.onclose = () => {"));
+    expect(onopen).toContain('await fetch("/api/voice/confirmations")');
+    expect(onopen).toContain("setClarifiers((prev) => prev.filter(keep));");
+    expect(onopen).toContain("setRepeatBacks((prev) => prev.filter(keep));");
+    // Not behind the first-connect-only history guard, which closes before
+    // the approvals are rehydrated.
+    expect(onopen.slice(onopen.indexOf("/api/authority/approvals"), onopen.indexOf("/api/voice/confirmations"))).not.toContain("historyHydratedRef");
+  });
+});
+
+describe("roomActionRequestFrom (#965)", () => {
+  const base = { source: "room_action", room: "settings", action: "switch_tab", args: { tab: "voice" } };
+
+  test("keeps the resultId only when the daemon asked this dashboard", () => {
+    expect(roomActionRequestFrom({ ...base, resultId: "r1", resultFrom: "dashboard" }, 5))
+      .toEqual({ room: "settings", action: "switch_tab", args: { tab: "voice" }, ts: 5, resultId: "r1" });
+    // The pebble's requests are for native panels to answer, not the dashboard.
+    for (const extra of [{ resultId: "r1" }, { resultId: "r1", resultFrom: "panel" }, { resultId: "", resultFrom: "dashboard" }, { resultId: 7, resultFrom: "dashboard" }, {}]) {
+      expect(roomActionRequestFrom({ ...base, ...extra }, 5)).toEqual({ room: "settings", action: "switch_tab", args: { tab: "voice" }, ts: 5 });
+    }
+  });
+
+  test("runs an action that changes more than the screen only when it was addressed here (#974)", () => {
+    const task = { source: "room_action", room: "tasks", action: "create_task", args: { title: "Pay rent" } };
+    expect(roomActionRequestFrom({ ...task, resultId: "r1", resultFrom: "dashboard" }, 5))
+      .toEqual({ room: "tasks", action: "create_task", args: { title: "Pay rent" }, ts: 5, resultId: "r1" });
+    for (const extra of [{}, { resultId: "r1" }, { resultId: "r1", resultFrom: "panel" }, { resultId: "", resultFrom: "dashboard" }]) {
+      expect(roomActionRequestFrom({ ...task, ...extra }, 5)).toBeNull();
+    }
+  });
+
+  test("an action this dashboard answers expires when the daemon stops waiting, on this clock (#1010)", () => {
+    const task = { source: "room_action", room: "tasks", action: "create_task", args: { title: "Pay rent" }, resultId: "r1", resultFrom: "dashboard" };
+    // ts is the daemon's clock; the deadline is the arrival time here plus its wait.
+    expect(roomActionRequestFrom({ ...task, expiresInMs: 3500 }, 5, 1_000)?.expiresAt).toBe(4_500);
+    expect(roomActionRequestFrom({ ...task, expiresInMs: 0 }, 5, 1_000)?.expiresAt).toBe(1_000);
+    for (const bad of [undefined, -1, "3500", Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(roomActionRequestFrom({ ...task, expiresInMs: bad }, 5, 1_000)?.expiresAt).toBeUndefined();
+    }
+    // Not addressed here: nobody here is waited on, so nothing expires.
+    expect(roomActionRequestFrom({ ...base, resultId: "r1", expiresInMs: 3500 }, 5, 1_000)?.expiresAt).toBeUndefined();
+  });
+
+  test("drops malformed actions", () => {
+    expect(roomActionRequestFrom(null, 1)).toBeNull();
+    expect(roomActionRequestFrom({ room: "settings" }, 1)).toBeNull();
+    expect(roomActionRequestFrom({ room: 1, action: "x" }, 1)).toBeNull();
+    expect(roomActionRequestFrom({ room: "tools", action: "search", args: "nope" }, 1)?.args).toEqual({});
   });
 });

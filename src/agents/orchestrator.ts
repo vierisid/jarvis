@@ -16,6 +16,15 @@ import { taintProfile, mergeProfiles, TAINT_PROFILE_LABEL, type TaintGating } fr
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 /**
+ * Whether a resumed task buffer holds a browser read whose element ids the
+ * model may act on (#827): a call to one of the two tools that fill the id map.
+ */
+export function historyHoldsBrowserRead(history: LLMMessage[] | undefined): boolean {
+  return (history ?? []).some((m) => m.role === 'assistant'
+    && (m.tool_calls ?? []).some((tc) => tc.name === 'browser_snapshot' || tc.name === 'browser_navigate'));
+}
+
+/**
  * Rebuild a turn's taint from a resumed conversation: every tool call the
  * assistant made earlier in it that reads outside content counts, whether or
  * not its result was wrapped (delegate_task's is not).
@@ -41,10 +50,27 @@ import {
 import { getToolFilterPolicy } from '../actions/tools/tool-relevance/policy.ts';
 import { toolsInScope, toolInScope, outOfScopeMessage, type TurnToolScope } from '../actions/tools/tool-scope.ts';
 import { withTurnScopeId } from '../actions/tools/turn-scope-store.ts';
+import { newSnapshotReadLog, withSnapshotReadLog } from '../actions/tools/snapshot-read-log.ts';
 import type { LLMProviderEntry } from '../config/types.ts';
 import { combineDecisions, type AuthorityDecision } from '../authority/engine.ts';
 import { progressAcknowledgement } from './progress.ts';
 import { runWithOrigin } from '../llm/origin.ts';
+import { runAsApproved } from '../authority/approved-action-scope.ts';
+import { AgentLifecycleRefusal, askLifecycleApproval, gateLifecycle, type LifecycleAction, type LifecycleGateDeps, type LifecycleVia } from './lifecycle-gate.ts';
+import { actingAgent } from './acting-agent.ts';
+
+/**
+ * Tighten-only merge of `profiles` (`mergeProfiles`), with each label part
+ * kept once. An agent's restrictions reach a run along more than one route
+ * (inherited at its spawn, and again as its caller's when that caller asks
+ * for the run), and repeated label parts grew with every generation (#1014
+ * review).
+ */
+function tighten(...profiles: Array<AuthorityProfile | null>): AuthorityProfile | null {
+  const merged = profiles.reduce<AuthorityProfile | null>((acc, p) => mergeProfiles(acc, p), null);
+  if (!merged?.label) return merged;
+  return { ...merged, label: [...new Set(merged.label.split('; '))].join('; ') };
+}
 
 /**
  * Convert a system prompt (legacy string or static/dynamic parts) into the
@@ -72,6 +98,18 @@ function toSystemMessages(systemPrompt: string | SystemPromptParts): LLMMessage[
 
 const MAX_TOOL_ITERATIONS = 200;
 const MAX_TOOL_RESULT_CHARS = 6000; // Cap individual tool results to control context size
+
+/**
+ * A tool result's OUTSIDE text cut to MAX_TOOL_RESULT_CHARS, with a note
+ * saying how long it was. Applied to the payload BEFORE it is framed, never to
+ * a framed string: `wrapUntrusted` promises a block is never partially framed,
+ * and a cut made after the frame is drawn would drop its closing line.
+ */
+function capToolResult(text: string): string {
+  return text.length > MAX_TOOL_RESULT_CHARS
+    ? text.slice(0, MAX_TOOL_RESULT_CHARS) + `\n... (truncated, was ${text.length} chars)`
+    : text;
+}
 // How long the authority gate blocks waiting for the user to approve a
 // gated tool call before falling back to the deferred (fire-and-forget)
 // path. Long enough to click a permission panel, short enough that an
@@ -412,61 +450,156 @@ export class AgentOrchestrator {
   }
 
   /**
-   * Spawn a sub-agent under a parent
+   * What the lifecycle gate needs from this orchestrator; see lifecycle-gate.ts.
+   * `restrictions` are the acting sub-agent's, tightening the live profile.
+   */
+  private lifecycleDeps(restrictions: AuthorityProfile | null = null): LifecycleGateDeps {
+    return {
+      engine: this.authorityEngine,
+      approvalManager: this.approvalManager,
+      auditTrail: this.auditTrail,
+      emergency: this.emergencyController,
+      toolRegistry: this.toolRegistry,
+      temporaryGrants: this.temporaryGrants,
+      profile: tighten(this.getEffectiveProfile(), restrictions),
+      onApprovalNeeded: this.onApprovalNeeded,
+      auditName: (roleName) => this.auditAgentName(roleName),
+    };
+  }
+
+  /**
+   * Restrictions an agent started by a sub-agent carries for life (#1014):
+   * the profile its caller ran under and the taint its caller had read, as
+   * of the spawn. Keyed by agent id, removed when the agent is.
+   */
+  private inheritedRestrictions = new Map<string, AuthorityProfile>();
+
+  /**
+   * The sub-agent whose tool call is running, and the restrictions it is
+   * under: the profile its run was given, and its taint judged by THIS
+   * orchestrator's taint gating, whether or not its own run gates on taint (a
+   * workflow-delegated run does not). Null when nobody but the primary or the
+   * person is acting.
+   *
+   * Not carried: an override the owner scoped to the caller's ROLE
+   * (`overrides[].role_id`). The engine matches those on the role being
+   * judged, so a child of another role is not bound by them -- exactly as a
+   * specialist the primary starts is not bound by an override on the
+   * primary's role. What is carried is everything the caller's run is
+   * restricted by as a profile, plus its level and tools.
+   */
+  private actingCaller(action: LifecycleAction, subject: string): { agent: AgentInstance; restrictions: AuthorityProfile | null } | null {
+    const acting = actingAgent();
+    if (!acting) return null;
+    // Fail closed: an act asked for by a call that has returned, or by an
+    // agent that is gone, is nobody's. Never the primary's. Audited as the
+    // gate audits its own refusals, under the id that asked.
+    const agent = acting.settled ? undefined : this.hierarchy.getAgent(acting.agentId);
+    if (!agent) {
+      try {
+        this.auditTrail?.log({ agent_id: acting.agentId, agent_name: this.auditAgentName('sub-agent'),
+          tool_name: `${action}(${subject})`, action_category: action, authority_decision: 'denied', executed: false });
+      } catch (err) {
+        console.warn(`[Lifecycle] could not audit ${action}(${subject}):`, err instanceof Error ? err.message : err);
+      }
+      throw new AgentLifecycleRefusal(action, 'denied', acting.settled
+        ? 'The tool call that asked for this has already finished, so nothing was done.'
+        : 'The agent that asked for this is no longer running, so nothing was done.');
+    }
+    return { agent, restrictions: tighten(acting.profile, taintProfile(this.taintGating, new Set(acting.taint))) };
+  }
+
+  /**
+   * The profile an agent's run is restricted by: the live effective profile,
+   * what the agent inherited from a sub-agent that started it, and, when a
+   * sub-agent is the one asking for this run (a `delegate_task` it made, a
+   * task it assigns), that sub-agent's restrictions. Tighten-only, so a run
+   * never has fewer restrictions than whoever asked for it (#1014).
+   */
+  getProfileFor(agentId: string): AuthorityProfile | null {
+    // An assign is gated as a start (`manageAgentsGate`), so it is refused as one.
+    const caller = this.actingCaller('spawn_agent', this.hierarchy.getAgent(agentId)?.agent.role.id ?? agentId);
+    return tighten(this.getEffectiveProfile(), this.inheritedRestrictions.get(agentId) ?? null, caller?.restrictions ?? null);
+  }
+
+  /**
+   * Why the acting sub-agent may not direct `agentId` (give it a task), or
+   * null when it may (#1014). It may direct only an agent it could have
+   * started itself: one below its level, with no tool it lacks and every tool
+   * it is denied also denied. Otherwise a task it wrote would run with more
+   * authority than it has. Null when no sub-agent is acting.
+   */
+  delegationShortfall(agentId: string): string | null {
+    const target = this.hierarchy.getAgent(agentId);
+    const caller = this.actingCaller('spawn_agent', target?.agent.role.id ?? agentId);
+    if (!caller || !target) return null;
+    const mine = caller.agent.agent.authority;
+    const theirs = target.agent.authority;
+    const extra = theirs.allowed_tools.filter((t) => !mine.allowed_tools.includes(t));
+    const undenied = mine.denied_tools.filter((t) => !theirs.denied_tools.includes(t));
+    if (theirs.max_authority_level < mine.max_authority_level && extra.length === 0 && undenied.length === 0) return null;
+    const why = theirs.max_authority_level >= mine.max_authority_level
+      ? `level ${theirs.max_authority_level}, not below ${mine.max_authority_level}`
+      : extra.length > 0 ? `the tools ${extra.join(', ')}` : `the tools ${undenied.join(', ')} it is denied`;
+    return `${target.agent.role.name} has more authority than ${caller.agent.agent.role.name}, the agent asking (${why}); `
+      + 'a sub-agent can only give tasks to agents it could have started itself.';
+  }
+
+  /**
+   * Spawn a sub-agent under a parent.
+   *
+   * This is the SINK for starting an agent, so it is where the gate lives
+   * (#932), not at each path that reaches it: the tool layer, the dashboard
+   * spawn dialog, the pebble's voice fast path, a workflow step. See
+   * lifecycle-gate.ts for what is decided. The authority engine is the PRIME
+   * decider: the user's explicit configuration wins over the role-derived
+   * capability flag in BOTH directions, and the flag is only the fallback when
+   * no engine is wired (tests, embedded use).
+   *
+   * A decision that needs approval is satisfied only by an approval already
+   * given for this act (the tool layer's card, run inside its scope). Otherwise
+   * it throws `AgentLifecycleRefusal`, after raising a card for `via` when the
+   * caller supplied the call that redoes the spawn once approved.
    */
   spawnSubAgent(
     parentId: string,
     role: RoleDefinition,
-    opts?: { memory_scope?: string[] }
+    opts?: { memory_scope?: string[]; via?: LifecycleVia }
   ): AgentInstance {
     const parent = this.hierarchy.getAgent(parentId);
     if (!parent) {
       throw new Error(`Parent agent not found: ${parentId}`);
     }
 
-    // The authority engine is the PRIME decider for spawning. The user's
-    // explicit configuration (per-action overrides, context rules, the
-    // authority slider) wins over the role-derived capability flag in
-    // BOTH directions: a `spawn_agent` deny blocks a delegation-capable
-    // role, and an allow unblocks a role that never declared delegation.
-    // This also covers spawn paths that bypass the tool-level gate
-    // (dashboard spawn dialog, workflow delegator). The role flag is
-    // only the fallback when no engine is wired (tests, embedded use).
-    if (this.authorityEngine) {
-      const decision = this.authorityEngine.checkAuthority({
-        agentId: parent.id,
-        agentAuthorityLevel: parent.agent.authority.max_authority_level,
-        agentRoleId: parent.agent.role.id,
-        toolName: 'spawn_sub_agent',
-        toolCategory: 'delegation',
-        actionCategory: 'spawn_agent',
-        temporaryGrants: this.temporaryGrants,
-        profile: this.getEffectiveProfile(),
-      });
-      if (!decision.allowed) {
-        throw new Error(`Authority denied spawning a sub-agent: ${decision.reason}`);
-      }
-      // `requiresApproval` is intentionally treated as allowed here: the
-      // soft gate runs at the TOOL layer (executeTool intercepts
-      // delegate_task/manage_agents before they execute), so by the time
-      // we get here the approval either wasn't needed or was granted.
-    } else if (!parent.agent.authority.can_spawn_children) {
-      throw new Error(
-        `Agent role "${parent.agent.role.id}" cannot spawn sub-agents: the role declares neither the "delegation" tool nor any sub_roles. Add "delegation" to the role's tools list to enable delegation.`,
-      );
-    }
+    // Who is asking (#1014). A sub-agent's tool call names its agent: the
+    // spawn is judged as that agent, under its restrictions and taint, and
+    // the child is capped by it as well as by `parent`, so whatever parent a
+    // tool names, the child never has more than the agent that asked for it.
+    // `parent` stays the hierarchy parent: the child's lifetime and who it
+    // reports to are unchanged, only its authority is bounded.
+    const caller = this.actingCaller('spawn_agent', role.id);
+    const actor = caller?.agent ?? parent;
+    // And no deferred card for it: one runs later with nobody acting, as the
+    // primary, so approving it would start the child with the primary's
+    // authority. A sub-agent's spawn that needs approval takes the approval
+    // its own call was made under (a workflow per-call card), or is refused.
+    const via = caller && opts?.via ? { toolName: opts.via.toolName } : opts?.via;
+    const recordSpawn = gateLifecycle(this.lifecycleDeps(caller?.restrictions ?? null), {
+      action: 'spawn_agent', actor, subject: role.id, via,
+    }, {
+      // Both: a sub-agent cannot spawn where the parent's role could not.
+      allowed: parent.agent.authority.can_spawn_children && actor.agent.authority.can_spawn_children,
+      message: `Agent role "${actor.agent.role.id}" cannot spawn sub-agents: the role declares neither the "delegation" tool nor any sub_roles. Add "delegation" to the role's tools list to enable delegation.`,
+    });
 
-    // Create child agent with reduced authority
+    // Create child agent with reduced authority: below both the hierarchy
+    // parent and the agent that asked.
+    const bounds = [parent.agent.authority, actor.agent.authority];
     const childAuthority = {
-      max_authority_level: Math.min(
-        role.authority_level,
-        parent.agent.authority.max_authority_level - 1
-      ),
-      allowed_tools: role.tools.filter((tool) =>
-        parent.agent.authority.allowed_tools.includes(tool)
-      ),
-      denied_tools: parent.agent.authority.denied_tools,
-      max_token_budget: Math.floor(parent.agent.authority.max_token_budget / 2),
+      max_authority_level: Math.min(role.authority_level, ...bounds.map((b) => b.max_authority_level - 1)),
+      allowed_tools: role.tools.filter((tool) => bounds.every((b) => b.allowed_tools.includes(tool))),
+      denied_tools: [...new Set(bounds.flatMap((b) => b.denied_tools))],
+      max_token_budget: Math.floor(Math.min(...bounds.map((b) => b.max_token_budget)) / 2),
       can_spawn_children: canSpawnChildren(role),
     };
 
@@ -477,6 +610,11 @@ export class AgentOrchestrator {
     });
 
     this.hierarchy.addAgent(agent);
+    // Every run the child ever makes is restricted by what its caller was
+    // (`getProfileFor`), including a task the primary assigns it later.
+    const inherited = tighten(caller?.restrictions ?? null, this.inheritedRestrictions.get(actor.id) ?? null);
+    if (inherited) this.inheritedRestrictions.set(agent.id, inherited);
+    recordSpawn();
 
     // Add system message with role context for sub-agents. Communication
     // style is optional - only inject the line when the role declares one.
@@ -492,9 +630,69 @@ export class AgentOrchestrator {
   }
 
   /**
-   * Terminate an agent and its children
+   * Stops the background task loops an agent is running; set by the agent
+   * service, which owns the task manager. Without it a terminated agent's loop
+   * kept calling the model until it finished (#963).
    */
-  terminateAgent(agentId: string): void {
+  private taskCanceller: ((agentId: string) => void) | null = null;
+
+  setTaskCanceller(cancel: ((agentId: string) => void) | null): void {
+    this.taskCanceller = cancel;
+  }
+
+  /**
+   * Stop an agent at someone's request: the SINK for stopping one (#963),
+   * gated as `terminate_agent` for the agent asking (the primary). A hard deny
+   * throws; a decision that needs approval is satisfied only by a card already
+   * approved for this act, otherwise a card is raised for `via` and this throws
+   * `AgentLifecycleRefusal`. When it goes ahead, the agent's running task loops
+   * are aborted, not just its record removed.
+   *
+   * Cleanup of an agent the caller itself spawned and whose run is over is
+   * `reapAgent`, which is not a decision anyone needs to approve.
+   */
+  terminateAgent(agentId: string, opts?: { via?: LifecycleVia }): void {
+    const agent = this.hierarchy.getAgent(agentId);
+    if (!agent) {
+      throw new Error(`Agent not found: ${agentId}`);
+    }
+    // Judged as the sub-agent asking, when one is (#1014), under its
+    // restrictions; otherwise as the primary, for the person. Unlike a spawn,
+    // a sub-agent's stop keeps its deferred card and may name any managed
+    // agent: a stop takes authority away rather than exercising it, it is the
+    // safety lever #963 keeps reachable, and the card names the exact agent
+    // and task and runs nothing but that stop, so running it later as the
+    // primary widens nothing. A deny still refuses before any card.
+    const caller = this.actingCaller('terminate_agent', agent.agent.role.id);
+    const actor = caller?.agent ?? this.getPrimary() ?? agent;
+    const recordStop = gateLifecycle(this.lifecycleDeps(caller?.restrictions ?? null), {
+      action: 'terminate_agent', actor, subject: agent.agent.role.id, via: opts?.via,
+    }, { allowed: true, message: '' });
+    this.reapAgent(agentId);
+    recordStop();
+  }
+
+  /**
+   * Raise a card to stop `agentId` without stopping it, whatever the engine
+   * would allow: voice may stop an agent only through a card (#963). Returns
+   * the request; throws `AgentLifecycleRefusal` on a hard deny or when there
+   * is nobody to ask.
+   */
+  requestTerminationApproval(agentId: string, via: Required<LifecycleVia>): ApprovalRequest {
+    const agent = this.hierarchy.getAgent(agentId);
+    if (!agent) throw new Error(`Agent not found: ${agentId}`);
+    return askLifecycleApproval(this.lifecycleDeps(), {
+      action: 'terminate_agent', actor: this.getPrimary() ?? agent, subject: agent.agent.role.id, via,
+    });
+  }
+
+  /**
+   * Remove an agent and its children, aborting any task loop they run. Not
+   * gated: for an agent the caller spawned itself and has finished with
+   * (delegate_task, a workflow delegation, shutdown). Anything stopping an
+   * agent on someone's behalf goes through `terminateAgent`.
+   */
+  reapAgent(agentId: string): void {
     const agent = this.hierarchy.getAgent(agentId);
     if (!agent) {
       throw new Error(`Agent not found: ${agentId}`);
@@ -503,7 +701,13 @@ export class AgentOrchestrator {
     // Recursively terminate children first
     const children = this.hierarchy.getChildren(agentId);
     for (const child of children) {
-      this.terminateAgent(child.id);
+      this.reapAgent(child.id);
+    }
+
+    try {
+      this.taskCanceller?.(agentId);
+    } catch (err) {
+      console.warn(`[Orchestrator] could not cancel the tasks of ${agentId}:`, err instanceof Error ? err.message : err);
     }
 
     // Terminate this agent
@@ -513,6 +717,7 @@ export class AgentOrchestrator {
     // terminated agent's entry would otherwise sit in the map for the life
     // of the process.
     this.exposureLedgers.delete(agentId);
+    this.inheritedRestrictions.delete(agentId);
   }
 
   getPrimary(): AgentInstance | undefined {
@@ -553,31 +758,43 @@ export class AgentOrchestrator {
     // BackgroundAgentService), which is how a commitment written in a site
     // chat gets its originating scope back (#571).
     scope?: TurnToolScope | null,
+    // A conversation of the caller's own instead of the primary agent's
+    // history (#884). An external channel passes each sender's thread here:
+    // the primary history is the one the dashboard chat writes, so a stranger
+    // messaging the bot read the owner's dashboard conversation. The thread
+    // is read, never written: the caller persists the turn itself.
+    thread?: { history: LLMMessage[] } | null,
   ): Promise<string> {
     const primary = this.getPrimary();
     if (!primary) {
       throw new Error('No primary agent exists. Create one first.');
     }
+    const ownThread = thread ?? null;
 
     // A message from the user is the turn boundary for taint gating: this
     // turn's reads gate this turn's later calls and nothing else.
     const turnTaint = new Set<string>();
+    // The remote snapshots THIS loop reads, entered around each of its tool
+    // calls, so a browser card it raises binds the snapshot it read and not
+    // the newest one another channel or the voice route took (#827,
+    // actions/tools/snapshot-read-log.ts).
+    const turnReads = newSnapshotReadLog();
     const turnScope = scope ?? null;
 
     // Add user message to persistent history
-    primary.addMessage('user', message);
+    if (!ownThread) primary.addMessage('user', message);
 
     // If no LLM manager, return placeholder
     if (!this.llmManager) {
       const response = `[No LLM configured] Received: ${message}`;
-      primary.addMessage('assistant', response);
+      if (!ownThread) primary.addMessage('assistant', response);
       return response;
     }
 
     // Build local messages array for this turn (system + history)
     const messages: LLMMessage[] = [
       ...toSystemMessages(systemPrompt),
-      ...primary.getMessages(),
+      ...(ownThread ? [...ownThread.history, { role: 'user' as const, content: message }] : primary.getMessages()),
     ];
 
     // Decided once for the turn and held across the loop. Recomputing per
@@ -622,7 +839,7 @@ export class AgentOrchestrator {
           // of the conversation, so a later turn cannot strip a tool an
           // in-flight task is using.
           this.noteToolUse(ledger, tc.name, turnScope);
-          const result = await this.executeTool(tc, undefined, turnTaint, turnScope);
+          const result = await withSnapshotReadLog(turnReads, () => this.executeTool(tc, undefined, turnTaint, turnScope));
           messages.push({
             role: 'tool',
             content: result,
@@ -664,7 +881,7 @@ export class AgentOrchestrator {
     }
 
     // Add final response to persistent history
-    primary.addMessage('assistant', finalText);
+    if (!ownThread) primary.addMessage('assistant', finalText);
     return finalText;
   }
 
@@ -726,6 +943,13 @@ export class AgentOrchestrator {
     // "ask first, then run it", so the taint is rebuilt from the history
     // instead of starting clean.
     const turnTaint = new Set<string>();
+    // The remote snapshots THIS loop reads, entered around each of its tool
+    // calls, so a browser card it raises binds the snapshot it read and not
+    // the newest one another channel or the voice route took (#827,
+    // actions/tools/snapshot-read-log.ts). A resume replays snapshot replies
+    // whose generations were not kept across the pause, so a buffer that
+    // holds one fails closed until the loop snapshots again.
+    const turnReads = newSnapshotReadLog({ resumedWithReads: historyHoldsBrowserRead(opts.history) });
     if (opts.history) seedTaintFromHistory(opts.history, turnTaint, this.toolRegistry);
 
     // Build the running conversation buffer. On a fresh call: system + user
@@ -883,7 +1107,7 @@ export class AgentOrchestrator {
           // a registered tool is otherwise admitted and RUN, and on a hosted
           // install the filter does not engage at all (the tier models are
           // frontier-vetoed), so this check is the only thing that refuses.
-          const result = await this.executeTool(tc, opts.signal, turnTaint, turnScope);
+          const result = await withSnapshotReadLog(turnReads, () => this.executeTool(tc, opts.signal, turnTaint, turnScope));
           toolsExecuted++;
           messages.push({
             role: 'tool',
@@ -1021,6 +1245,11 @@ export class AgentOrchestrator {
     // A message from the user is the turn boundary for taint gating: this
     // turn's reads gate this turn's later calls and nothing else.
     const turnTaint = new Set<string>();
+    // The remote snapshots THIS loop reads, entered around each of its tool
+    // calls, so a browser card it raises binds the snapshot it read and not
+    // the newest one another channel or the voice route took (#827,
+    // actions/tools/snapshot-read-log.ts).
+    const turnReads = newSnapshotReadLog();
     // The public entry point may leave the scope out; everything below it
     // requires the decision to be explicit, so it is made once here.
     const turnScope = scope ?? null;
@@ -1181,7 +1410,7 @@ export class AgentOrchestrator {
           continue;
         }
         this.noteToolUse(ledger, tc.name, turnScope);
-        const result = await this.executeTool(tc, undefined, turnTaint, turnScope);
+        const result = await withSnapshotReadLog(turnReads, () => this.executeTool(tc, undefined, turnTaint, turnScope));
         messages.push({
           role: 'tool',
           content: result,
@@ -1686,20 +1915,46 @@ export class AgentOrchestrator {
          * chat-channel relay and the execute route's HTTP body. A frame carries
          * a per-message nonce; those three must never be handed one.
          */
-        const runApproved = async (): Promise<string> => {
+        const runApproved = async (): Promise<string | ContentBlock[]> => {
           const receipt = await this.deferredExecutor!.executeApprovedWithReceipt(request.id, 'inline-gate');
           if (receipt.failed && tool?.failureIsOutsideContent === true) {
             this.noteTaint(toolCall.name, tool?.category);
             return markUntrustedToolFailure(toolCall.name, tool?.category, receipt.result, MAX_TOOL_RESULT_CHARS, true);
           }
-          return frame(receipt.result);
+          // A picture (#709): the blocks, sized and framed exactly as the
+          // ungated path below hands them over, rather than the receipt's text
+          // form, which names the image and does not carry it. An approved
+          // screenshot is often the very thing the person approved acting on.
+          if (receipt.content) {
+            this.noteTaint(toolCall.name, tool?.category);
+            return markUntrustedToolBlocks(toolCall.name, tool?.category, receipt.content.map(guardImageSize));
+          }
+          // A trusted trailer (#708): the tool's own repo-authored sentence,
+          // placed AFTER the block the way the ungated path below places it,
+          // instead of inside it with the rest of the receipt -- and, like
+          // that path, with the OUTSIDE half capped before it is framed, so
+          // the cap never competes with the trailer and never cuts a frame.
+          // The executor hands a trailer over only when the tool returned a
+          // carrier, which no reply from another machine can produce.
+          if (receipt.trailer) {
+            return frame(capToolResult(receipt.outside ?? '')) + receipt.trailer;
+          }
+          // Capped BEFORE it is framed, as the ungated path caps a plain
+          // result (#828; content blocks are uncapped text on both paths). Uncapped, an approved `browser_navigate` or
+          // `desktop_snapshot` -- page- and screen-sized results, and exactly
+          // the tools that take a card -- reached the model whole; and the
+          // order matters as much as the cap, because a cut made after the
+          // frame is drawn would drop its closing line.
+          return frame(capToolResult(receipt.result));
         };
 
-        // Every return below is a single string, and that is no longer a
-        // limitation worth noting for documents: `DeferredExecution` collapses
-        // the tool's return with `toolReturnText` before writing its receipt,
-        // which would drop any out-of-band metadata a tool tried to hand over
-        // here. #584 briefly made that a gap -- an approved `create_document`
+        // Every return below is a single string except one: an approved call
+        // that returned a picture comes back as blocks (#709), which the
+        // executor hands over separately from its receipt text. The other
+        // thing the executor hands over beside its receipt text is a trusted
+        // trailer (#708), placed after the block above. Anything else is
+        // still collapsed into the one receipt string, which would drop any
+        // other out-of-band metadata a tool tried to hand over here. #584 briefly made that a gap -- an approved `create_document`
         // would have lost its download card while an ungated one kept it -- and
         // then removed the card entirely, so there is nothing left to lose. If
         // a tool ever does need to hand structured metadata to the chat loop,
@@ -1713,7 +1968,10 @@ export class AgentOrchestrator {
             return runApproved();
           case 'executed':
             // Another path already ran it (shouldn't happen for inline
-            // requests; tolerated for robustness). Surface its result.
+            // requests; tolerated for robustness). Surface its result -- the
+            // STORED receipt, which carries no trusted trailer (#829: the
+            // executor drops it there, so it is absent rather than framed and
+            // disclaimed) and is already bounded to RECEIPT_MAX_CHARS.
             return frame(resolved.execution_result ?? `[EXECUTED] ${toolCall.name} completed.`);
           case 'denied':
             return `[APPROVAL DENIED] The user denied permission to execute ${toolCall.name}. ` +
@@ -1908,9 +2166,40 @@ export class AgentOrchestrator {
       return `[BLOCKED] ${name} needs the user's confirmation in the dashboard and cannot be started from a voice session. Tell the user what you wanted to do and ask them to confirm it there.`;
     }
 
+    // 2c. Stopping an agent is never auto-approved by a voice session
+    // (#963): voice may stop one only through a card, which the person clicks
+    // (terminate_agent is destructive, so the card cannot be approved by voice
+    // either). Raised here, deferred, so the audio loop does not block.
+    if (gate.categories.includes('terminate_agent') && primary) {
+      // Only a real sub-agent, and only the canonical stop call: a card for an
+      // invented id, or carrying extra keys, would be noise on every approval
+      // surface (and defeat the dedupe of a card already waiting).
+      const target = typeof args.agent_id === 'string' ? this.getAgent(args.agent_id) : undefined;
+      if (name !== 'manage_agents' || !target || target.id === primary.id) {
+        logAudit('denied', false);
+        return `Error: there is no background agent "${String(args.agent_id ?? '')}" to stop.`;
+      }
+      const toolArguments = { action: 'terminate', agent_id: target.id,
+        ...(typeof args.task_id === 'string' ? { task_id: args.task_id } : {}) };
+      try {
+        // askLifecycleApproval writes the audit row, whichever way it goes.
+        const card = askLifecycleApproval(this.lifecycleDeps(), {
+          action: 'terminate_agent', actor: primary, subject: target.agent.role.id,
+          via: { toolName: name, toolArguments },
+        });
+        return `[AWAITING_APPROVAL] Request #${card.id.slice(0, 8)} submitted. Stopping an agent needs the user to click the approval card in the dashboard; it keeps running until they do. Tell them that.`;
+      } catch (err) {
+        return `[AUTHORITY DENIED] Cannot execute ${name}: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    }
+
     // 3. Authority check — hard denies enforced; approval auto-granted.
+    // The categories auto-granted here, for the lifecycle sinks the call may
+    // reach (#932): without the scope, a voice `manage_agents spawn` the
+    // realtime policy auto-approved would be refused again at the spawn sink.
+    let autoApproved: ActionCategory[] | null = null;
     if (this.authorityEngine && primary) {
-      const decision = combineDecisions(gate.categories.map((category) => this.authorityEngine!.checkAuthority({
+      const perCategory = gate.categories.map((category) => this.authorityEngine!.checkAuthority({
         agentId: primary.id,
         agentAuthorityLevel: primary.agent.authority.max_authority_level,
         agentRoleId: primary.agent.role.id,
@@ -1919,7 +2208,8 @@ export class AgentOrchestrator {
         actionCategory: category,
         temporaryGrants: this.temporaryGrants,
         profile: this.getEffectiveProfile(),
-      })));
+      }));
+      const decision = combineDecisions(perCategory);
 
       if (!decision.allowed) {
         logAudit('denied', false);
@@ -1937,11 +2227,17 @@ export class AgentOrchestrator {
 
       // Other requiresApproval -> auto-approved in realtime; audited as such.
       logAudit(decision.requiresApproval ? 'approval_required' : 'allowed', true);
+      // Only the categories that asked for approval were auto-approved.
+      if (decision.requiresApproval) autoApproved = perCategory.filter((d) => d.requiresApproval).map((d) => d.actionCategory);
     }
 
     // 4. Execute.
     try {
-      const raw = await this.toolRegistry.execute(name, args);
+      const registry = this.toolRegistry;
+      const raw = await (autoApproved
+        ? runAsApproved({ categories: autoApproved, approvalId: null, source: 'realtime_auto' },
+          () => registry.execute(name, args))
+        : registry.execute(name, args));
       const category = tool?.category;
       this.noteTaint(name, category);
       if (isToolResult(raw)) {

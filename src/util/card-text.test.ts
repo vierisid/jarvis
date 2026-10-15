@@ -8,7 +8,8 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { forCard } from './card-text.ts';
+import { commandForCard, escapedLiteralForCard, forCard } from './card-text.ts';
+import { inlineUntrusted } from '../roles/untrusted.ts';
 
 describe('forCard', () => {
   test('it collapses whitespace so a newline cannot hide the sentence', () => {
@@ -25,16 +26,16 @@ describe('forCard', () => {
   });
 
   test('it strips a bidi override that would reorder what the reader sees', () => {
-    // `cv‮gpj.exe` renders as `cvexe.jpg`. The override survives a
+    // `cv\u202egpj.exe` renders as `cvexe.jpg`. The override survives a
     // whitespace collapse and a length cap untouched, so a filename the model
     // chose could make the card describe a different file than the one approved.
-    const out = forCard('/home/me/Documents/cv‮gpj.exe');
+    const out = forCard('/home/me/Documents/cv\u202egpj.exe');
     expect(out).toBe('/home/me/Documents/cvgpj.exe');
-    expect(out).not.toContain('‮');
+    expect(out).not.toContain('\u202e');
   });
 
   test('it strips the other invisible formatting characters', () => {
-    for (const ch of ['​', '‎', '‏', '‪', '‭', '⁦', '⁩', '﻿', '­']) {
+    for (const ch of ['\u200b', '\u200e', '\u200f', '\u202a', '\u202d', '\u2066', '\u2069', '\ufeff', '\u00ad']) {
       expect(forCard(`a${ch}b`), ch.charCodeAt(0).toString(16)).toBe('ab');
     }
   });
@@ -63,6 +64,37 @@ describe('forCard', () => {
     expect(forCard('\u3164\u115f')).toBe('');
   });
 
+  test('#838: it strips every format character, including the 32 that are not default-ignorable', () => {
+    // Measured from the runtime's own property tables, not listed by hand, so
+    // a Unicode update that moves a character is covered as well.
+    const gap: string[] = [];
+    for (let c = 0; c <= 0x10ffff; c++) {
+      if (c >= 0xd800 && c <= 0xdfff) continue;
+      const ch = String.fromCodePoint(c);
+      if (/^\p{Cf}$/u.test(ch) && !/^\p{Default_Ignorable_Code_Point}$/u.test(ch)) gap.push(ch);
+    }
+    expect(gap.length).toBe(32);
+    for (const ch of gap) {
+      expect(forCard(`pay${ch} 100`), ch.codePointAt(0)!.toString(16)).toBe('pay 100');
+    }
+    // The interlinear annotation the issue named: U+FFF9..U+FFFB around text
+    // that a renderer may show as a ruby gloss, or not at all.
+    expect(forCard('approve \ufff9rm -rf ~\ufffaharmless\ufffb')).toBe('approve rm -rf ~harmless');
+  });
+
+  test('#838: it drops exactly what inlineUntrusted drops as invisible', () => {
+    // The log helper and the card disagreed in both directions before #763
+    // and #838. Every Cf or Default_Ignorable code point, one at a time.
+    for (let c = 0; c <= 0x10ffff; c++) {
+      if (c >= 0xd800 && c <= 0xdfff) continue;
+      const ch = String.fromCodePoint(c);
+      if (!/^[\p{Cf}\p{Default_Ignorable_Code_Point}]$/u.test(ch)) continue;
+      const card = forCard(`a${ch}b`);
+      const inline = inlineUntrusted(`a${ch}b`);
+      if (card !== 'ab' || inline !== 'ab') throw new Error(`U+${c.toString(16)}: card ${JSON.stringify(card)} inline ${JSON.stringify(inline)}`);
+    }
+  });
+
   test('it leaves ordinary text, including non-ASCII, alone', () => {
     expect(forCard('/home/me/Documentos/currículum.pdf')).toBe('/home/me/Documentos/currículum.pdf');
     expect(forCard('~/Downloads/レポート.xlsx')).toBe('~/Downloads/レポート.xlsx');
@@ -71,5 +103,22 @@ describe('forCard', () => {
   test('a null or undefined value is the empty string, not "null"', () => {
     expect(forCard(null)).toBe('');
     expect(forCard(undefined)).toBe('');
+  });
+});
+
+/** #720: shared by `run_command` and `site_run_command`; the site tests in tool-gate.test.ts pin the rest. */
+describe('escapedLiteralForCard and commandForCard', () => {
+  test('a literal decodes to exactly the value and cannot close its own quote', () => {
+    const value = `a"b\n${String.fromCharCode(0x202e)}c${String.fromCharCode(10)}`;
+    const literal = escapedLiteralForCard(value);
+    expect(literal).not.toMatch(/[^\x20-\x7e]/);
+    expect(JSON.parse(literal)).toBe(value);
+    expect(escapedLiteralForCard(undefined)).toBe('""');
+  });
+
+  test('trim follows the caller: untrimmed shows the outer whitespace the shell receives', () => {
+    expect(commandForCard('  ls \n')).toBe('run: ls');
+    expect(commandForCard('  ls', { trim: false })).toBe('run:   ls');
+    expect(commandForCard('ls\n', { trim: false })).toBe('run this 2-line command, as an escaped string (\\n is a new line): "ls\\n"');
   });
 });

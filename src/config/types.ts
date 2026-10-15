@@ -77,16 +77,37 @@ export type GoogleConfig = {
   instance_id?: string;
 };
 
+/**
+ * `allowed_users` is a list of user ids: positive integers for Telegram,
+ * snowflake strings for Discord. Any other entry is ignored with a warning, and
+ * a value that names nobody (a string, `["042"]`) lets nobody in rather than
+ * everyone (#883, comms/channels/allow-list.ts).
+ *
+ * `allowed_users` means two different things when it is EMPTY (#811):
+ *   - chat: everyone who can reach the bot may talk to Jarvis (any Telegram
+ *     user who finds it, any member of a Discord guild it is in), each in a
+ *     conversation of their own (#884), though with the owner's tools;
+ *   - approvals: nobody may approve or deny from that channel. An
+ *     `approve <id>` or `deny <id>` reply is refused, and the decision has to
+ *     be made in the dashboard. A gated action is the one place "allow all"
+ *     is the wrong default.
+ *   - notifications: nothing is sent proactively (#852). Approval cards and
+ *     other broadcasts go to the private chat of the last sender the list
+ *     names (never a group or server channel), so an empty list has no
+ *     recipient; a stranger who messages the bot gets replies, never the
+ *     owner's cards.
+ * A non-empty list admits only the users it names, for all three.
+ */
 export type ChannelConfig = {
   telegram?: {
     enabled: boolean;
     bot_token: string;
-    allowed_users: number[];  // Telegram user IDs
+    allowed_users: number[];  // Telegram user IDs; empty = anyone may chat, nobody may approve
   };
   discord?: {
     enabled: boolean;
     bot_token: string;
-    allowed_users: string[];  // Discord user IDs
+    allowed_users: string[];  // Discord user IDs; empty = anyone may chat, nobody may approve
     guild_id?: string;        // restrict to single guild
   };
 };
@@ -225,13 +246,16 @@ export type PebbleConfig = {
   palette_hotkey?: unknown;
 };
 
+/**
+ * The `desktop` settings section. #897 removed `sidecar_port`, `sidecar_path`,
+ * `auto_launch`, `tree_depth` and `snapshot_max_elements`: nothing read them
+ * (the legacy desktop bridge their names described used hard-coded constants,
+ * and #799 deleted it), so setting one changed nothing and said nothing. A
+ * stored row or file that still carries them loads as before: deepMerge keeps
+ * unknown keys, and nothing reads them.
+ */
 export type DesktopConfig = {
   enabled: boolean;
-  sidecar_port: number;
-  sidecar_path?: string;
-  auto_launch: boolean;
-  tree_depth: number;
-  snapshot_max_elements: number;
 };
 
 export type AwarenessConfig = {
@@ -886,10 +910,6 @@ export const DEFAULT_CONFIG: JarvisConfig = {
   },
   desktop: {
     enabled: true,
-    sidecar_port: 9224,
-    auto_launch: true,
-    tree_depth: 5,
-    snapshot_max_elements: 60,
   },
   awareness: {
     enabled: true,

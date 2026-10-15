@@ -240,7 +240,7 @@ describe('gated tool classification (run_skill)', () => {
     expect(cap.categories).toEqual(['send_email', 'control_app']);
     const target = cap.target({ name: 'gmail-send' });
     expect(target).toMatchObject({ tool: 'run_skill', skill: 'gmail-send', version: 1, integrity: 'ok', surface: 'browser', capability: 'browser', sidecarId: 'pc-1', selection: 'pinned-sidecar' });
-    expect(String(target.intent)).toContain('click Send (sends email)');
+    expect(String(target.intent)).toContain('click "Send" (sends email)');
     expect(cap.prepareArguments({ name: 'gmail-send' })).toEqual({ name: 'gmail-send', target: 'pc-1' });
   }));
 

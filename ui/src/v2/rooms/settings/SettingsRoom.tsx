@@ -15,8 +15,9 @@ import { RoomShell } from "../RoomShell";
 import { useRoomActions } from "../useRoomActionBus";
 import { useRovingTabs } from "../useRovingTabs";
 import { useLiveData } from "../../shell/LiveDataContext";
-import { useSettingsData } from "./useSettingsData";
+import { useSettingsData, type ActionResult } from "./useSettingsData";
 import {
+  reloadAfterOnboardingReset,
   resetOnboarding,
   type OnboardingResetScope,
 } from "../../onboarding/resetClient";
@@ -31,28 +32,27 @@ import { BillingTab } from "./tabs/BillingTab";
 import { useBilling } from "../../billing/useBilling";
 import { billingTabVisible } from "../../billing/billing-view";
 import { SETTINGS_TAB_EVENT, takeRequestedSettingsTab } from "../../shell/settings-tab-request";
+import { isRoomTab, ROOM_TABS, type RoomTab } from "../../../../../src/daemon/room-tabs";
+import { withRoomActionDefaults } from "../../../../../src/daemon/room-action-targets";
 import "./SettingsRoom.css";
 
-export type SettingsTab =
-  | "general"
-  | "profile"
-  | "llm"
-  | "channels"
-  | "voice"
-  | "integrations"
-  | "billing"
-  | "sidecar";
+export type SettingsTab = RoomTab<"settings">;
 
-const TABS: ReadonlyArray<{ key: SettingsTab; label: string; icon: LucideIcon }> = [
-  { key: "general", label: "General", icon: Cog },
-  { key: "profile", label: "Profile", icon: UserCircle2 },
-  { key: "llm", label: "LLM", icon: Bot },
-  { key: "channels", label: "Channels", icon: MessagesSquare },
-  { key: "voice", label: "Voice", icon: Mic },
-  { key: "integrations", label: "Integrations", icon: Cable },
-  { key: "billing", label: "Billing", icon: CreditCard },
-  { key: "sidecar", label: "Sidecar", icon: Server },
-];
+// Keyed by every tab in ROOM_TABS.settings, so a tab added there without a
+// label and icon here does not type-check (#933).
+const TAB_META: Record<SettingsTab, { label: string; icon: LucideIcon }> = {
+  general: { label: "General", icon: Cog },
+  profile: { label: "Profile", icon: UserCircle2 },
+  llm: { label: "LLM", icon: Bot },
+  channels: { label: "Channels", icon: MessagesSquare },
+  voice: { label: "Voice", icon: Mic },
+  integrations: { label: "Integrations", icon: Cable },
+  billing: { label: "Billing", icon: CreditCard },
+  sidecar: { label: "Sidecar", icon: Server },
+};
+
+const TABS: ReadonlyArray<{ key: SettingsTab; label: string; icon: LucideIcon }> =
+  ROOM_TABS.settings.map((key) => ({ key, ...TAB_META[key] }));
 
 const VALID_TABS = new Set<SettingsTab>(TABS.map((t) => t.key));
 
@@ -124,12 +124,22 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
   }, [lastApplied]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Voice room actions ──
+  // A side-effecting action is answered once its request has settled, with
+  // whether it worked (#1015): it used to answer yes as the request went out,
+  // so a failed save, or a heartbeat write the daemon has no endpoint for,
+  // was confirmed by voice.
+  const answerFrom = (work: Promise<ActionResult>): Promise<boolean> =>
+    work.then((r) => {
+      showToast(r.message, r.ok ? "ok" : "warn");
+      return r.ok;
+    });
+
   useRoomActions("settings", (action, args) => {
     switch (action) {
       case "switch_tab": {
-        const t = String(args.tab);
-        if (VALID_TABS.has(t as SettingsTab) && (showBilling || t !== "billing")) {
-          setTab(t as SettingsTab);
+        const t = args.tab;
+        if (isRoomTab("settings", t) && (showBilling || t !== "billing")) {
+          setTab(t);
           return true;
         }
         return false;
@@ -185,101 +195,59 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
             : "";
         if (!ref || !ref.includes(":")) return false;
         setTab("llm");
-        (async () => {
-          const r = await data.setDefaultModel(ref);
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setDefaultModel(ref));
       }
       case "test_provider": {
         const name = String(args.provider ?? args.name ?? "").trim();
         if (!name) return false;
         setTab("llm");
-        (async () => {
-          const r = await data.testProvider(name);
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.testProvider(name));
       }
 
       // ── Channels ──
       case "enable_telegram": {
         setTab("channels");
-        (async () => {
-          const r = await data.setTelegram({ enabled: true });
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setTelegram({ enabled: true }));
       }
       case "disable_telegram": {
         setTab("channels");
-        (async () => {
-          const r = await data.setTelegram({ enabled: false });
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setTelegram({ enabled: false }));
       }
       case "enable_discord": {
         setTab("channels");
-        (async () => {
-          const r = await data.setDiscord({ enabled: true });
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setDiscord({ enabled: true }));
       }
       case "disable_discord": {
         setTab("channels");
-        (async () => {
-          const r = await data.setDiscord({ enabled: false });
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setDiscord({ enabled: false }));
       }
       case "set_stt_provider": {
         const provider = String(args.provider).toLowerCase();
         if (!["openai", "groq", "sarvam", "local", "usejarvis"].includes(provider)) return false;
         setTab("channels");
-        (async () => {
-          const r = await data.setSTTProvider(provider as any);
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setSTTProvider(provider as any));
       }
       case "enable_tts": {
         setTab("channels");
-        (async () => {
-          const r = await data.setTTS({ enabled: true });
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setTTS({ enabled: true }));
       }
       case "disable_tts": {
         setTab("channels");
-        (async () => {
-          const r = await data.setTTS({ enabled: false });
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setTTS({ enabled: false }));
       }
       case "set_tts_provider": {
         const provider = String(args.provider).toLowerCase();
         if (!["edge", "elevenlabs", "sarvam"].includes(provider)) return false;
         setTab("channels");
-        (async () => {
-          const r = await data.setTTS({ provider: provider as any });
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setTTS({ provider: provider as any }));
       }
       case "set_tts_voice": {
-        const voice = String(args.voice);
+        // Not String(args.voice): a voice left out became the voice
+        // "undefined", which no card showed (#1008).
+        const voice = typeof args.voice === "string" ? args.voice.trim() : "";
         if (!voice) return false;
         setTab("channels");
-        (async () => {
-          const r = await data.setTTS({ voice });
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setTTS({ voice }));
       }
 
       // ── General ──
@@ -287,28 +255,21 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
         const minutes = Number(args.minutes);
         if (!Number.isFinite(minutes) || minutes <= 0) return false;
         setTab("general");
-        (async () => {
-          const r = await data.setHeartbeatInterval(minutes);
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setHeartbeatInterval(minutes));
       }
       case "set_heartbeat_aggressiveness": {
         const level = String(args.level).toLowerCase();
         if (!["passive", "moderate", "aggressive"].includes(level)) return false;
         setTab("general");
-        (async () => {
-          const r = await data.setHeartbeatAggressiveness(level as any);
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setHeartbeatAggressiveness(level as any));
       }
       case "restart_daemon": {
-        (async () => {
-          const r = await data.restartDaemon();
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        // Answered from the route, so a restart it refuses (no keepalive
+        // service installed) is a no (#1015). On Linux the route's
+        // `systemctl --no-block restart` can stop the daemon before this
+        // answer reaches it; nothing is heard then, where the old early yes
+        // could be.
+        return answerFrom(data.restartDaemon());
       }
 
       case "replay_onboarding": {
@@ -317,26 +278,24 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
         // resetOnboarding(), which clears the right localStorage keys
         // and reloads the page so the OnboardingGate (when it ships)
         // re-evaluates its initial state cleanly.
-        const rawScope = String(args.scope ?? "all");
-        const scope: OnboardingResetScope =
-          rawScope === "setup" ||
-          rawScope === "profile" ||
-          rawScope === "tutorial" ||
-          rawScope === "all"
-            ? rawScope
-            : "all";
+        // No scope, or one it does not know, is "all", which clears the
+        // user profile; the daemon shows that on the card before a held
+        // voice action runs, from the same defaults (#1008).
+        const scope = withRoomActionDefaults("settings", "replay_onboarding", args).scope as OnboardingResetScope;
         showToast("Replaying onboarding — reloading…", "ok");
-        (async () => {
-          try {
-            await resetOnboarding(scope);
-          } catch (err) {
-            showToast(
-              err instanceof Error ? err.message : "Reset failed",
-              "warn",
-            );
-          }
-        })();
-        return true;
+        // Answered before the page reloads (#1015): the reload closes the
+        // socket the answer goes back on. The answer is sent as this
+        // promise settles, a microtask, so the reload waits a task.
+        return resetOnboarding(scope, { reload: false }).then(
+          () => {
+            window.setTimeout(reloadAfterOnboardingReset, 0);
+            return true;
+          },
+          (err: unknown) => {
+            showToast(err instanceof Error ? err.message : "Reset failed", "warn");
+            return false;
+          },
+        );
       }
 
       default:

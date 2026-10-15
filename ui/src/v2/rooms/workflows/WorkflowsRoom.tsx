@@ -104,14 +104,15 @@ export function WorkflowsRoomBody(): React.ReactElement {
    * inside the editor; we don't prompt for a name up front because the user's
    * intent at this point is to start building, not to bikeshed a label.
    */
-  const handleCreate = async (): Promise<void> => {
+  const handleCreate = async (): Promise<boolean> => {
     const result = await data.createFlow();
     if (result.ok && result.flowId) {
       data.setEditingFlowId(result.flowId);
-    } else {
-      setActionMessage({ tone: "warn", text: `Create failed: ${result.message}` });
-      window.setTimeout(() => setActionMessage(null), 3000);
+      return true;
     }
+    setActionMessage({ tone: "warn", text: `Create failed: ${result.message}` });
+    window.setTimeout(() => setActionMessage(null), 3000);
+    return false;
   };
 
   // Voice / text-classifier `create_from_nl` room action. With an empty
@@ -124,17 +125,17 @@ export function WorkflowsRoomBody(): React.ReactElement {
   useRoomActions("workflows", (action, args) => {
     if (action !== "create_from_nl") return false;
     const prompt = typeof args?.prompt === "string" ? args.prompt.trim() : "";
-    void (async () => {
-      await handleCreate();
-      if (prompt) {
+    // Answered once the flow exists, or not (#1015).
+    return handleCreate().then((created) => {
+      if (created && prompt) {
         setActionMessage({
           tone: "ok",
           text: `Empty workflow created. To have Jarvis build "${prompt}" for you, ask in chat: "Make a workflow that ${prompt}".`,
         });
         window.setTimeout(() => setActionMessage(null), 6000);
       }
-    })();
-    return true;
+      return created;
+    });
   });
 
   return (

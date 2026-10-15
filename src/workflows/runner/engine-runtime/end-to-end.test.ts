@@ -87,7 +87,7 @@ describe("Engine end-to-end (F gate)", () => {
     if (buildOptIn) {
       await buildAllJarvisPieces();
     }
-    runtime = new EngineRuntime({ api, bundlePath: cached.bundlePath });
+    runtime = new EngineRuntime({ api, bundlePath: cached.bundlePath, expectedDigest: cached.digest });
     const metadataHandle = await runtime.acquire({ runId: 'readiness-metadata', projectId: DEFAULT_IDS.project });
     try {
       const metadata = await metadataHandle.extractPieceMetadata({ pieceName: PIECE_TEST_NAME, pieceVersion: PIECE_VERSION });
@@ -532,7 +532,7 @@ describe("Engine end-to-end (G+H pieces)", () => {
     if (!cached && buildOptIn) cached = await buildEngineBundle();
     if (!cached) return;
     if (buildOptIn) await buildAllJarvisPieces();
-    runtime = new EngineRuntime({ api, bundlePath: cached.bundlePath });
+    runtime = new EngineRuntime({ api, bundlePath: cached.bundlePath, expectedDigest: cached.digest });
     const metadataHandle = await runtime.acquire({ runId: 'readiness-metadata', projectId: DEFAULT_IDS.project });
     try {
       const metadata = await metadataHandle.extractPieceMetadata({ pieceName: PIECE_TEST_NAME, pieceVersion: PIECE_VERSION });

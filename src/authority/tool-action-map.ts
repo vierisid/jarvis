@@ -312,13 +312,12 @@ export const ABOVE_LEVEL_SUBSTITUTION = "is above this agent's authority level";
  * approvals could train a suggestion to auto-allow the whole category --
  * globally, for every tool, and evaluated before the level check.
  *
- * The label goes INSIDE the sentence, not appended after it:
- * formatApprovalIntent decides whether the engine wrote this reason, and one
- * of its two tests is `endsWith('requires user approval')`. For the TAINT
- * label its other test (`includes(TAINT_PROFILE_LABEL)`) would still match a
- * trailing parenthetical -- but the background profile's label has no such
- * second test, so appending would make its card lead with this sentence
- * instead of the one naming the actual effect.
+ * The label goes INSIDE the sentence, not appended after it. That placement
+ * once decided the dashboard headline too, when formatApprovalIntent let any
+ * reason not ending in `requires user approval` replace the card's sentence;
+ * since #721 the sentence naming the effect always leads and every engine
+ * reason follows it, so the placement no longer matters there. It is kept so
+ * the reason still reads as one sentence.
  */
 export function substituteAboveLevel(
   decision: AuthorityDecision,

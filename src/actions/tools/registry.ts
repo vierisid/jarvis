@@ -1,4 +1,5 @@
 import type { ContentBlock } from '../../llm/provider.ts';
+import type { ReviewedExecution } from './reviewed-call-scope.ts';
 import { checkpointExecution } from '../execution-scope.ts';
 import { ActionOutcomeError } from '../action-outcome.ts';
 import { WorkflowCancellationError } from '../../workflows/runtime/cancellation-error.ts';
@@ -166,9 +167,18 @@ export type ToolDefinition = {
   failureIsOutsideContent?: true;
   /** Capture a read-only check of the UI session/subject a person will review.
    * The returned guard lives only until this approval is resolved; it must
-   * never reconnect or select a replacement subject when validation fails. */
-  captureApprovalGuard?: (params: Record<string, unknown>) => (() => boolean);
+   * never reconnect or select a replacement subject when validation fails.
+   * It may also carry what it bound (`reviewed`), which the approval executor
+   * hands the one execution it buys (#676). */
+  captureApprovalGuard?: (params: Record<string, unknown>) => ApprovalGuard;
 };
+
+/**
+ * A captured approval guard: the check, plus what it bound at review that the
+ * execution has to send (#676, `reviewed-call-scope.ts`). A plain `() => boolean`
+ * is one, which is every guard that binds nothing beyond its own closure.
+ */
+export type ApprovalGuard = (() => boolean) & { readonly reviewed?: ReviewedExecution };
 
 export class ToolRegistry {
   private tools: Map<string, ToolDefinition> = new Map();

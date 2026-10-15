@@ -196,10 +196,38 @@ read loop runs inline to keep audio frames in receive order but still runs
 through `runRPCHandler`.
 
 Frames that are not `rpc_request`s are outside this contract, because there is no
-pending request to answer: `register_ack` and `register_rejected` are handled
-directly on the read loop and a panic in either is still fatal. Noted rather than
-fixed -- containing one would mean continuing with a half-processed registration,
-which is a different decision from "answer the caller".
+pending request to answer. `register_ack` and `register_rejected` are handled
+directly on the read loop, and a panic in either is contained under its own
+policy (#670), chosen by what the frame decides:
+
+- **`register_rejected` fails closed.** It is an authority verdict (this sidecar
+  must not operate), so the verdict is recorded before any handling that can
+  fail. A panic in the handling (logging the update command, telling the
+  updater) loses the update prompt -- for the rest of the process's life if the
+  panic came from the prompt callback, which runs under a `sync.Once` -- but the
+  connection still ends and the sidecar still waits out the blocked retry
+  interval instead of reconnecting into the same refusal.
+- **`register_ack` is contained and the connection carries on.** The brain sends
+  it after it has already accepted the registration, so a panic leaves the
+  registration known and only the self-update bookkeeping unknown: no update
+  offer from that ack, and a pending self-update is not marked proven, until
+  the next accepted registration. Reconnecting instead would cost every
+  in-flight RPC and, for a deterministic panic, flap forever (the backoff resets
+  on every successful dial). A version that panics on every ack still never
+  proves a fresh self-update and is rolled back after three starts, as before,
+  though that now takes three ordinary restarts rather than a crash loop.
+
+Both cases log the panic with its stack. The goroutines the updater starts from
+an ack (`cleanupPrevious`, the registry `check` and its hourly retry) are off the
+read loop and recover their own panics (#760). Having no connection to fail into
+and no caller to report to, each falls back to a fixed state: a `check` that
+panicked before deciding is treated as one that could not reach the registry
+(`unavailable` with an error, reported to the brain, retried on the hourly
+timer; an offer an earlier check confirmed is kept), a panic in one of the hooks
+that announce a decided result (the brain, the tray, the prompt) is contained on
+its own so the others still run, and a `cleanupPrevious` that panicked is
+not marked done, so the next accepted registration tries again to mark a fresh
+self-update proven.
 
 | Code | Meaning | How the brain reads the effect |
 |---|---|---|
@@ -448,6 +476,38 @@ before. With it, `result` is an object:
 | `text` | the formatted snapshot, identical to the string reply |
 | `page_url` | the main frame's URL as the BROWSER reported it, for the document the text came from |
 | `loader_id` | that document's loaderId, which changes on every commit |
+| `elem_gen` | the generation of the element-id map THIS read filled (#676); an opaque string, compared for equality only |
+
+### `elem_gen`: binding a reviewed element action to its snapshot (#676)
+
+`elem_gen` is `<epoch>.<counter>`: the counter is bumped on every fill and every
+drop of the element map, and the epoch is random per browser client, so a
+relaunched browser or a restarted sidecar never hands out a generation an older
+map already used. It travels independently of the `page_url`/`loader_id` pair:
+it names the id map, not the document.
+
+The brain records the newest one per sidecar and per reader -- the model loop
+that read it when there is one (#827), else the reader's delivery scope --
+copies it onto an approval when a `browser_click`, `browser_type` or
+`browser_hover` card is raised, and sends it back as the action's `elem_gen`
+param when the approved call runs. The sidecar
+compares it in `refuseStaleElement`, under `elemMu`, before anything else, and
+refuses a mismatch -- or a present-but-malformed value -- with RPC error code
+`BROWSER_SNAPSHOT_SUPERSEDED`, before any CDP command. An absent `elem_gen`
+means the call was not reviewed and is not compared.
+
+The generation names the isolated world's element refs as well as the
+coordinate map, because the sidecar runs one snapshot at a time per browser,
+from its first frame-tree read through the fill, and a reviewed `browser_type`
+excludes snapshots from its generation check through its last use of a ref
+(#826). Without that, two concurrent snapshots could arm the world's refs in
+one order and fill the map in the other, and a snapshot could re-arm the refs
+between a type's check and its focus. A snapshot or type that cannot get its
+turn within ten seconds refuses rather than queueing.
+
+A sidecar older than this ignores the param, so the brain sends a reviewed
+element action only to a sidecar advertising `browser_elem_gen`, and refuses it
+otherwise with a message saying the sidecar must be updated.
 
 **`page_url` and `loader_id` travel as a pair, or not at all.** The sidecar omits
 both unless `assertSamePage` confirmed the same document after the read, and the
@@ -1127,6 +1187,7 @@ Currently all events are enqueued as `normal` and processed round-robin. When pr
 |---|---|
 | `update_prompt` | the sidecar can show its native update prompt (`sidecar.update_prompt`); Windows and macOS |
 | `update_apply` | the sidecar can install an update on request (`sidecar.update_apply`) |
+| `browser_elem_gen` | page replies carry `elem_gen`, and `browser_click`/`browser_type`/`browser_hover` compare a reviewed `elem_gen` (#676). Advertised on every build, dev included |
 
 The brain answers every accepted registration with an ack carrying the sidecar version it ships with (`SIDECAR_LATEST_VERSION`, always equal to `sidecar/VERSION` at the brain's release):
 

@@ -135,4 +135,24 @@ describe('#602 the main registry binds a reviewed browser call', () => {
     setSidecarManagerRef(null as unknown as SidecarManager);
     expect(guard()).toBe(false);
   });
+
+  /**
+   * #675. The guard resolves the route twice -- at review and at approval --
+   * only to compare the two, and each resolution used to print
+   * `[browser] <tool> -> sidecar stack (...)`, so one gated call logged two
+   * dispatches before the one real one in `execute`. Nothing had run.
+   */
+  test('reviewing and approving a call logs no dispatch line', () => {
+    setSidecarManagerRef(fakeBrowserSidecar());
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => { lines.push(args.map(String).join(' ')); };
+    try {
+      const guard = browserScrollTool.captureApprovalGuard!({ direction: 'down' });
+      expect(guard()).toBe(true);
+    } finally {
+      console.log = original;
+    }
+    expect(lines.filter((l) => l.includes('-> sidecar stack') || l.includes('-> local stack'))).toEqual([]);
+  });
 });

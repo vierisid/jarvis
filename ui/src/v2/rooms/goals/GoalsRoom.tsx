@@ -28,8 +28,10 @@ import {
   type GoalStatus,
 } from "./useGoalsData";
 import "./GoalsRoom.css";
+import { isRoomTab, type RoomTab } from "../../../../../src/daemon/room-tabs";
+import { withRoomActionDefaults } from "../../../../../src/daemon/room-action-targets";
 
-type TabId = "constellation" | "timeline" | "metrics";
+type TabId = RoomTab<"goals">;
 
 const TAB_LABEL: Record<TabId, string> = {
   constellation: "Constellation",
@@ -108,8 +110,8 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
   useRoomActions("goals", (action, args) => {
     switch (action) {
       case "switch_tab": {
-        const t = String(args.tab);
-        if (t === "constellation" || t === "timeline" || t === "metrics") {
+        const t = args.tab;
+        if (isRoomTab("goals", t)) {
           setActiveTab(t);
           return true;
         }
@@ -144,22 +146,23 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
       case "create_goal": {
         const title = typeof args.title === "string" ? args.title.trim() : "";
         if (!title) return false;
-        const level = (args.level as GoalLevel) ?? "task";
+        // The default the daemon showed on the card (#1008).
+        const level = withRoomActionDefaults("goals", "create_goal", args).level as GoalLevel;
         // The classifier may pass deadline as a relative string; we accept
         // a numeric epoch ms only here (the schedule_event path covers
         // date parsing for calendar — for goals we let the user set the
         // deadline in the dialog if they want a fancy date).
         const deadline = typeof args.deadline === "number" ? args.deadline : undefined;
-        (async () => {
-          const r = await data.createQuick({ title, level, deadline });
+        // Answered once the write has settled, with whether it worked (#1015).
+        return data.createQuick({ title, level, deadline }).then((r) => {
           if (r.ok) {
             setSelectedId(r.goal.id);
             setToast({ text: `Created "${r.goal.title}".`, tone: "ok" });
           } else {
             setToast({ text: r.message, tone: "warn" });
           }
-        })();
-        return true;
+          return r.ok;
+        });
       }
       default:
         return false;

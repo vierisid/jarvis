@@ -17,6 +17,7 @@ import { Chip, Icon } from "../../ui";
 import { openRoom } from "../../router";
 import { RoomShell } from "../RoomShell";
 import { useRoomActions } from "../useRoomActionBus";
+import { pickRoomActionTarget, withRoomActionDefaults } from "../../../../../src/daemon/room-action-targets";
 import {
   useWorkspacesData,
   type Project,
@@ -161,8 +162,11 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
 
   const activeProject = openTabs.find((p) => p.id === activeProjectId) ?? null;
 
+  // Opens `project`, starting its dev server when it is stopped; the result
+  // says whether that server is up, for a voice action to answer from
+  // (#1015).
   const openProject = useCallback(
-    async (project: Project) => {
+    async (project: Project): Promise<{ ok: boolean; message: string }> => {
       setWorkspacesUIState((prev) => ({
         ...prev,
         openTabIds: prev.openTabIds.includes(project.id)
@@ -181,7 +185,9 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
           // Refresh to pick up new devPort.
           data.refresh();
         }
+        return r;
       }
+      return { ok: true, message: "Opened." };
     },
     [data, mode],
   );
@@ -236,18 +242,25 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
         setSearch(typeof args.query === "string" ? args.query : "");
         backToList();
         return true;
+      // A held voice action arrives with the project the person approved
+      // pinned by id (#1008); pickRoomActionTarget takes that one or none.
       case "select_project": {
-        const name = typeof args.name === "string" ? args.name : "";
-        const p = data.findByName(name);
+        const p = pickRoomActionTarget(data.projects, args, data.findByName);
         if (!p) return false;
-        openProject(p);
         // The IDE only renders when the room is expanded (the inline
         // RoomWindow always passes mode="inline"). Without this escalation
         // the ack fires but the user sees the list view forever — looks
         // like nothing happened. Mirror what a click on a project card
         // would do if it could only render fullscreen.
         if (mode === "inline") openRoom("workspaces");
-        return true;
+        // Answered once its dev server has started, or failed to (#1015):
+        // starting it is what makes this more than a view (ROOM_ACTIONS
+        // lists it as execute_command), so a server that did not start is
+        // not a yes, though the project is open.
+        return openProject(p).then((r) => {
+          if (!r.ok) setToast({ text: `${p.name} is open, but its dev server did not start: ${r.message}`, tone: "warn" });
+          return r.ok;
+        });
       }
       case "back_to_list":
         backToList();
@@ -255,37 +268,37 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
       case "create_project": {
         const name = typeof args.name === "string" ? args.name.trim() : "";
         if (!name) return false;
-        const template = typeof args.template === "string" ? args.template : "vite-react";
-        (async () => {
-          const r = await data.createProject({ name, template });
-          if (r.ok) {
-            openProject(r.project);
-            setToast({ text: `Created "${r.project.name}".`, tone: "ok" });
-          } else {
+        // The default is the one the daemon showed on the card (#1008).
+        const template = withRoomActionDefaults("workspaces", "create_project", args).template as string;
+        // Answered once it is created and opened, with whether it was
+        // created (#1015): the scaffold and `make install` are what it runs.
+        // A dev server that did not start once it was open is said on screen.
+        return data.createProject({ name, template }).then(async (r) => {
+          if (!r.ok) {
             setToast({ text: r.message, tone: "warn" });
+            return false;
           }
-        })();
-        return true;
+          setToast({ text: `Created "${r.project.name}".`, tone: "ok" });
+          const opened = await openProject(r.project);
+          if (!opened.ok) setToast({ text: `Created "${r.project.name}", but its dev server did not start: ${opened.message}`, tone: "warn" });
+          return true;
+        });
       }
       case "start_server": {
-        const name = typeof args.name === "string" ? args.name : "";
-        const p = name ? data.findByName(name) : activeProject;
+        const p = pickRoomActionTarget(data.projects, args, data.findByName, activeProject);
         if (!p) return false;
-        (async () => {
-          const r = await data.startServer(p.id);
+        return data.startServer(p.id).then((r) => {
           setToast({ text: r.ok ? `${p.name}: ${r.message}` : r.message, tone: r.ok ? "ok" : "warn" });
-        })();
-        return true;
+          return r.ok;
+        });
       }
       case "stop_server": {
-        const name = typeof args.name === "string" ? args.name : "";
-        const p = name ? data.findByName(name) : activeProject;
+        const p = pickRoomActionTarget(data.projects, args, data.findByName, activeProject);
         if (!p) return false;
-        (async () => {
-          const r = await data.stopServer(p.id);
+        return data.stopServer(p.id).then((r) => {
           setToast({ text: r.ok ? `${p.name}: ${r.message}` : r.message, tone: r.ok ? "ok" : "warn" });
-        })();
-        return true;
+          return r.ok;
+        });
       }
       default:
         return false;

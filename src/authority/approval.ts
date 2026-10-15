@@ -14,7 +14,8 @@
 
 import { getDb, generateId } from '../vault/schema.ts';
 import type { ActionCategory } from '../roles/authority.ts';
-import type { ToolDefinition, ToolRegistry } from '../actions/tools/registry.ts';
+import type { ApprovalGuard, ToolDefinition, ToolRegistry } from '../actions/tools/registry.ts';
+import type { ReviewedExecution } from '../actions/tools/reviewed-call-scope.ts';
 import { rawUiGate } from './ui-intent';
 
 export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'expired' | 'executed';
@@ -118,8 +119,16 @@ export function approvalNeedsClick(request: Pick<ApprovalRequest, 'context'>): b
   }
 }
 
-/** The card sentence a gated tool wrote into the request context, if any. */
-export function approvalIntentFromContext(request: Pick<ApprovalRequest, 'context'>): string | null {
+/**
+ * The card sentence a gated tool wrote into the request context, if any.
+ *
+ * Never for `request_approval`: its `context` is the model's own `context`
+ * argument, stored verbatim, so a JSON object there is not a gate's sentence
+ * however it is spelled (#721). Every other writer of `context` is trusted
+ * code (`gateContext`, the workflow effect boundary).
+ */
+export function approvalIntentFromContext(request: Pick<ApprovalRequest, 'context' | 'tool_name'>): string | null {
+  if (request.tool_name === 'request_approval') return null;
   const raw = request.context ?? '';
   if (!raw.startsWith('{')) return null;
   try {
@@ -131,6 +140,24 @@ export function approvalIntentFromContext(request: Pick<ApprovalRequest, 'contex
   }
 }
 
+/**
+ * How much of a request id a Telegram/Discord card shows and a reply must
+ * name: the first group of the UUID (`approvalChannelCard`).
+ */
+export const APPROVAL_SHORT_ID_LENGTH = 8;
+
+const SHORT_ID = new RegExp(`^[0-9a-f]{${APPROVAL_SHORT_ID_LENGTH}}$`);
+
+/** What a reply's short id names (`ApprovalManager.findByShortId`). */
+export type ShortIdMatch =
+  | { status: 'found'; request: ApprovalRequest }
+  /** No pending request has that short id. */
+  | { status: 'none' }
+  /** More than one pending request has it, so it names none of them. */
+  | { status: 'ambiguous' }
+  /** Not a whole short id: wrong length, or not lower-case hex. */
+  | { status: 'malformed' };
+
 export class ApprovalManager {
   /** Identity of this process. A claim carrying another boot id never got its receipt from us. */
   readonly bootId: string;
@@ -138,7 +165,7 @@ export class ApprovalManager {
   // browser controllers and structural element IDs do not. A missing binding
   // must require fresh review, never fall back to the main agent's registry.
   private uiExecutions = new Map<string, {
-    registry: ToolRegistry; tool: ToolDefinition; arguments: string; current: () => boolean;
+    registry: ToolRegistry; tool: ToolDefinition; arguments: string; current: ApprovalGuard;
   }>();
 
   constructor(bootId: string = PROCESS_BOOT_ID) {
@@ -167,7 +194,7 @@ export class ApprovalManager {
     const toolArgs = JSON.stringify(params.toolArguments);
     const executionMode = params.executionMode ?? 'deferred';
     const tool = params.toolRegistry?.get(params.toolName);
-    let current: (() => boolean) | undefined;
+    let current: ApprovalGuard | undefined;
     if (tool && rawUiGate(params.toolName, params.toolArguments)) {
       try {
         current = tool.captureApprovalGuard?.(JSON.parse(toolArgs)) ?? (() => true);
@@ -216,11 +243,36 @@ export class ApprovalManager {
 
   /** Resolve only the exact live implementation/subject captured for this row. */
   getUiExecutionRegistry(request: ApprovalRequest): ToolRegistry | null {
+    return this.getUiExecution(request)?.registry ?? null;
+  }
+
+  /**
+   * The same resolution, together with what the guard bound at review (#676)
+   * -- for the executor, which has to run the call inside that scope.
+   *
+   * `reviewed` is ALWAYS an object here, `{}` for a guard that bound nothing,
+   * so the execution can tell "approved, with nothing bound" from "not an
+   * approved execution at all". Read from the SAME binding the check passed
+   * on, so the two cannot come from different approvals.
+   */
+  getUiExecution(request: ApprovalRequest): { registry: ToolRegistry; reviewed: ReviewedExecution } | null {
     const binding = this.uiExecutions.get(request.id);
     if (!binding || binding.arguments !== request.tool_arguments ||
         binding.registry.get(request.tool_name) !== binding.tool) return null;
     try {
-      return binding.current() ? binding.registry : null;
+      if (!binding.current()) return null;
+      const reviewed = binding.current.reviewed ?? {};
+      // The model loop that raised the card is carried ONLY while a live gate
+      // in that loop is the one running the call (#827). A deferred row --
+      // created so, or an inline one demoted after its wait timed out -- runs
+      // whenever the person gets to it, often while that loop has moved on
+      // without the result: its navigate would then write the loop's record,
+      // and the loop's next card would bind a page its model never read.
+      if (request.execution_mode !== 'inline' && reviewed.readLog) {
+        const { readLog: _detached, ...rest } = reviewed;
+        return { registry: binding.registry, reviewed: rest };
+      }
+      return { registry: binding.registry, reviewed };
     } catch {
       return null;
     }
@@ -236,13 +288,27 @@ export class ApprovalManager {
   }
 
   /**
-   * Find a request by short ID prefix (for Telegram/Discord commands).
+   * The pending request a Telegram/Discord `approve <id>` or `deny <id>` names
+   * (#810).
+   *
+   * The id must be the whole short id the card shows -- the first
+   * `APPROVAL_SHORT_ID_LENGTH` characters of the request id -- and must name
+   * exactly one pending request. This used to be a prefix match with no
+   * minimum length that took the first row, so `approve a` approved whichever
+   * pending request happened to come first with an id starting `a`: one the
+   * person may never have seen. (Worse, the reply parser matched any hex-
+   * looking word, so `approve all of them` sent `a`.) A shorter or longer id is
+   * `malformed`, and one that matches two pending requests is `ambiguous`;
+   * neither decides anything.
    */
-  findByShortId(shortId: string): ApprovalRequest | null {
+  findByShortId(shortId: string): ShortIdMatch {
+    if (!SHORT_ID.test(shortId)) return { status: 'malformed' };
     const db = getDb();
-    const row = db.query('SELECT * FROM approval_requests WHERE id LIKE ? AND status = ?')
-      .get(`${shortId}%`, 'pending') as ApprovalRequest | null;
-    return row;
+    const rows = db.query('SELECT * FROM approval_requests WHERE substr(id, 1, ?) = ? AND status = ? LIMIT 2')
+      .all(APPROVAL_SHORT_ID_LENGTH, shortId, 'pending') as ApprovalRequest[];
+    if (rows.length === 0) return { status: 'none' };
+    if (rows.length > 1) return { status: 'ambiguous' };
+    return { status: 'found', request: rows[0]! };
   }
 
   /**
@@ -361,6 +427,20 @@ export class ApprovalManager {
     this.uiExecutions.clear();
     const db = getDb();
     const demotedInline = this.demoteAllPendingInline();
+    // APPROVED inline rows lost their gate too: whoever runs one now (the
+    // execute route, after the person chooses to) hands the result to a
+    // person, not to the loop that asked. `inline` must keep meaning "a live
+    // gate owns this", because the executor keys site-playbook delivery on it
+    // (#830): left inline, an approved `browser_snapshot` card run from the
+    // dashboard after a restart recorded a playbook no model would read, and
+    // the chat's next snapshot got none for 30 minutes. Not counted in
+    // `demotedInline`, which names the pending rows that go back on the queue.
+    // WHATEVER the row's outcome: one an earlier boot already reconciled to
+    // not_started or unknown has no live gate either, and stayed inline.
+    db.run(
+      `UPDATE approval_requests SET execution_mode = 'deferred'
+       WHERE status = 'approved' AND execution_mode = 'inline'`
+    );
     const interrupted = db.run(
       `UPDATE approval_requests SET execution_outcome = 'unknown'
        WHERE status = 'approved' AND execution_claimed_at IS NOT NULL AND execution_outcome IS NULL

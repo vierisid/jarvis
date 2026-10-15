@@ -105,6 +105,7 @@ import { spawnEngine, liveEngines, killLiveEngines } from ${JSON.stringify(SPAWN
 const start = async (id: string) => {
   const e = spawnEngine({
     bundlePath: ${JSON.stringify(enginePath)},
+    expectedDigest: null,
     sandboxId: id,
     sandboxWsPort: 1,
     baseCodeDir: ${JSON.stringify(tmpdir())},
@@ -253,6 +254,7 @@ import { spawnEngine } from ${JSON.stringify(SPAWN_MODULE)};
 test("leaks an engine", () => {
   const e = spawnEngine({
     bundlePath: ${JSON.stringify(enginePath)},
+    expectedDigest: null,
     sandboxId: "sandbox-leaked",
     sandboxWsPort: 1,
     baseCodeDir: ${JSON.stringify(tmpdir())},
@@ -293,6 +295,7 @@ import { spawnEngine } from ${JSON.stringify(SPAWN_MODULE)};
 test("tidies up after itself", async () => {
   const e = spawnEngine({
     bundlePath: ${JSON.stringify(enginePath)},
+    expectedDigest: null,
     sandboxId: "sandbox-tidy",
     sandboxWsPort: 1,
     baseCodeDir: ${JSON.stringify(tmpdir())},
@@ -319,6 +322,7 @@ import { spawnEngine } from ${JSON.stringify(SPAWN_MODULE)};
 test("leaks on purpose", () => {
   const e = spawnEngine({
     bundlePath: ${JSON.stringify(enginePath)},
+    expectedDigest: null,
     sandboxId: "sandbox-on-purpose",
     sandboxWsPort: 1,
     baseCodeDir: ${JSON.stringify(tmpdir())},

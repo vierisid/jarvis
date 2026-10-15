@@ -12,22 +12,27 @@ import {
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { execSync } from 'node:child_process';
 import { hostname, platform, arch, cpus, version } from 'node:os';
 import { TerminalExecutor } from '../terminal/executor.ts';
-import { WSLBridge } from '../terminal/wsl-bridge.ts';
+import { WSLBridge, windowsSystemExe } from '../terminal/wsl-bridge.ts';
 import { BrowserController, type PageSnapshot } from '../browser/session.ts';
 import { checkNavigationUrl } from '../browser/url-policy.ts';
 import { checkUploadPath, pageOrigin, uploadTargetRefusal } from '../browser/upload-policy.ts';
-import type { ToolDefinition, ToolResult } from './registry.ts';
+import type { ApprovalGuard, ToolDefinition, ToolResult } from './registry.ts';
 import type { LLMTool } from '../../llm/provider.ts';
 import {
-  routeToSidecar, routeScreenshotToSidecar, routeBrowserReadToSidecar, autoTargetForCapability, resolveToolTarget,
+  routeToSidecar, routeScreenshotToSidecar, routeBrowserReadToSidecar, autoTargetForCapability, resolveToolTarget, findSidecar, getSidecarManager,
+  routeElementActionToSidecar, remoteSnapshotGeneration, currentSnapshotReader, currentSnapshotReadLog,
   type SidecarPageRead,
 } from './sidecar-route.ts';
+import { currentReviewedExecution, type ReviewedExecution, type ReviewedRemoteSnapshot } from './reviewed-call-scope.ts';
+import { getMachineScope } from '../machine-scope.ts';
 import { WebappTemplateDelivery, globalWebappTemplateDelivery, usablePageUrl } from './webapp-template-injection.ts';
 import { listSidecarsTool } from './sidecar-list.ts';
-import { DESKTOP_TOOLS } from './desktop.ts';
+import { DESKTOP_TOOLS, localScreenshotResult } from './desktop.ts';
+import { awaitCaptureTool, awaitCaptureToolOutput, captureViaPrivateFileAsync, CaptureTimeoutError } from '../app-control/capture-file.ts';
+import { sanitizedEnv } from '../../util/subprocess-env.ts';
+import { WorkflowCancellationError } from '../../workflows/runtime/cancellation-error.ts';
 import { UI_TOOLS } from './ui.ts';
 import { SKILL_TOOLS } from './skills.ts';
 
@@ -43,7 +48,7 @@ import {
   secretInodeRefusal,
   secretListRefusal, secretRead, secretReadRefusal, secretRefusalTextFor, secretScanRefusal, siteGitRefusal,
 } from './file-path-policy.ts';
-import { forCard } from '../../util/card-text.ts';
+import { forCard, commandForCard, escapedLiteralForCard } from '../../util/card-text.ts';
 // Re-export for convenience
 export { setNoLocalTools, isNoLocalTools, setDefaultCwd } from './local-tools-guard.ts';
 
@@ -307,6 +312,72 @@ export const runCommandTool: ToolDefinition = {
       description: 'Timeout in milliseconds (optional, defaults to 30000)',
       required: false,
     },
+  },
+  /**
+   * The card for a shell command (#720): which machine, which directory, and
+   * the command itself, shown by the same `commandForCard` as
+   * `site_run_command` (#707). Without this gate the dashboard fell back to
+   * `Run: ${command}` raw, so a newline collapsed in HTML (a second line hid
+   * behind a `#` comment on the first) and a bidi override reordered the line,
+   * and nothing said where it would run.
+   *
+   * It adds no category and no `confirm`: `execute_command` is already the
+   * static floor, so the decision -- allowed, approval, denied, the voice gate,
+   * the approval learner -- is exactly what it was. What it adds is the
+   * sentence, and with it the deferred executor's comparison: an approval is
+   * of THIS machine and directory, and a call that would now land elsewhere
+   * (a sidecar picked automatically went away, a name now matches another
+   * sidecar, the site chat whose cwd it was ended) is refused rather than run
+   * under the old click.
+   *
+   * The machine is named as the dispatch will find it, not as the model spelled
+   * it (#720 review): `findSidecar` matches an id, then a name ignoring case,
+   * then the first name CONTAINING the text, so `target: "server"` runs on
+   * "prod-server". The card shows the enrolled name and the id, which also puts
+   * the id into the deferred comparison: a spelling that resolves to another
+   * machine by the time the click lands no longer has the approved sentence.
+   *
+   * Every model-supplied value is shown whole: names, the id and the directory
+   * as escaped literals, since they sit mid-sentence and must not be able to
+   * forge its ending, the command last. Total, as a gate must be: a throw
+   * would turn every call into a mandatory "business effect unknown" card.
+   */
+  authorityGate: (params) => {
+    const command = commandForCard(params.command, { trim: false });
+    const dir = params.cwd ? `in ${escapedLiteralForCard(params.cwd)}` : 'in its default directory';
+    // Under a workflow's machine scope the scope picks the machine at dispatch.
+    // Asking it here would create the run's durable machine binding as a side
+    // effect of a call that may yet be refused (run_command is opaque to the
+    // effect boundary), so the card says so instead of resolving.
+    if (getMachineScope()) {
+      return { actionCategory: 'execute_command',
+        intent: `On the machine this workflow run is bound to, ${dir}, ${command}` };
+    }
+    let routed: string | null;
+    try {
+      routed = params.target ? String(params.target) : autoTargetForCapability('terminal');
+    } catch {
+      return { actionCategory: 'execute_command',
+        intent: `On a machine that could not be resolved (this call will fail), ${command}` };
+    }
+    if (routed) {
+      let found: { id: string; name: string } | null = null;
+      try {
+        found = findSidecar(routed, getSidecarManager()?.listSidecars() ?? []);
+      } catch { /* named as spelled below */ }
+      const how = params.target ? '' : ', picked automatically';
+      const machine = found
+        ? `sidecar ${escapedLiteralForCard(found.name)} (id ${escapedLiteralForCard(found.id)}${how})`
+        : `sidecar ${escapedLiteralForCard(routed)}, which matches no enrolled sidecar (this call will fail)`;
+      return { actionCategory: 'execute_command', intent: `On ${machine}, ${dir}, ${command}` };
+    }
+    if (isNoLocalTools()) {
+      return { actionCategory: 'execute_command',
+        intent: `On this Jarvis host, where local tools are disabled (this call will be refused), ${command}` };
+    }
+    const cwd = resolve(String(params.cwd || getDefaultCwd() || homedir()));
+    return { actionCategory: 'execute_command',
+      intent: `On this Jarvis host, in ${escapedLiteralForCard(cwd)}, ${command}` };
   },
   execute: async (params) => {
     const target = (params.target as string | undefined) || autoTargetForCapability('terminal');
@@ -587,64 +658,118 @@ export const listDirectoryTool: ToolDefinition = {
 
 // --- Clipboard / Screenshot / System Info helpers ---
 
-function localClipboardRead(): string {
+/**
+ * The clipboard tools, awaited and bounded (#894). They ran through execSync
+ * with no timeout, so a clipboard tool that hung held the daemon's event loop
+ * for as long as it hung -- and that is an ordinary condition, not an attack:
+ * `xclip -o` waits on the selection's owner, and an owner that stops
+ * answering leaves it waiting. Measured here with a SIGSTOPped xclip owning
+ * the selection: `xclip -o` and `xsel --output` both still waiting at 12 s.
+ *
+ * The bound is CAPTURE_TIMEOUT_MS (30 s, SIGKILL; see capture-file.ts). A
+ * clipboard call is far quicker than a capture -- measured, n=30 each: xclip
+ * read median 2.7 ms (max 3.3), write 2.1 (max 5.1); xsel read 2.5, write 2.2;
+ * WSL's Get-Clipboard through interop median 203 ms (max 244, n=10) -- so
+ * only a call that is not coming back meets it. A timed-out xclip does not
+ * fall back to xsel, which waits on the same owner (measured above).
+ */
+const CLIPBOARD_READ = { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' } as const;
+const clipboardWrite = (content: string) => ({ stdin: Buffer.from(content, 'utf-8'), stdout: 'ignore', stderr: 'pipe' } as const);
+
+async function localClipboardRead(): Promise<string> {
   const os = platform();
   if (os === 'darwin') {
-    return execSync('pbpaste', { encoding: 'utf-8' });
+    return awaitCaptureToolOutput(Bun.spawn(['pbpaste'], CLIPBOARD_READ), 'pbpaste');
   } else if (os === 'win32') {
-    return execSync('powershell -command Get-Clipboard', { encoding: 'utf-8' }).trimEnd();
+    // powershell run directly, not through cmd.exe as execSync did, so the
+    // bound's kill reaches the process doing the work.
+    return (await awaitCaptureToolOutput(Bun.spawn(['powershell', '-command', 'Get-Clipboard'], { ...CLIPBOARD_READ, windowsHide: true }), 'Get-Clipboard')).trimEnd();
   } else if (WSLBridge.isWSL()) {
     // On WSL the X clipboard (xclip/xsel via WSLg) is NOT the clipboard the
     // user copies/pastes with -- that's the Windows clipboard. Read it through
-    // Windows interop so workflows see what the user actually copied.
-    return execSync('powershell.exe -NoProfile -Command Get-Clipboard', { encoding: 'utf-8' }).replace(/\r\n/g, '\n').trimEnd();
+    // Windows interop so workflows see what the user actually copied. From
+    // System32 by absolute path, never PATH (#896: see windowsSystemExe).
+    return (await awaitCaptureToolOutput(Bun.spawn([windowsSystemExe('powershell.exe'), '-NoProfile', '-Command', 'Get-Clipboard'], CLIPBOARD_READ), 'Get-Clipboard'))
+      .replace(/\r\n/g, '\n').trimEnd();
   } else {
     try {
-      return execSync('xclip -selection clipboard -o', { encoding: 'utf-8' });
-    } catch {
-      return execSync('xsel --clipboard --output', { encoding: 'utf-8' });
+      return await awaitCaptureToolOutput(Bun.spawn(['xclip', '-selection', 'clipboard', '-o'], CLIPBOARD_READ), 'xclip');
+    } catch (err) {
+      if (err instanceof CaptureTimeoutError) throw err;
+      return awaitCaptureToolOutput(Bun.spawn(['xsel', '--clipboard', '--output'], CLIPBOARD_READ), 'xsel');
     }
   }
 }
 
-function localClipboardWrite(content: string): void {
+async function localClipboardWrite(content: string): Promise<void> {
   const os = platform();
   if (os === 'darwin') {
-    execSync('pbcopy', { input: content, encoding: 'utf-8' });
+    await awaitCaptureTool(Bun.spawn(['pbcopy'], clipboardWrite(content)), 'pbcopy');
   } else if (os === 'win32') {
-    execSync('powershell -command Set-Clipboard', { input: content, encoding: 'utf-8' });
+    await awaitCaptureTool(Bun.spawn(['powershell', '-command', 'Set-Clipboard'], { ...clipboardWrite(content), windowsHide: true }), 'Set-Clipboard');
   } else if (WSLBridge.isWSL()) {
     // Write to the Windows clipboard via interop. `clip.exe` is the simplest
     // sink and is always present on WSL; it consumes stdin verbatim. (xclip/
     // xsel would only populate the WSLg X clipboard, which Windows apps and
-    // the desktop sidecar's clipboard observer never see.)
-    execSync('clip.exe', { input: content, encoding: 'utf-8' });
+    // the desktop sidecar's clipboard observer never see.) From System32 by
+    // absolute path, never PATH (#896: see windowsSystemExe).
+    await awaitCaptureTool(Bun.spawn([windowsSystemExe('clip.exe')], clipboardWrite(content)), 'clip.exe');
   } else {
     try {
-      execSync('xclip -selection clipboard', { input: content, encoding: 'utf-8' });
-    } catch {
-      execSync('xsel --clipboard --input', { input: content, encoding: 'utf-8' });
+      await awaitCaptureTool(Bun.spawn(['xclip', '-selection', 'clipboard'], clipboardWrite(content)), 'xclip');
+    } catch (err) {
+      if (err instanceof CaptureTimeoutError) throw err;
+      await awaitCaptureTool(Bun.spawn(['xsel', '--clipboard', '--input'], clipboardWrite(content)), 'xsel');
     }
   }
 }
 
-function localCaptureScreen(): string {
+/**
+ * Through a private, unpredictable file (#746): the path used to be
+ * `/tmp/jarvis-screenshot-${Date.now()}.png`, which another process could
+ * pre-create as a symlink or plant an image at. See app-control/capture-file.ts.
+ * The tools run without a shell, so the path is an argument, never parsed.
+ * PowerShell's script reads it from its environment rather than from the
+ * command text, so neither cmd.exe (which expands %VAR%) nor PowerShell's
+ * quoting (which also ends a literal at a typographic quote) ever sees it.
+ *
+ * Awaited, and bounded (#802): these ran through execFileSync/execSync with
+ * no timeout, so a capture tool that hung held the daemon's event loop for
+ * as long as it hung. See CAPTURE_TIMEOUT_MS for the bound and
+ * awaitCaptureTool for how it is enforced.
+ */
+async function localCaptureScreen(): Promise<string> {
   const os = platform();
-  const tmp = `/tmp/jarvis-screenshot-${Date.now()}.png`;
-  if (os === 'darwin') {
-    execSync(`screencapture -x ${tmp}`);
-  } else if (os === 'win32') {
-    execSync(`powershell -command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen | ForEach-Object { $bmp = New-Object System.Drawing.Bitmap($_.Bounds.Width, $_.Bounds.Height); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($_.Bounds.Location, [System.Drawing.Point]::Empty, $_.Bounds.Size); $bmp.Save('${tmp}') }"`);
-  } else {
-    try {
-      execSync(`scrot ${tmp}`);
-    } catch {
-      execSync(`import -window root ${tmp}`);
+  const tool = { stdin: 'ignore', stdout: 'ignore', stderr: 'pipe' } as const;
+  return (await captureViaPrivateFileAsync(async (file) => {
+    if (os === 'darwin') {
+      await awaitCaptureTool(Bun.spawn(['screencapture', '-x', file], tool), 'screencapture');
+    } else if (os === 'win32') {
+      // powershell.exe run directly, not through cmd.exe as execSync did: a
+      // timeout kills the process it started, and on Windows killing cmd.exe
+      // leaves its powershell child running. The script has no double quotes
+      // and no %, so neither cmd.exe's parsing nor its expansion had any part
+      // in what it means.
+      await awaitCaptureTool(Bun.spawn(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', 'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen | ForEach-Object { $bmp = New-Object System.Drawing.Bitmap($_.Bounds.Width, $_.Bounds.Height); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($_.Bounds.Location, [System.Drawing.Point]::Empty, $_.Bounds.Size); $bmp.Save($env:JARVIS_CAPTURE_PATH) }'], {
+        ...tool,
+        windowsHide: true,
+        // sanitizedEnv, not a process.env spread: the allowlist keeps
+        // SYSTEMROOT, WINDIR, COMSPEC, PATHEXT, PSMODULEPATH, APPDATA and PATH
+        // (matched case-insensitively on win32), which is everything this
+        // one-liner needs, while dropping the daemon's secrets.
+        env: sanitizedEnv({ JARVIS_CAPTURE_PATH: file }),
+      }), 'powershell capture');
+    } else {
+      try {
+        await awaitCaptureTool(Bun.spawn(['scrot', file], tool), 'scrot');
+      } catch (err) {
+        // A scrot that hung says the display is wedged, and import would only
+        // hang on it too; any other failure (scrot not installed) falls back.
+        if (err instanceof CaptureTimeoutError) throw err;
+        await awaitCaptureTool(Bun.spawn(['import', '-window', 'root', file], tool), 'import');
+      }
     }
-  }
-  const data = readFileSync(tmp);
-  unlinkSync(tmp);
-  return data.toString('base64');
+  })).toString('base64');
 }
 
 function localSystemInfo(): Record<string, unknown> {
@@ -676,7 +801,7 @@ export const getClipboardTool: ToolDefinition = {
     if (auto) return routeToSidecar(auto, 'get_clipboard', {}, 'clipboard');
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
-      const content = localClipboardRead();
+      const content = await localClipboardRead();
       return content || '[clipboard is empty]';
     } catch (err) {
       return `Error reading clipboard: ${err instanceof Error ? err.message : err}`;
@@ -706,7 +831,7 @@ export const setClipboardTool: ToolDefinition = {
     if (auto) return routeToSidecar(auto, 'set_clipboard', { content: params.content }, 'clipboard');
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
-      localClipboardWrite(params.content as string);
+      await localClipboardWrite(params.content as string);
       return 'Clipboard updated.';
     } catch (err) {
       return `Error writing clipboard: ${err instanceof Error ? err.message : err}`;
@@ -735,14 +860,14 @@ export const captureScreenTool: ToolDefinition = {
     try {
       // The same shape as the sidecar branch above; a stringified descriptor
       // reached the model as a truncated prefix of base64, like #658's.
-      const base64 = localCaptureScreen();
-      return {
-        content: [
-          { type: 'text', text: 'Screenshot captured.' },
-          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } },
-        ],
-      } satisfies ToolResult;
+      // Compacted when the raw PNG is over the image cap (#711), as the
+      // routed branch is.
+      // Awaited, not returned: a rejection must land in the catch below (#769).
+      return await localScreenshotResult(await localCaptureScreen(), 'image/png', 'Screenshot captured', false);
     } catch (err) {
+      // A canceled run's fence (#803) is a stop, not a capture error: as in
+      // desktop.ts's executeLocal, it goes on up for ToolRegistry to pass on.
+      if (err instanceof WorkflowCancellationError) throw err;
       return `Error capturing screen: ${err instanceof Error ? err.message : err}`;
     }
   },
@@ -1025,9 +1150,14 @@ export function formatSnapshot(snap: PageSnapshot): string {
 /**
  * Resolve which browser stack serves this call and log the decision. Thin
  * wrapper over the shared resolver so each call site names only its tool.
+ * `quiet` is for `browserCallGuard`'s comparisons only (#675).
  */
-function resolveBrowserTarget(params: Record<string, unknown>, tool: string): string | null {
-  return resolveToolTarget(params.target, 'browser', tool);
+function resolveBrowserTarget(
+  params: Record<string, unknown>,
+  tool: string,
+  opts: { quiet?: boolean } = {},
+): string | null {
+  return resolveToolTarget(params.target, 'browser', tool, opts);
 }
 
 /**
@@ -1060,20 +1190,25 @@ function resolveBrowserTarget(params: Record<string, unknown>, tool: string): st
  * tool path.) A router that throws degrades to the unbound guard rather than to
  * a dead approval: `execute` will refuse the call itself, with a reason.
  *
- * REMAINING GAP, deliberate and recorded: a reviewed REMOTE call is still
- * unbound. The sidecar has its own `elemGen` and its own document checks at use
- * time, but nothing in this process can read them synchronously, and the
- * arguments -- including `target` -- are already compared byte for byte by
- * `getUiExecutionRegistry`.
+ * A REVIEWED REMOTE ELEMENT ACTION is bound by the sidecar, not here (#676).
+ * Nothing in this process can read the sidecar's `elemGen` synchronously, so
+ * this guard does not compare it: it COPIES the generation the sidecar's newest
+ * snapshot reply carried onto the guard as `reviewed`, the approval executor
+ * runs the call inside that scope, and `routeElementActionToSidecar` sends it
+ * as `elem_gen` for the sidecar to compare under its own lock -- or refuses to
+ * send the call to a sidecar too old to compare it.
  */
 function browserCallGuard(
   tool: string,
   opts: { bindDocument?: boolean } = {},
-): (params: Record<string, unknown>) => (() => boolean) {
+): (params: Record<string, unknown>) => ApprovalGuard {
   return (params) => {
     let reviewedRoute: string | null;
     try {
-      reviewedRoute = resolveBrowserTarget(params, tool);
+      // Quiet (#675): this resolution is a comparison, not a dispatch, and
+      // logging it printed a `-> sidecar stack` line for a call that had not
+      // run. The tool's own `execute` logs the one real dispatch.
+      reviewedRoute = resolveBrowserTarget(params, tool, { quiet: true });
     } catch {
       // Fails CLOSED, matching `createRequest`'s own catch ("a failed subject
       // capture must not create an executable approval"). The only thing that
@@ -1094,7 +1229,26 @@ function browserCallGuard(
     // really does mean nothing was reviewed.
     const mayConnectLazily = !opts.bindDocument;
     const local = reviewedRoute ? null : browser.captureApprovalGuard(mayConnectLazily, opts);
-    return () => {
+    // What the remote call will be held to (#676), captured NOW -- the newest
+    // generation is re-recorded on every snapshot, so reading it at execution
+    // would name a snapshot the person never saw. Only for the element-
+    // addressed tools: a generation is a property of the id map, and the other
+    // tools address none.
+    //
+    // Every remote call also carries the READER that raised the card, so a
+    // snapshot the approved call takes (a navigate) is recorded as that
+    // reader's rather than as the executor's.
+    //
+    // And the model LOOP that raised it (#827), when there is one, so the card
+    // binds the snapshot this loop read rather than the newest one any
+    // default-scope caller took, and an approved navigate records into it.
+    const readLog = reviewedRoute ? currentSnapshotReadLog() : undefined;
+    const reader = { reader: currentSnapshotReader(), ...(readLog ? { readLog } : {}) };
+    const reviewed: ReviewedExecution | undefined = !reviewedRoute ? undefined
+      : opts.bindDocument
+        ? { remoteBrowserSnapshot: reviewedRemoteSnapshot(reviewedRoute), ...reader }
+        : reader;
+    const guard = () => {
       // The ROUTE is compared, never used to pick one. Reviewed local and
       // executed remote is a change of machine, not just of surface: the card
       // named element [5] from the local snapshot, and id 5 on the sidecar is
@@ -1104,18 +1258,31 @@ function browserCallGuard(
       // of silently retargeting it.
       let nowRoute: string | null;
       try {
-        nowRoute = resolveBrowserTarget(params, tool);
+        nowRoute = resolveBrowserTarget(params, tool, { quiet: true });
       } catch {
         return false;
       }
       if (nowRoute !== reviewedRoute) return false;
       // Remote: nothing in this process holds the reviewed surface. The
-      // sidecar runs its own document and generation checks at use time, and
-      // the arguments (including `target`) are already compared byte for byte
-      // by `getUiExecutionRegistry`.
+      // sidecar runs its own document and generation checks at use time --
+      // against the generation `reviewed` carries, for an element action --
+      // and the arguments (including `target`) are already compared byte for
+      // byte by `getUiExecutionRegistry`.
       return local ? local() : true;
     };
+    return reviewed ? Object.assign(guard, { reviewed }) : guard;
   };
+}
+
+/**
+ * The remote snapshot a reviewed element action is being approved against:
+ * the canonical sidecar the route names, and the newest `elem_gen` that
+ * sidecar reported (#676). Either may be null, and `routeElementActionToSidecar`
+ * refuses the call at execution if one is -- this records, it does not judge.
+ */
+function reviewedRemoteSnapshot(route: string): ReviewedRemoteSnapshot {
+  const sidecar = findSidecar(route, getSidecarManager()?.listSidecars() ?? []);
+  return { sidecarId: sidecar?.id ?? null, elemGen: sidecar ? remoteSnapshotGeneration(sidecar.id) : null };
 }
 
 /**
@@ -1285,11 +1452,11 @@ export const browserClickTool: ToolDefinition = {
   execute: async (params) => {
     const target = resolveBrowserTarget(params, 'browser_click');
     if (target) {
-      return routeToSidecar(target, 'browser_click', {
+      return routeElementActionToSidecar(target, 'browser_click', {
         element_id: params.element_id,
         button: params.button,
         double: params.double,
-      }, 'browser');
+      }, currentReviewedExecution());
     }
     if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
@@ -1324,7 +1491,8 @@ export const browserHoverTool: ToolDefinition = {
   execute: async (params) => {
     const target = resolveBrowserTarget(params, 'browser_hover');
     if (target) {
-      return routeToSidecar(target, 'browser_hover', { element_id: params.element_id }, 'browser');
+      return routeElementActionToSidecar(target, 'browser_hover', { element_id: params.element_id },
+        currentReviewedExecution());
     }
     if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
@@ -1403,12 +1571,12 @@ export const browserTypeTool: ToolDefinition = {
   execute: async (params) => {
     const target = resolveBrowserTarget(params, 'browser_type');
     if (target) {
-      return routeToSidecar(target, 'browser_type', {
+      return routeElementActionToSidecar(target, 'browser_type', {
         element_id: params.element_id,
         text: params.text,
         submit: params.submit,
         append: params.append,
-      }, 'browser');
+      }, currentReviewedExecution());
     }
     if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;

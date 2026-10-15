@@ -253,6 +253,9 @@ export async function bootstrapWorkflowEngine(
   const runtime = new EngineRuntime({
     api,
     bundlePath: cached.bundlePath,
+    // What the lookup or build verified, re-checked at every spawn for this
+    // runtime's whole life (#671, #762); null for an adopted per-user bundle.
+    expectedDigest: cached.digest,
     pool: true,
     poolIdleTtlMs: opts.engineIdleTtlMs,
     customPiecesPaths: [

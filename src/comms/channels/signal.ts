@@ -1,4 +1,4 @@
-import type { ChannelAdapter, ChannelHandler, ChannelMessage } from './telegram.ts';
+import type { ChannelAdapter, ChannelHandler, ChannelMessage, SendOptions } from './telegram.ts';
 
 export class SignalAdapter implements ChannelAdapter {
   name = 'signal';
@@ -31,7 +31,9 @@ export class SignalAdapter implements ChannelAdapter {
     this.connected = false;
   }
 
-  async sendMessage(recipient: string, text: string): Promise<void> {
+  // A real implementation must honour `options.literal` (no markup, mentions
+  // or previews): the approval card is sent that way and approved by reply.
+  async sendMessage(recipient: string, text: string, _options?: SendOptions): Promise<void> {
     throw new Error('Signal adapter not yet implemented.');
 
     // Future implementation using signal-cli REST API:

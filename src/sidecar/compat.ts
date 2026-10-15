@@ -38,7 +38,7 @@ export const SIDECAR_MIN_VERSION = '0.1.0';
 export const SIDECAR_RECOMMENDED_VERSION = '0.1.0';
 
 /** The sidecar version released with this brain. Keep equal to sidecar/VERSION. */
-export const SIDECAR_LATEST_VERSION = '0.10.0';
+export const SIDECAR_LATEST_VERSION = '0.11.0';
 
 /**
  * Outcome of classifying a sidecar's reported version against the floors:

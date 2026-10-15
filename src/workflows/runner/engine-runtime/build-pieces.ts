@@ -136,7 +136,11 @@ async function ensureStagingInstalled(): Promise<void> {
   // they used to throw on missing esbuild. Now both paths share the
   // same install promise (bun install dedupes naturally; consecutive
   // calls return without re-running once the tree is in place).
-  if (existsSync(resolve(STAGING_NODE_MODULES, "esbuild"))) return;
+  //
+  // ALWAYS delegated (#836): an "esbuild is there" shortcut here accepted a
+  // staging tree installed for another lockfile, or one an install died half
+  // way through, and compiled pieces against it under the new hash. The
+  // engine path's check is cheap once the tree is stamped.
   await ensureEngineStagingInstalled();
 }
 

@@ -2,10 +2,11 @@ name: Release
 
 # Cuts a release end-to-end: bumps package.json on a release branch, opens a
 # PR and merges it (main requires PRs), tags the merge commit, then dispatches
-# the Release Executor workflow (release-exec.yml) against that tag. The
-# explicit dispatch is required because tags pushed with GITHUB_TOKEN never
-# trigger tag-push workflows (GitHub's recursion guard) -- workflow_dispatch
-# is exempt from that guard.
+# the Release Executor workflow (release-exec.yml) against that tag and waits
+# for that run, failing unless it succeeds (#683). The explicit dispatch is
+# required because tags pushed with GITHUB_TOKEN never trigger tag-push
+# workflows (GitHub's recursion guard) -- workflow_dispatch is exempt from
+# that guard.
 
 on:
   workflow_dispatch:
@@ -20,23 +21,67 @@ permissions:
   pull-requests: write
   actions: write
 
+# queue: max (#683). `cut` now holds this group until the release it
+# dispatched has finished, which can be hours, and the default queue keeps ONE
+# pending run: a third dispatch would silently cancel the waiting one. `max`
+# queues them in order, as release-exec.yml does. actionlint 1.7.x predates
+# the key and reports it as unexpected.
 concurrency:
   group: release
   cancel-in-progress: false
+  queue: max
 
 jobs:
   cut:
     runs-on: ubuntu-latest
+    # Above the release-executor watch bound (WATCH_TIMEOUT_SECONDS below,
+    # 300 minutes), so the watch fails with a message first; see that step.
+    timeout-minutes: 330
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
+      # Refuse now, with a reason, rather than at a confusing checkout failure
+      # (#929). Same shape as #869: a release that cannot finish should say so
+      # before it changes anything, not after the bump PR is open.
+      # Through env, not an `if:`: the secrets context is not dependable in a
+      # step condition, and an empty `token:` on the checkout below would fail
+      # with something that looks like a network problem.
+      - name: Refuse without the bump-PR token
+        env:
+          BUMP_PR_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+        run: |
+          if [ -z "$BUMP_PR_TOKEN" ]; then
+            echo "::error::RELEASE_PR_TOKEN is not set, so the bump PR would open without CI and could never merge (#929)."
+            echo "Add a fine-grained PAT with Contents: read and write, and Pull requests: read and write, on this repository."
+            exit 1
+          fi
+
+      # The PAT, not GITHUB_TOKEN (#929). GitHub suppresses `pull_request` CI
+      # for anything GITHUB_TOKEN opens, so the bump PR got no `test` run --
+      # measured: zero checks on #600, the v0.15.0 bump PR -- and main has
+      # required `test` since 2026-10-05. It is on the checkout so that the
+      # branch push and `gh pr create` are the same actor; the PR-opened event
+      # is what has to be attributed to a real token for CI to start.
+      #
+      # persist-credentials: false (#982). The default leaves the PAT in
+      # .git/config for every later step, `npm version` and `bun -e`
+      # included, in a job holding contents, pull-requests and actions write.
+      # The one push that needs it takes it from its step env through a
+      # credential helper instead (see "Create release PR"); the branch
+      # deletes go through the API with this job's GITHUB_TOKEN.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
+          token: ${{ secrets.RELEASE_PR_TOKEN }}
+          persist-credentials: false
 
+      # Pinned, never `latest` (#681): this job's token can push a v* tag and
+      # dispatch a real release. Same version as test.yml and release-exec.yml.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: latest
+          # The Actions cache is writable by any run on main; see #681.
+          no-cache: true
+          bun-version: "1.4.2"
 
       - name: Compute new version
         id: version
@@ -66,19 +111,77 @@ jobs:
             }
           '
 
+      # The tag is free only on a clean answer that says so (#998). This used
+      # to read any failure of `gh api .../git/ref/tags/vX` as "no such tag",
+      # so a rate limit or a 5xx let the bump PR open and merge, and "Tag
+      # merge commit" then failed on a tag that did exist, leaving a merged
+      # bump with no tag. A 404 is no clean answer either: measured, that
+      # endpoint gives the same 404 body for a missing repository as for a
+      # missing tag. matching-refs answers 200 with every tag whose name
+      # starts with vX (measured: not paginated, per_page ignored), [] when
+      # there is none, so "free" is an exact name absent from a list GitHub
+      # did return. gh 2.102.0 exits 1 on every non-2xx and does not retry
+      # (measured against GitHub for 401 and 404, and a local server for 403,
+      # 429, 500, 502 and 503: one request each), yet exits 0 on a 200 whose
+      # body is HTML, empty or an object; so anything but exit 0 and exactly
+      # one JSON array of refs stops here.
+      # release-exec.test.sh runs this script verbatim against every case.
       - name: Guard - tag must not already exist
         env:
           NEW: ${{ steps.version.outputs.NEW }}
         run: |
-          if gh api "repos/${{ github.repository }}/git/ref/tags/v${NEW}" >/dev/null 2>&1; then
-            echo "Tag v${NEW} already exists"
+          set -euo pipefail
+          rc=0
+          err="$(mktemp)"
+          trap 'rm -f "$err"' EXIT
+          refs="$(gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/v${NEW}" 2>"$err")" || rc=$?
+          # blocked: a tag under vX/ exists, and git refuses to create vX
+          # beside it, as it would vX itself (review of #998).
+          verdict="$(jq -rs --arg ref "refs/tags/v${NEW}" 'if length == 1 and (.[0] | type == "array" and all(.[]; type == "object" and (.ref | type) == "string")) then (if any(.[0][]; .ref == $ref) then "taken" elif any(.[0][]; .ref | startswith($ref + "/")) then "blocked" else "free" end) else "unknown" end' <<<"$refs" 2>/dev/null)" || verdict=unknown
+          [ "$rc" -eq 0 ] || verdict=unknown
+          case "$verdict" in
+          free)
+            echo "Tag v${NEW} does not exist yet."
+            ;;
+          taken)
+            echo "::error::Tag v${NEW} already exists"
             exit 1
-          fi
+            ;;
+          blocked)
+            echo "::error::A tag under v${NEW}/ exists, so the tag v${NEW} cannot be created"
+            exit 1
+            ;;
+          *)
+            # gh text and the start of its answer, control characters
+            # dropped, so they stay one line and cannot start a workflow
+            # command of their own.
+            printf '::error::Could not establish whether the tag v%s exists (gh api exit %s: %s; answer: %s), so the bump PR is not opened (#998). Re-run if it was transient; otherwise check the token and the repository.\n' \
+              "$NEW" "$rc" "$(head -c 300 "$err" | tr -d '\000-\037\177')" "$(head -c 200 <<<"$refs" | tr -d '\000-\037\177')"
+            exit 1
+            ;;
+          esac
 
       - name: Create release PR
         id: pr
         env:
           NEW: ${{ steps.version.outputs.NEW }}
+          # Overrides the job-level github.token for this step only (#929), so
+          # the PR is opened by the PAT and its CI starts.
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+          # The branch push authenticates with that same GH_TOKEN (#982): the
+          # checkout no longer leaves it in .git/config. Git asks this helper
+          # for a credential when github.com answers 401, and the helper reads
+          # the token from its environment at that moment, so it is never in
+          # a file, a remote URL or an argument, and nothing prints it. The
+          # empty first entry drops any helper configured elsewhere on the
+          # runner, the second answers for https://github.com alone, and git
+          # may not fall back to a prompt.
+          GIT_TERMINAL_PROMPT: "0"
+          GIT_CONFIG_COUNT: "2"
+          GIT_CONFIG_KEY_0: credential.helper
+          GIT_CONFIG_VALUE_0: ""
+          GIT_CONFIG_KEY_1: credential.https://github.com.helper
+          GIT_CONFIG_VALUE_1: '!f() { if [ "$1" = get ] && [ -n "$GH_TOKEN" ]; then printf "username=x-access-token\npassword=%s\n" "$GH_TOKEN"; fi; }; f'
         run: |
           set -euo pipefail
           BRANCH="release/v${NEW}"
@@ -103,23 +206,40 @@ jobs:
           PR_URL: ${{ steps.pr.outputs.PR_URL }}
         run: |
           set -euo pipefail
-          # Mergeability is computed async after PR creation; retry while it is
-          # UNKNOWN, but fail fast on a real conflict (e.g. package.json changed
-          # on main between checkout and merge) -- retrying cannot fix that.
+          # Two things are waited on here, and a real conflict is not one of
+          # them: mergeability is computed async after creation, so UNKNOWN is
+          # retried, but CONFLICTING (package.json changed on main between
+          # checkout and merge) fails fast because retrying cannot fix it.
+          #
+          # The other is the required check (#929). main has required `test`
+          # since 2026-10-05, it takes about 11 minutes (measured 10m49s, run
+          # 37949458219), and a merely PENDING required check refuses the merge
+          # exactly as a missing one does. This loop used to allow 10 tries at
+          # 5s -- 50 seconds -- which no required check could ever have
+          # satisfied; it went unnoticed because no release has run since.
+          #
+          # Bounded at 20 minutes: this job has 330 and the release watch below
+          # takes 300, leaving 30 for everything before it.
+          DEADLINE=$(( $(date +%s) + 1200 ))
           MERGED=0
-          for i in $(seq 1 10); do
+          while [ "$(date +%s)" -lt "$DEADLINE" ]; do
             STATUS=$(gh pr view "$PR_URL" --json mergeable --jq .mergeable || true)
             if [ "$STATUS" = "CONFLICTING" ]; then
               echo "Release PR ${PR_URL} conflicts with main; aborting."
               exit 1
             fi
-            if [ "$STATUS" = "MERGEABLE" ]; then
+            # Checks first, then merge: a refused merge prints a GraphQL error,
+            # and at 20s intervals that would be 60 of them in the log ahead of
+            # the one that works.
+            if [ "$STATUS" = "MERGEABLE" ] && gh pr checks "$PR_URL" --required >/dev/null 2>&1; then
               if gh pr merge "$PR_URL" --squash; then MERGED=1; break; fi
             fi
-            sleep 5
+            sleep 20
           done
           if [ "$MERGED" != 1 ]; then
-            echo "Could not merge release PR ${PR_URL}"
+            echo "Could not merge release PR ${PR_URL} within 20 minutes."
+            echo "If its checks never started, it was opened without RELEASE_PR_TOKEN (#929)."
+            gh pr checks "$PR_URL" || true
             exit 1
           fi
           SHA=""
@@ -139,21 +259,48 @@ jobs:
           NEW: ${{ steps.version.outputs.NEW }}
           SHA: ${{ steps.merge.outputs.SHA }}
         run: |
-          gh api "repos/${{ github.repository }}/git/refs" \
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
             -f ref="refs/tags/v${NEW}" \
             -f sha="${SHA}"
 
+      # Through the API with the job token (#982): the checkout persists no
+      # credential, so a `git push --delete` here would fail, and the
+      # `|| true` it carried would hide that and leave the branch behind.
+      # Still not fatal, since the tag is pushed and the release has to be
+      # started, but a failure is reported rather than swallowed.
       - name: Delete release branch
         env:
           NEW: ${{ steps.version.outputs.NEW }}
-        run: git push origin --delete "release/v${NEW}" || true
-
-      - name: Start release executor
-        env:
-          NEW: ${{ steps.version.outputs.NEW }}
         run: |
-          gh workflow run release-exec.yml --ref "v${NEW}" -f tag="v${NEW}" -f dry_run=false
-          echo "Dispatched release-exec.yml for v${NEW}"
+          if ! gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/release/v${NEW}"; then
+            echo "::warning::Could not delete the branch release/v${NEW}; delete it by hand."
+          fi
+
+      # Dispatch AND wait (#683). This used to dispatch and exit, so a failed
+      # or cancelled release left the merged bump and the pushed tag with
+      # nothing published while this workflow stayed green. The script gets
+      # the run id from the dispatch (or looks the run up by workflow, tag,
+      # commit and time when the answer has none), checks it is that run,
+      # and fails unless it concludes `success`.
+      #
+      # The wait is bounded so it fails with the run URL instead of the job
+      # being killed at its clock. Measured on the last 23 release-exec runs
+      # (2026-06-11 to 2026-10-07): median about 10 minutes, longest 83
+      # (v0.7.0). It also covers the `release` environment approvals, which
+      # wait for a person, and the release-exec concurrency queue, so the
+      # bound is 5 hours: under the 6 a hosted job may run, with the job
+      # timeout at 330 minutes leaving 30 for the steps before this one.
+      # Hitting it does not stop the release; it only stops this job waiting.
+      #
+      # This job now holds the `release` concurrency group until the release
+      # finishes, so a second Release dispatch queues behind it instead of
+      # cutting the next version while this one is still publishing.
+      - name: Start the release executor and wait for it
+        env:
+          TAG: v${{ steps.version.outputs.NEW }}
+          SHA: ${{ steps.merge.outputs.SHA }}
+          WATCH_TIMEOUT_SECONDS: "18000"
+        run: .github/scripts/watch-release-run.sh
 
       # Don't leave an orphaned release branch / open PR behind: a re-run would
       # otherwise fail at git push / gh pr create because they already exist.
@@ -170,6 +317,8 @@ jobs:
               gh pr close "$PR_URL" --comment "Release workflow run failed; closing. See the workflow logs." || true
             fi
           fi
-          if [ -n "$NEW" ]; then
-            git push origin --delete "release/v${NEW}" || true
+          # As in "Delete release branch" (#982). The branch may never have
+          # been pushed, so a failure here only warns.
+          if [ -n "$NEW" ] && ! gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/release/v${NEW}"; then
+            echo "::warning::Could not delete the branch release/v${NEW}; if it exists, delete it by hand."
           fi

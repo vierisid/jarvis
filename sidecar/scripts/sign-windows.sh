@@ -36,8 +36,10 @@
 #                       to this script. PUBLIC data — commit it.
 #   SIGNING_PUBLISHER_CN         if set, every signature must carry this CN
 #   SIGN_REQUIRE_TRUSTED_CHAIN   1 (default) = also require the chain to verify
-#                                locally. Sectigo's roots are publicly trusted,
-#                                so a release must never relax this; set 0 only
+#                                locally, and require verification to run at
+#                                all: without osslsigncode it fails (#817).
+#                                Sectigo's roots are publicly trusted, so a
+#                                release must never relax this; set 0 only
 #                                when experimenting with a self-signed cert.
 #   CA_BUNDLE      CA file for verification (default: system bundle)
 #   JSIGN_JAR      use this jar instead of downloading (local runs / tests)
@@ -45,7 +47,8 @@
 #   JSIGN_SHA256   pinned checksum of that download
 #   TSA_URL        timestamp authority                 (default: Sectigo)
 #
-# Usage: sign-windows.sh <file.exe> [more.exe ...]
+# Usage: sign-windows.sh [--defer-verify | --verify-only] <file.exe> [more.exe ...]
+#        (the two modes are described where they are parsed, below)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -73,6 +76,14 @@ fail() {
 	exit 1
 }
 
+# Exactly 0 or 1 (#817 review): every check below compares with "1", so any
+# other spelling ("yes", "true", " 1") would silently turn both the
+# trusted-chain requirement and the must-verify requirement off.
+case "$SIGN_REQUIRE_TRUSTED_CHAIN" in
+0 | 1) ;;
+*) fail "SIGN_REQUIRE_TRUSTED_CHAIN must be 0 or 1 (got '${SIGN_REQUIRE_TRUSTED_CHAIN}')" ;;
+esac
+
 # Everything registered here is removed on ANY exit path. Nothing secret is
 # written to disk any more (the key is in Cloud HSM and the token stays in the
 # environment), but the downloaded jar still has to go, and a `set -e` abort
@@ -88,68 +99,36 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[ "$#" -ge 1 ] || fail "usage: $(basename "$0") <file.exe> [more.exe ...]"
-
-# The access token is the one credential, and it is derivable locally: a
-# developer with gcloud logged in should not have to export anything.
-# gcloud's own stderr is kept: the overwhelmingly common local failure is
-# "no active account", and reporting only "GCP_ACCESS_TOKEN is required" would
-# send someone to set a variable when the fix is `gcloud auth login`.
-gcloud_err=""
-if [ -z "${GCP_ACCESS_TOKEN:-}" ] && command -v gcloud >/dev/null 2>&1; then
-	if ! GCP_ACCESS_TOKEN="$(gcloud auth print-access-token 2>"${TMPDIR:-/tmp}/gcloud-err.$$")"; then
-		GCP_ACCESS_TOKEN=""
-		gcloud_err="$(cat "${TMPDIR:-/tmp}/gcloud-err.$$" 2>/dev/null || true)"
-	fi
-	rm -f "${TMPDIR:-/tmp}/gcloud-err.$$"
-fi
-
-for v in GCP_KMS_KEYRING GCP_KMS_KEY_ALIAS GCP_ACCESS_TOKEN; do
-	if [ -z "${!v:-}" ]; then
-		if [ "$v" = "GCP_ACCESS_TOKEN" ] && [ -n "$gcloud_err" ]; then
-			fail "GCP_ACCESS_TOKEN is required and \`gcloud auth print-access-token\` failed: ${gcloud_err}"
-		fi
-		fail "$v is required (see code-signing/ci-pipeline.md in usejarvis-docs)"
-	fi
+# Modes, as the first argument (#817):
+#   (none)          sign, then verify each file here
+#   --defer-verify  sign only; the caller verifies the result separately with
+#                   --verify-only. CI does: verification needs osslsigncode,
+#                   an apt package whose maintainer scripts run as root, and
+#                   the signing job holds the Workload Identity token, so the
+#                   check runs in a job that cannot mint one.
+#   --verify-only   verify only: no credential, no certificate file, no jsign.
+MODE=sign
+USAGE="usage: $(basename "$0") [--defer-verify | --verify-only] <file.exe> [more.exe ...]"
+case "${1:-}" in
+--defer-verify)
+	MODE=defer
+	shift
+	;;
+--verify-only)
+	MODE=verify
+	shift
+	;;
+-*) fail "unknown option ${1} (${USAGE})" ;;
+esac
+[ "$#" -ge 1 ] || fail "$USAGE"
+# One option, first: a second one would otherwise be taken for a file name.
+for f in "$@"; do
+	case "$f" in -*) fail "one option at most, and only before the files: ${f} (${USAGE})" ;; esac
 done
-
-# jsign rejects a keyring that is not exactly projects/<p>/locations/<l>/keyRings/<r>,
-# but only after downloading the jar and starting a JVM, with a message that
-# reads like a jsign bug rather than a typo in a repo variable. Mirror the
-# check here — this is the shape of value people paste wrong (a full cryptoKey
-# path, or the bare keyring name from the console). The pattern is jsign's own
-# (KeyStoreType.GOOGLECLOUD.validate in the pinned 7.1 jar).
-[[ "$GCP_KMS_KEYRING" =~ ^projects/[^/]+/locations/[^/]+/keyRings/[^/]+$ ]] ||
-	fail "GCP_KMS_KEYRING must be projects/<project>/locations/<location>/keyRings/<keyring> — got '$GCP_KMS_KEYRING' (the key name belongs in GCP_KMS_KEY_ALIAS)"
-
-# Cloud KMS stores the private key ONLY, so jsign cannot discover the
-# certificate: --certfile is mandatory. Fail on it here rather than letting a
-# missing file surface as a Java stack trace. The chain is committed, so this
-# now fires on a partial checkout — or on the next renewal, if the new chain
-# is never committed.
-[ -f "$CODESIGN_CERT_FILE" ] ||
-	fail "certificate chain not found at ${CODESIGN_CERT_FILE} — Cloud KMS holds only the private key, so the Sectigo chain PEM must be committed at sidecar/packaging/windows/codesign-chain.pem (or pointed at with CODESIGN_CERT_FILE). See code-signing/windows-setup.md in usejarvis-docs."
-grep -q 'BEGIN CERTIFICATE' "$CODESIGN_CERT_FILE" ||
-	fail "${CODESIGN_CERT_FILE} contains no PEM certificate — is it still the placeholder?"
 
 for f in "$@"; do
 	[ -f "$f" ] || fail "file not found: $f"
 done
-
-# Pinned checksum: jsign runs with a live signing token in hand, so an
-# unverified download is never acceptable here.
-if [ -n "${JSIGN_JAR:-}" ]; then
-	jar="${JSIGN_JAR}"
-	[ -f "$jar" ] || fail "JSIGN_JAR=$jar does not exist"
-else
-	jar="$(mktemp "${TMPDIR:-/tmp}/jsign-XXXXXX.jar")"
-	CLEANUP+=("$jar")
-	# Retry: a CDN blip must not fail a release whose binaries are already built.
-	curl -fsSL --retry 3 --retry-all-errors --connect-timeout 20 -o "$jar" \
-		"https://github.com/ebourg/jsign/releases/download/${JSIGN_VERSION}/jsign-${JSIGN_VERSION}.jar"
-	echo "${JSIGN_SHA256}  ${jar}" | sha256sum -c - >/dev/null ||
-		fail "jsign ${JSIGN_VERSION} checksum mismatch — refusing to run it"
-fi
 
 # verify_signature asserts, after the fact, that the signature actually landed
 # on THESE bytes and came from US.
@@ -168,7 +147,13 @@ fi
 verify_signature() {
 	local f="$1" out rc cn bundle
 	if ! command -v osslsigncode >/dev/null 2>&1; then
-		echo "warning: osslsigncode not installed — skipping post-sign verification of $f" >&2
+		# #817: a required check that cannot run is a failure. This used to
+		# warn and return 0 even under SIGN_REQUIRE_TRUSTED_CHAIN=1, so a
+		# runner without osslsigncode shipped a signature nothing verified.
+		if [ "$SIGN_REQUIRE_TRUSTED_CHAIN" = "1" ]; then
+			fail "osslsigncode is not installed, so $f cannot be verified, and SIGN_REQUIRE_TRUSTED_CHAIN=1 requires verification (install osslsigncode, or set SIGN_REQUIRE_TRUSTED_CHAIN=0 for a local experiment)"
+		fi
+		echo "warning: osslsigncode not installed -- skipping post-sign verification of $f (SIGN_REQUIRE_TRUSTED_CHAIN=0)" >&2
 		return 0
 	fi
 
@@ -271,6 +256,72 @@ verify_signature() {
 	return 0
 }
 
+# Verification alone needs none of what signing needs below.
+if [ "$MODE" = verify ]; then
+	for f in "$@"; do
+		verify_signature "$f"
+	done
+	echo "verified $# file(s)"
+	exit 0
+fi
+
+# The access token is the one credential, and it is derivable locally: a
+# developer with gcloud logged in should not have to export anything.
+# gcloud's own stderr is kept: the overwhelmingly common local failure is
+# "no active account", and reporting only "GCP_ACCESS_TOKEN is required" would
+# send someone to set a variable when the fix is `gcloud auth login`.
+gcloud_err=""
+if [ -z "${GCP_ACCESS_TOKEN:-}" ] && command -v gcloud >/dev/null 2>&1; then
+	if ! GCP_ACCESS_TOKEN="$(gcloud auth print-access-token 2>"${TMPDIR:-/tmp}/gcloud-err.$$")"; then
+		GCP_ACCESS_TOKEN=""
+		gcloud_err="$(cat "${TMPDIR:-/tmp}/gcloud-err.$$" 2>/dev/null || true)"
+	fi
+	rm -f "${TMPDIR:-/tmp}/gcloud-err.$$"
+fi
+
+for v in GCP_KMS_KEYRING GCP_KMS_KEY_ALIAS GCP_ACCESS_TOKEN; do
+	if [ -z "${!v:-}" ]; then
+		if [ "$v" = "GCP_ACCESS_TOKEN" ] && [ -n "$gcloud_err" ]; then
+			fail "GCP_ACCESS_TOKEN is required and \`gcloud auth print-access-token\` failed: ${gcloud_err}"
+		fi
+		fail "$v is required (see code-signing/ci-pipeline.md in usejarvis-docs)"
+	fi
+done
+
+# jsign rejects a keyring that is not exactly projects/<p>/locations/<l>/keyRings/<r>,
+# but only after downloading the jar and starting a JVM, with a message that
+# reads like a jsign bug rather than a typo in a repo variable. Mirror the
+# check here — this is the shape of value people paste wrong (a full cryptoKey
+# path, or the bare keyring name from the console). The pattern is jsign's own
+# (KeyStoreType.GOOGLECLOUD.validate in the pinned 7.1 jar).
+[[ "$GCP_KMS_KEYRING" =~ ^projects/[^/]+/locations/[^/]+/keyRings/[^/]+$ ]] ||
+	fail "GCP_KMS_KEYRING must be projects/<project>/locations/<location>/keyRings/<keyring> — got '$GCP_KMS_KEYRING' (the key name belongs in GCP_KMS_KEY_ALIAS)"
+
+# Cloud KMS stores the private key ONLY, so jsign cannot discover the
+# certificate: --certfile is mandatory. Fail on it here rather than letting a
+# missing file surface as a Java stack trace. The chain is committed, so this
+# now fires on a partial checkout — or on the next renewal, if the new chain
+# is never committed.
+[ -f "$CODESIGN_CERT_FILE" ] ||
+	fail "certificate chain not found at ${CODESIGN_CERT_FILE} — Cloud KMS holds only the private key, so the Sectigo chain PEM must be committed at sidecar/packaging/windows/codesign-chain.pem (or pointed at with CODESIGN_CERT_FILE). See code-signing/windows-setup.md in usejarvis-docs."
+grep -q 'BEGIN CERTIFICATE' "$CODESIGN_CERT_FILE" ||
+	fail "${CODESIGN_CERT_FILE} contains no PEM certificate — is it still the placeholder?"
+
+# Pinned checksum: jsign runs with a live signing token in hand, so an
+# unverified download is never acceptable here.
+if [ -n "${JSIGN_JAR:-}" ]; then
+	jar="${JSIGN_JAR}"
+	[ -f "$jar" ] || fail "JSIGN_JAR=$jar does not exist"
+else
+	jar="$(mktemp "${TMPDIR:-/tmp}/jsign-XXXXXX.jar")"
+	CLEANUP+=("$jar")
+	# Retry: a CDN blip must not fail a release whose binaries are already built.
+	curl -fsSL --retry 3 --retry-all-errors --connect-timeout 20 -o "$jar" \
+		"https://github.com/ebourg/jsign/releases/download/${JSIGN_VERSION}/jsign-${JSIGN_VERSION}.jar"
+	echo "${JSIGN_SHA256}  ${jar}" | sha256sum -c - >/dev/null ||
+		fail "jsign ${JSIGN_VERSION} checksum mismatch — refusing to run it"
+fi
+
 for f in "$@"; do
 	echo "signing $f"
 	# --storepass lands in this process's argv, visible in /proc on the local
@@ -286,7 +337,11 @@ for f in "$@"; do
 		--tsaurl "$TSA_URL" \
 		--tsmode RFC3161 \
 		"$f"
-	verify_signature "$f"
+	if [ "$MODE" = defer ]; then
+		echo "signed $f; post-sign verification deferred to sign-windows.sh --verify-only"
+	else
+		verify_signature "$f"
+	fi
 done
 
 echo "signed $# file(s) as '${GCP_KMS_KEY_ALIAS}' in ${GCP_KMS_KEYRING}"

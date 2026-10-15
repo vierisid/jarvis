@@ -174,7 +174,11 @@ describe('desktop outcome API and durable receipts', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ outcome: { status: 'blocked' } });
     expect(f.dispatches()).toBe(0);
-    expect(f.approvals.getRequest(listWorkflowEffects(f.run.id)[0]!.approvalId!)?.status).toBe('approved');
+    // Pinned `approved` before #845, which is the zombie that issue is about:
+    // an approval granted for a call that never ran, shown granted for good.
+    const effect = listWorkflowEffects(f.run.id)[0]!;
+    expect(effect.status).toBe('blocked');
+    expect(f.approvals.getRequest(effect.approvalId!)).toMatchObject({ status: 'executed', execution_outcome: 'blocked' });
   });
 
   test('default assertion preserves approval identity across a piece upgrade', async () => {
@@ -212,7 +216,7 @@ describe('desktop outcomes through the real engine and outer worker', () => {
     await api.start({ port: 0 });
     const bundle = await buildEngineBundle();
     await buildAllJarvisPieces();
-    const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath });
+    const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest });
     const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({
       executor: new EngineFlowExecutor(runtime, { terminalTimeoutMs: 3000 }),
     }) } });

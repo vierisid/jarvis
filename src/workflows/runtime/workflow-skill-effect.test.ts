@@ -108,8 +108,8 @@ describe('run_skill as a workflow effect', () => {
     const request = f.approvals.getRequest(pending.approval!.approvalId)!;
     expect(request.action_category).toBe('send_email');
     expect(request.execution_mode).toBe('workflow');
-    expect(approvalIntentFromContext(request)).toContain('click Send (sends email)');
-    expect(approvalIntentFromContext(request)).toContain('"gmail-send" in Gmail');
+    expect(approvalIntentFromContext(request)).toContain('click "Send" (sends email)');
+    expect(approvalIntentFromContext(request)).toContain('"gmail-send" in "Gmail"');
     expect(f.delivered).toEqual([request.id]);
 
     const effect = listWorkflowEffects(f.run.id)[0]!;
@@ -165,7 +165,7 @@ describe('run_skill as a workflow effect', () => {
     const request = f.approvals.getRequest(pending.approval!.approvalId)!;
     expect(request.action_category).toBe('make_payment');
     expect(request.urgency).toBe('urgent');
-    expect(approvalIntentFromContext(request)).toContain('click Pay now (pays)');
+    expect(approvalIntentFromContext(request)).toContain('click "Pay now" (pays)');
   });
 
   test('a skill re-recorded after review cannot dispatch under the old approval', async () => {

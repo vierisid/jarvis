@@ -75,6 +75,10 @@ type Options = {
   writeGate?: () => ToolGate | null;
   /** The write pins its arguments before they are gated (the real file tools' freezeArguments, #522). */
   writeFreeze?: boolean;
+  /** The read pauses the system after it ran, so the NEXT call meets the runner's emergency check. */
+  readPauses?: boolean;
+  /** Each spawn gets its own child id, as the real orchestrator's do, instead of always 'child'. */
+  distinctChildren?: boolean;
 };
 
 /** Real backends, boundary, Authority and SQLite; only the model and the tools are scripted. */
@@ -88,7 +92,7 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
     ...(opts.writeFreeze ? { freezeArguments: (p: Record<string, unknown>) => ({ ...p, frozen: true }) } : {}),
     execute: async (p: Record<string, unknown>) => { writes.push(p); effects++; if (opts.writeThrows) throw new Error('disk full'); if (opts.writeInterrupts) { emergency.pause(); checkpointExecution(); } return 'saved'; } });
   registry.register({ name: 'read_file', category: 'file-ops', description: 'Synthetic read', parameters: {},
-    execute: async () => { if (opts.readFails) throw new ActionOutcomeError({ status: 'error', code: 'SYNTHETIC', message: 'unreadable', effect: 'not_started' }); if (opts.readCancels) cancelFlowRun(ids.run.id); return 'contents'; } });
+    execute: async () => { if (opts.readFails) throw new ActionOutcomeError({ status: 'error', code: 'SYNTHETIC', message: 'unreadable', effect: 'not_started' }); if (opts.readCancels) cancelFlowRun(ids.run.id); if (opts.readPauses) emergency.pause(); return 'contents'; } });
   registry.register({ name: 'run_script', category: 'terminal', description: 'Synthetic command', parameters: {}, execute: async () => { effects++; return 'ran'; } });
   registry.register({ name: 'run_command', category: 'terminal', description: 'Synthetic shell', parameters: {}, execute: async () => { effects++; return 'ran'; } });
   // A gated tool: approvable in a flow step through its adapter, never here.
@@ -123,16 +127,18 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
   const approvals = new ApprovalManager();
   const emergency = new EmergencyController();
   const auditTrail = new AuditTrail();
+  let spawned = 0;
   const child = () => {
     const history: Array<{ role: string; content: unknown }> = [];
-    return { id: 'child', agent: { role: ROLE, authority: { allowed_tools: ROLE.tools, max_authority_level: opts.childLevel ?? 10 } },
+    spawned++;
+    return { id: opts.distinctChildren ? `child-${spawned}` : 'child', agent: { role: ROLE, authority: { allowed_tools: ROLE.tools, max_authority_level: opts.childLevel ?? 10 } },
       setTask() {}, activate() {}, idle() {}, addMessage: (role: string, content: unknown) => history.push({ role, content }),
       getMessages: () => history };
   };
   const services = buildSandboxServiceBackends({ credentialResolver: new CredentialResolver(), eventBuffer: new WorkflowEventBuffer(),
     toolRegistry: registry, authorityEngine: authority, emergencyController: emergency, auditTrail,
     approvalManager: approvals,
-    agentOrchestrator: { getPrimary: () => ({ id: 'primary' }), spawnSubAgent: child, terminateAgent: () => {} } as any,
+    agentOrchestrator: { getPrimary: () => ({ id: 'primary' }), spawnSubAgent: child, reapAgent: () => {} } as any,
     agentSpecialists: new Map([[ROLE.id, ROLE]]) as any,
     agentScopedRegistry: () => registry,
     llmManager: { chatTier: async (_tier: string, _origin: string, messages: Array<{ role: string }>) => {
@@ -192,14 +198,18 @@ describe('delegated approvals through the workflow effect boundary', () => {
       pending: { toolCall: { id: 'call-1', name: 'write_file', arguments: ARGS }, sequence: 1, remaining: [], iteration: 0,
         approval: reply.approval, principal: { agentId: 'child', agentRoleId: ROLE.id, agentAuthorityLevel: 10 } } });
     expect(checkpoint!.messages.at(-1)).toMatchObject({ role: 'assistant' });
+    // The sub-agent gate's row is under the run too (#730), not the spawned
+    // child's id, which nothing ties back to the run.
     expect(audit()).toEqual([
       [`workflow:${ids.run.id}`, 'workflow_delegate', 'allowed', true],
       [`workflow:${ids.run.id}`, 'write_file', 'approval_required', false],
-      ['child', 'write_file', 'approval_required', false],
+      [`workflow:${ids.run.id}`, 'write_file', 'approval_required', false],
     ]);
-    // The boundary's row says who was judged.
+    // The boundary's row says who was judged; the gate's row says which
+    // sub-agent decided, under the step it ran in.
     const names = (getWorkflowDb().query('SELECT agent_name FROM audit_trail WHERE tool_name = ? ORDER BY rowid').all('write_file') as Array<{ agent_name: string }>);
     expect(names[0]!.agent_name).toContain(`as ${ROLE.id} (level 10)`);
+    expect(names[1]!.agent_name).toBe(`Workflow ${ids.run.id} / delegate / ${ROLE.name} (sub-agent child)`);
   });
 
   test('approval resumes the delegation: the tool runs once and the conversation finishes', async () => {
@@ -485,6 +495,9 @@ describe('delegated approvals through the workflow effect boundary', () => {
    * a query for the run's audit (`/api/authority/audit?agentId=workflow:<id>`)
    * showed the delegation allowed and then nothing. `toolsInvoke` and
    * `pieceAuthorize` already audit their refusals there.
+   *
+   * Since #730 the gate's row is under the run as well, with the child and
+   * the step in its name, so both rows below carry `workflow:<runId>`.
    */
   test('a refusal on this route is audited under the run, beside the sub-agent gate\'s own row (#672)', async () => {
     for (const [tool, args, governed] of [
@@ -498,18 +511,19 @@ describe('delegated approvals through the workflow effect boundary', () => {
       const done = await f.delegate({ requiredTools: [tool] });
       expect(done.toolCalls[0]!.error).toMatch(new RegExp(`^\\[APPROVAL DENIED\\] ${tool}: Unsupported workflow capability`));
       const rows = audit().filter(row => row[1] === tool);
+      // Both under the run since #730: the route's refusal and the sub-agent
+      // gate's own row.
       expect({ tool, rows }).toEqual({ tool, rows: [
         [`workflow:${ids.run.id}`, tool, 'denied', false],
-        ['child', tool, 'denied', false],
+        [`workflow:${ids.run.id}`, tool, 'denied', false],
       ] });
       // The run's row names the step, and is in the category the gate judged,
       // so the two rows describe the same decision.
-      const runRow = getWorkflowDb().query('SELECT agent_name, action_category FROM audit_trail WHERE agent_id = ? AND tool_name = ?')
-        .get(`workflow:${ids.run.id}`, tool) as { agent_name: string; action_category: string };
-      const childRow = getWorkflowDb().query('SELECT action_category FROM audit_trail WHERE agent_id = ? AND tool_name = ?')
-        .get('child', tool) as { action_category: string };
-      expect(runRow.agent_name).toBe(`Workflow ${ids.run.id} / delegate`);
-      expect(runRow.action_category).toBe(childRow.action_category);
+      const [runRow, childRow] = getWorkflowDb().query('SELECT agent_name, action_category FROM audit_trail WHERE agent_id = ? AND tool_name = ? ORDER BY rowid')
+        .all(`workflow:${ids.run.id}`, tool) as Array<{ agent_name: string; action_category: string }>;
+      expect(runRow!.agent_name).toBe(`Workflow ${ids.run.id} / delegate`);
+      expect(childRow!.agent_name).toBe(`Workflow ${ids.run.id} / delegate / ${ROLE.name} (sub-agent child)`);
+      expect(runRow!.action_category).toBe(childRow!.action_category);
       // Still nothing durable for the refused call itself.
       expect(listWorkflowEffects(ids.run.id).map(e => e.route)).toEqual(['agent']);
     }
@@ -543,9 +557,165 @@ describe('delegated approvals through the workflow effect boundary', () => {
       .all('write_file') as Array<{ agent_id: string; authority_decision: string; action_category: string }>;
     expect(rows).toEqual([
       { agent_id: `workflow:${ids.run.id}`, authority_decision: 'approval_required', action_category: 'write_data' },
-      { agent_id: 'child', authority_decision: 'approval_required', action_category: 'write_data' },
+      // The sub-agent gate's row, under the run since #730.
+      { agent_id: `workflow:${ids.run.id}`, authority_decision: 'approval_required', action_category: 'write_data' },
       { agent_id: `workflow:${ids.run.id}`, authority_decision: 'denied', action_category: 'execute_command' },
     ]);
+  });
+
+  /**
+   * #730. The calls the sub-agent's OWN gate decides -- a denial, a call it
+   * runs without approval, a suspension -- were audited only under the
+   * spawned child's id and the role's name. A new child is spawned on every
+   * resume and nothing records which child belonged to which run, so none of
+   * them could be tied back to the run. They are written under the run now,
+   * with the child and the step in the name.
+   */
+  test('the sub-agent gate\'s own decisions are audited under the run, across every spawn of a resumed delegation (#730)', async () => {
+    const ids = createRun();
+    // Spawn one parks the write; spawn two resumes it and then calls a tool
+    // its own gate refuses (the gate throws, so it is `confirm: 'always'`).
+    const f = backends(ids, { distinctChildren: true, script: [{ call: 'write_file', args: ARGS }, { call: 'wobbly_gate' }, 'finish'] });
+    const parked = await f.delegate();
+    expect(parked.status).toBe('approval_required');
+    f.approvals.approve(parked.approval!.approvalId, 'test');
+    const done = await f.delegate();
+    expect(done.toolCalls[1]!.error).toMatch(/AUTHORITY DENIED/);
+    const gateRows = getWorkflowDb().query(
+      "SELECT agent_id, agent_name, tool_name, authority_decision, executed FROM audit_trail WHERE agent_name LIKE '%(sub-agent %' ORDER BY rowid").all();
+    expect(gateRows).toEqual([
+      { agent_id: `workflow:${ids.run.id}`, agent_name: `Workflow ${ids.run.id} / delegate / ${ROLE.name} (sub-agent child-1)`,
+        tool_name: 'write_file', authority_decision: 'approval_required', executed: 0 },
+      { agent_id: `workflow:${ids.run.id}`, agent_name: `Workflow ${ids.run.id} / delegate / ${ROLE.name} (sub-agent child-2)`,
+        tool_name: 'wobbly_gate', authority_decision: 'denied', executed: 0 },
+    ]);
+    // Nothing is left under a spawned child's id: the run's query is complete.
+    expect(getWorkflowDb().query("SELECT COUNT(*) AS n FROM audit_trail WHERE agent_id LIKE 'child%'").get()).toEqual({ n: 0 });
+  });
+
+  test('a call the sub-agent runs without approval, and one it meets suspended, are audited under the run (#730)', async () => {
+    const ids = createRun();
+    const f = backends(ids, { readPauses: true,
+      script: [{ call: 'read_file', args: { path: '/tmp/synthetic' } }, { call: 'write_file', args: ARGS }, 'finish'] });
+    const done = await f.delegate();
+    expect(done.toolCalls[1]!.error).toContain('[SYSTEM PAUSED]');
+    expect(f.effects()).toBe(0);
+    const rows = getWorkflowDb().query(
+      "SELECT agent_id, agent_name, tool_name, action_category, authority_decision, executed FROM audit_trail WHERE tool_name IN ('read_file', 'write_file') ORDER BY rowid").all();
+    expect(rows).toEqual([
+      { agent_id: `workflow:${ids.run.id}`, agent_name: `Workflow ${ids.run.id} / delegate / ${ROLE.name} (sub-agent child)`,
+        tool_name: 'read_file', action_category: 'read_data', authority_decision: 'allowed', executed: 1 },
+      { agent_id: `workflow:${ids.run.id}`, agent_name: `Workflow ${ids.run.id} / delegate / ${ROLE.name} (sub-agent child)`,
+        tool_name: 'write_file', action_category: 'write_data', authority_decision: 'denied', executed: 0 },
+    ]);
+  });
+
+  /**
+   * #731. The resumed call above is refused at this dispatch, so the boundary
+   * never sees it -- and the `agent-tool:N` record the first pass parked stayed
+   * `pending` with its approval granted, for good: no terminal state, and
+   * nothing for an operator reading the run's effects to tell it was refused.
+   * Reachable with a real tool, not only this synthetic gate:
+   * `browser_upload_file`'s gate is null for a path that does not exist yet
+   * (an ordinary governed write that parks) and `confirm: 'always'` once it
+   * does. Now the record is `blocked` with the refusal as its reason, which is
+   * what the boundary does for its own refusals, and stays blocked.
+   */
+  test('a resumed call refused at the dispatch marks its parked effect blocked with the reason, for good (#731)', async () => {
+    let raised = false;
+    const ids = createRun();
+    const f = backends(ids, { writeGate: () => (raised
+      ? { actionCategory: 'execute_command', intent: 'Write a shell startup file', confirm: 'always' }
+      : null) });
+    const parked = await f.delegate({ requiredTools: ['write_file'] });
+    expect(listWorkflowEffects(ids.run.id)[1]).toMatchObject({ route: 'agent-tool:1', status: 'pending' });
+    raised = true;
+    f.approvals.approve(parked.approval!.approvalId, 'test');
+    const done = await f.delegate({ requiredTools: ['write_file'] });
+    expect(f.effects()).toBe(0);
+    const refusal = done.toolCalls[0]!.error!;
+    expect(refusal).toMatch(/requires the user's explicit confirmation/);
+    const effect = listWorkflowEffects(ids.run.id)[1]!;
+    expect(effect).toMatchObject({ route: 'agent-tool:1', status: 'blocked', decision: 'denied',
+      approvalId: parked.approval!.approvalId, finishedAt: expect.any(Number) });
+    // The reason an operator reads is the refusal the agent got.
+    expect(refusal).toContain(effect.error!);
+    expect(effect.reason).toBe(effect.error!);
+    expect(effect.error).toMatch(/^Unsupported workflow capability: write_file requires the user's explicit confirmation/);
+    // #845. The approval was granted and the call will never run, so it gets
+    // the `blocked` receipt the boundary gives its own refusals, naming the
+    // effect. It used to stay `approved` with no outcome, for good.
+    const approval = f.approvals.getRequest(parked.approval!.approvalId)!;
+    expect(approval).toMatchObject({ status: 'executed', execution_outcome: 'blocked' });
+    expect(JSON.parse(approval.execution_result!)).toEqual({ effectId: effect.id, status: 'blocked', error: effect.error });
+
+    // Terminal: the gate relaxing does not revive it, the scheduler has
+    // nothing to resume, and asking again answers the same without running.
+    raised = false;
+    expect(resumeResolvedWorkflowEffects()).toBe(0);
+    expect(await f.delegate({ requiredTools: ['write_file'] })).toEqual(done);
+    expect(f.effects()).toBe(0);
+    expect(listWorkflowEffects(ids.run.id)[1]).toEqual(effect);
+  });
+
+  test('a refusal blocks only the record of the call it refused, not another call parked at the same position (#731)', async () => {
+    // A record at the same `agent-tool:N` bound to different arguments is a
+    // different call (a turn re-run from an earlier checkpoint can produce
+    // one). Blocking it would put this refusal's reason on a call nobody
+    // refused, so it is left alone.
+    let raised = false;
+    const ids = createRun();
+    const f = backends(ids, { writeGate: () => (raised
+      ? { actionCategory: 'execute_command', intent: 'Write a shell startup file', confirm: 'always' }
+      : null) });
+    const parked = await f.delegate();
+    const { saveDelegation } = await import('../db/repos/delegation');
+    const checkpoint = getDelegation(delegationId(ids.run.id))!;
+    saveDelegation({ ...checkpoint, pending: { ...checkpoint.pending!,
+      toolCall: { ...checkpoint.pending!.toolCall, arguments: { path: '/tmp/other', content: 'other' } } } });
+    raised = true;
+    f.approvals.approve(parked.approval!.approvalId, 'test');
+    const done = await f.delegate();
+    expect(done.toolCalls[0]!.error).toMatch(/requires the user's explicit confirmation/);
+    expect(listWorkflowEffects(ids.run.id)[1]).toMatchObject({ route: 'agent-tool:1', status: 'pending', arguments: ARGS });
+  });
+
+  test('a refusal never rewrites a record that already finished (#731)', async () => {
+    // The call ran under its approval, and the process died before the
+    // checkpoint said so, so the resume hands the same call back. If the
+    // route now refuses it, the record that says it SUCCEEDED -- the replay
+    // state a resumed conversation reads instead of acting again -- must not
+    // be turned into a refusal that never happened.
+    let raised = false;
+    const ids = createRun();
+    const f = backends(ids, { writeGate: () => (raised
+      ? { actionCategory: 'execute_command', intent: 'Write a shell startup file', confirm: 'always' }
+      : null) });
+    const parked = await f.delegate();
+    const { saveDelegation } = await import('../db/repos/delegation');
+    const pausedCheckpoint = getDelegation(delegationId(ids.run.id))!;
+    f.approvals.approve(parked.approval!.approvalId, 'test');
+    await f.delegate();
+    expect(f.effects()).toBe(1);
+    const succeeded = listWorkflowEffects(ids.run.id)[1]!;
+    expect(succeeded).toMatchObject({ route: 'agent-tool:1', status: 'succeeded' });
+    saveDelegation(pausedCheckpoint);
+    raised = true;
+    const again = await f.delegate();
+    expect(again.toolCalls[0]!.error).toMatch(/requires the user's explicit confirmation/);
+    expect(f.effects()).toBe(1);
+    expect(listWorkflowEffects(ids.run.id)[1]).toEqual(succeeded);
+  });
+
+  test('a first-pass refusal at the dispatch creates no effect record to block (#731)', async () => {
+    // The control: the blocking above is of the PARKED record, and a refusal
+    // that never parked has none. Nothing is invented for it.
+    const ids = createRun();
+    const f = backends(ids, { script: [{ call: 'run_command', args: { command: 'true' } }, 'finish'],
+      authority: { governed_categories: ['execute_command'] } });
+    const done = await f.delegate();
+    expect(done.toolCalls[0]!.error).toMatch(/Unsupported workflow capability/);
+    expect(listWorkflowEffects(ids.run.id).map(e => e.route)).toEqual(['agent']);
   });
 
   test('the refusal does not catch the reads this route legitimately carries (#638)', async () => {
@@ -709,8 +879,11 @@ describe('delegated approvals through the workflow effect boundary', () => {
     expect(done.toolCalls[0]!.error).toContain('system paused');
     expect(done.outcome).toMatchObject({ status: 'error', code: 'REQUIRED_TOOL_NOT_COMPLETED', effect: 'may_have_occurred' });
     expect(listWorkflowEffects(ids.run.id)[1]).toMatchObject({ route: 'agent-tool:1', status: 'failed', outcome: { code: 'TOOL_FAILED', effect: 'may_have_occurred' } });
-    // The approval row is not the receipt for a workflow effect; the effect record is (A4 leaves workflow-owned rows to it).
-    expect(f.approvals.getRequest(parked.approval!.approvalId)).toMatchObject({ status: 'approved' });
+    // The effect record holds the detail, but since #845 the approval is no
+    // longer left `approved` with no outcome: a dispatched call that failed
+    // gets the `failed` receipt the deferred executor gives a tool that threw.
+    // This pinned `approved` before, which is the zombie #845 is about.
+    expect(f.approvals.getRequest(parked.approval!.approvalId)).toMatchObject({ status: 'executed', execution_outcome: 'failed' });
     expect(f.effects()).toBe(1);
   });
 
@@ -798,7 +971,7 @@ describe('delegated approvals through the real engine', () => {
     await api.start({ port: 0 });
     const bundle = await buildEngineBundle();
     await buildAllJarvisPieces();
-    const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath });
+    const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest });
     const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({
       executor: new EngineFlowExecutor(runtime, { terminalTimeoutMs: 3000 }),
     }) } });

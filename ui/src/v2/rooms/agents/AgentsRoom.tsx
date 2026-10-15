@@ -22,7 +22,7 @@ import { Chip, Icon } from "../../ui";
 import { StatusChip, type Tone } from "../../ui/roomkit";
 import { RoomShell } from "../RoomShell";
 import { openRoom } from "../../router";
-import { useRoomActions } from "../useRoomActionBus";
+import { AWAITING_APPROVAL, useRoomActions } from "../useRoomActionBus";
 import { useRovingTabs } from "../useRovingTabs";
 import {
   useAgentsData,
@@ -31,6 +31,7 @@ import {
   type SpecialistInfo,
 } from "./useAgentsData";
 import "./AgentsRoom.css";
+import { isRoomTab, ROOM_TABS, type RoomTab } from "../../../../../src/daemon/room-tabs";
 
 /** Each role gets a quiet lucide glyph in place of the legacy emojis. */
 const ROLE_ICON: Record<string, LucideIcon> = {
@@ -55,8 +56,8 @@ function initials(name: string): string {
   return (name.trim().slice(0, 2) || "··").toUpperCase();
 }
 
-type TabId = "command" | "orbital" | "builder";
-const AGENTS_TAB_KEYS: ReadonlyArray<TabId> = ["command", "orbital", "builder"];
+type TabId = RoomTab<"agents">;
+const AGENTS_TAB_KEYS: ReadonlyArray<TabId> = ROOM_TABS.agents;
 
 export type RoomBodyMode = "inline" | "expanded";
 
@@ -91,14 +92,18 @@ export function AgentsRoomBody({ mode }: { mode: RoomBodyMode }) {
     return data.roster.filter((a) => a.name.toLowerCase().includes(q));
   }, [data.roster, search]);
 
-  const handleSpawn = useCallback(
+  const spawnAndToast = useCallback(
     async (input: { specialist: string; task: string; context: string }) => {
       const result = await data.spawn(input);
       setToast({ text: result.message, tone: result.ok ? "ok" : "warn" });
       if (result.ok) setSpawnOpen(false);
-      return result.ok;
+      return result;
     },
     [data],
+  );
+  const handleSpawn = useCallback(
+    async (input: { specialist: string; task: string; context: string }) => (await spawnAndToast(input)).ok,
+    [spawnAndToast],
   );
 
   // Phase 6.3.5 — voice-driven Room actions. Each action mirrors a UI
@@ -108,8 +113,8 @@ export function AgentsRoomBody({ mode }: { mode: RoomBodyMode }) {
   useRoomActions("agents", (action, args) => {
     switch (action) {
       case "switch_tab": {
-        const tab = String(args.tab);
-        if (tab === "command" || tab === "orbital" || tab === "builder") {
+        const tab = args.tab;
+        if (isRoomTab("agents", tab)) {
           setActiveTab(tab);
           return true;
         }
@@ -127,14 +132,17 @@ export function AgentsRoomBody({ mode }: { mode: RoomBodyMode }) {
       case "spawn_agent": {
         const specialist = typeof args.specialist === "string" ? args.specialist : "";
         if (!specialist) return false;
-        // Fire and forget — the spawn helper toasts on success/failure.
-        // We do NOT open the dialog: voice spawn is fully autonomous.
-        handleSpawn({
+        // Answered when POST /api/agents has (#991): carried out only when
+        // the agent actually started. Pause or Kill (409), a refusal (403) or
+        // too many waiting (429) is not a spawn, so voice must not confirm
+        // one; the toast says which it was. A card raised for it (202) is
+        // not one either, but nor is it a refusal: it waits on the person
+        // (#1016). We do NOT open the dialog: voice spawn is fully autonomous.
+        return spawnAndToast({
           specialist,
           task: typeof args.task === "string" ? args.task : "",
           context: typeof args.context === "string" ? args.context : "",
-        });
-        return true;
+        }).then((result) => result.started === true || (result.awaitingApproval === true ? AWAITING_APPROVAL : false));
       }
       default:
         return false;
@@ -742,6 +750,8 @@ function SpawnDialog({
               className="v2-agents__textarea"
               value={task}
               onChange={(e) => setTask(e.target.value)}
+              // The server's AGENT_TASK_MAX_CHARS (#989): what the approval card shows whole.
+              maxLength={600}
               rows={2}
               placeholder="Optional. Leave blank to spawn the agent in idle mode."
             />
@@ -753,6 +763,8 @@ function SpawnDialog({
               className="v2-agents__textarea"
               value={context}
               onChange={(e) => setContext(e.target.value)}
+              // The server's AGENT_CONTEXT_MAX_CHARS (#989).
+              maxLength={300}
               rows={2}
               placeholder="Optional background context for the task."
             />

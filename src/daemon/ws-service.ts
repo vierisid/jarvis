@@ -17,12 +17,11 @@ import type { Commitment } from '../vault/commitments.ts';
 import type { ContentItem } from '../vault/content-pipeline.ts';
 import type { STTProvider, TTSProvider } from '../comms/voice.ts';
 import { PROJECT_SITE_CHAT_SCOPE } from '../actions/tools/tool-scope.ts';
-import { approvalIntentFromContext, approvalNeedsClick, type ApprovalRequest, type ApprovalManager } from '../authority/approval.ts';
+import { approvalNeedsClick, type ApprovalRequest, type ApprovalManager } from '../authority/approval.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyState } from '../authority/emergency.ts';
-import { TAINT_PROFILE_LABEL } from '../authority/taint-gating.ts';
-import { boundedApprovalLabel } from '../authority/approval-delivery.ts';
-import type { AuditTrail } from '../authority/audit.ts';
+import { approvalIntentFields, approvalIntentParts, boundedApprovalLabel, formatApprovalIntent } from '../authority/approval-delivery.ts';
+import type { AuditTrail, AuthorityDecisionType, ResolutionChannel } from '../authority/audit.ts';
 import { impactFromCategory, gateVoiceApprovalResolution } from '../roles/authority.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import { classifyVoiceIntent, type RecentTurn } from '../agents/voice-intent-classifier.ts';
@@ -37,7 +36,7 @@ import {
   type InterviewSession,
 } from './onboarding-interviewer.ts';
 import { getMessages } from '../vault/conversations.ts';
-import { createCommitment, updateCommitmentStatus, updateCommitmentAssignee } from '../vault/commitments.ts';
+import { createCommitment, findCommitments, updateCommitmentStatus, updateCommitmentAssignee } from '../vault/commitments.ts';
 import { recordAgentActivity } from '../vault/agent-activity.ts';
 import { WebSocketServer, type WSMessage } from '../comms/websocket.ts';
 import { StreamRelay } from '../comms/streaming.ts';
@@ -46,7 +45,8 @@ import { realtimeEnablement } from './usejarvis-ai.ts';
 import { BrowserAudioTransport } from '../comms/audio-transport.ts';
 import { tagRealtimePcm } from '../comms/realtime-frame.ts';
 import { RealtimeVoiceSession } from './realtime-voice.ts';
-import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from './realtime-nav-tools.ts';
+import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES, REALTIME_ROOM_KEYS, REALTIME_WINDOW_ACTIONS } from './realtime-nav-tools.ts';
+import { TOOL_RESULT_GRACE_MS } from '../comms/realtime.ts';
 import { RealtimeBudgetTracker } from './realtime-budget.ts';
 import { hostedRealtimeIncluded } from './realtime-gate.ts';
 import { classifyErrorString } from '../llm/provider.ts';
@@ -55,6 +55,19 @@ import { maybeCreateUserProfileFollowupPrompt, recordUserProfileTurn } from '../
 import { runWithOrigin } from '../llm/origin.ts';
 import { buildProjectSiteContext, formatProjectList } from '../sites/prompt-context.ts';
 import type { FileEntry } from '../sites/types.ts';
+import { ROOM_ACTION_QUEUE_TTL_MS, RoomActionResults, type RoomActionOutcome } from './room-action-results.ts';
+import { PEBBLE_ROOMS, tabSwitchReply } from './pebble-intents.ts';
+import { isPresentationRoomAction, isRoomAction, roomActionCategories, type RoomActionCategory } from './room-actions.ts';
+import {
+  classifierMustConfirmRoomAction, realtimeRoomActionDecision, resolveHeldRoomAction, roomActionAuditRow,
+  roomActionExecuted, type RoomActionAuditReason, type RoomActionOrigin,
+  type RealtimeRoomActionContext, type RoomActionTargetLists,
+} from './voice-room-action-gate.ts';
+import { findContent } from '../vault/content-pipeline.ts';
+import { roomActionTargetKind } from './room-action-targets.ts';
+
+/** How long a realtime nav tool waits for the room to answer: inside TOOL_RESULT_GRACE_MS. */
+const REALTIME_ROOM_ACTION_WAIT_MS = Math.min(ROOM_ACTION_QUEUE_TTL_MS, TOOL_RESULT_GRACE_MS - 500);
 
 type VoiceSession = {
   requestId: string;
@@ -62,7 +75,144 @@ type VoiceSession = {
   startedAt: number;
   /** Phase 6.7.C — current Room key (or "home") at utterance start. */
   currentRoom?: string;
+  /** The approval the dashboard showed when the person started speaking (#809, `shownApprovalIdFrom`). */
+  shownApprovalId?: string | null;
 };
+
+/**
+ * The approval a voice utterance answers (#809): the id of the newest pending
+ * approval the dashboard was showing when the person started speaking, as the
+ * client sends it on `voice_start` / `voice_text`. `null` means it showed none;
+ * `undefined` means the client did not say (an older dashboard), which is not
+ * the same thing and is refused for a decision, since nothing tells us which
+ * request the person read.
+ */
+export function shownApprovalIdFrom(payload: unknown): string | null | undefined {
+  const value = (payload as { shownApprovalId?: unknown } | null | undefined)?.shownApprovalId;
+  if (value === null) return null;
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+/** How much of an approval's sentence a spoken-approval reply quotes; nothing is decided on this text. */
+const VOICE_APPROVAL_LABEL_MAX_CHARS = 160;
+
+/**
+ * What will happen, as a voice reply names it: the card's sentence, never the
+ * engine's reason (#809). The reply is an assistant message the dashboard
+ * renders as markdown, and the sentence carries values a model or a workflow
+ * chose, so it is quoted as an inline code span (#809 review), where markdown
+ * interprets nothing: `![](https://x/p.png)` must read as those characters,
+ * not load an image beside text Jarvis is saying, `**safe, say yes**` must not
+ * turn bold, and a bare URL must not become a link. Backslash-escaping was
+ * tried first and is not enough: GFM still autolinks an escaped URL. The fence
+ * is one backtick longer than any run inside, and the one space padding each
+ * side is what CommonMark strips, so the span shows the sentence exactly.
+ */
+function voiceApprovalLabel(request: ApprovalRequest): string {
+  const label = boundedApprovalLabel(approvalIntentParts(request).action, VOICE_APPROVAL_LABEL_MAX_CHARS) || request.tool_name;
+  const longestRun = Math.max(0, ...(label.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = '`'.repeat(longestRun + 1);
+  return `${fence} ${label} ${fence}`;
+}
+
+/**
+ * Why a spoken yes or no decided nothing (#809), or null when it may go ahead:
+ * the newest pending approval must be the one the dashboard showed when the
+ * person started speaking. Otherwise a request that arrived while they were
+ * answering would be the one decided -- "yes" bound by position, not by what
+ * they read.
+ *
+ * Every message says that nothing was decided, names what is now newest, and,
+ * where it is still waiting, the one they were answering, so a refusal reads
+ * as "a different request arrived" and not as a failure. None of them says
+ * "say yes again": the dashboard now shows the new request on top, so a second
+ * yes would answer THAT one.
+ */
+export function voiceApprovalMismatch(
+  decision: 'approve' | 'cancel',
+  newest: ApprovalRequest,
+  shownApprovalId: string | null | undefined,
+  shown: ApprovalRequest | null,
+): string | null {
+  if (shownApprovalId === newest.id) return null;
+  const nothing = decision === 'approve' ? "I haven't approved anything" : "I haven't cancelled anything";
+  const latest = voiceApprovalLabel(newest);
+  if (shownApprovalId === undefined) {
+    return `I couldn't tell which request was on your screen when you started speaking, so ${nothing}. Waiting for you: ${latest}. Decide it on its card.`;
+  }
+  if (shownApprovalId === null) {
+    // Nothing on screen: none had arrived yet, or the dashboard was hidden.
+    return `No approval was on your screen when you started speaking, so ${nothing}. Waiting for you: ${latest}. Decide it on its card.`;
+  }
+  if (shown && shown.status === 'pending') {
+    return `A new request arrived while you were answering, so ${nothing}. The one you were looking at is still waiting: ${voiceApprovalLabel(shown)}. The new one: ${latest}. Decide each on its card.`;
+  }
+  return `The request you were looking at has already been decided or has expired, so ${nothing}. Another one is waiting: ${latest}. Decide it on its card.`;
+}
+
+/**
+ * Why voice may not decide this approval at all, though it is the one on
+ * screen (#856): it is destructive, the tool that asked for it requires a
+ * click, or the classifier was not sure the answer was a yes or a no.
+ */
+export type VoiceApprovalGateReason = 'destructive' | 'click_only' | 'low_confidence';
+
+/**
+ * What a gated spoken yes or no gets back (#856), as an assistant message in
+ * the thread like #809's refusals. It used to be a `voice_approval_gated`
+ * notification nothing rendered, so the person said "yes", the daemon
+ * deliberately did nothing, and the dashboard showed nothing either --
+ * indistinguishable from not being heard.
+ *
+ * Each reason says what to do differently, because they differ: a
+ * destructive or click-only request will never take a voice answer, so the
+ * only way is its card; a low-confidence answer was simply unclear, so saying
+ * it again plainly can work.
+ *
+ * That suggestion carries a condition, "while it is still the only request
+ * waiting" (#856 review). A second answer is judged afresh, by what is on
+ * screen when it starts and by the one-pending rule, so it cannot decide a
+ * request the person cannot see; but if this request is decided elsewhere or
+ * expires and another arrives before they speak again, the one on screen --
+ * and so the one a second "yes" answers -- is the new one, not the one this
+ * message names. Every message says nothing was decided and names the
+ * request, quoted like the refusals (`voiceApprovalLabel`).
+ */
+export function voiceApprovalGatedMessage(
+  decision: 'approve' | 'cancel',
+  reason: VoiceApprovalGateReason,
+  request: ApprovalRequest,
+): string {
+  const nothing = decision === 'approve' ? "I haven't approved anything" : "I haven't cancelled anything";
+  const label = voiceApprovalLabel(request);
+  switch (reason) {
+    case 'destructive':
+      return `That request is marked destructive, and destructive requests are decided only with a click, never by voice, so ${nothing}. Waiting for you: ${label}. Approve or deny it on its card.`;
+    case 'click_only':
+      return `That request has to be confirmed with a click, never by voice, so ${nothing}. Waiting for you: ${label}. Approve or deny it on its card.`;
+    case 'low_confidence': {
+      const word = decision === 'approve' ? 'yes' : 'no';
+      return `I wasn't sure that was a clear "${word}", so ${nothing}. Waiting for you: ${label}. Decide it on its card, or, while it is still the only request waiting, say "${word}" again plainly.`;
+    }
+  }
+}
+
+/**
+ * Why a spoken yes or no decided nothing when several approvals are pending
+ * (#855). The rail lists every one of them, so "yes" says which by position
+ * only -- the one on top -- not by which card the person was reading. Voice
+ * therefore decides only while exactly one approval is waiting.
+ *
+ * The message says how many are waiting and that each has to be decided on
+ * its own card, so the refusal reads as "I can't tell which one you mean",
+ * not as a failure. It does not name them: they are all on the rail, and a
+ * list read back as a sentence is no easier to pick from than the cards.
+ */
+export function voiceApprovalAmbiguous(decision: 'approve' | 'cancel', pendingCount: number): string {
+  const word = decision === 'approve' ? 'yes' : 'no';
+  const nothing = decision === 'approve' ? "I haven't approved anything" : "I haven't cancelled anything";
+  return `${pendingCount} requests are waiting for approval, so I can't tell which one your "${word}" is for, and ${nothing}. Approve or deny each one on its card. Voice works again once only one is waiting.`;
+}
 
 /**
  * A voice utterance that's been STT'd but is held pending user confirmation
@@ -78,6 +228,12 @@ type PendingVoiceConfirmation = {
   channel: string;
   kind: 'clarifier' | 'repeat_back';
   createdAt: number;
+  /**
+   * A room action the classifier read but may not run on its own reading
+   * (#973). Confirming runs this action rather than handing the transcript
+   * to chat.
+   */
+  roomAction?: { room: string; action: string; args?: Record<string, unknown> };
 };
 
 /**
@@ -100,8 +256,9 @@ const VOICE_CONFIRMATION_SWEEP_INTERVAL_MS = 60_000;
  * be unit-tested without spinning up a real WebSocket server.
  *
  * Returns the number of pendingVoiceConfirmations entries removed (the
- * other two are at most 1 each — one entry per ws). Mostly useful so the
- * test can assert "we swept N abandoned cards" without re-querying.
+ * other two are at most 1 each -- one entry per ws), and their ids, so the
+ * caller can take those cards down on every dashboard that shows them
+ * (#1011).
  */
 export function cleanupPerSocketMaps<W>(
   ws: W,
@@ -110,7 +267,7 @@ export function cleanupPerSocketMaps<W>(
   pendingVoiceConfirmations: Map<string, { ws: W }>,
   realtimeSessions?: Map<W, unknown>,
   pendingVoiceFrames?: Map<W, unknown>,
-): { voiceRemoved: boolean; interviewRemoved: boolean; pendingRemoved: number } {
+): { voiceRemoved: boolean; interviewRemoved: boolean; pendingRemoved: number; pendingRemovedIds: string[] } {
   const voiceRemoved = voiceSessions.delete(ws);
   const interviewRemoved = interviewSessions.delete(ws);
   // Backstop only: closeRealtimeVoice runs first on disconnect and owns the
@@ -122,20 +279,20 @@ export function cleanupPerSocketMaps<W>(
     realtimeSessions.delete(ws);
   }
   pendingVoiceFrames?.delete(ws);
-  let pendingRemoved = 0;
+  const pendingRemovedIds: string[] = [];
   for (const [id, pending] of pendingVoiceConfirmations) {
     if (pending.ws === ws) {
       pendingVoiceConfirmations.delete(id);
-      pendingRemoved += 1;
+      pendingRemovedIds.push(id);
     }
   }
-  return { voiceRemoved, interviewRemoved, pendingRemoved };
+  return { voiceRemoved, interviewRemoved, pendingRemoved: pendingRemovedIds.length, pendingRemovedIds };
 }
 
 /**
  * Pure TTL-sweep helper: removes pendingVoiceConfirmations entries older
  * than `ttlMs` and returns the ids of removed entries so the caller can
- * notify the originating clients (`voice_confirmation_expired`).
+ * take their cards down (`voice_confirmation_expired`, to every client).
  *
  * Extracted so the TTL contract can be unit-tested deterministically by
  * passing an explicit `now` rather than relying on real time.
@@ -171,6 +328,34 @@ const VOICE_STOP_PHRASES = new Set([
   'jarvis quiet',
   'hey jarvis quiet',
 ]);
+
+/**
+ * How long a held room action (#973) can be confirmed by a spoken yes. A
+ * click on its card still works for the full VOICE_CONFIRMATION_TTL_MS; a
+ * "yes" said minutes later was most likely about something else.
+ */
+const HELD_ROOM_ACTION_VOICE_MS = 60_000;
+
+const VOICE_AFFIRMATIVE_PHRASES = new Set([
+  'yes', 'yeah', 'yep', 'yes please', 'yes do it', 'yes go ahead', 'do it', 'go ahead',
+  'confirm', 'confirmed', 'approve', 'approved',
+]);
+
+/**
+ * Whether the person said a plain yes, read from the transcript itself rather
+ * than from the classifier (#973): a held room action is held because the
+ * classifier's reading is not trusted, so the same classifier may not be the
+ * one that says the person agreed.
+ */
+export function isVoiceAffirmative(transcript: string): boolean {
+  const normalized = transcript
+    .toLowerCase()
+    .replace(/[.,!?;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^(hey )?jarvis /, '');
+  return VOICE_AFFIRMATIVE_PHRASES.has(normalized);
+}
 
 export function isVoiceStopCommand(transcript: string): boolean {
   const normalized = transcript
@@ -243,6 +428,8 @@ export class WebSocketService implements Service {
    * cap survives restarts. See realtime-budget.ts.
    */
   private realtimeBudget: RealtimeBudgetTracker | null = null;
+  /** Room actions waiting on a panel to say whether it ran them (#933). */
+  private roomActionResults = new RoomActionResults();
   /**
    * Phase B — per-WS onboarding interview sessions. Created on
    * `interview_start`, torn down on disconnect or after the agent
@@ -407,25 +594,7 @@ export class WebSocketService implements Service {
         onConnect: (_ws) => {
           console.log('[WSService] Client connected');
         },
-        onDisconnect: (ws) => {
-          this.cancelActiveChat(ws, 'disconnect', false);
-          // Tear down any realtime voice session (closes the OpenAI WS + timer).
-          this.closeRealtimeVoice(ws);
-          // Clean up every per-socket map so a long-running daemon doesn't
-          // accumulate dead-socket entries across reconnects. See
-          // cleanupPerSocketMaps for the contract; tested in
-          // ws-service-cleanup.test.ts.
-          cleanupPerSocketMaps(
-            ws,
-            this.voiceSessions as unknown as Map<typeof ws, unknown>,
-            this.interviewSessions as unknown as Map<typeof ws, unknown>,
-            this.pendingVoiceConfirmations as unknown as Map<string, { ws: typeof ws }>,
-            this.realtimeSessions as unknown as Map<typeof ws, unknown>,
-            this.pendingVoiceFrames as unknown as Map<typeof ws, unknown>,
-          );
-          this.endInterviewSession(ws);
-          console.log('[WSService] Client disconnected');
-        },
+        onDisconnect: (ws) => this.handleClientDisconnect(ws),
       });
 
       // Start the server
@@ -435,29 +604,10 @@ export class WebSocketService implements Service {
       // an active client that receives a clarifier and then ignores it
       // (user walks away, switches context) leaves the entry forever.
       // 60s tick, 10-min TTL — see sweepExpiredVoiceConfirmations.
-      this.voiceConfirmationSweepTimer = setInterval(() => {
-        const expired = sweepExpiredVoiceConfirmations(
-          this.pendingVoiceConfirmations as unknown as Map<string, { ws: ServerWebSocket<unknown>; createdAt: number }>,
-          Date.now(),
-          VOICE_CONFIRMATION_TTL_MS,
-        );
-        for (const { id, ws } of expired) {
-          // Tell the originating client so the card UI can dismiss itself
-          // rather than stay rendered forever.
-          try {
-            ws.send(JSON.stringify({
-              type: 'voice_confirmation_expired',
-              payload: { id },
-              timestamp: Date.now(),
-            }));
-          } catch (err) {
-            // Socket may have died between map-read and send; safe to
-            // ignore. Use debug instead of warn so a burst of expirations
-            // against half-closed sockets doesn't spam the daemon log.
-            console.debug('[WSService] voice_confirmation_expired send failed:', err);
-          }
-        }
-      }, VOICE_CONFIRMATION_SWEEP_INTERVAL_MS);
+      this.voiceConfirmationSweepTimer = setInterval(
+        () => this.sweepVoiceConfirmations(Date.now()),
+        VOICE_CONFIRMATION_SWEEP_INTERVAL_MS,
+      );
 
       this._status = 'running';
       console.log(`[WSService] Started on port ${this.port}`);
@@ -467,12 +617,98 @@ export class WebSocketService implements Service {
     }
   }
 
+  /** The clarifiers and repeat-backs still waiting for an answer (#1011). */
+  pendingVoiceConfirmationIds(): string[] {
+    return [...this.pendingVoiceConfirmations.keys()];
+  }
+
+  /** A dashboard or panel socket closed. */
+  private handleClientDisconnect(ws: ServerWebSocket<unknown>): void {
+    this.cancelActiveChat(ws, 'disconnect', false);
+    // A room action this dashboard was asked about can no longer be
+    // answered: say so now rather than after the wait (#965).
+    this.roomActionResults.abandonAnswerer(ws);
+    // Tear down any realtime voice session (closes the OpenAI WS + timer).
+    this.closeRealtimeVoice(ws);
+    // Clean up every per-socket map so a long-running daemon doesn't
+    // accumulate dead-socket entries across reconnects. See
+    // cleanupPerSocketMaps for the contract; tested in
+    // ws-service-cleanup.test.ts.
+    const holds = this.heldRoomActions((p) => p.ws === ws);
+    const { pendingRemovedIds } = cleanupPerSocketMaps(
+      ws,
+      this.voiceSessions as unknown as Map<typeof ws, unknown>,
+      this.interviewSessions as unknown as Map<typeof ws, unknown>,
+      this.pendingVoiceConfirmations as unknown as Map<string, { ws: typeof ws }>,
+      this.realtimeSessions as unknown as Map<typeof ws, unknown>,
+      this.pendingVoiceFrames as unknown as Map<typeof ws, unknown>,
+    );
+    // Its clarifier and repeat-back cards went to every dashboard, and a
+    // click on one now finds nothing: take them down everywhere (#1011).
+    for (const id of pendingRemovedIds) this.broadcastVoiceConfirmationGone(id, 'disconnected');
+    // A held action that will now never run is recorded as such (#1009).
+    for (const [id, ra] of holds) this.auditRoomAction(ra, 'classifier', 'denied', false, { approvalId: id, channel: 'system', reason: 'disconnected' });
+    this.endInterviewSession(ws);
+    console.log('[WSService] Client disconnected');
+  }
+
+  /**
+   * Drop the voice confirmations older than VOICE_CONFIRMATION_TTL_MS, and
+   * take their cards down on every dashboard that was shown them (#1011).
+   * The sweep timer calls this; it used to tell only the socket that spoke,
+   * in a message no dashboard handled.
+   */
+  private sweepVoiceConfirmations(now: number): void {
+    const holds = this.heldRoomActions(() => true);
+    const expired = sweepExpiredVoiceConfirmations(
+      this.pendingVoiceConfirmations as unknown as Map<string, { ws: ServerWebSocket<unknown>; createdAt: number }>,
+      now,
+      VOICE_CONFIRMATION_TTL_MS,
+    );
+    for (const { id } of expired) {
+      this.broadcastVoiceConfirmationGone(id, 'expired');
+      const ra = holds.get(id);
+      if (ra) this.auditRoomAction(ra, 'classifier', 'denied', false, { approvalId: id, channel: 'system', reason: 'expired' });
+    }
+  }
+
+  /** id -> held room action, for the pending confirmations `which` picks. */
+  private heldRoomActions(which: (p: PendingVoiceConfirmation) => boolean): Map<string, NonNullable<PendingVoiceConfirmation['roomAction']>> {
+    const out = new Map<string, NonNullable<PendingVoiceConfirmation['roomAction']>>();
+    for (const [id, p] of this.pendingVoiceConfirmations) if (p.roomAction && which(p)) out.set(id, p.roomAction);
+    return out;
+  }
+
+  /**
+   * A clarifier or repeat-back card that can no longer be answered, sent to
+   * the audience its request went to: every client (broadcastClarifierRequest,
+   * broadcastRepeatBackRequest). A card that looks live but is dead teaches
+   * people to click without reading, which is what the card is there to stop.
+   *
+   * One source, `voice_confirmation_expired`, for both endings; `reason` says
+   * which, for logs and any client that wants it, and dashboards treat them
+   * alike. It replaces a top-level `voice_confirmation_expired` message that
+   * went to the originating socket only and that no client handled.
+   */
+  private broadcastVoiceConfirmationGone(id: string, reason: 'expired' | 'disconnected'): void {
+    this.wsServer.broadcast({
+      type: 'notification',
+      payload: { source: 'voice_confirmation_expired', id, reason },
+      timestamp: Date.now(),
+    });
+  }
+
   async stop(): Promise<void> {
     this._status = 'stopping';
     if (this.voiceConfirmationSweepTimer) {
       clearInterval(this.voiceConfirmationSweepTimer);
       this.voiceConfirmationSweepTimer = null;
     }
+    // Holds live in memory only: a stop ends them, and says so (#1009).
+    for (const [id, ra] of this.heldRoomActions(() => true)) {
+      this.auditRoomAction(ra, 'classifier', 'denied', false, { approvalId: id, channel: 'system', reason: 'shutdown' });
+    }
+    this.pendingVoiceConfirmations.clear();
     this.wsServer.stop();
     this._status = 'stopped';
     console.log('[WSService] Stopped');
@@ -628,7 +864,6 @@ export class WebSocketService implements Service {
   broadcastApprovalRequest(request: ApprovalRequest): void {
     const shortId = request.id.slice(0, 8);
     const impact = impactFromCategory(request.action_category);
-    const intent = formatApprovalIntent(request);
     const message: WSMessage = {
       type: 'notification',
       payload: {
@@ -636,7 +871,7 @@ export class WebSocketService implements Service {
         request,
         shortId,
         impact,
-        intent,
+        ...approvalIntentFields(request),
       },
       priority: request.urgency === 'urgent' ? 'urgent' : 'normal',
       timestamp: Date.now(),
@@ -871,7 +1106,7 @@ export class WebSocketService implements Service {
         source: 'approval_update',
         request,
         impact: impactFromCategory(request.action_category),
-        intent: formatApprovalIntent(request),
+        ...approvalIntentFields(request),
       },
       timestamp: Date.now(),
     };
@@ -970,11 +1205,12 @@ export class WebSocketService implements Service {
         // that case the utterance is complete and processing starts now.
         const buffered = this.pendingVoiceFrames.get(ws);
         this.pendingVoiceFrames.delete(ws);
-        const session = {
+        const session: VoiceSession = {
           requestId,
           chunks: buffered?.chunks ?? [],
           startedAt: Date.now(),
           currentRoom,
+          shownApprovalId: shownApprovalIdFrom(msg.payload),
         };
         if (buffered?.ended) {
           this.handleVoiceSession(session, ws).catch(err =>
@@ -1015,7 +1251,7 @@ export class WebSocketService implements Service {
         // we don't double-process the same utterance.
         this.voiceSessions.delete(ws);
         if (!text) return undefined;
-        this.processVoiceTranscript(text, requestId, ws, currentRoom).catch(err =>
+        this.processVoiceTranscript(text, requestId, ws, currentRoom, shownApprovalIdFrom(payload)).catch(err =>
           console.error('[WSService] voice_text pipeline error:', err)
         );
         return undefined;
@@ -1050,6 +1286,17 @@ export class WebSocketService implements Service {
       case 'interview_listen_stop': {
         // No interview capture exists to stop. In particular, do not disarm
         // a normal Pebble conversation because a stale client sent this.
+        return undefined;
+      }
+
+      case 'room_action_result': {
+        // A panel's or dashboard's answer to requestRoomAction. Malformed or
+        // unknown ids, and answers from a client that was not asked, are
+        // dropped inside answer(); nothing is sent back either way.
+        const p = msg.payload as { resultId?: unknown; accepted?: unknown; outcome?: unknown; started?: unknown } | undefined;
+        // Word that the room is on it, ahead of its answer (#1015).
+        if (p?.started === true) this.roomActionResults.started(p.resultId, ws);
+        else this.roomActionResults.answer(p?.resultId, p?.accepted, ws, p?.outcome);
         return undefined;
       }
 
@@ -1677,10 +1924,16 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       executeToolCall: (name, args) => {
         // Dashboard nav/in-room actions are handled here (they broadcast to the
         // dashboard); everything else goes through the auto-approve tool bridge.
-        const nav = this.executeRealtimeNavTool(name, args);
-        if (nav !== null) return Promise.resolve(nav);
+        if (REALTIME_NAV_TOOL_NAMES.has(name)) {
+          return this.executeRealtimeNavTool(name, args, ws, { blockedCategories: resolved.blockedCategories })
+            .then((nav) => nav ?? 'Unknown navigation tool.');
+        }
         return orchestrator.executeRealtimeToolCall(name, args, { blockedCategories: resolved.blockedCategories });
       },
+      // Voice has no turn objects: the user starting to speak is the taint
+      // gating boundary (ordered before that utterance's tool calls; the
+      // transcript event is not).
+      onUserTurnStart: () => orchestrator.resetRealtimeTaint(),
       onTranscript: (t) =>
         this.wsServer.sendToClient(ws, {
           type: 'realtime_transcript',
@@ -1713,10 +1966,6 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // that never got its voice_end). handleVoiceAudio checks accumulators first,
     // so a stale one would swallow every realtime mic frame.
     this.voiceSessions.delete(ws);
-    // Voice has no turn objects: the user starting to speak is the taint
-    // gating boundary (ordered before that utterance's tool calls; the
-    // transcript event is not).
-    session.onUserTurnStart(() => orchestrator.resetRealtimeTaint());
     this.realtimeSessions.set(ws, {
       session, transport, timeout, startedAt: Date.now(),
       hosted: resolved.provider === 'usejarvis_ai',
@@ -1736,43 +1985,155 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   }
 
   /**
+   * The lists a held room action's item is found in (#1008), read from the
+   * same sources the rooms load them from: /api/sites/projects, /api/content
+   * and /api/vault/commitments.
+   */
+  protected roomActionTargetLists(): RoomActionTargetLists {
+    return {
+      project: async () => {
+        if (!this.siteBuilderService) throw new Error('site builder not available');
+        return this.siteBuilderService.listProjectsWithStatus();
+      },
+      content: async () => findContent({}),
+      task: async () => findCommitments({}),
+    };
+  }
+
+  /**
+   * Write the audit row for a decision about a voice room action (#1009):
+   * every one that changes more than the screen, refused, held, run or
+   * dropped. A failure to write it changes nothing about the decision, as on
+   * the lifecycle sinks (#986). With no primary agent (tests, a daemon still
+   * starting) the row is written as agent "voice", where the realtime tool
+   * path writes none: a decision with no row is the gap this closes.
+   */
+  private auditRoomAction(
+    ra: { room: string; action: string },
+    origin: RoomActionOrigin,
+    decision: AuthorityDecisionType,
+    executed: boolean,
+    opts: { approvalId?: string | null; channel?: ResolutionChannel; reason: RoomActionAuditReason },
+  ): void {
+    try {
+      const primary = this.agentService.getOrchestrator().getPrimary();
+      const row = roomActionAuditRow(ra, origin, decision, executed,
+        { agentId: primary?.id ?? 'voice', agentName: primary?.agent.role.name ?? 'voice' }, opts);
+      if (row) this.auditTrail?.log(row);
+    } catch (err) {
+      console.warn(`[WSService] could not audit room action ${ra.room}/${ra.action}:`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  /** `ra` with its defaults and its item settled before its card (#1008). */
+  private settleHeldRoomAction(ra: { room: string; action: string; args?: Record<string, unknown> }) {
+    return resolveHeldRoomAction(ra, this.roomActionTargetLists(), `${roomTitle(ra.room)}: ${ra.action.replace(/_/g, ' ')}`);
+  }
+
+  /**
+   * What a realtime room action is judged against (#973), read from the
+   * orchestrator: its emergency state, and the taint gating and the session
+   * taint its own realtime tool calls are judged against.
+   */
+  private realtimeRoomActionContext(blockedCategories: readonly string[]): RealtimeRoomActionContext {
+    const orchestrator = this.agentService.getOrchestrator();
+    const emergency = orchestrator.getEmergencyController();
+    return {
+      halted: emergency && !emergency.canExecute() ? emergency.getState() : null,
+      blockedCategories,
+      taintGating: orchestrator.getTaintGating(),
+      taint: orchestrator.getTurnTaint(),
+    };
+  }
+
+  /**
    * Execute a dashboard navigation / in-room-action tool called by the realtime
    * voice model. Returns a short result string for the model to acknowledge, or
    * null if `name` isn't a navigation tool (so the caller falls through to the
    * normal tool bridge). Reuses the same broadcast* methods the standard voice
    * path uses, so the dashboard reacts identically.
    */
-  private executeRealtimeNavTool(name: string, args: Record<string, unknown>): string | null {
+  private async executeRealtimeNavTool(
+    name: string,
+    args: Record<string, unknown>,
+    ws: ServerWebSocket<unknown>,
+    opts: { blockedCategories?: readonly string[] } = {},
+  ): Promise<string | null> {
     if (!REALTIME_NAV_TOOL_NAMES.has(name)) return null;
     const reqId = crypto.randomUUID();
+    const isRoom = (room: string) => (REALTIME_ROOM_KEYS as readonly string[]).includes(room);
+    // Navigation is not answered, so the model is told it was asked for, not
+    // that it happened (#969).
+    const asked = (what: string) => `Asked the dashboard to ${what}; it does not report back whether it did.`;
     switch (name) {
       case 'open_dashboard_room': {
         const room = String(args.room ?? '');
         if (!room) return 'No room specified.';
+        if (!isRoom(room)) return `There is no "${room}" room.`;
         this.broadcastRoomNavigation(room as RoomKey, reqId);
-        return `Opened the ${room} room.`;
+        return asked(`open ${roomTitle(room)}`);
       }
       case 'go_back_to_thread': {
         this.broadcastNavigateHome(reqId);
-        return 'Back to the thread.';
+        return asked('go back to the thread');
       }
       case 'control_dashboard_window': {
         const action = String(args.action ?? '');
-        const target = (args.target ? String(args.target) : 'most_recent') as RoomKey | 'most_recent';
+        const target = args.target ? String(args.target) : 'most_recent';
         if (!action) return 'No window action specified.';
-        this.broadcastWindowControl({ action: action as WindowControl['action'], target }, reqId);
-        return `${action} done.`;
+        if (!(REALTIME_WINDOW_ACTIONS as readonly string[]).includes(action)) return `There is no "${action}" window action.`;
+        if (target !== 'most_recent' && !isRoom(target)) return `There is no "${target}" room.`;
+        this.broadcastWindowControl({ action: action as WindowControl['action'], target: target as RoomKey | 'most_recent' }, reqId);
+        return asked(`${action} ${target === 'most_recent' ? 'the most recent window' : roomTitle(target)}`);
       }
       case 'dashboard_room_action': {
         const room = String(args.room ?? '');
         const action = String(args.action ?? '');
         if (!room || !action) return 'Room and action are required.';
         const innerArgs = (args.args && typeof args.args === 'object') ? args.args as Record<string, unknown> : {};
-        // Auto-open the room first (no-op if already open), then dispatch —
-        // mirrors the classifier path so the qualifier isn't dropped.
-        this.broadcastRoomNavigation(room as RoomKey, reqId);
-        this.broadcastRoomAction({ room, action, args: innerArgs }, reqId);
-        return `Done: ${action} in ${room}.`;
+        if (!(REALTIME_ROOM_KEYS as readonly string[]).includes(room)) return `There is no "${room}" room.`;
+        // Only what the room's handler carries out is sent (#969): nothing on
+        // this path consults the authority engine, so an authority grant, or
+        // anything else no handler runs, is refused before the room opens.
+        const refused = roomActionRefusal({ room, action }, 'model');
+        if (refused) {
+          // Recorded only for an authority grant or revoke (#1009).
+          this.auditRoomAction({ room, action }, 'realtime', 'denied', false, { reason: 'not_a_room_action' });
+          return refused;
+        }
+        // Its handler's REST calls are clicks no gate sees, so the session is
+        // held here to what its own tool calls are held to (#973): an action
+        // that changes more than the screen is refused under Pause or Kill,
+        // in a blocked category, or once the session has read outside
+        // content. Nothing is sent, not even the navigation.
+        const held = realtimeRoomActionDecision({ room, action }, this.realtimeRoomActionContext(opts.blockedCategories ?? []));
+        if (held) {
+          console.warn(`[WSService] refused realtime room action ${room}/${action}: ${held.message}`);
+          this.auditRoomAction({ room, action }, 'realtime', 'denied', false, { reason: held.reason });
+          return held.message;
+        }
+        // Auto-open the room first (no-op if already open), then dispatch,
+        // mirroring the classifier path so the qualifier isn't dropped. The
+        // dashboard this session runs on says whether the room ran it, and
+        // the model is told that, not "Done" (#965).
+        const ra = { room, action, args: innerArgs };
+        this.navigateForRoomAction(ra, ws, reqId);
+        // Shorter than the realtime session's wait for sibling tool results,
+        // so a slow room cannot leave this result to be voiced on its own
+        // (and the model, seeing none, calling the tool again).
+        const outcome = await this.requestRoomAction(ra, REALTIME_ROOM_ACTION_WAIT_MS, { client: ws });
+        this.auditRoomAction(ra, 'realtime', 'allowed', roomActionExecuted(outcome), { reason: outcome });
+        const reply = roomActionReply(ra, outcome);
+        // The model, told only "didn't accept", may call again and raise a
+        // second card (#1016).
+        if (outcome === 'pending') return `${reply} (Nothing has run. The user approves or refuses it on the card; do not call this again for this request.)`;
+        // Calling again would run it twice (#1015).
+        if (outcome === 'started') return `${reply} (It has not finished; do not call this again for this request.)`;
+        // A side-effecting action is answered once its request has settled
+        // (#1015), so accepted is done, not started.
+        return outcome === 'accepted' && !isPresentationRoomAction(room, action)
+          ? `${reply} (${roomTitle(room)} says it is done.)`
+          : reply;
       }
       default:
         return null;
@@ -2013,7 +2374,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     try {
       const transcript = await this.sttProvider.transcribe(audioBuffer);
       if (!transcript.trim()) return;
-      await this.processVoiceTranscript(transcript, session.requestId, ws, session.currentRoom);
+      await this.processVoiceTranscript(transcript, session.requestId, ws, session.currentRoom, session.shownApprovalId);
     } catch (err) {
       console.error('[WSService] Voice session error:', err);
       const message = err instanceof Error ? err.message : 'Voice processing failed';
@@ -2089,9 +2450,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     requestId: string,
     ws: ServerWebSocket<unknown>,
     currentRoom?: string,
+    shownApprovalId?: string | null,
   ): Promise<void> {
     // The person speaking: the intent classifier and any turn it hands to chat.
-    return runWithOrigin('user', () => this.processVoiceTranscriptTurn(transcript, requestId, ws, currentRoom));
+    return runWithOrigin('user', () => this.processVoiceTranscriptTurn(transcript, requestId, ws, currentRoom, shownApprovalId));
   }
 
   private async processVoiceTranscriptTurn(
@@ -2099,6 +2461,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     requestId: string,
     ws: ServerWebSocket<unknown>,
     currentRoom?: string,
+    shownApprovalId?: string | null,
   ): Promise<void> {
     const trimmed = transcript.trim();
     if (!trimmed) return;
@@ -2171,7 +2534,20 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     const recentTurns = this.recentTurns('websocket');
     const userProfilePrompt = formatUserProfileForPrompt(getUserProfile());
     const intent = await classifyVoiceIntent(trimmed, recentTurns, llm, currentRoom, userProfilePrompt);
+    await this.routeClassifiedVoiceIntent(intent, trimmed, requestId, ws, shownApprovalId);
+  }
 
+  /**
+   * Act on what the classifier read `trimmed` as: navigation, a room action,
+   * a voice approve or cancel, chat, or a clarifier or repeat-back.
+   */
+  private async routeClassifiedVoiceIntent(
+    intent: Intent,
+    trimmed: string,
+    requestId: string,
+    ws: ServerWebSocket<unknown>,
+    shownApprovalId?: string | null,
+  ): Promise<void> {
     // Safety net: the classifier sometimes flags coherent multi-word
     // English as verb=unknown / low-confidence (especially conversational
     // openers like "I'm back at the PC, how are you?"). Repeat-back loops
@@ -2193,6 +2569,13 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       }
     }
 
+    // The classifier grades its own impact, and it was told a room action is
+    // always "read", which lets a write act at 0.6 confidence. What a room
+    // action does is in ROOM_ACTIONS, not in the model's reading (#973).
+    if (intent.room_action && intent.impact === 'read'
+      && roomActionCategories(intent.room_action.room, intent.room_action.action).length > 0) {
+      intent.impact = 'write';
+    }
     const route = routeByConfidence(intent);
 
     console.log(
@@ -2219,17 +2602,40 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // navigation. Room actions are always more specific (e.g. "show
     // pending tasks" → set_filter status=pending) — if we navigate
     // first, the qualifier ("pending") gets dropped and the user sees
-    // an unfiltered Room. Classifier emits room_action only when it's
-    // confident the user wants in-room behavior, so trust it.
+    // an unfiltered Room.
+    // A room action in the governed categories is never run on the
+    // classifier's reading alone, whatever confidence it gave itself (#973):
+    // it is repeated back, and the person's yes runs it.
+    if (intent.room_action && classifierMustConfirmRoomAction(intent.room_action, this.agentService.getOrchestrator().getTaintGating())) {
+      // The card shows what confirming runs, so whatever the handler would
+      // decide later (a default, the item a name matches, the selection) is
+      // decided now and pinned into the hold (#1008).
+      const settled = await this.settleHeldRoomAction(intent.room_action);
+      if (!settled.ok) {
+        this.auditRoomAction(intent.room_action, 'classifier', 'denied', false, { approvalId: intent.id, reason: 'unsettled' });
+        this.broadcastAssistantAck(settled.message, requestId);
+        this.broadcastThinkingEnd(requestId);
+        return;
+      }
+      const pending: PendingVoiceConfirmation = {
+        id: intent.id,
+        intent,
+        transcript: trimmed,
+        ws,
+        channel: 'websocket',
+        kind: 'repeat_back',
+        createdAt: Date.now(),
+        roomAction: settled.ra,
+      };
+      this.pendingVoiceConfirmations.set(pending.id, pending);
+      this.auditRoomAction(settled.ra, 'classifier', 'approval_required', false, { approvalId: pending.id, reason: 'held' });
+      this.broadcastRepeatBackRequest(pending);
+      this.broadcastThinkingEnd(requestId);
+      return;
+    }
+
     if (route === 'act' && intent.room_action) {
-      const ra = intent.room_action;
-      // Auto-open the room (no-op if already open) so a "go to settings
-      // and disable TTS"-style compound voice command also works when
-      // the user is on the home thread. The UI bus queues the action
-      // until the body mounts.
-      this.broadcastRoomNavigation(ra.room as RoomKey, requestId);
-      this.broadcastRoomAction(ra, requestId);
-      this.broadcastAssistantAck(ackForRoomAction(ra), requestId);
+      await this.handleVoiceRoomAction(intent.room_action, requestId, ws);
       this.broadcastThinkingEnd(requestId);
       return;
     }
@@ -2252,11 +2658,17 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     if (route === 'act' && intent.confirmation_response) {
       const decision = intent.confirmation_response;
       try {
-        const resolved = await this.resolveLatestPendingByVoice(decision, intent.confidence);
+        const resolved = await this.resolveLatestPendingByVoice(decision, intent.confidence, shownApprovalId, { transcript: trimmed, ws });
         if (resolved) {
-          if (resolved.kind === 'gated') {
-            this.broadcastVoiceApprovalGated(resolved.label, resolved.message, requestId);
-          } else {
+          if (resolved.kind === 'refused') {
+            // In the thread, where the person reads replies: nothing was
+            // decided, and which request is waiting (#809).
+            this.broadcastAssistantAck(resolved.message, requestId);
+          } else if (resolved.kind === 'gated') {
+            // In the thread too, and saying which reason (#856).
+            this.broadcastAssistantAck(resolved.message, requestId);
+          } else if (!(resolved.kind === 'room_action' && decision === 'approve')) {
+            // A confirmed room action has already said what its room did.
             const verb = decision === 'approve' ? 'Approving' : 'Cancelling';
             this.broadcastAssistantAck(`${verb} ${resolved.label}.`, requestId);
           }
@@ -2280,17 +2692,39 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       }, ws);
     } else {
       // Hold the transcript and ask the user to confirm before acting.
+      // Confirming a listed room action runs the action itself, not chat on
+      // the transcript, which has no way to carry it out. One that changes
+      // more than the screen is always a repeat-back, the card that shows
+      // what confirming runs (#973); a clarifier shows only the intent.
+      let roomAction: PendingVoiceConfirmation['roomAction'] = intent.room_action && isRoomAction(intent.room_action.room, intent.room_action.action)
+        ? intent.room_action : undefined;
+      // A side-effecting one is settled before its card, as above (#1008).
+      if (roomAction && !isPresentationRoomAction(roomAction.room, roomAction.action)) {
+        const settled = await this.settleHeldRoomAction(roomAction);
+        if (!settled.ok) {
+          this.auditRoomAction(roomAction, 'classifier', 'denied', false, { approvalId: intent.id, reason: 'unsettled' });
+          this.broadcastAssistantAck(settled.message, requestId);
+          this.broadcastThinkingEnd(requestId);
+          return;
+        }
+        roomAction = settled.ra;
+      }
+      const kind: PendingVoiceConfirmation['kind'] = route === 'clarify'
+        && !(roomAction && !isPresentationRoomAction(roomAction.room, roomAction.action)) ? 'clarifier' : 'repeat_back';
       const pending: PendingVoiceConfirmation = {
         id: intent.id,
         intent,
         transcript: trimmed,
         ws,
         channel: 'websocket',
-        kind: route === 'clarify' ? 'clarifier' : 'repeat_back',
+        kind,
         createdAt: Date.now(),
+        ...(roomAction ? { roomAction } : {}),
       };
       this.pendingVoiceConfirmations.set(pending.id, pending);
-      if (route === 'clarify') {
+      // A view action held for a clarifier writes nothing (#1009).
+      if (roomAction) this.auditRoomAction(roomAction, 'classifier', 'approval_required', false, { approvalId: pending.id, reason: 'held' });
+      if (kind === 'clarifier') {
         this.broadcastClarifierRequest(pending);
       } else {
         this.broadcastRepeatBackRequest(pending);
@@ -2328,13 +2762,36 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    *
    * Returns null when nothing is pending so the caller can fall through to
    * the chat agent (so "yes" still means "yes, I agree" in conversation).
+   *
+   * An approval is decided only when it is the one the person was answering
+   * (#809): `shownApprovalId` is the newest pending approval the dashboard
+   * showed when they started speaking (`shownApprovalIdFrom`), and the newest
+   * pending approval now must be that one. This used to resolve whatever was
+   * newest at the moment the transcript arrived, so a request that came in
+   * while the person was saying "yes" was the one approved, and the reply
+   * named it by the engine's reason ("execute_command requires user
+   * approval"), so nothing told them it was not what they had read. A
+   * mismatch is `refused`, with a message saying nothing was decided and what
+   * is waiting (`voiceApprovalMismatch`).
+   *
+   * The same holds when the approval they were answering has gone and nothing
+   * else is pending: their "yes" was not about a clarifier or a repeat-back,
+   * so it confirms neither.
+   *
+   * And it holds only while one approval is pending (#855): with two cards up,
+   * the one on top is not necessarily the one they read, so a yes or no is
+   * `refused` (`voiceApprovalAmbiguous`) and each is decided on its card. A
+   * mismatch is reported first, since it says more about what happened.
    */
   async resolveLatestPendingByVoice(
     decision: 'approve' | 'cancel',
     confidence = 1,
+    shownApprovalId?: string | null,
+    speaker?: { transcript: string; ws: ServerWebSocket<unknown> },
   ): Promise<
-    | { kind: 'approval' | 'clarifier' | 'repeat_back'; label: string }
-    | { kind: 'gated'; label: string; message: string }
+    | { kind: 'approval' | 'clarifier' | 'repeat_back' | 'room_action'; label: string }
+    | { kind: 'gated'; label: string; reason: VoiceApprovalGateReason; message: string }
+    | { kind: 'refused'; message: string }
     | null
   > {
     // 1. Pending approvals — newest first.
@@ -2342,16 +2799,53 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       const pending = this.approvalManager.getPending();
       if (pending.length > 0) {
         const latest = pending.reduce((a, b) => (a.created_at > b.created_at ? a : b));
-        const label = (latest.reason && latest.reason.trim()) || latest.tool_name;
+        const label = voiceApprovalLabel(latest);
+
+        const shown = typeof shownApprovalId === 'string' ? this.approvalManager.getRequest(shownApprovalId) : null;
+        const mismatch = voiceApprovalMismatch(decision, latest, shownApprovalId, shown);
+        if (mismatch) {
+          // Nothing decided; logged like a gated reply so a refused voice
+          // decision is forensically visible against the request it did not
+          // touch.
+          this.auditTrail?.log({
+            agent_id: latest.agent_id,
+            agent_name: latest.agent_name,
+            tool_name: latest.tool_name,
+            action_category: latest.action_category as ActionCategory,
+            authority_decision: 'approval_required',
+            approval_id: latest.id,
+            executed: false,
+            channel: 'voice',
+          });
+          return { kind: 'refused', message: mismatch };
+        }
+        if (pending.length > 1) {
+          // The newest is the one shown, but it is not the only one (#855):
+          // the person may have been reading any card on the rail.
+          this.auditTrail?.log({
+            agent_id: latest.agent_id,
+            agent_name: latest.agent_name,
+            tool_name: latest.tool_name,
+            action_category: latest.action_category as ActionCategory,
+            authority_decision: 'approval_required',
+            approval_id: latest.id,
+            executed: false,
+            channel: 'voice',
+          });
+          return { kind: 'refused', message: voiceApprovalAmbiguous(decision, pending.length) };
+        }
 
         // Two-tier safety: destructive impacts never resolve by voice;
         // non-destructive require confidence ≥ 0.85. Gate decision is a
         // pure helper so it's unit-testable without spinning up the
         // approval pipeline. See gateVoiceApprovalResolution.
-        // A request the gated tool marked click-only (record_skill start)
-        // is treated like a destructive one: the card must be clicked.
+        // A request whose tool marked it click-only (`confirm: 'always'`,
+        // `approvalNeedsClick`) is gated like a destructive one, the card must
+        // be clicked, but reported as click_only (#856): it may not be
+        // destructive at all. Checked first, so a request that is both is
+        // reported as click_only.
         const gate = approvalNeedsClick(latest)
-          ? { kind: 'clarify' as const, reason: 'destructive_impact' as const, message: 'This action requires dashboard confirmation. Please click the approval card.' }
+          ? { kind: 'clarify' as const, reason: 'click_only' as const }
           : gateVoiceApprovalResolution(latest.action_category as ActionCategory, confidence);
         if (gate.kind === 'clarify') {
           // Pending approval STAYS in the queue — user can resolve via
@@ -2368,7 +2862,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
             executed: false,
             channel: 'voice',
           });
-          return { kind: 'gated', label, message: gate.message };
+          const why: VoiceApprovalGateReason = gate.reason === 'destructive_impact' ? 'destructive' : gate.reason;
+          return { kind: 'gated', label, reason: why, message: voiceApprovalGatedMessage(decision, why, latest) };
         }
 
         if (decision === 'approve') {
@@ -2419,6 +2914,12 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         if (updated) this.broadcastApprovalUpdate(updated);
         return { kind: 'approval', label };
       }
+      if (typeof shownApprovalId === 'string') {
+        // They were answering an approval that is no longer pending: decided
+        // on another surface, or expired. Their "yes" was about that card.
+        const nothing = decision === 'approve' ? "I haven't approved anything" : "I haven't cancelled anything";
+        return { kind: 'refused', message: `The request you were looking at has already been decided or has expired, so ${nothing}. Nothing else is waiting for approval.` };
+      }
     }
 
     // 2. Pending clarifier / repeat-back — newest first within the map.
@@ -2426,16 +2927,27 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       const latest = Array.from(this.pendingVoiceConfirmations.values()).reduce((a, b) =>
         a.createdAt > b.createdAt ? a : b,
       );
+      // Only for an action that changes more than the screen: a held filter
+      // or tab switch needs no more than any other yes.
+      if (latest.roomAction && decision === 'approve' && !isPresentationRoomAction(latest.roomAction.room, latest.roomAction.action)) {
+        const refused = this.heldRoomActionVoiceRefusal(latest, speaker);
+        if (refused) {
+          // Still held, still a card to click, as a gated voice approval is.
+          this.auditRoomAction(latest.roomAction, 'confirm', 'approval_required', false, { approvalId: latest.id, channel: 'voice', reason: 'refused_yes' });
+          return { kind: 'refused', message: refused };
+        }
+      }
       const result = await this.resolveVoiceConfirmation(
         latest.id,
         decision === 'approve' ? 'confirm' : 'cancel',
+        'voice',
       );
       if (!result.ok) return null;
       const label = latest.transcript.length > 60
         ? latest.transcript.slice(0, 60) + '…'
         : latest.transcript;
       return {
-        kind: latest.kind === 'clarifier' ? 'clarifier' : 'repeat_back',
+        kind: latest.roomAction ? 'room_action' : latest.kind === 'clarifier' ? 'clarifier' : 'repeat_back',
         label,
       };
     }
@@ -2444,10 +2956,42 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   }
 
   /**
+   * Why a spoken yes may not run a held room action (#973), or null when it
+   * may. The yes must be a plain one in the transcript itself (not the
+   * classifier's reading, which is what the hold is checking), said on the
+   * dashboard the action was held for, within HELD_ROOM_ACTION_VOICE_MS,
+   * and with no other held action it could be about. Otherwise the card is
+   * clicked. A no always cancels.
+   */
+  private heldRoomActionVoiceRefusal(
+    held: PendingVoiceConfirmation,
+    speaker?: { transcript: string; ws: ServerWebSocket<unknown> },
+  ): string | null {
+    // The short form: the card shows the arguments, and this may be spoken.
+    const what = `${roomTitle(held.roomAction!.room)}: ${held.roomAction!.action.replace(/_/g, ' ')}`;
+    if (speaker && speaker.ws !== held.ws) {
+      return `I haven't done ${what}: it is waiting on another dashboard. Confirm it there.`;
+    }
+    if (!speaker || !isVoiceAffirmative(speaker.transcript)) {
+      return `I haven't done ${what}. To go ahead, say "yes" on its own or click its card.`;
+    }
+    const heldCount = [...this.pendingVoiceConfirmations.values()]
+      .filter((p) => p.roomAction && !isPresentationRoomAction(p.roomAction.room, p.roomAction.action)).length;
+    if (heldCount > 1) {
+      return `I haven't done anything: ${heldCount} actions are waiting for a yes. Click the one you mean.`;
+    }
+    if (Date.now() - held.createdAt > HELD_ROOM_ACTION_VOICE_MS) {
+      return `I haven't done ${what}: it has been waiting too long for a spoken yes. Click its card, or ask again.`;
+    }
+    return null;
+  }
+
+  /**
    * Resolve a pending voice confirmation. Called by the REST endpoints
    * `/api/voice/(clarifier|repeat-back)/:id/{confirm,cancel}`.
    *
-   * On confirm: forwards the held transcript to the chat agent.
+   * On confirm: runs the held room action when there is one (#973), and
+   * otherwise forwards the held transcript to the chat agent.
    * On cancel: drops the pending entry; the user-voice ThreadItem stays in
    * the thread but no assistant reply is generated.
    *
@@ -2457,6 +3001,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   async resolveVoiceConfirmation(
     id: string,
     decision: 'confirm' | 'cancel',
+    // How the person answered, for a held room action's audit row (#1009):
+    // the REST endpoints are a card click, a spoken answer passes 'voice'.
+    via: 'click' | 'voice' = 'click',
   ): Promise<{ ok: boolean; reason?: string }> {
     const pending = this.pendingVoiceConfirmations.get(id);
     if (!pending) return { ok: false, reason: 'not-found' };
@@ -2476,7 +3023,23 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     this.wsServer.broadcast(message);
 
     if (decision === 'cancel') {
+      if (pending.roomAction) this.auditRoomAction(pending.roomAction, 'confirm', 'denied', false, { approvalId: id, channel: via, reason: 'cancelled' });
       return { ok: true };
+    }
+
+    if (pending.roomAction) {
+      // The person confirmed what the repeat-back said would happen (#973),
+      // so that is what runs, on the dashboard they spoke to.
+      this.broadcastThinkingStart(pending.id);
+      try {
+        await this.handleVoiceRoomAction(pending.roomAction, pending.id, pending.ws, { origin: 'confirm', approvalId: id, channel: via });
+        return { ok: true };
+      } catch (err) {
+        console.error('[WSService] resolveVoiceConfirmation room action error:', err);
+        return { ok: false, reason: err instanceof Error ? err.message : 'room-action-failed' };
+      } finally {
+        this.broadcastThinkingEnd(pending.id);
+      }
     }
 
     try {
@@ -2509,29 +3072,6 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     this.wsServer.broadcast(message);
   }
 
-  /**
-   * Broadcast a "voice approval gated" notice — the user's spoken yes/no
-   * was heard but suppressed because either the action is destructive
-   * (always click) or STT confidence was too low (please repeat or click).
-   *
-   * The pending approval STAYS in the queue; this notice tells the UI
-   * to show a transient banner so the user knows their voice didn't
-   * resolve anything (vs silent no-op which would be confusing).
-   */
-  private broadcastVoiceApprovalGated(label: string, message: string, requestId?: string): void {
-    const wsMessage: WSMessage = {
-      type: 'notification',
-      payload: {
-        source: 'voice_approval_gated',
-        label,
-        message,
-      },
-      id: requestId,
-      timestamp: Date.now(),
-    };
-    this.wsServer.broadcast(wsMessage);
-  }
-
   /** Broadcast: classifier didn't understand; ask the user to confirm the verbatim transcript. */
   private broadcastRepeatBackRequest(pending: PendingVoiceConfirmation): void {
     const message: WSMessage = {
@@ -2541,6 +3081,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         id: pending.id,
         transcript: pending.transcript,
         confidence: pending.intent.confidence,
+        // What confirming runs, for a held room action (#973): the person
+        // checks the classifier's reading, not just what they said.
+        ...(pending.roomAction ? { action: describeRoomAction(pending.roomAction) } : {}),
       },
       timestamp: Date.now(),
     };
@@ -2548,9 +3091,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   }
 
   /**
-   * Public exposure of `formatApprovalIntent` so api-routes can produce the
-   * same intent string for REST responses (Phase 5B audit fix). Falls back
-   * to `reason || tool_name` if the helper isn't available.
+   * The joined approval sentence the WS broadcasts send as `intent`
+   * (`formatApprovalIntent`). The REST listing now calls
+   * `approvalIntentFields` itself; this stays for callers that hold only the
+   * service.
    */
   computeApprovalIntent(request: ApprovalRequest): string {
     return formatApprovalIntent(request);
@@ -2562,11 +3106,24 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * RoomKey) — bypasses the chat agent.
    */
   broadcastRoomNavigation(key: RoomKey, requestId?: string): void {
-    this.wsServer.broadcast({
-      type: 'notification',
-      payload: { source: 'navigate_room', key, requestId },
-      timestamp: Date.now(),
-    });
+    this.wsServer.broadcast(navigateRoomNotice(key, requestId));
+  }
+
+  /**
+   * Open the room a voice room action is for, on the same dashboards the
+   * action goes to (#974): every one for a presentation action, only
+   * `client` for any other, which no other dashboard runs.
+   */
+  private navigateForRoomAction(
+    ra: { room: string; action: string },
+    client: ServerWebSocket<unknown>,
+    requestId?: string,
+  ): void {
+    const notice = navigateRoomNotice(ra.room, requestId);
+    const reached = this.wsServer.getClients().has(client) && this.wsServer.sendToClient(client, notice);
+    // As with the action itself: the others follow only once the dashboard
+    // that asked has it (#1011).
+    if (reached && isPresentationRoomAction(ra.room, ra.action)) this.wsServer.broadcastWithReceipt(notice, client);
   }
 
   /**
@@ -2600,25 +3157,138 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   }
 
   /**
-   * Phase 6.3.5 — drive a Room's UI directly from voice. The dashboard's
-   * action bus dispatches to whichever Room is currently mounted matching
-   * `room`. Args are per-action and validated client-side.
+   * Send a room action and wait to hear whether a room ran it (#933).
+   * Resolves `accepted`, `rejected` or `pending` (a card waits on the person,
+   * #1016) on the first answer; when the wait runs out, `started` if the room
+   * said it was still working on it (#1015), else `no_answer` (a room that
+   * never mounted, a dashboard that closed before it answered); and
+   * `unreached` at once when no socket took the frame (nobody connected who
+   * could answer, #1011).
+   *
+   * Without `client` the native panels answer (the pebble's tab switch). With
+   * `client`, only that dashboard gets the resultId, is asked to answer
+   * (`resultFrom: 'dashboard'`), and is listened to (#965): a dashboard voice
+   * turn asks the dashboard the user spoke to.
+   *
+   * Who else gets it depends on what the action does (#974). A presentation
+   * action (ROOM_ACTIONS `view`, such as `switch_tab`) goes to every
+   * dashboard and panel too, so they stay in step. Any other goes to `client`
+   * alone: every dashboard with the room mounted, or mounting it within the
+   * bus's queue TTL, runs the handler it is sent, so a broadcast `create_task`
+   * made one task per open dashboard while the user heard one answer. Without
+   * a `client` such an action has nobody to go to and is refused.
    */
-  broadcastRoomAction(
+  requestRoomAction(
     action: { room: string; action: string; args?: Record<string, unknown> },
-    requestId?: string,
-  ): void {
-    this.wsServer.broadcast({
-      type: 'notification',
-      payload: {
-        source: 'room_action',
-        room: action.room,
-        action: action.action,
-        args: action.args ?? {},
-        requestId,
-      },
-      timestamp: Date.now(),
-    });
+    timeoutMs: number = ROOM_ACTION_QUEUE_TTL_MS,
+    opts?: { client?: ServerWebSocket<unknown> },
+  ): Promise<RoomActionOutcome> {
+    // Backstop for every caller (#969): an action no room handler carries out
+    // is never broadcast, whoever asked for it.
+    if (!isRoomAction(action.room, action.action)) {
+      console.warn(`[WSService] refused room action ${action.room}/${action.action}: not a room action`);
+      return Promise.resolve('rejected');
+    }
+    const client = opts?.client;
+    const presentation = isPresentationRoomAction(action.room, action.action);
+    if (!presentation && !client) {
+      // Reported as `rejected`, the same as a room declining it: no caller
+      // sends one without a client today, so nobody hears this as the room's
+      // answer. A caller that could must say why itself.
+      console.warn(`[WSService] refused room action ${action.room}/${action.action}: it changes more than the screen, and no dashboard was named to run it`);
+      return Promise.resolve('rejected');
+    }
+    const { id, outcome } = this.roomActionResults.open(timeoutMs, client);
+    const payload = {
+      source: 'room_action',
+      room: action.room,
+      action: action.action,
+      args: action.args ?? {},
+    };
+    // Whoever is asked to answer is also told how long it is waited for
+    // (#1010): once this wait is over the caller has said it got no answer,
+    // and the realtime model, told it can't tell whether it happened, may
+    // ask again. The bus drops an action still queued past this, so that
+    // retry is not the second run of a create_task or start_server. The
+    // bus's own queue TTL (ROOM_ACTION_QUEUE_TTL_MS) is longer than the
+    // realtime wait, so without this a late-mounting room ran both.
+    const waited = { resultId: id, expiresInMs: timeoutMs };
+    let reached: boolean;
+    if (client) {
+      reached = this.wsServer.getClients().has(client) && this.wsServer.sendToClient(client, {
+        type: 'notification',
+        payload: { ...payload, ...waited, resultFrom: 'dashboard' },
+        timestamp: Date.now(),
+      });
+      // The others follow the dashboard that asked, and only once it has the
+      // action: otherwise they would switch while it is reported unreached,
+      // and "nothing was done" would be untrue (#1011).
+      if (presentation && reached) this.wsServer.broadcastWithReceipt({ type: 'notification', payload, timestamp: Date.now() }, client);
+    } else {
+      reached = this.wsServer.broadcastWithReceipt({
+        type: 'notification',
+        payload: { ...payload, ...waited },
+        timestamp: Date.now(),
+      }) > 0;
+    }
+    // Nobody took the frame: say so now rather than after the timeout, and
+    // not as "sent but no answer" (#1011). That includes a dashboard whose
+    // socket is closing but whose close has not been handled yet, where the
+    // send is dropped.
+    if (!reached) this.roomActionResults.abandon(id);
+    return outcome;
+  }
+
+  /**
+   * A dashboard voice turn the classifier read as an in-room action. Opens the
+   * room (no-op if open) so "go to settings and disable TTS" works from the
+   * home thread, sends the action, and acknowledges what the dashboard said
+   * happened (#965). It used to acknowledge before any room had seen it.
+   */
+  private async handleVoiceRoomAction(
+    ra: { room: string; action: string; args?: Record<string, unknown> },
+    requestId: string,
+    ws: ServerWebSocket<unknown>,
+    // Who sent it, for its audit row (#1009): the classifier on its own
+    // reading, or the person's yes to a hold (its id, and click or voice).
+    audit: { origin: Exclude<RoomActionOrigin, 'realtime'>; approvalId?: string; channel?: Exclude<ResolutionChannel, 'system'> } = { origin: 'classifier' },
+  ): Promise<void> {
+    const auditOpts = { approvalId: audit.approvalId ?? null, channel: audit.channel ?? 'voice' };
+    // The classifier turns plain speech into this with no confirmation, so
+    // it is held to the same list as the realtime tool (#969).
+    const refused = roomActionRefusal(ra, 'user');
+    if (refused) {
+      console.warn(`[WSService] refused voice room action ${ra.room}/${ra.action}: not a room action`);
+      // Recorded only for an authority grant or revoke (#1009).
+      this.auditRoomAction(ra, audit.origin, 'denied', false, { ...auditOpts, reason: 'not_a_room_action' });
+      this.broadcastAssistantAck(refused, requestId);
+      return;
+    }
+    // Under Pause or Kill nothing beyond the screen runs, here as on the
+    // realtime path (#973). This is the one sink for the classifier and for a
+    // confirmed hold, so a hold confirmed after Kill does not run either.
+    const emergency = roomActionCategories(ra.room, ra.action).length > 0
+      ? this.agentService.getOrchestrator().getEmergencyController()
+      : null;
+    if (emergency && !emergency.canExecute()) {
+      const state = emergency.getState();
+      console.warn(`[WSService] refused voice room action ${ra.room}/${ra.action}: system ${state}`);
+      this.auditRoomAction(ra, audit.origin, 'denied', false, { ...auditOpts, reason: state === 'killed' ? 'killed' : 'paused' });
+      this.broadcastAssistantAck(`I didn't do that: actions are suspended while the system is ${state}. Ask again once it is resumed.`, requestId);
+      return;
+    }
+    let outcome: RoomActionOutcome;
+    try {
+      this.navigateForRoomAction(ra, ws, requestId);
+      outcome = await this.requestRoomAction(ra, ROOM_ACTION_QUEUE_TTL_MS, { client: ws });
+    } catch (err) {
+      // The decision still gets its row, so a hold is never left open in it.
+      this.auditRoomAction(ra, audit.origin, 'allowed', false, { ...auditOpts, reason: 'failed' });
+      throw err;
+    }
+    console.log(`[WSService] room action ${ra.room}/${ra.action}: ${outcome}`);
+    this.auditRoomAction(ra, audit.origin, 'allowed', roomActionExecuted(outcome), { ...auditOpts, reason: outcome });
+    this.broadcastAssistantAck(roomActionReply(ra, outcome), requestId);
   }
 
   /**
@@ -2773,140 +3443,6 @@ function looksLikeCommitment(text: string): boolean {
 }
 
 /**
- * Build a short imperative sentence describing an approval request, for use
- * as the `intent` field in the dashboard ApprovalCard. Prefers the LLM-supplied
- * reason when it looks like a complete sentence; otherwise synthesizes one
- * from tool_name + arguments.
- */
-function formatApprovalIntent(request: ApprovalRequest): string {
-  const reason = (request.reason ?? '').trim();
-
-  // `reason` is usually an imperative sentence drafted by the LLM (e.g.,
-  // "Reply to Anya, move Monday review to 3pm"). Keep it as-is when present,
-  // unless the authority engine wrote it ("... requires user approval"): then
-  // the per-tool sentence below is the headline the user needs (what will
-  // run), and the engine's reason follows it.
-  // The Authority engine's own wording names the CATEGORY, never the effect.
-  // For a governed category ("send_email is a governed action requiring user
-  // approval") the headline the reviewer needs is what will actually run, so
-  // the synthesized sentence leads and the engine's wording follows it.
-  const engineReason = reason.endsWith('requires user approval')
-    || reason.endsWith('is a governed action requiring user approval')
-    || reason.includes(TAINT_PROFILE_LABEL);
-  // One line with no format characters (#696): for request_approval this is the
-  // model's own intent, and a bidi override would reorder the headline. Not
-  // cut: this card is where the whole intent can be read.
-  if (reason.length > 0 && !engineReason) return boundedApprovalLabel(reason, reason.length);
-  const synthesized = synthesizeApprovalIntent(request);
-  return engineReason ? `${synthesized} (${reason})` : synthesized;
-}
-
-function synthesizeApprovalIntent(request: ApprovalRequest): string {
-  // A gated tool (run_skill, record_skill, manage_skills delete) writes the
-  // sentence that names what will actually happen, with resolved values.
-  const gated = approvalIntentFromContext(request);
-  if (gated) return gated;
-
-  let args: Record<string, unknown> = {};
-  try {
-    args = JSON.parse(request.tool_arguments ?? '{}');
-  } catch {
-    // fall through with empty args
-  }
-
-  // Per-tool fallbacks for the common destructive/external intents.
-  switch (request.tool_name) {
-    case 'send_email': {
-      const to = asString(args.to) ?? 'someone';
-      const subject = asString(args.subject);
-      return subject
-        ? `Send email to ${to} — "${subject}"`
-        : `Send email to ${to}`;
-    }
-    case 'send_message': {
-      const channel = asString(args.channel) ?? 'channel';
-      return `Send message via ${channel}`;
-    }
-    case 'run_command':
-    case 'execute_command': {
-      const cmd = asString(args.command) ?? 'a shell command';
-      return `Run: ${cmd}`;
-    }
-    case 'delete_file':
-    case 'delete_data': {
-      const path = asString(args.path) ?? asString(args.target) ?? 'the target';
-      return `Delete ${path}`;
-    }
-    case 'install_software': {
-      const pkg = asString(args.package) ?? asString(args.name) ?? 'software';
-      return `Install ${pkg}`;
-    }
-    case 'make_payment': {
-      const amount = asString(args.amount) ?? asString(args.total);
-      const to = asString(args.recipient) ?? asString(args.to) ?? 'recipient';
-      return amount ? `Pay ${amount} to ${to}` : `Make a payment to ${to}`;
-    }
-    case 'spawn_agent': {
-      const role = asString(args.role) ?? 'an agent';
-      return `Spawn ${role}`;
-    }
-    default: {
-      // Governed workflow-piece effects: `piece:<catalog id>/<action>`. The
-      // durable effect's target rides along in `context`, so the sentence can
-      // name the recipient, file or endpoint rather than just the piece.
-      const governedPiece = /^piece:([^/]+)\/(.+)$/u.exec(request.tool_name);
-      if (governedPiece) return describeGovernedPieceIntent(governedPiece[1]!, governedPiece[2]!, request);
-      const verb = request.tool_name.replace(/_/g, ' ');
-      return `${verb}`.replace(/^./, (c) => c.toUpperCase());
-    }
-  }
-}
-
-/** A governed piece's target value in the dashboard sentence: the 80 it always had. */
-const GOVERNED_TARGET_VALUE_MAX_CHARS = 80;
-
-/**
- * "Gmail - send email to finance@example.test, subject: Q3 invoice".
- *
- * Reads the reviewed target out of the approval's context, which is what the
- * piece adapter resolved from the step's real input. A card that said only
- * "gmail" would not be governance.
- */
-function describeGovernedPieceIntent(pieceId: string, action: string, request: ApprovalRequest): string {
-  const label = pieceId.replace(/-/g, ' ').replace(/^./, c => c.toUpperCase());
-  const verb = action.replace(new RegExp(`^${pieceId.replace(/-/g, '_')}_`, 'u'), '').replace(/[_-]/g, ' ');
-  let target: Record<string, unknown> = {};
-  try {
-    const context: unknown = JSON.parse(request.context ?? '{}');
-    if (context && typeof context === 'object' && !Array.isArray(context)) {
-      const raw = (context as Record<string, unknown>).target;
-      if (raw && typeof raw === 'object' && !Array.isArray(raw)) target = raw as Record<string, unknown>;
-    }
-  } catch {
-    // No context to read; the piece and action alone still describe the step.
-  }
-  const details: string[] = [];
-  for (const [key, value] of Object.entries(target)) {
-    if (key === 'piece' || key === 'action' || key === 'unmappedAction') continue;
-    const rendered = Array.isArray(value) ? value.map(item => String(item)).join(', ')
-      : value === null || typeof value === 'object' ? undefined : String(value);
-    if (!rendered) continue;
-    // The step's real input, which a flow can wire from anything it read, so
-    // one line with no format characters before the 80-character cut (#697):
-    // the same reduction #651 gave the Telegram card's labels.
-    const shown = boundedApprovalLabel(rendered, GOVERNED_TARGET_VALUE_MAX_CHARS) || '(invisible characters only)';
-    details.push(`${key.replace(/_/g, ' ')}: ${shown}`);
-    if (details.length === 3) break;
-  }
-  const head = `${label} - ${verb}`;
-  return details.length > 0 ? `${head} (${details.join(', ')})` : head;
-}
-
-function asString(v: unknown): string | undefined {
-  return typeof v === 'string' && v.length > 0 ? v : undefined;
-}
-
-/**
  * Short ack message for window-control voice commands. Mirrors the
  * "Opening the X room." style of the navigation acks.
  */
@@ -2926,17 +3462,121 @@ function ackForWindowControl(ctrl: WindowControl): string {
   }
 }
 
+/** The dashboard's instruction to open a room. */
+function navigateRoomNotice(key: string, requestId?: string): WSMessage {
+  return { type: 'notification', payload: { source: 'navigate_room', key, requestId }, timestamp: Date.now() };
+}
+
 /**
- * Phase 6.3.5 — short ack for Room action voice commands. Reads naturally
- * for the most common per-Room actions; falls back to a generic "Done" for
- * anything not enumerated so future Room action vocabularies don't need
- * code changes here.
+ * A held room action as the repeat-back shows it (#973): the room, the action,
+ * every argument the classifier filled in, in full and JSON-quoted so a value
+ * cannot pass for another argument, and what the action can do. The
+ * arguments are what the classifier may have read wrong.
+ *
+ * The id a held action's item is pinned by (#1008) is left out: the name
+ * beside it is that item's own, set when it was pinned, and no other item
+ * has it (an ambiguous name is refused), so the id says nothing more to the
+ * person, and would be read aloud.
  */
-function ackForRoomAction(ra: { room: string; action: string; args?: Record<string, unknown> }): string {
+export function describeRoomAction(ra: { room: string; action: string; args?: Record<string, unknown> }): string {
+  const pinned = roomActionTargetKind(ra.room, ra.action) !== null;
+  const args = Object.entries(ra.args ?? {})
+    .filter(([k]) => !(pinned && k === 'id'))
+    .map(([k, v]) => `${visible(JSON.stringify(k))}: ${visible(JSON.stringify(v) ?? String(v))}`);
+  const head = `${roomTitle(ra.room)}: ${ra.action.replace(/_/g, ' ')}`;
+  const effects = roomActionCategories(ra.room, ra.action).map((c) => ROOM_ACTION_EFFECT[c]);
+  return [args.length > 0 ? `${head} {${args.join(', ')}}` : head, ...(effects.length > 0 ? [`(${effects.join('; ')})`] : [])].join(' ');
+}
+
+/**
+ * `s` with every control, format, line- or paragraph-separator character
+ * written as a visible `\uXXXX` (#1008). JSON leaves bidi overrides and
+ * zero-width characters as they are, and one in a value (from the classifier,
+ * or a stored item name) could reorder or hide the rest of the card.
+ */
+function visible(s: string): string {
+  return s.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (c) => `\\u${c.codePointAt(0)!.toString(16).padStart(4, '0')}`);
+}
+
+/** What each category a room action can reach means, for the repeat-back. */
+const ROOM_ACTION_EFFECT: Record<RoomActionCategory, string> = {
+  read_data: 'reads data',
+  write_data: 'saves data',
+  delete_data: 'deletes data',
+  execute_command: 'runs a command on this machine',
+  install_software: 'installs software',
+  modify_settings: 'changes settings',
+  spawn_agent: 'starts an agent',
+};
+
+/**
+ * What to say about a room action once the room has answered, or not (#965).
+ * Only an accepted action gets the action's own acknowledgement; a rejected
+ * one says so, a pending one says a card is waiting for the person (#1016),
+ * and with no answer it says it cannot tell. A tab switch reads the same as
+ * the pebble's (tabSwitchReply).
+ */
+export function roomActionReply(
+  ra: { room: string; action: string; args?: Record<string, unknown> },
+  outcome: RoomActionOutcome,
+): string {
+  const title = roomTitle(ra.room);
+  if (ra.action === 'switch_tab') return tabSwitchReply(title, String(ra.args?.tab ?? '') || 'that tab', outcome);
+  switch (outcome) {
+    case 'accepted':
+      return ackForRoomAction(ra, title);
+    case 'rejected':
+      return `${title} didn't accept that.`;
+    // Not refused: it waits on the person (#1016).
+    case 'pending':
+      return `That needs your approval before it runs. A card is waiting for you.`;
+    // Taken, and not finished when the wait ran out (#1015).
+    case 'started':
+      return `${title} started that and is still working on it. It shows the result on screen.`;
+    case 'no_answer':
+      return `I sent that to ${title}, but it didn't answer, so I can't tell whether it happened.`;
+    case 'unreached':
+      return `I couldn't reach ${title} on the dashboard, so nothing was done.`;
+  }
+}
+
+/**
+ * Why a voice room action may not be sent, or null when it may (#969). Only
+ * actions a room's handler carries out (ROOM_ACTIONS) go out. Authority
+ * grants and revokes are named, because they are the ones a voice path must
+ * never reach: they write a lasting override into config.yaml and no voice
+ * path is gated by the authority engine. `to` picks who reads it: the user,
+ * or the realtime model, which has to be told what to say.
+ */
+export function roomActionRefusal(
+  ra: { room: string; action: string },
+  to: 'user' | 'model',
+): string | null {
+  if (isRoomAction(ra.room, ra.action)) return null;
+  if (ra.room === 'authority' && (ra.action === 'grant_access' || ra.action === 'revoke_access')) {
+    return to === 'user'
+      ? "Permissions can't be changed by voice. Use the Grants tab in Authority."
+      : "Permissions can't be changed by voice. Tell the user to use the Grants tab in Authority.";
+  }
+  return `${roomTitle(ra.room)} has no "${ra.action}" action, so I did not send it.`;
+}
+
+function roomTitle(room: string): string {
+  return Object.hasOwn(PEBBLE_ROOMS, room) ? PEBBLE_ROOMS[room]!.title : room;
+}
+
+/**
+ * Phase 6.3.5 - short ack for a Room action the room accepted. For a view
+ * action accepted means its handler did it; for any other, since #1015, that
+ * its request settled and worked (for a setting, that it was saved: applying
+ * it can still fail later, and Settings says so). They still read as what is
+ * under way (#965), which stays true either way. Anything not enumerated gets
+ * a generic acknowledgement, so future Room action vocabularies need no code
+ * here.
+ */
+function ackForRoomAction(ra: { room: string; action: string; args?: Record<string, unknown> }, title: string): string {
   const a = ra.args ?? {};
   switch (ra.action) {
-    case 'switch_tab':
-      return `Switching to ${String(a.tab ?? 'tab')} view.`;
     case 'open_spawn_dialog':
       return `Opening the spawn dialog.`;
     case 'close_dialog':
@@ -2968,28 +3608,16 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
       return `Toggling live tail.`;
     case 'refresh':
       return `Refreshing.`;
-    case 'run':
-      return a.name ? `Running ${String(a.name)}.` : `Running the selected workflow.`;
-    case 'pause':
-      return a.name ? `Pausing ${String(a.name)}.` : `Pausing the selected workflow.`;
-    case 'enable':
-      return a.name ? `Enabling ${String(a.name)}.` : `Enabling the selected workflow.`;
     case 'create_from_nl':
       return a.prompt
-        ? `Creating a workflow that ${String(a.prompt)}.`
+        // The room creates an empty workflow and points to chat for the
+        // rest (WorkflowsRoom); it does not build what was described.
+        ? `Creating an empty workflow. To have me build "${String(a.prompt)}", ask me in chat.`
         : `Creating a new workflow.`;
     case 'remember_that':
       return a.subject && a.predicate && a.object
-        ? `Remembered that ${String(a.subject)}'s ${String(a.predicate)} is ${String(a.object)}.`
+        ? `Saving that ${String(a.subject)}'s ${String(a.predicate)} is ${String(a.object)}.`
         : `Remembering that.`;
-    case 'grant_access':
-      return a.action
-        ? `Granting ${String(a.action).replace(/_/g, ' ')}.`
-        : `Granting access.`;
-    case 'revoke_access':
-      return a.action
-        ? `Revoking ${String(a.action).replace(/_/g, ' ')}.`
-        : `Revoking access.`;
     case 'switch_view':
       return `Switching to ${String(a.view ?? 'view')} view.`;
     case 'select_event':
@@ -3047,10 +3675,6 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
       return a.name ? `Stopping "${String(a.name)}".` : `Stopping the dev server.`;
     case 'read_status':
       return `Reading current settings.`;
-    case 'set_primary_llm':
-      return a.provider ? `Setting primary LLM to ${String(a.provider)}.` : `Setting primary LLM.`;
-    case 'set_fallback_llm':
-      return `Updating fallback chain.`;
     case 'set_model':
       return a.provider && a.model
         ? `Setting ${String(a.provider)} model to ${String(a.model)}.`
@@ -3096,6 +3720,6 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
       return `Replaying ${label}. The dashboard will reload in a moment.`;
     }
     default:
-      return `Done.`;
+      return `${title} took that.`;
   }
 }

@@ -9,6 +9,7 @@ import type { ObjectType, ThreadItem } from "../thread/types";
 import { VoiceRail, type VoiceState } from "./VoiceRail";
 import { useVoice } from "../../hooks/useVoice";
 import { mapVoiceState } from "../voice/stateMapper";
+import { shownApprovalId } from "../voice/shownApproval";
 import { useLLMSuggestions, useSuggestions } from "../voice/useSuggestions";
 import { CommandPalette } from "../palette/CommandPalette";
 import type { PaletteNavEntry, PaletteResult, PaletteResultType } from "../palette/types";
@@ -27,6 +28,8 @@ import { NotificationDrawer } from "../notifications/NotificationDrawer";
 import { LiveDataProvider } from "./LiveDataContext";
 import { PausedTasksBanner } from "./PausedTasksBanner";
 import { useRoomActionDispatcher } from "../rooms/useRoomActionBus";
+import { dispatchDashboardRoomAction } from "../rooms/panel-room-action";
+import type { DashboardRoomActionRequest } from "../../hooks/useWebSocket";
 import { IndexSidebar, useIndexCollapsed } from "./IndexSidebar";
 import { TopBar } from "./TopBar";
 import { NowRoom } from "./NowRoom";
@@ -139,6 +142,16 @@ function AppShellLive() {
     const m = window.location.hash.match(/^#\/?_room_([a-z]+)/);
     return m ? m[1]! : "home";
   }, []);
+  // #809: the approval a spoken "yes" answers is the one on top of the rail
+  // (RailConfirmationStack sorts newest first), while the page is on screen.
+  // Read through a ref so the getter keeps a stable identity, like
+  // getCurrentRoom.
+  const approvalsRef = useRef(live.approvals);
+  approvalsRef.current = live.approvals;
+  const getShownApprovalId = useCallback(
+    (): string | null => shownApprovalId(approvalsRef.current, document.visibilityState),
+    [],
+  );
   const voice = useVoice({
     wsRef: live.wsRef,
     wakeWordEnabled: true,
@@ -155,6 +168,7 @@ function AppShellLive() {
     // device, the sidecar's own speech included.
     nativeWakeActive: true,
     getCurrentRoom,
+    getShownApprovalId,
   });
 
   // Bridge TTS audio + lifecycle from useWebSocket → useVoice (matches the
@@ -554,7 +568,7 @@ function AppShellLive() {
         latestAssistantReply,
       }}
     >
-      <RoomActionBridge request={live.roomActionRequest} forceIdle={voice.forceIdle} />
+      <RoomActionBridge request={live.roomActionRequest} forceIdle={voice.forceIdle} wsRef={live.wsRef} />
       <ShellLayout
         connection={live.isConnected ? "live" : "offline"}
         items={live.items}
@@ -634,16 +648,25 @@ function AppShellLive() {
 function RoomActionBridge({
   request,
   forceIdle,
+  wsRef,
 }: {
-  request: { room: string; action: string; args: Record<string, unknown>; ts: number } | null;
+  request: DashboardRoomActionRequest | null;
   forceIdle: () => void;
+  wsRef: React.MutableRefObject<WebSocket | null>;
 }) {
   const { dispatch } = useRoomActionDispatcher();
   const ts = request?.ts;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!request) return;
-    dispatch(request);
+    // When the daemon asked, tell it whether the room ran the action, so its
+    // acknowledgement says what happened (#965). A queued action answers when
+    // its room mounts; after a reconnect the daemon ignores that answer (it
+    // asked the old socket) and has already said it got none.
+    dispatchDashboardRoomAction(request, dispatch, (text) => {
+      const ws = wsRef.current;
+      if (ws?.readyState === WebSocket.OPEN) ws.send(text);
+    });
     forceIdle();
   }, [ts]);
   return null;

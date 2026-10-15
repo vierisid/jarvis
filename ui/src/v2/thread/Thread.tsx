@@ -323,6 +323,7 @@ function ItemRenderer({
       return (
         <ApprovalCard
           intent={item.intent}
+          reason={item.reason}
           category={item.category}
           impact={item.impact}
           highlights={item.highlights}
@@ -357,6 +358,7 @@ function ItemRenderer({
         <RepeatBackCard
           transcript={item.transcript}
           confidence={item.confidence}
+          action={item.action}
           onConfirm={() => onRepeatBack?.(item.id, "confirm")}
           onCancel={() => onRepeatBack?.(item.id, "cancel")}
         />

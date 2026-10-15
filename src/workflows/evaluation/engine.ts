@@ -34,7 +34,7 @@ export async function createEvaluationEngine(): Promise<EffectExecutor & { close
     },
   } });
   await api.start({ host: '127.0.0.1', port: 0 });
-  const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath });
+  const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest });
   try {
     const handle = await runtime.acquire({ runId: 'quality-catalog', projectId: DEFAULT_IDS.project });
     const entries = [];

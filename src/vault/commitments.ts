@@ -5,6 +5,9 @@ import { currentTurnScopeId } from '../actions/tools/turn-scope-store.ts';
 export type CommitmentPriority = 'low' | 'normal' | 'high' | 'critical';
 export type CommitmentStatus = 'pending' | 'active' | 'completed' | 'failed' | 'escalated';
 
+export const COMMITMENT_PRIORITIES: readonly CommitmentPriority[] = ['low', 'normal', 'high', 'critical'];
+export const COMMITMENT_STATUSES: readonly CommitmentStatus[] = ['pending', 'active', 'completed', 'failed', 'escalated'];
+
 export type CommitmentScheduleOptions = {
   /** Linked work uses its own decision and execution contract, even when it has a due date. */
   excludeWorkItems?: boolean;
@@ -337,10 +340,36 @@ export function updateCommitmentStatus(
   return getCommitment(id);
 }
 
+/** The fields a dashboard edit may change (#1020); see daemon/commitment-patch.ts. */
+export type CommitmentPatch = {
+  status?: CommitmentStatus;
+  /** Only with `status`, as updateCommitmentStatus takes it. */
+  result?: string;
+  priority?: CommitmentPriority;
+  /** null unassigns. */
+  assigned_to?: string | null;
+};
+
 /**
- * Update a commitment's assigned_to field.
+ * Apply `patch` to one commitment, all of it or none of it. A status change
+ * is updateCommitmentStatus's, so it sets completed_at and the result as it
+ * always has. Null when there is no such commitment.
  */
-export function updateCommitmentAssignee(id: string, assignedTo: string): Commitment | null {
+export function patchCommitment(id: string, patch: CommitmentPatch): Commitment | null {
+  const db = getDb();
+  if (!getCommitment(id)) return null;
+  db.transaction(() => {
+    if (patch.status !== undefined) updateCommitmentStatus(id, patch.status, patch.result);
+    if (patch.priority !== undefined) db.prepare('UPDATE commitments SET priority = ? WHERE id = ?').run(patch.priority, id);
+    if (patch.assigned_to !== undefined) updateCommitmentAssignee(id, patch.assigned_to);
+  })();
+  return getCommitment(id);
+}
+
+/**
+ * Update a commitment's assigned_to field. null unassigns.
+ */
+export function updateCommitmentAssignee(id: string, assignedTo: string | null): Commitment | null {
   const db = getDb();
   const commitment = getCommitment(id);
   if (!commitment) return null;

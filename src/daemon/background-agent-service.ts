@@ -181,7 +181,7 @@ export class BackgroundAgentService implements Service, IAgentService {
     this._status = 'stopping';
     const primary = this.orchestrator.getPrimary();
     if (primary) {
-      this.orchestrator.terminateAgent(primary.id);
+      this.orchestrator.reapAgent(primary.id);
     }
 
     // Pending UI approvals must not launch/reuse this browser after stop.

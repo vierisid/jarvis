@@ -44,7 +44,7 @@ describe("EngineRuntime (D1: spawn + handshake)", () => {
       cached = await buildEngineBundle();
     }
     if (cached) {
-      runtime = new EngineRuntime({ api, bundlePath: cached.bundlePath });
+      runtime = new EngineRuntime({ api, bundlePath: cached.bundlePath, expectedDigest: cached.digest });
     }
   });
 
@@ -137,7 +137,7 @@ describe("EngineRuntime (D3: end-to-end CODE flow)", () => {
       cached = await buildEngineBundle();
     }
     if (cached) {
-      runtime = new EngineRuntime({ api, bundlePath: cached.bundlePath });
+      runtime = new EngineRuntime({ api, bundlePath: cached.bundlePath, expectedDigest: cached.digest });
     }
   });
 
@@ -215,6 +215,7 @@ describe("EngineRuntime (D1: error paths)", () => {
       const runtime = new EngineRuntime({
         api,
         bundlePath: "/nonexistent/engine-bundle.js",
+        expectedDigest: null,
         handshakeTimeoutMs: 1000,
         killGraceMs: 200,
       });
@@ -246,7 +247,7 @@ describe("EngineRuntime (D1: error paths)", () => {
     });
     await api.start({ port: 0 });
     try {
-      const runtime = new EngineRuntime({ api, bundlePath: "/nonexistent/main.js" });
+      const runtime = new EngineRuntime({ api, bundlePath: "/nonexistent/main.js", expectedDigest: null });
       await runtime.shutdown();
       // Idempotent: a second shutdown is a no-op, not an error.
       await runtime.shutdown();
@@ -268,6 +269,7 @@ describe("EngineRuntime shutdown reclaims what release() did not", () => {
   // minutes.
   let api: SandboxApi;
   let bundlePath: string | null = null;
+  let expectedDigest: string | null = null;
 
   beforeAll(async () => {
     initWorkflowDb(":memory:");
@@ -278,6 +280,7 @@ describe("EngineRuntime shutdown reclaims what release() did not", () => {
     let cached = initialCached;
     if (!cached && buildOptIn) cached = await buildEngineBundle();
     bundlePath = cached?.bundlePath ?? null;
+    expectedDigest = cached?.digest ?? null;
   });
 
   afterAll(async () => {
@@ -298,7 +301,7 @@ describe("EngineRuntime shutdown reclaims what release() did not", () => {
   test.skipIf(skipBundleTests)(
     "an acquired, never-released engine is killed by shutdown()",
     async () => {
-      const runtime = new EngineRuntime({ api, bundlePath: bundlePath! });
+      const runtime = new EngineRuntime({ api, bundlePath: bundlePath!, expectedDigest });
       const flow = createFlow({ projectId: DEFAULT_IDS.project });
       const v = createDraftVersion({ flowId: flow.id, displayName: "abandoned" });
       lockVersion(v.id);
@@ -333,7 +336,7 @@ describe("EngineRuntime shutdown reclaims what release() did not", () => {
       // miss: shutdown decides what to kill while an acquire is still inside
       // its token mint, and the engine appears afterwards.
       const before = new Set(liveEngines().map((e) => e.pid));
-      const runtime = new EngineRuntime({ api, bundlePath: bundlePath! });
+      const runtime = new EngineRuntime({ api, bundlePath: bundlePath!, expectedDigest });
       const flow = createFlow({ projectId: DEFAULT_IDS.project });
       const v = createDraftVersion({ flowId: flow.id, displayName: "racing" });
       lockVersion(v.id);

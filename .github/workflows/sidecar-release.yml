@@ -4,13 +4,25 @@ name: Sidecar Release
 # from sidecar/VERSION. Distributed via npm only — no sidecar-v* git tag or
 # GitHub release. Driven two ways:
 #   * Called by the brain's Release Executor (release-exec.yml) so a brain
-#     release also ships the current sidecar (its own version).
+#     release also ships the current sidecar (its own version). It is called
+#     TWICE there (#952): once with `publish: false`, which builds, signs and
+#     verifies and reports the five digests as its `digests` output, and once
+#     with `publish_only: true`, which builds nothing and publishes those
+#     artifacts, checked against those digests. The second call waits for
+#     the same two jobs as the brain publish, and runs no job of its own
+#     before publish-sidecar (resolve is skipped, and everything else needs
+#     it), so the two `release` approvals come due together and one click
+#     releases both.
 #   * Dispatched manually to ship a sidecar-only release without touching the
-#     brain.
+#     brain. Neither input above exists on a dispatch, and absent they mean
+#     build and publish in one go, as before.
 # Idempotent: if sidecar/VERSION is already on npm it stops as a no-op success
 # instead of failing — so calling it on every brain release is safe even when
-# the sidecar hasn't changed. Partial publishes self-heal: the per-package
-# "already on npm" guards no-op, and the wrapper (published last) is the gate.
+# the sidecar hasn't changed. Partial publishes self-heal when the failed jobs
+# of the run that started them are re-run (not all jobs, which rebuilds): the per-package "already on npm" guards no-op once
+# npm is found to serve exactly that run's files (#958), and the wrapper
+# (published last) is the gate. A new run cannot finish another run's partial
+# publish, since its build is not byte-identical; bump sidecar/VERSION.
 
 on:
   workflow_call:
@@ -19,13 +31,68 @@ on:
         description: "Build and validate without publishing"
         type: boolean
         default: false
+      # The two halves (#952). Read by resolve (its if: and its script),
+      # by publish-sidecar (its if: and its version and verify steps), and
+      # nowhere else; each of those is pinned or run verbatim by
+      # release-exec.test.sh, including for a dispatch, which declares none
+      # of them, so they arrive null or empty and mean build and publish.
+      publish:
+        description: "Publish to npm. false builds, signs and verifies only, and reports the digests output"
+        type: boolean
+        default: true
+      publish_only:
+        description: "Build nothing; publish what an earlier call in this run built, by its digests output"
+        type: boolean
+        default: false
+      digests:
+        description: "With publish_only: the digests output of the call that built the artifacts"
+        type: string
+        default: ""
+      version:
+        description: "With publish_only: the version output of the call that built the artifacts"
+        type: string
+        default: ""
+    # released and version come from publish-sidecar when it ran, and from
+    # resolve otherwise (#952): a publish_only call runs no resolve, and a
+    # publish: false call no publish-sidecar. github-release reads them from
+    # the publish_only call, where publish-sidecar ran exactly when it
+    # published.
     outputs:
       released:
-        description: "true when a new sidecar version was (re)built this run"
-        value: ${{ jobs.resolve.outputs.should_release }}
+        description: "true when this call published a new sidecar version (on a dry run, rehearsed publishing it), or, on a call that does not publish, built one"
+        value: ${{ jobs.publish-sidecar.outputs.released || jobs.resolve.outputs.should_release }}
       version:
-        description: "the sidecar version (from sidecar/VERSION)"
-        value: ${{ jobs.resolve.outputs.version }}
+        description: "the sidecar version (from sidecar/VERSION, by way of the build call on a publish_only call)"
+        value: ${{ jobs.publish-sidecar.outputs.version || jobs.resolve.outputs.version }}
+      sums:
+        description: "base64 sha256sum manifest of the sidecar-* artifacts publish-sidecar published"
+        value: ${{ jobs.publish-sidecar.outputs.sums }}
+      # Each digest is the job output of the one job that produced those
+      # bytes (#781), labelled with its leg by this format string and nothing
+      # else; publish-sidecar parses it back by label on a publish_only call.
+      # Evaluated by GitHub from job outputs, so no step of any job in the
+      # run can write it. Empty when this call built nothing (the version is
+      # already on npm), which tells the publish_only call there is nothing
+      # to publish without it asking npm a second time.
+      digests:
+        description: "the five sidecar-* artifact sha256 digests, by leg, for a later publish_only call; empty when nothing was built"
+        value: ${{ jobs.resolve.outputs.build == 'true' && format('linux-x64={0} linux-arm64={1} darwin-arm64={2} darwin-x64={3} win32-x64={4}', jobs.build-sidecar-linux-x64.outputs.sha256, jobs.build-sidecar-linux-arm64.outputs.sha256, jobs.build-sidecar-darwin-arm64.outputs.sha256, jobs.build-sidecar-darwin-x64.outputs.sha256, jobs.sign-sidecar-windows.outputs.sha256) || '' }}
+    # Every secret this workflow reads, declared so the caller can pass exactly
+    # these instead of `secrets: inherit` (#682). All optional: absent, the
+    # macOS bundle ships unsigned with a warning, as on a fork. A secret read
+    # here but not declared would be silently empty when called, so
+    # .github/scripts/workflow-hardening.test.sh checks the two lists match.
+    secrets:
+      APPLE_CERT_P12:
+        required: false
+      APPLE_CERT_PASSWORD:
+        required: false
+      ASC_KEY_ID:
+        required: false
+      ASC_ISSUER_ID:
+        required: false
+      ASC_API_KEY_P8:
+        required: false
   workflow_dispatch:
     inputs:
       dry_run:
@@ -34,68 +101,175 @@ on:
         default: true
 
 # Least privilege at the workflow level: the jobs that need OIDC declare it
-# themselves — publish-sidecar for npm Trusted Publishing, build-sidecar to
-# federate into Google Cloud KMS for Windows signing.
+# themselves -- publish-sidecar for npm Trusted Publishing, sign-sidecar-windows
+# to federate into Google Cloud KMS for Windows signing.
 permissions:
   contents: read
 
 env:
-  GO_VERSION: "1.25"
-  BUN_VERSION: "latest"
+  # No GO_VERSION: setup-go reads the exact version from sidecar/go.mod.
+  # There is no BUN_VERSION: nothing in this workflow runs Bun. It used to be
+  # `latest`, installed into publish-sidecar (id-token: write) and never used
+  # (#681).
+  # Exact npm for Trusted Publishing, never `latest`: keep it equal to
+  # NPM_VERSION in release-exec.yml, which says where the value comes from.
+  NPM_VERSION: "12.1.0"
+  # The sha512 of that npm tarball (#1000); see release-exec.yml, and bump
+  # the two together.
+  NPM_INTEGRITY: "sha512-Fyhu62pNx70YCs/5+dEmJQTFVmSKwvo5CA0qvBkGDRpob42MJ6G2RQ2tdxeKM4nYnIZDqkYAxEgqtoejn9QGtQ=="
   SIDECAR_BIN: jarvis
-  DRY_RUN: ${{ inputs.dry_run || false }}
+  # Spelled exactly as in release-exec.yml, which passes the input (#685);
+  # publish-sidecar's environment name repeats it because `env` is not
+  # available there. release-exec.test.sh checks that the two agree.
+  DRY_RUN: ${{ inputs.dry_run == true }}
 
 jobs:
   # ─── Resolve version + idempotency gate ────────────────────────
   # The whole release is skipped (no-op success) when sidecar/VERSION is already
   # published, so the brain's release-exec can call this unconditionally.
+  #
+  # Skipped on a publish_only call (#952), and with it every job but
+  # publish-sidecar, since they all need it: a skipped job takes no runner,
+  # so the publish is the first job of that call to reach the `release` gate,
+  # at the same moment as publish-brain. That call takes the version and the
+  # decision from the build call instead. It still runs for publish: false
+  # with publish_only: true, only to refuse that combination. On a dispatch
+  # publish_only is null, which is not true, so it runs.
   resolve:
+    if: inputs.publish_only != true || inputs.publish == false
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
       should_release: ${{ steps.v.outputs.should_release }}
+      # What this call does (#952): publish is false on a publish: false
+      # call, and both are false when there is nothing to release. The build
+      # legs gate on build and publish-sidecar on publish. resolve does not
+      # run on a publish_only call at all.
+      build: ${{ steps.v.outputs.build }}
+      publish: ${{ steps.v.outputs.publish }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - id: v
+        env:
+          PUBLISH: ${{ inputs.publish }}
+          PUBLISH_ONLY: ${{ inputs.publish_only }}
         run: |
           set -euo pipefail
+          export LC_ALL=C
           VERSION="$(cat sidecar/VERSION)"
+          # Checked before it becomes an output (#684): every job below takes
+          # it through env:, but it still names npm packages and lands in a
+          # sed expression, so it must be a plain semver with nothing a shell
+          # or sed would read as syntax -- and a newline here would otherwise
+          # write extra lines into $GITHUB_OUTPUT.
+          # SemVer 2.0 pre-release identifiers: no empty one, no leading zero
+          # on a numeric one (`npm version` refuses both).
+          id='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+          if ! [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-${id}(\.${id})*)?$ ]]; then
+            printf '::error::sidecar/VERSION is not a plain semver: %q\n' "$VERSION"
+            exit 1
+          fi
+          # Which half of the work this call does (#952). Compared with the
+          # one value that changes the default and nothing else, so an input
+          # a dispatch never declares (an empty string here) means build and
+          # publish, as it did before the inputs existed.
+          build=true
+          publish=true
+          if [ "${PUBLISH_ONLY:-}" = "true" ]; then build=false; fi
+          if [ "${PUBLISH:-}" = "false" ]; then publish=false; fi
+          if [ "$build" = false ] && [ "$publish" = false ]; then
+            echo "::error::publish: false and publish_only: true together would neither build nor publish"
+            exit 1
+          fi
+          # The job's if: skips it on every other publish_only call; a
+          # publish_only call decides in publish-sidecar, from the build call.
+          if [ "$build" = false ]; then
+            echo "::error::resolve does not run on a publish_only call; publish-sidecar takes the version and the decision from the build call"
+            exit 1
+          fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           if [ "${DRY_RUN}" = "true" ]; then
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            should_release=true
             echo "::notice::Dry run — building/validating sidecar v${VERSION} without publishing."
-            exit 0
-          fi
-          if npm view "@usejarvis/sidecar@${VERSION}" version >/dev/null 2>&1; then
-            echo "should_release=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::@usejarvis/sidecar@${VERSION} is already published — skipping sidecar release (no-op)."
           else
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
-            echo "Sidecar v${VERSION} is not yet on npm — releasing."
+            # Released only on a clean "not found" (#979). Any other failure
+            # of the lookup -- a 5xx, a rate limit, an auth error, a network
+            # error, an answer that does not parse -- used to read as "not
+            # published" and send a version already out to publish-sidecar.
+            # npm view --json puts the error, code included, on stdout; E404
+            # is both "no such version" (the package answered without it)
+            # and "no such package" (a first release). Measured on npm 10.8.2,
+            # 11.6.2 and 12.1.0: a published version prints "1.2.3" on 10 and
+            # 11 and ["1.2.3"] on 12. npm has retried a transient error twice
+            # (fetch-retries) before it reports one here.
+            view_rc=0
+            view="$(npm view "@usejarvis/sidecar@${VERSION}" version --json 2>/dev/null)" || view_rc=$?
+            # Exactly one JSON value is an answer; nothing, two, or text that
+            # does not parse is not, and reads as null.
+            answer="$(jq -sc 'if length == 1 then .[0] else null end' <<<"$view" 2>/dev/null)" || answer=null
+            errfield() { jq -r --arg f "$1" 'if type == "object" and (.error | type) == "object" then .error[$f] | strings else empty end' <<<"$answer"; }
+            if [ "$view_rc" -eq 0 ] && jq -e --arg v "$VERSION" '. == $v or . == [$v]' <<<"$answer" >/dev/null; then
+              should_release=false
+              echo "::notice::@usejarvis/sidecar@${VERSION} is already published -- skipping sidecar release (no-op)."
+            elif [ "$view_rc" -ne 0 ] && [ "$(errfield code)" = "E404" ]; then
+              should_release=true
+              echo "Sidecar v${VERSION} is not yet on npm -- releasing."
+            else
+              # npm text, control characters dropped, so it stays one line
+              # and cannot start a workflow command of its own.
+              printf '::error::Could not establish whether @usejarvis/sidecar@%s is on npm (npm view exit %s, code %s: %s), so this run will not decide to publish it (#979). Re-run this job.\n' \
+                "$VERSION" "$view_rc" "$(errfield code | tr -d '\000-\037')" "$(errfield summary | tr -d '\000-\037')"
+              exit 1
+            fi
           fi
+          if [ "$should_release" != true ]; then build=false; publish=false; fi
+          {
+            echo "should_release=${should_release}"
+            echo "build=${build}"
+            echo "publish=${publish}"
+          } >> "$GITHUB_OUTPUT"
 
   # ─── Cross-compile Go sidecars (cgo) ───────────────────────────
   # The sidecar is a cgo program (webview_go, GTK/Cocoa overlays), so it CANNOT
   # be cross-compiled with CGO_ENABLED=0 from a single runner. Each arch builds
   # with CGO_ENABLED=1 on a runner/toolchain that can see its native UI SDK.
-  build-sidecar:
+  # Four jobs, not one four-leg matrix (#781). The legs of a matrix share
+  # ONE outputs block, merged from whatever each leg writes, so any leg could
+  # set another leg's digest name and finish last -- a compromised Linux leg
+  # (apt maintainer scripts as root, the cgo toolchain, the module graph)
+  # could then swap the macOS bundle AND vouch for the swap. A job's outputs
+  # can be set only by that job, so each leg is its own job with its own
+  # `sha256`, and publish-sidecar checks each artifact against the job that
+  # built it. The steps are written once below and reused by YAML alias in
+  # the other three, so the four cannot drift; each job keeps a one-entry
+  # matrix only because those steps (and runs-on) read `matrix.*`.
+  #
+  # No id-token in any of them (#682). Only Windows signing federates into
+  # Google Cloud, so the Windows leg is its own jobs (build-sidecar-windows,
+  # then sign-sidecar-windows, the only one of the two with id-token), and
+  # these four -- two of which run Swift and Apple tooling on macOS -- cannot
+  # mint an OIDC token at all.
+  #
+  # The five jobs that build (these four and build-sidecar-windows), the
+  # signer and the post-sign check all gate on resolve's build output, and on
+  # a publish_only call skip with the skipped resolve, taking no runner
+  # (#952).
+  build-sidecar-linux-x64:
     needs: resolve
-    if: needs.resolve.outputs.should_release == 'true'
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
-    # OIDC, for google-github-actions/auth: Windows signing federates into
-    # Google Cloud KMS with no stored credential at all. Declared here rather
-    # than at the workflow level so no other job can mint a token.
     permissions:
       contents: read
-      id-token: write
-    env:
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
+    env: &build-sidecar-leg-env
       # secrets can't be referenced in step `if:` conditions — surface their
       # presence as env flags so the signing steps can gate on them.
       HAVE_APPLE_SIGNING: ${{ secrets.APPLE_CERT_P12 != '' }}
-      # Windows signing is keyless: there is no secret to sentinel on, so the
-      # gate is the keyring variable — nothing can be signed without it.
+    # One leg. The matrix is only what the shared steps read.
     strategy:
-      fail-fast: false
       matrix:
         include:
           - goos: linux
@@ -103,32 +277,16 @@ jobs:
             npm_pkg: linux-x64
             runner: ubuntu-latest
             setup: linux
-          - goos: linux
-            goarch: arm64
-            npm_pkg: linux-arm64
-            runner: ubuntu-24.04-arm
-            setup: linux
-          - goos: windows
-            goarch: amd64
-            npm_pkg: win32-x64
-            runner: ubuntu-latest
-            setup: windows-cross
-            ext: .exe
-          - goos: darwin
-            goarch: arm64
-            npm_pkg: darwin-arm64
-            runner: macos-latest
-            setup: darwin
-          - goos: darwin
-            goarch: amd64
-            npm_pkg: darwin-x64
-            runner: macos-latest
-            setup: darwin
-    steps:
+    steps: &build-sidecar-leg-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
+          # The Actions cache is writable by any run on main, and Go reuses
+          # cached modules and build output without re-verifying them (#681).
+          cache: false
           # Track sidecar/go.mod as the single source of the Go version.
           go-version-file: sidecar/go.mod
           cache-dependency-path: sidecar/go.sum
@@ -154,127 +312,21 @@ jobs:
             [ -f "$d/javascriptcoregtk-4.1.pc" ] && sudo ln -sf "$d/javascriptcoregtk-4.1.pc" "$d/javascriptcoregtk-4.0.pc" || true
           done
 
-      # Windows cross-compile from Linux via mingw-w64 + the bundled EventToken.h
-      # shim (the one WebView2 SDK header mingw lacks). Same recipe as
-      # verify-windows.sh — no Windows runner needed.
-      - name: Install mingw-w64 (Windows cross)
-        if: matrix.setup == 'windows-cross'
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          # osslsigncode: post-sign verification inside sign-windows.sh
-          sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 osslsigncode
-
+      # .github/scripts/build-sidecar.sh is shared with build-sidecar-windows,
+      # so the two jobs cannot drift in how they build or pin.
       - name: Build sidecar (${{ matrix.goos }}/${{ matrix.goarch }})
         working-directory: sidecar
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: "1"
+          SETUP: ${{ matrix.setup }}
+          OUT: ${{ env.SIDECAR_BIN }}
           # The self-updater verifies the payloads it installs exactly as
           # Jarvis-Setup does (internal/update), so it carries the same pins:
-          # the Authenticode publisher on Windows, the Developer ID team on
-          # macOS. Empty means chain-only + a warning in sidecar.log.
-          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
+          # the Developer ID team on macOS. Empty means chain-only + a
+          # warning in sidecar.log.
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-          LDFLAGS="-s -w -X main.sidecarVersion=$(cat VERSION)"
-          PIN=""
-          case "${{ matrix.setup }}" in
-            windows-cross)
-              export CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++
-              export CGO_CFLAGS="-I$(pwd)/include" CGO_CXXFLAGS="-I$(pwd)/include"
-              # GUI subsystem: no console window when the .exe is launched.
-              LDFLAGS="$LDFLAGS -H windowsgui"
-              PIN="${SIGNING_PUBLISHER_CN}"
-              # The go tool splits -ldflags on whitespace, so the CN (a company
-              # name, always with spaces) carries its own quotes to the linker.
-              LDFLAGS="$LDFLAGS -X 'github.com/jarvis/sidecar/internal/update.expectedPublisherCN=${PIN}'"
-              ;;
-            darwin)
-              if [ "${{ matrix.goarch }}" = "amd64" ]; then TARGET=x86_64-apple-macos11; else TARGET=arm64-apple-macos11; fi
-              export CC="clang -target $TARGET" CXX="clang++ -target $TARGET"
-              PIN="${APPLE_TEAM_ID}"
-              LDFLAGS="$LDFLAGS -X 'github.com/jarvis/sidecar/internal/update.expectedTeamID=${PIN}'"
-              ;;
-          esac
-          if [ "${{ matrix.setup }}" != "linux" ] && [ -z "${PIN}" ]; then
-            echo "::warning::no signing pin for ${{ matrix.goos }}; self-updates from this build will accept any validly signed payload."
-          fi
-          # -trimpath keeps -ldflags out of the embedded build info: without it
-          # the pin text is in the binary even when the -X target is wrong
-          # (a renamed variable), and the check below could never fail.
-          go build -trimpath -ldflags "$LDFLAGS" \
-            -o "${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}" .
-          if [ -n "${PIN}" ]; then
-            # Via a file, not a pipe: `grep -q` exiting early SIGPIPEs strings,
-            # which pipefail would report as a missing pin.
-            strings "${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}" > /tmp/sidecar-strings.txt
-            if ! grep -qF "${PIN}" /tmp/sidecar-strings.txt; then
-              echo "::error::signing pin '${PIN}' is not present in the sidecar binary; check the -X path and the -ldflags quoting"
-              exit 1
-            fi
-          fi
-
-      # Windows signing needs BOTH the KMS keyring variable AND the issued
-      # certificate chain in the repo. They arrive at DIFFERENT times: the
-      # Sectigo CSR is generated FROM the KMS key, so the keyring necessarily
-      # exists days before the certificate does. Gating on the variable alone
-      # would turn that window into hard release failures instead of unsigned
-      # builds — so check the chain file too.
-      - name: Windows signing readiness
-        id: winsign
-        if: matrix.setup == 'windows-cross'
-        run: |
-          set -euo pipefail
-          if [ -z "${{ vars.GCP_KMS_KEYRING }}" ]; then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Windows signing is not configured (GCP_KMS_KEYRING unset) — shipping an unsigned binary (SmartScreen will warn users)."
-          elif [ ! -f sidecar/packaging/windows/codesign-chain.pem ]; then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::GCP_KMS_KEYRING is set but sidecar/packaging/windows/codesign-chain.pem is missing — the certificate has not been issued/committed yet, so this binary ships UNSIGNED."
-          else
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      # ─── Windows: Authenticode signature (Cloud KMS + Sectigo) ────────
-      # Keyless: OIDC → Workload Identity Federation → a short-lived access
-      # token for the Cloud HSM key. Nothing is stored in this repository, so
-      # there is no signing secret to leak or rotate.
-      - name: Authenticate to Google Cloud
-        id: gcp-auth
-        if: matrix.setup == 'windows-cross' && steps.winsign.outputs.ready == 'true'
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_SIGNING_SERVICE_ACCOUNT }}
-          token_format: "access_token"
-
-      # scripts/sign-windows.sh is the single signing code path, shared with
-      # installer-release.yml and runnable locally (see its header), so a local
-      # test exercises exactly what CI runs. Gated on GCP_KMS_KEYRING: absent
-      # (forks, pre-onboarding) the .exe ships unsigned, exactly as before.
-      - name: Sign Windows binary (Cloud KMS)
-        if: matrix.setup == 'windows-cross' && steps.winsign.outputs.ready == 'true'
-        working-directory: sidecar
-        env:
-          GCP_ACCESS_TOKEN: ${{ steps.gcp-auth.outputs.access_token }}
-          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}
-          GCP_KMS_KEY_ALIAS: ${{ vars.GCP_KMS_KEY_ALIAS }}
-          # Asserted post-sign: the binary must carry OUR publisher, the same
-          # identity the installer pins at runtime.
-          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
-          # Sectigo's roots are publicly trusted, so demand the FULL
-          # verification (osslsigncode exit 0). This is the script's default
-          # too; stated here so the release posture is visible at the workflow.
-          SIGN_REQUIRE_TRUSTED_CHAIN: "1"
-        run: |
-          if [ -z "${SIGNING_PUBLISHER_CN}" ]; then
-            echo "::warning::SIGNING_PUBLISHER_CN repo variable is unset — the signature's publisher will not be asserted."
-          fi
-          scripts/sign-windows.sh "${{ env.SIDECAR_BIN }}.exe"
-
+        run: ../.github/scripts/build-sidecar.sh
 
       # ─── macOS: assemble Jarvis.app, sign, notarize ────────────────
       # Notifications (UNUserNotification) and stable TCC grants require a
@@ -297,7 +349,7 @@ jobs:
         run: |
           set -euo pipefail
           packaging/macos/make-icns.sh
-          make app-macos BIN=./${{ env.SIDECAR_BIN }} APP_DIR=dist/Jarvis.app
+          make app-macos BIN="./${SIDECAR_BIN}" APP_DIR=dist/Jarvis.app
 
       # Gated on the Apple credentials: absent (forks, pre-onboarding) the
       # bundle ships unsigned, exactly as before. Signing is inside-out
@@ -381,34 +433,494 @@ jobs:
         # codesign seal.
         run: COPYFILE_DISABLE=1 tar --no-mac-metadata -C dist -czf jarvis-app.tar.gz Jarvis.app
 
+      # The digest of exactly the file the upload below takes, as the output of
+      # this job alone; the artifact store is writable by every job in the run.
+      # macOS has shasum but not always sha256sum; the hex is the same.
+      - name: Digest
+        id: digest
+        working-directory: sidecar
+        env:
+          FILE: ${{ matrix.setup == 'darwin' && 'jarvis-app.tar.gz' || env.SIDECAR_BIN }}
+          LEG: ${{ matrix.npm_pkg }}
+        run: |
+          set -euo pipefail
+          if command -v sha256sum >/dev/null; then sum="$(sha256sum "$FILE")"; else sum="$(shasum -a 256 "$FILE")"; fi
+          sum="${sum%% *}"
+          [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::could not hash $FILE"; exit 1; }
+          echo "sha256=${sum}" >> "$GITHUB_OUTPUT"
+          echo "${LEG}: ${FILE} sha256 ${sum}"
+
       - name: Upload bundle (darwin)
         if: matrix.setup == 'darwin'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sidecar-${{ matrix.npm_pkg }}
           path: sidecar/jarvis-app.tar.gz
+          if-no-files-found: error
 
       - name: Upload binary
         if: matrix.setup != 'darwin'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sidecar-${{ matrix.npm_pkg }}
-          path: sidecar/${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}
+          path: sidecar/${{ env.SIDECAR_BIN }}
+          if-no-files-found: error
+
+  build-sidecar-linux-arm64:
+    needs: resolve
+    if: needs.resolve.outputs.build == 'true'
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
+    env: *build-sidecar-leg-env
+    # One leg. The matrix is only what the shared steps read.
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: arm64
+            npm_pkg: linux-arm64
+            runner: ubuntu-24.04-arm
+            setup: linux
+    steps: *build-sidecar-leg-steps
+
+  build-sidecar-darwin-arm64:
+    needs: resolve
+    if: needs.resolve.outputs.build == 'true'
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
+    env: *build-sidecar-leg-env
+    # One leg. The matrix is only what the shared steps read.
+    strategy:
+      matrix:
+        include:
+          - goos: darwin
+            goarch: arm64
+            npm_pkg: darwin-arm64
+            runner: macos-latest
+            setup: darwin
+    steps: *build-sidecar-leg-steps
+
+  build-sidecar-darwin-x64:
+    needs: resolve
+    if: needs.resolve.outputs.build == 'true'
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
+    env: *build-sidecar-leg-env
+    # One leg. The matrix is only what the shared steps read.
+    strategy:
+      matrix:
+        include:
+          - goos: darwin
+            goarch: amd64
+            npm_pkg: darwin-x64
+            runner: macos-latest
+            setup: darwin
+    steps: *build-sidecar-leg-steps
+
+  # --- Windows: cross-compile (no OIDC) ---
+  # Split out of the matrix so the matrix holds no id-token, and split from
+  # signing so the compiler, mingw and the Go module graph never run in a job
+  # that can mint one (#682): a compromised toolchain here could otherwise ask
+  # Workload Identity Federation for a token and have KMS sign anything. The
+  # binary crosses to sign-sidecar-windows with its digest as a job output.
+  build-sidecar-windows:
+    needs: resolve
+    if: needs.resolve.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # The Actions cache is writable by any run on main, and Go reuses
+          # cached modules and build output without re-verifying them (#681).
+          cache: false
+          # Track sidecar/go.mod as the single source of the Go version.
+          go-version-file: sidecar/go.mod
+          cache-dependency-path: sidecar/go.sum
+
+      # Windows cross-compile from Linux via mingw-w64 + the bundled EventToken.h
+      # shim (the one WebView2 SDK header mingw lacks). Same recipe as
+      # verify-windows.sh -- no Windows runner needed.
+      - name: Install mingw-w64 (Windows cross)
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+
+      - name: Build sidecar (windows/amd64)
+        working-directory: sidecar
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          SETUP: windows-cross
+          OUT: ${{ env.SIDECAR_BIN }}.exe
+          # The self-updater verifies the payloads it installs exactly as
+          # Jarvis-Setup does (internal/update), so it carries the same pin:
+          # the Authenticode publisher. Empty means chain-only + a warning in
+          # sidecar.log.
+          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
+        run: ../.github/scripts/build-sidecar.sh
+
+      - name: Digest
+        id: digest
+        working-directory: sidecar
+        run: echo "sha256=$(sha256sum "${SIDECAR_BIN}.exe" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      # Not under the sidecar-* name: that is the signed binary, which only
+      # sign-sidecar-windows uploads.
+      - name: Upload unsigned binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unsigned-win32-x64
+          path: sidecar/${{ env.SIDECAR_BIN }}.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  # --- Windows: Authenticode-sign via Cloud KMS ---
+  # The only job here besides publish-sidecar that holds id-token. It builds
+  # nothing and installs nothing: it verifies the binary build-sidecar-windows
+  # reported, signs it with scripts/sign-windows.sh (whose jsign download is
+  # checksum-pinned), and uploads the result as sidecar-win32-x64 -- signed,
+  # or, when signing is not configured, unsigned on a dry run or with
+  # ALLOW_UNSIGNED_WINDOWS set, and otherwise not at all (#869: see the
+  # readiness step). The post-sign check runs in verify-sidecar-windows
+  # (#817).
+  sign-sidecar-windows:
+    needs: [resolve, build-sidecar-windows]
+    # build, not should_release (#952): on a publish_only call this job,
+    # which holds the KMS-federating token, must not run even if someone
+    # later adds a status function that would carry it past its skipped need.
+    if: needs.resolve.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    # OIDC, for google-github-actions/auth: Windows signing federates into
+    # Google Cloud KMS with no stored credential at all. Declared here rather
+    # than at the workflow level so no other job can mint a token. Windows
+    # signing is keyless: there is no secret to sentinel on, so the gate is
+    # the keyring variable -- nothing can be signed without it.
+    permissions:
+      contents: read
+      id-token: write
+    # The SIGNED binary's digest (#781). Signing changes the bytes, so the
+    # digest build-sidecar-windows reported no longer describes what this job
+    # uploads, and without this the signed artifact reached publish-sidecar
+    # with nothing to check it against.
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
+      # Whether the signing step ran, so verify-sidecar-windows knows whether
+      # there is a signature to check (false only on a dry run or under
+      # ALLOW_UNSIGNED_WINDOWS, #869).
+      signed: ${{ steps.winsign.outputs.ready }}
+    steps:
+      # For scripts/sign-windows.sh and the committed certificate chain.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Into a directory of its own, never the checkout (#817 review): an
+      # artifact is a zip any job in this run can write -- a Linux or macOS
+      # leg included -- and extracted over sidecar/ it could replace
+      # scripts/sign-windows.sh before that runs with the KMS token.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: unsigned-win32-x64
+          path: ${{ runner.temp }}/unsigned
+
+      # The digest travels as a job output, which only build-sidecar-windows
+      # can set; the artifact store is writable by every job in this run.
+      # Exactly one regular file, that digest, and only then a copy into place.
+      - name: Verify the binary
+        working-directory: sidecar
+        env:
+          SHA256: ${{ needs.build-sidecar-windows.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-sidecar-windows reported no digest"; exit 1; }
+          in="${RUNNER_TEMP}/unsigned"
+          if [ "$(find "$in" -mindepth 1 -print)" != "${in}/${SIDECAR_BIN}.exe" ] || [ -L "${in}/${SIDECAR_BIN}.exe" ] || [ ! -f "${in}/${SIDECAR_BIN}.exe" ]; then
+            echo "::error::the unsigned-win32-x64 artifact is not exactly one file, ${SIDECAR_BIN}.exe"
+            exit 1
+          fi
+          echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c -
+          install -m 0644 "${in}/${SIDECAR_BIN}.exe" "${SIDECAR_BIN}.exe"
+
+      # Windows signing needs BOTH the KMS keyring variable AND the issued
+      # certificate chain in the repo. They arrive at DIFFERENT times: the
+      # Sectigo CSR is generated FROM the KMS key, so the keyring necessarily
+      # exists days before the certificate does -- so this checks the chain
+      # file too, and says which of the two is missing.
+      #
+      # A real run missing either one FAILS here (#869). It used to warn and
+      # carry on, and since every signing and verification step follows this
+      # decision, a release then shipped an UNSIGNED jarvis.exe with nothing
+      # but a warning in a green run. Shipping unsigned is now a recorded
+      # choice: set the repository variable ALLOW_UNSIGNED_WINDOWS to exactly
+      # `true` and the run warns and continues as it used to. A dry run
+      # still only warns, so a rehearsal needs no signing configuration.
+      # release-exec.test.sh runs this script verbatim against every case.
+      - name: Windows signing readiness
+        id: winsign
+        env:
+          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}
+          ALLOW_UNSIGNED_WINDOWS: ${{ vars.ALLOW_UNSIGNED_WINDOWS }}
+        run: |
+          set -euo pipefail
+          missing=""
+          if [ -z "${GCP_KMS_KEYRING}" ]; then
+            missing="Windows signing is not configured (GCP_KMS_KEYRING unset)"
+            fix="Set the GCP_KMS_KEYRING repository variable"
+          elif [ ! -f sidecar/packaging/windows/codesign-chain.pem ]; then
+            missing="GCP_KMS_KEYRING is set but sidecar/packaging/windows/codesign-chain.pem is missing -- the certificate has not been issued/committed yet"
+            fix="Issue the certificate and commit sidecar/packaging/windows/codesign-chain.pem"
+          fi
+          if [ -z "$missing" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            if [ "${ALLOW_UNSIGNED_WINDOWS}" = "true" ]; then
+              echo "::warning::ALLOW_UNSIGNED_WINDOWS is set but signing is configured, so it changed nothing this run. Delete the variable, or the next missing signing config ships an UNSIGNED jarvis.exe instead of failing."
+            fi
+          elif [ "${DRY_RUN}" = "true" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::${missing}. This dry run continues and builds an UNSIGNED jarvis.exe; a real release would stop here unless ALLOW_UNSIGNED_WINDOWS is true."
+          elif [ "${ALLOW_UNSIGNED_WINDOWS}" = "true" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::${missing}. Shipping an UNSIGNED jarvis.exe because ALLOW_UNSIGNED_WINDOWS is true (SmartScreen will warn users)."
+          else
+            echo "::error::${missing}, so this release would ship an UNSIGNED jarvis.exe. ${fix}, or set the repository variable ALLOW_UNSIGNED_WINDOWS to true to ship unsigned on purpose."
+            exit 1
+          fi
+
+      # ─── Windows: Authenticode signature (Cloud KMS + Sectigo) ────────
+      # Keyless: OIDC → Workload Identity Federation → a short-lived access
+      # token for the Cloud HSM key. Nothing is stored in this repository, so
+      # there is no signing secret to leak or rotate.
+      - name: Authenticate to Google Cloud
+        id: gcp-auth
+        if: steps.winsign.outputs.ready == 'true'
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SIGNING_SERVICE_ACCOUNT }}
+          token_format: "access_token"
+          # Only access_token is used. The default (true) writes a
+          # gha-creds-*.json into the workspace that carries what is needed
+          # to mint further OIDC tokens; nothing here reads it (#682).
+          create_credentials_file: false
+
+      # scripts/sign-windows.sh is the single signing code path, shared with
+      # installer-release.yml and runnable locally (see its header), so a local
+      # test exercises exactly what CI runs. Gated on the readiness step: with
+      # the keyring or the chain absent, a real run has already failed there
+      # unless ALLOW_UNSIGNED_WINDOWS is true (#869).
+      # --defer-verify (#817): the check needs osslsigncode, an apt package,
+      # and apt maintainer scripts run as root beside this job's OIDC token.
+      # verify-sidecar-windows runs it instead, and publish-sidecar waits for
+      # it.
+      - name: Sign Windows binary (Cloud KMS)
+        if: steps.winsign.outputs.ready == 'true'
+        working-directory: sidecar
+        env:
+          GCP_ACCESS_TOKEN: ${{ steps.gcp-auth.outputs.access_token }}
+          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}
+          GCP_KMS_KEY_ALIAS: ${{ vars.GCP_KMS_KEY_ALIAS }}
+        run: scripts/sign-windows.sh --defer-verify "${SIDECAR_BIN}.exe"
+
+      - name: Digest
+        id: digest
+        working-directory: sidecar
+        run: echo "sha256=$(sha256sum "${SIDECAR_BIN}.exe" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sidecar-win32-x64
+          path: sidecar/${{ env.SIDECAR_BIN }}.exe
+          if-no-files-found: error
+
+  # --- Windows: post-sign verification (no OIDC) ---
+  # #817. The check needs osslsigncode, which comes from apt, and apt runs
+  # package maintainer scripts as root: in sign-sidecar-windows they ran
+  # beside the Workload Identity token, so a mirror or archive compromise
+  # reached the KMS signing identity. Here nothing can mint a token. The
+  # binary is taken by the digest sign-sidecar-windows reported, which is
+  # also what publish-sidecar checks, so what is verified here is what ships;
+  # and publish-sidecar waits for this job. sign-windows.sh --verify-only
+  # fails when osslsigncode is missing, so dropping the install cannot turn
+  # into a skipped check.
+  verify-sidecar-windows:
+    needs: [resolve, sign-sidecar-windows]
+    if: needs.resolve.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # For scripts/sign-windows.sh.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Outside the checkout, as in sign-sidecar-windows: extracted over
+      # sidecar/, an artifact could replace the script that does the checking.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sidecar-win32-x64
+          path: ${{ runner.temp }}/signed
+
+      - name: Verify the signed binary digest
+        env:
+          SHA256: ${{ needs.sign-sidecar-windows.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::sign-sidecar-windows reported no digest"; exit 1; }
+          in="${RUNNER_TEMP}/signed"
+          if [ "$(find "$in" -mindepth 1 -print)" != "${in}/${SIDECAR_BIN}.exe" ] || [ -L "${in}/${SIDECAR_BIN}.exe" ] || [ ! -f "${in}/${SIDECAR_BIN}.exe" ]; then
+            echo "::error::the sidecar-win32-x64 artifact is not exactly one file, ${SIDECAR_BIN}.exe"
+            exit 1
+          fi
+          echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c -
+
+      # #869, checked again in a job that holds no token: the signer decides
+      # whether to sign, and this refuses its answer when a real run without
+      # ALLOW_UNSIGNED_WINDOWS says it did not, so a mistake in that decision
+      # cannot reach the publish on its own. An empty answer (the signer did
+      # not say) is a refusal too.
+      - name: Refuse an unsigned binary on a real run
+        env:
+          SIGNED: ${{ needs.sign-sidecar-windows.outputs.signed }}
+          ALLOW_UNSIGNED_WINDOWS: ${{ vars.ALLOW_UNSIGNED_WINDOWS }}
+        run: |
+          set -euo pipefail
+          if [ "${SIGNED}" != "true" ] && [ "${DRY_RUN}" != "true" ] && [ "${ALLOW_UNSIGNED_WINDOWS}" != "true" ]; then
+            echo "::error::sign-sidecar-windows did not sign jarvis.exe, and this is a real run without ALLOW_UNSIGNED_WINDOWS set to true, so it would ship unsigned. See its Windows signing readiness step."
+            exit 1
+          fi
+
+      - name: Install osslsigncode
+        if: needs.sign-sidecar-windows.outputs.signed == 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y osslsigncode
+
+      - name: Verify the Authenticode signature
+        if: needs.sign-sidecar-windows.outputs.signed == 'true'
+        working-directory: sidecar
+        env:
+          # The binary must carry OUR publisher, the same identity the
+          # installer pins at runtime.
+          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
+          # Sectigo's roots are publicly trusted, so demand the FULL
+          # verification (osslsigncode exit 0), and a check that runs at all.
+          # This is the script's default too; stated here so the release
+          # posture is visible at the workflow.
+          SIGN_REQUIRE_TRUSTED_CHAIN: "1"
+        run: |
+          if [ -z "${SIGNING_PUBLISHER_CN}" ]; then
+            echo "::warning::SIGNING_PUBLISHER_CN repo variable is unset -- the signature's publisher will not be asserted."
+          fi
+          scripts/sign-windows.sh --verify-only "${RUNNER_TEMP}/signed/${SIDECAR_BIN}.exe"
 
   # ─── Publish sidecar packages to npm ───────────────────────────
   publish-sidecar:
-    needs: [resolve, build-sidecar]
-    if: needs.resolve.outputs.should_release == 'true'
+    # Same requirement as publish-brain in release-exec.yml (#679): npm Trusted
+    # Publishing is bound to this environment, so the OIDC claim must carry it.
+    # It must be declared HERE rather than on the calling job, because GitHub
+    # does not allow `environment:` on a job that uses a reusable workflow.
+    # See the matching block in release-exec.yml: a dry run records its
+    # deployment against a separate environment so a rehearsal cannot appear as
+    # the live state of `release`. `env` is not an allowed context in an
+    # environment name, so this reads the input directly.
+    environment:
+      name: ${{ inputs.dry_run == true && 'release-dry-run' || 'release' }}
+    needs: [resolve, verify-sidecar-windows, build-sidecar-linux-x64, build-sidecar-linux-arm64, build-sidecar-darwin-arm64, build-sidecar-darwin-x64, sign-sidecar-windows]
+    # Two ways to run, and only two (#952):
+    #   * resolve said publish and every job above succeeded in THIS call --
+    #     the build and publish of a dispatch, the condition this job had
+    #     before.
+    #   * a publish_only call, where every job above is skipped by design
+    #     (resolve included), so neither success() nor resolve can decide.
+    #     It publishes exactly when the build call built, which that call
+    #     says by a non-empty digests output, and never asks npm a second
+    #     time: a second `npm view` could disagree with the first (one that
+    #     fails transiently reads as "not published") and send this call to
+    #     publish artifacts nobody built. It runs only if nothing above failed
+    #     or was cancelled; what vouches for the build is the caller, which
+    #     starts this call only after the publish: false call succeeded as a
+    #     whole (verify-sidecar-windows included), and the digests it hands
+    #     over, checked below as strictly as job outputs.
+    # The `inputs.publish_only == true` term is what keeps the status
+    # functions away from every other call: release-exec.test.sh pins this
+    # line byte for byte.
+    if: (needs.resolve.outputs.publish == 'true' && success()) || (inputs.publish_only == true && inputs.publish == true && inputs.digests != '' && !cancelled() && !failure())
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
+    outputs:
+      sums: ${{ steps.sums.outputs.sums }}
+      # The call outputs github-release reads (#952). released is literal:
+      # it is set only if this job ran, and the call fails unless it
+      # finished, so true here means this job published, or found the
+      # version already on npm and took that as success (the fallback in the
+      # publish steps). That fallback holds on a real run only when npm
+      # serves exactly the platform files this job verified (#958), so a
+      # concurrent standalone dispatch of the same version can no longer
+      # leave github-release attaching binaries npm does not serve.
+      released: "true"
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The one place this job learns its version (#952). A publish_only call
+      # ran no resolve, so it takes the build call's, passed through the
+      # caller as the version input; every other call takes resolve's.
+      # Exactly one source per call, and the value is checked again as resolve
+      # checks it (#684), because it still names npm packages and lands in a
+      # sed expression. First, so nothing runs before it is known.
+      - name: Resolve the version this call publishes
+        id: version
+        env:
+          PUBLISH_ONLY: ${{ inputs.publish_only }}
+          BUILT_VERSION: ${{ needs.resolve.outputs.version }}
+          GIVEN_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          if [ "${PUBLISH_ONLY:-}" = "true" ]; then
+            if [ -n "${BUILT_VERSION:-}" ]; then
+              echo "::error::a publish_only call takes its version from the version input, yet resolve ran in this call"
+              exit 1
+            fi
+            VERSION="${GIVEN_VERSION:-}"
+          else
+            if [ -n "${GIVEN_VERSION:-}" ]; then
+              echo "::error::the version input is for a publish_only call; this call resolved its own"
+              exit 1
+            fi
+            VERSION="${BUILT_VERSION:-}"
+          fi
+          id='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+          if ! [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-${id}(\.${id})*)?$ ]]; then
+            printf '::error::the sidecar version to publish is not a plain semver: %q\n' "$VERSION"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          bun-version: ${{ env.BUN_VERSION }}
+          persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -416,22 +928,158 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Ensure npm supports Trusted Publishing
-        run: npm install -g npm@latest
+        run: |
+          set -euo pipefail
+          # Checked where it is used (#960): whatever set it, an alias, a
+          # path or a URL here would install some other package globally.
+          # The digits are listed, not a range: a range follows the locale.
+          [[ "$NPM_VERSION" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]] || { echo "::error::NPM_VERSION is not an exact x.y.z, so it could name another package (#960)"; exit 1; }
+          # From a tarball with the pinned sha512, never by version (#1000):
+          # fetched by its fixed registry URL into a fresh directory, so
+          # nothing earlier put a file or a link at that path, checked, and
+          # only then installed, offline and with no lifecycle scripts. npm
+          # bundles every dependency it has, so it fetches nothing else. The
+          # directory is named in full, never from TMPDIR: a relative one
+          # made the path a git spec that npm fetched instead (review).
+          npm_tgz="$(mktemp -d /tmp/npm.XXXXXXXXXX)/npm-${NPM_VERSION}.tgz"
+          curl -fsS --proto '=https' --retry 3 --max-time 300 --max-filesize 67108864 -o "$npm_tgz" "https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz" || { echo "::error::could not download npm-${NPM_VERSION}.tgz from the registry (#1000)"; exit 1; }
+          got="sha512-$(openssl dgst -sha512 -binary "$npm_tgz" | base64 -w0)"
+          [ "$got" = "$NPM_INTEGRITY" ] || { echo "::error::npm-${NPM_VERSION}.tgz from the registry is ${got}, not the pinned NPM_INTEGRITY (#1000)"; exit 1; }
+          npm install -g --offline --ignore-scripts "$npm_tgz"
+          got="$(npm --version)"
+          [ "$got" = "$NPM_VERSION" ] || { echo "::error::npm on PATH is $got, expected $NPM_VERSION"; exit 1; }
 
-      - name: Download all sidecar binaries
+      # By exact name, each into its own directory (#952 follow-up), never
+      # `pattern: sidecar-*`: a glob takes in any artifact so named, and any
+      # job in this run can upload one -- pack-brain runs dependency code
+      # beside sidecar-build -- so a planted sidecar-* artifact used to fail
+      # this publish closed after the shared approval had released brain, and
+      # stayed in the run, so a re-run failed the same way. By name it is
+      # never downloaded. Same layout as the glob gave (artifacts/<name>/),
+      # so the check below is unchanged.
+      - name: Download sidecar-linux-x64
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: artifacts
-          pattern: sidecar-*
+          name: sidecar-linux-x64
+          path: artifacts/sidecar-linux-x64
 
-      - name: Resolve version
-        id: version
-        run: echo "VERSION=${{ needs.resolve.outputs.version }}" >> "$GITHUB_OUTPUT"
+      - name: Download sidecar-linux-arm64
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sidecar-linux-arm64
+          path: artifacts/sidecar-linux-arm64
 
-      - name: Prepare platform packages
+      - name: Download sidecar-darwin-arm64
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sidecar-darwin-arm64
+          path: artifacts/sidecar-darwin-arm64
+
+      - name: Download sidecar-darwin-x64
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sidecar-darwin-x64
+          path: artifacts/sidecar-darwin-x64
+
+      - name: Download sidecar-win32-x64
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sidecar-win32-x64
+          path: artifacts/sidecar-win32-x64
+
+      # Before anything reads them (#781): each artifact must be the file its
+      # build job hashed, by a digest that arrives as that job output (which
+      # only that job can set), not through the artifact store (which every
+      # job in this run can write). The download must also hold exactly the
+      # five expected files: an artifact is a zip any job can replace with
+      # one holding more files, and Prepare copies a whole directory into
+      # each package. release-exec.test.sh runs this script against tampered,
+      # extra, missing and undigested fixtures.
+      #
+      # On a publish_only call (#952) the build jobs ran in the caller's
+      # publish: false call, so their job outputs arrive as the digests
+      # input: the caller passes that call's digests output, which GitHub
+      # composes from the same job outputs, and no step anywhere can write
+      # either. Exactly one source per call: a publish_only call refuses a
+      # digest from a build job of its own, any other call refuses the
+      # input, and the input must name all five legs, each a sha256.
+      - name: Verify sidecar artifacts
+        env:
+          SHA_LINUX_X64: ${{ needs.build-sidecar-linux-x64.outputs.sha256 }}
+          SHA_LINUX_ARM64: ${{ needs.build-sidecar-linux-arm64.outputs.sha256 }}
+          SHA_DARWIN_ARM64: ${{ needs.build-sidecar-darwin-arm64.outputs.sha256 }}
+          SHA_DARWIN_X64: ${{ needs.build-sidecar-darwin-x64.outputs.sha256 }}
+          SHA_WIN32_X64: ${{ needs.sign-sidecar-windows.outputs.sha256 }}
+          PUBLISH_ONLY: ${{ inputs.publish_only }}
+          DIGESTS: ${{ inputs.digests }}
         run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
+          set -euo pipefail
+          export LC_ALL=C
+          if [ "${PUBLISH_ONLY:-}" = "true" ]; then
+            if [ -n "${SHA_LINUX_X64}${SHA_LINUX_ARM64}${SHA_DARWIN_ARM64}${SHA_DARWIN_X64}${SHA_WIN32_X64}" ]; then
+              echo "::error::a publish_only call takes its digests from the digests input, yet a build job of this call reported one"
+              exit 1
+            fi
+            h='([0-9a-f]{64})'
+            re="^linux-x64=${h} linux-arm64=${h} darwin-arm64=${h} darwin-x64=${h} win32-x64=${h}\$"
+            if ! [[ "${DIGESTS:-}" =~ $re ]]; then
+              printf '::error::the digests input is not one sha256 for each of the five legs: %q\n' "${DIGESTS:-}"
+              exit 1
+            fi
+            SHA_LINUX_X64="${BASH_REMATCH[1]}"
+            SHA_LINUX_ARM64="${BASH_REMATCH[2]}"
+            SHA_DARWIN_ARM64="${BASH_REMATCH[3]}"
+            SHA_DARWIN_X64="${BASH_REMATCH[4]}"
+            SHA_WIN32_X64="${BASH_REMATCH[5]}"
+          elif [ -n "${DIGESTS:-}" ]; then
+            echo "::error::the digests input is for a publish_only call; this call built its own artifacts"
+            exit 1
+          fi
+          manifest=""
+          expect() {
+            [[ "$1" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::no digest was reported for $2"; exit 1; }
+            manifest+="$1  $2"$'\n'
+          }
+          expect "$SHA_LINUX_X64" "sidecar-linux-x64/${SIDECAR_BIN}"
+          expect "$SHA_LINUX_ARM64" "sidecar-linux-arm64/${SIDECAR_BIN}"
+          expect "$SHA_DARWIN_ARM64" "sidecar-darwin-arm64/jarvis-app.tar.gz"
+          expect "$SHA_DARWIN_X64" "sidecar-darwin-x64/jarvis-app.tar.gz"
+          expect "$SHA_WIN32_X64" "sidecar-win32-x64/${SIDECAR_BIN}.exe"
+          cd artifacts
+          # Regular files only: a link would be hashed through to its target.
+          if [ -n "$(find . -mindepth 1 -not -type d -not -type f -print -quit)" ]; then
+            echo "::error::the downloaded sidecar artifacts contain something other than files and directories"
+            exit 1
+          fi
+          want="$(printf '%s' "$manifest" | cut -d' ' -f3- | sort)"
+          got="$(find . -mindepth 1 -not -type d | sed 's|^\./||' | sort)"
+          if [ "$got" != "$want" ]; then
+            echo "::error::the downloaded sidecar artifacts are not exactly the five that were built"
+            diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") || true
+            exit 1
+          fi
+          printf '%s' "$manifest" | sha256sum --strict -c -
 
+      # The digests of exactly what this job publishes, handed to the brain's
+      # github-release job as a job output (#682). Artifacts are writable by
+      # every job in the run -- release-exec.yml's pack-brain runs dependency
+      # code while they sit in the store, and github-release downloads them
+      # again later to attach them; job outputs only this job can set.
+      - name: Record artifact digests
+        id: sums
+        run: |
+          set -euo pipefail
+          sums="$(cd artifacts && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | base64 -w0)"
+          echo "sums=${sums}" >> "$GITHUB_OUTPUT"
+
+      # VERSION reaches every script below through env:, never as ${{ }} in
+      # the script text (#684), and was checked as a plain semver by the
+      # first step of this job.
+      - name: Prepare platform packages
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
           for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do
             pkg_dir="sidecar/npm/${platform}"
             mkdir -p "${pkg_dir}/bin"
@@ -465,20 +1113,121 @@ jobs:
             sed -i "s|\"@usejarvis/sidecar-${platform}\": \".*\"|\"@usejarvis/sidecar-${platform}\": \"${VERSION}\"|" package.json
           done
 
+      # A version npm already has refuses the publish, dry or real. On a dry
+      # run that refusal, and only that one, is a notice (#966): `resolve`
+      # sends every dry run here, so without it every rehearsal after a
+      # release failed until sidecar/VERSION moved, and a dry run is the only
+      # rehearsal this workflow has. The text is what NPM_VERSION prints;
+      # any other failure of a rehearsed publish still fails the run. npm's
+      # output goes through tee so the log stays live and the refusal can
+      # be read back; the publish's own status is PIPESTATUS[0].
+      #
+      # On a real run a package already on npm counts as published only if
+      # npm serves exactly the files this job verified (#958): this job then
+      # reports released and these artifacts' sums, and github-release
+      # attaches them as the release. Another run of the same version (a
+      # standalone dispatch beside a release, or a fresh run finishing a
+      # partial publish) built other bytes: the sidecar is not reproducible
+      # across runs (the Go binaries embed the commit, the macOS bundle and
+      # the Windows binary carry signing timestamps), so the comparison is
+      # with what npm serves, never with a rebuild. Re-running the failed
+      # jobs of the run that published the version reuses its artifacts and
+      # matches; re-running all jobs rebuilds, and does not. The tarball
+      # is fetched from the registry, checked against dist.integrity, and
+      # compared entry by entry (type, path, sha256) with ours. On a
+      # dry run the comparison is only reported: a fresh build never matches,
+      # and #966 says the rehearsal does not fail for a version npm has.
+      #
+      # The wrapper carries no artifact bytes and is published last, so the
+      # race is caught here, before it.
       - name: Publish platform packages
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          FLAGS=""
-          if [ "$DRY_RUN" = "true" ]; then FLAGS="$FLAGS --dry-run"; fi
-          if echo "${{ steps.version.outputs.VERSION }}" | grep -q '-'; then FLAGS="$FLAGS --tag next"; fi
-          VERSION="${{ steps.version.outputs.VERSION }}"
+          flags=()
+          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi
+          if [[ "$VERSION" == *-* ]]; then flags+=(--tag next); fi
+          err="$(mktemp)"
+
+          # manifest <dir>: every entry of the package in <dir> but
+          # directories, by type and path, then every file by sha256. Fails
+          # without package.json and a file in bin/ (nothing compared is not
+          # a match), or on a name with a character that is not printable
+          # (it would reach the log raw).
+          manifest() (
+            set -o pipefail
+            cd -P "$1" && [ -f package.json ] || exit 1
+            [ -n "$(find bin -type f -print -quit 2>/dev/null)" ] || exit 1
+            [ -z "$(LC_ALL=C find . -name '*[![:print:]]*' -print -quit)" ] || exit 1
+            find . -mindepth 1 -not -type d -printf '%y %P\n' | LC_ALL=C sort || exit 1
+            find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum || exit 1
+          )
+          # same_as_npm <pkg>, from its package directory: 0 when npm serves
+          # exactly this package (package.json and bin/, which is all npm
+          # packs of it and which it does not rewrite) for pkg@VERSION, 1
+          # when it serves another, 2 when that could not be established.
+          # npm installs a tarball by stripping its first path component and
+          # dropping links, so it must hold one real directory, package, or
+          # what GNU tar shows here is not what npm installs.
+          same_as_npm() {
+            local url integrity tmp got names types ours theirs
+            url="$(npm view "${1}@${VERSION}" dist.tarball)" || return 2
+            integrity="$(npm view "${1}@${VERSION}" dist.integrity)" || return 2
+            [[ "$url" =~ ^https://registry\.npmjs\.org/[^[:space:]]+\.tgz$ ]] || return 2
+            [[ "$integrity" =~ ^sha512-[A-Za-z0-9+/]{86}==$ ]] || return 2
+            tmp="$(mktemp -d)" || return 2
+            curl -fsSL --proto '=https' --retry 3 --max-time 300 --max-filesize 268435456 -o "${tmp}/npm.tgz" "$url" || return 2
+            got="$(openssl dgst -sha512 -binary "${tmp}/npm.tgz" | base64 -w0)" || return 2
+            [ "sha512-${got}" = "$integrity" ] || return 2
+            # The listing first, as npm reads it: every member under
+            # package/ (no ./, no other root), and only files and
+            # directories, since npm drops links and GNU tar would follow a
+            # hard link to a member sent again later.
+            names="$(tar --quoting-style=escape -tzf "${tmp}/npm.tgz")" || return 2
+            types="$(tar --quoting-style=escape -tvzf "${tmp}/npm.tgz" | cut -c1)" || return 2
+            if grep -qv '^package/' <<<"$names"; then return 1; fi
+            if grep -qv '^[-d]$' <<<"$types"; then return 1; fi
+            mkdir "${tmp}/x" && tar -xzf "${tmp}/npm.tgz" -C "${tmp}/x" --no-same-owner --no-same-permissions || return 2
+            [ "$(find "${tmp}/x" -mindepth 1 -maxdepth 1 -printf '%P %y\n')" = "package d" ] || return 1
+            ours="$(manifest .)" || return 2
+            theirs="$(manifest "${tmp}/x/package")" || return 1
+            if [ "$ours" != "$theirs" ]; then
+              diff <(printf '%s\n' "$ours") <(printf '%s\n' "$theirs") || true
+              return 1
+            fi
+          }
 
           for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do
             pkg="@usejarvis/sidecar-${platform}"
-            echo "Publishing ${pkg}@${VERSION}... ${FLAGS}"
+            echo "Publishing ${pkg}@${VERSION}... ${flags[*]}"
             cd "sidecar/npm/${platform}"
-            if ! npm publish --access public $FLAGS; then
-              if [ "$DRY_RUN" != "true" ] && npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
-                echo "${pkg}@${VERSION} is already on npm; treating as success."
+            npm publish --access public "${flags[@]}" 2>&1 | tee "$err"
+            if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+              if ! npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
+                exit 1
+              elif [ "$DRY_RUN" != "true" ]; then
+                same=0
+                same_as_npm "$pkg" || same=$?
+                if [ "$same" -eq 0 ]; then
+                  echo "${pkg}@${VERSION} is already on npm with exactly the files this run verified; treating as success."
+                elif [ "$same" -eq 1 ]; then
+                  echo "::error::${pkg}@${VERSION} is already on npm with files other than the ones this run built and verified, so this run cannot report them as released (#958). Another run, or an earlier attempt of this one, published this version: to finish a partial publish, re-run the failed jobs (not all jobs) of the run that started it; otherwise bump sidecar/VERSION."
+                  exit 1
+                else
+                  echo "::error::${pkg}@${VERSION} is already on npm, and whether it holds the files this run verified could not be established (#958); re-run this job."
+                  exit 1
+                fi
+              elif grep -qF "You cannot publish over the previously published versions" "$err"; then
+                echo "::notice::${pkg}@${VERSION} is already on npm, so this dry run cannot rehearse publishing it; packing it was rehearsed."
+                same=0
+                same_as_npm "$pkg" || same=$?
+                if [ "$same" -eq 0 ]; then
+                  echo "::notice::${pkg}@${VERSION} on npm is byte for byte this build, so a real run would take it as published."
+                elif [ "$same" -eq 1 ]; then
+                  echo "::notice::${pkg}@${VERSION} on npm is not byte for byte this build, so a real run finding it there would stop (#958). Expected when another run built it: the sidecar is not reproducible across runs."
+                else
+                  echo "::warning::could not establish whether ${pkg}@${VERSION} on npm is this build; a real run would stop here (#958)."
+                fi
               else
                 exit 1
               fi
@@ -487,17 +1236,26 @@ jobs:
           done
 
       - name: Publish wrapper package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          FLAGS=""
-          if [ "$DRY_RUN" = "true" ]; then FLAGS="$FLAGS --dry-run"; fi
-          if echo "${{ steps.version.outputs.VERSION }}" | grep -q '-'; then FLAGS="$FLAGS --tag next"; fi
-          VERSION="${{ steps.version.outputs.VERSION }}"
+          flags=()
+          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi
+          if [[ "$VERSION" == *-* ]]; then flags+=(--tag next); fi
           pkg="@usejarvis/sidecar"
 
+          err="$(mktemp)"
+
+          # As for the platform packages (#966).
           cd sidecar/npm/jarvis-sidecar
-          if ! npm publish --access public $FLAGS; then
-            if [ "$DRY_RUN" != "true" ] && npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
+          npm publish --access public "${flags[@]}" 2>&1 | tee "$err"
+          if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+            if ! npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
+              exit 1
+            elif [ "$DRY_RUN" != "true" ]; then
               echo "${pkg}@${VERSION} is already on npm; treating as success."
+            elif grep -qF "You cannot publish over the previously published versions" "$err"; then
+              echo "::notice::${pkg}@${VERSION} is already on npm, so this dry run cannot rehearse publishing it; packing it was rehearsed."
             else
               exit 1
             fi

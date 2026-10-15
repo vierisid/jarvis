@@ -226,7 +226,7 @@ interface ChannelAdapter {
   name: string;
   connect(): Promise<void>;
   disconnect(): Promise<void>;
-  sendMessage(to: string, text: string): Promise<void>;
+  sendMessage(to: string, text: string, options?: SendOptions): Promise<void>; // { literal: true }: no markup, mentions or previews
   onMessage(handler: ChannelHandler): void;
   isConnected(): boolean;
 }

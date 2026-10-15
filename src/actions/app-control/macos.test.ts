@@ -12,7 +12,7 @@ type Call = { cmd: string[]; input: string };
 
 function fakeExec(handler: (cmd: string[], input: string) => Partial<NativeExecResult>) {
   const calls: Call[] = [];
-  const exec: NativeExec = (cmd, input) => {
+  const exec: NativeExec = async (cmd, input) => {
     calls.push({ cmd, input });
     const result = handler(cmd, input);
     return { status: 0, stdout: '', stderr: '', ...result };
@@ -22,7 +22,7 @@ function fakeExec(handler: (cmd: string[], input: string) => Partial<NativeExecR
 
 function controller(handler: (cmd: string[], input: string) => Partial<NativeExecResult>) {
   const { exec, calls } = fakeExec(handler);
-  return { ctrl: new MacAppController({ exec, useSidecar: false }), calls };
+  return { ctrl: new MacAppController({ exec }), calls };
 }
 
 // pid, focused, x, y, width, height, className, title
@@ -124,7 +124,7 @@ describe('MacAppController fallback', () => {
       status: 1,
       stderr: 'execution error: Can’t get application process whose unix id = 7. (-1728)',
     }));
-    expect(ctrl.focusWindow(7)).rejects.toThrow(/unix id = 7/);
+    await expect(ctrl.focusWindow(7)).rejects.toThrow(/unix id = 7/);
   });
 
   test('launchApp uses open with an argv array, never a shell string', async () => {
@@ -145,10 +145,10 @@ describe('MacAppController fallback', () => {
     expect(calls[1]!.cmd).toEqual(['open', '/opt/tool.app', '--args', '--flag']);
   });
 
-  test('closeWindow and getWindowTree without sidecar throw instead of pretending', async () => {
+  test('closeWindow and getWindowTree throw instead of pretending', async () => {
     const { ctrl } = controller(() => ({}));
-    expect(ctrl.closeWindow(1)).rejects.toThrow(/sidecar/);
-    expect(ctrl.getWindowTree(1)).rejects.toThrow(/sidecar/);
+    await expect(ctrl.closeWindow(1)).rejects.toThrow(/not available locally/);
+    await expect(ctrl.getWindowTree(1)).rejects.toThrow(/JARVIS sidecar/);
   });
 });
 
