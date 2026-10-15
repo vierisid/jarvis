@@ -27,6 +27,22 @@ describe('optional runtime and release closure', () => {
   test('missing optional diagnostics does not block or become a reverse dependency', async () => {
     expect((await createOnboardingRuntime(omit(fixtureOptions(), 'diagnostics.v1')).status(request())).ready).toBe(true);
   });
+  test('shared dependencies are probed once per status observation', async () => {
+    const o = fixtureOptions(), counts = new Map<string, number>();
+    for (const p of PROVIDERS) {
+      const original = o.bindings![p.capability]!;
+      o.bindings![p.capability] = async (...args) => {
+        const bound = (await original(...args))!;
+        return { ...bound, probe: async () => {
+          counts.set(p.capability, (counts.get(p.capability) ?? 0) + 1);
+          await Promise.resolve();
+          return { ready: true, reason: 'ready' };
+        } };
+      };
+    }
+    expect((await createOnboardingRuntime(o).status(request())).ready).toBe(true);
+    expect([...counts.values()]).toEqual(PROVIDERS.map(() => 1));
+  });
   test('does not load dependent factory until its provider requirements are ready', async () => {
     const o = fixtureOptions(); const s = await createOnboardingRuntime(omit(o, 'interview-profile.v1')).status(request());
     expect(s.capabilities['interview-session.v1'].reason).toBe('dependency_unavailable');

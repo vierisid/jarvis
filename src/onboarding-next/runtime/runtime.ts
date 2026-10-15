@@ -72,7 +72,8 @@ export function createOnboardingRuntime(options: RuntimeOptions) {
       if (mode === 'hosted' || mode === 'self') installMode = mode;
     } catch { /* unreadable config is unknown, never self-hosted */ }
     const capabilities = {} as Record<Capability, CapabilityState>;
-    const visit = async (cap: Capability): Promise<CapabilityState> => {
+    const probes = new Map<Capability, Promise<CapabilityState>>();
+    const inspectCapability = async (cap: Capability): Promise<CapabilityState> => {
       if (capabilities[cap]) return capabilities[cap];
       const entry = entries.get(cap);
       if (!entry) return capabilities[cap] = state(false, 'module_absent');
@@ -93,6 +94,13 @@ export function createOnboardingRuntime(options: RuntimeOptions) {
         }, timeout, context.signal);
         return capabilities[cap] = result;
       } catch { return capabilities[cap] = state(true, 'provider_unavailable'); }
+    };
+    const visit = (cap: Capability): Promise<CapabilityState> => {
+      const existing = probes.get(cap);
+      if (existing) return existing;
+      const pending = inspectCapability(cap);
+      probes.set(cap, pending);
+      return pending;
     };
     await Promise.all(PROVIDERS.map(p => visit(p.capability)));
     await recheck(context);
