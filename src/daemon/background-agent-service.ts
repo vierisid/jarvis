@@ -36,6 +36,7 @@ import { getDueCommitments, getUpcoming } from '../vault/commitments.ts';
 import { getRecentObservations, describeObservationForPrompt } from '../vault/observations.ts';
 import { findContent } from '../vault/content-pipeline.ts';
 import { runWithOrigin } from '../llm/origin.ts';
+import { BackgroundThrottled } from '../llm/background-budget.ts';
 
 const BG_CDP_PORT = 9223;
 const BG_PROFILE_DIR = join(homedir(), '.jarvis', 'browser', 'bg-profile');
@@ -225,6 +226,10 @@ export class BackgroundAgentService implements Service, IAgentService {
         // queued turn runs in whichever context resolved the one before it.
         return await runWithOrigin('background', () => this.orchestrator.processMessage(systemPrompt, text));
       } catch (err) {
+        // A refused admission is not an answer. Returned as text it would be
+        // spoken as an error "fix", broadcast as a reaction, or recorded as a
+        // commitment's completed result; callers' failure paths handle it.
+        if (err instanceof BackgroundThrottled) throw err;
         console.error('[BackgroundAgent] Message error:', err);
         return `Error: ${err instanceof Error ? err.message : String(err)}`;
       } finally {
