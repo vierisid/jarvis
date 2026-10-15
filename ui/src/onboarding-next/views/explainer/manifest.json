@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "ON-U-02",
+  "kind": "view",
+  "entry": "./index.tsx",
+  "provides": ["explainer-view.v1"],
+  "requires": ["journey.v1", "setup.v1"]
+}
