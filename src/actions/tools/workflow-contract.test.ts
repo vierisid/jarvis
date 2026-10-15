@@ -58,8 +58,14 @@ describe('the composer holds a graph to the job contract', () => {
     expect(prompts[1]).toContain('job contract: step "send" would send email, which the job forbids');
     expect(prompts[1]).toContain('job contract: step "send" sends a message the job did not ask for');
     // The repair prompt still carries the contract as part of the job specification.
-    const context = JSON.parse(prompts[1]!.slice(prompts[1]!.indexOf('Composition context (JSON):\n') + 28));
+    // The context is one JSON line inside its untrusted block (#1065).
+    const context = JSON.parse(prompts[1]!.split('Composition context (JSON):\n')[1]!.split('\n')[0]!);
     expect(context.jobSpecification.contract).toEqual(contract);
+    // Caller-stated contract text and candidate values stay inside the untrusted block.
+    const block = prompts[1]!.indexOf('source="workflow composition context"');
+    expect(block).toBeGreaterThan(-1);
+    expect(prompts[1]!.indexOf('"contract":')).toBeGreaterThan(block);
+    expect(prompts[1]!.indexOf('job contract: step "send"')).toBeGreaterThan(block);
   });
 
   test('a repair cannot drop a requirement: every candidate is checked against the same contract', async () => {
