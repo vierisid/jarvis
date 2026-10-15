@@ -4,6 +4,7 @@ import { BriefCapabilities } from "../../../../../src/brief/capabilities";
 import { outcomeView, qualifiedTime, progressBand, formatNumber, weekTime, type OutcomeBinding, type OutcomeSummary } from "./model";
 import { outcomeFixture, activityFixture, fixtureMeasurement } from "../preview/outcomeFixtures";
 import type { BriefRoute } from "../../contracts";
+import type { BriefMeasurement } from "../../../../../src/brief/contracts";
 
 GlobalRegistrator.register({ url: "http://localhost:4389/" });
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -187,4 +188,24 @@ test("empty and unavailable activity never invent events or expose preview rows 
     expect(host.querySelectorAll("li").length).toBe(0); expect(text()).not.toContain("Inbox brief saved");
   }
   await React.act(async () => root.render(<RecentActivity mode="live" binding={activityFixture()} />)); expect(text()).not.toContain("Inbox brief saved");
+});
+
+test("a measurement without a recognised qualification never renders as a figure", async () => {
+  const data = readyData();
+  const unqualified = { ...fixtureMeasurement(90, "minutes", null), qualification: "estimated" } as unknown as BriefMeasurement;
+  data.today = unqualified; data.week = unqualified;
+  data.goal!.progress = { ...fixtureMeasurement(6), qualification: "inferred" } as unknown as BriefMeasurement;
+  await render({ source: "fixture", state: { status: "ready", data } });
+  expect(text()).toContain("Not enough evidence yet"); expect(text()).toContain("Progress not measured yet");
+  expect(text()).not.toContain("saved today"); expect(text()).not.toContain("6/10");
+});
+
+test("activity renders owner-supplied markup as literal text", async () => {
+  const hostile = "<img src=x onerror=alert(1)><b>bold</b>";
+  await React.act(async () => root.render(<RecentActivity mode="preview" binding={{ source: "fixture", state: { status: "ready", data: [
+    { activityId: "hostile", title: hostile, timeLabel: "<i>09:00</i>", occurredAt: Date.parse("2026-09-17T07:00:00Z"), detail: hostile },
+  ] } }} />));
+  expect(host.querySelector("img, b, i")).toBeNull();
+  expect(host.querySelector("strong")!.textContent).toBe(hostile);
+  expect(host.querySelector("time")!.textContent).toBe("<i>09:00</i>");
 });

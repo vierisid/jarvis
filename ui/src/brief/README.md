@@ -210,7 +210,22 @@ is unchanged.
   the conversation, so the goal stays mounted and above Pebble when chat opens. While chat is closed,
   wheel input over the goal scrolls the room.
 - `today/figma-reference.json` records the source values.
+- Outcomes and Recent activity (`today/outcomes/`, `today/activity/`) are read-only. `Outcomes` and
+  `RecentActivity` take an `OutcomeBinding`; `outcomeView` passes it through only when `source` is
+  `"fixture"` in preview mode, or `"live"` with both the `outcomes` and `goalMeasurements` capabilities
+  enabled in live mode; anything else renders "unavailable". No live provider is wired yet.
+- A figure renders only if its F-01 `BriefMeasurement` is finite, has a unit, an `asOf`, at least one
+  provenance reference and `qualification` `measured` or `user_reported` (`qualified` in
+  `outcomes/model.ts`). Time saved also needs `minutes` and a baseline at or above the value. The view
+  never sums runs or derives a value; a missing measurement shows "Not enough evidence yet" or "Progress
+  not measured yet", and a measured zero shows 0. "Data basis" lists each figure's qualification, as-of
+  time and evidence count.
+- Only changed digits fade (`BRIEF_MOTION.selection.enter`); mount, remount and a new window or goal do
+  not animate, and reduced motion places values immediately. Animated figures expose their full value
+  as visually hidden text. Activity rows render owner text as plain React text; a row is a button only
+  when it has a `destination` and the caller passes `onOpen`.
+- `today/outcomes/figma-reference.json` records the UI-14 source values.
 
-`?brief=preview&specimen=today#/_brief_preview` opens the composition with fixture decisions and
-fixture goal/outcome/opportunity cards. Its actions only change local state; it starts no API read,
+`?brief=preview&specimen=today#/_brief_preview` opens the composition with fixture decisions,
+fixture outcomes and activity (`today/preview/outcomeFixtures.ts`) and fixture goal/opportunity cards. Its actions only change local state; it starts no API read,
 socket or approval.
