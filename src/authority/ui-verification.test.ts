@@ -31,7 +31,7 @@ function fixture(tool: ToolDefinition, reply: unknown, os = 'linux') {
     const r = manager.createRequest({ agentId: 'fixture', agentName: 'Fixture', toolName: tool.name,
       toolArguments: { target: sidecar.id, ...args }, actionCategory: 'control_app', urgency: 'normal', reason: 'fixture',
       context: JSON.stringify({ confirm: 'always', intent: 'Fixture UI action' }), toolRegistry: registry });
-    manager.approve(r.id, 'fixture'); return r;
+    manager.approve(r.id, 'dashboard'); return r; // click-only: decided on the dashboard (Q-08)
   };
   return { sidecar, machines, calls, manager, executor, request };
 }
@@ -64,7 +64,8 @@ for (const code of ['BROWSER_ACTION_REFUSED', 'BROWSER_ACTION_UNCERTAIN']) test(
   const request = f.request({ element_id: 1 });
   const receipt = await f.executor.executeApprovedWithReceipt(request.id);
   expect(receipt.failed).toBe(true);
-  expect(f.manager.getRequest(request.id)?.execution_outcome).toBe('failed');
+  // Typed, not just failed (Q-08): refused before dispatch is blocked, an uncertain one stays unknown.
+  expect(f.manager.getRequest(request.id)?.execution_outcome).toBe(code === 'BROWSER_ACTION_REFUSED' ? 'blocked' : 'unknown');
   const call = f.calls.find(c => c.method === 'browser_click')!;
   expect(call.args).toMatchObject({ action_outcome: true, elem_gen: 'e.1' });
   await f.executor.executeApprovedWithReceipt(request.id);
