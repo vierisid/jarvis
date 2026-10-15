@@ -79,6 +79,14 @@ inspectable disabled draft with readiness issues. Replay recomputes readiness
 and reports any later enabled/locked state truthfully. No publish, enable, test,
 run, send, desktop action, tool grant or goal link is available on this path.
 
+The workflow-data reader inventory in `untrusted-reach.test.ts` records this
+store's boundary. Results project identity, state, qualifications and bounded
+readiness, never whole versions, captured sample outputs/inputs or journal
+payloads. Recovery does not send stored data to a model. Readiness can quote
+graph text and qualifications are supplied data: any future model consumer must
+frame them at its prompt boundary. Regression tests seed hostile stored payloads
+and verify both replay and reconciliation preserve this projection.
+
 ## Verification and rollout
 
 `bun test src/onboarding-next/compose-draft src/actions/tools/persisted-workflow-composer.test.ts`
