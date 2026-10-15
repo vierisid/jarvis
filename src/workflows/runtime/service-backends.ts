@@ -48,6 +48,7 @@ import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, surfaceBoun
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceActionName, reprojectPieceInput,
   resolveGovernedPieceAction } from './piece-effects';
+import { assertRecipientFactsCurrent, recipientAddresses, recipientFactPins, type FactPin } from './fact-bindings';
 import { defangPieceProjection } from './piece-effect-receipt';
 import { getFlowInProject } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
@@ -785,6 +786,9 @@ export function buildSandboxServiceBackends(
     // to start tracking. See `piece-effect-receipt.ts` for the whole argument,
     // including which in-flight approvals a changed projection invalidates.
     const input = defangPieceProjection(reprojectPieceInput(req.input));
+    // Q-05: an action that sends to or addresses someone memory knows keeps
+    // the facts the address matched, and stops if they stop holding.
+    const addressing = ['send_email', 'send_message', 'write_data', 'modify_settings'].includes(resolved.category);
     const tool = governedPieceToolDefinition(resolved);
     const capability = (() => {
       try { return toolEffectCapability(tool); }
@@ -798,10 +802,16 @@ export function buildSandboxServiceBackends(
       // Digested over the whole resolved input, so a change to any prop -- not
       // just the ones the card shows -- invalidates an approval granted earlier.
       request: { piece: req.piece, action: req.action, input },
-      prepare: () => ({ arguments: input, target: capability.target(input) }),
+      prepare: () => {
+        // Matched once, when the effect is recorded; resumes and retries recheck the record's facts.
+        const facts = addressing ? recipientFactPins(recipientAddresses(input)) : [];
+        return { arguments: input, target: capability.target(input), ...(facts.length ? { bindings: { facts } } : {}) };
+      },
       validateTarget: (_args, target) => {
         if (digest(capability.target(input)) !== digest(target)) throw new Error('Workflow execution target changed after review; dispatch blocked');
       },
+      revalidate: record => assertRecipientFactsCurrent((record.bindings as { facts?: FactPin[] } | undefined)?.facts),
+      revalidateOnReplay: true,
       execute: async (_args, checkpoint) => { checkpoint(); return { dispatch: 'authorized' }; } });
     return reply.approval ? { governed: true, dispatch: 'approval_required', approval: reply.approval }
       : { governed: true, dispatch: 'authorized' };
