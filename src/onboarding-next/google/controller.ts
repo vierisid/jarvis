@@ -20,7 +20,7 @@ export interface GoogleControllerPorts {
 export function createGoogleController(ports: GoogleControllerPorts) {
   const timer = ports.timer ?? setTimeout;
   const clearTimer = ports.clearTimer ?? clearTimeout;
-  let active = false, generation = 0, busy = false;
+  let active = false, generation = 0, busy: 'read' | 'begin' | false = false;
   let current: GoogleSnapshot | undefined;
   let poll: Timer | undefined;
   let deadline: Timer | undefined;
@@ -39,9 +39,10 @@ export function createGoogleController(ports: GoogleControllerPorts) {
     if (snapshot.connection.state === 'pending') poll = timer(() => { poll = undefined; void refresh(); }, 2000);
   }
   async function perform(start: boolean) {
-    if (!active || busy) return;
+    // A begin preempts an in-flight status read (focus/poll), so a Connect click is never dropped.
+    if (!active || busy === 'begin' || (busy && !start)) return;
     stopRequest();
-    busy = true;
+    busy = start ? 'begin' : 'read';
     const epoch = generation, controller = new AbortController();
     request = controller;
     deadline = timer(() => {

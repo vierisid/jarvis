@@ -75,6 +75,14 @@ describe('Google headless browser lifecycle', () => {
     waiting.resolve(snapshot({ state: 'connected', attemptId: null, accountLabel: 'old', grantedAccessSummary: 'read', scopes: [] })); await entry;
     expect(f.rendered).toHaveLength(0); expect(f.timers.size).toBe(0); f.controller.leave();
   });
+  it('a connect click preempts an in-flight status read instead of being dropped', async () => {
+    const f = fixture(), waiting = deferred<GoogleSnapshot>(); await f.controller.enter(); f.readWait(waiting.promise);
+    const read = f.controller.refresh(); const readSignal = f.signal();
+    await f.controller.connect();
+    expect(readSignal?.aborted).toBe(true); expect(f.stats()).toMatchObject({ begins: 1, opens: 1 });
+    waiting.resolve(snapshot({ state: 'idle' })); await read;
+    expect(f.rendered.at(-1)?.connection.state).toBe('pending'); f.controller.leave();
+  });
   it('polls without overlap and stops on expiry', async () => {
     const f = fixture(); await f.controller.enter(); await f.controller.connect();
     f.state({ state: 'expired', attemptId: 'a' }); f.fire(2000); await tick();
