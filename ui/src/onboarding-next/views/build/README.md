@@ -1,7 +1,7 @@
 # ON-U-08: Build progress and recovery
 
-Optional presentation module, unregistered and inactive. It compiles directly on
-main without sibling onboarding or unmerged D/F/Q imports. ON-U-09 owns the actual
+Optional presentation module, unregistered and inactive. It imports no sibling
+onboarding module and no unmerged D/F/Q code. ON-U-09 owns the actual
 result canvas; this view hands the exact verified reference to the host.
 
 ## Approved design
@@ -12,9 +12,8 @@ version 2410205462365531104. Live Light loading composition inspected. The title
 workflow name, quiet phase rows, active wash and official mark follow that screen.
 The roadmap adds an explicit saving phase and recovery controls not depicted in
 the happy-path Figma frame. Dark follows established onboarding/Brief tokens.
-The unchanged official mark path matches D-16's usejarvis-light.svg at
-20e4d1a30fea4b24a753320dd313fdc680f2f697. No logo redraw or native Dark verification
-claim. Figma's timed completion is deliberately not a production timer.
+The mark inlines the official usejarvis logo path unchanged. No logo redraw or
+native Dark verification claim. Figma's timed completion is deliberately not a production timer.
 
 ## Host contract
 
@@ -111,4 +110,3 @@ Enable only after U-10, B-08 events, B-10 durable result reads, B-11 registratio
 and a verified D/F/Q candidate. Missing providers/discovery are blocked integration
 evidence, not mocked production success. Disable this optional view before
 reverting it after registration; retain request/job/draft data and the legacy entry.
-See docs/onboarding-delivery/ON-U-08.json for exact pins, evidence and limitations.
