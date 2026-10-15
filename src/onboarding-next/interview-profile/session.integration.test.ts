@@ -62,6 +62,41 @@ describe.skipIf(!hasSession)('B04 + staged interviewer + real canonical SQLite w
     expect(getUserProfile()?.interview_facts).toHaveLength(1); expect(getUserProfile()?.completed_at).toBeNumber(); expect(calls).toBe(2);
     expect((await restarted.request(null, command)).snapshot).toEqual(result.snapshot);
   });
+  test.each([false, true])('malformed final facts stay retryable after reopen (wrap first: %s)', async wrapFirst => {
+    answers[1] = async () => response('What is your goal?', [record]);
+    const malformed: LLMToolCall = { id: 'bad', name: 'record_profile_facts', arguments: { facts: [
+      { theme: 'tools', summary: 'Uses Calendar' }, { theme: 'goals', summary: 42 },
+    ] } };
+    answers.push(async () => response('All saved.', wrapFirst ? [wrap, malformed] : [malformed, wrap]));
+    const canonical = createInterviewProfileProvider({ enabled: true, store });
+    const commits: CommitInput[] = [];
+    const commit = async (input: CommitInput) => { commits.push(input); return canonical.commit(input); };
+    const p = provider(commit), opened = await start(p);
+    const partial = await p.request(null, { ...answer(opened), text: 'I build a product.' });
+    const command = { ...answer(partial.snapshot), clientRequestId: 'answer-2', text: 'I want a pilot. Please wrap up.' };
+    const failed = await p.request(null, command);
+    expect(failed.snapshot.phase).toBe('error'); expect(failed.snapshot.error).toBe('turn_failed');
+    expect(failed.snapshot.confirmedFactIds).toHaveLength(1);
+    expect(failed.snapshot.pendingAnswer).toEqual({ sessionId: command.sessionId, turnId: command.turnId,
+      clientRequestId: command.clientRequestId, text: command.text });
+    expect(failed.snapshot.messages.some((m: any) => m.text === 'All saved.')).toBe(false);
+    expect(getUserProfile()?.completed_at).toBeNull(); expect(getUserProfile()?.interview_facts).toHaveLength(1);
+    expect(commits).toHaveLength(2); // Opening and the earlier valid turn only.
+    const pending = createSessionStore(() => getDb()).transaction(owner, (tx: any) => tx.current.pending);
+    expect(pending.prepared).toBeUndefined();
+    closeDb(); initDatabase(path, { quiet: true });
+    answers.push(async () => response('', [{ id: 'good', name: 'record_profile_facts',
+      arguments: { facts: [{ theme: 'goals', summary: 'Wants a pilot' }] } }, wrap]));
+    const restarted = provider(commit);
+    const done = await restarted.request(null, { type: 'retry', sessionId: opened.sessionId });
+    expect(done.snapshot.phase).toBe('done'); expect(done.snapshot.confirmedFactIds).toHaveLength(2);
+    expect(done.snapshot.messages.filter((m: any) => m.role === 'user')).toHaveLength(2);
+    expect(commits.at(-1)?.attemptId).toBe(pending.attemptId); expect(calls).toBe(4);
+    expect(getUserProfile()?.completed_at).toBeNumber(); expect(getUserProfile()?.interview_facts).toHaveLength(2);
+    expect(getUserProfile()?.interview_facts?.map(f => f.theme)).toEqual(['work', 'goals']);
+    expect((await restarted.request(null, command)).snapshot).toEqual(done.snapshot);
+    expect(calls).toBe(4); expect(commits).toHaveLength(3);
+  });
   test('lost commit acknowledgement retries the durable receipt without rewriting profile', async () => {
     const canonical = createInterviewProfileProvider({ enabled: true, store }); let lose = true;
     const p = provider(async input => { const result = await canonical.commit(input); if (input.wrap && lose) { lose = false; throw Error('lost acknowledgement'); } return result; });

@@ -15,9 +15,11 @@ canonical writer uses. It never opens a database or creates a table.
 
 The model adapter runs the current interviewer prompt, themes, tool loop and turn
 cap on a cloned checkpoint. It stages facts and wrap, propagates cancellation,
-and leaves acknowledged counts unchanged. Invalid extracted facts fail before
-B04 checkpoints them, so model retry remains possible. The two additive shared
-service changes form the **staged-interview compatibility patch**: an exported
+and leaves acknowledged counts unchanged. Malformed fact calls are rejected before
+the legacy handler can filter their entries, including mixed batches and a wrap
+in the same response. Theme/text validation also runs before B04 checkpoints the
+turn, so retry can regenerate it without publishing partial facts or completion.
+The two additive shared service changes form the **staged-interview compatibility patch**: an exported
 pure preparation path and the canonical writer's opt-in `deferCompletion` option.
 Existing `runInterviewTurn` and one-argument profile writes retain their behavior.
 

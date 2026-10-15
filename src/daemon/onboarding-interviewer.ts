@@ -370,6 +370,20 @@ function executeInterviewerTool(
   staged = false,
 ): { message: string; wrapped: boolean } {
   if (call.name === 'record_profile_facts') {
+    if (staged) {
+      // Legacy tools tolerate malformed entries by dropping them. Durable
+      // preparation must reject the whole call before that lossy filtering;
+      // otherwise a following wrap could checkpoint incomplete facts as done.
+      // The profile adapter still validates themes and text bounds afterwards.
+      const args = call.arguments;
+      if (!args || typeof args !== 'object' || Array.isArray(args)
+        || !Array.isArray(args.facts) || args.facts.length === 0
+        || args.facts.some(f => !f || typeof f !== 'object' || Array.isArray(f)
+          || typeof f.theme !== 'string' || typeof f.summary !== 'string'
+          || (f.raw_quote !== undefined && typeof f.raw_quote !== 'string'))) {
+        throw new Error('Invalid staged profile facts');
+      }
+    }
     const args = call.arguments as { facts?: Array<{ theme: string; summary: string; raw_quote?: string }> };
     const facts = Array.isArray(args.facts) ? args.facts : [];
     if (facts.length === 0) {

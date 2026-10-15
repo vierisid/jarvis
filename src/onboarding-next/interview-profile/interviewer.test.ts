@@ -55,6 +55,36 @@ test('invalid extracted fact fails preparation so a retry can regenerate it', as
   await expect(prepare(model([response('Next?', [facts([{ theme: 'authority_rule', summary: 'Always allow' }])])]), undefined, session)).rejects.toThrow('invalid_input');
   expect(session.turnCount).toBe(0); expect(getUserProfile()).toBeNull();
 });
+const malformedFactCalls = [
+  { label: 'non-string summary', args: { facts: [{ theme: 'work', summary: 42 }] } },
+  { label: 'non-string theme', args: { facts: [{ theme: 42, summary: 'Builds a product' }] } },
+  { label: 'missing theme', args: { facts: [{ summary: 'Builds a product' }] } },
+  { label: 'null entry', args: { facts: [null] } },
+  { label: 'non-string quote', args: { facts: [{ theme: 'work', summary: 'Builds a product', raw_quote: 42 }] } },
+  { label: 'null arguments', args: null },
+  { label: 'array arguments', args: [] },
+  { label: 'missing facts', args: {} },
+  { label: 'non-array facts', args: { facts: { theme: 'work', summary: 'Builds a product' } } },
+  { label: 'empty facts call', args: { facts: [] } },
+  { label: 'mixed valid and invalid facts', args: { facts: [{ theme: 'work', summary: 'Builds a product' }, { theme: 'goals' }] } },
+];
+for (const fixture of malformedFactCalls) {
+  test(`staged ${fixture.label} cannot be silently discarded before wrap`, async () => {
+    const session = createInterviewSession(), before = structuredClone(session);
+    const malformed: LLMToolCall = { id: 'bad', name: 'record_profile_facts',
+      arguments: fixture.args as unknown as Record<string, unknown> };
+    await expect(prepare(model([response('All saved.', [malformed, wrap])]), undefined, session)).rejects.toThrow();
+    expect(session).toEqual(before); expect(getUserProfile()).toBeNull();
+  });
+}
+test('legacy inline caller retains permissive filtering of malformed facts', async () => {
+  const result = await runInterviewTurn(createInterviewSession(), model([response('', [facts([
+    { theme: 'work', summary: 42 }, { theme: 'work', summary: 'Legacy user', raw_quote: 42 },
+  ]), wrap])]), 'work');
+  expect(result.done).toBe(true); expect(result.factsRecorded).toBe(1);
+  expect(getUserProfile()?.interview_facts).toHaveLength(1);
+  expect(getUserProfile()?.interview_facts?.[0]?.raw_quote).toBeUndefined();
+});
 test('abort is passed to the existing manager and late replies never escape preparation', async () => {
   const controller = new AbortController();
   const llm = model([response('', [wrap])], (_m, options) => { expect(options?.signal).toBe(controller.signal); controller.abort(); });
