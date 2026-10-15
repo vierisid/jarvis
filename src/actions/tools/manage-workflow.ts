@@ -1063,9 +1063,11 @@ function actPublish(flow: FlowRow, deps: ManageWorkflowDeps): Record<string, unk
     // Nothing new to publish: publishing again is a person accepting the
     // connections and computer the published version runs with now (Q-05).
     if (!flow.published_version_id) throw new Error("no draft version to publish");
-    const { flow: updated } = publishFlowVersion(flow.id, flow.published_version_id);
+    const { flow: updated, version } = publishFlowVersion(flow.id, flow.published_version_id);
     void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));
-    return summarizeFlow(updated);
+    // Publishing again runs the published version, so that is the graph rechecked, as on enable.
+    const report = contractRecheck(updated, version.trigger);
+    return report ? { contractReport: report, ...summarizeFlow(updated) } : summarizeFlow(updated);
   }
   // Publish is the last gate before a flow starts running for real, and it is
   // the ONLY one a hand-built flow passes through -- a flow drawn in the
