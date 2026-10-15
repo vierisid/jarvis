@@ -543,7 +543,6 @@ export function OnboardingWizard({
         if (!baseUrl.trim()) { setTest({ status: "err", msg: "Enter a custom endpoint URL first." }); return; }
         body.base_url = baseUrl.trim();
       }
-      if ((provId === "openai_compatible" || provId === "litellm") && apiKey) body.api_key = apiKey;
       const r = await fetch("/api/config/llm/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const data = (await r.json()) as { ok: boolean; model?: string; models?: string[]; error?: string };
       if (epoch !== testEpoch.current) return; // inputs changed mid-flight — verdict is stale
