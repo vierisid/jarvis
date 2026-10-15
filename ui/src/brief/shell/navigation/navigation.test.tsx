@@ -33,7 +33,7 @@ beforeEach(() => {
     setTheme: value => { shell = { ...shell, theme: value }; }, navigate: route => { destinations.push(route.room); shell = { ...shell, route }; },
   };
   binding = { capabilities: capability, view: { source: "fixture", state: { status: "ready", data: {
-    ...UNKNOWN_NAVIGATION, workspaceName: "Vieri’s workspace", account: { name: "Vieri Balboni", plan: { status: "ready", data: "Business" } },
+    ...UNKNOWN_NAVIGATION, workspaceName: "Northwind workspace", account: { name: "Alex Morgan", plan: { status: "ready", data: "Business" } },
     badges: { workflows: 4, "needs-you": 1 },
   } } } };
 });

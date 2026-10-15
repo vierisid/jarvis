@@ -139,7 +139,7 @@ test("motion specimen stays isolated and unmounts without live side effects", as
 test("navigation review uses the production shell without live reads, sockets or account actions", async () => {
   await mount("http://localhost:4381/?brief=preview&specimen=navigation#/_brief_preview");
   expect(host.textContent).toContain("ISOLATED SHELL REVIEW");
-  await click("Vieri Balboni");
+  await click("Alex Morgan");
   expect(document.querySelector('[role="menu"]')).not.toBeNull();
   const billing = [...document.querySelectorAll('[role="menuitem"]')].find(b => b.textContent === "Billing") as HTMLElement;
   await React.act(async () => billing.click());

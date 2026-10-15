@@ -21,8 +21,8 @@ export function NavigationSpecimen() {
   const shell = useMemo<BriefShellPort>(() => ({ mode: "preview", route, sidebar, setSidebar, chatOpen, setChatOpen,
     theme, setTheme, navigate: setRoute }), [route, sidebar, chatOpen, theme, setTheme]);
   const binding: BriefNavigationBinding = { capabilities: null, view: { source: "fixture", state: { status: "ready", data: {
-    workspaceName: "Vieri’s workspace", account: {
-      name: accountState === "unavailable" ? null : accountState === "long" ? "Vieri Balboni · Design partner workspace" : "Vieri Balboni",
+    workspaceName: "Northwind workspace", account: {
+      name: accountState === "unavailable" ? null : accountState === "long" ? "Alex Morgan · Design partner workspace" : "Alex Morgan",
       plan: accountState === "ready" ? { status: "ready", data: "Pro plan" } : accountState === "self" ? { status: "ready", data: "Self-hosted" }
         : accountState === "long" ? { status: "ready", data: "Hosted Business + Additional storage" }
         : accountState === "loading" ? { status: "loading" } : { status: "unavailable", reason: "Unavailable" },
