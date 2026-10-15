@@ -48,11 +48,14 @@ export type JobConstraint =
   /** A stated constraint no check here can verify; a person reviews it. */
   | { kind: 'unverified'; text: string };
 
-/** Each opportunity kind promises drafts or checked output for approval (job-hypotheses.ts), never a direct send. */
+/** Each opportunity kind promises drafts or checked output for approval (routine-catalog.ts), never a direct send. */
 export const JOB_CONSTRAINTS: Record<JobKind, JobConstraint[]> = {
   invoice_review: [{ kind: 'review_before_effects' }],
   lead_followup: [{ kind: 'review_before_effects' }],
   recurring_report: [{ kind: 'review_before_effects' }],
+  meeting_followup: [{ kind: 'review_before_effects' }],
+  expense_reconciliation: [{ kind: 'review_before_effects' }],
+  support_triage: [{ kind: 'review_before_effects' }],
 };
 
 /** What a preview tells the user. Every effect step appears once; read steps do not. */
