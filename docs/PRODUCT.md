@@ -10,7 +10,7 @@ Founders using Jarvis to turn repetitive work into reliable programmatic workflo
 
 ## Approved direction
 
-Calm, precise, useful. The native **Brief · Pebble workspace v6.1** page in Figma (`eNfKeirIKLZLlZEasrurZa`, page `81:2`) is the visual source of truth. Checkpoint: **UI-35 · Dashboard craft pass verified · prototype limits recorded**. Per-task extractions and evidence live in `docs/brief-delivery/` and the corresponding `ui/src/brief/` module. Those sources, rather than an independently inferred theme, govern implementation.
+Calm, precise, useful. The native **Brief · Pebble workspace v6.1** page in Figma (`eNfKeirIKLZLlZEasrurZa`, page `81:2`) is the visual source of truth. Checkpoint: **UI-35 · Dashboard craft pass verified · prototype limits recorded**. Per-task extractions live in each `ui/src/brief/` module's `figma-reference.json`; developer notes are in `ui/src/brief/README.md`. Those sources, rather than an independently inferred theme, govern implementation.
 
 ## Design principles
 
