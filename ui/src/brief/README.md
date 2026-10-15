@@ -225,7 +225,19 @@ is unchanged.
   as visually hidden text. Activity rows render owner text as plain React text; a row is a button only
   when it has a `destination` and the caller passes `onOpen`.
 - `today/outcomes/figma-reference.json` records the UI-14 source values.
+- Goal card (`today/goal-card/`): `GoalCard` and `GoalQueueCue` share one `useGoalHandoff` state.
+  `goalView` passes a `GoalCardBinding` through only when `source` is `"fixture"` in preview mode, or
+  `"live"` with `goalMeasurements` in live mode; recommendations and `onAccept` additionally need the
+  `recommendations` and `decisions` capabilities. Recommendations, suppression (Q-14) and planning
+  (Q-18) are owner-side; the card renders the owner's recommendation as given and invents none. No
+  live provider is wired yet.
+- "Add to Today" calls `onAccept(request)` once per recommendation identity with a fresh `requestId`;
+  it writes nothing itself. Success needs a receipt matching every request field and a destination
+  that appears exactly once in a fresh owner `queue`; conflict, failure, unknown or a lost response
+  locks the card until the recommendation changes or is refreshed, and nothing is retried. Progress
+  never changes from an acceptance. The destination cue holds 1800ms (1200ms reduced) beside the hero
+  status, once per receipt. `today/goal-card/figma-reference.json` records the UI-15 source values.
 
 `?brief=preview&specimen=today#/_brief_preview` opens the composition with fixture decisions,
-fixture outcomes and activity (`today/preview/outcomeFixtures.ts`) and fixture goal/opportunity cards. Its actions only change local state; it starts no API read,
+fixture outcomes and activity (`today/preview/outcomeFixtures.ts`), a fixture goal with a simulated recommendation owner (`today/preview/goalFixtures.ts`) and a fixture opportunity card. Its actions only change local state; it starts no API read,
 socket or approval.
