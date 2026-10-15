@@ -1,2 +1,0 @@
-$ bunx --no-install tsc --noEmit
-exit=0
