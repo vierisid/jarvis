@@ -186,6 +186,24 @@ test("an open menu follows a local appearance change", async () => {
   expect(document.querySelector('[role="menu"]')?.closest("[data-brief-theme]")?.getAttribute("data-brief-theme")).toBe("dark");
 });
 
+test("menu accepts a custom trigger, marks the current item and closes when its dismiss key changes", async () => {
+  const menu = (where: string) => <C.BriefMenu label="Account" dismissKey={where} placement="top-start" className="custom-menu"
+    items={[{ id: "a", label: "Profile", current: where === "profile", onSelect: () => {} }, { id: "b", label: "Settings", onSelect: () => {} }]}
+    trigger={props => <button {...props} type="button" aria-label="Pat Lee, Business. Account menu">PL</button>} />;
+  await mount(menu("profile"));
+  const trigger = host.querySelector("button")!;
+  expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
+  await key(trigger, "ArrowDown");
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  expect(trigger.getAttribute("aria-controls")).toBe(document.querySelector('[role="menu"]')!.id);
+  expect(document.querySelector(".custom-menu[data-placement=\"top-start\"]")).not.toBeNull();
+  expect(document.activeElement?.getAttribute("aria-current")).toBe("page");
+  await mount(menu("profile"));
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  await mount(menu("billing"));
+  expect(document.querySelector('[role="menu"]')).toBeNull(); expect(document.activeElement).toBe(trigger);
+});
+
 test("tooltip is immediate on focus, does not repeat the name, and Escape retains focus", async () => {
   await mount(<C.BriefIconButton label="Close panel" icon={<span>X</span>} />);
   const button = host.querySelector("button")!;

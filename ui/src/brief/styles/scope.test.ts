@@ -8,6 +8,7 @@ const SHEETS = [
   "index.css", "specimen.css",
   "../components/controls/controls.css", "../components/controls/specimen.css",
   "../motion/specimen.css",
+  "../shell/navigation/navigation.css", "../shell/navigation/specimen.css",
 ];
 
 function selectors(css: string): string[] {
