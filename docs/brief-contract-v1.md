@@ -117,11 +117,10 @@ integration slots. F-28 and D-33 still own the final activation/release records.
 
 ## Quick verification
 
-From this worktree in WSL:
+From the repository root:
 
 ```bash
-cd /home/vierisid/.cache/codex/jarvis-f-01
-/home/vierisid/.bun/bin/bun test src/brief src/daemon/api-brief.test.ts src/workflows/adapters/untrusted-reach.test.ts src/roles/untrusted-import-guard.test.ts
+bun test src/brief src/daemon/api-brief.test.ts src/workflows/adapters/untrusted-reach.test.ts src/roles/untrusted-import-guard.test.ts
 ```
 
 This exercises a real HTTP server on a unique temporary Unix socket, bootstrap and
