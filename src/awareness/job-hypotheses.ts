@@ -3,6 +3,8 @@ import type { JobHypothesis, JobSignal, OpportunityAssessment } from './opportun
 
 import { ROUTINES, ROUTINE_POLICY } from './routine-catalog.ts';
 import { groupRoutineEpisodes, OPPORTUNITY_WINDOW_MS } from './routine-episodes.ts';
+import { rankOpportunityGoals } from './goal-relevance.ts';
+import { REPORT_CADENCES, routineKey, sameRoutine } from './routine-identity.ts';
 export { OPPORTUNITY_WINDOW_MS } from './routine-episodes.ts';
 export { classifyJobSignals } from './routine-signals.ts';
 
@@ -13,29 +15,29 @@ export function assessJobHypotheses(
   const recent = signals.filter(s => s.observedAt >= now - OPPORTUNITY_WINDOW_MS && s.observedAt <= now);
   const proposals: JobHypothesis[] = [];
   let recurring = false;
-  for (const job of ROUTINES) {
-    const episodes = groupRoutineEpisodes(recent.filter(s => s.kind === job.kind), now);
+  const jobs = ROUTINES.flatMap(job => (job.kind === 'recurring_report' ? [undefined, ...REPORT_CADENCES] : [undefined])
+    .map(cadence => ({ job, cadence })));
+  for (const { job, cadence } of jobs) {
+    const episodes = groupRoutineEpisodes(recent.filter(s => s.kind === job.kind
+      && (job.kind !== 'recurring_report' || s.routine?.cadence === cadence)), now);
     const days = new Set(episodes.map(e => new Date(e.source.observedAt).toISOString().slice(0, 10)));
     if (episodes.length < 3 || days.size < 2) continue;
     recurring = true;
     // Preserve durable dismissal/interest identity across the policy upgrade.
-    const patternKey = `job-v1:${job.kind}`;
-    if (knownPatterns.has(patternKey)) continue;
+    const patternKey = routineKey(job.kind, cadence);
+    if ([...knownPatterns].some(key => sameRoutine(key, patternKey))) continue;
     const evidence = episodes.map(e => e.output);
-    const goalCandidates = goals.filter(g => g.status === 'active' && job.goalPattern?.test(
-      `${g.title} ${g.description} ${g.success_criteria}`,
-    )).slice(0, 5).map(g => ({
-      goalId: g.id, title: g.title,
-      reason: `The goal and observed activity both mention ${job.cue}. This does not establish that the activity serves the goal.`,
-      evidenceCaptureIds: evidence.map(e => e.captureId),
-      basis: 'text_overlap_requires_confirmation' as const,
-    }));
-    proposals.push({
+    const hypothesis: JobHypothesis = {
       schemaVersion: 1, assessedAt: now, patternKey, kind: job.kind,
-      job: { title: job.title, proposedOutcome: job.proposedOutcome, question: job.question },
+      job: cadence ? {
+        title: `Prepare a ${cadence} report`,
+        proposedOutcome: `A draft ${cadence} report with source references and figures checked before sharing.`,
+        question: `Do you prepare this ${cadence} report repeatedly, and which sources and checks does it need?`,
+      } : { title: job.title, proposedOutcome: job.proposedOutcome, question: job.question },
       evidence,
       routine: {
         policy: ROUTINE_POLICY,
+        ...(cadence ? { cadence } : {}),
         episodes: episodes.map(episode => Object.fromEntries(
           (['source', 'operation', 'output'] as const).map(stage => [stage, {
             captureId: episode[stage].captureId, observedAt: episode[stage].observedAt, cue: job.labels[stage],
@@ -48,7 +50,7 @@ export function assessJobHypotheses(
         lastObservedAt: episodes.at(-1)!.output.observedAt,
         windowDays: 14, basis: 'observed_activity',
       },
-      goalCandidates,
+      goalCandidates: [],
       feasibility: {
         status: 'unverified',
         requiredChecks: ['source_access', 'output_destination', 'authority', 'workflow_preflight', 'model_profile_quality'],
@@ -60,9 +62,10 @@ export function assessJobHypotheses(
         'The job, scope and expected outcome need user confirmation.',
         'Goal candidates are possible relevance only; no goal is linked automatically.',
       ],
-    });
+    };
+    proposals.push({ ...hypothesis, ...rankOpportunityGoals(hypothesis, goals, now) });
   }
-  // Goal relevance breaks ties without inventing a probability or a business score.
+  // Only one defensible contribution improves priority; competing links never inflate it.
   proposals.sort((a, b) => b.goalCandidates.length - a.goalCandidates.length
     || b.recurrence.distinctDays - a.recurrence.distinctDays || a.patternKey.localeCompare(b.patternKey));
   return {

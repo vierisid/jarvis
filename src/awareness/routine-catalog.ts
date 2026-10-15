@@ -5,8 +5,6 @@ export type RoutineStage = 'source' | 'operation' | 'output';
 export type RoutineDefinition = {
   kind: JobKind; cue: string; title: string; proposedOutcome: string; question: string;
   source: RegExp; operation: RegExp; output: RegExp;
-  // Keep goal matching at the existing, explicitly unconfirmed text-overlap seam.
-  goalPattern?: RegExp;
   labels: Record<RoutineStage, string>;
 };
 
@@ -20,7 +18,6 @@ export const ROUTINES: readonly RoutineDefinition[] = [
     source: /\b(?:(?:unpaid|overdue|outstanding) invoices?|invoices? (?:overdue|unpaid|outstanding)|fatture (?:scadute|non pagate))\b/i,
     operation: /\b(?:checking payment status|reconciling balances|verifica pagamenti|controllo saldi)\b/i,
     output: /\b(?:invoice follow-up draft|draft invoice reminders|bozza (?:sollecito|promemoria) fatture)\b/i,
-    goalPattern: /\b(?:(?:unpaid|overdue|outstanding) invoices?|invoices? (?:overdue|unpaid|outstanding))\b/i,
     labels: { source: 'invoice balances', operation: 'checking balances or payments', output: 'invoice reminder draft' },
   },
   {
@@ -31,7 +28,6 @@ export const ROUTINES: readonly RoutineDefinition[] = [
     source: /\b(?:(?:lead|prospect)s? (?:follow[ -]?up|outreach)|(?:follow[ -]?up|outreach) (?:for |with )?(?:lead|prospect)s?)\b/i,
     operation: /\b(?:reviewing last contact|checking contact history)\b/i,
     output: /\b(?:(?:lead|prospect) (?:follow[ -]?up|outreach) (?:email )?draft)\b/i,
-    goalPattern: /\b(?:(?:lead|prospect)s? (?:follow[ -]?up|outreach)|(?:follow[ -]?up|outreach) (?:for |with )?(?:lead|prospect)s?)\b/i,
     labels: { source: 'lead or prospect list', operation: 'reviewing contact history', output: 'follow-up draft' },
   },
   {
@@ -42,7 +38,6 @@ export const ROUTINES: readonly RoutineDefinition[] = [
     source: /\b(?:daily|weekly|monthly) (?:sales |revenue |pipeline |performance |status )?report\b/i,
     operation: /\b(?:comparing figures|validating totals)\b/i,
     output: /\b(?:daily|weekly|monthly) (?:sales |revenue |pipeline |performance |status )?report (?:draft|preview)\b/i,
-    goalPattern: /\b(?:daily|weekly|monthly) (?:sales |revenue |pipeline |performance |status )?report\b/i,
     labels: { source: 'recurring report inputs', operation: 'checking report figures', output: 'report draft or preview' },
   },
   {

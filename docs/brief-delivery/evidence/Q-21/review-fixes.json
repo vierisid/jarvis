@@ -1,0 +1,81 @@
+{
+  "reviewedHead": "9a972d28366504d56598d03209a5493ed43ad14f",
+  "status": "all_three_addressed",
+  "findings": [
+    {
+      "id": "trusted-routing-rules",
+      "resolution": "Machine inventory alone is framed; repository OS/routing instructions remain outside. Machine names are never interpolated into trusted rule examples. Both composer paths tested."
+    },
+    {
+      "id": "footnote-metadata",
+      "resolution": "Preserve generated IDs, titles, classes and ARIA/data attributes. Unique reference IDs and scoped scroll/focus keep citations inside their result without changing the application hash."
+    },
+    {
+      "id": "prompt-provenance",
+      "resolution": "Composer prompt version is w8-3; persisted provenance regression verifies it after reopening SQLite."
+    }
+  ],
+  "tests": {
+    "passed": 287,
+    "failed": 0,
+    "assertions": 1258,
+    "files": 17
+  },
+  "typescript": "passed",
+  "uiBuild": "passed_with_existing_css_at_rule_warnings",
+  "removedFixChecks": [
+    {
+      "fix": "routing-rules",
+      "removedFixDetected": true,
+      "exitCode": 1,
+      "tests": [
+        "src/trust-boundaries/composer.test.ts",
+        "-t",
+        "routing instructions"
+      ]
+    },
+    {
+      "fix": "footnote-navigation",
+      "removedFixDetected": true,
+      "exitCode": 1,
+      "tests": [
+        "ui/src/components/SafeMarkdown.navigation.test.tsx"
+      ]
+    },
+    {
+      "fix": "prompt-version",
+      "removedFixDetected": true,
+      "exitCode": 1,
+      "tests": [
+        "src/actions/tools/persisted-workflow-composer.test.ts",
+        "-t",
+        "provenance is durable"
+      ]
+    }
+  ],
+  "browser": {
+    "status": "passed",
+    "browser": "Chrome on Linux",
+    "surfaces": [
+      "MarkdownBody",
+      "AnswerRoom",
+      "TaskResultRoom"
+    ],
+    "imageRequests": 0,
+    "activeElements": 0,
+    "executableLinks": 0,
+    "imageLinks": 3,
+    "tables": 3,
+    "footnoteRoundTrips": 3,
+    "uniqueFootnoteIds": 3,
+    "hashPreserved": true,
+    "scriptExecuted": false,
+    "screenshot": "review-fixes-browser.png",
+    "nativeWebviewMatrix": "not_run"
+  },
+  "review": "direct_read_only_no_remaining_findings_not_independent_approval",
+  "ci": "Check the current head of PR #1065 through Code Review; pre-push validation is recorded here.",
+  "liveProvider": "not_run",
+  "paidCalls": 0,
+  "realExternalEffects": 0
+}

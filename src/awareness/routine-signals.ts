@@ -1,10 +1,13 @@
 import type { JobSignal } from './opportunity-types.ts';
 import { ROUTINES, ROUTINE_POLICY, type RoutineStage } from './routine-catalog.ts';
+import { reportCadence, type ReportCadence } from './routine-identity.ts';
 
 export type RoutineSignalEvidence = {
   policy: typeof ROUTINE_POLICY;
   stage: RoutineStage;
   sidecarId: string | null;
+  /** Allowlisted material schedule, never a title/app/account fingerprint. */
+  cadence?: ReportCadence;
 };
 export type RoutineCapture = {
   captureId: string; timestamp: number; app?: string | null;
@@ -33,9 +36,15 @@ export function classifyJobSignals(input: RoutineCapture): JobSignal[] {
     const stage = job.output.test(text) ? 'output'
       : job.source.test(text) ? job.operation.test(text) ? 'operation' : 'source' : null;
     if (!stage) return [];
+    const cadences = job.kind === 'recurring_report'
+      ? new Set([...text.matchAll(/\b(daily|weekly|monthly) (?:sales |revenue |pipeline |performance |status )?report\b/gi)]
+        .map(m => m[1]!.toLowerCase())) : new Set<string>();
+    // Ambiguous schedules must not mint a fresh identity that bypasses suppression.
+    if (cadences.size > 1) return [];
+    const cadence = reportCadence([...cadences][0]);
     return [{ captureId: input.captureId, observedAt: input.timestamp, app,
       kind: job.kind, cue: job.cue,
-      routine: { policy: ROUTINE_POLICY, stage, sidecarId: input.sidecarId || null } }];
+      routine: { policy: ROUTINE_POLICY, stage, sidecarId: input.sidecarId || null, ...(cadence ? { cadence } : {}) } }];
   });
 }
 
@@ -48,5 +57,7 @@ export function parseRoutineEvidence(value: unknown): RoutineSignalEvidence | un
   const data = value as Record<string, unknown>;
   if (data.policy !== ROUTINE_POLICY || !['source', 'operation', 'output'].includes(String(data.stage))
     || !(data.sidecarId === null || typeof data.sidecarId === 'string' && data.sidecarId.length <= 200)) return undefined;
-  return { policy: ROUTINE_POLICY, stage: data.stage as RoutineStage, sidecarId: data.sidecarId as string | null };
+  if (data.cadence !== undefined && !reportCadence(data.cadence)) return undefined;
+  return { policy: ROUTINE_POLICY, stage: data.stage as RoutineStage, sidecarId: data.sidecarId as string | null,
+    ...(data.cadence ? { cadence: reportCadence(data.cadence)! } : {}) };
 }
