@@ -101,6 +101,32 @@ export const expressionPatches = {
         }
         // Each retained group is its evaluated prefix. The existing boolean
         // evaluator yields the same result; logs contain only evaluated data.`],
+    // #735: "starts with" has one meaning under both spellings, and an operator
+    // the switch does not implement fails the step instead of staying true.
+    // Registered here so a vendor sync re-applies it: readiness accepts
+    // TEXT_STARTS_WITH only because the engine reads it as TEXT_START_WITH.
+    ['            switch (castedCondition.operator) {',
+      `            // === JARVIS PATCH: one meaning for "starts with", and no silent match ===
+            // The enum's VALUE for starts-with is TEXT_START_WITH (what the dashboard
+            // saves); its KEY name, TEXT_STARTS_WITH, is what composed workflows write.
+            // Without a case for the key name, the condition fell through this switch
+            // and stayed true, so "starts with" matched every input.
+            const operator = (castedCondition.operator as string) === 'TEXT_STARTS_WITH'
+                ? BranchOperator.TEXT_STARTS_WITH : castedCondition.operator
+            // === END JARVIS PATCH ===
+            switch (operator) {`],
+    [`                case BranchOperator.DOES_NOT_EXIST:
+                    andGroup = andGroup && (castedCondition.firstValue === undefined || castedCondition.firstValue === null || castedCondition.firstValue === '')
+                    break
+`,
+      `                case BranchOperator.DOES_NOT_EXIST:
+                    andGroup = andGroup && (castedCondition.firstValue === undefined || castedCondition.firstValue === null || castedCondition.firstValue === '')
+                    break
+                // === JARVIS PATCH: an operator this switch does not implement fails the step instead of matching ===
+                default:
+                    throw new EngineGenericError('UnsupportedOperatorError', \`Router condition operator \${String(operator)} is not supported\`)
+                // === END JARVIS PATCH ===
+`],
   ],
 } as const;
 

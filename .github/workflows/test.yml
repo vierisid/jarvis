@@ -47,8 +47,8 @@ jobs:
       daemon-cli: ${{ steps.filter.outputs.daemon-cli }}
       toast: ${{ steps.filter.outputs.toast }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
           filters: |
@@ -92,7 +92,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/bun-setup
       - run: bun run scripts/check-no-ee-imports.ts
       - run: bun run scripts/check-migrations.ts
@@ -148,7 +148,7 @@ jobs:
     if: needs.changes.outputs.daemon-cli == 'true'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/bun-setup
       # Scoped to the lifecycle + service-definition files, not all of src/cli.
       # This job exists for the macOS-only behaviour (what launchd's KeepAlive
@@ -218,8 +218,8 @@ jobs:
       X_HOTKEY_TESTS: '^TestLinuxX'
       X_HOTKEY_TEST_COUNT: '8'
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # Single source of truth for the toolchain — tracks sidecar/go.mod so
           # the build gate can't drift from the declared Go version (GO_VERSION
@@ -576,8 +576,8 @@ jobs:
   sidecar-test-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: sidecar/go.mod
           cache-dependency-path: sidecar/go.sum
@@ -618,8 +618,8 @@ jobs:
     if: needs.changes.outputs.toast == 'true'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           # Same pin as .github/actions/bun-setup.
           bun-version: "1.4.2"
@@ -645,8 +645,8 @@ jobs:
     if: needs.changes.outputs.sidecar == 'true'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: sidecar/go.mod
           cache-dependency-path: sidecar/go.sum
@@ -690,7 +690,7 @@ jobs:
     if: needs.changes.outputs.sidecar == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Parse every plist
         run: |
           set -euo pipefail
@@ -709,7 +709,7 @@ jobs:
   applescript-check:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Compile + probe desktop.applescript
         run: |
           set -euo pipefail
@@ -742,7 +742,7 @@ jobs:
     if: needs.changes.outputs.sidecar == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build universal ocr-helper
         working-directory: sidecar
@@ -756,7 +756,7 @@ jobs:
           lipo -info helpers/ocr-helper
 
       - name: Upload helper binary
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ocr-helper-darwin
           path: sidecar/helpers/ocr-helper
