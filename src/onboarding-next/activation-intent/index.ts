@@ -12,8 +12,8 @@ function reply(submission: Submission, issues: Issue[], state: 'invalid' | 'need
   return { availability: 'ready', schemaVersion: 1, state, submission, issues, intent: null };
 }
 const unavailableRef = (ref: ContextRef, index: number): Issue => ({ id: `reference-${index}`, kind: ref.kind === 'connection' ? 'connection' : 'detail',
-  code: ref.kind === 'connection' ? 'missing_connection' : 'missing_context', label: 'Review this selection',
-  message: 'This selected reference is unavailable or changed. Choose an accessible current reference, or remove it and revise the request.', blocking: true });
+  code: ref.kind === 'connection' ? 'missing_connection' : 'missing_context', label: 'Review this selection', reference: { ...ref },
+  message: 'This selection is unavailable or changed. Remove it and review your request before trying again.', blocking: true });
 
 /** Stateless, default-off validation. B08 owns job idempotency/persistence;
  * B09 owns planning and saving a disabled draft. A serialized ready result is
@@ -45,6 +45,10 @@ export function createActivationIntentProvider<C>(deps: IntentDependencies<C>) {
           await guard();
         };
         await check();
+        const longAnswers: Issue[] = Object.entries(submission.answers).filter(([, value]) => value.length > LIMITS.answerChars)
+          .map(([id]) => ({ id, kind: 'detail', code: 'missing_detail', label: 'Shorten this answer', blocking: true,
+            message: `Keep this answer within ${LIMITS.answerChars} characters. Your text has been retained.` }));
+        if (longAnswers.length) return reply(submission, longAnswers, 'invalid');
         const prompt = submission.request.prompt;
         if (!prompt.trim() || prompt.length > LIMITS.promptChars) return reply(submission, [{ id: 'prompt', kind: 'detail',
           code: 'missing_detail', label: 'Describe your routine', blocking: true,

@@ -25,7 +25,7 @@ export function parseSubmission(value: unknown): Submission {
   }
   for (const [key, answer] of Object.entries(value.answers)) {
     if (!identifier(key) || ['constructor', 'prototype', '__proto__'].includes(key)
-      || typeof answer !== 'string' || answer.length > LIMITS.answerChars) throw new IntentError('invalid_request');
+      || typeof answer !== 'string') throw new IntentError('invalid_request');
   }
   // Do not truncate a user's request or silently discard unknown properties.
   if (new TextEncoder().encode(JSON.stringify(value)).byteLength > LIMITS.bodyBytes) throw new IntentError('request_too_large');

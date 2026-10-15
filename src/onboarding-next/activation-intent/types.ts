@@ -13,6 +13,8 @@ export interface Issue {
   code: 'missing_detail' | 'missing_context' | 'missing_connection' | 'unsupported_node' | 'placeholder';
   /** Only a named placeholder may be nonblocking for a disabled draft. */
   blocking: boolean;
+  /** Exact user-selected reference needing repair; only the validator sets this. */
+  reference?: ContextRef;
 }
 export interface Assessment { schemaVersion: 1; issues: Issue[] }
 export const CREATION_POLICY = Object.freeze({ artifact: 'disabled_draft', publish: false, enable: false,

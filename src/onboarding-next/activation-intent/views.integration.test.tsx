@@ -31,6 +31,75 @@ describe.skipIf(!existsSync(join(import.meta.dir, viewPath)))('actual U07 activa
   });
   afterEach(async () => { if (root) await act(async () => root.unmount()); root = null; element?.remove(); });
   afterAll(() => { (globalThis as any).IS_REACT_ACT_ENVIRONMENT = originalAct; GlobalRegistrator.unregister(); });
+  async function recoveryHarness(f: ReturnType<typeof fixture>, draft: any, issues: any[] = []) {
+    let model: any = { journeyId: 'recovery', revision: 0, theme: 'light', availability: 'ready', phase: 'ready', draft, issues };
+    let last: IntentResult | undefined, calls = 0;
+    const render = () => root.render(<View model={model} onDraftChange={(draft: unknown) => { model = { ...model, draft }; render(); }}
+      onIntent={async (intent: Submission) => {
+        calls++; last = await f.provider.validate(null, { action: intent.action, request: intent.request, answers: intent.answers });
+        model = { ...model, ...activationFeedback(last), revision: model.revision + 1 }; render();
+      }} />);
+    element = document.createElement('div'); document.body.append(element); root = createRoot(element);
+    await act(async () => render());
+    return {
+      model: () => model, result: () => last, calls: () => calls,
+      async click(label: string) {
+        const button = [...element.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent === label);
+        if (!button) throw Error(`Missing ${label}`); await act(async () => button.click());
+      },
+      async answer(value: string) {
+        const input = element.querySelector<HTMLInputElement>('input[type="text"]');
+        if (!input) throw Error('Missing correction field');
+        await act(async () => {
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+      },
+    };
+  }
+  test('a temporary assessment failure retains clarification fields and allows an explicit retry', async () => {
+    const f = fixture(), assess = f.services.assess;
+    f.services.assess = async () => { throw Error('temporary'); };
+    const h = await recoveryHarness(f, { prompt: 'Draft my follow-up', contextRefs: [], answers: { notes: 'Original notes' } }, [issue('notes')]);
+    await h.click('Create my workflow');
+    expect(h.result()).toMatchObject({ reason: 'service_unavailable' });
+    expect(element.querySelector('input')?.value).toBe('Original notes');
+    expect(element.querySelector('button[type="submit"]')?.getAttribute('aria-disabled')).toBe('false');
+    f.services.assess = assess; await h.click('Create my workflow');
+    expect(h.calls()).toBe(2); expect(h.result()).toMatchObject({ state: 'ready' });
+  });
+  test('an overlong clarification remains editable and can be corrected without losing the prompt', async () => {
+    const f = fixture(), original = 'n'.repeat(2001), prompt = '  Draft my follow-up.  ';
+    const h = await recoveryHarness(f, { prompt, contextRefs: [], answers: { notes: original } }, [issue('notes')]);
+    await h.click('Create my workflow');
+    expect(h.result()).toMatchObject({ availability: 'ready', state: 'invalid', intent: null });
+    expect(element.querySelector('input')?.value).toBe(original); expect(f.calls).not.toContain('assess');
+    await h.answer('Corrected notes'); expect(h.model().draft.answers.notes).toBe('Corrected notes');
+    await h.click('Create my workflow');
+    expect(h.result()).toMatchObject({ state: 'ready', intent: { request: { prompt }, answers: { notes: 'Corrected notes' } } });
+  });
+  test.each(['note', 'connection'])('an unavailable %s can be explicitly removed without clearing other selections', async kind => {
+    const f = fixture(), broken = ref(kind, 'selected'), retained = ref('source', 'selected'), resolve = f.services.resolve;
+    f.services.resolve = async r => r.kind === broken.kind ? { availability: 'unavailable' } : resolve(r);
+    const h = await recoveryHarness(f, { prompt: 'Draft from my selected sources', contextRefs: [broken, retained], answers: { notes: 'Keep these notes' } });
+    await h.click('Create my workflow'); expect(h.result()).toMatchObject({ state: 'needs_input' });
+    expect(element.querySelectorAll('input[type="text"]').length).toBe(0);
+    await h.click('Remove selection');
+    expect(h.calls()).toBe(1); expect(f.calls).not.toContain('assess');
+    expect(h.model().draft).toEqual({ prompt: 'Draft from my selected sources', contextRefs: [retained], answers: { notes: 'Keep these notes' } });
+    await h.click('Create my workflow');
+    expect(h.result()).toMatchObject({ state: 'ready', intent: { request: { contextRefs: [retained] } } });
+  });
+  test('removing an essential reference still requires explicit replacement data and another Create', async () => {
+    const f = services('note'); f.services.resolve = async () => ({ availability: 'unavailable' });
+    const h = await recoveryHarness(f, { prompt: 'Draft a follow-up', contextRefs: [ref('note', 'deleted')], answers: {} });
+    await h.click('Create my workflow'); await h.click('Remove selection');
+    expect(h.calls()).toBe(1); await h.click('Create my workflow');
+    expect(h.result()).toMatchObject({ state: 'needs_input', intent: null, issues: [{ id: 'note' }] });
+    await h.answer('Replacement meeting notes'); expect(h.calls()).toBe(2);
+    await h.click('Create my workflow');
+    expect(h.result()).toMatchObject({ state: 'ready', intent: { answers: { note: 'Replacement meeting notes' }, references: [] } });
+  });
   test.each(cases)('$label remains editable and requires an explicit create with available data', async c => {
     const f = services(c.required); let last: IntentResult | undefined, calls = 0;
     let model: any = { journeyId: 'journey', revision: 0, theme: 'light', availability: 'ready', phase: 'ready',
@@ -75,7 +144,7 @@ test.skipIf(!existsSync(join(import.meta.dir, hostPath)))('U10 consumes B07 feed
   h.config.adapters.activation = { available: () => true, create: () => ({ available: () => true,
     read: async () => presentation(), setDraft: (_c: unknown, value: typeof draft) => { draft = value; return presentation(); },
     command: async (_c: unknown, action: string, input: Submission) => {
-      feedback = activationFeedback(await f.provider.validate(null, { action, request: input.request, answers: input.answers })); revision++;
+      feedback = { ...feedback, ...activationFeedback(await f.provider.validate(null, { action, request: input.request, answers: input.answers })) }; revision++;
     } }) };
   const host = createSession(h.config);
   try {

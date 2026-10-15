@@ -34,7 +34,7 @@ test.each([
   { ...submission(), request: { ...submission().request, contextRefs: [ref('https://attacker')] } },
   { ...submission(), request: { ...submission().request, contextRefs: Array.from({ length: 21 }, (_, i) => ref('note', String(i))) } },
   { ...submission(), request: { ...submission().request, goalId: 'guessed' } },
-  { ...submission(), answers: { constructor: 'override' } }, { ...submission(), answers: { notes: 'x'.repeat(2001) } },
+  { ...submission(), answers: { constructor: 'override' } },
 ])('reject malformed or authority-bearing envelopes: %j', async input => {
   const f = fixture(); expect((await f.provider.validate(null, input)).availability).toBe('unavailable'); expect(f.calls).toEqual([]);
 });
@@ -45,6 +45,22 @@ test('future versions and oversized requests do not become creation intents', as
   expect(await f.provider.validate(null, submission('é'.repeat(LIMITS.bodyBytes))))
     .toEqual({ availability: 'unavailable', reason: 'request_too_large' });
   expect(f.calls).toEqual([]);
+});
+test('overlong answers return editable field errors with the exact original submission', async () => {
+  const f = fixture(), input = { ...submission(), answers: { notes: 'x'.repeat(2001), recipients: 'y'.repeat(2001) } };
+  expect(await f.provider.validate(null, input)).toMatchObject({ availability: 'ready', state: 'invalid', submission: input,
+    issues: [{ id: 'notes', kind: 'detail', blocking: true }, { id: 'recipients', kind: 'detail', blocking: true }], intent: null });
+  expect(f.calls).not.toContain('assess');
+});
+test.each(['disabled', 'unauthorized', 'binding_missing', 'capability_unavailable', 'unsupported_version'] as const)('feedback cannot reopen an unavailable capability: %s', reason => {
+  const availability = reason === 'unauthorized' ? 'unavailable' : 'unsupported';
+  expect(activationFeedback({ availability, reason }).availability).toBe(availability);
+});
+test.each(['service_unavailable', 'cancelled', 'invalid_request', 'request_too_large'] as const)('recoverable feedback is a retryable patch retaining prior fields: %s', reason => {
+  const prior = { issues: [issue('notes')] };
+  const patch = activationFeedback({ availability: 'unavailable', reason });
+  expect(patch.availability).toBe('ready'); expect({ ...prior, ...patch }.issues).toEqual(prior.issues);
+  expect(patch.phase).not.toBe('accepted');
 });
 test('intent identity binds scope, exact input, answers, and verified reference revisions', async () => {
   const f = fixture(), input = submission(); input.request.contextRefs = [ref('note')]; input.answers = { notes: 'My notes', recipients: 'No recipients yet' };
@@ -100,6 +116,7 @@ test.each([
   { schemaVersion: 1, issues: [{ ...issue(), blocking: false }] },
   { schemaVersion: 1, issues: [{ ...issue('node', 'unsupported_node'), blocking: false }] },
   { schemaVersion: 1, issues: [{ ...issue(), message: '' }] }, { schemaVersion: 1, issues: [], toolGrant: 'admin' },
+  { schemaVersion: 1, issues: [{ ...issue(), reference: ref('note', 'not-selected') }] },
 ])('malformed assessment cannot silently become ready: %j', async assessment => {
   const f = fixture(); f.services.assess = async () => assessment as unknown as Assessment;
   expect(await f.provider.validate(null, submission())).toEqual({ availability: 'unavailable', reason: 'service_unavailable' });

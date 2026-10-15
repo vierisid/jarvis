@@ -29,10 +29,21 @@ Only `ready` contains an intent. Missing details/connections and unsupported
 nodes are blocking. A trusted assessment can explicitly identify a legitimate
 `placeholder`; it must supply a label/message explaining what remains unresolved.
 That yields a qualified **disabled draft intent**, never runnable readiness.
-`activationFeedback` (browser-safe direct import from `feedback.ts`) projects
-these results into U07's existing issue fields. The owning host preserves the
-draft and advances its feedback revision. Validation never reports U07's
+`activationFeedback` (browser-safe direct import from `feedback.ts`) returns a
+patch to merge into U07's existing model, preserving correction fields when a
+temporary failure omits `issues`. Service failures/cancellation permit an explicit
+retry; disabled, missing, unsupported or unauthorized capabilities remain blocked.
+Overlong answers within the envelope limit return editable `invalid` field errors
+without truncating text. The owning host preserves the draft and advances its
+feedback revision. Validation never reports U07's
 `accepted` phase, which belongs to an actual B08 job acknowledgement.
+
+Unavailable reference issues carry the exact user-selected `{ kind, id }`. U07
+offers an explicit Remove selection action for that reference; it only edits the
+draft, retains other selections/answers and is disabled during pending requests.
+Removing a selection does not validate, grant access or create work. A subsequent
+Create rechecks the remaining request and can still require replacement data.
+Assessment services cannot supply reference-removal metadata or select sources.
 
 ## Existing service boundary
 
