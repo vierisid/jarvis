@@ -639,6 +639,8 @@ describe("Pause and Kill (Q-08)", () => {
     const paused = await post(d, flowId, "{}", { "Idempotency-Key": "k-9" });
     expect(paused.status).toBe(503);
     expect(paused.headers.get("Retry-After")).toBe("60");
+    // The sender is told to retry, not that Jarvis is paused.
+    expect(JSON.stringify(await paused.json())).not.toMatch(/paus|kill|jarvis/i);
     expect(runsOf(flowId)).toHaveLength(0);
     controller.resume();
     expect(await (await post(d, flowId, "{}", { "Idempotency-Key": "k-9" })).json()).toMatchObject({ outcome: "started" });

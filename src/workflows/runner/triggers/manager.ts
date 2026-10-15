@@ -825,7 +825,9 @@ export class TriggerManager {
         detail: { reason: opts.source === "webhook" ? `${reason} The sender was asked to retry.` : reason } });
       this.log(`flow ${flowId} (${opts.source}) not started: ${reason}`);
       return opts.source === "webhook"
-        ? { outcome: "skipped", fireId: fire?.id, reason: held, retryAfterSeconds: 60 }
+        // The sender may hold nothing but the URL: it is told to retry, not
+        // that Jarvis is paused or stopped (that stays in the delivery record).
+        ? { outcome: "skipped", fireId: fire?.id, reason: "Service unavailable, retry later", retryAfterSeconds: 60 }
         : { outcome: "skipped", fireId: fire?.id, reason };
     }
     const repeat = opts.dedupeKey ? repeatOf({ flowId, source: opts.source, dedupeKey: opts.dedupeKey, duplicateSince: opts.duplicateSince }) : null;
