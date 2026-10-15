@@ -355,6 +355,8 @@ COPY --from=build /app/ui/public ./ui/public
 # Copy version-stamped package.json from build stage (not the original)
 COPY --from=build /app/package.json ./
 COPY tsconfig.json ./
+# Keep the start/dev manifest lifecycle available in the runtime image too.
+COPY --from=build /app/scripts/onboarding-next-runtime-manifest.ts ./scripts/onboarding-next-runtime-manifest.ts
 
 # Compiled piece bundles from the `workflows` stage. Only each piece's dist/
 # is overlaid, so every source file under src/ still comes from exactly one

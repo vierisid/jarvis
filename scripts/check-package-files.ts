@@ -57,6 +57,14 @@ export interface Requirement {
  */
 export const REQUIRED: Requirement[] = [
   {
+    path: "scripts/onboarding-next-runtime-manifest.ts",
+    why: "source/package installs generate the optional runtime registry through postinstall",
+  },
+  {
+    path: "src/onboarding-next/runtime/generated/catalog.ts",
+    why: "read-only hosted installations import the prebuilt registry without install scripts",
+  },
+  {
     path: "bin/jarvis.ts",
     why: "the hosting fleet's install-version refuses a tarball without it, and the jarvis@ unit's ExecStart runs it",
   },

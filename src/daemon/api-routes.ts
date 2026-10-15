@@ -6,6 +6,8 @@
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createOnboardingRoutes } from '../onboarding-next/runtime/routes.ts';
+import type { OnboardingRuntime } from '../onboarding-next/runtime/runtime.ts';
 import { DEBUG_RPC_HEADER, debugRpcGate, debugRpcTokenMatches } from './debug-rpc-gate.ts';
 import type { HealthMonitor } from './health.ts';
 import { applyApprovalDecision, applyExecutionResolution } from './approval-decision.ts';
@@ -141,6 +143,10 @@ import { createSuggestionFeedbackRoutes } from '../awareness/suggestion-feedback
 import { approvalIntentFields } from '../authority/approval-delivery.ts';
 
 export type ApiContext = {
+  /** Optional B11 runtime. Default-off; legacy routes remain independent. */
+  onboardingNext?: OnboardingRuntime;
+  /** Strong readiness for B02, not the legacy background-agent existence test. */
+  onboardingServiceReadiness?: () => 'running' | 'stopped' | 'unavailable';
   suggestionComposer?: import('../awareness/suggestion-composer.ts').SuggestionComposer | null;
   /**
    * Daemon process boot time (Date.now() at start). Surfaced via the
@@ -1115,6 +1121,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     // `docs/ONBOARDING_PLAN.md`. Reset is intentionally available on
     // demand (not behind a build flag) so users can replay the tour
     // after a Jarvis update or when swapping LLM providers.
+
+    ...(ctx.onboardingNext ? createOnboardingRoutes(ctx.onboardingNext) : {}),
 
     '/api/onboarding/status': {
       GET: async () => {

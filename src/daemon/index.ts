@@ -39,6 +39,8 @@ import { EventCoalescer } from "./event-coalescer.ts";
 import { CommitmentExecutor } from "./commitment-executor.ts";
 import { classifyEvent } from "./event-classifier.ts";
 import { createApiRoutes, setCorsOrigin } from "./api-routes.ts";
+import { createDaemonOnboardingRuntime } from "../onboarding-next/runtime/daemon.ts";
+import { runtimeModules } from "../onboarding-next/runtime/generated/catalog.ts";
 import { GoogleAuth } from "../integrations/google-auth.ts";
 import { classifyGoogle, googleIdentity, makeGoogleAuth } from "../integrations/google-managed-refresh.ts";
 import { ResearchQueue } from "./research-queue.ts";
@@ -5047,6 +5049,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           }
         : undefined;
 
+    apiContext.onboardingNext = createDaemonOnboardingRuntime(apiContext, runtimeModules);
+
     const apiRoutes = {
       ...createApiRoutes(apiContext),
       ...createWorkflowRoutes({
@@ -5412,6 +5416,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // Idempotent constructor for the LLM-dependent services. Safe to call
     // multiple times; returns immediately if `bgAgent` is already running.
+    let onboardingStartupCompleted = false;
     const startPostSetupServices = async (): Promise<void> => {
       if (bgAgent) return; // already running
 
@@ -5750,18 +5755,28 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         console.error('[Daemon] Awareness service failed to start:', err instanceof Error ? err.message : err);
         // Non-fatal — daemon continues without awareness
       }
+      onboardingStartupCompleted = true;
     };
 
     // Expose the helper to the API layer so /api/onboarding/setup can
     // bring services online at the end of onboarding without a restart.
-    apiContext.startPostSetupServices = startPostSetupServices;
+    let onboardingStartInFlight: Promise<void> | null = null;
+    apiContext.startPostSetupServices = () => {
+      if (!onboardingStartInFlight) onboardingStartInFlight = startPostSetupServices().finally(() => { onboardingStartInFlight = null; });
+      return onboardingStartInFlight;
+    };
     apiContext.isPostSetupServicesReady = () => bgAgent !== null;
+    apiContext.onboardingServiceReadiness = () => {
+      if (!onboardingStartupCompleted || bgAgent?.status() !== 'running' || agentService.status() !== 'running') return 'stopped';
+      if (jarvisConfig.awareness?.enabled && apiContext.awarenessService?.status() !== 'running') return 'unavailable';
+      return 'running';
+    };
 
     // Boot-time path: setup was completed in a prior run, so spin services
     // up now. Skipped in setup mode — the onboarding endpoint will call
     // the same helper when the user finishes.
     if (!inSetupMode) {
-      await startPostSetupServices();
+      await apiContext.startPostSetupServices();
     }
 
     // 10a-2. Site Builder Service
