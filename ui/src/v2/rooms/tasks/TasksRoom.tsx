@@ -37,6 +37,9 @@ export function TasksRoomBody({ mode }: { mode: RoomBodyMode }) {
 
   useEffect(() => { if (!toast) return; const id = window.setTimeout(() => setToast(null), 4000); return () => window.clearTimeout(id); }, [toast]);
   const toastFrom = (r: { ok: boolean; message: string }) => setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
+  // A voice action is answered once its request has settled, with whether it
+  // worked (#1015).
+  const answered = (r: { ok: boolean; message: string }): boolean => { toastFrom(r); return r.ok; };
 
   const assignees = useMemo(() => [...new Set(data.tasks.map((t) => t.assigned_to).filter(Boolean) as string[])], [data.tasks]);
 
@@ -84,14 +87,19 @@ export function TasksRoomBody({ mode }: { mode: RoomBodyMode }) {
       case "create_task": {
         const title = typeof args.title === "string" ? args.title.trim() : ""; if (!title) return false;
         const parsed = typeof args.when === "string" ? parseRelativeDate(args.when) : null;
-        (async () => { const r = await data.createTask({ what: title, when_due: parsed?.ts, priority: (args.priority as TaskPriority) ?? undefined, assigned_to: typeof args.assigned_to === "string" ? args.assigned_to : undefined }); setToast({ text: r.ok ? `Created task "${title}".` : r.message, tone: r.ok ? "ok" : "warn" }); })();
-        return true;
+        return data.createTask({ what: title, when_due: parsed?.ts, priority: (args.priority as TaskPriority) ?? undefined, assigned_to: typeof args.assigned_to === "string" ? args.assigned_to : undefined })
+          .then((r) => answered(r.ok ? { ok: true, message: `Created task "${title}".` } : r));
       }
       // A held voice action arrives with the task pinned by id, and any
       // default filled in, as the daemon showed them on the card (#1008).
-      case "complete_task": { const t = pickRoomActionTarget(data.tasks, args, data.findByName); if (!t) return false; (async () => toastFrom(await data.updateStatus(t.id, "completed")))(); return true; }
-      case "update_priority": { const t = pickRoomActionTarget(data.tasks, args, data.findByName); if (!t) return false; (async () => toastFrom(await data.updatePriority(t.id, args.level as TaskPriority)))(); return true; }
-      case "reassign": { const t = pickRoomActionTarget(data.tasks, args, data.findByName); if (!t) return false; const agent = withRoomActionDefaults("tasks", "reassign", args).agent as string | null; (async () => toastFrom(await data.reassign(t.id, agent)))(); return true; }
+      case "complete_task": { const t = pickRoomActionTarget(data.tasks, args, data.findByName); if (!t) return false; return data.updateStatus(t.id, "completed").then(answered); }
+      case "update_priority": {
+        const t = pickRoomActionTarget(data.tasks, args, data.findByName); if (!t) return false;
+        const level = args.level as TaskPriority;
+        if (!TASK_PRIORITIES.includes(level)) { setToast({ text: `"${String(args.level)}" is not a priority.`, tone: "warn" }); return false; }
+        return data.updatePriority(t.id, level).then(answered);
+      }
+      case "reassign": { const t = pickRoomActionTarget(data.tasks, args, data.findByName); if (!t) return false; const agent = withRoomActionDefaults("tasks", "reassign", args).agent as string | null; return data.reassign(t.id, agent).then(answered); }
       default: return false;
     }
   });

@@ -128,7 +128,7 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
   };
 
   test('only the dashboard that spoke is asked, and only its answer counts', async () => {
-    const { svc, speaker, other, actionTo, answer } = setup();
+    const { svc, speaker, other, actionTo, answer, internals } = setup();
     const pending = svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 200, { client: speaker.ws as never });
     const mine = actionTo(speaker)!;
     const theirs = actionTo(other)!;
@@ -137,8 +137,9 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
     expect(typeof mine.payload.resultId).toBe('string');
     expect(theirs.payload).toMatchObject({ room: 'settings', action: 'switch_tab' });
     expect(theirs.payload.resultId).toBeUndefined();
-    // Another client that learned the id does not settle it.
+    // Another client that learned the id does not settle it, with any answer.
     await answer(other, mine.payload.resultId, false);
+    await internals.routeMessage({ type: 'room_action_result', payload: { resultId: mine.payload.resultId, accepted: false, outcome: 'pending' }, timestamp: Date.now() }, other.ws);
     await answer(speaker, mine.payload.resultId, true);
     expect(await pending).toBe('accepted');
   });
@@ -180,8 +181,10 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
   });
 
   test('the realtime tool tells the model what the room answered, never "Done"', async () => {
+    // A side-effecting action is answered once its request has settled
+    // (#1015), so a yes is the room saying it is done, not that it started.
     const cases = [
-      [true, 'Turning off text to speech. (Settings accepted it and started it; it shows the result on screen.)'],
+      [true, 'Turning off text to speech. (Settings says it is done.)'],
       [false, "Settings didn't accept that."],
       [null, "I sent that to Settings, but it didn't answer, so I can't tell whether it happened."],
     ] as const;
@@ -193,6 +196,39 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
         'dashboard_room_action', { room: 'settings', action: 'disable_tts', args: {} }, speaker.ws);
       expect(reply).toBe(said);
     }
+  });
+
+  // #1015: the room answers once its request settles, and a dev server gets
+  // 30s to come up where this path waits 3.5s. A room that said it had
+  // started is still working, which is not "can't tell whether it happened":
+  // told that, the model may ask again and run it twice.
+  test('a room still working when the wait runs out is said to be working, and that is not a retry', async () => {
+    const { svc, internals, speaker, answer, actionTo } = setup();
+    shortWait(svc);
+    const tick = setInterval(() => {
+      const a = actionTo(speaker);
+      if (!a) return;
+      clearInterval(tick);
+      void internals.routeMessage({ type: 'room_action_result', payload: { resultId: a.payload.resultId, started: true }, timestamp: Date.now() }, speaker.ws);
+    }, 1);
+    const reply = await internals.executeRealtimeNavTool('dashboard_room_action', { room: 'workspaces', action: 'start_server', args: { name: 'demo' } }, speaker.ws);
+    clearInterval(tick);
+    expect(reply).toBe('Workspaces started that and is still working on it. It shows the result on screen. (It has not finished; do not call this again for this request.)');
+    // Started is not an answer: one that follows in time settles it.
+    const p = svc.requestRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x' } }, 200, { client: speaker.ws as never });
+    const id = speaker.sent.filter((m) => m.payload?.source === 'room_action').at(-1)!.payload.resultId;
+    await internals.routeMessage({ type: 'room_action_result', payload: { resultId: id, started: true }, timestamp: Date.now() }, speaker.ws);
+    await answer(speaker, id, false);
+    expect(await p).toBe('rejected');
+  });
+
+  test('only the dashboard asked can say it has started', async () => {
+    const { svc, internals, speaker, other, actionTo } = setup();
+    const p = svc.requestRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x' } }, 50, { client: speaker.ws as never });
+    const id = actionTo(speaker)!.payload.resultId;
+    await internals.routeMessage({ type: 'room_action_result', payload: { resultId: id, started: true }, timestamp: Date.now() }, other.ws);
+    await internals.routeMessage({ type: 'room_action_result', payload: { resultId: 'someone-else', started: true }, timestamp: Date.now() }, speaker.ws);
+    expect(await p).toBe('no_answer');
   });
 
   // #1010: the answerer is told how long it is waited for, so the bus can
@@ -236,12 +272,15 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
     expect(to2(o2)!.payload.expiresInMs).toBeUndefined();
   });
 
-  test('an accepted presentation action is not reported as work started', async () => {
+  test('an accepted presentation action is not reported as work done', async () => {
     const { internals, speaker, answerWhenSent } = setup();
     answerWhenSent(speaker, true);
-    const reply = await internals.executeRealtimeNavTool(
-      'dashboard_room_action', { room: 'tasks', action: 'set_filter', args: { field: 'status', value: 'pending' } }, speaker.ws);
-    expect(reply).not.toContain('started it');
+    const args = { field: 'status', value: 'pending' };
+    const reply = await internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'set_filter', args }, speaker.ws);
+    // Its own acknowledgement and nothing after it (#1015: the suffix for
+    // work is "says it is done").
+    expect(reply).toBe(roomActionReply({ room: 'tasks', action: 'set_filter', args }, 'accepted'));
+    expect(reply).not.toContain('done');
   });
 
   test('a tab switch by the realtime tool reads like the pebble\'s', async () => {
@@ -329,6 +368,15 @@ describe('roomActionReply claims no more than the room said (#965)', () => {
       const reply = roomActionReply({ room: 'settings', action, args }, 'accepted');
       expect(`${action}: ${reply}`).not.toMatch(/: (Done|Remembered|Created|Completed|Finished)\b/);
     }
+  });
+
+  test('a pending answer is never heard as a refusal or as done (#1016)', () => {
+    expect(roomActionReply({ room: 'agents', action: 'spawn_agent', args: { specialist: 'research' } }, 'pending'))
+      .toBe('That needs your approval before it runs. A card is waiting for you.');
+    // A tab switch held for approval is not a thing, but such an answer is
+    // still not a switch.
+    expect(roomActionReply({ room: 'agents', action: 'switch_tab', args: { tab: 'orbital' } }, 'pending'))
+      .toBe("I asked Agents to switch to orbital, but it didn't say it had.");
   });
 
   test('a tab switch with no tab still reads as a sentence', () => {
@@ -1032,13 +1080,13 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
     (base.svc as unknown as { roomActionTargetLists: () => RoomActionTargetLists }).roomActionTargetLists = () => ({
       project: async () => [{ id: 'proj-demo', name: 'demo' }], content: async () => [], task: async () => [],
     });
-    // The speaker's room runs whatever it is sent.
-    const answering = () => {
+    // The speaker's room runs whatever it is sent, or answers as told.
+    const answering = (answer: { accepted: boolean; outcome?: string } = { accepted: true }) => {
       const tick = setInterval(() => {
         const a = speaker.sent.find((m) => m.payload?.source === 'room_action' && m.payload.resultId);
         if (!a) return;
         clearInterval(tick);
-        void internals.routeMessage({ type: 'room_action_result', payload: { resultId: a.payload.resultId, accepted: true }, timestamp: Date.now() }, speaker.ws);
+        void internals.routeMessage({ type: 'room_action_result', payload: { resultId: a.payload.resultId, ...answer }, timestamp: Date.now() }, speaker.ws);
       }, 1);
       // Never outlives the test, even one that fails before anything is sent.
       setTimeout(() => clearInterval(tick), 2_000);
@@ -1063,6 +1111,61 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
     await tainted.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'workspaces', action: 'create_project', args: { name: 'x' } }, tainted.speaker.ws);
     expect(tainted.brief()).toEqual(['denied:not-run:voice:room_action(workspaces/create_project; via realtime; install_software, execute_command; tainted)']);
     expect(tainted.rows[0]!.action_category).toBe('install_software');
+  });
+
+  // #1016: a spawn the route held behind a card is waiting, not refused, and
+  // has not run. "Agents didn't accept that." told the realtime model to try
+  // again, and every retry raised another card.
+  test('a room action waiting on a card is said to wait, and recorded as not run, on both paths', async () => {
+    const t = setup();
+    t.answering({ accepted: false, outcome: 'pending' });
+    const reply = await t.internals.executeRealtimeNavTool('dashboard_room_action',
+      { room: 'agents', action: 'spawn_agent', args: { specialist: 'research-analyst', task: 'x' } }, t.speaker.ws);
+    expect(reply).toBe('That needs your approval before it runs. A card is waiting for you. '
+      + '(Nothing has run. The user approves or refuses it on the card; do not call this again for this request.)');
+    expect(reply).not.toContain("didn't accept");
+    expect(t.brief()).toEqual(['allowed:not-run:voice:room_action(agents/spawn_agent; via realtime; spawn_agent; pending)']);
+
+    // The classifier holds a spawn for a yes; the yes sends it, and the
+    // room's card is what the person hears about.
+    const c = setup();
+    await c.internals.routeClassifiedVoiceIntent(c.intent('agents', 'spawn_agent', { specialist: 'research-analyst', task: 'x' }), 'spawn a researcher', 'r', c.speaker.ws);
+    c.answering({ accepted: false, outcome: 'pending' });
+    expect(await c.svc.resolveVoiceConfirmation('i-agents-spawn_agent', 'confirm')).toEqual({ ok: true });
+    expect(c.brief().at(-1)).toBe('allowed:not-run:click:room_action(agents/spawn_agent; via confirm; spawn_agent; pending)');
+    const said = c.speaker.sent.filter((m) => m.payload?.source === 'assistant_message').map((m) => m.payload.text);
+    expect(said.at(-1)).toBe('That needs your approval before it runs. A card is waiting for you.');
+  });
+
+  test('an answer whose two halves disagree, or that names no known outcome, is no answer', async () => {
+    for (const answer of [{ accepted: true, outcome: 'pending' }, { accepted: false, outcome: 'accepted' }, { accepted: false, outcome: 'maybe' }, { accepted: 'yes', outcome: 'pending' }]) {
+      const t = setup();
+      t.answering(answer as { accepted: boolean; outcome?: string });
+      await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws);
+      expect(`${JSON.stringify(answer)} ${t.brief()}`).toBe(`${JSON.stringify(answer)} allowed:not-run:voice:room_action(tasks/create_task; via realtime; write_data; no_answer)`);
+    }
+    // Not vacuous: the same harness, answering plainly, is heard.
+    const ok = setup();
+    ok.answering({ accepted: false, outcome: 'rejected' });
+    await ok.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, ok.speaker.ws);
+    expect(ok.brief()).toEqual(['allowed:not-run:voice:room_action(tasks/create_task; via realtime; write_data; rejected)']);
+  });
+
+  // #1015: a room still on it when the wait ran out has started it; the row
+  // says so, and that its end is not known.
+  test('a room still working when the wait runs out is recorded as run, and as started', async () => {
+    const t = setup();
+    t.answering({ started: true } as never);
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'workspaces', action: 'start_server', args: { name: 'demo' } }, t.speaker.ws);
+    expect(t.brief()).toEqual(['allowed:ran:voice:room_action(workspaces/start_server; via realtime; execute_command; started)']);
+    // And on the classifier path, where it is said aloud: test_provider is
+    // not governed, so a sure reading runs it.
+    const c = setup();
+    c.answering({ started: true } as never);
+    await c.internals.routeClassifiedVoiceIntent(c.intent('settings', 'test_provider', { provider: 'openai' }), 'test openai', 'r', c.speaker.ws);
+    expect(c.brief()).toEqual(['allowed:ran:voice:room_action(settings/test_provider; via classifier; read_data; started)']);
+    const said = c.speaker.sent.filter((m) => m.payload?.source === 'assistant_message').map((m) => m.payload.text);
+    expect(said.at(-1)).toBe('Settings started that and is still working on it. It shows the result on screen.');
   });
 
   test('a room that never answers is not recorded as having run it', async () => {
@@ -1191,6 +1294,6 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
     t.svc.setAuditTrail({ log: () => { throw new Error('disk full'); } } as never);
     t.answering();
     const reply = await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws);
-    expect(reply).toContain('accepted it and started it');
+    expect(reply).toContain('Tasks says it is done');
   });
 });

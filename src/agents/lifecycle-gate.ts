@@ -23,6 +23,10 @@
  *      said what call would redo the act once approved (`via.toolArguments`),
  *      and the act is refused either way with `AgentLifecycleRefusal`.
  *   4. An audit row, for every outcome. Nothing recorded a spawn before.
+ *
+ * The acting agent is the sub-agent whose tool call reached the sink when one
+ * did (`acting-agent.ts`, #1014), judged under its restrictions and taint;
+ * otherwise the primary, for a model turn or the person.
  */
 
 import type { ActionCategory } from '../roles/authority.ts';

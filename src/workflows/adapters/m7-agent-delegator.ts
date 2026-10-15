@@ -384,9 +384,10 @@ export class M7AgentDelegator implements PieceAgentDelegator {
       return errorResult(`delegate failed: ${msg}`);
     } finally {
       // Always clean up. reapAgent (not gated: this is our own finished
-      // child) recursively removes children, so even
-      // if runSubAgent itself spawned grand-children (it doesn't today), they
-      // get torn down too.
+      // child) recursively removes its children. An agent the child starts
+      // through `manage_agents` is the primary's child, not this one's, so it
+      // outlives the delegation, carrying the child's restrictions (#1014);
+      // a `delegate_task` specialist is reaped by that call itself.
       if (childId !== null) {
         try {
           this.orchestrator.reapAgent(childId);

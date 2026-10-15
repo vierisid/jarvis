@@ -72,15 +72,15 @@ export function CalendarRoomBody({ mode }: { mode: RoomBodyMode }) {
         const whenStr = typeof args.when === "string" ? args.when : "";
         if (!title) return false;
         const parsed = whenStr ? parseRelativeDate(whenStr) : null;
-        (async () => {
-          const r = await data.addEvent({ title, whenMs: parsed?.ts, priority: (args.priority as CalendarPriority) ?? undefined, assigned_to: typeof args.with === "string" ? args.with : undefined });
+        // Answered once the write has settled, with whether it worked (#1015).
+        return data.addEvent({ title, whenMs: parsed?.ts, priority: (args.priority as CalendarPriority) ?? undefined, assigned_to: typeof args.with === "string" ? args.with : undefined }).then((r) => {
           if (r.ok && parsed) {
             const offset = Math.round((startOfWeek(parsed.ts) - data.weekStart) / (7 * 86_400_000));
             if (offset !== 0) data.goToWeek(offset);
           }
           setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
-        })();
-        return true;
+          return r.ok;
+        });
       }
       default: return false;
     }

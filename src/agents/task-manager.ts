@@ -12,6 +12,7 @@ import type { LLMManager } from '../llm/manager.ts';
 import type { ToolRegistry } from '../actions/tools/registry.ts';
 import { outsideApprovalScope } from '../authority/approved-action-scope.ts';
 import { outsideExecutionScope } from '../actions/execution-scope.ts';
+import { outsideActingAgent } from './acting-agent.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 
 export type AsyncTaskStatus = 'running' | 'completed' | 'failed' | 'cancelled';
@@ -179,7 +180,10 @@ export class AgentTaskManager {
     // binding and the call's template-delivery suppression: both fail closed
     // (a sidecar call stays on the run's machine), and whether a task started
     // from a run should keep any of the run's state is not settled here.
-    outsideExecutionScope(() => outsideApprovalScope(() => this.runSubAgentFn({
+    // Outside the acting sub-agent that started it (#1014): the task's own
+    // loop names its own agent on every dispatch, and its restrictions were
+    // fixed into `authority.profile` by the caller.
+    outsideActingAgent(() => outsideExecutionScope(() => outsideApprovalScope(() => this.runSubAgentFn({
       agent,
       task,
       context,
@@ -225,7 +229,7 @@ export class AgentTaskManager {
       console.error(`[TaskManager] Task ${taskId} failed (${asyncTask.agentName}):`, err);
       this.emit(asyncTask.status === 'cancelled' ? 'cancel' : 'fail', asyncTask);
       onComplete?.(asyncTask);
-    })));
+    }))));
 
     return taskId;
   }

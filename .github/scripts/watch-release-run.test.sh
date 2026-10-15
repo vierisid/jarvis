@@ -337,7 +337,7 @@ release_caught() {
 	if ! FROM="$RELEASE" TO="$copy" OLD="$2" NEW="$3" bun -e '
 const s = await Bun.file(process.env.FROM).text();
 if (s.split(process.env.OLD).length !== 2) { console.error("anchor must occur once"); process.exit(2); }
-await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
+await Bun.write(process.env.TO, s.replace(process.env.OLD, () => process.env.NEW));
 '; then
 		no "mutant '$1' could be applied (release.yml no longer has the text it mutates)"
 		return

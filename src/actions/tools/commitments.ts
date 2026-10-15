@@ -10,10 +10,11 @@ import type { CommitmentPriority, CommitmentStatus } from '../../vault/commitmen
 import {
   createCommitment, getCommitment, findCommitments,
   updateCommitmentStatus, updateCommitmentDue, getUpcoming,
+  COMMITMENT_PRIORITIES, COMMITMENT_STATUSES,
 } from '../../vault/commitments.ts';
 
-const VALID_STATUSES = ['pending', 'active', 'completed', 'failed', 'escalated'];
-const VALID_PRIORITIES = ['low', 'normal', 'high', 'critical'];
+const VALID_STATUSES: readonly string[] = COMMITMENT_STATUSES;
+const VALID_PRIORITIES: readonly string[] = COMMITMENT_PRIORITIES;
 
 export const commitmentsTool: ToolDefinition = {
   name: 'commitments',
