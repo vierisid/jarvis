@@ -12,6 +12,8 @@
  *  - a timer or approval waitpoint whose own step has already finished (the
  *    run was woken early by something else) is retired, never used to wake
  *    whatever the run paused on next.
+ * A parent waiting on a required child is continued separately, by
+ * child-run-scheduler.ts (no waitpoint named on its job, no ledger row).
  * The RUN_FLOW handler checks the same again when the job is claimed
  * (`continuationRefusal`), and a run of a workflow turned off since it began
  * never continues (repos/flow-turn-off.ts).

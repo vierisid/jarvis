@@ -426,7 +426,11 @@ describe("webhooks", () => {
     deleteConnection(connection.id);
     const refused = await post(d, flowId, '{"order":7}', { "Idempotency-Key": "o-7" });
     expect(refused.status).toBe(200);
-    expect(await refused.json()).toMatchObject({ ok: true, outcome: "blocked" });
+    const refusedBody = await refused.json() as Record<string, unknown>;
+    expect(refusedBody).toMatchObject({ ok: true, outcome: "blocked" });
+    // The readiness reason stays in the owner's record, not the sender's reply.
+    expect(refusedBody.reason).toBeUndefined();
+    expect(listFlowFires(flowId)[0]!.detail?.reason).toEqual(expect.any(String));
     expect(await (await post(d, flowId, '{"order":7}', { "Idempotency-Key": "o-7" })).json()).toMatchObject({ outcome: "duplicate" });
     const failed = runsOf(flowId);
     expect(failed).toHaveLength(1);

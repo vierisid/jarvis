@@ -115,6 +115,12 @@ Approval Links step makes its URL in one step, and the run waits for it at a
 later one. Each URL still continues the run once, and only while it is paused
 with no other continuation queued.
 
+A parent run waiting on a required child workflow is continued by the child-run
+scheduler (`runtime/child-run-scheduler.ts`), which consumes the child's
+waitpoint and queues the RESUME in its own transaction, without a ledger row.
+Its waitpoint refuses a manual resume (403). The run handler still stops it if
+its workflow was turned off.
+
 The run handler checks the waitpoint again, refuses a run of a workflow turned
 off since it began (and stops it), and does not continue a draft edited while
 its run was paused, also when the edited draft was then published: the run
