@@ -55,18 +55,24 @@ export function retireTerminalRunWaits(runId: string): void {
   }).immediate();
 }
 
-/** Atomically stop the run and ALL its queued attempts, including legacy jobs. */
-export function cancelFlowRun(runId: string): {
+/**
+ * Atomically stop the run and ALL its queued attempts, including legacy jobs.
+ * A `reason` is kept on the stopped run (its failed step), so a run stopped
+ * because its workflow was turned off says so (Q-06). Required descendants
+ * stopped with it keep the plain cancellation: the reason names the root's
+ * workflow, not theirs.
+ */
+export function cancelFlowRun(runId: string, opts: { reason?: string; reasonLabel?: string } = {}): {
   accepted: boolean; jobCanceled: boolean; cancellation: RunCancellation | null;
 } {
   const db = getWorkflowDb();
   const stopped: string[] = [];
-  const stop = (runId: string) => {
+  const stop = (id: string) => {
     const run = db.query<{ status: string; start_time: number | null }, [string]>(
       "SELECT status, start_time FROM flow_run WHERE id = ?",
-    ).get(runId);
-    if (!run) throw new Error(`run not found: ${runId}`);
-    let cancellation = getRunCancellation(runId);
+    ).get(id);
+    if (!run) throw new Error(`run not found: ${id}`);
+    let cancellation = getRunCancellation(id);
     if (!cancellation && !["QUEUED", "RUNNING", "PAUSED"].includes(run.status)) {
       return { accepted: false, jobCanceled: false, cancellation: null };
     }
@@ -74,18 +80,22 @@ export function cancelFlowRun(runId: string): {
     if (!cancellation) {
       db.run(`INSERT INTO workflow_run_cancellation
         (run_id, acknowledged_at, status_at_request, in_flight_may_have_completed)
-        VALUES (?, ?, ?, ?)`, [runId, ts, run.status, run.status === "RUNNING" || run.start_time !== null ? 1 : 0]);
-      cancellation = getRunCancellation(runId)!;
+        VALUES (?, ?, ?, ?)`, [id, ts, run.status, run.status === "RUNNING" || run.start_time !== null ? 1 : 0]);
+      cancellation = getRunCancellation(id)!;
     }
     const jobs = db.run(`UPDATE workflow_job SET status = 'CANCELED', locked_until = NULL, updated = ?
       WHERE job_type = 'RUN_FLOW' AND status IN ('QUEUED', 'RUNNING')
-        AND (flow_run_id = ? OR (flow_run_id IS NULL AND CASE WHEN json_valid(payload) THEN json_extract(payload, '$.runId') END = ?))`, [ts, runId, runId]);
+        AND (flow_run_id = ? OR (flow_run_id IS NULL AND CASE WHEN json_valid(payload) THEN json_extract(payload, '$.runId') END = ?))`, [ts, id, id]);
     db.run("UPDATE flow_run SET status = 'STOPPED', finish_time = ?, updated = ? WHERE id = ?",
-      [cancellation.acknowledgedAt, ts, runId]);
-    retireRunWaits(runId, ts, true);
-    stopped.push(runId);
+      [cancellation.acknowledgedAt, ts, id]);
+    retireRunWaits(id, ts, true);
+    stopped.push(id);
+    if (opts.reason && id === runId) {
+      db.run("UPDATE flow_run SET failed_step = ? WHERE id = ?", [JSON.stringify({
+        name: "<lifecycle>", displayName: opts.reasonLabel ?? "Stopped", errorMessage: opts.reason }), id]);
+    }
     // A stopped run never resumes a delegated conversation; drop its log.
-    deleteDelegations(runId);
+    deleteDelegations(id);
     return { accepted: true, jobCanceled: jobs.changes > 0, cancellation };
   };
   const result = db.transaction(() => {
