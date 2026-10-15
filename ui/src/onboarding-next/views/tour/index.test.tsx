@@ -48,6 +48,12 @@ test.each([...TOUR_STEPS])("approved descriptor renders in order: %j", async ste
   expect(requests.at(-1)?.mode).toBe("tutorial");
   expect(effects).toBe(0);
 });
+test("room copy promises only actions the product has", () => {
+  const copy = TOUR_STEPS.map(step => step.body).join(" ").toLowerCase();
+  // Facts can be corrected but not deleted, approvals are approve/deny, and Awareness asks before drafting.
+  for (const claim of ["forget", "keep it as a draft", "edit it", "prepares the workflow"]) expect(copy).not.toContain(claim);
+  expect(TOUR_STEPS.find(step => step.id === "opportunities")?.body).toContain("asks before drafting");
+});
 test("next does not advance without authoritative acknowledgement and double clicks emit once", async () => {
   await mount(); const next = button("Next");
   await act(async () => { next.click(); next.click(); next.click(); });

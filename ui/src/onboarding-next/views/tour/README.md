@@ -1,7 +1,6 @@
 # ON-U-05: highlighted room tutorial
 
-Optional controlled UI, targeting main 5024ea7455a5613be0514475be32c0dee6de0edd.
-This module does not register itself or replace the released onboarding wizard.
+Optional controlled UI. This module does not register itself or replace the released onboarding wizard.
 
 ## Design and scope
 
@@ -9,7 +8,9 @@ Native Figma file eNfKeirIKLZLlZEasrurZa, page 1097:16402, checkpoint
 “Onboarding · Tutorial focus contour · 2026-10-14”, version 2410205462365531104.
 All twelve live prototype cards were inspected. Each descriptor records its node.
 The card keeps the blue 2px inside contour, sharp upper-right corner, restrained
-shadow and approved copy. Dark uses the approved Brief material family.
+shadow and the approved copy, adjusted where the design promised behaviour the
+product does not have (Memory cannot forget a fact, approvals are approve/deny,
+Awareness asks before drafting). Dark uses the approved Brief material family.
 
 The order is Today, Workflows, Opportunities, Needs you, Goals, Memory,
 Connected workspace, Authority, Profile, Settings, Billing, Pebble. The final
@@ -98,6 +99,3 @@ ON-B-11 registration and the relevant D rooms in a verified candidate.
 No sibling imports or shared registry edits. No new dependency or migration.
 Before activation, revert this module. After registration, disable its optional
 entry first and retain the legacy experience, journey and profile records.
-
-Delivery, review, known limitations and exact test commits:
-`docs/onboarding-delivery/ON-U-05.json`.
