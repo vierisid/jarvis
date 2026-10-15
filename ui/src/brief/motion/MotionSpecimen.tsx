@@ -11,7 +11,7 @@ import "./specimen.css";
 type ExampleProps = { active: boolean; reduced: boolean; onChange: (active: boolean) => void; onSample: (sample: MotionSample) => void };
 const names: Record<MotionKind, string> = { press: "Contact", reveal: "Reveal", selection: "Selection", reflow: "Make room", transfer: "Transfer", settle: "Settle" };
 const initial = () => ({ press: false, reveal: false, selection: false, reflow: false, transfer: false, settle: false });
-function measuredWidth() {
+function useMeasuredWidth() {
   const ref = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   useLayoutEffect(() => {
@@ -51,7 +51,7 @@ function Selection(p: ExampleProps) {
   </div></div>;
 }
 function Reflow(p: ExampleProps) {
-  const { ref, width } = measuredWidth();
+  const { ref, width } = useMeasuredWidth();
   const narrow = width < 620;
   const previousWidth = useRef(width);
   const resized = previousWidth.current !== width;
@@ -73,11 +73,11 @@ function Reflow(p: ExampleProps) {
   </div>;
 }
 function Transfer(p: ExampleProps) {
-  const { ref, width } = measuredWidth();
+  const { ref, width } = useMeasuredWidth();
   const card = useBriefMotion<HTMLButtonElement>({ transform: `translateX(${p.active ? Math.max(0, width / 2) : 0}px)` }, { ...p, kind: "transfer" });
   return <div ref={ref} className="brief-motion__small-stage brief-motion__transfer">
     <div className="brief-motion__slots" data-motion-anchor><span>Next step</span><span>In your stack</span></div>
-    <button ref={card} className="brief-motion__job" data-motion-part="transfer" aria-pressed={p.active} onClick={() => p.onChange(!p.active)}><FileText size={16} /><span>Prepare Alex’s call</span></button>
+    <button ref={card} className="brief-motion__job" data-motion-part="transfer" aria-pressed={p.active} onClick={() => p.onChange(!p.active)}><FileText size={16} /><span>Prepare the client call</span></button>
   </div>;
 }
 function Settle(p: ExampleProps) {
