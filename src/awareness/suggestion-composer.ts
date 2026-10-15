@@ -101,6 +101,9 @@ export class SuggestionComposer {
 
   private async drain(): Promise<void> {
     while (this.running) {
+      // Recovery consumes no model allowance. A lease surviving a restart must
+      // still become retryable when it expires during a resource pause.
+      recoverExpiredCompositions();
       if (!this.admission()) return;
       const job = claimSuggestionComposition(this.timeoutMs);
       if (!job) return;

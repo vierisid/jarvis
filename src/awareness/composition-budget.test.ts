@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { initWorkflowDb } from '../workflows/db';
 import { closeDb, getDb } from '../vault/schema';
 import { createSuggestion } from '../vault/awareness';
-import { acceptSuggestion, retrySuggestionComposition } from './suggestion-feedback';
+import { acceptSuggestion, getSuggestionLearning, retrySuggestionComposition } from './suggestion-feedback';
 import { claimSuggestionComposition, failSuggestionComposition, SuggestionComposer } from './suggestion-composer';
 import { COMPOSITION_LIMITS, compositionQueueStatus } from './composition-budget';
 import { createSuggestionFeedbackRoutes } from './suggestion-feedback-routes';
@@ -25,8 +25,13 @@ test('queue admission is bounded, idempotent at capacity, and refuses atomically
 });
 
 test('two workers cannot claim concurrently; rolling allowance and attempt caps survive restart', () => {
-  const id = enqueue(0); enqueue(1);
+  enqueue(0); const second = enqueue(1);
+  // Force selection of the second enqueue: the assertions must follow the
+  // claimed identity, regardless of timestamp ties or insertion order.
+  getDb().run('UPDATE suggestion_composition_jobs SET created_at = 0 WHERE suggestion_id = ?', [second]);
   const job = claimSuggestionComposition()!;
+  expect(job.suggestion_id).toBe(second);
+  const id = job.suggestion_id;
   expect(claimSuggestionComposition()).toBeNull();
   failSuggestionComposition(job, 'fixture');
   getDb().run('UPDATE suggestion_composition_jobs SET attempts = 3 WHERE suggestion_id = ?', [id]);
@@ -36,6 +41,25 @@ test('two workers cannot claim concurrently; rolling allowance and attempt caps 
   expect(claimSuggestionComposition()).toBeNull(); expect(compositionQueueStatus().reason).toBe('daily_budget');
   getDb().run('UPDATE suggestion_composition_attempts SET started_at = 0');
   expect(claimSuggestionComposition()).not.toBeNull();
+});
+
+test('a lease surviving restart expires and becomes retryable while model admission is paused', async () => {
+  const id = enqueue(0);
+  const job = claimSuggestionComposition()!;
+  closeDb(); initWorkflowDb(path);
+  let calls = 0;
+  const worker = new SuggestionComposer(async () => { calls++; throw new Error('must remain paused'); }, undefined, () => false);
+  try {
+    worker.start(); await worker.idle();
+    expect(getSuggestionLearning(id).composition?.state).toBe('running');
+    getDb().run('UPDATE suggestion_composition_jobs SET lease_until = ? WHERE id = ?', [Date.now() - 1, job.id]);
+    worker.kick(); await worker.idle();
+    expect(getSuggestionLearning(id).composition?.state).toBe('failed');
+    expect(retrySuggestionComposition(id, { requestId: 'retry', reason: 'fixture' }).composition?.state).toBe('queued');
+    worker.kick(); await worker.idle();
+    expect(compositionQueueStatus()).toMatchObject({ queued: 1, running: 0, attempts: 1 });
+    expect(calls).toBe(0);
+  } finally { worker.stop(); await worker.idle(); }
 });
 
 test('budget/target admission leaves work queued without attempts; later admission runs as background', async () => {

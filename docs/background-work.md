@@ -36,6 +36,13 @@ A request larger than remaining allowance records its next retry time. No provid
 request is sent for local `background_throttled` admission failures, and chat
 admission refusals are counted in budget telemetry rather than as provider usage.
 
+Hosted thinking-budget retries also reserve a new attempt, input payload and output
+allowance before transport. They use the admitted output limit, including the
+8,192-token cap; a tier requiring more can still fail and needs reconfiguration.
+The previous attempt stays spent. Its settled transport releases its slot before
+retry admission, so another active background call does not double-count this
+request. Foreground hosted retries retain their existing behavior.
+
 The existing `background` origin marks awareness, background agents and memory
 extraction. Suggestion composition now explicitly uses that origin. The composer
 adapter treats a detached call with no origin as background too, including the
@@ -51,6 +58,10 @@ exhausted job remains inspectable, never silently reset. Opportunistic awareness
 and extraction do not gain a new durable retry queue: a refused enrichment is
 observable in the aggregate counters and existing caller diagnostics, and its
 source remains under the existing retention policy.
+
+Expired preparation leases are recovered even while model admission is paused.
+A lease surviving restart therefore becomes failed and explicitly retryable on
+expiry; recovery itself consumes no model allowance.
 
 ## Inspecting the state
 

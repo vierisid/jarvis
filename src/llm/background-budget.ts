@@ -111,13 +111,28 @@ export function backgroundBudgetStatus() {
   try { return budget.snapshot(); }
   catch { return { state: 'unavailable' as const, reason: 'budget_unavailable', retryAt: null }; }
 }
+
+/** A provider-internal retry is another transport, not part of the first reservation. */
+function acquireProviderLease(governor: BackgroundBudget, messages: LLMMessage[], options?: LLMOptions) {
+  let lease = governor.acquire(messages, options);
+  const reserveRetry = (retryOptions: LLMOptions): LLMOptions => {
+    // The provider has settled its previous transport. Release only its slot;
+    // the durable allowance stays spent. Admission rechecks all current limits.
+    lease.release();
+    retryOptions.checkDeadline?.();
+    lease = governor.acquire(messages, retryOptions);
+    return { ...lease.options, reserveRetry };
+  };
+  return { options: { ...lease.options, reserveRetry }, release: () => lease.release() };
+}
+
 export async function backgroundChat(provider: LLMProvider, messages: LLMMessage[], options?: LLMOptions) {
   const governor = currentOrigin() === 'background' ? budget : null;
   if (!governor) {
     const release = currentOrigin() === 'user' ? budget?.foregroundStarted() : undefined;
     try { return await provider.chat(messages, options); } finally { release?.(); }
   }
-  const lease = governor.acquire(messages, options);
+  const lease = acquireProviderLease(governor, messages, options);
   try { return await provider.chat(messages, lease.options); }
   catch (error) { governor.failed(error); throw error; }
   // Keep the slot until the actual transport settles, even if its caller stopped waiting.
@@ -130,7 +145,7 @@ export async function* backgroundStream(provider: LLMProvider, messages: LLMMess
     try { yield* provider.stream(messages, options); } finally { release?.(); }
     return;
   }
-  const lease = governor.acquire(messages, options);
+  const lease = acquireProviderLease(governor, messages, options);
   try {
     for await (const event of provider.stream(messages, lease.options)) {
       if (event.type === 'error') governor.failed(new LLMProviderError(event.error, event.code ?? 'unknown', event.retry_after_ms));
