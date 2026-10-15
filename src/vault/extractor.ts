@@ -6,6 +6,7 @@ import { createFact, FACT_TEXT_LIMIT } from './facts.ts';
 import { createRelationship } from './relationships.ts';
 import { createCommitment } from './commitments.ts';
 import { USER_PROFILE_VAULT_SOURCE } from './user-profile.ts';
+import { wrapUntrusted } from '../roles/untrusted.ts';
 
 export type ExtractionResult = {
   entities: Array<{ name: string; type: string; properties?: Record<string, unknown> }>;
@@ -22,10 +23,10 @@ export function buildExtractionPrompt(userMessage: string, assistantResponse: st
   return `You are an expert at extracting structured information from conversations. Analyze the following conversation and extract entities, facts, relationships, and commitments.
 
 USER MESSAGE:
-${userMessage}
+${wrapUntrusted(userMessage, 'conversation user message')}
 
 ASSISTANT RESPONSE:
-${assistantResponse}
+${wrapUntrusted(assistantResponse, 'conversation assistant response')}
 
 Extract the following information and return ONLY valid JSON (no markdown, no explanation):
 
