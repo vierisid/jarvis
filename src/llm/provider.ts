@@ -43,6 +43,7 @@ export type LLMResponse = {
  * user-facing copy without string-matching the upstream error message.
  */
 export type LLMErrorCode =
+  | 'background_throttled' // local resource admission refused; never retry/fail over
   | 'auth'         // 401, invalid or missing API key
   | 'forbidden'    // 403, credentials accepted but this model/endpoint is not allowed
   | 'rate_limit'   // 429, quota exhausted

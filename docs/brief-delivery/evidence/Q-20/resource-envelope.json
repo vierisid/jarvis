@@ -1,0 +1,101 @@
+{
+  "task": "Q-20",
+  "generatedAt": "2026-10-15T10:44:59.414Z",
+  "runtime": "1.4.2",
+  "hardware": {
+    "platform": "linux",
+    "arch": "x64",
+    "cpu": "AMD Ryzen 9 5980HS with Radeon Graphics",
+    "logicalCpus": 16,
+    "memoryBytes": 15594766336
+  },
+  "profile": "Synthetic eligible capture calls, 40ms provider, two foreground calls (one cancelled); real SQLite approval denial; no network",
+  "thresholds": {
+    "backgroundTransports": 2,
+    "approvalTimerMs": 250,
+    "foregroundMs": 250
+  },
+  "limits": {
+    "concurrency": 2,
+    "requests": 240,
+    "inputBytes": 16777216,
+    "outputTokens": 524288,
+    "requestBytes": 2097152,
+    "requestOutputTokens": 8192,
+    "windowMs": 86400000
+  },
+  "scenarios": [
+    {
+      "governor": "bounded",
+      "burst": 0,
+      "providerCalls": 0,
+      "maxBackgroundTransports": 0,
+      "refused": 0,
+      "foregroundCalls": 0,
+      "foregroundOutcomes": [],
+      "foregroundMs": 1.217253999999997,
+      "cancellationSignalMs": 1.1962249999999983,
+      "approvalTimerMs": 7.35063199999999,
+      "approvalWriteMs": 3.0881589999999903,
+      "wallMs": 258.851656,
+      "cpuMs": 48.524,
+      "rssStart": 41500672,
+      "rssPeak": 42430464,
+      "heapStart": 3050496,
+      "heapPeak": 3085312,
+      "reservations": 0
+    },
+    {
+      "governor": "disabled-control",
+      "burst": 200,
+      "providerCalls": 200,
+      "maxBackgroundTransports": 200,
+      "refused": 0,
+      "foregroundCalls": 2,
+      "foregroundOutcomes": [
+        "fulfilled",
+        "rejected"
+      ],
+      "foregroundMs": 40.26250700000003,
+      "cancellationSignalMs": 0.6535309999999868,
+      "approvalTimerMs": 15.02937700000001,
+      "approvalWriteMs": 0.4588269999999852,
+      "wallMs": 302.954027,
+      "cpuMs": 83.601,
+      "rssStart": 40415232,
+      "rssPeak": 43855872,
+      "heapStart": 3101696,
+      "heapPeak": 4263936,
+      "reservations": 0
+    },
+    {
+      "governor": "bounded",
+      "burst": 200,
+      "providerCalls": 2,
+      "maxBackgroundTransports": 2,
+      "refused": 198,
+      "foregroundCalls": 2,
+      "foregroundOutcomes": [
+        "fulfilled",
+        "rejected"
+      ],
+      "foregroundMs": 40.35632199999998,
+      "cancellationSignalMs": 0.042880000000081964,
+      "approvalTimerMs": 11.38572099999999,
+      "approvalWriteMs": 0.22466000000008535,
+      "wallMs": 299.38154299999997,
+      "cpuMs": 63.509,
+      "rssStart": 43855872,
+      "rssPeak": 47407104,
+      "heapStart": 4263936,
+      "heapPeak": 5282816,
+      "reservations": 2
+    }
+  ],
+  "diagnostics": 0,
+  "limitations": [
+    "Short synthetic microbenchmark, not live provider latency or production capacity",
+    "Disabled control uses the same checkout with only the governor disabled",
+    "Memory peaks are sampled process memory, not a standalone daemon footprint"
+  ]
+}

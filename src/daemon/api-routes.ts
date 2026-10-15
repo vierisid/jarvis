@@ -1,3 +1,4 @@
+import { memoryPageResponse } from '../vault/memory-page';
 /**
  * REST API Routes
  *
@@ -423,6 +424,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     },
 
     // --- Vault: Entities ---
+    '/api/vault/page': { GET: (req: Request) => memoryPageResponse(req, json) },
+
     '/api/vault/entities': {
       GET: (req: Request) => {
         const params = getSearchParams(req);

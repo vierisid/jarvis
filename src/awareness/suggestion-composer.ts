@@ -1,3 +1,5 @@
+import { compositionQueueStatus, COMPOSITION_LIMITS } from './composition-budget';
+import { runWithOrigin } from '../llm/origin';
 import { getDb, generateId } from '../vault/schema.ts';
 import { createFlow } from '../workflows/db/repos/flow.ts';
 import { createDraftVersion } from '../workflows/db/repos/flow-version.ts';
@@ -17,9 +19,14 @@ export function claimSuggestionComposition(timeoutMs = COMPOSITION_TIMEOUT_MS): 
   return getDb().transaction(() => {
     const now = Date.now();
     recoverExpiredCompositions(now);
+    const budget = compositionQueueStatus(now);
+    if (budget.reason) return null;
+    getDb().run("UPDATE suggestion_composition_jobs SET state = 'failed', error = 'Preparation attempt limit reached; inspect the saved request', updated_at = ? WHERE state = 'queued' AND attempts >= ?", [now, COMPOSITION_LIMITS.attemptsPerJob]);
     const row = getDb().query<CompositionRow, []>(`SELECT * FROM suggestion_composition_jobs
       WHERE state = 'queued' ORDER BY created_at, id LIMIT 1`).get();
     if (!row) return null;
+    getDb().run('DELETE FROM suggestion_composition_attempts WHERE started_at <= ?', [now - COMPOSITION_LIMITS.windowMs]);
+    getDb().run('INSERT INTO suggestion_composition_attempts(job_id,started_at) VALUES (?,?)', [row.id, now]);
     const token = generateId();
     getDb().run(`UPDATE suggestion_composition_jobs SET state = 'running', attempts = attempts + 1,
       lease_token = ?, lease_until = ?, updated_at = ? WHERE id = ?`, [token, now + timeoutMs, now, row.id]);
@@ -61,7 +68,8 @@ export class SuggestionComposer {
   private active: { job: CompositionRow; abort: AbortController } | null = null;
   private pending: Promise<void> | null = null;
 
-  constructor(private compose: ComposeSuggestion, private timeoutMs = COMPOSITION_TIMEOUT_MS) {}
+  constructor(private compose: ComposeSuggestion, private timeoutMs = COMPOSITION_TIMEOUT_MS,
+    private admission: () => boolean = () => true) {}
 
   start(): void {
     if (this.running) return;
@@ -93,6 +101,7 @@ export class SuggestionComposer {
 
   private async drain(): Promise<void> {
     while (this.running) {
+      if (!this.admission()) return;
       const job = claimSuggestionComposition(this.timeoutMs);
       if (!job) return;
       const active = { job, abort: new AbortController() };
@@ -102,8 +111,8 @@ export class SuggestionComposer {
         if (canonicalSuggestion(job.suggestion_id).dismissed) throw new Error('Suggestion was dismissed. No draft was created.');
         const request = JSON.parse(job.request) as CompositionRequest;
         const result = await Promise.race([
-          this.compose({ name: request.name, description: `${request.description}\n\nExpected result: ${request.expectedOutcome}`,
-            signal: active.abort.signal }),
+          runWithOrigin('background', () => this.compose({ name: request.name, description: `${request.description}\n\nExpected result: ${request.expectedOutcome}`,
+            signal: active.abort.signal })),
           new Promise<never>((_, reject) => {
             timer = setTimeout(() => active.abort.abort(new Error('Composition timed out. Review the request and retry.')), this.timeoutMs);
             active.abort.signal.addEventListener('abort', () => reject(active.abort.signal.reason), { once: true });
@@ -125,6 +134,8 @@ export class SuggestionComposer {
         active.abort.abort();
         if (this.active === active) this.active = null;
       }
+      // Yield to socket decisions/cancellation between immediately settled fixture/cache results.
+      await new Promise(resolve => setTimeout(resolve, 0));
     }
   }
 }

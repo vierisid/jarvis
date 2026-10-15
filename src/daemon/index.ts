@@ -658,6 +658,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       try { return getDb(); } catch { return null; }
     });
 
+    const { BackgroundBudget, setBackgroundBudget, backgroundBudgetStatus } = await import('../llm/background-budget');
+    setBackgroundBudget(new BackgroundBudget(() => getDb()));
+
     // 2.0b. Relocate a workflow encryption key still sitting in `cache/` into
     // the data-dir root, BEFORE the workflow schema check below and before any
     // credential is read. `cache/` is documented as disposable and is excluded
@@ -5282,7 +5285,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             id: r.id, name: r.name, description: r.description,
           })),
           library: composerLibrary, executionTargets: collectExecutionTargets(),
-        }, request));
+        }, request), undefined, () => backgroundBudgetStatus().state === 'ready');
         apiContext.suggestionComposer = suggestionComposer;
         suggestionComposer.start();
       }
