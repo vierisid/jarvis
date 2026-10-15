@@ -9,6 +9,7 @@ import { getSidecarManager, setSidecarManagerRef } from './tools/sidecar-route';
 import type { SidecarManager } from '../sidecar/manager';
 import { withExecutionProgress, type ExecutionActivity } from './progress-context';
 import { SidecarRPCError } from '../sidecar/rpc';
+import { browserActionFailure } from './browser/action-failure';
 
 const directories: string[] = [];
 afterEach(() => { for (const path of directories.splice(0)) rmSync(path, { recursive: true, force: true }); });
@@ -79,4 +80,20 @@ test('routed tool outcomes use the RPC failure and command receipt, never file c
     failure = true;
     expect(await call('read_file')).toMatchObject({ phase: 'failed' });
   } finally { setSidecarManagerRef(previous as SidecarManager); }
+});
+
+test('a legacy browser refusal keeps its chat text and marks only its own call failed', async () => {
+  const events: ExecutionActivity[] = [];
+  const registry = new ToolRegistry();
+  registry.register({ name: 'browser_refusal_fixture', description: 'fixture', category: 'browser', parameters: {},
+    execute: async () => browserActionFailure('Error: refused') });
+  registry.register({ name: 'browser_ok_fixture', description: 'fixture', category: 'browser', parameters: {},
+    execute: async () => 'ok' });
+  const results = await withExecutionProgress(event => events.push(event), () => Promise.all([
+    registry.execute('browser_refusal_fixture', {}), registry.execute('browser_ok_fixture', {}),
+  ]));
+  expect(results).toEqual(['Error: refused', 'ok']);
+  const final = (name: string) => events.filter(event => event.toolName === name).at(-1)?.phase;
+  expect(final('browser_refusal_fixture')).toBe('failed');
+  expect(final('browser_ok_fixture')).toBe('completed');
 });
