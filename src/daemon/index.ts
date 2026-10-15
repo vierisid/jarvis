@@ -43,6 +43,8 @@ import { createPostSetupServices } from "./post-setup-services.ts";
 import { createDaemonOnboardingRuntime } from "../onboarding-next/runtime/daemon.ts";
 import { runtimeModules } from "../onboarding-next/runtime/generated/catalog.ts";
 import { createBriefCapabilities } from '../brief/registrations/index.ts';
+import { registerConversations } from '../brief/registrations/conversations.ts';
+import { BriefConversationProvider } from '../brief/conversations.ts';
 import { GoogleAuth } from "../integrations/google-auth.ts";
 import { classifyGoogle, googleIdentity, makeGoogleAuth } from "../integrations/google-managed-refresh.ts";
 import { ResearchQueue } from "./research-queue.ts";
@@ -4770,8 +4772,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     ensureUiBuilt(repoRoot, logWithTimestamp);
 
     // 9b. Set up API routes + dashboard static files
+    const briefConversations = new BriefConversationProvider();
     const apiContext: import('./api-routes.ts').ApiContext & Record<string, unknown> = {
-      briefCapabilities: createBriefCapabilities(),
+      briefConversations,
+      briefCapabilities: createBriefCapabilities(registerConversations(briefConversations),
+        process.env.JARVIS_BRIEF_CONVERSATIONS === '1' ? ['conversations'] : []),
       daemonStartedAt: Date.now(),
       healthMonitor,
       agentService,

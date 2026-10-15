@@ -1,4 +1,5 @@
 import { getDb, generateId } from './schema.ts';
+import { defaultConversationWorkspace, ensureConversationTab } from './conversation-schema.ts';
 
 export type MessageRole = 'user' | 'assistant' | 'system';
 
@@ -82,15 +83,17 @@ export function getOrCreateConversation(channel: string, owner?: ConversationOwn
 
   // Look for a recent conversation on this channel (within last 4 hours)
   const cutoff = now - 4 * 60 * 60 * 1000;
+  const workspaceId = defaultConversationWorkspace(db);
   const existing = (sender === undefined
     ? db.prepare(
-      'SELECT * FROM conversations WHERE channel = ? AND sender IS NULL AND last_message_at > ? ORDER BY last_message_at DESC LIMIT 1'
-    ).get(channel, cutoff)
+      'SELECT * FROM conversations WHERE channel = ? AND sender IS NULL AND last_message_at > ? AND (workspace_id IS NULL OR workspace_id = ?) ORDER BY last_message_at DESC, id DESC LIMIT 1'
+    ).get(channel, cutoff, workspaceId)
     : db.prepare(
-      'SELECT * FROM conversations WHERE channel = ? AND sender = ? AND last_message_at > ? ORDER BY last_message_at DESC LIMIT 1'
-    ).get(channel, sender, cutoff)) as ConversationRow | null;
+      'SELECT * FROM conversations WHERE channel = ? AND sender = ? AND last_message_at > ? AND (workspace_id IS NULL OR workspace_id = ?) ORDER BY last_message_at DESC, id DESC LIMIT 1'
+    ).get(channel, sender, cutoff, workspaceId)) as ConversationRow | null;
 
   if (existing) {
+    ensureConversationTab(db, existing.id);
     return parseConversation(existing);
   }
 
@@ -99,6 +102,7 @@ export function getOrCreateConversation(channel: string, owner?: ConversationOwn
   db.prepare(
     'INSERT INTO conversations (id, channel, started_at, last_message_at, message_count, sender) VALUES (?, ?, ?, ?, 0, ?)'
   ).run(id, channel, now, now, sender ?? null);
+  ensureConversationTab(db, id);
 
   return {
     id,
@@ -162,14 +166,15 @@ export function getMessages(
 
   if (opts?.before) {
     const rows = db.prepare(
-      'SELECT * FROM conversation_messages WHERE conversation_id = ? AND created_at < ? ORDER BY created_at ASC LIMIT ?'
+      'SELECT * FROM conversation_messages WHERE conversation_id = ? AND created_at < ? ORDER BY created_at ASC, rowid ASC LIMIT ?'
     ).all(conversationId, opts.before, limit) as MessageRow[];
     return rows.map(parseMessage);
   }
 
-  // Get the last N messages, ordered ascending
+  // Equal timestamps retain insertion order, independently of the Brief cursor index.
+  // The channel handler relies on the current stored turn being last.
   const rows = db.prepare(
-    'SELECT * FROM (SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?) ORDER BY created_at ASC'
+    'SELECT id, conversation_id, role, content, tool_calls, created_at FROM (SELECT rowid AS insertion_order, * FROM conversation_messages WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?) ORDER BY created_at ASC, insertion_order ASC'
   ).all(conversationId, limit) as MessageRow[];
 
   return rows.map(parseMessage);
@@ -184,8 +189,8 @@ export function getRecentConversation(channel: string): {
 } | null {
   const db = getDb();
   const row = db.prepare(
-    'SELECT * FROM conversations WHERE channel = ? ORDER BY last_message_at DESC LIMIT 1'
-  ).get(channel) as ConversationRow | null;
+    'SELECT * FROM conversations WHERE channel = ? AND (workspace_id IS NULL OR workspace_id = ?) ORDER BY last_message_at DESC, id DESC LIMIT 1'
+  ).get(channel, defaultConversationWorkspace(db)) as ConversationRow | null;
 
   if (!row) return null;
 
