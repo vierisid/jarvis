@@ -941,9 +941,16 @@ describe('review: durable readiness refusals', () => {
       expect(JSON.stringify(runs[0]!.steps)).toContain('CONNECTION_BINDING');
       expect(queueStats().queued).toBe(0);
       expect(getFlow(flowId)!.status).toBe('ENABLED');
+      // Q-05: a connection deleted and created again may be another account,
+      // so the flow stays paused until a person enables it again.
       save();
       cron.fire(`flow:${flowId}`);
       expect(listRuns({ flowId })).toHaveLength(2);
+      expect(listRuns({ flowId }).some(run => run.failedStep?.errorMessage?.includes('Connection account was deleted and created again'))).toBe(true);
+      expect(queueStats().queued).toBe(0);
+      updateFlowStatus(flowId, 'ENABLED');
+      cron.fire(`flow:${flowId}`);
+      expect(listRuns({ flowId })).toHaveLength(3);
       expect(queueStats().queued).toBe(1);
     } finally { await manager.stop(); }
   });
@@ -961,6 +968,10 @@ describe('review: durable readiness refusals', () => {
       expect(listRuns({ flowId })).toHaveLength(1);
       expect(listRuns({ flowId })[0]).toMatchObject({ status: 'FAILED', triggeredBy: 'trigger:registration' });
       save();
+      // Q-05: the repaired connection is a new one; enabling the flow again accepts it.
+      await manager.refresh(flowId);
+      expect(manager.list()).toEqual([]);
+      updateFlowStatus(flowId, 'ENABLED');
       await manager.refresh(flowId);
       expect(manager.list()).toEqual([{ flowId, kind: 'cron' }]);
     } finally { await manager.stop(); }
@@ -984,6 +995,10 @@ describe('review: durable readiness refusals', () => {
       expect(listRuns({ flowId })[0]).toMatchObject({ status: 'FAILED', triggeredBy: 'trigger:engine' });
       expect(queueStats().queued).toBe(0);
       save();
+      // Q-05: still paused on the replaced connection, and nothing is consumed.
+      cron.fire(`flow:${flowId}`); await settle();
+      expect(polls).toBe(0);
+      updateFlowStatus(flowId, 'ENABLED');
       cron.fire(`flow:${flowId}`); await settle();
       expect(polls).toBe(1);
       expect(queueStats().queued).toBe(1);
@@ -1022,6 +1037,8 @@ describe('review: durable readiness refusals', () => {
       expect(queueStats().queued).toBe(0);
       for (const run of runs) expect(run).toMatchObject({ status: 'FAILED', flowVersionId: versionId, triggeredBy: 'trigger:engine' });
       save();
+      // Q-05: the replaced connection is accepted by enabling the flow again.
+      updateFlowStatus(flowId, 'ENABLED');
       cron.fire(`flow:${flowId}`); await settle();
       expect(listRuns({ flowId })).toHaveLength(2);
       expect(queueStats().queued).toBe(0);

@@ -38,6 +38,7 @@ export interface AppConnectionRow {
   value: string;
   metadata: string | null;
   pre_select_for_new_projects: number;
+  credential_generation: number;
   created: number;
   updated: number;
 }
@@ -56,6 +57,8 @@ export interface AppConnection {
   value: Record<string, unknown>;
   metadata: Record<string, unknown> | null;
   preSelectForNewProjects: boolean;
+  /** How many times the stored credential has been replaced (Q-05 binding pins). */
+  credentialGeneration: number;
   created: number;
   updated: number;
 }
@@ -112,9 +115,17 @@ function rowToConnection(row: AppConnectionRow): AppConnection {
     value: decryptBoundJson(row.value, bindingFor(row), `app_connection ${row.id}`) as Record<string, unknown>,
     metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : null,
     preSelectForNewProjects: row.pre_select_for_new_projects !== 0,
+    credentialGeneration: row.credential_generation,
     created: row.created,
     updated: row.updated,
   };
+}
+
+/** The same credential, whatever order its keys were sent in. */
+function sameCredential(a: unknown, b: unknown): boolean {
+  const canonical = (value: unknown) => JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item)
+    ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
+  return canonical(a) === canonical(b);
 }
 
 /**
@@ -124,6 +135,13 @@ function rowToConnection(row: AppConnectionRow): AppConnection {
  * `projectId` defaults to the default project, and a tuple that matches no
  * row INSERTS. So this is not the way to update a row found by id: use
  * `updateConnectionById`, which cannot insert (#650).
+ *
+ * Storing a different credential in an existing row advances
+ * `credential_generation`: a workflow enabled against the earlier credential
+ * pauses until a person enables it again (repos/binding-pins.ts). Jarvis keeps
+ * no account identity, so a rotated key cannot be told from another account.
+ * A rename, a status change or saving the same credential again is not a
+ * replacement and pauses nothing.
  */
 export function upsertConnection(input: UpsertConnectionInput): AppConnection {
   const projectId = input.projectId ?? DEFAULT_IDS.project;
@@ -145,7 +163,7 @@ export function upsertConnection(input: UpsertConnectionInput): AppConnection {
       `UPDATE app_connection
        SET display_name = ?, type = ?, status = ?, value = ?, metadata = ?,
            piece_version = ?, owner_id = ?, scope = ?,
-           pre_select_for_new_projects = ?, updated = ?
+           pre_select_for_new_projects = ?, credential_generation = credential_generation + ?, updated = ?
        WHERE id = ?`,
       [
         input.displayName,
@@ -163,6 +181,7 @@ export function upsertConnection(input: UpsertConnectionInput): AppConnection {
           : existing.preSelectForNewProjects
             ? 1
             : 0,
+        sameCredential(existing.value, input.value) ? 0 : 1,
         ts,
         id,
       ],
@@ -254,6 +273,12 @@ export function updateConnectionById(
       // Resolve encryption before the write. A key failure must never save JSON.
       sets.push("value = ?");
       params.push(encryptBoundJson(patch.value, bindingFor(row)));
+      // Use the same identity rule as upsert, within this scoped transaction.
+      // A rename or an identical credential must not invalidate accepted pins.
+      const previous = decryptBoundJson(row.value, bindingFor(row), `app_connection ${row.id}`);
+      if (!sameCredential(previous, patch.value)) {
+        sets.push("credential_generation = credential_generation + 1");
+      }
     }
     sets.push("updated = ?");
     params.push(now());

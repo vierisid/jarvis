@@ -7,6 +7,7 @@
  */
 
 import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness';
+import { pinUnpinnedEnabledFlows } from '../workflows/db/repos/binding-pins';
 import { mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -47,6 +48,7 @@ import { registerConversations } from '../brief/registrations/conversations.ts';
 import { BriefConversationProvider } from '../brief/conversations.ts';
 import { BriefChatTransport } from '../brief/chat-transport.ts';
 import { registerChatTransport } from '../brief/registrations/chat-transport.ts';
+import { registerChatState } from '../brief/registrations/chat-state.ts';
 import type { BriefCapabilityId } from '../brief/capabilities.ts';
 import { GoogleAuth } from "../integrations/google-auth.ts";
 import { classifyGoogle, googleIdentity, makeGoogleAuth } from "../integrations/google-managed-refresh.ts";
@@ -4828,8 +4830,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const briefEnabled: BriefCapabilityId[] = [];
     if (process.env.JARVIS_BRIEF_CONVERSATIONS === '1') briefEnabled.push('conversations');
     if (process.env.JARVIS_BRIEF_CHAT_TRANSPORT === '1') briefEnabled.push('chatTransport');
+    if (process.env.JARVIS_BRIEF_CHAT_STATE === '1') briefEnabled.push('chatState');
     const briefCapabilities = createBriefCapabilities([
       ...registerConversations(briefConversations), ...registerChatTransport(briefChatTransport),
+      ...registerChatState(briefConversations, briefChatTransport),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
     const apiContext: import('./api-routes.ts').ApiContext & Record<string, unknown> = {
@@ -5056,7 +5060,20 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         return tool ? { params: Object.entries(tool.parameters).map(([name, param]) => ({ name, ...param })) } : null;
       },
       roles: () => new Set(agentService.getSpecialists().keys()),
+      // Q-05: the computers a workflow can be pinned to, and whether this one may run local tools.
+      // `--no-local-tools` reaches the tools only later in startup (9b), after
+      // the pin pass below, so the flag is read here as well.
+      machines: () => sidecarManager.listSidecars(),
+      localTools: () => !config.noLocalTools && !isNoLocalTools(),
     });
+    // Q-05: an enabled flow without pins (one enabled before this build) is
+    // pinned to the bindings it runs against now, before any trigger fires.
+    try {
+      const pinned = pinUnpinnedEnabledFlows();
+      if (pinned) console.log(`[Daemon] Pinned the connections and computer of ${pinned} enabled workflow(s)`);
+    } catch (error) {
+      console.error('[Daemon] Could not pin enabled workflows:', (error as Error).message);
+    }
     const workflowEngineRuntime = engineBoot?.runtime ?? null;
     const workflowSandboxApi = engineBoot?.api ?? null;
 
