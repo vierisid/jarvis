@@ -1,0 +1,32 @@
+{
+  "file": "eNfKeirIKLZLlZEasrurZa",
+  "page": "81:2",
+  "page_name": "Brief · Pebble workspace v6.1",
+  "nodes": {"closed": "81:3", "chat_open": "81:212"},
+  "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+  "source_root": "workspace/Jarvis/dashboard-brief-figma-2026-09-14-v6-1",
+  "inspected": [
+    "ui-10-today-layout-2026-10-01/README.md",
+    "ui-12-hero-paper-2026-10-01/README.md",
+    "ui-12-hero-paper-2026-10-01/paper-interaction-contract.md",
+    "ui-12-hero-paper-2026-10-01/board-622-147700.png",
+    "ui-35-final-verification-2026-10-05/01-expanded-closed-light.png",
+    "ui-35-final-verification-2026-10-05/01-expanded-chat-light.png"
+  ],
+  "preserved": {
+    "composition": "Greeting/date, decision, large outcomes, activity beneath outcomes, Opportunities heading outside its stack",
+    "goal": "306px closed column; compact main goal above conversation at the same top offset",
+    "paper": "Diagonal recess, at most two backing sheets, asymmetric 12/0/12/12 paper and shadow corners",
+    "intent": "Only paper moves and actions reveal; summary, status and count remain still",
+    "motion": "D-04 reveal: 200ms entry / 160ms return; no mount animation; reduced motion immediate",
+    "actions": "Persistent Review path, direct approval/keep-draft/reject only when supplied by the decision owner"
+  },
+  "runtime_adaptations": [
+    "One stable portal keeps the actual goal mounted as its column changes width. It scrolls with the closed room and stays above open chat.",
+    "Finite-height windows bound the conversation below the compact goal. The companion viewport clips at the workspace boundary, not over the header.",
+    "A hero below 580px stacks its summary and paper instead of shrinking meaningful text. This threshold measures the hero itself, not the entire workspace.",
+    "Review expands in place on Today, brings the document into view, and returns to the stored main-scroll position and originating button on close.",
+    "Pointer movement or keyboard-visible focus is required to raise paper after review closes; layout-induced pointer entry alone cannot reopen it.",
+    "Outcome, goal, activity and opportunity examples are fixture slots only. Their production components remain D-09 to D-11."
+  ]
+}

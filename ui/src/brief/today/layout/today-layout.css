@@ -1,0 +1,12 @@
+.brief-root .brief-today-layout { display: grid; grid-template-columns: minmax(0, 1fr) 306px; column-gap: 60px; row-gap: 26px; margin-top: -6px; align-items: start; }
+.brief-root .brief-today-greeting { grid-column: 1; min-height: 74px; }
+.brief-root .brief-today-greeting h1 { margin: 10px 0 0; overflow-wrap: anywhere; }
+.brief-root .brief-today-primary, .brief-root .brief-today-outcomes, .brief-root .brief-today-activity { grid-column: 1; min-width: 0; }
+.brief-root .brief-today-primary { grid-row: 2; container: brief-decision / inline-size; }
+.brief-root .brief-today-outcomes { grid-row: 3; }
+.brief-root .brief-today-activity { grid-row: 4; }
+.brief-root .brief-today-opportunities { grid-column: 2; grid-row: 1 / span 4; margin-top: calc(var(--pebble-companion-height, 287px) + 32px); min-width: 0; }
+.brief-root .brief-today-opportunities > h2 { margin: 0 0 14px; }
+.brief-root .brief-today-layout[data-compact="true"], .brief-root .brief-today-layout[data-goal="false"] { grid-template-columns: minmax(0, 1fr); }
+.brief-root .brief-today-layout[data-compact="true"] .brief-today-opportunities, .brief-root .brief-today-layout[data-goal="false"] .brief-today-opportunities { grid-column: 1; grid-row: 5; margin-top: 0; }
+.brief-root .brief-today-layout[data-single="true"][data-chat="false"][data-goal="true"] .brief-today-primary { margin-top: calc(var(--pebble-companion-height, 152px) + 24px); }
