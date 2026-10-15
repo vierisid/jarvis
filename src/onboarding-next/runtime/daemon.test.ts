@@ -12,6 +12,7 @@ import { PANEL_SESSION_COOKIE } from '../../sidecar/panel-sessions.ts';
 import { USER_PROFILE_SETTING_KEY } from '../../user/profile.ts';
 import { createDaemonOnboardingRuntime, daemonBindings, readLegacyJourney } from './daemon.ts';
 import { createOnboardingRuntime } from './runtime.ts';
+import { OPERATION_PATHS } from './routes.ts';
 import { runtimeModules } from './generated/catalog.ts';
 import { fixtureOptions, request } from './test-fixture.ts';
 const scope = { actorId: 'jrv_user_default', projectId: 'jrv_proj_default' };
@@ -171,9 +172,12 @@ test('loopback HTTP preserves legacy status and refuses new commands by default'
     expect(await status.json()).toMatchObject({ schemaVersion: 1, enabled: false, ready: false, released: false });
     const legacy = await fetch(new URL('/api/onboarding/status', server.url), { headers });
     expect(await legacy.json()).toMatchObject({ setup_completed: false });
-    expect((await fetch(new URL('/api/onboarding-next/v1/build/submit', server.url), {
-      method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: '{"schemaVersion":1,"input":{}}',
-    })).status).toBe(503);
+    // Every command route, including those with real B01/B02 bindings, stays inert.
+    for (const op of Object.values(OPERATION_PATHS)) {
+      expect((await fetch(new URL(`/api/onboarding-next/v1${op}`, server.url), {
+        method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: '{"schemaVersion":1,"input":{}}',
+      })).status).toBe(503);
+    }
     expect(getDb().query('SELECT count(*) as n FROM settings').get()).toEqual({ n: 0 });
   } finally { await server.stop(true); }
 });
