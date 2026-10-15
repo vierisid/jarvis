@@ -1,0 +1,310 @@
+{
+  "checkedAt": "2026-10-15T14:05:29.602582+00:00",
+  "initialMain": "3418bb3ca2e93d6e0492f5188453260f1af0b491",
+  "base": "dbc58724aaacadd80b98631e2d8d4f38e4a76042",
+  "implementation": "c133a630e93f190c703ca57500b196aa89882051",
+  "baseChoice": "Current main; no hard compile-time prerequisite. Refreshed after Q09/Q11 and D02 merged. Unmerged provider modules are not imported or implicitly enabled.",
+  "prs": [
+    {
+      "baseRefName": "main",
+      "headRefName": "brief/q-21",
+      "headRefOid": "98bf68a381895f79e914026141728dee2d66013b",
+      "number": 1065,
+      "state": "OPEN",
+      "title": "[Q-21] Verify untrusted content and data boundaries",
+      "updatedAt": "2026-10-15T13:05:00Z",
+      "url": "https://github.com/vierisid/jarvis/pull/1065"
+    },
+    {
+      "baseRefName": "main",
+      "headRefName": "brief/q-20",
+      "headRefOid": "85333aef8f2ef4a56520c24d3818b09dd30ed2c5",
+      "number": 1064,
+      "state": "OPEN",
+      "title": "[Q-20] Bound background work and preserve foreground responsiveness",
+      "updatedAt": "2026-10-15T11:46:11Z",
+      "url": "https://github.com/vierisid/jarvis/pull/1064"
+    },
+    {
+      "baseRefName": "brief/q-07",
+      "headRefName": "brief/q-19",
+      "headRefOid": "fb4d2880f4e408318a423b2f337ef284e54181e1",
+      "number": 1057,
+      "state": "OPEN",
+      "title": "Q-19: Make failure and recovery messages actionable",
+      "updatedAt": "2026-10-14T17:30:39Z",
+      "url": "https://github.com/vierisid/jarvis/pull/1057"
+    },
+    {
+      "baseRefName": "brief/f-15",
+      "headRefName": "brief/q-17",
+      "headRefOid": "293bc88f4b20eceaabc1acd7c159e7fdbaa94212",
+      "number": 1031,
+      "state": "OPEN",
+      "title": "[Q-17] Count measured goals from cited entries, one per counted thing",
+      "updatedAt": "2026-10-14T13:10:42Z",
+      "url": "https://github.com/vierisid/jarvis/pull/1031"
+    },
+    {
+      "baseRefName": "brief/f-27",
+      "headRefName": "brief/f-28",
+      "headRefOid": "4a16a57ccc6b532449f6b4b125dda709a719e633",
+      "number": 1005,
+      "state": "OPEN",
+      "title": "F-28: Gate feature activation and migration compatibility",
+      "updatedAt": "2026-10-13T21:39:06Z",
+      "url": "https://github.com/vierisid/jarvis/pull/1005"
+    },
+    {
+      "baseRefName": "brief/f-19",
+      "headRefName": "brief/q-16",
+      "headRefOid": "4eea4375f4320b13ce682d5074a9353d294bac2d",
+      "number": 1004,
+      "state": "OPEN",
+      "title": "[Q-16] Verify corrections and Forget across memory consumers",
+      "updatedAt": "2026-10-13T21:47:52Z",
+      "url": "https://github.com/vierisid/jarvis/pull/1004"
+    },
+    {
+      "baseRefName": "brief/d-32",
+      "headRefName": "brief/d-33",
+      "headRefOid": "cb20c1add5e330ec4d5ae29259a92d66c629cb82",
+      "number": 1003,
+      "state": "OPEN",
+      "title": "D-33: Add a reversible Brief release gate",
+      "updatedAt": "2026-10-13T21:36:40Z",
+      "url": "https://github.com/vierisid/jarvis/pull/1003"
+    },
+    {
+      "baseRefName": "main",
+      "headRefName": "brief/q-15",
+      "headRefOid": "f8da6f73aec37695b9ec424e6c62242f4e07efb0",
+      "number": 996,
+      "state": "OPEN",
+      "title": "[Q-15] Measure founder recall and scope named-person context",
+      "updatedAt": "2026-10-14T17:14:16Z",
+      "url": "https://github.com/vierisid/jarvis/pull/996"
+    },
+    {
+      "baseRefName": "brief/d-31",
+      "headRefName": "brief/d-32",
+      "headRefOid": "4c3b124401e2ae2007343a28ccde150b13d719f1",
+      "number": 995,
+      "state": "OPEN",
+      "title": "D32: Add runtime craft and accessibility verification harness",
+      "updatedAt": "2026-10-13T21:00:39Z",
+      "url": "https://github.com/vierisid/jarvis/pull/995"
+    },
+    {
+      "baseRefName": "brief/q-12",
+      "headRefName": "brief/q-14",
+      "headRefOid": "7abe7e4618d2f4e783390d77e4354afc9990d14d",
+      "number": 993,
+      "state": "OPEN",
+      "title": "[Q-14] Learn from proposal usefulness without repeat noise",
+      "updatedAt": "2026-10-15T13:58:53Z",
+      "url": "https://github.com/vierisid/jarvis/pull/993"
+    },
+    {
+      "baseRefName": "main",
+      "headRefName": "brief/q-12",
+      "headRefOid": "0cb1749d19fb9ee2a3273c091d9f3c94388089c6",
+      "number": 977,
+      "state": "OPEN",
+      "title": "[Q-12] Ground opportunity candidates in current goal outcomes",
+      "updatedAt": "2026-10-15T13:58:52Z",
+      "url": "https://github.com/vierisid/jarvis/pull/977"
+    },
+    {
+      "baseRefName": "main",
+      "headRefName": "brief/q-11",
+      "headRefOid": "7de6a05d4eed3ca2508477db96e75ab208c45187",
+      "number": 967,
+      "state": "MERGED",
+      "title": "[Q-11] Recognize routines from structured episode evidence",
+      "updatedAt": "2026-10-15T13:46:42Z",
+      "url": "https://github.com/vierisid/jarvis/pull/967"
+    },
+    {
+      "baseRefName": "main",
+      "headRefName": "brief/q-10",
+      "headRefOid": "f4a892c40694f541651108b3bef67b70f4a5b7e7",
+      "number": 946,
+      "state": "OPEN",
+      "title": "Q-10: Preserve delegated and nested workflow continuation",
+      "updatedAt": "2026-10-15T14:00:27Z",
+      "url": "https://github.com/vierisid/jarvis/pull/946"
+    },
+    {
+      "baseRefName": "main",
+      "headRefName": "brief/q-09",
+      "headRefOid": "f473f42b1f2132164c5e896c45c80f3c6598dd5f",
+      "number": 942,
+      "state": "MERGED",
+      "title": "Q-09: Verify desktop outcomes and device affinity",
+      "updatedAt": "2026-10-15T13:41:40Z",
+      "url": "https://github.com/vierisid/jarvis/pull/942"
+    },
+    {
+      "baseRefName": "brief/q-08",
+      "headRefName": "brief/q-07",
+      "headRefOid": "6f65891406c723ce0d906f824ee6dd4fd6fdfce0",
+      "number": 940,
+      "state": "OPEN",
+      "title": "Q-07: Finish safe recovery for uncertain execution",
+      "updatedAt": "2026-10-14T16:19:27Z",
+      "url": "https://github.com/vierisid/jarvis/pull/940"
+    },
+    {
+      "baseRefName": "brief/q-06",
+      "headRefName": "brief/q-08",
+      "headRefOid": "5353482f02f2c9d555cae6553519e4e5cddcfe16",
+      "number": 891,
+      "state": "OPEN",
+      "title": "Q-08: Certify Authority across every execution entry",
+      "updatedAt": "2026-10-14T16:01:06Z",
+      "url": "https://github.com/vierisid/jarvis/pull/891"
+    },
+    {
+      "baseRefName": "brief/foundations",
+      "headRefName": "brief/q-06",
+      "headRefOid": "134f23ddaf510e697297214fa028fe18f6653b42",
+      "number": 806,
+      "state": "OPEN",
+      "title": "[Q-06] Certify real trigger and continuation delivery",
+      "updatedAt": "2026-10-14T15:39:40Z",
+      "url": "https://github.com/vierisid/jarvis/pull/806"
+    },
+    {
+      "baseRefName": "brief/f-15",
+      "headRefName": "brief/f-16",
+      "headRefOid": "1cd3d429b1842a831d20d0a9e2e137f49d914c20",
+      "number": 805,
+      "state": "OPEN",
+      "title": "F16: project evidence-backed outcomes and time back",
+      "updatedAt": "2026-10-07T13:52:13Z",
+      "url": "https://github.com/vierisid/jarvis/pull/805"
+    },
+    {
+      "baseRefName": "brief/f-14",
+      "headRefName": "brief/f-15",
+      "headRefOid": "bc0fdf9cda343e45ad8081345a77e1814dbe979a",
+      "number": 796,
+      "state": "OPEN",
+      "title": "F15: record explicit goal measurements",
+      "updatedAt": "2026-10-07T11:45:35Z",
+      "url": "https://github.com/vierisid/jarvis/pull/796"
+    },
+    {
+      "baseRefName": "brief/foundations",
+      "headRefName": "brief/q-05",
+      "headRefOid": "85b37288c2f9d8c69e21fcc0936bb5fb6f7d412c",
+      "number": 778,
+      "state": "OPEN",
+      "title": "[Q-05] Revalidate bindings before activation and execution",
+      "updatedAt": "2026-10-14T15:32:41Z",
+      "url": "https://github.com/vierisid/jarvis/pull/778"
+    },
+    {
+      "baseRefName": "brief/f-12",
+      "headRefName": "brief/f-13",
+      "headRefOid": "d7e1bde053cc905fb5b02406da021c9f8a290cfb",
+      "number": 777,
+      "state": "OPEN",
+      "title": "F-13: persist recommendations and accept queued work exactly once",
+      "updatedAt": "2026-10-07T08:16:20Z",
+      "url": "https://github.com/vierisid/jarvis/pull/777"
+    },
+    {
+      "baseRefName": "brief/f-11",
+      "headRefName": "brief/f-12",
+      "headRefOid": "f8a323060ca496c6e0d42b754d80a841faa1f3e5",
+      "number": 775,
+      "state": "OPEN",
+      "title": "F-12: unify decision identity, queue placement and guarded actions",
+      "updatedAt": "2026-10-07T07:39:04Z",
+      "url": "https://github.com/vierisid/jarvis/pull/775"
+    },
+    {
+      "baseRefName": "brief/f-09",
+      "headRefName": "brief/f-10",
+      "headRefOid": "ad6cb75ff4b8b8d80d5fd2791533639c94887bb2",
+      "number": 770,
+      "state": "OPEN",
+      "title": "feat(brief): approve prepared opportunities exactly once (F-10)",
+      "updatedAt": "2026-10-06T18:42:33Z",
+      "url": "https://github.com/vierisid/jarvis/pull/770"
+    },
+    {
+      "baseRefName": "brief/f-08",
+      "headRefName": "brief/f-09",
+      "headRefOid": "8614e886d3118fe08e06b1d4a5020f33419d6505",
+      "number": 766,
+      "state": "OPEN",
+      "title": "feat(brief): prepare durable opportunity workflows (F-09)",
+      "updatedAt": "2026-10-06T18:10:43Z",
+      "url": "https://github.com/vierisid/jarvis/pull/766"
+    },
+    {
+      "baseRefName": "brief/foundations",
+      "headRefName": "brief/q-04",
+      "headRefOid": "607ac2788d7bb9c201746823dbe04ed361641488",
+      "number": 765,
+      "state": "OPEN",
+      "title": "[Q-04] Check generated workflows against the requested job",
+      "updatedAt": "2026-10-14T15:25:22Z",
+      "url": "https://github.com/vierisid/jarvis/pull/765"
+    },
+    {
+      "baseRefName": "brief/q-02",
+      "headRefName": "brief/q-03",
+      "headRefOid": "b22cf592bb4f4ad5b69e2edb88a93d9b58948bba",
+      "number": 753,
+      "state": "OPEN",
+      "title": "[Q-03] Make the planning policy switchable and its promotion a measured decision",
+      "updatedAt": "2026-10-14T15:16:24Z",
+      "url": "https://github.com/vierisid/jarvis/pull/753"
+    },
+    {
+      "baseRefName": "brief/foundations",
+      "headRefName": "brief/q-18",
+      "headRefOid": "29f9e471475c2cde85c77dbb09eebb42d8b7f694",
+      "number": 742,
+      "state": "OPEN",
+      "title": "[Q-18] Recommend the next action worth taking, ask, or say nothing new is worth adding",
+      "updatedAt": "2026-10-14T17:16:51Z",
+      "url": "https://github.com/vierisid/jarvis/pull/742"
+    },
+    {
+      "baseRefName": "brief/foundations",
+      "headRefName": "brief/q-13",
+      "headRefOid": "61f6d74d8c423b5c41e2b623bcf3e7f3c75cc80f",
+      "number": 737,
+      "state": "OPEN",
+      "title": "[Q-13] Qualify a prepared proposal against its exact version before it can say Ready",
+      "updatedAt": "2026-10-14T17:07:20Z",
+      "url": "https://github.com/vierisid/jarvis/pull/737"
+    },
+    {
+      "baseRefName": "brief/q-01",
+      "headRefName": "brief/q-02",
+      "headRefOid": "0ec63a514afe8c722a7ee256819ddc80500931c0",
+      "number": 734,
+      "state": "OPEN",
+      "title": "[Q-02] Grade composed workflows on founder jobs with sandboxed effects, exact assertions and blind review",
+      "updatedAt": "2026-10-14T15:14:11Z",
+      "url": "https://github.com/vierisid/jarvis/pull/734"
+    },
+    {
+      "baseRefName": "brief/foundations",
+      "headRefName": "brief/q-01",
+      "headRefOid": "cfe6453b81b86056964d67e849a9025c3cbe73e3",
+      "number": 725,
+      "state": "OPEN",
+      "title": "[Q-01] Gate the hosted workflow baseline on approved spend, profile evidence and a frozen rubric",
+      "updatedAt": "2026-10-14T15:11:51Z",
+      "url": "https://github.com/vierisid/jarvis/pull/725"
+    }
+  ],
+  "prStateIsNotReleaseEvidence": true
+}

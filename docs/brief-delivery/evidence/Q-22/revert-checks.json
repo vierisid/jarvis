@@ -1,0 +1,20 @@
+[
+  {
+    "guard": "heldout-safety",
+    "test": "heldout safety",
+    "removedFixExitCode": 1,
+    "detected": true
+  },
+  {
+    "guard": "live-failure",
+    "test": "observed live connector failure",
+    "removedFixExitCode": 1,
+    "detected": true
+  },
+  {
+    "guard": "profile-identity",
+    "test": "renaming a profile",
+    "removedFixExitCode": 1,
+    "detected": true
+  }
+]

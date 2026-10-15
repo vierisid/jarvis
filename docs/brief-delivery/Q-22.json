@@ -1,0 +1,71 @@
+{
+  "task": "Q-22",
+  "title": "Run the final product-quality release gate",
+  "baseline": "dbc58724aaacadd80b98631e2d8d4f38e4a76042",
+  "implementationHead": "c133a630e93f190c703ca57500b196aa89882051",
+  "deliveryHead": "Commit containing this receipt; scorecard deliberately remains bound to implementationHead.",
+  "figma": {
+    "node": "81:3",
+    "visualChange": false
+  },
+  "status": {
+    "implementation": "delivered",
+    "release": "blocked",
+    "merged": false,
+    "enabled": false
+  },
+  "capabilityGate": {
+    "prerequisites": [
+      "F-09",
+      "F-10",
+      "F-12",
+      "F-13",
+      "F-15",
+      "F-16",
+      "Q-01",
+      "Q-02",
+      "Q-03",
+      "Q-04",
+      "Q-05",
+      "Q-06",
+      "Q-07",
+      "Q-08",
+      "Q-09",
+      "Q-10",
+      "Q-11",
+      "Q-12",
+      "Q-13",
+      "Q-14",
+      "Q-15",
+      "Q-16",
+      "Q-17",
+      "Q-18",
+      "Q-19",
+      "Q-20",
+      "Q-21"
+    ],
+    "deploymentAuthorized": false
+  },
+  "tests": "docs/brief-delivery/evidence/Q-22/validation.json",
+  "manualChecks": [
+    "Clean implementation commit audited with --source-probes: exit 2, 58 not_run release cells, zero supported profiles/jobs.",
+    "Review Agent skill: three findings fixed with revert checks; no remaining findings."
+  ],
+  "evidence": [
+    "docs/brief-delivery/evidence/Q-22/scorecard.json",
+    "docs/brief-delivery/evidence/Q-22/scorecard.md",
+    "docs/brief-delivery/evidence/Q-22/integration-base.json",
+    "docs/brief-delivery/evidence/Q-22/review.md",
+    "docs/brief-delivery/evidence/Q-22/revert-checks.json"
+  ],
+  "limitations": [
+    "Full integrated journeys and production profile quality not established.",
+    "Q01 rubric remains proposed; paid evaluation/admin routing/spend authorization absent.",
+    "Local source stubs cannot certify F09/F10/F15 integration or deployed models.",
+    "D32 existing failures/manual gaps, F28 activation and D33 live composition approval remain separate.",
+    "Q21 documented runtime jarvis-ask segment provenance gap remains with its owner.",
+    "Evidence hashes and reviewed flags do not authenticate reviewers or prove raw measurements."
+  ],
+  "rollback": "Revert Q22 commits or stop invoking audit. No migration/default/production state changes. Preserve historical candidate-bound results; never replay effects.",
+  "quickVerification": "bun scripts/check-product-quality.ts --out /tmp/q22-audit --source-probes (expected exit 2); bun test src/quality-release scripts/check-product-quality.test.ts"
+}
