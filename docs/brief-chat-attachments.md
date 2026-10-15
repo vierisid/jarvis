@@ -1,6 +1,6 @@
 # F-05: chat attachments
 
-F-05 adds Document, Image and Screenshot to the existing F-04 composer adapter. It is stacked on the corrected `brief/f-04` commit `72f3078a4857e28ae6738c336f55f2988bf6f31b`. Nothing is merged or enabled on a running daemon. D-12 through D-15 still own the production host, attachment menu and presentation.
+F-05 adds Document, Image and Screenshot to the existing F-04 composer adapter. It is default off; nothing is enabled on a running daemon. D-12 through D-15 still own the production host, attachment menu and presentation.
 
 ## Activation and adapter
 
