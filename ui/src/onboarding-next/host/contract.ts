@@ -26,6 +26,7 @@ export interface Journey {
   setupState: 'pending' | 'completed';
   interviewState: 'connecting' | 'ready' | 'thinking' | 'error' | 'done' | 'skipped';
   tourState: 'pending' | 'in_progress' | 'done' | 'skipped'; tourStepId: string | null;
+  replayReturnStepId?: Step | null;
   activationState: 'pending' | 'building' | 'draft_saved' | 'explored' | 'legacy_completed';
   completion: 'active' | 'completed' | 'explored' | 'legacy_completed';
   jobId: string | null; buildRequestId?: string | null;

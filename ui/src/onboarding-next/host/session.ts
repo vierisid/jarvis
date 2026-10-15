@@ -34,16 +34,38 @@ export function createSession(config: Configuration) {
   }
   async function read() {
     if (disposed) throw new Unavailable();
-    const next = parseJourney(await bounded(config.transport.call('journey.read', {}, abort.signal), abort.signal));
+    let next = parseJourney(await bounded(config.transport.call('journey.read', {}, abort.signal), abort.signal));
     const previous = state.journey;
     if (previous && (next.scopeId !== previous.scopeId || next.journeyId !== previous.journeyId || next.revision < previous.revision)) throw new Unavailable();
-    if (next.completion !== 'active') {
+    if (next.completion !== 'active' && !(next.stepId === 'tour' && next.replayReturnStepId)) {
       update({ mode: 'complete', journey: next, view: null, presentation: null, blocked: false }); return;
     }
-    const view = viewFor(next);
+    // A migrated completed/skipped tour must not replay just because setup or
+    // the interview finished later. Advancing to Activation does not finish it.
+    if (next.stepId === 'tour' && !next.replayReturnStepId && ['done', 'skipped'].includes(next.tourState)) {
+      const before = next;
+      next = parseJourney(await bounded(config.transport.call('journey.transition', {
+        journeyId: before.journeyId, expectedRevision: before.revision, requestId: uuid(),
+        command: { type: 'navigate', stepId: 'activation' },
+      }, abort.signal), abort.signal));
+      if (next.scopeId !== before.scopeId || next.journeyId !== before.journeyId || next.revision <= before.revision || next.stepId !== 'activation') throw new Unavailable();
+    }
+    let view = viewFor(next);
     if (view === 'legacy-provider-setup' && status?.installMode !== 'self') throw new Unavailable();
     const adapter = adapters[view as keyof Configuration['adapters']];
-    const presentation = adapter ? await bounded(adapter.read({ ...contextFor(next), signal: abort.signal }), abort.signal) : null;
+    let presentation = adapter ? await bounded(adapter.read({ ...contextFor(next), signal: abort.signal }), abort.signal) : null;
+    // B06 maps legacy hints without mutating on read. Its acknowledged model
+    // selects the tour presentation even before the first canonical step write.
+    if (next.stepId === 'tour' && typeof presentation?.model?.stepId === 'string') {
+      const target = presentation.model.stepId === 'pebble' ? 'pebble-tour' : 'tour';
+      if (view !== target) {
+        view = target;
+        const alternate = adapters[target];
+        if (!alternate) throw new Unavailable();
+        presentation = await bounded(alternate.read(contextFor(next)), abort.signal);
+        if ((presentation.model.stepId === 'pebble') !== (target === 'pebble-tour')) throw new Unavailable();
+      }
+    }
     if (view !== 'welcome' && view !== 'explainer' && (!presentation || !presentation.model || typeof presentation.model !== 'object')) throw new Unavailable();
     // Scope/revision are committed together with the model, never a half-screen.
     update({ mode: 'journey', journey: next, view, presentation, blocked: false });
@@ -69,7 +91,7 @@ export function createSession(config: Configuration) {
     else { refreshQueued = false; update({ busy: false }); }
   }
   async function refresh() {
-    if (disposed || !started || state.mode === 'legacy' || state.mode === 'complete') return;
+    if (disposed || !started || state.mode === 'legacy') return;
     if (inFlight) { refreshQueued = true; return; }
     inFlight = true; update({ busy: true });
     try {

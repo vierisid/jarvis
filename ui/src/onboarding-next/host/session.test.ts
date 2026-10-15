@@ -230,3 +230,30 @@ test('draft records survive recreation and are isolated by server scope/journey'
   expect(() => createDraftStore(storage, 'owner', 'journey').save('activation', { prompt: '' })).toThrow();
   expect([...values.values()]).toEqual(['{bad']);
 });
+
+
+test('explicit completed-user tutorial replay stays visible, then returns to the completed workspace', async () => {
+  const f = fixture(); f.setJourney({ stepId: 'tour', completion: 'legacy_completed', activationState: 'legacy_completed',
+    setupState: 'completed', interviewState: 'skipped', replayReturnStepId: 'exited' });
+  const s = createSession(f.config); await s.start(); expect(s.state().mode).toBe('journey'); expect(s.state().view).toBe('tour');
+  f.setJourney({ stepId: 'exited', tourState: 'done', replayReturnStepId: null, revision: 1 }); await s.refresh();
+  expect(s.state().mode).toBe('complete'); s.dispose();
+});
+test('a completed host can observe an explicit tutorial replay invalidation without resetting completion', async () => {
+  const f = fixture(); f.setJourney({ stepId: 'exited', completion: 'completed', setupState: 'completed', interviewState: 'done' });
+  const s = createSession(f.config); await s.start(); expect(s.state().mode).toBe('complete');
+  f.setJourney({ stepId: 'tour', replayReturnStepId: 'exited', tourState: 'pending', revision: 1 }); await s.refresh();
+  expect(s.state().mode).toBe('journey'); expect(s.state().journey?.completion).toBe('completed'); s.dispose();
+});
+test('B06 authoritative legacy projection selects the Pebble view before a canonical step is written', async () => {
+  const f = fixture(); f.setJourney({ stepId: 'tour', tourStepId: null, setupState: 'completed', interviewState: 'done' });
+  f.models.tour = { stepId: 'pebble' }; f.models['pebble-tour'] = { stepId: 'pebble', revision: 0 };
+  const s = createSession(f.config); await s.start(); expect(s.state().view).toBe('pebble-tour');
+  expect(s.state().presentation?.model).toEqual(f.models['pebble-tour']); expect(f.calls).not.toContain('journey.transition'); s.dispose();
+});
+
+test.each(['done', 'skipped'] as const)('a previously %s legacy tour advances to activation after the remaining setup/interview', async tourState => {
+  const f = fixture(); f.setJourney({ stepId: 'tour', tourState, setupState: 'completed', interviewState: 'done' });
+  const s = createSession(f.config); await s.start(); expect(s.state().view).toBe('activation'); expect(s.state().mode).toBe('journey');
+  expect(s.state().journey?.completion).toBe('active'); expect(s.state().journey?.tourState).toBe(tourState); s.dispose();
+});

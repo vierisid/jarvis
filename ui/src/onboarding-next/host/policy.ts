@@ -19,6 +19,8 @@ export function parseJourney(v: unknown): Journey {
     || !member(s.stepId, ['welcome', 'explain', 'legacy-provider-setup', 'google', 'interview', 'tour', 'activation', 'build', 'result', 'exited'])
     || !member(s.setupState, ['pending', 'completed']) || !member(s.interviewState, ['connecting', 'ready', 'thinking', 'error', 'done', 'skipped'])
     || !member(s.tourState, ['pending', 'in_progress', 'done', 'skipped']) || !(s.tourStepId === null || id(s.tourStepId))
+    || !(s.replayReturnStepId === undefined || s.replayReturnStepId === null
+      || member(s.replayReturnStepId, ['welcome', 'explain', 'legacy-provider-setup', 'google', 'interview', 'tour', 'activation', 'build', 'result', 'exited']))
     || !member(s.activationState, ['pending', 'building', 'draft_saved', 'explored', 'legacy_completed'])
     || !member(s.completion, ['active', 'completed', 'explored', 'legacy_completed'])
     || !(s.jobId === null || id(s.jobId)) || !(s.buildRequestId === undefined || s.buildRequestId === null || id(s.buildRequestId))
