@@ -45,12 +45,12 @@
 .brief-root .brief-pebble-demo-continuity { margin-top: 30px; display: grid; gap: 20px; }
 .brief-root .brief-pebble-demo-history { display: flex; gap: 12px; justify-content: space-between; align-items: center; min-height: 68px; border-bottom: 1px solid var(--brief-card-edge); font-size: 13px; color: var(--brief-secondary); }
 @container brief-work (max-width: 760px) {
-  .brief-pebble-demo-hero { grid-template-columns: 1fr !important; }.brief-pebble-demo-paper { display: none; }
-  .brief-pebble-demo-canvas { flex-direction: column; }.brief-pebble-demo-graph,.brief-pebble-demo-inspector { width: 100% !important; }
-  .brief-pebble-demo-outcomes { gap: 14px !important; }.brief-pebble-demo-outcomes strong { font-size: 36px !important; }
+  .brief-root .brief-pebble-demo-hero { grid-template-columns: 1fr !important; }.brief-root .brief-pebble-demo-paper { display: none; }
+  .brief-root .brief-pebble-demo-canvas { flex-direction: column; }.brief-root .brief-pebble-demo-graph,.brief-root .brief-pebble-demo-inspector { width: 100% !important; }
+  .brief-root .brief-pebble-demo-outcomes { gap: 14px !important; }.brief-root .brief-pebble-demo-outcomes strong { font-size: 36px !important; }
 }
 @container brief-work (max-width: 460px) {
-  .brief-pebble-demo-outcomes { grid-template-columns: 1fr !important; }
-  .brief-pebble-demo-list button { grid-template-columns: 1fr !important; gap: 8px !important; }
-  .brief-pebble-demo-topline { flex-wrap: wrap; }.brief-pebble-demo-history { flex-wrap: wrap; }
+  .brief-root .brief-pebble-demo-outcomes { grid-template-columns: 1fr !important; }
+  .brief-root .brief-pebble-demo-list button { grid-template-columns: 1fr !important; gap: 8px !important; }
+  .brief-root .brief-pebble-demo-topline { flex-wrap: wrap; }.brief-root .brief-pebble-demo-history { flex-wrap: wrap; }
 }
