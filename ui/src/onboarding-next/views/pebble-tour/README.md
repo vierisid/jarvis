@@ -1,9 +1,8 @@
 # ON-U-06: Pebble tutorial
 
 Optional presentation module. No production route, registry or wizard imports it.
-Merge independently into main. Enable only with ON-U-10, ON-B-06, ON-B-11
-registration and a verified D-line Pebble host. Removing this directory leaves
-the existing onboarding path intact.
+Enable only with ON-U-10, ON-B-06, ON-B-11 registration and a verified D-line
+Pebble host. Removing this directory leaves the existing onboarding path intact.
 
 ## Source of truth
 
@@ -58,13 +57,14 @@ bun ui/src/onboarding-next/views/pebble-tour/preview/serve.ts --build
 ON_U_06_MISSING_SHELL=1 bun ui/src/onboarding-next/views/pebble-tour/preview/serve.ts --build
 ```
 
-The preview builder reads the **local** Git object
-`f77b6e712f2e223ac2d781dbcf38f606c324ba03` (D-06, PR #736) into a unique temporary
-directory and bundles its actual PebbleLayout, motion code, controls and official
-logo. It never fetches, changes the checkout, registers a feature or imports an
-unmerged path from production code. If that object is absent it builds the
-unsupported-adapter fixture. The only remote preview resource is the same Google
-Fonts stylesheet already used by `ui/index.html`.
+The D-06 Pebble layout (PR #736) is not on main yet. When its commit
+(`SHELL_SHA` in `preview/serve.ts`) happens to exist in the local object store,
+the preview copies its `ui/src/brief` tree into a temporary directory and bundles
+the real PebbleLayout, motion code, controls and logo. The preview never fetches,
+changes the checkout or registers a feature, and production code imports nothing
+from it. If the object is absent the preview builds the unsupported-adapter
+fixture instead. No test, typecheck or production build depends on it. The only
+remote preview resource is the Google Fonts stylesheet `ui/index.html` uses.
 
 Preview room/sidebar/header and unsent conversation content are labeled samples,
 not a claim that all D rooms or the final conversation are assembled. The imported
@@ -77,7 +77,6 @@ adapter and widths 1440/768/390. Continue emits `next → first-workflow`.
 
 ## Checks and limitations
 
-See `docs/onboarding-delivery/ON-U-06.json` and its evidence directory. No native
-WebView/screen-reader certification or live B-06 persistence is implied by a
-browser fixture. This is not a rollout or backend change. Rollback: disable this
+Tests mount the real view with a stub Surface. No native WebView/screen-reader
+certification or live B-06 persistence is implied by a browser fixture. This is not a rollout or backend change. Rollback: disable this
 optional view, then revert its owned files without removing journey/user data.
