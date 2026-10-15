@@ -22,12 +22,15 @@ import type { WorkflowEffectContext, WorkflowApprovalPending } from '../../runti
 
 export interface WorkflowsStartRequest {
   flowId: string;
+  waitForCompletion?: boolean;
   payload?: Record<string, unknown>;
 }
 
 export interface WorkflowsStartResponse {
   runId: string | null;
   approval?: WorkflowApprovalPending;
+  child?: import('../../db/repos/child-run').ChildRun;
+  waitpointId?: string;
 }
 
 /**
@@ -41,8 +44,8 @@ export interface WorkflowsStartResponse {
  *     resulting `SELF_RECURSION` error to a 409.
  *   - **payload**: passed through to RUN_FLOW as the trigger payload.
  *   - **return**: the started run's id; the call is fire-and-forget --
- *     the called workflow runs asynchronously and the caller does not
- *     block on its completion.
+ *     optional waitForCompletion parks the parent until its child terminates.
+ *     Existing calls remain asynchronous.
  */
 export type WorkflowsStartFn = (
   req: WorkflowsStartRequest,
@@ -66,6 +69,10 @@ export function createJarvisWorkflowsStartRoute(
       return err("flowId is required (non-empty string)", 400);
     }
     const out: WorkflowsStartRequest = { flowId: raw.flowId };
+    if (raw.waitForCompletion !== undefined) {
+      if (typeof raw.waitForCompletion !== 'boolean') return err('waitForCompletion must be a boolean', 400);
+      out.waitForCompletion = raw.waitForCompletion;
+    }
     if (raw.payload !== undefined) {
       if (typeof raw.payload !== "object" || raw.payload === null || Array.isArray(raw.payload)) {
         return err("payload must be an object if provided", 400);

@@ -3,10 +3,16 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initWorkflowDb, closeWorkflowDb, getWorkflowDb, DEFAULT_IDS } from '../db';
+import { configureWorkflowReadiness } from '../db/repos/flow-readiness';
+import { buildPieceCatalog, computeCatalogCacheKey } from './piece-catalog';
 import { createFlow } from '../db/repos/flow';
 import { createDraftVersion, updateDraftVersion, type FlowTriggerNode } from '../db/repos/flow-version';
 import { createFlowRun, getFlowRun, updateRun } from '../db/repos/flow-run';
 import { listWorkflowEffects } from '../db/repos/workflow-effect';
+import { listChildRuns } from '../db/repos/child-run';
+import { resumeCompletedChildRuns } from './child-run-scheduler';
+import { createWorkflowRoutes } from '../api/routes';
+import { listWaitpointsByFlowRun } from '../db/repos/waitpoint';
 import { getDelegation } from '../db/repos/delegation';
 import { cancelFlowRun } from '../db/repos/run-cancellation';
 import { enqueue } from '../db/repos/job-queue';
@@ -33,13 +39,19 @@ import { EngineFlowExecutor } from '../runner/engine-runtime/engine-flow-executo
 import { createRunFlowHandler } from '../runner/handler';
 import { Worker } from '../queue/worker';
 
-let directory: string, dbPath: string;
+let directory: string, dbPath: string, previousDataDir: string | undefined;
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), 'jarvis-delegated-approval-'));
   dbPath = join(directory, 'workflow.db');
+  previousDataDir = process.env.JARVIS_WORKFLOW_DATA_DIR;
+  process.env.JARVIS_WORKFLOW_DATA_DIR = directory;
   initWorkflowDb(dbPath);
 });
-afterEach(() => { closeWorkflowDb(); rmSync(directory, { recursive: true, force: true }); });
+afterEach(() => {
+  closeWorkflowDb(); rmSync(directory, { recursive: true, force: true });
+  if (previousDataDir === undefined) delete process.env.JARVIS_WORKFLOW_DATA_DIR;
+  else process.env.JARVIS_WORKFLOW_DATA_DIR = previousDataDir;
+});
 
 const PIECE = '@jarvispieces/piece-jarvis-agent';
 const ROLE = { id: 'note-writer', name: 'Workflow role', description: '', responsibilities: [], tools: ['file-ops', 'terminal'] };
@@ -66,6 +78,7 @@ type Options = {
   childLevel?: number;
   /** Behaviour of the synthetic tools. */
   writeThrows?: boolean;
+  writeUnknown?: boolean;
   /** The write pauses the system and hits the boundary's fence while it runs. */
   writeInterrupts?: boolean;
   readFails?: boolean;
@@ -90,7 +103,7 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
   registry.register({ name: 'write_file', category: 'file-ops', description: 'Synthetic write', parameters: {},
     ...(opts.writeGate ? { authorityGate: () => opts.writeGate!() } : {}),
     ...(opts.writeFreeze ? { freezeArguments: (p: Record<string, unknown>) => ({ ...p, frozen: true }) } : {}),
-    execute: async (p: Record<string, unknown>) => { writes.push(p); effects++; if (opts.writeThrows) throw new Error('disk full'); if (opts.writeInterrupts) { emergency.pause(); checkpointExecution(); } return 'saved'; } });
+    execute: async (p: Record<string, unknown>) => { writes.push(p); effects++; if (opts.writeUnknown) throw new ActionOutcomeError({ status: 'unknown', code: 'LOST_RECEIPT', message: 'Synthetic acknowledgement lost', effect: 'may_have_occurred' }); if (opts.writeThrows) throw new Error('disk full'); if (opts.writeInterrupts) { emergency.pause(); checkpointExecution(); } return 'saved'; } });
   registry.register({ name: 'read_file', category: 'file-ops', description: 'Synthetic read', parameters: {},
     execute: async () => { if (opts.readFails) throw new ActionOutcomeError({ status: 'error', code: 'SYNTHETIC', message: 'unreadable', effect: 'not_started' }); if (opts.readCancels) cancelFlowRun(ids.run.id); if (opts.readPauses) emergency.pause(); return 'contents'; } });
   registry.register({ name: 'run_script', category: 'terminal', description: 'Synthetic command', parameters: {}, execute: async () => { effects++; return 'ran'; } });
@@ -960,37 +973,258 @@ describe('delegated approvals through the workflow effect boundary', () => {
   });
 });
 
-describe('delegated approvals through the real engine', () => {
-  const skip = findCachedBundle() === null && process.env.JARVIS_TEST_ENGINE_BUILD !== '1';
-
-  test.skipIf(skip)('the piece parks the run, the decision resumes it, and the outcome is declared', async () => {
-    const ids = createRun({ requiredTools: 'write_file' });
-    const f = backends(ids);
-    updateRun(ids.run.id, { status: 'QUEUED' });
-    const api = new SandboxApi({ services: f.services });
-    await api.start({ port: 0 });
-    const bundle = await buildEngineBundle();
-    await buildAllJarvisPieces();
-    const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest });
+/** Each boot gets new backends, Authority state, API and engine processes. */
+async function boot(ids: ReturnType<typeof createRun>, opts: Options = {}) {
+  const f = backends(ids, opts);
+  const api = new SandboxApi({ services: f.services });
+  await api.start({ port: 0 });
+  const bundle = await buildEngineBundle();
+  await buildAllJarvisPieces();
+  const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest });
+  try {
+    const { catalog, failures } = await buildPieceCatalog({ runtime,
+      pieceRoots: [join(import.meta.dir, '../activepieces/packages/pieces/jarvis')],
+      cacheFile: join(directory, 'catalog.json'), cacheKey: computeCatalogCacheKey({ bundlePath: bundle.bundlePath }),
+    });
+    expect(failures).toHaveLength(0);
+    configureWorkflowReadiness({ pieces: catalog, roles: () => new Set([ROLE.id]) });
     const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({
       executor: new EngineFlowExecutor(runtime, { terminalTimeoutMs: 3000 }),
     }) } });
+    return { ...f, worker, stop: async () => { await runtime.shutdown(); await api.stop(); } };
+  } catch (error) {
+    await runtime.shutdown(); await api.stop();
+    throw error;
+  }
+}
+
+const engineSkip = findCachedBundle() === null && process.env.JARVIS_TEST_ENGINE_BUILD !== '1';
+describe('delegated approvals through the real engine', () => {
+  for (const loop of [false, true]) test.skipIf(engineSkip)(`restart and repeated resume preserve ${loop ? 'sibling loop identities' : 'the declared outcome'}`, async () => {
+    const ids = createRun({ requiredTools: 'write_file' }, loop);
+    updateRun(ids.run.id, { status: 'QUEUED' });
+    let f = await boot(ids, { distinctChildren: true });
     try {
-      enqueue({ jobType: 'RUN_FLOW', flowRunId: ids.run.id, maxAttempts: 1, payload: { runId: ids.run.id } });
-      await worker.drain();
+      enqueue({ jobType: 'RUN_FLOW', flowRunId: ids.run.id, maxAttempts: 1, payload: { runId: ids.run.id, payload: { items: ['first', 'second'] } } });
+      await f.worker.drain();
       expect(getFlowRun(ids.run.id)!.status).toBe('PAUSED');
       expect(f.effects()).toBe(0);
+      const firstApproval = f.approvals.getPending()[0]!.id;
+      await f.stop(); closeWorkflowDb(); initWorkflowDb(dbPath);
+      f = await boot(ids, { distinctChildren: true });
       expect(f.approvals.getPending()).toHaveLength(1);
-      expect(getDelegation(delegationId(ids.run.id))).toMatchObject({ status: 'paused' });
-
-      f.approvals.approve(f.approvals.getPending()[0]!.id, 'test');
+      f.approvals.approve(firstApproval, 'test');
       expect(resumeResolvedWorkflowEffects()).toBe(1);
-      await worker.drain();
-      expect(getFlowRun(ids.run.id)!.status).toBe('SUCCEEDED');
+      expect(resumeResolvedWorkflowEffects()).toBe(0);
+      await f.worker.drain();
       expect(f.effects()).toBe(1);
-      expect(listWorkflowEffects(ids.run.id).map(effect => [effect.route, effect.status])).toEqual([['agent', 'succeeded'], ['agent-tool:1', 'succeeded']]);
-      expect(getDelegation(delegationId(ids.run.id))).toMatchObject({ status: 'completed',
+      if (loop) {
+        expect(getFlowRun(ids.run.id)!.status).toBe('PAUSED');
+        const secondApproval = f.approvals.getPending()[0]!.id;
+        expect(secondApproval).not.toBe(firstApproval);
+        expect(resumeResolvedWorkflowEffects()).toBe(0);
+        f.approvals.approve(secondApproval, 'test');
+        expect(resumeResolvedWorkflowEffects()).toBe(1);
+        expect(resumeResolvedWorkflowEffects()).toBe(0);
+        await f.worker.drain();
+        expect(f.effects()).toBe(2);
+        expect(listWorkflowEffects(ids.run.id).filter(e => e.route === 'agent-tool:1').map(e => e.executionPath))
+          .toEqual([[['loop', 0]], [['loop', 1]]]);
+      }
+      expect(getFlowRun(ids.run.id)!.status).toBe('SUCCEEDED');
+      expect(f.approvals.getPending()).toHaveLength(0);
+      expect(getDelegation(delegationId(ids.run.id, loop ? [['loop', 0]] : []))).toMatchObject({ status: 'completed',
         result: { status: 'completed', finalMessage: 'Saved the note', outcome: { status: 'succeeded' } } });
-    } finally { await runtime.shutdown(); await api.stop(); }
+      expect(resumeResolvedWorkflowEffects()).toBe(0);
+    } finally { await f.stop(); }
+  }, 60_000);
+
+  for (const ending of ['denied', 'failed', 'unknown', 'canceled'] as const) test.skipIf(engineSkip)(`delegated ${ending} reaches the outer worker after restart`, async () => {
+    const ids = createRun({ requiredTools: 'write_file' });
+    updateRun(ids.run.id, { status: 'QUEUED' });
+    let f = await boot(ids);
+    try {
+      enqueue({ jobType: 'RUN_FLOW', flowRunId: ids.run.id, maxAttempts: 1, payload: { runId: ids.run.id } });
+      await f.worker.drain();
+      const approvalId = f.approvals.getPending()[0]!.id;
+      await f.stop(); closeWorkflowDb(); initWorkflowDb(dbPath);
+      f = await boot(ids, { writeThrows: ending === 'failed', writeUnknown: ending === 'unknown' });
+      if (ending === 'canceled') {
+        cancelFlowRun(ids.run.id);
+        expect(f.approvals.approve(approvalId, 'test')).toBeNull();
+        expect(listWaitpointsByFlowRun(ids.run.id, false)).toHaveLength(0);
+      } else if (ending === 'denied') f.approvals.deny(approvalId, 'test');
+      else f.approvals.approve(approvalId, 'test');
+      expect(resumeResolvedWorkflowEffects()).toBe(ending === 'canceled' ? 0 : 1);
+      expect(resumeResolvedWorkflowEffects()).toBe(0);
+      await f.worker.drain();
+      expect(getFlowRun(ids.run.id)!.status).toBe(ending === 'canceled' ? 'STOPPED' : 'FAILED');
+      expect(f.approvals.getPending()).toHaveLength(0);
+      expect(f.effects()).toBe(ending === 'failed' || ending === 'unknown' ? 1 : 0);
+      if (ending === 'unknown') {
+        expect(getFlowRun(ids.run.id)!.failedStep!.errorMessage).toContain('uncertain effect');
+        expect(f.llmCalls()).toBe(0); // the interrupted dispatch never asks the model to retry it
+        expect(listWorkflowEffects(ids.run.id)[1]!.status).toBe('unknown');
+      }
+    } finally { await f.stop(); }
   }, 60_000);
 });
+
+function parentOf(childFlowId: string, options: { loop?: boolean; required?: boolean } = {}) {
+  const flow = createFlow({});
+  const child: FlowTriggerNode = { name: 'child', type: 'PIECE', displayName: 'Required child', settings: {
+    pieceName: '@jarvispieces/piece-jarvis-trigger', pieceVersion: '0.0.1', actionName: 'run_workflow',
+    input: { flow: childFlowId, ...(options.required === false ? {} : { waitForCompletion: true }) },
+  } };
+  const version = createDraftVersion({ flowId: flow.id, displayName: 'Nested routine', trigger: { name: 'trigger', type: 'EMPTY',
+    nextAction: options.loop ? { name: 'loop', type: 'LOOP_ON_ITEMS', settings: { items: '{{trigger.items}}' }, firstLoopAction: child } : child } });
+  const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
+  return { flow, version, run };
+}
+
+async function dashboard(runId: string, suffix: 'effects' | 'waitpoints') {
+  const routes = createWorkflowRoutes();
+  const req = Object.assign(new Request(`http://localhost/api/workflow-runs/${runId}/${suffix}`), { params: { runId } });
+  const response = await routes[`/api/workflow-runs/:runId/${suffix}`]!.GET!(req as any);
+  expect(response.status).toBe(200);
+  return response.json() as Promise<any>;
+}
+
+function enqueueParent(runId: string) {
+  enqueue({ jobType: 'RUN_FLOW', flowRunId: runId, maxAttempts: 1, payload: { runId, payload: { items: ['first', 'second'] } } });
+}
+
+describe('required nested workflows through the real outer worker', () => {
+  test.skipIf(engineSkip)('restart and duplicate ticks never finish early or substitute a sibling child', async () => {
+    const ids = createRun({ requiredTools: 'write_file' });
+    const parent = parentOf(ids.flow.id, { loop: true });
+    let f = await boot(ids);
+    try {
+      enqueueParent(parent.run.id);
+      await f.worker.drain();
+      expect(getFlowRun(parent.run.id), 'parent must park').toMatchObject({ status: 'PAUSED' });
+      const first = listChildRuns(parent.run.id)[0]!;
+      expect(first).toMatchObject({ parentRunId: parent.run.id, stepName: 'child', executionPath: [['loop', 0]], status: 'PAUSED' });
+      expect(getFlowRun(parent.run.id)!.status).toBe('PAUSED');
+      expect(resumeCompletedChildRuns()).toBe(0);
+      const waiting = (await dashboard(parent.run.id, 'waitpoints')).waitpoints[0];
+      expect(waiting.child.childRunId).toBe(first.childRunId);
+      expect(waiting.resumeUrl).toBeUndefined();
+      const routes = createWorkflowRoutes();
+      const manual = Object.assign(new Request(`http://localhost/api/webhooks/waitpoints/${first.waitpointId}`, { method: 'POST', body: '{}' }),
+        { params: { id: first.waitpointId } });
+      expect((await routes['/api/webhooks/waitpoints/:id']!.POST!(manual as any)).status).toBe(403);
+      await f.stop(); closeWorkflowDb(); initWorkflowDb(dbPath);
+      f = await boot(ids);
+      f.approvals.approve(f.approvals.getPending()[0]!.id, 'test');
+      expect(resumeResolvedWorkflowEffects()).toBe(1);
+      await f.worker.drain();
+      expect(getFlowRun(parent.run.id)!.status).toBe('PAUSED');
+      expect(resumeCompletedChildRuns()).toBe(1);
+      expect(resumeCompletedChildRuns()).toBe(0);
+      await f.worker.drain();
+      const children = listChildRuns(parent.run.id);
+      expect(children).toHaveLength(2);
+      expect(children[0]).toMatchObject({ childRunId: first.childRunId, status: 'SUCCEEDED' });
+      expect(children[1]).toMatchObject({ executionPath: [['loop', 1]], status: 'PAUSED' });
+      expect(children[1]!.childRunId).not.toBe(first.childRunId);
+      expect(resumeCompletedChildRuns()).toBe(0);
+      expect(getFlowRun(parent.run.id)!.status).toBe('PAUSED');
+      f.approvals.approve(f.approvals.getPending()[0]!.id, 'test');
+      expect(resumeResolvedWorkflowEffects()).toBe(1);
+      await f.worker.drain();
+      expect(resumeCompletedChildRuns()).toBe(1);
+      expect(resumeCompletedChildRuns()).toBe(0);
+      await f.worker.drain();
+      expect(getFlowRun(parent.run.id)!.status).toBe('SUCCEEDED');
+      expect(f.effects()).toBe(2);
+      expect(listChildRuns(parent.run.id)).toHaveLength(2);
+      expect((await dashboard(parent.run.id, 'effects')).children.map((child: any) => child.status)).toEqual(['SUCCEEDED', 'SUCCEEDED']);
+      const jobs = getWorkflowDb().query('SELECT max_attempts FROM workflow_job').all() as Array<{ max_attempts: number }>;
+      expect(jobs.every(job => job.max_attempts === 1)).toBe(true);
+    } finally { await f.stop(); }
+  }, 60_000);
+
+  for (const ending of ['failed', 'unknown', 'canceled'] as const) test.skipIf(engineSkip)(`nested ${ending} reaches every required ancestor and dashboard`, async () => {
+    const ids = createRun({ requiredTools: 'write_file' });
+    const middle = parentOf(ids.flow.id);
+    const parent = parentOf(middle.flow.id);
+    let f = await boot(ids);
+    try {
+      enqueueParent(parent.run.id);
+      await f.worker.drain();
+      const child = listChildRuns(parent.run.id)[0]!;
+      const leaf = listChildRuns(child.childRunId)[0]!;
+      expect(child.status).toBe('PAUSED');
+      expect(leaf.status).toBe('PAUSED');
+      await f.stop(); closeWorkflowDb(); initWorkflowDb(dbPath);
+      f = await boot(ids, { writeThrows: ending === 'failed', writeUnknown: ending === 'unknown' });
+      if (ending === 'canceled') {
+        cancelFlowRun(parent.run.id);
+        for (const runId of [parent.run.id, child.childRunId, leaf.childRunId]) {
+          expect(getFlowRun(runId)!.status).toBe('STOPPED');
+          expect(listWaitpointsByFlowRun(runId, false)).toHaveLength(0);
+        }
+        expect(f.approvals.getPending()).toHaveLength(0);
+        expect(resumeResolvedWorkflowEffects()).toBe(0);
+        expect(resumeCompletedChildRuns()).toBe(0);
+        expect(f.effects()).toBe(0);
+      } else {
+        f.approvals.approve(f.approvals.getPending()[0]!.id, 'test');
+        expect(resumeResolvedWorkflowEffects()).toBe(1);
+        await f.worker.drain();
+        expect(resumeCompletedChildRuns()).toBe(1);
+        await f.worker.drain();
+        expect(resumeCompletedChildRuns()).toBe(1);
+        await f.worker.drain();
+        expect(getFlowRun(parent.run.id)!.status).toBe('FAILED');
+        expect(getFlowRun(parent.run.id)!.failedStep!.errorMessage).toContain(child.childRunId);
+        expect(f.effects()).toBe(1);
+        expect(f.approvals.getPending()).toHaveLength(0);
+      }
+      const receipt = (await dashboard(parent.run.id, 'effects')).children[0];
+      expect(receipt).toMatchObject({ parentRunId: parent.run.id, stepName: 'child', executionPath: [], childRunId: child.childRunId,
+        status: ending === 'canceled' ? 'STOPPED' : 'FAILED', outcome: { status: ending === 'failed' ? 'error' : 'unknown' } });
+      expect(resumeCompletedChildRuns()).toBe(0);
+    } finally { await f.stop(); }
+  }, 60_000);
+
+  test.skipIf(engineSkip)('existing fire-and-forget children keep their independent lifecycle', async () => {
+    const ids = createRun({ requiredTools: 'write_file' });
+    const parent = parentOf(ids.flow.id, { required: false });
+    const f = await boot(ids);
+    try {
+      enqueueParent(parent.run.id);
+      await f.worker.drain();
+      expect(getFlowRun(parent.run.id)!.status).toBe('SUCCEEDED');
+      const [child] = listChildRuns(parent.run.id);
+      expect(child).toMatchObject({ status: 'PAUSED', waitpointId: null });
+      expect(cancelFlowRun(parent.run.id).accepted).toBe(false);
+      expect(resumeCompletedChildRuns()).toBe(0);
+      expect(f.approvals.getPending()).toHaveLength(1);
+      cancelFlowRun(child!.childRunId);
+      expect(f.approvals.getPending()).toHaveLength(0);
+    } finally { await f.stop(); }
+  }, 60_000);
+});
+
+
+test.skipIf(engineSkip)('parent failure retires a required child approval on the next recovery tick', async () => {
+  const ids = createRun({ requiredTools: 'write_file' });
+  const parent = parentOf(ids.flow.id);
+  const f = await boot(ids);
+  try {
+    enqueueParent(parent.run.id);
+    await f.worker.drain();
+    const child = listChildRuns(parent.run.id)[0]!;
+    const approvalId = f.approvals.getPending()[0]!.id;
+    updateRun(parent.run.id, { status: 'FAILED', finishTime: Date.now() });
+    expect(resumeCompletedChildRuns()).toBe(0);
+    expect(getFlowRun(child.childRunId)!.status).toBe('STOPPED');
+    expect(f.approvals.approve(approvalId, 'test')).toBeNull();
+    expect(f.approvals.getPending()).toHaveLength(0);
+    expect(listWaitpointsByFlowRun(parent.run.id, false)).toHaveLength(0);
+    expect(listWaitpointsByFlowRun(child.childRunId, false)).toHaveLength(0);
+    expect(f.effects()).toBe(0);
+  } finally { await f.stop(); }
+}, 60_000);
