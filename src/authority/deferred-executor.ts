@@ -2,6 +2,7 @@
  * Deferred Executor — Runs approved tool calls that were waiting for approval.
  */
 
+import { collectActionVerification, verificationSummary, type ActionVerification } from '../actions/action-verification';
 import { isToolResult, type ToolRegistry } from '../actions/tools/registry.ts';
 import type { ContentBlock } from '../llm/provider.ts';
 import { executionState, approvalIntentFromContext, approvalNeedsClick, type ApprovalManager, type ApprovalRequest } from './approval.ts';
@@ -25,6 +26,7 @@ export type ExecutionResultCallback = (requestId: string, request: ApprovalReque
 
 /** What `executeApprovedWithReceipt` reports; see its docblock for each field. */
 export type ApprovedReceipt = {
+  verification?: ActionVerification;
   claimed: boolean;
   result: string;
   failed?: boolean;
@@ -285,8 +287,9 @@ export class DeferredExecutor {
       // call reaches (spawn, terminate) reads the scope instead of raising a
       // second card for the act the person just approved.
       const grant = { categories: [request.action_category as ActionCategory], approvalId: requestId, source: 'approval' as const };
-      const raw = await runAsApproved(grant, () => runAsReviewed(uiExecution?.reviewed,
-        () => request.execution_mode === 'inline' ? dispatch() : withoutTemplateDelivery(dispatch)));
+      const { result: raw, verification } = await collectActionVerification(request.tool_name, registry.get(request.tool_name)?.category ?? '',
+        () => runAsApproved(grant, () => runAsReviewed(uiExecution?.reviewed,
+          () => request.execution_mode === 'inline' ? dispatch() : withoutTemplateDelivery(dispatch))));
       // Collapsed to one string for the consumers that show it -- the
       // notification and the execute route -- with any trusted trailer back
       // in band, where it is framed as data along with the rest if anything
@@ -337,7 +340,7 @@ export class DeferredExecutor {
       // as before (a tool returning undefined still stores "undefined", where
       // `split.outside` would be undefined itself and throw in the bound).
       const stored = split?.trailer ? split.outside : result;
-      this.approvalManager.markExecuted(requestId, boundedReceiptText(stored, RECEIPT_MAX_CHARS), 'committed');
+      this.approvalManager.markExecuted(requestId, boundedReceiptText(verification ? `${verificationSummary(verification)}\n${stored}` : stored, RECEIPT_MAX_CHARS), 'committed');
 
       // Log to audit trail
       this.auditTrail.log({
@@ -380,8 +383,9 @@ export class DeferredExecutor {
       // Notify
       this.onResult?.(requestId, request, result);
 
-      if (content) return { claimed: true, result, content };
-      return split?.trailer ? { claimed: true, result, outside: split.outside, trailer: split.trailer } : { claimed: true, result };
+      const evidence = verification ? { verification } : {};
+      if (content) return { claimed: true, result, content, ...evidence };
+      return split?.trailer ? { claimed: true, result, outside: split.outside, trailer: split.trailer, ...evidence } : { claimed: true, result, ...evidence };
     } catch (err) {
       // RAW, and framed nowhere in this method (#608). This one string has six
       // consumers and only two of them are a model: the row below, the

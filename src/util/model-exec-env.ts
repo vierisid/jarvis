@@ -211,6 +211,8 @@ export const JARVIS_INTERNAL_ENV_NAMES: readonly string[] = Object.freeze([
   // taking it from the command text (#746). Set only on that spawn, by the
   // daemon, on a file it just created with mkdtemp.
   'JARVIS_CAPTURE_PATH',
+  // Test-only cache isolation. Never forward to model-launched processes.
+  'JARVIS_TEST_ENGINE_CACHE_ROOT',
 ]);
 
 const SECRET_EXACT: ReadonlySet<string> = new Set(DAEMON_SECRET_ENV_NAMES);

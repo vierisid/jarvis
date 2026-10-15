@@ -44,6 +44,7 @@ const calls: string[] = [];
 
 function fakeSidecar(): SidecarManager {
   return {
+    getConnectionSessionId: () => 'fixture-session',
     listSidecars: () => [box],
     dispatchRPC: async (_id: string, method: string) => {
       calls.push(method);
