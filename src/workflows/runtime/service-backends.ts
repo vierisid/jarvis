@@ -25,6 +25,7 @@ import { JarvisNotifierAdapter, type NotifierDeps } from "../adapters/notifier";
 import { JarvisContextProviderAdapter } from "../adapters/context-provider";
 import { LlmOnlyAgentDelegator } from "../adapters/agent-delegator";
 import { M7AgentDelegator, type DelegationContinuation } from "../adapters/m7-agent-delegator";
+import { getChildRun } from '../db/repos/child-run';
 import { getDelegation, saveDelegation } from "../db/repos/delegation";
 import { JarvisWorkflowRunnerAdapter } from "../adapters/workflow-runner";
 import type { LlmChatFn, LlmChatRequest, LlmChatResponse } from "../sandbox-api/routes/jarvis-llm";
@@ -41,7 +42,7 @@ import type { CredentialResolver } from "../credentials/adapter";
 import { WorkflowEventBuffer } from "./event-buffer";
 import { cancellableWorkflowService } from "./cancellation";
 import { closeEffectApproval, WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
-import { getWorkflowEffect, saveWorkflowEffect, type WorkflowEffect } from '../db/repos/workflow-effect';
+import { getWorkflowEffect, saveWorkflowEffect, listWorkflowEffects, type WorkflowEffect } from '../db/repos/workflow-effect';
 import { resolveToolGate, severityRank } from '../../authority/tool-action-map';
 import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, surfaceBoundRefusal, toolEffectCapability } from './effect-capabilities';
 import { ActionOutcomeError } from '../../actions/action-outcome';
@@ -228,7 +229,7 @@ export function buildSandboxServiceBackends(
           },
           execute: async (args, checkpoint) => { checkpoint(); return toolAdapter.execute(req.toolName, args); } });
         return reply.approval ? { result: null, toolName: req.toolName, approval: reply.approval }
-          : { result: reply.result, toolName: req.toolName };
+          : { result: reply.result, toolName: req.toolName, ...(reply.outcome ? { outcome: reply.outcome } : {}) };
       }
     : undefined;
 
@@ -655,7 +656,7 @@ export function buildSandboxServiceBackends(
           const message = error instanceof Error ? error.message : String(error);
           const recorded = getWorkflowEffect(workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, `agent-tool:${call.sequence}`));
           if (recorded?.status === 'blocked') return { kind: 'denied', reason: recorded.error ?? message };
-          if (recorded?.status === 'failed' || recorded?.status === 'unknown') return { kind: 'failed', result: recorded.error ?? message };
+          if (recorded?.status === 'failed') return { kind: 'failed', result: recorded.error ?? message };
           throw error;
         }
       },
@@ -666,9 +667,18 @@ export function buildSandboxServiceBackends(
     // judges, so an authorisation that was never an approval cannot answer an
     // approval the sink asks for. Spent by that one spawn.
     const delegation = getWorkflowEffect(workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, 'agent'));
-    if (!delegation?.approvalId) return m7.delegate(req, continuation);
-    return runAsApproved({ categories: ['spawn_agent'], approvalId: delegation.approvalId, source: 'workflow_effect' },
-      () => m7.delegate(req, continuation));
+    const result = delegation?.approvalId
+      ? await runAsApproved({ categories: ['spawn_agent'], approvalId: delegation.approvalId, source: 'workflow_effect' },
+        () => m7.delegate(req, continuation))
+      : await m7.delegate(req, continuation);
+    const uncertain = listWorkflowEffects(ctx.runId).find(effect => effect.stepName === resolved.stepName
+      && digest(effect.executionPath) === digest(resolved.executionPath) && effect.route.startsWith('agent-tool:')
+      && (effect.status === 'unknown' || effect.status === 'dispatching'));
+    // Never let a conversational ending or required-tools check downgrade an
+    // uncertain child dispatch to success or an ordinary retriable failure.
+    return { ...result, delegation: continuation.identity, ...(uncertain ? { status: 'error' as const,
+      outcome: { status: 'unknown' as const, code: 'DELEGATED_EFFECT_UNCERTAIN', effect: 'may_have_occurred' as const,
+        message: `Delegation ${id} has an uncertain effect ${uncertain.id}; inspect its receipt before any new run` } } : {}) };
   };
 
   const eventsPoll: EventsPollFn = async (req) => {
@@ -704,6 +714,8 @@ export function buildSandboxServiceBackends(
     return { versionId: version.id, versionDigest: digest(version.trigger) };
   };
   const workflowsStart: WorkflowsStartFn = async (req, ctx) => {
+    const resolved = resolveEffectContext(ctx, '@jarvispieces/piece-jarvis-trigger', 'run_workflow');
+    const effectId = workflowEffectId(ctx.runId, resolved.stepName, resolved.executionPath, 'workflow');
     const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-trigger', action: 'run_workflow',
       route: 'workflow', toolName: 'workflow_start', category: 'spawn_agent', toolCategory: 'delegation',
       request: { ...req }, prepare: () => {
@@ -713,11 +725,14 @@ export function buildSandboxServiceBackends(
       execute: async (args, checkpoint) => {
         checkpoint();
         if (digest(childVersion(args.flowId as string, ctx.projectId)) !== digest(args.pinned)) throw new Error('Target workflow changed after approval; start a new run');
-        return runnerAdapter.start(args as unknown as Parameters<typeof runnerAdapter.start>[0], ctx.runId, ctx.projectId);
+        return runnerAdapter.start(args as unknown as Parameters<typeof runnerAdapter.start>[0], ctx.runId, ctx.projectId,
+          { effectId, stepName: resolved.stepName });
       },
     });
-    return reply.approval ? { runId: null, approval: reply.approval }
-      : reply.result as Awaited<ReturnType<WorkflowsStartFn>>;
+    if (reply.approval) return { runId: null, approval: reply.approval };
+    const result = reply.result as Awaited<ReturnType<WorkflowsStartFn>>;
+    const child = getChildRun(effectId);
+    return { ...result, ...(child ? { child, waitpointId: child.outcome ? undefined : child.waitpointId ?? undefined } : {}) };
   };
 
   /**

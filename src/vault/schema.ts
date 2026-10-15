@@ -604,6 +604,8 @@ function createTables(db: Database): void {
     capture_id TEXT NOT NULL, kind TEXT NOT NULL, observed_at INTEGER NOT NULL,
     app TEXT NOT NULL, cue TEXT NOT NULL, PRIMARY KEY (capture_id, kind)
   )`);
+  // Q-11: nullable for old writers; never backfill structured evidence from cue-only rows.
+  try { db.run('ALTER TABLE opportunity_observations ADD COLUMN routine_evidence TEXT'); } catch { /* already present */ }
   db.run(`CREATE INDEX IF NOT EXISTS idx_opportunity_observations_time ON opportunity_observations(observed_at)`);
   db.run(`CREATE TABLE IF NOT EXISTS opportunity_hypotheses (
     suggestion_id TEXT PRIMARY KEY REFERENCES awareness_suggestions(id) ON DELETE CASCADE,

@@ -154,6 +154,14 @@ const STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_workflow_effect_run ON workflow_effect(run_id)`,
   `CREATE INDEX IF NOT EXISTS idx_workflow_effect_pending ON workflow_effect(status)`,
 
+  // A nested dispatch is bound to the parent's effect (including loop path).
+  // Keep the child id even if its flow is deleted: missing is not success.
+  `CREATE TABLE IF NOT EXISTS workflow_child_run (
+    effect_id TEXT PRIMARY KEY REFERENCES workflow_effect(id) ON DELETE CASCADE,
+    child_run_id TEXT NOT NULL UNIQUE,
+    waitpoint_id TEXT UNIQUE
+  )`,
+
   // A delegated sub-agent's conversation while its run waits on a tool
   // approval, and its finished result so a re-run step returns that instead
   // of starting a new conversation. One row per step instance.

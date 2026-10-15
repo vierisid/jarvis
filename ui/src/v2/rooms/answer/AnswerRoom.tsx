@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { SafeMarkdown } from "../../../components/SafeMarkdown";
 import "../taskResult/TaskResultRoom.css";
 
 type AnswerRecord = {
@@ -84,9 +83,7 @@ export function AnswerRoom({ answerId }: { answerId: string }) {
           <div className="task-result__section-eyebrow">full answer</div>
         </div>
         <div className="task-result__response-body task-result__markdown">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-            {answer.response || "(no output)"}
-          </ReactMarkdown>
+          <SafeMarkdown text={answer.response || "(no output)"} />
         </div>
       </section>
     </div>

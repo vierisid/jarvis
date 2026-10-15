@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "task": "Q-21",
+  "title": "Verify untrusted-content and data boundaries end to end",
+  "baseline": "5024ea7455a5613be0514475be32c0dee6de0edd",
+  "implementationHead": "25e2e8196af29e3e72b7df74174c37a2953a9212",
+  "deliveryHead": "Resolve the head of the single Q-21 PR; this receipt commit follows implementationHead.",
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "node": "81:3",
+    "checkpoint": "UI-35",
+    "status": "reference_only_no_layout_certification"
+  },
+  "status": {
+    "implementation": "complete",
+    "review": "complete_implementer_read_only",
+    "merged": false,
+    "productionActivated": false,
+    "ci": "external_exact_head_checks"
+  },
+  "capabilityGate": "No new flag or migration. Changes take effect only when this daemon/UI revision is deployed; no deployment performed.",
+  "tests": {
+    "implementationHead": "25e2e8196af29e3e72b7df74174c37a2953a9212",
+    "widerRegression": {
+      "passed": 912,
+      "failed": 0,
+      "files": 38,
+      "assertions": 6745,
+      "phase": "before final linked-image correction"
+    },
+    "finalFocused": {
+      "passed": 157,
+      "failed": 0,
+      "files": 8,
+      "assertions": 749
+    },
+    "implementationHooks": {
+      "passed": 197,
+      "failed": 0,
+      "files": 11,
+      "assertions": 975
+    },
+    "typescript": "passed",
+    "uiBuild": "passed_with_existing_css_at_rule_warnings",
+    "review": "no_remaining_findings",
+    "fixtures": [
+      {
+        "id": "screen-authority",
+        "outcome": "passed"
+      },
+      {
+        "id": "document-fact",
+        "outcome": "passed"
+      },
+      {
+        "id": "piece-account",
+        "outcome": "passed"
+      },
+      {
+        "id": "delimiter-spoof",
+        "outcome": "passed"
+      },
+      {
+        "id": "rich-rendering",
+        "outcome": "passed"
+      },
+      {
+        "id": "linked-image",
+        "outcome": "passed"
+      },
+      {
+        "id": "billing-owner-selection",
+        "outcome": "passed"
+      }
+    ],
+    "sanitization": "Only synthetic fixture IDs and outcomes; no customer content, production credentials or raw captured text.",
+    "ci": "See exact-head checks on https://github.com/vierisid/jarvis/pull/1065; pending at receipt creation.",
+    "liveProvider": "not_run",
+    "liveHosting": "not_run",
+    "paidCalls": 0,
+    "realExternalEffects": 0
+  },
+  "manualChecks": {
+    "status": "passed",
+    "kind": "synthetic browser probe using production React components",
+    "browser": "Chrome on Linux via Codex browser tools",
+    "surfaces": [
+      "MarkdownBody",
+      "AnswerRoom",
+      "TaskResultRoom"
+    ],
+    "imageRequests": 0,
+    "activeElements": 0,
+    "executableLinks": 0,
+    "imageLinks": 3,
+    "tables": 3,
+    "scriptExecuted": false,
+    "screenshot": "browser.png",
+    "designCertification": false,
+    "nativeWebviewMatrix": "not_run"
+  },
+  "evidence": [
+    "evidence/Q-21/integration-base.json",
+    "evidence/Q-21/validation.json",
+    "evidence/Q-21/revert-checks.json",
+    "evidence/Q-21/review.md",
+    "evidence/Q-21/browser.json",
+    "evidence/Q-21/browser.png",
+    "evidence/Q-21/review-fixes.json",
+    "evidence/Q-21/review-fixes-browser.png"
+  ],
+  "limitations": [
+    "No deployed-model prompt-injection certification or paid calls.",
+    "Existing workflow jarvis-ask template interpolation lacks segment provenance across the sandbox.",
+    "CODE opt-in, ungoverned pieces and file-reader taint exemptions retain their existing policy.",
+    "Cross-project protection does not narrow access to a single connection within an authorized project.",
+    "Hosting control-plane source inspected; runtime and live account verification not_run.",
+    "Combined Brief stack and native webview matrix not_run; Q-22 remains a separate gate."
+  ],
+  "rollback": "Revert Q-21 commits and rebuild daemon/UI together. No migrations; preserve durable records and do not replay effects.",
+  "verification": "docs/TRUST_BOUNDARIES.md",
+  "ci": "See exact-head checks on https://github.com/vierisid/jarvis/pull/1065; pending at receipt creation.",
+  "reviewCorrections": "evidence/Q-21/review-fixes.json"
+}
