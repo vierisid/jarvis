@@ -17,7 +17,7 @@ import type { JarvisContextProvider } from '../sandbox-api/routes/jarvis-context
 import type { WorkflowEffectContext } from '../runtime/effect-context';
 import { CredentialResolver } from '../credentials/adapter';
 import { PieceCatalog, metadataToCatalogEntry } from '../runtime/piece-catalog';
-import { environmentFor, type EvaluationEnvironment } from './environment';
+import { canonicalTarget, environmentFor, type EvaluationEnvironment } from './environment';
 import { inspectGraph, checkScenario } from './checks';
 import type { EffectExecutor, EffectReceipt, Scenario, ScenarioResult } from './types';
 
@@ -40,8 +40,10 @@ export async function createEvaluationEngine(environment: EvaluationEnvironment 
     const failed = (status: 'blocked' | 'error', code: string, message: string): ToolsInvokeResponse =>
       (record('tool', input, ctx, status), { result: null, toolName: req.toolName, outcome: { status, code, message, effect: 'not_started' } });
     if (!tools.has(req.toolName)) return failed('blocked', 'TOOL_UNAVAILABLE', req.toolName + ' is not available to workflows');
-    if (typeof params.target === 'string' && (s.offlineTargets ?? []).includes(params.target))
-      return failed('blocked', 'TARGET_OFFLINE', params.target + ' is offline; nothing was done');
+    // A machine named by its sidecar id is the same machine as its display name.
+    const target = canonicalTarget(params.target);
+    if (typeof target === 'string' && (s.offlineTargets ?? []).includes(target))
+      return failed('blocked', 'TARGET_OFFLINE', target + ' is offline; nothing was done');
     if ((s.approvals ?? []).includes(req.toolName)) {
       record('tool', input, ctx, 'approval_pending');
       const waitpointId = createWaitpoint({ flowRunId: ctx.runId, projectId: ctx.projectId, stepName: ctx.stepName ?? 'step', type: 'MANUAL' }).id;

@@ -234,6 +234,11 @@ function describe_engine() {
       const [, offline] = await engine.execute(smokeGraphs[screen.id], screen.scenarios);
       expect(offline).toMatchObject({ status: 'FAILED', receipts: [{ kind: 'tool', outcome: 'blocked' }] });
       expect(offline!.checks.every(c => c.pass)).toBe(true);
+      const byIdGraph = structuredClone(smokeGraphs[screen.id]);
+      byIdGraph.nextAction.settings.input.params.target = 'sidecar-studio';
+      const [, offlineById] = await engine.execute(byIdGraph, screen.scenarios);
+      expect(offlineById).toMatchObject({ status: 'FAILED', receipts: [{ kind: 'tool', outcome: 'blocked' }] });
+      expect(offlineById!.checks.every(c => c.pass)).toBe(true);
     } finally { await engine.close(); }
   }, 120_000);
 }
