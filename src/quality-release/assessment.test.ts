@@ -159,3 +159,40 @@ test('rate successes cannot exceed the reported passed task population', () => {
   row.taskDispositions = { provider_error: 60 }; f.seal();
   expect(assess(f).profiles[0]!.quality[0]!.disposition).toBe('failed');
 });
+
+for (const check of ['median-corrections', 'median-correction-time'] as const) {
+  test(`${check} accepts complete supported-job reviews without negative-case padding`, () => {
+    const f = fixture(), row = f.record.profiles[0]!.quality.find(r => r.check === check)!;
+    row.measurement = { kind: 'distribution', count: 40, p50: 0, p90: 0, p95: 0, max: 0, timeouts: 0 };
+    f.seal();
+    const result = assess(f), reported = result.profiles[0]!.quality.find(r => r.check === check)!;
+    expect(result.status).toBe('passed'); expect(reported.disposition).toBe('passed');
+    expect(reported.scheduled).toBe(60); expect(reported.measured).toBe(60);
+    expect(reported.supportedTasks).toBe(40); expect(reported.negativeTasks).toBe(20);
+  });
+  test(`${check} rejects a median diluted by zero-effort negative cases`, () => {
+    const f = fixture(), row = f.record.profiles[0]!.quality.find(r => r.check === check)!;
+    const high = check === 'median-corrections' ? 3 : 180000;
+    const supported = [...Array(19).fill(0), ...Array(21).fill(high)];
+    const combined = [...supported, ...Array(20).fill(0)].sort((a, b) => a - b);
+    expect(supported[19]).toBe(high); expect(combined[29]).toBe(0);
+    row.measurement = { kind: 'distribution', count: 60, p50: combined[29], p90: high, p95: high, max: high, timeouts: 0 };
+    f.seal();
+    expect(assess(f).profiles[0]!.quality.find(r => r.check === check)!.disposition).toBe('failed');
+    expect(assess(f).profiles[0]!.supportedJobs).toEqual([]);
+    row.measurement.count = 40; row.measurement.p50 = supported[19]; f.seal();
+    expect(assess(f).profiles[0]!.quality.find(r => r.check === check)!.disposition).toBe('failed');
+  });
+  test(`${check} refuses incomplete supported-job review`, () => {
+    const f = fixture(), row = f.record.profiles[0]!.quality.find(r => r.check === check)!;
+    row.measurement = { kind: 'distribution', count: 39, p50: 0, p90: 0, p95: 0, max: 0, timeouts: 0 };
+    f.seal(); expect(assess(f).profiles[0]!.quality.find(r => r.check === check)!.disposition).toBe('failed');
+  });
+}
+for (const check of ['request-budget', 'token-budget', 'latency-budget'] as const) test(`${check} still includes negative cases`, () => {
+  const f = fixture(), row = f.record.profiles[0]!.quality.find(r => r.check === check)!;
+  row.measurement = { kind: 'distribution', count: 40, p50: 0, p90: 0, p95: 0, max: 0, timeouts: 0 };
+  f.seal(); expect(assess(f).profiles[0]!.quality.find(r => r.check === check)!.disposition).toBe('failed');
+  row.measurement.count = 60; f.seal();
+  expect(assess(f).status).toBe('passed');
+});

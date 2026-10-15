@@ -49,7 +49,7 @@
   "tests": "docs/brief-delivery/evidence/Q-22/validation.json",
   "manualChecks": [
     "Clean implementation commit audited with --source-probes: exit 2, 58 not_run release cells, zero supported profiles/jobs.",
-    "Review Agent skill: three findings fixed with revert checks; no remaining findings."
+    "Review Agent skill: four initial findings fixed with revert checks; follow-up correction-effort cohort finding fixed with four failing-before regressions. No remaining findings."
   ],
   "evidence": [
     "docs/brief-delivery/evidence/Q-22/scorecard.json",

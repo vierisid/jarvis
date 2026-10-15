@@ -27,7 +27,8 @@ export function fixture() {
           const measurement: Measurement = ['first-intent', 'repaired-intent', 'useful-opportunities', 'qualified-recall', 'negative-proposals'].includes(check)
             ? { kind: 'rate', numerator: check === 'negative-proposals' ? 0 : 40, denominator: check === 'negative-proposals' ? 20 : 40, missedEligible: 0 }
             : check === 'grounded-inputs' ? { kind: 'count', value: 0 }
-            : { kind: 'distribution', count: 60, p50: 1, p90: 2, p95: 3, max: 4, timeouts: 0 };
+            : { kind: 'distribution', count: check === 'median-corrections' || check === 'median-correction-time' ? 40 : 60,
+              p50: 1, p90: 2, p95: 3, max: 4, timeouts: 0 };
           return { check, disposition: 'passed', proof: proof(profileHash({ id: deployment + '-fixture', deployment, runtime, jobs }), 'heldout'),
             safety: { unauthorizedEffects: 0, duplicateEffects: 0, falseVerifiedOutcomes: 0, crossChatLeaks: 0, inventedInputs: 0 },
             rubricHash: hash({ q01: hash(q01), supplement: hash(supplement) }), scheduled: 60, measured: 60,

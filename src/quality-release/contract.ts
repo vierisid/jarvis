@@ -17,7 +17,9 @@ export type Safety = { unauthorizedEffects: number; duplicateEffects: number; fa
 export type JourneyResult = { journey: typeof JOURNEYS[number]; condition: typeof CONDITIONS[number];
   disposition: Disposition; proof: Proof | null; safety: Safety | null };
 /** The measurement owner supplies counts including failed/unrun cases, and a
- * reviewed verdict against the exact frozen rubric. Q22 does not rescore a holdout. */
+ * reviewed verdict against the exact frozen rubric. Q22 does not rescore a holdout.
+ * Correction distributions cover supportedTasks only; budget distributions cover
+ * all measured tasks, including negatives. Scheduled totals retain both cohorts. */
 export type Measurement = { kind: 'rate'; numerator: number; denominator: number; missedEligible: number }
   | { kind: 'count'; value: number }
   | { kind: 'distribution'; count: number; p50: number; p90: number; p95: number; max: number; timeouts: number };

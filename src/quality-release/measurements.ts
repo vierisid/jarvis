@@ -26,11 +26,15 @@ export function measurementMet(row: QualityResult, q01: any, supplement: any, pr
       return (lowerBound ? value.ci95![0]! : value.rate!) >= target;
     }
     case 'grounded-inputs': return m.kind === 'count' && m.value === 0;
+    case 'median-corrections': case 'median-correction-time': {
+      // Q01 measures human effort on supported jobs. Negative cases remain in
+      // scheduled/measured totals, but cannot dilute the correction median.
+      if (m.kind !== 'distribution' || m.count !== row.supportedTasks) return false;
+      return m.p50 <= (row.check === 'median-corrections' ? q01.humanEffort.maxMedianEdits : q01.humanEffort.maxMedianCorrectionMs);
+    }
     default: {
       if (m.kind !== 'distribution' || m.count !== row.measured) return false;
       const budget = q01.budgets?.[profile] ?? q01.budgets?.['*'];
-      if (row.check === 'median-corrections') return m.p50 <= q01.humanEffort.maxMedianEdits;
-      if (row.check === 'median-correction-time') return m.p50 <= q01.humanEffort.maxMedianCorrectionMs;
       if (row.check === 'request-budget') return m.max <= budget?.maxRequestsPerTask;
       if (row.check === 'token-budget') return m.max <= budget?.maxTokensPerTask;
       return m.p95 <= budget?.maxP95CompositionMs;

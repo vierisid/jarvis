@@ -16,6 +16,25 @@
     "assertions": 272,
     "files": 3
   },
+  "correctionCohortReviewFix": {
+    "reviewedHead": "535b81e21ab51d358d0bda1b997f1edc86ceb48c",
+    "change": "Correction counts and times cover supported jobs only; budget distributions still include negatives.",
+    "beforeFix": {
+      "command": "bun test src/quality-release/assessment.test.ts --test-name-pattern 'accepts complete supported-job|rejects a median diluted'",
+      "passed": 0,
+      "failed": 4,
+      "exitCode": 1
+    },
+    "afterFix": {
+      "command": "bun test src/quality-release scripts/check-product-quality.test.ts",
+      "passed": 140,
+      "failed": 0,
+      "assertions": 302,
+      "files": 3
+    },
+    "typecheck": "passed",
+    "review": "Direct correction-diff review: no remaining findings."
+  },
   "typecheck": "passed",
   "normalHooks": "passed on implementation; final correction hooks recorded in PR CI evidence",
   "sourceAudit": {
