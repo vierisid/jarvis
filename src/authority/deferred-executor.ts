@@ -1,8 +1,8 @@
-import { collectActionVerification, verificationSummary, type ActionVerification } from '../actions/action-verification';
 /**
  * Deferred Executor — Runs approved tool calls that were waiting for approval.
  */
 
+import { collectActionVerification, verificationSummary, type ActionVerification } from '../actions/action-verification';
 import { isToolResult, type ToolRegistry } from '../actions/tools/registry.ts';
 import type { ContentBlock } from '../llm/provider.ts';
 import { executionState, approvalIntentFromContext, approvalNeedsClick, type ApprovalManager, type ApprovalRequest } from './approval.ts';

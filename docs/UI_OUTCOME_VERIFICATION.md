@@ -1,4 +1,4 @@
-# UI outcome verification (Q-09)
+# UI outcome verification
 
 Execution completion and verification of a postcondition are separate. A click
 returning normally is not confirmation that a message was sent, a payment was
@@ -38,8 +38,7 @@ the exact postcondition, or use provider confirmation.
 Current workflow restrictions remain in force: raw browser navigation, clicks,
 typing, app launch, and other opaque UI writes cannot be introduced as direct
 workflow capabilities. Supported reads such as `browser_snapshot` gain durable
-evidence. This card does not enable raw UI writes or replace the Q-07 recovery
-state machine.
+evidence. This does not enable raw UI writes.
 
 The existing approval executor collects evidence for approved desktop/browser
 calls. Its live `ApprovedReceipt.verification` carries the structured observation;
@@ -73,24 +72,14 @@ after that device disconnects; it never permits a fresh dispatch on a replacemen
 Existing tests cover simultaneous bindings, socket generation fences, approvals,
 restarts, real engine execution, pause/kill, and local/hosted selection.
 
-## Integration, limits, and rollback
-
-This card was rebased onto main `5024ea7455a5613be0514475be32c0dee6de0edd` on
-2026-10-14. It preserves desktop bridge removal, bounded native calls, reviewed
-browser snapshot binding, and remote snapshot serialization. Approved execution
-retains main's one-call approval scope, so Spawn/Stop actions consume their granted
-approval while verification observes that same dispatch. It has no merge
-or enable dependency on Q-07/Q-08 and does not merge that stack. When integrating
-Q-07/Q-08, preserve both their held/recovery outcomes and this additive verification
-field on replay, fresh completion, and API responses. F-21 is a read-only consumer.
+## Limits and rollback
 
 There is no guarantee for arbitrary third-party UIs, no automatic replay or new
 retry mechanism, and no business success inferred from a screenshot or a normal
 tool return. Unapproved legacy chat browser calls keep their prior text format;
-this card certifies workflow reads and approved UI execution. No deployment or
-Brief activation is included.
+this change certifies workflow reads and approved UI execution.
 
-Rollback: revert the Q-09 commits and restart the daemon. The fields are additive,
+Rollback: revert this change and restart the daemon. The fields are additive,
 with no schema migration; old readers ignore them. Updated sidecars preserve the
 old protocol without opt-in, so they can remain installed. Rolling back the brain
 also removes its typed browser refusal and verification guarantees. Never use
@@ -98,8 +87,6 @@ rollback as permission to repeat an uncertain action. Native Windows/macOS runti
 checks require their respective hosts; cross-platform protocol fixtures do not
 certify native behavior there.
 
-Quick verification: use Bun 1.4.2, install with `bun install --frozen-lockfile`, and
-run the commands in `brief-delivery/Q-09.json`. Run native Linux tests under
-`xvfb-run -a`; browser fixtures use isolated temporary profiles and local pages.
-The test-only `JARVIS_TEST_ENGINE_CACHE_ROOT` isolates generated engine and piece
-outputs and is stripped from model-launched environments.
+The test-only `JARVIS_TEST_ENGINE_CACHE_ROOT` (honoured only when `NODE_ENV=test`)
+isolates generated engine and piece outputs between worktrees and is stripped
+from model-launched environments.

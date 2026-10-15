@@ -1,4 +1,3 @@
-import { recordActionVerification, observedWindow } from '../action-verification';
 /**
  * Desktop Tools — Desktop Automation via Sidecar RPC or Local Execution
  *
@@ -10,6 +9,7 @@ import { recordActionVerification, observedWindow } from '../action-verification
  * handles platform-specific implementation details internally.
  */
 
+import { recordActionVerification, observedWindow } from '../action-verification';
 import type { AppController, UIElement, WindowInfo } from '../app-control/interface.ts';
 import { getAppController } from '../app-control/interface.ts';
 import type { ToolDefinition, ToolResult } from './registry.ts';

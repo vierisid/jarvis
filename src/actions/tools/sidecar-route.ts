@@ -1,4 +1,3 @@
-import { recordActionVerification, observedPage, hasUiVerificationScope } from '../action-verification';
 /**
  * Sidecar Routing — Transparent Remote Execution
  *
@@ -7,6 +6,7 @@ import { recordActionVerification, observedPage, hasUiVerificationScope } from '
  * The AI decides where to run a command by specifying (or omitting) a target.
  */
 
+import { recordActionVerification, observedPage, hasUiVerificationScope } from '../action-verification';
 import type { SidecarManager } from '../../sidecar/manager.ts';
 import type { SidecarCapability, SidecarInfo } from '../../sidecar/types.ts';
 import {

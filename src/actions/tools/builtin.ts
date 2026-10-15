@@ -1,5 +1,3 @@
-import { browserActionFailure, browserActionError } from '../browser/action-failure';
-import { recordActionVerification, observedPage } from '../action-verification';
 /**
  * Built-in Tools — The Hands
  *
@@ -7,6 +5,8 @@ import { recordActionVerification, observedPage } from '../action-verification';
  * run_command, read_file, write_file, list_directory
  */
 
+import { browserActionFailure, browserActionError } from '../browser/action-failure';
+import { recordActionVerification, observedPage } from '../action-verification';
 import {
   readFileSync, writeFileSync, readdirSync, statSync, existsSync, unlinkSync, chmodSync, renameSync, rmSync,
   realpathSync, openSync, closeSync, fstatSync, readSync, readlinkSync, constants as fsConstants,

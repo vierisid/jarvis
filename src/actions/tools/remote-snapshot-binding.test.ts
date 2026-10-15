@@ -129,7 +129,7 @@ describe('the snapshot reply records its generation (#676)', () => {
       resetRemoteSnapshotGenerations();
       const manager = {
         getConnectionSessionId: () => 'fixture-session',
-    listSidecars: () => [box],
+        listSidecars: () => [box],
         dispatchRPC: async () => ({ text: 'Page: x', page_url: 'https://x.example/', loader_id: 'L1', elem_gen: bad }),
       } as unknown as SidecarManager;
       setSidecarManagerRef(manager);

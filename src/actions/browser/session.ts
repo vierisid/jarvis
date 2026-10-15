@@ -1,4 +1,3 @@
-import { browserActionFailure } from './action-failure';
 /**
  * Browser Controller — High-level browser automation
  *
@@ -9,6 +8,7 @@ import { browserActionFailure } from './action-failure';
  * The LLM sees these IDs and references them in click/type commands.
  */
 
+import { browserActionFailure } from './action-failure';
 import { CDPClient } from './cdp.ts';
 import { STEALTH_SCRIPT } from './stealth.ts';
 import { launchChrome, stopChrome, type RunningBrowser } from './chrome-launcher.ts';
