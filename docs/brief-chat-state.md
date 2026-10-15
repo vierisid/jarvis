@@ -28,14 +28,12 @@ Expected: **37 focused tests pass**. Review regressions cover a missed answer sp
 across replay pages outside the latest-ten snapshot, a cached running turn outside
 the latest fifty turns, history loaded before subscription, two windows sharing
 storage, legacy draft recovery, and generation/restart errors. Seven cases fail
-on the original F-04 commit and pass with the review fixes. See the retained
-`docs/brief-delivery/evidence/F-04/review-{red,green,affected}.log` files.
+on the original F-04 commit and pass with the review fixes.
 
 The 2026-10-14 recovery regressions cover acceptance lost before disconnect,
 followed by 51 later turns. Both single-page and paginated replay clear the old
 pending send without resending it, preserve a newer draft from another window,
-and permit the next send. Both cases fail on `72f3078a` and pass with the fix;
-see `docs/brief-delivery/evidence/F-04/recovery-{red,green,affected}.log`.
+and permit the next send. Both cases fail without the fix and pass with it.
 
 
 ## Integration contract
@@ -159,9 +157,8 @@ socket before legacy use because F-03 scoped opt-in is permanent for that socket
 
 Rollback by removing the `chatState` activation and keeping the existing dashboard
 entry, or reverting this client adapter. Retain the server conversations and local
-draft keys; do not delete messages, drop schema or replay model work. This PR adds
-no database migration. Code merged: no. Release enabled: no. See
-`docs/brief-delivery/F-04.json` for exact verification evidence and limitations.
+draft keys; do not delete messages, drop schema or replay model work. This change adds
+no database migration. Release enabled: no.
 
 Design reference: [conversation lifecycle, Figma node 81:212](https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-212).
 No tab styling or new visual affordance is included. Later F-line work is tracked
