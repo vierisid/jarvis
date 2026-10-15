@@ -1,6 +1,8 @@
 /** Versioned C6 contract. Observations and user reports never imply verified progress. */
 import type { RoutineSignalEvidence } from './routine-signals.ts';
 import type { RoutineStage } from './routine-catalog.ts';
+import type { ReportCadence } from './routine-identity.ts';
+import type { FeedbackLearning, FeedbackSuppression } from './opportunity-feedback-policy.ts';
 
 export type JobKind = 'invoice_review' | 'lead_followup' | 'recurring_report'
   | 'meeting_followup' | 'expense_reconciliation' | 'support_triage';
@@ -47,6 +49,7 @@ export type JobHypothesis = {
   /** Optional for stored v1 hypotheses; new proposals include all three evidence roles. */
   routine?: {
     policy: 'routine-cues-v2';
+    cadence?: ReportCadence;
     episodes: Array<Record<RoutineStage, { captureId: string; observedAt: number; cue: string }>>;
   };
   recurrence: {
@@ -60,6 +63,8 @@ export type JobHypothesis = {
   goalCandidates: GoalCandidate[];
   /** Optional for persisted older hypotheses. Current reads recompute this projection. */
   goalRelevance?: GoalRelevance;
+  /** Related user reports inform priority, never proof this proposal will be useful. */
+  feedbackLearning?: FeedbackLearning;
   feasibility: {
     status: 'unverified';
     requiredChecks: string[];
@@ -88,5 +93,6 @@ export type OpportunityAssessment = {
   schemaVersion: 1;
   assessedAt: number;
   proposals: JobHypothesis[];
-  abstention: null | 'no_job_evidence' | 'insufficient_recurrence' | 'already_proposed';
+  abstention: null | 'no_job_evidence' | 'insufficient_recurrence' | 'already_proposed' | 'feedback_cooldown';
+  feedbackPolicy?: { policy: 'proposal-feedback-v1'; suppressed: FeedbackSuppression[] };
 };
