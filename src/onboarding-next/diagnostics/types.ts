@@ -45,7 +45,7 @@ export interface Receipt {
   duplicateEvents: number;
   conflictingEvents: number;
   delivery: DeliveryState;
-  /** Queued events dropped for this receipt, not other tenants' counts. */
+  /** Queued or active deliveries dropped for this receipt, not other tenants' counts. */
   droppedDeliveries: number;
 }
 export interface Sink<Context> { record(context: Context, input: unknown): unknown }

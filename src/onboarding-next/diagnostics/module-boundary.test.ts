@@ -9,7 +9,7 @@ test('physically isolated diagnostics imports and constructs with no sibling mod
   const dir = mkdtempSync(join(tmpdir(), 'on-b-12-boundary-'));
   try {
     const module = join(dir, 'diagnostics'); mkdirSync(module);
-    for (const file of ['index.ts', 'types.ts', 'normalize.ts', 'observe.ts']) cpSync(join(import.meta.dir, file), join(module, file));
+    for (const file of ['index.ts', 'types.ts', 'normalize.ts', 'observe.ts', 'logger-abort.ts']) cpSync(join(import.meta.dir, file), join(module, file));
     for (const [i, present] of [false, true, false].entries()) {
       if (i === 2) rmSync(module, { recursive: true });
       const entry = join(dir, 'host.ts');
