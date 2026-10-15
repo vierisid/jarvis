@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "ON-U-07",
+  "kind": "view",
+  "entry": "./index.tsx",
+  "provides": ["activation-view.v1"],
+  "requires": ["activation-intent.v1", "build-job.v1"]
+}

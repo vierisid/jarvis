@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "ON-U-06",
+  "kind": "view",
+  "entry": "./index.tsx",
+  "provides": ["pebble-tour-view.v1"],
+  "requires": ["tour.v1"]
+}
