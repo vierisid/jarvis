@@ -307,8 +307,16 @@ describe("schedules, in Jarvis's configured time zone", () => {
     expect(runsOf(flowId).filter(r => r.status === "FAILED")).toHaveLength(1);
     expect(listFlowFires(flowId)).toEqual([expect.objectContaining({ label: "blocked", repeats: 2,
       scheduledFor: at("2026-10-07T09:02:00Z"), detail: expect.objectContaining({ reason: expect.stringContaining("Connection is missing") }) })]);
+    // A connection created again under the same name is not the one the flow
+    // was enabled against (Q-05): still refused, now with that reason, until a
+    // person enables the flow again.
     save();
     d.tick(flowId, "2026-10-07T09:03:10Z");
+    expect(queueStats().queued).toBe(0);
+    expect(listFlowFires(flowId)[0]).toMatchObject({ label: "blocked",
+      detail: expect.objectContaining({ code: "WORKFLOW_NOT_READY", reason: expect.stringContaining("was deleted and created again") }) });
+    updateFlowStatus(flowId, "ENABLED");
+    d.tick(flowId, "2026-10-07T09:04:10Z");
     expect(queueStats().queued).toBe(1);
     await d.stop();
   });
