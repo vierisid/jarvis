@@ -22,9 +22,13 @@ function project(report: PermissionsResult, name: PermissionName): NativeAccess 
   const rows = report.permissions.filter(row => row.name === name);
   if (rows.length !== 1) return unavailable('permission_unknown');
   const row = rows[0]!;
-  const ready = row.status === 'granted' || (report.platform === 'windows' && row.status === 'na');
+  // `na` means the OS has no per-app grant for this (Windows, Linux). The live
+  // Permissions screen shows nothing to do for such rows; only macOS `na` is
+  // treated as an unknown, unsupported answer.
+  const notRequired = row.status === 'na' && report.platform !== 'darwin';
+  const ready = row.status === 'granted' || notRequired;
   return {
-    schemaVersion: 1, supported: row.status !== 'na' || report.platform === 'windows', ready,
+    schemaVersion: 1, supported: row.status !== 'na' || notRequired, ready,
     reason: ready ? (row.status === 'na' ? 'not_required' : 'granted') : row.status,
     observationStarted: false, hostId: report.host.id,
     permissions: [{ name, status: row.status }],

@@ -47,6 +47,15 @@ describe('native access remains explicit and separate from setup', () => {
     expect(await f.provider.requestAction(true, screen)).toMatchObject({ ready: true, reason: 'not_required', observationStarted: false, permissions: [{ name: 'screen', status: 'na' }] });
     expect(f.calls).toHaveLength(1);
   });
+  test('Linux reports no OS grant required instead of an unrecoverable check-again', async () => {
+    const f = fixture('linux', 'na', 'none');
+    expect(await f.provider.requestAction(true, screen)).toMatchObject({ ready: true, supported: true, reason: 'not_required', recovery: 'none', observationStarted: false });
+    expect(f.calls.map(call => call.method)).toEqual(['system.permissions']);
+  });
+  test('macOS na is not treated as a grant', async () => {
+    const f = fixture('darwin', 'na', 'none');
+    expect(await f.provider.checkAction(true, screen)).toMatchObject({ ready: false, supported: false, reason: 'na' });
+  });
   test('a missing or duplicate permission row is not a grant', async () => {
     const f = fixture(); f.report.permissions = [];
     expect(await f.provider.requestAction(true, screen)).toMatchObject({ ready: false, reason: 'permission_unknown' });

@@ -58,7 +58,7 @@ to notifications. Existing action-level Authority checks still apply downstream.
 `createDaemonPermissions` reuses the existing sidecar resolution, RPC validation
 and timeout logic. It pins requests to the checked device. Opened System Settings
 is not a grant; macOS screen denial after opening its pane offers conditional
-restart advice. Windows `na` is reported as `not_required`, never `granted`.
+restart advice. Windows and Linux `na` are reported as `not_required`, never `granted`.
 No sidecar, offline, ambiguous, old and unreadable reports remain unavailable.
 
 Neither native method starts capture or enables Awareness. A usable grant is
