@@ -205,7 +205,7 @@ function InterviewPanel({ model, onDraftChange, onSubmit, onRetry, onSkip, onCon
                 : latest?.text || (model.phase === "connecting" ? "Getting ready to chat…" : "Your interview will appear here.")}
             </h1>
             <p className="on-interview__help">{terminal
-              ? model.phase === "skipped" ? "You can add context in Memory as you work."
+              ? model.phase === "skipped" ? "You can tell Jarvis more about your work anytime."
                 : model.farewell?.trim() || (confirmedCount ? "I have plenty to start with. Welcome to Jarvis." : "You’re ready to explore Jarvis.")
               : "A few written answers about what you’re building, what repeats, and where you want help."}</p>
             {terminal ? <>

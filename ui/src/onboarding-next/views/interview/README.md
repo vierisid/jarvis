@@ -97,7 +97,7 @@ illustrative; Return reply explicitly advances the fixture.
 6. Compare Light/Dark, 390/768/1440px, No motion and 200% preview zoom.
 
 DOM tests cover composition events, request guards, retry, navigation, focus,
-fact counts, streaming and synthetic scroll anchoring. Browser evidence covers
+fact counts, streaming and synthetic scroll anchoring. Manual browser checks cover
 actual keyboard/scroll/layout behavior. Native IME, assistive technology,
 WebView zoom and real provider durability are separate integration checks.
 

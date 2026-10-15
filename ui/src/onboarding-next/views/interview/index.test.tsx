@@ -122,6 +122,7 @@ describe("ON-U-04 written interview", () => {
     await render({ navigation: { revision: 2, kind: "error", message: "Skip not saved." } }); await click("Skip"); expect(navigation).toEqual(["skip", "skip"]);
     await render({ phase: "skipped", navigation: { revision: 3, kind: "ready" } });
     expect(host.querySelector("h1")?.textContent).toBe("Interview skipped."); expect(input()).toBeNull(); expect(host.textContent).not.toContain("Got it.");
+    expect(host.textContent).toContain("You can tell Jarvis more about your work anytime."); expect(host.textContent).not.toContain("add context in Memory");
     expect(document.activeElement).toBe(button("Continue"));
     await click("Continue"); expect(navigation.at(-1)).toBe("continue");
   });
