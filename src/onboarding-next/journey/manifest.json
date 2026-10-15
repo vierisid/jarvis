@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "ON-B-01",
+  "kind": "provider",
+  "entry": "./index.ts",
+  "provides": ["journey.v1"],
+  "requires": []
+}

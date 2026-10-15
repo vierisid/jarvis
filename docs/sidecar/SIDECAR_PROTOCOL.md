@@ -11,6 +11,35 @@ All events from all sidecars flow into a central **event scheduler** on the brai
 
 ## Message Format
 
+### Browser action outcome negotiation
+
+Sidecars implementing typed refusals for `browser_click`, `browser_type`, and
+`browser_hover` advertise `browser_action_outcomes` in registration `features`,
+including development builds. This is independent of `browser_elem_gen`: a
+snapshot binding alone does not say whether a normal reply represents a refusal.
+
+For an approved action, the brain requires this feature and sets
+`params.action_outcome = true` from trusted adapter code. The sidecar then emits
+an RPC error with `BROWSER_ACTION_REFUSED` for a known pre-action refusal, or
+`BROWSER_ACTION_UNCERTAIN` when input may already have changed. In particular,
+losing focus after a type operation's focus/clear script is uncertain even when
+no new text was inserted. The brain retains these as typed outcomes instead of
+committing a successful text result. Existing panic, timeout, and other RPC error
+classifications remain conservative about partial effects.
+
+The sidecar preserves its legacy text refusal format when the boolean opt-in is
+absent or false. An older sidecar can still provide browser reads; the new brain
+refuses approved element actions before dispatch if the feature is absent. No
+version-number comparison substitutes for feature negotiation, and there is no
+fallback to a local browser or another device. Rebuild/update the sidecar to
+enable the new contract; the minimum general connection version is unchanged.
+
+`browser_navigate` and `browser_snapshot` continue to use `page_identity: true`.
+Only a structured reply with both `page_url` and a nonempty, bounded `loader_id`
+provides evidence of the observed document. A page's text, a requested URL, or a
+legacy string reply cannot supply that evidence. This observation does not prove
+that an intended business operation happened. See [UI outcome verification](../UI_OUTCOME_VERIFICATION.md).
+
 All messages are JSON with a common envelope:
 
 ### Brain → Sidecar: RPC Request
