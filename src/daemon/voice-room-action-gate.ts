@@ -137,6 +137,15 @@ export type RoomActionAuditReason =
   | 'paused' | 'killed' | 'expired' | 'disconnected' | 'shutdown' | 'failed' | 'not_a_room_action';
 
 /**
+ * Whether a room action the room answered for ran, for its audit row: done,
+ * or under way when the wait ran out (#1015). Held for a card (#1016),
+ * declined or unanswered is not.
+ */
+export function roomActionExecuted(outcome: RoomActionOutcome): boolean {
+  return outcome === 'accepted' || outcome === 'started';
+}
+
+/**
  * The audit row for a decision about a voice room action (#1009), or null for
  * a view action, which changes only a screen. Realtime tool calls write
  * `channel: 'voice'` rows; room actions reach `make dev`, the user profile
@@ -149,9 +158,11 @@ export type RoomActionAuditReason =
  * action, the origin, every category and the reason, e.g.
  * `room_action(settings/replay_onboarding; via classifier; delete_data,
  * modify_settings; held)`. `executed` is true only when the room said it ran
- * the action; the reason says whether a false one was declined, unreached,
- * or unanswered, which may still have run. `approval_id` is the hold's id,
- * linking a hold to what became of it.
+ * the action (roomActionExecuted): it finished it, or it was still working
+ * on it when the wait ran out (reason `started`, #1015, whose end the row
+ * cannot know). The reason says whether a false one was declined, held for
+ * a card (`pending`, #1016), unreached, or unanswered, which may still have
+ * run. `approval_id` is the hold's id, linking a hold to what became of it.
  *
  * An authority grant or revoke is not a room action and has no categories,
  * but a voice path asking for one is what #969 refuses by name, so its

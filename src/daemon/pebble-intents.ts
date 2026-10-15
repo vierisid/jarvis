@@ -283,6 +283,11 @@ export function tabSwitchReply(title: string, tabRaw: string, outcome: RoomActio
       return `Switched ${title} to ${tabRaw}.`;
     case 'rejected':
       return `${title} didn't switch to ${tabRaw}.`;
+    // No room holds a tab switch for approval (#1016) or answers one late
+    // (#1015), but an answer that says so is still not a switch.
+    case 'pending':
+    case 'started':
+      return `I asked ${title} to switch to ${tabRaw}, but it didn't say it had.`;
     case 'no_answer':
       return `I asked ${title} to switch to ${tabRaw}, but it didn't answer.`;
     case 'unreached':

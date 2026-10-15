@@ -18,6 +18,7 @@ import { claimWorkflowEffect, getWorkflowEffect, saveWorkflowEffect, type Workfl
 import { canonicalJson, digest, resolveEffectContext, type WorkflowApprovalPending, type WorkflowEffectContext } from './effect-context';
 import { substituteAboveLevel } from '../../authority/tool-action-map';
 import { boundedApprovalLabel } from '../../authority/approval-delivery';
+import { maxWaitingSpawnCards } from '../../agents/lifecycle-gate';
 
 /**
  * A flow name on a card or an audit row: the same 512 the HTTP routes cap a
@@ -102,6 +103,38 @@ export function closeEffectApproval(approvals: ApprovalManager | undefined, effe
     approvals.markExecuted(effect.approvalId, boundedReceiptText(canonicalJson({ effectId: effect.id,
       status: effect.status, error: effect.error ?? null }), RECEIPT_MAX_CHARS), outcome);
   } catch (error) { console.error('[Workflow Authority] approval receipt failed:', error); }
+}
+
+/**
+ * Workflow cards waiting on a decision for an act that starts an agent, from
+ * runs of `flowId` (#1017). A delegation step (`workflow_delegate`), a started
+ * workflow (`workflow_start`) and a delegated agent's own spawn call all ask
+ * as `spawn_agent`; a stop is `terminate_agent` and is never counted.
+ *
+ * The flow is the source, not the run: a repeatedly triggered workflow is a
+ * new run each time, so a per-run count bounds nothing. Each flow has its own
+ * budget, separate from the deferred budget of each agent the lifecycle gate
+ * counts, so the bound is per source as #1012 put it, not one global number.
+ *
+ * Only cards of runs still able to act on them count. A run that was stopped
+ * or failed leaves its card pending (nothing closes it), and approving it
+ * resumes nothing, so it must not use up the budget of the runs that can. A
+ * card whose run no longer exists names no flow and is not counted either.
+ */
+const LIVE_RUN_STATUSES: ReadonlySet<string> = new Set(['QUEUED', 'RUNNING', 'PAUSED']);
+function waitingStartCards(approvals: ApprovalManager, flowId: string): number {
+  const runs = new Map<string, string | null>();
+  const flowOf = (agentId: string): string | null => {
+    if (!agentId.startsWith('workflow:')) return null;
+    const runId = agentId.slice('workflow:'.length);
+    if (!runs.has(runId)) {
+      const run = getFlowRun(runId);
+      runs.set(runId, run && LIVE_RUN_STATUSES.has(run.status) ? run.flowId : null);
+    }
+    return runs.get(runId)!;
+  };
+  return approvals.getPending().filter((r) => r.execution_mode === 'workflow' && r.action_category === 'spawn_agent'
+    && flowOf(r.agent_id) === flowId).length;
 }
 
 /** The durable identity of an effect: one per run, step, loop position and route. */
@@ -246,6 +279,22 @@ export class WorkflowEffectBoundary {
     if (record.approvalId || decision.requiresApproval) {
       if (!approvals) throw new Error('Workflow approval service unavailable; execution denied');
       if (!record.approvalId) {
+        // A start request waits within the same per-source budget a deferred
+        // one does (#1012, #1017): the running-task cap, per flow. Refused
+        // for good, as a policy refusal is, and audited as denied, so a flood
+        // shows in the trail rather than as cards nobody can get through.
+        // Synchronous from the count to the card below, so two runs cannot
+        // both see room for the last one.
+        if (decision.actionCategory === 'spawn_agent') {
+          const waiting = waitingStartCards(approvals, record.flowId);
+          const cap = maxWaitingSpawnCards();
+          if (waiting >= cap) {
+            record.status = 'blocked'; record.decision = 'denied';
+            record.error = `${waiting} requests to start an agent or a workflow are already waiting for your decision (the limit is ${cap}). Approve or deny those in the Authority room first.`;
+            record.reason = record.error; record.finishedAt = Date.now(); saveWorkflowEffect(record);
+            log(false); throw new Error(record.error);
+          }
+        }
         let request!: ApprovalRequest;
         getWorkflowDb().transaction(() => {
           // A gated tool's target carries the sentence its card should show

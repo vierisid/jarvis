@@ -22,7 +22,7 @@ import { Chip, Icon } from "../../ui";
 import { StatusChip, type Tone } from "../../ui/roomkit";
 import { RoomShell } from "../RoomShell";
 import { openRoom } from "../../router";
-import { useRoomActions } from "../useRoomActionBus";
+import { AWAITING_APPROVAL, useRoomActions } from "../useRoomActionBus";
 import { useRovingTabs } from "../useRovingTabs";
 import {
   useAgentsData,
@@ -133,15 +133,16 @@ export function AgentsRoomBody({ mode }: { mode: RoomBodyMode }) {
         const specialist = typeof args.specialist === "string" ? args.specialist : "";
         if (!specialist) return false;
         // Answered when POST /api/agents has (#991): carried out only when
-        // the agent actually started. A card raised for it (202), Pause or
-        // Kill (409), a refusal (403) or too many waiting (429) is not a
-        // spawn, so voice must not confirm one; the toast says which it was.
-        // We do NOT open the dialog: voice spawn is fully autonomous.
+        // the agent actually started. Pause or Kill (409), a refusal (403) or
+        // too many waiting (429) is not a spawn, so voice must not confirm
+        // one; the toast says which it was. A card raised for it (202) is
+        // not one either, but nor is it a refusal: it waits on the person
+        // (#1016). We do NOT open the dialog: voice spawn is fully autonomous.
         return spawnAndToast({
           specialist,
           task: typeof args.task === "string" ? args.task : "",
           context: typeof args.context === "string" ? args.context : "",
-        }).then((result) => result.started === true);
+        }).then((result) => result.started === true || (result.awaitingApproval === true ? AWAITING_APPROVAL : false));
       }
       default:
         return false;

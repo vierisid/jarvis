@@ -157,6 +157,8 @@ export interface SpawnResult {
    * says so only when one happened.
    */
   started?: boolean;
+  /** Not started, and not refused: a card is waiting on the person (202, #1016). */
+  awaitingApproval?: boolean;
 }
 
 export function useAgentsData() {
@@ -258,7 +260,7 @@ export function useAgentsData() {
       // 202: the spawn needs approval and a card is waiting for it. Nothing
       // was spawned, so say that rather than "Agent spawned." (#932).
       if (data.approval_required) {
-        return { ok: true, started: false, message: data.message ?? "Spawning this agent needs your approval. A card is waiting." };
+        return { ok: true, started: false, awaitingApproval: true, message: data.message ?? "Spawning this agent needs your approval. A card is waiting." };
       }
       // Refresh roster so the new agent shows up immediately.
       refresh();

@@ -7,7 +7,7 @@ import React, {
   useRef,
 } from "react";
 import type { RoomKey } from "../router";
-import { ROOM_ACTION_QUEUE_TTL_MS } from "../../../../src/daemon/room-action-results";
+import { ROOM_ACTION_QUEUE_TTL_MS, type RoomAnswer } from "../../../../src/daemon/room-action-results";
 import { isRoomAction } from "../../../../src/daemon/room-actions";
 
 /**
@@ -44,6 +44,15 @@ export interface RoomActionRequest {
    * socket it came on closed, and the daemon gave up on it then.
    */
   stillAsked?: () => boolean;
+  /**
+   * Told when the room's handler has taken the action and its answer waits
+   * on work still running (it returned a promise, #1015): a request to the
+   * daemon, which can outlast the daemon's wait (a dev server gets 30s to
+   * come up). The daemon then says the action is under way, not that it
+   * could not tell whether anything happened, so the realtime model does
+   * not ask again and run it twice. Called at most once, before the answer.
+   */
+  onStarted?: () => void;
 }
 
 /** Whether `req`'s caller has stopped waiting for it (#1010). */
@@ -54,8 +63,19 @@ function expired(req: RoomActionRequest): boolean {
   return true;
 }
 
-/** What a handler answers: true or a string ack when it carried the action out. */
-export type RoomActionAnswer = boolean | string | void;
+/**
+ * A handler's answer for an action it asked for that now waits on the person
+ * (#1016): a spawn the route held behind a card (202). Nothing has run, and
+ * nothing was refused; the daemon says a card is waiting.
+ */
+export const AWAITING_APPROVAL: unique symbol = Symbol("room-action-awaiting-approval");
+
+/**
+ * What a handler answers: true or a string ack when it carried the action
+ * out, AWAITING_APPROVAL when it is held for the person's answer, anything
+ * else when it did not carry it out.
+ */
+export type RoomActionAnswer = boolean | string | void | typeof AWAITING_APPROVAL;
 
 /**
  * Per-Room handler signature. Returns a string ack on success, false when
@@ -74,16 +94,20 @@ export type RoomActionHandler = (
 ) => RoomActionAnswer | PromiseLike<RoomActionAnswer>;
 
 /**
- * Told whether the room carried an action out (#933): true for `true` or a
- * string ack, false for anything else. Called once, when a handler's answer
- * is known (when its promise settles, for one that returns a promise); an
- * action that waits in the queue and expires is never reported, so a caller
- * waiting on this needs its own timeout.
+ * Told whether the room carried an action out (#933): `accepted` is true for
+ * `true` or a string ack, false for anything else, and `answer` says which no
+ * a false one is: `pending` for AWAITING_APPROVAL (#1016), `rejected` for the
+ * rest. Called once, when a handler's answer is known (when its promise
+ * settles, for one that returns a promise); an action that waits in the queue
+ * and expires is never reported, so a caller waiting on this needs its own
+ * timeout.
  */
-export type RoomActionResultCallback = (accepted: boolean) => void;
+export type RoomActionResultCallback = (accepted: boolean, answer: RoomAnswer) => void;
 
-const accepted = (result: RoomActionAnswer): boolean =>
-  result === true || typeof result === "string";
+function answerOf(result: RoomActionAnswer): RoomAnswer {
+  if (result === true || typeof result === "string") return "accepted";
+  return result === AWAITING_APPROVAL ? "pending" : "rejected";
+}
 
 function isThenable(value: unknown): value is PromiseLike<RoomActionAnswer> {
   return typeof (value as { then?: unknown } | null | undefined)?.then === "function";
@@ -96,15 +120,17 @@ function report(
   onResult: RoomActionResultCallback | undefined,
   label: string,
 ): void {
-  const settle = (answer: RoomActionAnswer) => {
-    onResult?.(accepted(answer));
-    if (answer === false) {
+  const settle = (result: RoomActionAnswer) => {
+    const answer = answerOf(result);
+    onResult?.(answer === "accepted", answer);
+    if (result === false) {
       console.warn(`[RoomActionBus] ${label} "${req.action}" rejected by "${req.room}"`);
     }
   };
   // Any thenable, not only a native Promise: a handler's answer is reported
   // when it settles, never read as "not carried out" because of its type.
   if (isThenable(result)) {
+    req.onStarted?.();
     result.then(settle, (err: unknown) => {
       console.warn(`[RoomActionBus] ${label} "${req.action}" failed in "${req.room}":`, err);
       settle(false);
@@ -195,7 +221,7 @@ export function RoomActionBusProvider({ children }: { children: React.ReactNode 
     // now rather than waiting on a room that may never mount (#969).
     if (!isRoomAction(req.room, req.action)) {
       console.warn(`[RoomActionBus] Refused "${req.action}" for room "${req.room}": not one of its actions`);
-      onResult?.(false);
+      onResult?.(false, "rejected");
       return;
     }
     // Not reported: the daemon no longer listens for this answer.

@@ -45,7 +45,7 @@ afterEach(async () => {
 });
 afterAll(() => GlobalRegistrator.unregister());
 
-type Dispatch = (req: { room: string; action: string; args: Record<string, unknown>; ts: number }, onResult?: (ok: boolean) => void) => void;
+type Dispatch = (req: { room: string; action: string; args: Record<string, unknown>; ts: number }, onResult?: import("./useRoomActionBus").RoomActionResultCallback) => void;
 
 async function mountWithBus(children: React.ReactNode, status = 200): Promise<Dispatch> {
   let dispatch!: Dispatch;
@@ -141,6 +141,6 @@ test("#965: a dashboard asked about a room action answers with the real room's v
       );
     });
   }
-  expect(answers).toEqual([{ resultId: "a", accepted: true }, { resultId: "b", accepted: false }]);
+  expect(answers).toEqual([{ resultId: "a", accepted: true, outcome: "accepted" }, { resultId: "b", accepted: false, outcome: "rejected" }]);
   expect(selected()).toBe("builder");
 });

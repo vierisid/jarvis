@@ -162,8 +162,11 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
 
   const activeProject = openTabs.find((p) => p.id === activeProjectId) ?? null;
 
+  // Opens `project`, starting its dev server when it is stopped; the result
+  // says whether that server is up, for a voice action to answer from
+  // (#1015).
   const openProject = useCallback(
-    async (project: Project) => {
+    async (project: Project): Promise<{ ok: boolean; message: string }> => {
       setWorkspacesUIState((prev) => ({
         ...prev,
         openTabIds: prev.openTabIds.includes(project.id)
@@ -182,7 +185,9 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
           // Refresh to pick up new devPort.
           data.refresh();
         }
+        return r;
       }
+      return { ok: true, message: "Opened." };
     },
     [data, mode],
   );
@@ -242,14 +247,20 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
       case "select_project": {
         const p = pickRoomActionTarget(data.projects, args, data.findByName);
         if (!p) return false;
-        openProject(p);
         // The IDE only renders when the room is expanded (the inline
         // RoomWindow always passes mode="inline"). Without this escalation
         // the ack fires but the user sees the list view forever — looks
         // like nothing happened. Mirror what a click on a project card
         // would do if it could only render fullscreen.
         if (mode === "inline") openRoom("workspaces");
-        return true;
+        // Answered once its dev server has started, or failed to (#1015):
+        // starting it is what makes this more than a view (ROOM_ACTIONS
+        // lists it as execute_command), so a server that did not start is
+        // not a yes, though the project is open.
+        return openProject(p).then((r) => {
+          if (!r.ok) setToast({ text: `${p.name} is open, but its dev server did not start: ${r.message}`, tone: "warn" });
+          return r.ok;
+        });
       }
       case "back_to_list":
         backToList();
@@ -259,34 +270,35 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
         if (!name) return false;
         // The default is the one the daemon showed on the card (#1008).
         const template = withRoomActionDefaults("workspaces", "create_project", args).template as string;
-        (async () => {
-          const r = await data.createProject({ name, template });
-          if (r.ok) {
-            openProject(r.project);
-            setToast({ text: `Created "${r.project.name}".`, tone: "ok" });
-          } else {
+        // Answered once it is created and opened, with whether it was
+        // created (#1015): the scaffold and `make install` are what it runs.
+        // A dev server that did not start once it was open is said on screen.
+        return data.createProject({ name, template }).then(async (r) => {
+          if (!r.ok) {
             setToast({ text: r.message, tone: "warn" });
+            return false;
           }
-        })();
-        return true;
+          setToast({ text: `Created "${r.project.name}".`, tone: "ok" });
+          const opened = await openProject(r.project);
+          if (!opened.ok) setToast({ text: `Created "${r.project.name}", but its dev server did not start: ${opened.message}`, tone: "warn" });
+          return true;
+        });
       }
       case "start_server": {
         const p = pickRoomActionTarget(data.projects, args, data.findByName, activeProject);
         if (!p) return false;
-        (async () => {
-          const r = await data.startServer(p.id);
+        return data.startServer(p.id).then((r) => {
           setToast({ text: r.ok ? `${p.name}: ${r.message}` : r.message, tone: r.ok ? "ok" : "warn" });
-        })();
-        return true;
+          return r.ok;
+        });
       }
       case "stop_server": {
         const p = pickRoomActionTarget(data.projects, args, data.findByName, activeProject);
         if (!p) return false;
-        (async () => {
-          const r = await data.stopServer(p.id);
+        return data.stopServer(p.id).then((r) => {
           setToast({ text: r.ok ? `${p.name}: ${r.message}` : r.message, tone: r.ok ? "ok" : "warn" });
-        })();
-        return true;
+          return r.ok;
+        });
       }
       default:
         return false;

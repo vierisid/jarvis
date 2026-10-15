@@ -15,8 +15,9 @@ import { RoomShell } from "../RoomShell";
 import { useRoomActions } from "../useRoomActionBus";
 import { useRovingTabs } from "../useRovingTabs";
 import { useLiveData } from "../../shell/LiveDataContext";
-import { useSettingsData } from "./useSettingsData";
+import { useSettingsData, type ActionResult } from "./useSettingsData";
 import {
+  reloadAfterOnboardingReset,
   resetOnboarding,
   type OnboardingResetScope,
 } from "../../onboarding/resetClient";
@@ -123,6 +124,16 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
   }, [lastApplied]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Voice room actions ──
+  // A side-effecting action is answered once its request has settled, with
+  // whether it worked (#1015): it used to answer yes as the request went out,
+  // so a failed save, or a heartbeat write the daemon has no endpoint for,
+  // was confirmed by voice.
+  const answerFrom = (work: Promise<ActionResult>): Promise<boolean> =>
+    work.then((r) => {
+      showToast(r.message, r.ok ? "ok" : "warn");
+      return r.ok;
+    });
+
   useRoomActions("settings", (action, args) => {
     switch (action) {
       case "switch_tab": {
@@ -184,91 +195,51 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
             : "";
         if (!ref || !ref.includes(":")) return false;
         setTab("llm");
-        (async () => {
-          const r = await data.setDefaultModel(ref);
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setDefaultModel(ref));
       }
       case "test_provider": {
         const name = String(args.provider ?? args.name ?? "").trim();
         if (!name) return false;
         setTab("llm");
-        (async () => {
-          const r = await data.testProvider(name);
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.testProvider(name));
       }
 
       // ── Channels ──
       case "enable_telegram": {
         setTab("channels");
-        (async () => {
-          const r = await data.setTelegram({ enabled: true });
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setTelegram({ enabled: true }));
       }
       case "disable_telegram": {
         setTab("channels");
-        (async () => {
-          const r = await data.setTelegram({ enabled: false });
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setTelegram({ enabled: false }));
       }
       case "enable_discord": {
         setTab("channels");
-        (async () => {
-          const r = await data.setDiscord({ enabled: true });
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setDiscord({ enabled: true }));
       }
       case "disable_discord": {
         setTab("channels");
-        (async () => {
-          const r = await data.setDiscord({ enabled: false });
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setDiscord({ enabled: false }));
       }
       case "set_stt_provider": {
         const provider = String(args.provider).toLowerCase();
         if (!["openai", "groq", "sarvam", "local", "usejarvis"].includes(provider)) return false;
         setTab("channels");
-        (async () => {
-          const r = await data.setSTTProvider(provider as any);
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setSTTProvider(provider as any));
       }
       case "enable_tts": {
         setTab("channels");
-        (async () => {
-          const r = await data.setTTS({ enabled: true });
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setTTS({ enabled: true }));
       }
       case "disable_tts": {
         setTab("channels");
-        (async () => {
-          const r = await data.setTTS({ enabled: false });
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setTTS({ enabled: false }));
       }
       case "set_tts_provider": {
         const provider = String(args.provider).toLowerCase();
         if (!["edge", "elevenlabs", "sarvam"].includes(provider)) return false;
         setTab("channels");
-        (async () => {
-          const r = await data.setTTS({ provider: provider as any });
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setTTS({ provider: provider as any }));
       }
       case "set_tts_voice": {
         // Not String(args.voice): a voice left out became the voice
@@ -276,11 +247,7 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
         const voice = typeof args.voice === "string" ? args.voice.trim() : "";
         if (!voice) return false;
         setTab("channels");
-        (async () => {
-          const r = await data.setTTS({ voice });
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setTTS({ voice }));
       }
 
       // ── General ──
@@ -288,28 +255,21 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
         const minutes = Number(args.minutes);
         if (!Number.isFinite(minutes) || minutes <= 0) return false;
         setTab("general");
-        (async () => {
-          const r = await data.setHeartbeatInterval(minutes);
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setHeartbeatInterval(minutes));
       }
       case "set_heartbeat_aggressiveness": {
         const level = String(args.level).toLowerCase();
         if (!["passive", "moderate", "aggressive"].includes(level)) return false;
         setTab("general");
-        (async () => {
-          const r = await data.setHeartbeatAggressiveness(level as any);
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        return answerFrom(data.setHeartbeatAggressiveness(level as any));
       }
       case "restart_daemon": {
-        (async () => {
-          const r = await data.restartDaemon();
-          showToast(r.message, r.ok ? "ok" : "warn");
-        })();
-        return true;
+        // Answered from the route, so a restart it refuses (no keepalive
+        // service installed) is a no (#1015). On Linux the route's
+        // `systemctl --no-block restart` can stop the daemon before this
+        // answer reaches it; nothing is heard then, where the old early yes
+        // could be.
+        return answerFrom(data.restartDaemon());
       }
 
       case "replay_onboarding": {
@@ -323,17 +283,19 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
         // voice action runs, from the same defaults (#1008).
         const scope = withRoomActionDefaults("settings", "replay_onboarding", args).scope as OnboardingResetScope;
         showToast("Replaying onboarding — reloading…", "ok");
-        (async () => {
-          try {
-            await resetOnboarding(scope);
-          } catch (err) {
-            showToast(
-              err instanceof Error ? err.message : "Reset failed",
-              "warn",
-            );
-          }
-        })();
-        return true;
+        // Answered before the page reloads (#1015): the reload closes the
+        // socket the answer goes back on. The answer is sent as this
+        // promise settles, a microtask, so the reload waits a task.
+        return resetOnboarding(scope, { reload: false }).then(
+          () => {
+            window.setTimeout(reloadAfterOnboardingReset, 0);
+            return true;
+          },
+          (err: unknown) => {
+            showToast(err instanceof Error ? err.message : "Reset failed", "warn");
+            return false;
+          },
+        );
       }
 
       default:
