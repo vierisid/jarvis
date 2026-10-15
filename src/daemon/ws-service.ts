@@ -18,10 +18,11 @@ import type { ContentItem } from '../vault/content-pipeline.ts';
 import type { STTProvider, TTSProvider } from '../comms/voice.ts';
 import { PROJECT_SITE_CHAT_SCOPE } from '../actions/tools/tool-scope.ts';
 import { approvalNeedsClick, type ApprovalRequest, type ApprovalManager } from '../authority/approval.ts';
-import type { DeferredExecutor } from '../authority/deferred-executor.ts';
-import type { EmergencyState } from '../authority/emergency.ts';
+import { isAgentStopCard, type DeferredExecutor } from '../authority/deferred-executor.ts';
+import { activeEmergencyState, type EmergencyState } from '../authority/emergency.ts';
 import { approvalIntentFields, approvalIntentParts, boundedApprovalLabel, formatApprovalIntent } from '../authority/approval-delivery.ts';
 import type { AuditTrail, AuthorityDecisionType, ResolutionChannel } from '../authority/audit.ts';
+import { heldApprovalMessage } from './approval-decision.ts';
 import { impactFromCategory, gateVoiceApprovalResolution } from '../roles/authority.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import { classifyVoiceIntent, type RecentTurn } from '../agents/voice-intent-classifier.ts';
@@ -2912,6 +2913,22 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         }
 
         if (decision === 'approve') {
+          // Pause holds: approving waits for Resume (Q-08).
+          const emergency = activeEmergencyState();
+          if (emergency !== 'normal' && !isAgentStopCard(latest)) {
+            // Nothing decided; audited like every other refused voice decision.
+            this.auditTrail?.log({
+              agent_id: latest.agent_id,
+              agent_name: latest.agent_name,
+              tool_name: latest.tool_name,
+              action_category: latest.action_category as ActionCategory,
+              authority_decision: 'approval_required',
+              approval_id: latest.id,
+              executed: false,
+              channel: 'voice',
+            });
+            return { kind: 'refused', message: heldApprovalMessage(emergency) };
+          }
           const approved = this.approvalManager.approve(latest.id, 'voice');
           if (!approved) return null;
           // Audit the voice resolution distinctly from the click path so

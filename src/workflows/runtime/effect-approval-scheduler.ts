@@ -3,9 +3,13 @@ import { getFlowRun } from '../db/repos/flow-run';
 import { getWaitpoint } from '../db/repos/waitpoint';
 import { stopTurnedOffRun, turnedOffReason } from '../db/repos/flow-turn-off';
 import { claimContinuation } from './continuation';
+import { emergencyHold } from './emergency-hold';
 
 /** Durable polling covers every approval surface and decisions made before park. */
 export function resumeResolvedWorkflowEffects(): number {
+  // A decision made while Jarvis is paused waits for Resume; it is not
+  // carried out under the pause, nor lost to it (Q-08).
+  if (emergencyHold()) return 0;
   const db = getWorkflowDb();
   const rows = db.query(`SELECT e.id, e.run_id, e.waitpoint_id FROM workflow_effect e
     JOIN approval_requests a ON a.id=e.approval_id

@@ -1,4 +1,6 @@
-import type { ComposerToolSpec } from '../../actions/tools/workflow-composer';
+import type { ComposerLibraryEntry, ComposerSpecialistRole, ComposerToolSpec } from '../../actions/tools/workflow-composer';
+import { discoverSpecialists } from '../../agents/role-discovery';
+import { CATALOG } from '../pieces-library/catalog';
 import type { ToolDefinition } from '../../actions/tools/registry';
 import type { ExecutionTarget } from '../../util/execution-environment';
 import type { PieceCatalogEntry } from '../runtime/piece-catalog';
@@ -21,6 +23,10 @@ export interface EvaluationEnvironment {
   external: PieceCatalogEntry[];
   tools: ComposerToolSpec[];
   targets: ExecutionTarget[];
+  /** Specialist roles production lists for delegation. Absent in the original envelopes. */
+  specialistRoles?: ComposerSpecialistRole[];
+  /** Installable pieces production offers; self-hosted daemons show them, hosted ones manage pieces themselves. */
+  library?: ComposerLibraryEntry[];
 }
 
 /** The same projection the daemon gives the composer (daemon/index.ts, composerToolRegistry.listDetailed). */
@@ -81,6 +87,47 @@ export const ENVIRONMENTS: Record<string, EvaluationEnvironment> = {
     external: EXTERNAL_FIXTURES, tools: FOUNDER_TOOLS, targets: FOUNDER_TARGETS },
 };
 
+/** The shipped specialist roles, mapped as the daemon maps them for the composer (daemon/index.ts). */
+function shippedRoles(): ComposerSpecialistRole[] {
+  return [...discoverSpecialists('roles/specialists').values()].map(r => ({ id: r.id, name: r.name, description: r.description }));
+}
+/** The pieces library, mapped as a self-hosted daemon offers it (daemon/index.ts composerLibrary). */
+function shippedLibrary(): ComposerLibraryEntry[] {
+  return CATALOG.map(e => ({ id: e.id, npmPackage: e.npmPackage, displayName: e.displayName, description: e.description }));
+}
+/**
+ * founder-v1 as production shows it to the composer: with the shipped
+ * specialist roles, and on a self-hosted daemon the pieces library (hosted
+ * installs manage pieces and show none). Built on first use, so loading this
+ * module reads no role files. Run a founder task set in one with --environment.
+ */
+const PRODUCTION_SHAPES: Record<string, () => EvaluationEnvironment> = {
+  'founder-v2': () => ({ ...ENVIRONMENTS['founder-v1']!, id: 'founder-v2', specialistRoles: shippedRoles(), library: shippedLibrary() }),
+  'founder-v2-hosted': () => ({ ...ENVIRONMENTS['founder-v1']!, id: 'founder-v2-hosted', specialistRoles: shippedRoles() }),
+};
+const built = new Map<string, EvaluationEnvironment>();
+
+/** Whether the composer sees what production shows it: at least the specialist roles every daemon lists. */
+export const productionShaped = (environment: EvaluationEnvironment) => (environment.specialistRoles?.length ?? 0) > 0;
+
+/** Whether `outer` offers everything `inner` does, so a task written for `inner` can run in `outer`. */
+export function extendsEnvironment(outer: EvaluationEnvironment, inner: EvaluationEnvironment): boolean {
+  const covers = (a: string[], b: string[]) => b.every(x => a.includes(x));
+  return covers(outer.jarvisPieces, inner.jarvisPieces) && covers(outer.external.map(e => e.name), inner.external.map(e => e.name))
+    && covers(outer.tools.map(t => t.name), inner.tools.map(t => t.name))
+    && covers(outer.targets.map(t => t.id + '\0' + t.name), inner.targets.map(t => t.id + '\0' + t.name));
+}
+
+/** What the composer is given besides the catalog, exactly as production passes it. */
+export function composerEnvironment(environment: EvaluationEnvironment) {
+  return {
+    ...(environment.tools.length ? { tools: environment.tools } : {}),
+    ...(environment.targets.length ? { executionTargets: environment.targets } : {}),
+    ...(environment.specialistRoles?.length ? { specialistRoles: environment.specialistRoles } : {}),
+    ...(environment.library?.length ? { library: environment.library } : {}),
+  };
+}
+
 /** A machine may be named by display name or sidecar id; both mean the same target. */
 export function canonicalTarget(target: unknown): unknown {
   for (const environment of Object.values(ENVIRONMENTS))
@@ -93,7 +140,10 @@ export function canonicalToolParams(params: Record<string, unknown>): Record<str
 }
 
 export function environmentFor(id: string | undefined): EvaluationEnvironment {
-  const environment = ENVIRONMENTS[id ?? 'w8'];
+  const key = id ?? 'w8';
+  const shape = PRODUCTION_SHAPES[key];
+  if (shape && !built.has(key)) built.set(key, shape());
+  const environment = ENVIRONMENTS[key] ?? built.get(key);
   if (!environment) throw new Error('Unknown evaluation environment ' + id);
   return environment;
 }

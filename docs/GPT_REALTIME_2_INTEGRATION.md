@@ -148,11 +148,15 @@ audio is skipped.
 
 `orchestrator.executeRealtimeToolCall` mirrors the text-path authority gate but
 **auto-approves**: a `requiresApproval` decision is executed so the audio loop is
-never blocked on a dashboard click. Still enforced:
+never blocked on a dashboard click. The spoken command is the authorization
+(decision #2, confirmed by the owner on 14 October 2026). Still enforced:
 
 - emergency state,
 - explicit hard denies,
-- the `blocked_categories` backstop.
+- the `blocked_categories` backstop,
+- a card that must be clicked (`confirm: 'always'`), which voice cannot start,
+- an approval a tainted session's profile asks for, which voice cannot give,
+- a primary agent to judge for: with none, nothing runs.
 
 Every realtime tool call is written to the audit trail tagged `channel: 'voice'`;
 an auto-approved call is logged as `approval_required` + `executed: true` so the

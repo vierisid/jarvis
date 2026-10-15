@@ -1,7 +1,8 @@
 import type { ContentBlock } from '../../llm/provider.ts';
 import type { ReviewedExecution } from './reviewed-call-scope.ts';
-import { checkpointExecution } from '../execution-scope.ts';
+import { checkpointExecution, withExecutionScope } from '../execution-scope.ts';
 import { ActionOutcomeError } from '../action-outcome.ts';
+import { activeEmergencyState } from '../../authority/emergency.ts';
 import { WorkflowCancellationError } from '../../workflows/runtime/cancellation-error.ts';
 import { observeToolExecution } from '../progress-context.ts';
 
@@ -181,6 +182,15 @@ export type ToolDefinition = {
  */
 export type ApprovalGuard = (() => boolean) & { readonly reviewed?: ReviewedExecution };
 
+/** Refuses at a tool's next dispatch checkpoint once Jarvis is stopped with Kill (Q-08). */
+function killFence(): void {
+  if (activeEmergencyState() !== 'killed') return;
+  throw new ActionOutcomeError({
+    status: 'unknown', code: 'emergency_kill', effect: 'may_have_occurred',
+    message: 'Jarvis was stopped with Kill, so this action was stopped partway. Part of it may already have happened.',
+  });
+}
+
 export class ToolRegistry {
   private tools: Map<string, ToolDefinition> = new Map();
   /** Default working directory for tools like run_command. Set by site builder context. */
@@ -227,7 +237,11 @@ export class ToolRegistry {
     checkpointExecution();
 
     try {
-      return await observeToolExecution(name, () => tool.execute(params));
+      // Kill stops tools in flight (Q-08): every dispatch checkpoint a tool
+      // reaches while running (a sidecar call, a channel send, a TTS chunk)
+      // refuses once Jarvis is stopped. Pause does not: work in flight
+      // finishes, and nothing new starts.
+      return await observeToolExecution(name, () => withExecutionScope(killFence, () => tool.execute(params)));
     } catch (error) {
       if (error instanceof ActionOutcomeError) throw error;
       // #630. The fence above is NOT the only place cancellation is raised, and
