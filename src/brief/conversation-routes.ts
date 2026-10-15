@@ -3,9 +3,6 @@ import type { BriefConversationProvider } from './conversations.ts';
 import { ConversationRequestError, type ConversationRepository } from '../vault/conversation-lifecycle.ts';
 
 type RequestWithId = Request & { params: { id: string } };
-function response(body: unknown, status = 200): Response {
-  return Response.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
-}
 function keys(value: unknown, allowed: string[]): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !allowed.includes(key))) {
     throw new ConversationRequestError('Invalid request fields');
@@ -43,7 +40,12 @@ function page(req: Request, history = false) {
 }
 
 /** Mounted under the existing panel-session gate. Closing touches only tab metadata. */
-export function createConversationRoutes(capabilities: BriefCapabilities, provider?: BriefConversationProvider) {
+export function createConversationRoutes(capabilities: BriefCapabilities, json: (body: unknown, status?: number) => Response, provider?: BriefConversationProvider) {
+  const response = (body: unknown, status = 200): Response => {
+    const result = json(body, status);
+    result.headers.set('Cache-Control', 'no-store');
+    return result;
+  };
   const gated = <R extends Request>(operation: (req: R, repo: ConversationRepository) => Response | Promise<Response>) => async (req: R) => {
     if (!provider || !capabilities.hasProvider('conversations', provider)) return response({ state: 'unsupported' }, 501);
     const capability = capabilities.snapshot().capabilities.conversations;
