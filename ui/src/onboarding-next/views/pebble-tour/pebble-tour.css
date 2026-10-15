@@ -1,0 +1,46 @@
+.on-pebble-tour {
+  --on-pt-canvas: #fafbfc; --on-pt-surface: #fff; --on-pt-ink: #13161a;
+  --on-pt-muted: #535b63; --on-pt-focus: #2d78ff; --on-pt-edge: #e2e7ec;
+  position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0;
+  height: 100%; container: on-pebble-tour / size; background: var(--on-pt-canvas); color: var(--on-pt-ink);
+  font-family: "Familjen Grotesk", sans-serif; font-size: 16px; line-height: 1.5;
+}
+.on-pebble-tour[data-theme="dark"] {
+  --on-pt-canvas: #121417; --on-pt-surface: #1a1d22; --on-pt-ink: #eef1f4;
+  --on-pt-muted: #a4abb3; --on-pt-focus: #6fa4ff; --on-pt-edge: #272c33;
+}
+.on-pebble-tour * { box-sizing: border-box; }
+.on-pebble-tour__stage { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; }
+.on-pebble-tour__unavailable { margin: auto; padding: 24px; color: var(--on-pt-muted); }
+.on-pebble-tour__dock { position: absolute; left: 36px; bottom: 36px; width: min(648px, calc(100% - 144px)); z-index: 5; }
+.on-pebble-tour[data-open="true"] .on-pebble-tour__dock { width: min(648px, calc(100% - 536px)); }
+.on-pebble-tour__card {
+  background: var(--on-pt-surface); border: 2px solid var(--on-pt-focus); border-radius: 18px 0 18px 18px;
+  padding: 24px; box-shadow: 0 10px 30px #2635451a; color: var(--on-pt-ink);
+}
+.on-pebble-tour[data-theme="dark"] .on-pebble-tour__card { box-shadow: 0 10px 30px #080b1047; }
+.on-pebble-tour__eyebrow { margin: 0 0 18px; font-family: "Spline Sans Mono", monospace; font-size: 12px; line-height: 1.5; text-transform: uppercase; color: var(--on-pt-muted); }
+.on-pebble-tour__title { margin: 0 0 12px; font-size: 24px; line-height: 1.25; font-weight: 600; letter-spacing: -.35px; overflow-wrap: anywhere; }
+.on-pebble-tour__body { margin: 0; color: var(--on-pt-muted); }
+.on-pebble-tour__notice { min-height: 26px; padding-top: 4px; font-size: 13px; color: var(--on-pt-muted); }
+.on-pebble-tour__actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.on-pebble-tour__actions button { min-height: 44px; border: 0; border-radius: 10px 0 10px 10px; padding: 10px 14px; background: transparent; color: var(--on-pt-muted); font: inherit; font-size: 14px; cursor: pointer; }
+.on-pebble-tour__actions button:hover { background: var(--on-pt-canvas); color: var(--on-pt-ink); }
+.on-pebble-tour__actions .on-pebble-tour__primary { margin-left: auto; padding: 12px 24px; background: var(--on-pt-ink); color: var(--on-pt-surface); font-weight: 600; }
+.on-pebble-tour__actions .on-pebble-tour__primary:hover { background: var(--on-pt-ink); color: var(--on-pt-surface); opacity: .9; }
+.on-pebble-tour button[aria-disabled="true"] { opacity: .5; cursor: default; }
+.on-pebble-tour :focus-visible { outline: 2px solid var(--on-pt-focus); outline-offset: 4px; }
+/* Reserve a real row below the shell when its single-pane layout would otherwise
+   place the tutorial over the conversation. No scaled text or hidden actions. */
+@container on-pebble-tour (max-width: 1100px) or (max-height: 720px) {
+  .on-pebble-tour[data-open] .on-pebble-tour__dock { position: relative; left: auto; bottom: auto; width: auto; margin: 0 18px 18px; flex: none; max-height: 55%; overflow: auto; }
+  .on-pebble-tour__card { padding: 20px; }
+  .on-pebble-tour__title { font-size: 22px; }
+  .on-pebble-tour__eyebrow { margin-bottom: 12px; }
+}
+@container on-pebble-tour (max-width: 430px) {
+  .on-pebble-tour[data-open] .on-pebble-tour__dock { margin: 0 10px 10px; }
+  .on-pebble-tour__card { padding: 16px; }
+  .on-pebble-tour__actions { gap: 4px; }
+  .on-pebble-tour__actions .on-pebble-tour__primary { padding: 12px; flex: 1 1 180px; }
+}
