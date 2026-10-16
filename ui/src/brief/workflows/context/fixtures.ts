@@ -67,10 +67,10 @@ export function makeContextFixture(runs = makeRunsFixture()) {
         ],
         memory: [
           entry(
-            recorded ? "fact-alex-meeting" : "step-meeting-notes",
+            recorded ? "fact-northwind-meeting" : "step-meeting-notes",
             "Meeting notes",
             recorded
-              ? "Alex asked to confirm the pilot date before the next call."
+              ? "Northwind asked to confirm the pilot date before the next call."
               : "Read the notes from the meeting that triggers the workflow.",
             recorded ? "fact" : "step",
           ),
@@ -90,13 +90,13 @@ export function makeContextFixture(runs = makeRunsFixture()) {
           entry(
             "connection-calendar",
             "Google Calendar",
-            "Vieri’s calendar",
+            "Alex Morgan's calendar",
             "connection",
           ),
           entry(
             "connection-gmail",
             "Gmail",
-            "vieri@example.test",
+            "alex.morgan@northwind.example",
             "connection",
           ),
         ],
@@ -146,7 +146,7 @@ export function makeContextFixture(runs = makeRunsFixture()) {
             18,
           );
         rows.bindings[1]!.value =
-          "very.long.founder.account.for.design.partners.and.investor.updates@example.test";
+          "very.long.founder.account.for.design.partners.and.investor.updates@northwind.example";
         rows.target[0]!.source!.id =
           "device-" + "long-source-identifier-".repeat(8);
       }
