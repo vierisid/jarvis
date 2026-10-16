@@ -580,3 +580,38 @@ Nothing is enabled, deleted or run on an account.
 `?brief=preview&specimen=opportunities#/_brief_preview` opens the room over fixture proposals (pending
 or blocked registration, lost response, refusal, long content, missing preview, many proposals). Its
 actions only change local fixture state.
+
+## Needs you decisions
+
+- `decisions/` is the D-23 Needs you room: a selector list beside one document paper where reading,
+  editing and acting happen in place. It reuses Today's `DecisionPaper`, stable decision ID, action
+  labels and revision; only `document.attention` is highlighted. Document text is untrusted and is
+  rendered as plain text only.
+- `DecisionsController` owns one authenticated scope and survives room, theme, sidebar and Pebble
+  changes; the host calls `retire()` on logout or scope change. Actions need a fresh `ready` read whose
+  revision and `actions` match the rendered item. One request is in flight at a time.
+- The room handles F-14 permission documents only (`approveResult: "permission_granted"`). F-12 intent
+  and effect-recovery actions (`accept_intent`, `reject_intent`) stay with their canonical owners.
+- Each action captures decision ID, revision, action and one request ID before dispatch. Nothing
+  settles locally without a matching receipt: same request and decision, the expected outcome, an
+  approval ID, result revision and generation, and `executed: false`. Permission granted says
+  sending is not confirmed; Keep draft keeps the row with Reopen. A lost response stays pinned and
+  locked; Check result reads the ORIGINAL request receipt and never re-sends. A refusal needs a fresh
+  read before retry.
+- Editing buffers a complete typed email or calendar document. Save does not approve: it yields a new
+  revision and approval to review. A read that changes or removes the decision keeps the unsaved
+  text and Cancel, and disables Save.
+- Wiring (not done here): aggregate every F-12 `GET /api/brief/decisions` page and restart on
+  `queue_changed`; join each item with F-14 `GET /api/brief/decisions/:id/document` only when the
+  revisions match. POST the F-14 document endpoint with `{ requestId, revision, action }` plus
+  `document` for save only (`decisionId` is the path, not a body key). Map recovery to
+  `GET .../document?requestId=<original>`. Persist requests before dispatch and reconcile them after
+  reload; network errors, 5xx and timeouts are unknown, never refusals. Today and Needs you must share
+  one decision owner before activation.
+- Opt-in `decisionsRegistration(useBinding)`, not in the production registry. `decisionsAvailable`
+  requires a non-empty scope, a `source` matching the shell mode, a controller bound to the same scope
+  and, in live mode, the `decisions` capability.
+- `?brief=preview&specimen=decisions#/_brief_preview` opens it over in-memory fixtures; the example
+  menu covers ready, long, many, calendar, read-only, stale, deferred, uncertain, refused, empty and
+  unavailable.
+- `decisions/figma-reference.json` records the UI-27 source and bounded deviations.
