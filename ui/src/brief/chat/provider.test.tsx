@@ -205,3 +205,43 @@ for (const change of ['disconnect', 'mode change', 'unmount'] as const) {
     expect(sockets.filter(socket => socket.readyState === 1)).toHaveLength(1);
   });
 }
+
+// #1075: mounting the provider in place of the dashboard hook must hide none of
+// its outputs. Only the chat fields are re-derived for a scoped conversation.
+const REDERIVED = ['messages', 'isConnected', 'sendMessage', 'cancelResponse', 'isResponding'];
+test('the provider passes through every dashboard socket output it does not re-derive', async () => {
+  await React.act(async () => root.render(<ConnectionProbe />));
+  const socketKeys = Object.keys(socketState).filter(key => !REDERIVED.includes(key));
+  // Not vacuous: the fields the issue names are among them.
+  expect(socketKeys).toEqual(expect.arrayContaining(['approvals', 'clarifiers', 'repeatBacks', 'roomActionRequest']));
+  await React.act(async () => root.render(<div />));
+  const { client } = clientFixture(); await render(client);
+  for (const key of socketKeys) expect(observed).toHaveProperty(key);
+});
+
+test('a scoped conversation still shows approvals, clarifiers, repeat-backs and room actions live, without a re-fetch', async () => {
+  const { client } = clientFixture(); await render(client); const socket = sockets[0]!; await open(socket);
+  expect(observed.status.mode).toBe('scoped');
+  const fetched = requests.filter(path => path.startsWith('/api/authority/approvals')).length;
+  // The one re-fetch is the socket open's; the count below would see another.
+  expect(fetched).toBe(1);
+  const request = { id: 'brief-approval-1', agent_name: 'PA', tool_name: 'run_command', action_category: 'execute_command',
+    urgency: 'normal', reason: 'execute_command requires user approval' };
+  await React.act(async () => {
+    socket.receive('brief_chat_event', { conversationId: 'chat-a', turnId: 't', requestId: 'r', eventId: 'e', sequence: 1,
+      payload: { kind: 'approval', approvalId: request.id, status: 'pending' } });
+    socket.receive('notification', { source: 'approval_request', request, shortId: 'brief-ap', impact: 'write', intent: 'Run make deploy' });
+    socket.receive('notification', { source: 'clarifier_request', id: 'clarify-1', transcript: 'open the thing', intent: { verb: 'show', object: { query: 'thing' } } });
+    socket.receive('notification', { source: 'repeat_back_request', id: 'repeat-1', transcript: 'delete the draft' });
+    socket.receive('notification', { source: 'room_action', room: 'tasks', action: 'create_task', args: { title: 'x' }, resultId: 'act-1', resultFrom: 'dashboard' });
+  });
+  expect(observed.approvals.map(approval => approval.id)).toEqual([request.id]);
+  expect(observed.clarifiers.map(clarifier => clarifier.id)).toEqual(['clarify-1']);
+  expect(observed.repeatBacks.map(repeat => repeat.id)).toEqual(['repeat-1']);
+  expect(observed.roomActionRequest?.resultId).toBe('act-1');
+  // The card settles live too, and nothing went back to the REST list for it
+  // (a regression guard: no client code re-fetches on a Brief approval event).
+  await React.act(async () => socket.receive('notification', { source: 'approval_update', request: { ...request, status: 'approved' } }));
+  expect(observed.approvals).toEqual([]);
+  expect(requests.filter(path => path.startsWith('/api/authority/approvals')).length).toBe(fetched);
+});
