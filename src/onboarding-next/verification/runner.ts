@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { containedFile, discover, ROOT } from './discovery';
 import { requiredCases } from './matrix';
 import { artifact, evidenceIndex, same, sourceCandidate, verifyReport } from './report';
@@ -20,7 +20,7 @@ export function suiteVerdict(result: { code: number; timedOut: boolean; output: 
 }
 export async function run(directory: string, options: { root?: string; only?: string; frontend?: string; sidecar?: string } = {}) {
   const root = options.root ?? ROOT, output = resolve(directory), inside = relative(root, output);
-  if (!inside.startsWith('..') && !isAbsolute(inside)) throw Error('Evidence must be outside the source checkout.');
+  if (!(inside === '..' || inside.startsWith('..' + sep) || isAbsolute(inside))) throw Error('Evidence must be outside the source checkout.');
   const required = requiredCases();
   if (options.only && !required.some(c => c.id === options.only)) throw Error('Unknown case');
   await mkdir(output); // Never overwrite or reuse prior evidence/databases.

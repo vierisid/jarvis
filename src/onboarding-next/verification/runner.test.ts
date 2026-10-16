@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { containedFile, discover } from './discovery';
 import { PROVIDERS, requiredCases } from './matrix';
-import { child, suiteVerdict } from './runner';
+import { child, run, suiteVerdict } from './runner';
 
 test('empty/partial discovery retains the complete required denominator and rejects substituted manifests', async () => {
   const root=await mkdtemp(resolve(tmpdir(),'b13-discovery-'));
@@ -29,3 +29,8 @@ test('owner-suite exit zero does not promote skipped or empty suites',()=>{
   expect(suiteVerdict({ code:0,timedOut:true,output:'3 pass\n0 fail\n' }).outcome).toBe('failed');
 });
 test('isolated subprocess timeout is bounded',async()=>{ const r=await child([process.execPath,'-e','setInterval(() => {}, 1000)'],process.cwd(),50); expect(r.timedOut).toBe(true); expect(r.code).not.toBe(0); });
+test('a directory name beginning with two dots is still inside the checkout',async()=>{
+  const root=await mkdtemp(resolve(tmpdir(),'b13-output-'));
+  try { for(const path of ['..evidence','nested/output','.']) await expect(run(resolve(root,path),{root})).rejects.toThrow('outside the source checkout'); }
+  finally { await rm(root,{recursive:true,force:true}); }
+});
