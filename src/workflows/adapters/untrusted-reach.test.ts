@@ -223,6 +223,12 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  *                                     names, readiness messages and a dry
  *                                     sample's bounded error, for a person
  *                                     through the Brief provider.
+ *   awareness/prepared-opportunities.ts BENIGN. Holds the exact prepared version
+ *                                     only to pin its graph and expose identity/state.
+ *                                     Captured sample data never reaches its read model
+ *                                     or model requests; only the saved job specification
+ *                                     reaches composition. A regression injects hostile
+ *                                     sample fields and checks reads and retries.
  *   brief/contracts.ts                BENIGN. Imports only workflow status
  *                                     TYPES for wire references. It fetches no
  *                                     run/version and exports no captured step
@@ -291,6 +297,7 @@ const REVIEWED_STEP_OUTPUT_READERS = [
   'awareness/prepared-dry-run.ts',
   'awareness/prepared-qualification.ts',
   'awareness/suggestion-composer.ts',
+  'awareness/prepared-opportunities.ts',
   'brief/adapters.ts',
   'brief/composition.ts',
   'brief/contracts.ts',
