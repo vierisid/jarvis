@@ -84,13 +84,13 @@ export function makeRunsFixture() {
               {
                 id: "notes",
                 title: "Read meeting notes",
-                description: "Latest conversation with Alex",
+                description: "Latest conversation with the Northwind team",
                 status: "succeeded",
                 fields: [
                   {
                     label: "Output",
                     value:
-                      "Alex wants to begin a pilot. Agree the scope and next date.",
+                      "Northwind wants to begin a pilot. Agree the scope and next date.",
                   },
                 ],
               },

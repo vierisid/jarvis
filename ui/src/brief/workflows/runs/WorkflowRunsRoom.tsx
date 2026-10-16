@@ -260,6 +260,16 @@ function BoundRuns({
     </section>
   );
 }
+// An unknown effect may have reached its provider. Say so rather than "failed"
+// or "not sent": recovery is read-only here and nothing is re-sent (Q-07).
+const EFFECT_LABEL: Record<RunDetail["effects"][number]["status"], string> = {
+  pending: "Not started",
+  dispatching: "In progress",
+  succeeded: "Completed",
+  failed: "Failed",
+  blocked: "Blocked",
+  unknown: "Uncertain, may have taken effect",
+};
 function date(value: number | null) {
   return value === null
     ? "Not started"
@@ -350,9 +360,7 @@ function RunDocument({ run }: { run: RunDetail }) {
             <div key={effect.id} className="brief-run-receipt">
               <div>
                 <strong>{effect.label}</strong>
-                <span>
-                  {effect.status === "unknown" ? "Uncertain" : effect.status}
-                </span>
+                <span>{EFFECT_LABEL[effect.status]}</span>
               </div>
               <p>{effect.description}</p>
               <small>Receipt {effect.id}</small>
@@ -367,7 +375,7 @@ function RunDocument({ run }: { run: RunDetail }) {
             <div key={wait.id} className="brief-run-receipt">
               <div>
                 <strong>{wait.label}</strong>
-                <span>{wait.status}</span>
+                <span>{wait.status === "waiting" ? "Waiting" : "Resolved"}</span>
               </div>
               <p>{wait.stepName}</p>
               <small>{wait.id}</small>
