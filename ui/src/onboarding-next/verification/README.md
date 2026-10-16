@@ -21,8 +21,11 @@ Open http://127.0.0.1:4431/. `ON_U_11_PORT` overrides the port. Build output liv
 a unique temporary directory, printed with the exact revision/tree, dirty state
 and discovered inventory. Restart the server and reload after source changes.
 A dirty checkout is useful for development but cannot produce release evidence.
-The loopback server allows GET/HEAD only, has no API and denies network connections
-through CSP. No credentials, database or live user data are used.
+The loopback server allows GET/HEAD only, has no API and denies fetch/socket
+connections through CSP. It loads the same Google Fonts stylesheet as `ui/index.html`
+(Familjen Grotesk and Spline Sans Mono); only those stylesheet/font hosts are allowed.
+Offline font fallback must be noted and cannot establish visual-reference approval.
+No credentials, database or live user data are used.
 
 Discovery validates the pinned six-key manifests, relative entries, versions,
 requirements and regular contained files before generating imports **in memory**.

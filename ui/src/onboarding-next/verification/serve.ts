@@ -21,6 +21,6 @@ if (!process.argv.includes('--build')) {
     if (name.startsWith('/api/')) return new Response('No live APIs', { status: 404 });
     const file = resolve(output, '.' + (name === '/' ? '/index.html' : name));
     if (!file.startsWith(output + '/') || !await Bun.file(file).exists()) return new Response('Not found', { status: 404 });
-    return new Response(Bun.file(file), { headers: { 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'none'" } });
+    return new Response(Bun.file(file), { headers: { 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'none'; object-src 'none'; base-uri 'none'" } });
   } }); console.log(`ON-U-11 fixture: ${server.url}`);
 }
