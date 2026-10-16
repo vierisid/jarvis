@@ -88,6 +88,26 @@ test("blank writing is inactive, Enter sends once, and Shift+Enter stays a newli
   expect(input().value).toBe("A real question");
 });
 
+test("F-04 binding projects the active conversation's F-05 attachment readiness", () => {
+  const owner: ComposerOwner = { status: { mode: "scoped", connected: true, pending: 0, pendingSends: [] },
+    state: { workspaceId: "ws", activeId: "a", order: ["a", "b"], conversations: {
+      a: { draft: "", error: null, turns: {}, attachments: [{ state: "ready" }, { state: "uploading" }] },
+      b: { draft: "", error: null, turns: {}, attachments: [{ state: "ready" }] } } },
+    client: { store: { setDraft: () => {}, setError: () => {} }, send: () => {}, cancel: () => {} } };
+  expect(bindConversationComposer(owner, "live").attachments).toEqual({ count: 2, ready: false });
+  owner.state.activeId = "b"; expect(bindConversationComposer(owner, "live").attachments).toEqual({ count: 1, ready: true });
+  owner.state.conversations.b!.attachments = undefined; expect(bindConversationComposer(owner, "live").attachments).toEqual({ count: 0, ready: true });
+});
+
+test("ready attachments send without text; unready attachments hold the send", async () => {
+  binding = { ...binding, draft: "", attachments: { count: 1, ready: true } }; await render();
+  expect(send().getAttribute("aria-disabled")).toBe("false"); await click(send()); expect(calls).toEqual(["send:"]);
+  calls.length = 0;
+  binding = { ...binding, draft: "With a file", attachments: { count: 2, ready: false } }; await render();
+  expect(send().getAttribute("aria-disabled")).toBe("true"); await key(); expect(calls).toEqual([]);
+  expect(status()).toBe("Attachments must finish before sending.");
+});
+
 test("IME composition, native composing and keyCode 229 cannot send prematurely", async () => {
   binding.draft = "你好"; await render();
   await composition("compositionstart"); await key(); await click(send()); await click(suggestion()); expect(calls).toEqual([]);
