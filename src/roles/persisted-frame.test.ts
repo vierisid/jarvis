@@ -295,6 +295,11 @@ describe('#609: the call sites that persist a receipt', () => {
       'workflows/adapters/m7-agent-delegator.ts',
       // approval_requests.execution_result, written by the effect boundary
       'workflows/runtime/effect-boundary.ts',
+      // engine completion approval receipt and explicit recovery inspection (Q-07)
+      'workflows/runtime/piece-completion.ts',
+      'workflows/runtime/recovery.ts',
+      // an ungoverned workflow step's audit row: its step name and piece (Q-08)
+      'workflows/runtime/service-backends.ts',
     ]);
   });
 
@@ -317,6 +322,7 @@ describe('#609: the call sites that persist a receipt', () => {
       'authority/approval.ts',
       'authority/deferred-executor.ts',
       'workflows/runtime/effect-boundary.ts',
+      'workflows/runtime/piece-completion.ts',
     ]);
   });
 });

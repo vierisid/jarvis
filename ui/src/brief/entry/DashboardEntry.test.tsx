@@ -1,6 +1,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import type { BriefRoomRegistry, BriefRoomProps, BriefShellPort } from "../contracts";
+import type { BriefNavigationBinding } from "../shell/navigation/model";
+import { UNKNOWN_NAVIGATION } from "../shell/navigation/model";
 import { getV2Route, ROOM_KEYS } from "../../v2/router";
 
 GlobalRegistrator.register({ url: "http://localhost:4381/" });
@@ -105,12 +107,66 @@ test("style specimen is an isolated, scoped preview with working theme and text 
   expect(connections).toBe(1);
 });
 
+test("Today review and illustrative decision actions never call live providers", async () => {
+  await mount("http://localhost:4381/?brief=preview&specimen=today#/_brief_preview");
+  expect(host.querySelector(".brief-today-decision")).not.toBeNull();
+  await click("Review follow-up");
+  const approve = host.querySelector<HTMLButtonElement>(".brief-today-review-actions button")!;
+  await React.act(async () => approve.click());
+  expect(host.textContent).toContain("Waiting for confirmation");
+  expect(host.querySelector(".brief-today-decision")?.getAttribute("data-decision-id")).toBe("fixture-decision-follow-up");
+  await React.act(async () => { await new Promise(resolve => setTimeout(resolve, 700)); });
+  expect(host.querySelector(".brief-today-decision")?.getAttribute("data-transition")).toBe("confirmed");
+  await React.act(async () => { await new Promise(resolve => setTimeout(resolve, 400)); });
+  await React.act(async () => { await new Promise(resolve => setTimeout(resolve, 240)); });
+  expect(host.querySelector(".brief-today-decision")?.getAttribute("data-decision-id")).toBe("fixture-decision-investor");
+  await click("Reset example");
+  expect(host.textContent).toContain("No email or workflow executes");
+  expect(network).toEqual([]); expect(connections).toBe(0); expect(gates).toBe(0);
+  await route("http://localhost:4381/#/");
+  expect(connections).toBe(1); expect(host.querySelector(".brief-pebble-companion")).toBeNull();
+});
+
 test("real Brief entry remains behind the existing onboarding gate", async () => {
   function SetupGate() { return <div>Complete existing onboarding</div>; }
   await mount("http://localhost:4381/?brief=1#/brief/today", {}, SetupGate);
   expect(host.textContent).toBe("Complete existing onboarding");
   expect(host.querySelector("[data-brief-room]")).toBeNull();
   expect(connections).toBe(0);
+});
+
+test("shared-control specimen is isolated from live account and connection effects", async () => {
+  await mount("http://localhost:4381/?brief=preview&specimen=controls#/_brief_preview");
+  expect(host.textContent).toContain("Shared controls.");
+  expect(host.querySelector('[role="switch"]')).not.toBeNull();
+  await click("Account example");
+  expect(document.querySelector('[role="menu"]')).not.toBeNull();
+  expect(network).toEqual([]); expect(connections).toBe(0); expect(gates).toBe(0);
+  await route("http://localhost:4381/#/");
+  expect(connections).toBe(1); expect(document.querySelector('[role="menu"]')).toBeNull();
+});
+
+test("motion specimen stays isolated and unmounts without live side effects", async () => {
+  await mount("http://localhost:4381/?brief=preview&specimen=motion#/_brief_preview");
+  expect(host.textContent).toContain("Motion with a purpose.");
+  await click("Toggle make room");
+  expect(host.querySelector('input[placeholder="Ask Jarvis…"]')?.closest('[aria-hidden]')?.getAttribute('aria-hidden')).toBe("false");
+  expect(network).toEqual([]); expect(connections).toBe(0); expect(gates).toBe(0);
+  await route("http://localhost:4381/#/");
+  expect(connections).toBe(1);
+});
+
+test("navigation review uses the production shell without live reads, sockets or account actions", async () => {
+  await mount("http://localhost:4381/?brief=preview&specimen=navigation#/_brief_preview");
+  expect(host.textContent).toContain("ISOLATED SHELL REVIEW");
+  await click("Alex Morgan");
+  expect(document.querySelector('[role="menu"]')).not.toBeNull();
+  const billing = [...document.querySelectorAll('[role="menuitem"]')].find(b => b.textContent === "Billing") as HTMLElement;
+  await React.act(async () => billing.click());
+  expect(host.querySelector("h1")?.textContent).toBe("Billing");
+  expect(network).toEqual([]); expect(connections).toBe(0); expect(gates).toBe(0);
+  await route("http://localhost:4381/#/");
+  expect(connections).toBe(1); expect(document.querySelector('[role="menu"]')).toBeNull();
 });
 
 test("missing modules give a truthful fallback instead of fabricated empty business data", async () => {
@@ -121,6 +177,18 @@ test("missing modules give a truthful fallback instead of fabricated empty busin
   await route("http://localhost:4381/?brief=1#/brief/unknown");
   expect(host.querySelector("[data-legacy]")).not.toBeNull();
   expect(connections).toBe(1);
+});
+
+test("Pebble review mounts one isolated conversation without live reads or writers", async () => {
+  await mount("http://localhost:4381/?brief=preview&specimen=pebble#/_brief_preview");
+  const composer = host.querySelector<HTMLTextAreaElement>('[aria-label="Conversation draft"]')!;
+  expect(composer).not.toBeNull();
+  await React.act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open conversation"]')!.click());
+  expect(host.querySelector("[data-pebble-open]")?.getAttribute("data-pebble-open")).toBe("true");
+  await React.act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Close conversation"]')!.click());
+  expect(host.querySelector('[aria-label="Conversation draft"]')).toBe(composer);
+  expect(network).toEqual([]); expect(connections).toBe(0); expect(gates).toBe(0);
+  await route("http://localhost:4381/#/"); expect(connections).toBe(1);
 });
 
 test("room modules preserve shell state and selected source IDs through navigation", async () => {
@@ -135,6 +203,45 @@ test("room modules preserve shell state and selected source IDs through navigati
   await route("http://localhost:4381/?brief=1#/brief/memory?factId=known-fact");
   expect(observed?.sidebar).toBe("rail"); expect(observed?.chatOpen).toBe(true);
   expect(observed?.route.selection).toEqual({ factId: "known-fact" });
+  expect(network).toEqual([]);
+});
+
+test("navigation readiness loss and recovery preserve the mounted room and edited draft", async () => {
+  let mounts = 0;
+  let observed: BriefShellPort | undefined;
+  function Body({ shell }: { shell: BriefShellPort }) {
+    observed = shell;
+    React.useEffect(() => { mounts++; }, []);
+    return <><input aria-label="Unsaved draft" defaultValue="Original" />
+      <button onClick={() => { shell.setSidebar("rail"); shell.setChatOpen(true); shell.setTheme("dark"); }}>Set shell</button></>;
+  }
+  const rooms: BriefRoomRegistry = { workflows: { id: "workflows", title: "Workflows", Body } };
+  const ready: BriefNavigationBinding = { capabilities: { contractVersion: 1, asOf: 1, capabilities: {
+    navigationCompatibility: { supported: true, ready: true, enabled: true, state: "ready", reason: null },
+  } }, view: { source: "live", state: { status: "ready", data: UNKNOWN_NAVIGATION } } };
+  const loading: BriefNavigationBinding = { ...ready, capabilities: { contractVersion: 1, asOf: 2, capabilities: {
+    navigationCompatibility: { supported: true, ready: false, enabled: false, state: "loading", reason: "provider_loading" },
+  } } };
+  history.replaceState(null, "", "http://localhost:4381/?brief=1#/brief/workflows?flowId=existing");
+  const render = async (navigation?: BriefNavigationBinding) => {
+    await React.act(async () => root!.render(<Entry legacy={<Legacy />} rooms={rooms} Gate={Gate} navigation={navigation} />));
+  };
+  await render(loading);
+  const input = host.querySelector("input")!;
+  input.value = "My unsaved workflow";
+  await click("Set shell");
+  await React.act(async () => input.focus());
+  for (const navigation of [ready, loading, ready, undefined, ready]) {
+    await render(navigation);
+    expect(host.querySelector("input") === input).toBe(true);
+    expect(input.value).toBe("My unsaved workflow");
+    expect(document.activeElement === input).toBe(true);
+    expect(mounts).toBe(1);
+    expect(observed?.sidebar).toBe("rail"); expect(observed?.chatOpen).toBe(true);
+    expect(observed?.theme).toBe("dark"); expect(observed?.route.selection.flowId).toBe("existing");
+    expect(host.querySelectorAll("main")).toHaveLength(1);
+    expect(host.querySelector("aside") !== null).toBe(navigation === ready);
+  }
   expect(network).toEqual([]);
 });
 

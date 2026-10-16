@@ -26,6 +26,8 @@ import type { TriggerManager } from "../../workflows/runner/triggers/manager.ts"
 import type { PieceLookup } from "../../workflows/runtime/piece-catalog.ts";
 import type { ComposerLlmClient } from "./workflow-composer.ts";
 import { composePersistedFlow } from "./persisted-workflow-composer.ts";
+import { recheckJobContract, type JobContract } from "./job-contract.ts";
+import { getWorkflowComposition } from "../../workflows/db/repos/workflow-composition.ts";
 
 /**
  * Minimal tool-registry shape the composer surfaces in its planner prompt.
@@ -56,10 +58,15 @@ import {
   createDraftVersion,
   getFlowVersion,
   getLatestDraft,
+  type FlowTriggerNode,
 } from "../../workflows/db/repos/flow-version.ts";
 import { publishFlowVersion } from "../../workflows/db/repos/flow-publication.ts";
 import { assertVersionReady } from '../../workflows/db/repos/flow-readiness';
+import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow } from '../../workflows/db/repos/flow-turn-off';
+import { listFlowFires } from '../../workflows/db/repos/trigger-fire';
+import { bindingChangesToAccept } from '../../workflows/db/repos/binding-pins';
 import { assertCodeStepsAllowed } from "../../workflows/db/repos/flow-code-steps.ts";
+import { manualStartRefusal } from "../../workflows/runtime/emergency-hold.ts";
 import {
   createFlowRun,
   getFlowRunInProject,
@@ -277,6 +284,15 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           '(schedule, webhook, manual) and any concrete services / actions (e.g. "send a Gmail to ...").',
         required: false,
       },
+      contract: {
+        type: "object",
+        description:
+          "compose: check the user's explicit requirements. trigger {kind: " +
+          "manual|schedule|webhook|event|piece, cron, every, timezone, eventType, piece, trigger}; sources, outputs: " +
+          "[{notify: {channels}} | {tool, params} | {piece, action, target}]; recipients; forbidden {effects e.g. " +
+          "send_email, pieces, actions, tools, channels, agents}; review. Outputs list all it may send or address.",
+        required: false,
+      },
       limit: {
         type: "number",
         description: "Cap for list_runs (default 25).",
@@ -309,10 +325,26 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
      * Kept total and dependency-free -- it switches on `params.action` and
      * nothing else. A gate that throws is caught at the call site and
      * escalated to confirm: 'always', so a DB read in here would turn a
-     * transient error into a mandatory card.
+     * transient error into a mandatory card. The one exception is `enable`
+     * and `publish` (Q-05): whether they accept a changed connection or
+     * computer is only known from the flow's pins, and there a card on a
+     * failed read is the safe side.
      */
     authorityGate: (params) => {
-      switch (String(params.action ?? "")) {
+      const action = String(params.action ?? "");
+      switch (action) {
+        case "enable":
+        case "publish": {
+          // Q-05: enabling or publishing accepts the connections and computer
+          // the flow runs with now. When that would accept a change since a
+          // person last accepted them (another account under a connection's
+          // name, another computer), a person sees it and approves first: the
+          // model never accepts one on its own. Otherwise both stay at the
+          // floor, for the reasons below.
+          const changes = bindingChangesForGate(params, deps.callerProjectId?.() ?? DEFAULT_IDS.project);
+          return changes.length ? { actionCategory: "write_data", confirm: "always",
+            intent: `${action === "enable" ? "Enable" : "Publish"} workflow ${forCard(params.flow)} and accept: ${changes.join(" ")}` } : null;
+        }
         case "run":
           return { actionCategory: "execute_command", confirm: "above_level",
             intent: `Run workflow: ${forCard(params.flow)}` };
@@ -323,7 +355,8 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           // list / get / list_runs / get_run are reads; compose / create /
           // enable / disable / publish are writes the floor already covers.
           //
-          // `publish` and `enable` are the arguable ones: enabling registers
+          // `publish` and `enable` (when they accept no binding change, above)
+          // are the arguable ones: enabling registers
           // the flow's cron/webhook, so they ARM the same execution that
           // `run` is raised for. They stay at the floor because the exposure
           // is bounded twice over -- CODE steps are refused at publish,
@@ -366,7 +399,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           const name = requireString(params, "name");
           const description = typeof params["description"] === "string" ? params["description"].trim() : "";
           if (description.length > 0) {
-            const composed = await actCompose(name, description, deps, project);
+            const composed = await actCompose(name, description, deps, project, params["contract"]);
             // ACCEPTED COST of one block per action: `note` is repo-authored
             // guidance to the model, and framing the whole return puts it under
             // a preamble that says not to follow instructions inside the block.
@@ -428,7 +461,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           );
         case "compose":
           return framedForModel(
-            await actCompose(requireString(params, "name"), requireString(params, "description"), deps, project),
+            await actCompose(requireString(params, "name"), requireString(params, "description"), deps, project, params["contract"]),
             "a composed workflow and the composer's text",
           );
         default:
@@ -924,6 +957,18 @@ function actGet(flow: FlowRow): Record<string, unknown> {
     ...summary,
     latestDraft: draft,
     published,
+    // Q-06: what became of its latest scheduled times, deliveries and events,
+    // so "why didn't it run?" has an answer: missed, blocked, skipped,
+    // delayed, or the run's own state, with how many repeats each absorbed.
+    recentDeliveries: listFlowFires(flow.id, { limit: 10 }).map((fire) => ({
+      at: fire.observedAt,
+      source: fire.source,
+      outcome: fire.label,
+      ...(fire.scheduledFor !== null ? { scheduledFor: fire.scheduledFor } : {}),
+      ...(fire.runId ? { runId: fire.runId } : {}),
+      ...(fire.repeats ? { repeats: fire.repeats } : {}),
+      ...(typeof fire.detail?.reason === "string" ? { reason: fire.detail.reason } : {}),
+    })),
   };
 }
 
@@ -935,6 +980,9 @@ function actRun(flow: FlowRow, payload?: Record<string, unknown>): Record<string
   // would be one `run` call wide. The thrown message goes straight back to the
   // model as the tool result, so it relays the opt-in instruction to the user
   // instead of retrying.
+  // Pause holds and Kill stops: nothing starts (Q-08).
+  const held = manualStartRefusal();
+  if (held) throw new Error(held);
   assertCodeStepsAllowed(flow.id, versionId, "run");
   assertVersionReady(flow.id, versionId);
   const run = createFlowRun({
@@ -974,20 +1022,56 @@ function actSetStatus(
   status: "ENABLED" | "DISABLED",
   deps: ManageWorkflowDeps,
 ): Record<string, unknown> {
-  updateFlowStatus(flow.id, status);
+  // Turning a workflow off stops its queued and waiting runs (Q-06).
+  const stoppedRuns = updateFlowStatus(flow.id, status).turnedOff ? stopRunsOfTurnedOffFlow(flow.id) : 0;
   void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));
   const updated = getFlow(flow.id);
-  return updated ? summarizeFlow(updated) : { error: "flow vanished after update" };
+  if (!updated) return { error: "flow vanished after update" };
+  // Enabling runs the published version, so that is the graph rechecked.
+  const published = status === "ENABLED" && updated.published_version_id ? getFlowVersion(updated.published_version_id) : null;
+  const report = published ? contractRecheck(updated, published.trigger) : null;
+  const summary = stoppedRuns ? { ...summarizeFlow(updated), stoppedRuns } : summarizeFlow(updated);
+  return report ? { contractReport: report, ...summary } : summary;
+}
+
+/**
+ * The job contract a flow was composed under, rechecked against the graph
+ * about to run, so the user sees what still holds and what to confirm when
+ * publishing or enabling, even after the draft was edited. Advisory, like the
+ * OS warnings: the user may have changed the job on purpose. Null for a flow
+ * composed without a contract.
+ */
+function contractRecheck(flow: FlowRow, trigger: FlowTriggerNode): ReturnType<typeof recheckJobContract> {
+  const recordId = parseFlowMetadata(flow)?.compositionRecordId;
+  if (typeof recordId !== "string") return null;
+  return recheckJobContract(trigger, getWorkflowComposition(recordId, flow.project_id)?.specification.contract);
+}
+
+/**
+ * What enabling or publishing `params.flow` would accept that a person has not
+ * (Q-05). Empty when it accepts nothing new, or when the flow does not resolve:
+ * the action reports that itself.
+ */
+function bindingChangesForGate(params: Record<string, unknown>, project: string): string[] {
+  let flow: FlowRow;
+  try { flow = requireFlowIn(project, params); } catch { return []; }
+  const versionId = params.action === "publish"
+    ? getLatestDraft(flow.id)?.id ?? flow.published_version_id
+    : flow.published_version_id ?? getLatestDraft(flow.id)?.id;
+  return versionId ? bindingChangesToAccept(flow.id, versionId) : [];
 }
 
 function actPublish(flow: FlowRow, deps: ManageWorkflowDeps): Record<string, unknown> {
   const target = getLatestDraft(flow.id);
   if (!target) {
-    if (flow.published_version_id) {
-      // Already published, nothing to do.
-      return summarizeFlow(flow);
-    }
-    throw new Error("no draft version to publish");
+    // Nothing new to publish: publishing again is a person accepting the
+    // connections and computer the published version runs with now (Q-05).
+    if (!flow.published_version_id) throw new Error("no draft version to publish");
+    const { flow: updated, version } = publishFlowVersion(flow.id, flow.published_version_id);
+    void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));
+    // Publishing again runs the published version, so that is the graph rechecked, as on enable.
+    const report = contractRecheck(updated, version.trigger);
+    return report ? { contractReport: report, ...summarizeFlow(updated) } : summarizeFlow(updated);
   }
   // Publish is the last gate before a flow starts running for real, and it is
   // the ONLY one a hand-built flow passes through -- a flow drawn in the
@@ -999,11 +1083,14 @@ function actPublish(flow: FlowRow, deps: ManageWorkflowDeps): Record<string, unk
   // is not enrolled yet, and blocking someone's publish over a heuristic would
   // be worse than the mismatch it prevents.
   const warnings = publishOsWarnings(target.trigger, deps);
+  const report = contractRecheck(flow, target.trigger);
   const { flow: updated } = publishFlowVersion(flow.id, target.id);
   void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));
-  return warnings.length > 0
-    ? { ...summarizeFlow(updated), warnings }
-    : summarizeFlow(updated);
+  return {
+    ...(report ? { contractReport: report } : {}),
+    ...summarizeFlow(updated),
+    ...(warnings.length > 0 ? { warnings } : {}),
+  };
 }
 
 /**
@@ -1018,6 +1105,8 @@ function publishOsWarnings(trigger: unknown, deps: ManageWorkflowDeps): string[]
 }
 
 function actDelete(flow: FlowRow, deps: ManageWorkflowDeps, project: string): Record<string, unknown> {
+  // The flow was resolved in the caller's project before stopping its runs.
+  stopRunsOfDeletedFlow(flow.id);
   // Its own predicate rather than trusting the resolve above for its scope,
   // as #692 made the connections UPDATE carry one.
   if (!deleteFlowInProject(project, flow.id)) throw new Error(`workflow not found: ${flow.id}`);
@@ -1032,6 +1121,7 @@ async function actCompose(
   description: string,
   deps: ManageWorkflowDeps,
   project: string,
+  contract?: unknown,
 ): Promise<Record<string, unknown>> {
   if (!deps.llm) {
     throw new Error("compose: an LLM client is not configured for this build");
@@ -1075,9 +1165,11 @@ async function actCompose(
     const targets = deps.executionTargets();
     if (targets.length > 0) composeDeps.executionTargets = targets;
   }
-  // The journal goes in the same project as the flow, or the flow's
-  // `compositionRecordId` names a record its own project cannot read.
-  const result = await composePersistedFlow(composeDeps, { name, description }, project);
+  // Keep the flow and its composition journal in the caller's project.
+  // The composer validates the contract and checks every candidate against it.
+  // A null contract, as some models send for an unused optional parameter, is none.
+  const stated = contract ?? undefined;
+  const result = await composePersistedFlow(composeDeps, { name, description, ...(stated !== undefined ? { contract: stated as JobContract } : {}) }, project);
 
   if (!result.ok) {
     return {
@@ -1103,6 +1195,9 @@ async function actCompose(
   });
   return {
     ok: true,
+    // What the contract check proved, and what the user should confirm. First,
+    // so the framed payload's length cap cuts the flow summary, not this.
+    ...(result.contractReport ? { contractReport: result.contractReport } : {}),
     flow: summarizeFlow(getFlow(flow.id) ?? flow),
     versionId: version.id,
     compositionRecordId: result.compositionRecordId,
@@ -1147,6 +1242,10 @@ function actGetRun(project: string, runId: string): Record<string, unknown> {
 }
 
 function summarizeRun(run: FlowRun, includeSteps = false): Record<string, unknown> {
+  // Q-05: a connection that changed under the run is refused by the engine's
+  // fetch, which reports only a bare loading error; the reason lives here.
+  const bindingRefusals = (run.connectionBindings ?? []).filter(binding => binding.refusal)
+    .map(binding => ({ connection: binding.externalId, reason: binding.refusal!.message }));
   return {
     id: run.id,
     flow_id: run.flowId,
@@ -1158,6 +1257,7 @@ function summarizeRun(run: FlowRun, includeSteps = false): Record<string, unknow
     durationMs: run.startTime && run.finishTime ? run.finishTime - run.startTime : null,
     stepsCount: run.stepsCount,
     failedStep: run.failedStep,
+    ...(bindingRefusals.length ? { bindingRefusals } : {}),
     ...(includeSteps ? { steps: run.steps } : {}),
   };
 }

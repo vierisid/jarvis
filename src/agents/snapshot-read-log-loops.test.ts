@@ -89,6 +89,10 @@ const LOOPS: Array<[string, (orch: AgentOrchestrator) => Promise<unknown>]> = [
   ['streamMessage', async (orch) => {
     for await (const _ of orch.streamMessage(PROMPT, 'go', 'medium', 'reads', undefined, null)) { /* drain */ }
   }],
+  ['streamMessage with an isolated Brief conversation', async (orch) => {
+    const conversation = { history: [], contextKey: 'brief:snapshot-fixture', signal: new AbortController().signal };
+    for await (const _ of orch.streamMessage(PROMPT, 'go', 'medium', 'reads', undefined, null, conversation)) { /* drain */ }
+  }],
   ['processTaskCall', (orch) => orch.processTaskCall({ systemPrompt: PROMPT, userMessage: 'go', tier: 'medium', subsystem: 'reads', scope: null })],
 ];
 
@@ -140,7 +144,7 @@ describe('a resumed task that replays a browser read fails closed (#827, review 
     const { orch, seen } = build();
     await resume(withCall('read_file'))(orch);
     expect(seen[0]?.resumedWithReads).toBe(false);
-    await LOOPS[2]![1](orch);
+    await LOOPS.find(([name]) => name === 'processTaskCall')![1](orch);
     expect(seen.at(-1)?.resumedWithReads).toBe(false);
   });
 });

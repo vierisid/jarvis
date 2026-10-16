@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "ON-U-08",
+  "kind": "view",
+  "entry": "./index.tsx",
+  "provides": ["build-view.v1"],
+  "requires": ["build-job.v1", "draft-result.v1"]
+}

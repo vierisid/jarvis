@@ -190,12 +190,45 @@ describe("manage_workflow tool", () => {
     expect(inspected.steps).toEqual({ send: { output: { receipt: "fake-delivery-1" } } });
   });
 
+  test("a run asked for in chat while Jarvis is paused is refused, saying why (Q-08)", async () => {
+    const { EmergencyController, setActiveEmergencyController } = await import("../../authority/emergency.ts");
+    const controller = new EmergencyController();
+    setActiveEmergencyController(controller);
+    try {
+      await call("create", { name: "held", empty: true });
+      controller.pause();
+      await expect(call("run", { flow: "held" })).rejects.toThrow(/Jarvis is paused/);
+      expect(queueStats().queued).toBe(0);
+      controller.resume();
+      expect(await call("run", { flow: "held" })).toMatchObject({ status: "QUEUED" });
+    } finally {
+      setActiveEmergencyController(null);
+    }
+  });
+
   test("enable / disable round-trip", async () => {
     await call("create", { name: "toggle", empty: true });
     let st = (await call("enable", { flow: "toggle" })) as { status: string };
     expect(st.status).toBe("ENABLED");
     st = (await call("disable", { flow: "toggle" })) as { status: string };
     expect(st.status).toBe("DISABLED");
+  });
+
+  test("turning a workflow off says how many runs it stopped, and get says what became of its deliveries", async () => {
+    const { createFlowRun } = await import("../../workflows/db/repos/flow-run.ts");
+    const { recordFire } = await import("../../workflows/db/repos/trigger-fire.ts");
+    const { TURNED_OFF_REASON } = await import("../../workflows/db/repos/flow-turn-off.ts");
+    const created = (await call("create", { name: "ledger", empty: true })) as { id: string };
+    await call("enable", { flow: "ledger" });
+    const run = createFlowRun({ flowId: created.id, flowVersionId: getLatestDraft(created.id)!.id, status: "PAUSED" });
+    recordFire({ flowId: created.id, source: "schedule", scheduledFor: 1_000, outcome: "missed", detail: { reason: "The schedule was not running at that time" } });
+    expect(await call("disable", { flow: "ledger" })).toMatchObject({ status: "DISABLED", stoppedRuns: 1 });
+    expect(getFlowRun(run.id)?.status).toBe("STOPPED");
+    const { recentDeliveries } = (await call("get", { flow: "ledger" })) as { recentDeliveries: unknown[] };
+    expect(recentDeliveries).toEqual([
+      expect.objectContaining({ source: "lifecycle", outcome: "stopped", runId: run.id, reason: TURNED_OFF_REASON }),
+      expect.objectContaining({ source: "schedule", outcome: "missed", scheduledFor: 1_000, reason: "The schedule was not running at that time" }),
+    ]);
   });
 
   test("publish locks the latest draft and ENABLES the flow", async () => {

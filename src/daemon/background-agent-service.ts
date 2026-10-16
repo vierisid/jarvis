@@ -36,6 +36,7 @@ import { getDueCommitments, getUpcoming } from '../vault/commitments.ts';
 import { getRecentObservations, describeObservationForPrompt } from '../vault/observations.ts';
 import { findContent } from '../vault/content-pipeline.ts';
 import { runWithOrigin } from '../llm/origin.ts';
+import { BackgroundThrottled, currentAdmission, runWithAdmission } from '../llm/background-budget.ts';
 
 const BG_CDP_PORT = 9223;
 const BG_PROFILE_DIR = join(homedir(), '.jarvis', 'browser', 'bg-profile');
@@ -211,6 +212,10 @@ export class BackgroundAgentService implements Service, IAgentService {
     // otherwise so the graceful drain awaits it too (same as the primary turns).
     if (activeTurns.isDraining) return 'skipped: draining';
     const endTurn = activeTurns.begin();
+    // Captured here, re-entered inside `run`: a chained turn runs in whichever
+    // context resolved the turn before it (see the origin note below), so a
+    // commitment's budget exemption would otherwise be lost or leak.
+    const admission = currentAdmission();
 
     // Strictly serialized: the primary agent has one message history, and a
     // gated turn can now sit on an approval for a while, so two turns must
@@ -223,8 +228,13 @@ export class BackgroundAgentService implements Service, IAgentService {
         const systemPrompt = this.buildSystemPromptParts(channel);
         // Inside `run`, not around handleMessage: turns are chained, and a
         // queued turn runs in whichever context resolved the one before it.
-        return await runWithOrigin('background', () => this.orchestrator.processMessage(systemPrompt, text));
+        const turn = () => runWithOrigin('background', () => this.orchestrator.processMessage(systemPrompt, text));
+        return await runWithAdmission(admission, turn);
       } catch (err) {
+        // A refused admission is not an answer. Returned as text it would be
+        // spoken as an error "fix", broadcast as a reaction, or recorded as a
+        // commitment's completed result; callers' failure paths handle it.
+        if (err instanceof BackgroundThrottled) throw err;
         console.error('[BackgroundAgent] Message error:', err);
         return `Error: ${err instanceof Error ? err.message : String(err)}`;
       } finally {

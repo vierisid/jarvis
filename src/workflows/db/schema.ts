@@ -40,6 +40,15 @@ const STATEMENTS: string[] = [
     run_id TEXT PRIMARY KEY REFERENCES flow_run(id) ON DELETE CASCADE,
     record TEXT NOT NULL
   )`,
+  // Q-05: the connection identity each run used, one row per connection, first
+  // writer wins. Every later fetch in the run (a resumed approval, a retried
+  // step) must hand out the same identity or the run stops.
+  `CREATE TABLE IF NOT EXISTS workflow_run_connection_binding (
+    run_id TEXT NOT NULL REFERENCES flow_run(id) ON DELETE CASCADE,
+    external_id TEXT NOT NULL,
+    record TEXT NOT NULL,
+    PRIMARY KEY (run_id, external_id)
+  )`,
   // Cancellation is a durable dispatch fence, separate from effect receipts.
   `CREATE TABLE IF NOT EXISTS workflow_run_cancellation (
     run_id TEXT PRIMARY KEY REFERENCES flow_run(id) ON DELETE CASCADE,
@@ -75,6 +84,15 @@ const STATEMENTS: string[] = [
     -- and the user can take it back.
     code_steps_grant TEXT,
     code_steps_granted_at INTEGER,
+    -- When the flow was last turned off (ENABLED -> DISABLED). Runs created
+    -- before it are stopped and never continue; runs started by hand on the
+    -- disabled flow afterwards are not (repos/flow-turn-off.ts, Q-06).
+    disabled_at INTEGER,
+    -- Q-05: the connections and computer this flow was enabled against
+    -- (repos/binding-pins.ts). Written only when a person publishes or enables
+    -- the flow, never by an unrelated write such as a metadata PATCH; run
+    -- admission and the engine's connection fetch compare against it.
+    binding_pins TEXT,
     created INTEGER NOT NULL,
     updated INTEGER NOT NULL
   )`,
@@ -127,6 +145,9 @@ const STATEMENTS: string[] = [
     failed_step TEXT,
     step_name_to_test TEXT,
     execution_config TEXT,
+    -- Digest of the version's graph when the run began. A paused run of a
+    -- draft that was edited meanwhile is not continued on the new graph.
+    graph_digest TEXT,
     start_time INTEGER,
     finish_time INTEGER,
     archived_at INTEGER,
@@ -153,6 +174,20 @@ const STATEMENTS: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_workflow_effect_run ON workflow_effect(run_id)`,
   `CREATE INDEX IF NOT EXISTS idx_workflow_effect_pending ON workflow_effect(status)`,
+
+  // A nested dispatch is bound to the parent's effect (including loop path).
+  // Keep the child id even if its flow is deleted: missing is not success.
+  `CREATE TABLE IF NOT EXISTS workflow_child_run (
+    effect_id TEXT PRIMARY KEY REFERENCES workflow_effect(id) ON DELETE CASCADE,
+    child_run_id TEXT NOT NULL UNIQUE,
+    waitpoint_id TEXT UNIQUE
+  )`,
+
+  // Append-only recovery decisions survive a run/flow deletion as audit evidence.
+  `CREATE TABLE IF NOT EXISTS workflow_recovery_receipt (
+    id TEXT PRIMARY KEY, run_id TEXT NOT NULL, request_id TEXT NOT NULL, record TEXT NOT NULL,
+    UNIQUE(run_id, request_id)
+  )`,
 
   // A delegated sub-agent's conversation while its run waits on a tool
   // approval, and its finished result so a re-run step returns that instead
@@ -183,6 +218,12 @@ const STATEMENTS: string[] = [
     value TEXT NOT NULL,
     metadata TEXT,
     pre_select_for_new_projects INTEGER NOT NULL DEFAULT 0,
+    -- Q-05: counts every replacement of the stored credential. Jarvis keeps no
+    -- account identity, so a rotated key and another account pasted under the
+    -- same name look the same; workflows enabled against an earlier
+    -- generation pause until a person enables them again. Re-encryption
+    -- (key rotation, migration) does not count: it writes the value column directly.
+    credential_generation INTEGER NOT NULL DEFAULT 0,
     created INTEGER NOT NULL,
     updated INTEGER NOT NULL
   )`,
@@ -270,6 +311,40 @@ const STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_workflow_job_claim ON workflow_job(status, scheduled_at, priority)`,
   `CREATE INDEX IF NOT EXISTS idx_workflow_job_flow_run ON workflow_job(flow_run_id)`,
 
+  // --- Trigger delivery ledger (Q-06): one row per scheduled occurrence,
+  // webhook delivery, event, poll item and continuation the daemon handled,
+  // with what became of it. `dedupe_key` is the delivery's identity (the
+  // schedule's wall-clock minute, a provider delivery id, an event key, a
+  // waitpoint digest); a second delivery with the same key is a repeat, not
+  // a run. No foreign key: the record outlives a deleted workflow. ---
+  `CREATE TABLE IF NOT EXISTS workflow_trigger_fire (
+    id TEXT PRIMARY KEY,
+    flow_id TEXT NOT NULL,
+    flow_version_id TEXT,
+    source TEXT NOT NULL,
+    dedupe_key TEXT,
+    scheduled_for INTEGER,
+    observed_at INTEGER NOT NULL,
+    outcome TEXT NOT NULL,
+    run_id TEXT,
+    late_ms INTEGER,
+    started_at INTEGER,
+    repeats INTEGER NOT NULL DEFAULT 0,
+    last_repeat_at INTEGER,
+    detail TEXT,
+    UNIQUE (flow_id, source, dedupe_key)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_trigger_fire_flow ON workflow_trigger_fire(flow_id, observed_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_trigger_fire_run ON workflow_trigger_fire(run_id)`,
+
+  // --- Since when each enabled schedule has been owed its occurrences, so a
+  // restart can tell missed ones from ones that were never due (Q-06). ---
+  `CREATE TABLE IF NOT EXISTS workflow_schedule_watch (
+    flow_id TEXT PRIMARY KEY,
+    expression TEXT NOT NULL,
+    watched_since INTEGER NOT NULL
+  )`,
+
   // --- Editor-only sidecar for flow_version: stores node x/y positions and
   // any "orphan" steps the user dragged onto the canvas but didn't connect.
   // The engine never reads this -- it serializes/runs only the tree rooted
@@ -354,6 +429,17 @@ function applyAdditiveColumnMigrations(db: Database): void {
     },
     { table: "flow", column: "code_steps_grant", ddl: "ALTER TABLE flow ADD COLUMN code_steps_grant TEXT" },
     { table: "flow", column: "code_steps_granted_at", ddl: "ALTER TABLE flow ADD COLUMN code_steps_granted_at INTEGER" },
+    { table: "flow", column: "disabled_at", ddl: "ALTER TABLE flow ADD COLUMN disabled_at INTEGER" },
+    { table: "flow_run", column: "graph_digest", ddl: "ALTER TABLE flow_run ADD COLUMN graph_digest TEXT" },
+    { table: "workflow_trigger_fire", column: "started_at", ddl: "ALTER TABLE workflow_trigger_fire ADD COLUMN started_at INTEGER" },
+    // Q-05: binding pins and the credential generation they compare against.
+    // NULL pins mean "not pinned yet"; the daemon pins enabled flows at boot.
+    { table: "flow", column: "binding_pins", ddl: "ALTER TABLE flow ADD COLUMN binding_pins TEXT" },
+    {
+      table: "app_connection",
+      column: "credential_generation",
+      ddl: "ALTER TABLE app_connection ADD COLUMN credential_generation INTEGER NOT NULL DEFAULT 0",
+    },
   ];
   // One transaction around the ALTERs AND the backfill they key. SQLite DDL is
   // transactional, and the coupling matters: the backfill is keyed on the

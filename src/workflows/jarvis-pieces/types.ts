@@ -76,11 +76,13 @@ export interface PieceWorkflowRunner {
 
 export interface PieceWorkflowStartInput {
   flowId: string;
+  waitForCompletion?: boolean;
   payload?: Record<string, unknown>;
 }
 
 export interface PieceWorkflowStartResult {
   runId: string;
+  waitpointId?: string;
 }
 
 /**
@@ -144,6 +146,7 @@ export interface PieceAgentToolCall {
 }
 
 export interface PieceAgentDelegateResult {
+  delegation?: { id: string; runId: string; stepName: string; executionPath: Array<[string, number]> };
   /** The agent's final message to the user. May be empty if status='error'. */
   finalMessage: string;
   toolCalls: PieceAgentToolCall[];

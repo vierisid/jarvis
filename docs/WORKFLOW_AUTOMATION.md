@@ -491,6 +491,49 @@ instead. The sub-agent's audit rows now record what happened: a call that
 needed approval is `approval_required` and not executed, and an allowed call
 is recorded after it ran.
 
+### Required nested workflow continuation
+
+Delegated execution keeps the single-use approval for starting the agent, and
+the same execution reports the delegation's stable identity and any uncertain
+outcome. An approval to start the agent does not
+authorize its later tool calls; those retain their own principal, intent and
+approval checks. An uncertain tool effect remains uncertain even if the agent
+finishes its conversation.
+
+`jarvis-trigger.run_workflow` keeps its asynchronous default. Opt into **Wait
+for completion** when the next step requires the child to succeed. The parent
+parks on a daemon-owned waitpoint; the timer scheduler resumes it through the
+ordinary outer worker only after the child reaches a terminal state. Failure,
+cancellation, missing child records and uncertain effects cannot produce parent
+success. Every `RUN_FLOW` job still has `maxAttempts: 1`.
+
+`workflow_child_run` links the child id and optional waitpoint to the parent's
+existing effect identity (run, step, loop path, route). Child creation, enqueue
+and linkage commit together. Re-entering a completed dispatch reads that child;
+it does not start a sibling. Required descendants propagate uncertainty through
+nested failures. `/api/workflow-runs/:runId/effects` includes their identity,
+status and outcome; the paused dashboard identifies the required child instead
+of offering an unusable webhook resume URL.
+
+Canceling a run atomically stops its required descendants, retires waitpoints
+and closes undispatched approval cards. An already-dispatched effect retains
+its receipt or uncertainty; cancellation never claims remote rollback.
+Recovery polling also stops required children whose parent failed or was deleted.
+For required children that already ended, it retires remaining waitpoints and
+undispatched approvals before continuing the parent. The child's terminal status,
+failure detail and any dispatched effect evidence remain intact.
+Independent asynchronous children retain their existing lifecycle. Delegated
+agent uncertainty now stops the conversation and reaches the parent as an
+`unknown` outcome rather than becoming conversational success.
+
+This uses the current queue, effect boundary, agent loop and waitpoints; it
+introduces no orchestration service. No existing graph opts into required
+completion automatically. Build the Jarvis pieces and refresh the catalog when
+installing this version. Before downgrading, cancel or finish active required
+parent/child runs and remove their `waitForCompletion` settings. Older binaries
+ignore that input and would otherwise restore asynchronous behavior. Retain the
+additive table and historical receipts; never retry an uncertain run as rollback.
+
 ### Governed pieces
 
 The ten verified pieces -- gmail, slack, notion, openai, github, google-calendar,
@@ -1035,8 +1078,17 @@ A **queue job** and a **run** finish on different clocks. A `RUN_FLOW` job cover
 
 Two things produce that resume job, both server-side:
 
-- `POST /api/webhooks/waitpoints/:id` for WEBHOOK/MANUAL waitpoints. It refuses anything but a PAUSED run (409) and an already-resumed waitpoint (410).
-- `TimerWaitpointScheduler` (`src/workflows/timer-scheduler.ts`) for TIMER waitpoints, which have no external trigger. It ticks every 15s plus once at boot, so a delay that elapsed entirely during downtime still fires. Marking the waitpoint resumed and enqueueing the job happen in one transaction, so a crash between them cannot strand the run.
+- `POST /api/webhooks/waitpoints/:id` for WEBHOOK/MANUAL waitpoints. Consuming the waitpoint and queueing the job happen in one transaction (`claimContinuation`, `src/workflows/runtime/continuation.ts`). It refuses:
+  - a run that is not PAUSED (409);
+  - a run whose workflow was turned off since it began (409; the run is stopped);
+  - a run with another continuation already queued or running (409; retry once it has run);
+  - a MANUAL waitpoint whose step already finished (410). A WEBHOOK waitpoint is exempt: the approval piece's Create Approval Links step makes its URL in one step and the run waits for it at a later one;
+  - an already-resumed waitpoint (410);
+  - anything while Jarvis is paused (503 with `Retry-After`; the waitpoint is kept for Resume, Q-08). After Kill the run is already stopped, so the answer is the 409 for a run that is not PAUSED;
+  - a HOLD waitpoint, which parks a step reached while Jarvis is paused (403: Jarvis releases it on Resume). The run's waitpoint list shows a HOLD with no resume URL.
+
+A step parked by Jarvis, for an approval or a hold, records how it was about to run (`jarvisParked` in its output). When it is let go it runs that way: from the start if it had not run, or resuming its own pause with the payload it was resuming with. A Delay held before its first run still waits its full time after Resume.
+- `TimerWaitpointScheduler` (`src/workflows/timer-scheduler.ts`) for TIMER waitpoints, which have no external trigger. It ticks every 15s plus once at boot, so a delay that elapsed entirely during downtime still fires, late, with its lateness recorded. It claims the continuation the same way, so a crash between consuming the waitpoint and queueing the job cannot strand the run. See `docs/workflow-trigger-delivery.md`.
 
 The scheduler's eligibility query (`listDueTimerWaitpoints`) skips waitpoints whose run is still QUEUED or RUNNING, *before* applying its 100-row batch limit. The engine creates the waitpoint row before it publishes PAUSED, so a short delay can come due inside that window; retiring the timer there would strand the run PAUSED with nothing left to wake it. Deferring instead also keeps those rows from filling a scan and starving later PAUSED runs. Missing and terminal runs still get their timers retired.
 
@@ -1213,12 +1265,16 @@ Malformed text does not erase the last parseable graph. The specification is
 authoritative over conflicting candidate data; repair instructions explicitly
 preserve the requested trigger, output, destination and negative constraints.
 
-Specification version 1 is `{ schemaVersion: 1, name, description }`. It preserves
-the caller's wording rather than inferring structured constraints with another
-model. For accepted suggestions, the description includes the accepted expected
-outcome. Structural validation still cannot prove fidelity to arbitrary natural
-language; the regression tests exercise context transport with synthetic providers,
-not live-model success rates.
+Specification version 1 is `{ schemaVersion: 1, name, description, contract? }`. It
+preserves the caller's wording rather than inferring structured constraints with
+another model. For accepted suggestions, the description includes the accepted
+expected outcome. The optional `contract` is the caller's explicit job contract:
+every candidate is checked against it and its violations feed the same repair
+loop (`docs/workflow-job-contract.md`). `manage_workflow publish` and `enable`
+recheck the graph about to run against it and return the report, advisory like
+the OS warnings. Neither check can prove fidelity to
+arbitrary natural language; the regression tests exercise context transport with
+synthetic providers, not live-model success rates.
 
 Both production entry points use `composePersistedFlow`, which saves the
 specification to `workflow_composition` before the first provider request and
@@ -1228,8 +1284,8 @@ when the chat tool caps its returned `rawResponse`. The resulting flow metadata
 contains `compositionRecordId`; chat also returns that ID on success or a normal
 composition failure. The record is readable with `getWorkflowComposition(id)`.
 
-Records have three states: `COMPOSING`, `VALIDATED` (structural checks passed), and
-`FAILED`. `VALIDATED` does not mean a draft was attached, published, or executed.
+Records have three states: `COMPOSING`, `VALIDATED` (structural checks passed, and
+the job contract when one was stated), and `FAILED`. `VALIDATED` does not mean a draft was attached, published, or executed.
 An interrupted attempt may remain `COMPOSING` with its last checkpoint after a
 restart; this table is authoring provenance, not a queue, and never resumes work
 or spends on its own. Suggestion retries continue to use their existing explicit

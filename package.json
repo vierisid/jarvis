@@ -55,7 +55,9 @@
     "setup:google": "bun run src/scripts/google-setup.ts",
     "postinstall": "node scripts/ensure-bun.cjs && (bun run copy:models 2>/dev/null || true)",
     "prepare": "git config core.hooksPath .githooks 2>/dev/null || true",
-    "prepublishOnly": "bun run copy:models && bun run build:ui && bun run build:workflows"
+    "prepublishOnly": "bun run copy:models && bun run build:ui && bun run build:workflows",
+    "generate:onboarding-runtime": "bun run scripts/onboarding-next-runtime-manifest.ts",
+    "check:onboarding-runtime": "bun run scripts/onboarding-next-runtime-manifest.ts --check"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",
@@ -77,22 +79,27 @@
     "edge-tts-universal": "^1.4.0",
     "fuse.js": "^7.3.0",
     "jose": "^6.2.0",
+    "jpeg-js": "0.4.4",
     "lucide-react": "^1.9.0",
     "nanoid": "^5.1.11",
     "onnxruntime-web": "^1.20.1",
     "openwakeword-wasm-browser": "^0.1.1",
+    "pngjs": "7.0.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "socket.io": "^4.8.3",
     "tailwindcss": "^4.2.1",
+    "unpdf": "1.8.1",
     "yaml": "^2.7.0"
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "^20.14.0",
     "@types/bun": "latest",
+    "@types/pngjs": "6.0.5",
     "happy-dom": "^20.14.0",
+    "js-tiktoken": "1.0.21",
     "socket.io-client": "^4.8.3"
   },
   "peerDependencies": {

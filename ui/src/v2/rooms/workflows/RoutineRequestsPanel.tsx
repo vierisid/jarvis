@@ -3,7 +3,10 @@ import { Button, Chip } from "../../ui";
 import type { SuggestionLearning } from "../../../../../src/awareness/suggestion-feedback";
 import "./RoutineRequestsPanel.css";
 
-type Page = { suggestions: SuggestionLearning[]; nextOffset: number | null };
+type Page = { suggestions: SuggestionLearning[]; nextOffset: number | null; background?: {
+  model: { state: string; reason: string | null; retryAt: number | null };
+  composition: { queued: number; running: number; reason: string | null; retryAt: number | null; workerAvailable: boolean };
+} };
 type Goal = { id: string; title: string };
 
 async function readJson<T>(url: string, options?: RequestInit): Promise<T> {
@@ -34,7 +37,7 @@ export function RoutineRequestsPanel({ onReview }: { onReview: (flowId: string) 
     const controller = new AbortController();
     let fetching = false;
     const load = async () => {
-      if (fetching) return;
+      if (fetching || document.hidden) return;
       fetching = true;
       try {
         const result = await readJson<Page>(`/api/awareness/routines?offset=${offset}`, { signal: controller.signal });
@@ -48,9 +51,18 @@ export function RoutineRequestsPanel({ onReview }: { onReview: (flowId: string) 
     };
     void load();
     const timer = window.setInterval(() => void load(), 5000);
-    return () => { controller.abort(); window.clearInterval(timer); };
+    const visible = () => { if (!document.hidden) void load(); };
+    document.addEventListener('visibilitychange', visible);
+    return () => { controller.abort(); window.clearInterval(timer); document.removeEventListener('visibilitychange', visible); };
   }, [offset, revision]);
 
+  const background = page?.background;
+  const pause = background && (!background.composition.workerAvailable ? 'Preparation is unavailable. Your saved requests are kept.'
+    : background.model.state === 'unavailable' ? 'Preparation is waiting for its resource budget. Your saved requests are kept.'
+    : background.model.reason === 'foreground_busy' ? 'Background preparation will continue after the current conversation.'
+    : background.model.reason === 'provider_backoff' ? 'Background preparation is waiting for the model service to recover.'
+    : background.model.reason === 'daily_budget' || background.composition.reason === 'daily_budget' ? 'Background preparation has reached its daily allowance. Saved requests will resume when allowance returns.'
+    : background.model.reason === 'concurrency' || background.composition.reason === 'concurrency' ? 'Background preparation is busy. Saved requests are waiting their turn.' : null);
   const learning = page?.suggestions.find(item => item.opportunityId === selected);
   const update = (item: SuggestionLearning) => {
     // Apply the saved result immediately; then replace any older in-flight poll.
@@ -65,6 +77,8 @@ export function RoutineRequestsPanel({ onReview }: { onReview: (flowId: string) 
       <p>Review proposed routines and return to saved draft requests here.</p>
       <Button size="sm" onClick={refresh}>Refresh requests</Button>
     </div>
+    {pause && <p role="status">{pause}</p>}
+    {background && <p>{background.composition.queued} waiting · {background.composition.running} preparing</p>}
     {error && <p role="alert">{error}</p>}
     {!page ? !error && <p role="status">Loading routine requests…</p> : page.suggestions.length === 0 ?
       <div><p>{offset > 0 ? "No older requests." : "No routine requests yet. Proposals appear here when Jarvis notices recurring work."}</p>

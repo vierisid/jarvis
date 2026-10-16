@@ -88,11 +88,15 @@ describe('the privileges in roles/untrusted.ts stay where they were argued for',
       // TOOL RETURN. Owns its own payload cap -- see #582.
       'actions/tools/manage-workflow.ts',
       // Prompts, all of them: no dispatch cap applies after the frame.
+      'actions/tools/workflow-composer.ts',
+      // F-05 caps file text in the decoder before framing the model's user blocks.
+      'brief/chat-transport.ts',
       'daemon/event-reactor.ts',
       'daemon/index.ts',
       'goals/rhythm.ts',
       'roles/prompt-builder.ts',
       'sites/prompt-context.ts',
+      'vault/extractor.ts',
     ]);
   });
 

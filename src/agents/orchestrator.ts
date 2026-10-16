@@ -42,6 +42,7 @@ import type { AuditTrail } from '../authority/audit.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import { getActionForTool, resolveToolGate, gateContext, freezeToolArguments, substituteAboveLevel } from '../authority/tool-action-map.ts';
+import { isActionCategory } from '../authority/config-validation.ts';
 import { decideTools, realtimeToolDecision } from '../actions/tools/tool-relevance/filter.ts';
 import { DISCOVER_TOOLS, ToolExposureLedger } from '../actions/tools/tool-relevance/ledger.ts';
 import {
@@ -195,6 +196,9 @@ export type TaskCallResult =
   | { kind: 'completed'; text: string; conversation: LLMMessage[] }
   | { kind: 'paused'; question: string; conversation: LLMMessage[] };
 
+/** Prefix of a turn mark recording an intent the person did not approve (Q-08). */
+const DECLINED_INTENT = 'declined-intent:';
+
 export class AgentOrchestrator {
   private hierarchy: AgentHierarchy;
   private llmManager: LLMManager | null;
@@ -208,6 +212,7 @@ export class AgentOrchestrator {
   private emergencyController: EmergencyController | null = null;
   private temporaryGrants: Map<string, ActionCategory[]> = new Map();
   private onApprovalNeeded: ((request: ApprovalRequest) => void) | null = null;
+  private onApprovalWithdrawn: ((request: ApprovalRequest) => void) | null = null;
   /** Per-orchestrator restrictions passed into every authority check. */
   private authorityProfile: AuthorityProfile | null = null;
   /** Taint gating config (main agent); null = off. */
@@ -229,6 +234,7 @@ export class AgentOrchestrator {
    * Empty and inert unless the relevance filter is switched on.
    */
   private exposureLedgers = new Map<string, ToolExposureLedger>();
+  private conversationLedgers = new Map<string, ToolExposureLedger>();
   /**
    * Provider entries from the post-DB-merge `llm` config, for model-class
    * eligibility. Absent is safe: the classifier then reads a provider's KIND
@@ -325,6 +331,11 @@ export class AgentOrchestrator {
     this.onApprovalNeeded = cb;
   }
 
+  /** Told when a card is withdrawn because its task was cancelled, so the dashboard drops it (Q-08). */
+  setApprovalWithdrawnCallback(cb: (request: ApprovalRequest) => void): void {
+    this.onApprovalWithdrawn = cb;
+  }
+
   /**
    * Restrictions layered on the shared engine for THIS orchestrator only.
    * The engine and its config stay the single source of truth (dashboard
@@ -362,7 +373,20 @@ export class AgentOrchestrator {
 
   /** Sources of outside content read so far in the calling turn (or voice session). */
   getTurnTaint(): ReadonlySet<string> {
-    return this.currentTaint();
+    return new Set([...this.currentTaint()].filter((mark) => !mark.startsWith(DECLINED_INTENT)));
+  }
+
+  /**
+   * An intent the person did not approve (`request_approval` denied, expired
+   * or unanswered) governs its category for the rest of the turn: a later
+   * call in it needs its own approval, so a denial cannot be walked around
+   * through a tool the level allows (Q-08). Kept in the turn's taint set
+   * under a prefix, which gives it exactly the turn's lifetime.
+   */
+  private noteDeclinedIntent(category: unknown): void {
+    // Trimmed as request_approval trims it, so the card and the rule agree.
+    const trimmed = typeof category === 'string' ? category.trim() : category;
+    if (isActionCategory(trimmed)) this.currentTaint().add(`${DECLINED_INTENT}${trimmed}`);
   }
 
   /** Voice sessions have no turn objects: the WS layer calls this on each final user transcript. */
@@ -381,7 +405,14 @@ export class AgentOrchestrator {
    * restrictions the parent is under.
    */
   getEffectiveProfile(): AuthorityProfile | null {
-    return mergeProfiles(this.authorityProfile, taintProfile(this.taintGating, this.currentTaint()));
+    const marks = [...this.currentTaint()];
+    const sources = new Set(marks.filter((mark) => !mark.startsWith(DECLINED_INTENT)));
+    const declined = marks.filter((mark) => mark.startsWith(DECLINED_INTENT))
+      .map((mark) => mark.slice(DECLINED_INTENT.length) as ActionCategory);
+    const declinedProfile: AuthorityProfile | null = declined.length
+      ? { label: 'an intent the user did not approve this turn', governed_categories: declined }
+      : null;
+    return mergeProfiles(mergeProfiles(this.authorityProfile, taintProfile(this.taintGating, sources)), declinedProfile);
   }
 
   // --- Accessors for tools that run sub-agents ---
@@ -908,6 +939,7 @@ export class AgentOrchestrator {
     /** When resuming, pass the conversation captured at the pause + the new user reply. */
     history?: LLMMessage[];
     signal?: AbortSignal;
+    contextKey?: string;
     /**
      * Opt in to the two anti-announcement layers: TASK_EXECUTOR_FRAMING on
      * the way in, and the bounded NO_WORK_NUDGE push-back when the model
@@ -993,7 +1025,8 @@ export class AgentOrchestrator {
     // the same for the second result" is offered none of it. Grow-only, so
     // concurrent tasks sharing it can only widen each other.
     const primaryAgent = this.getPrimary();
-    const ledger = primaryAgent ? this.ledgerFor(primaryAgent.id) : new ToolExposureLedger();
+    const ledger = opts.contextKey ? this.conversationLedgerFor(opts.contextKey)
+      : primaryAgent ? this.ledgerFor(primaryAgent.id) : new ToolExposureLedger();
     // Seeding writes into the long-lived primary ledger, so it follows the
     // same rule as noteToolUse: nothing at all while the filter is off.
     if (getToolFilterPolicy().enabled) {
@@ -1034,8 +1067,9 @@ export class AgentOrchestrator {
         opts.tier,
         opts.subsystem,
         messages,
-        { tools },
+        { tools, signal: opts.signal },
       );
+      opts.signal?.throwIfAborted();
 
       if (llmResponse.finish_reason === 'tool_use' && llmResponse.tool_calls.length > 0) {
         // First, scan tool calls for `ask_for_clarification` - that breaks
@@ -1236,6 +1270,7 @@ export class AgentOrchestrator {
     // orchestrator serves every chat and a field would let a general turn
     // clear a site turn's scope mid-loop (#561).
     scope?: TurnToolScope | null,
+    conversation?: { history: LLMMessage[]; contextKey: string; signal: AbortSignal; untrustedSources?: string[] },
   ): AsyncIterable<LLMStreamEvent> {
     const primary = this.getPrimary();
     if (!primary) {
@@ -1244,7 +1279,7 @@ export class AgentOrchestrator {
 
     // A message from the user is the turn boundary for taint gating: this
     // turn's reads gate this turn's later calls and nothing else.
-    const turnTaint = new Set<string>();
+    const turnTaint = new Set<string>(conversation?.untrustedSources);
     // The remote snapshots THIS loop reads, entered around each of its tool
     // calls, so a browser card it raises binds the snapshot it read and not
     // the newest one another channel or the voice route took (#827,
@@ -1255,13 +1290,14 @@ export class AgentOrchestrator {
     const turnScope = scope ?? null;
 
     // Add user message to persistent history
-    primary.addMessage('user', message);
+    conversation?.signal.throwIfAborted();
+    if (!conversation) primary.addMessage('user', message);
 
     // If no LLM manager, yield placeholder
     if (!this.llmManager) {
       const stub = typeof message === 'string' ? message : '[image+text content]';
       const response = `[No LLM configured] Received: ${stub}`;
-      primary.addMessage('assistant', response);
+      if (!conversation) primary.addMessage('assistant', response);
       yield { type: 'text', text: response };
       yield {
         type: 'done',
@@ -1279,7 +1315,7 @@ export class AgentOrchestrator {
     // Build local messages array for this turn
     const messages: LLMMessage[] = [
       ...toSystemMessages(systemPrompt),
-      ...primary.getMessages(),
+      ...(conversation ? [...conversation.history, { role: 'user' as const, content: message }] : primary.getMessages()),
     ];
 
     // `fallbackTier` MUST reach the gate. It is a caller-supplied retry
@@ -1288,7 +1324,7 @@ export class AgentOrchestrator {
     // deliberately empty. Without it the gate would clear a small local
     // conversation model and then hand the filtered list to the frontier
     // task model the instant the local one died before first output.
-    const ledger = this.ledgerFor(primary.id);
+    const ledger = conversation ? this.conversationLedgerFor(conversation.contextKey) : this.ledgerFor(primary.id);
     let decided = this.decideTurnTools(messages, tier, ledger, fallbackTier, turnScope);
     let tools = decided.llm;
     const totalUsage = { input_tokens: 0, output_tokens: 0 };
@@ -1303,6 +1339,7 @@ export class AgentOrchestrator {
 
     // Tool execution loop
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+      conversation?.signal.throwIfAborted();
       let accumulatedText = '';
       const toolCalls: LLMToolCall[] = [];
       let doneResponse: LLMResponse | null = null;
@@ -1313,9 +1350,10 @@ export class AgentOrchestrator {
         fallbackTier,
         subsystem,
         messages,
-        { tools },
+        { tools, signal: conversation?.signal },
         () => { activeTier = fallbackTier!; },
       )) {
+        conversation?.signal.throwIfAborted();
         if (event.type === 'text') {
           accumulatedText += event.text;
           yield event; // Forward text chunks to client
@@ -1368,7 +1406,7 @@ export class AgentOrchestrator {
           },
         };
         // Add final response to persistent history (only user-facing text)
-        primary.addMessage('assistant', finalText);
+        if (!conversation) primary.addMessage('assistant', finalText);
         return;
       }
 
@@ -1397,6 +1435,7 @@ export class AgentOrchestrator {
       // Execute each tool and add results
       let widened = false;
       for (const tc of toolCalls) {
+        conversation?.signal.throwIfAborted();
         const discovery = this.handleDiscoveryCall(tc, decided.exposed, ledger, turnScope);
         if (discovery) {
           widened ||= discovery.grew;
@@ -1410,7 +1449,8 @@ export class AgentOrchestrator {
           continue;
         }
         this.noteToolUse(ledger, tc.name, turnScope);
-        const result = await withSnapshotReadLog(turnReads, () => this.executeTool(tc, undefined, turnTaint, turnScope));
+        const result = await withSnapshotReadLog(turnReads, () => this.executeTool(tc, conversation?.signal, turnTaint, turnScope));
+        conversation?.signal.throwIfAborted();
         messages.push({
           role: 'tool',
           content: result,
@@ -1442,7 +1482,7 @@ export class AgentOrchestrator {
         finish_reason: 'stop',
       },
     };
-    primary.addMessage('assistant', finalText);
+    if (!conversation) primary.addMessage('assistant', finalText);
   }
 
   /**
@@ -1489,6 +1529,15 @@ export class AgentOrchestrator {
       this.exposureLedgers.set(agentId, l);
     }
     return l;
+  }
+
+  /** Bounded, conversation-specific cache; never share the primary history/ledger. */
+  private conversationLedgerFor(key: string): ToolExposureLedger {
+    const ledger = this.conversationLedgers.get(key) ?? new ToolExposureLedger();
+    this.conversationLedgers.delete(key);
+    this.conversationLedgers.set(key, ledger);
+    if (this.conversationLedgers.size > 100) this.conversationLedgers.delete(this.conversationLedgers.keys().next().value!);
+    return ledger;
   }
 
   /**
@@ -1701,6 +1750,7 @@ export class AgentOrchestrator {
     signal: AbortSignal | undefined,
     scope: TurnToolScope | null,
   ): Promise<string | ContentBlock[]> {
+    signal?.throwIfAborted();
     if (!this.toolRegistry) {
       return `Error: No tool registry configured`;
     }
@@ -1720,6 +1770,12 @@ export class AgentOrchestrator {
     if (toolCall.name === 'request_approval') {
       try {
         const raw = await this.toolRegistry.execute(toolCall.name, toolCall.arguments);
+        // Not approved -- denied, expired or not answered in time: the
+        // category needs its own approval for the rest of the turn (Q-08).
+        const verdict = isToolResult(raw) ? '' : toolReturnText(raw);
+        if (!verdict.startsWith('[APPROVED]') && !verdict.startsWith('[ERROR]')) {
+          this.noteDeclinedIntent(toolCall.arguments.action_category);
+        }
         if (isToolResult(raw)) return raw.content.map(guardImageSize);
         // `toolReturnText`, not `JSON.stringify`: request_approval cannot return
         // a trusted-trailer carrier today, and this is the one dispatch that
@@ -1880,6 +1936,13 @@ export class AgentOrchestrator {
           context: gateContext(gate, toolCall.name, toolCall.arguments),
           executionMode: inline ? 'inline' : 'deferred',
           toolRegistry: this.toolRegistry,
+          // Who it is asked for: the executor judges the approved call again
+          // as this agent, under the permissions in force when it runs (Q-08).
+          principal: {
+            agentRoleId: primary.agent.role.id,
+            agentAuthorityLevel: primary.agent.authority.max_authority_level,
+            profile: this.getEffectiveProfile(),
+          },
         });
 
         // Emit approval request event
@@ -1981,12 +2044,20 @@ export class AgentOrchestrator {
                    `Ask the user whether they still want this done.`;
           case 'pending':
           default: {
-            // Timed out waiting (or the task was cancelled mid-wait). Hand
-            // the request to the deferred path so a late click still
-            // executes it. demoteToDeferred only succeeds while the request
-            // is still pending, so it cannot race an approve into a double
-            // execution: if the user approved in the meantime, the demotion
-            // fails and we execute inline after all.
+            // The task was cancelled while it waited: its card is withdrawn,
+            // not handed on, so a later click cannot run the action of a task
+            // the person stopped (Q-08). A deny only lands while the request
+            // is still pending; an approve that won the race runs below.
+            const withdrawn = signal?.aborted ? this.approvalManager.deny(request.id, 'task-cancelled') : null;
+            if (withdrawn) {
+              this.onApprovalWithdrawn?.(withdrawn);
+              return `[APPROVAL WITHDRAWN] The task was cancelled, so the approval request for ${toolCall.name} was withdrawn and nothing was run.`;
+            }
+            // Timed out waiting. Hand the request to the deferred path so a
+            // late click still executes it. demoteToDeferred only succeeds
+            // while the request is still pending, so it cannot race an approve
+            // into a double execution: if the user approved in the meantime,
+            // the demotion fails and we execute inline after all.
             if (!this.approvalManager.demoteToDeferred(request.id)) {
               const recheck = this.approvalManager.getRequest(request.id);
               if (recheck?.status === 'approved') {
@@ -2091,12 +2162,16 @@ export class AgentOrchestrator {
   /**
    * Execute a tool call originating from a premium realtime (gpt-realtime-2)
    * voice session. Mirrors `executeTool`'s authority gate BUT auto-approves:
-   * a `requiresApproval` decision is treated as granted so the audio loop is
-   * never blocked (decision #2, see docs/GPT_REALTIME_2_INTEGRATION.md §4 Phase 3).
+   * a spoken command is the authorization, so a `requiresApproval` decision is
+   * treated as granted and the audio loop is never blocked (decision #2, see
+   * docs/GPT_REALTIME_2_INTEGRATION.md §4 Phase 3; confirmed by the owner on
+   * 14 October).
    *
-   * Still enforced: emergency state, explicit hard denies, and the
-   * user-configured `blockedCategories` backstop. Every call is written to the
-   * audit trail tagged `channel:'voice'`; an auto-approved call is recorded as
+   * Still enforced: emergency state, explicit hard denies, the user-configured
+   * `blockedCategories` backstop, cards that must be clicked, and approvals a
+   * tainted session's profile asks for. With no primary agent to judge for,
+   * nothing runs. Every call is written to the audit trail tagged
+   * `channel:'voice'`; an auto-approved call is recorded as
    * `approval_required` + `executed:true` so the trail shows no human confirmed it.
    *
    * Always returns a string (the tool result or an error/denial marker) — the
@@ -2132,6 +2207,11 @@ export class AgentOrchestrator {
     }
 
     const primary = this.getPrimary();
+    // Fail closed, as on the task path: a wired gate with nobody to judge for
+    // must not run the tool ungated and unaudited (Q-08).
+    if (this.authorityEngine && !primary) {
+      return `[AUTHORITY DENIED] Cannot execute ${name}: no primary agent is active.`;
+    }
     const tool = this.toolRegistry.get(name);
     // As on the task path: pin a relative file path before it is judged (#522).
     args = freezeToolArguments(tool, args);

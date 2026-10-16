@@ -6,13 +6,23 @@ The composer records versioned planning inputs, and this runner measures generat
 
 Production composition retains the immutable job specification and adds `provenance`: prompt version, planning policy, and SHA-256 fingerprints of the catalog and environment contracts. Catalog/tool/role/target/library metadata is copied once before composition, so a refresh cannot silently change a repair's inputs. The specification and provenance survive restart in the existing composition journal. No database migration is needed.
 
-`baseline-v1` is the production default: the existing prompt, unchanged. `deterministic-first-v1` adds an instruction, in both prompt paths, to prefer typed actions, templates, conditions, loops and transformations before adding AI, and to report a blocker when required information is missing. It is only used when a caller selects it (the evaluation does) until a hosted comparison supports making it the default.
+`baseline-v1` is the production default: the existing prompt, unchanged. `deterministic-first-v1` adds an instruction, in both prompt paths, to prefer typed actions, templates, conditions, loops and transformations before adding AI, and to report a blocker when required information is missing. It stays opt-in until a hosted comparison supports making it the default (see Promotion comparison).
+
+## Planning policy in production
+
+Every production composition (chat and opportunity) runs the policy named by `JARVIS_PLANNING_POLICY`, or else by the user-owned setting `workflows.planningPolicy`, or else the default. The choice is read at each composition, and every attempt and repair of one composition runs the policy it started with. The env var applies from the next daemon start. A stored setting applies to the next composition after a settings reload (`POST /api/config/reload` or SIGHUP), but no screen or route edits `workflows` settings yet, so the env var is the practical switch. An unknown name falls back to `baseline-v1` with one warning per value until a valid read, so a typo cannot select an unmeasured prompt. The daemon logs the policy and where it came from at start and whenever either changes. A direct call to the composer without a policy also follows the selector. The evaluation passes its policy explicitly and ignores both.
+
+- **Opt in:** set `deterministic-first-v1`.
+- **Promote:** change `DEFAULT_PLANNING_POLICY` in a pull request that carries a `promote` comparison report.
+- **Roll back:** set `baseline-v1`. It selects the prior policy whether or not the candidate was promoted.
+
+Each composition's journal row records the prompt version and the policy that actually ran, and the created flow links to it through `compositionRecordId`. Prompts are retained by version: `composition-provenance.test.ts` pins every system prompt, user prompt, tool result and tool definition the composer sends, on both paths and through a repair, to `COMPOSER_PROMPT_VERSION`. It does so in each environment shape production uses (bare; detailed tools, specialist roles, a library and mixed machines; the same without a library, as hosted installs show it; tool names only), and pins each policy's instruction text to its id. Changing the composer's wording without a new version, or a policy's instruction without a new id, fails that test, so rolling back always restores the prompt that was measured.
 
 The existing high-tier route remains unchanged. The hosted proxy resolves `uj-high` to the model a plan routes to; a client alias alone does not prove which model answered.
 
 ## Supported evaluation envelope
 
-The versioned sets contain **9 development tasks** and **12 held-out tasks**. They cover fixed reminders, webhook copying, thresholds and routing, empty/nonempty loops, regex transformations, event payloads, Ask output wiring, destinations, negative constraints and explicit abstention when required capabilities are unavailable.
+Two task sets exist, selected with `--taskset`. **`w8`** (the default) has **9 development tasks** and **12 held-out tasks** covering fixed reminders, webhook copying, thresholds and routing, empty/nonempty loops, regex transformations, event payloads, Ask output wiring, destinations, negative constraints and explicit abstention when required capabilities are unavailable. **`founder`** holds the founder jobs described below. A task set names the environment it was written for, so the composer always sees what the tasks assume.
 
 Only the original specification and a catalog of the real notify, regex, Ask and event-trigger pieces reach the model. Expected effects, test payloads and grading assertions are not supplied to the model. The controlled provider contains development fixtures only.
 
@@ -30,6 +40,39 @@ Limits:
 - This is not a live integration, arbitrary-code isolation or Authority certification.
 - The workflow readiness preflight (`flow-readiness.ts`) is used when present. The catalog artifact records whether it was.
 
+## Founder task sets
+
+`founder` covers the jobs the product promises: meeting preparation and follow-up, invoice review, lead follow-up and recurring reports, plus requests that must be refused: missing information, missing capabilities, unsupported machines or UI automation, and one-off or judgment-heavy requests that need no automation. The development set has 16 tasks (11 supported, 5 to refuse); the held-out set has 66 (44 supported, 22 to refuse), above the release rubric's minimum of 40 and 20.
+
+They run in the `founder-v1` environment, defined in `src/workflows/evaluation/environment.ts`. `founder-v2` is the same with what a self-hosted daemon also shows the composer, the shipped specialist roles and the pieces library; `founder-v2-hosted` adds the roles only, as hosted installs manage pieces themselves. `--environment ID` runs a task set in an environment that contains its own, recorded in the manifest. `founder-v1` shows:
+
+- **Pieces:** notify, regex, Ask, triggers, context (memory search, commitments, recent activity), tool and agent, with their real metadata.
+- **Tools:** the seven bounded tools a workflow can actually invoke (read, write and list files, read and set the clipboard, capture the screen, desktop snapshot), using the real tool definitions projected exactly as the daemon shows them to the composer. Tools a workflow cannot run are not offered.
+- **Machines:** this computer, an online Office Mac and an offline Studio PC. Tasks name the machine they mean.
+- **Integrations:** Gmail (create draft, send) and Slack (channel message, direct message), described with the action and property names of the catalog's verified versions. They are shown to the composer but never executed.
+
+Each scenario carries a sandbox: files, clipboard text, memory entities, commitments, recent activity, tools that need approval, and machines that are offline. The fake services answer from it the way the daemon would. A tool that needs approval creates a real waitpoint, so the run pauses before anything is written. A call to an offline machine is blocked and the step fails. A missing file is an error. Memory search matches entity names only, as production does. Context reads are recorded but are not effects.
+
+Assertions per scenario:
+
+- Expected run status: succeeded, paused for approval, or failed.
+- Notifications, tool calls and agent delegations compared as exact multisets. A tool call must match its tool, every parameter and its outcome, so a wrong path, machine or added text fails; a machine's display name and sidecar id count as the same target. Anything extra, duplicated or missing fails.
+- The one AI step's prompt must include the source facts named by the scenario and must not include facts the job excludes; its reply must reach the destination unchanged.
+- `forbidden` lists pieces, actions, tools, channels and agents the graph must not contain.
+
+A task that needs an integration is graded on its composed graph instead of being run. Each expected step must appear once with its action, the named connection (`{{connections['id']}}` or `{{connections.id}}`) and the literal recipient and text; any other integration step, such as a send where a draft was asked for, is an unexpected effect.
+
+Reference answers for the development set live beside it and drive smoke runs. Held-out answers are kept outside the repository. To prove every held-out task is satisfiable without publishing its answers, run smoke with them:
+
+```bash
+bun run eval:workflows --mode smoke --split heldout --taskset founder \
+  --policy baseline-v1 --references /private/founder-heldout-1.reference.json --out /tmp/founder-verify
+```
+
+That checks the fixtures; it measures nothing and a baseline refuses it. A third set, the **reserve**, is sealed for use after tuning: only its hash is committed (`tasks/founder-reserve-1.commitment.json`), and `--taskset founder-reserve --reserve FILE` refuses a file that does not match it. Do not tune against the reserve, and replace it once it has been used.
+
+Limits: the workflow's own AI and agent replies are simulated, so this measures what the AI step is given and how its output is used, not the runtime model's writing; reviewers judge that. Integrations are never executed. Sandboxed tools return fixture data, not a real machine's.
+
 ## Run
 
 Use Bun from the repository root. Each `--out` must be a **new directory whose parent already exists**. Existing results are never overwritten.
@@ -46,40 +89,74 @@ bun run eval:workflows --mode smoke --split development \
   --condition malformed-first --out /tmp/w8-repair
 ```
 
-For a hosted baseline, supply a versioned profile that describes an **existing authorized Jarvis hosted account**. The runner uses the same hosted provider implementation as Jarvis; it does not call a different model vendor directly.
+For a hosted baseline, supply a versioned profile that describes an **existing authorized Jarvis hosted account**. The runner uses the same hosted provider implementation as Jarvis; it does not call a different model vendor directly. Keys are per account and a plan resolves through the key's team, so each plan needs its own evaluation account and profile file.
 
 ```json
 {
-  "id": "owner-confirmed-plan",
-  "version": "deployment-revision",
+  "id": "starter",
+  "version": "2026-10-05",
   "baseUrl": "https://YOUR_JARVIS_HOSTED_PROXY",
   "apiKeyEnv": "JARVIS_EVAL_API_KEY",
-  "intendedModel": "CONFIRMED_BACKEND_MODEL_ID",
-  "routingEvidence": "Reference to the deployed plan-to-model mapping"
+  "intendedModel": "UPSTREAM_MODEL_OF_THE_HIGH_SLOT",
+  "routingEvidence": "Where the admin export below came from",
+  "admin": {
+    "exportedAt": "2026-10-05T12:00:00Z",
+    "exportedBy": "Admin name",
+    "plan": { "key": "starter", "name": "Starter" },
+    "profileKey": "base",
+    "proxyFallbacks": [],
+    "profiles": ["...GET /api/llm/profiles, unmodified..."],
+    "models": ["...GET /api/llm/models, unmodified..."]
+  }
 }
 ```
 
-The credential belongs in the named environment variable, not the file. Missing profile/access produces a `not_run` report and exit code 2. The repository does not contain credentials.
+A hosted run also needs a spend authorization, approved by someone who can authorize the cost:
+
+```json
+{
+  "schemaVersion": 1,
+  "approvedBy": "Name",
+  "approvedAt": "2026-10-05",
+  "validUntil": "2026-10-12",
+  "profileId": "starter",
+  "splits": ["development", "heldout"],
+  "maxRequests": 300,
+  "maxTokens": 3000000
+}
+```
+
+The credential belongs in the named environment variable, not either file. The repository does not contain credentials.
 
 ```bash
 bun run eval:workflows --mode hosted --profile /path/profile.json \
-  --split heldout --repeats 3 --max-requests 100 --out /tmp/w8-hosted
+  --authorization /path/spend.json --split heldout --repeats 3 --out /tmp/w8-hosted
 ```
 
 Run each deployed plan/profile into a separate directory. Both policies run by default; select one with `--policy baseline-v1` or `--policy deterministic-first-v1`. Natural and `malformed-first` conditions remain separate. The injected condition replaces the first model response, records both the actual and injected responses, and excludes abstention tasks. It measures controlled recovery, not the natural error rate.
 
-The request limit counts **actual HTTP POSTs**, including provider-internal recovery and manager retries. The composer's total deadline and cancellation still apply per task. This request limit is not a dollar cap. Budget exhaustion leaves remaining tasks explicitly unrun.
+Run development smoke first, then the frozen held-out run. Do not tune prompts against held-out failures and then describe the same set as an untouched holdout. Freeze a new version before the next comparison. Repeat the hosted baseline after composer, readiness, prompt, catalog or profile changes; compare only matched inputs.
 
-Do not tune prompts against held-out failures and then describe the same set as an untouched holdout. Freeze a new version before the next comparison. Repeat the hosted baseline after composer, readiness, prompt, catalog or profile changes; compare only matched inputs.
+## Hosted run gates
+
+A hosted run spends money and claims to measure a deployed plan, so it does not start unless each condition below holds. A missing condition produces a `not_run` report listing every reason, and exit code 2. Malformed files are errors, exit code 1.
+
+- **Spend authorization.** Required for every hosted run. It must name this profile and split, and the run must start inside its dates. `maxRequests` counts **actual HTTP POSTs**, including provider-internal recovery and manager retries; `--max-requests` may lower it, never raise it. `maxTokens` counts input, cached input and output as the provider reports them. Both are checked before each request, so a request already in flight can exceed the token limit by its own size. A successful response that reports no usage stops the run, because spend can no longer be counted. A stop leaves the remaining tasks explicitly unrun. These are request and token limits, not an invoice or a dollar cap.
+- **Admin evidence (held-out only).** `admin` is the unmodified control-plane export. The runner resolves plan, profile, `high` slot and upstream model from it and refuses a profile whose `intendedModel` differs. Hosting stores no profile revision, so the revision is a SHA-256 fingerprint of the resolved profile: every slot's model, reasoning effort, pricing and update time, plus the declared proxy fallbacks. Re-slotting the profile changes it; editing an unrelated profile does not. Proxy fallbacks must be listed, even as `[]`.
+- **Frozen rubric (held-out only).** `src/workflows/evaluation/rubric/workflow-release-v1.json` holds the release thresholds from the implementation roadmap. It ships as `proposed`. Freezing sets `status: "frozen"` with the date and approvers, and requires agreed per-plan budgets (requests and tokens per task, p95 composition time). A rubric dated after the run started is refused. A changed threshold is a new rubric id, not an edit. Every manifest pins the rubric and its hash, so a result cannot be re-judged against a different one.
+
+Every hosted request is pinned to `uj-high`. The hosted provider rewrites proxy errors before the model manager sees them, which today keeps the manager from failing over to the provider default (`uj-medium`). The pin makes that a guarantee rather than a side effect of error wording: a request for any other alias is refused before it is sent, recorded on the row, and the run stops. A refused row is never counted as a measurement of the profile.
+
+What these gates do not do: they do not verify which upstream model answered each request (a response may report only the opaque alias; the proxy spend log is the authority for routing), they do not make an estimate an invoice, and they do not certify anything beyond the synthetic task set.
 
 ## Evidence and reporting
 
-- `manifest.json`: code HEAD plus a source fingerprint (including uncommitted evaluation code), file inventory, task-set hash, hosted profile, aliases, limits and scheduled tasks. `sourceFingerprintVersion: 2` hashes a framed inventory of paths, content hashes and deletion markers. `deletedSourcePaths` records tracked files missing from the working tree; an empty file and a deletion have different fingerprints. Other read errors still fail the run. Older manifests use the previous fingerprint format and should not be compared directly.
+- `manifest.json`: code HEAD plus a source fingerprint (including uncommitted evaluation code), file inventory, task-set hash, the rubric and its hash, hosted profile, resolved admin evidence and its revision, spend authorization, aliases, limits, scheduled tasks, the exact command arguments and the Bun version. `sourceFingerprintVersion: 2` hashes a framed inventory of paths, content hashes and deletion markers. `deletedSourcePaths` records tracked files missing from the working tree; an empty file and a deletion have different fingerprints. Other read errors still fail the run. Older manifests use the previous fingerprint format and should not be compared directly.
 - `taskset.json` and `catalog.json`: exact task and catalog snapshots, engine bundle hash and whether the readiness preflight was available.
 - `events.jsonl`: incremental task/call/transport/candidate events. An interrupted run retains this log and its composition journal; it must not be presented as completed.
-- `rows.jsonl`: raw requests and responses, injected faults, candidates and validation errors, composition latency, HTTP status, requested/reported models, raw token counts, execution receipts and per-assertion results.
+- `rows.jsonl`: raw requests and responses, injected faults, candidates and validation errors, composition latency, HTTP status, requested/reported models, raw token counts, execution receipts and per-assertion results. Each row also records the profile id and revision, any refused requests, and fingerprints of the system prompt and tool definitions it sent.
 - `evaluation.sqlite` and `runtime/`: isolated composition, queue/run records and engine logs.
-- `report.json`: completion and unrun counts, with separate groups for split, measurement kind, policy and condition. Failed tasks stay in the denominator.
+- `report.json`: completion and unrun counts, refused requests, and separate groups for split, measurement kind, policy, condition and profile. Each group's `measures` count every scheduled task, so unrun, refused, failed and timed-out work stays in the denominator.
 - `review-template.json`: links each row to the fingerprint of its exact persisted, redacted JSON for subsequent human review. Redacted provider errors remain reviewable, and changes to the saved row still invalidate the review.
 
 Repair metrics count tasks, not individual calls. `repairs.needed` counts tasks with rejected candidates or an injected fault. `repairs.attempted` counts only tasks where a later composer call actually started with a failed candidate to repair. Each call records `repairOfCandidate`, the zero-based candidate index, or null for an initial/discovery call. A truncated response with no subsequent call is not a repair attempt. A provider failure during a repair call is an attempted, unsuccessful repair. Structural/intent repair successes use only the attempted tasks.
@@ -111,6 +188,57 @@ bun run eval:workflows --mode review --results /tmp/w8-hosted/rows.jsonl \
   --reviews /path/completed-reviews.json --out /tmp/w8-reviewed
 ```
 
-The importer rejects unknown/duplicate row IDs, changed row hashes and invalid measurements. Reviewed results are separate files; raw observations remain immutable. A corrected workflow needs a new execution run before claiming its effects are verified.
+For blind review, generate a packet first:
+
+```bash
+bun run eval:workflows --mode review-packet --results /tmp/w8-hosted/rows.jsonl --out /tmp/w8-packet
+```
+
+`packet.json` shows each job, the composed workflow or the reason none was composed, and what every scenario did, in shuffled order, without planning policy, profile, model, prompts, repair history or automatic verdicts. Reviewers fill `review-template.json`, which also asks whether the result would be useful (`useful`) and, for AI steps, whether it stayed faithful to its sources (`fidelity`); both may be left null. Keep `key.json` away from reviewers and pass it on import with `--key /tmp/w8-packet/key.json`.
+
+The importer rejects unknown/duplicate row IDs, changed row hashes and invalid measurements. Reviewed results are separate files; raw observations remain immutable. When the results file sits in its run directory, the review output also carries that run's manifest and task set, so it can feed a baseline. A corrected workflow needs a new execution run before claiming its effects are verified.
+
+## Measures
+
+Every completed row has exactly one disposition, taken from structured fields (refusal records, explicit blocks, error codes), never from message wording: `passed`, `checks_failed`, `missed_abstention`, `false_abstention`, `composition_failed`, `composition_timeout`, `provider_error`, `routing_fallback`, `budget_stopped` or `harness_error`. Scheduled work that never ran is `not_run`. Only `passed` counts as success.
+
+Rates carry their counts and a 95% Wilson interval, and a rate without a denominator is null, never zero. Supported jobs report a valid graph, intent correct on the **first candidate** (the first submitted graph was accepted) and **after the bounded repair loop**, both automatically and with human review; a task counts as correct under review only if its automatic checks pass and the reviewer agrees. Abstention tasks report correct abstentions and missed ones, and false abstentions on supported jobs are counted separately. Unexpected effects count simulated notifications and tool calls beyond what a scenario expects (extra, duplicate or misdirected), unrequested AI calls and agent delegations, and integration steps a graph-only task did not ask for; a missing effect is a failure but not an unauthorized one. Unexpected effects are also split: `effects.unsafe` counts what reaches people or systems, and `effects.unrequestedAi` counts AI calls and agent delegations no scenario asked for. `ai` counts composed graphs whose AI steps exceed their task's `maxAiSteps`, and the excess steps. Composition time, requests and tokens per task, and review edits and time report p50, p90, p95 and the maximum. Usefulness and AI fidelity are reported as separate rates over the rows a reviewer judged; they never change intent correctness. With repeats, task-level rates count a task only when every scheduled repeat succeeded.
+
+## Baseline report
+
+```bash
+bun run eval:workflows --mode baseline --runs /tmp/w8-reviewed,/tmp/w8-plus-reviewed --out /tmp/w8-baseline
+```
+
+`--runs` takes run directories or reviewed directories. The report is sanitized for sharing: aggregates and identities only, with no job text, prompts, responses, graphs, error text, URLs, pricing or reviewer notes. It is **refused** (exit 1) for smoke, plan or development runs, rows that are not hosted measurements, a missing or unpinned frozen rubric, missing admin evidence or authorization, runs on different rubrics or task sets, and two runs of the same profile. Hosted held-out runs that did not start make it **not_run** (exit 2), with their reasons.
+
+Natural-condition groups are judged against the frozen rubric: sample size, first-candidate and after-repair intent, unexpected effects, missed abstentions, median edits and correction time, and the per-plan budgets. Each verdict is `met`, `not_met`, `insufficient_sample`, `incomplete_review`, `not_measured`, `not_agreed` or `unknown_usage`. A small sample cannot pass a threshold, though it can fail one when even its upper bound is below the minimum. The overall verdict is `meets_rubric` only when everything is met. Injected-fault groups are reported without verdicts.
+
+## Promotion comparison
+
+```bash
+bun run eval:workflows --mode hosted --taskset founder --environment founder-v2 --profile PROFILE.json --authorization SPEND.json --out /tmp/promotion-run
+bun run eval:workflows --mode compare --runs /tmp/promotion-run-reviewed --out /tmp/promotion
+```
+
+`--mode compare` judges `deterministic-first-v1` against `baseline-v1` under the promotion rule `src/workflows/evaluation/rubric/planning-promotion-v1.json` (or `--rule FILE`). It ships **proposed**. To use it, freeze it with its approvers and date and commit the frozen rule before the hosted runs it judges. Every run pins the rule it starts under in its manifest, and a comparison is judged only by that rule: a run without a pin, a rule that differs from the pinned one, a proposed rule, or one frozen after the run started is refused. So results cannot move a threshold; a changed threshold is a new rule id.
+
+It takes the same runs a baseline takes and refuses the same things. It also refuses:
+
+- a run outside a production-shaped environment (`founder-v2` or `founder-v2-hosted`), which would not measure what production shows the composer;
+- a run that did not schedule both policies on the same natural-condition tasks and repeats (`--policy both`, the default, does, running each task under both back to back so drift and a budget stop affect them evenly);
+- runs that measured more than one composer prompt version.
+
+For each profile it checks:
+
+- **Complete:** every scheduled item ran. An incomplete group decides nothing.
+- **Sample:** the release rubric's minimum supported and negative tasks.
+- **Unnecessary AI:** on the graphs both policies composed, the AI each graph uses beyond its job's needs must fall. That is its AI steps over the task's allowance, or the most extra AI calls and delegations in any one scenario, whichever is larger, so one extra step counts once.
+- **Composed:** the candidate composes at least as many supported jobs and abstains falsely no more often, so avoiding AI by not composing is not an improvement.
+- **Corrections:** first-candidate correctness and, with human review, median edits and correction time must improve: at least one better and none worse.
+- **Safety:** unsafe effects and missed abstentions must not rise.
+- **Success:** after-repair task success may fall by at most `maxSuccessRegression` (5 points in the proposed rule); a drop exactly at the allowance passes.
+
+Each profile is `promote`, `keep_baseline` (something failed) or `not_established` (an incomplete run, pending reviews or a small sample). The report promotes only when every profile does, every run completed, and the runs measured the composer prompt version the code sends now; it lists that version and each run's head, source fingerprint and environment. Exit codes match the baseline: 0 completed, 1 refused, 2 not_run or incomplete. The report is sanitized like a baseline: aggregates, fingerprints and run names only. A `promote` verdict is the evidence for changing the default, not the change.
 
 Results are written only to the `--out` directory; do not commit run output. Summarize a run in the PR or discussion that uses it.

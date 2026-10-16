@@ -1,0 +1,54 @@
+.brief-root .brief-today-decision { --decision-edge: var(--brief-attention-text); position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 42%); min-height: 300px; border: 1px solid var(--decision-edge); border-radius: var(--brief-corner-card); background: var(--brief-card); isolation: isolate; }
+.brief-root .brief-today-decision[data-tone="success"] { --decision-edge: var(--brief-success-text); }
+.brief-root .brief-today-decision[data-tone="error"] { --decision-edge: var(--brief-error-text); }
+.brief-root .brief-today-decision[data-tone="running"] { --decision-edge: var(--brief-running-text); }
+.brief-root .brief-today-decision-summary { padding: 24px; display: flex; flex-direction: column; align-items: start; min-width: 0; }
+.brief-root .brief-today-decision-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 20px; width: 100%; }
+.brief-root .brief-today-decision-meta .brief-status { border-radius: 16px 0 16px 16px; }
+.brief-root .brief-today-decision-summary h2 { margin: 26px 0 22px; max-width: 27ch; white-space: pre-line; overflow-wrap: anywhere; }
+.brief-root .brief-today-decision-summary > p { margin: 0 0 20px; white-space: pre-line; }
+.brief-root .brief-today-review-trigger { margin-top: auto; min-width: 170px; }
+.brief-root .brief-today-action-feedback { margin-top: 8px; min-height: 16px; color: var(--brief-secondary); }
+.brief-root .brief-today-action-feedback:empty { visibility: hidden; }
+.brief-root .brief-today-decision-notice { color: var(--brief-attention-text); font: 400 12px/18px var(--brief-sans); }
+.brief-root .brief-today-paper-stage { position: relative; min-height: 298px; border-top-right-radius: 0; border-bottom-right-radius: 13px; }
+.brief-root .brief-today-paper-recess { position: absolute; inset: 0; background: var(--brief-selected); clip-path: polygon(40% 0, 100% 0, 100% 100%, 0 100%); border-radius: 0 0 13px 0; pointer-events: none; }
+.brief-root .brief-today-paper-clip { position: absolute; inset: 0; overflow: clip; border-radius: 0 0 13px 0; clip-path: polygon(22% 0, 100% 0, 100% 100%, 0 100%); }
+.brief-root .brief-today-paper-clip[data-raised="true"] { clip-path: none; overflow: visible; }
+.brief-root .brief-today-paper-backing-mask { position: absolute; inset: 0; overflow: clip; border-radius: 0 0 13px 0; clip-path: polygon(22% 0, 100% 0, 100% 100%, 0 100%); }
+.brief-root .brief-today-paper-motion, .brief-root .brief-today-paper-backs { position: absolute; right: 14px; width: max(250px, calc(100% - 38px)); top: 18px; bottom: 20px; transform-origin: center; }
+.brief-root .brief-today-paper-backs { transform: translate(26px, 12px) rotate(-3.5deg); pointer-events: none; }
+.brief-root .brief-today-paper-back { position: absolute; inset: 0; transform: translate(4px, 5px); border: 1px solid var(--brief-paper-edge); border-radius: var(--brief-corner-paper); background: var(--brief-paper-backing); }
+.brief-root .brief-today-paper-back.far { transform: translate(7px, 9px); background: var(--brief-stack-far); }
+.brief-root .brief-today-paper-face { height: 100%; display: flex; flex-direction: column; gap: 12px; padding: 16px; border: 1px solid var(--brief-paper-edge); border-radius: var(--brief-corner-paper); background: var(--brief-paper); box-shadow: 2px 3px 0 var(--brief-paper-shadow); transition: box-shadow 200ms ease-out; }
+.brief-root [data-raised="true"] > .brief-today-paper-clip .brief-today-paper-face { box-shadow: 4px 8px 0 var(--brief-paper-shadow); }
+.brief-root .brief-today-paper-face > h3 { border-bottom: 1px solid var(--brief-card-edge); margin: 0; padding-bottom: 10px; }
+.brief-root .brief-today-paper-excerpt { min-height: 0; overflow: hidden; flex: 1; scrollbar-width: thin; overscroll-behavior: contain; }
+.brief-root [data-raised="true"] .brief-today-paper-excerpt { overflow: auto; }
+.brief-root .brief-today-paper-excerpt .brief-type-body { font-size: 12px; line-height: 18px; }
+.brief-root .brief-today-paper-excerpt p { margin-bottom: 6px; }
+.brief-root .brief-today-paper-excerpt h4 { margin-bottom: 10px; }
+.brief-root .brief-today-document { overflow-wrap: anywhere; }
+.brief-root .brief-today-document p { margin: 0 0 12px; white-space: pre-wrap; }
+.brief-root .brief-today-document h4 { margin: 0 0 16px; }
+.brief-root .brief-today-document-attention { padding: 10px; border-radius: 5px 0 5px 5px; background: var(--brief-attention-surface); color: var(--brief-attention-text); }
+.brief-root .brief-today-paper-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; flex: none; min-height: 36px; }
+.brief-root .brief-today-paper-actions .brief-button { min-width: 0; padding-inline: 9px; }
+.brief-root .brief-today-document-review { grid-column: 1 / -1; padding: 26px; margin: 0 24px 24px; background: var(--brief-paper); border: 1px solid var(--brief-paper-edge); border-radius: var(--brief-corner-paper); outline-offset: 3px; }
+.brief-root .brief-today-review-header { display: flex; gap: 20px; align-items: center; justify-content: space-between; padding-bottom: 18px; margin-bottom: 24px; border-bottom: 1px solid var(--brief-card-edge); }
+.brief-root .brief-today-review-header h3 { margin: 0; }
+.brief-root .brief-today-document-review .brief-today-document { max-width: 65ch; }
+.brief-root .brief-today-review-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+.brief-root .brief-today-decision--fallback { grid-template-columns: 1fr; align-content: center; padding: 28px; gap: 20px; border-color: var(--brief-card-edge); }
+.brief-root .brief-today-decision--fallback :is(h2,p) { margin: 0; }
+.brief-root .brief-today-decision--fallback button { justify-self: start; }
+.brief-root .brief-today-skeleton { width: 78%; height: 24px; border-radius: var(--brief-corner-control); background: var(--brief-recessed); }
+.brief-root .brief-today-skeleton.short { width: 50%; }
+@container brief-decision (max-width: 580px) {
+  .brief-root .brief-today-decision { grid-template-columns: 1fr; }
+  .brief-root .brief-today-paper-stage { min-height: 290px; }
+  .brief-root .brief-today-paper-motion, .brief-root .brief-today-paper-backs { width: min(340px, calc(100% - 38px)); }
+  .brief-root .brief-today-document-review { padding: 18px; margin: 0 16px 20px; }
+}
+@media (prefers-reduced-motion: reduce) { .brief-root .brief-today-paper-face { transition: none; } }
+.brief-root [data-reduce-motion="true"] .brief-today-paper-face { transition: none; }

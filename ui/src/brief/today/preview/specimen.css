@@ -1,0 +1,13 @@
+.brief-root.brief-today-specimen { display:flex; flex-direction:column; height:100dvh; overflow:auto; }
+.brief-root .brief-today-review-toolbar { position:sticky; left:0; display:flex; align-items:center; flex-wrap:wrap; flex:none; gap:8px 16px; padding:8px 18px; background:var(--brief-soft); border-bottom:1px solid var(--brief-card-edge); color:var(--brief-secondary); font:400 12px/18px var(--brief-sans); }
+.brief-root .brief-today-review-toolbar label { display:flex; align-items:center; gap:6px; }
+.brief-root .brief-today-review-toolbar :is(button,select) { min-height:32px; background:var(--brief-card); color:var(--brief-ink); border:1px solid var(--brief-card-edge); border-radius:var(--brief-corner-control); padding:4px 8px; }
+.brief-root .brief-today-review-toolbar small { flex-basis:100%; font-size:12px; }
+.brief-root .brief-today-review-viewport { flex:1; min-height:540px; }
+.brief-root .brief-today-review-viewport > .brief-navigation { height:100%; }
+.brief-root .sample-conversation-tabs { padding:8px 12px; margin-right:36px; background:var(--brief-soft); border-radius:var(--brief-corner-control); font-size:13px; }
+.brief-root .sample-conversation-thread { flex:1; min-height:0; overflow:auto; padding-top:36px; }
+.brief-root .sample-conversation-thread h2 { margin:0; }
+.brief-root .sample-conversation-suggestions { display:flex; flex-wrap:wrap; gap:8px; padding-block:16px; }
+.brief-root .sample-conversation-input { width:100%; height:56px; min-height:56px; flex:none; resize:none; background:var(--brief-card); color:var(--brief-ink); border:1px solid var(--brief-field-edge); border-radius:var(--brief-corner-card); padding:12px; font:400 14px/20px var(--brief-sans); }
+.brief-root .sample-conversation-input:focus-visible { outline:2px solid var(--brief-focus); outline-offset:2px; }

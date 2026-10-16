@@ -12,20 +12,13 @@ import { rawUiGate, REVIEWED_UI_TOOLS } from '../../authority/ui-intent';
 // Target keys the boundary owns; neither a tool's gate subject nor a governed
 // piece's target props can set them (`piece-effects.ts`, #793).
 import { RESERVED_TARGET_KEYS } from './piece-effects';
+import { BOUNDED_TOOLS, boundedToolCapability } from './tool-capability';
 
-/**
- * Tools whose effect is bounded enough to describe a review target (a sidecar
- * and an absolute path) on an approval card. Names only: the Authority action
- * for each comes from the daemon's single source of truth, `TOOL_ACTION_MAP`,
- * so the two can never drift. `bounded-tools.test.ts` fails if a name here
- * stops resolving there.
- */
-const BOUNDED_TOOLS = new Set<string>([
-  'read_file', 'list_directory', 'write_file',
-  'get_clipboard', 'set_clipboard', 'get_system_info', 'capture_screen',
-  'browser_snapshot', 'browser_screenshot',
-  'desktop_list_windows', 'desktop_snapshot', 'desktop_find_element', 'desktop_screenshot',
-]);
+/** The capability a bounded tool needs on the machine it runs on; dispatch checks it. */
+export { boundedToolCapability };
+
+// The bounded tools and their capabilities live in `tool-capability.ts`, which
+// the database layer reads too (Q-05 binding pins).
 
 /**
  * Tools whose effect is a script or a click sequence. A category label cannot
@@ -226,10 +219,7 @@ function gatedCapability(tool: ToolDefinition, params: Record<string, unknown>) 
 }
 
 function boundedTarget(tool: string, params: Record<string, unknown>): Record<string, unknown> {
-  const capability: SidecarCapability = tool.includes('file') || tool === 'list_directory' ? 'filesystem'
-    : tool.includes('clipboard') ? 'clipboard' : tool === 'get_system_info' ? 'system_info'
-    : tool === 'capture_screen' || tool === 'desktop_screenshot' ? 'screenshot'
-    : tool.startsWith('browser_') ? 'browser' : 'desktop';
+  const capability = boundedToolCapability(tool);
   const scope = getMachineScope();
   const selector = scope ? scope.resolveTarget(params.target, capability)
     : typeof params.target === 'string' && params.target.trim() ? params.target : autoTargetForCapability(capability);

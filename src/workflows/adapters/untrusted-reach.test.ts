@@ -173,17 +173,82 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  *                                     `blocker.reason`, which goals/rhythm.ts
  *                                     then DOES frame at the prompt boundary --
  *                                     the precedent this whole decision follows.
+ *   goals/next-action.ts               OPEN-ish, one hop like goals/work-items.ts.
+ *                                     It holds a whole `FlowVersion` only to
+ *                                     find a waiting step by name and read its
+ *                                     `pieceName`, and returns who resumes the
+ *                                     wait. It also quotes `blocker.reason`
+ *                                     from work-items.ts in a plan's
+ *                                     rationale, clipped to 200 characters;
+ *                                     for a failed run that is the step's
+ *                                     `failedStep.errorMessage`. The plan backs
+ *                                     What's next?, which a person reads; a
+ *                                     consumer that hands it to a model frames
+ *                                     it there, as goals/rhythm.ts does.
  *   actions/tools/workflow-composer.ts BENIGN. It imports only the
  *                                     `FlowTriggerNode` TYPE, so it holds no run
  *                                     or version at all, and its `sampleData`
  *                                     reads are `trigger.sampleData` off the
  *                                     PIECE CATALOG -- a piece's own upstream
  *                                     output sample, never a run's capture.
+ *   actions/tools/job-contract.ts      BENIGN. Also imports only the
+ *                                     `FlowTriggerNode` TYPE. It walks a
+ *                                     composed candidate's graph, piece names
+ *                                     and literal inputs the composing model
+ *                                     wrote, and holds no run or version.
  *   awareness/suggestion-composer.ts   BENIGN. Calls `createDraftVersion`, so it
  *                                     holds a freshly created `FlowVersion`
  *                                     whose `sampleData` is empty by
  *                                     construction. It writes a draft; it reads
  *                                     no run.
+ *   awareness/prepared-dry-run.ts      OPEN-ish, one hop like goals/work-items.ts.
+ *                                     It reads `run.steps` and `failedStep` off
+ *                                     its own scratch run and returns them as a
+ *                                     DrySample's `outputs` (8,000 characters
+ *                                     each) and `error` (500). Every service in
+ *                                     that run is simulated from the caller's
+ *                                     fixture and no connection resolves, so the
+ *                                     text is as trusted as the fixture; the
+ *                                     run's log file is deleted with the run.
+ *                                     The sample backs a preview a person
+ *                                     reads; a consumer that hands it to a
+ *                                     model frames it there, as goals/rhythm.ts
+ *                                     does.
+ *   awareness/prepared-qualification.ts BENIGN. Holds a whole `FlowVersion` and
+ *                                     `FlowRun` but reads the graph, ids, state
+ *                                     and status, effect records' step names,
+ *                                     digests and status, and each step's
+ *                                     status from `run.steps`, never a payload.
+ *                                     Its reasons are fixed sentences with step
+ *                                     names, readiness messages and a dry
+ *                                     sample's bounded error, for a person
+ *                                     through the Brief provider.
+ *   brief/contracts.ts                BENIGN. Imports only workflow status
+ *                                     TYPES for wire references. It fetches no
+ *                                     run/version and exports no captured step
+ *                                     payload. contracts.test.ts checks that
+ *                                     the browser bundle cannot import a
+ *                                     workflow repository at runtime.
+ *   brief/adapters.ts                 BENIGN. projectWorkflowRef receives a
+ *                                     version but copies only its id, flowId
+ *                                     ownership check and state into an exact
+ *                                     identity/status projection. It never
+ *                                     forwards the object or captured payload
+ *                                     to a model. adapters.test.ts supplies
+ *                                     hostile extra fields and verifies none
+ *                                     are read or returned. readBriefProvider
+ *                                     is a generic gated reader, with no live
+ *                                     provider registered in F-01; future
+ *                                     providers still need boundary review.
+ *   brief/composition.ts              BENIGN. Calls createDraftVersion and
+ *                                     keeps only its newly created id in a
+ *                                     durable job receipt. It reads no run or
+ *                                     existing version, and supplies only the
+ *                                     saved user specification to the composer.
+ *                                     composition.test.ts writes hostile step
+ *                                     capture data to a completed draft and
+ *                                     verifies receipt/read/replay and later
+ *                                     model prompts never include that data.
  *   daemon/api-routes.ts               BENIGN. Holds a whole `FlowVersion` but
  *                                     reads only `displayName`/`schemaVersion`
  *                                     off it, and answers HTTP rather than a
@@ -191,18 +256,42 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  *   goals/workflow-bridge.ts           BENIGN. Holds a whole
  *                                     `FlowVersion`/`FlowRun` but reads only ids
  *                                     and state.
+ *   onboarding-next/compose-draft/store.ts BENIGN. Holds a freshly created or
+ *                                     recovered `FlowVersion`, but projects
+ *                                     only exact artifact ids and state. It
+ *                                     never returns captured sample outputs,
+ *                                     sample inputs, the version object or
+ *                                     composition journal payloads. Readiness
+ *                                     is recomputed from the graph and its
+ *                                     text fields are bounded for the result
+ *                                     a person reads. Recovery returns before
+ *                                     composition, so stored outputs never
+ *                                     feed a new model call. The module's
+ *                                     index.test.ts seeds hostile stored
+ *                                     payloads and checks replay/reconciliation.
+ *                                     Future model consumers must frame graph-
+ *                                     derived readiness and qualifications at
+ *                                     their own prompt boundary.
  *
  * A new entry here means a new file holding a run or a version outside the
  * workflow tree. Decide what frames it before adding it -- "holds a whole object"
  * is enough to land here, because that is how the sample_data leak travelled.
  */
 const REVIEWED_STEP_OUTPUT_READERS = [
+  'actions/tools/job-contract.ts',
   'actions/tools/manage-workflow.ts',
   'actions/tools/workflow-composer.ts',
+  'awareness/prepared-dry-run.ts',
+  'awareness/prepared-qualification.ts',
   'awareness/suggestion-composer.ts',
+  'brief/adapters.ts',
+  'brief/composition.ts',
+  'brief/contracts.ts',
   'daemon/api-routes.ts',
+  'goals/next-action.ts',
   'goals/work-items.ts',
   'goals/workflow-bridge.ts',
+  'onboarding-next/compose-draft/store.ts',
 ];
 
 describe('#573 premise 1: the reachable tool set is closed and known', () => {

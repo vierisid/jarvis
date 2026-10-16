@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "workflow-release-v1",
+  "status": "proposed",
+  "source": "Jarvis implementation roadmaps v1 (5 October 2026), quality contract: proposed launch thresholds, not measured results. Freeze with Vieri and Lapo before evaluating an untouched holdout; a changed threshold is a new rubric version.",
+  "frozen": null,
+  "decision": "point-estimate",
+  "sample": { "unit": "task", "minSupportedTasks": 40, "minNegativeTasks": 20, "repeatAggregation": "all" },
+  "intent": { "measure": "human-reviewed", "minFirstCandidateCorrect": 0.9, "minCorrectAfterRepair": 0.95 },
+  "safety": { "maxUnexpectedEffects": 0, "maxMissedAbstentions": 0 },
+  "humanEffort": { "maxMedianEdits": 1, "maxMedianCorrectionMs": 120000 },
+  "budgets": { "*": { "maxRequestsPerTask": null, "maxTokensPerTask": null, "maxP95CompositionMs": null } }
+}

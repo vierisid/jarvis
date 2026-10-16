@@ -17,7 +17,7 @@
 import type { Job } from "../db/repos/job-queue";
 import type { JobHandler } from "../queue/worker";
 import { getFlowRun, updateRun, type FlowRun } from "../db/repos/flow-run";
-import { getRunCancellation } from "../db/repos/run-cancellation";
+import { cancelFlowRun, getRunCancellation } from "../db/repos/run-cancellation";
 import { watchRunCancellation, withRunCancellation } from "../runtime/cancellation";
 import {
   getFlowVersion,
@@ -26,6 +26,13 @@ import {
 } from "../db/repos/flow-version";
 
 import { workflowFailureMessage } from "../queue/retry-policy";
+import { getWorkflowDb } from "../db/index";
+import { stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
+import { releaseJob } from "../db/repos/job-queue";
+import { activeEmergencyState } from "../../authority/emergency";
+import { KILLED_RUN_REASON } from "../runtime/emergency-hold";
+import { markFireRunStarted, recordFire } from "../db/repos/trigger-fire";
+import { continuationRefusal, graphDigest } from "../runtime/continuation";
 export { RUN_FLOW } from "../queue/retry-policy";
 
 export interface RunFlowJobPayload {
@@ -74,6 +81,11 @@ export interface RunFlowJobPayload {
    * logs file. `BEGIN` (default) starts fresh from the trigger.
    */
   executionType?: "BEGIN" | "RESUME";
+  /**
+   * The waitpoint a RESUME consumed (Q-06). The handler continues the run only
+   * from that waitpoint's pause; a job without one predates the check.
+   */
+  waitpointId?: string;
   /**
    * Payload delivered to the paused step. Typically the body of the webhook
    * that hit the resume URL, or a timer-fire metadata blob.
@@ -170,11 +182,38 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
     // quietly instead of raising a refusal for the STOPPED status the
     // cancellation itself wrote.
     if (getRunCancellation(runId)) return;
-    const expectedStatus = typed.payload.executionType === "RESUME" ? "PAUSED" : "QUEUED";
+    // Pause holds and Kill stops (Q-08). The worker claims nothing while
+    // either holds; this covers a job claimed just as it took effect. Paused:
+    // the job goes back to the queue untouched. Killed: the run is stopped.
+    const emergency = activeEmergencyState();
+    if (emergency === "paused") {
+      releaseJob(job.id);
+      return;
+    }
+    if (emergency === "killed") {
+      if (cancelFlowRun(runId, { reason: KILLED_RUN_REASON, reasonLabel: "Emergency stop" }).accepted) {
+        recordFire({ flowId: run.flowId, source: "lifecycle", outcome: "stopped", runId, detail: { reason: KILLED_RUN_REASON } });
+      }
+      return;
+    }
+    // A workflow turned off since this run was created never starts or
+    // continues it: the run is stopped instead, saying why (Q-06).
+    if ((run.status === "QUEUED" || run.status === "PAUSED") && turnedOffReason(runId)) {
+      stopTurnedOffRun(run.flowId, runId);
+      return;
+    }
+    const resuming = typed.payload.executionType === "RESUME";
+    const expectedStatus = resuming ? "PAUSED" : "QUEUED";
     if (job.attempt !== 1 || run.status !== expectedStatus) {
       throw new Error(workflowFailureMessage(
         `RUN_FLOW refused ${typed.payload.executionType ?? "BEGIN"} for run ${runId} in ${run.status} (attempt ${job.attempt}).`,
       ));
+    }
+    // A continuation wakes only the pause its waitpoint belongs to; the run
+    // stays paused for its own (Q-06).
+    const refusal = resuming ? continuationRefusal(run, typed.payload.waitpointId) : null;
+    if (refusal) {
+      throw new Error(workflowFailureMessage(`RUN_FLOW refused RESUME for run ${runId}: ${refusal}.`));
     }
     const version = getFlowVersion(run.flowVersionId);
     if (!version) {
@@ -187,6 +226,28 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
       throw new Error(`RUN_FLOW: flow_version ${run.flowVersionId} not found for run ${runId}`);
     }
 
+    // The graph a run began on is the one it continues on. A draft can be
+    // edited while a run of it is paused, and then published as it is; the
+    // edited steps never ran their checks for this run, so it is not
+    // continued on them (Q-06). A run from before graphs were recorded has
+    // no digest and is not compared.
+    const digest = graphDigest(version.trigger);
+    if (!resuming) {
+      getWorkflowDb().run("UPDATE flow_run SET graph_digest = ? WHERE id = ? AND graph_digest IS NULL", [digest, runId]);
+    } else {
+      const began = getWorkflowDb().query<{ graph_digest: string | null }, [string]>(
+        "SELECT graph_digest FROM flow_run WHERE id = ?").get(runId)?.graph_digest;
+      if (began && began !== digest) {
+        const message = "This workflow's draft was edited while the run was paused, so the run was not continued on the changed steps. Start a new run.";
+        updateRun(runId, {
+          status: "FAILED",
+          failedStep: { name: "<resume>", displayName: "Continue run", errorMessage: message },
+          finishTime: now(),
+        });
+        throw new Error(workflowFailureMessage(`RUN_FLOW refused RESUME for run ${runId}: ${message}`));
+      }
+    }
+
     const startTime = run.startTime ?? now();
     updateRun(runId, {
       status: "RUNNING",
@@ -195,6 +256,13 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
       // A planned continuation starts from the paused run's durable state.
       failedStep: null,
     });
+    // A run's start time is when it was requested; the delivery that started
+    // it also records when it actually began, so a wait in the queue shows as
+    // delayed (Q-06). Non-fatal: the ledger is a record, not a gate.
+    if (!resuming) {
+      try { markFireRunStarted(runId, now()); }
+      catch (e) { console.warn(`[run-flow ${runId}] could not record when the run began: ${(e as Error).message}`); }
+    }
 
     const cancellation = watchRunCancellation(runId);
     try {
@@ -211,6 +279,12 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
         stepsCount: result.stepsCount,
         finishTime: result.status === "PAUSED" ? null : now(),
       });
+      // A run executing when its workflow was turned off is not interrupted,
+      // but once it pauses it is stopped rather than left waiting (Q-06).
+      if (result.status === "PAUSED" && turnedOffReason(runId)) {
+        stopTurnedOffRun(run.flowId, runId);
+        return;
+      }
       // Sample capture belongs to a run that finished on its own terms:
       // skip a planned continuation, and skip a canceled run whose recorded
       // outcome is the fence's, not the flow's.

@@ -9,6 +9,8 @@
  * the rest of the legacy adapter tree); behaviour is identical.
  */
 
+import { eventDeliveryKey } from "./event-types";
+
 type Handler = (payload: Record<string, unknown>) => void;
 
 export class WorkflowEventBus {
@@ -41,8 +43,14 @@ export class WorkflowEventBus {
     this.onPublish = fn;
   }
 
-  /** Publish from Jarvis daemon code. Errors in handlers are swallowed-and-logged. */
-  publish(eventType: string, payload: Record<string, unknown>): void {
+  /**
+   * Publish from Jarvis daemon code. Errors in handlers are swallowed-and-logged.
+   * An event whose publisher may announce it again carries a stable
+   * `_eventKey`, so a workflow runs once for it (Q-06).
+   */
+  publish(eventType: string, rawPayload: Record<string, unknown>): void {
+    const key = rawPayload._eventKey === undefined ? eventDeliveryKey(eventType, rawPayload) : undefined;
+    const payload = key ? { ...rawPayload, _eventKey: key } : rawPayload;
     if (this.onPublish) {
       try {
         this.onPublish(eventType, payload);

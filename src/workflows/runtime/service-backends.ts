@@ -25,6 +25,7 @@ import { JarvisNotifierAdapter, type NotifierDeps } from "../adapters/notifier";
 import { JarvisContextProviderAdapter } from "../adapters/context-provider";
 import { LlmOnlyAgentDelegator } from "../adapters/agent-delegator";
 import { M7AgentDelegator, type DelegationContinuation } from "../adapters/m7-agent-delegator";
+import { getChildRun } from '../db/repos/child-run';
 import { getDelegation, saveDelegation } from "../db/repos/delegation";
 import { JarvisWorkflowRunnerAdapter } from "../adapters/workflow-runner";
 import type { LlmChatFn, LlmChatRequest, LlmChatResponse } from "../sandbox-api/routes/jarvis-llm";
@@ -41,16 +42,23 @@ import type { CredentialResolver } from "../credentials/adapter";
 import { WorkflowEventBuffer } from "./event-buffer";
 import { cancellableWorkflowService } from "./cancellation";
 import { closeEffectApproval, WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
-import { getWorkflowEffect, saveWorkflowEffect, type WorkflowEffect } from '../db/repos/workflow-effect';
+import { getWorkflowEffect, saveWorkflowEffect, listWorkflowEffects, type WorkflowEffect } from '../db/repos/workflow-effect';
 import { resolveToolGate, severityRank } from '../../authority/tool-action-map';
 import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, surfaceBoundRefusal, toolEffectCapability } from './effect-capabilities';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceActionName, reprojectPieceInput,
-  resolveGovernedPieceAction } from './piece-effects';
+  resolveGovernedPieceAction, tracksPieceCompletion } from './piece-effects';
+import { assertRecipientFactsCurrent, recipientAddresses, recipientFactPins, type FactPin } from './fact-bindings';
+import { captureProviderBinding } from './provider-reconciliation';
+import { recordPieceCompletion } from './piece-completion';
 import { defangPieceProjection } from './piece-effect-receipt';
 import { getFlowInProject } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
 import { digest, resolveEffectContext, type WorkflowEffectContext } from './effect-context';
+import { CODE_STEP_PIECE, type PieceAuthorizeRequest, type PieceAuthorizeResponse } from './piece-effect-guard';
+import { holdStep, KILLED_REASON, PAUSED_REASON } from './emergency-hold';
+import { getFlowRun } from '../db/repos/flow-run';
+import { boundedReceiptText } from '../../roles/untrusted';
 import { evaluateLlmOutput } from './llm-output-contract';
 import { withWorkflowMachineBinding } from './machine-binding';
 import { getMachineScope } from '../../actions/machine-scope';
@@ -119,6 +127,15 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
    */
   buildJarvisSystemPrompt?: (userMessage: string) => SystemPromptParts;
 }
+
+/** Jarvis's own pieces: each of their effects passes the boundary and is audited there. */
+const JARVIS_PIECE_PREFIX = '@jarvispieces/';
+
+/** The built-in steps vendored with the engine (`scripts/sync-activepieces.ts`); never audited as steps. */
+const BUILT_IN_STEP_PIECES: ReadonlySet<string> = new Set([
+  '@activepieces/piece-approval', '@activepieces/piece-delay', '@activepieces/piece-file-helper',
+  '@activepieces/piece-http', '@activepieces/piece-schedule', '@activepieces/piece-store', '@activepieces/piece-webhook',
+]);
 
 export function buildSandboxServiceBackends(
   opts: BuildServiceBackendsOptions,
@@ -655,7 +672,7 @@ export function buildSandboxServiceBackends(
           const message = error instanceof Error ? error.message : String(error);
           const recorded = getWorkflowEffect(workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, `agent-tool:${call.sequence}`));
           if (recorded?.status === 'blocked') return { kind: 'denied', reason: recorded.error ?? message };
-          if (recorded?.status === 'failed' || recorded?.status === 'unknown') return { kind: 'failed', result: recorded.error ?? message };
+          if (recorded?.status === 'failed') return { kind: 'failed', result: recorded.error ?? message };
           throw error;
         }
       },
@@ -666,9 +683,18 @@ export function buildSandboxServiceBackends(
     // judges, so an authorisation that was never an approval cannot answer an
     // approval the sink asks for. Spent by that one spawn.
     const delegation = getWorkflowEffect(workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, 'agent'));
-    if (!delegation?.approvalId) return m7.delegate(req, continuation);
-    return runAsApproved({ categories: ['spawn_agent'], approvalId: delegation.approvalId, source: 'workflow_effect' },
-      () => m7.delegate(req, continuation));
+    const result = delegation?.approvalId
+      ? await runAsApproved({ categories: ['spawn_agent'], approvalId: delegation.approvalId, source: 'workflow_effect' },
+        () => m7.delegate(req, continuation))
+      : await m7.delegate(req, continuation);
+    const uncertain = listWorkflowEffects(ctx.runId).find(effect => effect.stepName === resolved.stepName
+      && digest(effect.executionPath) === digest(resolved.executionPath) && effect.route.startsWith('agent-tool:')
+      && (effect.status === 'unknown' || effect.status === 'dispatching'));
+    // Never let a conversational ending or required-tools check downgrade an
+    // uncertain child dispatch to success or an ordinary retriable failure.
+    return { ...result, delegation: continuation.identity, ...(uncertain ? { status: 'error' as const,
+      outcome: { status: 'unknown' as const, code: 'DELEGATED_EFFECT_UNCERTAIN', effect: 'may_have_occurred' as const,
+        message: `Delegation ${id} has an uncertain effect ${uncertain.id}; inspect its receipt before any new run` } } : {}) };
   };
 
   const eventsPoll: EventsPollFn = async (req) => {
@@ -704,6 +730,8 @@ export function buildSandboxServiceBackends(
     return { versionId: version.id, versionDigest: digest(version.trigger) };
   };
   const workflowsStart: WorkflowsStartFn = async (req, ctx) => {
+    const resolved = resolveEffectContext(ctx, '@jarvispieces/piece-jarvis-trigger', 'run_workflow');
+    const effectId = workflowEffectId(ctx.runId, resolved.stepName, resolved.executionPath, 'workflow');
     const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-trigger', action: 'run_workflow',
       route: 'workflow', toolName: 'workflow_start', category: 'spawn_agent', toolCategory: 'delegation',
       request: { ...req }, prepare: () => {
@@ -713,11 +741,46 @@ export function buildSandboxServiceBackends(
       execute: async (args, checkpoint) => {
         checkpoint();
         if (digest(childVersion(args.flowId as string, ctx.projectId)) !== digest(args.pinned)) throw new Error('Target workflow changed after approval; start a new run');
-        return runnerAdapter.start(args as unknown as Parameters<typeof runnerAdapter.start>[0], ctx.runId, ctx.projectId);
+        return runnerAdapter.start(args as unknown as Parameters<typeof runnerAdapter.start>[0], ctx.runId, ctx.projectId,
+          { effectId, stepName: resolved.stepName });
       },
     });
-    return reply.approval ? { runId: null, approval: reply.approval }
-      : reply.result as Awaited<ReturnType<WorkflowsStartFn>>;
+    if (reply.approval) return { runId: null, approval: reply.approval };
+    const result = reply.result as Awaited<ReturnType<WorkflowsStartFn>>;
+    const child = getChildRun(effectId);
+    return { ...result, ...(child ? { child, waitpointId: child.outcome ? undefined : child.waitpointId ?? undefined } : {}) };
+  };
+
+  /**
+   * A step with no Jarvis adapter: a community piece the owner installed from
+   * the Library, a CODE step in a workflow granted them, a built-in step
+   * (delay, store, HTTP, ...) or one of Jarvis's own pieces. It stays outside
+   * Authority by those opt-ins, but it obeys Pause and Kill (Q-08). A
+   * community piece or a CODE step leaves an audit row when it is let run:
+   * like a governed piece's, the row records the dispatch, not its outcome.
+   * Jarvis's own pieces leave none here, since each of their effects passes
+   * the boundary and is audited there; built-in steps leave none either. Its
+   * input is never sent here.
+   */
+  const admitUngovernedStep = (req: PieceAuthorizeRequest, ctx: WorkflowEffectContext): PieceAuthorizeResponse => {
+    const run = getFlowRun(ctx.runId);
+    if (!run || run.projectId !== ctx.projectId) throw new Error('Workflow step identity does not match the run');
+    if (run.status !== 'RUNNING') throw new Error(`Workflow step blocked: run is ${run.status}`);
+    const state = opts.emergencyController?.getState() ?? 'normal';
+    if (state === 'killed') throw new Error(KILLED_REASON);
+    const stepName = boundedReceiptText(ctx.stepName ?? 'unknown step', 120);
+    if (state === 'paused') {
+      const hold = holdStep({ runId: run.id, projectId: run.projectId, stepName: ctx.stepName ?? 'unknown step' });
+      return { governed: false, dispatch: 'held', approval: { effectId: '', approvalId: '', waitpointId: hold.id, hold: PAUSED_REASON } };
+    }
+    if (!req.piece.startsWith(JARVIS_PIECE_PREFIX) && !BUILT_IN_STEP_PIECES.has(req.piece)) {
+      try {
+        opts.auditTrail?.log({ agent_id: `workflow:${run.id}`, agent_name: `Workflow ${run.id} / ${stepName}`,
+          tool_name: req.piece === CODE_STEP_PIECE ? 'code step' : `community piece ${boundedReceiptText(`${req.piece}/${req.action}`, 160)}`,
+          action_category: 'execute_command', authority_decision: 'allowed', approval_id: null, executed: true });
+      } catch (error) { console.error('[Workflow Authority] step audit failed:', error); }
+    }
+    return { governed: false };
   };
 
   /**
@@ -729,7 +792,7 @@ export function buildSandboxServiceBackends(
    * subprocess once this returns, so the record is a dispatch authorization
    * and not a completion receipt.
    *
-   * A piece with no adapter is reported ungoverned and runs as it does today.
+   * A piece with no adapter goes through `admitUngovernedStep` above.
    *
    * One authorization covers one step instance. A step the flow configures to
    * retry re-reads the recorded authorization for the same arguments instead
@@ -737,10 +800,15 @@ export function buildSandboxServiceBackends(
    * failed can repeat that call under the original decision. Any change to the
    * arguments, the version or the Authority decision invalidates the record and
    * stops the dispatch.
+   *
+   * Except a tracked send (Q-07, `tracksPieceCompletion`): its record stays
+   * `dispatching` until the engine posts the completion receipt, so a retry
+   * after a failed or lost send is refused instead of sending again, and a
+   * retry after a recorded receipt gets the stored result back.
    */
   const pieceAuthorize: PieceAuthorizeFn = async (req, ctx) => {
     const resolved = resolveGovernedPieceAction(req.piece, req.action);
-    if (!resolved) return { governed: false };
+    if (!resolved) return admitUngovernedStep(req, ctx);
     // The action becomes `tool_name`: the audit row, the effect record, the
     // approval row and the card's `Action:` line (#651). Refused, not reported
     // ungoverned -- `governed: false` would let the engine run the piece with
@@ -770,6 +838,9 @@ export function buildSandboxServiceBackends(
     // to start tracking. See `piece-effect-receipt.ts` for the whole argument,
     // including which in-flight approvals a changed projection invalidates.
     const input = defangPieceProjection(reprojectPieceInput(req.input));
+    // Q-05: an action that sends to or addresses someone memory knows keeps
+    // the facts the address matched, and stops if they stop holding.
+    const addressing = ['send_email', 'send_message', 'write_data', 'modify_settings'].includes(resolved.category);
     const tool = governedPieceToolDefinition(resolved);
     const capability = (() => {
       try { return toolEffectCapability(tool); }
@@ -778,23 +849,50 @@ export function buildSandboxServiceBackends(
         throw error;
       }
     })();
+    const tracked = tracksPieceCompletion(req.piece, req.action);
+    const route = tracked ? 'piece-dispatch' : 'piece';
+    if (tracked && !req.inputDigest) throw new Error('A tracked send requires the complete input digest');
+    if (tracked && getWorkflowEffect(workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], 'piece'))) {
+      throw new Error('Legacy piece authorization may already have dispatched; inspect it and start a new intentional run');
+    }
+    const run = getFlowRun(ctx.runId);
+    if (!run || run.projectId !== ctx.projectId) throw new Error('Workflow step identity does not match the run');
+    const providerBinding = tracked ? captureProviderBinding({ projectId: ctx.projectId, versionId: run.flowVersionId,
+      stepName: ctx.stepName!, piece: req.piece, credentialDigest: req.credentialDigest }) : undefined;
     const reply = await effects.invoke({ context: ctx, piece: req.piece, action: req.action,
-      route: 'piece', toolName: tool.name, category: capability.category, toolCategory: tool.category,
-      // Digested over the whole resolved input, so a change to any prop -- not
-      // just the ones the card shows -- invalidates an approval granted earlier.
-      request: { piece: req.piece, action: req.action, input },
-      prepare: () => ({ arguments: input, target: capability.target(input) }),
+      externalDispatch: tracked, providerBinding,
+      route, toolName: tool.name, category: capability.category, toolCategory: tool.category,
+      // Digested over the projection AND the engine's digest of the whole
+      // resolved input, so a change to any prop -- including the part of a
+      // long body or a long recipient list the card cuts -- invalidates an
+      // approval granted earlier (Q-08).
+      request: { piece: req.piece, action: req.action, input, ...(req.inputDigest ? { inputDigest: req.inputDigest } : {}),
+        ...(tracked && req.credentialDigest ? { credentialDigest: req.credentialDigest } : {}) },
+      prepare: () => {
+        // Matched once, when the effect is recorded; resumes and retries recheck the record's facts.
+        const facts = addressing ? recipientFactPins(recipientAddresses(input)) : [];
+        return { arguments: input, target: capability.target(input), ...(facts.length ? { bindings: { facts } } : {}) };
+      },
       validateTarget: (_args, target) => {
         if (digest(capability.target(input)) !== digest(target)) throw new Error('Workflow execution target changed after review; dispatch blocked');
       },
+      revalidate: record => assertRecipientFactsCurrent((record.bindings as { facts?: FactPin[] } | undefined)?.facts),
+      revalidateOnReplay: true,
       execute: async (_args, checkpoint) => { checkpoint(); return { dispatch: 'authorized' }; } });
-    return reply.approval ? { governed: true, dispatch: 'approval_required', approval: reply.approval }
-      : { governed: true, dispatch: 'authorized' };
+    if (reply.approval) return { governed: true, dispatch: 'approval_required', approval: reply.approval };
+    if (tracked) {
+      const effectId = workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], route);
+      return getWorkflowEffect(effectId)?.status === 'succeeded'
+        ? { governed: true, dispatch: 'completed', result: reply.result }
+        : { governed: true, dispatch: 'authorized', effectId };
+    }
+    return { governed: true, dispatch: 'authorized' };
   };
 
   const services: SandboxApiServices = {
     credentialResolver: opts.credentialResolver,
     pieceAuthorize: cancellableWorkflowService(pieceAuthorize),
+    pieceReceipt: (ctx, id, result) => recordPieceCompletion(ctx, id, result, opts),
     llmChat: cancellableWorkflowService(llmChat),
     notify: cancellableWorkflowService(notify),
     contextProvider,

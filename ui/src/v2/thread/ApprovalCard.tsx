@@ -22,6 +22,8 @@ export interface ApprovalCardProps {
   /** Substrings inside `intent` to highlight in accent — matched literally. */
   highlights?: string[];
   voiceHint?: string;
+  /** Why an approve was refused (Jarvis paused, say); the card is still pending. */
+  note?: string;
   onApprove?: () => void;
   onCancel?: () => void;
 }
@@ -43,6 +45,7 @@ export function ApprovalCard({
   impact,
   highlights,
   voiceHint = `or say "yes"`,
+  note,
   onApprove,
   onCancel,
 }: ApprovalCardProps) {
@@ -68,6 +71,8 @@ export function ApprovalCard({
       <ApprovalWhy reason={reason} />
 
       <div className="v2-approval__category">{category}</div>
+
+      {note && <p className="v2-approval__note" role="status">{note}</p>}
 
       <div className="v2-approval__actions">
         <Button variant="primary" size="md" onClick={onApprove}>

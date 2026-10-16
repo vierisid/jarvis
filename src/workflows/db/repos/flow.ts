@@ -10,6 +10,7 @@ import { apId } from "../ids";
 import { withOwnedFlowVersion } from "./flow-version-ownership";
 import { assertFlowCodeStepsAllowed } from "./flow-code-steps";
 import { assertFlowReady, assertVersionReady } from './flow-readiness';
+import { pinFlowBindings } from './binding-pins';
 
 export type FlowStatus = "ENABLED" | "DISABLED";
 
@@ -144,7 +145,12 @@ export function listFlows(
     .all(projectId, limit, offset);
 }
 
-export function updateFlowStatus(id: string, status: FlowStatus): void {
+/**
+ * Set the flow's status. Turning an ENABLED flow off stamps `disabled_at`, and
+ * the caller then stops the runs it had started (repos/flow-turn-off.ts,
+ * Q-06); `turnedOff` says whether this call did that.
+ */
+export function updateFlowStatus(id: string, status: FlowStatus): { turnedOff: boolean } {
   // Enabling is the OTHER way a flow becomes runnable: the trigger manager
   // registers an ENABLED flow's cron / webhook against `published ?? latest
   // draft`, so a flow can start firing on a schedule without ever being
@@ -153,12 +159,20 @@ export function updateFlowStatus(id: string, status: FlowStatus): void {
   // inside `publishFlowVersion`'s transaction when publish is the caller --
   // by which point the same version has already cleared the same check.
   if (status === "ENABLED") assertFlowCodeStepsAllowed(id, "enable");
-  if (status === 'ENABLED') assertFlowReady(id);
+  // Enabling is a person accepting the flow's current bindings (Q-05), so it
+  // pins them instead of comparing against pins taken earlier.
+  if (status === 'ENABLED') assertFlowReady(id, { acceptBindings: true });
+  const before = db().query<{ status: FlowStatus }, [string]>(`SELECT status FROM flow WHERE id = ?`).get(id);
+  const ts = now();
   const res = db().run(
-    `UPDATE flow SET status = ?, updated = ? WHERE id = ?`,
-    [status, now(), id],
+    `UPDATE flow SET status = ?, updated = ?,
+       disabled_at = CASE WHEN ? = 'DISABLED' AND status = 'ENABLED' THEN ? ELSE disabled_at END
+     WHERE id = ?`,
+    [status, ts, status, ts, id],
   );
   if (res.changes === 0) throw new Error(`updateFlowStatus: flow not found (id=${id})`);
+  if (status === 'ENABLED') pinFlowBindings(id);
+  return { turnedOff: before?.status === "ENABLED" && status === "DISABLED" };
 }
 
 /**
@@ -205,13 +219,19 @@ export function setPublishedVersion(id: string, versionId: string | null): void 
     );
     if (res.changes === 0) throw new Error(`setPublishedVersion: flow not found (id=${id})`);
   };
+  // Attaching a version to an enabled flow changes what it runs, so it is a
+  // person accepting that version's bindings (Q-05): pin them.
   if (versionId === null) db().transaction(() => {
     attach();
     // Clearing a publication on an enabled flow selects its latest draft.
     // Roll back the pointer change if that fallback is not executable.
-    if (getFlow(id)?.status === 'ENABLED') assertFlowReady(id);
+    if (getFlow(id)?.status === 'ENABLED') { assertFlowReady(id, { acceptBindings: true }); pinFlowBindings(id); }
   })();
-  else withOwnedFlowVersion(id, versionId, () => { assertVersionReady(id, versionId); attach(); });
+  else withOwnedFlowVersion(id, versionId, () => {
+    assertVersionReady(id, versionId, undefined, { acceptBindings: true });
+    attach();
+    if (getFlow(id)?.status === 'ENABLED') pinFlowBindings(id);
+  });
 }
 
 export function updateFlowMetadata(id: string, metadata: Record<string, unknown> | null): void {

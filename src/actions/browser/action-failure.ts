@@ -2,6 +2,7 @@ import { hasUiVerificationScope } from '../action-verification';
 import { ActionOutcomeError, type ActionFailure } from '../action-outcome';
 import { getMachineScope } from '../machine-scope';
 import { WorkflowCancellationError } from '../../workflows/runtime/cancellation-error';
+import { failedToolResult } from '../progress-context';
 
 /** Preserve chat's legacy text, but never turn a workflow refusal into success. */
 export function browserActionFailure(message: string, effect: ActionFailure['effect'] = 'not_started'): string {
@@ -9,7 +10,7 @@ export function browserActionFailure(message: string, effect: ActionFailure['eff
     status: effect === 'not_started' ? 'blocked' : 'unknown',
     code: effect === 'not_started' ? 'BROWSER_ACTION_REFUSED' : 'BROWSER_ACTION_UNCERTAIN', message, effect,
   });
-  return message;
+  return failedToolResult(message);
 }
 
 export function browserActionError(error: unknown, formatMessage: (message: string) => string = message => message): string {

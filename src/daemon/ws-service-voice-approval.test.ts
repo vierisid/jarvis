@@ -477,3 +477,26 @@ describe('#856: a gated voice answer says so in the thread, and why', () => {
     expect(voiceApprovalGatedMessage('approve', 'low_confidence', req)).toContain('while it is still the only request waiting, say "yes" again plainly');
   });
 });
+
+describe('Q-08: a spoken yes while Jarvis is paused waits for Resume', () => {
+  test('the card stays pending, nothing runs, and the refused yes is audited', async () => {
+    const { EmergencyController, setActiveEmergencyController } = await import('../authority/emergency.ts');
+    const { heldApprovalMessage } = await import('./approval-decision.ts');
+    const audit = new AuditTrail();
+    svc.setAuditTrail(audit);
+    const controller = new EmergencyController();
+    setActiveEmergencyController(controller);
+    try {
+      controller.pause();
+      const a = pendingEmail('alice@example.com', 1000);
+      const resolved = await svc.resolveLatestPendingByVoice('approve', 1, a.id);
+      expect(resolved).toEqual({ kind: 'refused', message: heldApprovalMessage('paused') });
+      expect(status(a)).toBe('pending');
+      expect(executions).toEqual([]);
+      expect(audit.query({ limit: 5 })).toContainEqual(expect.objectContaining({
+        approval_id: a.id, authority_decision: 'approval_required', executed: 0, channel: 'voice' }));
+    } finally {
+      setActiveEmergencyController(null);
+    }
+  });
+});
