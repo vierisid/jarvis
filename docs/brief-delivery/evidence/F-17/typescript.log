@@ -1,3 +1,0 @@
-bun x tsc --noEmit
-
-exit 0
