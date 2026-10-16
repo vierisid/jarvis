@@ -299,10 +299,37 @@ fixture owner (add, select, close, reopen, failing writes and each status mode).
   refused locally, matching the client.
 - Attachments: the composer only reserves the 44px slot (`attachmentControl`). Attachments must go
   through F-05's `client.attachments` flow (`JARVIS_BRIEF_CHAT_ATTACHMENTS`), which `client.send`
-  already includes; never add a parallel upload here.
+  already includes; never add a parallel upload here. The binding projects the active chat's
+  attachment count and readiness: ready attachments can be sent without text, and Send waits while
+  any attachment is uploading, removing or failed, matching `client.send`.
 - Not mounted in the live shell yet, and it calls `client.send`: the same #1075 rule as the tab strip
   applies. Do not mount the provider or this composer live until Brief-turn approval cards are visible.
 - `chat/composer/figma-reference.json` records the UI-18 source values.
 
 `?brief=preview&specimen=composer#/_brief_preview` opens the composer inside the Today specimen with
 a fixture owner (send, hold, stop, failing send/stop, offline and each status mode). It sends nothing.
+
+## Attachment fan
+
+- `chat/attachment-fan/` renders the UI-19 Document / Image / Screenshot fan in the composer's
+  `attachmentControl` slot. It owns no files, upload, preview, retry, removal or send admission.
+  `bindAttachmentFan(owner, pickers, source)` captures the active conversation and workspace when it
+  is bound and delegates to F-05's `client.attachments.upload` / `capture` (`DraftAttachments`, gated by
+  `JARVIS_BRIEF_CHAT_ATTACHMENTS`), so F-05's size/type limits, SQLite-only storage, one-turn binding
+  and untrusted framing apply unchanged. Never add a second upload path or render attachment content
+  here; the fan shows only its own fixed labels and status strings.
+- The host supplies `pickers`: a native file picker, and for Screenshot a device chooser that shows the
+  device and returns `confirmed: true` only after explicit confirmation. A result arriving after the
+  workspace changed, the chat closed, the connection dropped or the request was aborted is refused or
+  reported as cancelled, and success needs F-05's `ready` reference for the same conversation.
+  `owner.test.ts` drives the real `BriefConversationClient` and `DraftAttachments`.
+- The fan renders through a body portal (it must escape Pebble's clip) with its own outside-click,
+  focus-out and Escape handling, because `BriefMenu` has no staggered fan geometry. It reuses
+  `BriefTooltip` and D-04 `useBriefMotion`; reduced motion places choices immediately. Short
+  conversations fan sideways so the tab strip stays reachable.
+- Not mounted in the live shell yet: the same #1075 rule as the tab strip and composer applies. Do not
+  mount the provider or this fan live until Brief-turn approval cards are visible.
+- `chat/attachment-fan/figma-reference.json` records the UI-19 source values.
+
+`?brief=preview&specimen=attachments#/_brief_preview` opens the fan in the composer specimen with a
+fixture binding (Screenshot availability and failure toggles). It picks, uploads and captures nothing.

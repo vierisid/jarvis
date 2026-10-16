@@ -3,6 +3,10 @@ import { compileWorkflow, type ReadinessContext, type WorkflowReadiness } from '
 import { assertFlowVersionOwnership } from './flow-version-ownership';
 import { workflowReadinessServices } from './readiness-services';
 import { bindingPinIssues } from './binding-pins';
+import { flowIngredientIssues, hasFlowIngredients } from './composition-ingredients';
+import { ensureRunExecutionConfig, type FlowRun, type RunExecutionConfig } from './flow-run';
+import { applyInputOverrides } from '../flow-graph';
+import type { FlowTriggerNode } from './flow-version';
 
 export { configureWorkflowReadiness, type ReadinessServices } from './readiness-services';
 
@@ -133,7 +137,7 @@ function contextFor(flowId: string, ancestors: string[] = [], cache = new Map<st
       if (!version) return 'Target workflow has no executable version';
       let trigger: unknown;
       try { trigger = JSON.parse(version.trigger); } catch { return 'Target workflow graph is unreadable'; }
-      const readiness = compileWorkflow(trigger, contextFor(id, [...ancestors, flowId], cache, budget));
+      const readiness = withIngredients(id, trigger, compileWorkflow(trigger, contextFor(id, [...ancestors, flowId], cache, budget)));
       cache.set(id, readiness);
       const first = readiness.issues[0];
       // Bounded with the same cuts the thrown message uses (#633), because this
@@ -155,20 +159,45 @@ function contextFor(flowId: string, ancestors: string[] = [], cache = new Map<st
   };
 }
 
+function withIngredients(flowId: string, trigger: unknown, readiness: WorkflowReadiness): WorkflowReadiness {
+  // Avoid traversing malformed/oversized graphs a second time.
+  if (readiness.issues.some(i => i.code === 'LIMIT')) return readiness;
+  const issues = flowIngredientIssues(flowId, trigger, workflowReadinessServices()?.pieces)
+    .map(message => ({ node: 'trigger', path: 'ingredients', code: 'INGREDIENT', message }));
+  return { ...readiness, ready: readiness.ready && issues.length === 0, issues: [...readiness.issues, ...issues].slice(0, 100) };
+}
+
 export function graphReadiness(flowId: string, trigger: unknown): WorkflowReadiness {
-  return compileWorkflow(trigger, contextFor(flowId));
+  return withIngredients(flowId, trigger, compileWorkflow(trigger, contextFor(flowId)));
 }
 export function versionReadiness(flowId: string, versionId: string, preview?: ReadinessContext['preview'], mode: BindingPinMode = {}): WorkflowReadiness {
   assertFlowVersionOwnership(flowId, versionId);
   const row = getWorkflowDb().query<{ trigger: string }, [string]>('SELECT trigger FROM flow_version WHERE id = ?').get(versionId)!;
   let trigger: unknown;
   try { trigger = JSON.parse(row.trigger); } catch { trigger = null; }
-  const result = compileWorkflow(trigger, { ...contextFor(flowId), preview });
+  const compiled = compileWorkflow(trigger, { ...contextFor(flowId), preview });
+  // Check the inputs the engine will actually execute, including account auth.
+  // Keep the compiler's traversal limit before making a second graph walk.
+  const effective = preview?.inputOverride && !compiled.issues.some(i => i.code === 'LIMIT')
+    ? applyInputOverrides(trigger as FlowTriggerNode, { [preview.stepName]: preview.inputOverride })
+    : trigger;
+  // Selected-ingredient pins (F-08) hold on every path, including the ones
+  // where a person accepts new binding pins.
+  const result = withIngredients(flowId, effective, compiled);
   if (mode.acceptBindings) return result;
   // A binding that changed since a person enabled the flow is a blocker, never
   // a silent switch to whatever now answers to the same name.
   const stale = bindingPinIssues(flowId, versionId, trigger);
   return stale.length ? { ...result, ready: false, issues: [...result.issues, ...stale] } : result;
+}
+/** Recheck saved pins at dispatch, using the same frozen preview inputs as execution. */
+export function assertRunIngredientsReady(run: Pick<FlowRun, 'id' | 'flowId'>, trigger: FlowTriggerNode, initial?: RunExecutionConfig): void {
+  if (!hasFlowIngredients(run.flowId)) return;
+  // RESUME supplies no initial config: only the original BEGIN may define it.
+  const config = ensureRunExecutionConfig(run.id, initial);
+  const effective = config.sampleInputOverride ? applyInputOverrides(trigger, config.sampleInputOverride) : trigger;
+  const result = withIngredients(run.flowId, effective, { ready: true, issues: [], runtimeChecks: [] });
+  if (!result.ready) throw new WorkflowReadinessError(result);
 }
 export function assertVersionReady(flowId: string, versionId: string, preview?: ReadinessContext['preview'], mode: BindingPinMode = {}): void {
   const result = versionReadiness(flowId, versionId, preview, mode);

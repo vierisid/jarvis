@@ -273,6 +273,13 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  *                                     derived readiness and qualifications at
  *                                     their own prompt boundary.
  *
+ *   onboarding-next/result/reader.ts PERSON-FACING. Returns only the exact
+ *                                     authorized draft's title/graph and bounded
+ *                                     readiness, with receipt identities. No run,
+ *                                     captured output, composition text or whole
+ *                                     version is forwarded; no model is called.
+ *                                     See result/reader.test.ts projection tests.
+ *
  * A new entry here means a new file holding a run or a version outside the
  * workflow tree. Decide what frames it before adding it -- "holds a whole object"
  * is enough to land here, because that is how the sample_data leak travelled.
@@ -292,6 +299,7 @@ const REVIEWED_STEP_OUTPUT_READERS = [
   'goals/work-items.ts',
   'goals/workflow-bridge.ts',
   'onboarding-next/compose-draft/store.ts',
+  'onboarding-next/result/reader.ts',
 ];
 
 describe('#573 premise 1: the reachable tool set is closed and known', () => {
