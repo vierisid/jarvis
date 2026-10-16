@@ -63,7 +63,15 @@ code, HTTP status and unsent remainder:
 | --- | --- | --- |
 | Refused before sending (`NotSentError`), 4xx, a named wait | not sent | 429 and named waits only |
 | Connection never made (`ECONNREFUSED`, `ENOTFOUND`, ...) | not sent | yes |
-| Timeout, dropped connection, 5xx, part of a long message sent, untyped | may have arrived | never |
+| Timeout, dropped connection, 5xx, part of a long message sent, untyped | may have arrived | never, except an approval card: once |
+
+Approval cards are the one exception (owner decision: "no retry, except
+approval cards"). `ApprovalDelivery` sends its card to the external channels
+with `approvalCard`, and a card whose send may have arrived is tried exactly
+once more (`APPROVAL_CARD_UNCERTAIN_RETRIES`), accepting a possible duplicate
+card over a silently lost approval. If that retry fails too, the card is
+reported as unconfirmed, never as not sent. The card is on the dashboard
+either way. Every other message keeps the rule above.
 
 Discord's own client retries are off (`rest: { retries: 0 }`): discord.js would
 otherwise resend a timed-out or 5xx request up to three times. A desktop toast

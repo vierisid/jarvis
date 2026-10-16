@@ -618,6 +618,66 @@ describe("#718: send options reach the adapter", () => {
 });
 
 /**
+ * Owner decision on Q-19: "no retry, except approval cards". An ordinary
+ * message that timed out is never resent (it may have arrived); an approval
+ * card gets exactly one retry, so an approval is not silently lost.
+ */
+describe("Q-19: one retry after a timeout, for approval cards only", () => {
+  class TimeoutOnceAdapter {
+    name = "discord";
+    public calls: unknown[][] = [];
+    constructor(private timeouts = 1) {}
+    isConnected() { return true; }
+    async sendMessage(...args: unknown[]): Promise<void> {
+      this.calls.push(args);
+      if (this.timeouts-- > 0) throw timedOut();
+    }
+  }
+  const setup = async (adapter: TimeoutOnceAdapter) => {
+    initDatabase(":memory:");
+    setSetting("channel.lastRecipient.discord", JSON.stringify({ to: "chat-1", userId: U1 }));
+    const svc = new ChannelService(allowListConfig({ discord: [U1] }), {} as never);
+    await svc.start();
+    svc.getManager().register(adapter as unknown as ChannelAdapter);
+    const failures: DeliveryFailure[] = [];
+    svc.setDeliveryFailureHandler(f => failures.push(f));
+    return { svc, failures };
+  };
+
+  test("an approval card that times out once is retried once and delivered", async () => {
+    const adapter = new TimeoutOnceAdapter(1);
+    const { svc, failures } = await setup(adapter);
+    await svc.broadcastToAll("approval card", { literal: true }, { approvalCard: true });
+    expect(adapter.calls).toEqual([["chat-1", "approval card", { literal: true }], ["chat-1", "approval card", { literal: true }]]);
+    expect(failures).toEqual([]);
+  });
+
+  test("an approval card gets one retry, not more, and a second timeout reads as may have arrived", async () => {
+    const adapter = new TimeoutOnceAdapter(5);
+    const { svc, failures } = await setup(adapter);
+    await svc.broadcastToAll("approval card", { literal: true }, { approvalCard: true });
+    expect(adapter.calls).toHaveLength(2);
+    expect(failures).toMatchObject([{ channel: "discord", attempts: 2, mayHaveArrived: true }]);
+  });
+
+  test("an ordinary message that times out is not resent", async () => {
+    const adapter = new TimeoutOnceAdapter(1);
+    const { svc, failures } = await setup(adapter);
+    await svc.broadcastToAll("hello");
+    expect(adapter.calls).toEqual([["chat-1", "hello"]]);
+    expect(failures).toMatchObject([{ channel: "discord", attempts: 1, mayHaveArrived: true }]);
+  });
+
+  test("sendWithRetry resends a request that may have arrived only within uncertainRetries", async () => {
+    const { sleep } = makeSleepRecorder();
+    const plain = new TimeoutOnceAdapter(1);
+    expect(await sendWithRetry(plain, "u", "x", { sleep })).toMatchObject({ ok: false, attempts: 1, mayHaveArrived: true });
+    const card = new TimeoutOnceAdapter(1);
+    expect(await sendWithRetry(card, "u", "x", { sleep, uncertainRetries: 1 })).toEqual({ ok: true, attempts: 2 });
+  });
+});
+
+/**
  * #811. An empty allow-list lets anyone chat, and nobody decide an approval.
  */
 describe("#811: an approve or deny needs a sender the allow-list names", () => {

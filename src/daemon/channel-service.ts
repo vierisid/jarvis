@@ -301,7 +301,7 @@ export class ChannelService implements Service {
    * Broadcast a message to ALL connected external channels.
    * Uses the last known recipient per channel (from most recent inbound message).
    */
-  async broadcastToAll(text: string, options?: SendOptions): Promise<void> {
+  async broadcastToAll(text: string, options?: SendOptions, delivery?: BroadcastDelivery): Promise<void> {
     // Channels are sent concurrently so one channel's retry backoff can't
     // delay delivery of a time-boxed message (e.g. an approval request) to
     // the others.
@@ -317,7 +317,13 @@ export class ChannelService implements Service {
       }
 
       sends.push(
-        sendWithRetry(adapter, lastRecipient, text, options ? { send: options } : undefined).then((result) => {
+        sendWithRetry(adapter, lastRecipient, text, {
+          ...(options ? { send: options } : {}),
+          // Owner decision (Q-19): an approval card gets one retry even when
+          // the first send may have arrived, so an approval is not silently
+          // lost to a timeout. Every other message is never resent.
+          ...(delivery?.approvalCard ? { uncertainRetries: APPROVAL_CARD_UNCERTAIN_RETRIES } : {}),
+        }).then((result) => {
           if (!result.ok) {
             this.reportDeliveryFailure(name, result);
           }
@@ -704,6 +710,15 @@ export const SEND_RETRY_MAX_DELAY_MS = 30_000;
  */
 export const SEND_RETRY_BUDGET_MS = 60_000;
 
+/** How a broadcast is delivered. Only the approval-card path sets anything. */
+export interface BroadcastDelivery {
+  /** An approval card (ApprovalDelivery): one retry after a send that may have arrived. */
+  approvalCard?: boolean;
+}
+
+/** Owner decision (Q-19): "no retry, except approval cards", which get exactly one. */
+export const APPROVAL_CARD_UNCERTAIN_RETRIES = 1;
+
 export interface SendRetryOptions {
   maxAttempts?: number;
   baseDelayMs?: number;
@@ -714,6 +729,12 @@ export interface SendRetryOptions {
   isTransient?: (err: unknown) => boolean;
   /** Passed to every attempt's `sendMessage`, e.g. `{ literal: true }` for an approval card. */
   send?: SendOptions;
+  /**
+   * How many times a send that may have arrived (timeout, drop, 5xx) is tried
+   * again. 0 by default: a retry could deliver it twice. Only approval cards
+   * set it (owner decision), accepting a possible duplicate card over a lost one.
+   */
+  uncertainRetries?: number;
 }
 
 export type SendRetryResult =
@@ -756,6 +777,7 @@ export async function sendWithRetry(
   let currentText = text;
   // Part of the message reached the channel on an earlier attempt.
   let sentPart = false;
+  let uncertainRetriesLeft = opts?.uncertainRetries ?? 0;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -767,8 +789,15 @@ export async function sendWithRetry(
       const mayHaveArrived = sentPart || sendMayHaveArrived(err);
       // Resuming the unsent remainder after a refused chunk is safe; resending
       // a request that may have been taken is not, whatever `isTransient` says.
-      if (attempt === maxAttempts || requestMayHaveArrived(err) || !isTransient(err)) {
+      const uncertain = requestMayHaveArrived(err);
+      const retryUncertain = uncertain && uncertainRetriesLeft > 0;
+      if (attempt === maxAttempts || (uncertain && !retryUncertain) || (!uncertain && !isTransient(err))) {
         return { ok: false, attempts: attempt, error: message, mayHaveArrived };
+      }
+      if (retryUncertain) {
+        uncertainRetriesLeft--;
+        // It may have arrived: whatever happens next, never report it as not sent.
+        sentPart = true;
       }
       if (partlySent(err)) {
         currentText = (err as { remainingText: string }).remainingText;
