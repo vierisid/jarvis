@@ -18,6 +18,9 @@ function Surface({ open, onOpenChange }: { open: boolean; onOpenChange: (open: b
 function ResultSlot({ model, onContinue }: { model: Record<string, unknown>; onContinue: () => void }) {
   return <section className="on-preview__room"><h1>Saved draft fixture</h1><p>U09 is absent. This slot verifies the host handoff; it is not the workflow canvas.</p><p>Flow: {String(model.flowId)} · Version: {String(model.versionId)} · Disabled</p><button onClick={onContinue}>Continue to dashboard</button></section>;
 }
+function ResultCanvasSlot({ draft }: { draft: { flowId: string; versionId: string } }) {
+  return <p>Canvas handoff fixture · {draft.flowId} / {draft.versionId}. The real D18 renderer is verified in U09’s isolated preview.</p>;
+}
 /** Explicit synthetic providers. No timers manufacture progress: the preview
  * operator advances build phases. Never imported by the production entry. */
 export function previewConfiguration(options: { storage?: Pick<Storage, 'getItem' | 'setItem'>; mode?: 'full' | 'partial' | 'empty' | 'disabled'; start?: Journey['stepId'] } = {}) {
@@ -37,7 +40,7 @@ export function previewConfiguration(options: { storage?: Pick<Storage, 'getItem
   config.modules = config.modules.map(module => viewModules.find(real => real.manifest.id === module.manifest.id)
     ?? { ...module, load: async () => ({ ResultView: ResultSlot as unknown as ComponentType<Record<string, unknown>> }) });
   if (options.mode === 'empty') config.modules = [];
-  if (options.mode === 'partial') config.modules = viewModules;
+  if (options.mode === 'partial') config.modules = viewModules.filter(module => module.manifest.id !== 'ON-U-09');
   if (options.mode === 'disabled') config.enabled = false;
   const presentation = (name: string, context: Context): Awaited<ReturnType<FeatureAdapter['read']>> => {
     const j = context.journey;
@@ -56,7 +59,20 @@ export function previewConfiguration(options: { storage?: Pick<Storage, 'getItem
       status: { jobId: 'fixture-job', revision: eventRevision, outcome: finished ? 'succeeded' : 'working', phase: phases[phaseIndex], completedPhases: phases.slice(0, finished ? 4 : phaseIndex) },
       result: finished ? { state: 'ready', reference: { jobId: 'fixture-job', requestId, compositionRecordId: 'fixture-composition', flowId: 'fixture-flow', versionId: 'fixture-version', readiness: 'needs_input', activation: 'disabled' } } : { state: 'pending' },
       actions: { cancel: true, resume: true, openResult: true } } };
-    return { model: { flowId: 'fixture-flow', versionId: 'fixture-version' } };
+    const reference = { jobId: 'fixture-job', requestId, compositionRecordId: 'fixture-composition', flowId: 'fixture-flow', versionId: 'fixture-version', readiness: 'needs_input', activation: 'disabled' };
+    const expected = { compositionRecordId: reference.compositionRecordId, flowId: reference.flowId, versionId: reference.versionId };
+    return { model: { scopeId: j.scopeId, journeyId: j.journeyId, jobId: reference.jobId, requestId, revision: j.revision, expected,
+      flowId: reference.flowId, versionId: reference.versionId,
+      result: { availability: 'ready', state: 'saved', schemaVersion: 1, scopeId: j.scopeId, journeyId: j.journeyId, ...reference,
+        contentRevision: 'fixture-content', title: 'Saved draft fixture', graph: { name: 'trigger', type: 'EMPTY', displayName: 'Fixture trigger' }, selectedNodeId: null,
+        versionState: 'DRAFT', reference, readiness: { ready: false, issues: [], runtimeChecks: [] }, missingBindings: [],
+        recovery: { operation: 'result.read', input: { schemaVersion: 1, jobId: reference.jobId, expected } },
+        workflow: { room: 'workflow', selection: { flowId: reference.flowId, versionId: reference.versionId } },
+        journey: { sync: 'settled', completion: 'active' },
+        continuation: { operation: 'journey.transition', input: { journeyId: j.journeyId, expectedRevision: j.revision,
+          requestId: 'result-finish:fixture', command: { type: 'finish' } } },
+      } }, ports: { Canvas: ResultCanvasSlot } };
+
   };
   for (const name of ['google', 'interview', 'tour', 'pebble-tour', 'activation', 'build', 'result'] as const) config.adapters[name] = {
     available: () => true,
@@ -68,12 +84,17 @@ export function previewConfiguration(options: { storage?: Pick<Storage, 'getItem
         return presentation(name, c);
       },
       subscribe: changed => { notify.add(changed); return () => { notify.delete(changed); }; },
-      command: async (_c, action, value) => {
+      command: async (c, action, value) => {
         const input = value as { request?: { requestId: string }; action?: string; to?: string } | undefined;
         if (name === 'interview' && (action === 'answer' || action === 'skip')) { answered ||= action === 'answer'; cursor++; bump({ interviewState: action === 'skip' ? 'skipped' : 'done' }); }
         if (name === 'tour' || name === 'pebble-tour') {
           if (action === 'skip' || input?.to === 'first-workflow') bump({ tourState: action === 'skip' ? 'skipped' : 'done', stepId: 'activation', tourStepId: null });
           else bump({ tourState: 'in_progress', tourStepId: input?.to ?? (action === 'open-pebble' ? 'pebble' : steps[1]!) });
+        }
+        if (name === 'result' && action === 'finish') {
+          const model = presentation(name, c).model;
+          const result = model.result as { continuation: { input: Record<string, unknown> } };
+          await config.transport.call('journey.transition', result.continuation.input, c.signal);
         }
         if (name === 'activation' && action === 'create') { requestId = input?.request?.requestId ?? requestId; bump({ stepId: 'build', activationState: 'building', jobId: 'fixture-job', buildRequestId: requestId }); }
         if (name === 'build' && action === 'open_result' && finished) bump({ stepId: 'result', activationState: 'draft_saved', draft: { flowId: 'fixture-flow', versionId: 'fixture-version' } });

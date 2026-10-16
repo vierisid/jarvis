@@ -102,7 +102,7 @@ function OnboardingViewHost({ session, legacy, children }: { session: Session; l
     case 'tour': case 'pebble-tour': props = { ...props, onNavigate: intent }; break;
     case 'activation': props = { ...props, onDraftChange: draft, onIntent: intent }; break;
     case 'build': props = { ...props, model: { ...model, actions: { ...(base.actions as Record<string, unknown>), openResult: !state.busy && (base.actions as Record<string, unknown>)?.openResult === true } }, onIntent: intent }; break;
-    case 'result': props = { ...props, onReview: () => action('review'), onContinue: () => action('finish') }; break;
+    case 'result': props = { ...props, onReview: (value: unknown) => action('review', value), onContinue: (value: unknown) => action('finish', value) }; break;
     case 'legacy-provider-setup': props = { ...props, onComplete: () => action('complete'), onBack: () => action('back') }; break;
   }
   const View = state.view === 'legacy-provider-setup' ? state.presentation?.ports?.View as ComponentType<Record<string, unknown>> : session.views()?.[state.view];

@@ -257,3 +257,23 @@ test.each(['done', 'skipped'] as const)('a previously %s legacy tour advances to
   const s = createSession(f.config); await s.start(); expect(s.state().view).toBe('activation'); expect(s.state().mode).toBe('journey');
   expect(s.state().journey?.completion).toBe('active'); expect(s.state().journey?.tourState).toBe(tourState); s.dispose();
 });
+
+test('result completion belongs to the adapter and never synthesizes a finish command', async () => {
+  const f = fixture(); f.setJourney({ stepId: 'result', activationState: 'draft_saved', jobId: 'job', draft: { flowId: 'flow', versionId: 'version' } });
+  const commands: unknown[] = [];
+  f.config.adapters.result!.create = () => ({ available: () => true, read: async () => ({ model: {} }),
+    command: async (_c, action, input) => { commands.push({ action, input }); } });
+  const s = createSession(f.config), input = { action: 'finish', draft: { continuation: { input: { requestId: 'server-receipt' } } } };
+  try {
+    await s.start(); await s.act(s.key(), 'finish', input);
+    expect(commands).toEqual([{ action: 'finish', input }]); expect(f.calls).not.toContain('journey.transition');
+    expect(s.state().mode).toBe('journey'); expect(s.state().journey?.completion).toBe('active');
+  } finally { s.dispose(); }
+});
+test('a rejected result adapter blocks completion without falling back to a synthesized finish', async () => {
+  const f = fixture(); f.setJourney({ stepId: 'result', activationState: 'draft_saved', jobId: 'job', draft: { flowId: 'flow', versionId: 'version' } });
+  f.config.adapters.result!.create = () => ({ available: () => true, read: async () => ({ model: {} }), command: async () => { throw Error('result unavailable'); } });
+  const s = createSession(f.config);
+  try { await s.start(); await s.act(s.key(), 'finish'); expect(s.state().blocked).toBe(true); expect(f.calls).not.toContain('journey.transition'); }
+  finally { s.dispose(); }
+});

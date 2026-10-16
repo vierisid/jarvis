@@ -135,8 +135,6 @@ export function createSession(config: Configuration) {
         // The view supplied its current draft; save it before leaving the screen.
         adapters.activation!.setDraft?.(context(), (input as { draft?: unknown })?.draft);
         await navigate(action === 'back' ? { type: 'replay_tutorial' } : { type: 'explore' });
-      } else if (view === 'result' && action === 'finish') {
-        await navigate({ type: 'finish' });
       } else {
         const adapter = adapters[view as keyof Configuration['adapters']];
         if (!adapter) throw new Unavailable();

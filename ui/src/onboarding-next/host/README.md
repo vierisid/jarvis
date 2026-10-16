@@ -136,3 +136,9 @@ Rollback uses the default configuration or reverts the gate wrapper, preserving
 the legacy body. Regenerate the catalog when removing a view. Keep all additive
 journey, interview and draft data; rollback performs no token revocation, deletion,
 workflow creation, run or enable action.
+
+Result completion is routed to the result adapter, including its current action
+payload. That adapter owns B10's exact continuation descriptor and reconciliation;
+the session must not synthesize a generic finish transition. The synthetic preview
+works with both an absent U09 handoff slot and the real optional U09 view. Its
+partial-module scenario explicitly removes U09 even when all views are installed.
