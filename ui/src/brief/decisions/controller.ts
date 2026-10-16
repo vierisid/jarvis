@@ -281,7 +281,7 @@ export class DecisionsController {
       request: {
         decisionId: id,
         revision: revision(item),
-        requestId: crypto.randomUUID(),
+        requestId: requestId(),
         action,
         ...(action === "save"
           ? { document: structuredClone(this.state.draft!.document) }
@@ -444,6 +444,12 @@ export class DecisionsController {
     clearTimeout(this.timer);
     this.listeners.clear();
   }
+}
+/** getRandomValues also works on self-hosted HTTP origins where randomUUID is absent. */
+function requestId() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
 }
 function decisionIdOrNull(item?: DecisionView) {
   return item ? decisionId(item) : null;

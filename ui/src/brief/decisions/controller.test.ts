@@ -496,3 +496,17 @@ test("R1: typing during save reconciliation is not consumed by that earlier save
   expect(c.canAct(A, "save")).toBe(false);
   expect(f.calls.length).toBe(1);
 });
+test("a decision still dispatches on HTTP origins without crypto.randomUUID", async () => {
+  const original = crypto.randomUUID;
+  Object.defineProperty(crypto, "randomUUID", { value: undefined, configurable: true });
+  try {
+    const f = fixture();
+    await f.c.refresh();
+    await f.c.act(A, "approve");
+    expect(f.calls.length).toBe(1);
+    expect(f.calls[0]!.requestId).toMatch(/^[0-9a-f]{32}$/u);
+    expect(f.c.snapshot().phase).toBe("acknowledge");
+  } finally {
+    Object.defineProperty(crypto, "randomUUID", { value: original, configurable: true });
+  }
+});
