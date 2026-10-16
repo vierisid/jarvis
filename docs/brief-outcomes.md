@@ -2,11 +2,11 @@
 
 F16 projects existing checked work, workflow execution evidence and F15 goal observations. It does not infer business benefit from a successful run, a goal title, a legacy score, engine duration or `flow.time_saved_per_run`.
 
-## Stack and activation
+## Activation
 
-`brief/f-16` is stacked on corrected F15 `bc0fdf9cda343e45ad8081345a77e1814dbe979a`. The roadmap compile contract is F01; F15 persistence is an optional runtime seam, checked at readiness. No F15 measurement writer is imported by the outcome implementation. The existing F stack still contains its earlier compile dependencies. Enable both `JARVIS_BRIEF_GOAL_MEASUREMENTS=1` and `JARVIS_BRIEF_OUTCOMES=1` to expose the authenticated outcome routes. Both default off. D09/D10/D25 live presentation is not activated.
+F15 goal-measurement persistence is an optional runtime seam, checked at readiness; the outcome implementation imports no F15 measurement writer. Enable both `JARVIS_BRIEF_GOAL_MEASUREMENTS=1` and `JARVIS_BRIEF_OUTCOMES=1` to expose the authenticated outcome routes. Both default off. D09/D10/D25 live presentation is not activated by this change.
 
-Pinned sources: A18 workflow schema, A08 work items and A09 goal application service at `69211511c95355776c6c319c01e1df5acd3b8f1e`. Current main inspected: `244658eed294af5d4b51de434d40cfd800adca67`. Those sources match the stack except F08 ingredient pins and F15 measurement writing/scoring protection. Existing work/run identities, result checks and effect records remain authoritative. No workflow schema, execution policy, provider call or goal writer is changed.
+Existing work/run identities, result checks and effect records remain authoritative. No workflow schema, execution policy, provider call or goal writer is changed.
 
 ## Eligibility and attribution
 
@@ -54,7 +54,7 @@ All intervals are half-open `[start, end)` UTC epoch milliseconds. Custom reads 
 
 Time totals are null where no defensible records exist. The summary includes per-day coverage, eligible/untimed/timed work counts and reasons for excluded checked work. Coverage describes checked work in the requested window, not all activity on the machine. A partial total includes only the supported records. No eligible work or goal observations yields empty. Missing required source tables, a replaced database, a database error or exceeded read bounds yields unavailable instead of a fabricated zero.
 
-The weekly `goalDeltas` and daily `todayGoalDeltas` use the final observation in their respective window minus the most recent observation strictly before that window. They retain signed corrections. A missing opening observation or changed unit/baseline/target produces a null delta with a reason and incomplete coverage. A configured baseline is not treated as a historical observation. Each goal, including parents and children, is separate; no cross-goal total or causal work attribution is produced.
+The weekly `goalDeltas` and daily `todayGoalDeltas` use the final observation in their respective window minus the most recent observation strictly before that window. They retain signed corrections. A missing opening observation or changed unit/baseline/target produces a null delta with a reason and incomplete coverage. A configured baseline is not treated as a historical observation. Each delta carries the qualification its observations were recorded with (`user_reported` unless both are `measured`); any other qualification makes the summary unavailable. Each goal, including parents and children, is separate; no cross-goal total or causal work attribution is produced.
 
 Reads fail closed above 10,000 checked work items, 1,000 runs or 10,000 effects in one family, or 50,000 historical goal receipts. These bounds avoid silently truncating evidence and presenting the remainder as complete.
 
@@ -72,13 +72,10 @@ D09 must map this owner-produced summary to its view adapter, preserve `user_rep
 
 ## Verification and rollback
 
-In WSL:
-
 ```sh
-cd /home/vierisid/.cache/codex/jarvis-f-16
 bun test src/brief/outcomes.test.ts src/daemon/api-brief-outcomes.test.ts src/util/model-exec-env.test.ts
 ```
 
-Tests use isolated fixture databases, real canonical work/goal writers and an authenticated local socket. They exercise missing evidence, correction/replay/restart, negative/zero time, overlapping intervals, descendant uncertainty, test runs, duplicate run bindings, timezone boundaries, independent goal deltas and malformed requests. No live model, provider or external effect is involved. Review regressions use the real workflow-launch backend and canonical deletion to cover failed, pending and successful children, deleted grandchildren, inconsistent launch references and restart. HTTP checks cover a fresh client, concurrent correction/conflict/refresh, immutable historical receipts and authenticated current-record access. Removing both fixes reproduces all ten review failures. Raw verification and mutation evidence is recorded in `docs/brief-delivery/F-16.json` and its evidence directory.
+Tests use isolated fixture databases, real canonical work/goal writers and an authenticated local socket. They exercise missing evidence, correction/replay/restart, negative/zero time, overlapping intervals, descendant uncertainty, test runs, duplicate run bindings, timezone boundaries, independent goal deltas and malformed requests. No live model, provider or external effect is involved. Review regressions use the real workflow-launch backend and canonical deletion to cover failed, pending and successful children, deleted grandchildren, inconsistent launch references and restart. HTTP checks cover a fresh client, concurrent correction/conflict/refresh, immutable historical receipts and authenticated current-record access.
 
-Disable `JARVIS_BRIEF_OUTCOMES` on the new runtime to stop reads/writes; retain additive time receipts and existing canonical work/goal data. Disabling F15 also disables outcomes through the capability dependency. This PR remains unmerged and does not enable a release. F17 is not included.
+Disable `JARVIS_BRIEF_OUTCOMES` on the new runtime to stop reads/writes; retain additive time receipts and existing canonical work/goal data. Disabling F15 also disables outcomes through the capability dependency.
