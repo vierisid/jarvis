@@ -237,7 +237,26 @@ is unchanged.
   locks the card until the recommendation changes or is refreshed, and nothing is retried. Progress
   never changes from an acceptance. The destination cue holds 1800ms (1200ms reduced) beside the hero
   status, once per receipt. `today/goal-card/figma-reference.json` records the UI-15 source values.
+- Opportunity stack (`today/opportunity-stack/`): `opportunityView` passes an `OpportunityBinding`
+  through only when `source` is `"fixture"` in preview mode, or `"live"` with `preparedOpportunities`
+  in live mode; `onAction` and `receipts` additionally need `opportunityActivation`. Each card carries
+  the F-01 `BriefPreparedOpportunity` unchanged plus owner-written title, observation, automation and
+  goal-title strings; the UI infers no copy and never falls back to the preview fixtures. No live
+  provider is wired yet.
+- The provider may report a proposal `ready` only for a Q-13 `ready` qualification of that exact
+  snapshot (`src/awareness/prepared-qualification.ts`), and suppression (Q-14) is owner-side: a
+  suppressed proposal is simply not returned. "Approve & enable" stays disabled unless the snapshot and
+  its readiness are `ready`, the goal, composition, flow and version are present and every binding is
+  `ready`; preparing or blocked proposals show the owner's reason instead.
+- "Approve & enable" and "Dismiss" call `onAction(request)` once per proposal identity with a fresh
+  `requestId` and the exact proposal revision, flow and version; the UI writes and runs nothing. The
+  owner must enable through the existing gated enable path (Authority card, Q-05 binding pins) and must
+  not also run the flow. Success needs a confirmed result echoing every request field with a receipt
+  ID; conflict, failure, unknown or a lost response keeps the card locked until a matching `receipts`
+  entry or a new revision arrives. Stale data allows local Next browsing but no action. Local locks are
+  not durable; the owner restores accepted/dismissed state after reload.
+  `today/opportunity-stack/figma-reference.json` records the UI-16 source values.
 
 `?brief=preview&specimen=today#/_brief_preview` opens the composition with fixture decisions,
-fixture outcomes and activity (`today/preview/outcomeFixtures.ts`), a fixture goal with a simulated recommendation owner (`today/preview/goalFixtures.ts`) and a fixture opportunity card. Its actions only change local state; it starts no API read,
+fixture outcomes and activity (`today/preview/outcomeFixtures.ts`), a fixture goal with a simulated recommendation owner (`today/preview/goalFixtures.ts`) and a fixture opportunity stack with a simulated owner (`today/preview/opportunityFixtures.ts`). Its actions only change local state; it starts no API read,
 socket or approval.

@@ -13,6 +13,7 @@ const SHEETS = [
   "../today/hero-paper/hero-paper.css", "../today/layout/today-layout.css", "../today/preview/specimen.css",
   "../today/decision-transition/decision-transition.css",
   "../today/outcomes/outcomes.css", "../today/activity/activity.css", "../today/goal-card/goal-card.css",
+  "../today/opportunity-stack/opportunity-stack.css",
 ];
 
 function selectors(css: string): string[] {
