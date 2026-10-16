@@ -14,6 +14,8 @@ import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness
 import { getWorkflowComposition } from '../workflows/db/repos/workflow-composition';
 import { sampleCatalog } from '../workflows/runtime/test-fixtures';
 import type { ComposerLlmClient } from '../actions/tools/workflow-composer';
+import { currentOrigin, runWithOrigin } from '../llm/origin';
+import { currentAdmission, runWithAdmission } from '../llm/background-budget';
 
 const input = { requestId: 'stable-request', name: 'Private report', prompt: '  On manual trigger, draft a report in the dashboard. Never send email or delete files.\n' };
 const graph = { displayName: 'Private report', trigger: { name: 'trigger', type: 'EMPTY', nextAction: {
@@ -78,6 +80,17 @@ test('durable receipt precedes the model; retries across every phase attach one 
   const recovered = provider();
   expect(recovered.submit(input)).toEqual({ job, created: false }); await recovered.idle();
   expect(count('flow')).toBe(1);
+});
+
+test('a submitted job composes as foreground user work whatever context kicked the worker', async () => {
+  const seen: Array<[string | undefined, string | undefined]> = [];
+  const p = provider({ async chat() { seen.push([currentOrigin(), currentAdmission()]); return { text: valid }; } });
+  // A detached kick (timer, recovery, a background caller) must not turn the
+  // person's explicit request into Q-20 governed background work.
+  const { job } = runWithAdmission(undefined, () => runWithOrigin('background', () => p.submit(input)));
+  await p.idle();
+  expect(p.get(job.jobId).state).toBe('draft_ready');
+  expect(seen).toEqual([['user', 'foreground']]);
 });
 
 test('an uncertain response can be recovered by requestId and changed specifications conflict', async () => {

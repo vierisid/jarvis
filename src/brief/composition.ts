@@ -8,6 +8,8 @@ import { composePersistedFlow } from '../actions/tools/persisted-workflow-compos
 import type { ComposeDeps } from '../actions/tools/workflow-composer';
 import { COMPOSITION_LIMITS as limits, type BriefCompositionJob, type BriefComposeRequest } from './composition-contracts';
 import { ensureCompositionJobSchema } from './composition-schema';
+import { runWithOrigin } from '../llm/origin';
+import { runWithAdmission } from '../llm/background-budget';
 
 export class CompositionRequestError extends Error {
   constructor(message: string, public readonly status = 400) { super(message); }
@@ -169,14 +171,17 @@ export class BriefCompositionProvider {
       const owns = () => !this.stopped && this.currentDatabase() && this.active === active && this.row(row.id).state === 'running' && !active.abort.signal.aborted;
       try {
         const deps = this.dependencies!();
-        const compose = composePersistedFlow({ ...deps, onCandidate: candidate => {
+        // Every job is an explicit request the person submitted and is waiting on, so
+        // its model calls are foreground `user` work, not Q-20 background admission.
+        // Set here, not inherited: the worker can be kicked from any async context.
+        const compose = runWithAdmission('foreground', () => runWithOrigin('user', () => composePersistedFlow({ ...deps, onCandidate: candidate => {
           if (!owns()) throw new Error('Composition is no longer active');
           this.db.run('UPDATE brief_workflow_composition_jobs SET checked_candidates = checked_candidates + 1, updated_at = ? WHERE id = ?', [Date.now(), row.id]);
           deps.onCandidate?.(candidate);
         } }, { name: row.name, description: row.prompt, signal: active.abort.signal }, this.projectId, id => {
           if (!owns()) throw new Error('Composition is no longer active');
           this.db.run('UPDATE brief_workflow_composition_jobs SET composition_id = ?, updated_at = ? WHERE id = ?', [id, Date.now(), row.id]);
-        });
+        })));
         const result = await Promise.race([compose, new Promise<never>((_, reject) => {
           if (active.abort.signal.aborted) reject(new Error('Composition stopped'));
           else active.abort.signal.addEventListener('abort', () => reject(new Error('Composition stopped')), { once: true });
