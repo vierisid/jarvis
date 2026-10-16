@@ -15,19 +15,28 @@ export interface ReplyTurn {
 export interface MessageChat {
   messages: readonly Message[]; turns: Readonly<Record<string, ReplyTurn>>;
   activity?: Readonly<Record<string, Activity>>; scroll: ReadingPosition;
-  /** F-04 keeps only id + status per Brief-turn approval (#1075): no card details. */
+  /** F-04 keeps only id + status per Brief-turn approval; the card's details come from the dashboard list (#1075). */
   approvals?: Readonly<Record<string, { conversationId: string; turnId: string; requestId: string; status: string }>>;
   history: { state: "idle" | "loading" | "ready" | "error"; cursor: string | null };
+}
+/** What the existing dashboard card shows, from useWebSocket's pending approvals (#1075). */
+export interface ApprovalCardDetails {
+  id: string; intent: string; intentReason?: string; category: string;
+  impact: "read" | "write" | "destructive" | "external";
 }
 export interface MessageOwner {
   status: { mode: "disabled" | "loading" | "scoped" | "legacy" | "unavailable"; connected: boolean; progressEnabled?: boolean };
   state: { workspaceId: string | null; activeId: string | null; order: readonly string[]; conversations: Readonly<Record<string, MessageChat>> };
   client: { store: { setScroll(id: string, position: ReadingPosition): void }; loadOlder?(id: string): Promise<unknown> };
+  /** The dashboard's pending approvals: REST on socket open, then live notifications. */
+  approvals?: readonly ApprovalCardDetails[];
 }
 export interface MessageBinding {
   source: "fixture" | "live"; scopeId: string | null; conversationId: string | null;
   mode: MessageOwner["status"]["mode"]; connected: boolean; progressEnabled: boolean;
   chat?: MessageChat; saveScroll(position: ReadingPosition): void; loadOlder?(): Promise<unknown>;
+  /** Card details by approval id; only ids the dashboard itself lists as pending. */
+  approvalCards?: Readonly<Record<string, ApprovalCardDetails>>;
 }
 export function bindConversationMessages(owner: MessageOwner, source: MessageBinding["source"]): MessageBinding {
   const id = owner.state.activeId;
@@ -35,11 +44,12 @@ export function bindConversationMessages(owner: MessageOwner, source: MessageBin
   return { source, scopeId: owner.state.workspaceId, conversationId: chat ? id : null,
     mode: owner.status.mode, connected: owner.status.connected, progressEnabled: owner.status.progressEnabled === true,
     chat, saveScroll: position => { if (chat && id) owner.client.store.setScroll(id, position); },
-    loadOlder: chat && id && owner.client.loadOlder ? () => owner.client.loadOlder!(id) : undefined };
+    loadOlder: chat && id && owner.client.loadOlder ? () => owner.client.loadOlder!(id) : undefined,
+    approvalCards: Object.fromEntries((owner.approvals ?? []).map(card => [card.id, card])) };
 }
 export type ThreadItem = { key: string; time: number } & (
   { kind: "user"; message: Message } |
-  { kind: "reply"; message?: Message; turn?: ReplyTurn; activities: Activity[]; awaitingApproval: boolean }
+  { kind: "reply"; message?: Message; turn?: ReplyTurn; activities: Activity[]; awaitingApproval: boolean; pendingApprovalIds: string[] }
 );
 export const running = (turn?: ReplyTurn) => turn?.state === "running" || turn?.state === "queued";
 
@@ -53,8 +63,10 @@ export function threadItems(binding: MessageBinding): ThreadItem[] {
     .filter(a => a.conversationId === conversationId && a.turnId === turn.turnId && a.requestId === turn.requestId
       && ["started", "completed", "failed"].includes(a.phase))
     .sort((a,b) => a.firstSequence - b.firstSequence || a.activityId.localeCompare(b.activityId));
-  const awaiting = (turn?: ReplyTurn) => !!turn && running(turn) && Object.values(chat.approvals ?? {})
-    .some(a => a.status === "pending" && a.conversationId === conversationId && a.turnId === turn.turnId && a.requestId === turn.requestId);
+  const pending = (turn?: ReplyTurn) => !turn || !running(turn) ? [] : Object.entries(chat.approvals ?? {})
+    .filter(([, a]) => a.status === "pending" && a.conversationId === conversationId && a.turnId === turn.turnId && a.requestId === turn.requestId)
+    .map(([approvalId]) => approvalId).sort();
+  const awaiting = (turn?: ReplyTurn) => { const ids = pending(turn); return { awaitingApproval: ids.length > 0, pendingApprovalIds: ids }; };
   for (const message of chat.messages) {
     if (message.conversation_id !== conversationId || seen.has(message.id)) continue;
     seen.add(message.id);
@@ -63,11 +75,11 @@ export function threadItems(binding: MessageBinding): ThreadItem[] {
       const turn = turns.find(t => t.assistantMessageId === message.id);
       if (turn) matched.add(turn.turnId);
       items.push({ key: turn ? `turn:${turn.turnId}` : `message:${message.id}`, time: turn ? turn.createdAt + .5 : message.created_at,
-        kind: "reply", message, turn, activities: turn ? activities(turn) : [], awaitingApproval: awaiting(turn) });
+        kind: "reply", message, turn, activities: turn ? activities(turn) : [], ...awaiting(turn) });
     }
   }
   for (const turn of turns) if (!matched.has(turn.turnId)) items.push({ key: `turn:${turn.turnId}`, time: turn.createdAt + .5,
-    kind: "reply", turn, activities: activities(turn), awaitingApproval: awaiting(turn) });
+    kind: "reply", turn, activities: activities(turn), ...awaiting(turn) });
   return items.sort((a,b) => a.time - b.time || a.key.localeCompare(b.key));
 }
 

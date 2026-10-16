@@ -20,6 +20,12 @@ function useBriefLiveThread(client: BriefConversationClient, enabled: boolean, c
   }, [client, chatVisible]);
   const ws = useWebSocket({ enabled: enabled && (status.mode === 'scoped' || status.mode === 'legacy'),
     chat: status.mode === 'scoped' ? client.adapter : undefined });
+  // Everything but the chat itself passes through untouched (#1075): approvals,
+  // clarifiers, repeat-backs, room actions and the room notifications share the
+  // same connection, so mounting this in place of the dashboard hook hides none.
+  // On a scoped socket the adapter swallows thinking and TTS frames, so
+  // `thinking`, `voiceCallbacksRef` and voice over `wsRef` work in legacy mode only.
+  const { messages: _messages, isConnected: _connected, sendMessage: _send, cancelResponse: _cancel, isResponding: _responding, ...socket } = ws;
   const current = state.activeId ? state.conversations[state.activeId] ?? null : null;
   const messages = status.mode === 'legacy' ? ws.messages : (current?.messages ?? []).map(row => ({
     id: row.id, role: row.role, content: row.content, timestamp: row.created_at, attachments: row.attachments,
@@ -33,6 +39,7 @@ function useBriefLiveThread(client: BriefConversationClient, enabled: boolean, c
     return item;
   });
   return {
+    ...socket,
     status, state, current: status.mode === 'scoped' ? current : null, messages, items,
     isConnected: status.mode === 'scoped' ? status.connected : ws.isConnected,
     isResponding: status.mode === 'legacy' ? ws.isResponding : status.pendingSends.some(turn => turn.conversationId === state.activeId)
@@ -49,9 +56,6 @@ function useBriefLiveThread(client: BriefConversationClient, enabled: boolean, c
         ?? status.pendingSends.find(turn => turn.conversationId === state.activeId);
       if (turn) client.cancel({ conversationId: turn.conversationId, turnId: turn.turnId, requestId: turn.requestId });
     },
-    // Existing room notifications share the same connection. No second useLiveThread mount.
-    taskEvents: ws.taskEvents, contentEvents: ws.contentEvents, settingsEvents: ws.settingsEvents,
-    notices: ws.notices, dismissNotice: ws.dismissNotice,
   };
 }
 type BriefThread = ReturnType<typeof useBriefLiveThread>;
