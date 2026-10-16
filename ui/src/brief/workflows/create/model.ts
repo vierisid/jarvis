@@ -1,9 +1,10 @@
 import { COMPOSITION_LIMITS, type BriefComposeRequest, type BriefCompositionJob } from "../../../../../src/brief/composition-contracts";
+import { readIngredients, sameIngredients } from "../ingredient-picker/model";
 
 /** F-07 wire port over `/api/brief/workflow-compositions`. Types come from F-07's contracts.
- * Ingredient selection (F-08) belongs to D-17's picker; this room sends prompt-only requests. */
+ * Optional F-08 ingredients are the exact pins from D-17's picker, sent and echoed unchanged. */
 export const PROMPT_BYTES = COMPOSITION_LIMITS.promptBytes;
-export type CompositionRequest = Omit<BriefComposeRequest, "ingredients">;
+export type CompositionRequest = BriefComposeRequest;
 export type CompositionJob = BriefCompositionJob;
 export interface CompositionPort {
   submit(request: CompositionRequest): Promise<CompositionJob>;
@@ -26,8 +27,10 @@ export function readJob(value: unknown, request?: CompositionRequest): Compositi
     || (j.state === "draft_ready" && !j.workflow)
     || (j.state !== "draft_ready" && j.workflow !== null)
     || (j.blocker !== null && (!j.blocker || typeof j.blocker.message !== "string" || !Array.isArray(j.blocker.details) || !j.blocker.details.every(s => typeof s === "string")))
-    // A prompt-only request never owns a receipt that carries ingredient selections.
-    || (request && (j.specification.ingredients !== undefined || j.requestId !== request.requestId || j.specification.prompt !== request.prompt || j.specification.name !== (request.name ?? "New workflow")))) throw Error("Invalid composition receipt");
+    || (request && (j.requestId !== request.requestId || j.specification.prompt !== request.prompt || j.specification.name !== (request.name ?? "New workflow")))) throw Error("Invalid composition receipt");
+  // A receipt must echo the request's exact ordered pins; missing and empty are equivalent.
+  readIngredients(j.specification.ingredients);
+  if (request && !sameIngredients(j.specification.ingredients, request.ingredients)) throw Error("Invalid composition receipt");
   return j;
 }
 
