@@ -48,7 +48,15 @@ Rejecting a workflow permission resolves the approval as `denied`, but does not 
 
 Order is `(persisted position, source creation time, stable decision ID)`. Cursors are opaque, scoped to the run filter and tied to a durable queue generation. SQLite selects at most `limit + 1` identities per page; it does not load the full work/history list into application memory. Projections read their current source records in the same database snapshot.
 
-Any source or placement write invalidates an unfinished traversal. A stale cursor returns `409` with `code: "queue_changed"`; discard the old pages and start from the first page. This explicit refresh policy avoids mixing snapshots or silently skipping/repeating cards after insertions, status changes, deletions or reordering. It also means a busy running workflow can require a refresh while paging. Cursor scope errors return 400. A cursor survives restart when its source generation has not changed.
+The sort key of a decision never changes except through its placement: source creation time and the typed ID are fixed. So a cursor is a plain keyset position. A source write (a new decision, a status change, a deletion, including by legacy surfaces) never repeats a card already returned; a card that appears before the cursor shows up on the next refresh. Only a placement write moves an existing card, so it invalidates an unfinished traversal: that cursor returns `409` with `code: "queue_changed"`; discard the old pages and start from the first page. Cursor scope errors return 400. A cursor survives restart while no placement changed.
+
+The queue adds no triggers to source tables. bun:sqlite counts trigger writes in a statement's `changes`, which would break the single-row checks in the workflow repos (`createFlowRun`, the effect dispatch claim).
+
+## Scope and approval rules
+
+The queue is scoped to one workflow project (the default project, as the workflow routes are since #729): effects, runs and flows of another project are not listed, not readable by ID and not matched by `runId`. Approvals and work items belong to the daemon owner.
+
+Permission decisions go through `applyApprovalDecision` as a dashboard click and are audited like the existing approval card (Q-08). While Jarvis is paused or stopped, approving returns `409` with `code: "held"` and the approval stays pending. A click-only approval (`confirm: "always"`) is never approvable here: its projection offers `reject_permission` and `inspect` only, and it is approved on its full dashboard approval card. `execute_once` refused by Pause/Kill returns `409` with `code: "not_executable"` and the reason.
 
 ## Quick verification
 
@@ -64,7 +72,7 @@ The tests use temporary databases, synthetic tools and a Unix socket. They do no
 1. Three-day-old proposed work, persisted placement and restart rehydration.
 2. Intent acceptance without dispatch, separate permission execution, lost-response lookup and duplicate-click fencing.
 3. Approval/effect/run identity deduplication and blocked/unknown effects overriding misleading run/work success.
-4. 205 equal-time decisions over three bounded pages, plus explicit refresh after concurrent source/placement changes.
+4. 205 equal-time decisions over three bounded pages, keyset cursors across source writes, and explicit refresh after a placement change.
 5. Real authenticated HTTP reads/writes, encoded IDs, disabled/missing providers, stale revisions and malformed bodies.
 6. A second database connection observing the durable claim before the fake tool starts.
 7. Hostile workflow steps, failure messages, samples, inputs and effect results stay outside decision responses for all three source kinds.

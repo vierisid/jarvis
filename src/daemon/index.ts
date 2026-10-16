@@ -4842,7 +4842,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     ensureUiBuilt(repoRoot, logWithTimestamp);
 
     // 9b. Set up API routes + dashboard static files
-    const briefDecisions = new DecisionQueue(getDb(), { approvalManager, deferredExecutor, wsService });
+    const briefDecisions = new DecisionQueue(getDb(), { approvalManager, deferredExecutor, wsService, auditTrail });
     const briefConversations = new BriefConversationProvider();
     const briefChatTransport = new BriefChatTransport({
       db: getDb(),

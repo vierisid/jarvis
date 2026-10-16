@@ -1,12 +1,13 @@
 import type { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
 import { getDb } from '../vault/schema';
-import { approvalIntentFromContext, executionState } from '../authority/approval';
-import { applyApprovalDecision, applyExecutionResolution, type ApprovalDecisionDeps } from '../daemon/approval-decision';
+import { approvalIntentFromContext, approvalNeedsClick, DASHBOARD_DECIDER, executionState } from '../authority/approval';
+import { applyApprovalDecision, applyExecutionResolution, heldApprovalMessage, type ApprovalDecisionDeps } from '../daemon/approval-decision';
 import { decideWorkItem, getWorkItem } from '../goals/work-items';
-import { getFlow } from '../workflows/db/repos/flow';
+import { DEFAULT_IDS } from '../workflows/db/index';
+import { getFlowInProject } from '../workflows/db/repos/flow';
 import { getFlowVersion } from '../workflows/db/repos/flow-version';
-import { getFlowRun } from '../workflows/db/repos/flow-run';
+import { getFlowRunInProject } from '../workflows/db/repos/flow-run';
 import type { EffectStatus } from '../workflows/db/repos/workflow-effect';
 import type { BriefReadProviders } from './providers';
 import type { BriefWorkflowRef } from './contracts';
@@ -20,13 +21,15 @@ type Clock = { epoch: string; generation: number };
 type Key = { id: string; created: number; position: number };
 type Cursor = Clock & { after: Key; runId: string | null };
 type Effect = { id: string; run_id: string; approval_id: string | null; status: EffectStatus; created: number; title: string };
-const EFFECT_COLUMNS = "id, run_id, approval_id, status, json_extract(record, '$.createdAt') AS created, json_extract(record, '$.toolName') AS title";
+const EFFECT_COLUMNS = "e.id, e.run_id, e.approval_id, e.status, json_extract(e.record, '$.createdAt') AS created, json_extract(e.record, '$.toolName') AS title";
+/** Effects of runs whose flow is in the queue's project (#729, #841); `?1` is that project. */
+const SCOPED_EFFECTS = 'workflow_effect e JOIN flow_run sr ON sr.id = e.run_id JOIN flow sf ON sf.id = sr.flow_id AND sf.project_id = ?1';
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const text = (value: unknown, max = 256): value is string => typeof value === 'string' && !!value.trim() && value.length <= max;
 
 /** One authenticated daemon/workspace. No client-supplied tenant or execution registry. */
 export class DecisionQueue implements NonNullable<BriefReadProviders['decisions']> {
-  constructor(private readonly db: Database, private readonly authority: ApprovalDecisionDeps) {
+  constructor(private readonly db: Database, private readonly authority: ApprovalDecisionDeps, private readonly projectId: string = DEFAULT_IDS.project) {
     ensureDecisionSchema(db);
   }
   readiness(): 'ready' | 'unavailable' {
@@ -46,19 +49,19 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
   }
   private workflow(flowId: string | null, versionId: string | null): BriefWorkflowRef | null {
     if (!flowId || !versionId) return null;
-    const flow = getFlow(flowId), version = getFlowVersion(versionId);
+    const flow = getFlowInProject(this.projectId, flowId), version = getFlowVersion(versionId);
     return flow && version?.flowId === flow.id
       ? { flowId, versionId, activation: flow.status, versionState: version.state } : null;
   }
   private effects(column: 'approval_id' | 'run_id' | 'id', id: string) {
     // Read at most 51 references. Aggregate all statuses so a later unknown
     // receipt cannot be hidden by the reference cap or a successful run upload.
-    const counts = this.db.query<{ status: EffectStatus; n: number }, [string]>(
-      `SELECT status, count(*) AS n FROM workflow_effect WHERE ${column} = ? GROUP BY status`,
-    ).all(id);
-    const rows = this.db.query<Effect, [string]>(
-      `SELECT ${EFFECT_COLUMNS} FROM workflow_effect WHERE ${column} = ? ORDER BY id LIMIT 51`,
-    ).all(id);
+    const counts = this.db.query<{ status: EffectStatus; n: number }, [string, string]>(
+      `SELECT e.status, count(*) AS n FROM ${SCOPED_EFFECTS} WHERE e.${column} = ?2 GROUP BY e.status`,
+    ).all(this.projectId, id);
+    const rows = this.db.query<Effect, [string, string]>(
+      `SELECT ${EFFECT_COLUMNS} FROM ${SCOPED_EFFECTS} WHERE e.${column} = ?2 ORDER BY e.id LIMIT 51`,
+    ).all(this.projectId, id);
     const states = new Set(counts.map(row => row.status));
     const unresolved = ['unknown', 'blocked', 'failed', 'dispatching', 'pending'].find(s => states.has(s as EffectStatus)) as EffectStatus | undefined;
     return { rows: rows.slice(0, 50), truncated: rows.length > 50, unresolved, counts };
@@ -68,7 +71,7 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
     // Effect detail and run detail resolve to the same approval identity as the
     // global queue. A missing approval remains an inspectable effect, never success.
     if (kind === 'effect') {
-      const row = this.db.query<Effect, [string]>(`SELECT ${EFFECT_COLUMNS} FROM workflow_effect WHERE id = ?`).get(sourceId);
+      const row = this.db.query<Effect, [string, string]>(`SELECT ${EFFECT_COLUMNS} FROM ${SCOPED_EFFECTS} WHERE e.id = ?2`).get(this.projectId, sourceId);
       if (!row) throw new DecisionError('Decision not found', 404, 'not_found');
       if (row.approval_id && this.authority.approvalManager.getRequest(row.approval_id)) return this.project(`approval:${row.approval_id}`);
     }
@@ -99,8 +102,12 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
       runId = linked.rows[0]?.run_id ?? null;
       if (linked.unresolved && linked.unresolved !== 'pending') item.state = linked.unresolved;
       if (approval.status === 'pending' && (!linked.unresolved || linked.unresolved === 'pending')) {
-        item.actions = ['approve', 'reject', 'inspect'];
-        item.supportedActions = ['approve_permission', 'reject_permission', 'inspect'];
+        // A click-only card (Q-08) is approved on its full dashboard approval
+        // card, which shows what it will do. This projection carries only its
+        // title, so it offers reject and inspect here, never approve.
+        const clickOnly = approvalNeedsClick(approval);
+        item.actions = clickOnly ? ['reject', 'inspect'] : ['approve', 'reject', 'inspect'];
+        item.supportedActions = clickOnly ? ['reject_permission', 'inspect'] : ['approve_permission', 'reject_permission', 'inspect'];
       } else if (approval.execution_mode !== 'workflow' && approval.status === 'approved' &&
         ['unknown', 'not_started'].includes(approval.execution_outcome ?? '') && !linked.rows.length) {
         item.kind = 'recovery';
@@ -128,7 +135,7 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
     item.refs.push(...linked.rows.map(row => ({ kind: 'effect' as const, id: row.id, runId: row.run_id, status: row.status })));
     item.relatedTruncated = linked.truncated;
     if (runId) {
-      const run = getFlowRun(runId);
+      const run = getFlowRunInProject(this.projectId, runId);
       const workflow = run ? this.workflow(run.flowId, run.flowVersionId) : null;
       item.workflow ??= workflow;
       item.run = workflow && run ? { ...workflow, runId: run.id, status: run.status } : null;
@@ -173,7 +180,8 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
           WHERE (a.status = 'pending' OR (a.status = 'approved' AND a.execution_outcome IN ('unknown','not_started'))
             OR (a.status = 'executed' AND (a.execution_outcome IS NULL OR a.execution_outcome IN ('failed','blocked','unknown')))
             OR EXISTS (SELECT 1 FROM workflow_effect e WHERE e.approval_id = a.id AND e.status != 'succeeded'))
-            AND (?1 IS NULL OR EXISTS (SELECT 1 FROM workflow_effect e WHERE e.approval_id = a.id AND e.run_id = ?1))
+            AND (?1 IS NULL OR EXISTS (SELECT 1 FROM workflow_effect e JOIN flow_run sr ON sr.id = e.run_id
+              JOIN flow sf ON sf.id = sr.flow_id AND sf.project_id = ?6 WHERE e.approval_id = a.id AND e.run_id = ?1))
           UNION ALL
           SELECT 'work:' || w.work_id, c.created_at FROM commitment_work w JOIN commitments c ON c.id = w.work_id
           LEFT JOIN flow_run r ON r.id = w.run_id
@@ -183,6 +191,7 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
             AND (?1 IS NULL OR w.run_id = ?1)
           UNION ALL
           SELECT 'effect:' || e.id, json_extract(e.record, '$.createdAt') FROM workflow_effect e
+          JOIN flow_run sr ON sr.id = e.run_id JOIN flow sf ON sf.id = sr.flow_id AND sf.project_id = ?6
           WHERE e.status != 'succeeded' AND NOT EXISTS (SELECT 1 FROM approval_requests a WHERE a.id = e.approval_id)
             AND (?1 IS NULL OR e.run_id = ?1)
         ), ordered AS (
@@ -190,7 +199,7 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
           LEFT JOIN brief_decision_placement p ON p.decision_id = c.id
         ) SELECT * FROM ordered WHERE ?2 IS NULL OR (position, created, id) > (?3, ?4, ?2)
           ORDER BY position, created, id LIMIT ?5
-      `).all(query.runId ?? null, cursor?.after.id ?? null, cursor?.after.position ?? 0, cursor?.after.created ?? 0, limit + 1);
+      `).all(query.runId ?? null, cursor?.after.id ?? null, cursor?.after.position ?? 0, cursor?.after.created ?? 0, limit + 1, this.projectId);
       const page = keys.slice(0, limit);
       const nextCursor = keys.length > limit
         ? Buffer.from(JSON.stringify({ ...clock, after: page.at(-1)!, runId: query.runId ?? null } satisfies Cursor)).toString('base64url') : null;
@@ -204,6 +213,9 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
       const item = this.project(id);
       this.match(item, revision);
       this.db.run(`INSERT INTO brief_decision_placement VALUES (?, ?) ON CONFLICT(decision_id) DO UPDATE SET position = excluded.position`, [item.decisionId, position]);
+      // A position is the only part of a decision's sort key that ever changes,
+      // so it is the only write that can make a keyset cursor skip or repeat one.
+      this.db.run('UPDATE brief_decision_queue_clock SET generation = generation + 1 WHERE singleton = 1');
       return this.project(item.decisionId);
     }).immediate();
   }
@@ -232,11 +244,15 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
       decideWorkItem(item.workItemId!, { outcome: body.action === 'accept_intent' ? 'accepted' : 'rejected', reason: body.reason });
     }).immediate();
     else if (body.action === 'approve_permission' || body.action === 'reject_permission') {
-      const result = await applyApprovalDecision(body.action === 'approve_permission' ? 'approve' : 'deny', item.approval!.approvalId, 'dashboard', authority);
+      const result = await applyApprovalDecision(body.action === 'approve_permission' ? 'approve' : 'deny', item.approval!.approvalId, DASHBOARD_DECIDER, authority);
       if (result.status === 'already_decided') throw new DecisionError('Decision already changed', 409, 'revision_conflict');
+      // Pause holds and Kill stops (Q-08): the card stays pending and says why.
+      if (result.status === 'held') throw new DecisionError(heldApprovalMessage(result.state), 409, 'held');
+      if (result.status === 'needs_dashboard') throw new DecisionError('Approve this on its dashboard approval card', 409, 'needs_dashboard');
     } else {
-      const result = await applyExecutionResolution(body.action === 'execute_once' ? 'execute' : 'close', item.approval!.approvalId, 'dashboard', authority, body.note);
-      if (result.status === 'not_unresolved' || result.status === 'not_executable') throw new DecisionError('Execution resolution changed; read it by ID', 409, 'revision_conflict');
+      const result = await applyExecutionResolution(body.action === 'execute_once' ? 'execute' : 'close', item.approval!.approvalId, DASHBOARD_DECIDER, authority, body.note);
+      if (result.status === 'not_unresolved') throw new DecisionError('Execution resolution changed; read it by ID', 409, 'revision_conflict');
+      if (result.status === 'not_executable') throw new DecisionError(result.reason, 409, 'not_executable');
     }
     return this.get(item.decisionId);
   }

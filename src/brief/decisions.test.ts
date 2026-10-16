@@ -7,7 +7,7 @@ import { closeDb, getDb } from '../vault/schema';
 import { initWorkflowDb } from '../workflows/db';
 import { ApprovalManager } from '../authority/approval';
 import { AuthorityEngine } from '../authority/engine';
-import { EmergencyController } from '../authority/emergency';
+import { EmergencyController, setActiveEmergencyController } from '../authority/emergency';
 import { AuditTrail } from '../authority/audit';
 import { DeferredExecutor } from '../authority/deferred-executor';
 import type { ToolRegistry } from '../actions/tools/registry';
@@ -15,7 +15,7 @@ import { createWorkItem, decideWorkItem, checkWorkResult, getWorkItem } from '..
 import { createFlow } from '../workflows/db/repos/flow';
 import { createDraftVersion, lockVersion, getFlowVersion } from '../workflows/db/repos/flow-version';
 import { createFlowRun, updateRun, getFlowRun } from '../workflows/db/repos/flow-run';
-import { saveWorkflowEffect, getWorkflowEffect, type WorkflowEffect } from '../workflows/db/repos/workflow-effect';
+import { saveWorkflowEffect, getWorkflowEffect, claimWorkflowEffect, type WorkflowEffect } from '../workflows/db/repos/workflow-effect';
 import { WorkflowEffectBoundary, type EffectInvocation } from '../workflows/runtime/effect-boundary';
 import { resumeResolvedWorkflowEffects } from '../workflows/runtime/effect-approval-scheduler';
 import { DecisionQueue } from './decisions';
@@ -168,14 +168,30 @@ test('placement persists, equal-time pagination is bounded and stable across res
   expect(all.at(-1)!.decisionId).toBe(placed.decisionId);
 });
 
-test.each(['insert', 'reorder', 'legacy-write', 'delete'] as const)('cursor explicitly conflicts after %s instead of skipping or repeating a decision', async mutation => {
+test('only a placement change invalidates a cursor; reorder answers queue_changed', async () => {
   const a = approval('inline'); createWorkItem({ title: 'Second' });
   const page = await queue.read({ limit: 1 }); expect(page.data.nextCursor).not.toBeNull();
+  const item = queue.get(`approval:${a.id}`); queue.place(item.decisionId, item.revision, -10);
+  await expect(queue.read({ cursor: page.data.nextCursor! })).rejects.toMatchObject({ status: 409, code: 'queue_changed' });
+});
+
+test.each(['insert', 'legacy-write', 'delete'] as const)('a cursor survives a source %s without repeating a decision', async mutation => {
+  const a = approval('inline'); createWorkItem({ title: 'Second' }); createWorkItem({ title: 'Third' });
+  const page = await queue.read({ limit: 1 });
+  const seen = page.data.items[0]!.decisionId;
   if (mutation === 'insert') createWorkItem({ title: 'New' });
-  if (mutation === 'reorder') { const item = queue.get(`approval:${a.id}`); queue.place(item.decisionId, item.revision, -10); }
   if (mutation === 'legacy-write') manager.deny(a.id, 'legacy');
   if (mutation === 'delete') getDb().run('DELETE FROM approval_requests WHERE id = ?', [a.id]);
-  await expect(queue.read({ cursor: page.data.nextCursor! })).rejects.toMatchObject({ status: 409, code: 'queue_changed' });
+  const rest = (await queue.read({ cursor: page.data.nextCursor!, limit: 100 })).data.items.map(item => item.decisionId);
+  expect(rest).not.toContain(seen);
+  expect(new Set(rest).size).toBe(rest.length);
+});
+
+test('the queue leaves single-row write checks in workflow repos intact', () => {
+  const e = effect('pending');
+  // createFlowRun (inside effect()) and the dispatch claim both require changes === 1.
+  expect(claimWorkflowEffect(e.record)).toBe(true);
+  expect(getWorkflowEffect(e.record.id)!.status).toBe('dispatching');
 });
 
 test('query validation, cursor scope, source revisions and replaced database fail closed', async () => {
@@ -317,4 +333,57 @@ test('workflow rejection stays denied, then becomes an inspect-only blocked rece
     await expect(queue.resolve(id, { revision: blocked.revision, action })).rejects.toMatchObject({ status: 409, code: 'unsupported_action' });
   }
   expect(calls).toBe(0);
+});
+
+test('Pause holds and Kill refuses a Brief approval: the card stays pending and says why (Q-08)', async () => {
+  const controller = new EmergencyController(); setActiveEmergencyController(controller);
+  try {
+    const a = approval();
+    for (const state of ['pause', 'kill'] as const) {
+      controller[state]();
+      const item = queue.get(`approval:${a.id}`);
+      await expect(queue.resolve(item.decisionId, { revision: item.revision, action: 'approve_permission' })).rejects.toMatchObject({ status: 409, code: 'held' });
+      expect(manager.getRequest(a.id)!.status).toBe('pending'); expect(calls).toBe(0);
+      controller.reset();
+    }
+  } finally { setActiveEmergencyController(null); }
+});
+
+test('a click-only card is never approvable from the Brief queue; reject still works (Q-08)', async () => {
+  const a = manager.createRequest({ agentId: 'fixture', agentName: 'Fixture', toolName: 'fixture_tool', toolArguments: {},
+    actionCategory: 'write_data', urgency: 'normal', reason: 'Install hooks', context: JSON.stringify({ confirm: 'always' }), executionMode: 'deferred' });
+  const item = queue.get(`approval:${a.id}`);
+  expect(item.actions).toEqual(['reject', 'inspect']);
+  expect(item.supportedActions).toEqual(['reject_permission', 'inspect']);
+  await expect(queue.resolve(item.decisionId, { revision: item.revision, action: 'approve_permission' })).rejects.toMatchObject({ status: 409, code: 'unsupported_action' });
+  expect(manager.getRequest(a.id)!.status).toBe('pending'); expect(calls).toBe(0);
+  await queue.resolve(item.decisionId, { revision: item.revision, action: 'reject_permission' });
+  expect(manager.getRequest(a.id)!.status).toBe('denied');
+});
+
+test('a Brief approve and deny are audited as dashboard clicks', async () => {
+  const audit = new AuditTrail();
+  const audited = new DecisionQueue(getDb(), { approvalManager: manager, deferredExecutor: executor, auditTrail: audit });
+  const first = approval(), second = approval();
+  for (const [a, action] of [[first, 'approve_permission'], [second, 'reject_permission']] as const) {
+    const item = audited.get(`approval:${a.id}`);
+    await audited.resolve(item.decisionId, { revision: item.revision, action });
+  }
+  const rows = audit.query({}).filter(r => r.approval_id === first.id || r.approval_id === second.id);
+  expect(rows.filter(r => r.channel === 'click').map(r => [r.approval_id, r.authority_decision]).sort())
+    .toEqual([[first.id, 'allowed'], [second.id, 'denied']].sort());
+});
+
+test('effects and runs of another project are not listed, read by id or filtered by run (#729)', async () => {
+  const mine = effect('unknown');
+  const flow = createFlow({ projectId: 'proj_other_f12' });
+  const version = lockVersion(createDraftVersion({ flowId: flow.id, displayName: 'Other', trigger: { name: 'trigger', type: 'EMPTY' } }).id);
+  const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
+  const theirs: WorkflowEffect = { ...mine.record, id: crypto.randomUUID(), runId: run.id, projectId: run.projectId, flowId: flow.id, versionId: version.id };
+  saveWorkflowEffect(theirs);
+  expect((await read()).items.map(item => item.decisionId)).toEqual([`effect:${mine.record.id}`]);
+  expect(() => queue.get(`effect:${theirs.id}`)).toThrow('Decision not found');
+  expect((await queue.read({ runId: run.id })).data.items).toEqual([]);
+  const other = new DecisionQueue(getDb(), { approvalManager: manager, deferredExecutor: executor }, 'proj_other_f12');
+  expect((await other.read({ limit: 100 })).data.items.map(item => item.decisionId)).toEqual([`effect:${theirs.id}`]);
 });
