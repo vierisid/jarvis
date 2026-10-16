@@ -22,6 +22,5 @@
     "Vertical path below 570px room width or with more than four stages",
     "Add a goal appears only with an existing host onCreate flow",
     "Refresh exposes source read states; fixture review toolbar is separate from product UI"
-  ],
-  "evidence": "docs/brief-delivery/evidence/D-24/"
+  ]
 }

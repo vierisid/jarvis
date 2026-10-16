@@ -106,10 +106,10 @@ export function GoalsSpecimen() {
                 status: "ready",
                 data: {
                   ...UNKNOWN_NAVIGATION,
-                  workspaceName: "Vieri’s workspace",
+                  workspaceName: "Northwind workspace",
                   connection: "connected",
                   account: {
-                    name: "Vieri Balboni",
+                    name: "Alex Morgan",
                     plan: { status: "ready", data: "Pro plan" },
                   },
                 },
