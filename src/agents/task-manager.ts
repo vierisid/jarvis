@@ -15,6 +15,7 @@ import { outsideExecutionScope } from '../actions/execution-scope.ts';
 import { outsideActingAgent } from './acting-agent.ts';
 import { outsideBriefTurn } from '../brief/chat-context.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
+import { withExecutionProgress } from '../actions/progress-context.ts';
 
 export type AsyncTaskStatus = 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -167,6 +168,10 @@ export class AgentTaskManager {
     const abort = new AbortController();
     this.aborts.set(taskId, abort);
     if (emergency) this.watchEmergency(emergency, taskId);
+    // Detached work has its own task lifecycle. Only the handoff belongs to the
+    // calling turn; keeping its progress observer would mark a still-running
+    // agent failed when that answer ends.
+    withExecutionProgress(undefined, () => {
     this.emit('launch', asyncTask);
 
     // Fire runSubAgent without awaiting — runs in background. Outside any
@@ -234,6 +239,7 @@ export class AgentTaskManager {
       this.emit(asyncTask.status === 'cancelled' ? 'cancel' : 'fail', asyncTask);
       onComplete?.(asyncTask);
     })))));
+    });
 
     return taskId;
   }

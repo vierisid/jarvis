@@ -17,6 +17,7 @@ import * as vault from '../vault/goals.ts';
 import { getGoalApplication } from './application-service.ts';
 import { calculateGoalHealth } from './health.ts';
 import { runWithOrigin } from '../llm/origin.ts';
+import { runWithAdmission } from '../llm/background-budget.ts';
 
 export class GoalService implements Service {
   name = 'goals';
@@ -102,7 +103,7 @@ export class GoalService implements Service {
 
     try {
       this.cron.schedule('goals:morning', `0 ${morningHour} * * *`, () => {
-        runWithOrigin('background', () => this.runMorningPlan()).catch(err =>
+        this.fireRhythm('morning').catch(err =>
           console.error('[GoalService] Morning plan error:', err),
         );
       });
@@ -112,7 +113,7 @@ export class GoalService implements Service {
 
     try {
       this.cron.schedule('goals:evening', `0 ${eveningHour} * * *`, () => {
-        runWithOrigin('background', () => this.runEveningReview()).catch(err =>
+        this.fireRhythm('evening').catch(err =>
           console.error('[GoalService] Evening review error:', err),
         );
       });
@@ -187,6 +188,17 @@ export class GoalService implements Service {
    * Check if we're in a morning or evening window and trigger check-ins.
    * Calls DailyRhythm to generate the plan/review and sends the message to chat.
    */
+  /**
+   * Cron entry for the daily rhythm. Background origin (it is not the person's
+   * own words), but EXEMPT from the background budget
+   * (src/llm/background-budget.ts): it runs once per window, so a busy chat or
+   * a spent allowance at the start hour would otherwise skip the whole day.
+   */
+  private fireRhythm(kind: 'morning' | 'evening'): Promise<void> {
+    return runWithAdmission('exempt', () => runWithOrigin('background',
+      () => kind === 'morning' ? this.runMorningPlan() : this.runEveningReview()));
+  }
+
   /**
    * Run the morning plan via DailyRhythm. Skipped if already run today.
    * Triggered by the goals:morning cron job.

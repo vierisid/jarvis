@@ -250,7 +250,8 @@ export class UsejarvisAIProvider extends OpenAIProvider {
    * tokens can now return up to this many — unavoidable, since Anthropic
    * requires max_tokens > budget and the budget is invisible behind the opaque
    * alias. Downstream code must not rely on a tiny max_tokens as a hard length
-   * bound on a hosted tier; constrain via the prompt instead. */
+   * bound on a hosted tier; constrain via the prompt instead. Background
+   * resource admission can further cap or refuse this retry. */
   private static readonly THINKING_RETRY_MAX_TOKENS = 16384;
 
   /** Models already warned about this misconfig — one line per process, not
@@ -267,16 +268,20 @@ export class UsejarvisAIProvider extends OpenAIProvider {
   private static bumpForThinkingBudget(options: LLMOptions | undefined): LLMOptions | null {
     const current = options?.max_tokens ?? 0;
     if (current >= UsejarvisAIProvider.THINKING_RETRY_MAX_TOKENS) return null;
+    const requested = { ...options, max_tokens: UsejarvisAIProvider.THINKING_RETRY_MAX_TOKENS };
+    // The resource governor may refuse or lower the bump. Reserve the actual
+    // next attempt before either chat or stream can enter the transport again.
+    const admitted = options?.reserveRetry?.(requested) ?? requested;
     const model = options?.model ?? '(default)';
     if (!UsejarvisAIProvider.warnedThinkingTiers.has(model)) {
       UsejarvisAIProvider.warnedThinkingTiers.add(model);
       console.warn(
         `[usejarvis] ${model} rejected max_tokens=${current || '(unset)'} below its thinking budget; ` +
-          `retried with ${UsejarvisAIProvider.THINKING_RETRY_MAX_TOKENS}. If this tier runs short ` +
+          `retried with ${admitted.max_tokens}. If this tier runs short ` +
           `structured calls, drop reasoning_effort from its model.`,
       );
     }
-    return { ...options, max_tokens: UsejarvisAIProvider.THINKING_RETRY_MAX_TOKENS };
+    return admitted;
   }
 
   override async chat(
