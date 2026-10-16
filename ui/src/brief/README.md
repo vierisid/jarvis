@@ -333,3 +333,30 @@ a fixture owner (send, hold, stop, failing send/stop, offline and each status mo
 
 `?brief=preview&specimen=attachments#/_brief_preview` opens the fan in the composer specimen with a
 fixture binding (Screenshot availability and failure toggles). It picks, uploads and captures nothing.
+
+## Conversation messages
+
+- `chat/message/` renders the UI-20 thread: a quiet user surface, expandable activity rows and
+  unboxed assistant replies. It owns no transport, history or persistence:
+  `bindConversationMessages(owner, source)` projects the F-04 owner (`useBriefConversation()`, or a
+  fixture) to the active conversation's messages, turns, activity, approvals, saved scroll and
+  `loadOlder`. Items match by conversation/turn/request id, never by array position; tool and system
+  messages are not rendered. `owner.test.tsx` pins that the provider's value satisfies the port and
+  renders the real `ConversationStore`.
+- Activity rows come from F-06 progress events and show only F-06's fixed public labels
+  (`activityText` allowlist); an unknown label falls back to a generic phase string, never raw tool
+  data. Only the newest live start animates; replayed rows never move. Reduced motion stops it.
+- Reply text is untrusted and renders through `components/SafeMarkdown` (#1065): no raw HTML, no image
+  loads, restricted URL schemes. Never add a second markdown renderer or `dangerouslySetInnerHTML`.
+- Failed or cancelled turns keep the partial answer and show a fixed notice; the raw error is not shown.
+- Reading position is kept by semantic anchors (`reading.ts`) across activity toggles, history
+  prepend, width changes and tab switches, and only a reader already at the bottom follows new content.
+- A running turn with a pending approval shows "Waiting for your approval before continuing." The
+  approval card itself is not rendered here: F-04 keeps only the approval id and status (#1075).
+- Not mounted in the live shell yet: the same #1075 rule as the tab strip and composer applies. Do not
+  mount the provider or this thread live until Brief-turn approval cards are visible.
+- `chat/message/figma-reference.json` records the UI-20 source values.
+
+`?brief=preview&specimen=messages#/_brief_preview` opens the thread with the tab strip, composer and
+attachment fan in the Today specimen with a fixture owner (start, finish, partial failure, long reply,
+replay, offline and unavailable). It sends nothing.
