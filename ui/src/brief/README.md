@@ -657,7 +657,7 @@ actions only change local fixture state.
 - `memory/stream/` is the D-25 Memory room: Search, Source, Used in and Updated filters, an exact
   result count, rows grouped by Today / Yesterday / Earlier and sorted by Updated descending, then
   fact ID. It only reads. There is no Add memory action, category tab, writer or second memory engine;
-  detail, correction and Forget belong to D-26, which receives only the canonical fact ID through
+  detail and correction belong to D-26, which receives only the canonical fact ID through
   `onOpen(factId)`. Without `onOpen` a row is `aria-disabled`.
 - `MemoryPort.read(query, signal)` is the only input, and only a fixture port exists so far. The live
   port over F-17's `/api/brief/memory` (#823) is a follow-up; the room also needs F-18 usage records
@@ -683,3 +683,27 @@ actions only change local fixture state.
   source and, in live mode, both the `memoryStream` and `memoryUsage` capabilities.
 - `?brief=preview&specimen=memory#/_brief_preview` opens it over in-memory fixtures (ready, loading,
   empty, stale, error, unavailable, unsupported, long, many with a match beyond page one, no-usage).
+- `memory/detail/` is the D-26 detail: one fact's sentence, qualification, sources ("Where it came
+  from"), recorded use ("Where it helps") and linked correction history, with Edit memory and Confirm
+  fact. It is review and correct only: there is no Forget or delete until F-19 / Q-16 land on main,
+  and per-fact `canForget` is ignored.
+- `MemoryDetailPort` (`read`, `history`, `decide`) is the only input and has no live implementation on
+  main: the detail read needs F-17's `/api/brief/memory/:id` (#823). When that lands, the HTTP port
+  must send `decide` to main's existing `/api/vault/facts/:id/correct` and `/confirm` routes
+  (`confirmed: true` plus a reason), which own supersession and provenance; it never writes the
+  display sentence and keeps F-17's `canCorrect=false` gate.
+- `MemoryDetailController` lives beside the stream controller for one scope. A correction follows the
+  replacement fact ID, invalidates the stream's cached rows, and keeps earlier evidence in history. A
+  conflict or rejection keeps the draft; "Reload current fact" reapplies it to the fresh value. An
+  unknown save result is never retried automatically. Unavailable, missing or conflicting reads clear
+  cached content in both rooms.
+- Leaving never drops an unsaved edit silently: "All memories", "View current value" and history
+  links refuse with a message until Save or Cancel; leaving through the shell keeps the draft, and
+  choosing another row reopens the drafted fact first.
+- Return restores the applied filters, the loaded page window (bounded, never the whole vault), the
+  scroll offset and focus on the original row, its replacement, or the nearest surviving neighbour.
+  The sentence transfer uses `BRIEF_MOTION.transfer` and is skipped under reduced motion.
+- Opt-in `memoryDetailRegistrations(useBinding)`, not in the production registry. `detailAvailable`
+  adds to `memoryAvailable` a detail controller bound to the same scope and source.
+- `?brief=preview&specimen=memory-detail#/_brief_preview` opens it over in-memory fixtures (ready,
+  long, many, conflict, save-error, lost-save, unavailable, read-only, loading, no-usage).
