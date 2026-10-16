@@ -16,6 +16,8 @@ import { LLMManager } from '../llm/manager';
 import type { LLMMessage, LLMProvider, LLMResponse } from '../llm/provider';
 import { defangDelimiters } from '../roles/untrusted';
 import { MemoryStream } from '../brief/memory-stream';
+import { BACKGROUND_LIMITS, BackgroundBudget, setBackgroundBudget } from '../llm/background-budget';
+import { runWithOrigin } from '../llm/origin';
 
 let directory: string, file: string, savedFlag: string | undefined;
 beforeEach(() => {
@@ -184,4 +186,20 @@ test('no automatic writer may promote supply to outcome-verified evidence', () =
   const [fact] = facts('Ada', 1), ledger = getMemoryUsageLedger(), ref = target();
   expect(() => ledger.record(ref, [memoryFactRef(fact!, 'Ada')], 'outcome_verified' as any)).toThrow('Invalid memory evidence');
   expect(ledger.coverage().completeness).toBe('recorded_events_only');
+});
+test('a background call refused by admission never reached a provider, so it is not supplied', async () => {
+  facts(); const ref = turn(); let calls = 0;
+  setBackgroundBudget(new BackgroundBudget(() => getDb(), { ...BACKGROUND_LIMITS, requests: 0 }));
+  try {
+    await withBriefTurn(ref, async () => {
+      const messages: LLMMessage[] = [{ role: 'system', content: getKnowledgeForMessage('Ada') }];
+      const llm = manager(() => { calls++; });
+      await expect(runWithOrigin('background', () => llm.chat(messages))).rejects.toMatchObject({ code: 'background_throttled' });
+      const events = await runWithOrigin('background', async () => { const seen = []; for await (const e of llm.stream(messages)) seen.push(e); return seen; });
+      expect(events.at(-1)).toMatchObject({ type: 'error', code: 'background_throttled' });
+    });
+  } finally { setBackgroundBudget(null); }
+  expect(calls).toBe(0);
+  expect(history(ref).filter(u => u.stage === 'selected').length).toBeGreaterThan(0);
+  expect(history(ref).filter(u => u.stage === 'supplied')).toHaveLength(0);
 });
