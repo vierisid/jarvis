@@ -45,9 +45,15 @@ describe('engine piece-executor admission gate', () => {
     expect(authorizeAt).toBeGreaterThan(-1);
     expect(runAt).toBeGreaterThan(-1);
     expect(authorizeAt).toBeLessThan(runAt);
+    // F-14: the guard applies an approved document to processedInput in place,
+    // so the action's context must read that same object, not a copy.
+    expect(flat).toContain('propsValue: processedInput,');
     // The resolved input is what gets authorized: authorizing the unresolved
     // settings would review `{{ ... }}` sources rather than real recipients.
     expect(flat).toContain('input: processedInput,');
+    // F-14: an approved document replaces the editable fields of the censored
+    // run history too, so the run shows what was actually sent.
+    expect(flat).toContain('recordedInput: stepOutput.input,');
   });
 
   test('an approval-required verdict parks the step instead of running it', () => {
@@ -76,7 +82,7 @@ describe('engine piece-executor admission gate', () => {
     // Paths are relative to VENDOR_PACKAGES; each must resolve to a real file.
     const vendorPackages = resolve(__dirname, '../activepieces/packages');
     for (const rel of ['../../runtime/piece-effects.ts', '../../runtime/piece-effect-guard.ts',
-      'server/engine/src/lib/handler/piece-executor.ts', 'server/engine/src/lib/handler/code-executor.ts']) {
+      '../../runtime/decision-document.ts', 'server/engine/src/lib/handler/piece-executor.ts', 'server/engine/src/lib/handler/code-executor.ts']) {
       expect(block![1]!).toContain(`'${rel}'`);
       expect(existsSync(resolve(vendorPackages, rel))).toBe(true);
     }

@@ -1,0 +1,23 @@
+[
+  {
+    "mutation": "engine-handoff",
+    "exit": 1,
+    "expected_failed": 2
+  },
+  {
+    "mutation": "old-approval",
+    "exit": 1,
+    "expected_failed": 1
+  },
+  {
+    "mutation": "claim-fence",
+    "exit": 1,
+    "expected_failed": 1
+  },
+  {
+    "mutation": "expiry-resume-both-fences",
+    "exit": 1,
+    "expected_failed": 2,
+    "note": "Removing the prefilter alone survived because the in-transaction recheck still blocks expired drafts."
+  }
+]

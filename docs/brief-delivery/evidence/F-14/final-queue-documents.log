@@ -1,0 +1,167 @@
+bun test v1.4.2 (744846f84)
+
+src/daemon/api-brief-decision-documents.test.ts:
+Database initialized at: :memory:
+(pass) optional provider identity, readiness and both capability flags gate every read and write [31.22ms]
+Database initialized at: :memory:
+(pass) save, recover lost response, reject stale controls and reload the same decision [29.55ms]
+Database initialized at: :memory:
+(pass) malformed, unknown, oversized and generic tool argument payloads cannot write [32.33ms]
+Database initialized at: :memory:
+[WebSocketServer] Started on unix:/tmp/jarvis-f14-http-6I89si/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) authenticated HTTP protects document reads/writes and returns a truthful keep-draft receipt [35.50ms]
+
+src/brief/decision-documents.test.ts:
+Database initialized at: /tmp/jarvis-f14-YSCcm1/db.sqlite
+(pass) email edit saves a new pending revision, retires every old approval control and dispatches edited parameters only [766.18ms]
+Database initialized at: /tmp/jarvis-f14-7FPgzb/db.sqlite
+(pass) date and attendee edits are frozen, calendar and notification options stay read-only [727.43ms]
+Database initialized at: /tmp/jarvis-f14-O0Ri2Q/db.sqlite
+Database initialized at: /tmp/jarvis-f14-O0Ri2Q/db.sqlite
+(pass) deferral retires permission, survives expiry and restart, stays queued and requires fresh review [666.10ms]
+Database initialized at: /tmp/jarvis-f14-Yn2fCG/db.sqlite
+(pass) an expired review can be edited and approved after reload without silently resuming [730.13ms]
+Database initialized at: /tmp/jarvis-f14-JRr2mC/db.sqlite
+(pass) rejecting review never grants permission and resumes only to a blocked receipt [640.60ms]
+Database initialized at: /tmp/jarvis-f14-jkV4yC/db.sqlite
+(pass) rejecting deferred never grants permission and resumes only to a blocked receipt [711.34ms]
+Database initialized at: /tmp/jarvis-f14-UZVQ1E/db.sqlite
+(pass) rejecting expired never grants permission and resumes only to a blocked receipt [802.02ms]
+Database initialized at: /tmp/jarvis-f14-xOvVB5/db.sqlite
+Database initialized at: /tmp/jarvis-f14-xOvVB5/db.sqlite
+(pass) lost responses replay exact durable receipts; conflicting reuse and stale edits fail [659.28ms]
+Database initialized at: /tmp/jarvis-f14-v8mzeI/db.sqlite
+(pass) legacy approval wins against a subsequent save without changing its reviewed arguments [698.20ms]
+Database initialized at: /tmp/jarvis-f14-UsKdjk/db.sqlite
+(pass) legacy approval wins against a subsequent keep_draft without changing its reviewed arguments [748.20ms]
+Database initialized at: /tmp/jarvis-f14-JZonxI/db.sqlite
+(pass) an edit during notification delivery replaces the in-memory approval snapshot without overwriting it [534.21ms]
+Database initialized at: /tmp/jarvis-f14-GGDkS2/db.sqlite
+(pass) old engines, changed workflow input and changed policy cannot dispatch an edited document [571.71ms]
+Database initialized at: /tmp/jarvis-f14-Bh5MM6/db.sqlite
+(pass) unsupported and pre-protocol actions stay read-only; enabling enrollment is explicit [460.20ms]
+Database initialized at: /tmp/jarvis-f14-ruYTTd/db.sqlite
+(pass) strict edits reject injection, malformed recipients, unknown fields, reversed dates and oversized documents [498.36ms]
+Database initialized at: /tmp/jarvis-f14-OAH3N9/db.sqlite
+(pass) document views and receipts never expose credentials, raw approval context or waitpoint secrets [579.79ms]
+Database initialized at: /tmp/jarvis-f14-8HeUNJ/db.sqlite
+(pass) F-13 links a revised document to the existing work and queue position [479.84ms]
+Database initialized at: /tmp/jarvis-f14-V56UAp/db.sqlite
+(pass) editing terminal or resumed runs is refused, even when an approval is still pending [479.74ms]
+Database initialized at: /tmp/jarvis-f14-n0RJGC/db.sqlite
+(pass) notification failures cannot erase committed document receipts [339.47ms]
+Database initialized at: /tmp/jarvis-f14-MoV8Jw/db.sqlite
+(pass) a bound effect cannot silently downgrade without its owner binding adapter [606.46ms]
+(skip) actual Q-05 binds edited recipients and retains deleted original facts for unchanged recipients
+Database initialized at: /tmp/jarvis-f14-ckCXKf/db.sqlite
+(pass) two independent processes cannot save and approve the same document revision [675.13ms]
+Database initialized at: /tmp/jarvis-f14-WrB3Sm/db.sqlite
+(pass) lost edit responses recover through an approval alias after that revision is superseded [500.12ms]
+
+src/brief/decisions.test.ts:
+Database initialized at: /tmp/jarvis-f12-LjuWzo/fixture.db
+Database initialized at: /tmp/jarvis-f12-LjuWzo/fixture.db
+(pass) prior-day work survives reload; intent acceptance is not permission or verified success [493.15ms]
+Database initialized at: /tmp/jarvis-f12-GMyzIr/fixture.db
+(pass) approval, effect detail and run detail share one identity; no duplicate blocked work card [570.31ms]
+Database initialized at: /tmp/jarvis-f12-ogPwWC/fixture.db
+(pass) unknown receipt cannot be hidden by a verified work result [499.22ms]
+Database initialized at: /tmp/jarvis-f12-TP0lIH/fixture.db
+(pass) blocked receipt cannot be hidden by a verified work result [631.95ms]
+Database initialized at: /tmp/jarvis-f12-F1qzbF/fixture.db
+(pass) failed receipt cannot be hidden by a verified work result [679.70ms]
+Database initialized at: /tmp/jarvis-f12-0cxfIH/fixture.db
+Database initialized at: /tmp/jarvis-f12-0cxfIH/fixture.db
+(pass) concurrent permission submissions call the existing executor only once; lost response reconciles by ID [610.99ms]
+Database initialized at: /tmp/jarvis-f12-o0tiZi/fixture.db
+(pass) restart uncertainty can only close; not-started can run once through the existing claim [719.95ms]
+Database initialized at: /tmp/jarvis-f12-Dm9Yn3/fixture.db
+(pass) failed/blocked receipts and legacy executed-without-receipt remain attention items [790.85ms]
+Database initialized at: /tmp/jarvis-f12-2aQh5W/fixture.db
+(pass) bounded references still detect unknown beyond the first fifty effects [839.10ms]
+Database initialized at: /tmp/jarvis-f12-hZ0O02/fixture.db
+Database initialized at: /tmp/jarvis-f12-hZ0O02/fixture.db
+(pass) placement persists, equal-time pagination is bounded and stable across restart [1382.03ms]
+Database initialized at: /tmp/jarvis-f12-AfT9iM/fixture.db
+(pass) cursor explicitly conflicts after insert instead of skipping or repeating a decision [585.73ms]
+Database initialized at: /tmp/jarvis-f12-O9mfY0/fixture.db
+(pass) cursor explicitly conflicts after reorder instead of skipping or repeating a decision [655.77ms]
+Database initialized at: /tmp/jarvis-f12-KhNj9w/fixture.db
+(pass) cursor explicitly conflicts after legacy-write instead of skipping or repeating a decision [774.76ms]
+Database initialized at: /tmp/jarvis-f12-d4HrtX/fixture.db
+(pass) cursor explicitly conflicts after delete instead of skipping or repeating a decision [681.23ms]
+Database initialized at: /tmp/jarvis-f12-vDA1p5/fixture.db
+Database initialized at: :memory:
+(pass) query validation, cursor scope, source revisions and replaced database fail closed [759.81ms]
+Database initialized at: /tmp/jarvis-f12-WELtD7/fixture.db
+(pass) approval and execution claim are durable before the tool is dispatched [761.16ms]
+Database initialized at: /tmp/jarvis-f12-ucZZDh/fixture.db
+(pass) permission revision is checked again at the actual writer, before any dispatch [691.61ms]
+Database initialized at: /tmp/jarvis-f12-qwMCZR/fixture.db
+Database initialized at: /tmp/jarvis-f12-qwMCZR/fixture.db
+(pass) approval projection excludes hostile workflow payloads from reads and mutation receipts [889.57ms]
+Database initialized at: /tmp/jarvis-f12-ptOCdm/fixture.db
+Database initialized at: /tmp/jarvis-f12-ptOCdm/fixture.db
+(pass) work projection excludes hostile workflow payloads from reads and mutation receipts [803.23ms]
+Database initialized at: /tmp/jarvis-f12-k4HBmy/fixture.db
+Database initialized at: /tmp/jarvis-f12-k4HBmy/fixture.db
+(pass) effect projection excludes hostile workflow payloads from reads and mutation receipts [642.08ms]
+Database initialized at: /tmp/jarvis-f12-23fUy8/fixture.db
+Database initialized at: /tmp/jarvis-f12-23fUy8/fixture.db
+(pass) workflow rejection stays denied, then becomes an inspect-only blocked receipt across restart [665.95ms]
+
+src/brief/recommendations.test.ts:
+Database initialized at: /tmp/jarvis-f13-oWLDFX/fixture.db
+Database initialized at: /tmp/jarvis-f13-oWLDFX/fixture.db
+(pass) acceptance appends one canonical item, preserves the front, goal and durable receipt [693.82ms]
+Database initialized at: /tmp/jarvis-f13-uhSuKr/fixture.db
+Database initialized at: /tmp/jarvis-f13-uhSuKr/fixture.db
+(pass) return, dismissal, explicit refresh and expiry never create work [701.57ms]
+Database initialized at: /tmp/jarvis-f13-x9aCJB/fixture.db
+(pass) goal changes invalidate a stored recommendation before acceptance [810.85ms]
+Database initialized at: /tmp/jarvis-f13-44wbaS/fixture.db
+(pass) workload changes invalidate a stored recommendation before acceptance [719.98ms]
+Database initialized at: /tmp/jarvis-f13-jGHcJW/fixture.db
+(pass) capability changes invalidate a stored recommendation before acceptance [650.69ms]
+Database initialized at: /tmp/jarvis-f13-BuSyTB/fixture.db
+Database initialized at: /tmp/jarvis-f13-BuSyTB/fixture.db
+(pass) ask remains an honest non-action across reload [696.61ms]
+Database initialized at: /tmp/jarvis-f13-gLtyTV/fixture.db
+Database initialized at: /tmp/jarvis-f13-gLtyTV/fixture.db
+(pass) none remains an honest non-action across reload [549.84ms]
+Database initialized at: /tmp/jarvis-f13-uwVwWx/fixture.db
+(pass) existing work is linked without duplicating, renaming, accepting its pending intent or moving the front [647.54ms]
+Database initialized at: /tmp/jarvis-f13-7YdxxC/fixture.db
+Database initialized at: /tmp/jarvis-f13-7YdxxC/fixture.db
+(pass) work whose goal was deleted still links once and preserves its historical goal ID after restart [650.17ms]
+Database initialized at: /tmp/jarvis-f13-rJkDoL/fixture.db
+(pass) a missing planner goal cannot link work that belongs to a live goal [541.59ms]
+Database initialized at: /tmp/jarvis-f13-upcau2/fixture.db
+(pass) a different planner goal cannot link work that belongs to a live goal [441.02ms]
+Database initialized at: /tmp/jarvis-f13-b8cTpz/fixture.db
+(pass) blocked work links its approval identity rather than creating an invisible work wrapper [535.66ms]
+Database initialized at: /tmp/jarvis-f13-5vLHC0/fixture.db
+(pass) queue failure rolls back work creation, intent acceptance and receipt together [605.93ms]
+Database initialized at: /tmp/jarvis-f13-qc6x4p/fixture.db
+(pass) acceptance rechecks under the write lock even without an intervening read [925.95ms]
+Database initialized at: /tmp/jarvis-f13-K1H2pU/fixture.db
+Database initialized at: :memory:
+(pass) missing, failed and replaced dependencies fail closed without saving a recommendation [827.78ms]
+Database initialized at: /tmp/jarvis-f13-AINqOG/fixture.db
+(pass) planner wire projection is bounded and strips unreviewed extra source fields [871.65ms]
+Database initialized at: /tmp/jarvis-f13-iKIy2e/fixture.db
+(pass) return uses insertion order even when the wall clock moves backwards [859.93ms]
+Database initialized at: /tmp/jarvis-f13-538IKu/fixture.db
+(pass) a changed planner choice with the same basis cannot authorize an old action [983.92ms]
+Database initialized at: /tmp/jarvis-f13-L2WLuc/fixture.db
+(pass) two independent processes accept the same saved recommendation exactly once [882.47ms]
+
+1 tests skipped:
+(skip) actual Q-05 binds edited recipients and retains deleted original facts for unchanged recipients
+
+ 65 pass
+ 1 skip
+ 0 fail
+ 564 expect() calls
+Ran 66 tests across 4 files. [41.86s]

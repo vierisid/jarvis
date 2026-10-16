@@ -1,0 +1,24 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/decision-documents.test.ts:
+Database initialized at: /tmp/jarvis-f14-uBO9Dh/db.sqlite
+172 |   f.command(id, 'save', { ...view.document!, body: 'Changed' }); f.command(id, 'approve');
+173 |   await expect(f.backend.pieceAuthorize!({ piece: GMAIL, action: 'send_email', input: email }, f.context)).rejects.toThrow(/changed/);
+174 |   await expect(f.backend.pieceAuthorize!({ ...f.request, input: { ...email, subject: 'Changed upstream' } }, f.context)).rejects.toThrow(/changed/);
+175 |   f.authority.addOverride({ action: 'send_email', allowed: false });
+176 |   await expect(f.engine()).rejects.toThrow(/denied/); expect(listWorkflowEffects(f.run.id)[0]!.status).toBe('blocked');
+177 |   expect(documents.get(id).state).toBe('blocked');
+                                        ^
+error: expect(received).toBe(expected)
+
+Expected: "blocked"
+Received: "permission_granted"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:177:35)
+(fail) old engines, changed workflow input and changed policy cannot dispatch an edited document [598.05ms]
+
+ 0 pass
+ 20 filtered out
+ 1 fail
+ 6 expect() calls
+Ran 1 test across 1 file. [712.00ms]

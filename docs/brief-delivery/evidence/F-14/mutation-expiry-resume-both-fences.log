@@ -1,0 +1,39 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/decision-documents.test.ts:
+Database initialized at: /tmp/jarvis-f14-kyZrYl/db.sqlite
+ 99 |
+100 | test('deferral retires permission, survives expiry and restart, stays queued and requires fresh review', async () => {
+101 |   const f = setup(), view = await f.pending(), id = view.decision.decisionId;
+102 |   const saved = f.command(id, 'keep_draft'); updateRun(f.run.id, { status: 'PAUSED' });
+103 |   expect(saved).toMatchObject({ outcome: 'deferred', executed: false });
+104 |   expect(manager.approve(saved.approvalId, 'legacy')).toBeNull(); expect(resumeResolvedWorkflowEffects()).toBe(0);
+                                                                                                                ^
+error: expect(received).toBe(expected)
+
+Expected: 0
+Received: 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:104:107)
+(fail) deferral retires permission, survives expiry and restart, stays queued and requires fresh review [598.87ms]
+Database initialized at: /tmp/jarvis-f14-jNgR6F/db.sqlite
+115 |
+116 | test('an expired review can be edited and approved after reload without silently resuming', async () => {
+117 |   const f = setup(), view = await f.pending(), id = view.decision.decisionId;
+118 |   getDb().run('UPDATE approval_requests SET created_at=0 WHERE id=?', [view.decision.approval!.approvalId]);
+119 |   manager.expireOld(1); updateRun(f.run.id, { status: 'PAUSED' });
+120 |   expect(resumeResolvedWorkflowEffects()).toBe(0); expect(documents.get(id).state).toBe('expired');
+                                                ^
+error: expect(received).toBe(expected)
+
+Expected: 0
+Received: 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:120:43)
+(fail) an expired review can be edited and approved after reload without silently resuming [785.77ms]
+
+ 0 pass
+ 19 filtered out
+ 2 fail
+ 4 expect() calls
+Ran 2 tests across 1 file. [1486.00ms]

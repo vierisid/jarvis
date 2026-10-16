@@ -1,0 +1,26 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/decision-documents.test.ts:
+Database initialized at: /tmp/jarvis-f14-VE79SC/db.sqlite
+86 |       const view = this.project(id), canonical = view.decision.decisionId;
+87 |       const fingerprint = digest({ id: canonical, ...body });
+88 |       const prior = this.db.query<{ fingerprint: string; receipt: string }, [string]>(
+89 |         'SELECT fingerprint,receipt FROM brief_decision_document_receipt WHERE request_id=?').get(body.requestId);
+90 |       if (prior) {
+91 |         if (prior.fingerprint !== fingerprint) throw new DecisionError('Request ID was used for another command', 409, 'request_conflict');
+                                                          ^
+error: Request ID was used for another command
+ status: 409,
+   code: "request_conflict"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.ts:91:54)
+      at transaction (bun:sqlite:400:27)
+      at act (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.ts:143:8)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:315:20)
+(fail) lost edit responses recover through an approval alias after that revision is superseded [686.46ms]
+
+ 0 pass
+ 21 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [827.00ms]

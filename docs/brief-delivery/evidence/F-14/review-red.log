@@ -1,0 +1,207 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/decision-documents.test.ts:
+Database initialized at: /tmp/jarvis-f14-HqH24e/db.sqlite
+Database initialized at: /tmp/jarvis-f14-HqH24e/db.sqlite
+78 |         'X-Jarvis-Execution-Path': JSON.stringify(params.executionPath ?? []),
+79 |       },
+80 |       body: JSON.stringify(body),
+81 |     });
+82 |   } catch (error) {
+83 |     throw new Error(`Governed piece ${body.piece}/${body.action} was not authorized: ${error instanceof Error ? error.message : String(error)}`);
+                   ^
+error: Governed piece @activepieces/piece-gmail/send_email was not authorized: Workflow effect changed since it was recorded; start a new run for new arguments or version
+      at authorizePieceDispatch (/home/vierisid/.cache/codex/jarvis-f-14/src/workflows/runtime/piece-effect-guard.ts:83:15)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:60:25)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:349:28)
+(fail) F14 review R1: pre-protocol short email resumes after upgrade (edits=false) [584.46ms]
+Database initialized at: /tmp/jarvis-f14-f9ljHH/db.sqlite
+Database initialized at: /tmp/jarvis-f14-f9ljHH/db.sqlite
+78 |         'X-Jarvis-Execution-Path': JSON.stringify(params.executionPath ?? []),
+79 |       },
+80 |       body: JSON.stringify(body),
+81 |     });
+82 |   } catch (error) {
+83 |     throw new Error(`Governed piece ${body.piece}/${body.action} was not authorized: ${error instanceof Error ? error.message : String(error)}`);
+                   ^
+error: Governed piece @activepieces/piece-gmail/send_email was not authorized: Workflow effect changed since it was recorded; start a new run for new arguments or version
+      at authorizePieceDispatch (/home/vierisid/.cache/codex/jarvis-f-14/src/workflows/runtime/piece-effect-guard.ts:83:15)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:60:25)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:349:28)
+(fail) F14 review R1: pre-protocol long email resumes after upgrade (edits=false) [647.09ms]
+Database initialized at: /tmp/jarvis-f14-QjBGzC/db.sqlite
+Database initialized at: /tmp/jarvis-f14-QjBGzC/db.sqlite
+78 |         'X-Jarvis-Execution-Path': JSON.stringify(params.executionPath ?? []),
+79 |       },
+80 |       body: JSON.stringify(body),
+81 |     });
+82 |   } catch (error) {
+83 |     throw new Error(`Governed piece ${body.piece}/${body.action} was not authorized: ${error instanceof Error ? error.message : String(error)}`);
+                   ^
+error: Governed piece @activepieces/piece-google-calendar/create_google_calendar_event was not authorized: Workflow effect changed since it was recorded; start a new run for new arguments or version
+      at authorizePieceDispatch (/home/vierisid/.cache/codex/jarvis-f-14/src/workflows/runtime/piece-effect-guard.ts:83:15)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:60:25)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:349:28)
+(fail) F14 review R1: pre-protocol calendar resumes after upgrade (edits=false) [823.80ms]
+Database initialized at: /tmp/jarvis-f14-W0vpk5/db.sqlite
+Database initialized at: /tmp/jarvis-f14-W0vpk5/db.sqlite
+78 |         'X-Jarvis-Execution-Path': JSON.stringify(params.executionPath ?? []),
+79 |       },
+80 |       body: JSON.stringify(body),
+81 |     });
+82 |   } catch (error) {
+83 |     throw new Error(`Governed piece ${body.piece}/${body.action} was not authorized: ${error instanceof Error ? error.message : String(error)}`);
+                   ^
+error: Governed piece @activepieces/piece-gmail/send_email was not authorized: Workflow effect changed since it was recorded; start a new run for new arguments or version
+      at authorizePieceDispatch (/home/vierisid/.cache/codex/jarvis-f-14/src/workflows/runtime/piece-effect-guard.ts:83:15)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:60:25)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:349:28)
+(fail) F14 review R1: pre-protocol short email resumes after upgrade (edits=true) [664.36ms]
+Database initialized at: /tmp/jarvis-f14-NLIeCE/db.sqlite
+Database initialized at: /tmp/jarvis-f14-NLIeCE/db.sqlite
+78 |         'X-Jarvis-Execution-Path': JSON.stringify(params.executionPath ?? []),
+79 |       },
+80 |       body: JSON.stringify(body),
+81 |     });
+82 |   } catch (error) {
+83 |     throw new Error(`Governed piece ${body.piece}/${body.action} was not authorized: ${error instanceof Error ? error.message : String(error)}`);
+                   ^
+error: Governed piece @activepieces/piece-gmail/send_email was not authorized: Workflow effect changed since it was recorded; start a new run for new arguments or version
+      at authorizePieceDispatch (/home/vierisid/.cache/codex/jarvis-f-14/src/workflows/runtime/piece-effect-guard.ts:83:15)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:60:25)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:349:28)
+(fail) F14 review R1: pre-protocol long email resumes after upgrade (edits=true) [752.76ms]
+Database initialized at: /tmp/jarvis-f14-6PPPxw/db.sqlite
+Database initialized at: /tmp/jarvis-f14-6PPPxw/db.sqlite
+78 |         'X-Jarvis-Execution-Path': JSON.stringify(params.executionPath ?? []),
+79 |       },
+80 |       body: JSON.stringify(body),
+81 |     });
+82 |   } catch (error) {
+83 |     throw new Error(`Governed piece ${body.piece}/${body.action} was not authorized: ${error instanceof Error ? error.message : String(error)}`);
+                   ^
+error: Governed piece @activepieces/piece-google-calendar/create_google_calendar_event was not authorized: Workflow effect changed since it was recorded; start a new run for new arguments or version
+      at authorizePieceDispatch (/home/vierisid/.cache/codex/jarvis-f-14/src/workflows/runtime/piece-effect-guard.ts:83:15)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:60:25)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:349:28)
+(fail) F14 review R1: pre-protocol calendar resumes after upgrade (edits=true) [823.89ms]
+Database initialized at: /tmp/jarvis-f14-xHv7Pe/db.sqlite
+(pass) F14 review R1: a new read-only protocol record cannot downgrade to a legacy preview [771.82ms]
+Database initialized at: /tmp/jarvis-f14-Q8sSe2/db.sqlite
+369 |     guests_can_invite_others: permissions, guests_can_see_other_guests: permissions,
+370 |   }) };
+371 |   const f = setup(CAL, 'create_google_calendar_event', input), view = await f.pending(), id = view.decision.decisionId;
+372 |   const expected = { guestsCanInviteOthers: permissions ?? true, guestsCanSeeOtherGuests: permissions ?? true,
+373 |     guestsCanModify: false, createMeetLink: false };
+374 |   expect(view.options).toMatchObject(expected);
+                             ^
+error: expect(received).toMatchObject(expected)
+
+  {
++   "calendarId": "primary",
+    "createMeetLink": false,
+-   "guestsCanInviteOthers": true,
++   "guestsCanInviteOthers": false,
+    "guestsCanModify": false,
+-   "guestsCanSeeOtherGuests": true,
++   "guestsCanSeeOtherGuests": false,
++   "notifications": "all",
+  }
+
+- Expected  - 2
++ Received  + 4
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:374:24)
+(fail) F14 review R2: Calendar review uses effective guest permissions (undefined) [752.22ms]
+Database initialized at: /tmp/jarvis-f14-YjScgT/db.sqlite
+(pass) F14 review R2: Calendar review uses effective guest permissions (false) [703.33ms]
+Database initialized at: /tmp/jarvis-f14-OeEDZf/db.sqlite
+(pass) F14 review R2: Calendar review uses effective guest permissions (true) [583.06ms]
+
+src/workflows/runtime/decision-document-engine.test.ts:
+Database initialized at: /tmp/jarvis-f14-engine-gRP4Pk/db.sqlite
+[engine d215bd46 stderr] (node:1055825) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+[engine d215bd46 stderr] (Use `bun --trace-warnings ...` to show where the warning was created)
+[engine d6616759 stderr] (node:1055907) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+102 |   const step = (complete.steps!.action as { output: RecordedStep }).output;
+103 |   const expected = edited.kind === 'email'
+104 |     ? { ...input, receiver: edited.to, cc: edited.cc, bcc: edited.bcc, subject: edited.subject, body: edited.body }
+105 |     : { ...input, title: edited.title, description: edited.description, start_date_time: edited.start, end_date_time: edited.end, attendees: edited.attendees, location: edited.location };
+106 |   expect(step.output).toEqual({ received: expected, authenticated: true });
+107 |   expect(step.input).toMatchObject(expected);
+                           ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "bcc": [
+-     "blind@example.test",
+-   ],
+-   "body": "Approved body",
++   "auth": "**REDACTED**",
++   "bcc": [],
++   "body": "Original body",
+    "body_type": "plain_text",
+-   "cc": [
+-     "copy@example.test",
+-   ],
++   "cc": [],
+    "draft": false,
+    "receiver": [
+-     "second@example.test",
++     "first@example.test",
+    ],
+-   "subject": "Approved subject",
++   "subject": "Original subject",
+  }
+
+- Expected  - 9
++ Received  + 6
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/workflows/runtime/decision-document-engine.test.ts:107:22)
+(fail) F14 review R3: real email engine records the approved input without credentials [5548.14ms]
+Database initialized at: /tmp/jarvis-f14-engine-6z0C5t/db.sqlite
+[engine ce8bdaea stderr] (node:1055939) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+[engine ce8bdaea stderr] (Use `bun --trace-warnings ...` to show where the warning was created)
+[engine 62d348cc stderr] (node:1055971) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+[engine 62d348cc stderr] (Use `bun --trace-warnings ...` to show where the warning was created)
+102 |   const step = (complete.steps!.action as { output: RecordedStep }).output;
+103 |   const expected = edited.kind === 'email'
+104 |     ? { ...input, receiver: edited.to, cc: edited.cc, bcc: edited.bcc, subject: edited.subject, body: edited.body }
+105 |     : { ...input, title: edited.title, description: edited.description, start_date_time: edited.start, end_date_time: edited.end, attendees: edited.attendees, location: edited.location };
+106 |   expect(step.output).toEqual({ received: expected, authenticated: true });
+107 |   expect(step.input).toMatchObject(expected);
+                           ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "attendees": [
+-     "second@example.test",
++     "first@example.test",
+    ],
++   "auth": "**REDACTED**",
+    "calendar_id": "primary",
+-   "description": "Approved agenda",
+-   "end_date_time": "2026-11-02T11:00:00Z",
+-   "location": "Office",
++   "description": "Original agenda",
++   "end_date_time": "2026-11-01T09:30:00Z",
++   "location": "",
+    "send_notifications": "all",
+-   "start_date_time": "2026-11-02T10:00:00Z",
+-   "title": "Approved event",
++   "start_date_time": "2026-11-01T09:00:00Z",
++   "title": "Original event",
+  }
+
+- Expected  - 6
++ Received  + 7
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/workflows/runtime/decision-document-engine.test.ts:107:22)
+(fail) F14 review R3: real calendar engine records the approved input without credentials [4810.74ms]
+
+ 3 pass
+ 22 filtered out
+ 9 fail
+ 57 expect() calls
+Ran 12 tests across 2 files. [17.63s]

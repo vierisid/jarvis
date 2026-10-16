@@ -1,0 +1,84 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/decision-documents.test.ts:
+Database initialized at: /tmp/jarvis-f14-pMDskC/db.sqlite
+78 |         'X-Jarvis-Execution-Path': JSON.stringify(params.executionPath ?? []),
+79 |       },
+80 |       body: JSON.stringify(body),
+81 |     });
+82 |   } catch (error) {
+83 |     throw new Error(`Governed piece ${body.piece}/${body.action} was not authorized: ${error instanceof Error ? error.message : String(error)}`);
+                   ^
+error: Governed piece @activepieces/piece-gmail/send_email was not authorized: Workflow effect was already claimed; replay blocked
+      at authorizePieceDispatch (/home/vierisid/.cache/codex/jarvis-f-14/src/workflows/runtime/piece-effect-guard.ts:83:15)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:52:25)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:77:29)
+(fail) email edit saves a new pending revision, retires every old approval control and dispatches edited parameters only [626.97ms]
+Database initialized at: /tmp/jarvis-f14-CamCRg/db.sqlite
+78 |         'X-Jarvis-Execution-Path': JSON.stringify(params.executionPath ?? []),
+79 |       },
+80 |       body: JSON.stringify(body),
+81 |     });
+82 |   } catch (error) {
+83 |     throw new Error(`Governed piece ${body.piece}/${body.action} was not authorized: ${error instanceof Error ? error.message : String(error)}`);
+                   ^
+error: Governed piece @activepieces/piece-google-calendar/google_calendar_create_event was not authorized: Workflow effect was already claimed; replay blocked
+      at authorizePieceDispatch (/home/vierisid/.cache/codex/jarvis-f-14/src/workflows/runtime/piece-effect-guard.ts:83:15)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:52:25)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:91:52)
+(fail) date and attendee edits are frozen, calendar and notification options stay read-only [576.28ms]
+Database initialized at: /tmp/jarvis-f14-vsqcOF/db.sqlite
+Database initialized at: /tmp/jarvis-f14-vsqcOF/db.sqlite
+(pass) deferral retires permission, survives expiry and restart, stays queued and requires fresh review [695.73ms]
+Database initialized at: /tmp/jarvis-f14-DMXStg/db.sqlite
+(pass) an expired review can be edited and approved after reload without silently resuming [733.29ms]
+Database initialized at: /tmp/jarvis-f14-JnB9ty/db.sqlite
+(pass) rejecting review never grants permission and resumes only to a blocked receipt [764.75ms]
+Database initialized at: /tmp/jarvis-f14-WLmuOf/db.sqlite
+(pass) rejecting deferred never grants permission and resumes only to a blocked receipt [777.09ms]
+Database initialized at: /tmp/jarvis-f14-61CjSj/db.sqlite
+(pass) rejecting expired never grants permission and resumes only to a blocked receipt [640.56ms]
+Database initialized at: /tmp/jarvis-f14-xzTVH7/db.sqlite
+Database initialized at: /tmp/jarvis-f14-xzTVH7/db.sqlite
+(pass) lost responses replay exact durable receipts; conflicting reuse and stale edits fail [578.81ms]
+Database initialized at: /tmp/jarvis-f14-SL2spf/db.sqlite
+78 |         'X-Jarvis-Execution-Path': JSON.stringify(params.executionPath ?? []),
+79 |       },
+80 |       body: JSON.stringify(body),
+81 |     });
+82 |   } catch (error) {
+83 |     throw new Error(`Governed piece ${body.piece}/${body.action} was not authorized: ${error instanceof Error ? error.message : String(error)}`);
+                   ^
+error: Governed piece @activepieces/piece-gmail/send_email was not authorized: Workflow effect was already claimed; replay blocked
+      at authorizePieceDispatch (/home/vierisid/.cache/codex/jarvis-f-14/src/workflows/runtime/piece-effect-guard.ts:83:15)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:52:25)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:149:19)
+(fail) legacy approval wins against a subsequent save without changing its reviewed arguments [563.41ms]
+Database initialized at: /tmp/jarvis-f14-eoVwVF/db.sqlite
+78 |         'X-Jarvis-Execution-Path': JSON.stringify(params.executionPath ?? []),
+79 |       },
+80 |       body: JSON.stringify(body),
+81 |     });
+82 |   } catch (error) {
+83 |     throw new Error(`Governed piece ${body.piece}/${body.action} was not authorized: ${error instanceof Error ? error.message : String(error)}`);
+                   ^
+error: Governed piece @activepieces/piece-gmail/send_email was not authorized: Workflow effect was already claimed; replay blocked
+      at authorizePieceDispatch (/home/vierisid/.cache/codex/jarvis-f-14/src/workflows/runtime/piece-effect-guard.ts:83:15)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:52:25)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:149:19)
+(fail) legacy approval wins against a subsequent keep_draft without changing its reviewed arguments [715.34ms]
+Database initialized at: /tmp/jarvis-f14-yQCtIp/db.sqlite
+(pass) an edit during notification delivery replaces the in-memory approval snapshot without overwriting it [580.05ms]
+Database initialized at: /tmp/jarvis-f14-LtvLuX/db.sqlite
+(pass) old engines, changed workflow input and changed policy cannot dispatch an edited document [698.49ms]
+Database initialized at: /tmp/jarvis-f14-yqeXoX/db.sqlite
+(pass) unsupported and pre-protocol actions stay read-only; enabling enrollment is explicit [716.86ms]
+Database initialized at: /tmp/jarvis-f14-dbjvei/db.sqlite
+(pass) strict edits reject injection, malformed recipients, unknown fields, reversed dates and oversized documents [680.43ms]
+Database initialized at: /tmp/jarvis-f14-cvMjS9/db.sqlite
+(pass) document views and receipts never expose credentials, raw approval context or waitpoint secrets [987.70ms]
+
+ 11 pass
+ 4 fail
+ 101 expect() calls
+Ran 15 tests across 1 file. [10.41s]

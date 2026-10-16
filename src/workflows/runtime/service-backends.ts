@@ -1,3 +1,4 @@
+import { documentInput, projectDocument } from './decision-document';
 /**
  * Glue layer: wraps existing Jarvis adapters into the function-shape that the
  * SandboxApi service-backend slots expect. Each `/v1/jarvis/*` route takes a
@@ -47,7 +48,7 @@ import { resolveToolGate, severityRank } from '../../authority/tool-action-map';
 import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, surfaceBoundRefusal, toolEffectCapability } from './effect-capabilities';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceActionName, reprojectPieceInput,
-  resolveGovernedPieceAction, tracksPieceCompletion } from './piece-effects';
+  resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { assertRecipientFactsCurrent, recipientAddresses, recipientFactPins, type FactPin } from './fact-bindings';
 import { captureProviderBinding } from './provider-reconciliation';
 import { recordPieceCompletion } from './piece-completion';
@@ -71,6 +72,8 @@ import { sendMayHaveArrived } from '../../comms/delivery.ts';
 import { providerOutcome } from '../../failures/evidence.ts';
 
 export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependencies {
+  /** F-14 enrollment is explicitly enabled only with the F-12 queue. */
+  decisionDocumentsEnabled?: boolean;
   credentialResolver: CredentialResolver;
   llmManager: LLMManager;
   toolRegistry?: ToolRegistry;
@@ -868,7 +871,12 @@ export function buildSandboxServiceBackends(
     // `piece-effects.ts` stays free of the import the engine bundle would have
     // to start tracking. See `piece-effect-receipt.ts` for the whole argument,
     // including which in-flight approvals a changed projection invalidates.
-    const input = defangPieceProjection(reprojectPieceInput(req.input));
+    // F-14: an engine sends a supported decision document whole. What an engine
+    // without that protocol would have sent is the bounded projection, so that
+    // is the read-only input whenever the document path is not taken.
+    const whole = req.documentProtocol === 1 ? documentInput(req.piece, req.action, req.input) : null;
+    if (req.documentProtocol === 1 && !whole) throw new Error('Unsupported document protocol input');
+    const projected = defangPieceProjection(reprojectPieceInput(whole ? sanitizePieceInput(req.input) : req.input));
     // Q-05: an action that sends to or addresses someone memory knows keeps
     // the facts the address matched, and stops if they stop holding.
     const addressing = ['send_email', 'send_message', 'write_data', 'modify_settings'].includes(resolved.category);
@@ -888,6 +896,19 @@ export function buildSandboxServiceBackends(
     }
     const run = getFlowRun(ctx.runId);
     if (!run || run.projectId !== ctx.projectId) throw new Error('Workflow step identity does not match the run');
+    const requestOf = (input: Record<string, unknown>, documentProtocol: boolean) => ({ piece: req.piece, action: req.action, input,
+      ...(req.inputDigest ? { inputDigest: req.inputDigest } : {}),
+      ...(tracked && req.credentialDigest ? { credentialDigest: req.credentialDigest } : {}),
+      ...(documentProtocol ? { documentProtocol: 1 } : {}) });
+    // A recorded effect keeps the protocol it was recorded under, whatever the
+    // flag says now: a pending revision resumes, and an older record stays
+    // read-only. A new one is a document only with the feature on, and only
+    // when no text spells a framing delimiter the defang would rewrite (#634);
+    // such a document keeps the bounded, defanged card instead.
+    const previous = getWorkflowEffect(workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], route));
+    const document = whole && (previous ? previous.requestDigest === digest(requestOf(whole, true))
+      : opts.decisionDocumentsEnabled === true && digest(defangPieceProjection(whole)) === digest(whole)) ? whole : null;
+    const input = document ?? projected;
     const providerBinding = tracked ? captureProviderBinding({ projectId: ctx.projectId, versionId: run.flowVersionId,
       stepName: ctx.stepName!, piece: req.piece, credentialDigest: req.credentialDigest }) : undefined;
     const reply = await effects.invoke({ context: ctx, piece: req.piece, action: req.action,
@@ -897,27 +918,31 @@ export function buildSandboxServiceBackends(
       // resolved input, so a change to any prop -- including the part of a
       // long body or a long recipient list the card cuts -- invalidates an
       // approval granted earlier (Q-08).
-      request: { piece: req.piece, action: req.action, input, ...(req.inputDigest ? { inputDigest: req.inputDigest } : {}),
-        ...(tracked && req.credentialDigest ? { credentialDigest: req.credentialDigest } : {}) },
+      request: requestOf(input, !!document),
+      documentReview: !!document,
       prepare: () => {
         // Matched once, when the effect is recorded; resumes and retries recheck the record's facts.
         const facts = addressing ? recipientFactPins(recipientAddresses(input)) : [];
         return { arguments: input, target: capability.target(input), ...(facts.length ? { bindings: { facts } } : {}) };
       },
-      validateTarget: (_args, target) => {
-        if (digest(capability.target(input)) !== digest(target)) throw new Error('Workflow execution target changed after review; dispatch blocked');
+      // A revised document carries its own reviewed target; anything else is frozen to this input.
+      validateTarget: (args, target) => {
+        if (digest(capability.target(document ? args : input)) !== digest(target)) throw new Error('Workflow execution target changed after review; dispatch blocked');
       },
       revalidate: record => assertRecipientFactsCurrent((record.bindings as { facts?: FactPin[] } | undefined)?.facts),
       revalidateOnReplay: true,
-      execute: async (_args, checkpoint) => { checkpoint(); return { dispatch: 'authorized' }; } });
+      // The engine applies exactly the reviewed document it is handed here.
+      execute: async (args, checkpoint) => { checkpoint(); return { dispatch: 'authorized',
+        ...(document ? { document: projectDocument(req.piece, req.action, args) } : {}) }; } });
     if (reply.approval) return { governed: true, dispatch: 'approval_required', approval: reply.approval };
+    const approved = () => document ? { document: (reply.result as { document: ReturnType<typeof projectDocument> }).document } : {};
     if (tracked) {
       const effectId = workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], route);
       return getWorkflowEffect(effectId)?.status === 'succeeded'
         ? { governed: true, dispatch: 'completed', result: reply.result }
-        : { governed: true, dispatch: 'authorized', effectId };
+        : { governed: true, dispatch: 'authorized', effectId, ...approved() };
     }
-    return { governed: true, dispatch: 'authorized' };
+    return { governed: true, dispatch: 'authorized', ...approved() };
   };
 
   const services: SandboxApiServices = {

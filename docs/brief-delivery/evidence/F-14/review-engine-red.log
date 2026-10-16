@@ -1,0 +1,88 @@
+bun test v1.4.2 (744846f84)
+
+src/workflows/runtime/decision-document-engine.test.ts:
+Database initialized at: /tmp/jarvis-f14-engine-Ed2AVR/db.sqlite
+[engine f50b7975 stderr] (node:1051639) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+[engine a6170e6f stderr] (node:1051671) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+100 |   const step = complete.steps!.action!.output as { input: Record<string, unknown>; output: { received: Record<string, unknown>; authenticated: boolean } };
+101 |   const expected = edited.kind === 'email'
+102 |     ? { ...input, receiver: edited.to, cc: edited.cc, bcc: edited.bcc, subject: edited.subject, body: edited.body }
+103 |     : { ...input, title: edited.title, description: edited.description, start_date_time: edited.start, end_date_time: edited.end, attendees: edited.attendees, location: edited.location };
+104 |   expect(step.output).toEqual({ received: expected, authenticated: true });
+105 |   expect(step.input).toMatchObject(expected);
+                           ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "bcc": [
+-     "blind@example.test",
+-   ],
+-   "body": "Approved body",
++   "auth": "**REDACTED**",
++   "bcc": [],
++   "body": "Original body",
+    "body_type": "plain_text",
+-   "cc": [
+-     "copy@example.test",
+-   ],
++   "cc": [],
+    "draft": false,
+    "receiver": [
+-     "second@example.test",
++     "first@example.test",
+    ],
+-   "subject": "Approved subject",
++   "subject": "Original subject",
+  }
+
+- Expected  - 9
++ Received  + 6
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/workflows/runtime/decision-document-engine.test.ts:105:22)
+(fail) F14 review R3: real email engine records the approved input without credentials [4940.45ms]
+Database initialized at: /tmp/jarvis-f14-engine-J9wofL/db.sqlite
+[engine 74aefd01 stderr] (node:1051705) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+[engine 7e0afc4b stderr] (node:1051737) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+[engine 7e0afc4b stderr] (Use `bun --trace-warnings ...` to show where the warning was created)
+100 |   const step = complete.steps!.action!.output as { input: Record<string, unknown>; output: { received: Record<string, unknown>; authenticated: boolean } };
+101 |   const expected = edited.kind === 'email'
+102 |     ? { ...input, receiver: edited.to, cc: edited.cc, bcc: edited.bcc, subject: edited.subject, body: edited.body }
+103 |     : { ...input, title: edited.title, description: edited.description, start_date_time: edited.start, end_date_time: edited.end, attendees: edited.attendees, location: edited.location };
+104 |   expect(step.output).toEqual({ received: expected, authenticated: true });
+105 |   expect(step.input).toMatchObject(expected);
+                           ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "attendees": [
+-     "second@example.test",
++     "first@example.test",
+    ],
++   "auth": "**REDACTED**",
+    "calendar_id": "primary",
+-   "description": "Approved agenda",
+-   "end_date_time": "2026-11-02T11:00:00Z",
+-   "location": "Office",
++   "description": "Original agenda",
++   "end_date_time": "2026-11-01T09:30:00Z",
++   "location": "",
+    "send_notifications": "all",
+-   "start_date_time": "2026-11-02T10:00:00Z",
+-   "title": "Approved event",
++   "start_date_time": "2026-11-01T09:00:00Z",
++   "title": "Original event",
+  }
+
+- Expected  - 6
++ Received  + 7
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/workflows/runtime/decision-document-engine.test.ts:105:22)
+(fail) F14 review R3: real calendar engine records the approved input without credentials [4693.46ms]
+
+ 0 pass
+ 2 fail
+ 10 expect() calls
+Ran 2 tests across 1 file. [9.82s]

@@ -1,0 +1,67 @@
+bun test v1.4.2 (744846f84)
+
+src/daemon/api-brief-decision-documents.test.ts:
+Database initialized at: :memory:
+(pass) optional provider identity, readiness and both capability flags gate every read and write [44.43ms]
+Database initialized at: :memory:
+(pass) save, recover lost response, reject stale controls and reload the same decision [45.92ms]
+Database initialized at: :memory:
+(pass) malformed, unknown, oversized and generic tool argument payloads cannot write [28.04ms]
+Database initialized at: :memory:
+[WebSocketServer] Started on unix:/tmp/jarvis-f14-http-oFXvmE/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) authenticated HTTP protects document reads/writes and returns a truthful keep-draft receipt [25.79ms]
+
+src/brief/decision-documents.test.ts:
+Database initialized at: /tmp/jarvis-f14-gqkQdu/db.sqlite
+(pass) email edit saves a new pending revision, retires every old approval control and dispatches edited parameters only [654.77ms]
+Database initialized at: /tmp/jarvis-f14-6ZNMVp/db.sqlite
+(pass) date and attendee edits are frozen, calendar and notification options stay read-only [532.69ms]
+Database initialized at: /tmp/jarvis-f14-FWJDOW/db.sqlite
+Database initialized at: /tmp/jarvis-f14-FWJDOW/db.sqlite
+(pass) deferral retires permission, survives expiry and restart, stays queued and requires fresh review [528.38ms]
+Database initialized at: /tmp/jarvis-f14-sAG25q/db.sqlite
+(pass) an expired review can be edited and approved after reload without silently resuming [660.21ms]
+Database initialized at: /tmp/jarvis-f14-8kv1vt/db.sqlite
+(pass) rejecting review never grants permission and resumes only to a blocked receipt [544.66ms]
+Database initialized at: /tmp/jarvis-f14-xWbA79/db.sqlite
+(pass) rejecting deferred never grants permission and resumes only to a blocked receipt [694.69ms]
+Database initialized at: /tmp/jarvis-f14-ze7qFW/db.sqlite
+(pass) rejecting expired never grants permission and resumes only to a blocked receipt [623.28ms]
+Database initialized at: /tmp/jarvis-f14-TRJl4M/db.sqlite
+Database initialized at: /tmp/jarvis-f14-TRJl4M/db.sqlite
+(pass) lost responses replay exact durable receipts; conflicting reuse and stale edits fail [561.66ms]
+Database initialized at: /tmp/jarvis-f14-zg92YM/db.sqlite
+(pass) legacy approval wins against a subsequent save without changing its reviewed arguments [504.43ms]
+Database initialized at: /tmp/jarvis-f14-B2d4WD/db.sqlite
+(pass) legacy approval wins against a subsequent keep_draft without changing its reviewed arguments [571.26ms]
+Database initialized at: /tmp/jarvis-f14-0qoIOT/db.sqlite
+(pass) an edit during notification delivery replaces the in-memory approval snapshot without overwriting it [596.52ms]
+Database initialized at: /tmp/jarvis-f14-lwLw7k/db.sqlite
+(pass) old engines, changed workflow input and changed policy cannot dispatch an edited document [570.17ms]
+Database initialized at: /tmp/jarvis-f14-rUay4w/db.sqlite
+(pass) unsupported and pre-protocol actions stay read-only; enabling enrollment is explicit [615.74ms]
+Database initialized at: /tmp/jarvis-f14-oOKfgX/db.sqlite
+(pass) strict edits reject injection, malformed recipients, unknown fields, reversed dates and oversized documents [558.46ms]
+Database initialized at: /tmp/jarvis-f14-kGiPLo/db.sqlite
+(pass) document views and receipts never expose credentials, raw approval context or waitpoint secrets [536.13ms]
+Database initialized at: /tmp/jarvis-f14-neIhO4/db.sqlite
+(pass) F-13 links a revised document to the existing work and queue position [546.61ms]
+Database initialized at: /tmp/jarvis-f14-ce4Jah/db.sqlite
+(pass) editing terminal or resumed runs is refused, even when an approval is still pending [437.05ms]
+Database initialized at: /tmp/jarvis-f14-jEA4JM/db.sqlite
+(pass) notification failures cannot erase committed document receipts [538.14ms]
+Database initialized at: /tmp/jarvis-f14-ZJ2YED/db.sqlite
+(pass) a bound effect cannot silently downgrade without its owner binding adapter [450.52ms]
+(skip) actual Q-05 binds edited recipients and retains deleted original facts for unchanged recipients
+Database initialized at: /tmp/jarvis-f14-vtcaue/db.sqlite
+(pass) two independent processes cannot save and approve the same document revision [774.07ms]
+
+1 tests skipped:
+(skip) actual Q-05 binds edited recipients and retains deleted original facts for unchanged recipients
+
+ 24 pass
+ 1 skip
+ 0 fail
+ 194 expect() calls
+Ran 25 tests across 2 files. [11.79s]
