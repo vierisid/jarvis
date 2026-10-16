@@ -6,6 +6,7 @@ import { BriefCapabilities } from "../../../../../src/brief/capabilities";
 import { BriefConversationClient } from "../client";
 import type { ConversationApi } from "../api";
 import type { AttachmentApi } from "../attachments";
+import { bindConversationComposer } from "../composer/model";
 import { bindAttachmentFan, type AttachmentOwner, type AttachmentPickers } from "./model";
 
 // Compile-time guard: the F-05 client must satisfy the fan's structural port,
@@ -84,6 +85,9 @@ test("the fan delegates to the real F-05 DraftAttachments flow and keeps its con
   await bindAttachmentFan(client, pickers, "live").choose("screenshot", signal());
   assert.deepEqual(captures, [{ c: b, deviceId: "fixture-desktop" }]);
   assert.equal(items(b)[1]!.kind, "screenshot");
+  // The composer sees the same ready references, so an attachment-only message can be sent.
+  await client.select(b);
+  assert.deepEqual(bindConversationComposer({ status: client.getSnapshot(), state: client.store.getSnapshot(), client }, "live").attachments, { count: 2, ready: true });
 
   // A file chosen after its chat closed during the picker is refused, not uploaded.
   await client.select(a);

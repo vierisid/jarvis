@@ -39,9 +39,13 @@ function ScopedComposer({ binding, suggestions = [], label = "Message Jarvis", p
   const working = !!binding.turn;
   const turnKey = binding.turn ? JSON.stringify([binding.turn.conversationId, binding.turn.turnId, binding.turn.requestId]) : null;
   const stopping = !!stopIntent && stopIntent.turnKey === turnKey && binding.connected && (!binding.error || stopIntent.ownerError === binding.error);
-  const disabled = !binding.connected || binding.metadataPending || !!pending || (!working && (!binding.draft.trim() || !!invalid));
+  // Mirrors client.send: text or attachments, and every attachment ready.
+  const files = binding.attachments ?? { count: 0, ready: true };
+  const notReady = !working && files.count > 0 && !files.ready;
+  const disabled = !binding.connected || binding.metadataPending || !!pending || (!working && ((!binding.draft.trim() && !files.count) || !!invalid || notReady));
   const status = error || invalid || (!binding.connected ? "Reconnecting… Your draft is kept." : stopping ? "Stopping response…"
-    : pending === "send" || binding.pendingAcceptance ? "Sending…" : binding.error);
+    : pending === "send" || binding.pendingAcceptance ? "Sending…" : binding.error
+    ?? (notReady ? "Attachments must finish before sending." : null));
 
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useLayoutEffect(() => {

@@ -299,7 +299,9 @@ fixture owner (add, select, close, reopen, failing writes and each status mode).
   refused locally, matching the client.
 - Attachments: the composer only reserves the 44px slot (`attachmentControl`). Attachments must go
   through F-05's `client.attachments` flow (`JARVIS_BRIEF_CHAT_ATTACHMENTS`), which `client.send`
-  already includes; never add a parallel upload here.
+  already includes; never add a parallel upload here. The binding projects the active chat's
+  attachment count and readiness: ready attachments can be sent without text, and Send waits while
+  any attachment is uploading, removing or failed, matching `client.send`.
 - Not mounted in the live shell yet, and it calls `client.send`: the same #1075 rule as the tab strip
   applies. Do not mount the provider or this composer live until Brief-turn approval cards are visible.
 - `chat/composer/figma-reference.json` records the UI-18 source values.
