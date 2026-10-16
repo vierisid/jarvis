@@ -14,6 +14,7 @@ const SHEETS = [
   "../today/decision-transition/decision-transition.css",
   "../today/outcomes/outcomes.css", "../today/activity/activity.css", "../today/goal-card/goal-card.css",
   "../today/opportunity-stack/opportunity-stack.css",
+  "../chat/tab-strip/tabs.css", "../chat/tab-strip/preview/specimen.css",
 ];
 
 function selectors(css: string): string[] {
@@ -48,7 +49,8 @@ for (const sheet of SHEETS) {
   test(`${sheet} only styles elements inside a Brief root`, () => {
     const css = readFileSync(join(import.meta.dir, sheet), "utf8");
     const list = selectors(css);
-    expect(list.length).toBeGreaterThan(10);
+    // Sanity floor so a parse that finds nothing cannot pass; the smallest sheet has 5 rules.
+    expect(list.length).toBeGreaterThan(4);
     const leaking = list.filter(s => !/^(:root(\[data-theme="dark"\])? )?\.brief-(root|specimen(__[a-z-]+)?)(?![\w-])/.test(s));
     expect(leaking).toEqual([]);
   });

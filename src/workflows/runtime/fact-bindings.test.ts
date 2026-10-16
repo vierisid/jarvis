@@ -18,6 +18,7 @@ import { ApprovalManager, type ApprovalRequest } from '../../authority/approval'
 import { CredentialResolver } from '../credentials/adapter';
 import { WorkflowEventBuffer } from './event-buffer';
 import { buildSandboxServiceBackends, type BuildServiceBackendsOptions } from './service-backends';
+import { pieceInputDigest } from './piece-effect-guard';
 import { resumeResolvedWorkflowEffects } from './effect-approval-scheduler';
 import { createEntity } from '../../vault/entities';
 import { correctFact, createFact, deleteFact } from '../../vault/facts';
@@ -47,9 +48,13 @@ function fixture(action = 'send_email', onWorkflowApproval?: (request: ApprovalR
     channelService: { getChannelStatus: () => ({}), tryBroadcastToChannels: async () => ({ delivered: [], failed: [] }) } as any,
     wsService: { broadcastNotificationToDashboard: () => {} } as any };
   const backends = buildSandboxServiceBackends(options);
-  const authorize = (receiver: string) => backends.pieceAuthorize!({ piece: GMAIL, action,
-    input: { receiver: [receiver], subject: 'Invoices', body: 'Hi Ana' } }, { runId: run.id, projectId: DEFAULT_IDS.project, stepName: 'action', executionPath: [] });
-  return { run, authority, approvals, authorize };
+  const context = { runId: run.id, projectId: DEFAULT_IDS.project, stepName: 'action', executionPath: [] as Array<[string, number]> };
+  // The engine always sends its digest of the whole input (Q-08); a tracked send requires it (Q-07).
+  const authorize = async (receiver: string) => {
+    const input = { receiver: [receiver], subject: 'Invoices', body: 'Hi Ana' };
+    return backends.pieceAuthorize!({ piece: GMAIL, action, input, inputDigest: await pieceInputDigest(input) }, context);
+  };
+  return { run, authority, approvals, authorize, backends, context };
 }
 
 describe('which addresses and facts a step depends on', () => {
@@ -142,7 +147,11 @@ describe('a governed send checks the facts its recipients matched', () => {
   test("the engine's own retry of an authorized send rechecks memory before the service is called again", async () => {
     const f = fixture();
     const fact = createFact(ana(), 'email', 'ana@old.example', { confirmed: true });
-    expect(await f.authorize('ana@old.example')).toEqual({ governed: true, dispatch: 'authorized' });
+    const authorized = await f.authorize('ana@old.example') as { dispatch: string; effectId: string };
+    expect(authorized).toMatchObject({ governed: true, dispatch: 'authorized' });
+    // Q-07: a send with no completion receipt is never handed out again.
+    await expect(f.authorize('ana@old.example')).rejects.toThrow(/replay is blocked/);
+    f.backends.pieceReceipt!(f.context, authorized.effectId, { id: 'a123' });
     correctFact(fact.id, 'ana@new.example', 'Ana moved between attempts');
     await expect(f.authorize('ana@old.example')).rejects.toThrow(/no longer current in memory/);
     // The effect keeps what it did and records why the retry was refused.

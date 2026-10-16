@@ -21,9 +21,10 @@
  * Imported BY THE ENGINE BUNDLE: keep it pure. `fetch` only, no node built-ins.
  */
 
-import { isGovernedPiece, sanitizePieceInput } from './piece-effects';
+import { isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 
 export const PIECE_AUTHORIZE_PATH = '/v1/jarvis/pieces/authorize';
+export const PIECE_RECEIPT_PATH = '/v1/jarvis/pieces/receipt';
 
 /** The name a CODE step is admitted under: it has no piece of its own. */
 export const CODE_STEP_PIECE = '@jarvis/code-step';
@@ -39,6 +40,7 @@ export interface PieceAuthorizeRequest {
    * cover a longer message or more recipients than were reviewed.
    */
   inputDigest?: string;
+  credentialDigest?: string;
 }
 
 /** Stable JSON: sorted keys, so the same input always digests the same. */
@@ -69,7 +71,8 @@ export type PieceAuthorizeResponse =
   /** No adapter, and Jarvis is paused: the step parks on this waitpoint until Resume (Q-08). */
   | { governed: false; dispatch: 'held'; approval: PieceAuthorizePending }
   /** Authority allowed the dispatch; the effect is recorded and claimed. */
-  | { governed: true; dispatch: 'authorized' }
+  | { governed: true; dispatch: 'authorized'; effectId?: string }
+  | { governed: true; dispatch: 'completed'; result: unknown }
   /** Authority wants a human; the step parks on this waitpoint. */
   | { governed: true; dispatch: 'approval_required'; approval: PieceAuthorizePending };
 
@@ -100,6 +103,14 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
   const refused = governed
     ? `Governed piece ${body.piece}/${body.action} was not authorized`
     : body.piece === CODE_STEP_PIECE ? 'CODE step was not admitted' : `Piece step ${body.piece}/${body.action} was not admitted`;
+  if (tracksPieceCompletion(params.piece, params.action)) {
+    const auth = (params.input as { auth?: { access_token?: unknown; type?: unknown } } | null)?.auth;
+    const token = auth?.access_token;
+    if (auth?.type !== 'CUSTOM_AUTH' && typeof token === 'string') {
+      const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical(token))));
+      body.credentialDigest = Array.from(hash).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+  }
   let response: Response;
   try {
     response = await (params.fetchImpl ?? fetch)(url, {
@@ -124,6 +135,7 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
     throw new Error(`${refused}: malformed authorization reply`);
   }
   if (reply.governed === false) {
+    if (tracksPieceCompletion(params.piece, params.action)) throw new Error('Completion receipt protocol unavailable; send refused');
     if ('dispatch' in reply && reply.dispatch === 'held') {
       if (reply.approval?.waitpointId) return reply;
       throw new Error(`${refused}: malformed hold reply`);
@@ -133,6 +145,35 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
     return { governed: false };
   }
   if (reply.dispatch === 'approval_required' && reply.approval?.waitpointId) return reply;
-  if (reply.dispatch === 'authorized') return reply;
+  if (reply.dispatch === 'completed' && tracksPieceCompletion(params.piece, params.action)) return reply;
+  if (reply.dispatch === 'authorized') {
+    if (tracksPieceCompletion(params.piece, params.action) && !reply.effectId) throw new Error('Completion receipt protocol unavailable; send refused');
+    return reply;
+  }
   throw new Error(`${refused}: malformed authorization reply`);
+}
+
+/** Persist completion before handing the result back to the engine's run log.
+ * A transport loss leaves dispatching behind. Reauthorization cannot resend. */
+export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParams, governance: PieceAuthorizeResponse, execute: () => Promise<unknown>): Promise<unknown> {
+  if ('dispatch' in governance && governance.dispatch === 'completed') return governance.result;
+  if ('dispatch' in governance && (governance.dispatch === 'held' || governance.dispatch === 'approval_required')) throw new Error('Piece is waiting for authorization');
+  const raw = await execute();
+  // Gmail 0.17 returns a Gaxios response, including transport configuration.
+  // Keep its data envelope for expressions, but never persist request headers
+  // (which can contain the OAuth bearer) as a completion receipt or step output.
+  const response = raw as { data?: unknown; status?: unknown; statusText?: unknown } | null;
+  const result = tracksPieceCompletion(params.piece, params.action) && params.piece === '@activepieces/piece-gmail' && response?.data !== undefined
+    ? { data: response.data, ...(typeof response.status === 'number' ? { status: response.status } : {}),
+      ...(typeof response.statusText === 'string' ? { statusText: response.statusText } : {}) }
+    : raw;
+  if (governance.governed && governance.dispatch === 'authorized' && governance.effectId) {
+    const response = await (params.fetchImpl ?? fetch)(`${params.apiUrl.replace(/\/+$/u, '')}${PIECE_RECEIPT_PATH}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${params.engineToken}`,
+        'X-Jarvis-Step-Name': params.stepName, 'X-Jarvis-Execution-Path': JSON.stringify(params.executionPath) },
+      body: JSON.stringify({ effectId: governance.effectId, result: result ?? null }), signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) throw new Error(`Provider completion could not be recorded (${response.status}); automatic replay is blocked`);
+  }
+  return result;
 }

@@ -240,6 +240,15 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  *                                     is a generic gated reader, with no live
  *                                     provider registered in F-01; future
  *                                     providers still need boundary review.
+ *   brief/composition.ts              BENIGN. Calls createDraftVersion and
+ *                                     keeps only its newly created id in a
+ *                                     durable job receipt. It reads no run or
+ *                                     existing version, and supplies only the
+ *                                     saved user specification to the composer.
+ *                                     composition.test.ts writes hostile step
+ *                                     capture data to a completed draft and
+ *                                     verifies receipt/read/replay and later
+ *                                     model prompts never include that data.
  *   daemon/api-routes.ts               BENIGN. Holds a whole `FlowVersion` but
  *                                     reads only `displayName`/`schemaVersion`
  *                                     off it, and answers HTTP rather than a
@@ -247,6 +256,22 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  *   goals/workflow-bridge.ts           BENIGN. Holds a whole
  *                                     `FlowVersion`/`FlowRun` but reads only ids
  *                                     and state.
+ *   onboarding-next/compose-draft/store.ts BENIGN. Holds a freshly created or
+ *                                     recovered `FlowVersion`, but projects
+ *                                     only exact artifact ids and state. It
+ *                                     never returns captured sample outputs,
+ *                                     sample inputs, the version object or
+ *                                     composition journal payloads. Readiness
+ *                                     is recomputed from the graph and its
+ *                                     text fields are bounded for the result
+ *                                     a person reads. Recovery returns before
+ *                                     composition, so stored outputs never
+ *                                     feed a new model call. The module's
+ *                                     index.test.ts seeds hostile stored
+ *                                     payloads and checks replay/reconciliation.
+ *                                     Future model consumers must frame graph-
+ *                                     derived readiness and qualifications at
+ *                                     their own prompt boundary.
  *
  *   onboarding-next/result/reader.ts PERSON-FACING. Returns only the exact
  *                                     authorized draft's title/graph and bounded
@@ -267,11 +292,13 @@ const REVIEWED_STEP_OUTPUT_READERS = [
   'awareness/prepared-qualification.ts',
   'awareness/suggestion-composer.ts',
   'brief/adapters.ts',
+  'brief/composition.ts',
   'brief/contracts.ts',
   'daemon/api-routes.ts',
   'goals/next-action.ts',
   'goals/work-items.ts',
   'goals/workflow-bridge.ts',
+  'onboarding-next/compose-draft/store.ts',
   'onboarding-next/result/reader.ts',
 ];
 

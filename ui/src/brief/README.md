@@ -260,3 +260,27 @@ is unchanged.
 `?brief=preview&specimen=today#/_brief_preview` opens the composition with fixture decisions,
 fixture outcomes and activity (`today/preview/outcomeFixtures.ts`), a fixture goal with a simulated recommendation owner (`today/preview/goalFixtures.ts`) and a fixture opportunity stack with a simulated owner (`today/preview/opportunityFixtures.ts`). Its actions only change local state; it starts no API read,
 socket or approval.
+
+## Conversation tabs
+
+- `chat/tab-strip/` renders the UI-17 tab strip. It owns no messages, drafts, persistence, streams or
+  close policy: `bindConversationTabs(owner, source)` projects the F-04 owner (`useBriefConversation()`,
+  or a fixture) to ids, titles, `activeId` and the three metadata writes `add`/`select`/`close`.
+  `owner.test.tsx` pins that the provider's value satisfies the port and drives the real
+  `BriefConversationClient`.
+- Tabs and actions render only when `status.mode` is `scoped` with a workspace id and the binding's
+  `source` matches the mode (`"live"` in live, `"fixture"` in preview). Loading, legacy, disabled and
+  unavailable show a status line and no actions. Closing the last tab leaves `activeId` null; only `+`
+  creates a conversation. Writes are blocked while one is pending, and a failure keeps the tabs and
+  reports locally. A changed workspace id resets local state.
+- Arrows/Home/End move focus without writing; Enter/Space select; Delete closes. Tabs stop shrinking at
+  112px and scroll; width changes use the D-04 controller, and reduced motion places them immediately.
+  The caller owns the panel id and `role="tabpanel"` linkage (`chatTabId(panelId, id)`).
+- Not mounted in the live shell yet. Mount `BriefConversationProvider` once above rooms when wiring it;
+  do not open a second socket. Do not mount the provider or enable `JARVIS_BRIEF_CHAT_TRANSPORT` /
+  `JARVIS_BRIEF_CHAT_STATE` until Brief-turn approval cards are visible (#1075): today the provider
+  drops approvals, clarifiers, repeat-backs and room action requests.
+- `chat/tab-strip/figma-reference.json` records the UI-17 source values.
+
+`?brief=preview&specimen=chat-tabs#/_brief_preview` opens the strip inside the Today specimen with a
+fixture owner (add, select, close, reopen, failing writes and each status mode). It sends nothing.

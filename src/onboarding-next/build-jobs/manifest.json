@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "ON-B-08",
+  "kind": "provider",
+  "entry": "./index.ts",
+  "provides": ["build-job.v1"],
+  "requires": ["activation-intent.v1", "compose-draft.v1"]
+}

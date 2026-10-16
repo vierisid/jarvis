@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "ON-B-09",
+  "kind": "provider",
+  "entry": "./index.ts",
+  "provides": ["compose-draft.v1"],
+  "requires": []
+}
