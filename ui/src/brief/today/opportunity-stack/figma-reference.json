@@ -1,0 +1,16 @@
+{
+  "task": "D-11",
+  "file": "eNfKeirIKLZLlZEasrurZa",
+  "page": "81:2",
+  "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+  "today": "81:3",
+  "today_chat_open": "81:212",
+  "native_stack": "685:309783",
+  "extraction": "AIOS workspace/Jarvis/dashboard-brief-figma-2026-09-14-v6-1/ui-16-opportunity-stack-2026-10-02/README.md, build-opportunity-stack.js and renders/",
+  "later_action_wording": "Approve & enable from the final D-11 card and UI-26 room, replacing UI-16's earlier Enable workflow label",
+  "materials": "Shared Brief card, stack-near and stack-far tokens; 14/0/14/14 corners on every sheet; two backing layers maximum",
+  "copy": "Three approved illustrative UI-16 proposals, only in preview fixtures. Live copy must come from the prepared snapshot owner.",
+  "motion_ms": { "acknowledge": 520, "dismiss": 360, "exit": 160, "enter": 180 },
+  "responsive": "Preserve D-07/D-10 Today layout. Compact hides only the repeated title, never observation, automation or goal contribution. Long content grows naturally. Actions stack below 290px card width.",
+  "limits": "Saved native Figma extraction, not a new editor inspection. No live activation, generation or credential inference. OS reduced motion is implemented in React, beyond the native storyboard's specification."
+}
