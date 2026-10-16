@@ -651,3 +651,35 @@ actions only change local fixture state.
 - `?brief=preview&specimen=goals#/_brief_preview` opens it over in-memory fixtures (ready, mixed
   status, score only, decreasing, unknown, long, many, loading, empty, stale, unavailable,
   unsupported). `goals/figma-reference.json` records the UI-35 source and bounded adaptations.
+
+## Memory
+
+- `memory/stream/` is the D-25 Memory room: Search, Source, Used in and Updated filters, an exact
+  result count, rows grouped by Today / Yesterday / Earlier and sorted by Updated descending, then
+  fact ID. It only reads. There is no Add memory action, category tab, writer or second memory engine;
+  detail, correction and Forget belong to D-26, which receives only the canonical fact ID through
+  `onOpen(factId)`. Without `onOpen` a row is `aria-disabled`.
+- `MemoryPort.read(query, signal)` is the only input. There is no live implementation on main: the
+  F-17 memory stream query (`/api/brief/memory`, #823) and F-18 usage records (#833) are still open.
+  An HTTP port is added together with that wiring. Main's paged legacy reader (`/api/vault/page`) has
+  no search or filters and is not used here.
+- Search, Source and Used in go to the server, never filter one fetched page. Search is literal text up
+  to 256 characters; Source is an exact label (whitespace kept, up to 4,000 characters); Used in is
+  `conversation:<id>` or `run:<id>` and counts supplied use only, not selected-only. Source and Used in
+  suggestions come from host-supplied authorized catalogs; exact entry works without them.
+- `validPage` rejects a page as a whole (never drops rows, which would falsify counts): wrong counts,
+  duplicate IDs, unreadable rows, an order break, or a status other than `active` / `contested`, so
+  superseded or forgotten facts cannot render. Continuation repeats the frozen query with the opaque
+  cursor and must keep totals, order and identity.
+- `MemoryController` owns one authenticated scope and survives room, theme, sidebar and chat changes;
+  the host calls `retire()` on logout or scope change. A filter edit clears rows at once and late reads
+  of an older query or page are ignored. Stale, unavailable, unsupported and error states carry no
+  cached rows (a fact may have been forgotten) but keep the applied filters. Losing access clears both.
+- Memory text is untrusted (it can hold captured page text) and renders as plain text only.
+  Recorded use means a retained provider handoff, not model reliance; `uses: null` reads "Usage
+  unavailable".
+- Opt-in `memoryRegistrations(useBinding)`, not in the production registry. `memoryAvailable` requires
+  a non-empty scope, a `source` matching the shell mode, a controller bound to the same scope and
+  source and, in live mode, both the `memoryStream` and `memoryUsage` capabilities.
+- `?brief=preview&specimen=memory#/_brief_preview` opens it over in-memory fixtures (ready, loading,
+  empty, stale, error, unavailable, unsupported, long, many with a match beyond page one, no-usage).
