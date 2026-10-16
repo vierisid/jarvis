@@ -62,8 +62,6 @@ On the independent F stack, expect 23 pass, 4 skipped, zero failures. The skips 
 
 The actual Q-18 integration was also run with its five source/test/scenario files temporarily overlaid from commit `dd658e0535dd0e365559a065987c5bf4031c8732`, then removed. Running `bun test src/brief/recommendations-q18.test.ts src/goals/next-action.test.ts` in that combined checkout passed 69 tests after the R1 correction, with only the missing-provider case skipped. This includes Q-18's approved scenario set unchanged, plus goal deletion before/after generation and receipt recovery after restart. Its code is not copied into this PR.
 
-The full affected command, logs, two initially failing regressions, and four rejecting mutations are under `docs/brief-delivery/evidence/F-13/`. Mutations remove freshness, duplicate protection, append placement and the atomic write boundary; each fails its check. R1 review evidence is in `review-R1-red.log`, `review-q18-integration.log`, `review-affected.log`, and `review-mutation-live-goal-red.log`: deletion regressions fail before correction, and removing live-goal validation is rejected. TypeScript and normal repository commit guards must pass before push.
-
 ## Limits and rollback
 
 This is the backend provider/API and canonical Today adapter, not a rendered room change. There is no UI screenshot. D-10's live presentation adapter and the release cutover remain integration work. Q-18's structured-observation and ranking limits still apply; F-13 does not invent missing steps or certify live-model performance. One read returns one stored result, at most 64 KB; history is retrievable by ID, not a new unbounded list.
