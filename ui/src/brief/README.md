@@ -284,3 +284,25 @@ socket or approval.
 
 `?brief=preview&specimen=chat-tabs#/_brief_preview` opens the strip inside the Today specimen with a
 fixture owner (add, select, close, reopen, failing writes and each status mode). It sends nothing.
+
+## Conversation composer
+
+- `chat/composer/` renders the UI-18 compact composer and send pebble. It owns no persistence, send
+  acceptance or cancellation: `bindConversationComposer(owner, source)` projects the F-04 owner
+  (`useBriefConversation()`, or a fixture) to the active conversation's draft, its queued/running or
+  pending turn, error and connection, and the writes `setDraft`/`send`/`cancel`. `owner.test.tsx` pins
+  that the provider's value satisfies the port and drives the real `BriefConversationClient`.
+- The draft is kept until the owner accepts the send; a rejected or failed send keeps it. Stop cancels
+  the exact selected turn (conversation, turn and request ids) and shows "Stopping response..." until
+  the owner reports the turn ended or an error, so a terminal failure after Stop stays visible.
+  Enter sends (not during IME composition); Shift+Enter adds a line. Drafts over 65,536 bytes are
+  refused locally, matching the client.
+- Attachments: the composer only reserves the 44px slot (`attachmentControl`). Attachments must go
+  through F-05's `client.attachments` flow (`JARVIS_BRIEF_CHAT_ATTACHMENTS`), which `client.send`
+  already includes; never add a parallel upload here.
+- Not mounted in the live shell yet, and it calls `client.send`: the same #1075 rule as the tab strip
+  applies. Do not mount the provider or this composer live until Brief-turn approval cards are visible.
+- `chat/composer/figma-reference.json` records the UI-18 source values.
+
+`?brief=preview&specimen=composer#/_brief_preview` opens the composer inside the Today specimen with
+a fixture owner (send, hold, stop, failing send/stop, offline and each status mode). It sends nothing.
