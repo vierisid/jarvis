@@ -24,6 +24,7 @@ const SHEETS = [
   "../workflows/context/context.css",
   "../workflows/manage-list/management.css",
   "../opportunities/opportunities.css",
+  "../decisions/decisions.css",
 ];
 
 function selectors(css: string): string[] {
