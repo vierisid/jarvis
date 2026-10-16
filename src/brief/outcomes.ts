@@ -143,11 +143,15 @@ export class Outcomes {
       `SELECT r.goal_id,r.request_id,r.receipt,r.measured_at,g.title FROM goal_measurement_receipt r JOIN goals g ON g.id=r.goal_id
        WHERE r.measured_at IS NOT NULL AND r.measured_at < ? ORDER BY r.goal_id,r.measured_at,r.request_id LIMIT 50001`).all(Math.min(w.end, now + 1));
     if (rows.length > 50000) throw Error('Goal evidence exceeds read bound');
-    type Point = { value: number; unit: string; baseline: number; target: number; measuredAt: number; evidence: { id: string; revision: string } };
+    type Point = { value: number; unit: string; baseline: number; target: number; measuredAt: number;
+      evidence: { id: string; revision: string }; qualification: BriefMeasurement['qualification'] };
     const goals = new Map<string, { title: string; opening?: Point; ending?: Point }>();
     for (const row of rows) {
       const receipt = parse<{ measurement: Point }>(row.receipt), m = receipt?.measurement;
-      if (!m || !Number.isFinite(m.value) || m.measuredAt !== row.measured_at || !m.evidence) throw Error('Goal evidence is incomplete');
+      // Carry the writer's qualification instead of asserting one: anything other
+      // than a measured or user-reported observation never becomes a delta.
+      if (!m || !Number.isFinite(m.value) || m.measuredAt !== row.measured_at || !m.evidence
+        || (m.qualification !== 'measured' && m.qualification !== 'user_reported')) throw Error('Goal evidence is incomplete');
       const g = goals.get(row.goal_id) ?? { title: row.title }; goals.set(row.goal_id, g);
       if (row.measured_at < w.start) g.opening = m; else g.ending = m;
     }
@@ -156,7 +160,8 @@ export class Outcomes {
       const reason = !a ? 'missing_opening' : a.unit !== b.unit || a.baseline !== b.baseline || a.target !== b.target ? 'definition_changed' : null;
       return { goalId, title: g.title, reason, attribution: 'observed_change_only', rollup: 'independent',
         change: reason ? null : { value: b.value - a!.value, unit: b.unit, baseline: a!.value, target: b.target, asOf: b.measuredAt,
-          provenance: [source(a!.evidence.id, a!.evidence.revision), source(b.evidence.id, b.evidence.revision)], qualification: 'user_reported' } };
+          provenance: [source(a!.evidence.id, a!.evidence.revision), source(b.evidence.id, b.evidence.revision)],
+          qualification: a!.qualification === 'measured' && b.qualification === 'measured' ? 'measured' : 'user_reported' } };
     });
   }
   async summary(raw: { timezone: string; at?: number }): Promise<Read<OutcomeSummary>> {

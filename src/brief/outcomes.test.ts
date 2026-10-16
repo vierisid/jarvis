@@ -174,6 +174,15 @@ test('goal deltas are actual signed observations, independent of work and parent
   expect(view.goalDeltas.find(g => g.goalId === parent.id)).toMatchObject({ change: { value: -2 }, attribution: 'observed_change_only', rollup: 'independent' });
   expect(view.goalDeltas.find(g => g.goalId === child.id)?.change?.value).toBe(1);
 });
+test('goal deltas keep the recorded qualification and refuse an unqualified observation', async () => {
+  const g = getGoalApplication().createGoal('Goal', 'objective'), start = query().start;
+  measurement(g.id, 5, start - 1, 0); measurement(g.id, 7, start + 1, 1);
+  expect((await summary()).goalDeltas[0]?.change).toMatchObject({ value: 2, qualification: 'user_reported' });
+  const row = getDb().query<{ receipt: string }, [string]>('SELECT receipt FROM goal_measurement_receipt WHERE goal_id=? AND request_id=\'m1\'').get(g.id)!;
+  const receipt = JSON.parse(row.receipt); receipt.measurement.qualification = 'estimated';
+  getDb().run('UPDATE goal_measurement_receipt SET receipt=? WHERE goal_id=? AND request_id=\'m1\'', [JSON.stringify(receipt), g.id]);
+  await expect(provider.summary({ timezone: 'UTC' })).rejects.toThrow('Goal evidence is incomplete');
+});
 test('missing opening measurements and changed definitions omit the delta, with incomplete coverage', async () => {
   const g = getGoalApplication().createGoal('Goal', 'objective'); measurement(g.id, 6, query().start + 1, 0);
   expect((await summary()).goalDeltas[0]).toMatchObject({ change: null, reason: 'missing_opening' });
