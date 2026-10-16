@@ -1,9 +1,9 @@
 import React from "react";
-import { flushSync } from "react-dom";
 import type { BriefShellPort } from "../../contracts";
 import "./header.css";
-let transition: ViewTransition | undefined;
-/** Same native elements and bounds in Canvas/Runs; Context can reuse this in D-20. */
+/** Same native elements and bounds in Canvas/Runs; Context can reuse this in D-20.
+ * Switching views is an immediate room navigation: a document-wide View Transition
+ * would need unscoped `::view-transition-*` rules that reach the released dashboard. */
 export function WorkflowViewHeader({
   shell,
   flowId,
@@ -24,19 +24,10 @@ export function WorkflowViewHeader({
   children?: React.ReactNode;
 }) {
   function navigate(room: "workflow" | "workflow-runs" | "workflow-context") {
-    const go = () =>
-      shell.navigate({
-        room,
-        selection: { ...shell.route.selection, flowId, versionId },
-      });
-    if (
-      document.startViewTransition &&
-      !window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    ) {
-      transition?.skipTransition();
-      transition = document.startViewTransition(() => flushSync(go));
-      void transition.finished.catch(() => {});
-    } else go();
+    shell.navigate({
+      room,
+      selection: { ...shell.route.selection, flowId, versionId },
+    });
   }
   const tabs = [
     { id: "canvas", label: "Canvas", room: "workflow" },

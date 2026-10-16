@@ -5,7 +5,7 @@
   overflow: hidden;
   scrollbar-gutter: auto;
 }
-.brief-workflow-runs {
+.brief-root .brief-workflow-runs {
   height: 100%;
   min-height: 440px;
   display: flex;
@@ -13,7 +13,7 @@
   min-width: 0;
   color: var(--brief-ink);
 }
-.brief-runs-feedback {
+.brief-root .brief-runs-feedback {
   min-height: 28px;
   padding: 4px 32px;
   font-size: 12px;
@@ -21,7 +21,7 @@
   color: var(--brief-secondary);
   flex: none;
 }
-.brief-runs-columns {
+.brief-root .brief-runs-columns {
   flex: 1;
   min-height: 0;
   display: grid;
@@ -29,39 +29,39 @@
   gap: 26px;
   padding: 4px 32px 84px;
 }
-.brief-runs-history {
+.brief-root .brief-runs-history {
   display: flex;
   flex-direction: column;
   min-height: 0;
   min-width: 0;
 }
-.brief-workflow-runs h2 {
+.brief-root .brief-workflow-runs h2 {
   font-size: 22px;
   line-height: 1.3;
   font-weight: 600;
   letter-spacing: -0.02em;
   margin: 0;
 }
-.brief-workflow-runs h3 {
+.brief-root .brief-workflow-runs h3 {
   font-size: 14px;
   line-height: 1.5;
   font-weight: 600;
   margin: 0 0 16px;
 }
-.brief-runs-history-heading {
+.brief-root .brief-runs-history-heading {
   display: flex;
   justify-content: space-between;
   align-items: center;
   min-height: 40px;
   gap: 8px;
 }
-.brief-runs-count {
+.brief-root .brief-runs-count {
   font: 12px/1.5 var(--brief-sans);
   margin: 8px 0 18px;
   color: var(--brief-secondary);
 }
-.brief-runs-row-head,
-.brief-runs-row {
+.brief-root .brief-runs-row-head,
+.brief-root .brief-runs-row {
   display: grid;
   grid-template-columns: minmax(58px, 0.55fr) minmax(92px, 1fr) minmax(
       90px,
@@ -70,19 +70,19 @@
   align-items: center;
   gap: 10px;
 }
-.brief-runs-row-head {
+.brief-root .brief-runs-row-head {
   padding: 0 12px 8px;
   font-size: 12px;
   color: var(--brief-secondary);
 }
-.brief-runs-list {
+.brief-root .brief-runs-list {
   overflow: auto;
   min-height: 0;
   scrollbar-gutter: stable;
   padding: 3px;
   margin: -3px;
 }
-.brief-runs-row {
+.brief-root .brief-runs-row {
   width: 100%;
   min-height: 48px;
   padding: 10px 12px;
@@ -95,28 +95,28 @@
   cursor: pointer;
   transition: background 160ms ease-out;
 }
-.brief-runs-row:hover {
+.brief-root .brief-runs-row:hover {
   background: var(--brief-soft);
 }
-.brief-runs-row[data-selected="true"] {
+.brief-root .brief-runs-row[data-selected="true"] {
   background: var(--brief-selected);
   border-color: var(--brief-card-edge);
 }
-.brief-runs-row:focus-visible {
+.brief-root .brief-runs-row:focus-visible {
   outline: 2px solid var(--brief-focus);
   outline-offset: 1px;
 }
-.brief-runs-row strong {
+.brief-root .brief-runs-row strong {
   font-size: 13px;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
-.brief-runs-row time {
+.brief-root .brief-runs-row time {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   color: var(--brief-secondary);
 }
-.brief-run-status {
+.brief-root .brief-run-status {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -124,30 +124,30 @@
   color: var(--brief-secondary);
   white-space: nowrap;
 }
-.brief-run-status i {
+.brief-root .brief-run-status i {
   width: 5px;
   height: 5px;
   flex: none;
   border-radius: 50%;
   background: currentColor;
 }
-.brief-run-status[data-tone="success"],
-.brief-run-step-mark[data-tone="success"] {
+.brief-root .brief-run-status[data-tone="success"],
+.brief-root .brief-run-step-mark[data-tone="success"] {
   color: var(--brief-success-text);
 }
-.brief-run-status[data-tone="attention"],
-.brief-run-step-mark[data-tone="attention"] {
+.brief-root .brief-run-status[data-tone="attention"],
+.brief-root .brief-run-step-mark[data-tone="attention"] {
   color: var(--brief-attention-text);
 }
-.brief-run-status[data-tone="error"],
-.brief-run-step-mark[data-tone="error"] {
+.brief-root .brief-run-status[data-tone="error"],
+.brief-root .brief-run-step-mark[data-tone="error"] {
   color: var(--brief-error-text);
 }
-.brief-run-status[data-tone="running"],
-.brief-run-step-mark[data-tone="running"] {
+.brief-root .brief-run-status[data-tone="running"],
+.brief-root .brief-run-step-mark[data-tone="running"] {
   color: var(--brief-running-text);
 }
-.brief-run-detail {
+.brief-root .brief-run-detail {
   padding: 24px;
   min-width: 0;
   overflow: auto;
@@ -156,10 +156,10 @@
   background: var(--brief-card);
   scrollbar-gutter: stable;
 }
-.brief-run-document {
+.brief-root .brief-run-document {
   animation: brief-run-content 160ms ease-out;
 }
-.brief-run-document-heading {
+.brief-root .brief-run-document-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -167,45 +167,45 @@
   margin-bottom: 20px;
   flex-wrap: wrap;
 }
-.brief-workflow-runs .brief-run-summary {
+.brief-root .brief-workflow-runs .brief-run-summary {
   font-size: 20px;
   line-height: 1.4;
   margin-bottom: 26px;
   overflow-wrap: anywhere;
 }
-.brief-run-metadata {
+.brief-root .brief-run-metadata {
   padding: 20px 0;
   border-top: 1px solid var(--brief-card-edge);
   margin-bottom: 28px;
 }
-.brief-run-detail dl {
+.brief-root .brief-run-detail dl {
   display: grid;
   grid-template-columns: 76px minmax(0, 1fr);
   column-gap: 12px;
   row-gap: 12px;
 }
-.brief-run-detail dt {
+.brief-root .brief-run-detail dt {
   color: var(--brief-secondary);
   font-size: 12px;
 }
-.brief-run-detail dd {
+.brief-root .brief-run-detail dd {
   margin: 0;
   font-size: 14px;
   overflow-wrap: anywhere;
 }
-.brief-run-steps {
+.brief-root .brief-run-steps {
   list-style: none;
   padding: 0;
   margin: 0;
 }
-.brief-run-steps li {
+.brief-root .brief-run-steps li {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr);
   gap: 12px;
   padding-bottom: 24px;
   position: relative;
 }
-.brief-run-steps li:not(:last-child)::before {
+.brief-root .brief-run-steps li:not(:last-child)::before {
   content: "";
   position: absolute;
   top: 20px;
@@ -214,40 +214,40 @@
   width: 1px;
   background: var(--brief-card-edge);
 }
-.brief-run-step-mark {
+.brief-root .brief-run-step-mark {
   margin-top: 4px;
 }
-.brief-run-step-title {
+.brief-root .brief-run-step-title {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
 }
-.brief-run-step-title strong {
+.brief-root .brief-run-step-title strong {
   font-size: 14px;
   overflow-wrap: anywhere;
 }
-.brief-run-steps p,
-.brief-run-receipt p {
+.brief-root .brief-run-steps p,
+.brief-root .brief-run-receipt p {
   font-size: 12px;
   line-height: 1.6;
   color: var(--brief-secondary);
   margin: 6px 0 0;
   overflow-wrap: anywhere;
 }
-.brief-run-detail details {
+.brief-root .brief-run-detail details {
   margin-top: 12px;
 }
-.brief-run-detail summary {
+.brief-root .brief-run-detail summary {
   cursor: pointer;
   font-size: 13px;
   padding: 6px 0;
 }
-.brief-run-detail summary:focus-visible {
+.brief-root .brief-run-detail summary:focus-visible {
   outline: 2px solid var(--brief-focus);
   outline-offset: 2px;
 }
-.brief-run-detail pre {
+.brief-root .brief-run-detail pre {
   font: 12px/1.6 var(--brief-mono);
   background: var(--brief-soft);
   padding: 12px;
@@ -256,39 +256,39 @@
   overflow-wrap: anywhere;
   margin: 0;
 }
-.brief-run-evidence {
+.brief-root .brief-run-evidence {
   border-top: 1px solid var(--brief-card-edge);
   padding-top: 20px;
   margin-top: 12px;
 }
-.brief-run-receipt {
+.brief-root .brief-run-receipt {
   padding: 0 0 18px;
 }
-.brief-run-receipt > div {
+.brief-root .brief-run-receipt > div {
   display: flex;
   justify-content: space-between;
   gap: 12px;
   font-size: 13px;
 }
-.brief-run-detail small {
+.brief-root .brief-run-detail small {
   display: block;
   margin-top: 4px;
   font: 12px/1.5 var(--brief-mono);
   color: var(--brief-secondary);
   overflow-wrap: anywhere;
 }
-.brief-runs-muted,
-.brief-runs-notice,
-.brief-runs-read-state {
+.brief-root .brief-runs-muted,
+.brief-root .brief-runs-notice,
+.brief-root .brief-runs-read-state {
   font-size: 14px;
   line-height: 1.6;
   color: var(--brief-secondary);
 }
-.brief-runs-notice {
+.brief-root .brief-runs-notice {
   color: var(--brief-attention-text);
   margin: 0 0 24px;
 }
-.brief-run-skeleton {
+.brief-root .brief-run-skeleton {
   display: block;
   height: 56px;
   width: 85%;
@@ -305,84 +305,84 @@
   }
 }
 @container brief-work (max-width:960px) {
-  .brief-runs-columns {
+  .brief-root .brief-runs-columns {
     grid-template-columns: minmax(155px, 0.75fr) minmax(0, 1.4fr);
     gap: 18px;
   }
-  .brief-runs-row-head {
+  .brief-root .brief-runs-row-head {
     display: none;
   }
-  .brief-runs-row {
+  .brief-root .brief-runs-row {
     grid-template-columns: 1fr auto;
     gap: 6px;
   }
-  .brief-runs-row time {
+  .brief-root .brief-runs-row time {
     grid-row: 2;
     grid-column: 1/-1;
   }
-  .brief-runs-row strong {
+  .brief-root .brief-runs-row strong {
     font-size: 13px;
   }
-  .brief-run-detail {
+  .brief-root .brief-run-detail {
     padding: 20px;
   }
 }
 @container brief-work (max-width:650px) {
-  .brief-runs-columns {
+  .brief-root .brief-runs-columns {
     padding: 4px 18px 84px;
     gap: 14px;
     grid-template-columns: minmax(120px, 0.62fr) minmax(0, 1.4fr);
   }
-  .brief-runs-feedback {
+  .brief-root .brief-runs-feedback {
     padding-inline: 18px;
   }
-  .brief-run-step-title {
+  .brief-root .brief-run-step-title {
     flex-wrap: wrap;
     gap: 4px;
   }
-  .brief-run-detail dl {
+  .brief-root .brief-run-detail dl {
     grid-template-columns: 1fr;
     gap: 6px;
   }
-  .brief-run-detail dd {
+  .brief-root .brief-run-detail dd {
     margin-bottom: 8px;
   }
-  .brief-runs-row {
+  .brief-root .brief-runs-row {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
     gap: 6px;
   }
-  .brief-run-detail {
+  .brief-root .brief-run-detail {
     padding: 16px;
   }
 }
 @container brief-work (max-width:450px) {
-  .brief-runs-columns {
+  .brief-root .brief-runs-columns {
     display: flex;
     flex-direction: column;
     overflow: auto;
   }
-  .brief-runs-history {
+  .brief-root .brief-runs-history {
     flex: none;
   }
-  .brief-runs-list {
+  .brief-root .brief-runs-list {
     max-height: 190px;
   }
-  .brief-runs-row {
+  .brief-root .brief-runs-row {
     display: grid;
     grid-template-columns: 1fr auto;
   }
-  .brief-run-detail {
+  .brief-root .brief-run-detail {
     flex: none;
     overflow: visible;
   }
-  .brief-workflow-runs .brief-run-summary {
+  .brief-root .brief-workflow-runs .brief-run-summary {
     font-size: 18px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .brief-workflow-runs * {
+  .brief-root .brief-workflow-runs * {
     animation: none !important;
     transition: none !important;
   }

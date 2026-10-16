@@ -52,32 +52,6 @@
 .brief-root .brief-canvas-heading > button {
   flex: none;
 }
-.brief-root .brief-canvas-tabs {
-  display: flex;
-  gap: 30px;
-  border-bottom: 1px solid var(--brief-card-edge);
-  margin-top: 12px;
-}
-.brief-root .brief-canvas-tabs :is(span, button) {
-  font: inherit;
-  font-size: 14px;
-  padding: 16px 0;
-  background: transparent;
-  border: 0;
-  color: var(--brief-secondary);
-}
-.brief-root .brief-canvas-tabs [aria-current] {
-  border-bottom: 2px solid var(--brief-ink);
-  color: var(--brief-ink);
-  font-weight: 600;
-}
-.brief-root .brief-canvas-tabs button:hover {
-  color: var(--brief-ink);
-}
-.brief-root .brief-canvas-tabs button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
 .brief-root .brief-canvas-tools {
   display: flex;
   flex-wrap: wrap;

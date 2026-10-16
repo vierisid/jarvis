@@ -28,6 +28,6 @@
     "Inspect step discloses only the safe presentation fields supplied by the provider; partial receipts and waitpoints are inline.",
     "Below 450px available work width the history and detail stack with local scrolling.",
     "D-20 Context remains an explicit preview handoff, not a second implemented room.",
-    "Shared header retains D-18 editable name and draft tools. Native view transitions move the underline; reduced motion switches immediately."
+    "Shared header retains D-18 editable name and draft tools. The underline is placed per view without a document-wide View Transition, which would need unscoped styles."
   ]
 }
