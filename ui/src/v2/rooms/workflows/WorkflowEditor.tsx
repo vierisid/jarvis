@@ -18,7 +18,10 @@ import React, { createContext, useCallback, useContext, useEffect, useLayoutEffe
 import { useSampleDraftText } from "./useSampleDraftText";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { WorkflowEditorEnvironment, WorkflowPortal, useWorkflowRequest } from "./WorkflowEditorEnvironment";
-const createPortal = (children: React.ReactNode, _target: Element) => <WorkflowPortal>{children}</WorkflowPortal>;
+import { BriefTabs } from "../../../brief/components/controls/Choices";
+// Floating surfaces mount in the editor's portal host: document.body for the
+// legacy editor, the Brief canvas layer in the workspace (WorkflowPortal).
+const portalToEditorHost = (children: React.ReactNode) => <WorkflowPortal>{children}</WorkflowPortal>;
 import {
   ReactFlow,
   Background,
@@ -1551,7 +1554,7 @@ function NodeSettingsPopover({
   );
   return (
     <VariablePickerContext.Provider value={pickerHandle}>
-      {inline ? panel : createPortal(panel, document.body)}
+      {inline ? panel : portalToEditorHost(panel)}
       {pickerActive ? (
         <VariablePickerPanel
           settingsPopoverRef={ref}
@@ -1635,7 +1638,7 @@ function VariablePickerPanel({
     return out;
   }, [rows]);
 
-  return createPortal(
+  return portalToEditorHost(
     <div
       ref={ref}
       className="wf-var-picker"
@@ -1707,8 +1710,7 @@ function VariablePickerPanel({
       <footer className="wf-var-picker__footer">
         Or type <code>{"{{stepName.field}}"}</code> directly.
       </footer>
-    </div>,
-    document.body,
+    </div>
   );
 }
 
@@ -2213,7 +2215,7 @@ function CanvasContextMenu({
     return () => window.removeEventListener("keydown", onKey);
   }, [items, activeIdx, onClose]);
 
-  return createPortal(
+  return portalToEditorHost(
     <div
       ref={ref}
       className="wf-canvas-menu"
@@ -2252,8 +2254,7 @@ function CanvasContextMenu({
           );
         })}
       </ul>
-    </div>,
-    document.body,
+    </div>
   );
 }
 
@@ -2560,7 +2561,7 @@ function PieceLibraryPopover({
     },
   });
 
-  return createPortal(
+  return portalToEditorHost(
     <div
       ref={ref}
       className="wf-library"
@@ -2651,8 +2652,7 @@ function PieceLibraryPopover({
           })}
         </ul>
       )}
-    </div>,
-    document.body,
+    </div>
   );
 }
 
@@ -3344,22 +3344,10 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
     [step.settings?.input],
   );
 
-  return (
-    <div className="wf-props">
-      <header className="wf-props__header">
-        {props.workspace && <NodeIdentityIcon step={step}/>}
-        <EditableStepName
-          name={step.displayName ?? step.name}
-          fallback={step.name}
-          onCommit={onSetDisplayName}
-        />
-        <p>
-          <code>{step.name}</code> · {isTrigger ? (isManual ? "Manual trigger" : "Piece trigger") : isLoop ? "Loop" : isRouter ? "Router" : "Action"}
-        </p>
-      </header>
-
-      {props.workspace && <div className="wf-inspector-tabs" role="tablist" aria-label="Node settings view">{["Configure", "Input", "Output"].map(name => <button type="button" key={name} role="tab" aria-selected={tab === name} onClick={() => setTab(name)}>{name}</button>)}</div>}
-      <div hidden={props.workspace && tab !== "Configure"}>
+  // Configure is the whole legacy panel. The Brief workspace adds Input/Output
+  // views beside it; the floating editor renders Configure alone, unchanged.
+  const configure = (
+    <>
       {/* The display name is edited by clicking the title above
           (same UX as the workflow title in the editor header).
           The separate "Display name" Field that used to live here is
@@ -3525,11 +3513,35 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         onSetSampleInput={props.onSetSampleInput}
         onTestFromHere={props.onTestFromHere}
       />
-      </div>
-      {props.workspace && <>
-        <div hidden={tab !== "Input"}><h3 className="wf-io-title">Configured input</h3><pre className="wf-io-value">{JSON.stringify(step.settings?.input ?? {}, null, 2)}</pre><SampleInputSection stepName={step.name} sampleInput={props.sampleInput} isLocked={props.isLocked} onSetSampleInput={props.onSetSampleInput} /></div>
-        <div hidden={tab !== "Output"}><SampleDataSection stepName={step.name} sampleData={props.sampleData} declaredSample={selectedSubAction?.sampleData ?? selectedSubAction?.outputSample} isLocked={props.isLocked} isTriggerStep={isTriggerStep} onSetSampleData={props.onSetSampleData} onTestFromHere={props.onTestFromHere} /></div>
-      </>}
+    </>
+  );
+
+  return (
+    <div className="wf-props">
+      <header className="wf-props__header">
+        {props.workspace && <NodeIdentityIcon step={step}/>}
+        <EditableStepName
+          name={step.displayName ?? step.name}
+          fallback={step.name}
+          onCommit={onSetDisplayName}
+        />
+        <p>
+          <code>{step.name}</code> · {isTrigger ? (isManual ? "Manual trigger" : "Piece trigger") : isLoop ? "Loop" : isRouter ? "Router" : "Action"}
+        </p>
+      </header>
+
+      {props.workspace ? (
+        <BriefTabs
+          label="Node settings view"
+          value={tab}
+          onValueChange={setTab}
+          items={[
+            { value: "Configure", label: "Configure", content: configure },
+            { value: "Input", label: "Input", content: <><h3 className="wf-io-title">Configured input</h3><pre className="wf-io-value">{JSON.stringify(step.settings?.input ?? {}, null, 2)}</pre><SampleInputSection stepName={step.name} sampleInput={props.sampleInput} isLocked={props.isLocked} onSetSampleInput={props.onSetSampleInput} /></> },
+            { value: "Output", label: "Output", content: <SampleDataSection stepName={step.name} sampleData={props.sampleData} declaredSample={selectedSubAction?.sampleData ?? selectedSubAction?.outputSample} isLocked={props.isLocked} isTriggerStep={isTriggerStep} onSetSampleData={props.onSetSampleData} onTestFromHere={props.onTestFromHere} /> },
+          ]}
+        />
+      ) : configure}
     </div>
   );
 }
@@ -4513,7 +4525,7 @@ function FlowRefField({
         <span className="wf-flow-ref__trigger-caret">▾</span>
       </button>
       {open
-        ? createPortal(
+        ? portalToEditorHost(
             <FlowRefPopover
               popoverRef={popoverRef}
               anchorEl={btnRef.current}
@@ -4535,8 +4547,7 @@ function FlowRefField({
                 onChange(undefined);
                 setOpen(false);
               }}
-            />,
-            document.body,
+            />
           )
         : null}
       {field.description ? <span className="wf-props__field-help">{field.description}</span> : null}
@@ -5836,7 +5847,7 @@ function RunStepDetailPopover({
           : "neutral";
   const errorText = snapshot ? stringifyErrorMessage(snapshot.errorMessage) : null;
 
-  return createPortal(
+  return portalToEditorHost(
     <div
       ref={ref}
       className="wf-run-detail"
@@ -5889,8 +5900,7 @@ function RunStepDetailPopover({
           ) : null}
         </div>
       )}
-    </div>,
-    document.body,
+    </div>
   );
 }
 
