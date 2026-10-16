@@ -189,3 +189,8 @@ test("a later write failure can preserve a known request when storage becomes wr
   expect(restored.getSnapshot()).toMatchObject({ draft: "New edit", request, job: { workflow: ready.workflow } });
   restored.dispose();
 });
+test("a receipt carrying ingredient selections never matches a prompt-only request",()=>{
+  const request={requestId:"r",prompt:"P"};expect(readJob(fixtureJob(request),request).requestId).toBe("r");
+  const withIngredients={...fixtureJob(request),specification:{name:"New workflow",prompt:"P",ingredients:[]}} as CompositionJob;
+  expect(()=>readJob(withIngredients,request)).toThrow("Invalid composition receipt");
+});

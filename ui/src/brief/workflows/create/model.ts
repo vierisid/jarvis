@@ -1,14 +1,10 @@
-/** Structural F-07 wire port. No import dependency on the unmerged feature track. */
-export const PROMPT_BYTES = 16_384;
-export interface CompositionRequest { requestId: string; prompt: string; name?: string }
-export interface CompositionJob {
-  jobId: string; requestId: string; specification: { name: string; prompt: string };
-  state: "queued" | "running" | "draft_ready" | "blocked" | "failed" | "cancelled";
-  progress: { checkedCandidates: number }; compositionId: string | null;
-  workflow: { flowId: string; versionId: string } | null;
-  blocker: { code: string; message: string; details: string[] } | null;
-  createdAt: number; updatedAt: number;
-}
+import { COMPOSITION_LIMITS, type BriefComposeRequest, type BriefCompositionJob } from "../../../../../src/brief/composition-contracts";
+
+/** F-07 wire port over `/api/brief/workflow-compositions`. Types come from F-07's contracts.
+ * Ingredient selection (F-08) belongs to D-17's picker; this room sends prompt-only requests. */
+export const PROMPT_BYTES = COMPOSITION_LIMITS.promptBytes;
+export type CompositionRequest = Omit<BriefComposeRequest, "ingredients">;
+export type CompositionJob = BriefCompositionJob;
 export interface CompositionPort {
   submit(request: CompositionRequest): Promise<CompositionJob>;
   recover(request: CompositionRequest): Promise<CompositionJob | null>;
@@ -30,7 +26,8 @@ export function readJob(value: unknown, request?: CompositionRequest): Compositi
     || (j.state === "draft_ready" && !j.workflow)
     || (j.state !== "draft_ready" && j.workflow !== null)
     || (j.blocker !== null && (!j.blocker || typeof j.blocker.message !== "string" || !Array.isArray(j.blocker.details) || !j.blocker.details.every(s => typeof s === "string")))
-    || (request && (j.requestId !== request.requestId || j.specification.prompt !== request.prompt || j.specification.name !== (request.name ?? "New workflow")))) throw Error("Invalid composition receipt");
+    // A prompt-only request never owns a receipt that carries ingredient selections.
+    || (request && (j.specification.ingredients !== undefined || j.requestId !== request.requestId || j.specification.prompt !== request.prompt || j.specification.name !== (request.name ?? "New workflow")))) throw Error("Invalid composition receipt");
   return j;
 }
 
