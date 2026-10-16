@@ -27,6 +27,8 @@ export interface ActivationIssue {
   kind: "detail" | "connection";
   label: string;
   message: string;
+  /** A user-selected reference that can be explicitly removed from this draft. */
+  reference?: ActivationContextRef;
 }
 export interface ActivationModel {
   journeyId: string;
@@ -79,6 +81,8 @@ function ActivationSession({ model, onDraftChange, onIntent, canResolveConnectio
   const valid = Boolean(model.draft.prompt.trim()) && model.draft.prompt.length <= MAX_PROMPT_LENGTH;
   const available = model.availability === "ready";
   const canSubmit = !busy && available && (recovery || valid);
+  const issues = model.issues?.filter(issue => !issue.reference || model.draft.contextRefs.some(ref =>
+    ref.kind === issue.reference!.kind && ref.id === issue.reference!.id)) ?? [];
 
   useLayoutEffect(() => { live.current.mounted = true; input.current?.focus({ preventScroll: true });
     return () => { live.current.mounted = false; }; }, []);
@@ -175,9 +179,22 @@ function ActivationSession({ model, onDraftChange, onIntent, canResolveConnectio
             }} />
         </div>
         {model.draft.prompt.length > MAX_PROMPT_LENGTH && <p className="on-activation__error" role="alert">Keep your request under {MAX_PROMPT_LENGTH.toLocaleString("en-US")} characters. Your text hasn’t been shortened.</p>}
-        {Boolean(model.issues?.length) && <div className="on-activation__issues" aria-label="Details to continue">
-          {model.issues!.map((issue, i) => <div className="on-activation__issue" key={issue.id}>
-            {issue.kind === "detail" ? <>
+        {Boolean(issues.length) && <div className="on-activation__issues" aria-label="Details to continue">
+          {issues.map((issue, i) => <div className="on-activation__issue" key={issue.id}>
+            {issue.reference ? <>
+              <p className="on-activation__issue-label">{issue.label}</p><p>{issue.message}</p>
+              <p>{issue.reference.kind}: {issue.reference.id}</p>
+              <button type="button" className="on-activation__connection" aria-disabled={!editable}
+                aria-label={`Remove selection ${issue.reference.kind}: ${issue.reference.id}`}
+                onClick={() => {
+                  if (!editable || lock.current === model.revision) return;
+                  edit({ ...model.draft, contextRefs: model.draft.contextRefs.filter(ref =>
+                    ref.kind !== issue.reference!.kind || ref.id !== issue.reference!.id) });
+                  input.current?.focus();
+                }}>Remove selection</button>
+              {issue.kind === "connection" && canResolveConnection && <button type="button" className="on-activation__connection" aria-disabled={!editable}
+                onClick={() => { if (editable) dispatch({ journeyId: model.journeyId, revision: model.revision, from: "activation", action: "resolve_connection", issueId: issue.id, draft: model.draft }); }}>Choose connection</button>}
+            </> : issue.kind === "detail" ? <>
               <label htmlFor={`${id}-detail-${i}`} className="on-activation__issue-label">{issue.label}</label>
               <p id={`${id}-detail-help-${i}`}>{issue.message}</p>
               <input id={`${id}-detail-${i}`} type="text" value={model.draft.answers[issue.id] ?? ""} readOnly={!editable}

@@ -35,5 +35,6 @@ export function ensureChatTurnSchema(db: Database): void {
     )`);
     db.run('CREATE INDEX IF NOT EXISTS idx_brief_chat_turns_conversation ON brief_chat_turns(conversation_id, created_at, turn_id)');
     db.run('CREATE INDEX IF NOT EXISTS idx_brief_chat_turns_pending ON brief_chat_turns(workspace_id, state)');
+    db.run('CREATE INDEX IF NOT EXISTS idx_brief_chat_events_turn ON brief_chat_events(turn_id, sequence)');
   })();
 }

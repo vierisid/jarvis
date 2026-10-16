@@ -8,11 +8,18 @@ export type ChatTurn = BriefTurnRef & { state: BriefTurnState; createdAt: number
 /** References only. F-05 owns file bytes, upload validation and submission binding. */
 export interface ChatAttachment { attachmentId: string; name: string; size: number; mediaType: string; kind?: 'document' | 'image' | 'screenshot'; state?: 'uploading' | 'ready' | 'failed' | 'removing'; error?: string }
 export interface ChatScroll { top: number; atBottom: boolean }
+export type ChatActivity = BriefActivity & BriefTurnRef & {
+  sequence: number;
+  /** Stable placement; completion must not move a row to the end. */
+  firstSequence: number;
+  /** Entry animation is allowed only for a newly observed live start, never replay. */
+  live: boolean;
+};
 export interface ConversationState {
   conversation: BriefConversation;
   messages: ConversationMessage[];
   turns: Record<string, ChatTurn>;
-  activity: Record<string, BriefActivity & BriefTurnRef & { sequence: number }>;
+  activity: Record<string, ChatActivity>;
   approvals: Record<string, BriefTurnRef & { status: string; sequence: number }>;
   draft: string;
   attachments: ChatAttachment[];
@@ -239,7 +246,7 @@ export class ConversationStore {
       replay.sequence = snapshot.nextSequence;
       for (const [key, event] of replay.events) if (event.sequence <= snapshot.nextSequence) replay.events.delete(key);
     }
-    const metadata = this.metadata(chat, snapshot.events);
+    const metadata = this.metadata(chat, snapshot.events, false);
     const { messageSequences: _watermarks, historyIds: _history, ...projected } = project(replay, Date.now());
     this.update(id, { ...metadata, ...projected, sequence: Math.max(chat.sequence, snapshot.sequence),
       // A reconnect must not rewind the older-history cursor already consumed by the reader.
@@ -250,12 +257,20 @@ export class ConversationStore {
       ...snapshot.events.flatMap(event => event.payload.kind === 'message' ? event.payload.message.attachments ?? [] : []),
     ].map(ref => ref.attachmentId));
   }
-  private metadata(chat: ConversationState, events: BriefChatEvent[]) {
-    const activity = { ...chat.activity }, approvals = { ...chat.approvals }, unread = new Set(chat.unread);
+  private metadata(chat: ConversationState, events: BriefChatEvent[], live = true) {
+    const activity = Object.fromEntries(Object.entries(chat.activity).map(([id, value]) => [id, live ? value : { ...value, live: false }]));
+    const approvals = { ...chat.approvals }, unread = new Set(chat.unread);
     for (const event of events) {
       const { payload, sequence, conversationId, turnId, requestId } = event;
       const ref = { conversationId, turnId, requestId, sequence };
-      if (payload.kind === 'activity' && sequence > (activity[payload.activity.activityId]?.sequence ?? -1)) activity[payload.activity.activityId] = { ...payload.activity, ...ref };
+      if (payload.kind === 'activity') {
+        const prior = activity[payload.activity.activityId];
+        const firstSequence = Math.min(prior?.firstSequence ?? sequence, sequence);
+        if (prior && (sequence <= prior.sequence || prior.phase !== 'started')) {
+          activity[payload.activity.activityId] = { ...prior, firstSequence };
+        } else activity[payload.activity.activityId] = { ...payload.activity, ...ref, firstSequence,
+          live: live && !prior && payload.activity.phase === 'started' };
+      }
       if (payload.kind === 'approval' && sequence > (approvals[payload.approvalId]?.sequence ?? -1)) approvals[payload.approvalId] = { ...ref, status: payload.status };
       if (payload.kind === 'delta' && sequence > chat.readSequence) unread.add(payload.messageId);
     }
@@ -276,6 +291,11 @@ export class ConversationStore {
     this.update(id, { ...projected, history: { state: 'ready', cursor: page.nextCursor } }, false);
     this.acceptAttachments(id, page.items.flatMap(message => message.attachments ?? []).map(ref => ref.attachmentId));
   }
+}
+
+/** D-15 consumes this order and the live hint without inventing replay animations. */
+export function orderedActivities(chat: ConversationState): ChatActivity[] {
+  return Object.values(chat.activity).sort((a, b) => a.firstSequence - b.firstSequence || a.activityId.localeCompare(b.activityId));
 }
 
 function project(replay: Replay, timestamp: number): Projection {

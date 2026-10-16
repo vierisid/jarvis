@@ -51,6 +51,7 @@ import {
   secretListRefusal, secretRead, secretReadRefusal, secretRefusalTextFor, secretScanRefusal, siteGitRefusal,
 } from './file-path-policy.ts';
 import { forCard, commandForCard, escapedLiteralForCard } from '../../util/card-text.ts';
+import { failedToolResult } from '../progress-context.ts';
 // Re-export for convenience
 export { setNoLocalTools, isNoLocalTools, setDefaultCwd } from './local-tools-guard.ts';
 
@@ -220,17 +221,17 @@ function readJudgedFile(filePath: string, requested: unknown, scanOnly: boolean)
     fd = openSync(filePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOCTTY);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') return `Error: File not found: ${filePath}`;
-    if (code === 'EACCES') return `Error: Permission denied: ${filePath}`;
-    return `Error: Cannot read ${filePath}: ${code ?? 'open failed'}`;
+    if (code === 'ENOENT') return failedToolResult(`Error: File not found: ${filePath}`);
+    if (code === 'EACCES') return failedToolResult(`Error: Permission denied: ${filePath}`);
+    return failedToolResult(`Error: Cannot read ${filePath}: ${code ?? 'open failed'}`);
   }
   try {
     const st = fstatSync(fd);
-    if (!st.isFile()) return `Error: Not a regular file: ${filePath}`;
+    if (!st.isFile()) return failedToolResult(`Error: Not a regular file: ${filePath}`);
     // Identity, which no spelling and no race can change. An inode of 0 is not
     // an identity: some network and Windows volumes report it for every file,
     // and a cached `dev:0` would then refuse everything on that volume.
-    if (st.ino && isSecretInode(st.dev, st.ino)) return secretInodeRefusal(requested);
+    if (st.ino && isSecretInode(st.dev, st.ino)) return failedToolResult(secretInodeRefusal(requested));
     // Where the descriptor really landed, which can differ from the path if it
     // was retargeted after the pre-checks. A definite verdict refuses; a
     // scan-only one is carried into the scan below, or a shell rc swapped in
@@ -242,7 +243,7 @@ function readJudgedFile(filePath: string, requested: unknown, scanOnly: boolean)
       // Refuse naming the path the CALLER asked for: `landed` is the resolved
       // path, and putting that in a model-facing message would disclose where a
       // symlink really goes.
-      if (hit && !hit.scanOnly) return secretRefusalTextFor(requested, hit);
+      if (hit && !hit.scanOnly) return failedToolResult(secretRefusalTextFor(requested, hit));
       if (hit?.scanOnly) scan = true;
     }
 
@@ -260,7 +261,7 @@ function readJudgedFile(filePath: string, requested: unknown, scanOnly: boolean)
     // what is RETURNED is enough: anything past the limit is not returned.
     if (scan) {
       const name = scanForDaemonSecrets(content);
-      if (name) return secretScanRefusal(requested, name);
+      if (name) return failedToolResult(secretScanRefusal(requested, name));
     }
     if (!truncated) return content;
     // A procfs stream reports size 0 while still having bytes, so there is no
@@ -391,7 +392,7 @@ export const runCommandTool: ToolDefinition = {
       }, 'terminal');
     }
 
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
 
     const command = params.command as string;
     const explicitCwd = params.cwd as string | undefined;
@@ -399,6 +400,7 @@ export const runCommandTool: ToolDefinition = {
     const timeout = (params.timeout as number) || undefined;
 
     const result = await terminal.execute(command, { cwd, timeout });
+    if (result.exitCode !== 0) failedToolResult(undefined);
 
     let output = '';
     if (result.stdout) output += result.stdout;
@@ -433,34 +435,34 @@ export const readFileTool: ToolDefinition = {
   freezeArguments: freezePath,
   execute: async (params) => {
     const refused = siteGitRefusalFor(params);
-    if (refused) return refused;
+    if (refused) return failedToolResult(refused);
     // Classified once, before routing: a sidecar on this machine opens these
     // same files, and a routed path is judged by spelling.
     const verdict = secretVerdict(params);
-    if (verdict.refusal) return verdict.refusal;
+    if (verdict.refusal) return failedToolResult(verdict.refusal);
     const target = (params.target as string | undefined) || autoTargetForCapability('filesystem');
     if (target) {
       return routeToSidecar(target, 'read_file', { path: params.path }, 'filesystem');
     }
 
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
 
     const rawPath = params.path as string;
     const baseCwd = getDefaultCwd() || policyHome();
     const filePath = resolve(baseCwd, rawPath);
 
     if (!existsSync(filePath)) {
-      return `Error: File not found: ${filePath}`;
+      return failedToolResult(`Error: File not found: ${filePath}`);
     }
 
     const stat = statSync(filePath);
     if (stat.isDirectory()) {
-      return `Error: Path is a directory, not a file: ${filePath}`;
+      return failedToolResult(`Error: Path is a directory, not a file: ${filePath}`);
     }
     // A FIFO blocks readFileSync, and the whole daemon with it, until a
     // writer shows up; a device like /dev/zero reports size 0 and never ends.
     if (!stat.isFile()) {
-      return `Error: Not a regular file: ${filePath}`;
+      return failedToolResult(`Error: Not a regular file: ${filePath}`);
     }
 
     // A file that may hold the daemon's environment is returned only if its
@@ -547,13 +549,13 @@ export const writeFileTool: ToolDefinition = {
   freezeArguments: freezePath,
   execute: async (params) => {
     const refused = siteGitRefusalFor(params);
-    if (refused) return refused;
+    if (refused) return failedToolResult(refused);
     const target = (params.target as string | undefined) || autoTargetForCapability('filesystem');
     if (target) {
       return routeToSidecar(target, 'write_file', { path: params.path, content: params.content }, 'filesystem');
     }
 
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
 
     const rawPath = params.path as string;
     const baseCwd = getDefaultCwd() || policyHome();
@@ -565,7 +567,7 @@ export const writeFileTool: ToolDefinition = {
     } catch { /* new file */ }
     // Opening a FIFO for writing blocks until a reader appears, and the
     // daemon with it; a device is not a file either.
-    if (existing && !existing.isFile()) return `Error: Not a regular file: ${filePath}`;
+    if (existing && !existing.isFile()) return failedToolResult(`Error: Not a regular file: ${filePath}`);
 
     // A file with other hard links is replaced, not written in place, as the
     // site tools do (#516): bun's hardlink backend links node_modules to its
@@ -612,27 +614,27 @@ export const listDirectoryTool: ToolDefinition = {
   freezeArguments: freezePath,
   execute: async (params) => {
     const refused = siteGitRefusalFor(params);
-    if (refused) return refused;
+    if (refused) return failedToolResult(refused);
     const secret = secretListRefusal(params.path, { bases: relativeBases() });
-    if (secret) return secret;
+    if (secret) return failedToolResult(secret);
     const target = (params.target as string | undefined) || autoTargetForCapability('filesystem');
     if (target) {
       return routeToSidecar(target, 'list_directory', { path: params.path }, 'filesystem');
     }
 
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
 
     const rawPath = params.path as string;
     const baseCwd = getDefaultCwd() || policyHome();
     const dirPath = resolve(baseCwd, rawPath);
 
     if (!existsSync(dirPath)) {
-      return `Error: Directory not found: ${dirPath}`;
+      return failedToolResult(`Error: Directory not found: ${dirPath}`);
     }
 
     const stat = statSync(dirPath);
     if (!stat.isDirectory()) {
-      return `Error: Path is a file, not a directory: ${dirPath}`;
+      return failedToolResult(`Error: Path is a file, not a directory: ${dirPath}`);
     }
 
     const entries = readdirSync(dirPath);
@@ -801,7 +803,7 @@ export const getClipboardTool: ToolDefinition = {
     const target = params.target as string | undefined;
     const auto = target || autoTargetForCapability('clipboard');
     if (auto) return routeToSidecar(auto, 'get_clipboard', {}, 'clipboard');
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
     try {
       const content = await localClipboardRead();
       return content || '[clipboard is empty]';
@@ -831,7 +833,7 @@ export const setClipboardTool: ToolDefinition = {
     const target = params.target as string | undefined;
     const auto = target || autoTargetForCapability('clipboard');
     if (auto) return routeToSidecar(auto, 'set_clipboard', { content: params.content }, 'clipboard');
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
     try {
       await localClipboardWrite(params.content as string);
       return 'Clipboard updated.';
@@ -858,7 +860,7 @@ export const captureScreenTool: ToolDefinition = {
     // An image block, like desktop_screenshot's (#658); stringifying the
     // reply handed the model truncated base64 instead of a picture.
     if (auto) return routeScreenshotToSidecar(auto, {}, false);
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
     try {
       // The same shape as the sidecar branch above; a stringified descriptor
       // reached the model as a truncated prefix of base64, like #658's.
@@ -890,7 +892,7 @@ export const getSystemInfoTool: ToolDefinition = {
     const target = params.target as string | undefined;
     const auto = target || autoTargetForCapability('system_info');
     if (auto) return routeToSidecar(auto, 'get_system_info', {}, 'system_info');
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
     return JSON.stringify(localSystemInfo(), null, 2);
   },
 };
