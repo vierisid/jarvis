@@ -9,12 +9,17 @@ export async function deliverOpportunityNotification(
   sockets: Pick<WebSocketServer, 'broadcastWithReceipt'>,
   channels: Pick<ChannelService, 'tryBroadcastToChannels'> & { getManager(): { listChannels(): string[] } },
   desktop = sendDesktopNotificationWithReceipt,
+  options: { quiet?: boolean } = {},
 ): Promise<string | null> {
   const { id, title, body, type } = suggestion;
   const timestamp = Date.now();
   const event = { type: 'suggestion_ready', data: { id, opportunityId: id, title, body, type }, timestamp };
   const cards = sockets.broadcastWithReceipt({ type: 'notification',
     payload: { source: 'awareness_event', event }, timestamp });
+  // No accepting inbox/card socket means pending, not permission to interrupt.
+  // The durable outbox owns retry/restart recovery and retains this identity.
+  if (options.quiet) return cards > 0 ? 'websocket' : null;
+
   const chat = sockets.broadcastWithReceipt({ type: 'chat',
     payload: { source: 'proactive', opportunityId: id, text: `**${title}**\n${body}` },
     priority: 'urgent', timestamp });
