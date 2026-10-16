@@ -1,8 +1,0 @@
-Normal commit hooks (Bun 1.3.14), exit 0.
-No EE imports: passed
-Expand/contract migrations: passed
-Webapp template lint: passed
-Package file guard: passed
-Related tests: 100 pass, 0 fail, 488 assertions, 6 files
-TypeScript noEmit: passed
-No hook bypass or co-author trailer.
