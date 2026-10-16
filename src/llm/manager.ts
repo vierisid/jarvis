@@ -21,6 +21,18 @@ import {
 } from './tiers.ts';
 import { recordUsage } from './usage.ts';
 
+/**
+ * F18: record the packed memory this request carries at the moment the adapter
+ * is called. Background admission runs first, so a throttled request that
+ * never reached a provider is not recorded as supplied.
+ */
+function withMemoryHandoff(provider: LLMProvider): LLMProvider {
+  const wrapped: LLMProvider = Object.create(provider);
+  wrapped.chat = (messages, options) => { recordMemoryHandoff(messages); return provider.chat(messages, options); };
+  wrapped.stream = (messages, options) => { recordMemoryHandoff(messages); return provider.stream(messages, options); };
+  return wrapped;
+}
+
 export class LLMManager {
   private providers: Map<string, LLMProvider> = new Map();
   private primaryProvider = '';
@@ -514,7 +526,7 @@ export class LLMManager {
       options?.signal?.throwIfAborted();
       try {
         const result = await this.withTimeout(
-          (signal) => { recordMemoryHandoff(messages); return backgroundChat(provider, messages, { ...options, signal }); },
+          (signal) => backgroundChat(withMemoryHandoff(provider), messages, { ...options, signal }),
           provider.name,
           options?.signal,
           options?.checkDeadline,
@@ -565,8 +577,7 @@ export class LLMManager {
       try {
         let hasError = false;
         options?.signal?.throwIfAborted();
-        recordMemoryHandoff(messages);
-        for await (const event of backgroundStream(provider, messages, options)) {
+        for await (const event of backgroundStream(withMemoryHandoff(provider), messages, options)) {
           if (event.type === 'error') {
             hasError = true;
             errors.push(`attempt ${attempt}: ${event.error}`);
@@ -657,7 +668,7 @@ export class LLMManager {
         options?.signal?.throwIfAborted();
         try {
           const result = await this.withTimeout(
-            (signal) => { recordMemoryHandoff(messages); return backgroundChat(provider, messages, { ...options, signal }); },
+            (signal) => backgroundChat(withMemoryHandoff(provider), messages, { ...options, signal }),
             providerName,
             options?.signal,
             options?.checkDeadline,
@@ -733,8 +744,7 @@ export class LLMManager {
         try {
           let hasError = false;
           options?.signal?.throwIfAborted();
-          recordMemoryHandoff(messages);
-          for await (const event of backgroundStream(provider, messages, options)) {
+          for await (const event of backgroundStream(withMemoryHandoff(provider), messages, options)) {
             if (event.type === 'error') {
               hasError = true;
               errors.push(`attempt ${attempt}: ${event.error}`);
