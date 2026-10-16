@@ -1,7 +1,7 @@
 # Workflow context and run inspection (F-21)
 
-F-21 supplies the authenticated backend contract for the staged D-19/D-20
-consumers. It does not register those rooms in production, enable Brief, or
+F-21 supplies the authenticated backend contract for the D-19 Runs and D-20
+Context views. It does not register those rooms in production, enable Brief, or
 certify a deployment. It reads the existing workflow, run, effect, wait, work-item
 and memory-use repositories. No recovery action or goal-progress write is added.
 
@@ -32,8 +32,15 @@ effect receipts and waits. Inspection unwraps the real worker's
 `{output: StepOutput}` storage envelope before projecting inputs, outputs, status
 and nested iterations; existing unwrapped records remain supported.
 Unknown/dispatching effects make the run summary
-`uncertain`, even if the run row says succeeded. This is a read projection, not
-effect reconciliation or a permission to replay.
+`uncertain`, even if the run row says succeeded, and so does a stop acknowledged
+while a call was in flight (the same rule D-19's history reader applies). A run
+that ended badly carries Q-19's typed `failure` (category, effect, headline,
+outcome, next steps, code; the raw detail is withheld) and its `summary` is that
+headline and outcome. A run stopped by its lifecycle names the reason first, so
+one stopped because its workflow was turned off or removed reads "Workflow
+turned off." A terminal run also carries Q-07's read-only `recovery` state
+(`unknown`, `blocked` or `recoverable`, never a replay). This is a read
+projection, not effect reconciliation or a permission to replay.
 
 Only LOCKED graphs are projected as immutable. New runs record whether their
 version was locked at acceptance via a small additive SQLite trigger. This
@@ -134,19 +141,17 @@ authentication, capability and readiness gates apply; lookup does not enqueue wo
 
 ## Integration and rollback
 
-This is stacked on `brief/f-20`. Main's newer project isolation was reviewed; the
-touched `/run` route now checks its server-owned project both before and after
-body reading, and creates legacy runs in that project. During integration, retain
-main's broader `resolveProjectId` protections for every other workflow route.
-Do not replace main's route file with the older stack wholesale.
+The Brief mode of `/run` sits behind the same checks as every other start: the
+flow is resolved in the caller's project before and after the body is read
+(#729), and Pause or Kill refuses it (Q-08). The provider's project must equal
+the caller's, or the flow reads as not found.
 
-Q-07 owns reconciliation/recovery writes. F-21 reads existing effect statuses,
-keeps unknown outcomes uncertain and adds no recovery state machine. Merge the
-small shared schema/bootstrap/route seams, retaining both cards' tests and newer
-main approval restrictions. No Q branch is imported here.
+Q-07 owns reconciliation/recovery writes and Q-19 the failure wording. F-21 reads
+both projections and adds no recovery state machine of its own.
 
-The actual pinned D-19/D-20 validators are exercised by
-`bun run scripts/probe-brief-workflow-context.ts`. The host maps selection.context
+`src/brief/workflow-context-consumers.test.ts` runs this projection through the
+D-19 Runs and D-20 Context validators as they are in `ui/`, and type-checks it
+against their models. The host maps selection.context
 to the context port and the run routes to the run port. Authenticated production
 host binding, shared durable UI command ownership, source navigation, and release
 verification still need integration before activation. The graph is an inspection
@@ -159,14 +164,13 @@ silently interprets a Brief request as a legacy unkeyed run. Existing accepted
 runs continue through the normal worker. No live activation or deployment was
 performed, and F-22 is outside this change.
 
-Quick verification (Bun 1.3.14):
+Quick verification:
 
 ```sh
-bun test --timeout 15000 src/brief/workflow-context.test.ts src/daemon/api-brief-workflow-context.test.ts src/workflows/adapters/untrusted-reach.test.ts
-bun run scripts/probe-brief-workflow-context.ts
-bun x tsc --noEmit
+bun test --timeout 15000 src/brief/workflow-context.test.ts src/brief/workflow-context-consumers.test.ts src/daemon/api-brief-workflow-context.test.ts src/workflows/adapters/untrusted-reach.test.ts
+bunx tsc --noEmit
 ```
 
 The tests use isolated fixture SQLite databases, an isolated Unix socket, and a
 fake executor. They do not send emails, make payments, call paid models, or alter
-goal progress. Delivery evidence is in `docs/brief-delivery/F-21.json`.
+goal progress.
