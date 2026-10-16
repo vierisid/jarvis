@@ -31,8 +31,7 @@
 .brief-root .brief-ingredient-row[aria-disabled="true"] strong { color:var(--brief-secondary); }
 .brief-root .brief-ingredient-empty { margin:0; padding:22px 10px; font:400 14px/22px var(--brief-sans); color:var(--brief-secondary); }
 .brief-root .brief-ingredient-footer { display:flex; justify-content:space-between; align-items:center; gap:8px; padding-top:12px; font:400 12px/18px var(--brief-sans); color:var(--brief-secondary); }
-.brief-root .brief-ingredient-footer button, .brief-root .brief-ingredient-empty button { min-height:32px; padding:5px 10px; border:1px solid var(--brief-card-edge); border-radius:9px 0 9px 9px; background:var(--brief-card); color:var(--brief-ink); font:500 13px/20px var(--brief-sans); cursor:pointer; }
-.brief-root .brief-ingredient-empty button { display:block; margin-top:12px; }
+.brief-root .brief-ingredient-empty .brief-button { display:flex; margin-top:12px; }
 .brief-root .brief-ingredient-chips { display:flex; flex-wrap:wrap; gap:6px; padding:2px; }
 .brief-root .brief-ingredient-chip { max-width:100%; min-width:0; display:flex; align-items:center; gap:6px; padding-left:8px; border:1px solid var(--brief-card-edge); border-radius:9px 0 9px 9px; color:var(--brief-ink); background:var(--brief-soft); font:400 13px/18px var(--brief-sans); }
 .brief-root .brief-ingredient-chip[data-kind="library-action"] { color:var(--brief-running-text); background:var(--brief-running-surface); }

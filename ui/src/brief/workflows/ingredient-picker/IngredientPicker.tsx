@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useRef, useState } from "react";
 import { Check, GitBranch, Link2, Plus, Search, X } from "lucide-react";
 import { FloatingSurface } from "../../components/controls/Floating";
+import { BriefButton } from "../../components/controls/Buttons";
 import { useBriefReducedMotion } from "../../motion";
 import { ingredientKey, sameIngredients, type IngredientCatalog, type SelectedIngredient } from "./model";
 import "./picker.css";
@@ -107,7 +108,7 @@ export function IngredientPicker({ catalog, selected, onChange, enabled, reduced
         </label>
         <div id={`${id}-results`} role="tabpanel" aria-labelledby={`${id}-tab-${tab==="connection"?0:1}`} className="brief-ingredient-results">
           {!ready ? <div className="brief-ingredient-empty" role="status">{catalog.state==="loading"?"Loading ingredients…":"Ingredients are unavailable. Your selection is kept."}
-            {catalog.refresh && catalog.state!=="loading" && <button type="button" onClick={catalog.refresh}>Try again</button>}</div>
+            {catalog.refresh && catalog.state!=="loading" && <BriefButton variant="text" size="sm" onClick={catalog.refresh}>Try again</BriefButton>}</div>
             : !rows.length ? <p className="brief-ingredient-empty">{query || (tab==="library-action" && activeGroup) ? "No matching ingredients. Try another search or service." : tab==="connection" ? "No available connections. Connect an account in Connected workspace." : "No library nodes are available."}</p>
             : rows.map(row => {
               const selectedIndex = selected.findIndex(s => ingredientKey(s.selection) === row.key);
@@ -127,7 +128,7 @@ export function IngredientPicker({ catalog, selected, onChange, enabled, reduced
             })}
         </div>
         <div className="brief-ingredient-footer"><span>{selected.length} {selected.length===1?"ingredient":"ingredients"} selected{selected.length===64?" · limit reached":""}</span>
-          <button type="button" onClick={()=>close(true)}>Done</button></div>
+          <BriefButton variant="text" size="sm" onClick={()=>close(true)}>Done</BriefButton></div>
         <span className="brief-sr-only" role="status">{feedback}</span>
       </div>
     </FloatingSurface>}

@@ -5,11 +5,18 @@ import { tmpdir } from "node:os";
 import { WorkflowCreationController } from "../create/controller";
 import { createCompositionPort } from "../create/client";
 import { readIngredientCatalog } from "./read";
-const ownerRoot = process.env.JARVIS_F08_ROOT;
-test.skipIf(!ownerRoot)("actual F08 discovery and pinned request recover one populated draft, no credentials or execution",async()=>{
- const load=(path:string)=>import(`${ownerRoot}/${path}`);
- const [{BriefCompositionProvider},{BriefCapabilities},{createCompositionRoutes},db,{configureWorkflowReadiness},{PieceCatalog},{getFlow},{getFlowVersion}]=await Promise.all([
-  load("src/brief/composition.ts"),load("src/brief/capabilities.ts"),load("src/brief/composition-routes.ts"),load("src/workflows/db/index.ts"),load("src/workflows/db/repos/flow-readiness.ts"),load("src/workflows/runtime/piece-catalog.ts"),load("src/workflows/db/repos/flow.ts"),load("src/workflows/db/repos/flow-version.ts")]);
+import { BriefCompositionProvider } from "../../../../../src/brief/composition";
+import { BriefCapabilities } from "../../../../../src/brief/capabilities";
+import { createCompositionRoutes } from "../../../../../src/brief/composition-routes";
+import * as db from "../../../../../src/workflows/db/index";
+import { configureWorkflowReadiness } from "../../../../../src/workflows/db/repos/flow-readiness";
+import { PieceCatalog } from "../../../../../src/workflows/runtime/piece-catalog";
+import { getFlow } from "../../../../../src/workflows/db/repos/flow";
+import { getFlowVersion } from "../../../../../src/workflows/db/repos/flow-version";
+
+// Drives F-08's real discovery, provider, routes and SQLite through this picker's reader, port and
+// controller. Fake model only; a credential canary proves no secret reaches the UI or the model.
+test("actual F08 discovery and pinned request recover one populated draft, no credentials or execution",async()=>{
  const directory=mkdtempSync(join(tmpdir(),"jarvis-d17-f08-"));db.initWorkflowDb(join(directory,"fixture.db"));
  const pieceName="@fixture/piece-account",secret="D17_CREDENTIAL_CANARY";
  const catalog=new PieceCatalog([{name:pieceName,version:"1.2.3",displayName:"  Account",description:"Fixture",auth:{type:"SECRET_TEXT"},actions:{send:{name:"send",displayName:"Send \n",description:"Send a message",requireAuth:true,inputSchema:{fields:[{name:"text",label:"Text",type:"string",required:true}]}}}}]);
@@ -24,8 +31,9 @@ test.skipIf(!ownerRoot)("actual F08 discovery and pinned request recover one pop
   const request=async(input:string,init?:RequestInit)=>{
    if(input==="/api/workflows/pieces/library")return Response.json({managed:true,entries:[]});
    const req=new Request(new URL(input,"http://fixture.local"),init),path=new URL(req.url).pathname;
-   if(routes[path]){const response=await routes[path][req.method as "GET"|"POST"](req);if(req.method==="POST"){posts++;if(lose){lose=false;throw Error("lost");}}return response;}
-   Object.assign(req,{params:{id:decodeURIComponent(path.split("/").at(-1)!)}});return routes["/api/brief/workflow-compositions/:id"].GET(req);
+   if(path==="/api/brief/composition-ingredients")return routes[path].GET(req);
+   if(path==="/api/brief/workflow-compositions"){const response=await routes[path][req.method as "GET"|"POST"](req);if(req.method==="POST"){posts++;if(lose){lose=false;throw Error("lost");}}return response;}
+   return routes["/api/brief/workflow-compositions/:id"].GET(Object.assign(req,{params:{id:decodeURIComponent(path.split("/").at(-1)!)}}));
   };
   const choices=await readIngredientCatalog(()=>caps.snapshot(),new AbortController().signal,request);expect(choices).toHaveLength(2);expect(choices.find(c=>c.tab==="library-action")!.displayName).toBe("Account: Send");expect(JSON.stringify(choices)).not.toContain(secret);
   expect(choices.map(c=>c.selection!.kind).sort()).toEqual(["connection","library-action"]);
@@ -33,6 +41,6 @@ test.skipIf(!ownerRoot)("actual F08 discovery and pinned request recover one pop
   const selected=choices.map(c=>({selection:c.selection!,displayName:c.displayName}));controller.setIngredients(selected);controller.setDraft("Use the chosen account and send action to prepare a workflow.");await controller.submit(controller.getSnapshot().draft);expect(controller.getSnapshot().error).not.toBeNull();await provider.idle();await controller.recover();
   const job=controller.getSnapshot().job!;expect(job.state).toBe("draft_ready");expect(job.specification.ingredients).toEqual(selected.map(s=>s.selection));expect(posts).toBe(1);expect(calls).toBe(1);
   expect(getFlow(job.workflow!.flowId)).toMatchObject({status:"DISABLED",published_version_id:null});expect(getFlowVersion(job.workflow!.versionId)).toMatchObject({state:"DRAFT",trigger:graph.trigger});
-  expect(db.getWorkflowDb().query("SELECT COUNT(*) n FROM flow").get().n).toBe(1);expect(db.getWorkflowDb().query("SELECT COUNT(*) n FROM flow_run").get().n).toBe(0);expect(raw).not.toContain(secret);controller.dispose();
+  expect(db.getWorkflowDb().query<{n:number},[]>("SELECT COUNT(*) n FROM flow").get()!.n).toBe(1);expect(db.getWorkflowDb().query<{n:number},[]>("SELECT COUNT(*) n FROM flow_run").get()!.n).toBe(0);expect(raw).not.toContain(secret);controller.dispose();
  } finally {provider.stop();await provider.idle();db.closeWorkflowDb();rmSync(directory,{recursive:true,force:true});}
 });
