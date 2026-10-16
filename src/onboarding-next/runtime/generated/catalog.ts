@@ -7,4 +7,5 @@ export const runtimeModules: readonly ModuleEntry[] = [
   { manifest: {"schemaVersion":1,"id":"ON-B-04","kind":"provider","entry":"./index.ts","provides":["interview-session.v1"],"requires":["interview-profile.v1"]}, load: async () => Object.assign({}, ...await Promise.all([import("../../interview-session/index.ts")])) },
   { manifest: {"schemaVersion":1,"id":"ON-B-07","kind":"provider","entry":"./index.ts","provides":["activation-intent.v1"],"requires":[]}, load: async () => Object.assign({}, ...await Promise.all([import("../../activation-intent/index.ts")])) },
   { manifest: {"schemaVersion":1,"id":"ON-B-08","kind":"provider","entry":"./index.ts","provides":["build-job.v1"],"requires":["activation-intent.v1","compose-draft.v1"]}, load: async () => Object.assign({}, ...await Promise.all([import("../../build-jobs/index.ts")])) },
+  { manifest: {"schemaVersion":1,"id":"ON-B-09","kind":"provider","entry":"./index.ts","provides":["compose-draft.v1"],"requires":[]}, load: async () => Object.assign({}, ...await Promise.all([import("../../compose-draft/index.ts")])) },
 ];
