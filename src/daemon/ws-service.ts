@@ -889,7 +889,10 @@ export class WebSocketService implements Service {
    * are never duplicated.
    */
   broadcastApprovalRequest(request: ApprovalRequest): void {
-    if (this.briefChat?.transport.approval(request)) return;
+    // A Brief turn also learns of its own approval, but the request always
+    // reaches the ordinary dashboard card too (#1075): the Brief event carries
+    // only the id and status, so it cannot stand in for the card.
+    this.briefChat?.transport.approval(request);
     const shortId = request.id.slice(0, 8);
     const impact = impactFromCategory(request.action_category);
     const message: WSMessage = {
@@ -1134,7 +1137,8 @@ export class WebSocketService implements Service {
   }
 
   broadcastApprovalUpdate(request: ApprovalRequest): void {
-    if (this.briefChat?.transport.approval(request)) return;
+    // Same as broadcastApprovalRequest: the dashboard card settles too (#1075).
+    this.briefChat?.transport.approval(request);
     const message: WSMessage = {
       type: 'notification',
       payload: {

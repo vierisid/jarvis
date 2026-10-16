@@ -32,7 +32,12 @@ for (const progress of [false, true]) test(`authenticated WebSocket routing gate
   service.getServer().setSidecarManager(manager);
   const conversations = new BriefConversationProvider();
   let generations = 0;
-  const approval = { id: 'stable-approval', status: 'pending' } as ApprovalRequest;
+  // A whole request: since #1075 it also reaches the ordinary dashboard card,
+  // which renders every field.
+  const approval: ApprovalRequest = { id: 'stable-approval', status: 'pending', agent_id: 'a1', agent_name: 'PA',
+    tool_name: 'run_command', tool_arguments: '{"command":"make deploy"}', action_category: 'execute_command',
+    urgency: 'normal', reason: 'execute_command requires user approval', context: '', execution_mode: 'deferred',
+    decided_at: null, decided_by: null, executed_at: null, execution_result: null, created_at: 0 };
   const transport = new BriefChatTransport({ db: getDb(), runner: { ready: () => true, stream: () => {
     generations++;
     return { onComplete: async () => {}, stream: (async function* () {
@@ -88,8 +93,20 @@ for (const progress of [false, true]) test(`authenticated WebSocket routing gate
     conversations.repository.activate(b.conversationId);
     service.broadcastApprovalUpdate({ ...approval, status: 'approved' });
     await until(() => scoped.frames.some(frame => frame.type === 'brief_chat_event' && (frame.payload as any).payload.status === 'approved'));
-    expect((scoped.frames.at(-1)!.payload as BriefChatEvent).conversationId).toBe(a.conversationId);
+    // The ordinary card now follows the Brief event (#1075), so pick the event itself.
+    const settled = scoped.frames.filter(frame => frame.type === 'brief_chat_event' && (frame.payload as any).payload.status === 'approved');
+    expect(settled).toHaveLength(1);
+    expect((settled[0]!.payload as BriefChatEvent).conversationId).toBe(a.conversationId);
     expect(transport.repository.approvalOwner(approval.id)?.turnId).toBe('turn-a');
+    // #1075: every dashboard socket, the scoped one included, also gets the
+    // ordinary card with the whole request, once per request and per update.
+    const cards = (reader: { frames: WSMessage[] }, source: string) => reader.frames.filter(frame => frame.type === 'notification'
+      && (frame.payload as any).source === source && (frame.payload as any).request?.id === approval.id);
+    await until(() => [scoped, legacy, mirror].every(reader => cards(reader, 'approval_update').length > 0));
+    for (const reader of [scoped, legacy, mirror]) {
+      expect(cards(reader, 'approval_request').map(frame => (frame.payload as any).request)).toEqual([approval]);
+      expect(cards(reader, 'approval_update').map(frame => (frame.payload as any).request.status)).toEqual(['approved']);
+    }
     // Legacy readers still receive the existing stream/status wire shape.
     const scopedCount = scoped.frames.length;
     service.broadcastSubAgentProgress({ type: 'tool_call', agentName: 'Legacy agent', agentId: 'legacy', data: { secret: 'legacy-private' } });

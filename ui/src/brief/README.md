@@ -278,8 +278,11 @@ socket or approval.
   The caller owns the panel id and `role="tabpanel"` linkage (`chatTabId(panelId, id)`).
 - Not mounted in the live shell yet. Mount `BriefConversationProvider` once above rooms when wiring it;
   do not open a second socket. Do not mount the provider or enable `JARVIS_BRIEF_CHAT_TRANSPORT` /
-  `JARVIS_BRIEF_CHAT_STATE` until Brief-turn approval cards are visible (#1075): today the provider
-  drops approvals, clarifiers, repeat-backs and room action requests.
+  `JARVIS_BRIEF_CHAT_STATE` until Brief-turn approval cards are visible (#1075). Since #1075 the
+  daemon also sends the ordinary dashboard card for Brief-owned approvals, the provider passes every
+  `useWebSocket` output except the chat it re-derives (approvals, clarifiers, repeat-backs, room
+  actions...), and the message thread shows the card under its waiting line; mounting is still the
+  mount work's own step, and it must render those outputs as the v2 shell does.
 - `chat/tab-strip/figma-reference.json` records the UI-17 source values.
 
 `?brief=preview&specimen=chat-tabs#/_brief_preview` opens the strip inside the Today specimen with a
@@ -351,10 +354,17 @@ fixture binding (Screenshot availability and failure toggles). It picks, uploads
 - Failed or cancelled turns keep the partial answer and show a fixed notice; the raw error is not shown.
 - Reading position is kept by semantic anchors (`reading.ts`) across activity toggles, history
   prepend, width changes and tab switches, and only a reader already at the bottom follows new content.
-- A running turn with a pending approval shows "Waiting for your approval before continuing." The
-  approval card itself is not rendered here: F-04 keeps only the approval id and status (#1075).
-- Not mounted in the live shell yet: the same #1075 rule as the tab strip and composer applies. Do not
-  mount the provider or this thread live until Brief-turn approval cards are visible.
+- A running turn with a pending approval shows "Waiting for your approval before continuing." and,
+  under it, the existing dashboard `ApprovalCard` for that approval id (#1075). F-04 keeps only the id
+  and status; the card's details come from the owner's `approvals` (useWebSocket's pending list: REST
+  on socket open, then the ordinary `approval_request` / `approval_update` notifications, which the
+  daemon now sends for Brief-owned approvals too). Approve and Cancel post to the existing
+  `/api/authority/approvals/:id/approve|deny` routes, the same dashboard decider as the v2 thread; a
+  fixture owner never decides, and the `messages` specimen passes no approvals, so it shows the line
+  only. An id the dashboard list does not hold shows the line only. Once both the v2 thread and this
+  thread are visible, a Brief-owned approval shows a card in each; deciding either removes both
+  through `approval_update`. Whether to show both is the mount work's decision.
+- Not mounted in the live shell yet: mounting the provider and this thread is the D-12..D-15 mount work.
 - `chat/message/figma-reference.json` records the UI-20 source values.
 
 `?brief=preview&specimen=messages#/_brief_preview` opens the thread with the tab strip, composer and
