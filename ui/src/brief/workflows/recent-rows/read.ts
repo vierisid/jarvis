@@ -30,7 +30,9 @@ export async function readRecentWorkflows(request: (url:string, init?:RequestIni
       const flow=flows[index++]!;
       if(signal?.aborted){incomplete=true;break;}
       try {
-        const list:unknown=await read(`/api/workflows/${encodeURIComponent(flow.id)}/runs?limit=1`);
+        // The runs route answers one `{ items, nextOffset }` page (#652), never a bare array.
+        const page=await read(`/api/workflows/${encodeURIComponent(flow.id)}/runs?limit=1`) as {items?:unknown}|null;
+        const list=page?.items;
         if(!Array.isArray(list)||list.length>1)throw Error("Invalid runs");
         if(!list.length)continue;
         const run=list[0] as FlowRun;
