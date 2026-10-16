@@ -120,7 +120,7 @@ test("missing F22 remains unsupported without importing an unmerged provider", a
 });
 
 // Run against the pinned F-22 export without making this D branch depend on an unmerged module.
-// See D-27.md for extraction/command. No live service, credential write or OAuth is involved.
+// Set D27_F22_SETUP_MODULE to F-22 ui/src/brief/connections/setup.ts (see the Brief README). No live service, credential write or OAuth is involved.
 const modulePath = process.env.D27_F22_SETUP_MODULE;
 const ConnectionSetup = modulePath
   ? (await import(modulePath)).ConnectionSetup
