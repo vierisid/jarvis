@@ -204,6 +204,25 @@ export async function runInterviewTurn(
   return { ...result, factsRecorded: session.factsRecorded };
 }
 
+/** Pure preparation for durable session hosts. The current prompt/tool loop is
+ * shared with legacy onboarding; neither facts nor completion are written here.
+ * Counts remain acknowledged counts until the host commits the returned effects. */
+export async function prepareInterviewTurn(
+  checkpoint: InterviewSession,
+  llm: LLMManager,
+  userText: string | null,
+  signal?: AbortSignal,
+): Promise<{ session: InterviewSession; result: InterviewTurnResult; facts: ProfileFactInput[] }> {
+  signal?.throwIfAborted();
+  const session = structuredClone(checkpoint);
+  const facts: ProfileFactInput[] = [];
+  const result = session.done
+    ? { assistantText: '', done: true, farewell: session.farewell, factsRecorded: session.factsRecorded }
+    : await advanceInterview(session, llm, userText, facts, true, signal);
+  signal?.throwIfAborted();
+  return { session, result, facts };
+}
+
 type ProfileFactInput = Parameters<typeof appendUserProfileFact>[0];
 
 function saveFacts(session: InterviewSession, facts: ProfileFactInput[]): void {
@@ -222,6 +241,8 @@ async function advanceInterview(
   llm: LLMManager,
   userText: string | null,
   pendingFacts: ProfileFactInput[],
+  staged = false,
+  signal?: AbortSignal,
 ): Promise<InterviewTurnResult> {
   if (userText !== null) {
     session.messages.push({ role: 'user', content: userText.trim() });
@@ -244,7 +265,7 @@ async function advanceInterview(
     session.done = true;
     session.farewell =
       "Let's wrap up here. You can add more context as you work with Jarvis.";
-    markInterviewWrapped();
+    if (!staged) markInterviewWrapped();
     return {
       assistantText: session.farewell,
       done: true,
@@ -257,6 +278,7 @@ async function advanceInterview(
   // optional silent tool calls). If the agent emits ONLY tool calls
   // with no prose, loop again so we always have something to display.
   for (let inner = 0; inner < 4; inner++) {
+    signal?.throwIfAborted();
     // Onboarding is conversational - prefer the conversation tier when
     // configured, falling back through the standard tier chain. Phase 4 will
     // migrate this to the router-first conversation flow proper.
@@ -269,8 +291,11 @@ async function advanceInterview(
         tool_choice: 'auto',
         temperature: 0.6,
         max_tokens: 800,
+        ...(signal ? { signal } : {}),
       },
     );
+
+    signal?.throwIfAborted();
 
     // Persist the assistant turn (text + tool_use) so the LLM sees its
     // own previous tool calls on the next iteration.
@@ -284,7 +309,7 @@ async function advanceInterview(
     // message back to the history.
     let wrappedThisTurn = false;
     for (const call of response.tool_calls) {
-      const result = executeInterviewerTool(session, call, pendingFacts);
+      const result = executeInterviewerTool(session, call, pendingFacts, staged);
       session.messages.push({
         role: 'tool',
         content: result.message,
@@ -342,8 +367,23 @@ function executeInterviewerTool(
   session: InterviewSession,
   call: LLMToolCall,
   pendingFacts: ProfileFactInput[],
+  staged = false,
 ): { message: string; wrapped: boolean } {
   if (call.name === 'record_profile_facts') {
+    if (staged) {
+      // Legacy tools tolerate malformed entries by dropping them. Durable
+      // preparation must reject the whole call before that lossy filtering;
+      // otherwise a following wrap could checkpoint incomplete facts as done.
+      // The profile adapter still validates themes and text bounds afterwards.
+      const args = call.arguments;
+      if (!args || typeof args !== 'object' || Array.isArray(args)
+        || !Array.isArray(args.facts) || args.facts.length === 0
+        || args.facts.some(f => !f || typeof f !== 'object' || Array.isArray(f)
+          || typeof f.theme !== 'string' || typeof f.summary !== 'string'
+          || (f.raw_quote !== undefined && typeof f.raw_quote !== 'string'))) {
+        throw new Error('Invalid staged profile facts');
+      }
+    }
     const args = call.arguments as { facts?: Array<{ theme: string; summary: string; raw_quote?: string }> };
     const facts = Array.isArray(args.facts) ? args.facts : [];
     if (facts.length === 0) {
@@ -360,7 +400,7 @@ function executeInterviewerTool(
       });
       accepted++;
     }
-    return { message: `Saved ${accepted} fact${accepted === 1 ? '' : 's'}.`, wrapped: false };
+    return { message: `${staged ? 'Prepared' : 'Saved'} ${accepted} fact${accepted === 1 ? '' : 's'}.`, wrapped: false };
   }
 
   if (call.name === 'wrap_interview') {
@@ -370,11 +410,11 @@ function executeInterviewerTool(
       : 'Thanks. You can add more context as you work with Jarvis.';
     session.farewell = farewell;
     try {
-      markInterviewWrapped();
+      if (!staged) markInterviewWrapped();
     } catch (err) {
       console.warn('[Interviewer] Failed to mark interview complete:', err);
     }
-    return { message: 'Interview wrapped.', wrapped: true };
+    return { message: staged ? 'Completion prepared; saving must succeed first.' : 'Interview wrapped.', wrapped: true };
   }
 
   return { message: `Error: unknown tool "${call.name}".`, wrapped: false };
