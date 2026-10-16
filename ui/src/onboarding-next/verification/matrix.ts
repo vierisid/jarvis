@@ -7,7 +7,7 @@ export const VIEWS = [
   { id: 'ON-U-04', name: 'interview', export: 'InterviewView', capability: 'interview-view.v1', requires: ['interview-session.v1', 'interview-profile.v1'], states: ['connecting', 'ready', 'thinking', 'error', 'done', 'skipped', 'resumed', 'streaming', 'saving-error', 'unknown-facts', 'navigation-pending', 'long'] },
   { id: 'ON-U-05', name: 'tour', export: 'TourView', capability: 'tour-view.v1', requires: ['tour.v1'], states: [...ROOMS, 'moving', 'error', 'unavailable'] },
   { id: 'ON-U-06', name: 'pebble-tour', export: 'PebbleTourView', capability: 'pebble-tour-view.v1', requires: ['tour.v1'], states: ['closed', 'open', 'moving', 'error', 'unavailable'] },
-  { id: 'ON-U-07', name: 'activation', export: 'ActivationView', capability: 'activation-view.v1', requires: ['activation-intent.v1', 'build-job.v1'], states: ['ready', 'checking', 'submitting', 'needs_input', 'invalid', 'accepted', 'unavailable', 'unsupported', 'long'] },
+  { id: 'ON-U-07', name: 'activation', export: 'ActivationView', capability: 'activation-view.v1', requires: ['activation-intent.v1', 'build-job.v1'], states: ['ready', 'checking', 'submitting', 'needs_input', 'missing-connection', 'invalid', 'accepted', 'unavailable', 'unsupported', 'long'] },
   { id: 'ON-U-08', name: 'build', export: 'BuildView', capability: 'build-view.v1', requires: ['build-job.v1', 'draft-result.v1'], states: ['queued', 'understanding', 'building', 'validating', 'saving', 'needs_input', 'failed', 'cancelled', 'cancelling', 'disconnected', 'timed-out', 'saved', 'unavailable', 'long'] },
   { id: 'ON-U-09', name: 'result', export: 'ResultView', capability: 'result-view.v1', requires: ['draft-result.v1'], states: ['ready', 'review', 'needs_input', 'pending', 'deleted', 'missing-canvas', 'long'] },
 ] as const;
@@ -29,6 +29,8 @@ export function requiredCases(): Case[] {
     }
     for (const kind of REVIEW_KINDS) for (const theme of ['light', 'dark'] as const)
       add({ owner: view.id, view: view.name, state: view.states[0], kind, theme, width: 1440, sidebar: 'expanded' });
+    if (view.name === 'activation') for (const theme of ['light', 'dark'] as const)
+      add({ owner: view.id, view: view.name, state: 'missing-connection', kind: 'keyboard', theme, width: 1440, sidebar: 'expanded' });
   }
   for (const state of JOURNEYS) for (const theme of ['light', 'dark'] as const) for (const width of [390, 1440])
     add({ owner: 'ON-U-10', view: 'journey', state, kind: 'journey', theme, width, sidebar: 'expanded' });

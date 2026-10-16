@@ -46,6 +46,9 @@ pending/errors, interview recovery, missing connections, all build phases,
 disconnect/cancel/timeout and saved/deleted results. Separate rows require keyboard,
 actual 200% zoom, actual reduced-motion preference, screen reader, native WebView,
 approved visual reference and runtime binding for every view in both themes.
+Activation's `missing-connection` case renders its connection issue and enabled
+Choose connection control at all three widths, with additional keyboard rows in
+both themes. It is separate from the missing-detail form.
 
 `fixtures.tsx` supplies only serializable illustrative data to the **actual views**.
 The tutorial background is explicitly an illustrative slot; contour/layout checks
@@ -117,8 +120,12 @@ exact case/viewport/state, observation and artifacts. Repairs belong to that own
 The geometry check detects horizontal overflow, hidden/clipped ancestors and
 obscured visible controls. Scrollable content is not presumed clipped solely
 because it is currently below the fold. Names are a DOM heuristic, not an axe or
-WCAG certification. Keyboard probes traverse forward/backward beyond the view;
-they do not replace full assistive-technology review. Screenshots and matching
+WCAG certification. Keyboard probes require every visible enabled control to be
+reached in both forward and reverse traversal, including native controls with a
+negative tabindex. DOM paths distinguish controls with identical labels; disabled,
+hidden and inert controls are excluded. Each direction must also leave the view.
+The traversal budget includes controls elsewhere in the fixture page. These probes
+do not replace full assistive-technology review. Screenshots and matching
 theme attributes alone do not establish visual approval. Record observed design
 differences against native Figma, not against another screenshot of the fixture.
 

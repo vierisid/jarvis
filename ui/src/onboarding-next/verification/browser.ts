@@ -5,7 +5,7 @@ import type { Inventory } from './discovery';
 // The caller supplies a documented CUA tab/viewport and an artifact writer.
 // Browser code only reads the DOM; interaction uses locators and native keyboard.
 export async function inspect(tab: any) {
-  return tab.playwright.evaluate(() => {
+  const read = () => {
     const scene = document.querySelector('[data-u11-scene]') as HTMLElement | null;
     const visible = (element: Element) => {
       if (element.closest('[hidden],[inert],[aria-hidden="true"]')) return false;
@@ -14,7 +14,18 @@ export async function inspect(tab: any) {
     };
     const name = (element: Element) => (element.getAttribute('aria-label') || (element.getAttribute('aria-labelledby') ?? '').split(/\s+/).map(id => document.getElementById(id)?.textContent ?? '').join(' ').trim()
       || [...((element as HTMLInputElement).labels ?? [])].map(label => label.textContent).join(' ') || element.textContent || element.getAttribute('title') || '').trim();
-    const controls = [...(scene?.querySelectorAll('button,a[href],input:not([type=hidden]),textarea,select,summary,[role=button],[tabindex="0"]') ?? [])].filter(visible);
+    const controlSelector = 'button,a[href],input:not([type=hidden]),textarea,select,summary,[role=button],[tabindex="0"]';
+    const controls = [...(scene?.querySelectorAll(controlSelector) ?? [])].filter(visible);
+    // Identify the element, not its label: multiple controls can have the same name.
+    // A DOM path is read-only and stays stable across native focus changes.
+    const controlPath = (element: Element) => {
+      if (!scene?.contains(element)) return null;
+      const path: number[] = [];
+      for (let node = element; node !== scene; node = node.parentElement!) {
+        path.unshift([...node.parentElement!.children].indexOf(node));
+      }
+      return `scene/${path.join('/')}`;
+    };
     const clipped = controls.filter(element => {
       const r = element.getBoundingClientRect();
       if (r.width < 1 || r.height < 1 || r.left < -2 || r.right > innerWidth + 2) return true;
@@ -40,22 +51,26 @@ export async function inspect(tab: any) {
       width: innerWidth, height: innerHeight, dpr: devicePixelRatio, overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
       headings: [...(scene?.querySelectorAll('h1,h2') ?? [])].filter(visible).map(n => n.textContent?.trim()), text: scene?.innerText ?? '',
       controls: controls.map(name), unnamed: controls.filter(c => !name(c)).length, clipped,
+      keyboardControls: controls.filter(c => !c.matches(':disabled') && !c.closest('[aria-disabled="true"]'))
+        .map(c => ({ path: controlPath(c)!, name: name(c) })),
+      keyboardTraversalLimit: document.querySelectorAll(controlSelector).length + 2,
       contour: cardStyle ? { shadow: cardStyle.boxShadow, border: cardStyle.borderColor, width: cardStyle.borderWidth } : null,
       reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
-      focus: active ? { name: name(active), tag: active.tagName, inside: !!scene?.contains(active), visible: visible(active),
+      focus: active ? { path: controlPath(active), name: name(active), tag: active.tagName, inside: !!scene?.contains(active), visible: visible(active),
         indicator: active.matches(':focus-visible') && ((getComputedStyle(active).outlineWidth !== '0px' && getComputedStyle(active).outlineStyle !== 'none') || getComputedStyle(active).boxShadow !== 'none') } : null,
       pebbleOpen: scene?.querySelector('[data-pebble-open]')?.getAttribute('data-pebble-open'),
       pebbleVisible: !!surface && visible(surface) && !!b && b.width > 0 && b.height > 0 && b.left >= -2 && b.right <= innerWidth + 2,
       buildPhases: [...(scene?.querySelectorAll('.on-build__phase') ?? [])].map(n => n.getAttribute('data-state')),
     };
-  });
+  };
+  return tab.playwright.evaluate(read) as Promise<ReturnType<typeof read>>;
 }
 export function problems(test: Case, metrics: Awaited<ReturnType<typeof inspect>>, candidate: Candidate): string[] {
   const errors: string[] = [];
   if (metrics.revision !== candidate.revision || metrics.dirty !== String(candidate.dirty)) errors.push('Served candidate differs from report.');
   if (metrics.caseId !== test.id || metrics.view !== test.view || metrics.state !== test.state || metrics.sidebar !== test.sidebar) errors.push('Wrong view/state/sidebar rendered.');
   if (!metrics.headings.length || !metrics.controls.length) errors.push('Missing actual view headings or controls.');
-  if (metrics.width !== test.width || metrics.theme !== test.theme || metrics.childThemes.some((t: string) => t !== test.theme)) errors.push('Wrong viewport or mixed theme.');
+  if (metrics.width !== test.width || metrics.theme !== test.theme || metrics.childThemes.some(t => t !== test.theme)) errors.push('Wrong viewport or mixed theme.');
   if (metrics.overflow > 2 || metrics.clipped.length) errors.push(`Clipped or obscured controls: ${metrics.clipped.join(', ')}; horizontal overflow ${metrics.overflow}px.`);
   if (metrics.unnamed) errors.push('Interactive controls lack accessible names.');
   if (test.view === 'tour' || test.view === 'pebble-tour') {
@@ -82,10 +97,18 @@ export async function runCases(options: { tab: any; viewport: any; baseUrl: stri
     if (test.kind === 'keyboard') {
       if (typeof tab.pressKey !== 'function') errors.push('Native keyboard input unavailable.');
       else {
-        const total = metrics.controls.length + 2;
-        for (let i = 0; i < total; i++) { await tab.pressKey(null, 'Tab'); keys.push((await inspect(tab)).focus); }
-        for (let i = 0; i < total; i++) { await tab.pressKey(null, 'shift+Tab'); keys.push((await inspect(tab)).focus); }
-        if (!keys.some(k => k?.inside) || !keys.some(k => !k?.inside) || keys.some(k => k?.inside && (!k.visible || !k.indicator))) errors.push('Keyboard traversal did not enter and leave the view with a visible focus indicator.');
+        for (const [direction, key] of [['forward', 'Tab'], ['reverse', 'shift+Tab']] as const) {
+          const traversal = [];
+          for (let i = 0; i < metrics.keyboardTraversalLimit; i++) {
+            await tab.pressKey(null, key);
+            const focus = (await inspect(tab)).focus;
+            traversal.push(focus); keys.push({ direction, ...focus });
+          }
+          const visited = new Set(traversal.filter(k => k?.inside).map(k => k?.path));
+          const missing = metrics.keyboardControls.filter(c => !visited.has(c.path));
+          if (missing.length) errors.push(`Keyboard ${direction} traversal missed enabled controls: ${missing.map(c => `${c.name} (${c.path})`).join(', ')}.`);
+          if (!traversal.some(k => k?.inside) || !traversal.some(k => k && !k.inside) || traversal.some(k => k?.inside && (!k.visible || !k.indicator))) errors.push(`Keyboard ${direction} traversal did not enter and leave the view with a visible focus indicator.`);
+        }
       }
     }
     const evidence = [await save(`${test.id}.metrics.json`, JSON.stringify({ candidate, caseId: test.id, metrics, errors, keys }, null, 2)), await save(`${test.id}.ax.txt`, await tab.playwright.domSnapshot()), await save(`${test.id}.png`, await tab.screenshot({ fullPage: true }))];
@@ -106,7 +129,7 @@ export async function runJourney(options: { tab: any; viewport: any; baseUrl: st
     const snapshot = await tab.playwright.domSnapshot(), metrics = await inspect(tab);
     trace.push({ step, snapshot, metrics });
     if (metrics.revision !== candidate.revision || metrics.dirty !== String(candidate.dirty)) throw Error('Wrong served candidate');
-    if (checkTheme && metrics.childThemes.some((t: string) => t !== test.theme)) errors.push(`${step}: mixed-theme endpoint`);
+    if (checkTheme && metrics.childThemes.some(t => t !== test.theme)) errors.push(`${step}: mixed-theme endpoint`);
     return snapshot;
   };
   const click = async (name: string) => { await tab.playwright.getByRole('button', { name, exact: true }).click(); return observe(name); };

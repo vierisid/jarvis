@@ -37,8 +37,11 @@ export function fixtureProps(test: Case, update: (patch: any) => void): any {
     renderer: state === 'unavailable' ? undefined : { isolation: 'fixture-only', renderRoom: ({ step }: any) => ({ status: 'ready', content: <section className="u11-room"><h1>{step.room}</h1><p>Illustrative room slot. The tutorial card is real; full D-line room integration is not verified here.</p></section> }) } };
   if (view === 'pebble-tour') return { model: { ...common, sessionId: 'fixture-tour', phase: ['moving','error'].includes(state) ? state : 'ready', sidebar }, onNavigate: noop,
     adapter: { isolation: 'tutorial-sandbox', status: state === 'unavailable' ? 'unsupported' : state === 'error' ? 'error' : 'ready', open: state === 'open', Surface, onOpenChange: (open: boolean) => update({ open }) } };
-  if (view === 'activation') return { model: { ...common, journeyId: 'fixture-journey', availability: ['unavailable','unsupported'].includes(state) ? state : 'ready', phase: ['long','unavailable','unsupported'].includes(state) ? 'ready' : state,
-    draft: { prompt: state === 'long' ? LONG : 'Prepare meeting follow-ups for my review.', contextRefs: [], answers: {} }, issues: ['needs_input','invalid'].includes(state) ? [{ id: 'recipient', kind: 'detail', label: 'Recipient', message: 'Choose who should receive the draft.' }] : [], message }, onDraftChange: (draft: any) => update({ draft }), onIntent: noop };
+  if (view === 'activation') return { model: { ...common, journeyId: 'fixture-journey', availability: ['unavailable','unsupported'].includes(state) ? state : 'ready', phase: state === 'missing-connection' ? 'needs_input' : ['long','unavailable','unsupported'].includes(state) ? 'ready' : state,
+    draft: { prompt: state === 'long' ? LONG : 'Prepare meeting follow-ups for my review.', contextRefs: [], answers: {} },
+    issues: state === 'missing-connection' ? [{ id: 'google', kind: 'connection', label: 'Choose a Google account', message: 'This workflow needs a verified Google connection before it can continue.' }]
+      : ['needs_input','invalid'].includes(state) ? [{ id: 'recipient', kind: 'detail', label: 'Recipient', message: 'Choose who should receive the draft.' }] : [], message },
+    canResolveConnection: state === 'missing-connection', onDraftChange: (draft: any) => update({ draft }), onIntent: noop };
   if (view === 'build') {
     const phases = ['understanding','building','validating','saving'], phase = phases.includes(state) ? state : 'understanding';
     const outcome = ['queued','needs_input','failed','cancelled'].includes(state) ? state : state === 'saved' ? 'succeeded' : 'working';
