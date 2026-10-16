@@ -197,7 +197,7 @@ test("keep draft advancement updates the return route instead of reopening the d
   expect(host.querySelector("article")?.dataset.decision).toBe(
     "fixture-decision-follow-up",
   );
-  expect(shell.route.selection.approvalId).toBe("fixture-approval-alex");
+  expect(shell.route.selection.approvalId).toBe("fixture-approval-jordan");
   await React.act(async () => root.render(null));
   await render();
   expect(host.querySelector("article")?.dataset.decision).toBe(

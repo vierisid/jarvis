@@ -46,7 +46,7 @@ export function decisionFixture(
     kind === "invitation" ? undefined : "Does [pilot date] work for your team?";
   if (kind !== "invitation")
     paper.document.paragraphs = [
-      "Hi Alex,",
+      "Hi Jordan,",
       "Thanks for the conversation today. I’m excited to help your team turn repetitive work into workflows you can inspect and trust.",
       "For the pilot, we’ll start with meeting follow-ups and review each draft before sending.",
       ...(long ? paper.document.paragraphs.slice(2) : []),
@@ -54,7 +54,7 @@ export function decisionFixture(
   const body = [
     ...paper.document.paragraphs,
     ...(paper.document.attention ? [paper.document.attention] : []),
-    "Best,\nVieri",
+    "Best,\nAlex",
   ].join("\n\n");
   paper.decision.workflow = {
     flowId: "fixture-meeting-followups",
@@ -66,7 +66,7 @@ export function decisionFixture(
     paper,
     document: {
       kind: "email",
-      to: [kind === "invitation" ? "maya@example.test" : "alex@example.test"],
+      to: [kind === "invitation" ? "maya@example.test" : "jordan@example.test"],
       cc: [],
       bcc: [],
       subject: paper.document.subject,
@@ -108,7 +108,7 @@ export function makeDecisionsFixture(
       description: "Agree the pilot scope and owner.",
       start: "2026-10-09T10:00:00+02:00",
       end: "2026-10-09T10:30:00+02:00",
-      attendees: ["alex@example.test"],
+      attendees: ["jordan@example.test"],
       location: "Video call",
     };
     rows[0]!.paper.title = "Pilot kickoff";
