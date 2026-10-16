@@ -7,6 +7,7 @@ import { assertVersionReady } from '../workflows/db/repos/flow-readiness';
 import { getFlowRun } from '../workflows/db/repos/flow-run';
 import { runFailure } from '../workflows/runtime/run-failure';
 import { getRunRecovery } from '../workflows/runtime/recovery';
+import { runConnectionBindingViews } from '../workflows/db/repos/binding-pins';
 import { boundedJson, canonicalManualPayload, inspectionId, inspectionValue, INSPECTION_LIMITS as LIMIT,
   object, opaque, WorkflowInspectionError } from './inspection-values';
 import type { ContextGroup, InspectionContext, InspectionContextEntry, InspectionRunDetail,
@@ -205,6 +206,15 @@ export class WorkflowContext {
       if (object(b) && b.runId === r.id) {
         if (b.sidecarId === null) add('target', 'device', 'local-host', 'Recorded local execution host.');
         else add('target', 'device', b.sidecarId, 'Recorded execution target; current connection is not asserted.');
+      }
+      // Q-05 records the connection each run actually used, or refused because
+      // it changed since the workflow was enabled. Identity only: no credential,
+      // grant fingerprint or refusal wording.
+      for (const b of this.boundedRows(runConnectionBindingViews(r.id))) {
+        const ref = b.identity?.kind === 'native' ? b.identity.connectionId : b.externalId;
+        if (b.refusal) add('bindings', 'connection', ref, 'Recorded connection was refused for this run because it changed; no credentials were handed out.', 'stale');
+        else add('bindings', 'connection', ref, b.identity ? 'Recorded connection used by this run; no credentials included.'
+          : 'Recorded connection request; its identity could not be resolved.', b.identity ? 'available' : 'missing');
       }
       for (const effect of this.effects(r)) {
         if (inspectionId(effect.approvalId)) add('rules', 'rule', effect.approvalId, 'Recorded approval reference; approval is not a verified result.');

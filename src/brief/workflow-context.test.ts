@@ -266,6 +266,20 @@ test('a failed run takes its wording from the typed failure projection; a succee
   const ok = run(); updateRun(ok.id, { status: 'SUCCEEDED' });
   expect(service.detail(flowId, ok.id)).toMatchObject({ failure: null, recovery: null, status: 'succeeded' });
 });
+test('recorded connections come from the Q-05 run bindings, identity only', () => {
+  const r = run(); updateRun(r.id, { status: 'SUCCEEDED' });
+  const put = (externalId: string, record: unknown) => db.run('INSERT INTO workflow_run_connection_binding (run_id, external_id, record) VALUES (?, ?, ?)', [r.id, externalId, JSON.stringify(record)]);
+  put('gmail-main', { externalId: 'gmail-main', identity: { kind: 'native', connectionId: 'conn-1', generation: 2 }, boundAt: 1 });
+  put('slack-ops', { externalId: 'slack-ops', identity: { kind: 'native', connectionId: 'conn-2', generation: 1 }, boundAt: 1,
+    refusal: { message: 'Connection slack-ops credential fixture-secret changed', at: 2 } });
+  put('jarvis:google', { externalId: 'jarvis:google', identity: { kind: 'managed', source: 'google', fingerprint: 'fixture-grant' }, boundAt: 1 });
+  const bindings = service.selection(flowId, versionId, r.id).context.groups.bindings;
+  if (bindings.status !== 'ready') throw Error('bindings not ready');
+  expect(bindings.data.map(e => [e.source?.id, e.availability])).toEqual([['conn-1', 'available'], ['jarvis:google', 'available'], ['conn-2', 'stale']]);
+  const raw = JSON.stringify(bindings);
+  expect(raw).not.toContain('fixture-secret'); expect(raw).not.toContain('fixture-grant');
+  expect(service.selection(flowId, versionId).context.groups.bindings.status).toBe('unavailable');
+});
 test('additive schema upgrades twice without inventing run evidence or deleting request outcomes', () => {
   const result = service.start(flowId, command()); createSchema(db); createSchema(db);
   expect(service.request(flowId, 'fixture-request')).toEqual(result);

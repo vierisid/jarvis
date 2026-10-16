@@ -61,7 +61,7 @@ of complete usage inferred from an empty query.
 | --- | --- | --- |
 | Goal | Work-item links and prepared specifications naming the selected version | Exact work-item/run link |
 | Memory | Explicit `factId` inputs and prepared fact evidence | F-18 `supplied` / `outcome_verified` events for that run and flow |
-| Connections | Version connection IDs and exact connection templates in graph auth fields | Unavailable: existing receipts do not establish credential identity |
+| Connections | Version connection IDs and exact connection templates in graph auth fields | Q-05 per-run connection bindings (identity only; a refused binding reads stale) |
 | Target | Explicit graph `sidecarId` / `target` references | Captured run machine binding and effect target references |
 | Rules | Routing and code-step references | Retained approval references |
 
