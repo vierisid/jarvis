@@ -26,7 +26,7 @@ export function AttachmentSpecimen() {
     return <AttachmentFan mode="preview" binding={binding} reducedMotion={reducedMotion}
       onFeedback={message => setFeedback(previous => ({ ...previous, [id]: message }))} />;
   }} />
-    <aside className="d14-fixture-controls" aria-label="Attachment fixture controls">
+    <aside className="brief-root d14-fixture-controls" aria-label="Attachment fixture controls">
       <strong>Attachment fixture only</strong>
       <label><input type="checkbox" checked={screenshot} onChange={event => setScreenshot(event.target.checked)} /> Screenshot available</label>
       <label><input type="checkbox" checked={fail} onChange={event => setFail(event.target.checked)} /> Fail attachment</label>
