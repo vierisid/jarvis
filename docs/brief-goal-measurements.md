@@ -4,7 +4,7 @@ A score-only goal remains a score-only goal. A 0.6 score, a title containing “
 
 ## Scope and activation
 
-Stack: `brief/f-15` on corrected F14 `1d4cf952aa3ade0abb198f4304ab28df80187063`. Compile prerequisite: F01. F15 has no additional activation dependency. Enable its authenticated Brief routes with `JARVIS_BRIEF_GOAL_MEASUREMENTS=1`. The flag defaults off and does not enable a dashboard room or F16 outcomes. Unmerged D/Q branches remain separate.
+Prerequisite: F01. F15 has no additional activation dependency. Enable its authenticated Brief routes with `JARVIS_BRIEF_GOAL_MEASUREMENTS=1`. The flag defaults off and does not enable a dashboard room or F16 outcomes. Unmerged D/Q branches remain separate.
 
 New source: optional additive `goal_measurement` and `goal_measurement_receipt` tables in the existing vault database. Existing goals receive no backfilled count. No workflow schema, second goal engine, provider calls, model inference, title parsing or automatic observation is added.
 
@@ -69,13 +69,10 @@ F16 can read the stored current snapshot, receipts and linked progress IDs. It m
 
 ## Verify and roll back
 
-In WSL:
-
 ```sh
-cd /home/vierisid/.cache/codex/jarvis-f-15
 bun test src/goals/measurements.test.ts src/daemon/api-brief-goal-measurements.test.ts src/util/model-exec-env.test.ts
 ```
 
-Tests use isolated fixture databases and a local authenticated socket. They exercise the canonical writer, API, receipt recovery, restart, competing processes, negative corrections, independent hierarchy, old-schema migration, malformed requests and transaction failure. No live service, model or external effect is used. The review regressions commit a correction through the real writer in another process between fetching a goal and projecting it, covering nine canonical/Brief read paths. The environment inventory also verifies that the feature flag is classified as a setting and preserved in model-launched environments. The focused command passes 55 tests after both review corrections; red/green evidence is retained under `docs/brief-delivery/evidence/F-15/review-*.log`.
+Tests use isolated fixture databases and a local authenticated socket. They exercise the canonical writer, API, receipt recovery, restart, competing processes, negative corrections, independent hierarchy, old-schema migration, malformed requests and transaction failure. No live service, model or external effect is used. The review regressions commit a correction through the real writer in another process between fetching a goal and projecting it, covering nine canonical/Brief read paths. The environment inventory also verifies that the feature flag is classified as a setting and preserved in model-launched environments.
 
-Disable the feature flag and restart the new runtime to stop Brief reads/writes. Retain additive tables, receipts and existing recorded scores. Do not drop evidence or downgrade to an older writer while measurements are active: an older binary does not enforce the measurement-backed scoring rule. New clients must respect unsupported/unavailable capabilities on an older server. Delivery evidence and baseline details are in `docs/brief-delivery/F-15.json` and its evidence directory. F16 is not implemented here.
+Disable the feature flag and restart the new runtime to stop Brief reads/writes. Retain additive tables, receipts and existing recorded scores. Do not drop evidence or downgrade to an older writer while measurements are active: an older binary does not enforce the measurement-backed scoring rule. New clients must respect unsupported/unavailable capabilities on an older server. F16 is not implemented here.
