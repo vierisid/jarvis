@@ -291,6 +291,9 @@ describe('#609: the call sites that persist a receipt', () => {
       'authority/approval-delivery.ts',
       // approval_requests.execution_result, every branch
       'authority/deferred-executor.ts',
+      // a failure's detail: shown behind Details, kept with a chat failure and
+      // a failed task's result (Q-19)
+      'failures/projection.ts',
       // a delegation step's tool trace -> flow_version.sample_data
       'workflows/adapters/m7-agent-delegator.ts',
       // approval_requests.execution_result, written by the effect boundary

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { UserFailure } from "../../ui";
 
 const POLL_INTERVAL_MS = 8000;
 
@@ -55,6 +56,8 @@ export interface FlowRun {
   stepsCount: number | null;
   steps: Record<string, unknown> | null;
   failedStep: { name: string; displayName: string; errorMessage?: string } | null;
+  /** Q-19: how a run that ended badly reads, the same sentence Today shows. */
+  failure?: UserFailure | null;
   triggeredBy: string | null;
   created: number;
   updated: number;

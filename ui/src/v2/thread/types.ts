@@ -5,6 +5,7 @@
  */
 
 import type { RoomKey } from "../router";
+import type { UserFailure } from "../ui";
 
 /**
  * Rooms that can render inline as a thread room-window. Excludes
@@ -94,6 +95,8 @@ export type ThreadItem =
       id: string;
       summary: string;
       detail?: string;
+      /** Q-19: a failed turn as the daemon projected it. */
+      failure?: UserFailure;
       t: string;
     }
   | {

@@ -86,7 +86,9 @@ import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { buildBackgroundProfile } from "../authority/background-profile.ts";
 import { buildTaintGating } from "../authority/taint-gating.ts";
 import { channelApprovalReply, notificationApprovalDecision, notificationDecisionNote } from "./approval-decision.ts";
-import { sendDesktopNotification } from "../comms/desktop-notify.ts";
+import { sendDesktopNotification, sendDesktopNotificationReceipt } from "../comms/desktop-notify.ts";
+import { channelLabel, failureText, projectFailure } from "../failures/projection.ts";
+import { runFailureNotice } from "../workflows/runtime/run-failure.ts";
 import { ensureUiBuilt } from "./ui-autobuild.ts";
 import { SidecarManager, buildEnrollmentUrls } from "../sidecar/manager.ts";
 import {
@@ -5145,12 +5147,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // to direct event-bus subscription.
     triggerManager = new TriggerManager({
       eventBus: sharedEventBus,
-      onRegistrationBlocked: ({ runId, message }) => notifyAll({
-        id: `workflow-readiness:${runId}`, kind: 'workflow',
-        title: 'Workflow needs attention',
-        body: `A workflow could not start: ${message}. See its failed run for details.`,
-        actions: [{ id: 'review', label: 'Open Jarvis', primary: true }, { id: 'dismiss', label: 'Dismiss' }],
-      }),
+      onRegistrationBlocked: ({ runId, message }) => {
+        // Q-19: the sentence Runs and Today show for this run.
+        notifyAll({
+          id: `workflow-readiness:${runId}`, kind: 'workflow',
+          title: 'Workflow needs attention',
+          body: runFailureNotice(runId) ?? `A workflow could not start: ${message}. See its failed run for details.`,
+          actions: [{ id: 'review', label: 'Open Jarvis', primary: true }, { id: 'dismiss', label: 'Dismiss' }],
+        });
+      },
       ...(workflowEngineRuntime ? { engineRuntime: workflowEngineRuntime } : {}),
     });
 
@@ -5427,14 +5432,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     }
     approvalDelivery.setBroadcaster(wsService);
     approvalDelivery.setChannelSender(channelService);
-    channelService.setDeliveryFailureHandler(({ channel, attempts, error }) => {
+    channelService.setDeliveryFailureHandler(({ channel, error, mayHaveArrived }) => {
       // 'normal', not 'urgent': urgent notifications are echoed back to
       // external channels, which would loop the failure into the channel
       // that just failed. The dashboard is the fallback the user still has.
-      wsService.broadcastNotification(
-        `Could not deliver message to ${channel} after ${attempts} attempt(s): ${error}`,
-        'normal',
-      );
+      // Q-19: a send that may have arrived reads as unconfirmed, never as
+      // not sent, and the evidence shown is redacted.
+      const failure = projectFailure({ source: 'delivery', channels: [{ channel, result: mayHaveArrived ? 'unknown' : 'failed', error }] },
+        { label: `A message to ${channelLabel(channel)}`, sideEffects: true }, { channel });
+      wsService.broadcastNotification(failureText(failure, { detail: true }), 'normal');
     });
     deferredExecutor.setResultCallback((requestId, request, result) => {
       // Notify via WS and channels that an approved action was executed.
@@ -5470,7 +5476,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         wsService,
         eventBuffer: workflowEventBuffer,
         sendDesktop: async (title, body) => {
-          sendDesktopNotification(title, body, { urgency: 'normal' });
+          const receipt = await sendDesktopNotificationReceipt(title, body, { urgency: 'normal' });
+          return receipt === 'unknown' ? 'unknown' : receipt === 'shown';
         },
         agentOrchestrator: agentService.getOrchestrator(),
         agentSpecialists,

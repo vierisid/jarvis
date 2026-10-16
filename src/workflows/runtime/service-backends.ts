@@ -12,7 +12,7 @@
 
 import type { LLMManager } from "../../llm/manager";
 import type { ToolRegistry } from "../../actions/tools/registry";
-import type { ChannelService } from "../../daemon/channel-service";
+import type { ChannelDeliveryReport, ChannelService } from "../../daemon/channel-service";
 import type { WebSocketService } from "../../daemon/ws-service";
 import type { AgentOrchestrator } from "../../agents/orchestrator";
 import type { AuthorityEngine } from "../../authority/engine";
@@ -32,7 +32,7 @@ import type { LlmChatFn, LlmChatRequest, LlmChatResponse } from "../sandbox-api/
 import type { SystemPromptParts } from "../../roles/prompt-builder";
 import type { ToolsInvokeFn } from "../sandbox-api/routes/jarvis-tools";
 import type { PieceAuthorizeFn } from "../sandbox-api/routes/jarvis-pieces";
-import type { NotifyFn } from "../sandbox-api/routes/jarvis-notify";
+import { DeliveryFailedError, type NotifyFn } from "../sandbox-api/routes/jarvis-notify";
 import type { ContextReply, JarvisContextProvider } from "../sandbox-api/routes/jarvis-context";
 import type { AgentDelegateFn } from "../sandbox-api/routes/jarvis-agent";
 import type { EventsPollFn } from "../sandbox-api/routes/jarvis-events";
@@ -67,6 +67,8 @@ import { toolReturnText } from '../../roles/untrusted.ts';
 import { withoutTemplateDelivery } from '../../actions/tools/template-delivery-scope.ts';
 import { outsideApprovalScope, runAsApproved } from '../../authority/approved-action-scope.ts';
 import type { ActionCategory } from '../../roles/authority';
+import { sendMayHaveArrived } from '../../comms/delivery.ts';
+import { providerOutcome } from '../../failures/evidence.ts';
 
 export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependencies {
   credentialResolver: CredentialResolver;
@@ -75,10 +77,11 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
   channelService: ChannelService;
   wsService: WebSocketService;
   /**
-   * Optional desktop-notification sender. Receives `(title, body)`. The daemon
-   * passes a function that calls `sendDesktopNotification` with normal urgency.
+   * Optional desktop-notification sender. Receives `(title, body)` and resolves
+   * whether the desktop showed it, or `'unknown'` when the sender timed out and
+   * the toast may already be up. The daemon passes the desktop receipt.
    */
-  sendDesktop?: (title: string, body: string) => Promise<void>;
+  sendDesktop?: (title: string, body: string) => Promise<boolean | 'unknown'>;
   /** Recent-events buffer for `jarvis-trigger:on_event` polling. */
   eventBuffer: WorkflowEventBuffer;
   /**
@@ -201,7 +204,16 @@ export function buildSandboxServiceBackends(
       // The prompt is the payload that leaves the device, so it is what gets
       // frozen and reviewed -- not the daemon-composed system prompt above.
       prepare: () => ({ arguments: { ...effectRequest }, target: { destination: 'llm-provider', overrideSystem: req.overrideSystem === true } }),
-      execute: async (args, checkpoint) => { checkpoint(); return callLlm(args as unknown as LlmChatRequest); },
+      execute: async (args, checkpoint) => {
+        checkpoint();
+        try { return await callLlm(args as unknown as LlmChatRequest); }
+        catch (error) {
+          // Q-19: keep the provider's typed code on the record, so a failed run
+          // says what the provider said instead of "may have taken effect".
+          const outcome = providerOutcome(error);
+          throw outcome ? new ActionOutcomeError(outcome) : error;
+        }
+      },
     });
     return reply.approval ? { text: '', approval: reply.approval } : reply.result as LlmChatResponse;
   };
@@ -261,9 +273,9 @@ export function buildSandboxServiceBackends(
     broadcastToChannels: (channels, text) =>
       opts.channelService.tryBroadcastToChannels(channels, text),
     // Voice channel = TTS over the same WS path used by awareness
-    // suggestions. No-op when no client is connected or no TTS provider
-    // is configured; the underlying method handles both.
-    sendVoice: (text) => opts.wsService.broadcastProactiveVoice(text),
+    // suggestions. Nothing is spoken when no client is connected or no TTS
+    // provider is configured, and then it reports failed, not delivered.
+    sendVoice: async (text) => (await opts.wsService.broadcastProactiveVoice(text)) > 0,
     // Drives `auto`-channel expansion so unconfigured external channels
     // don't surface as failures on every notification. Explicit
     // `["telegram"]` still bypasses this and attempts delivery either way.
@@ -281,8 +293,9 @@ export function buildSandboxServiceBackends(
     const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-notify', action: 'notify',
       route: 'notify', toolName: 'workflow_notify', category: 'send_message', toolCategory: 'notification', request: { ...req },
       prepare: () => {
+        const requested = req.channels.length ? req.channels : ['auto'];
         const channels = new Set<string>();
-        for (const channel of req.channels.length ? req.channels : ['auto']) {
+        for (const channel of requested) {
           if (channel !== 'auto') channels.add(channel);
           else {
             channels.add('dashboard');
@@ -291,30 +304,48 @@ export function buildSandboxServiceBackends(
         }
         const recipients = Object.fromEntries([...channels].map(channel => [channel,
           ['telegram', 'discord'].includes(channel) ? opts.channelService.getBroadcastRecipient(channel) : null]));
-        return { arguments: { ...req, channels: [...channels], recipients }, target: { channels: [...channels], recipients } };
+        // Q-19: a dashboard `auto` chose is skipped when nobody is watching and
+        // the desktop shows it instead. Frozen with the rest, so the review
+        // covers the desktop too.
+        const autoDashboard = requested.includes('auto') && !requested.includes('dashboard');
+        const fallback = autoDashboard && opts.sendDesktop ? { autoDashboard: true, fallback: 'desktop' } : autoDashboard ? { autoDashboard: true } : {};
+        return { arguments: { ...req, channels: [...channels], recipients, ...fallback },
+          target: { channels: [...channels], recipients, ...(fallback.fallback ? { fallback: fallback.fallback } : {}) } };
       },
       execute: async (args, checkpoint) => {
         const recipients = args.recipients as Record<string, string | null>;
         const guardedNotifier = new JarvisNotifierAdapter({ ...notifierDeps,
-          broadcastToDashboard: (text, priority) => { checkpoint(); opts.wsService.broadcastNotificationToDashboard(text, priority); },
+          broadcastToDashboard: (text, priority) => { checkpoint(); return opts.wsService.broadcastNotificationToDashboard(text, priority); },
           broadcastToChannels: async (channels, text) => {
-            const delivered: string[] = [], failed: { channel: string; error: string }[] = [];
+            const report: ChannelDeliveryReport = { delivered: [], failed: [], unknown: [] };
             for (const channel of channels) {
+              try { checkpoint(); } catch (error) { report.failed.push({ channel, error: (error as Error).message }); continue; }
               try {
-                checkpoint();
                 await opts.channelService.sendWorkflowNotification(channel, recipients[channel] ?? null, text);
-                delivered.push(channel);
-              } catch (error) { failed.push({ channel, error: (error as Error).message }); }
+                report.delivered.push(channel);
+              } catch (error) {
+                // Q-19: a send that may have arrived is reported unknown, never as not sent.
+                (sendMayHaveArrived(error) ? report.unknown : report.failed).push({ channel, error: (error as Error).message });
+              }
             }
-            return { delivered, failed };
+            return report;
           },
-          sendVoice: async text => { checkpoint(); await opts.wsService.broadcastProactiveVoice(text); },
-          ...(opts.sendDesktop ? { sendDesktop: async (title: string, body: string) => { checkpoint(); await opts.sendDesktop!(title, body); } } : {}),
+          sendVoice: async text => { checkpoint(); return (await opts.wsService.broadcastProactiveVoice(text)) > 0; },
+          ...(opts.sendDesktop ? { sendDesktop: async (title: string, body: string) => { checkpoint(); return opts.sendDesktop!(title, body); } } : {}),
         });
-        return guardedNotifier.notify({ message: args.message as string, channels: args.channels as any, priority: args.priority as any });
+        const report = await guardedNotifier.notify({ message: args.message as string, channels: args.channels as any, priority: args.priority as any,
+          ...(args.autoDashboard === true ? { autoDashboard: true } : {}) });
+        // Q-19, owner decision: the step reports each channel and fails only
+        // when nothing was sent anywhere. A channel that may have taken it
+        // counts as sent: failing would invite a resend that could repeat it.
+        if (report.delivered.length === 0 && report.unknown.length === 0) {
+          throw new DeliveryFailedError({ status: 'error', code: 'DELIVERY_FAILED', effect: 'not_started',
+            message: `Not sent on any channel: ${report.failed.map(f => `${f.channel} (${f.error})`).join('; ')}` }, report);
+        }
+        return report;
       },
     });
-    return reply.approval ? { delivered: [], failed: [], approval: reply.approval } : reply.result as Awaited<ReturnType<NotifyFn>>;
+    return reply.approval ? { delivered: [], failed: [], unknown: [], approval: reply.approval } : reply.result as Awaited<ReturnType<NotifyFn>>;
   };
 
   const contextAdapter = new JarvisContextProviderAdapter();
