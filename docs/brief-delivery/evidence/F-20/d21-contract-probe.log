@@ -1,0 +1,2 @@
+PASS: actual D21 validators accept complete list, Remove, request recovery, paused Undo, explicit Enable and stale rejection.
+D21 validator revision: 3131564517fe5dd4a9bd136abe688b45b0bf4337

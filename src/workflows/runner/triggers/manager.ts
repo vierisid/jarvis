@@ -1,3 +1,4 @@
+import { workflowRemovalState, workflowTriggerCurrent } from '../../db/repos/workflow-removal-state';
 /**
  * `TriggerManager` -- runtime owner of trigger subscriptions for the new
  * workflow system.
@@ -82,6 +83,7 @@ export const MAX_QUEUED_WEBHOOK_RUNS = 500;
 
 type SubscriptionKind = "cron" | "webhook" | "event" | "engine";
 type ActiveSub = {
+  generation: number;
   flowId: string;
   versionId: string;
   kind: SubscriptionKind;
@@ -243,13 +245,13 @@ export class TriggerManager {
       5_000, 15_000, 60_000, 300_000, 900_000,
     ];
 
-    this.webhooks.setTriggerCallback((flowId, payload, delivery) => this.fire(flowId, payload, "webhook", delivery));
+    this.webhooks.setTriggerCallback((flowId, payload, delivery, generation) => this.fire(flowId, payload, "webhook", delivery, generation));
   }
 
   /** Exact-version registration receipt; refresh resolving alone is not proof of a subscription. */
   registrationState(flowId: string, versionId: string): 'registered' | 'pending' | 'blocked' | 'changed' {
     const flow = getFlow(flowId), version = getFlowVersion(versionId);
-    if (!flow || flow.status !== 'ENABLED' || flow.published_version_id !== versionId || !version || version.flowId !== flowId) return 'changed';
+    if (!flow || workflowRemovalState(flowId).receipt_id || flow.status !== 'ENABLED' || flow.published_version_id !== versionId || !version || version.flowId !== flowId) return 'changed';
     if (ungrantedCodeSteps(flow, version.trigger)) return 'blocked';
     try { assertVersionReady(flowId, versionId); } catch { return 'blocked'; }
     if (version.trigger.type === 'EMPTY') return 'registered'; // Manual-only: no subscription or run is needed.
@@ -316,7 +318,7 @@ export class TriggerManager {
       const existing = this.subs.get(flowId);
 
       // Flow gone or disabled -> tear down whatever's active.
-      if (!flow || flow.status !== "ENABLED") {
+      if (!flow || flow.status !== "ENABLED" || workflowRemovalState(flowId).receipt_id) {
         await this.unregister(flowId);
         clearScheduleWatch(flowId);
         return;
@@ -332,6 +334,7 @@ export class TriggerManager {
       // trigger says, so an edited schedule replaces the old one.
       const desiredTrigger = desiredVersionId ? getFlowVersion(desiredVersionId)?.trigger : undefined;
       if (existing && existing.versionId === desiredVersionId
+        && existing.generation === workflowRemovalState(flowId).generation
         && (!existing.triggerDigest || existing.triggerDigest === triggerDigest(desiredTrigger))) {
         // Repair an incomplete local subscription from the cached engine state.
         // Keep working webhook delivery and avoid ON_DISABLE / ON_ENABLE replay.
@@ -376,6 +379,7 @@ export class TriggerManager {
   // ---------------------------------------------------------------- private
 
   private async register(flow: FlowRow): Promise<void> {
+    if (flow.status !== "ENABLED" || workflowRemovalState(flow.id).receipt_id) return;
     const versionId = flow.published_version_id ?? getLatestDraft(flow.id)?.id ?? null;
     if (!versionId) return;
     const version = getFlowVersion(versionId);
@@ -475,15 +479,17 @@ export class TriggerManager {
     }
     const warning = scheduleZoneWarning(expression, input.timezone);
     if (warning) this.log(`flow ${flowId}: ${warning}`);
+    const generation = workflowRemovalState(flowId).generation;
     try {
       const dueAfter = this.catchUpMissed(flowId, versionId, expression);
       this.cron.schedule(
         `flow:${flowId}`,
         expression,
-        (occurrence?: CronOccurrence) => this.fireSchedule(flowId, versionId, occurrence, { cronExpression: expression }),
+        (occurrence?: CronOccurrence) => this.fireSchedule(flowId, versionId, occurrence, { cronExpression: expression }, generation),
         { onMissed: (missed, older) => this.recordMissed(flowId, versionId, missed, "Jarvis was asleep or too busy at that time", older), dueAfter },
       );
       this.subs.set(flowId, {
+        generation,
         flowId,
         versionId,
         kind: "cron",
@@ -499,8 +505,10 @@ export class TriggerManager {
   private registerWebhook(flowId: string, versionId: string, trigger: TriggerNode): void {
     const input = (trigger.settings?.input ?? {}) as Record<string, unknown>;
     const secret = typeof input.secret === "string" && input.secret ? input.secret : undefined;
-    this.webhooks.register(flowId, secret);
+    const generation = workflowRemovalState(flowId).generation;
+    this.webhooks.register(flowId, secret, generation);
     this.subs.set(flowId, {
+      generation,
       flowId,
       versionId,
       kind: "webhook",
@@ -526,12 +534,14 @@ export class TriggerManager {
       input.filter && typeof input.filter === "object" && !Array.isArray(input.filter)
         ? (input.filter as Record<string, unknown>)
         : undefined;
+    const generation = workflowRemovalState(flowId).generation;
     const matches = makeFilter(filter);
     const unsubscribe = this.bus.subscribe(eventType, (payload) => {
       if (!matches(payload)) return;
-      this.fire(flowId, payload, "event", { key: eventItemKey(payload) });
+      this.fire(flowId, payload, "event", { key: eventItemKey(payload) }, generation);
     });
     this.subs.set(flowId, {
+      generation,
       flowId,
       versionId,
       kind: "event",
@@ -563,6 +573,8 @@ export class TriggerManager {
   ): Promise<void> {
     const engine = this.engineRuntime;
     if (!engine) return;
+    const generation = workflowRemovalState(flow.id).generation;
+    if (!workflowTriggerCurrent(flow.id, version.id, generation)) return;
 
     let schedule: EngineScheduleOptions | null = version.engineSchedule;
     let listeners: AppEventListener[] | null = version.engineListeners;
@@ -574,6 +586,7 @@ export class TriggerManager {
           projectId: flow.project_id,
         });
         try {
+          if (!workflowTriggerCurrent(flow.id, version.id, generation)) return;
           const upstreamVersion = toUpstreamFlowVersion(version);
           const response = (await handle.executeTriggerHook("ON_ENABLE", {
             flowVersion: upstreamVersion,
@@ -591,11 +604,15 @@ export class TriggerManager {
           await handle.release();
         }
       } catch (e) {
-        this.scheduleEnableRetry(flow.id, (e as Error).message);
+        if (workflowTriggerCurrent(flow.id, version.id, generation)) this.scheduleEnableRetry(flow.id, (e as Error).message);
         return;
       }
     }
 
+    if (!workflowTriggerCurrent(flow.id, version.id, generation)) {
+      await this.teardownEngineTrigger(flow.id, version.id, null);
+      return;
+    }
     if (!schedule && (!listeners || listeners.length === 0)) {
       this.log(
         `flow ${flow.id}: engine ON_ENABLE returned neither schedule nor listeners; flow can still be run manually`,
@@ -615,7 +632,7 @@ export class TriggerManager {
         this.cron.schedule(
           `flow:${flow.id}`,
           expression,
-          (occurrence?: CronOccurrence) => { void this.fireEngineTrigger(flow.id, version.id, "cron", occurrence, pureSchedule); },
+          (occurrence?: CronOccurrence) => { void this.fireEngineTrigger(flow.id, version.id, "cron", occurrence, pureSchedule, generation); },
           // A missed poll of an event source is not a missed run; a missed
           // occurrence of the schedule piece is.
           pureSchedule
@@ -637,7 +654,7 @@ export class TriggerManager {
       // Multiple listeners (e.g. Gmail watch + identifier) share one webhook
       // endpoint per flow; the engine's onEnable already encoded what to
       // listen for via its external API (Gmail watch, etc.).
-      this.webhooks.register(flow.id);
+      this.webhooks.register(flow.id, undefined, generation);
       webhookTearDown = () => this.webhooks.unregister(flow.id);
       this.log(
         `flow ${flow.id}: engine registered ${listeners.length} listener(s); webhook route /webhooks/${flow.id} active`,
@@ -651,6 +668,7 @@ export class TriggerManager {
     const failure = noSubscription ? 'No trigger subscription could be registered; the flow is not firing.'
       : schedule?.cronExpression && !cronTearDown ? 'Cron registration failed; only webhook delivery is active.' : undefined;
     const sub: ActiveSub = {
+      generation,
       flowId: flow.id,
       versionId: version.id,
       kind: "engine",
@@ -789,11 +807,17 @@ export class TriggerManager {
    * exists, is on, and still runs the version this subscription was
    * registered for.
    */
-  private notAdmitted(flowId: string, versionId: string): string | null {
+  private notAdmitted(flowId: string, versionId: string, generation?: number): string | null {
     const flow = getFlow(flowId);
     if (!flow) return "The workflow no longer exists.";
     if (flow.status !== "ENABLED") return "The workflow is turned off.";
-    if (this.subs.get(flowId)?.versionId !== versionId) return "The workflow changed; this trigger no longer runs it.";
+    // F-20: a removed workflow starts nothing, and a subscription registered
+    // before a Remove (even one later undone and re-enabled) is not current.
+    const removal = workflowRemovalState(flowId);
+    if (removal.receipt_id) return "The workflow was removed.";
+    const sub = this.subs.get(flowId);
+    if (sub?.versionId !== versionId || sub.generation !== removal.generation
+      || (generation !== undefined && generation !== removal.generation)) return "The workflow changed; this trigger no longer runs it.";
     return null;
   }
 
@@ -834,7 +858,7 @@ export class TriggerManager {
    */
   private startRun(opts: LiveStart): WebhookFireResult {
     const { flowId, versionId } = opts;
-    const off = this.notAdmitted(flowId, versionId);
+    const off = this.notAdmitted(flowId, versionId, opts.generation);
     if (off) {
       const fire = recordFire({ flowId, flowVersionId: versionId, source: opts.source, scheduledFor: opts.scheduledFor,
         outcome: "blocked", detail: { reason: off, ...(opts.dedupeKey ? { deliveryKey: opts.dedupeKey } : {}) } });
@@ -969,7 +993,7 @@ export class TriggerManager {
    * interval. An occurrence the previous run has not started for yet is
    * skipped, not stacked.
    */
-  private fireSchedule(flowId: string, versionId: string, occurrence: CronOccurrence | undefined, payload: Record<string, unknown>): void {
+  private fireSchedule(flowId: string, versionId: string, occurrence: CronOccurrence | undefined, payload: Record<string, unknown>, generation?: number): void {
     try {
       // A job left over from a replaced registration does nothing.
       if (this.subs.get(flowId)?.versionId !== versionId) return;
@@ -982,7 +1006,7 @@ export class TriggerManager {
         return;
       }
       const result = this.startRun({
-        flowId, versionId, kind: "cron", source: "schedule",
+        flowId, versionId, generation, kind: "cron", source: "schedule",
         payload: { ...payload, firedAt: Date.now(), scheduledFor: new Date(at).toISOString() },
         dedupeKey: occurrence?.key, scheduledFor: at, lateMs: occurrence?.lateMs, ...shiftedDetail(occurrence),
       });
@@ -1016,16 +1040,16 @@ export class TriggerManager {
    * Never rejects: it runs as a `void` interval callback, and an escaped
    * rejection (a workflow deleted mid-poll) used to take the daemon down.
    */
-  private async fireEngineTrigger(flowId: string, versionId: string, source: string, occurrence?: CronOccurrence, pureSchedule = false): Promise<void> {
+  private async fireEngineTrigger(flowId: string, versionId: string, source: string, occurrence?: CronOccurrence, pureSchedule = false, generation?: number): Promise<void> {
     try {
-      await this.pollEngineTrigger(flowId, versionId, source, occurrence, pureSchedule);
+      await this.pollEngineTrigger(flowId, versionId, source, occurrence, pureSchedule, generation);
     } catch (e) {
       this.log(`flow ${flowId} (engine-${source}) failed: ${(e as Error).message}`);
     }
   }
 
   private async pollEngineTrigger(flowId: string, versionId: string, source: string, occurrence: CronOccurrence | undefined,
-    pureSchedule: boolean): Promise<void> {
+    pureSchedule: boolean, generation?: number): Promise<void> {
     const engine = this.engineRuntime;
     if (!engine) return;
     // A scheduled time that does not run still leaves a row, so the ledger
@@ -1055,7 +1079,7 @@ export class TriggerManager {
       unrun("blocked", "The workflow version no longer exists.");
       return;
     }
-    const off = this.notAdmitted(flowId, versionId);
+    const off = this.notAdmitted(flowId, versionId, generation);
     if (off) {
       unrun("blocked", off);
       return;
@@ -1115,7 +1139,7 @@ export class TriggerManager {
         : { value: item };
       try {
         const result = this.startRun({
-          flowId, versionId, kind: "engine", source: fireSource, payload, executeTrigger: false,
+          flowId, versionId, generation, kind: "engine", source: fireSource, payload, executeTrigger: false,
           dedupeKey: pureSchedule ? occurrence?.key : eventItemKey(payload),
           // The poll moved the source's cursor past it (Pause may have come mid-poll).
           ...(pureSchedule ? {} : { takenFromSource: true }),
@@ -1139,7 +1163,7 @@ export class TriggerManager {
    * directly with the payload as initial state. Returns what became of the
    * delivery, for the webhook reply.
    */
-  private fire(flowId: string, payload: Record<string, unknown>, kind: "webhook" | "event", delivery: WebhookDelivery = {}): WebhookFireResult {
+  private fire(flowId: string, payload: Record<string, unknown>, kind: "webhook" | "event", delivery: WebhookDelivery = {}, generation?: number): WebhookFireResult {
     const sub = this.subs.get(flowId);
     const versionId = sub?.versionId;
     if (!sub || !versionId) {
@@ -1167,6 +1191,7 @@ export class TriggerManager {
       return this.startRun({
         flowId,
         versionId,
+        generation,
         kind: sub.kind,
         source: kind,
         payload,
@@ -1216,6 +1241,8 @@ function makeFilter(filter?: Record<string, unknown>): (payload: Record<string, 
 interface LiveStart {
   flowId: string;
   versionId: string;
+  /** F-20 removal generation the delivering subscription was registered under. */
+  generation?: number;
   kind: SubscriptionKind;
   source: FireSource;
   payload?: Record<string, unknown>;
