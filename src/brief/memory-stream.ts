@@ -1,3 +1,4 @@
+import type { MemoryUsageCoverage } from '../vault/memory-usage';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Database } from 'bun:sqlite';
 import { getDb } from '../vault/schema';
@@ -11,7 +12,7 @@ export const MEMORY_STREAM_LIMITS = { facts: 10000, evidence: 50000, uses: 50000
 export class MemoryQueryError extends Error {}
 class CapacityError extends Error {}
 type Row = FactRow & { subject_name: string };
-type Collection = { items: Map<string, MemoryStreamItem>; usedIn: MemoryStreamPage['usedIn'] };
+type Collection = { items: Map<string, MemoryStreamItem>; usedIn: MemoryStreamPage['usedIn']; usageCoverage?: MemoryUsageCoverage };
 type Snapshot = { queryKey: string; asOf: number; expiresAt: number; members: [string, string][];
   matches: string[]; total: number; usedIn: MemoryStreamPage['usedIn'] };
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -70,11 +71,19 @@ export class MemoryStream {
     for (const e of evidence) { const list = byFact.get(e.fact_id) ?? []; list.push(e); byFact.set(e.fact_id, list); }
     for (const list of byFact.values()) list.sort((a, b) => b.recorded_at - a.recorded_at || compareText(a.id, b.id));
     let uses: BriefMemoryUse[] | null = null;
+    let usageCoverage: MemoryUsageCoverage | undefined;
     if (this.usage) {
       if (this.usage.readiness() !== 'ready') throw Error('Usage unavailable');
       const read = this.usage.readUses(rows.map(r => r.id));
       if (read.state !== 'ready') throw Error('Usage unavailable');
       uses = read.uses;
+      if (read.coverage && (!timestamp(read.coverage.startedAt) || !timestamp(read.coverage.retainedFrom)
+        || !Number.isSafeInteger(read.coverage.retentionDays) || read.coverage.retentionDays <= 0
+        || !Number.isSafeInteger(read.coverage.maxRecords) || read.coverage.maxRecords <= 0)) throw Error('Invalid usage coverage');
+      if (read.coverage) usageCoverage = { startedAt: read.coverage.startedAt, retainedFrom: read.coverage.retainedFrom,
+        retentionDays: read.coverage.retentionDays, maxRecords: read.coverage.maxRecords,
+        paths: ['brief_conversation_recall', 'workflow_ask_recall'], meaning: 'retained_provider_handoffs_not_model_reliance',
+        completeness: 'recorded_events_only' };
       if (!Array.isArray(uses)) throw Error('Invalid usage');
       if (uses.length > MEMORY_STREAM_LIMITS.uses || Buffer.byteLength(JSON.stringify(uses)) > MEMORY_STREAM_LIMITS.bytes) throw new CapacityError();
     }
@@ -108,13 +117,13 @@ export class MemoryStream {
       const revision = digest([row, ev, factUses]);
       const href = `/api/brief/memory/${encodeURIComponent(row.id)}`;
       items.set(row.id, { factId: row.id, sourceId: null, sentence: `${row.subject_name} ${row.predicate} ${row.object}`,
-        revision, subjectId: row.subject_id, scope: row.scope, updatedAt, basis, status: row.status,
+        revision, ...(usageCoverage ? { usageCoverage } : {}), subjectId: row.subject_id, scope: row.scope, updatedAt, basis, status: row.status,
         validity: { from: row.valid_from, to: row.valid_to }, sourceSummary: { labels, evidenceCount: ev.length },
         provenance: ev.map(e => ({ kind: 'source', id: e.id, revision: digest(e) })), uses: factUses,
         permissions: { canRead: true, canCorrect: false, canForget: false },
         detailHref: href, historyHref: `${href}/history`, supersededBy: row.superseded_by });
     }
-    return { items, usedIn };
+    return { items, usedIn, ...(usageCoverage ? { usageCoverage } : {}) };
   }
   private encode(id: string, offset: number): string {
     const body = `${id}.${offset}`;
@@ -169,7 +178,7 @@ export class MemoryStream {
         const items = snapshot.matches.slice(offset, offset + query.limit).map(id => collection.items.get(id)!);
         const nextCursor = offset + items.length < snapshot.matches.length ? this.encode(id!, offset + items.length) : null;
         return { state: snapshot.matches.length ? 'ready' : 'empty', asOf: snapshot.asOf,
-          data: { items, nextCursor, count: { total: snapshot.total, matched: snapshot.matches.length, returned: items.length }, usedIn: snapshot.usedIn } };
+          data: { items, nextCursor, ...(collection.usageCoverage ? { usageCoverage: collection.usageCoverage } : {}), count: { total: snapshot.total, matched: snapshot.matches.length, returned: items.length }, usedIn: snapshot.usedIn } };
       })();
     } catch (e) {
       if (e instanceof MemoryQueryError) throw e;

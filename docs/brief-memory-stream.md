@@ -2,6 +2,8 @@
 
 F17 adds a read projection over canonical vault facts and provenance. It changes no fact writer, recall qualification, usage ledger, legacy vault route or UI.
 
+F18 adds the production usage ledger and declares its retention and coverage limits; see [recorded memory use](brief-memory-usage.md) for its activation and provenance contract.
+
 It does not replace `/api/vault/page` (`src/vault/memory-page.ts`). That route is an unfiltered primary-key keyset pager the Memory room uses to rebuild its full local copy of entities, facts and relationships. F17 answers a different question: a filtered (search, source, Used in, updated range) view ordered by Updated time with exact counts, which an ID keyset cannot serve. Both exclude superseded facts from the current list. The existing Memory room shows every person's facts, and so does this browser; Q-15's named-person scoping applies to recall, not to browsing.
 
 ## Activation and F18 seam
