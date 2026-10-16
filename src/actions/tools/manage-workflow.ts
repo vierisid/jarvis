@@ -66,6 +66,7 @@ import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow } from '../../workflows/
 import { listFlowFires } from '../../workflows/db/repos/trigger-fire';
 import { bindingChangesToAccept } from '../../workflows/db/repos/binding-pins';
 import { assertCodeStepsAllowed } from "../../workflows/db/repos/flow-code-steps.ts";
+import { manualStartRefusal } from "../../workflows/runtime/emergency-hold.ts";
 import {
   createFlowRun,
   getFlowRunInProject,
@@ -979,6 +980,9 @@ function actRun(flow: FlowRow, payload?: Record<string, unknown>): Record<string
   // would be one `run` call wide. The thrown message goes straight back to the
   // model as the tool result, so it relays the opt-in instruction to the user
   // instead of retrying.
+  // Pause holds and Kill stops: nothing starts (Q-08).
+  const held = manualStartRefusal();
+  if (held) throw new Error(held);
   assertCodeStepsAllowed(flow.id, versionId, "run");
   assertVersionReady(flow.id, versionId);
   const run = createFlowRun({

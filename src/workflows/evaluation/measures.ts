@@ -35,6 +35,13 @@ export function disposition(row: EvaluationRow, task: QualityTask): Disposition 
  * Context reads are not effects. A tool call matches only with its exact
  * parameters, so a call to the wrong path or machine counts as unexpected. */
 export function unexpectedEffects(expected: Scenario, receipts: EffectReceipt[]): number {
+  const excess = excessEffects(expected, receipts);
+  return excess.external + excess.ai;
+}
+
+/** The same excess, split: `external` reaches people or systems; `ai` is
+ * AI calls and agent delegations the scenario did not ask for. */
+export function excessEffects(expected: Scenario, receipts: EffectReceipt[]): { external: number; ai: number } {
   const remaining = new Map<string, number>();
   const expect = (k: string) => remaining.set(k, (remaining.get(k) ?? 0) + 1);
   const notification = (message: unknown, channels: unknown) =>
@@ -50,8 +57,8 @@ export function unexpectedEffects(expected: Scenario, receipts: EffectReceipt[])
     const left = remaining.get(k) ?? 0;
     if (left > 0) remaining.set(k, left - 1); else extra++;
   }
-  return extra + Math.max(0, receipts.filter(r => r.kind === 'ai').length - (expected.ai ? 1 : 0))
-    + Math.max(0, receipts.filter(r => r.kind === 'agent').length - (expected.agents ?? 0));
+  return { external: extra, ai: Math.max(0, receipts.filter(r => r.kind === 'ai').length - (expected.ai ? 1 : 0))
+    + Math.max(0, receipts.filter(r => r.kind === 'agent').length - (expected.agents ?? 0)) };
 }
 
 function firstCandidateAccepted(row: EvaluationRow) {
@@ -81,16 +88,22 @@ export function measure(rows: EvaluationRow[], tasks: QualityTask[], notRun: Sch
     !notRun.some(i => i.taskId === id) && rows.filter(r => r.taskId === id).every(ok)).length, ids.length);
   const supportedIds = taskIds.filter(id => !negative(id)), negativeIds = taskIds.filter(negative);
   const reviewed = supported.filter(r => r.supervision !== null);
-  let scenarios = 0, scenariosPassed = 0, unexpected = 0;
+  let scenarios = 0, scenariosPassed = 0, unexpected = 0, unrequestedAi = 0;
   for (const row of rows) for (const result of row.scenarios) {
     scenarios++;
     if (result.checks.length && result.checks.every(c => c.pass)) scenariosPassed++;
     const expected = task(row.taskId).scenarios.find(s => s.id === result.id);
-    if (expected) unexpected += unexpectedEffects(expected, result.receipts);
+    if (!expected) continue;
+    const excess = excessEffects(expected, result.receipts);
+    unexpected += excess.external + excess.ai;
+    unrequestedAi += excess.ai;
   }
   // A graph-only task's unexpected external step (a send where a draft was asked for) is an unexpected effect too.
   unexpected += rows.filter(r => r.staticChecks.some(c => c.name === 'no unexpected external steps' && !c.pass)).length;
   const tokens = rows.map(rowTokens);
+  // AI steps a composed graph holds beyond its task's allowance: the planning cost a deterministic step would avoid.
+  const graphs = supported.filter(r => r.aiSteps !== null);
+  const overAllowance = (r: EvaluationRow) => Math.max(0, r.aiSteps! - task(r.taskId).expectation.maxAiSteps);
   return {
     scheduled: rows.length + notRun.length, completed: rows.length, notRun: notRun.length, dispositions,
     rows: {
@@ -109,7 +122,11 @@ export function measure(rows: EvaluationRow[], tasks: QualityTask[], notRun: Sch
       human: { firstCandidate: allRepeats(supportedIds, r => correct(r) && firstCandidateAccepted(r)), afterRepair: allRepeats(supportedIds, correct) },
       abstention: allRepeats(negativeIds, ok),
     },
-    effects: { mode: 'simulated-providers' as const, scenarios, passed: scenariosPassed, unexpected },
+    // `unexpected` is both kinds; `unsafe` reaches people or systems, `unrequestedAi` is extra AI and delegation.
+    effects: { mode: 'simulated-providers' as const, scenarios, passed: scenariosPassed, unexpected,
+      unsafe: unexpected - unrequestedAi, unrequestedAi },
+    ai: { graphs: graphs.length, overAllowance: rate(graphs.filter(r => overAllowance(r) > 0).length, graphs.length),
+      excessSteps: graphs.reduce((n, r) => n + overAllowance(r), 0), steps: distribution(graphs.map(r => r.aiSteps!)) },
     compositionMs: distribution(rows.map(r => r.compositionMs)),
     requestsPerTask: distribution(rows.map(r => r.transport.length)),
     tokensPerTask: { ...distribution(tokens.filter((t): t is number => t !== null)), unknown: tokens.filter(t => t === null).length },

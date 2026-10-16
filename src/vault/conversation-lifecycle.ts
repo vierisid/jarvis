@@ -180,7 +180,14 @@ export class ConversationRepository {
       .all(id, ...(cursor ? [cursor.time, cursor.time, cursor.id] : []), limit + 1) as Array<Omit<ConversationMessage, 'tool_calls'> & { tool_calls: string | null }>;
     const page = rows.slice(0, limit); const last = page.at(-1);
     return {
-      items: page.reverse().map(row => ({ ...row, tool_calls: row.tool_calls ? JSON.parse(row.tool_calls) : null })),
+      items: page.reverse().map(row => {
+        const attachments = this.db.query<import('../brief/attachment-contracts').BriefAttachmentRef, [string, string, string]>(`SELECT
+          a.attachment_id AS attachmentId, a.conversation_id AS conversationId, a.kind, a.name, a.media_type AS mediaType,
+          a.size, a.sha256, a.expires_at AS expiresAt, a.state, a.turn_id AS turnId
+          FROM brief_chat_attachments a JOIN brief_chat_turns t ON t.turn_id = a.turn_id
+          WHERE a.workspace_id = ? AND a.conversation_id = ? AND t.user_message_id = ? ORDER BY a.attachment_id`).all(this.workspaceId, id, row.id);
+        return { ...row, tool_calls: row.tool_calls ? JSON.parse(row.tool_calls) : null, ...(attachments.length ? { attachments } : {}) };
+      }),
       nextCursor: rows.length > limit && last ? this.cursor('messages', id, last.created_at, last.id) : null,
     };
   }

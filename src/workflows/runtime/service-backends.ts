@@ -53,6 +53,10 @@ import { defangPieceProjection } from './piece-effect-receipt';
 import { getFlowInProject } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
 import { digest, resolveEffectContext, type WorkflowEffectContext } from './effect-context';
+import { CODE_STEP_PIECE, type PieceAuthorizeRequest, type PieceAuthorizeResponse } from './piece-effect-guard';
+import { holdStep, KILLED_REASON, PAUSED_REASON } from './emergency-hold';
+import { getFlowRun } from '../db/repos/flow-run';
+import { boundedReceiptText } from '../../roles/untrusted';
 import { evaluateLlmOutput } from './llm-output-contract';
 import { withWorkflowMachineBinding } from './machine-binding';
 import { getMachineScope } from '../../actions/machine-scope';
@@ -121,6 +125,15 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
    */
   buildJarvisSystemPrompt?: (userMessage: string) => SystemPromptParts;
 }
+
+/** Jarvis's own pieces: each of their effects passes the boundary and is audited there. */
+const JARVIS_PIECE_PREFIX = '@jarvispieces/';
+
+/** The built-in steps vendored with the engine (`scripts/sync-activepieces.ts`); never audited as steps. */
+const BUILT_IN_STEP_PIECES: ReadonlySet<string> = new Set([
+  '@activepieces/piece-approval', '@activepieces/piece-delay', '@activepieces/piece-file-helper',
+  '@activepieces/piece-http', '@activepieces/piece-schedule', '@activepieces/piece-store', '@activepieces/piece-webhook',
+]);
 
 export function buildSandboxServiceBackends(
   opts: BuildServiceBackendsOptions,
@@ -737,6 +750,38 @@ export function buildSandboxServiceBackends(
   };
 
   /**
+   * A step with no Jarvis adapter: a community piece the owner installed from
+   * the Library, a CODE step in a workflow granted them, a built-in step
+   * (delay, store, HTTP, ...) or one of Jarvis's own pieces. It stays outside
+   * Authority by those opt-ins, but it obeys Pause and Kill (Q-08). A
+   * community piece or a CODE step leaves an audit row when it is let run:
+   * like a governed piece's, the row records the dispatch, not its outcome.
+   * Jarvis's own pieces leave none here, since each of their effects passes
+   * the boundary and is audited there; built-in steps leave none either. Its
+   * input is never sent here.
+   */
+  const admitUngovernedStep = (req: PieceAuthorizeRequest, ctx: WorkflowEffectContext): PieceAuthorizeResponse => {
+    const run = getFlowRun(ctx.runId);
+    if (!run || run.projectId !== ctx.projectId) throw new Error('Workflow step identity does not match the run');
+    if (run.status !== 'RUNNING') throw new Error(`Workflow step blocked: run is ${run.status}`);
+    const state = opts.emergencyController?.getState() ?? 'normal';
+    if (state === 'killed') throw new Error(KILLED_REASON);
+    const stepName = boundedReceiptText(ctx.stepName ?? 'unknown step', 120);
+    if (state === 'paused') {
+      const hold = holdStep({ runId: run.id, projectId: run.projectId, stepName: ctx.stepName ?? 'unknown step' });
+      return { governed: false, dispatch: 'held', approval: { effectId: '', approvalId: '', waitpointId: hold.id, hold: PAUSED_REASON } };
+    }
+    if (!req.piece.startsWith(JARVIS_PIECE_PREFIX) && !BUILT_IN_STEP_PIECES.has(req.piece)) {
+      try {
+        opts.auditTrail?.log({ agent_id: `workflow:${run.id}`, agent_name: `Workflow ${run.id} / ${stepName}`,
+          tool_name: req.piece === CODE_STEP_PIECE ? 'code step' : `community piece ${boundedReceiptText(`${req.piece}/${req.action}`, 160)}`,
+          action_category: 'execute_command', authority_decision: 'allowed', approval_id: null, executed: true });
+      } catch (error) { console.error('[Workflow Authority] step audit failed:', error); }
+    }
+    return { governed: false };
+  };
+
+  /**
    * Admission for a verified piece's action. The piece itself runs in the
    * engine subprocess, so what passes through the boundary here is the
    * decision to let it dispatch: the same Authority check, the same emergency
@@ -745,7 +790,7 @@ export function buildSandboxServiceBackends(
    * subprocess once this returns, so the record is a dispatch authorization
    * and not a completion receipt.
    *
-   * A piece with no adapter is reported ungoverned and runs as it does today.
+   * A piece with no adapter goes through `admitUngovernedStep` above.
    *
    * One authorization covers one step instance. A step the flow configures to
    * retry re-reads the recorded authorization for the same arguments instead
@@ -756,7 +801,7 @@ export function buildSandboxServiceBackends(
    */
   const pieceAuthorize: PieceAuthorizeFn = async (req, ctx) => {
     const resolved = resolveGovernedPieceAction(req.piece, req.action);
-    if (!resolved) return { governed: false };
+    if (!resolved) return admitUngovernedStep(req, ctx);
     // The action becomes `tool_name`: the audit row, the effect record, the
     // approval row and the card's `Action:` line (#651). Refused, not reported
     // ungoverned -- `governed: false` would let the engine run the piece with
@@ -799,9 +844,11 @@ export function buildSandboxServiceBackends(
     })();
     const reply = await effects.invoke({ context: ctx, piece: req.piece, action: req.action,
       route: 'piece', toolName: tool.name, category: capability.category, toolCategory: tool.category,
-      // Digested over the whole resolved input, so a change to any prop -- not
-      // just the ones the card shows -- invalidates an approval granted earlier.
-      request: { piece: req.piece, action: req.action, input },
+      // Digested over the projection AND the engine's digest of the whole
+      // resolved input, so a change to any prop -- including the part of a
+      // long body or a long recipient list the card cuts -- invalidates an
+      // approval granted earlier (Q-08).
+      request: { piece: req.piece, action: req.action, input, ...(req.inputDigest ? { inputDigest: req.inputDigest } : {}) },
       prepare: () => {
         // Matched once, when the effect is recorded; resumes and retries recheck the record's facts.
         const facts = addressing ? recipientFactPins(recipientAddresses(input)) : [];
