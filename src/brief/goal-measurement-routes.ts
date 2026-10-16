@@ -22,6 +22,28 @@ export function createGoalMeasurementRoutes(capabilities: BriefCapabilities, jso
     }
     response.headers.set('Cache-Control', 'no-store'); return response;
   };
+  /** A bounded JSON command body: 8 KiB, valid UTF-8, no query string. */
+  const command = async (req: Params): Promise<unknown> => {
+    if (new URL(req.url).search) throw new GoalValidationError('query', 'is not supported');
+    if (!req.body) throw new GoalValidationError('request', 'a body is required');
+    const reader = req.body.getReader(), chunks: Uint8Array[] = []; let bytes = 0;
+    try {
+      while (true) {
+        const next = await reader.read(); if (next.done) break;
+        bytes += next.value.byteLength;
+        if (bytes > 8192) { await reader.cancel(); throw new GoalValidationError('request', 'exceeds 8192 bytes'); }
+        chunks.push(next.value);
+      }
+      try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))); }
+      catch { throw new GoalValidationError('request', 'must be valid UTF-8 JSON'); }
+    } finally { reader.releaseLock(); }
+  };
+  /** The one `requestId` a receipt recovery names. */
+  const requestId = (req: Params): string => {
+    const query = new URL(req.url).searchParams;
+    if ([...query.keys()].some(k => k !== 'requestId') || query.getAll('requestId').length !== 1) throw new GoalValidationError('query', 'requires one requestId');
+    return query.get('requestId')!;
+  };
   const base = '/api/brief/goals/:id';
   return {
     [base]: { GET: wrap((req, id) => {
@@ -29,28 +51,17 @@ export function createGoalMeasurementRoutes(capabilities: BriefCapabilities, jso
       return provider!.read({ goalId: id });
     }) },
     [`${base}/measurement`]: {
-      GET: wrap((req, id) => {
-        const query = new URL(req.url).searchParams;
-        if ([...query.keys()].some(k => k !== 'requestId') || query.getAll('requestId').length !== 1) throw new GoalValidationError('query', 'requires one requestId');
-        return { receipt: provider!.receipt(id, query.get('requestId')!) };
-      }),
-      POST: wrap(async (req, id) => {
-        if (new URL(req.url).search) throw new GoalValidationError('query', 'is not supported');
-        if (!req.body) throw new GoalValidationError('request', 'a body is required');
-        const reader = req.body.getReader(), chunks: Uint8Array[] = []; let bytes = 0;
-        try {
-          while (true) {
-            const next = await reader.read(); if (next.done) break;
-            bytes += next.value.byteLength;
-            if (bytes > 8192) { await reader.cancel(); throw new GoalValidationError('request', 'exceeds 8192 bytes'); }
-            chunks.push(next.value);
-          }
-          let command: unknown;
-          try { command = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))); }
-          catch { throw new GoalValidationError('request', 'must be valid UTF-8 JSON'); }
-          return provider!.record(id, command);
-        } finally { reader.releaseLock(); }
-      }),
+      GET: wrap((req, id) => ({ receipt: provider!.receipt(id, requestId(req)) })),
+      POST: wrap(async (req, id) => provider!.record(id, await command(req))),
+    },
+    // Q-17: a goal counted from cited entries. The definition's receipt is
+    // recovered like any measurement's, through GET .../measurement.
+    [`${base}/measurement/counted`]: {
+      POST: wrap(async (req, id) => provider!.defineCounted(id, await command(req))),
+    },
+    [`${base}/observations`]: {
+      GET: wrap((req, id) => new URL(req.url).search ? { receipt: provider!.observationReceipt(id, requestId(req)) } : provider!.observations(id)),
+      POST: wrap(async (req, id) => provider!.recordObservation(id, await command(req))),
     },
   };
 }
