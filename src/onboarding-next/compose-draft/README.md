@@ -32,6 +32,18 @@ writes. An HTTP disconnect alone must not cancel a durable job: B08 supplies its
 worker signal and owns the final cancellation/recovery decision. No transaction
 is held while awaiting model, authorization or reference services.
 
+## Model admission (Q-20)
+
+B09 sets no LLM origin or admission class; model calls inherit the caller's.
+With the production `createComposerLlmClient`, a call with no origin runs as
+`background` and passes the shared background admission budget. That is the
+expected path for a detached B08 worker and for any retry after a restart. A
+`background_throttled` refusal fails that composition (journal `FAILED`, result
+`composition_failed`) before any save: the receipt stays `pending` and B08
+decides when to retry. Only a binding
+that runs the attempt inside the person's own onboarding request may mark it
+foreground (`runWithOrigin('user', ...)`); it must not grant an exempt class.
+
 ## Composition compatibility patch
 
 The existing `composePersistedFlow` remains the only planner and validator.

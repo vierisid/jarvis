@@ -189,7 +189,8 @@ test('provider exception is redacted and journal association survives', async ()
   composer.llm.chat = async () => { throw new Error('secret-provider-key'); };
   const result = await provider.compose(null, input(), control);
   expect(JSON.stringify(result)).not.toContain('secret-provider-key');
-  expect(result.availability).toBe('unavailable');
+  // Includes a Q-20 background admission refusal: nothing saved, B08 retries later.
+  expect(result).toEqual({ availability: 'unavailable', reason: 'composition_failed' });
   const replay = await provider.reconcile(null, input()); expect(replay).toMatchObject({ state: 'pending', compositionRecordId: expect.any(String) });
   expect(counts().flow).toBe(0);
 });
