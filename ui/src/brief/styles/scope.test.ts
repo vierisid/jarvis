@@ -21,6 +21,7 @@ const SHEETS = [
   "../workflows/ingredient-picker/picker.css",
   "../workflows/create/creation.css", "../workflows/canvas/canvas.css",
   "../workflows/runs/runs.css", "../workflows/runs/header.css",
+  "../workflows/context/context.css",
 ];
 
 function selectors(css: string): string[] {
