@@ -1,3 +1,4 @@
+import { INGREDIENT_FIXTURES } from "../../ingredient-picker/fixtures";
 import React, { useMemo, useRef, useState } from "react";
 import { BriefButton } from "../../../components/controls";
 import type { BriefRoute, BriefShellPort } from "../../../contracts";
@@ -11,9 +12,10 @@ import { WorkflowCreationRoom } from "../WorkflowCreationRoom";
 import type { RecentWorkflowBinding } from "../../recent-rows/model";
 import "../../../today/preview/specimen.css";
 
-export const compositionCapabilities = (enabled = true) => ({ contractVersion:1, capabilities:{ workflowComposition:{supported:true,ready:true,enabled,state:"ready",reason:enabled ? null : "disabled"} } });
+export const compositionCapabilities = (enabled = true) => ({ contractVersion:1, capabilities:{ compositionIngredients:{supported:true,ready:true,enabled,state:"ready",reason:enabled ? null : "disabled"}, workflowComposition:{supported:true,ready:true,enabled,state:"ready",reason:enabled ? null : "disabled"} } });
 /** Isolated representative receipts. No HTTP, model, draft creation or run occurs. */
-export function WorkflowCreationSpecimen() {
+export function WorkflowCreationSpecimen({ingredients = false}: {ingredients?: boolean}) {
+  const [catalogState,setCatalogState] = useState<"ready"|"loading"|"unavailable">("ready");
   const [route, setRoute] = useState<BriefRoute>({room:"workflows",selection:{}});
   const [sidebar,setSidebar] = useState<"expanded"|"rail">("expanded"), [chatOpen,setChatOpen] = useState(false);
   const [theme,setTheme] = useTheme(), [reduced,setReduced] = useState(false), [chatDraft,setChatDraft] = useState("");
@@ -23,7 +25,7 @@ export function WorkflowCreationSpecimen() {
   const controller = useMemo(() => {
     let saved: string | null = null;
     const jobs = new Map<string,{job:CompositionJob;result:string}>();
-    const makeJob = (request:CompositionRequest): CompositionJob => ({jobId:`fixture-job-${jobs.size+1}`,requestId:request.requestId,specification:{name:"New workflow",prompt:request.prompt},state:"queued",progress:{checkedCandidates:0},compositionId:null,workflow:null,blocker:null,createdAt:Date.now(),updatedAt:Date.now()});
+    const makeJob = (request:CompositionRequest): CompositionJob => ({jobId:`fixture-job-${jobs.size+1}`,requestId:request.requestId,specification:{name:"New workflow",prompt:request.prompt,...(request.ingredients ? {ingredients:request.ingredients} : {})},state:"queued",progress:{checkedCandidates:0},compositionId:null,workflow:null,blocker:null,createdAt:Date.now(),updatedAt:Date.now()});
     function finish(entry:{job:CompositionJob;result:string}) {
       const {job,result}=entry;
       return {...job,state:result==="blocked" ? "blocked" : result==="failed" ? "failed" : "draft_ready",progress:{checkedCandidates:1},
@@ -49,7 +51,8 @@ export function WorkflowCreationSpecimen() {
   if(long)rows.push(...Array.from({length:16},(_,i)=>({...rows[1]!,flowId:`long-${i}`,runId:`long-run-${i}`,name:`Long workflow ${i+1}: gather the weekly product research and prepare a team briefing`,result:"A longer representative result with enough detail to verify wrapping and retained row position."})));
   const recent:RecentWorkflowBinding={source:"fixture",state:recentState==="ready"?{status:"ready",data:rows}:recentState==="stale"?{status:"stale",data:rows,reason:"Fixture"}:recentState==="empty"||recentState==="loading"?{status:recentState}:{status:"unavailable",reason:"Fixture"},refresh:()=>setRecentState("ready")};
   return <div className="brief-root brief-today-specimen" data-brief-theme={theme}>
-    <div className="brief-today-review-toolbar" aria-label="Isolated review controls"><span>D-16 · Workflow creation and recent work</span>
+    <div className="brief-today-review-toolbar" aria-label="Isolated review controls"><span>{ingredients ? "D-17 · Connection and library picker" : "D-16 · Workflow creation and recent work"}</span>
+      {ingredients && <label>Catalog <select aria-label="Catalog scenario" value={catalogState} onChange={e=>setCatalogState(e.target.value as typeof catalogState)}>{["ready","loading","unavailable"].map(s=><option key={s}>{s}</option>)}</select></label>}
       <button onClick={()=>setTheme(theme==="light"?"dark":"light")}>Switch to {theme==="light"?"dark":"light"}</button>
       <label>Composition <select aria-label="Composition scenario" value={scenario} onChange={e=>setScenario(e.target.value)}>{["ready","blocked","failed","lost-response","unavailable"].map(x=><option key={x}>{x}</option>)}</select></label>
       <label>Recent runs <select aria-label="Recent runs scenario" value={recentState} onChange={e=>setRecentState(e.target.value)}>{["ready","loading","empty","stale","unavailable"].map(x=><option key={x}>{x}</option>)}</select></label>
@@ -62,7 +65,7 @@ export function WorkflowCreationSpecimen() {
       <NavigationShell shell={shell} rooms={{workflows:{id:"workflows",title:"Workflows"},"all-workflows":{id:"all-workflows",title:"All workflows"},"workflow-draft":{id:"workflow-draft",title:"Prepared workflow"},workflow:{id:"workflow",title:"Workflow"}}} binding={nav} reducedMotion={reduced}
         conversation={{source:"fixture",content:<><div className="sample-conversation-tabs">General</div><div className="sample-conversation-thread"><h2 className="brief-type-section-heading">What are we moving forward?</h2></div>
           <ConversationComposer mode="preview" reducedMotion={reduced} binding={{source:"fixture",scopeId:"workflow-preview-chat",conversationId:"general",mode:"scoped",connected:true,metadataPending:false,draft:chatDraft,turn:null,pendingAcceptance:false,error:null,actions:{setDraft:setChatDraft,send:()=>setChatDraft(""),cancel:()=>{}}}} /></>}}>
-        {route.room==="workflows" ? <WorkflowCreationRoom shell={shell} binding={{controller,capabilities:compositionCapabilities(scenario!=="unavailable"),recent}} reducedMotion={reduced}/>
+        {route.room==="workflows" ? <WorkflowCreationRoom shell={shell} binding={{controller,capabilities:compositionCapabilities(scenario!=="unavailable"),recent,ingredients:ingredients?{source:"fixture",scopeId:controller.scopeId,state:catalogState,choices:INGREDIENT_FIXTURES,refresh:()=>setCatalogState("ready")}:undefined}} reducedMotion={reduced}/>
           : <section className="brief-workflow-preview-destination"><h1 className="brief-type-room-title">{route.room==="all-workflows"?"All workflows":route.room==="workflow-draft"?"Prepared draft":"Selected workflow"}</h1>
             <p className="brief-workflow-notice">Destination handoff only. Canvas, run details and management are later roadmap steps.</p>
             <dl aria-label="Exact destination IDs">{Object.entries(route.selection).map(([key,value])=><div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>

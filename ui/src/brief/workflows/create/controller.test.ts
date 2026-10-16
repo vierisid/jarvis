@@ -191,6 +191,9 @@ test("a later write failure can preserve a known request when storage becomes wr
 });
 test("a receipt carrying ingredient selections never matches a prompt-only request",()=>{
   const request={requestId:"r",prompt:"P"};expect(readJob(fixtureJob(request),request).requestId).toBe("r");
-  const withIngredients={...fixtureJob(request),specification:{name:"New workflow",prompt:"P",ingredients:[]}} as CompositionJob;
+  // F-08 treats missing and empty lists alike; any actual pin must have been requested.
+  expect(readJob({...fixtureJob(request),specification:{name:"New workflow",prompt:"P",ingredients:[]}},request).requestId).toBe("r");
+  const pin={kind:"connection" as const,id:"northwind-gmail",pieceName:"@activepieces/piece-gmail",pieceVersion:"0.9.0",required:true};
+  const withIngredients={...fixtureJob(request),specification:{name:"New workflow",prompt:"P",ingredients:[pin]}} as CompositionJob;
   expect(()=>readJob(withIngredients,request)).toThrow("Invalid composition receipt");
 });
