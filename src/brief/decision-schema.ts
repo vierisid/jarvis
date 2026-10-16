@@ -1,8 +1,8 @@
 import type { Database } from 'bun:sqlite';
 
-/** The source tables an earlier draft of F-12 put write triggers on. */
+/** The source tables earlier drafts of F-12 and F-14 put write triggers on. */
 const FORMER_TRIGGER_TABLES = ['approval_requests', 'commitment_work', 'commitments', 'workflow_effect',
-  'flow_run', 'flow', 'flow_version', 'waitpoint', 'workflow_run_cancellation', 'brief_decision_placement'];
+  'brief_decision_document', 'flow_run', 'flow', 'flow_version', 'waitpoint', 'workflow_run_cancellation', 'brief_decision_placement'];
 
 /** Queue metadata only. Canonical writers retain all decision and execution ownership. */
 export function ensureDecisionSchema(db: Database): void {

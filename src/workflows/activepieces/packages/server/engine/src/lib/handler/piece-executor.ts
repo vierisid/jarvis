@@ -187,7 +187,11 @@ const executeAction: ActionHandler<PieceAction> = async ({ action, executionStat
             stepName: action.name,
             executionPath: executionState.currentPath.path,
             input: processedInput,
+            // Censored run history: an approved F-14 document replaces only its editable fields.
+            recordedInput: stepOutput.input,
         }
+        // A reviewed decision document is applied to processedInput (which the
+        // context's propsValue is) by this call, before the action runs.
         const governance = await authorizePieceDispatch(dispatchParams)
         // Parked: for an approval, or held while Jarvis is paused (Q-08).
         const parked = 'dispatch' in governance && (governance.dispatch === 'approval_required' || governance.dispatch === 'held')
