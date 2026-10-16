@@ -1,4 +1,4 @@
-import q01Proposed from '../../scripts/product-quality/q01-proposed-rubric.json';
+import q01Proposed from '../workflows/evaluation/rubric/workflow-release-v1.json';
 import { hash, profileHash } from './validation';
 import { CONDITIONS, JOURNEYS, PREREQUISITES, QUALITY_CHECKS, type ReleaseRecord, type Proof, type Measurement } from './contract';
 import { PROPOSED_SUPPLEMENT } from './template';

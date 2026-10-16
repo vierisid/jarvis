@@ -1,10 +1,10 @@
 # Q-22 product quality gate
 
-Q22 audits the integrated candidate's reviewed evidence. The shipped scorecard is **blocked**. Local source tests, open PRs and CI success do not certify the assembled product. This command never enables capabilities, performs deployment, calls a model or runs a live connector.
+Q22 audits the integrated candidate's reviewed evidence. No integrated release runner produces that evidence yet, so a plain checkout always reports **blocked**. Local source tests, open PRs and CI success do not certify the assembled product. This command never enables capabilities, performs deployment, calls a model or runs a live connector.
 
 ## Reproduce the source audit
 
-Use the checkout's pinned Bun (1.4.2 at delivery), install its frozen lockfile, then:
+Install the frozen lockfile, then:
 
 ```sh
 bun scripts/check-product-quality.ts --out /tmp/q22-audit --source-probes
@@ -48,7 +48,7 @@ Hashes check integrity, **not authorship or truth**. Evidence review must establ
 
 ## Frozen thresholds and per-profile quality
 
-The checked-in `scripts/product-quality/q01-proposed-rubric.json` is an unmodified snapshot from Q01 PR #725 at `cfe6453b81b86056964d67e849a9025c3cbe73e3`, path `src/workflows/evaluation/rubric/workflow-release-v1.json`. It remains **proposed**. Q22 adds a proposed supplement for opportunity usefulness/negative proposals, qualified recall and invented inputs because Q01's existing artifact only encodes workflow thresholds. Both artifacts need owner approval and freezing **before** evaluating the holdout. Q22 does not approve or change either owner's thresholds.
+The audit reads Q01's rubric from `src/workflows/evaluation/rubric/workflow-release-v1.json` (Q01, #725). It remains **proposed**. Q22 adds a proposed supplement for opportunity usefulness/negative proposals, qualified recall and invented inputs because Q01's existing artifact only encodes workflow thresholds. Both artifacts need owner approval and freezing **before** evaluating the holdout. Q22 does not approve or change either owner's thresholds.
 
 The record's freeze time must be at or after both artifact freezes and before every quality measurement starts. Both artifact hashes are pinned together by `hash({ q01: q01Hash, supplement: supplementHash })`. The rubric validator requires at least the roadmap's targets and positive agreed per-profile (or `*`) budgets; stricter samples/thresholds are honored. Changing thresholds requires new rubric identity and an untouched evaluation, not relabeling existing results.
 

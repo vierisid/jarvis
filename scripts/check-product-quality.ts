@@ -23,7 +23,7 @@ export function audit(args: string[], root = resolve(import.meta.dir, '..')): nu
   };
   const candidate = git('rev-parse', 'HEAD');
   const dirty = git('status', '--porcelain', '--untracked-files=all').length > 0;
-  const q01 = JSON.parse(readFileSync(join(import.meta.dir, 'product-quality/q01-proposed-rubric.json'), 'utf8'));
+  const q01 = JSON.parse(readFileSync(join(root, 'src/workflows/evaluation/rubric/workflow-release-v1.json'), 'utf8'));
   const record: unknown = options['--record'] ? JSON.parse(readFileSync(resolve(options['--record']), 'utf8')) : releaseTemplate(candidate, hash(q01), {
     schema: hash(readFileSync(join(root, 'src/workflows/db/schema.ts'), 'utf8')),
     prompt: hash(readFileSync(join(root, 'src/actions/tools/composition-provenance.ts'), 'utf8')),
