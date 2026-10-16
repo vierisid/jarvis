@@ -1,13 +1,13 @@
-.brief-management {
+.brief-root .brief-management {
   min-width: 0;
   container-type: inline-size;
   padding-bottom: 88px;
   color: var(--brief-ink);
 }
-.brief-management h1 {
+.brief-root .brief-management h1 {
   margin: 0 0 12px;
 }
-.brief-management-meta {
+.brief-root .brief-management-meta {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -16,11 +16,11 @@
   font-size: 13px;
   color: var(--brief-secondary);
 }
-.brief-management-table {
+.brief-root .brief-management-table {
   width: 100%;
 }
-.brief-management-head,
-.brief-management-row {
+.brief-root .brief-management-head,
+.brief-root .brief-management-row {
   display: grid;
   grid-template-columns:
     minmax(160px, 1.75fr) minmax(96px, 0.7fr) minmax(132px, 0.8fr)
@@ -29,13 +29,13 @@
   align-items: center;
   padding: 0 12px;
 }
-.brief-management-head {
+.brief-root .brief-management-head {
   min-height: 38px;
   font: 400 12px/1.5 var(--brief-sans);
   color: var(--brief-secondary);
   border-bottom: 1px solid var(--brief-card-edge);
 }
-.brief-management-row {
+.brief-root .brief-management-row {
   position: relative;
   min-height: 124px;
   padding-top: 22px;
@@ -44,22 +44,22 @@
   border-radius: 0;
   transition: background-color 160ms;
 }
-.brief-management-row:has(.brief-management-open:hover),
-.brief-management-row[data-confirming="true"] {
+.brief-root .brief-management-row:has(.brief-management-open:hover),
+.brief-root .brief-management-row[data-confirming="true"] {
   background: var(--brief-soft);
 }
-.brief-management-row > * {
+.brief-root .brief-management-row > * {
   min-width: 0;
 }
-.brief-management-name {
+.brief-root .brief-management-name {
   overflow-wrap: anywhere;
 }
-.brief-management-name strong,
-.brief-management-open {
+.brief-root .brief-management-name strong,
+.brief-root .brief-management-open {
   font: 600 16px/1.4 var(--brief-sans);
   color: var(--brief-ink);
 }
-.brief-management-open {
+.brief-root .brief-management-open {
   display: block;
   width: 100%;
   text-align: left;
@@ -67,50 +67,49 @@
   border: 0;
   padding: 0;
   cursor: pointer;
-}
-/* Only the workflow cell opens. Switches and bins are siblings, never nested
+} /* Only the workflow cell opens. Switches and bins are siblings, never nested
    inside a row-wide button. Their targets cannot trigger navigation. */
-.brief-management-open:focus-visible {
+.brief-root .brief-management-open:focus-visible {
   outline: 2px solid var(--brief-focus);
   outline-offset: 5px;
   border-radius: 3px 0 3px 3px;
 }
-.brief-management-description {
+.brief-root .brief-management-description {
   font: 400 13px/1.5 var(--brief-sans);
   color: var(--brief-secondary);
   margin: 8px 0 0;
 }
-.brief-management-readiness {
+.brief-root .brief-management-readiness {
   font: 400 12px/1.5 var(--brief-sans);
   color: var(--brief-secondary);
   margin: 4px 0 0;
 }
-.brief-management-trigger,
-.brief-management-latest {
+.brief-root .brief-management-trigger,
+.brief-root .brief-management-latest {
   font: 400 13px/1.5 var(--brief-sans);
   color: var(--brief-secondary);
   overflow-wrap: anywhere;
 }
-.brief-management-latest {
+.brief-root .brief-management-latest {
   font-variant-numeric: tabular-nums;
 }
-.brief-management-activation .brief-switch-row {
+.brief-root .brief-management-activation .brief-switch-row {
   gap: 8px;
 }
-.brief-management-activation .brief-switch__value {
+.brief-root .brief-management-activation .brief-switch__value {
   font-size: 13px;
 }
-.brief-management-actions {
+.brief-root .brief-management-actions {
   justify-self: end;
 }
-.brief-management-confirm {
+.brief-root .brief-management-confirm {
   grid-column: 2/-1;
   display: flex;
   justify-content: flex-end;
   gap: 12px;
   align-items: center;
 }
-.brief-management-row-feedback {
+.brief-root .brief-management-row-feedback {
   grid-column: 1/-1;
   display: flex;
   gap: 12px;
@@ -120,10 +119,10 @@
   font: 400 12px/1.5 var(--brief-sans);
   overflow-wrap: anywhere;
 }
-.brief-management-row-feedback:has(button) {
+.brief-root .brief-management-row-feedback:has(button) {
   padding-top: 8px;
 }
-.brief-management-collapse {
+.brief-root .brief-management-collapse {
   display: grid;
   grid-template-rows: 1fr;
   opacity: 1;
@@ -131,21 +130,21 @@
     grid-template-rows 280ms var(--brief-motion-ease, ease-out),
     opacity 160ms ease-out;
 }
-.brief-management-collapse[data-removed="true"] {
+.brief-root .brief-management-collapse[data-removed="true"] {
   grid-template-rows: 0fr;
   opacity: 0;
 }
-.brief-management-clip {
+.brief-root .brief-management-clip {
   overflow: hidden;
   min-height: 0;
 }
-.brief-management-undo-list {
+.brief-root .brief-management-undo-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-top: 20px;
 }
-.brief-management-undo {
+.brief-root .brief-management-undo {
   display: flex;
   align-items: center;
   gap: 20px;
@@ -155,27 +154,27 @@
   border-radius: var(--brief-corner-card);
   font-size: 13px;
 }
-.brief-management-undo > div {
+.brief-root .brief-management-undo > div {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.brief-management-undo p {
+.brief-root .brief-management-undo p {
   margin: 4px 0 0;
   color: var(--brief-secondary);
   font-size: 12px;
 }
-.brief-management-notice,
-.brief-management-empty {
+.brief-root .brief-management-notice,
+.brief-root .brief-management-empty {
   color: var(--brief-secondary);
   font-size: 14px;
   padding: 16px 0;
 }
-.brief-management-mobile-label {
+.brief-root .brief-management-mobile-label {
   display: none;
 }
 @container (max-width:780px) {
-  .brief-management-head,
-  .brief-management-row {
+  .brief-root .brief-management-head,
+  .brief-root .brief-management-row {
     gap: 0 8px;
     grid-template-columns:
       minmax(144px, 1fr) minmax(86px, 0.4fr) 124px minmax(78px, 0.35fr)
@@ -183,124 +182,131 @@
     padding-left: 8px;
     padding-right: 8px;
   }
-  .brief-management-description {
+  .brief-root .brief-management-description {
     display: none;
   }
-  .brief-management-row[data-confirming="true"] .brief-management-description {
+  .brief-root
+    .brief-management-row[data-confirming="true"]
+    .brief-management-description {
     display: block;
   }
-  .brief-management-open,
-  .brief-management-name strong {
+  .brief-root .brief-management-open,
+  .brief-root .brief-management-name strong {
     font-size: 14px;
   }
 }
 @container (max-width:590px) {
-  .brief-management-head {
+  .brief-root .brief-management-head {
     display: none;
   }
-  .brief-management-row {
+  .brief-root .brief-management-row {
     grid-template-columns: minmax(0, 1fr) 132px 40px;
     gap: 12px 8px;
     padding: 18px 4px;
   }
-  .brief-management-name {
+  .brief-root .brief-management-name {
     grid-column: 1/3;
   }
-  .brief-management-actions {
+  .brief-root .brief-management-actions {
     grid-column: 3;
     grid-row: 1;
   }
-  .brief-management-trigger {
+  .brief-root .brief-management-trigger {
     grid-column: 1;
     grid-row: 2;
   }
-  .brief-management-activation {
+  .brief-root .brief-management-activation {
     grid-column: 2/4;
     grid-row: 2;
   }
-  .brief-management-latest {
+  .brief-root .brief-management-latest {
     grid-column: 1/3;
   }
-  .brief-management-mobile-label {
+  .brief-root .brief-management-mobile-label {
     display: block;
     font-size: 12px;
     color: var(--brief-tertiary);
     margin-bottom: 4px;
   }
-  .brief-management-confirm {
+  .brief-root .brief-management-confirm {
     grid-column: 1/-1;
   }
-  .brief-management-row-feedback {
+  .brief-root .brief-management-row-feedback {
     min-height: 18px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .brief-management-collapse,
-  .brief-management-row {
+  .brief-root .brief-management-collapse,
+  .brief-root .brief-management-row {
     transition: none;
   }
 }
 
-.brief-management-destination {
+.brief-root .brief-management-destination {
   height: 100%;
   min-height: 480px;
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
-.brief-management-destination > .brief-button {
+.brief-root .brief-management-destination > .brief-button {
   align-self: flex-start;
   flex: none;
 }
-.brief-management-destination > .brief-workflow-canvas {
+.brief-root .brief-management-destination > .brief-workflow-canvas {
   flex: 1;
   min-height: 380px;
 }
 
-.brief-management-row[data-confirming="true"] {
+.brief-root .brief-management-row[data-confirming="true"] {
   border-radius: var(--brief-corner-control);
-}
-
-/* The scrolling list and Undo area occupy separate space. An Undo never
+} /* The scrolling list and Undo area occupy separate space. An Undo never
    covers another row or the workspace-corner Pebble. */
-.brief-management {
+.brief-root .brief-management {
   height: 100%;
   min-height: 0;
   display: flex;
   flex-direction: column;
   padding-bottom: 72px;
 }
-.brief-management > h1,
-.brief-management > .brief-button,
-.brief-management-meta,
-.brief-management-notice {
+.brief-root .brief-management > h1,
+.brief-root .brief-management > .brief-button,
+.brief-root .brief-management-hint,
+.brief-root .brief-management-meta,
+.brief-root .brief-management-notice {
   flex: none;
 }
-.brief-management > .brief-button {
+.brief-root .brief-management > .brief-button {
   align-self: flex-start;
 }
-.brief-management-scroll {
+.brief-root .brief-management-scroll {
   min-height: 0;
   overflow: auto;
   flex: 1;
   scrollbar-gutter: stable;
 }
-.brief-management-scroll:focus-visible {
+.brief-root .brief-management-scroll:focus-visible {
   outline: 2px solid var(--brief-focus);
   outline-offset: 3px;
 }
-.brief-management-head {
+.brief-root .brief-management-head {
   position: sticky;
   top: 0;
   z-index: 1;
   background: var(--brief-canvas);
 }
-.brief-management-undo-list {
+.brief-root .brief-management-undo-list {
   flex: none;
   max-height: 160px;
   overflow: auto;
   overscroll-behavior: contain;
 }
-.brief-management-undo-list:empty {
+.brief-root .brief-management-undo-list:empty {
   margin-top: 0;
+}
+
+.brief-root .brief-management-hint {
+  margin: -12px 0 16px;
+  font: 400 12px/1.5 var(--brief-sans);
+  color: var(--brief-secondary);
 }
