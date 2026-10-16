@@ -44,7 +44,7 @@ afterEach(async () => { if (root) await act(async () => root!.unmount()); root =
 afterAll(() => { globalThis.fetch = originalFetch; globalThis.WebSocket = originalSocket; (globalThis as any).IS_REACT_ACT_ENVIRONMENT = originalAct; GlobalRegistrator.unregister(); });
 function Canvas(p: ResultCanvasProps) {
   canvasProps = p; const [selected, select] = React.useState<string | null>(null);
-  React.useEffect(() => { mounts++; }, []);
+  React.useEffect(() => { mounts++; p.onDirtyChange(false); }, []);
   return <div data-canvas-flow={p.draft.flowId}><button onClick={() => select('draft')}>Draft the follow-up</button>{selected && <label>Draft inspector<input defaultValue="Unfinished edit" /></label>}</div>;
 }
 async function mount(overrides: Partial<ResultViewProps> = {}) {
@@ -87,6 +87,48 @@ test('renderer invalidation removes canvas and disables continuation until a fre
   await mount(); await act(async () => canvasProps.onUnavailable()); expect(host.querySelector('[data-canvas-flow]')).toBeNull();
   expect(host.textContent).not.toContain('Continue to dashboard'); await render({ theme: 'dark' }); expect(host.querySelector('[data-canvas-flow]')).toBeNull();
   await render({ revision: 2 }); expect(host.querySelector('[data-canvas-flow]')).not.toBeNull();
+});
+test('recovered canvas retains selection, unsaved input, focus and dirty guards across later reads', async () => {
+  await mount(); await act(async () => canvasProps.onUnavailable()); await render({ revision: 2 });
+  await click('Draft the follow-up'); const input = host.querySelector('input')!; input.value = 'Unsaved after recovery'; input.focus();
+  await act(async () => canvasProps.onDirtyChange(true));
+  await render({ revision: 3 }); await render({ revision: 4, theme: 'dark' });
+  expect(mounts).toBe(2); expect(host.querySelector('input')).toBe(input); expect(input.value).toBe('Unsaved after recovery'); expect(document.activeElement).toBe(input);
+  for (const name of ['Continue to dashboard', 'Open in Workflows', 'Back to your request', 'Check again']) {
+    expect(button(name).disabled).toBe(true); await click(name);
+  }
+  expect(calls).toEqual([]);
+});
+test('a late renderer invalidation cannot undo a newer revocation', async () => {
+  await mount(); const oldUnavailable = canvasProps.onUnavailable;
+  await render({ revision: 2 }); await act(async () => canvasProps.onUnavailable());
+  expect(host.querySelector('[data-canvas-flow]')).toBeNull();
+  await act(async () => oldUnavailable());
+  expect(host.querySelector('[data-canvas-flow]')).toBeNull(); expect(host.textContent).not.toContain('Continue to dashboard');
+  expect(mounts).toBe(1); expect(calls).toEqual([]);
+  await render({ revision: 3 }); expect(host.querySelector('[data-canvas-flow]')).not.toBeNull(); expect(mounts).toBe(2);
+});
+test('stale renderer invalidations leave fresh edits and focus intact before and after recovery', async () => {
+  await mount(); const oldUnavailable = canvasProps.onUnavailable;
+  for (const revision of [2, 3]) {
+    await render({ revision }); await click('Draft the follow-up');
+    const input = host.querySelector('input')!; input.value = 'Still editing'; input.focus();
+    await act(async () => canvasProps.onDirtyChange(true)); await act(async () => oldUnavailable());
+    expect(host.querySelector('input')).toBe(input); expect(input.value).toBe('Still editing'); expect(document.activeElement).toBe(input);
+    expect(button('Continue to dashboard').disabled).toBe(true);
+    // The current renderer must still be able to withdraw the draft.
+    await act(async () => canvasProps.onUnavailable()); expect(host.querySelector('[data-canvas-flow]')).toBeNull();
+    expect(host.textContent).not.toContain('Continue to dashboard');
+  }
+  expect(mounts).toBe(2); expect(calls).toEqual([]);
+});
+test('a batched invalidation and fresh read reset the editor once', async () => {
+  await mount(); await click('Draft the follow-up'); const input = host.querySelector('input')!;
+  await act(async () => {
+    canvasProps.onUnavailable(); props.model = { ...props.model, revision: 2 }; root!.render(<View {...props} />);
+  });
+  expect(mounts).toBe(2); expect(input.isConnected).toBe(false); expect(host.querySelector('[data-canvas-flow]')).not.toBeNull();
+  await render({ revision: 3 }); expect(mounts).toBe(2);
 });
 test('dirty canvas guards all leaving/refresh actions until saved or discarded', async () => {
   await mount(); await act(async () => canvasProps.onDirtyChange(true));

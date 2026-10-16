@@ -50,11 +50,16 @@ function ResultContent({ model, draft, Canvas, onReview, onContinue, onRefresh, 
   const heading = useRef<HTMLHeadingElement>(null), canvas = useRef<HTMLDivElement>(null);
   const id = useId();
   const live = useRef({ model, draft }); live.current = { model, draft };
-  const valid = !!draft && revoked !== model.revision;
+  const valid = !!draft && (revoked === null || model.revision > revoked);
   const canvasReady = valid && !!Canvas;
   useEffect(() => { mounted.current = true; heading.current?.focus(); return () => { mounted.current = false; active.current = null; }; }, []);
   useEffect(() => { active.current = null; setPending(null); setError(false); }, [model.revision]);
-  const revoke = () => { setRevoked(model.revision); setDirty(false); heading.current?.focus(); };
+  const revoke = () => {
+    // An async renderer check belongs to the observation that started it.
+    if (live.current.model.revision !== model.revision) return;
+    setRevoked(previous => previous === null ? model.revision : Math.max(previous, model.revision));
+    setDirty(false); heading.current?.focus();
+  };
   async function invoke(action: ResultAction['action'], callback: ResultViewProps['onContinue']) {
     if (!callback || (active.current && action !== 'refresh')) return;
     if (action !== 'refresh' && error) return;
@@ -92,7 +97,8 @@ function ResultContent({ model, draft, Canvas, onReview, onContinue, onRefresh, 
     </header>
     <div className="on-result__body">
       <div className="on-result__canvas" ref={canvas} tabIndex={-1} role="region" aria-label="Workflow canvas">
-        {canvasReady ? <CanvasBoundary key={revoked === null ? 'canvas' : model.revision} onUnavailable={revoke}>
+        {/* Reset only for an invalidation, including when recovery arrives in the same batch. */}
+        {canvasReady ? <CanvasBoundary key={revoked ?? 'canvas'} onUnavailable={revoke}>
           <Canvas draft={draft!} reviewing={reviewing} onDirtyChange={setDirty} onUnavailable={revoke} />
         </CanvasBoundary> : <div className="on-result__empty"><h2>{valid ? 'Canvas unavailable' : 'Draft recovery'}</h2><p role="status">{valid ? 'Your draft is saved. Open it in Workflows or check again when the canvas is available.' : unavailableMessage(model.result)}</p></div>}
       </div>

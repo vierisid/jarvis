@@ -34,7 +34,9 @@ verifies real interactive node/inspector behavior.
 
 The adapter must report dirty edits synchronously through `onDirtyChange`, and
 call `onUnavailable` on a missing/replaced/inaccessible/activated version. Catch
-renderer failures and fail closed. A fresh host read can restore the canvas.
+renderer failures and fail closed. Invalidation callbacks belong to their supplied
+read revision; callbacks from superseded reads are ignored. A fresh host read can
+restore the canvas once, without resetting it on subsequent same-version reads.
 Keep the component type stable; theme, chat, sidebar, review mode and same-version
 reads preserve its mounted state. Changing the artifact retires its edit buffer.
 Run/Enable/Publish are not supplied by this view. Any later action belongs to
