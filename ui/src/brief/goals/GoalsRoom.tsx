@@ -13,7 +13,7 @@ import {
   BriefSelect,
   BriefTabs,
 } from "../components/controls";
-import { useBriefReducedMotion } from "../motion";
+import { BRIEF_EASE_OUT, BRIEF_MOTION, useBriefReducedMotion } from "../motion";
 import { GoalSegments, OutcomeNumber } from "../today/outcomes/Values";
 import { formatNumber, qualified } from "../today/outcomes/model";
 import { GoalsController } from "./controller";
@@ -132,7 +132,7 @@ function ConnectedGoals({
     if (!changed || reduced) return;
     const animation = pathElement.current?.animate?.(
       [{ opacity: 0.65 }, { opacity: 1 }],
-      { duration: 180, easing: "cubic-bezier(0,0,.58,1)" },
+      { duration: BRIEF_MOTION.selection.enter, easing: BRIEF_EASE_OUT },
     );
     void animation?.finished?.catch(() => {});
     return () => animation?.cancel();
