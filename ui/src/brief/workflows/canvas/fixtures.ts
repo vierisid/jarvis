@@ -62,7 +62,7 @@ export function makeCanvasFixture(advanced = false) {
     type: "EMPTY",
     displayName: "Meeting ends",
     nextAction: piece("notes", "Read meeting notes", {
-      instructions: "Read notes from the latest meeting with Alex.",
+      instructions: "Read notes from the latest meeting with the Northwind team.",
     }),
   };
   const draft = piece("draft", "Draft the follow-up", {
@@ -134,7 +134,7 @@ export function makeCanvasFixture(advanced = false) {
     notes: [],
     backupFiles: {},
     sampleData: {
-      notes: { content: "Alex wants to begin a pilot." },
+      notes: { content: "Northwind wants to begin a pilot." },
       draft: { content: "Our pilot: next steps" },
     },
     sampleInput: null,
@@ -180,7 +180,8 @@ export function makeCanvasFixture(advanced = false) {
       return response({ connections: [] });
     if (method === "GET" && path === "/api/workflows")
       return response([{ id: "meeting", displayName: version.displayName }]);
-    if (method === "GET" && path.includes("/runs?")) return response([]);
+    if (method === "GET" && path.includes("/runs?"))
+      return response({ items: [], nextOffset: null });
     if (method === "GET" && path === "/api/workflows/meeting")
       return response({
         flow: { id: "meeting" },

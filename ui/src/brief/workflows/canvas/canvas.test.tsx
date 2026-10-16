@@ -326,3 +326,43 @@ test("moving an orphan root retires a stale saved descendant override", async ()
   expect(editor.stepPositions.orphan).toBeUndefined();
   expect(editor.draftOrphans[0]).toMatchObject({ x: 800, y: 900 });
 });
+test("the canvas room mounts the real editor over the fixture without a render error", async () => {
+  const { WorkflowCanvasRoom } = await import("./WorkflowCanvasRoom");
+  const shell = {
+    mode: "preview",
+    route: { room: "workflow", selection: { flowId: "meeting" } },
+    navigate: () => {},
+  } as unknown as BriefShellPort;
+  const errors: unknown[] = [];
+  const onError = (e: ErrorEvent) => errors.push(e.error ?? e.message);
+  window.addEventListener("error", onError);
+  try {
+    await React.act(async () =>
+      root.render(
+        <div className="brief-root">
+          <WorkflowCanvasRoom
+            shell={shell}
+            binding={{
+              source: "fixture",
+              scopeId: "canvas-test",
+              flowId: "meeting",
+              versionId: fixture.versionId,
+              capabilities: caps,
+              request: fixture.request,
+            }}
+          />
+        </div>,
+      ),
+    );
+    await React.act(async () => new Promise((r) => setTimeout(r, 50)));
+  } finally {
+    window.removeEventListener("error", onError);
+  }
+  expect(errors).toEqual([]);
+  expect(host.querySelector(".wf-editor--workspace")).not.toBeNull();
+  expect(host.textContent).toContain("Run workflow");
+  expect(host.textContent).toContain("Saved draft");
+  // The run-history poll reads the paged runs API shape ({ items, nextOffset }).
+  expect(fixture.requests.some((r) => r.path.includes("/runs?"))).toBe(true);
+  expect(fixture.requests.every((r) => r.method === "GET")).toBe(true);
+});
