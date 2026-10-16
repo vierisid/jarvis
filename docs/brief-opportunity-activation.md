@@ -4,7 +4,7 @@ F-10 adds the decision after F-09 preparation. Approval publishes and enables th
 
 ## Dependencies and activation
 
-This PR is stacked on corrected F-09 (`8614e886`). F-01 is the roadmap compile prerequisite; F-09 is the enable prerequisite and in turn requires Q-13. The Q-13 implementation remains optional and is not copied into this branch.
+F-01 is the roadmap compile prerequisite; F-09 is the enable prerequisite and in turn requires Q-13 qualification.
 
 Both flags must be exactly `1`:
 
@@ -13,7 +13,7 @@ JARVIS_BRIEF_PREPARED_OPPORTUNITIES=1
 JARVIS_BRIEF_OPPORTUNITY_ACTIVATION=1
 ```
 
-The default is off. Capability readiness also requires the current shared workflow database, a ready prepared-opportunity provider, and the trigger manager configured after daemon startup. Enabling F-09 permits its bounded background composition work. This change did not set either flag on a running daemon.
+The default is off. Capability readiness also requires the current shared workflow database, a ready prepared-opportunity provider, and the trigger manager configured after daemon startup. Enabling F-09 permits its bounded background composition work.
 
 ## Authenticated API
 
@@ -72,7 +72,7 @@ With Q-13 integrated, also run:
 JARVIS_TEST_PREPARED_Q13=1 bun test src/brief/opportunity-activation.test.ts src/awareness/prepared-opportunities.test.ts src/awareness/prepared-quality-adapter.test.ts
 ```
 
-This uses the real engine and qualifier with simulated services and isolated fixtures. It prepares, qualifies and activates the same locked notification version without a real workflow run. The delivery receipt records the dependency commit and local evidence. No paid model calls, account connections or live delivery are needed.
+This uses the real engine and qualifier with simulated services and isolated fixtures. It prepares, qualifies and activates the same locked notification version without a real workflow run. No paid model calls, account connections or live delivery are needed.
 
 For an integrated manual check, use a disposable daemon/database with Q-13 and both flags. Prepare a confirmed opportunity through F-09, fetch its ready proposal and save its ID/revision. POST approval with a new stable key, then GET its receipt until registered or blocked. Repeat the same POST: the receipt ID and published version must match, and there must be one workflow. A manual-only fixture must have zero runs. Pause that workflow with the existing controls and repeat approval: it must stay paused. In a fresh fixture, disconnect a required account or change the goal before approving: approval must be refused without publication. Dismiss another ready proposal and check that it stays disabled and the returned next ID, if present, can be loaded.
 
