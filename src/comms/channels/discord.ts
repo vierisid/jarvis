@@ -2,6 +2,7 @@ import { Client, GatewayIntentBits, MessageFlags, Partials, type Message } from 
 import type { ChannelAdapter, ChannelHandler, ChannelMessage, SendOptions } from './telegram.ts';
 import type { STTProvider } from '../voice.ts';
 import { discordAllowList, type AllowList } from './allow-list.ts';
+import { NotSentError } from '../delivery.ts';
 
 export class DiscordAdapter implements ChannelAdapter {
   name = 'discord';
@@ -43,6 +44,10 @@ export class DiscordAdapter implements ChannelAdapter {
         GatewayIntentBits.MessageContent,
       ],
       partials: [Partials.Channel],
+      // Q-19: discord.js would resend a timed-out or 5xx request up to three
+      // times on its own. A send that may have arrived is never resent; the
+      // channel service decides, from the error, what is safe to retry.
+      rest: { retries: 0 },
     });
 
     // Wait for ready event
@@ -100,15 +105,32 @@ export class DiscordAdapter implements ChannelAdapter {
   }
 
   async sendMessage(channelId: string, text: string, options?: SendOptions): Promise<void> {
-    if (!this.client) throw new Error('Discord not connected');
+    if (!this.client) throw new NotSentError('Discord not connected');
 
-    const channel = await this.client.channels.fetch(channelId);
+    // Looking up the channel sends nothing, so any failure here is "not sent".
+    let channel: Awaited<ReturnType<Client['channels']['fetch']>>;
+    try {
+      channel = await this.client.channels.fetch(channelId);
+    } catch (error) {
+      throw new NotSentError(`Could not open Discord channel ${channelId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
     if (!channel || !channel.isTextBased()) {
-      throw new Error(`Invalid or non-text channel: ${channelId}`);
+      throw new NotSentError(`Invalid or non-text channel: ${channelId}`);
     }
 
-    for (const payload of discordPayloads(text, options)) {
-      await (channel as any).send(payload);
+    const chunks = options?.literal ? splitLiteral(text, DISCORD_MAX_CHARS / 2) : splitMessage(text, DISCORD_MAX_CHARS);
+    const payloads = discordPayloads(text, options);
+    for (let i = 0; i < payloads.length; i++) {
+      try {
+        await (channel as any).send(payloads[i]);
+      } catch (error) {
+        // Keep the raw unsent text: a safe retry escapes it once, preserving
+        // literal approval content and never repeating an earlier chunk.
+        if (error instanceof Error && i > 0) {
+          (error as Error & { remainingText?: string }).remainingText = chunks.slice(i).join(options?.literal ? '' : '\n');
+        }
+        throw error;
+      }
     }
   }
 

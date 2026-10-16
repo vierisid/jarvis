@@ -251,11 +251,20 @@ export interface PieceNotifyInput {
   message: string;
   channels?: PieceNotifyChannel[];
   priority?: PieceNotifyPriority;
+  /**
+   * The dashboard is in `channels` because `auto` chose it, not because the
+   * step named it (set by the governed step, which expands `auto` before
+   * review). Such a dashboard with nobody watching is skipped, not failed,
+   * and the desktop is tried instead.
+   */
+  autoDashboard?: boolean;
 }
 
 export interface PieceNotifyResult {
   delivered: string[];
   failed: { channel: string; error: string }[];
+  /** Q-19: channels that may have taken it without confirming. Never reported as not sent. */
+  unknown: { channel: string; error: string }[];
 }
 
 /**

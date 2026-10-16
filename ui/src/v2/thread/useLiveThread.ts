@@ -377,6 +377,7 @@ export function messageToThreadItem(msg: ChatMessage): (ThreadItem & { __ts: num
       kind: "result",
       id: msg.id,
       summary: trimmed,
+      ...(msg.failure ? { failure: msg.failure } : {}),
       t,
     };
   }

@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { openRoom, type RoomKey } from "../router";
+import { closeRoom, openRoom, type RoomKey } from "../router";
 import { useLiveData, type LiveData } from "./LiveDataContext";
 import { useAuthorityInbox } from "../rooms/authority/useAuthorityData";
-import { availabilityLabel, combinedAvailability, readArray, readObject, useRemoteData, type RemoteSource } from "../hooks/useRemoteData";
+import { availabilityLabel, combinedAvailability, readArray, readObject, useRemoteData, type RemoteData, type RemoteSource } from "../hooks/useRemoteData";
+import type { UserFailure } from "../ui";
+import { focusRun } from "../rooms/workflows/run-focus";
 import { RemoteNotice, RemoteSection } from "../ui/RemoteSection";
 import type { ConnectionState } from "./Header";
 import { ApprovalWhy } from "../thread/ApprovalWhy";
@@ -18,7 +20,11 @@ import { ApprovalWhy } from "../thread/ApprovalWhy";
 
 type WSize = 1 | 2;
 type LayoutItem = { id: string; size: WSize };
-type RenderCtx = { live: LiveData; inbox: ReturnType<typeof useAuthorityInbox>; connection: ConnectionState; onApprove: (id: string) => void; onCancel: (id: string) => void };
+/** Mirrors `OpenFailure` in src/workflows/runtime/open-failures.ts (Q-19). */
+type OpenFailure = { failure: UserFailure; keys: string[]; repeats: number; source: "run" | "delivery" | "chat"; title: string;
+  flowId?: string; runId?: string; at: number };
+const readOpenFailures = (value: unknown) => readArray<OpenFailure>(value);
+type RenderCtx = { live: LiveData; inbox: ReturnType<typeof useAuthorityInbox>; failures: RemoteData<OpenFailure[]>; connection: ConnectionState; onApprove: (id: string) => void; onCancel: (id: string) => void };
 type WidgetDef = {
   id: string;
   group: "run" | "know" | "guard" | "build" | "system";
@@ -74,16 +80,20 @@ function agentRows(live: LiveData) {
 }
 function todayRows(live: LiveData) {
   const rows: { id: string; dot: string; text: string; ts: number }[] = [];
-  for (const t of live.taskEvents) rows.push({ id: `t${t.task.id}${t.timestamp}`, dot: t.task.status === "done" ? "var(--ok)" : "var(--speak)", text: t.task.what, ts: t.timestamp });
+  // Task states are pending, active, completed, failed and escalated; "done" was never one (Q-19).
+  for (const t of live.taskEvents) rows.push({ id: `t${t.task.id}${t.timestamp}`, dot: taskDot(t.task.status), text: t.task.what, ts: t.timestamp });
   for (const c of live.contentEvents) rows.push({ id: `c${c.item.id}${c.timestamp}`, dot: "var(--ok)", text: `${c.item.title} · ${c.item.stage}`, ts: c.timestamp });
   for (const n of live.notices) rows.push({ id: `n${n.id}`, dot: "var(--listen)", text: n.title, ts: Date.now() });
   return rows.sort((a, b) => b.ts - a.ts).slice(0, 5);
 }
+function taskDot(status: string): string {
+  return status === "completed" ? "var(--ok)" : status === "failed" ? "var(--listen)" : status === "escalated" ? "var(--hold)" : "var(--speak)";
+}
 function taskRows(live: LiveData) {
   const seen = new Map<string, { id: string; what: string; status: string; due: number | null }>();
   for (const t of live.taskEvents) {
-    if (t.action === "deleted") { seen.delete(t.task.id); continue; }
-    if (t.task.status !== "done") seen.set(t.task.id, { id: t.task.id, what: t.task.what, status: t.task.status, due: t.task.when_due });
+    if (t.action === "deleted" || t.task.status === "completed" || t.task.status === "failed") { seen.delete(t.task.id); continue; }
+    seen.set(t.task.id, { id: t.task.id, what: t.task.what, status: t.task.status, due: t.task.when_due });
   }
   return [...seen.values()].slice(0, 4);
 }
@@ -236,20 +246,51 @@ function SettingsWidget() {
       : <Loading />}</RemoteSection></>);
 }
 
-function inboxSummary(live: LiveData, inbox: ReturnType<typeof useAuthorityInbox>, connection: ConnectionState) {
+function inboxSummary(live: LiveData, inbox: ReturnType<typeof useAuthorityInbox>, failures: RemoteData<OpenFailure[]>, connection: ConnectionState) {
   const ids = new Set([...live.approvals.map(a => a.id), ...(inbox.pending.data ?? []).map(a => a.id), ...(inbox.unresolved.data ?? []).map(a => a.id)]);
-  const state = combinedAvailability(inbox.pending, inbox.unresolved);
-  return { count: ids.size, state: state === "ready" && connection !== "live" ? "stale" as const : state };
+  const state = combinedAvailability(inbox.pending, inbox.unresolved, failures);
+  return { count: ids.size + (failures.data?.length ?? 0), state: state === "ready" && connection !== "live" ? "stale" as const : state };
 }
 
-export function WaitingWidget({ live, inbox, connection, onApprove, onCancel }: RenderCtx) {
-  const { count, state } = inboxSummary(live, inbox, connection);
+/**
+ * Q-19: one row per failure that needs the person, with the sentence Runs and
+ * chat show for it. It leaves when resolved (the daemon decides) or dismissed.
+ */
+function FailureRows({ failures }: { failures: RemoteData<OpenFailure[]> }) {
+  const [dismissing, setDismissing] = useState<string | null>(null);
+  const dismiss = async (row: OpenFailure) => {
+    setDismissing(row.keys[0]!);
+    try {
+      await fetch("/api/failures/dismiss", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keys: row.keys }) });
+    } catch { /* the next refresh shows whether it was recorded */ }
+    finally { setDismissing(null); void failures.refresh(); }
+  };
+  return <>{(failures.data ?? []).slice(0, 3).map(row => (
+    <div className="rs-apr" key={row.keys[0]} data-effect={row.failure.effect}>
+      <div className="t1"><span className="rs-dot" style={{ background: row.failure.effect === "none" ? "var(--listen)" : "var(--hold)" }} />
+        {row.title}{row.repeats > 0 ? ` · ${row.repeats + 1} times` : ""}</div>
+      <div className="t2">{row.failure.headline} {row.failure.outcome}</div>
+      <div className="bs">
+        <button className="b1" onClick={() => {
+          if (row.source === "chat") { closeRoom(); return; }
+          // Lands on the run itself, not just the Workflows room (review C7).
+          if (row.flowId && row.runId) focusRun(row.flowId, row.runId);
+          openRoom("workflows");
+        }}>Open</button>
+        <button className="b2" disabled={dismissing === row.keys[0]} onClick={() => void dismiss(row)}>Dismiss</button>
+      </div>
+    </div>))}</>;
+}
+
+export function WaitingWidget({ live, inbox, failures, connection, onApprove, onCancel }: RenderCtx) {
+  const { count, state } = inboxSummary(live, inbox, failures, connection);
   const liveIds = new Set(live.approvals.map(a => a.id));
   const saved = (inbox.pending.data ?? []).filter(a => !liveIds.has(a.id));
   return <>
     <WHeader label={`waiting on you · ${state === "ready" ? count : "—"}`} room="authority" tone="hold" />
     <RemoteNotice label="Pending approvals" resource={inbox.pending} />
     <RemoteNotice label="Unfinished approvals" resource={inbox.unresolved} />
+    <RemoteNotice label="Failures" resource={failures} />
     {connection !== "live" && <div className="v2-remote-state" role="status">Live requests unavailable. Reconnect to confirm what is waiting; displayed requests are last known.</div>}
     {live.approvals.slice(0, 3).map(a => <div className="rs-apr" key={a.id}>
       <div className="t1"><span className="rs-dot" />{a.category} · {a.toolName}</div>
@@ -259,7 +300,8 @@ export function WaitingWidget({ live, inbox, connection, onApprove, onCancel }: 
     </div>)}
     {saved.slice(0, 3).map(a => <Row key={a.id} room="authority" dot="var(--hold)"><b>{a.tool_name}</b> · {a.reason}</Row>)}
     {(inbox.unresolved.data?.length ?? 0) > 0 && <Row room="authority" dot="var(--hold)">{inbox.unresolved.data!.length} approved, not finished. Open Authority to resolve.</Row>}
-    {state === "ready" && count === 0 && <Empty>Approvals land here when an action needs your yes. <span className="dim">Nothing waits right now.</span></Empty>}
+    <FailureRows failures={failures} />
+    {state === "ready" && count === 0 && <Empty>Approvals and failures that need you land here. <span className="dim">Nothing waits right now.</span></Empty>}
   </>;
 }
 
@@ -275,7 +317,7 @@ const WIDGETS: Record<string, WidgetDef> = {
     },
   },
   waiting: {
-    id: "waiting", group: "guard", dot: "var(--hold)", desc: "Pending approvals, resolvable in place. Pins to the top while amber.", defaultSize: 1,
+    id: "waiting", group: "guard", dot: "var(--hold)", desc: "Pending approvals and failures that need you, resolvable in place. Pins to the top while amber.", defaultSize: 1,
     render: (ctx) => <WaitingWidget {...ctx} />,
   },
   today: {
@@ -293,8 +335,8 @@ const WIDGETS: Record<string, WidgetDef> = {
   },
   vitals: {
     id: "vitals", group: "system", dot: "var(--faint)", desc: "Agents active, approvals waiting, events today.", defaultSize: 1,
-    render: ({ live, inbox, connection }) => {
-      const { count, state } = inboxSummary(live, inbox, connection);
+    render: ({ live, inbox, failures, connection }) => {
+      const { count, state } = inboxSummary(live, inbox, failures, connection);
       const active = agentRows(live).filter((a) => a.running).length;
       return (<><WHeader label="vitals" /><div className="rs-vit">
         <div className="v"><span className="k">agents</span><div className="n">{active}<span> active</span></div></div>
@@ -395,6 +437,7 @@ export function NowRoom({
 }) {
   const live = useLiveData();
   const inbox = useAuthorityInbox();
+  const failures = useRemoteData("/api/failures/open", readOpenFailures, 15000);
   const [layout, setLayout] = useState<LayoutItem[]>(loadLayout);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -406,7 +449,7 @@ export function NowRoom({
   const commit = useCallback((l: LayoutItem[]) => { setLayout(l); persist(l); }, []);
 
   const offline = connection === "offline";
-  const summary = inboxSummary(live, inbox, connection);
+  const summary = inboxSummary(live, inbox, failures, connection);
   const amberPinned = summary.count > 0 || summary.state !== "ready";
 
   // waiting-on-you is force-present (and immovable) while amber.
@@ -418,7 +461,7 @@ export function NowRoom({
 
   const available = useMemo(() => CATALOG_ORDER.filter((id) => !items.some((i) => i.id === id)), [items]);
 
-  const ctx: RenderCtx = { live, inbox, connection, onApprove, onCancel };
+  const ctx: RenderCtx = { live, inbox, failures, connection, onApprove, onCancel };
 
   const remove = (id: string) => { if (id === "waiting" && amberPinned) return; commit(layout.filter((i) => i.id !== id)); };
   const resize = (id: string) => commit(layout.map((i) => (i.id === id ? { ...i, size: (i.size === 2 ? 1 : 2) as WSize } : i)));

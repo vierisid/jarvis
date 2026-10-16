@@ -238,7 +238,8 @@ describe('proactive TTS and live realtime sessions', () => {
     const other = fakeClient();
     const { svc, internals } = withClients(live, other);
     internals.realtimeSessions.set(live.socket, session(true));
-    await svc.broadcastProactiveVoice('Your meeting starts in five minutes.');
+    // Q-19: the receipt counts only the clients that were sent audio.
+    expect(await svc.broadcastProactiveVoice('Your meeting starts in five minutes.')).toBe(1);
     expect(live.json).toEqual([]);
     expect(live.binary).toEqual([]);
     expect(other.json.map((m) => m.type)).toEqual(['tts_start', 'tts_end']);
@@ -249,7 +250,7 @@ describe('proactive TTS and live realtime sessions', () => {
     const talking = fakeClient();
     const { svc, internals, synthesized } = withClients(talking);
     internals.realtimeSessions.set(talking.socket, session(false, Date.now()));
-    await svc.broadcastProactiveVoice('Heads up.');
+    expect(await svc.broadcastProactiveVoice('Heads up.')).toBe(0);
     expect(synthesized()).toBe(0);
     expect(talking.json).toEqual([]);
   });
@@ -260,7 +261,7 @@ describe('proactive TTS and live realtime sessions', () => {
     const open = fakeClient();
     const { svc, internals } = withClients(open);
     internals.realtimeSessions.set(open.socket, session(false, Date.now() - 60_000));
-    await svc.broadcastProactiveVoice('Heads up.');
+    expect(await svc.broadcastProactiveVoice('Heads up.')).toBe(1);
     expect(open.json.map((m) => m.type)).toEqual(['tts_start', 'tts_end']);
     expect(open.binary).toHaveLength(1);
   });

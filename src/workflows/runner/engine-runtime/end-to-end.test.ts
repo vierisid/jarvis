@@ -41,6 +41,7 @@ import { EngineFlowExecutor } from './engine-flow-executor';
 import { Worker } from '../../queue/worker';
 import { createRunFlowHandler } from '../handler';
 import { createWorkflowRoutes } from '../../api/routes';
+import { ActionOutcomeError } from "../../../actions/action-outcome";
 
 const buildOptIn = process.env.JARVIS_TEST_ENGINE_BUILD === "1";
 const initialCached = findCachedBundle();
@@ -540,7 +541,11 @@ describe("Engine end-to-end (G+H pieces)", () => {
   };
   const notify: NotifyFn = async (req) => {
     calls.notify.push({ message: req.message });
-    return { delivered: ["dashboard"], failed: [] };
+    if (req.message === "sent nowhere") {
+      throw new ActionOutcomeError({ status: "error", code: "DELIVERY_FAILED", effect: "not_started",
+        message: "Not sent on any channel: dashboard (no dashboard was open)" });
+    }
+    return { delivered: ["dashboard"], failed: [], unknown: [] };
   };
   const contextProvider: JarvisContextProvider = {
     vaultSearch: async () => {
@@ -711,6 +716,40 @@ describe("Engine end-to-end (G+H pieces)", () => {
       expect(calls.agent[0]?.goal).toBe("say hi");
       expect(calls.workflows.length).toBe(1);
       expect(calls.workflows[0]?.flowId).toBe("flow_other");
+    },
+    60_000,
+  );
+
+  // Q-19: a notify step that sent nothing anywhere fails with its typed
+  // outcome through the real engine and the rebuilt notify piece.
+  test.skipIf(skipE2eTests)(
+    "a notify step sent nowhere fails the run with its outcome",
+    async () => {
+      calls.notify.length = 0;
+      const flow = createFlow({ projectId: DEFAULT_IDS.project });
+      const trigger: FlowTriggerNode = {
+        name: "trigger", type: "PIECE_TRIGGER", displayName: "Manual",
+        settings: { pieceName: PIECE_TEST_NAME, pieceVersion: PIECE_VERSION, triggerName: "manual", input: { payload: {} } },
+        nextAction: {
+          name: "step_notify", type: "PIECE", displayName: "Notify",
+          settings: { pieceName: PIECE_NOTIFY_NAME, pieceVersion: PIECE_VERSION, actionName: "notify",
+            input: { message: "sent nowhere", channels: ["dashboard"], priority: "normal" } },
+        },
+      };
+      const v = createDraftVersion({ flowId: flow.id, displayName: "notify-nowhere", trigger });
+      updateDraftVersion(v.id, { trigger, valid: true });
+      lockVersion(v.id);
+      const run = createFlowRun({ flowId: flow.id, flowVersionId: v.id, environment: "TESTING" });
+      const handle = await runtime!.acquire({ runId: run.id, projectId: DEFAULT_IDS.project });
+      try {
+        const finalRun = await handle.executeFlow({ flowVersion: getFlowVersion(v.id)! });
+        expect(finalRun.status).toBe("FAILED");
+        expect(finalRun.failedStep?.name).toBe("step_notify");
+        expect(finalRun.failedStep?.errorMessage).toContain("Not sent on any channel");
+      } finally {
+        await handle.release();
+      }
+      expect(calls.notify).toEqual([{ message: "sent nowhere" }]);
     },
     60_000,
   );

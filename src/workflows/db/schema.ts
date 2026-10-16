@@ -187,6 +187,24 @@ const STATEMENTS: string[] = [
     child_run_id TEXT NOT NULL UNIQUE,
     waitpoint_id TEXT UNIQUE
   )`,
+  // Q-19: failures the person dismissed from Today. Keyed by the failure's
+  // stable key, so a dismissal outlives the run it came from.
+  `CREATE TABLE IF NOT EXISTS failure_dismissal (
+    key TEXT PRIMARY KEY, dismissed_at INTEGER NOT NULL
+  )`,
+  // Q-19: what still waits on the person: a run that ended badly, or a notify
+  // step a channel did not confirm. Rows are references, read afresh each time,
+  // and leave when resolved or dismissed. Runs are indexed as they finish, by
+  // the cursor below over flow_run.updated, so Today never rescans history.
+  `CREATE TABLE IF NOT EXISTS open_failure (
+    key TEXT PRIMARY KEY, source TEXT NOT NULL CHECK(source IN ('run', 'delivery')),
+    run_id TEXT NOT NULL, flow_id TEXT NOT NULL, effect_id TEXT, at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_open_failure_flow ON open_failure(flow_id)`,
+  `CREATE TABLE IF NOT EXISTS open_failure_scan (
+    id INTEGER PRIMARY KEY CHECK (id = 1), updated INTEGER NOT NULL, run_rowid INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_flow_run_updated ON flow_run(updated)`,
 
   // Append-only recovery decisions survive a run/flow deletion as audit evidence.
   `CREATE TABLE IF NOT EXISTS workflow_recovery_receipt (

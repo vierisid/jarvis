@@ -63,7 +63,7 @@ function fixture(piece: string, action: string, level = 10, names: { displayName
     auditTrail: new AuditTrail(), eventBuffer: new WorkflowEventBuffer(), approvalManager: approvals,
     onWorkflowApproval: request => { deliveredApprovals.push(request.id); },
     channelService: { getChannelStatus: () => ({}), tryBroadcastToChannels: async () => ({ delivered: [], failed: [] }) } as any,
-    wsService: { broadcastNotificationToDashboard: () => {} } as any };
+    wsService: { broadcastNotificationToDashboard: () => 1 } as any };
   const backends = buildSandboxServiceBackends(options);
   const context = { runId: run.id, projectId: DEFAULT_IDS.project, stepName, executionPath: [] };
   const authorize = async (input: Record<string, unknown> = {}) =>

@@ -12,11 +12,14 @@
  */
 
 import { createAction, Property } from "@activepieces/pieces-framework";
+import { ActionOutcomeError, isActionOutcome, type ActionOutcome } from '../../../../../../../../../actions/action-outcome';
 
 interface NotifyResponse {
   delivered: string[];
   failed: { channel: string; error: string }[];
+  unknown: { channel: string; error: string }[];
   approval?: { effectId: string; approvalId: string; waitpointId: string };
+  outcome?: ActionOutcome;
 }
 
 export const notifyAction = createAction({
@@ -25,14 +28,17 @@ export const notifyAction = createAction({
   description:
     "Deliver a message through Jarvis's configured channels. Use 'auto' to let Jarvis pick a sensible default given the priority.",
   // Delivery report: `delivered` lists channel names the notifier
-  // actually reached; `failed` carries one entry per channel that
-  // refused, with the error string for diagnostics. Both are always
-  // present in the response (empty arrays on full success / failure).
+  // actually reached; `failed` carries one entry per channel that did not
+  // send it, with the error string for diagnostics; `unknown` lists channels
+  // that may have taken it without confirming (a timeout after sending), which
+  // Jarvis never resends on its own. All three are always present. The step
+  // fails only when nothing was sent on any channel.
   outputSample: {
     delivered: ["telegram", "dashboard"],
     failed: [
       { channel: "discord", error: "no recipient configured" },
     ],
+    unknown: [],
   },
   props: {
     message: Property.LongText({
@@ -97,6 +103,11 @@ export const notifyAction = createAction({
     });
     if (!response.ok) {
       const text = await response.text();
+      let outcome: unknown;
+      try { outcome = (JSON.parse(text) as NotifyResponse).outcome; } catch { /* not a typed reply */ }
+      // A typed outcome (nothing sent anywhere, or a refused effect) fails the
+      // step with its code and message intact.
+      if (isActionOutcome(outcome) && outcome.status !== 'succeeded') throw new ActionOutcomeError(outcome);
       throw new Error(
         `jarvis-notify: daemon responded ${response.status}: ${text.slice(0, 500)}`,
       );

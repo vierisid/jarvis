@@ -9,8 +9,9 @@ import type { WorkflowEventBus } from '../workflows/runtime/event-bus.ts';
 import { AWARENESS_EVENT_TYPE_MAP } from '../workflows/runtime/event-types.ts';
 import { classifyEvent } from './event-classifier.ts';
 import { wrapUntrusted, inlineUntrusted } from '../roles/untrusted.ts';
-import { sendDesktopNotification as defaultDesktop, type sendDesktopNotificationWithReceipt } from '../comms/desktop-notify.ts';
+import { sendDesktopNotification as defaultDesktop, type DesktopReceipt } from '../comms/desktop-notify.ts';
 import { deliverOpportunityNotification } from './opportunity-notification.ts';
+import { ScreenAlerts, screenIssueKey } from '../failures/interruptions.ts';
 
 type DeliverySockets = Pick<WebSocketService, 'broadcastAwarenessEvent' | 'broadcastNotification' | 'broadcastProactiveVoice'> & {
   getServer(): Pick<WebSocketServer, 'getClientCount' | 'broadcastWithReceipt'>;
@@ -24,7 +25,9 @@ export interface AwarenessDeliveryDependencies {
   agent(): Pick<BackgroundAgentService, 'handleMessage' | 'lastTurnRequestedApproval'> | null;
   desktop?: typeof defaultDesktop;
   // A launched sender is not a delivery receipt; keep the two contracts distinct.
-  desktopWithReceipt?: typeof sendDesktopNotificationWithReceipt;
+  // Unset uses the native receipt, which reads a sender past its wait as 'unknown' (Q-19).
+  desktopWithReceipt?: (title: string, body: string, options?: { urgency?: 'low' | 'normal' | 'critical'; expireMs?: number }) =>
+    Promise<DesktopReceipt | boolean>;
 }
 
 /** Only the AwarenessService callback and opportunity outbox use this policy.
@@ -34,6 +37,8 @@ export interface AwarenessDeliveryDependencies {
 export class AwarenessDeliveryPolicy {
   readonly quiet: boolean;
   private readonly awarenessWarnedTypes = new Set<string>();
+  /** Q-19 (owner decision): one urgent interruption per screen issue, then quiet; the researched fix is that interruption. */
+  private readonly screenAlerts = new ScreenAlerts();
   constructor(private readonly deps: AwarenessDeliveryDependencies, flag?: string) { this.quiet = flag === '1'; }
   readiness(): 'ready' { return 'ready'; }
 
@@ -60,6 +65,7 @@ export class AwarenessDeliveryPolicy {
     // Never feed ambient awareness into an automatic assistant in quiet mode.
     if (this.quiet) return;
     const bgAgent = this.deps.agent();
+    const screenAlerts = this.screenAlerts;
 
     // Route awareness events through existing event pipeline
     const classified = classifyEvent({
@@ -82,8 +88,13 @@ export class AwarenessDeliveryPolicy {
       console.log(`[Daemon] Awareness suggestion firing: "${title}"`);
 
       const hasWsClients = wsService.getServer().getClientCount() > 0;
+      const issueKey = typeof event.data.issueKey === 'string' ? event.data.issueKey : null;
 
-      if (hasWsClients) {
+      if (screenAlerts.headsUp(issueKey) === 'quiet') {
+        // Research is under way (its fix will interrupt), or this issue
+        // already interrupted: the dashboard only.
+        wsService.broadcastNotification(text, 'normal');
+      } else if (hasWsClients) {
         // Primary: deliver via WebSocket + voice
         wsService.broadcastNotification(text, 'urgent');
         sendDesktopNotification(`JARVIS: ${title}`, body, { urgency: 'normal' });
@@ -106,6 +117,8 @@ export class AwarenessDeliveryPolicy {
       const appName = String(event.data.appName ?? '');
       if (errorText.length > 5) {
         console.log(`[Daemon] Auto-researching error: "${errorText.slice(0, 80)}"`);
+        const errorKey = screenIssueKey('error', appName, errorText);
+        screenAlerts.researchStarted(errorKey);
         bgAgent.handleMessage(
           // `appName` is the active window's app name, which a web page
           // controls through document.title -- the same actor that
@@ -124,6 +137,11 @@ export class AwarenessDeliveryPolicy {
             const awaiting = bgAgent?.lastTurnRequestedApproval() ?? false;
             const heading = awaiting ? `Needs your approval (error in ${appName})` : `Fix for error in ${appName}`;
             const solutionText = `**${heading}:**\n${solution.slice(0, 500)}`;
+            // The one interruption for this error, unless one already went out (Q-19).
+            if (screenAlerts.fix(errorKey) === 'quiet') {
+              wsService.broadcastNotification(solutionText, 'normal');
+              return;
+            }
             wsService.broadcastNotification(solutionText, 'urgent');
             sendDesktopNotification(`JARVIS: ${heading}`, solution.slice(0, 200), { urgency: 'critical', expireMs: 15000 });
             // Strip markdown for TTS; voice should sound natural
@@ -147,10 +165,13 @@ export class AwarenessDeliveryPolicy {
             ).catch(err =>
               console.error('[Daemon] Error solution TTS failed:', err instanceof Error ? err.message : err)
             );
+          } else {
+            screenAlerts.researchEnded(errorKey);
           }
-        }).catch(err =>
-          console.error('[Daemon] Error auto-research failed:', err instanceof Error ? err.message : err)
-        );
+        }).catch(err => {
+          screenAlerts.researchEnded(errorKey);
+          console.error('[Daemon] Error auto-research failed:', err instanceof Error ? err.message : err);
+        });
       }
     }
 
@@ -163,6 +184,8 @@ export class AwarenessDeliveryPolicy {
 
       if (compositeScore >= 0.7 && (appCategory === 'code_editor' || appCategory === 'terminal')) {
         console.log(`[Daemon] Deep-researching struggle in ${sAppName} (score: ${compositeScore.toFixed(2)})`);
+        const struggleKey = screenIssueKey('struggle', sAppName);
+        screenAlerts.researchStarted(struggleKey);
         bgAgent.handleMessage(
           // Same reasoning as the error path above: both of these come
           // from observer event data, so both are labels inside trusted
@@ -178,6 +201,10 @@ export class AwarenessDeliveryPolicy {
             const awaiting = bgAgent?.lastTurnRequestedApproval() ?? false;
             const heading = awaiting ? `Needs your approval (${sAppName})` : `Help for ${sAppName}`;
             const solutionText = `**${heading}:**\n${solution.slice(0, 500)}`;
+            if (screenAlerts.fix(struggleKey) === 'quiet') {
+              wsService.broadcastNotification(solutionText, 'normal');
+              return;
+            }
             wsService.broadcastNotification(solutionText, 'urgent');
             sendDesktopNotification(`JARVIS: ${heading}`, solution.slice(0, 200), { urgency: 'critical', expireMs: 15000 });
             const voiceText = solution
@@ -197,10 +224,13 @@ export class AwarenessDeliveryPolicy {
             ).catch(err =>
               console.error('[Daemon] Struggle solution TTS failed:', err instanceof Error ? err.message : err)
             );
+          } else {
+            screenAlerts.researchEnded(struggleKey);
           }
-        }).catch(err =>
-          console.error('[Daemon] Struggle auto-research failed:', err instanceof Error ? err.message : err)
-        );
+        }).catch(err => {
+          screenAlerts.researchEnded(struggleKey);
+          console.error('[Daemon] Struggle auto-research failed:', err instanceof Error ? err.message : err);
+        });
       }
     }
   }

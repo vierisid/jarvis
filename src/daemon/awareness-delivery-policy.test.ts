@@ -25,6 +25,7 @@ import { captureRoutine } from '../awareness/opportunity-test-fixtures';
 import { getOpportunity, getOpportunityMetrics, refreshOpportunity } from '../awareness/opportunities';
 import { OpportunityDelivery } from '../awareness/opportunity-delivery';
 import type { ApprovalRequest } from '../authority/approval';
+import { screenIssueKey } from '../failures/interruptions';
 
 const suggestion: Suggestion = { id: 'opportunity-one', type: 'automation', title: 'Review invoices', body: 'Three observed episodes.', triggerCaptureId: 'capture-one', context: {} };
 function fixture(flag: string | undefined = '1', accepted = 1) {
@@ -35,11 +36,11 @@ function fixture(flag: string | undefined = '1', accepted = 1) {
       getServer: () => ({ getClientCount: () => accepted, broadcastWithReceipt: message => { messages.push(message); return accepted; } }),
       broadcastAwarenessEvent: event => { messages.push({ type: 'notification', payload: { source: 'awareness_event', event }, timestamp: event.timestamp }); },
       broadcastNotification: text => { messages.push({ type: 'chat', payload: { text }, timestamp: Date.now() }); },
-      broadcastProactiveVoice: async () => { calls.voice++; },
+      broadcastProactiveVoice: async () => { calls.voice++; return 1; },
     },
     channels: { getManager: () => ({ listChannels: () => ['telegram'] }),
       broadcastToAll: async () => { calls.channels++; },
-      tryBroadcastToChannels: async () => { calls.channels++; return { delivered: ['telegram'], failed: [] }; } },
+      tryBroadcastToChannels: async () => { calls.channels++; return { delivered: ['telegram'], failed: [], unknown: [] }; } },
     desktop: () => { calls.desktop++; return true; },
     desktopWithReceipt: async () => { calls.desktop++; return true; },
     reactor: { react: async () => { calls.reactor++; return true; } },
@@ -93,6 +94,26 @@ for (const flag of [undefined, '0', 'true', 'yes']) test(`flag ${String(flag)} k
   expect(f.messages.some(m => m.type === 'chat')).toBe(true);
 });
 
+// Q-19 (owner decision, carried into the F-11 policy): one interruption per
+// screen issue. While research runs, the heads-up goes to the dashboard
+// quietly; the researched fix is the one urgent alert.
+test('legacy delivery: an on-screen error interrupts once, with its researched fix', async () => {
+  const f = fixture('0');
+  const priorities: string[] = [];
+  let finish!: (text: string) => void;
+  f.deps.sockets = { ...f.deps.sockets, broadcastNotification: (_text: string, priority?: string) => { priorities.push(priority ?? 'normal'); } } as typeof f.deps.sockets;
+  f.deps.agent = () => ({ handleMessage: () => new Promise<string>(resolve => { finish = resolve; }), lastTurnRequestedApproval: () => false });
+  const policy = new AwarenessDeliveryPolicy(f.deps, '0');
+  const data = { appName: 'Terminal', errorText: 'Synthetic screen error' };
+  policy.handleEvent({ type: 'error_detected', data, timestamp: 1 });
+  policy.handleEvent({ type: 'suggestion_ready', data: { title: 'Error', body: 'b', issueKey: screenIssueKey('error', 'Terminal', 'Synthetic screen error') }, timestamp: 2 });
+  expect(priorities).toEqual(['normal']);
+  finish('A synthetic solution long enough to announce.'); await Bun.sleep(0); await Bun.sleep(0);
+  expect(priorities).toEqual(['normal', 'urgent']);
+  policy.handleEvent({ type: 'suggestion_ready', data: { title: 'Error', body: 'b', issueKey: screenIssueKey('error', 'Terminal', 'Synthetic screen error') }, timestamp: 3 });
+  expect(priorities).toEqual(['normal', 'urgent', 'normal']);
+});
+
 test('an enabled workflow still receives quiet awareness events through its real trigger manager', async () => {
   initWorkflowDb(':memory:'); configureWorkflowReadiness({ pieces: sampleCatalog() });
   const f = fixture(), manager = new TriggerManager({ eventBus: f.eventBus, log: () => {} });
@@ -119,7 +140,7 @@ async function waitFor(check: () => boolean) { for (let i = 0; i < 100 && !check
 
 for (const quiet of [false, true]) test(`governed approval, emergency and execution failure remain visible with chat closed (quiet=${quiet})`, async () => {
   const ws = new WebSocketService(0, { setDelegationCallback() {} } as any), connection = await connect(ws);
-  const f = fixture(quiet ? '1' : '0'); ws.broadcastProactiveVoice = async () => { f.calls.voice++; }; f.deps.sockets = ws;
+  const f = fixture(quiet ? '1' : '0'); ws.broadcastProactiveVoice = async () => { f.calls.voice++; return 1; }; f.deps.sockets = ws;
   try {
     // This client opens no conversation and subscribes to no chat stream.
     await f.policy.deliverOpportunity(suggestion);
@@ -152,7 +173,7 @@ test('offline quiet delivery retains its durable inbox and retries the same iden
     expect(offline.messages).toHaveLength(1); expect(offline.calls.channels).toBe(0);
     await worker.stop(); closeWorkflowDb(); initWorkflowDb(path);
     const ws = new WebSocketService(0, { setDelegationCallback() {} } as any); connection = await connect(ws);
-    const online = fixture(); ws.broadcastProactiveVoice = async () => { online.calls.voice++; }; online.deps.sockets = ws;
+    const online = fixture(); ws.broadcastProactiveVoice = async () => { online.calls.voice++; return 1; }; online.deps.sockets = ws;
     const workflowEvents: unknown[] = []; online.eventBus.subscribe('awareness.suggestion_ready', e => { workflowEvents.push(e); });
     worker = new OpportunityDelivery(s => online.policy.deliverOpportunity(s), () => now);
     await worker.flush(); expect(getOpportunityMetrics().delivered).toBe(0);
@@ -203,7 +224,8 @@ test('F11 review R1: quiet error suggestions preserve evidence without promising
     expect(saved.type).toBe('error');
     expect(saved.body).toBe('I spotted "Error".');
     expect(f.messages.map(m => m.payload)).toContainEqual({ source: 'awareness_event', event: {
-      type: 'suggestion_ready', data: { id: saved.id, type: saved.type, title: saved.title, body: saved.body }, timestamp: expect.any(Number),
+      // Q-19 keys a screen issue so its heads-up and researched fix share one interruption.
+      type: 'suggestion_ready', data: { id: saved.id, type: saved.type, title: saved.title, body: saved.body, issueKey: expect.any(String) }, timestamp: expect.any(Number),
     } });
     const routes = createApiRoutes({ awarenessService: service } as ApiContext);
     const route = routes['/api/awareness/suggestions'] as { GET: (request: Request) => Response };
@@ -230,7 +252,7 @@ for (const accepted of [true, false]) test(`F11 review R2: injected desktop rece
       sockets: { getServer: () => ({ getClientCount: () => 0, broadcastWithReceipt: () => 0 }),
         broadcastAwarenessEvent() {}, broadcastNotification() {}, broadcastProactiveVoice: async () => { calls.voice++; } },
       channels: { getManager: () => ({ listChannels: () => ['telegram'] }), broadcastToAll: async () => {},
-        tryBroadcastToChannels: async () => { calls.channels++; return { delivered: [], failed: [{ channel: 'telegram', error: 'offline' }] }; } },
+        tryBroadcastToChannels: async () => { calls.channels++; return { delivered: [], failed: [{ channel: 'telegram', error: 'offline' }], unknown: [] }; } },
       desktop: () => { calls.desktop++; return true; },
       desktopWithReceipt: async (...args) => { calls.receipt++; receiptArgs = args; return await acceptedReceipt; },
       reactor: { react: async () => false }, coalescer: { addEvent() {} }, eventBus: { publish() {} }, agent: () => null,

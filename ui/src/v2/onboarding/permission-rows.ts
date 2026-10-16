@@ -249,6 +249,11 @@ export function unavailableCopy(reason: PermUnavailable): { title: string; body:
         title: "More than one machine is connected.",
         body: "Permissions belong to one computer, and this page can't tell which one you're at. Open Jarvis on that machine and run through setup there.",
       };
+    case "errored":
+      return {
+        title: "The desktop app hit an error.",
+        body: "It answered, but could not finish checking. Its message is below. You can carry on, since Jarvis asks for what it needs as it goes, or reopen it and try again.",
+      };
     case "unreachable":
       return {
         title: "The desktop app didn't answer.",
