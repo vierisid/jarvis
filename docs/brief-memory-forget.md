@@ -2,8 +2,6 @@
 
 Forget removes one selected fact and its evidence from the canonical vault. It preserves content-free history and durable suppression so replaying the same automatic source cannot silently recreate that assertion. It adds an authenticated backend operation; the D track still owns its visible confirmation and UI.
 
-`brief/f-19` is stacked on reviewed F18 `5f83f7876a9bd1ff84e57aa4e00966eb5dc04cb1`, targeting `brief/f-18`, as requested by the owner. Main initially inspected: `485bb9b3b70f4d3874798810efc6f06355f86ef6`; final recheck: `16c5eec08d5d3e4250b100b584005561fcfded61`, with no new changes to the vault, Brief, AgentService or WS paths. The pinned audit is `69211511c95355776c6c319c01e1df5acd3b8f1e`. The facts and extraction sources are unchanged across the audit, main and F18. Open F/D/Q work was inspected before starting; no other F19 PR existed. The roadmap reference is Figma file `eNfKeirIKLZLlZEasrurZa`, node `382:4043`. No screenshot or visible UI change is claimed.
-
 ## Scope and confirmation contract
 
 With the existing panel session, read `GET /api/brief/memory/<fact-id>/forget`. A live fact returns:
@@ -48,11 +46,8 @@ Rollback of activation means unsetting `JARVIS_BRIEF_MEMORY_FORGET` and restarti
 
 ## Verify without touching real memories
 
-In WSL:
-
 ```sh
-cd /home/vierisid/.cache/codex/jarvis-f-19
 bun test src/brief/memory-forget.test.ts src/daemon/api-brief-memory-forget.test.ts src/daemon/agent-service-forget.test.ts
 ```
 
-The tests create isolated SQLite vaults and scripted in-process model providers. They cover deletion/restart/re-extraction, legacy provenance and schema upgrades, repeated requests, correction conflicts, rollback, capacity, retained usage history, profile synchronization, changed-back profile input, scoped/unscoped extraction replay, repeated Forget boundaries, real AgentService dispatch and an authenticated Unix-socket HTTP server. The eight R1/R2 regressions failed on the reviewed implementation before the repairs. No live model or user memory is needed. Final counts and commands are recorded in `docs/brief-delivery/F-19.json` and its evidence directory. F20 is not started.
+The tests create isolated SQLite vaults and scripted in-process model providers. They cover deletion/restart/re-extraction, legacy provenance and schema upgrades, repeated requests, correction conflicts, rollback, capacity, retained usage history, profile synchronization, changed-back profile input, scoped/unscoped extraction replay, repeated Forget boundaries, real AgentService dispatch and an authenticated Unix-socket HTTP server. No live model or user memory is needed.
