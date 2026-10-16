@@ -1,0 +1,14 @@
+Real engine on brief/q-19 at f4110c7b (local WSL2): the engine and every Jarvis piece rebuilt, including the notify piece.
+$ JARVIS_TEST_ENGINE_BUILD=1 JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q19-engine-cache bun test --preload ./src/test-preload.ts src/workflows/runner/engine-runtime/end-to-end.test.ts
+ 30 pass
+ 0 fail
+ 157 expect() calls
+Ran 30 tests across 1 file. [75.52s]
+
+The Q-19 test alone, to show it ran rather than skipped:
+$ JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q19-engine-cache bun test --preload ./src/test-preload.ts src/workflows/runner/engine-runtime/end-to-end.test.ts -t "sent nowhere"
+ 1 pass
+ 29 filtered out
+ 0 fail
+ 4 expect() calls
+Ran 1 test across 1 file. [4.38s]

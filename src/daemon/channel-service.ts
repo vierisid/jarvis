@@ -20,7 +20,7 @@ import { createSTTProvider } from '../comms/voice.ts';
 import { effectiveSttForBinding, usejarvisVoiceCredentials } from './usejarvis-ai.ts';
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
 import { getSettingsByPrefix, setSetting } from '../vault/settings.ts';
-import { classifyErrorString } from '../llm/provider.ts';
+import { NotSentError, partlySent, requestMayHaveArrived, sendMayHaveArrived, sendRetryable } from '../comms/delivery.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import { checkpointExecution } from '../actions/execution-scope.ts';
 
@@ -83,7 +83,20 @@ export function recipientWarning(status: Record<string, RecipientStatus>): strin
 
 export type ApprovalCommandHandler = (action: 'approve' | 'deny', shortId: string, channel: string) => Promise<string>;
 
-export type DeliveryFailureHandler = (failure: { channel: string; attempts: number; error: string }) => void;
+/**
+ * A send that did not complete. `mayHaveArrived` (Q-19): the channel may have
+ * taken the message before the failure, so it must never be reported as not
+ * sent, and it is never sent again on its own.
+ */
+export interface DeliveryFailure { channel: string; attempts: number; error: string; mayHaveArrived: boolean }
+export type DeliveryFailureHandler = (failure: DeliveryFailure) => void;
+
+/** Per-channel receipts. `unknown`: the channel may have taken it; see `DeliveryFailure`. */
+export interface ChannelDeliveryReport {
+  delivered: string[];
+  failed: { channel: string; error: string }[];
+  unknown: { channel: string; error: string }[];
+}
 
 export class ChannelService implements Service {
   name = 'channels';
@@ -131,10 +144,12 @@ export class ChannelService implements Service {
     this.deliveryFailureHandler = handler;
   }
 
-  private reportDeliveryFailure(channel: string, result: { attempts: number; error: string }): void {
-    console.error(`[ChannelService] Failed to send to ${channel} after ${result.attempts} attempt(s): ${result.error}`);
+  private reportDeliveryFailure(channel: string, result: { attempts: number; error: string; mayHaveArrived: boolean }): void {
+    console.error(result.mayHaveArrived
+      ? `[ChannelService] Send to ${channel} unconfirmed after ${result.attempts} attempt(s); it may have arrived and will not be resent: ${result.error}`
+      : `[ChannelService] Failed to send to ${channel} after ${result.attempts} attempt(s): ${result.error}`);
     try {
-      this.deliveryFailureHandler?.({ channel, attempts: result.attempts, error: result.error });
+      this.deliveryFailureHandler?.({ channel, attempts: result.attempts, error: result.error, mayHaveArrived: result.mayHaveArrived });
     } catch (err) {
       console.error('[ChannelService] Delivery failure handler threw:', err);
     }
@@ -324,7 +339,7 @@ export class ChannelService implements Service {
   async tryBroadcastToChannels(
     channels: string[],
     text: string,
-  ): Promise<{ delivered: string[]; failed: { channel: string; error: string }[] }> {
+  ): Promise<ChannelDeliveryReport> {
     return routePerChannel(channels, text, {
       getAdapter: (name) => this.manager.getChannel(name) ?? null,
       getLastRecipient: (name) => this.getBroadcastRecipient(name),
@@ -408,10 +423,10 @@ export class ChannelService implements Service {
    */
   async sendWorkflowNotification(channel: string, recipient: string | null, text: string): Promise<void> {
     const adapter = this.manager.getChannel(channel);
-    if (!adapter?.isConnected()) throw new Error(`Channel ${channel} is unavailable`);
-    if (!recipient) throw new Error(`No approved recipient for ${channel}`);
+    if (!adapter?.isConnected()) throw new NotSentError(`Channel ${channel} is unavailable`);
+    if (!recipient) throw new NotSentError(`No approved recipient for ${channel}`);
     if (this.getBroadcastRecipient(channel) !== recipient) {
-      throw new Error(`The approved recipient for ${channel} is no longer an allow-listed recipient, so nothing was sent`);
+      throw new NotSentError(`The approved recipient for ${channel} is no longer an allow-listed recipient, so nothing was sent`);
     }
     // Last gate before the adapter hands the message off. The governed caller
     // installs its Authority/emergency checkpoint in the execution scope.
@@ -619,7 +634,10 @@ export function channelDecisionCommand(text: string): { action: 'approve' | 'den
  *   - Adapter missing             -> failed("not configured").
  *   - Adapter present but offline -> failed("not connected").
  *   - No known recipient yet      -> failed("no known recipient ...").
- *   - sendMessage throws          -> failed with the exception message.
+ *   - sendMessage throws          -> failed with the exception message, or
+ *                                    unknown when the channel may have taken
+ *                                    it (Q-19: a timeout, a dropped
+ *                                    connection, a partly sent message).
  *   - sendMessage resolves        -> delivered.
  *
  * Duplicate entries are de-duped silently; first-occurrence wins.
@@ -633,9 +651,10 @@ export async function routePerChannel(
   channels: string[],
   text: string,
   services: ChannelRouterServices,
-): Promise<{ delivered: string[]; failed: { channel: string; error: string }[] }> {
+): Promise<ChannelDeliveryReport> {
   const delivered: string[] = [];
   const failed: { channel: string; error: string }[] = [];
+  const unknown: { channel: string; error: string }[] = [];
   const seen = new Set<string>();
   for (const name of channels) {
     if (seen.has(name)) continue;
@@ -660,13 +679,18 @@ export async function routePerChannel(
     }
     try {
       checkpointExecution();
+    } catch (err) {
+      failed.push({ channel: name, error: err instanceof Error ? err.message : String(err) });
+      continue;
+    }
+    try {
       await adapter.sendMessage(lastRecipient, text);
       delivered.push(name);
     } catch (err) {
-      failed.push({ channel: name, error: err instanceof Error ? err.message : String(err) });
+      (sendMayHaveArrived(err) ? unknown : failed).push({ channel: name, error: err instanceof Error ? err.message : String(err) });
     }
   }
-  return { delivered, failed };
+  return { delivered, failed, unknown };
 }
 
 export const SEND_RETRY_MAX_ATTEMPTS = 4;
@@ -694,34 +718,15 @@ export interface SendRetryOptions {
 
 export type SendRetryResult =
   | { ok: true; attempts: number }
-  | { ok: false; attempts: number; error: string };
-
-/** Runtime error codes for connection-level failures (Node + Bun spellings). */
-const TRANSIENT_ERROR_CODES = new Set([
-  'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'ETIMEDOUT', 'EPIPE', 'EAI_AGAIN',
-  'ConnectionRefused', 'ConnectionClosed', 'FailedToOpenSocket',
-]);
-
-function defaultIsTransient(err: unknown): boolean {
-  // An explicit retry-after from the provider always means "try again",
-  // regardless of how the error message is worded.
-  if (typeof (err as { retryAfterMs?: unknown })?.retryAfterMs === 'number') return true;
-  if (err instanceof Error) {
-    // AbortError is fetchWithTimeout's timeout. Retrying a timed-out send can
-    // duplicate a message that was actually delivered (Telegram has no
-    // idempotency key) — accepted: a duplicate beats a silently dropped
-    // approval request.
-    if (err.name === 'AbortError' || err.name === 'TimeoutError') return true;
-    const errCode = (err as { code?: unknown }).code;
-    if (typeof errCode === 'string' && TRANSIENT_ERROR_CODES.has(errCode)) return true;
-  }
-  const code = classifyErrorString(err instanceof Error ? err.message : String(err));
-  return code === 'rate_limit' || code === 'network' || code === 'server';
-}
+  | { ok: false; attempts: number; error: string; mayHaveArrived: boolean };
 
 /**
- * Send a message through an adapter, retrying transient failures (rate
- * limits, network errors, timeouts) with exponential backoff. An explicit
+ * Send a message through an adapter, retrying failures that left nothing
+ * sent and can pass (rate limits, connections never made) with exponential
+ * backoff. A failure after which the message may have arrived (a timeout, a
+ * dropped connection, a server error; see `comms/delivery.ts`) is never
+ * retried (Q-19): Telegram has no idempotency key, so a retry could send it
+ * twice. It is reported with `mayHaveArrived` instead. An explicit
  * retryAfterMs on the thrown error (e.g. Telegram 429 retry_after) is
  * honored even beyond the per-wait cap, which only bounds the synthetic
  * backoff. The budget is a wall-clock deadline covering sleeps and attempt
@@ -746,9 +751,11 @@ export async function sendWithRetry(
   const maxDelayMs = opts?.maxDelayMs ?? SEND_RETRY_MAX_DELAY_MS;
   const sleep = opts?.sleep ?? ((ms: number) => Bun.sleep(ms));
   const now = opts?.now ?? Date.now;
-  const isTransient = opts?.isTransient ?? defaultIsTransient;
+  const isTransient = opts?.isTransient ?? sendRetryable;
   const deadline = now() + (opts?.budgetMs ?? SEND_RETRY_BUDGET_MS);
   let currentText = text;
+  // Part of the message reached the channel on an earlier attempt.
+  let sentPart = false;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -757,19 +764,22 @@ export async function sendWithRetry(
       return { ok: true, attempts: attempt };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (attempt === maxAttempts || !isTransient(err)) {
-        return { ok: false, attempts: attempt, error: message };
+      const mayHaveArrived = sentPart || sendMayHaveArrived(err);
+      // Resuming the unsent remainder after a refused chunk is safe; resending
+      // a request that may have been taken is not, whatever `isTransient` says.
+      if (attempt === maxAttempts || requestMayHaveArrived(err) || !isTransient(err)) {
+        return { ok: false, attempts: attempt, error: message, mayHaveArrived };
       }
-      const remaining = (err as { remainingText?: unknown }).remainingText;
-      if (typeof remaining === 'string' && remaining.length > 0) {
-        currentText = remaining;
+      if (partlySent(err)) {
+        currentText = (err as { remainingText: string }).remainingText;
+        sentPart = true;
       }
 
       const retryAfterMs = (err as { retryAfterMs?: unknown }).retryAfterMs;
       const backoff = Math.min(maxDelayMs, baseDelayMs * Math.pow(2, attempt - 1));
       const delay = Math.max(typeof retryAfterMs === 'number' ? retryAfterMs : 0, backoff);
       if (now() + delay > deadline) {
-        return { ok: false, attempts: attempt, error: message };
+        return { ok: false, attempts: attempt, error: message, mayHaveArrived: sentPart };
       }
 
       console.warn(`[ChannelService] Send to ${adapter.name} failed (attempt ${attempt}/${maxAttempts}), retrying in ${delay}ms: ${message}`);
@@ -777,5 +787,5 @@ export async function sendWithRetry(
     }
   }
   // Unreachable: the loop always returns on the last attempt.
-  return { ok: false, attempts: maxAttempts, error: 'unreachable' };
+  return { ok: false, attempts: maxAttempts, error: 'unreachable', mayHaveArrived: sentPart };
 }

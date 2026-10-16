@@ -13,7 +13,7 @@
  *     deferred until pieces have stable output shapes.
  */
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import {
   AlertTriangle,
@@ -30,9 +30,10 @@ import {
   XCircle,
 } from "lucide-react";
 import { WorkflowEditor } from "./WorkflowEditor";
-import { Button, Chip, Icon } from "../../ui";
+import { Button, Chip, FailureNotice, Icon } from "../../ui";
 import { RoomShell } from "../RoomShell";
 import { useRoomActions } from "../useRoomActionBus";
+import { useRunFocus, type RunFocus } from "./run-focus";
 import {
   useWorkflowsData,
   CANCELED_EFFECT_WARNING,
@@ -89,6 +90,13 @@ export function WorkflowsRoomBody(): React.ReactElement {
   }, [data.setEditingFlowId]);
   const [actionMessage, setActionMessage] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
   const [tab, setTab] = useState<RoomTab>("flows");
+  // Q-19: Today's "Open" on a failed run lands on that run.
+  const [focusRunId, setFocusRunId] = useState<string | null>(null);
+  useRunFocus(useCallback(({ flowId, runId }: RunFocus) => {
+    setTab("flows");
+    data.setSelectedFlowId(flowId);
+    setFocusRunId(runId);
+  }, [data.setSelectedFlowId]));
 
   const handleAction = async (label: string, fn: () => Promise<{ ok: boolean; message: string }>): Promise<void> => {
     const result = await fn();
@@ -258,6 +266,7 @@ export function WorkflowsRoomBody(): React.ReactElement {
             <FlowDetail
               flow={data.selectedFlow}
               runs={data.selectedRuns}
+              focusRunId={focusRunId}
               onRefreshRuns={() => void data.refreshRuns(data.selectedFlow!.id)}
               onCancelRun={(runId) => handleAction("Cancel", () => data.cancelRun(runId))}
               onClose={() => data.setSelectedFlowId(null)}
@@ -391,13 +400,16 @@ function TriggerWarningChip({ text }: { text: string }): React.ReactElement {
 interface FlowDetailProps {
   flow: Flow;
   runs: FlowRun[];
+  /** A run to open, asked for by another surface (Q-19). */
+  focusRunId?: string | null;
   onRefreshRuns: () => void;
   onCancelRun: (runId: string) => void;
   onClose: () => void;
 }
 
-function FlowDetail({ flow, runs, onRefreshRuns, onCancelRun, onClose }: FlowDetailProps): React.ReactElement {
-  const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
+function FlowDetail({ flow, runs, focusRunId, onRefreshRuns, onCancelRun, onClose }: FlowDetailProps): React.ReactElement {
+  const [expandedRunId, setExpandedRunId] = useState<string | null>(focusRunId ?? null);
+  useEffect(() => { if (focusRunId) setExpandedRunId(focusRunId); }, [focusRunId]);
   const succeeded = useMemo(() => runs.filter((r) => r.status === "SUCCEEDED").length, [runs]);
   const failed = useMemo(() => runs.filter((r) => r.status === "FAILED" || r.status === "INTERNAL_ERROR").length, [runs]);
   return (
@@ -464,7 +476,8 @@ function RunRow({ run, expanded, onToggle, onCancel }: RunRowProps): React.React
         <div className="wf-runs__head-left">
           <RunStatusIcon status={run.status} />
           <Chip tone={RUN_STATUS_TONE[run.status]} dot={false}>{run.status}</Chip>
-          {run.failedStep ? <span className="wf-runs__failed-step">@ {run.failedStep.displayName}</span> : null}
+          {run.failure ? <span className="wf-runs__failed-step" title={run.failure.headline}>{run.failure.headline}</span>
+            : run.failedStep ? <span className="wf-runs__failed-step">@ {run.failedStep.displayName}</span> : null}
         </div>
         <div className="wf-runs__head-right">
           <span className="wf-runs__time">{run.startTime ? fmtClock(run.startTime) : "—"}</span>
@@ -482,7 +495,8 @@ function RunRow({ run, expanded, onToggle, onCancel }: RunRowProps): React.React
             <dd>{run.triggeredBy ?? "manual"}</dd>
           </dl>
           {run.status === "PAUSED" ? <PausedRunCallout runId={run.id} /> : null}
-          {run.cancellation?.inFlightMayHaveCompleted ? <p>{CANCELED_EFFECT_WARNING}</p> : null}
+          {run.failure ? <FailureNotice failure={run.failure} />
+            : run.cancellation?.inFlightMayHaveCompleted ? <p>{CANCELED_EFFECT_WARNING}</p> : null}
           {run.steps && Object.keys(run.steps).length > 0 ? (
             <details className="wf-runs__steps">
               <summary>Step output JSON</summary>

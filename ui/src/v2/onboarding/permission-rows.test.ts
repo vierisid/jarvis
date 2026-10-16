@@ -176,7 +176,7 @@ describe("needsRestartNote", () => {
 
 describe("unavailableCopy", () => {
   test("every reason has its own sentence", () => {
-    const reasons: PermUnavailable[] = ["no_sidecar", "offline", "ambiguous", "unsupported", "refused", "unreachable"];
+    const reasons: PermUnavailable[] = ["no_sidecar", "offline", "ambiguous", "unsupported", "refused", "errored", "unreachable"];
     const titles = reasons.map((r) => unavailableCopy(r).title);
     expect(new Set(titles).size).toBe(reasons.length);
     for (const r of reasons) {
@@ -215,7 +215,7 @@ describe("requestFeedback", () => {
     // THE bug this guards. The route answers HTTP 200 for every one of these,
     // so a hook that checks only response.ok resets the button to its label
     // and says nothing -- the exact silent click this screen exists to fix.
-    const reasons: PermUnavailable[] = ["no_sidecar", "offline", "ambiguous", "unsupported", "refused", "unreachable"];
+    const reasons: PermUnavailable[] = ["no_sidecar", "offline", "ambiguous", "unsupported", "refused", "errored", "unreachable"];
     for (const reason of reasons) {
       const msg = requestFeedback({ available: false, reason }, "Screen Recording");
       expect(msg).toBeTruthy();

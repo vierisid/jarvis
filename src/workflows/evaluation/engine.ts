@@ -91,7 +91,7 @@ export async function createEvaluationEngine(environment: EvaluationEnvironment 
     credentialResolver: new CredentialResolver(),
     notify: async (req, ctx) => {
       record('notification', req as any, ctx);
-      return { delivered: req.channels, failed: [] };
+      return { delivered: req.channels, failed: [], unknown: [] };
     },
     llmChat: async (req, ctx) => {
       record('ai', req as any, ctx);

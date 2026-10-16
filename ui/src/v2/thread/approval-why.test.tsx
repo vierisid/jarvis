@@ -55,7 +55,7 @@ describe("#792: the reason is never part of the sentence", () => {
   test("the Now room's waiting widget renders them apart", () => {
     const ready = { data: [], availability: "ready" as const, error: null, updatedAt: 0, refresh: async () => {} };
     const html = renderToStaticMarkup(<WaitingWidget live={live} inbox={{ pending: ready, unresolved: ready } as never}
-      connection="live" onApprove={() => {}} onCancel={() => {}} />);
+      failures={ready as never} connection="live" onApprove={() => {}} onCancel={() => {}} />);
     expect(textOf(html, 'class="t2"')).toBe(COMMAND);
     expect(textOf(html, 'class="v2-approval-why"')).toBe(`Why approval is needed${REASON}`);
   });

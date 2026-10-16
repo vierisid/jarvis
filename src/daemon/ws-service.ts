@@ -24,6 +24,7 @@ import { approvalIntentFields, approvalIntentParts, boundedApprovalLabel, format
 import type { AuditTrail, AuthorityDecisionType, ResolutionChannel } from '../authority/audit.ts';
 import { heldApprovalMessage } from './approval-decision.ts';
 import { impactFromCategory, gateVoiceApprovalResolution } from '../roles/authority.ts';
+import { resolveToolGate } from '../authority/tool-action-map.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import { classifyVoiceIntent, type RecentTurn } from '../agents/voice-intent-classifier.ts';
 import { getUserProfile } from '../vault/user-profile.ts';
@@ -50,7 +51,9 @@ import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES, REALTIME_ROOM_KEYS, REALTI
 import { TOOL_RESULT_GRACE_MS } from '../comms/realtime.ts';
 import { RealtimeBudgetTracker } from './realtime-budget.ts';
 import { hostedRealtimeIncluded } from './realtime-gate.ts';
-import { classifyErrorString } from '../llm/provider.ts';
+import { chatErrorPayload, recordChatFailure } from '../failures/chat.ts';
+import { failureEvidence } from '../failures/evidence.ts';
+import { failureText, projectFailure, type UserFailure } from '../failures/projection.ts';
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
 import { maybeCreateUserProfileFollowupPrompt, recordUserProfileTurn } from '../user/profile-followup.ts';
 import { runWithOrigin } from '../llm/origin.ts';
@@ -781,8 +784,11 @@ export class WebSocketService implements Service {
     }
   }
 
-  /** Dashboard delivery only. Governed callers authorize external recipients separately. */
-  broadcastNotificationToDashboard(text: string, priority: 'urgent' | 'normal' | 'low'): void {
+  /**
+   * Dashboard delivery only. Governed callers authorize external recipients
+   * separately. Returns how many dashboard sockets accepted it (0: none open).
+   */
+  broadcastNotificationToDashboard(text: string, priority: 'urgent' | 'normal' | 'low'): number {
     const message: WSMessage = {
       type: 'chat',
       payload: {
@@ -792,7 +798,7 @@ export class WebSocketService implements Service {
       priority,
       timestamp: Date.now(),
     };
-    this.wsServer.broadcast(message);
+    return this.wsServer.broadcastWithReceipt(message);
   }
 
   /**
@@ -960,20 +966,18 @@ export class WebSocketService implements Service {
   /**
    * Synthesize TTS for a proactive message and broadcast audio to all clients.
    * Used for awareness suggestions and other unsolicited voice notifications.
+   * Resolves how many clients were sent audio: 0 when it was skipped or no
+   * audio was synthesized, so a caller never reports silence as spoken.
    */
-  /**
-   * Synthesize TTS for a proactive message and broadcast audio to all clients.
-   * Used for awareness suggestions and other unsolicited voice notifications.
-   */
-  async broadcastProactiveVoice(text: string): Promise<void> {
+  async broadcastProactiveVoice(text: string): Promise<number> {
     if (!this.ttsProvider || !text) {
       console.log(`[WSService] Proactive TTS skipped: ${!this.ttsProvider ? 'no TTS provider' : 'empty text'}`);
-      return;
+      return 0;
     }
 
     if (this.wsServer.getClientCount() === 0) {
       console.log('[WSService] Proactive TTS skipped: no connected clients');
-      return;
+      return 0;
     }
 
     // A socket mid-turn in its realtime session would get a clip talking over
@@ -983,9 +987,10 @@ export class WebSocketService implements Service {
     const targets = [...this.wsServer.getClients()].filter((client) => !this.realtimeTurnActive(client));
     if (targets.length === 0) {
       console.log('[WSService] Proactive TTS skipped: every client is mid-turn in a realtime session');
-      return;
+      return 0;
     }
 
+    let chunkCount = 0;
     try {
       const requestId = `proactive-${Date.now()}`;
 
@@ -1000,7 +1005,6 @@ export class WebSocketService implements Service {
       checkpointExecution();
       for (const client of targets) this.wsServer.sendToClient(client, startMsg);
 
-      let chunkCount = 0;
       // Sentence-split like the reply path: proactive text goes to the
       // provider whole otherwise, and the hosted provider truncates a single
       // over-long input (billed per character, capped per request) — split
@@ -1033,6 +1037,7 @@ export class WebSocketService implements Service {
       };
       for (const client of targets) this.wsServer.sendToClient(client, endMsg);
       console.log(`[WSService] Proactive TTS complete: "${text.slice(0, 60)}..." (${chunkCount} chunks)`);
+      return chunkCount > 0 ? targets.length : 0;
     } catch (err) {
       console.error('[WSService] Proactive TTS error:', err instanceof Error ? err.message : err);
       // Still send tts_end so client doesn't get stuck
@@ -1044,6 +1049,7 @@ export class WebSocketService implements Service {
       // Preserve cancellation in the delivery report after closing the UI's
       // audio session. A canceled stream must not be reported as delivered.
       checkpointExecution();
+      return chunkCount > 0 ? targets.length : 0;
     }
   }
 
@@ -1359,6 +1365,19 @@ export class WebSocketService implements Service {
    * Handle chat messages — stream response via StreamRelay.
    * Auto-creates a task for non-trivial messages so the task board tracks agent work.
    */
+  /**
+   * Q-19: whether this tool call can change something outside Jarvis, by the
+   * Authority categories it is judged under. Only a call judged purely as
+   * reading is left out of "may have acted"; an unknown tool counts.
+   */
+  private toolMayAct(name: string, args: Record<string, unknown>): boolean {
+    try {
+      const tool = this.agentService.getOrchestrator().getToolRegistry()?.get(name);
+      if (!tool) return true;
+      return resolveToolGate(tool, name, args ?? {}).categories.some(category => impactFromCategory(category) !== 'read');
+    } catch { return true; }
+  }
+
   private async handleChat(msg: WSMessage, ws?: ServerWebSocket<unknown>): Promise<WSMessage | void> {
     // The person's own turn, including the streamed answer consumed below
     // (src/llm/origin.ts).
@@ -1398,8 +1417,9 @@ export class WebSocketService implements Service {
       return {
         type: 'error',
         payload: {
+          ...chatErrorPayload({ source: 'action', outcome: { status: 'blocked', code: 'SETUP_REQUIRED', effect: 'not_started',
+            message: 'Finish first-run setup before chatting with Jarvis.' } }, msg.id ? { requestId: msg.id } : {}),
           code: 'setup_required',
-          message: 'Finish first-run setup before chatting with Jarvis.',
         },
         id: msg.id,
         timestamp: Date.now(),
@@ -1674,6 +1694,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       // We still use the relayStream return (not onTextDone) to mark completion.
       const fullText = await this.streamRelay.relayStream(stream, requestId, {
         signal: activeChat?.controller.signal,
+        mayAct: (call) => this.toolMayAct(call.name, call.arguments),
         // Voice enters "thinking" after STT-final. Flip it off as soon as
         // acknowledgment/final prose becomes visible instead of leaving the
         // orb stuck there until the whole tool loop completes.
@@ -1719,13 +1740,20 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         retainActiveForTTS = ttsSpeaking || ttsSentenceQueue.length > 0 || ttsStartSent;
       }
 
-      // Persist assistant response
-      addMessage(conversation.id, { role: 'assistant', content: fullText });
+      // Persist assistant response. The turn is done and was shown: failing to
+      // save it is reported as that, never as a failed request (Q-19).
+      try {
+        addMessage(conversation.id, { role: 'assistant', content: fullText });
 
-      const followupPrompt = maybeCreateUserProfileFollowupPrompt();
-      if (followupPrompt) {
-        this.broadcastAssistantMessage(followupPrompt);
-        addMessage(conversation.id, { role: 'assistant', content: followupPrompt });
+        const followupPrompt = maybeCreateUserProfileFollowupPrompt();
+        if (followupPrompt) {
+          this.broadcastAssistantMessage(followupPrompt);
+          addMessage(conversation.id, { role: 'assistant', content: followupPrompt });
+        }
+      } catch (err) {
+        console.error('[WSService] Failed to save the reply:', err);
+        this.broadcastNotificationToDashboard(failureText(projectFailure(failureEvidence(err),
+          { label: 'Saving this reply to the conversation', sideEffects: false }), { detail: true }), 'normal');
       }
 
       // Mark task as completed
@@ -1773,11 +1801,20 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       return undefined;
     } catch (error) {
       console.error('[WSService] Chat error:', error);
+      // Q-19: one failure for this turn. The relay attaches the one it already
+      // showed; otherwise it is built here, from typed evidence only.
+      const streamed = error as Error & { _streamErrorBroadcast?: boolean; failure?: UserFailure };
+      const payload = streamed?._streamErrorBroadcast ? null : chatErrorPayload(failureEvidence(error), { requestId });
+      const failure = streamed?.failure ?? payload?.failure;
+      // A turn that may have acted waits on the person in Today.
+      if (failure) {
+        try { recordChatFailure(failure); } catch (err) { console.error('[WSService] Failed to record chat failure:', err); }
+      }
 
-      // Mark task as failed
+      // Mark task as failed, with the same sentence the chat shows.
       if (taskCommitment) {
         try {
-          const reason = error instanceof Error ? error.message : 'Processing failed';
+          const reason = failure ? failureText(failure, { detail: true }) : 'Processing failed';
           const updated = updateCommitmentStatus(taskCommitment.id, 'failed', reason);
           if (updated) this.broadcastTaskUpdate(updated, 'updated');
         } catch (err) {
@@ -1790,18 +1827,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       // If StreamRelay already broadcast the error to all clients (including
       // this requester), don't emit a second error WSMessage as the handler
       // return value - the user would see the same error twice.
-      const broadcastFlag = (error as Error & { _streamErrorBroadcast?: boolean })?._streamErrorBroadcast;
-      if (broadcastFlag) {
-        return undefined;
-      }
-
-      const message = error instanceof Error ? error.message : 'Chat processing failed';
+      if (!payload) return undefined;
       return {
         type: 'error',
-        payload: {
-          message,
-          code: classifyErrorString(message),
-        },
+        payload,
         id: requestId,
         timestamp: Date.now(),
       };

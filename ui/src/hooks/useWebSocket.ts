@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { uuid } from "../lib/uuid";
 import { isPresentationRoomAction } from "../../../src/daemon/room-actions";
 import { roomActionExpiry } from "../../../src/daemon/room-action-results";
+import { isUserFailure, type UserFailure } from "../v2/ui/FailureNotice";
 
 export type MessageRole = "user" | "assistant" | "system";
 
@@ -28,6 +29,8 @@ export type ChatMessage = {
   priority?: string;
   isStreaming?: boolean;
   detail?: string; // raw error/debug payload, rendered collapsed in the chat
+  /** Q-19: a failed turn, as the daemon projected it. Rendered as is, never re-classified. */
+  failure?: UserFailure;
 };
 
 /**
@@ -208,7 +211,11 @@ export type VoiceCallbacks = {
   /** `bargeIn` — realtime voice sends tts_end{bargeIn:true} when the user
    *  starts speaking, so the player can flush queued output immediately. */
   onTTSEnd: (requestId?: string, bargeIn?: boolean) => void;
-  onError: (message?: string) => void;
+  /**
+   * `requestId` is set when the error ended a turn this tab did not send as
+   * text (another tab's, or a voice turn): the voice hook reacts only to its own.
+   */
+  onError: (message?: string, requestId?: string) => void;
   /** Realtime session ended server-side (max_session_minutes timeout or
    *  server close). The client must stop the mic — it's otherwise streaming
    *  into a session that no longer exists. */
@@ -413,9 +420,11 @@ export type ProviderErrorCode =
   | "quota_exhausted"
   | "content_policy"
   | "restricted"
+  | "unsupported_tools"
+  | "setup_required"
   | "unknown";
 
-/** Shared by the structured `forbidden` code and the keyword fallbacks below. */
+/** The structured `forbidden` code's copy. */
 const FORBIDDEN_SUMMARY =
   "Your AI provider accepted the API key but won't allow this model. Check that your plan or organization has access to it, or pick a different model.";
 
@@ -443,6 +452,10 @@ function summaryForCode(code: ProviderErrorCode | undefined): string | null {
       return "This request was blocked by the Usejarvis AI content policy.";
     case "restricted":
       return "Usejarvis AI is restricted on this account. The details say how to appeal.";
+    case "unsupported_tools":
+      return "The selected model can't use tools. Pick a model that supports tools.";
+    case "setup_required":
+      return "Finish first-run setup before chatting with Jarvis.";
     default:
       return null;
   }
@@ -452,7 +465,7 @@ export function formatProviderErrorMessage(
   raw: string | undefined,
   code?: ProviderErrorCode,
 ): ProviderErrorFormatted {
-  const fallbackSummary = "Couldn't reach your AI provider. Check your API key, network connection, or fallback settings.";
+  const fallbackSummary = "Your request failed. The details say what went wrong.";
   if (!raw && !code) return { summary: fallbackSummary, detail: "" };
 
   const original = (raw ?? "").trim();
@@ -472,80 +485,46 @@ export function formatProviderErrorMessage(
     }
   }
 
-  // Prefer the server-supplied structured code when available — the emission
-  // site knows the HTTP status and error type, and doesn't need us to guess
-  // from string contents.
+  // The server-supplied structured code decides the summary (Q-19): the
+  // emission site knows the HTTP status and error type. The wording is never
+  // read for a category; without a code the message is only shown as detail.
   const codeSummary = summaryForCode(code);
-  if (codeSummary) {
-    return { summary: codeSummary, detail: normalized };
+  return { summary: codeSummary ?? fallbackSummary, detail: normalized };
+}
+
+/**
+ * Q-19: how an error frame lands in this tab. A turn's error is broadcast to
+ * every tab, which all mirror the thread, so every tab shows it; only the tab
+ * that asked reacts. `voiceRequestId` is passed to the voice hook when the
+ * turn was not a text turn this tab sent (the voice hook knows its own voice
+ * turns). `endsTurn`: whether it ends the turn this tab is in or following.
+ * An error with no request id was sent to this socket alone.
+ */
+export function routeErrorFrame(
+  frame: { id?: string | null; requestId?: unknown },
+  tab: { sentAsText: (id: string) => boolean; followingTurn: string | null },
+): { askedHere: boolean; voiceRequestId: string | undefined; endsTurn: boolean } {
+  const requestId = String(frame.requestId ?? frame.id ?? "");
+  const askedHere = frame.id != null && tab.sentAsText(frame.id);
+  const notSentHere = requestId !== "" && !askedHere;
+  return { askedHere, voiceRequestId: notSentHere ? requestId : undefined,
+    endsTurn: !notSentHere || requestId === tab.followingTurn };
+}
+
+/** The thread message for an error frame: the daemon's failure when it sent one, never re-classified here. */
+export function errorFrameContent(
+  payload: { message?: unknown; code?: unknown; failure?: unknown } | undefined,
+  askedHere: boolean,
+): { content: string; detail?: string; failure?: UserFailure } {
+  if (isUserFailure(payload?.failure)) return { content: payload.failure.headline, failure: payload.failure };
+  const rawMessage = typeof payload?.message === "string" ? payload.message : undefined;
+  if (askedHere) {
+    const formatted = formatProviderErrorMessage(rawMessage, typeof payload?.code === "string" ? payload.code as ProviderErrorCode : undefined);
+    return { content: formatted.summary,
+      ...(formatted.detail && formatted.detail !== formatted.summary ? { detail: formatted.detail } : {}) };
   }
-
-  const lowered = normalized.toLowerCase();
-
-  // Mirrors classifyErrorString: authoritative 403 markers first, the softer
-  // permission wording after the auth bucket.
-  if (
-    lowered.includes("forbidden") ||
-    lowered.includes("permission_error") ||
-    lowered.includes("permission_denied") ||
-    /\b403\b/.test(lowered)
-  ) {
-    return {
-      summary: FORBIDDEN_SUMMARY,
-      detail: normalized,
-    };
-  }
-
-  if (
-    lowered.includes("api key") ||
-    lowered.includes("authentication") ||
-    lowered.includes("unauthorized") ||
-    lowered.includes("invalid_api_key") ||
-    lowered.includes("invalid x-api-key") ||
-    lowered.includes("incorrect api key") ||
-    /\b401\b/.test(lowered)
-  ) {
-    return {
-      summary: "Couldn't reach your AI provider. Check your API key and model settings.",
-      detail: normalized,
-    };
-  }
-
-  if (lowered.includes("permission denied") || lowered.includes("not have access")) {
-    return {
-      summary: FORBIDDEN_SUMMARY,
-      detail: normalized,
-    };
-  }
-
-  if (
-    lowered.includes("rate limit") ||
-    lowered.includes("too many requests") ||
-    lowered.includes("insufficient_quota") ||
-    lowered.includes("quota") ||
-    /\b429\b/.test(lowered)
-  ) {
-    return {
-      summary: "Your AI provider is rate-limiting requests. Wait a moment, or check your usage and billing.",
-      detail: normalized,
-    };
-  }
-
-  if (
-    lowered.includes("timeout") ||
-    lowered.includes("temporarily unavailable") ||
-    lowered.includes("econnrefused") ||
-    lowered.includes("enotfound") ||
-    lowered.includes("network") ||
-    /\b503\b/.test(lowered)
-  ) {
-    return {
-      summary: "Couldn't reach your AI provider right now. Check your connection, provider status, or fallback settings.",
-      detail: normalized,
-    };
-  }
-
-  return { summary: fallbackSummary, detail: normalized };
+  // Other errors (protocol, config, STT) are already human-readable.
+  return { content: rawMessage?.trim() ? rawMessage : "An unexpected error occurred." };
 }
 
 /** Optional scoped chat owner. The connection and non-chat notifications stay shared. */
@@ -1181,31 +1160,15 @@ export function useWebSocket({ enabled = true, chat }: { enabled?: boolean; chat
         }
       }
     } else if (msg.type === "error") {
-      const rawMessage = msg.payload?.message;
-      const rawCode = typeof msg.payload?.code === "string" ? (msg.payload.code as ProviderErrorCode) : undefined;
-      voiceCallbacksRef.current?.onError(rawMessage);
+      const route = routeErrorFrame({ id: msg.id, requestId: msg.payload?.requestId },
+        { sentAsText: (id) => pendingChatIdsRef.current.has(id), followingTurn: currentChatRequestIdRef.current });
+      voiceCallbacksRef.current?.onError(msg.payload?.message, route.voiceRequestId);
 
       // Always preserve the raw payload in the console for debugging.
       console.error("[WS] Error frame:", msg.payload);
-
-      // Only apply the provider-friendly formatter when the error correlates
-      // with a chat request we sent. Other errors (protocol, config, STT) are
-      // already human-readable and shouldn't be reshaped.
-      const isChatCorrelated = msg.id != null && pendingChatIdsRef.current.has(msg.id);
       if (msg.id != null) pendingChatIdsRef.current.delete(msg.id);
 
-      let content: string;
-      let detail: string | undefined;
-      if (isChatCorrelated) {
-        const formatted = formatProviderErrorMessage(rawMessage, rawCode);
-        content = formatted.summary;
-        detail = formatted.detail && formatted.detail !== formatted.summary ? formatted.detail : undefined;
-      } else {
-        content = typeof rawMessage === "string" && rawMessage.trim()
-          ? rawMessage
-          : "An unexpected error occurred.";
-      }
-
+      const { content, detail, failure } = errorFrameContent(msg.payload, route.askedHere);
       setMessages((prev) => [
         ...prev,
         {
@@ -1215,8 +1178,11 @@ export function useWebSocket({ enabled = true, chat }: { enabled?: boolean; chat
           detail,
           timestamp: msg.timestamp,
           source: "error",
+          ...(failure ? { failure } : {}),
         },
       ]);
+      // A turn this tab was not following ended; this tab's own turn goes on.
+      if (!route.endsTurn) return;
       // Reset stream state on error
       streamBufferRef.current = "";
       streamIdRef.current = null;

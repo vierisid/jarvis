@@ -13,7 +13,7 @@ import { boundedReceiptText } from '../../roles/untrusted';
 import { getWorkflowDb } from '../db';
 import { assertRunNotCanceled } from './cancellation';
 import { withExecutionScope } from '../../actions/execution-scope';
-import { ActionOutcomeError } from '../../actions/action-outcome';
+import { ActionOutcomeError, type ActionFailure } from '../../actions/action-outcome';
 import { getFlowRun } from '../db/repos/flow-run';
 import { createWaitpoint } from '../db/repos/waitpoint';
 import { claimWorkflowEffect, getWorkflowEffect, saveWorkflowEffect, type WorkflowEffect } from '../db/repos/workflow-effect';
@@ -153,6 +153,25 @@ function waitingStartCards(approvals: ApprovalManager, flowId: string): number {
     && flowOf(r.agent_id) === flowId).length;
 }
 
+/**
+ * A refusal decided before anything was dispatched (Q-19). Typed so a failed
+ * run can say why without reading the message. It becomes the effect's
+ * outcome only where nothing has been dispatched yet: the same check failing
+ * part way through an effect still records an uncertain outcome.
+ */
+class PolicyRefusal extends Error {
+  constructor(public readonly code: string, message: string) { super(message); }
+}
+const refused = (error: PolicyRefusal): ActionFailure =>
+  ({ status: 'blocked', code: error.code, message: error.message, effect: 'not_started' });
+
+/**
+ * Refusals by Authority, an approval or the emergency state. A workflow never
+ * handles one as an outcome to branch on: it fails the step, even a probe's.
+ */
+export const GOVERNANCE_REFUSALS: ReadonlySet<string> = new Set(['EMERGENCY_STOPPED', 'RUN_NOT_RUNNING', 'AUTHORITY_DENIED',
+  'APPROVAL_DENIED', 'APPROVAL_EXPIRED', 'APPROVAL_WITHDRAWN', 'APPROVAL_REQUIRED', 'WORKFLOW_CHANGED']);
+
 /** The durable identity of an effect: one per run, step, loop position and route. */
 export const workflowEffectId = (runId: string, stepName: string, executionPath: Array<[string, number]>, route: string) =>
   'wfe_' + digest([runId, stepName, executionPath, route]);
@@ -221,7 +240,10 @@ export class WorkflowEffectBoundary {
       // before, this returned ahead of every check.
       if (input.route === 'piece' || input.route === 'agent') {
         const state = emergency.getState();
-        if (state === 'killed') throw new Error('Workflow effect blocked: system killed');
+        if (state === 'killed') {
+          // This attempt dispatches nothing; the recorded authorization is left as it is (Q-19).
+          throw new ActionOutcomeError({ status: 'blocked', code: 'EMERGENCY_STOPPED', message: 'Workflow effect blocked: system killed', effect: 'not_started' });
+        }
         if (state === 'paused') {
           return { approval: { effectId: id, approvalId: '',
             waitpointId: holdStep({ runId: resolved.run.id, projectId: resolved.run.projectId, stepName: resolved.stepName }).id, hold: PAUSED_REASON } };
@@ -285,9 +307,9 @@ export class WorkflowEffectBoundary {
       // Kill stops. The controller is the one source of truth: a copy of the
       // state taken at boot kept workflows blocked after Resume (Q-08).
       const state = emergency.getState();
-      if (state === 'killed') throw new Error('Workflow effect blocked: system killed');
+      if (state === 'killed') throw new PolicyRefusal('EMERGENCY_STOPPED', 'Workflow effect blocked: system killed');
       const run = getFlowRun(record.runId);
-      if (!run || run.status !== 'RUNNING') throw new Error(`Workflow effect blocked: run is ${run?.status ?? 'missing'}`);
+      if (!run || run.status !== 'RUNNING') throw new PolicyRefusal('RUN_NOT_RUNNING', `Workflow effect blocked: run is ${run?.status ?? 'missing'}`);
       // Cancellation has one fence, owned by `runtime/cancellation`. Defer to it
       // rather than reading job rows here, so the boundary and the daemon's
       // other dispatch points can never disagree about whether a run is dead.
@@ -311,7 +333,7 @@ export class WorkflowEffectBoundary {
       const decision = input.aboveLevelFloor
         ? substituteAboveLevel(folded, { confirm: 'above_level', floorCategory: input.aboveLevelFloor }, check)
         : folded;
-      if (!decision.allowed) throw new Error(`Authority denied ${input.toolName}: ${decision.reason}`);
+      if (!decision.allowed) throw new PolicyRefusal('AUTHORITY_DENIED', `Authority denied ${input.toolName}: ${decision.reason}`);
       // A capability whose UI effect cannot be described is reviewed whatever
       // the category check concluded; the card carries the uncertainty.
       if (input.confirmation) return { ...decision, requiresApproval: true,
@@ -337,13 +359,12 @@ export class WorkflowEffectBoundary {
     let decision;
     try { decision = policy(); } catch (error) {
       record.status = 'blocked'; record.decision = 'denied'; record.error = String((error as Error).message);
+      const outcome = error instanceof PolicyRefusal ? refused(error) : null;
+      if (outcome) record.outcome = outcome;
       record.reason = record.error; record.finishedAt = Date.now(); saveWorkflowEffect(record);
-      // A resumed effect whose approval was granted and that policy now
-      // refuses: an emergency state, the job-row cancellation fence, or
-      // Authority. (A run that is no longer RUNNING never gets here:
-      // `resolveEffectContext` refused it above, before the record was read.)
       closeEffectApproval(approvals, record, 'blocked');
-      log(false); throw error;
+      log(false);
+      throw outcome ? new ActionOutcomeError(outcome) : error;
     }
     record.reason = decision.reason;
     if (record.approvalId || decision.requiresApproval) {
@@ -423,33 +444,42 @@ export class WorkflowEffectBoundary {
       if (approval.status !== 'approved') {
         record.decision = 'denied';
         record.status = 'blocked'; record.error = `Workflow approval ${approval.status}; effect was not executed`;
-        record.finishedAt = Date.now(); saveWorkflowEffect(record); log(false); throw new Error(record.error);
+        // Typed (Q-19): a denied or unanswered approval ran nothing, and says so.
+        record.outcome = { status: 'blocked', code: approval.status === 'expired' ? 'APPROVAL_EXPIRED' : 'APPROVAL_DENIED',
+          message: record.error, effect: 'not_started' };
+        record.finishedAt = Date.now(); saveWorkflowEffect(record); log(false); throw new ActionOutcomeError(record.outcome);
       }
     } else { record.decision = 'allowed'; }
     // Recheck after delivery/approval and immediately before the synchronous
     // dispatch claim. No await separates this gate from the effect callback.
     const checkpoint = () => {
+      // A run no longer running refuses first, typed (Q-19): reading the
+      // context would otherwise throw an untyped error for it, and a refusal
+      // before the claim would leave the record pending.
+      const run = getFlowRun(record.runId);
+      if (!run || run.status !== 'RUNNING') throw new PolicyRefusal('RUN_NOT_RUNNING', `Workflow effect blocked: run is ${run?.status ?? 'missing'}`);
       input.validateTarget?.(record.arguments, record.target);
       input.revalidate?.(record);
       const latest = resolveEffectContext(input.context, input.piece, input.action);
-      if (latest.versionDigest !== record.versionDigest) throw new Error('Workflow version changed before dispatch');
+      if (latest.versionDigest !== record.versionDigest) throw new PolicyRefusal('WORKFLOW_CHANGED', 'Workflow version changed before dispatch');
       const current = policy();
       if (record.approvalId && approvals?.getRequest(record.approvalId)?.status !== 'approved') {
-        throw new Error('Workflow approval is no longer approved; dispatch blocked');
+        throw new PolicyRefusal('APPROVAL_WITHDRAWN', 'Workflow approval is no longer approved; dispatch blocked');
       }
-      if (current.requiresApproval && !record.approvalId) throw new Error('Workflow Authority now requires approval; effect was not dispatched');
+      if (current.requiresApproval && !record.approvalId) throw new PolicyRefusal('APPROVAL_REQUIRED', 'Workflow Authority now requires approval; effect was not dispatched');
     };
     const heldBeforeDispatch = holdIfPaused();
     if (heldBeforeDispatch) return heldBeforeDispatch;
     try { checkpoint(); } catch (error) {
       // A rejected target/session has not reached the dispatch claim. Preserve
       // that fact separately from uncertainty about already-started effects.
-      if (error instanceof ActionOutcomeError) {
-        record.outcome = error.outcome; record.status = 'blocked'; record.error = error.message;
+      if (error instanceof ActionOutcomeError || error instanceof PolicyRefusal) {
+        const outcome = error instanceof PolicyRefusal ? refused(error) : error.outcome;
+        record.outcome = outcome; record.status = 'blocked'; record.error = error.message;
         record.finishedAt = Date.now(); saveWorkflowEffect(record);
-        // Refused before the dispatch claim, so nothing was dispatched.
         closeEffectApproval(approvals, record, 'blocked');
         log(false);
+        throw error instanceof PolicyRefusal ? new ActionOutcomeError(outcome) : error;
       }
       throw error;
     }

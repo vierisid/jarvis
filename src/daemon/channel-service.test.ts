@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { ChannelService, channelDecisionCommand, channelDecisionNeedsAllowList, isPrivateChat, parsePersistedRecipient, recipientWarning, routePerChannel, sendWithRetry, type ChannelRouterServices } from "./channel-service";
+import { ChannelService, channelDecisionCommand, channelDecisionNeedsAllowList, isPrivateChat, parsePersistedRecipient, recipientWarning, routePerChannel, sendWithRetry, type ChannelRouterServices, type DeliveryFailure } from "./channel-service";
 import type { ChannelAdapter, ChannelMessage } from "../comms/channels/telegram";
 import { initDatabase } from "../vault/schema";
 import { getSetting, setSetting } from "../vault/settings";
@@ -15,6 +15,19 @@ import { getSetting, setSetting } from "../vault/settings";
 const U1 = "100000000000000001";
 const OWNER = "100000000000000002";
 const STRANGER = "100000000000000003";
+import { NotSentError } from "../comms/delivery";
+
+/** A typed refusal, as the Telegram and Discord adapters throw one (HTTP 400). */
+function refused(message = "Telegram API error: Bad Request: chat not found"): Error {
+  return Object.assign(new Error(message), { status: 400 });
+}
+
+/** fetchWithTimeout's timeout: the request may already have reached the service. */
+function timedOut(): Error {
+  const err = new Error("The operation was aborted.");
+  err.name = "AbortError";
+  return err;
+}
 
 class FakeAdapter implements ChannelAdapter {
   name: string;
@@ -130,13 +143,40 @@ describe("routePerChannel", () => {
   });
 
   test("adapter throws -> failed with the exception message", async () => {
-    const tg = new FakeAdapter({ connected: true, throwOnSend: new Error("rate limited") });
+    const tg = new FakeAdapter({ connected: true, throwOnSend: refused("rate limited") });
     const res = await routePerChannel(["telegram"], "hi", makeServices({
       adapters: { telegram: tg },
       recipients: { telegram: "user" },
     }));
     expect(res.delivered).toEqual([]);
     expect(res.failed[0]?.error).toBe("rate limited");
+    expect(res.unknown).toEqual([]);
+  });
+
+  // Q-19: a send that timed out may have arrived. It is never reported as
+  // not sent, so no caller falls back to another surface or resends it.
+  test.each([
+    ["a timeout", timedOut()],
+    ["a dropped connection", Object.assign(new Error("socket closed"), { code: "ECONNRESET" })],
+    ["a server error", Object.assign(new Error("Telegram API error: Bad Gateway"), { status: 502 })],
+    ["an untyped error, whatever it says", new Error("400 Bad Request: chat not found")],
+  ])("adapter throws %s -> unknown, never failed", async (_name, error) => {
+    const tg = new FakeAdapter({ connected: true, throwOnSend: error });
+    const res = await routePerChannel(["telegram"], "hi", makeServices({
+      adapters: { telegram: tg },
+      recipients: { telegram: "user" },
+    }));
+    expect(res).toEqual({ delivered: [], failed: [], unknown: [{ channel: "telegram", error: error.message }] });
+  });
+
+  test("an adapter that refused before sending is not sent", async () => {
+    const tg = new FakeAdapter({ connected: true, throwOnSend: new NotSentError("Discord not connected") });
+    const res = await routePerChannel(["telegram"], "hi", makeServices({
+      adapters: { telegram: tg },
+      recipients: { telegram: "user" },
+    }));
+    expect(res.failed).toEqual([{ channel: "telegram", error: "Discord not connected" }]);
+    expect(res.unknown).toEqual([]);
   });
 
   test("partial failure -> each channel reported independently", async () => {
@@ -187,8 +227,9 @@ function makeSleepRecorder(): { sleeps: number[]; sleep: (ms: number) => Promise
   };
 }
 
+/** Telegram's rate limit, typed as `telegramErrorFromResponse` builds it (status 429). */
 function rateLimitError(retryAfterMs?: number): Error & { retryAfterMs?: number } {
-  const err = new Error("Telegram API error 429: Too Many Requests") as Error & { retryAfterMs?: number };
+  const err = Object.assign(new Error("Telegram API error 429: Too Many Requests"), { status: 429 }) as Error & { retryAfterMs?: number };
   if (retryAfterMs !== undefined) err.retryAfterMs = retryAfterMs;
   return err;
 }
@@ -236,14 +277,25 @@ describe("sendWithRetry", () => {
   });
 
   test("non-transient errors are not retried", async () => {
-    const adapter = new ScriptedAdapter([new Error("Telegram API error: Bad Request: chat not found")]);
+    const adapter = new ScriptedAdapter([refused()]);
     const { sleeps, sleep } = makeSleepRecorder();
 
     const res = await sendWithRetry(adapter, "user", "hi", { sleep });
 
-    expect(res).toEqual({ ok: false, attempts: 1, error: "Telegram API error: Bad Request: chat not found" });
+    expect(res).toEqual({ ok: false, attempts: 1, error: "Telegram API error: Bad Request: chat not found", mayHaveArrived: false });
     expect(sleeps).toEqual([]);
     expect(adapter.sent).toEqual([]);
+  });
+
+  test("the wording of an error never makes it retryable", async () => {
+    // Before Q-19 a "429" or "timeout" in the text alone triggered a retry.
+    const adapter = new ScriptedAdapter([new Error("Telegram API error 429: Too Many Requests")]);
+    const { sleeps, sleep } = makeSleepRecorder();
+
+    const res = await sendWithRetry(adapter, "user", "hi", { sleep });
+
+    expect(res).toEqual({ ok: false, attempts: 1, error: "Telegram API error 429: Too Many Requests", mayHaveArrived: true });
+    expect(sleeps).toEqual([]);
   });
 
   test("fails immediately when the provider demands a wait beyond the budget", async () => {
@@ -315,16 +367,33 @@ describe("sendWithRetry", () => {
     expect(sleeps).toEqual([2_000, 4_000]);
   });
 
-  test("retries a fetch timeout (AbortError)", async () => {
-    const abortError = new Error("The operation was aborted.");
-    abortError.name = "AbortError";
-    const adapter = new ScriptedAdapter([abortError]);
+  // Q-19: Telegram has no idempotency key. A timed-out send may have arrived,
+  // so retrying it could send it twice; it is reported instead.
+  test.each([
+    ["a fetch timeout (AbortError)", timedOut()],
+    ["a TimeoutError", Object.assign(new Error("timed out"), { name: "TimeoutError" })],
+    ["a connection dropped after sending", Object.assign(new Error("closed"), { code: "ConnectionClosed" })],
+    ["a server error", Object.assign(new Error("Telegram API error: Internal Server Error"), { status: 500 })],
+  ])("never retries %s: it may have arrived", async (_name, error) => {
+    const adapter = new ScriptedAdapter([error]);
     const { sleeps, sleep } = makeSleepRecorder();
 
     const res = await sendWithRetry(adapter, "user", "hi", { sleep, baseDelayMs: 2_000 });
 
-    expect(res).toEqual({ ok: true, attempts: 2 });
-    expect(sleeps).toEqual([2_000]);
+    expect(res).toEqual({ ok: false, attempts: 1, error: error.message, mayHaveArrived: true });
+    expect(sleeps).toEqual([]);
+    expect(adapter.sent).toEqual([]);
+  });
+
+  test("a may-have-arrived failure is never retried, whatever isTransient says", async () => {
+    const adapter = new ScriptedAdapter([timedOut()]);
+    const { sleeps, sleep } = makeSleepRecorder();
+
+    const res = await sendWithRetry(adapter, "user", "hi", { sleep, isTransient: () => true });
+
+    expect(res.ok).toBe(false);
+    expect(res.attempts).toBe(1);
+    expect(sleeps).toEqual([]);
   });
 
   test("retries connection-level failures identified by error code", async () => {
@@ -337,6 +406,24 @@ describe("sendWithRetry", () => {
 
     expect(res).toEqual({ ok: true, attempts: 2 });
     expect(sleeps).toEqual([2_000]);
+  });
+
+  test("a resumed send that then fails reports the earlier chunks as possibly arrived", async () => {
+    class ResumeThenRefuse {
+      name = "resume-refuse";
+      private calls = 0;
+      async sendMessage(): Promise<void> {
+        this.calls++;
+        if (this.calls === 1) throw Object.assign(rateLimitError(), { remainingText: "tail" });
+        throw refused();
+      }
+    }
+    const { sleep } = makeSleepRecorder();
+
+    const res = await sendWithRetry(new ResumeThenRefuse(), "user", "head-and-tail", { sleep });
+
+    // The refused chunk was not sent, but the head was: never "not sent".
+    expect(res).toEqual({ ok: false, attempts: 2, error: "Telegram API error: Bad Request: chat not found", mayHaveArrived: true });
   });
 
   test("resumes from the error's remainingText instead of resending sent chunks", async () => {
@@ -424,33 +511,43 @@ describe("delivery failure handler", () => {
     const failing = new FakeAdapter({
       connected: true,
       name: "discord",
-      throwOnSend: new Error("Telegram API error: Bad Request: chat not found"),
+      throwOnSend: refused(),
     });
     svc.getManager().register(failing);
-    const failures: Array<{ channel: string; attempts: number; error: string }> = [];
+    const failures: DeliveryFailure[] = [];
     svc.setDeliveryFailureHandler((f) => failures.push(f));
 
     await svc.broadcastToAll("hi");
 
     expect(failures).toEqual([
-      { channel: "discord", attempts: 1, error: "Telegram API error: Bad Request: chat not found" },
+      { channel: "discord", attempts: 1, error: "Telegram API error: Bad Request: chat not found", mayHaveArrived: false },
     ]);
   });
 
   test("notifies the handler when a send exhausts its retries", async () => {
     const failing = new FakeAdapter({
       connected: true,
-      throwOnSend: new Error("Telegram API error: Bad Request: chat not found"),
+      throwOnSend: refused(),
     });
     const svc = makeService(failing);
-    const failures: Array<{ channel: string; attempts: number; error: string }> = [];
+    const failures: DeliveryFailure[] = [];
     svc.setDeliveryFailureHandler((f) => failures.push(f));
 
     await svc.sendToChannel("fake", "user", "hi");
 
     expect(failures).toEqual([
-      { channel: "fake", attempts: 1, error: "Telegram API error: Bad Request: chat not found" },
+      { channel: "fake", attempts: 1, error: "Telegram API error: Bad Request: chat not found", mayHaveArrived: false },
     ]);
+  });
+
+  test("a send that timed out reaches the handler as possibly arrived, after one attempt", async () => {
+    const svc = makeService(new FakeAdapter({ connected: true, throwOnSend: timedOut() }));
+    const failures: DeliveryFailure[] = [];
+    svc.setDeliveryFailureHandler((f) => failures.push(f));
+
+    await svc.sendToChannel("fake", "user", "hi");
+
+    expect(failures).toEqual([{ channel: "fake", attempts: 1, error: "The operation was aborted.", mayHaveArrived: true }]);
   });
 
   test("does not notify the handler on success", async () => {
@@ -468,7 +565,7 @@ describe("delivery failure handler", () => {
   test("a throwing handler does not break the send path", async () => {
     const failing = new FakeAdapter({
       connected: true,
-      throwOnSend: new Error("Telegram API error: Bad Request: chat not found"),
+      throwOnSend: refused(),
     });
     const svc = makeService(failing);
     svc.setDeliveryFailureHandler(() => {

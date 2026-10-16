@@ -77,7 +77,10 @@ import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { buildBackgroundProfile } from "../authority/background-profile.ts";
 import { buildTaintGating } from "../authority/taint-gating.ts";
 import { channelApprovalReply, notificationApprovalDecision, notificationDecisionNote } from "./approval-decision.ts";
-import { sendDesktopNotification } from "../comms/desktop-notify.ts";
+import { sendDesktopNotification, sendDesktopNotificationReceipt } from "../comms/desktop-notify.ts";
+import { channelLabel, failureText, projectFailure } from "../failures/projection.ts";
+import { ScreenAlerts, screenIssueKey } from "../failures/interruptions.ts";
+import { runFailureNotice } from "../workflows/runtime/run-failure.ts";
 import { ensureUiBuilt } from "./ui-autobuild.ts";
 import { deliverOpportunityNotification } from './opportunity-notification.ts';
 import { SidecarManager, buildEnrollmentUrls } from "../sidecar/manager.ts";
@@ -5111,12 +5114,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // to direct event-bus subscription.
     triggerManager = new TriggerManager({
       eventBus: sharedEventBus,
-      onRegistrationBlocked: ({ runId, message }) => notifyAll({
-        id: `workflow-readiness:${runId}`, kind: 'workflow',
-        title: 'Workflow needs attention',
-        body: `A workflow could not start: ${message}. See its failed run for details.`,
-        actions: [{ id: 'review', label: 'Open Jarvis', primary: true }, { id: 'dismiss', label: 'Dismiss' }],
-      }),
+      onRegistrationBlocked: ({ runId, message }) => {
+        // Q-19: the sentence Runs and Today show for this run.
+        notifyAll({
+          id: `workflow-readiness:${runId}`, kind: 'workflow',
+          title: 'Workflow needs attention',
+          body: runFailureNotice(runId) ?? `A workflow could not start: ${message}. See its failed run for details.`,
+          actions: [{ id: 'review', label: 'Open Jarvis', primary: true }, { id: 'dismiss', label: 'Dismiss' }],
+        });
+      },
       ...(workflowEngineRuntime ? { engineRuntime: workflowEngineRuntime } : {}),
     });
 
@@ -5413,14 +5419,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     }
     approvalDelivery.setBroadcaster(wsService);
     approvalDelivery.setChannelSender(channelService);
-    channelService.setDeliveryFailureHandler(({ channel, attempts, error }) => {
+    channelService.setDeliveryFailureHandler(({ channel, error, mayHaveArrived }) => {
       // 'normal', not 'urgent': urgent notifications are echoed back to
       // external channels, which would loop the failure into the channel
       // that just failed. The dashboard is the fallback the user still has.
-      wsService.broadcastNotification(
-        `Could not deliver message to ${channel} after ${attempts} attempt(s): ${error}`,
-        'normal',
-      );
+      // Q-19: a send that may have arrived reads as unconfirmed, never as
+      // not sent, and the evidence shown is redacted.
+      const failure = projectFailure({ source: 'delivery', channels: [{ channel, result: mayHaveArrived ? 'unknown' : 'failed', error }] },
+        { label: `A message to ${channelLabel(channel)}`, sideEffects: true }, { channel });
+      wsService.broadcastNotification(failureText(failure, { detail: true }), 'normal');
     });
     deferredExecutor.setResultCallback((requestId, request, result) => {
       // Notify via WS and channels that an approved action was executed.
@@ -5456,7 +5463,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         wsService,
         eventBuffer: workflowEventBuffer,
         sendDesktop: async (title, body) => {
-          sendDesktopNotification(title, body, { urgency: 'normal' });
+          const receipt = await sendDesktopNotificationReceipt(title, body, { urgency: 'normal' });
+          return receipt === 'unknown' ? 'unknown' : receipt === 'shown';
         },
         agentOrchestrator: agentService.getOrchestrator(),
         agentSpecialists,
@@ -5589,6 +5597,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       try {
         const { AwarenessService } = await import('../awareness/service.ts');
         const awarenessWarnedTypes = new Set<string>();
+        // Q-19: one urgent interruption per screen issue, then quiet; the
+        // researched fix is that interruption (owner decision).
+        const screenAlerts = new ScreenAlerts();
         const svc = new AwarenessService(
           jarvisConfig,
           agentService.getLLMManager(),
@@ -5631,8 +5642,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               console.log(`[Daemon] Awareness suggestion firing: "${title}"`);
 
               const hasWsClients = wsService.getServer().getClientCount() > 0;
+              const issueKey = typeof event.data.issueKey === 'string' ? event.data.issueKey : null;
 
-              if (hasWsClients) {
+              if (screenAlerts.headsUp(issueKey) === 'quiet') {
+                // Research is under way (its fix will interrupt), or this issue
+                // already interrupted: the dashboard only.
+                wsService.broadcastNotification(text, 'normal');
+              } else if (hasWsClients) {
                 // Primary: deliver via WebSocket + voice
                 wsService.broadcastNotification(text, 'urgent');
                 sendDesktopNotification(`JARVIS: ${title}`, body, { urgency: 'normal' });
@@ -5655,6 +5671,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               const appName = String(event.data.appName ?? '');
               if (errorText.length > 5) {
                 console.log(`[Daemon] Auto-researching error: "${errorText.slice(0, 80)}"`);
+                const errorKey = screenIssueKey('error', appName, errorText);
+                screenAlerts.researchStarted(errorKey);
                 bgAgent.handleMessage(
                   // `appName` is the active window's app name, which a web page
                   // controls through document.title -- the same actor that
@@ -5673,6 +5691,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                     const awaiting = bgAgent?.lastTurnRequestedApproval() ?? false;
                     const heading = awaiting ? `Needs your approval (error in ${appName})` : `Fix for error in ${appName}`;
                     const solutionText = `**${heading}:**\n${solution.slice(0, 500)}`;
+                    // The one interruption for this error, unless one already went out (Q-19).
+                    if (screenAlerts.fix(errorKey) === 'quiet') {
+                      wsService.broadcastNotification(solutionText, 'normal');
+                      return;
+                    }
                     wsService.broadcastNotification(solutionText, 'urgent');
                     sendDesktopNotification(`JARVIS: ${heading}`, solution.slice(0, 200), { urgency: 'critical', expireMs: 15000 });
                     // Strip markdown for TTS — voice should sound natural
@@ -5696,10 +5719,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                     ).catch(err =>
                       console.error('[Daemon] Error solution TTS failed:', err instanceof Error ? err.message : err)
                     );
+                  } else {
+                    screenAlerts.researchEnded(errorKey);
                   }
-                }).catch(err =>
-                  console.error('[Daemon] Error auto-research failed:', err instanceof Error ? err.message : err)
-                );
+                }).catch(err => {
+                  screenAlerts.researchEnded(errorKey);
+                  console.error('[Daemon] Error auto-research failed:', err instanceof Error ? err.message : err);
+                });
               }
             }
 
@@ -5712,6 +5738,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
               if (compositeScore >= 0.7 && (appCategory === 'code_editor' || appCategory === 'terminal')) {
                 console.log(`[Daemon] Deep-researching struggle in ${sAppName} (score: ${compositeScore.toFixed(2)})`);
+                const struggleKey = screenIssueKey('struggle', sAppName);
+                screenAlerts.researchStarted(struggleKey);
                 bgAgent.handleMessage(
                   // Same reasoning as the error path above: both of these come
                   // from observer event data, so both are labels inside trusted
@@ -5727,6 +5755,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                     const awaiting = bgAgent?.lastTurnRequestedApproval() ?? false;
                     const heading = awaiting ? `Needs your approval (${sAppName})` : `Help for ${sAppName}`;
                     const solutionText = `**${heading}:**\n${solution.slice(0, 500)}`;
+                    if (screenAlerts.fix(struggleKey) === 'quiet') {
+                      wsService.broadcastNotification(solutionText, 'normal');
+                      return;
+                    }
                     wsService.broadcastNotification(solutionText, 'urgent');
                     sendDesktopNotification(`JARVIS: ${heading}`, solution.slice(0, 200), { urgency: 'critical', expireMs: 15000 });
                     const voiceText = solution
@@ -5746,10 +5778,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                     ).catch(err =>
                       console.error('[Daemon] Struggle solution TTS failed:', err instanceof Error ? err.message : err)
                     );
+                  } else {
+                    screenAlerts.researchEnded(struggleKey);
                   }
-                }).catch(err =>
-                  console.error('[Daemon] Struggle auto-research failed:', err instanceof Error ? err.message : err)
-                );
+                }).catch(err => {
+                  screenAlerts.researchEnded(struggleKey);
+                  console.error('[Daemon] Struggle auto-research failed:', err instanceof Error ? err.message : err);
+                });
               }
             }
 

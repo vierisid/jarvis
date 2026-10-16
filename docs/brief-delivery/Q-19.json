@@ -1,0 +1,232 @@
+{
+  "task": "Q-19",
+  "title": "Make failure and recovery messages actionable",
+  "date": "2026-10-14",
+  "branch": "brief/q-19",
+  "worktree": "dedicated Git worktree; the owner's main checkout was not touched",
+  "baseline": "b8731bdc02fa7ab657c94ffdbd87b35dc7dac3d1",
+  "baseline_ref": "origin/brief/q-07, open PR #940 (stacked on Q-08 #891, which is stacked on Q-06 #806)",
+  "head": {
+    "ref": "commit containing this receipt",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-19.json",
+    "implementation_sha": "f4110c7b9ae1720869a6f747d62ec90b2762b598",
+    "implementation_resolve": "git log -1 --format=%H -- src/comms/desktop-notify.test.ts"
+  },
+  "status": {
+    "implementation": "verified locally",
+    "merge": "not_merged",
+    "capability_ready": "typed failure projection used by Runs, chat, Today, delivery toasts and the readiness notice; delivery that never calls a possibly delivered send failed",
+    "release_enabled": false,
+    "publication": "PR #1057 open against brief/q-07; https://github.com/vierisid/jarvis/pull/1057"
+  },
+  "design": {
+    "surface": "existing Runs (Workflows room and editor), chat thread, Today's Waiting on you, dashboard toasts",
+    "visual_changes": true,
+    "visual_note": "one shared FailureNotice component (headline, outcome, next steps, Details); Waiting on you rows with Open and Dismiss; Today task colors corrected",
+    "contract": "docs/failure-messages.md"
+  },
+  "ownership": {
+    "implementer": "Core-quality line",
+    "review": "independent PR reviewer pass on 781907a1, the head before the rebase (read-only); every finding verified against the code and fixed on the rebased branch (see review)",
+    "owns": "src/failures (projection, evidence, fixtures, chat payload, interruption gate) and src/comms/delivery.ts"
+  },
+  "merge_after": [
+    "Q-07 #940, after Q-08 #891, after Q-06 #806"
+  ],
+  "enable_after": [],
+  "decisions": [
+    "Timeouts (owner): a send that may have arrived is marked unconfirmed with its channel; no automatic fallback to another channel and no automatic resend. A workflow notify step reports each channel and fails only when nothing was sent anywhere.",
+    "Today (owner): one row per failure in Waiting on you, with the same sentence, until resolved or dismissed.",
+    "Interrupts (owner): one urgent interruption per issue, then quiet.",
+    "Base (owner): stacked on Q-07.",
+    "Review round: the owner said fix all with two questions unanswered, so the recommended choices were applied and can be switched. (1) The researched fix is the one interruption for a screen issue; a heads-up while research runs goes to the dashboard quietly. (2) With no dashboard open, a dashboard that auto chose is skipped and the desktop shows the message; a step that names the dashboard stays strict."
+  ],
+  "behavior": [
+    "projectFailure reads typed evidence only (action outcome status, effect and code; readiness issue codes; LLMErrorCode; approval decision; cancellation; per-channel delivery results). The message is kept as redacted, bounded detail and never parsed. Untyped failures of work with side effects read as may have taken effect.",
+    "Every recovery step is advice the person starts; nothing in the projection runs, retries or resends anything.",
+    "A failed send is classified from its error name, runtime code, HTTP status and unsent remainder. Timeouts, dropped connections, 5xx, partly sent messages and untyped errors may have arrived: never retried, never replaced by a fallback, reported unconfirmed. Only typed not-sent failures that can pass (429, named waits, connections never made) are retried.",
+    "The workflow notify step returns delivered, failed and unknown per channel and fails with DELIVERY_FAILED only when nothing was sent anywhere; the dashboard, voice and desktop count as delivered only when something accepted them.",
+    "The opportunity outbox records an unconfirmed send (unconfirmed_at, never due) and never resends it; a late answer still settles it; no critical desktop fallback after an unconfirmed channel.",
+    "The workflow effect boundary records refusals decided before dispatch as typed outcomes (APPROVAL_DENIED, APPROVAL_EXPIRED, APPROVAL_WITHDRAWN, APPROVAL_REQUIRED, AUTHORITY_DENIED, EMERGENCY_STOPPED, RUN_NOT_RUNNING, WORKFLOW_CHANGED); the same check failing during dispatch still records an uncertain outcome. Governance refusals stay unhandleable for probe steps. The sandbox server answers typed outcomes with their status instead of 500. AI steps keep their provider code.",
+    "runFailure derives a failed run's failure on read from the run and its effect records; run list and detail carry it; the Workflows room and editor render it.",
+    "Chat error frames carry the failure, a typed code and a redacted message; a turn that had called a tool never reads as nothing done; only the tab that asked reacts; the failed task records the same sentence; a relayed error is sent once.",
+    "GET /api/failures/open lists failed runs (repeats grouped; cleared by a later success when nothing took effect, by a Q-07 inspection when something may have), unconfirmed notify deliveries and chat turns that failed after acting; POST /api/failures/dismiss records dismissals.",
+    "InterruptionGate: one urgent alert per issue per hour; an on-screen error's suggestion and researched fix share one key. The readiness desktop notice uses the run's failure sentence.",
+    "The desktop permission check classifies by the sidecar's typed error code; a crash in the app reads as errored, not as no answer."
+  ],
+  "acceptance": [
+    {
+      "check": "Timeout cannot trigger a wrong fallback",
+      "status": "passed",
+      "evidence": "src/daemon/opportunity-notification.test.ts (unconfirmed channel or router throw: no desktop fallback), src/awareness/opportunity-delivery.test.ts (unconfirmed never retried; a send still running at the wait is unconfirmed and a late answer settles it), src/daemon/channel-service.test.ts (timeouts, dropped connections and 5xx never retried, whatever isTransient says); evidence/Q-19/revert-checks.log"
+    },
+    {
+      "check": "Unknown delivery never says nothing was sent",
+      "status": "passed",
+      "evidence": "src/comms/delivery.test.ts, src/daemon/channel-service.test.ts (routed timeouts are unknown; partly sent messages may have arrived), src/workflows/adapters/notifier.test.ts, src/workflows/runtime/workflow-authority.test.ts (a timed-out channel is unknown and the step does not fail; a notification sent nowhere fails with DELIVERY_FAILED), src/failures/projection.test.ts (fixtures)"
+    },
+    {
+      "check": "The same failure reads consistently in Today, Runs and chat",
+      "status": "passed",
+      "evidence": "src/workflows/runtime/run-failure.test.ts and open-failures.test.ts (Today rows carry runFailure's sentence), src/comms/streaming.test.ts (the task records the failure the clients were shown), ui/src/hooks/useWebSocket.test.ts (the daemon's failure is rendered as is), ui/src/v2/rooms/availability.test.tsx (Waiting on you shows the same headline and outcome)"
+    },
+    {
+      "check": "Without duplicate urgent interruptions",
+      "status": "passed",
+      "evidence": "src/failures/interruptions.test.ts, src/awareness/capture-transitions.test.ts (the error suggestion carries the error's key), src/comms/streaming.test.ts (an error is sent once), ui/src/hooks/useVoice.playback.test.tsx and useWebSocket.test.ts (only the asking tab reacts)"
+    },
+    {
+      "check": "Validation, missing binding, provider limit, offline target, denied approval and uncertain effect normalized; exact step/run/decision linked; only safe recovery offered",
+      "status": "passed",
+      "evidence": "src/failures/fixtures.ts with src/failures/projection.test.ts (17 fixtures), src/workflows/runtime/workflow-authority.test.ts (typed denied, expired, Authority and Kill refusals; provider codes on AI steps), src/workflows/sandbox-api/sandbox-api.test.ts (typed outcome instead of 500)"
+    },
+    {
+      "check": "Credentials redacted; no classification by loose wording",
+      "status": "passed",
+      "evidence": "src/failures/projection.test.ts (detail redacted and bounded; the same typed evidence with different wording reads the same; untyped errors are internal whatever they say), src/comms/delivery.test.ts (wording never classifies a send), src/comms/streaming.test.ts (no code without a typed one), src/daemon/system-permissions.test.ts"
+    },
+    {
+      "check": "Boundary: no automatic repair that executes new side effects; original evidence preserved",
+      "status": "passed",
+      "evidence": "recovery steps are advice only (projection.test.ts); no resend of unconfirmed sends (opportunity-delivery.test.ts, channel-service.test.ts); replays return the recorded refusal (workflow-authority.test.ts); evidence kept redacted behind details"
+    }
+  ],
+  "verification": [
+    {
+      "command": "bun test --preload ./src/test-preload.ts",
+      "result": "at a7005cda, a fresh checkout: 9452 pass, 86 skip, 7 fail across 497 files in 809 seconds. The 7 also fail on the base 6f658914 with no Q-19 work: git config lint and six Chromium launches on this machine. f4110c7b, after this run, changes only src/comms/desktop-notify.ts and its test.",
+      "log": "evidence/Q-19/full-suite-summary.log"
+    },
+    {
+      "command": "bun test --preload ./src/test-preload.ts <every test file Q-19 adds or changes, and the suites around them>",
+      "result": "at f4110c7b: 1481 pass, 31 skip, 0 fail across 44 files; the skips are desktop-notify's Windows-only toast tests",
+      "log": "evidence/Q-19/q19-tests.log"
+    },
+    {
+      "command": "JARVIS_TEST_ENGINE_BUILD=1 bun test --preload ./src/test-preload.ts src/workflows/runner/engine-runtime/end-to-end.test.ts",
+      "result": "at f4110c7b with the engine and pieces rebuilt: 30 pass, 0 fail, including a notify step sent nowhere failing the run with its typed outcome",
+      "log": "evidence/Q-19/real-engine.log"
+    },
+    {
+      "command": "bunx --no-install tsc --noEmit",
+      "result": "at f4110c7b: exit 0",
+      "log": "evidence/Q-19/types.log"
+    },
+    {
+      "command": "bun run check:no-ee && bun run check:migrations && bun run lint:templates && bun run check:package",
+      "result": "at f4110c7b: exit 0",
+      "log": "evidence/Q-19/guards.log"
+    },
+    {
+      "command": "revert checks: each guarantee removed in turn and its test run",
+      "result": "60 of 60 detected: 59 at a7005cda, and the desktop sender's own wait at f4110c7b, which adds its test",
+      "log": "evidence/Q-19/revert-checks.log"
+    }
+  ],
+  "manual_checks": [
+    "Not run against a live daemon with real channels. The quick path below names the manual checks for a dev daemon."
+  ],
+  "quick_verify": {
+    "cwd": "repository root, on brief/q-19",
+    "command": "bun test --preload ./src/test-preload.ts src/failures src/comms/delivery.test.ts src/workflows/runtime/run-failure.test.ts src/workflows/runtime/open-failures.test.ts",
+    "expected": "78 pass",
+    "manual": "On a dev daemon: run a workflow whose notify step targets only the dashboard with no dashboard open (the run fails with 'was not sent' and shows once in Today); deny a workflow approval (Runs and Today read 'did not run: its approval was denied. Nothing was done.'); make a Telegram send time out (the toast says it may not have arrived; nothing is resent)."
+  },
+  "migration": "Additive: tables failure_dismissal (workflow schema) and chat_failure (vault schema), column opportunity_delivery.unconfirmed_at. Deploy the daemon and a rebuilt engine together: the notify piece reads typed outcomes. Review round: tables open_failure and open_failure_scan and index idx_flow_run_updated (workflow schema), all additive.",
+  "rollback": "Revert this PR and rebuild daemon and engine together. The new tables, index and column can stay; older code ignores them. An unconfirmed opportunity is never due, so older code does not resend it either.",
+  "limitations": [
+    "src/llm still derives some provider error codes from error text before Q-19 reads them; typing them at the source changes retry and failover behavior and needs its own change.",
+    "The interruption gate is in memory: after a restart an issue may interrupt once more, never less.",
+    "A chat failure that changed nothing is not kept for Today; chat already showed it.",
+    "Waiting on you shows the newest three rows; its count includes every open one (at most 20 listed). Nothing ages out; the very first scan looks back one week.",
+    "Discord's retries are off by configuration only (rest.retries 0); no test drives a live Discord client.",
+    "If Kill or an Authority change refused every channel of a notify step, the step would read DELIVERY_FAILED rather than the refusal; the first channel is checked in the same tick as the dispatch claim."
+  ],
+  "integration": [
+    "Rebased on 2026-10-14 onto Q-07 #940 at 6f65891406c723ce0d906f824ee6dd4fd6fdfce0, including updated Q-08/Q-06 and main 5024ea7455a5613be0514475be32c0dee6de0edd. All thirteen original commits retained; PR remains against brief/q-07 and unmerged.",
+    "Owner approved combining Q19 typed failure messages and cautious delivery with main literal Discord rendering, allow-listed recipients rechecked before dispatch, approval receipts, workflow spawn budgets, room/voice behavior and paginated runs.",
+    "Workflow failures and unconfirmed workflow notifications are scoped through their owning project before query limits. Dismissal accepts only currently visible keys for that project; foreign or invented keys cannot hide failures. Existing account-wide chat failures retain their scope.",
+    "Engine: the notify piece throws the typed outcome on a non-2xx reply. Deploy the daemon and rebuilt engine together. No deployment or activation was performed.",
+    "Validation before the rebase is kept under verification_history; the rebase pass's validation is under rebase.validation; verification describes the current head.",
+    "A trial merge of f4110c7b with main 5024ea74 (git merge-tree, no checkout touched) is clean."
+  ],
+  "rebase": {
+    "date": "2026-10-14",
+    "onto": "6f65891406c723ce0d906f824ee6dd4fd6fdfce0",
+    "main": "5024ea7455a5613be0514475be32c0dee6de0edd",
+    "validation": {
+      "focused": "973 passed, 0 failed; 15091 assertions across 28 files, including project isolation and literal Discord retry regressions.",
+      "engineAndMain": "275 passed, 0 failed; 1111 assertions across six files, including 30 real-engine tests plus main approval delivery/decisions, voice approval, room actions and workflow spawn-card caps.",
+      "recovery": "49 passed, 0 failed; 228 assertions for Q07 recovery and project isolation.",
+      "typecheck": "passed",
+      "uiBuild": "passed with existing CSS at-rule warnings",
+      "rangeDiff": "All thirteen original commits retained; combined conflicting behavior as owner approved.",
+      "limits": "Fake providers and local engines; no live provider call, paid model, deployment, merge or full-stack certification."
+    }
+  },
+  "review": {
+    "date": "2026-10-14",
+    "reviewed": "781907a1 (read-only review; findings applied on the rebased branch)",
+    "commits": [
+      "32b95990 Q-19: fix the review findings on #1057",
+      "a7005cda Q-19: test that Today's Open lands on the failed run",
+      "f4110c7b Q-19: test that a desktop sender past its wait reads unknown"
+    ],
+    "fixes": [
+      "C1: a resume refused because the workflow changed says what the steps before the pause did, never a plain 'run it again'.",
+      "C2: CODE steps and Library pieces leave no effect record; what the rest of a run did is read from records and the step trace, and with no trace an untracked step ahead of the failure (or in the same loop) may have run.",
+      "C3: the researched fix is the one interruption; a heads-up while research runs goes to the dashboard quietly (ScreenAlerts).",
+      "C4: a desktop toast that ran past its wait is unknown, never 'not sent'; the opportunity outbox does not show it again. The sender's own wait is tested directly.",
+      "C5: a reply that was shown but could not be saved reads as that, not as a failed request.",
+      "C6, P1, P2: Today indexes runs as they finish (open_failure, a cursor over flow_run.updated) and never rescans history; no time window; repeats share one row; both queries pinned to their indexes.",
+      "C7: Today's Open lands on the run itself.",
+      "P3: effects load only for runs that ended badly.",
+      "B1: the notify behavior change is decided (decision above), frozen with the reviewed arguments and documented.",
+      "B2: discord.js's own retries are off, so a timed-out or 5xx send is never resent behind Jarvis's back.",
+      "D1: a pending record reads as not dispatched; a run that stops before dispatch and a Kill on a replayed authorization are typed refusals.",
+      "D2: the docs say what the code does.",
+      "T1: a test pins that a check failing mid-dispatch stays uncertain.",
+      "N1: the unused approval evidence type is gone; fixtures use the real action outcomes.",
+      "Suggestions taken: a failed notify reply carries each channel's report; only tool calls Authority does not judge as purely reading mark a failed chat turn as having acted. Not taken: splitting the PR; a governance refusal of every channel mid-notify (limitations)."
+    ]
+  },
+  "verification_history": {
+    "note": "Validation before the rebase and the review round. Its logs: git show 8e7265bb:docs/brief-delivery/<log>.",
+    "entries": [
+      {
+        "command": "bun test --preload ./src/test-preload.ts",
+        "result": "at 8884bf4f, a fresh checkout: 8009 pass, 82 skip, 7 fail across 435 files in 788 seconds. The 7 also fail on the base b8731bdc with no Q-19 work: git config lint and six Chromium launches on this machine. e587581d adds one test only.",
+        "log": "evidence/Q-19/full-suite-summary.log"
+      },
+      {
+        "command": "bun test --preload ./src/test-preload.ts <every test file Q-19 adds or changes, and the suites around them>",
+        "result": "at e587581d: 759 pass, 0 fail across 28 files",
+        "log": "evidence/Q-19/q19-tests.log"
+      },
+      {
+        "command": "JARVIS_TEST_ENGINE_BUILD=1 bun test --preload ./src/test-preload.ts src/workflows/runner/engine-runtime/end-to-end.test.ts",
+        "result": "at 8884bf4f with the engine and pieces rebuilt: 30 pass, 0 fail, including a notify step sent nowhere failing the run with its typed outcome",
+        "log": "evidence/Q-19/real-engine.log"
+      },
+      {
+        "command": "bunx --no-install tsc --noEmit",
+        "result": "exit 0",
+        "log": "evidence/Q-19/types.log"
+      },
+      {
+        "command": "bun run check:no-ee && bun run check:migrations && bun run lint:templates && bun run check:package",
+        "result": "exit 0",
+        "log": "evidence/Q-19/guards.log"
+      },
+      {
+        "command": "revert checks: each guarantee removed in turn and its test run",
+        "result": "36 of 36 detected (one first survived at 8884bf4f because the outbox protects an unconfirmed row twice; e587581d pins each lock on its own)",
+        "log": "evidence/Q-19/revert-checks.log"
+      },
+      {
+        "command": "bun test --preload ./src/test-preload.ts ui/src/hooks/useWebSocket.test.ts ui/src/v2/onboarding/permission-rows.test.ts",
+        "result": "at 500ba40d, which only changes two strings (a test name and one sentence of permission copy) after the runs above: 76 pass, 0 fail; the commit hook also ran the type check"
+      }
+    ]
+  }
+}

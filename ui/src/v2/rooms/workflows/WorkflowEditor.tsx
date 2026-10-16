@@ -32,7 +32,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { LayoutGrid, Save, RotateCcw, ShieldAlert, X, Plus, Trash2, Play, History, CheckCircle2, XCircle, Clock, AlertTriangle, Pause, Undo2 } from "lucide-react";
-import { Button, Chip, Icon } from "../../ui";
+import { Button, Chip, FailureNotice, Icon } from "../../ui";
 import {
   useWorkflowEditor,
   type FlatStep,
@@ -5540,10 +5540,14 @@ function RunRow({
         <span className="wf-editor__run-time">{startedAt}</span>
         <span className="wf-editor__run-duration">{duration}</span>
       </button>
-      {/* One-line error preview, shown directly under the status row so
-          the user doesn't have to expand to see what went wrong. Tooltip
-          carries the full message when truncated. */}
-      {failedStepError ? (
+      {/* One-line preview, shown directly under the status row so the user
+          doesn't have to expand to see what went wrong. The run's failure
+          sentence (Q-19) when the daemon sent one, else the raw step error. */}
+      {run.failure ? (
+        <p className="wf-editor__run-error" title={run.failure.headline}>
+          {run.failure.headline}
+        </p>
+      ) : failedStepError ? (
         <p className="wf-editor__run-error" title={failedStepError}>
           {failedStepError}
         </p>
@@ -5562,6 +5566,7 @@ function RunRow({
       </div>
       {expanded ? (
         <div className="wf-editor__run-body">
+          {run.failure ? <FailureNotice failure={run.failure} /> : null}
           <dl className="wf-editor__run-kv">
             <dt>Id</dt>
             <dd><code>{run.id}</code></dd>
@@ -5626,7 +5631,7 @@ function OverlayBanner({
       </span>
       <span className="wf-editor__overlay-banner-text">
         Viewing run {startedAt} -- <strong>{run.status}</strong>
-        {run.cancellation?.inFlightMayHaveCompleted ? <span className="wf-editor__overlay-banner-reason">{CANCELED_EFFECT_WARNING}</span> : null}
+        {!run.failure && run.cancellation?.inFlightMayHaveCompleted ? <span className="wf-editor__overlay-banner-reason">{CANCELED_EFFECT_WARNING}</span> : null}
         {run.failedStep ? <> at <code>{run.failedStep.displayName}</code></> : null}
         {!hasOverlayData ? (
           <em className="wf-editor__overlay-banner-note">
@@ -5636,7 +5641,11 @@ function OverlayBanner({
         {/* Without this the only clue to a run that died before any step ran
             (engine never came up, RPC timeout) is the daemon log. The reason
             is already persisted on the run -- show it. */}
-        {run.failedStep?.errorMessage ? (
+        {run.failure ? (
+          <span className="wf-editor__overlay-banner-reason" title={`${run.failure.headline} ${run.failure.outcome}`}>
+            {run.failure.headline}
+          </span>
+        ) : run.failedStep?.errorMessage ? (
           <span className="wf-editor__overlay-banner-reason" title={run.failedStep.errorMessage}>
             {run.failedStep.errorMessage}
           </span>

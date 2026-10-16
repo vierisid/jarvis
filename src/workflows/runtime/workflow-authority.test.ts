@@ -41,6 +41,9 @@ import { WorkflowEventBuffer } from './event-buffer';
 import { buildSandboxServiceBackends, type BuildServiceBackendsOptions } from './service-backends';
 import { WebSocketService } from '../../daemon/ws-service';
 import { noOpCodeSandbox } from '../activepieces/packages/server/engine/src/lib/core/code/no-op-code-sandbox';
+import { runFailure } from './run-failure';
+import { LLMProviderError } from '../../llm/provider';
+import { getDb } from '../../vault/schema';
 
 beforeEach(() => { initWorkflowDb(':memory:'); });
 afterEach(() => { closeWorkflowDb(); });
@@ -78,7 +81,7 @@ function fixture(route: 'tool' | 'notify' | 'agent' | 'workflow' | 'context' | '
     channelService: { getChannelStatus: () => ({}), getBroadcastRecipient: () => 'recipient-at-review',
       sendWorkflowNotification: async (...args: unknown[]) => { calls.push(args.slice(0, 3)); },
       tryBroadcastToChannels: async () => ({ delivered: [], failed: [] }) } as any,
-    wsService: { broadcastNotificationToDashboard: (...args: unknown[]) => { calls.push(args); } } as any,
+    wsService: { broadcastNotificationToDashboard: (...args: unknown[]) => { calls.push(args); return 1; } } as any,
   };
   const backends = buildSandboxServiceBackends(options);
   const context = { runId: run.id, projectId, stepName: 'action', executionPath: [] };
@@ -199,7 +202,7 @@ describe('workflow effect boundary', () => {
   test('urgent dashboard-only notifications do not broadcast to external recipients', async () => {
     const f = fixture('notify');
     const ws = new WebSocketService(0, { setDelegationCallback: () => {} } as any);
-    (ws as any).wsServer.broadcast = () => { f.calls.push('dashboard'); };
+    (ws as any).wsServer.broadcastWithReceipt = () => { f.calls.push('dashboard'); return 1; };
     ws.setChannelService({ broadcastToAll: async () => { f.calls.push('unapproved-recipient'); } } as any);
     f.options.wsService = ws;
     const result = await f.backends.notify!({ message: 'hello', channels: ['dashboard'], priority: 'high' }, f.context);
@@ -210,7 +213,7 @@ describe('workflow effect boundary', () => {
   test('legacy urgent proactive notifications retain their explicit broadcast behavior', () => {
     const calls: string[] = [];
     const ws = new WebSocketService(0, { setDelegationCallback: () => {} } as any);
-    (ws as any).wsServer.broadcast = () => { calls.push('dashboard'); };
+    (ws as any).wsServer.broadcastWithReceipt = () => { calls.push('dashboard'); return 1; };
     ws.setChannelService({ broadcastToAll: async (text: string) => { calls.push(text); } } as any);
     ws.broadcastNotification('legacy', 'urgent');
     expect(calls).toEqual(['dashboard', '[URGENT] legacy']);
@@ -578,7 +581,7 @@ describe('workflow effect boundary', () => {
     f.options.channelService.getChannelStatus = () => ({ telegram: true } as any);
     f.authority.setGovernedCategories(['send_message']);
     const ws = new WebSocketService(0, { setDelegationCallback: () => {} } as any);
-    (ws as any).wsServer.broadcast = () => { f.calls.push('dashboard'); };
+    (ws as any).wsServer.broadcastWithReceipt = () => { f.calls.push('dashboard'); return 1; };
     ws.setChannelService({ broadcastToAll: async () => { f.calls.push('unapproved-recipient'); } } as any);
     f.options.wsService = ws;
     const req = { message: 'hello', channels: ['auto'], priority: 'high' as const };
@@ -598,7 +601,7 @@ describe('workflow effect boundary', () => {
     const f = fixture('notify');
     const ws = new WebSocketService(0, { setDelegationCallback: () => {} } as any);
     // Kill stops work in flight; a Pause lets it finish (Q-08).
-    (ws as any).wsServer.broadcast = () => { f.calls.push('dashboard'); f.emergency.kill(); };
+    (ws as any).wsServer.broadcastWithReceipt = () => { f.calls.push('dashboard'); f.emergency.kill(); return 1; };
     ws.setChannelService({ broadcastToAll: async () => { f.calls.push('unapproved-recipient'); } } as any);
     f.options.wsService = ws;
     const reply = await f.backends.notify!({ message: 'hello', channels: ['dashboard', 'telegram'], priority: 'high' }, f.context);
@@ -607,6 +610,152 @@ describe('workflow effect boundary', () => {
     expect(reply.failed[0]!.error).toContain('killed');
     expect(f.calls).toEqual(['dashboard']);
     expect(listWorkflowEffects(f.run.id)[0]!.result).toEqual(reply);
+  });
+
+  // Q-19: a refusal decided before dispatch is a typed outcome on the record,
+  // so the failed run reads why, and a replay returns the same refusal.
+  test('a denied approval is a typed refusal, and the failed run says so', async () => {
+    const f = fixture();
+    f.authority.setGovernedCategories(['write_data']);
+    const pending = await f.invoke();
+    f.approvals.deny(pending.approval.approvalId, 'user');
+    const error = await f.invoke().catch(e => e);
+    expect(error).toBeInstanceOf(ActionOutcomeError);
+    expect(error.outcome).toMatchObject({ status: 'blocked', code: 'APPROVAL_DENIED', effect: 'not_started' });
+    expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'blocked', outcome: { code: 'APPROVAL_DENIED' } });
+    await expect(f.invoke()).rejects.toMatchObject({ outcome: { code: 'APPROVAL_DENIED' } });
+    expect(f.calls).toHaveLength(0);
+    const run = updateRun(f.run.id, { status: 'FAILED', failedStep: { name: 'action', displayName: 'Write the file', errorMessage: error.message } })!;
+    expect(runFailure(run)).toMatchObject({ category: 'approval_denied', effect: 'none', code: 'APPROVAL_DENIED',
+      headline: 'The step "Write the file" did not run: its approval was denied.', outcome: 'Nothing was done.',
+      links: { runId: f.run.id, stepName: 'action', approvalId: pending.approval.approvalId } });
+  });
+
+  test('an expired workflow approval reads as not given in time', async () => {
+    const f = fixture();
+    f.authority.setGovernedCategories(['write_data']);
+    const pending = await f.invoke();
+    getDb().run(`UPDATE approval_requests SET status = 'expired' WHERE id = ?`, [pending.approval.approvalId]);
+    await expect(f.invoke()).rejects.toMatchObject({ outcome: { code: 'APPROVAL_EXPIRED', effect: 'not_started' } });
+    expect(f.calls).toHaveLength(0);
+  });
+
+  test.each([
+    ['an Authority denial', (f: ReturnType<typeof fixture>) => f.authority.addOverride({ action: 'write_data', allowed: false }), 'AUTHORITY_DENIED', 'review_authority'],
+    ['Kill', (f: ReturnType<typeof fixture>) => f.emergency.kill(), 'EMERGENCY_STOPPED', 'run_again'],
+  ] as const)('%s is a typed refusal with its own next step', async (_name, refuse, code, step) => {
+    const f = fixture();
+    refuse(f);
+    await expect(f.invoke()).rejects.toMatchObject({ outcome: { status: 'blocked', code, effect: 'not_started' } });
+    expect(f.calls).toHaveLength(0);
+    const run = updateRun(f.run.id, { status: 'FAILED', failedStep: { name: 'action', displayName: 'Write the file' } })!;
+    const failure = runFailure(run)!;
+    expect(failure.code).toBe(code);
+    expect(failure.effect).toBe('none');
+    expect(failure.next[0]!.step).toBe(step);
+  });
+
+  // Review D1: a step whose record never left pending (it waited for approval
+  // and the run ended) dispatched nothing, whatever the error says.
+  test('a step still waiting for approval when its run failed reads as not done', async () => {
+    const f = fixture();
+    f.authority.setGovernedCategories(['write_data']);
+    await f.invoke();
+    updateRun(f.run.id, { status: 'FAILED', failedStep: { name: 'action', displayName: 'Write the file', errorMessage: 'Workflow effect blocked: run is FAILED' } });
+    await expect(f.invoke()).rejects.toThrow(/run is FAILED/);
+    expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'pending' });
+    expect(runFailure(getFlowRun(f.run.id)!)).toMatchObject({ category: 'internal', effect: 'none', outcome: 'Nothing was done.' });
+    expect(f.calls).toHaveLength(0);
+  });
+
+  test('a run that stops while its approval is delivered is refused, typed, before dispatch', async () => {
+    const f = fixture();
+    f.authority.setGovernedCategories(['write_data']);
+    f.options.onWorkflowApproval = request => {
+      // Approved and stopped while the card was being delivered.
+      f.approvals.approve(request.id, 'user');
+      updateRun(f.run.id, { status: 'FAILED' });
+    };
+    const backends = buildSandboxServiceBackends(f.options);
+    await expect(backends.toolsInvoke!({ toolName: 'write_file', params: { path: '/tmp/synthetic', content: 'hello' } }, f.context))
+      .rejects.toMatchObject({ outcome: { status: 'blocked', code: 'RUN_NOT_RUNNING', effect: 'not_started' } });
+    expect(f.calls).toHaveLength(0);
+    expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'blocked', outcome: { code: 'RUN_NOT_RUNNING' } });
+  });
+
+  // Review T1: the same checks failing DURING dispatch may follow a partial
+  // effect, so the record stays uncertain, never "not started".
+  test('Kill during a dispatch records an uncertain outcome, not a refusal', async () => {
+    const f = fixture();
+    f.registry.get('write_file')!.execute = async () => { f.calls.push('half done'); f.emergency.kill(); checkpointExecution(); return 'saved'; };
+    await expect(f.invoke()).rejects.toThrow(/killed/);
+    expect(f.calls).toEqual(['half done']);
+    expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'unknown',
+      outcome: { status: 'unknown', code: 'DISPATCH_UNCERTAIN', effect: 'may_have_occurred' } });
+  });
+
+  test('a provider refusal on an AI step keeps its typed code, and changes nothing outside Jarvis', async () => {
+    const f = fixture('llm');
+    f.options.llmManager.chat = async () => { throw new LLMProviderError('429 Too Many Requests', 'rate_limit'); };
+    const error = await f.invoke().catch(e => e);
+    expect(error).toBeInstanceOf(ActionOutcomeError);
+    expect(error.outcome).toMatchObject({ status: 'error', code: 'PROVIDER_RATE_LIMIT', effect: 'not_started' });
+    const run = updateRun(f.run.id, { status: 'FAILED', failedStep: { name: 'action', displayName: 'Summarise' } })!;
+    expect(runFailure(run)).toMatchObject({ category: 'provider_limit', effect: 'none', code: 'rate_limit',
+      next: [{ step: 'wait_or_switch_model' }, { step: 'open_details' }] });
+  });
+
+  test('a provider failure that may have been processed is recorded as such', async () => {
+    const f = fixture('llm');
+    f.options.llmManager.chat = async () => { throw new LLMProviderError('upstream reset', 'network'); };
+    await expect(f.invoke()).rejects.toMatchObject({ outcome: { code: 'PROVIDER_NETWORK', effect: 'may_have_occurred' } });
+  });
+
+  // Q-19, owner decision: the step reports each channel and fails only when
+  // nothing was sent anywhere; a channel that may have taken it counts as sent.
+  // Review B1, owner rule: with no dashboard open, auto shows it on the desktop,
+  // and that choice is frozen with the reviewed arguments.
+  test('an auto notification with no dashboard open shows on the desktop, as reviewed', async () => {
+    const f = fixture('notify');
+    f.options.wsService = { broadcastNotificationToDashboard: () => 0 } as any;
+    const shown: string[] = [];
+    f.options.sendDesktop = async (_title, body) => { shown.push(body); return true; };
+    const reply = await f.backends.notify!({ message: 'hello', channels: ['auto'], priority: 'normal' }, f.context);
+    expect(reply).toEqual({ delivered: ['desktop'], failed: [], unknown: [] });
+    expect(shown).toEqual(['hello']);
+    expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'succeeded',
+      arguments: { channels: ['dashboard'], autoDashboard: true, fallback: 'desktop' }, target: { fallback: 'desktop' } });
+  });
+
+  test('a notification sent nowhere fails the step with a typed outcome and records it', async () => {
+    const f = fixture('notify');
+    f.options.wsService = { broadcastNotificationToDashboard: () => 0 } as any;
+    f.options.channelService.sendWorkflowNotification = async () => { throw Object.assign(new Error('Forbidden: bot was blocked'), { status: 403 }); };
+    const req = { message: 'hello', channels: ['dashboard', 'telegram'], priority: 'normal' as const };
+    const error = await f.backends.notify!(req, f.context).catch(e => e);
+    expect(error).toBeInstanceOf(ActionOutcomeError);
+    expect(error.outcome).toMatchObject({ status: 'error', code: 'DELIVERY_FAILED', effect: 'not_started' });
+    expect(error.outcome.message).toContain('dashboard (no dashboard was open)');
+    expect(error.outcome.message).toContain('telegram (Forbidden: bot was blocked)');
+    // The reply still reports each channel (review suggestion).
+    expect(error.report.failed.map((f: { channel: string }) => f.channel)).toEqual(['dashboard', 'telegram']);
+    expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'failed', outcome: { code: 'DELIVERY_FAILED' } });
+    // A replay returns the recorded outcome; nothing is sent again.
+    let sends = 0;
+    f.options.channelService.sendWorkflowNotification = async () => { sends++; };
+    await expect(f.backends.notify!(req, f.context)).rejects.toBeInstanceOf(ActionOutcomeError);
+    expect(sends).toBe(0);
+  });
+
+  test('a channel that timed out is reported unknown, and the step does not fail', async () => {
+    const f = fixture('notify');
+    f.options.wsService = { broadcastNotificationToDashboard: () => 0 } as any;
+    const timeout = Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' });
+    f.options.channelService.sendWorkflowNotification = async () => { throw timeout; };
+    const reply = await f.backends.notify!({ message: 'hello', channels: ['dashboard', 'telegram'], priority: 'normal' }, f.context);
+    expect(reply).toEqual({ delivered: [], failed: [{ channel: 'dashboard', error: 'no dashboard was open' }],
+      unknown: [{ channel: 'telegram', error: 'The operation was aborted.' }] });
+    expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'succeeded', result: reply });
   });
 
   test('trusted typed adapter uses its declared business category and target', async () => {
