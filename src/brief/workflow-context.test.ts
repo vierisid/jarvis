@@ -20,6 +20,7 @@ import { startWorkItemRun } from '../goals/workflow-bridge';
 import { Worker } from '../workflows/queue/worker';
 import { createRunFlowHandler, RUN_FLOW } from '../workflows/runner/handler';
 import { createWaitpoint } from '../workflows/db/repos/waitpoint';
+import { cancelFlowRun } from '../workflows/db/repos/run-cancellation';
 import { createSchema } from '../workflows/db/schema';
 import { WorkflowContext } from './workflow-context';
 import { WorkflowRemoval } from './workflow-removal';
@@ -228,6 +229,42 @@ test('removal still fences new requests; accepted requests survive removal and d
     expect(() => service.start(flowId, command('new'))).toThrow('workflow_removed');
     expect(db.query('SELECT id FROM flow_run').all()).toHaveLength(1);
   } finally { removal.stop(); }
+});
+test('a run stopped by removal reads as Workflow turned off, through the Q-19 failure and Q-07 recovery projections', async () => {
+  const accepted = service.start(flowId, command());
+  const removal = new WorkflowRemoval(db, DEFAULT_IDS.project, Date.now, () => true); removal.start({ refresh: async () => {} });
+  try {
+    const item = removal.read().data.items[0]!;
+    removal.change({ scopeId: DEFAULT_IDS.project, flowId, versionId, expectedRevision: item.revision, requestId: 'remove', action: 'remove' });
+    await removal.reconcileFlow(flowId);
+    const detail = service.detail(flowId, accepted.run.runId);
+    expect(getFlowRun(accepted.run.runId)!.status).toBe('STOPPED');
+    expect(detail.summary.startsWith('Workflow turned off.')).toBe(true);
+    expect(detail.failure).toMatchObject({ category: 'cancelled', headline: 'Workflow turned off.' });
+    expect(detail.recovery).toMatchObject({ canReplay: false, newRunRequired: true });
+    expect(['unknown', 'blocked', 'recoverable']).toContain(detail.recovery!.state);
+  } finally { removal.stop(); }
+});
+test('a stop acknowledged mid-call stays uncertain in history and detail, and says it may have taken effect', () => {
+  const r = run(); updateRun(r.id, { status: 'RUNNING', startTime: Date.now() });
+  cancelFlowRun(r.id);
+  const page = service.list(flowId);
+  expect(page.status === 'ready' && page.data.items[0]!.status).toBe('uncertain');
+  const detail = service.detail(flowId, r.id);
+  expect(detail.status).toBe('uncertain');
+  expect(detail.failure).toMatchObject({ category: 'cancelled', effect: 'unknown' });
+  expect(detail.summary).toContain('may have gone through');
+});
+test('a failed run takes its wording from the typed failure projection; a succeeded run has none', () => {
+  const failed = run();
+  updateRun(failed.id, { status: 'FAILED', failedStep: { name: '<engine>', displayName: 'Engine', errorMessage: 'token=fixture-secret' } });
+  const detail = service.detail(flowId, failed.id);
+  expect(detail.status).toBe('failed');
+  expect(detail.failure).not.toBeNull();
+  expect(detail.summary).toBe(`${detail.failure!.headline} ${detail.failure!.outcome}`);
+  expect(JSON.stringify(detail)).not.toContain('fixture-secret');
+  const ok = run(); updateRun(ok.id, { status: 'SUCCEEDED' });
+  expect(service.detail(flowId, ok.id)).toMatchObject({ failure: null, recovery: null, status: 'succeeded' });
 });
 test('additive schema upgrades twice without inventing run evidence or deleting request outcomes', () => {
   const result = service.start(flowId, command()); createSchema(db); createSchema(db);

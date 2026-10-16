@@ -4,6 +4,9 @@ import { createFlowRun } from '../workflows/db/repos/flow-run';
 import { enqueue } from '../workflows/db/repos/job-queue';
 import { assertCodeStepsAllowed } from '../workflows/db/repos/flow-code-steps';
 import { assertVersionReady } from '../workflows/db/repos/flow-readiness';
+import { getFlowRun } from '../workflows/db/repos/flow-run';
+import { runFailure } from '../workflows/runtime/run-failure';
+import { getRunRecovery } from '../workflows/runtime/recovery';
 import { boundedJson, canonicalManualPayload, inspectionId, inspectionValue, INSPECTION_LIMITS as LIMIT,
   object, opaque, WorkflowInspectionError } from './inspection-values';
 import type { ContextGroup, InspectionContext, InspectionContextEntry, InspectionRunDetail,
@@ -53,7 +56,10 @@ export class WorkflowContext {
   private summary(r: RunRow): InspectionRunSummary {
     // Unknown effects outrank a nominal success or failure. Q-07 may add recovery
     // evidence; F-21 never reconciles or changes any of these rows.
-    const uncertain = this.db.query("SELECT 1 FROM workflow_effect WHERE run_id=? AND status IN ('unknown','dispatching') LIMIT 1").get(r.id);
+    // A stop acknowledged while a call was in flight may still have taken
+    // effect: the same rule D-19's history reader applies to the paged runs API.
+    const uncertain = this.db.query("SELECT 1 FROM workflow_effect WHERE run_id=? AND status IN ('unknown','dispatching') LIMIT 1").get(r.id)
+      || (r.status === 'STOPPED' && this.db.query('SELECT 1 FROM workflow_run_cancellation WHERE run_id=? AND in_flight_may_have_completed=1').get(r.id));
     return { scopeId: this.projectId, flowId: r.flow_id, versionId: r.flow_version_id, runId: r.id,
       label: `Run ${r.id}`, status: uncertain ? 'uncertain' : status(r.status), createdAt: r.created, startedAt: r.start_time };
   }
@@ -272,7 +278,19 @@ export class WorkflowContext {
     const used = groups.flatMap(group => { const state = context.groups[group]; return state.status !== 'ready' ? [] : state.data.map(e => ({
       kind: kinds[group], id: e.source?.id ?? e.id, label: e.label,
       availability: e.availability === 'available' ? 'available' as const : e.availability === 'removed' || e.availability === 'missing' ? 'removed' as const : 'redacted' as const })); });
-    return { ...this.summary(r), summary: 'Recorded execution evidence; success alone does not verify goal progress.',
+    // Failure wording comes from Q-19's typed projection, the one Runs and Today
+    // read on main, and recovery from Q-07's read-only projection. Nothing here
+    // reconciles, retries or records a decision. A run stopped by the lifecycle
+    // (its workflow turned off or removed, or Kill) names that reason first.
+    const run = getFlowRun(r.id)!, failure = runFailure(run), recovery = getRunRecovery(r.id);
+    const stoppedBy = run.failedStep?.name === '<lifecycle>' ? `${run.failedStep.displayName}.` : null;
+    const summary = failure ? [stoppedBy, failure.headline, failure.outcome].filter(Boolean).join(' ')
+      : 'Recorded execution evidence; success alone does not verify goal progress.';
+    return { ...this.summary(r), summary,
+      failure: failure ? { category: failure.category, effect: failure.effect, headline: stoppedBy ?? failure.headline,
+        outcome: failure.outcome, next: failure.next, code: failure.code } : null,
+      recovery: recovery ? { state: recovery.state, reason: recovery.reason, needsAttention: recovery.needsAttention,
+        canReplay: false as const, newRunRequired: true as const } : null,
       trigger: null, finishedAt: r.finish_time,
       steps: entries.map(([name, raw, path]) => { const s = object(raw) ? raw : {};
         return { id: `step-${path}`, title: `Step ${name}`, description: 'Recorded step input and output.',

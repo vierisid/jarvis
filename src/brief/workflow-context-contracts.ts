@@ -1,3 +1,5 @@
+import type { UserFailure } from '../failures/projection';
+import type { RecoveryProjection } from '../workflows/runtime/recovery';
 /** F-21 read contract shared with the staged D-19/D-20 presentation ports.
  * Values are plain text; consumers must render them as text, never HTML. */
 export type InspectionState<T> = { status: 'ready'; data: T } | { status: 'empty' }
@@ -28,6 +30,10 @@ export interface InspectionRunDetail extends InspectionRunSummary {
   waits: Array<{ id: string; stepName: string; label: string; status: 'waiting' | 'resolved' }>;
   context: Array<{ kind: 'Goal' | 'Memory' | 'Rule' | 'Connection' | 'Device'; id: string; label: string; availability: 'available' | 'removed' | 'redacted' }>;
   inspection: { status: 'complete' | 'partial'; note: string | null };
+  /** Q-19's typed failure for a run that ended badly; its raw detail is withheld. */
+  failure: Pick<UserFailure, 'category' | 'effect' | 'headline' | 'outcome' | 'next' | 'code'> | null;
+  /** Q-07's read-only recovery state for a terminal run. Never a replay. */
+  recovery: { state: RecoveryProjection['state']; reason: string; needsAttention: boolean; canReplay: false; newRunRequired: true } | null;
 }
 export interface InspectionSelection {
   scopeId: string; flowId: string; versionId: string; runId: string | null;
