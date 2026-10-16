@@ -144,7 +144,7 @@ export class Outcomes {
        WHERE r.measured_at IS NOT NULL AND r.measured_at < ? ORDER BY r.goal_id,r.measured_at,r.request_id LIMIT 50001`).all(Math.min(w.end, now + 1));
     if (rows.length > 50000) throw Error('Goal evidence exceeds read bound');
     type Point = { value: number; unit: string; baseline: number; target: number; measuredAt: number;
-      evidence: { id: string; revision: string }; qualification: BriefMeasurement['qualification'] };
+      evidence: { id: string; revision: string }; qualification: BriefMeasurement['qualification']; basis?: string };
     const goals = new Map<string, { title: string; opening?: Point; ending?: Point }>();
     for (const row of rows) {
       const receipt = parse<{ measurement: Point }>(row.receipt), m = receipt?.measurement;
@@ -157,7 +157,9 @@ export class Outcomes {
     }
     return [...goals].filter(([, g]) => g.ending).map(([goalId, g]) => {
       const a = g.opening, b = g.ending!;
-      const reason = !a ? 'missing_opening' : a.unit !== b.unit || a.baseline !== b.baseline || a.target !== b.target ? 'definition_changed' : null;
+      const reason = !a ? 'missing_opening' : a.unit !== b.unit || a.baseline !== b.baseline || a.target !== b.target
+        // A typed value and a count of observations are different measures, even with one unit.
+        || (a.basis ?? 'typed') !== (b.basis ?? 'typed') ? 'definition_changed' : null;
       return { goalId, title: g.title, reason, attribution: 'observed_change_only', rollup: 'independent',
         change: reason ? null : { value: b.value - a!.value, unit: b.unit, baseline: a!.value, target: b.target, asOf: b.measuredAt,
           provenance: [source(a!.evidence.id, a!.evidence.revision), source(b.evidence.id, b.evidence.revision)],

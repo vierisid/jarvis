@@ -183,6 +183,16 @@ test('goal deltas keep the recorded qualification and refuse an unqualified obse
   getDb().run('UPDATE goal_measurement_receipt SET receipt=? WHERE goal_id=? AND request_id=\'m1\'', [JSON.stringify(receipt), g.id]);
   await expect(provider.summary({ timezone: 'UTC' })).rejects.toThrow('Goal evidence is incomplete');
 });
+test('a switch between typed values and counted observations is a changed definition, not a delta', async () => {
+  const g = getGoalApplication().createGoal('Goal', 'objective'), start = query().start;
+  measurement(g.id, 6, start - 1, 0); measurement(g.id, 3, start + 1, 1);
+  expect((await summary()).goalDeltas[0]?.change?.value).toBe(-3);
+  const row = getDb().query<{ receipt: string }, [string]>('SELECT receipt FROM goal_measurement_receipt WHERE goal_id=? AND request_id=\'m1\'').get(g.id)!;
+  const receipt = JSON.parse(row.receipt); receipt.measurement.basis = 'observations';
+  getDb().run('UPDATE goal_measurement_receipt SET receipt=? WHERE goal_id=? AND request_id=\'m1\'', [JSON.stringify(receipt), g.id]);
+  const view = await summary();
+  expect(view.goalDeltas[0]).toMatchObject({ change: null, reason: 'definition_changed' }); expect(view.coverage.complete).toBe(false);
+});
 test('missing opening measurements and changed definitions omit the delta, with incomplete coverage', async () => {
   const g = getGoalApplication().createGoal('Goal', 'objective'); measurement(g.id, 6, query().start + 1, 0);
   expect((await summary()).goalDeltas[0]).toMatchObject({ change: null, reason: 'missing_opening' });
