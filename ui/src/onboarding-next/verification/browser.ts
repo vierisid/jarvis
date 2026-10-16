@@ -43,7 +43,7 @@ export async function inspect(tab: any) {
       contour: cardStyle ? { shadow: cardStyle.boxShadow, border: cardStyle.borderColor, width: cardStyle.borderWidth } : null,
       reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
       focus: active ? { name: name(active), tag: active.tagName, inside: !!scene?.contains(active), visible: visible(active),
-        indicator: active.matches(':focus-visible') && ((parseFloat(getComputedStyle(active).outlineWidth) > 0 && getComputedStyle(active).outlineStyle !== 'none') || getComputedStyle(active).boxShadow !== 'none') } : null,
+        indicator: active.matches(':focus-visible') && ((getComputedStyle(active).outlineWidth !== '0px' && getComputedStyle(active).outlineStyle !== 'none') || getComputedStyle(active).boxShadow !== 'none') } : null,
       pebbleOpen: scene?.querySelector('[data-pebble-open]')?.getAttribute('data-pebble-open'),
       pebbleVisible: !!surface && visible(surface) && !!b && b.width > 0 && b.height > 0 && b.left >= -2 && b.right <= innerWidth + 2,
       buildPhases: [...(scene?.querySelectorAll('.on-build__phase') ?? [])].map(n => n.getAttribute('data-state')),
