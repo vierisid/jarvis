@@ -24,6 +24,7 @@ export interface Job {
   stopReason: 'timeout' | 'composition_failed' | 'needs_input' | 'attempt_limit' | null;
 }
 export const terminal = (j: Job) => TERMINAL.includes(j.outcome);
+interface RequestCancellation { requestId: string; journeyId: string; settled: number; retryAfter: number }
 const project = (j: Job): Status => ({ schemaVersion: 1, scopeId: scopeId(j.owner), journeyId: j.input.journeyId,
   jobId: j.id, requestId: j.input.submission.request.requestId, requestDigest: j.digest, revision: j.revision,
   outcome: j.outcome, ...(j.phase ? { phase: j.phase } : {}),
@@ -41,7 +42,17 @@ export function initializeBuildJobStore(db: Database): void {
   CREATE TABLE IF NOT EXISTS onboarding_build_event (
     job_id TEXT NOT NULL REFERENCES onboarding_build_job(id), revision INTEGER NOT NULL, snapshot TEXT NOT NULL,
     PRIMARY KEY(job_id, revision)
-  );`);
+  );
+  CREATE TABLE IF NOT EXISTS onboarding_build_cancellation (
+    actor_id TEXT NOT NULL, project_id TEXT NOT NULL, request_id TEXT NOT NULL,
+    journey_id TEXT NOT NULL, settled INTEGER NOT NULL DEFAULT 0, retry_after INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (actor_id, project_id, request_id)
+  );
+  CREATE TRIGGER IF NOT EXISTS onboarding_build_reject_cancelled_request
+    BEFORE INSERT ON onboarding_build_job
+    WHEN EXISTS (SELECT 1 FROM onboarding_build_cancellation
+      WHERE actor_id = NEW.actor_id AND project_id = NEW.project_id AND request_id = NEW.request_id)
+    BEGIN SELECT RAISE(ABORT, 'request_cancelled'); END;`);
 }
 
 export function createSqliteBuildStore(db: Database, options: { now?: () => number } = {}) {
@@ -71,7 +82,22 @@ export function createSqliteBuildStore(db: Database, options: { now?: () => numb
       db.run('DELETE FROM onboarding_build_event WHERE job_id = ? AND revision <= ?', [job.id, job.revision - MAX_EVENTS]);
     }
   }
+  function readCancellation(scope: Scope, requestId: string): RequestCancellation | null {
+    current();
+    return db.query<RequestCancellation, [string, string, string]>(`SELECT request_id AS requestId,
+      journey_id AS journeyId, settled, retry_after AS retryAfter FROM onboarding_build_cancellation
+      WHERE actor_id = ? AND project_id = ? AND request_id = ?`).get(scope.actorId, scope.projectId, requestId);
+  }
   const transaction = <T>(fn: () => T): T => { current(); return db.transaction(fn).immediate(); };
+  function reconcileCancellation(scope: Scope, requestId: string): RequestCancellation {
+    return transaction(() => {
+      const cancellation = readCancellation(scope, requestId);
+      if (!cancellation || read(scope, { requestId })) throw new BuildError('storage_unavailable');
+      // No accepted job has ever been removed by this store. With acceptance now
+      // durably fenced, absence proves that no B08 worker could have composed.
+      return cancellation;
+    });
+  }
   const owns = (j: Job, token: string) => !terminal(j) && j.token === token && j.leaseUntil > now();
   const canCommit = (j: Job, token: string) => owns(j, token) && j.cancellation === 'not_requested' && j.stopReason === null && j.deadline! > now();
   function change(scope: Scope, id: string, token: string, update: (j: Job) => boolean): boolean {
@@ -82,9 +108,43 @@ export function createSqliteBuildStore(db: Database, options: { now?: () => numb
     });
   }
   return {
-    current, now, read,
+    current, now, read, readCancellation, reconcileCancellation,
+    fenceRequest(scope: Scope, requestId: string, journeyId: string): { job: Job } | { cancellation: RequestCancellation } {
+      return transaction(() => {
+        // Acceptance and rejection compete under the same SQLite write lock.
+        const job = read(scope, { requestId });
+        if (job) return { job };
+        const previous = readCancellation(scope, requestId);
+        if (previous && previous.journeyId !== journeyId) throw new BuildError('conflict');
+        db.run(`INSERT OR IGNORE INTO onboarding_build_cancellation (actor_id, project_id, request_id, journey_id)
+          VALUES (?, ?, ?, ?)`, [scope.actorId, scope.projectId, requestId, journeyId]);
+        return { cancellation: readCancellation(scope, requestId)! };
+      });
+    },
+    syncCancellation(scope: Scope, requestId: string, settled: boolean) {
+      transaction(() => {
+        if (!readCancellation(scope, requestId) || read(scope, { requestId })) throw new BuildError('storage_unavailable');
+        db.run(`UPDATE onboarding_build_cancellation SET settled = ?, retry_after = ?
+          WHERE actor_id = ? AND project_id = ? AND request_id = ? AND settled = 0`,
+          [Number(settled), settled ? 0 : now() + 1000, scope.actorId, scope.projectId, requestId]);
+      });
+    },
+    cancellationResult(scope: Scope, requestId: string): Result {
+      const r = reconcileCancellation(scope, requestId);
+      return { availability: 'ready', requestCancellation: { schemaVersion: 1, revision: r.settled ? 2 : 1, scopeId: scopeId(scope),
+        journeyId: r.journeyId, requestId, jobId: null, cancellation: r.settled ? 'acknowledged' : 'requested',
+        resolution: 'none', journeySync: r.settled ? 'settled' : 'pending' } };
+    },
+    pendingCancellation(scope: Scope): RequestCancellation | null {
+      current();
+      return db.query<RequestCancellation, [string, string, number]>(`SELECT request_id AS requestId,
+        journey_id AS journeyId, settled, retry_after AS retryAfter FROM onboarding_build_cancellation
+        WHERE actor_id = ? AND project_id = ? AND settled = 0 AND retry_after <= ?
+        ORDER BY retry_after, rowid LIMIT 1`).get(scope.actorId, scope.projectId, now());
+    },
     accept(scope: Scope, input: SubmitInput): Job {
       return transaction(() => {
+        if (readCancellation(scope, input.submission.request.requestId)) throw new BuildError('request_cancelled');
         const existing = read(scope, { requestId: input.submission.request.requestId });
         if (existing) {
           if (existing.digest !== digest(input.submission) || existing.input.journeyId !== input.journeyId) throw new BuildError('conflict');

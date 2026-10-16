@@ -11,7 +11,7 @@ import type { DraftControl, Result, Scope } from './types';
 
 let directory: string, dbPath: string, now: number, owner: Scope | null;
 let f: ReturnType<typeof fixture>, provider: ReturnType<typeof createBuildJobsProvider<null>>;
-const status = (result: Result) => { if (result.availability !== 'ready') throw new Error(JSON.stringify(result)); return result.status; };
+const status = (result: Result) => { if (result.availability !== 'ready' || !('status' in result)) throw new Error(JSON.stringify(result)); return result.status; };
 const ref = (jobId: string) => ({ schemaVersion: 1, jobId });
 function bind(options: { timeoutMs?: number; leaseMs?: number; maxAttempts?: number } = {}) {
   return createBuildJobsProvider({ enabled: true, authorize: () => owner, servicesFor: () => f.services, ...options });
@@ -37,7 +37,7 @@ test('reserve journey before durable acceptance; worker starts separately and sa
   expect(status(complete)).toMatchObject({ outcome: 'succeeded', resolution: 'saved', journeySync: 'settled', artifact: f.artifact() });
   expect(f.snapshot().draft).toEqual({ flowId: 'flow-1', versionId: 'version-1' });
   expect(f.calls()).toBe(1);
-  expect(complete.availability === 'ready' && complete.events.every((s, i, events) => !i || s.revision > events[i - 1]!.revision)).toBe(true);
+  expect(complete.availability === 'ready' && 'events' in complete && complete.events.every((s, i, events) => !i || s.revision > events[i - 1]!.revision)).toBe(true);
 });
 test('concurrent double clicks and another tab get the same job and one model call', async () => {
   const peer = bind();
@@ -289,11 +289,11 @@ test('event history is bounded and stale phase callbacks cannot overwrite progre
   expect(store.phase(scope, queued.jobId, claimed.token!, 'saving', 1)).toBe(false);
   expect(store.phase(scope, queued.jobId, claimed.token!, 'understanding', 200)).toBe(false);
   const result = await provider.read(null, ref(queued.jobId));
-  expect(result.availability === 'ready' && result.events.length).toBe(64);
-  expect(result.availability === 'ready' && result.truncated).toBe(true);
+  expect(result.availability === 'ready' && 'events' in result && result.events.length).toBe(64);
+  expect(result.availability === 'ready' && 'events' in result && result.truncated).toBe(true);
   const latest = status(result);
   const tail = await provider.read(null, { ...ref(queued.jobId), after: latest.revision - 1 });
-  expect(tail.availability === 'ready' && tail.events.map(e => e.revision)).toEqual([latest.revision]);
+  expect(tail.availability === 'ready' && 'events' in tail && tail.events.map(e => e.revision)).toEqual([latest.revision]);
   store.stop(scope, queued.jobId, claimed.token!, 'composition_failed'); store.finish(scope, queued.jobId, claimed.token!, null);
   expect(store.phase(scope, queued.jobId, claimed.token!, 'saving', 300)).toBe(false);
 });

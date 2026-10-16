@@ -68,13 +68,13 @@ export function createBuildJobsProvider<C>(deps: Dependencies<C>) {
     return { owner, services, store, binding, guard };
   }
   type Environment = Awaited<ReturnType<typeof open>>;
-  async function journeyRead(e: Environment, journeyId: string) {
+  async function journeyRead(e: Environment, journeyId?: string) {
     await e.guard();
     if (!e.services.journey) throw new BuildError('journey_unavailable');
     const r = await bounded(() => e.services.journey!.read());
     await e.guard();
     if (r.availability !== 'ready' || !r.snapshot || r.snapshot.scopeId !== scopeId(e.owner)
-      || r.snapshot.journeyId !== journeyId) throw new BuildError('journey_unavailable');
+      || !id(r.snapshot.journeyId) || (journeyId !== undefined && r.snapshot.journeyId !== journeyId)) throw new BuildError('journey_unavailable');
     return r.snapshot;
   }
   async function acknowledge(e: Environment, journeyId: string, revision: number, command: JourneyCommand) {
@@ -86,6 +86,7 @@ export function createBuildJobsProvider<C>(deps: Dependencies<C>) {
   async function reserve(e: Environment, input: SubmitInput) {
     const requestId = input.submission.request.requestId;
     for (let n = 0; n < 4; n++) {
+      if (e.store.readCancellation(e.owner, requestId)) throw new BuildError('request_cancelled');
       const accepted = e.store.read(e.owner, { requestId });
       if (accepted) {
         if (accepted.digest !== digest(input.submission) || accepted.input.journeyId !== input.journeyId) throw new BuildError('conflict');
@@ -128,11 +129,37 @@ export function createBuildJobsProvider<C>(deps: Dependencies<C>) {
     try { await synchronize(e, id); } catch { e.binding(); e.store.retrySync(e.owner, id); }
   };
 
+  async function recoverCancellation(e: Environment, requestId: string): Promise<Result> {
+    try {
+      for (let n = 0; n < 4; n++) {
+        const r = e.store.reconcileCancellation(e.owner, requestId);
+        if (r.settled) break;
+        const s = await journeyRead(e, r.journeyId);
+        if (s.buildHistory?.some(h => h.buildRequestId === requestId && h.jobId === null && h.outcome === 'cancelled')) {
+          e.store.syncCancellation(e.owner, requestId, true); break;
+        }
+        if (s.buildRequestId !== requestId || s.jobId !== null || s.draft) throw new BuildError('journey_unavailable');
+        // The durable rejection prevents delayed acceptance. Reconcile the same
+        // authoritative job store before releasing this exact no-job reservation.
+        e.store.reconcileCancellation(e.owner, requestId);
+        await acknowledge(e, s.journeyId, s.revision, {
+          type: 'build_finished_without_draft', buildRequestId: requestId, jobId: null, outcome: 'cancelled',
+        });
+      }
+    } catch { e.binding(); }
+    if (!e.store.reconcileCancellation(e.owner, requestId).settled) e.store.syncCancellation(e.owner, requestId, false);
+    await e.guard();
+    return e.store.cancellationResult(e.owner, requestId);
+  }
+
   async function run(context: C, input: unknown, signal?: AbortSignal): Promise<Result> {
     return safe(async () => {
       const ref = parseRead(input), e = await open(context);
       const previous = e.store.read(e.owner, ref);
-      if (!previous) throw new BuildError('not_found');
+      if (!previous) {
+        if (ref.requestId && e.store.readCancellation(e.owner, ref.requestId)) return recoverCancellation(e, ref.requestId);
+        throw new BuildError('not_found');
+      }
       if (terminal(previous)) { await trySync(e, previous.id); await e.guard(); return e.store.result(e.owner, previous.id, ref.after); }
       if (signal?.aborted) throw new BuildError('interrupted');
       const job = e.store.claim(e.owner, previous.id, leaseMs, timeoutMs);
@@ -238,6 +265,7 @@ export function createBuildJobsProvider<C>(deps: Dependencies<C>) {
     capability: 'build-job.v1' as const,
     submit: (context: C, input: unknown) => safe(async () => {
       const parsed = parseSubmit(input), e = await open(context);
+      if (e.store.readCancellation(e.owner, parsed.submission.request.requestId)) throw new BuildError('request_cancelled');
       const prior = e.store.read(e.owner, { requestId: parsed.submission.request.requestId });
       if (prior) {
         if (prior.digest !== digest(parsed.submission) || prior.input.journeyId !== parsed.journeyId) throw new BuildError('conflict');
@@ -253,11 +281,28 @@ export function createBuildJobsProvider<C>(deps: Dependencies<C>) {
     }),
     read: (context: C, input: unknown) => safe(async () => {
       const ref = parseRead(input), e = await open(context), job = e.store.read(e.owner, ref);
-      if (!job) throw new BuildError('not_found');
+      if (!job) {
+        if (ref.requestId && e.store.readCancellation(e.owner, ref.requestId)) return e.store.cancellationResult(e.owner, ref.requestId);
+        throw new BuildError('not_found');
+      }
       return e.store.result(e.owner, job.id, ref.after);
     }),
     cancel: (context: C, input: unknown) => safe(async () => {
-      const ref = parseRead(input), e = await open(context), job = e.store.read(e.owner, ref);
+      const ref = parseRead(input), e = await open(context);
+      let job = e.store.read(e.owner, ref);
+      if (!job && ref.requestId) {
+        if (!e.store.readCancellation(e.owner, ref.requestId)) {
+          const s = await journeyRead(e);
+          // An acceptance may have won while we were reading the reservation.
+          job = e.store.read(e.owner, ref);
+          if (!job) {
+            if (s.buildRequestId !== ref.requestId || s.jobId !== null || s.draft) throw new BuildError('not_found');
+            const fenced = e.store.fenceRequest(e.owner, ref.requestId, s.journeyId);
+            if ('job' in fenced) job = fenced.job;
+          }
+        }
+        if (!job) return recoverCancellation(e, ref.requestId);
+      }
       if (!job) throw new BuildError('not_found');
       e.store.cancel(e.owner, job.id);
       active.get(`${scopeId(e.owner)}:${job.id}`)?.abort();
@@ -268,7 +313,10 @@ export function createBuildJobsProvider<C>(deps: Dependencies<C>) {
     async runNext(context: C, signal?: AbortSignal): Promise<Result | null> {
       try {
         const e = await open(context), next = e.store.pending(e.owner, 1)[0];
-        return next ? run(context, { schemaVersion: 1, jobId: next }, signal) : null;
+        const job = next ? e.store.read(e.owner, { jobId: next }) : null, cancellation = e.store.pendingCancellation(e.owner);
+        const ref = cancellation && (!job || cancellation.retryAfter <= job.retryAfter)
+          ? { requestId: cancellation.requestId } : job ? { jobId: job.id } : null;
+        return ref ? run(context, { schemaVersion: 1, ...ref }, signal) : null;
       } catch (error) { return fail(error); }
     },
   };

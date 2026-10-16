@@ -16,7 +16,7 @@ export interface Artifact {
 export type Phase = 'understanding' | 'building' | 'validating' | 'saving';
 export type Outcome = 'queued' | 'working' | 'needs_input' | 'succeeded' | 'failed' | 'cancelled';
 export type Reason = 'disabled' | 'invalid_request' | 'unauthorized' | 'binding_missing' | 'provider_unavailable'
-  | 'storage_unavailable' | 'conflict' | 'not_found' | 'journey_unavailable' | 'intent_changed'
+  | 'storage_unavailable' | 'conflict' | 'not_found' | 'request_cancelled' | 'journey_unavailable' | 'intent_changed'
   | 'needs_input' | 'composition_failed' | 'timeout' | 'attempt_limit' | 'interrupted' | 'claim_lost';
 export interface Status {
   schemaVersion: 1; scopeId: string; journeyId: string; jobId: string; requestId: string; requestDigest: string;
@@ -28,6 +28,10 @@ export interface Status {
   journeySync: 'pending' | 'started' | 'settled';
 }
 export type Result = { availability: 'ready'; status: Status; events: Status[]; cursor: number; truncated: boolean }
+  | { availability: 'ready'; requestCancellation: {
+    schemaVersion: 1; revision: 1 | 2; scopeId: string; journeyId: string; requestId: string; jobId: null;
+    cancellation: 'requested' | 'acknowledged'; resolution: 'none'; journeySync: 'pending' | 'settled';
+  } }
   | { availability: 'unsupported' | 'unavailable'; reason: Reason };
 export interface IntentResult {
   availability: string; state?: string; issues?: { message: string }[];
@@ -53,7 +57,7 @@ export interface JourneySnapshot {
 export type JourneyCommand = { type: 'reserve_build'; buildRequestId: string }
   | { type: 'build_started'; buildRequestId: string; jobId: string }
   | { type: 'draft_saved'; jobId: string; flowId: string; versionId: string }
-  | { type: 'build_finished_without_draft'; buildRequestId: string; jobId: string; outcome: 'failed' | 'cancelled' };
+  | { type: 'build_finished_without_draft'; buildRequestId: string; jobId: string | null; outcome: 'failed' | 'cancelled' };
 export interface JourneyPort {
   read(): Promise<{ availability: string; snapshot?: JourneySnapshot }>;
   acknowledge(input: { journeyId: string; expectedRevision: number; requestId: string; command: JourneyCommand }): Promise<{

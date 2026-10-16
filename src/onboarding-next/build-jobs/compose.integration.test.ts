@@ -12,7 +12,7 @@ import { realJourney } from './journey-fixture';
 import type { Result, Services } from './types';
 const intentPath = '../activation-intent/index.ts', draftPath = '../compose-draft/index.ts';
 const present = [intentPath, draftPath, '../journey/index.ts'].every(p => existsSync(join(import.meta.dir, p)));
-const status = (r: Result) => { if (r.availability !== 'ready') throw new Error(JSON.stringify(r)); return r.status; };
+const status = (r: Result) => { if (r.availability !== 'ready' || !('status' in r)) throw new Error(JSON.stringify(r)); return r.status; };
 for (const failure of ['lost_reply', 'cancel_before_save', 'job_write_failure'] as const) {
   test.skipIf(!present)(`real B01/B07/B09: ${failure} preserves one authorized durable result`, async () => {
     const { createActivationIntentProvider } = await import(intentPath), { createComposeDraftProvider, createSqliteDraftStore, initializeComposeDraftStore } = await import(draftPath);
