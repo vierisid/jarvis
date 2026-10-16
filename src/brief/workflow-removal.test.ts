@@ -14,6 +14,7 @@ import { Worker } from '../workflows/queue/worker';
 import { createWorkflowRoutes } from '../workflows/api/routes';
 import { WorkflowRemoval, WORKFLOW_REMOVAL_LIMITS } from './workflow-removal';
 import type { WorkflowManageCommand } from './workflow-removal-contracts';
+import { readBindingPins } from '../workflows/db/repos/binding-pins';
 
 let dir: string, file: string, service: WorkflowRemoval, clock: number, saved: string | undefined;
 const runtime = { refresh: async (_flowId: string) => {} };
@@ -309,6 +310,8 @@ test('R4: explicit Enable checks CODE permission against the pinned draft', () =
   mergeRunOutputsIntoSampleData(old.id, { action: { output: { captured: true } } });
   expect(service.change(command(flow.id, 'activation', { activation: 'ENABLED' })))
     .toMatchObject({ status: 'accepted', item: { versionId: selected.id, activation: 'ENABLED' } });
+  // Q-05 pins the bindings of the version that will run: the pinned draft.
+  expect(readBindingPins(flow.id)?.versionId).toBe(selected.id);
 });
 test('R4: an invalid pinned draft cannot borrow readiness from an older runnable version', () => {
   const { flow, old, selected } = twoDrafts(); updateDraftVersion(selected.id, { trigger: {} });
