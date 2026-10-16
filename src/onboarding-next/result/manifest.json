@@ -1,0 +1,1 @@
+{"schemaVersion":1,"id":"ON-B-10","kind":"provider","entry":"./index.ts","provides":["draft-result.v1"],"requires":["build-job.v1"]}
