@@ -1,3 +1,0 @@
-Command: bun x tsc --noEmit
-Exit: 0
-No TypeScript diagnostics.
