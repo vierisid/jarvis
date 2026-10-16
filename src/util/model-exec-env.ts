@@ -183,6 +183,7 @@ export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
   'JARVIS_BRIEF_OPPORTUNITY_ACTIVATION',
   'JARVIS_BRIEF_QUIET_AWARENESS',
   'JARVIS_BRIEF_DECISIONS',
+  'JARVIS_BRIEF_RECOMMENDATIONS',
   'JARVIS_ALLOW_LEAKED_ENGINES',
   // The Linux Chrome sandbox opt-out (actions/browser/chrome-sandbox.ts, #521).
   // A daemon or browser started from the model's shell must keep the user's

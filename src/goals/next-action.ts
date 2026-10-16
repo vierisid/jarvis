@@ -82,7 +82,16 @@ export interface PlanSnapshot {
   capacity: number;
   /** Open work items past the observer's bound; the newest are kept. */
   omittedWork: number;
+  /** Actions the user turned down and when they may come back (F-13 dismissals under Q-14's cooldown). */
+  suppressed?: PlanSuppression[];
 }
+/** One action the user dismissed. It matches by kind, goal and work item, not by wording. */
+export interface PlanSuppression {
+  kind: NextActionKind; goalId: string | null; workItemId: string | null;
+  /** When the user dismissed it, and when it may be recommended again. */
+  at: number; until: number;
+}
+type PlanOptions = { now?: number; capacity?: number; workLimit?: number; suppressed?: readonly PlanSuppression[] };
 
 export type NextActionKind = 'check_result' | 'resolve_blocker' | 'restore_capability' | 'decide_work'
   | 'continue_work' | 'close_goal' | 'start_step' | 'review_goal';
@@ -308,6 +317,9 @@ export function planNextAction(snapshot: PlanSnapshot): NextActionPlan {
   const candidates: Candidate[] = [];
   const add = (kind: NextActionKind, title: string, goal: PlanGoal | null, work: PlanWork | null,
     reasons: string[], evidence: BriefEvidenceRef[], load: NextAction['load'], question: string | null = null) => {
+    const dismissed = snapshot.suppressed?.find(s => s.kind === kind && s.goalId === (goal?.id ?? null)
+      && s.workItemId === (work?.id ?? null) && s.at <= now && now < s.until);
+    if (dismissed) { exclude(kind, title, `You dismissed this on ${day(dismissed.at)}; it can come back on ${day(dismissed.until)}.`); return; }
     candidates.push({ kind, title, goal: goal ? goalRef(goal) : null, workItemId: work?.id ?? null,
       rationale: [WHY_TIER[kind], ...reasons, ...(goal ? [`Serves: ${path(goal).join(' > ')}.`] : [])],
       evidence: [...(goal ? [goalEvidence(goal)] : []), ...evidence], load,
@@ -542,7 +554,7 @@ type ResultRow = { goal_id: string; work_id: string; what: string; check_id: str
  * Work is bounded to what is open (accepted and not settled, or proposed today
  * and not decided), newest first, and the rest is counted in `omittedWork`.
  */
-export function observeNextAction(options: { now?: number; capacity?: number; workLimit?: number } = {}): PlanSnapshot {
+export function observeNextAction(options: PlanOptions = {}): PlanSnapshot {
   const now = options.now ?? Date.now();
   const db = getDb();
   const midnight = new Date(now);
@@ -611,6 +623,10 @@ export function observeNextAction(options: { now?: number; capacity?: number; wo
   const done = db.query<{ what: string; at: number }, [number]>(
     "SELECT what, completed_at AS at FROM commitments WHERE status = 'completed' AND completed_at >= ? ORDER BY completed_at DESC, id LIMIT 500",
   ).all(now - DONE_WINDOW).map(r => ({ title: r.what, at: r.at }));
+  // Only active suppressions are inputs, in a stable order, so one changes the basis exactly when it starts or lifts.
+  const suppressed = (options.suppressed ?? []).filter(s => s.at <= now && now < s.until)
+    .map(({ kind, goalId, workItemId, at, until }) => ({ kind, goalId, workItemId, at, until }))
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
   const workflows: PlanSnapshot['workflows'] = {};
   for (const w of work) {
     if (!w.workflow) continue;
@@ -627,9 +643,10 @@ export function observeNextAction(options: { now?: number; capacity?: number; wo
     now, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, dayStart, dayEnd,
     goals, work, commitments, done, workflows,
     capacity: options.capacity ?? DEFAULT_CAPACITY, omittedWork: Math.max(0, total - rows.length),
+    ...(suppressed.length ? { suppressed } : {}),
   };
 }
 
-export function nextAction(options: { now?: number; capacity?: number; workLimit?: number } = {}): NextActionPlan {
+export function nextAction(options: PlanOptions = {}): NextActionPlan {
   return planNextAction(observeNextAction(options));
 }

@@ -46,6 +46,20 @@ describe('founder-review scenarios', () => {
 });
 
 describe('next-action planner', () => {
+  test('a dismissed action is held back until its cooldown ends, then ranks as before', () => {
+    const s = scenarioSnapshot(scenario('check-finished-run'));
+    const chosen = recommended(planNextAction(s));
+    const hold = { kind: chosen.kind, goalId: chosen.goal?.goalId ?? null, workItemId: chosen.workItemId, at: s.now - DAY, until: s.now + DAY };
+    const held = planNextAction({ ...s, suppressed: [hold] });
+    expect(held.outcome === 'recommend' ? held.action.title : null).not.toBe(chosen.title);
+    expect(held.considered).toContainEqual(expect.objectContaining({ kind: chosen.kind, title: chosen.title, outcome: 'excluded',
+      why: expect.stringContaining('You dismissed this') }));
+    expect(held.basis).not.toBe(planNextAction(s).basis);
+    // Another kind on the same work, or a lifted hold, does not suppress it.
+    expect(recommended(planNextAction({ ...s, suppressed: [{ ...hold, kind: 'continue_work' }] })).title).toBe(chosen.title);
+    expect(recommended(planNextAction({ ...s, suppressed: [{ ...hold, until: s.now }] })).title).toBe(chosen.title);
+  });
+
   test('a recommendation names its goal and revision, its evidence, why it beats doing nothing and the runner-up, and when it expires', () => {
     const s = scenarioSnapshot(scenario('check-finished-run'));
     const p = planNextAction(s);
@@ -359,7 +373,8 @@ describe('live observation', () => {
     const snapshot = observeNextAction({ now: Date.now() });
     // Goals made in the same millisecond with the same order tie on (sort_order, created_at) and fall back to their random id.
     expect(snapshot.goals.map(g => [g.title, g.parentId === objective.id]).sort()).toEqual([['Follow up with leads', true], ['Grow revenue', false], ['Update pricing page', true]]);
-    expect(snapshot.work.map(w => [w.title, w.status])).toEqual([['Send lead follow-ups', 'ready'], ['Call Bo about the renewal', 'proposed']]);
+    // Work made in the same millisecond ties on created_at too, so compare it as a set.
+    expect(snapshot.work.map(w => [w.title, w.status]).sort()).toEqual([['Call Bo about the renewal', 'proposed'], ['Send lead follow-ups', 'ready']]);
     expect(snapshot.commitments.map(c => c.what)).toEqual(['Update pricing page']);
     expect(snapshot.workflows).toEqual({ [`${flow.id}:${version.id}`]: { ready: false, reason: 'send: Piece catalog is unavailable; readiness cannot be verified' } });
 
