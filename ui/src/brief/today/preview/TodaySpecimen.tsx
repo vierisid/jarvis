@@ -18,7 +18,7 @@ import { RecentActivity } from "../activity/RecentActivity";
 import { outcomeFixture, activityFixture } from "./outcomeFixtures";
 import "./specimen.css";
 
-export function TodaySpecimen({ conversation, reviewTools }: { conversation?: React.ReactNode | ((reduced: boolean) => React.ReactNode); reviewTools?: React.ReactNode } = {}) {
+export function TodaySpecimen({ conversation, reviewTools, reviewTitle }: { conversation?: React.ReactNode | ((reduced: boolean) => React.ReactNode); reviewTools?: React.ReactNode; reviewTitle?: string } = {}) {
   const [route, setRoute] = useState<BriefRoute>({ room: "today", selection: {} });
   const [sidebar, setSidebar] = useState<"expanded" | "rail">("expanded");
   const [chatOpen, setChatOpen] = useState(false);
@@ -77,7 +77,7 @@ export function TodaySpecimen({ conversation, reviewTools }: { conversation?: Re
   } } } };
   return <div className="brief-root brief-today-specimen" data-brief-theme={theme}>
     <div className="brief-today-review-toolbar" aria-label="Isolated review controls">
-      <span>{reviewTools ? "D-12 · Isolated conversation tabs" : "D-11 · Isolated Today opportunities"}</span>
+      <span>{reviewTitle ?? (reviewTools ? "D-12 · Isolated conversation tabs" : "D-11 · Isolated Today opportunities")}</span>
       {reviewTools}
       {!reviewTools && <label>Decision <select aria-label="Decision scenario" value={scenario} onChange={event => setScenario(event.target.value)}>
         {["ready", "acceptance", "permission", "queued", "invitation", "unknown", "loading", "empty", "stale", "unavailable"].map(s => <option key={s}>{s}</option>)}</select></label>}
