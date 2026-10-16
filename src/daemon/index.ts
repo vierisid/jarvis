@@ -5167,6 +5167,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const apiRoutes = {
       ...createApiRoutes(apiContext),
       ...createWorkflowRoutes({
+        recoveryAuthority: authorityEngine,
         triggerManager,
         credentialResolver,
         ...(workflowPieceCatalog ? { pieceRegistry: workflowPieceCatalog } : {}),

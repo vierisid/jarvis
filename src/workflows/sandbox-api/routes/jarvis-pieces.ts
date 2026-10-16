@@ -30,6 +30,7 @@ export type PieceAuthorizeFn = (
 
 export interface JarvisPiecesRouteDeps {
   pieceAuthorize?: PieceAuthorizeFn;
+  pieceReceipt?: (ctx: WorkflowEffectContext, id: string, result: unknown) => void;
 }
 
 export function createJarvisPieceAuthorizeRoute(
@@ -57,11 +58,35 @@ export function createJarvisPieceAuthorizeRoute(
     if (raw.inputDigest !== undefined && (typeof raw.inputDigest !== "string" || !/^[0-9a-f]{64}$/.test(raw.inputDigest))) {
       return err("inputDigest must be a SHA-256 hex digest", 400);
     }
+    if (raw.credentialDigest !== undefined && (typeof raw.credentialDigest !== 'string' || !/^[0-9a-f]{64}$/.test(raw.credentialDigest))) return err('Invalid credential digest', 400);
     const reply = await cancellableWorkflowService(deps.pieceAuthorize)(
       { piece: raw.piece, action: raw.action, input: (raw.input as Record<string, unknown>) ?? {},
-        ...(typeof raw.inputDigest === "string" ? { inputDigest: raw.inputDigest } : {}) },
+        ...(typeof raw.inputDigest === "string" ? { inputDigest: raw.inputDigest } : {}),
+        ...(typeof raw.credentialDigest === 'string' ? { credentialDigest: raw.credentialDigest } : {}) },
       workflowEffectContext(ctx),
     );
     return json(reply);
+  };
+}
+
+export function createJarvisPieceReceiptRoute(deps: JarvisPiecesRouteDeps): RouteHandler {
+  return async ctx => {
+    if (!deps.pieceReceipt) return err('Completion receipts unavailable', 503);
+    const reader = ctx.req.body?.getReader();
+    if (!reader) return err('Missing completion receipt', 400);
+    const chunks: Uint8Array[] = []; let size = 0;
+    while (true) {
+      const part = await reader.read(); if (part.done) break;
+      size += part.value.byteLength;
+      if (size > 262_144) { await reader.cancel(); return err('Completion receipt exceeds 262144 bytes; dispatch remains uncertain', 413); }
+      chunks.push(part.value);
+    }
+    let raw: Record<string, unknown>;
+    try { raw = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+    catch { return err('Invalid completion receipt JSON', 400); }
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return err('Invalid completion receipt', 400);
+    if (typeof raw.effectId !== 'string' || !/^wfe_[a-f0-9]{64}$/.test(raw.effectId) || !Object.hasOwn(raw, 'result')) return err('Invalid completion receipt', 400);
+    deps.pieceReceipt(workflowEffectContext(ctx), raw.effectId, raw.result);
+    return json({ recorded: true });
   };
 }

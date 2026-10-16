@@ -2,7 +2,7 @@ import { ActionContext, backwardCompatabilityContextUtils, ConstructToolParams, 
 import { AUTHENTICATION_PROPERTY_NAME, EngineGenericError, ExecutionType, FlowActionType, FlowRunStatus, GenericStepOutput, isNil, PausedFlowTimeoutError, PieceAction, RespondResponse, ResumePayload, StepOutput, StepOutputStatus } from '@activepieces/shared'
 import type { ToolSet } from 'ai'
 import dayjs from 'dayjs'
-import { authorizePieceDispatch } from '../../../../../../../runtime/piece-effect-guard'
+import { authorizePieceDispatch, executeAuthorizedPiece } from '../../../../../../../runtime/piece-effect-guard'
 import { continueIfFailureHandler, runWithExponentialBackoff } from '../helper/error-handling'
 import { pieceLoader } from '../helper/piece-loader'
 import { createFileUploader } from '../piece-context/file-uploader'
@@ -179,7 +179,7 @@ const executeAction: ActionHandler<PieceAction> = async ({ action, executionStat
         // asked only whether Jarvis is paused or stopped (Q-08). Re-runs on
         // RESUME re-authorize rather than trusting the decision that parked
         // the step.
-        const governance = await authorizePieceDispatch({
+        const dispatchParams = {
             apiUrl: constants.internalApiUrl,
             engineToken: constants.engineToken,
             piece: action.settings.pieceName,
@@ -187,7 +187,8 @@ const executeAction: ActionHandler<PieceAction> = async ({ action, executionStat
             stepName: action.name,
             executionPath: executionState.currentPath.path,
             input: processedInput,
-        })
+        }
+        const governance = await authorizePieceDispatch(dispatchParams)
         // Parked: for an approval, or held while Jarvis is paused (Q-08).
         const parked = 'dispatch' in governance && (governance.dispatch === 'approval_required' || governance.dispatch === 'held')
         if (parked) {
@@ -197,7 +198,7 @@ const executeAction: ActionHandler<PieceAction> = async ({ action, executionStat
         }
         const output = parked
             ? { approval: governance.approval, [JARVIS_PARKED]: isPaused ? { executionType: ExecutionType.RESUME, resumePayload } : { executionType: ExecutionType.BEGIN } }
-            : await runMethodToExecute(backwardCompatibleContext)
+            : await executeAuthorizedPiece(dispatchParams, governance, async () => runMethodToExecute(backwardCompatibleContext))
         const newExecutionContext = executionState.addTags(params.hookResponse.tags)
 
         const webhookResponse = getResponse(params.hookResponse)
