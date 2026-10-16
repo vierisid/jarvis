@@ -15,6 +15,7 @@ const SHEETS = [
   "../today/outcomes/outcomes.css", "../today/activity/activity.css", "../today/goal-card/goal-card.css",
   "../today/opportunity-stack/opportunity-stack.css",
   "../chat/tab-strip/tabs.css", "../chat/tab-strip/preview/specimen.css",
+  "../chat/composer/composer.css", "../chat/composer/preview/specimen.css",
 ];
 
 function selectors(css: string): string[] {
