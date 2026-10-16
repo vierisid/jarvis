@@ -22,7 +22,7 @@ Instrumented paths are canonical Brief conversation recall, including classic an
 
 Unscoped legacy channels, realtime voice, external provider calls, profile/goal context, tool-return memory and older calls are not retroactively attributed. `coverage.paths` declares the instrumented paths. `coverage.completeness` is `recorded_events_only`: an empty list means no retained records, not proof that no other path ever used memory. Disabling instrumentation can create gaps. Consumers must retain this qualification rather than present an all-time usage count.
 
-Immediately before provider handoff, the ledger rechecks every included canonical revision and recall eligibility in one transaction. Correction, deletion, expiry or cancellation during preparation refuses that stale handoff. A later turn rebuilds context through existing recall. Once a handoff occurred, later correction or deletion preserves its old ID and revision as history; it does not make the old fact eligible for future recall. Provider/database failure is unavailable, never fabricated zero usage.
+Immediately before provider handoff, the ledger rereads every included fact in one transaction. If a fact was deleted (or its subject removed) or its validity window ended since packing, or the turn or run is no longer running, the handoff is refused and that model call fails; a later turn rebuilds context through existing recall. Any other change since packing, such as new evidence, a confirmation, a correction that supersedes the fact or a subject rename, does not refuse the handoff: the already packed block is sent and the `supplied` record carries the fact's revision at handoff, while the earlier `selected` record keeps the packed revision. A correction made mid-turn can therefore reach the model once with the pre-correction value; the next recall excludes the superseded fact. Once a handoff occurred, later correction or deletion preserves its old ID and revision as history; it does not make the old fact eligible for future recall. Provider/database failure is unavailable, never fabricated zero usage.
 
 ## Read API and retention
 
@@ -42,7 +42,7 @@ bun test src/vault/memory-usage.test.ts src/daemon/agent-service-memory.test.ts 
 
 The fixtures use temporary SQLite databases, real chat transport and AgentService, the governed workflow route/effect boundary, real provider dispatch with scripted in-process models, and an authenticated Unix socket. No live model, email, desktop effect or deployment is required.
 
-Deliberate unsafe variants must fail: count omitted candidates as supplied, remove event deduplication, or allow stale revisions through handoff.
+Deliberate unsafe variants must fail: count omitted candidates as supplied, remove event deduplication, let a deleted or expired fact through handoff, or refuse a handoff for an evidence-only change.
 
 ## Rollback
 

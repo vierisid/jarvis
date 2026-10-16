@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto';
 import type { Database } from 'bun:sqlite';
 import { getDb } from './schema';
 import { getFact, type Fact } from './facts';
-import { isCurrentRecallFact } from './recall-ranking';
 import type { BriefMemoryUse, BriefTurnRef } from '../brief/contracts';
 import type { MemoryUsageReader } from '../brief/memory-stream-contracts';
 
@@ -96,12 +95,18 @@ export class MemoryUsageLedger implements MemoryUsageReader {
     this.db.transaction(() => {
       this.checkTarget(target);
       const now = Date.now();
-      for (const ref of refs) {
+      for (const packed of refs) {
+        let ref = packed;
         if (stage === 'supplied') {
+          // Owner decision (F18 I-3): only a fact deleted or expired since packing
+          // refuses the handoff. Any other revision change (new evidence,
+          // confirmation, correction, rename) passes and is recorded with the
+          // revision the fact has at handoff.
           const fact = getFact(ref.factId), entity = fact && this.db.query<{ name: string }, [string]>('SELECT name FROM entities WHERE id = ?').get(fact.subject_id);
-          if (!fact || !entity || !isCurrentRecallFact(fact, now) || memoryFactRef(fact, entity.name).sourceRevision !== ref.sourceRevision) {
-            throw new MemoryUsageError('Memory changed before provider handoff; refresh the context');
+          if (!fact || !entity || (fact.valid_to != null && now >= fact.valid_to)) {
+            throw new MemoryUsageError('Memory changed before provider handoff: a supplied fact was deleted or expired; refresh the context');
           }
+          ref = memoryFactRef(fact, entity.name);
         }
         const id = memoryDigest([target.purpose, target.turn?.conversationId ?? null, target.turn?.turnId ?? null, target.turn?.requestId ?? null,
           target.runId, target.workflowId, target.callId, ref.factId, ref.sourceRevision, stage]);

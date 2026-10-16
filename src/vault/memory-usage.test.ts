@@ -105,17 +105,33 @@ test('interleaved chats cannot borrow another turn\'s packed manifest', async ()
   expect(history(a).filter(u => u.stage === 'supplied').map(u => u.factId).sort()).toEqual(aFacts.map(f => f.id).sort());
   expect(history(b).filter(u => u.stage === 'supplied').map(u => u.factId).sort()).toEqual(bFacts.map(f => f.id).sort());
 });
-for (const change of ['delete', 'correct', 'expire'] as const) test(`${change} between packing and dispatch refuses stale context, preserves truthful history`, async () => {
+for (const change of ['delete', 'expire'] as const) test(`${change} between packing and dispatch refuses the handoff, preserves truthful history`, async () => {
   const [fact] = facts('Ada', 1), ref = turn(); let calls = 0;
   await withBriefTurn(ref, async () => {
     const text = getKnowledgeForMessage('Ada');
     if (change === 'delete') deleteFact(fact!.id);
-    if (change === 'correct') correctFact(fact!.id, 'corrected value', 'fixture correction');
     if (change === 'expire') getDb().run('UPDATE facts SET valid_to = ? WHERE id = ?', [Date.now() - 1, fact!.id]);
-    await expect(manager(() => calls++).chat([{ role: 'system', content: text }])).rejects.toThrow('Memory changed');
+    await expect(manager(() => calls++).chat([{ role: 'system', content: text }])).rejects.toThrow('deleted or expired');
     expect(packRecallEvidence(retrieveForMessage('Ada')).included.map(r => r.factId)).not.toContain(fact!.id);
   });
   expect(calls).toBe(0); expect(history(ref).every(u => u.stage === 'selected')).toBe(true);
+});
+for (const change of ['evidence', 'correct'] as const) test(`${change} between packing and dispatch passes and records the revision at handoff`, async () => {
+  const [fact] = facts('Ada', 1), ref = turn(); let calls = 0;
+  await withBriefTurn(ref, async () => {
+    const text = getKnowledgeForMessage('Ada');
+    const packed = memoryFactRef(getFact(fact!.id)!, 'Ada').sourceRevision;
+    if (change === 'evidence') createFact(fact!.subject_id, 'note_0', 'private fact Ada 0', { quote: 'a second, independent source' });
+    if (change === 'correct') correctFact(fact!.id, 'corrected value', 'fixture correction');
+    const current = memoryFactRef(getFact(fact!.id)!, 'Ada').sourceRevision;
+    expect(current).not.toBe(packed);
+    await manager(() => calls++).chat([{ role: 'system', content: text }]);
+    const supplied = history(ref).filter(u => u.stage === 'supplied');
+    expect(supplied).toHaveLength(1);
+    expect(supplied[0]).toMatchObject({ factId: fact!.id, sourceRevision: current });
+    expect(history(ref).find(u => u.stage === 'selected')).toMatchObject({ factId: fact!.id, sourceRevision: packed });
+  });
+  expect(calls).toBe(1);
 });
 test('supplied history survives correction, deletion and restart with old revisions and no copied content', async () => {
   const [fact] = facts('Ada', 1), ref = turn();
