@@ -226,7 +226,9 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
           SELECT MAX(position) AS position FROM ordered WHERE id != ?2`).get(null, key.id, null, null, null, this.projectId)!;
         const position = tail.position === null ? 0 : tail.position + 1;
         if (!Number.isSafeInteger(position) || position > 1_000_000) throw new DecisionError('Queue placement is full; reorder before adding work', 409, 'placement_full');
-        this.db.run('INSERT INTO brief_decision_placement(decision_id,position) VALUES (?,?)', [key.id, position]);
+        this.db.run('INSERT INTO brief_decision_placement(decision_id,position) VALUES (?,?) ON CONFLICT(decision_id) DO UPDATE SET position = excluded.position', [key.id, position]);
+        // A placement write changes a sort key, so open keyset cursors must reload (see place()).
+        this.db.run('UPDATE brief_decision_queue_clock SET generation = generation + 1 WHERE singleton = 1');
       }
       return this.project(key.id);
     }).immediate();

@@ -64,6 +64,15 @@ test('acceptance appends one canonical item, preserves the front, goal and durab
   expect((await queue.read()).data.items.map(i => i.decisionId)).toEqual([first.decisionId, receipt.destination.decisionId]);
 });
 
+test('appending accepted work invalidates open queue cursors like any other placement', async () => {
+  createWorkItem({ title: 'First queued' }); createWorkItem({ title: 'Second queued' });
+  const page = await queue.read({ limit: 1 });
+  expect(page.data.nextCursor).not.toBeNull();
+  const rec = provider.generate('cursor');
+  provider.accept(rec.recommendationId, 'cursor', rec.revision);
+  await expect(queue.read({ limit: 1, cursor: page.data.nextCursor! })).rejects.toThrow('Queue changed');
+});
+
 test('return, dismissal, explicit refresh and expiry never create work', () => {
   const rec = provider.generate('first');
   closeDb(); initWorkflowDb(file); wire();
