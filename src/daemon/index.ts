@@ -1,3 +1,5 @@
+import { MemoryStream } from '../brief/memory-stream';
+import { registerMemoryStream } from '../brief/registrations/memory-stream';
 import { Outcomes } from '../brief/outcomes';
 import { registerOutcomes } from '../brief/registrations/outcomes';
 import { GoalMeasurements } from '../brief/goal-measurements';
@@ -4856,6 +4858,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 9b. Set up API routes + dashboard static files
     const briefGoalMeasurements = new GoalMeasurements(getDb());
     const briefOutcomes = new Outcomes(getDb());
+    const briefMemoryStream = new MemoryStream(getDb());
     const briefDecisions = new DecisionQueue(getDb(), { approvalManager, deferredExecutor, wsService, auditTrail });
     const briefDecisionDocuments = new DecisionDocuments(getDb(), briefDecisions,
       { approvalManager, deferredExecutor, wsService, auditTrail }, documentFactBindings());
@@ -4882,6 +4885,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     }, process.env.JARVIS_BRIEF_QUIET_AWARENESS);
     const briefEnabled: BriefCapabilityId[] = [];
     if (process.env.JARVIS_BRIEF_GOAL_MEASUREMENTS === '1') briefEnabled.push('goalMeasurements');
+    if (process.env.JARVIS_BRIEF_MEMORY_STREAM === '1') briefEnabled.push('memoryStream');
     if (process.env.JARVIS_BRIEF_OUTCOMES === '1') briefEnabled.push('outcomes');
     if (process.env.JARVIS_BRIEF_RECOMMENDATIONS === '1') briefEnabled.push('recommendations');
     if (process.env.JARVIS_BRIEF_DECISION_EDITS === '1') briefEnabled.push('decisionEdits');
@@ -4910,6 +4914,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ...registerRecommendations(briefRecommendations),
       ...registerGoalMeasurements(briefGoalMeasurements),
       ...registerOutcomes(briefOutcomes),
+      ...registerMemoryStream(briefMemoryStream),
       ...registerCompositionIngredients(briefWorkflowComposition),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
@@ -4917,6 +4922,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       briefDecisions,
       briefGoalMeasurements,
       briefOutcomes,
+      briefMemoryStream,
       briefDecisionDocuments,
       briefRecommendations,
       briefConversations,
