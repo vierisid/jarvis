@@ -13,6 +13,7 @@ import type { ToolRegistry } from '../actions/tools/registry.ts';
 import { outsideApprovalScope } from '../authority/approved-action-scope.ts';
 import { outsideExecutionScope } from '../actions/execution-scope.ts';
 import { outsideActingAgent } from './acting-agent.ts';
+import { outsideBriefTurn } from '../brief/chat-context.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 
 export type AsyncTaskStatus = 'running' | 'completed' | 'failed' | 'cancelled';
@@ -183,7 +184,10 @@ export class AgentTaskManager {
     // Outside the acting sub-agent that started it (#1014): the task's own
     // loop names its own agent on every dispatch, and its restrictions were
     // fixed into `authority.profile` by the caller.
-    outsideActingAgent(() => outsideExecutionScope(() => outsideApprovalScope(() => this.runSubAgentFn({
+    // Outside the Brief chat turn that started it: the task outlives that turn,
+    // so its progress and approval cards must reach the dashboard as any other
+    // background task's do, not be filed under a turn that may already be over.
+    outsideBriefTurn(() => outsideActingAgent(() => outsideExecutionScope(() => outsideApprovalScope(() => this.runSubAgentFn({
       agent,
       task,
       context,
@@ -229,7 +233,7 @@ export class AgentTaskManager {
       console.error(`[TaskManager] Task ${taskId} failed (${asyncTask.agentName}):`, err);
       this.emit(asyncTask.status === 'cancelled' ? 'cancel' : 'fail', asyncTask);
       onComplete?.(asyncTask);
-    }))));
+    })))));
 
     return taskId;
   }

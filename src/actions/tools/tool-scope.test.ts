@@ -296,9 +296,14 @@ describe('what a future change could silently undo', () => {
     const src = await code('../../daemon/agent-service.ts');
     const conv = /return this\.streamMessageConv\(([^)]*)\);/.exec(src);
     expect(conv).not.toBeNull();
-    expect(conv![1]).toBe('text, channel, siteContext, scope, contextKey');
-    // ...and the classic branch, unchanged.
-    expect(src).toContain('this.orchestrator.streamMessage(systemPrompt, text, undefined, undefined, undefined, scope)');
+    expect(conv![1]).toBe('text, channel, siteContext, scope, contextKey, conversation');
+    // F-03 adds explicit conversation history to both branches; it must not
+    // replace or drop the existing site scope on either path.
+    // F-05 selects multimodal content and tiers before the same trailing scope
+    // and conversation arguments. Guard those arguments independently of content.
+    const classic = /const stream = this\.orchestrator\.streamMessage\(([\s\S]*?)\);/.exec(src);
+    expect(classic).not.toBeNull();
+    expect(classic![1]!.trim()).toEndWith(', scope, conversation');
     // The non-streaming fork too: `handleMessage` has the same conv/classic
     // split and the same way of quietly dropping half the turn.
     expect(src).toContain('this.handleMessageConv(text, channel, scope, siteContext)');

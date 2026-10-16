@@ -13,6 +13,9 @@ bun run scripts/lint-webapp-templates.ts
 echo "[pre-commit] Checking the published tarball still ships what consumers read..."
 bun run scripts/check-package-files.ts
 
+echo "[pre-commit] Checking the committed onboarding-next catalog matches its manifests..."
+bun run scripts/onboarding-next-runtime-manifest.ts --check
+
 # Run the tests that belong to what is being committed, not the whole suite.
 #
 # The blanket `bun test` ran for 206s when #505 set a 360s cap, 443s a week

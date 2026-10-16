@@ -26,8 +26,13 @@ const SENTENCE_END_RE = /[.!?:]\s/;
 export class StreamRelay {
   private wsServer: WebSocketServer;
 
-  constructor(wsServer: WebSocketServer) {
+  constructor(wsServer: WebSocketServer, private readonly deliver?: (message: WSMessage) => void) {
     this.wsServer = wsServer;
+  }
+
+  private emit(message: WSMessage): void {
+    if (this.deliver) this.deliver(message);
+    else this.wsServer.broadcast(message);
   }
 
   /**
@@ -95,7 +100,7 @@ export class StreamRelay {
             timestamp: Date.now(),
           };
 
-          this.wsServer.broadcast(message);
+          this.emit(message);
         } else if (event.type === 'tool_call') {
           // Broadcast tool call notification to clients
           const toolMessage: WSMessage = {
@@ -111,7 +116,7 @@ export class StreamRelay {
             timestamp: Date.now(),
           };
 
-          this.wsServer.broadcast(toolMessage);
+          this.emit(toolMessage);
         } else if (event.type === 'error') {
           console.error('[StreamRelay] Stream error:', event.error);
 
@@ -126,7 +131,7 @@ export class StreamRelay {
             timestamp: Date.now(),
           };
 
-          this.wsServer.broadcast(errorMessage);
+          this.emit(errorMessage);
           streamError = event.error;
           break;
         } else if (event.type === 'done') {
@@ -151,7 +156,7 @@ export class StreamRelay {
             timestamp: Date.now(),
           };
 
-          if (!options?.signal?.aborted) this.wsServer.broadcast(doneMessage);
+          if (!options?.signal?.aborted) this.emit(doneMessage);
         }
       }
 
@@ -183,7 +188,7 @@ export class StreamRelay {
           id: requestId,
           timestamp: Date.now(),
         };
-        this.wsServer.broadcast(errorMessage);
+        this.emit(errorMessage);
       }
 
       throw error;

@@ -31,6 +31,7 @@ import { maxWaitingSpawnCards } from '../../agents/lifecycle-gate';
 const WORKFLOW_NAME_LABEL_MAX_CHARS = 512;
 /** A step name on a card or an audit row: the 120 `auditRefusal` already uses. */
 const WORKFLOW_STEP_LABEL_MAX_CHARS = 120;
+import { holdStep, PAUSED_REASON } from './emergency-hold';
 
 export interface WorkflowAuthorityDependencies {
   authorityEngine?: AuthorityEngine; auditTrail?: AuditTrail; emergencyController?: EmergencyController;
@@ -58,8 +59,18 @@ export interface EffectInvocation {
   request: Record<string, unknown>;
   /** A reviewed UI capability cannot be auto-allowed by category overrides. */
   confirmation?: { confirm: 'always'; intent: string };
-  prepare: () => { arguments: Record<string, unknown>; target: Record<string, unknown> };
+  prepare: () => { arguments: Record<string, unknown>; target: Record<string, unknown>; bindings?: Record<string, unknown> };
   validateTarget?: (args: Record<string, unknown>, target: Record<string, unknown>) => void;
+  /**
+   * Q-05: recheck what the record was made against beyond its arguments and
+   * target, such as the memory facts a recipient matched. Runs before the
+   * policy and any approval, inside the dispatch checkpoint and, with
+   * `revalidateOnReplay`, before a recorded authorization is handed out again.
+   * Throws an ActionOutcomeError to block; the record keeps the outcome.
+   */
+  revalidate?: (record: WorkflowEffect) => void;
+  /** For routes whose replay re-dispatches (a piece's own retry), recheck before handing out the recorded result. */
+  revalidateOnReplay?: boolean;
   execute: (args: Record<string, unknown>, checkpoint: () => void) => Promise<unknown>;
   principal?: EffectPrincipal;
   /** The caller's gate already found this effect needs approval; the boundary never concludes otherwise. */
@@ -185,11 +196,45 @@ export class WorkflowEffectBoundary {
     const resolved = resolveEffectContext(input.context, input.piece, input.action);
     const id = workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, input.route);
     let effect = getWorkflowEffect(id);
+    // A piece effect recorded before Q-08 has a request digest without the
+    // engine's digest of the whole input. It is matched without it once and
+    // bound to it from then on, so an approval parked across the upgrade runs
+    // instead of failing as changed. Records made since always carry it.
+    if (effect && input.route === 'piece' && effect.requestDigest !== digest(input.request)) {
+      const { inputDigest, ...earlier } = input.request;
+      if (typeof inputDigest === 'string' && effect.requestDigest === digest(earlier)) {
+        effect.requestDigest = digest(input.request);
+        saveWorkflowEffect(effect);
+      }
+    }
     if (effect && (effect.requestDigest !== digest(input.request) || effect.versionDigest !== resolved.versionDigest
       || effect.toolName !== input.toolName || effect.actionCategory !== input.category)) {
       throw new Error('Workflow effect changed since it was recorded; start a new run for new arguments or version');
     }
-    if (effect?.status === 'succeeded') return { result: effect.result, ...(effect.outcome ? { outcome: effect.outcome } : {}) };
+    if (effect?.status === 'succeeded') {
+      // A piece's or a delegation's recorded DISPATCH AUTHORIZATION is handed
+      // out again when its step re-runs (a governed action that pauses itself
+      // resumes through it). Not while Jarvis is paused or stopped (Q-08):
+      // before, this returned ahead of every check.
+      if (input.route === 'piece' || input.route === 'agent') {
+        const state = emergency.getState();
+        if (state === 'killed') throw new Error('Workflow effect blocked: system killed');
+        if (state === 'paused') {
+          return { approval: { effectId: id, approvalId: '',
+            waitpointId: holdStep({ runId: resolved.run.id, projectId: resolved.run.projectId, stepName: resolved.stepName }).id, hold: PAUSED_REASON } };
+        }
+      }
+      // A recorded piece authorization is handed out again on the engine's own
+      // retry, and the piece then calls the service again: recheck first. A
+      // refusal is kept beside the result, which stays what it was.
+      if (input.revalidateOnReplay) {
+        try { input.revalidate?.(effect); } catch (error) {
+          if (error instanceof ActionOutcomeError) { effect.replayRefusal = { outcome: error.outcome, at: Date.now() }; saveWorkflowEffect(effect); }
+          throw error;
+        }
+      }
+      return { result: effect.result, ...(effect.outcome ? { outcome: effect.outcome } : {}) };
+    }
     if (effect?.outcome && effect.outcome.status !== 'succeeded') throw new ActionOutcomeError(effect.outcome);
     if (effect?.status === 'dispatching') throw new Error('Workflow effect outcome is uncertain or still in flight; automatic replay is blocked');
     if (effect && effect.status !== 'pending') throw new Error(effect.error ?? `Workflow effect is ${effect.status}`);
@@ -225,10 +270,18 @@ export class WorkflowEffectBoundary {
       tool_name: record.toolName, action_category: input.category,
       authority_decision: record.decision === 'denied' ? 'denied' : record.approvalId ? 'approval_required' : 'allowed',
       approval_id: record.approvalId, executed });
+    // Pause holds (Q-08): a step reached while Jarvis is paused parks on a
+    // HOLD waitpoint instead of being refused for good, and is judged afresh
+    // when Resume releases it. Asked before the decision and again before the
+    // dispatch claim; a step already dispatching is in flight and finishes.
+    const holdIfPaused = (): EffectReply | null => emergency.getState() === 'paused'
+      ? { approval: { effectId: id, approvalId: '', waitpointId: holdStep({ runId: record.runId, projectId: record.projectId, stepName: record.stepName }).id, hold: PAUSED_REASON } }
+      : null;
     const policy = () => {
+      // Kill stops. The controller is the one source of truth: a copy of the
+      // state taken at boot kept workflows blocked after Resume (Q-08).
       const state = emergency.getState();
-      const configuredState = authority.getConfig().emergency_state;
-      if (state !== 'normal' || configuredState !== 'normal') throw new Error(`Workflow effect blocked: system ${state !== 'normal' ? state : configuredState}`);
+      if (state === 'killed') throw new Error('Workflow effect blocked: system killed');
       const run = getFlowRun(record.runId);
       if (!run || run.status !== 'RUNNING') throw new Error(`Workflow effect blocked: run is ${run?.status ?? 'missing'}`);
       // Cancellation has one fence, owned by `runtime/cancellation`. Defer to it
@@ -266,6 +319,17 @@ export class WorkflowEffectBoundary {
       }
       return decision;
     };
+    const held = holdIfPaused();
+    if (held) return held;
+    // Bindings first, so a stale one is refused before anyone is asked to approve it.
+    try { input.revalidate?.(record); } catch (error) {
+      if (error instanceof ActionOutcomeError) {
+        // Authority never ran, but nothing ran either: the trail says denied, not allowed.
+        record.outcome = error.outcome; record.status = 'blocked'; record.decision = 'denied'; record.error = error.message;
+        record.reason = error.message; record.finishedAt = Date.now(); saveWorkflowEffect(record); log(false);
+      }
+      throw error;
+    }
     let decision;
     try { decision = policy(); } catch (error) {
       record.status = 'blocked'; record.decision = 'denied'; record.error = String((error as Error).message);
@@ -362,6 +426,7 @@ export class WorkflowEffectBoundary {
     // dispatch claim. No await separates this gate from the effect callback.
     const checkpoint = () => {
       input.validateTarget?.(record.arguments, record.target);
+      input.revalidate?.(record);
       const latest = resolveEffectContext(input.context, input.piece, input.action);
       if (latest.versionDigest !== record.versionDigest) throw new Error('Workflow version changed before dispatch');
       const current = policy();
@@ -370,6 +435,8 @@ export class WorkflowEffectBoundary {
       }
       if (current.requiresApproval && !record.approvalId) throw new Error('Workflow Authority now requires approval; effect was not dispatched');
     };
+    const heldBeforeDispatch = holdIfPaused();
+    if (heldBeforeDispatch) return heldBeforeDispatch;
     try { checkpoint(); } catch (error) {
       // A rejected target/session has not reached the dispatch claim. Preserve
       // that fact separately from uncertainty about already-started effects.

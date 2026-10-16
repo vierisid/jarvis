@@ -87,6 +87,8 @@ export type ConvSystemContext = {
  * Required, so the compiler catches a call site that forgets it.
  */
 export type ConvTurn = {
+  /** Cancellation belongs to this turn and its own delegated task only. */
+  signal?: AbortSignal;
   /**
    * The user's verbatim message for this turn.
    *
@@ -239,6 +241,7 @@ export class ConvOrchestrator {
     let acknowledgedWork = false;
 
     for (let iteration = 0; iteration < MAX_CONV_ITERATIONS; iteration++) {
+      turn.signal?.throwIfAborted();
       let responseText = '';
       const responseToolCalls: LLMToolCall[] = [];
       let response: LLMResponse | null = null;
@@ -254,7 +257,9 @@ export class ConvOrchestrator {
       for await (const event of this.llm.streamTier('conversation', 'conv_orchestrator', messages, {
         tools: CONV_TOOLS,
         tool_choice: 'auto',
+        signal: turn.signal,
       })) {
+        turn.signal?.throwIfAborted();
         if (event.type === 'text') {
           responseText += event.text;
           // Never expose a text-serialized tool call to the chat UI or TTS.
@@ -361,10 +366,12 @@ export class ConvOrchestrator {
       };
 
       for (const call of response.tool_calls) {
+        turn.signal?.throwIfAborted();
         // The turn's scope and site block travel as ARGUMENTS, read from the
         // context this call was made under. Nothing about them comes from
         // `call.arguments`, which is model output.
         const result = await this.handleToolCall(call, turn, captureEvent);
+        turn.signal?.throwIfAborted();
         if (result.taskId) tasksRun.push(result.taskId);
         messages.push({
           role: 'tool',
@@ -439,7 +446,7 @@ export class ConvOrchestrator {
         // Dispatch produces a result envelope. We notify the caller as the
         // task moves through its lifecycle via the registry subscription.
         const unsub = this.registry.subscribe(rec => {
-          if (rec.status === 'running' && rec.id) {
+          if (rec.status === 'running' && rec.id && this.sameContext(rec, turn)) {
             onTaskEvent?.({ type: 'task_started', record: rec });
           }
         });

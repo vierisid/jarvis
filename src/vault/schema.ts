@@ -3,6 +3,8 @@ import { ensureSuggestionSchema } from './suggestion-schema.ts';
 import { ensureGoalEventSchema } from './goal-event-schema.ts';
 import { ensureFactSchema } from './fact-schema.ts';
 import { ensureConversationSchema } from './conversation-schema.ts';
+import { ensureChatTurnSchema } from './chat-turn-schema.ts';
+import { ensureChatAttachmentSchema } from './chat-attachment-schema.ts';
 
 let dbInstance: Database | null = null;
 
@@ -349,6 +351,8 @@ function createTables(db: Database): void {
   `);
 
   ensureConversationSchema(db);
+  ensureChatTurnSchema(db);
+  ensureChatAttachmentSchema(db);
 
   // Content pipeline: items moving through creation stages
   db.run(`
@@ -437,6 +441,11 @@ function createTables(db: Database): void {
   // approve endpoints only flip the status. 'deferred' keeps the legacy
   // execute-on-approve behavior.
   try { db.run(`ALTER TABLE approval_requests ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'deferred'`); } catch {}
+  // Migration (Q-08): who the request was asked for -- the agent's role,
+  // level and profile, as JSON -- so permissions are judged again, as that
+  // agent, when the approved call runs. A row from before has none; it is
+  // refused at execution and asked for again.
+  try { db.run(`ALTER TABLE approval_requests ADD COLUMN principal TEXT`); } catch {}
   // Migration: execution claim and receipt. The claim columns record that one
   // executor took the approved request before dispatch, so a second caller or
   // a restarted daemon cannot run it again. `execution_outcome` qualifies the

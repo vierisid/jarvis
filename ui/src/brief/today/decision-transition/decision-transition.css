@@ -1,0 +1,12 @@
+.brief-root .brief-today-decision[data-tone="neutral"] { --decision-edge: var(--brief-secondary); }
+.brief-root .brief-decision-receipt { height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--decision-edge); flex: none; }
+.brief-root .brief-decision-receipt:empty { visibility: hidden; }
+.brief-root .brief-decision-review-receipt { min-height: 20px; margin-top: 12px; color: var(--decision-edge); }
+.brief-root .brief-decision-recovery { grid-column: 1 / -1; padding: 0 24px 20px; display: flex; align-items: center; gap: 16px; }
+.brief-root .brief-decision-recovery p { margin: 0; }
+.brief-root .brief-today-decision[data-transition="settling"] .brief-today-paper-face { box-shadow: 2px 3px 0 var(--brief-paper-shadow); }
+.brief-root .brief-today-decision[data-transition="arriving"][data-reduced="false"] .brief-today-paper-face { animation: brief-decision-arrival 220ms var(--brief-motion-ease, ease-out); }
+@keyframes brief-decision-arrival { from { opacity: .65; translate: 0 8px; } to { opacity: 1; translate: 0 0; } }
+@media (prefers-reduced-motion: reduce) { .brief-root .brief-today-decision .brief-today-paper-face { animation: none !important; } }
+.brief-root .brief-decision-stack { min-width: 0; outline-offset: 4px; }
+.brief-root .brief-today-decision-meta .brief-status { min-width: 148px; }

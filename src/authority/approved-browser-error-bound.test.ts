@@ -40,7 +40,7 @@ for (const error of [new Error(pageMessage), pageMessage]) {
       toolName: browserEvaluateTool.name, toolArguments: args, actionCategory: 'control_app',
       urgency: 'normal', reason: 'fixture', toolRegistry: registry,
       context: JSON.stringify({ confirm: 'always', intent: 'Fixture browser evaluation' }) });
-    manager.approve(request.id, 'fixture');
+    manager.approve(request.id, 'dashboard'); // click-only: decided on the dashboard (Q-08)
 
     const receipt = await executor.executeApprovedWithReceipt(request.id);
     expect(receipt.failed).toBe(true);
@@ -50,7 +50,8 @@ for (const error of [new Error(pageMessage), pageMessage]) {
     expect(receipt.result).not.toContain('oversized-tail');
     expect(notifications).toEqual([receipt.result]);
     const stored = manager.getRequest(request.id)!;
-    expect(stored.execution_outcome).toBe('failed');
+    // A page error may have happened: kept unknown, never re-run (Q-08).
+    expect(stored.execution_outcome).toBe('unknown');
     expect(stored.execution_result!.length).toBeLessThanOrEqual(RECEIPT_MAX_CHARS);
     await executor.executeApprovedWithReceipt(request.id);
     expect(evaluate).toHaveBeenCalledTimes(1);

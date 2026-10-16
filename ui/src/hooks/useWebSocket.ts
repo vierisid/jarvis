@@ -164,7 +164,7 @@ export type ContentEvent = {
   timestamp: number;
 };
 
-type WSMessage = {
+export type WSMessage = {
   type: string;
   payload: any;
   id?: string;
@@ -548,7 +548,14 @@ export function formatProviderErrorMessage(
   return { summary: fallbackSummary, detail: normalized };
 }
 
-export function useWebSocket() {
+/** Optional scoped chat owner. The connection and non-chat notifications stay shared. */
+export interface WebSocketChatAdapter {
+  onOpen(socket: WebSocket): void;
+  onClose(): void;
+  onMessage(message: WSMessage): boolean;
+}
+
+export function useWebSocket({ enabled = true, chat }: { enabled?: boolean; chat?: WebSocketChatAdapter } = {}) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
@@ -587,8 +594,10 @@ export function useWebSocket() {
   const pendingChatIdsRef = useRef<Set<string>>(new Set());
   /** Request whose chunks currently own the single foreground composer turn. */
   const currentChatRequestIdRef = useRef<string | null>(null);
+  const mountedRef = useRef(false);
 
   const connect = useCallback(() => {
+    if (!enabled || !mountedRef.current) return;
     // A manual "Retry now" or the scheduled backoff can fire while a socket is
     // already opening/open; clear any pending backoff and don't stack sockets.
     if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
@@ -598,14 +607,17 @@ export function useWebSocket() {
     ws.binaryType = "arraybuffer";
 
     ws.onopen = async () => {
+      if (wsRef.current !== ws || !mountedRef.current) return;
       setIsConnected(true);
+      chat?.onOpen(ws);
       console.log("[WS] Connected");
       // Load chat history from backend on the first connect that gets an answer.
-      if (!historyHydratedRef.current) {
+      if (!chat && !historyHydratedRef.current) {
         try {
           const resp = await fetch("/api/vault/conversations/active?channel=websocket");
           if (resp.ok) {
             const data = await resp.json();
+            if (wsRef.current !== ws || !mountedRef.current) return;
             historyHydratedRef.current = true;
             if (data.messages && data.messages.length > 0) {
               const restored: ChatMessage[] = data.messages.map((m: any) => ({
@@ -644,6 +656,7 @@ export function useWebSocket() {
             intent_reason?: string;
             impact?: ApprovalImpact;
           }>;
+          if (wsRef.current !== ws || !mountedRef.current) return;
           const rehydrated: PendingApproval[] = rows.map((r) => ({
             id: r.id,
             shortId: r.id.slice(0, 8),
@@ -680,8 +693,12 @@ export function useWebSocket() {
     };
 
     ws.onclose = () => {
+      if (wsRef.current !== ws || !mountedRef.current) return;
       // Every room action this socket was asked to answer is now unanswerable.
       socketGenerationRef.current += 1;
+      ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null;
+      wsRef.current = null;
+      chat?.onClose();
       setIsConnected(false);
       setIsResponding(false);
       currentChatRequestIdRef.current = null;
@@ -693,18 +710,22 @@ export function useWebSocket() {
     };
 
     ws.onerror = () => {
+      if (wsRef.current !== ws || !mountedRef.current) return;
       setIsConnected(false);
     };
 
     ws.onmessage = (event) => {
+      if (wsRef.current !== ws || !mountedRef.current) return;
       // Binary frame = TTS audio chunk from server
       if (event.data instanceof ArrayBuffer) {
+        if (chat) return;
         voiceCallbacksRef.current?.onTTSBinary(event.data);
         return;
       }
 
       try {
         const msg: WSMessage = JSON.parse(event.data);
+        if (chat?.onMessage(msg)) return;
 
         // Voice signal messages → route to voice hook
         if (msg.type === "tts_start") {
@@ -819,7 +840,7 @@ export function useWebSocket() {
     };
 
     wsRef.current = ws;
-  }, []);
+  }, [enabled, chat]);
 
   const handleMessage = useCallback((msg: WSMessage) => {
     if (msg.type === "chat" && msg.payload?.source) {
@@ -1208,19 +1229,32 @@ export function useWebSocket() {
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
     connect();
     // "Retry now" on the offline system-state forces an immediate reconnect
     // instead of waiting out the 2s backoff (recovery is automatic either way).
     const onManualRetry = () => connect();
     window.addEventListener("jarvis:ws-reconnect", onManualRetry);
     return () => {
+      mountedRef.current = false;
+      // Cleanup disables onclose below, so invalidate queued room actions here too.
+      socketGenerationRef.current += 1;
       window.removeEventListener("jarvis:ws-reconnect", onManualRetry);
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-      wsRef.current?.close();
+      const socket = wsRef.current;
+      wsRef.current = null;
+      // Closing during unmount/mode change must not schedule a second connection.
+      if (socket) {
+        socket.onopen = socket.onclose = socket.onerror = socket.onmessage = null;
+        socket.close();
+      }
+      chat?.onClose();
+      setIsConnected(false);
     };
-  }, [connect]);
+  }, [connect, chat]);
 
   const cancelResponse = useCallback(() => {
+    if (chat) return;
     const requestId = currentChatRequestIdRef.current;
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -1246,10 +1280,11 @@ export function useWebSocket() {
     currentChatRequestIdRef.current = null;
     setThinking(false);
     setIsResponding(false);
-  }, []);
+  }, [chat]);
 
   const sendMessage = useCallback(
     (text: string, options?: { projectId?: string; currentRoom?: string }) => {
+      if (chat) return;
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
       // Typed barge-in: the replacement turn owns the composer immediately.
@@ -1308,7 +1343,7 @@ export function useWebSocket() {
         setNotices((prev) => [notice, ...prev.filter((item) => item.text !== notice.text)].slice(0, 3));
       }
     },
-    [cancelResponse]
+    [cancelResponse, chat]
   );
 
   const dismissNotice = useCallback((noticeId: string) => {
