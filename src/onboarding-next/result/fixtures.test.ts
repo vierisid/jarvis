@@ -32,7 +32,7 @@ export function fixture(path = ':memory:') {
   const writes: unknown[] = [];
   const services: Services = { id: 'binding-1', reader: createSqliteResultReader(db), access: async () => true,
     build: { read: async () => ({ availability: 'ready', status: structuredClone(job) }) },
-    journey: { read: async () => ({ availability: 'ready', snapshot: structuredClone(journey) }),
+    journey: { canFinishDraft: true, read: async () => ({ availability: 'ready', snapshot: structuredClone(journey) }),
       acknowledge: async input => {
         writes.push(input);
         if (input.expectedRevision !== journey.revision) return { availability: 'unavailable' };

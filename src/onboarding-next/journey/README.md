@@ -41,6 +41,17 @@ original legacy settings row.
 Finishing an ordinary tour leads to Activation. Explore first explicitly exits
 without creating a workflow; finishing Result exits after a draft acknowledgement.
 
+Every **new** `finish` also requires the injected synchronous `validateFinish`
+guard to return exactly `true` inside the same persistence transaction. Bind B10's
+`createDraftCompletionGuard` to the current workflow database and B08's synchronous
+store reader. The settings adapter passes its database as the opaque transaction
+resource so B10 can enforce the same-database check. Missing, throwing, async or
+failed guards return `result_unavailable` without writing a revision or receipt.
+`canFinishDraft` advertises whether a guard is bound; B10 withholds Continue when
+it is absent. Other navigation and internal acknowledgements do not need this
+binding. A retry of a committed finish still returns the existing receipt: later
+workflow deletion cannot undo completion or cause another completion write.
+
 `acknowledge(...)` is an INTERNAL port for successful work by the other providers:
 setup, interview, tour, build reservation/recovery, job acceptance and durable authorized draft reads. Never
 expose it as a public generic PATCH or forward an HTTP body to it. ON-B-02 must

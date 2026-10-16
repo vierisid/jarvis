@@ -6,16 +6,16 @@ import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from '../../workflows/
 import { DEFAULT_IDS } from '../../workflows/db/schema';
 import { configureWorkflowReadiness } from '../../workflows/db/repos/flow-readiness';
 import { sampleCatalog } from '../../workflows/runtime/test-fixtures';
-import { createDraftResultProvider, createSqliteResultReader, type Result, type Services } from './index';
+import { createDraftCompletionGuard, createDraftResultProvider, createSqliteResultReader, type Result, type Services } from './index';
 import { fixture, input } from './fixtures.test';
 const journeyPath = '../journey/index.ts', buildPath = '../build-jobs/index.ts', intentPath = '../activation-intent/index.ts', draftPath = '../compose-draft/index.ts';
 const present = (path: string) => existsSync(join(import.meta.dir, path));
 const saved = (r: Result) => { if (r.availability !== 'ready' || r.state !== 'saved') throw Error(JSON.stringify(r)); return r; };
 afterEach(closeWorkflowDb);
-async function journeyFor(owner: { actorId: string; projectId: string }) {
+async function journeyFor(owner: { actorId: string; projectId: string }, validateFinish?: ReturnType<typeof createDraftCompletionGuard>) {
   const { createJourneyProvider, createSettingsJourneyPersistence } = await import(journeyPath);
   getWorkflowDb().exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL)');
-  const journey = createJourneyProvider({ authorize: () => owner, persistence: createSettingsJourneyPersistence({
+  const journey = createJourneyProvider({ authorize: () => owner, validateFinish, persistence: createSettingsJourneyPersistence({
     databaseForScope: () => getWorkflowDb(), readLegacy: () => ({ setup_completed: true, setup_skipped_profile: false,
       profile_completed: true, tutorial_completed: false, tutorial_dismissed: false, tutorial_progress_step: null }),
   }) });
@@ -25,7 +25,9 @@ async function journeyFor(owner: { actorId: string; projectId: string }) {
   return journey;
 }
 test.skipIf(!present(journeyPath))('actual B01 acknowledgement, explicit finish, lost reply and later reopen', async () => {
-  const f = fixture(), journey = await journeyFor(f.owner);
+  const f = fixture(), journey = await journeyFor(f.owner, createDraftCompletionGuard({
+    reader: f.services.reader, readJob: () => ({ availability: 'ready', status: f.job }),
+  }));
   for (const command of [{ type: 'reserve_build', buildRequestId: f.job.requestId },
     { type: 'build_started', buildRequestId: f.job.requestId, jobId: f.job.jobId }]) {
     const s = (await journey.read()).snapshot;
@@ -61,7 +63,7 @@ for (const failure of ['lost_reply', 'job_write_failure', 'cancel_after_save', '
         }) }; } } }),
       }) });
       let draftStore = createSqliteDraftStore(getWorkflowDb());
-      const journey = await journeyFor(owner);
+      let journey = await journeyFor(owner);
       const value = { schemaVersion: 1, journeyId: (await journey.read()).snapshot.journeyId, intentId: '', submission: {
         action: 'create', request: { schemaVersion: 1, intentVersion: 1, requestId: 'build-request', prompt: 'Draft a meeting follow-up for review.', contextRefs: [] }, answers: {},
       } };
@@ -85,8 +87,13 @@ for (const failure of ['lost_reply', 'job_write_failure', 'cancel_after_save', '
       // Do not rerun the worker before B10: exercise the saved-but-unacknowledged gap.
       closeWorkflowDb(); initWorkflowDb(path); configureWorkflowReadiness({ pieces: catalog });
       buildServices.store = createSqliteBuildStore(getWorkflowDb(), { now: () => now }); draftStore = createSqliteDraftStore(getWorkflowDb());
+      const reader = createSqliteResultReader(getWorkflowDb());
+      journey = await journeyFor(owner, createDraftCompletionGuard({ reader,
+        readJob: (scope, jobId) => buildServices.store.result(scope, jobId),
+      }));
+      buildServices.journey = journey;
       build = createBuildJobsProvider({ enabled: true, authorize: () => owner, servicesFor: () => buildServices });
-      const services: Services = { id: 'result', access: async () => true, reader: createSqliteResultReader(getWorkflowDb()), journey,
+      const services: Services = { id: 'result', access: async () => true, reader, journey,
         build: { read: i => build.read(null, i) } };
       const p = createDraftResultProvider({ enabled: true, authorize: () => owner, servicesFor: () => services });
       const r = await p.read(null, ref);
@@ -102,6 +109,12 @@ for (const failure of ['lost_reply', 'job_write_failure', 'cancel_after_save', '
         expect(saved(await p.read(null, result.recovery.input)).graph).toEqual(result.graph);
         expect(getWorkflowDb().query('SELECT status, published_version_id FROM flow').all()).toEqual([{ status: 'DISABLED', published_version_id: null }]);
         expect(getWorkflowDb().query('SELECT * FROM flow_version').all()).toHaveLength(1); expect(calls).toBe(1);
+        expect(result.continuation).not.toBeNull();
+        getWorkflowDb().run("UPDATE flow SET status = 'ENABLED' WHERE id = ?", [result.flowId]);
+        expect(await journey.transition(result.continuation!.input)).toMatchObject({ availability: 'unavailable', reason: 'result_unavailable' });
+        getWorkflowDb().run("UPDATE flow SET status = 'DISABLED' WHERE id = ?", [result.flowId]);
+        expect(await journey.transition(result.continuation!.input)).toMatchObject({ availability: 'ready', snapshot: { completion: 'completed' } });
+        expect((await journey.transition(result.continuation!.input)).replayed).toBe(true);
       }
       expect(getWorkflowDb().query('SELECT * FROM flow_run').all()).toHaveLength(0);
     } finally { closeWorkflowDb(); rmSync(dir, { recursive: true, force: true }); }

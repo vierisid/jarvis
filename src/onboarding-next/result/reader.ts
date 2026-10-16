@@ -6,7 +6,9 @@ import { versionReadiness } from '../../workflows/db/repos/flow-readiness';
 import { hash, id, nodeId, object, scopeId } from './input';
 import { ResultError, type Issue, type Reader } from './types';
 
-const bounded = <T extends Issue>(i: T): T => ({ ...i, node: i.node.slice(0, 120), path: i.path.slice(0, 512), message: i.message.slice(0, 512) });
+// Node and property identities must remain exact; truncation can alias another
+// inspector target. Only human-readable messages may be shortened.
+const bounded = <T extends Issue>(i: T): T => ({ ...i, message: i.message.slice(0, 512) });
 function nodes(graph: unknown): string[] {
   const names = new Set<string>(), stack = [graph];
   while (stack.length) {
@@ -24,7 +26,7 @@ function nodes(graph: unknown): string[] {
 /** No migrations or writes. The host must provision B09's durable receipt store. */
 export function createSqliteResultReader(db: Database): Reader {
   const current = () => { if (getWorkflowDb() !== db) throw new ResultError('binding_missing'); };
-  return { current, read(owner, job) {
+  return { current, inTransaction(resource) { current(); return resource === db && db.inTransaction; }, read(owner, job) {
     current();
     try {
       return db.transaction(() => {

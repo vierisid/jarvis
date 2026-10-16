@@ -1,6 +1,7 @@
 import { hash, id, identity, object, parseInput, parseJob, scopeId } from './input';
 import { ResultError, type Dependencies, type Job, type Journey, type ReadInput, type Result, type SavedDraft, type Scope, type Transition } from './types';
 export { createSqliteResultReader } from './reader';
+export { createDraftCompletionGuard } from './completion';
 export type * from './types';
 
 /** Inert/default-off factory. It never submits, retries, cancels or runs work. */
@@ -107,7 +108,7 @@ export function createDraftResultProvider<C>(deps: Dependencies<C>) {
         draft = read(); // Never return an old graph after an asynchronous authorization/acknowledgement.
         if (draft.state !== 'saved') throw new ResultError('incomplete_result');
         const a = draft.artifact;
-        const continuation: Transition | null = snapshot?.completion === 'active' && snapshot.stepId === 'result' ? {
+        const continuation: Transition | null = e.journey?.canFinishDraft === true && snapshot?.completion === 'active' && snapshot.stepId === 'result' ? {
           operation: 'journey.transition', input: { journeyId: job.journeyId, expectedRevision: snapshot.revision,
             requestId: `result-finish:${hash([job.jobId, snapshot.revision])}`, command: { type: 'finish' } },
         } : null;

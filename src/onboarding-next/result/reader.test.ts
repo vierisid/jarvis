@@ -25,6 +25,22 @@ test('fresh readiness changes when a required input is removed, without a succes
   if (r.state !== 'saved') throw Error();
   expect(r.missingBindings.length).toBeGreaterThan(0);
 });
+test('readiness preserves long node identities even when their prefix names another node', () => {
+  const f = fixture(), prefix = `step_${'a'.repeat(115)}`, blocked = `${prefix}b`, runtime = `${prefix}c`;
+  const graph = structuredClone(f.version.trigger);
+  graph.nextAction!.name = prefix;
+  graph.nextAction!.nextAction = { name: blocked, type: 'PIECE', settings: {
+    pieceName: 'jarvis-ask', actionName: 'ask', input: {},
+  }, nextAction: { name: runtime, type: 'PIECE', settings: {
+    pieceName: 'jarvis-ask', actionName: 'ask', input: { prompt: '{{trigger.body}}' },
+  } } };
+  f.db.run('UPDATE flow_version SET trigger = ? WHERE id = ?', [JSON.stringify(graph), f.version.id]);
+  const r = f.services.reader.read(f.owner, f.job); if (r.state !== 'saved') throw Error();
+  expect(r.missingBindings).toContainEqual(expect.objectContaining({ node: blocked, code: 'INPUT_TYPE' }));
+  expect(r.readiness.runtimeChecks.some(i => i.node === runtime)).toBe(true);
+  expect(r.readiness.issues.some(i => i.node === prefix)).toBe(false);
+  expect(r.nodeIds).toContain(blocked);
+});
 test('reads no captured output, model response, qualification or version-private fields into the result', () => {
   const f = fixture();
   f.db.run('UPDATE flow_version SET sample_data = ?, sample_input = ?, notes = ? WHERE id = ?',

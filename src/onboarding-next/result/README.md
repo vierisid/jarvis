@@ -42,7 +42,10 @@ through this provider.
   progress acknowledgement does not hide the draft. `journey.sync` and
   `continuation` make that distinction explicit. `continuation`, when present,
   is an explicit `journey.transition`/`finish` command with the current revision
-  and stable receipt ID. U09 sends it only on Continue/Explore dashboard. Opening
+  and stable receipt ID. B01 revalidates the exact draft inside the completion
+  transaction, including after asynchronous authorization; a stale descriptor
+  cannot finish a deleted, replaced, inaccessible or activated result. U09 sends
+  it only on Continue/Explore dashboard. Opening
   or reopening a result never finishes onboarding. B01 handles conflicts and
   replay; refresh before retrying a stale transition. Earlier Explore first
   remains B01/B07's activation action and cannot bypass a reserved build.
@@ -58,12 +61,24 @@ activation belongs to the ordinary workflow detail route.
 
 Inject `authorize`, `servicesFor`, `access`, the real B08 `read` adapter and
 `createSqliteResultReader` for the **same current workflow database**. Bind B01's
-current `read`/internal `acknowledge` to support continuation. Its acknowledgement
+current `read`/internal `acknowledge` to support progress synchronization. Its acknowledgement
 must recheck authorization and commit revision/receipt atomically. Replace the
 service generation and ports on account/vault changes. Never expose internal
 acknowledgement as a generic client mutation. Observational waits are bounded;
 mutations are not raced against a timer. Reader construction performs no I/O and
 creates no tables. B09 owns receipt provisioning and B08 owns jobs and fencing.
+
+For continuation, bind `createDraftCompletionGuard({ reader, readJob })` as B01's
+`validateFinish`. `readJob(scope, jobId)` must synchronously call the authoritative
+B08 **store** `result(scope, jobId)`, not its async provider/HTTP operation. Use
+`createSettingsJourneyPersistence` on that same database handle: it supplies the
+transaction resource, and the guard refuses a different handle or a read outside
+the transaction. The guard rechecks current job scope/request/digest and the
+exact saved receipt, graph and disabled draft before the completion write.
+B01 advertises `canFinishDraft`; B10 offers no continuation without that binding,
+and direct new finish commands fail closed too. Retry of an already committed
+finish returns its durable receipt without reapplying or undoing completion.
+Recreate these bindings when switching vaults. None are registered here.
 
 B11 production bindings remain explicit and absent here; source discovery does
 not enable the journey. U09, D18/19/20 canvas bindings and the exact U11/B13/D/F/Q
@@ -71,7 +86,8 @@ release evidence are required for a live reveal. Tests using deterministic model
 responses, synthetic assembly closure and isolated SQLite are not live-provider,
 native, browser-rendering or release evidence.
 
-The person-facing projection excludes captured outputs, private version columns,
+Readiness keeps exact node and property identities, including long IDs that share
+a prefix; only display messages are truncated. The person-facing projection excludes captured outputs, private version columns,
 composition prompt/response, receipts and credentials. Persisted graph inputs are
 user/model-authored data, not instructions to a future model consumer. The reader
 is documented in the workflow data-reader inventory with projection regressions.

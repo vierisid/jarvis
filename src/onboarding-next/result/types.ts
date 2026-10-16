@@ -22,6 +22,8 @@ export type ReadInput = { schemaVersion: 1; jobId?: string; requestId?: string; 
   expected?: { compositionRecordId: string; flowId: string; versionId: string; contentRevision?: string } };
 export interface Reader {
   current(): void;
+  /** True only inside the journey's transaction on this exact database handle. */
+  inTransaction(resource: unknown): boolean;
   /** One consistent, read-only snapshot of the durable receipt AND exact current artifact. */
   read(scope: Scope, job: Job): SavedDraft | { state: 'absent' | 'pending' };
 }
@@ -31,6 +33,8 @@ export interface Journey {
   draft: { flowId: string; versionId: string } | null;
 }
 export interface JourneyPort {
+  /** The journey rejects new finish commands unless its transaction guard is bound. */
+  canFinishDraft?: boolean;
   read(): Promise<{ availability: string; snapshot?: Journey }>;
   acknowledge(input: { journeyId: string; expectedRevision: number; requestId: string;
     command: { type: 'draft_saved'; jobId: string; flowId: string; versionId: string } }): Promise<unknown>;
