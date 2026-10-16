@@ -157,6 +157,15 @@ test('removal stops queued and waiting runs like turning off (Q-06); Undo does n
   await worker.drain(); expect(effects).toBe(0); expect(getFlowRun(run.id)?.status).toBe('STOPPED');
   expect(() => createFlowRun({ flowId: flow.id, flowVersionId: version.id })).not.toThrow();
 });
+test('a removed flow refuses new runs, and a refused legacy delete stops nothing', async () => {
+  const { flow, version } = fixture(), r = remove(flow.id);
+  expect(() => createFlowRun({ flowId: flow.id, flowVersionId: version.id })).toThrow('workflow_removed');
+  service.change(r.restore);
+  const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id }); updateRun(run.id, { status: 'RUNNING' });
+  const request = Object.assign(new Request('http://localhost/api/workflows/' + flow.id, { method: 'DELETE' }), { params: { id: flow.id } });
+  expect((await createWorkflowRoutes()['/api/workflows/:id']!.DELETE!(request)).status).toBe(409);
+  expect(getFlowRun(run.id)?.status).toBe('RUNNING'); expect(getFlow(flow.id)).not.toBeNull();
+});
 test('reconciliation survives restart and flag rollback without changing a recovered command', async () => {
   service.stop(); let attempts = 0;
   service.start({ refresh: async () => { attempts++; throw Error('offline'); } });
