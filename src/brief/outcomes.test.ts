@@ -193,6 +193,25 @@ test('a switch between typed values and counted observations is a changed defini
   const view = await summary();
   expect(view.goalDeltas[0]).toMatchObject({ change: null, reason: 'definition_changed' }); expect(view.coverage.complete).toBe(false);
 });
+test('Q-17 counted entries: a typed total switched to counting is a changed definition, counted deltas use the latest entry', async () => {
+  const app = getGoalApplication(), start = query().start;
+  const entry = (goalId: string, subject: string, n: number) => app.recordObservation(goalId, { requestId: `e${n}`,
+    entry: { kind: 'counted', subject, observedAt: now, source: { id: `contract:${subject}`, revision: 'v1' }, corrects: null } });
+  const switched = app.createGoal('Switched', 'objective');
+  measurement(switched.id, 6, start - 1, 0);
+  app.defineCountedMeasurement(switched.id, { requestId: 'define', revision: 1, definition: { unit: 'partners', baseline: 0, target: 10 } });
+  ['Acme', 'Globex', 'Initech'].forEach((subject, i) => entry(switched.id, subject, i));
+  const view = await summary();
+  expect(view.goalDeltas.find(g => g.goalId === switched.id)).toMatchObject({ change: null, reason: 'definition_changed' });
+  expect(view.coverage.complete).toBe(false);
+  // A counted goal with entries before and inside the window: all entries share one
+  // clock millisecond here, so the latest must follow insertion, not request ids.
+  const counted = app.createGoal('Counted', 'objective');
+  app.defineCountedMeasurement(counted.id, { requestId: 'define', revision: 0, definition: { unit: 'partners', baseline: 0, target: 10 } });
+  const saved = now; now = start - 1; entry(counted.id, 'Acme', 10); now = saved;
+  ['Globex', 'Initech', 'Umbrella', 'Hooli', 'Stark'].forEach((subject, i) => entry(counted.id, subject, 11 + i));
+  expect((await summary()).goalDeltas.find(g => g.goalId === counted.id)?.change).toMatchObject({ value: 5, baseline: 1, unit: 'partners' });
+});
 test('missing opening measurements and changed definitions omit the delta, with incomplete coverage', async () => {
   const g = getGoalApplication().createGoal('Goal', 'objective'); measurement(g.id, 6, query().start + 1, 0);
   expect((await summary()).goalDeltas[0]).toMatchObject({ change: null, reason: 'missing_opening' });

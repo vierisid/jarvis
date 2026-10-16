@@ -141,7 +141,7 @@ export class Outcomes {
     // completed work or the measurement definition's unobserved baseline.
     const rows = this.db.query<{ goal_id: string; request_id: string; receipt: string; measured_at: number; title: string }, [number]>(
       `SELECT r.goal_id,r.request_id,r.receipt,r.measured_at,g.title FROM goal_measurement_receipt r JOIN goals g ON g.id=r.goal_id
-       WHERE r.measured_at IS NOT NULL AND r.measured_at < ? ORDER BY r.goal_id,r.measured_at,r.request_id LIMIT 50001`).all(Math.min(w.end, now + 1));
+       WHERE r.measured_at IS NOT NULL AND r.measured_at < ? ORDER BY r.goal_id,r.measured_at,r.rowid LIMIT 50001`).all(Math.min(w.end, now + 1));
     if (rows.length > 50000) throw Error('Goal evidence exceeds read bound');
     type Point = { value: number; unit: string; baseline: number; target: number; measuredAt: number;
       evidence: { id: string; revision: string }; qualification: BriefMeasurement['qualification']; basis?: string };
