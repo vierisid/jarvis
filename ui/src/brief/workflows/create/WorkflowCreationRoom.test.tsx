@@ -31,3 +31,14 @@ test("loading history cannot erase a retained stream position before rows return
  const scroll=host.querySelector<HTMLElement>('.brief-workspace-content')!;scroll.scrollTop=0;scroll.dispatchEvent(new Event('scroll'));expect(binding.controller.getSnapshot().scrollTop).toBe(528);
  binding.recent=recent;await render();await React.act(async()=>{await new Promise(r=>setTimeout(r,40));});expect(scroll.scrollTop).toBe(528);expect(binding.controller.getSnapshot().selectedRunId).toBe("r");
 });
+
+test("ingredient scope mismatch cannot expose another account's catalog",async()=>{
+ binding.capabilities={...capabilities,capabilities:{...capabilities.capabilities,compositionIngredients:{supported:true,ready:true,enabled:true,state:"ready",reason:null}}};
+ binding.ingredients={source:"fixture",scopeId:"foreign",state:"ready",choices:[{key:"private",displayName:"Other account private service",groupId:"private-service",group:"Private",tab:"connection",status:"missing-account"}]};
+ await render();await click('[aria-label="Add connection or library node"]');expect(document.querySelector('[role="dialog"]')).toBeNull();expect(document.body.textContent).not.toContain('Other account private service');
+});
+test("selected ingredients without F08 cannot submit; explicit removal restores plain creation",async()=>{
+ binding.controller.setIngredients([{displayName:"Gmail",selection:{kind:"connection",id:"gmail",pieceName:"gmail",pieceVersion:"1.0.0",required:true}}]);binding.controller.setDraft("Build");
+ await render();await click('[aria-label="Send"]');expect(requests).toHaveLength(0);expect(host.textContent).toContain('Selected ingredients are unavailable');
+ await click('[aria-label="Remove Gmail"]');await click('[aria-label="Send"]');expect(requests).toHaveLength(1);expect(requests[0]!.ingredients).toBeUndefined();
+});
