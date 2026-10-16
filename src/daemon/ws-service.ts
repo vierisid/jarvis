@@ -1,4 +1,3 @@
-import { withMemoryRecall } from '../vault/memory-use-context';
 /**
  * WebSocket Service — The Mouth
  *
@@ -7,6 +6,7 @@ import { withMemoryRecall } from '../vault/memory-use-context';
  */
 
 import type { ServerWebSocket } from 'bun';
+import { withMemoryRecall } from '../vault/memory-use-context.ts';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { checkpointExecution } from '../actions/execution-scope.ts';
