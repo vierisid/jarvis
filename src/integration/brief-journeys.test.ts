@@ -1,5 +1,5 @@
-/** Source conformance probes. These exercise production owners with synthetic
- * data/effects; they are NOT assembled Brief/hosted release journey receipts. */
+/** Cross-module Brief journeys on synthetic data: fresh temp SQLite, stub LLM
+ * providers and an in-memory effect counter. No network, no paid model calls. */
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -30,7 +30,7 @@ import { CredentialResolver } from '../workflows/credentials/adapter';
 import { listWorkflowEffects } from '../workflows/db/repos/workflow-effect';
 
 let dir: string, db: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'q22-source-')); db = join(dir, 'source.db'); initWorkflowDb(db); });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'brief-journeys-')); db = join(dir, 'source.db'); initWorkflowDb(db); });
 afterEach(() => { closeWorkflowDb(); rmSync(dir, { recursive: true, force: true }); });
 const restart = () => { closeWorkflowDb(); initWorkflowDb(db); };
 const role = { id: 'personal-assistant', name: 'Fixture', description: 'Fixture', responsibilities: [], tools: [], authority_level: 3 } as RoleDefinition;
@@ -47,7 +47,7 @@ for (const condition of ['normal', 'restart', 'expiry'] as const) test(`source m
   const system = buildSystemPrompt(role, { knowledgeContext });
   let calls = 0;
   const llm = new LLMManager();
-  llm.registerProvider({ name: 'q22-stub', async chat(messages) {
+  llm.registerProvider({ name: 'journey-stub', async chat(messages) {
     calls++;
     const prompt = messages.filter(m => m.role === 'system').map(m => m.content).join('\n');
     expect(prompt).toContain('preferred_editor: CurrentEditor');
@@ -56,7 +56,7 @@ for (const condition of ['normal', 'restart', 'expiry'] as const) test(`source m
     expect(prompt).toContain('"basis":"confirmed"');
     return { content: 'CurrentEditor', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 }, model: 'stub', finish_reason: 'stop' };
   }, async *stream() { throw new Error('unused'); }, async listModels() { return ['stub']; } });
-  llm.setTierMap({ medium: { provider: 'q22-stub' } });
+  llm.setTierMap({ medium: { provider: 'journey-stub' } });
   const agent = new AgentOrchestrator(); agent.setLLMManager(llm); agent.createPrimary(role);
   expect(await agent.processMessage(system, 'What editor does Fixture Person use?')).toBe('CurrentEditor');
   expect(calls).toBe(1);
@@ -75,7 +75,7 @@ for (const interrupted of [false, true]) test(`source goal → next work → che
   const run = startWorkItemRun(work!.id, flow.id); claimNextJob();
   expect(() => checkWorkResult(work!.id, check)).toThrow();
   // The runner result is injected here; this probe certifies the durable result
-  // check boundary, not execution of a workflow or an F15 measured outcome.
+  // check boundary, not execution of a workflow or a measured outcome.
   updateRun(run.id, { status: interrupted ? 'RUNNING' : 'SUCCEEDED', steps: { report: { output: 'fixture' } } });
   restart();
   expect(getProgressHistory(goal.id)).toHaveLength(0);
