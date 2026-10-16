@@ -9,6 +9,7 @@ import {
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import type { Root } from "react-dom/client";
 import type { BriefShellPort } from "../contracts";
+import { FOLLOW_UP } from "../today/preview/fixtures";
 import { makeGoalsFixture, GOALS_SCOPE, type GoalExample } from "./fixtures";
 import type { GoalsBinding } from "./GoalsRoom";
 let React: typeof import("react"),
@@ -145,8 +146,8 @@ test("next action opens exactly the shared Today work and approval", async () =>
   expect(shell.route).toEqual({
     room: "needs-you",
     selection: {
-      workItemId: "fixture-work-follow-up",
-      approvalId: "fixture-approval-alex",
+      workItemId: FOLLOW_UP.decision.workItemId!,
+      approvalId: FOLLOW_UP.decision.approval!.approvalId,
     },
   });
 });

@@ -117,7 +117,7 @@ export function goalPaths(): GoalPath[] {
         decisionId: FOLLOW_UP.decision.decisionId,
         workItemId: FOLLOW_UP.decision.workItemId!,
         approvalId: FOLLOW_UP.decision.approval!.approvalId,
-        title: "Confirm Alex’s pilot date.",
+        title: "Confirm Jordan’s pilot date.",
         context: "Meeting follow-ups has the draft ready for you.",
         label: FOLLOW_UP.reviewLabel,
       },
