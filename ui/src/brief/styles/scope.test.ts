@@ -26,6 +26,7 @@ const SHEETS = [
   "../opportunities/opportunities.css",
   "../decisions/decisions.css",
   "../goals/goals.css",
+  "../memory/stream/stream.css",
 ];
 
 function selectors(css: string): string[] {
