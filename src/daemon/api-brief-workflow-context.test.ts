@@ -14,6 +14,7 @@ import { createWorkflowRoutes, WAITPOINT_RESUME_MAX_BODY_BYTES } from '../workfl
 import { WebSocketServer } from '../comms/websocket';
 import { PanelSessionStore } from '../sidecar/panel-sessions';
 import type { SidecarManager } from '../sidecar/manager';
+import { EmergencyController, setActiveEmergencyController } from '../authority/emergency';
 
 let service: WorkflowContext, flowId: string, versionId: string, saved: string | undefined;
 beforeEach(() => {
@@ -94,6 +95,24 @@ test('streamed body beyond the common cap cannot start a run', async () => {
     start(controller) { controller.enqueue(new Uint8Array(WAITPOINT_RESUME_MAX_BODY_BYTES + 1)); controller.close(); },
   }) }), { params: { id: flowId } });
   const response = await table()[start].POST(req); expect(response.status).toBe(413);
+  expect(getWorkflowDb().query('SELECT id FROM flow_run').all()).toHaveLength(0);
+});
+test('Pause and Kill refuse a Brief manual start like any other start (Q-08)', async () => {
+  const controller = new EmergencyController(); setActiveEmergencyController(controller);
+  try {
+    for (const state of ['pause', 'kill'] as const) {
+      controller[state]();
+      expect((await call(start, command(`held-${state}`))).status).toBe(409);
+      controller.reset();
+    }
+  } finally { setActiveEmergencyController(null); }
+  expect(getWorkflowDb().query('SELECT id FROM flow_run').all()).toHaveLength(0);
+  expect(getWorkflowDb().query('SELECT request_id FROM brief_manual_run_requests').all()).toHaveLength(0);
+});
+test('a flow outside the caller project reads as not found to a Brief manual start (#729)', async () => {
+  const routes = { ...table(), ...createWorkflowRoutes({ briefWorkflowContext: service,
+    briefCapabilities: new BriefCapabilities(registerWorkflowContext(service), ['workflowContext']), callerProjectId: () => 'other-project' }) };
+  expect((await call(start, command('foreign-caller'), '', routes)).status).toBe(404);
   expect(getWorkflowDb().query('SELECT id FROM flow_run').all()).toHaveLength(0);
 });
 test('rechecks project ownership after the body await', async () => {
