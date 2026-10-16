@@ -544,3 +544,39 @@ run response). It sends no request.
 `?brief=preview&specimen=workflow-manage#/_brief_preview` opens the list over in-memory fixture
 workflows (blocked enable, lost response, expired Undo, long list, stale and unavailable examples).
 Nothing is enabled, deleted or run on an account.
+
+## Opportunities room
+
+- `opportunities/` is the D-22 Opportunities room: a proposal selector beside one finished brief
+  (observation, prepared output, goal contribution, workflow steps) for the selected proposal ID and
+  revision. Selector and brief scroll independently; with Pebble open the selector becomes a bounded
+  horizontal strip.
+- `OpportunitiesPort.read()` returns the complete authorized F-09 collection (aggregate every page; never
+  call the first page complete). Terminal proposals are filtered out. Ready, Q-13 qualification and Q-14
+  suppression are owner-side: the room renders the provider's `state`, `readiness` and `canApprove` and
+  infers none. "Approve & enable" stays disabled unless `approvalBlock` passes (ready snapshot and
+  readiness, `canApprove`, goal, composition, evidence, preview basis, a LOCKED + DISABLED reviewed
+  version and every binding `ready`).
+- Output, steps, schedule and target come from the same authorized prepared revision; F-09 exposes no
+  raw sample output, so a missing preview is `output: null` and renders as unavailable. The basis label
+  follows `previewBasis` (verified output, sandbox sample, illustrative); the UI never upgrades it.
+- `act` maps to F-10 `POST /api/brief/opportunity-actions/:id/approve|dismiss` with exactly
+  `{ revision, idempotencyKey }`; `recover` maps to the F-10 `GET` for the original receipt and never
+  resends. `ActionReceipt` is F-10's `OpportunityActionReceipt`. There is no other enable path: the
+  room never enables or runs a flow itself. A receipt must match proposal, revision, decision and the
+  reviewed flow/version; only registered + enabled (or dismissed) advances. Pending or blocked
+  registration stays "Approval saved". A lost response stays locked behind "Check result"; only an
+  adapter-certified `ActionRefusal` releases the attempt, and only after a fresh read.
+- `OpportunitiesController` belongs to one authenticated scope, survives room unmounts and is retired
+  on logout or scope change. Pending decisions are in memory only: before live registration the host
+  must reconcile durable F-10 receipts on reload and share one owner with the Today opportunity stack.
+  Motion and the approve label are the D-11 `OPPORTUNITY_TIMING` / `OPPORTUNITY_APPROVE_LABEL`.
+- Opt-in `opportunitiesRegistration(useBinding)`, not in the production registry. `opportunitiesAvailable`
+  requires a non-empty scope, a `source` matching the shell mode, a controller bound to the same scope
+  and, live, the `preparedOpportunities` capability; writes additionally need `opportunityActivation`.
+  No live adapter is wired yet.
+- `opportunities/figma-reference.json` records the UI-26 source values and bounded deviations.
+
+`?brief=preview&specimen=opportunities#/_brief_preview` opens the room over fixture proposals (pending
+or blocked registration, lost response, refusal, long content, missing preview, many proposals). Its
+actions only change local fixture state.
