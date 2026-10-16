@@ -1,3 +1,4 @@
+import { COMPOSITION_LIMITS, compositionQueueStatus } from './composition-budget';
 import { getDb, generateId } from '../vault/schema.ts';
 import { suggestionContext } from '../vault/suggestion-schema.ts';
 import { getGoal } from '../vault/goals.ts';
@@ -132,6 +133,10 @@ export function acceptSuggestion(id: string, input: unknown) {
       goalLink: goal ? { goalId: goal.id, title: goal.title, reason: supplied.goalReason!, basis: 'user_confirmed' } : null,
       observations: observations(row),
     };
+    const queue = compositionQueueStatus();
+    if (queue.queued + queue.running >= COMPOSITION_LIMITS.queued) {
+      throw new SuggestionFeedbackError('Preparation queue is full; retry later', 429);
+    }
     const feedbackId = feedback(row.id, requestId, 'accept', reason, payload);
     const now = Date.now();
     getDb().run(`INSERT INTO suggestion_composition_jobs
@@ -158,6 +163,9 @@ export function retrySuggestionComposition(id: string, input: unknown) {
     }
     if (row.dismissed) throw new SuggestionFeedbackError('Suggestion was dismissed', 409);
     if (job.state !== 'failed') throw new SuggestionFeedbackError('Only failed composition requests can be retried', 409);
+    if (job.attempts >= COMPOSITION_LIMITS.attemptsPerJob) throw new SuggestionFeedbackError('Preparation attempt limit reached; inspect the saved request', 409);
+    const queue = compositionQueueStatus();
+    if (queue.queued + queue.running >= COMPOSITION_LIMITS.queued) throw new SuggestionFeedbackError('Preparation queue is full; retry later', 429);
     feedback(row.id, requestId, 'retry', reason, '{}');
     getDb().run(`UPDATE suggestion_composition_jobs SET state = 'queued', error = NULL,
       lease_token = NULL, lease_until = 0, updated_at = ? WHERE id = ?`, [Date.now(), job.id]);
