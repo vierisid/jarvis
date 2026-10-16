@@ -1,5 +1,5 @@
 import { Recommendations } from '../brief/recommendations';
-import { loadRecommendationPlanner } from '../brief/recommendation-planner';
+import { nextActionPlanner } from '../brief/recommendation-planner';
 import { registerRecommendations } from '../brief/registrations/recommendations';
 import { DecisionQueue } from '../brief/decisions';
 import { registerDecisions } from '../brief/registrations/decisions';
@@ -4847,7 +4847,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 9b. Set up API routes + dashboard static files
     const briefDecisions = new DecisionQueue(getDb(), { approvalManager, deferredExecutor, wsService, auditTrail });
     const briefRecommendations = new Recommendations(getDb(), briefDecisions,
-      process.env.JARVIS_BRIEF_RECOMMENDATIONS === '1' ? await loadRecommendationPlanner() : null);
+      process.env.JARVIS_BRIEF_RECOMMENDATIONS === '1' ? nextActionPlanner() : null);
     const briefConversations = new BriefConversationProvider();
     const briefChatTransport = new BriefChatTransport({
       db: getDb(),

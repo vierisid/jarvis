@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initWorkflowDb } from '../workflows/db';
@@ -12,22 +12,19 @@ import { AuditTrail } from '../authority/audit';
 import { DeferredExecutor } from '../authority/deferred-executor';
 import { DecisionQueue } from './decisions';
 import { Recommendations } from './recommendations';
-import { loadRecommendationPlanner } from './recommendation-planner';
+import { nextActionPlanner } from './recommendation-planner';
+import { DISMISS_COOLDOWN_MS } from '../awareness/opportunity-feedback-policy';
 
-const present = existsSync(new URL('../goals/next-action.ts', import.meta.url));
 let directory: string;
 beforeEach(() => { directory = mkdtempSync(join(tmpdir(), 'jarvis-f13-q18-')); initWorkflowDb(join(directory, 'fixture.db')); });
 afterEach(() => { closeDb(); rmSync(directory, { recursive: true, force: true }); });
-async function fixture() {
-  const planner = await loadRecommendationPlanner(); expect(planner).not.toBeNull();
+async function fixture(clock = Date.now) {
+  const planner = nextActionPlanner();
   const manager = new ApprovalManager();
   const queue = new DecisionQueue(getDb(), { approvalManager: manager, deferredExecutor: new DeferredExecutor(manager, new AuditTrail()) });
-  return { planner: planner!, queue, provider: new Recommendations(getDb(), queue, planner) };
+  return { planner, queue, provider: new Recommendations(getDb(), queue, planner, clock) };
 }
-test.skipIf(present)('without Q-18, the loader supplies no substitute planner', async () => {
-  expect(await loadRecommendationPlanner()).toBeNull();
-});
-test.skipIf(!present)('actual Q-18 recommends a concrete goal, accepts once, then links the existing work', async () => {
+test('actual Q-18 recommends a concrete goal, accepts once, then links the existing work', async () => {
   const { provider, queue } = await fixture();
   const goal = getGoalApplication().createGoal('Send the reviewed partner follow-up', 'task', { status: 'active' });
   const front = createWorkItem({ title: 'Keep current work at the front' });
@@ -44,7 +41,7 @@ test.skipIf(!present)('actual Q-18 recommends a concrete goal, accepts once, the
   expect(next.plan).toMatchObject({ outcome: 'recommend', action: { kind: 'continue_work', workItemId: receipt.destination.workItemId } });
   expect(provider.accept(next.recommendationId, 'q18-link', next.revision)).toMatchObject({ created: false, destination: receipt.destination });
 });
-test.skipIf(!present)('actual Q-18 questions, abstention and changed goal state remain non-actions', async () => {
+test('actual Q-18 questions, abstention and changed goal state remain non-actions', async () => {
   const { provider } = await fixture();
   expect(provider.generate('empty').state).toBe('none');
   const objective = getGoalApplication().createGoal('Grow partnerships', 'objective', { status: 'active' });
@@ -60,7 +57,7 @@ test.skipIf(!present)('actual Q-18 questions, abstention and changed goal state 
 });
 
 for (const timing of ['before generation', 'after generation'] as const) {
-  test.skipIf(!present)(`actual Q-18 links surviving work after goal deletion ${timing}`, async () => {
+  test(`actual Q-18 links surviving work after goal deletion ${timing}`, async () => {
     const { provider, queue } = await fixture();
     const goal = getGoalApplication().createGoal('Review the agreed proposal', 'task', { status: 'active' });
     const front = createWorkItem({ title: 'Keep the current front' });
@@ -95,3 +92,26 @@ for (const timing of ['before generation', 'after generation'] as const) {
     expect((await reopened.queue.read()).data.items).toEqual([retainedFront, queuedBefore]);
   });
 }
+
+test('actual Q-18 does not bring back a dismissed next step until Q-14 dismissal cooldown ends', async () => {
+  let now = Date.now();
+  const { provider } = await fixture(() => now);
+  // A deadline ranks the first goal ahead, so neither answer is a tie question.
+  const first = getGoalApplication().createGoal('Send the partner follow-up', 'task', { status: 'active', deadline: now + 30 * 86_400_000 });
+  const second = getGoalApplication().createGoal('Book the supplier call', 'task', { status: 'active' });
+  const rec = provider.generate('before-dismissal');
+  expect(rec.plan).toMatchObject({ outcome: 'recommend', action: { kind: 'start_step', goal: { goalId: first.id } } });
+  provider.dismiss(rec.recommendationId, rec.revision);
+  const next = provider.generate('after-dismissal');
+  expect(next.plan).toMatchObject({ outcome: 'recommend', action: { kind: 'start_step', goal: { goalId: second.id } } });
+  // The other goal's step is dismissed too: nothing is left, and neither comes back on a fresh request or a restart.
+  now += 1;
+  provider.dismiss(next.recommendationId, next.revision);
+  closeDb(); initWorkflowDb(join(directory, 'fixture.db'));
+  const reopened = (await fixture(() => now)).provider;
+  expect(reopened.generate('both-dismissed').plan.outcome).toBe('none');
+  expect(reopened.read('before-dismissal')).toMatchObject({ state: 'dismissed' });
+  now = reopened.read('before-dismissal')!.plan.generatedAt + DISMISS_COOLDOWN_MS;
+  expect(reopened.generate('cooldown-over').plan).toMatchObject({ outcome: 'recommend', action: { goal: { goalId: first.id } } });
+  expect((getDb().query('SELECT count(*) AS n FROM commitment_work').get() as { n: number }).n).toBe(0);
+});

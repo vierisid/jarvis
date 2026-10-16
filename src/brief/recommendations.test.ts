@@ -18,7 +18,8 @@ import { saveWorkflowEffect, type WorkflowEffect } from '../workflows/db/repos/w
 import { DecisionQueue } from './decisions';
 import { Recommendations } from './recommendations';
 import { checkedRecommendationPlan } from './recommendation-planner';
-import type { RecommendationPlan, RecommendationPlanner } from './recommendation-contracts';
+import { DISMISS_COOLDOWN_MS } from '../awareness/opportunity-feedback-policy';
+import type { RecommendationPlan, RecommendationPlanner, RecommendationSuppression } from './recommendation-contracts';
 
 let directory: string, file: string, queue: DecisionQueue, manager: ApprovalManager, provider: Recommendations;
 let now: number, goalId: string, changed: number, planner: RecommendationPlanner;
@@ -71,6 +72,18 @@ test('appending accepted work invalidates open queue cursors like any other plac
   const rec = provider.generate('cursor');
   provider.accept(rec.recommendationId, 'cursor', rec.revision);
   await expect(queue.read({ limit: 1, cursor: page.data.nextCursor! })).rejects.toThrow('Queue changed');
+});
+
+test('the planner is told what was dismissed, from the first dismissal until the cooldown ends', () => {
+  const seen: RecommendationSuppression[][] = [];
+  planner = { readiness: () => 'ready', plan: (at, suppressed) => { seen.push(suppressed); return plan(at); } }; wire();
+  const rec = provider.generate('dismiss-me'), dismissedAt = now;
+  const dismissed = provider.dismiss(rec.recommendationId, rec.revision);
+  now += 60_000; provider.dismiss(rec.recommendationId, dismissed.revision);
+  provider.generate('after');
+  expect(seen.at(-1)).toEqual([{ kind: 'start_step', goalId, workItemId: null, at: dismissedAt, until: dismissedAt + DISMISS_COOLDOWN_MS }]);
+  now = dismissedAt + DISMISS_COOLDOWN_MS; provider.generate('lifted');
+  expect(seen.at(-1)).toEqual([]);
 });
 
 test('return, dismissal, explicit refresh and expiry never create work', () => {

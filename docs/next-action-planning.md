@@ -40,6 +40,12 @@ const plan = planNextAction(snapshot);   // pure, for tests and replays
 `capacity` is how many open items a day holds before new work is noise. It
 defaults to 5; F-13 can pass the user's own limit.
 
+`suppressed` lists actions the user dismissed in F-13, each matched by kind,
+goal and work item, with when it was dismissed and when it may come back (Q-14's
+dismissal cooldown). While one is active the planner leaves that action out,
+lists it as excluded under `considered`, and ranks the rest as usual. Only active
+entries are inputs, so `basis` changes when one starts or lifts.
+
 ## Result
 
 | Outcome | Meaning |

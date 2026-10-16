@@ -4,7 +4,7 @@ F-13 stores the recommendation Q-18 already knows how to make. Opening and retur
 
 ## Dependencies and activation
 
-This PR is stacked on corrected F-12 (`f8a323060ca496c6e0d42b754d80a841faa1f3e5`) at the owner's request. It compiles against F-12's queue adapter. Q-18 stays an optional runtime dependency: its fixed `src/goals/next-action.ts` entry point must expose `next-action-v1` and the expected synchronous result contract. Missing, incompatible or failing planning returns unavailable; there is no fallback recommendation algorithm.
+F-13 builds on F-12's decision queue and calls Q-18's planner (`src/goals/next-action.ts`, `next-action-v1`) directly. A planner failure or a result outside that contract returns unavailable; there is no fallback recommendation algorithm.
 
 In an integrated disposable daemon, set both `JARVIS_BRIEF_DECISIONS=1` and `JARVIS_BRIEF_RECOMMENDATIONS=1`, then restart. Exact value `1` is required. Check `GET /api/brief/capabilities`: recommendations must be supported, ready and enabled, with no dependency reason. Both flags default off. No production daemon was enabled for delivery.
 
@@ -30,6 +30,10 @@ A stored result has `recommendationId`, generation `requestId`, opaque `revision
 - `none`: reason and evidence.
 
 Only `available` recommendations can be accepted. Questions and abstentions stay `ask`/`none`; they never become tasks. `dismissed` and `accepted` are durable. Expiry is checked against server time. Changed planner input or a changed choice becomes `blocked` with a refresh explanation. Requesting a new recommendation uses a new generation request ID, including after dismissal or expiry.
+
+## Dismissal does not bring the same step back
+
+Dismissal follows Q-14's feedback policy (`proposal-feedback-v1`, `docs/opportunity-feedback-policy.md`): a dismissed action is held back for its dismissal cooldown, 7 days from the moment it was dismissed. Every planning call (generation, reads and acceptance) passes Q-18 the actions dismissed within that window, matched by action kind, goal and work item rather than wording, so a reworded title cannot bring it back. Dismissing a question holds back every action it asked about. Q-18 lists a held-back action under `considered` as excluded, with the dates, and recommends the next option or says nothing is worth adding. Repeating a dismissal keeps the first time, so retries never extend the cooldown; a row without a dismissal time steers nothing. Active holds are planner inputs, so one starting or lifting changes `basis` and blocks an open recommendation planned without it.
 
 Reads and acceptance re-observe Q-18's basis and choice. The goal read revision is context, not the concurrency token. Checking the choice as well as the basis covers time-dependent changes even when stored inputs are unchanged. Acceptance checks run under the same SQLite immediate transaction as the work and receipt writes.
 
@@ -58,12 +62,10 @@ From this worktree in WSL:
 bun test src/brief/recommendations.test.ts src/daemon/api-brief-recommendations.test.ts src/brief/recommendations-q18.test.ts
 ```
 
-On the independent F stack, expect 23 pass, 4 skipped, zero failures. The skips need Q-18's separately delivered source; the missing-provider test passes instead. Tests use isolated databases and a Unix socket. They cover durable reload, idempotency, two independent accepting processes, stale goals/workload/capabilities, expiry, dismissal, ask/none, queue order, linked approval identity, rollback and authenticated HTTP. No external provider or message is used.
-
-The actual Q-18 integration was also run with its five source/test/scenario files temporarily overlaid from commit `dd658e0535dd0e365559a065987c5bf4031c8732`, then removed. Running `bun test src/brief/recommendations-q18.test.ts src/goals/next-action.test.ts` in that combined checkout passed 69 tests after the R1 correction, with only the missing-provider case skipped. This includes Q-18's approved scenario set unchanged, plus goal deletion before/after generation and receipt recovery after restart. Its code is not copied into this PR.
+Tests use isolated databases and a Unix socket. They cover durable reload, idempotency, two independent accepting processes, stale goals/workload/capabilities, expiry, dismissal and its cooldown against the real Q-18 planner, ask/none, queue order, linked approval identity, rollback and authenticated HTTP. No external provider or message is used.
 
 ## Limits and rollback
 
 This is the backend provider/API and canonical Today adapter, not a rendered room change. There is no UI screenshot. D-10's live presentation adapter and the release cutover remain integration work. Q-18's structured-observation and ranking limits still apply; F-13 does not invent missing steps or certify live-model performance. One read returns one stored result, at most 64 KB; history is retrievable by ID, not a new unbounded list.
 
-Rollback: unset `JARVIS_BRIEF_RECOMMENDATIONS` and restart. Retain `brief_recommendation`, existing commitments/work decisions, queue placement and receipts. There is no schema removal or reversal of accepted intent. All PRs stay unmerged. F-14 is not part of this delivery.
+Rollback: unset `JARVIS_BRIEF_RECOMMENDATIONS` and restart. Retain `brief_recommendation`, existing commitments/work decisions, queue placement and receipts. There is no schema removal or reversal of accepted intent.

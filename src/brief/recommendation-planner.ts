@@ -1,6 +1,5 @@
-import { existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import type { BriefEvidenceRef } from './contracts';
+import { nextAction } from '../goals/next-action';
 import type { RecommendationPlan, RecommendedAction, RecommendationPlanner } from './recommendation-contracts';
 
 const record = (v: unknown): Record<string, unknown> => {
@@ -47,13 +46,7 @@ export function checkedRecommendationPlan(input: unknown, now: number): Recommen
   if (JSON.stringify(plan).length > 64_000) throw Error('Planner result exceeds storage bound');
   return plan;
 }
-/** Fixed optional Q-18 entry point. No caller-controlled path or fallback planning algorithm. */
-export async function loadRecommendationPlanner(): Promise<RecommendationPlanner | null> {
-  const path = new URL('../goals/next-action.ts', import.meta.url);
-  if (!existsSync(fileURLToPath(path))) return null;
-  try {
-    const module = await import(path.href);
-    if (module.PLANNER !== 'next-action-v1' || typeof module.nextAction !== 'function') return null;
-    return { readiness: () => 'ready', plan: now => module.nextAction({ now }) };
-  } catch { return null; }
+/** Q-18's planner, told what the user dismissed. No fallback planning algorithm. */
+export function nextActionPlanner(): RecommendationPlanner {
+  return { readiness: () => 'ready', plan: (now, suppressed) => nextAction({ now, suppressed }) };
 }

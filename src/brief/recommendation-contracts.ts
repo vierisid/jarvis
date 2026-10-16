@@ -18,7 +18,11 @@ export type RecommendationPlan = {
   | { outcome: 'ask'; question: string; about: RecommendedAction[] }
   | { outcome: 'none'; reason: string; evidence: BriefEvidenceRef[] }
 );
-export interface RecommendationPlanner extends BriefProvider { plan(now: number): unknown }
+/** An action the user dismissed, held back until `until` (Q-14's dismissal cooldown). */
+export interface RecommendationSuppression {
+  kind: RecommendedAction['kind']; goalId: string | null; workItemId: string | null; at: number; until: number;
+}
+export interface RecommendationPlanner extends BriefProvider { plan(now: number, suppressed: RecommendationSuppression[]): unknown }
 export interface RecommendationReceipt {
   receiptId: string; recommendationId: string; requestId: string; revision: string; acceptedAt: number;
   destination: { decisionId: string; workItemId: string; title: string };

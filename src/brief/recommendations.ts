@@ -4,7 +4,8 @@ import { getDb } from '../vault/schema';
 import { createWorkItem, decideWorkItem, getWorkItem } from '../goals/work-items';
 import { getGoal } from '../vault/goals';
 import type { DecisionQueue } from './decisions';
-import type { RecommendationPlan, RecommendationPlanner, RecommendationReceipt, StoredRecommendation } from './recommendation-contracts';
+import { DISMISS_COOLDOWN_MS } from '../awareness/opportunity-feedback-policy';
+import type { RecommendationPlan, RecommendationPlanner, RecommendationReceipt, RecommendationSuppression, StoredRecommendation } from './recommendation-contracts';
 import { checkedRecommendationPlan } from './recommendation-planner';
 import { ensureRecommendationSchema } from './recommendation-schema';
 
@@ -29,8 +30,24 @@ export class Recommendations {
   private available() {
     if (this.readiness() !== 'ready') throw new RecommendationError('Recommendation planner or decision queue is unavailable', 503, 'unavailable');
   }
+  /**
+   * Q-14's feedback policy (proposal-feedback-v1) applied to next steps: a dated
+   * dismissal holds that action back for DISMISS_COOLDOWN_MS from the moment it
+   * was dismissed. Reads never extend it; undated rows steer nothing.
+   */
+  private suppressed(now: number): RecommendationSuppression[] {
+    const rows = this.db.query<{ plan: string; dismissed_at: number }, [number, number]>(
+      `SELECT plan, dismissed_at FROM brief_recommendation WHERE disposition = 'dismissed'
+       AND dismissed_at > ? AND dismissed_at <= ? ORDER BY dismissed_at DESC, id LIMIT 200`).all(now - DISMISS_COOLDOWN_MS, now);
+    return rows.flatMap(row => {
+      const plan = JSON.parse(row.plan) as RecommendationPlan;
+      const actions = plan.outcome === 'recommend' ? [plan.action] : plan.outcome === 'ask' ? plan.about : [];
+      return actions.map(a => ({ kind: a.kind, goalId: a.goal?.goalId ?? null, workItemId: a.workItemId,
+        at: row.dismissed_at, until: row.dismissed_at + DISMISS_COOLDOWN_MS }));
+    });
+  }
   private plan(now: number): RecommendationPlan {
-    try { return checkedRecommendationPlan(this.planner!.plan(now), now); }
+    try { return checkedRecommendationPlan(this.planner!.plan(now, this.suppressed(now)), now); }
     catch { throw new RecommendationError('Recommendation planning is unavailable', 503, 'unavailable'); }
   }
   private row(id: string): Row {
@@ -89,7 +106,8 @@ export class Recommendations {
       const row = this.row(id), now = this.now(), current = this.project(row, now);
       if (!idText(revision) || current.revision !== revision) throw new RecommendationError('Recommendation changed; read it again', 409, 'revision_conflict');
       if (row.disposition === 'accepted') throw new RecommendationError('Accepted work cannot be dismissed as a recommendation', 409, 'already_accepted');
-      this.db.run("UPDATE brief_recommendation SET disposition = 'dismissed' WHERE id = ?", [id]);
+      // A repeated dismissal keeps the first time, so retries never extend the cooldown.
+      this.db.run("UPDATE brief_recommendation SET disposition = 'dismissed', dismissed_at = coalesce(dismissed_at, ?) WHERE id = ?", [now, id]);
       return this.project(this.row(id), now);
     }).immediate();
   }
