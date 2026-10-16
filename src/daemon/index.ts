@@ -5390,8 +5390,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             targets: () => collectExecutionTargets().filter(t => !t.isHost).map(t => ({ ...t,
               unavailableCapabilities: sidecarManager.listSidecars().find(s => s.id === t.id)?.unavailable_capabilities?.map(c => c.name),
             })), credentials: credentialResolver,
-          }, engineBoot?.bundlePath);
-          briefPreparedOpportunities?.configure(compositionDependencies, quality);
+          }, engineBoot?.bundlePath, engineBoot?.bundleDigest);
+          briefPreparedOpportunities?.configure(compositionDependencies, quality, () => backgroundBudgetStatus().state === 'ready');
           briefPreparedOpportunities?.start();
         }
         suggestionComposer = new SuggestionComposer(

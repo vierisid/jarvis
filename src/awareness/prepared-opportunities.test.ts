@@ -237,7 +237,7 @@ test.skipIf(process.env.JARVIS_TEST_PREPARED_Q13 !== '1')('real Q13 dry-run qual
   const catalog = new PieceCatalog(sampleCatalog().list().map(entry => ({ ...entry, name: '@jarvispieces/piece-' + entry.name })));
   configureWorkflowReadiness({ pieces: catalog });
   const quality = await loadPreparedQualityGate({ authority: new AuthorityEngine({ default_level: 7, governed_categories: ['send_email', 'send_message'],
-    overrides: [], context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' }), tool: () => null, targets: () => [] }, bundle.bundlePath);
+    overrides: [], context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' }), tool: () => null, targets: () => [] }, bundle.bundlePath, bundle.digest);
   expect(quality).not.toBeNull();
   const previousDataDir = process.env.JARVIS_WORKFLOW_DATA_DIR; process.env.JARVIS_WORKFLOW_DATA_DIR = dir;
   try {
@@ -313,6 +313,8 @@ for (const winner of ['prepared', 'legacy'] as const) test(`old mixed queues res
   try { await Promise.all([legacy.idle(), p.idle()]); } finally { legacy.stop(); }
   expect(preparedCalls).toBe(winner === 'prepared' ? 1 : 0); expect(legacyCalls).toBe(winner === 'legacy' ? 1 : 0);
   expect(getDb().query('SELECT id FROM flow').all()).toHaveLength(1);
+  // A legacy job lost to the prepared owner is skipped before the shared legacy budget is charged (Q-20).
+  expect(getDb().query('SELECT id FROM suggestion_composition_attempts').all()).toHaveLength(winner === 'legacy' ? 1 : 0);
 });
 
 for (const failure of ['provider', 'model'] as const) test(`private ${failure} diagnostics stay in the linked journal`, async () => {
@@ -395,4 +397,25 @@ test('prepared inference cannot attach after old mixed records resolve to legacy
   const legacy = new SuggestionComposer(async () => ({ ok: true, flow: graph() as ComposedFlow, rawResponse: '{}' }));
   legacy.start(); try { await legacy.idle(); } finally { legacy.stop(); }
   expect(getCompositionRow(s.id)?.state).toBe('draft_ready'); expect(getDb().query('SELECT id FROM flow').all()).toHaveLength(1);
+});
+
+test('preparation waits for the shared background admission and never inherits a request origin', async () => {
+  const { currentOrigin, runWithOrigin } = await import('../llm/origin');
+  const { currentAdmission, runWithAdmission } = await import('../llm/background-budget');
+  const s = source(); const seen: Array<[string | undefined, string | undefined]> = [];
+  const p = provider({ async chat() { seen.push([currentOrigin(), currentAdmission()]); return { text: JSON.stringify(graph()) }; } });
+  let admitted = false;
+  p.configure(() => ({ llm: { async chat() { seen.push([currentOrigin(), currentAdmission()]); return { text: JSON.stringify(graph()) }; } }, pieceRegistry: sampleCatalog() }), gate(), () => admitted);
+  // A Brief request is user/foreground work; the preparation it queues is not.
+  const initial = runWithAdmission('foreground', () => runWithOrigin('user', () => p.ensure(s.id)));
+  await p.idle(); expect(seen).toHaveLength(0); expect(p.get(initial.proposalId).state).toBe('preparing');
+  admitted = true;
+  runWithAdmission('foreground', () => runWithOrigin('user', () => p.kick())); await p.idle();
+  expect(seen.length).toBeGreaterThan(0);
+  expect(seen.every(([origin, admission]) => origin === 'background' && admission === undefined)).toBe(true);
+  expect(p.get(initial.proposalId).state).toBe('ready');
+});
+
+test('the dry runner is never started without the verified bundle digest', async () => {
+  expect(await loadPreparedQualityGate({ authority: null, tool: () => null, targets: () => [] }, join(dir, 'engine.js'))).toBeNull();
 });

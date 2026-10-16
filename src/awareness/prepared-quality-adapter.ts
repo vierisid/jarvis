@@ -67,10 +67,10 @@ export function createPreparedQualityAdapter(quality: PreparedQualityModule, opt
 }
 
 /** Fixed optional Q-13 files, not a plugin search or a caller-selected module. Missing means unavailable. */
-export async function loadPreparedQualityGate(options: QualityOptions, bundlePath?: string): Promise<PreparedQualificationGate | null> {
+export async function loadPreparedQualityGate(options: QualityOptions, bundlePath?: string, bundleDigest?: string | null): Promise<PreparedQualificationGate | null> {
   const qualificationPath = new URL('./prepared-qualification.ts', import.meta.url);
   const dryPath = new URL('./prepared-dry-run.ts', import.meta.url);
-  if (!existsSync(fileURLToPath(qualificationPath)) || !existsSync(fileURLToPath(dryPath)) || !bundlePath) return null;
+  if (!existsSync(fileURLToPath(qualificationPath)) || !existsSync(fileURLToPath(dryPath)) || !bundlePath || bundleDigest === undefined) return null;
   let runner: DryRunner | undefined;
   try {
     const quality = await import(qualificationPath.href);
@@ -78,7 +78,7 @@ export async function loadPreparedQualityGate(options: QualityOptions, bundlePat
     if (quality.QUALIFIER !== 'prepared-qualification-v1' || !quality.JOB_CONSTRAINTS
       || ['liveQualificationServices','observePreparedProposal','briefBindings','qualifyPreparedProposal','recheckQualification'].some(name => typeof quality[name] !== 'function')
       || typeof dry.PreparedDryRunner?.start !== 'function') return null;
-    runner = await dry.PreparedDryRunner.start(bundlePath);
+    runner = await dry.PreparedDryRunner.start(bundlePath, bundleDigest);
     return createPreparedQualityAdapter(quality as PreparedQualityModule, options, runner);
   } catch { await runner?.close(); return null; }
 }
