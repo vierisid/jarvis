@@ -6,7 +6,7 @@ It does not replace `/api/vault/page` (`src/vault/memory-page.ts`). That route i
 
 ## Activation and F18 seam
 
-The `memoryStream` provider is registered, with `JARVIS_BRIEF_MEMORY_STREAM=1` as its default-off flag. The existing capability graph also requires enabled `memoryUsage`. This branch has no production usage provider, so setting the stream flag alone still returns unavailable. F18 is intentionally not implemented here. No live Memory room or screenshot is claimed.
+The `memoryStream` provider is registered, with `JARVIS_BRIEF_MEMORY_STREAM=1` as its default-off flag. The existing capability graph also requires enabled `memoryUsage`. Until F18 lands there is no production usage provider, so setting the stream flag alone still returns unavailable.
 
 F18 must implement `MemoryUsageReader` from `src/brief/memory-stream-contracts.ts`, pass it into `new MemoryStream(db, usage)`, register that exact same instance as `memoryUsage`, and enable that dependency through its own rollout control. `readUses(factIds)` must synchronously read committed, retained records for those IDs from the same vault database. The stream calls it inside the fact read transaction. Missing, failed, malformed or over-capacity instrumentation never becomes an empty usage list. F17 validates and explicitly projects each record; it does not import an unmerged writer or infer associations from text.
 
