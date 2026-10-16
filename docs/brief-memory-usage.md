@@ -2,7 +2,7 @@
 
 F18 records canonical fact IDs and revisions selected by recall and supplied to a model provider. It adds no memory truth rules and does not infer that an answer relied on a supplied fact.
 
-Branch `brief/f-18` is stacked on corrected F17 `42e54d637f2b4c0e955bae4bd6183b1373bd7442`, targeting `brief/f-17`, as requested by the owner. Main inspected: `2281a8235d4987af202e3b99f7ea514ac7ed4ff8`. The pinned audit is `69211511c95355776c6c319c01e1df5acd3b8f1e`. Its facts source is unchanged on main and the stack. The WebSocket source has later approval-delivery changes on main and scoped chat changes on the F stack. F18 instruments the existing retrieval and provider handoffs below AgentService, leaving WebSocket ownership intact. No other open F18 PR existed at the start.
+F18 instruments the existing retrieval and provider handoffs below AgentService, leaving WebSocket ownership intact.
 
 ## What the record means
 
@@ -18,7 +18,7 @@ Canonical assertion/evidence revisions are SHA-256 digests of the subject name, 
 
 `JARVIS_BRIEF_MEMORY_USAGE=1` explicitly enables instrumentation and the `memoryUsage` capability. It is off by default. Production registers the same ledger instance with the capability registry and F17 stream reader. `JARVIS_BRIEF_MEMORY_STREAM=1` is additionally required for F17 list/detail/history routes. Enabling usage does not enable the Brief chat transport, UI, or any workflow.
 
-Instrumented paths are canonical Brief conversation recall, including classic and router-first AgentService turns and their scoped model calls, and governed workflow `jarvis-ask` calls that use the Jarvis prompt builder. Existing Authority and cancellation checks still own dispatch. Workflow capture starts inside the approved effect, after its checkpoint; pending approval and explicit system overrides do not retrieve memory. Concurrent executions carry independent capture state. A conversation must belong to this daemon's workspace and still be running; a workflow must still belong to its running canonical run.
+Instrumented paths are canonical Brief conversation recall, including classic and router-first AgentService turns and their scoped model calls, and governed workflow `jarvis-ask` calls that use the Jarvis prompt builder. Existing Authority, cancellation and background admission checks still own dispatch; a handoff is recorded only when the provider adapter is called, so a request refused by background admission is never recorded as supplied. Workflow capture starts inside the approved effect, after its checkpoint; pending approval and explicit system overrides do not retrieve memory. Concurrent executions carry independent capture state. A conversation must belong to this daemon's workspace and still be running; a workflow must still belong to its running canonical run.
 
 Unscoped legacy channels, realtime voice, external provider calls, profile/goal context, tool-return memory and older calls are not retroactively attributed. `coverage.paths` declares the instrumented paths. `coverage.completeness` is `recorded_events_only`: an empty list means no retained records, not proof that no other path ever used memory. Disabling instrumentation can create gaps. Consumers must retain this qualification rather than present an all-time usage count.
 
@@ -36,17 +36,14 @@ F17 receives the same synchronous ledger reads inside its fact-read transaction,
 
 ## Verification
 
-Run in WSL from the dedicated worktree:
-
 ```sh
-cd /home/vierisid/.cache/codex/jarvis-f-18
 bun test src/vault/memory-usage.test.ts src/daemon/agent-service-memory.test.ts src/daemon/api-brief-memory-usage.test.ts src/workflows/runtime/memory-usage.test.ts
 ```
 
-The fixtures use temporary SQLite databases, real chat transport and AgentService, the governed workflow route/effect boundary, real provider dispatch with scripted in-process models, and an authenticated Unix socket. No live model, email, desktop effect or deployment is required. Evidence and final counts are in `docs/brief-delivery/F-18.json` and `docs/brief-delivery/evidence/F-18/`.
+The fixtures use temporary SQLite databases, real chat transport and AgentService, the governed workflow route/effect boundary, real provider dispatch with scripted in-process models, and an authenticated Unix socket. No live model, email, desktop effect or deployment is required.
 
-Deliberate unsafe variants must fail: count omitted candidates as supplied, remove event deduplication, or allow stale revisions through handoff. Original source bytes are restored before fresh verification. Existing recall, provider retry/cancellation, workflow authority/effect, memory stream and affected Brief tests are run separately, along with TypeScript and normal commit hooks.
+Deliberate unsafe variants must fail: count omitted candidates as supplied, remove event deduplication, or allow stale revisions through handoff.
 
 ## Rollback
 
-Unset `JARVIS_BRIEF_MEMORY_USAGE` and restart. Capture and usage reads stop, and F17 memory-stream activation fails its dependency gate. Additive tables and retained records remain compatible with older code; no schema rollback or data deletion is needed. Re-enabling starts recording only new observed handoffs and does not fill gaps. No UI is changed or released by this PR. All PRs remain unmerged; F19 is not implemented here.
+Unset `JARVIS_BRIEF_MEMORY_USAGE` and restart. Capture and usage reads stop, and F17 memory-stream activation fails its dependency gate. Additive tables and retained records remain compatible with older code; no schema rollback or data deletion is needed. Re-enabling starts recording only new observed handoffs and does not fill gaps. No UI is changed by F18. Forget is F19.
