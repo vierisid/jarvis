@@ -1,0 +1,44 @@
+.on-result { --on-r-bg:#fafbfc; --on-r-card:#fff; --on-r-ink:#171a1f; --on-r-muted:#646e79; --on-r-line:#e2e7ec; --on-r-accent:#287348; --on-r-focus:#1e5fd8;
+  container-type:inline-size; box-sizing:border-box; height:var(--on-result-height,100dvh); width:100%; min-width:0; overflow:auto; display:flex; flex-direction:column;
+  background:var(--on-r-bg); color:var(--on-r-ink); font:16px/1.5 'Familjen Grotesk',system-ui,sans-serif; color-scheme:light; }
+.on-result[data-theme=dark] { --on-r-bg:#121417; --on-r-card:#1a1d22; --on-r-ink:#eef1f4; --on-r-muted:#adb5c0; --on-r-line:#363d46; --on-r-accent:#87d3a6; --on-r-focus:#84afff; color-scheme:dark; }
+.on-result *, .on-result *::before, .on-result *::after { box-sizing:border-box; }
+.on-result__header { display:flex; align-items:center; justify-content:space-between; gap:24px; padding:24px 32px 20px; border-bottom:1px solid var(--on-r-line); }
+.on-result__header h1 { margin:4px 0 0; font-size:28px; line-height:1.2; font-weight:600; overflow-wrap:anywhere; }
+.on-result__eyebrow { font:11px/1.6 'Spline Sans Mono',monospace; text-transform:uppercase; letter-spacing:.04em; color:var(--on-r-muted); margin:0; }
+.on-result__header-actions { display:flex; flex-shrink:0; align-items:center; flex-wrap:wrap; gap:16px; }
+.on-result__badge { color:var(--on-r-muted); font-size:13px; }
+.on-result__body { display:flex; flex:1; min-height:500px; position:relative; }
+.on-result__canvas { flex:1; min-width:0; position:relative; min-height:500px; }
+.on-result__canvas:focus-visible { outline:2px solid var(--on-r-focus); outline-offset:-3px; }
+.on-result__review { align-self:flex-start; flex:0 0 300px; margin:24px 24px 24px 0; padding:22px; background:var(--on-r-card); border:1px solid var(--on-r-line); border-radius:14px 0 14px 14px; box-shadow:0 6px 18px #00000009; overflow-wrap:anywhere; }
+.on-result__review > .on-result__eyebrow { color:var(--on-r-accent); }
+.on-result__review h2 { font-size:22px; line-height:1.25; margin:16px 0 22px; letter-spacing:-.3px; }
+.on-result__review p { font-size:14px; color:var(--on-r-muted); }
+.on-result__review > button { width:100%; }
+.on-result__readiness { border-top:1px solid var(--on-r-line); margin-top:20px; padding-top:16px; font-size:14px; }
+.on-result__readiness p { margin-bottom:0; }
+.on-result details { font-size:13px; margin-top:16px; }
+.on-result summary { cursor:pointer; min-height:44px; display:list-item; padding-block:10px; }
+.on-result details ul { padding-left:18px; }
+.on-result details p { margin:4px 0; }
+.on-result details small { overflow-wrap:anywhere; }
+.on-result details li + li { margin-top:16px; }
+.on-result__empty { display:grid; align-content:center; justify-items:center; height:100%; padding:40px; text-align:center; }
+.on-result__empty p { max-width:440px; color:var(--on-r-muted); }
+.on-result__footer { padding:16px 24px; border-top:1px solid var(--on-r-line); display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; }
+.on-result__feedback { font-size:14px; color:var(--on-r-muted); max-width:480px; }
+.on-result__actions { display:flex; flex-wrap:wrap; gap:10px; margin-left:auto; }
+.on-result button { min-height:44px; padding:10px 16px; border:1px solid var(--on-r-line); border-radius:8px 0 8px 8px; color:var(--on-r-ink); background:var(--on-r-card); font:500 14px/1.5 'Familjen Grotesk',system-ui,sans-serif; cursor:pointer; }
+.on-result button.on-result__primary { color:var(--on-r-card); background:var(--on-r-ink); border-color:var(--on-r-ink); }
+.on-result button:disabled { cursor:default; opacity:.5; }
+.on-result button:focus-visible,.on-result summary:focus-visible { outline:2px solid var(--on-r-focus); outline-offset:3px; }
+.on-result h1:focus { outline:none; }
+@media(max-width:1000px) { .on-result__review { flex-basis:260px; margin-right:16px; padding:18px; } .on-result__header { padding:20px; gap:16px; } }
+@media(max-width:720px) { .on-result__header { flex-wrap:wrap; } .on-result__header h1 { font-size:24px; } .on-result__header-actions { width:100%; justify-content:space-between; }
+  .on-result__body { flex-direction:column; } .on-result__canvas { flex:none; height:560px; } .on-result__review { flex-basis:auto; width:calc(100% - 32px); margin:16px; }
+  .on-result__footer { padding:16px; } .on-result__actions { margin-left:0; } }
+@media(prefers-reduced-motion:reduce) { .on-result *, .on-result *::before { animation:none!important; transition:none!important; } }
+
+/* The room can also narrow when Pebble opens, without a viewport resize. */
+@container(max-width:720px) { .on-result__header { flex-wrap:wrap; } .on-result__header-actions { width:100%; justify-content:space-between; } .on-result__body { flex-direction:column; } .on-result__canvas { flex:none; height:560px; } .on-result__review { flex-basis:auto; width:calc(100% - 32px); margin:16px; } }
