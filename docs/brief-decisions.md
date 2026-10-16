@@ -56,7 +56,7 @@ The queue adds no triggers to source tables. bun:sqlite counts trigger writes in
 
 The queue is scoped to one workflow project (the default project, as the workflow routes are since #729): effects, runs and flows of another project are not listed, not readable by ID and not matched by `runId`. Approvals and work items belong to the daemon owner.
 
-Permission decisions go through `applyApprovalDecision` as a dashboard click and are audited like the existing approval card (Q-08). While Jarvis is paused or stopped, approving returns `409` with `code: "held"` and the approval stays pending. A click-only approval (`confirm: "always"`) is never approvable here: its projection offers `reject_permission` and `inspect` only, and it is approved on its full dashboard approval card. `execute_once` refused by Pause/Kill returns `409` with `code: "not_executable"` and the reason.
+Permission decisions go through `applyApprovalDecision` as a dashboard click and are audited like the existing approval card (Q-08). While Jarvis is paused or stopped, approving returns `409` with `code: "held"` and the approval stays pending. The Brief is a dashboard surface, so a click-only approval (`confirm: "always"`) is approvable here too, decided as `dashboard` through the same executor, recheck and Pause/Kill path. `execute_once` refused by Pause/Kill returns `409` with `code: "not_executable"` and the reason.
 
 ## Quick verification
 

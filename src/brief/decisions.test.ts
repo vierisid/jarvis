@@ -349,16 +349,15 @@ test('Pause holds and Kill refuses a Brief approval: the card stays pending and 
   } finally { setActiveEmergencyController(null); }
 });
 
-test('a click-only card is never approvable from the Brief queue; reject still works (Q-08)', async () => {
+test('a click-only card is approvable from the Brief queue as a dashboard click (Q-08)', async () => {
   const a = manager.createRequest({ agentId: 'fixture', agentName: 'Fixture', toolName: 'fixture_tool', toolArguments: {},
     actionCategory: 'write_data', urgency: 'normal', reason: 'Install hooks', context: JSON.stringify({ confirm: 'always' }), executionMode: 'deferred' });
   const item = queue.get(`approval:${a.id}`);
-  expect(item.actions).toEqual(['reject', 'inspect']);
-  expect(item.supportedActions).toEqual(['reject_permission', 'inspect']);
-  await expect(queue.resolve(item.decisionId, { revision: item.revision, action: 'approve_permission' })).rejects.toMatchObject({ status: 409, code: 'unsupported_action' });
-  expect(manager.getRequest(a.id)!.status).toBe('pending'); expect(calls).toBe(0);
-  await queue.resolve(item.decisionId, { revision: item.revision, action: 'reject_permission' });
-  expect(manager.getRequest(a.id)!.status).toBe('denied');
+  expect(item.actions).toEqual(['approve', 'reject', 'inspect']);
+  expect(item.supportedActions).toEqual(['approve_permission', 'reject_permission', 'inspect']);
+  await queue.resolve(item.decisionId, { revision: item.revision, action: 'approve_permission' });
+  expect(manager.getRequest(a.id)!.decided_by).toBe('dashboard');
+  expect(calls).toBe(1);
 });
 
 test('a Brief approve and deny are audited as dashboard clicks', async () => {

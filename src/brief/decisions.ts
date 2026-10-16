@@ -1,7 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
 import { getDb } from '../vault/schema';
-import { approvalIntentFromContext, approvalNeedsClick, DASHBOARD_DECIDER, executionState } from '../authority/approval';
+import { approvalIntentFromContext, DASHBOARD_DECIDER, executionState } from '../authority/approval';
 import { applyApprovalDecision, applyExecutionResolution, heldApprovalMessage, type ApprovalDecisionDeps } from '../daemon/approval-decision';
 import { decideWorkItem, getWorkItem } from '../goals/work-items';
 import { DEFAULT_IDS } from '../workflows/db/index';
@@ -102,12 +102,10 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
       runId = linked.rows[0]?.run_id ?? null;
       if (linked.unresolved && linked.unresolved !== 'pending') item.state = linked.unresolved;
       if (approval.status === 'pending' && (!linked.unresolved || linked.unresolved === 'pending')) {
-        // A click-only card (Q-08) is approved on its full dashboard approval
-        // card, which shows what it will do. This projection carries only its
-        // title, so it offers reject and inspect here, never approve.
-        const clickOnly = approvalNeedsClick(approval);
-        item.actions = clickOnly ? ['reject', 'inspect'] : ['approve', 'reject', 'inspect'];
-        item.supportedActions = clickOnly ? ['reject_permission', 'inspect'] : ['approve_permission', 'reject_permission', 'inspect'];
+        // The Brief is the dashboard: a click-only card (Q-08) is approvable
+        // here too, decided as DASHBOARD_DECIDER through the same executor path.
+        item.actions = ['approve', 'reject', 'inspect'];
+        item.supportedActions = ['approve_permission', 'reject_permission', 'inspect'];
       } else if (approval.execution_mode !== 'workflow' && approval.status === 'approved' &&
         ['unknown', 'not_started'].includes(approval.execution_outcome ?? '') && !linked.rows.length) {
         item.kind = 'recovery';
