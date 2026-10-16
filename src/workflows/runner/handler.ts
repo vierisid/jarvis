@@ -17,7 +17,7 @@
 import type { Job } from "../db/repos/job-queue";
 import type { JobHandler } from "../queue/worker";
 import { getFlowRun, updateRun, type FlowRun } from "../db/repos/flow-run";
-import { getRunCancellation } from "../db/repos/run-cancellation";
+import { cancelFlowRun, getRunCancellation } from "../db/repos/run-cancellation";
 import { watchRunCancellation, withRunCancellation } from "../runtime/cancellation";
 import {
   getFlowVersion,
@@ -28,7 +28,10 @@ import {
 import { workflowFailureMessage } from "../queue/retry-policy";
 import { getWorkflowDb } from "../db/index";
 import { stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
-import { markFireRunStarted } from "../db/repos/trigger-fire";
+import { releaseJob } from "../db/repos/job-queue";
+import { activeEmergencyState } from "../../authority/emergency";
+import { KILLED_RUN_REASON } from "../runtime/emergency-hold";
+import { markFireRunStarted, recordFire } from "../db/repos/trigger-fire";
 import { continuationRefusal, graphDigest } from "../runtime/continuation";
 export { RUN_FLOW } from "../queue/retry-policy";
 
@@ -179,6 +182,20 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
     // quietly instead of raising a refusal for the STOPPED status the
     // cancellation itself wrote.
     if (getRunCancellation(runId)) return;
+    // Pause holds and Kill stops (Q-08). The worker claims nothing while
+    // either holds; this covers a job claimed just as it took effect. Paused:
+    // the job goes back to the queue untouched. Killed: the run is stopped.
+    const emergency = activeEmergencyState();
+    if (emergency === "paused") {
+      releaseJob(job.id);
+      return;
+    }
+    if (emergency === "killed") {
+      if (cancelFlowRun(runId, { reason: KILLED_RUN_REASON, reasonLabel: "Emergency stop" }).accepted) {
+        recordFire({ flowId: run.flowId, source: "lifecycle", outcome: "stopped", runId, detail: { reason: KILLED_RUN_REASON } });
+      }
+      return;
+    }
     // A workflow turned off since this run was created never starts or
     // continues it: the run is stopped instead, saying why (Q-06).
     if ((run.status === "QUEUED" || run.status === "PAUSED") && turnedOffReason(runId)) {

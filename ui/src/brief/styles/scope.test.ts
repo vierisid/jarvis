@@ -12,6 +12,7 @@ const SHEETS = [
   "../shell/pebble-layout/pebble.css", "../shell/pebble-layout/specimen.css",
   "../today/hero-paper/hero-paper.css", "../today/layout/today-layout.css", "../today/preview/specimen.css",
   "../today/decision-transition/decision-transition.css",
+  "../today/outcomes/outcomes.css", "../today/activity/activity.css", "../today/goal-card/goal-card.css",
 ];
 
 function selectors(css: string): string[] {

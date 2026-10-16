@@ -64,7 +64,9 @@ import { publishFlowVersion } from "../../workflows/db/repos/flow-publication.ts
 import { assertVersionReady } from '../../workflows/db/repos/flow-readiness';
 import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow } from '../../workflows/db/repos/flow-turn-off';
 import { listFlowFires } from '../../workflows/db/repos/trigger-fire';
+import { bindingChangesToAccept } from '../../workflows/db/repos/binding-pins';
 import { assertCodeStepsAllowed } from "../../workflows/db/repos/flow-code-steps.ts";
+import { manualStartRefusal } from "../../workflows/runtime/emergency-hold.ts";
 import {
   createFlowRun,
   getFlowRunInProject,
@@ -323,10 +325,26 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
      * Kept total and dependency-free -- it switches on `params.action` and
      * nothing else. A gate that throws is caught at the call site and
      * escalated to confirm: 'always', so a DB read in here would turn a
-     * transient error into a mandatory card.
+     * transient error into a mandatory card. The one exception is `enable`
+     * and `publish` (Q-05): whether they accept a changed connection or
+     * computer is only known from the flow's pins, and there a card on a
+     * failed read is the safe side.
      */
     authorityGate: (params) => {
-      switch (String(params.action ?? "")) {
+      const action = String(params.action ?? "");
+      switch (action) {
+        case "enable":
+        case "publish": {
+          // Q-05: enabling or publishing accepts the connections and computer
+          // the flow runs with now. When that would accept a change since a
+          // person last accepted them (another account under a connection's
+          // name, another computer), a person sees it and approves first: the
+          // model never accepts one on its own. Otherwise both stay at the
+          // floor, for the reasons below.
+          const changes = bindingChangesForGate(params, deps.callerProjectId?.() ?? DEFAULT_IDS.project);
+          return changes.length ? { actionCategory: "write_data", confirm: "always",
+            intent: `${action === "enable" ? "Enable" : "Publish"} workflow ${forCard(params.flow)} and accept: ${changes.join(" ")}` } : null;
+        }
         case "run":
           return { actionCategory: "execute_command", confirm: "above_level",
             intent: `Run workflow: ${forCard(params.flow)}` };
@@ -337,7 +355,8 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           // list / get / list_runs / get_run are reads; compose / create /
           // enable / disable / publish are writes the floor already covers.
           //
-          // `publish` and `enable` are the arguable ones: enabling registers
+          // `publish` and `enable` (when they accept no binding change, above)
+          // are the arguable ones: enabling registers
           // the flow's cron/webhook, so they ARM the same execution that
           // `run` is raised for. They stay at the floor because the exposure
           // is bounded twice over -- CODE steps are refused at publish,
@@ -961,6 +980,9 @@ function actRun(flow: FlowRow, payload?: Record<string, unknown>): Record<string
   // would be one `run` call wide. The thrown message goes straight back to the
   // model as the tool result, so it relays the opt-in instruction to the user
   // instead of retrying.
+  // Pause holds and Kill stops: nothing starts (Q-08).
+  const held = manualStartRefusal();
+  if (held) throw new Error(held);
   assertCodeStepsAllowed(flow.id, versionId, "run");
   assertVersionReady(flow.id, versionId);
   const run = createFlowRun({
@@ -1025,14 +1047,31 @@ function contractRecheck(flow: FlowRow, trigger: FlowTriggerNode): ReturnType<ty
   return recheckJobContract(trigger, getWorkflowComposition(recordId, flow.project_id)?.specification.contract);
 }
 
+/**
+ * What enabling or publishing `params.flow` would accept that a person has not
+ * (Q-05). Empty when it accepts nothing new, or when the flow does not resolve:
+ * the action reports that itself.
+ */
+function bindingChangesForGate(params: Record<string, unknown>, project: string): string[] {
+  let flow: FlowRow;
+  try { flow = requireFlowIn(project, params); } catch { return []; }
+  const versionId = params.action === "publish"
+    ? getLatestDraft(flow.id)?.id ?? flow.published_version_id
+    : flow.published_version_id ?? getLatestDraft(flow.id)?.id;
+  return versionId ? bindingChangesToAccept(flow.id, versionId) : [];
+}
+
 function actPublish(flow: FlowRow, deps: ManageWorkflowDeps): Record<string, unknown> {
   const target = getLatestDraft(flow.id);
   if (!target) {
-    if (flow.published_version_id) {
-      // Already published, nothing to do.
-      return summarizeFlow(flow);
-    }
-    throw new Error("no draft version to publish");
+    // Nothing new to publish: publishing again is a person accepting the
+    // connections and computer the published version runs with now (Q-05).
+    if (!flow.published_version_id) throw new Error("no draft version to publish");
+    const { flow: updated, version } = publishFlowVersion(flow.id, flow.published_version_id);
+    void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));
+    // Publishing again runs the published version, so that is the graph rechecked, as on enable.
+    const report = contractRecheck(updated, version.trigger);
+    return report ? { contractReport: report, ...summarizeFlow(updated) } : summarizeFlow(updated);
   }
   // Publish is the last gate before a flow starts running for real, and it is
   // the ONLY one a hand-built flow passes through -- a flow drawn in the
@@ -1203,6 +1242,10 @@ function actGetRun(project: string, runId: string): Record<string, unknown> {
 }
 
 function summarizeRun(run: FlowRun, includeSteps = false): Record<string, unknown> {
+  // Q-05: a connection that changed under the run is refused by the engine's
+  // fetch, which reports only a bare loading error; the reason lives here.
+  const bindingRefusals = (run.connectionBindings ?? []).filter(binding => binding.refusal)
+    .map(binding => ({ connection: binding.externalId, reason: binding.refusal!.message }));
   return {
     id: run.id,
     flow_id: run.flowId,
@@ -1214,6 +1257,7 @@ function summarizeRun(run: FlowRun, includeSteps = false): Record<string, unknow
     durationMs: run.startTime && run.finishTime ? run.finishTime - run.startTime : null,
     stepsCount: run.stepsCount,
     failedStep: run.failedStep,
+    ...(bindingRefusals.length ? { bindingRefusals } : {}),
     ...(includeSteps ? { steps: run.steps } : {}),
   };
 }

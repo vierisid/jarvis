@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from "react";
-import { ArrowRight, Target } from "lucide-react";
+import React, { useMemo, useRef, useState } from "react";
+import { Target } from "lucide-react";
 import { BriefButton } from "../../components/controls";
 import type { BriefRoute, BriefShellPort } from "../../contracts";
 import { useTheme } from "../../../v2/shell/useTheme";
@@ -7,6 +7,14 @@ import { NavigationShell } from "../../shell/navigation/NavigationShell";
 import { UNKNOWN_NAVIGATION, type BriefNavigationBinding } from "../../shell/navigation/model";
 import { TodayLayout } from "../layout/TodayLayout";
 import { useDecisionPreview } from "./useDecisionPreview";
+import { Outcomes } from "../outcomes/Outcomes";
+import { GoalCard, GoalQueueCue } from "../goal-card/GoalCard";
+import { useGoalHandoff } from "../goal-card/useGoalHandoff";
+import { goalFixture, goalPaper } from "./goalFixtures";
+import type { GoalAcceptResult } from "../goal-card/model";
+
+import { RecentActivity } from "../activity/RecentActivity";
+import { outcomeFixture, activityFixture } from "./outcomeFixtures";
 import "./specimen.css";
 
 export function TodaySpecimen() {
@@ -19,13 +27,41 @@ export function TodaySpecimen() {
   const [reduced, setReduced] = useState(false);
   const [width, setWidth] = useState("fluid");
   const sample = useDecisionPreview(scenario, long);
+  const [outcomeScenario, setOutcomeScenario] = useState("ready");
+  const [updated, setUpdated] = useState(false);
+  const [actionable, setActionable] = useState(false);
+  const [refreshCount, setRefreshCount] = useState(0);
+  const outcomes = outcomeFixture(outcomeScenario, updated);
+  const [recommendationScenario, setRecommendationScenario] = useState("ready");
+  const [acceptResult, setAcceptResult] = useState("confirmed");
+  const [acceptCalls, setAcceptCalls] = useState(0);
+  const receipts = useRef(new Map<string, GoalAcceptResult>());
+  const previewGeneration = useRef(sample.generation);
+  previewGeneration.current = sample.generation;
+  const goalBinding = goalFixture(outcomes, recommendationScenario, sample.queue.map(paper => ({ decisionId:paper.decision.decisionId, workItemId:paper.decision.workItemId!, title:paper.title })));
+  if ("data" in goalBinding.recommendation) goalBinding.recommendation.data.revision = `rec-${sample.generation}-${recommendationScenario}`;
+  const handoff = useGoalHandoff("preview", { ...goalBinding, onAccept: async request => {
+    setAcceptCalls(n => n + 1);
+    await new Promise(resolve => setTimeout(resolve, 450));
+    if (previewGeneration.current !== sample.generation) return {...request,state:"conflict"};
+    if (acceptResult === "lost-response") throw new Error("Illustrative lost response");
+    if (acceptResult !== "confirmed") return {...request,state:acceptResult as "conflict"|"failed"|"unknown"};
+    const receiptKey = `${sample.generation}:${request.recommendationId}`;
+    const existing = receipts.current.get(receiptKey);
+    if (existing) return {...existing,requestId:request.requestId};
+    const paper = goalPaper();
+    if ("data" in goalBinding.recommendation) paper.title = goalBinding.recommendation.data.title;
+    sample.enqueue(paper);
+    const result: GoalAcceptResult = {...request,state:"confirmed",receiptId:`fixture-receipt-maya-${sample.generation}`,destination:{decisionId:paper.decision.decisionId,workItemId:paper.decision.workItemId!,title:paper.title}};
+    receipts.current.set(receiptKey,result); return result;
+  } }, reduced);
   const shell = useMemo<BriefShellPort>(() => ({ mode: "preview", route, sidebar, setSidebar, chatOpen, setChatOpen, theme, setTheme, navigate: setRoute }), [route, sidebar, chatOpen, theme, setTheme]);
   const binding: BriefNavigationBinding = { capabilities: null, view: { source: "fixture", state: { status: "ready", data: {
     ...UNKNOWN_NAVIGATION, workspaceName: "Northwind workspace", connection: "connected", account: { name: "Alex Morgan", plan: { status: "ready", data: "Pro plan" } }, badges: { workflows: 4, opportunities: 2, "needs-you": 1 },
   } } } };
   return <div className="brief-root brief-today-specimen" data-brief-theme={theme}>
     <div className="brief-today-review-toolbar" aria-label="Isolated review controls">
-      <span>D-08 · Isolated decision stack</span>
+      <span>D-10 · Isolated Today goals</span>
       <label>Decision <select aria-label="Decision scenario" value={scenario} onChange={event => setScenario(event.target.value)}>
         {["ready", "acceptance", "permission", "queued", "invitation", "unknown", "loading", "empty", "stale", "unavailable"].map(s => <option key={s}>{s}</option>)}</select></label>
       <button onClick={() => setTheme(theme === "light" ? "dark" : "light")}>Switch to {theme === "light" ? "dark" : "light"}</button>
@@ -37,32 +73,27 @@ export function TodaySpecimen() {
         {["confirmed", "conflict", "failed", "unknown"].map(value => <option key={value}>{value}</option>)}</select></label>
       <button onClick={sample.append}>Append goal step</button><button onClick={sample.reset}>Reset example</button>
       <button onClick={sample.remount}>Reload authoritative view</button>
+      <label>Outcomes <select aria-label="Outcome scenario" value={outcomeScenario} onChange={e => setOutcomeScenario(e.target.value)}>
+        {["ready", "near-complete", "partial", "unknown-goal", "zero", "loading", "empty", "stale", "unavailable", "unsupported", "long"].map(value => <option key={value}>{value}</option>)}</select></label>
+      <button onClick={() => setUpdated(!updated)}>{updated ? "Reset outcome update" : "+1 partner"}</button>
+      <button onClick={() => setRefreshCount(count => count + 1)}>Refresh same values</button><span aria-label="Refresh count">{refreshCount}</span>
+      <label><input type="checkbox" checked={actionable} onChange={e => setActionable(e.target.checked)} /> Actionable activity example</label>
+      <label>Recommendation <select aria-label="Recommendation scenario" value={recommendationScenario} onChange={e => setRecommendationScenario(e.target.value)}>{["ready","loading","empty","blocked","expired","changed-goal","accepted","stale","unavailable","unsupported","long"].map(v=><option key={v}>{v}</option>)}</select></label>
+      <label>Add result <select aria-label="Recommendation result" value={acceptResult} onChange={e => setAcceptResult(e.target.value)}>{["confirmed","conflict","failed","unknown","lost-response"].map(v=><option key={v}>{v}</option>)}</select></label>
+      <span aria-label="Acceptance calls">{acceptCalls}</span>
       <small>Simulated receipts only. No email or workflow executes.</small>
-      <small>Goal, outcomes and opportunities are layout fixtures for D-09 to D-11.</small>
+      <small>Illustrative outcome evidence only. Recommendations use a simulated owner. Opportunities and conversation remain layout fixtures.</small>
     </div>
     <div className="brief-today-review-viewport" style={{ width: width === "fluid" ? "100%" : Number(width) }}>
       <NavigationShell shell={shell} rooms={{ today: { id: "today", title: "Today" } }} binding={binding} reducedMotion={reduced}
         conversation={{ source: "fixture", content: <Conversation /> }}>
         {route.room === "today" ? <TodayLayout key={sample.generation} shell={shell} greeting="Good morning, Alex." dateLabel="Thursday, 17 September" dateTime="2026-09-17" decision={sample.binding} reducedMotion={reduced}
-          slots={{ goal: <Goal />, outcomes: <Outcomes />, activity: <Activity />, opportunities: <Opportunity /> }} />
+          slots={{ queueNotice: <GoalQueueCue handoff={handoff} />, goal: <GoalCard handoff={handoff} />, outcomes: <Outcomes mode={shell.mode} binding={outcomes} reducedMotion={reduced} />, activity: <RecentActivity mode={shell.mode} binding={activityFixture(outcomeScenario, actionable)} onOpen={shell.navigate} />, opportunities: <Opportunity /> }} />
           : <><h1 className="brief-type-room-title">Isolated Today review</h1><BriefButton onClick={() => setRoute({ room: "today", selection: {} })}>Return to Today</BriefButton></>}
       </NavigationShell>
     </div>
   </div>;
 }
-function Progress() { return <div className="brief-progress brief-progress--middle" role="img" aria-label="6 of 10 signed">{Array.from({ length: 10 }, (_, i) => <span key={i} data-complete={i < 6} />)}</div>; }
-function Goal() {
-  return <section className="brief-today-sample-goal brief-surface"><h2 className="brief-type-body-emphasis">Win 10 design partners</h2><p className="brief-type-utility brief-secondary sample-goal-drivers">September objective</p>
-    <div className="sample-goal-value"><strong>6</strong><span>/ 10</span><small>signed</small><small className="brief-positive">+2 this week</small></div><Progress />
-    <div className="sample-goal-drivers">{[["Qualified leads", "24 / 30", "80%"], ["Pilot calls", "12 / 20", "60%"], ["Pilots started", "8 / 10", "80%"]].map(([title, count, percent]) => <div className="sample-driver" key={title}><span>{title}</span><i><b style={{ width: percent }} /></i><span>{count}</span></div>)}</div>
-    <div className="sample-goal-next"><span>What’s next?</span><ArrowRight size={16} /></div>
-  </section>;
-}
-function Outcomes() { return <section className="brief-today-sample-outcomes brief-surface brief-surface--outcome" aria-label="Illustrative outcomes">
-  <div><strong className="sample-time">90 <small>min</small></strong><p className="brief-type-body brief-secondary">saved today · estimated</p><div className="sample-week" aria-hidden="true">{[50, 76, 104, 100].map((h, i) => <div key={i}><i style={{ height: h }} /><span>{["Mon", "Tue", "Wed", "Today"][i]}</span></div>)}</div><b className="sample-week-caption">5h back this week</b></div>
-  <div className="sample-outcome-goal"><div><strong className="brief-positive">+2</strong><span>partners<small>this week</small></span></div><div><strong>6/10</strong><span>design partners signed</span></div><Progress /></div>
-  </section>; }
-function Activity() { return <section className="brief-today-sample-activity brief-surface"><h2 className="brief-type-body-emphasis">Recent activity</h2><div>{[["Inbox brief saved", "08:31 · 14 messages"], ["Meeting notes organised", "09:02 · Ready for your call"], ["Follow-up awaiting you", "09:14 · Nothing sent"]].map(([title, time]) => <div key={title}><strong>{title}</strong><span>{time}</span></div>)}</div></section>; }
 function Opportunity() { return <article className="brief-today-sample-opportunity brief-surface"><h3 className="brief-type-hero-heading">Call prep,<br />ready to run.</h3><small>You did</small><p>Emails and notes searched before 4 sales calls.</p><small>Workflow does</small><p>Context and questions, ready before every call.</p><strong className="brief-positive"><Target size={16} />Win 10 design partners</strong><p>Know what each prospect needs to say yes.</p></article>; }
 function Conversation() {
   const [draft, setDraft] = useState("");

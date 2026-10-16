@@ -28,6 +28,10 @@ export function report(rows: EvaluationRow[], context?: ReportContext) {
 export interface HumanReview {
   rowId: string; rowSha256: string; reviewer: string; intentCorrect: boolean;
   elapsedMs: number; edits: number; notes: string;
+  /** Would the founder use this? Judged apart from intent; null or absent means not judged. */
+  useful?: boolean | null;
+  /** For AI steps: does the output stay faithful to its sources? Null or absent means not judged. */
+  fidelity?: boolean | null;
 }
 /** Reviews live beside immutable raw results and are tied to their exact hash. */
 export function applyReviews(rows: EvaluationRow[], reviews: unknown): EvaluationRow[] {
@@ -42,11 +46,13 @@ export function applyReviews(rows: EvaluationRow[], reviews: unknown): Evaluatio
       throw new Error('Review has unknown, duplicated or changed result');
     if (typeof v.reviewer !== 'string' || !v.reviewer.trim() || typeof v.intentCorrect !== 'boolean'
       || !Number.isSafeInteger(v.elapsedMs) || v.elapsedMs < 0 || !Number.isSafeInteger(v.edits) || v.edits < 0
-      || typeof v.notes !== 'string') throw new Error('Invalid human review');
+      || typeof v.notes !== 'string' || ![undefined, null, true, false].includes(v.useful as any)
+      || ![undefined, null, true, false].includes(v.fidelity as any)) throw new Error('Invalid human review');
     seen.add(v.rowId);
     const row = copy.find(r => r.id === v.rowId)!;
     row.humanIntentCorrect = v.intentCorrect;
-    row.supervision = { reviewer: v.reviewer, elapsedMs: v.elapsedMs, edits: v.edits, notes: v.notes };
+    row.supervision = { reviewer: v.reviewer, elapsedMs: v.elapsedMs, edits: v.edits, notes: v.notes,
+      ...(typeof v.useful === 'boolean' ? { useful: v.useful } : {}), ...(typeof v.fidelity === 'boolean' ? { fidelity: v.fidelity } : {}) };
   }
   return copy;
 }

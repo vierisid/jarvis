@@ -1,0 +1,506 @@
+{
+  "schemaVersion": 1,
+  "version": "founder-development-1",
+  "answers": {
+    "dev-weekly-notes-file": {
+      "graph": {
+        "name": "trigger",
+        "type": "PIECE_TRIGGER",
+        "settings": {
+          "pieceName": "schedule",
+          "input": {
+            "cron_expression": "0 17 * * 5"
+          }
+        },
+        "nextAction": {
+          "name": "write_note",
+          "type": "PIECE",
+          "settings": {
+            "pieceName": "@jarvispieces/piece-jarvis-tool",
+            "actionName": "invoke",
+            "input": {
+              "toolName": "write_file",
+              "params": {
+                "path": "/Users/founder/notes/weekly.txt",
+                "content": "Weekly review due",
+                "target": "Office Mac"
+              }
+            }
+          }
+        }
+      }
+    },
+    "dev-studio-screen": {
+      "graph": {
+        "name": "trigger",
+        "type": "PIECE_TRIGGER",
+        "settings": {
+          "pieceName": "schedule",
+          "input": {
+            "cron_expression": "0 8 * * 1-5"
+          }
+        },
+        "nextAction": {
+          "name": "capture",
+          "type": "PIECE",
+          "settings": {
+            "pieceName": "@jarvispieces/piece-jarvis-tool",
+            "actionName": "invoke",
+            "input": {
+              "toolName": "capture_screen",
+              "params": {
+                "target": "Studio PC"
+              }
+            }
+          },
+          "nextAction": {
+            "name": "tell",
+            "type": "PIECE",
+            "settings": {
+              "pieceName": "@jarvispieces/piece-jarvis-notify",
+              "actionName": "notify",
+              "input": {
+                "message": "Studio screen captured",
+                "channels": [
+                  "dashboard"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "dev-company-brief": {
+      "graph": {
+        "name": "trigger",
+        "type": "PIECE_TRIGGER",
+        "settings": {
+          "pieceName": "webhook",
+          "input": {}
+        },
+        "nextAction": {
+          "name": "lookup",
+          "type": "PIECE",
+          "settings": {
+            "pieceName": "@jarvispieces/piece-jarvis-context",
+            "actionName": "vault_search",
+            "input": {
+              "query": "{{trigger.company}}"
+            }
+          },
+          "nextAction": {
+            "name": "brief",
+            "type": "PIECE",
+            "settings": {
+              "pieceName": "@jarvispieces/piece-jarvis-ask",
+              "actionName": "ask",
+              "input": {
+                "prompt": "Write a one-line brief about {{trigger.company}} using only this memory: {{lookup}}"
+              }
+            },
+            "nextAction": {
+              "name": "post",
+              "type": "PIECE",
+              "settings": {
+                "pieceName": "@jarvispieces/piece-jarvis-notify",
+                "actionName": "notify",
+                "input": {
+                  "message": "{{brief.text}}",
+                  "channels": [
+                    "dashboard"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "dev-draft-thanks": {
+      "graph": {
+        "name": "trigger",
+        "type": "PIECE_TRIGGER",
+        "settings": {
+          "pieceName": "webhook",
+          "input": {}
+        },
+        "nextAction": {
+          "name": "draft",
+          "type": "PIECE",
+          "settings": {
+            "pieceName": "@activepieces/piece-gmail",
+            "actionName": "gmail_create_draft",
+            "input": {
+              "auth": "{{connections['founder-gmail']}}",
+              "receiver": [
+                "ana@cedar.test"
+              ],
+              "subject": "Thanks for today",
+              "body": "Great meeting. Notes to follow."
+            }
+          }
+        }
+      }
+    },
+    "dev-metrics-to-cofounder": {
+      "blocked": "Which Slack connection and which user or channel? The weekly metrics source is also not specified."
+    },
+    "dev-invoice-email-alert": {
+      "graph": {
+        "name": "trigger",
+        "type": "PIECE_TRIGGER",
+        "settings": {
+          "pieceName": "@jarvispieces/piece-jarvis-trigger",
+          "triggerName": "on_event",
+          "input": {
+            "eventType": "observer.email_received"
+          }
+        },
+        "nextAction": {
+          "name": "match",
+          "type": "ROUTER",
+          "settings": {
+            "executionType": "EXECUTE_FIRST_MATCH",
+            "branches": [
+              {
+                "branchType": "CONDITION",
+                "conditions": [
+                  [
+                    {
+                      "firstValue": "{{trigger.payload.subject}}",
+                      "operator": "TEXT_CONTAINS",
+                      "secondValue": "Invoice"
+                    }
+                  ]
+                ]
+              },
+              {
+                "branchType": "FALLBACK"
+              }
+            ]
+          },
+          "children": [
+            {
+              "name": "alert",
+              "type": "PIECE",
+              "settings": {
+                "pieceName": "@jarvispieces/piece-jarvis-notify",
+                "actionName": "notify",
+                "input": {
+                  "message": "{{trigger.payload.subject}}",
+                  "channels": [
+                    "desktop"
+                  ]
+                }
+              }
+            },
+            null
+          ]
+        }
+      }
+    },
+    "dev-overdue-loop": {
+      "graph": {
+        "name": "trigger",
+        "type": "PIECE_TRIGGER",
+        "settings": {
+          "pieceName": "webhook",
+          "input": {}
+        },
+        "nextAction": {
+          "name": "each",
+          "type": "LOOP_ON_ITEMS",
+          "settings": {
+            "items": "{{trigger.bills}}"
+          },
+          "firstLoopAction": {
+            "name": "overdue",
+            "type": "ROUTER",
+            "settings": {
+              "executionType": "EXECUTE_FIRST_MATCH",
+              "branches": [
+                {
+                  "branchType": "CONDITION",
+                  "conditions": [
+                    [
+                      {
+                        "firstValue": "{{each.item.overdue}}",
+                        "operator": "BOOLEAN_IS_TRUE"
+                      }
+                    ]
+                  ]
+                },
+                {
+                  "branchType": "FALLBACK"
+                }
+              ]
+            },
+            "children": [
+              {
+                "name": "tell",
+                "type": "PIECE",
+                "settings": {
+                  "pieceName": "@jarvispieces/piece-jarvis-notify",
+                  "actionName": "notify",
+                  "input": {
+                    "message": "{{each.item.reference}}",
+                    "channels": [
+                      "dashboard"
+                    ]
+                  }
+                }
+              },
+              null
+            ]
+          }
+        }
+      }
+    },
+    "dev-hot-lead": {
+      "graph": {
+        "name": "trigger",
+        "type": "PIECE_TRIGGER",
+        "settings": {
+          "pieceName": "webhook",
+          "input": {}
+        },
+        "nextAction": {
+          "name": "hot",
+          "type": "ROUTER",
+          "settings": {
+            "executionType": "EXECUTE_FIRST_MATCH",
+            "branches": [
+              {
+                "branchType": "CONDITION",
+                "conditions": [
+                  [
+                    {
+                      "firstValue": "{{trigger.score}}",
+                      "operator": "NUMBER_IS_GREATER_THAN",
+                      "secondValue": "80"
+                    }
+                  ]
+                ]
+              },
+              {
+                "branchType": "FALLBACK"
+              }
+            ]
+          },
+          "children": [
+            {
+              "name": "tell",
+              "type": "PIECE",
+              "settings": {
+                "pieceName": "@jarvispieces/piece-jarvis-notify",
+                "actionName": "notify",
+                "input": {
+                  "message": "{{trigger.name}} from {{trigger.company}}",
+                  "channels": [
+                    "dashboard"
+                  ]
+                }
+              }
+            },
+            null
+          ]
+        }
+      }
+    },
+    "dev-overdue-commitment": {
+      "graph": {
+        "name": "trigger",
+        "type": "PIECE_TRIGGER",
+        "settings": {
+          "pieceName": "@jarvispieces/piece-jarvis-trigger",
+          "triggerName": "on_event",
+          "input": {
+            "eventType": "commitment.overdue"
+          }
+        },
+        "nextAction": {
+          "name": "tell",
+          "type": "PIECE",
+          "settings": {
+            "pieceName": "@jarvispieces/piece-jarvis-notify",
+            "actionName": "notify",
+            "input": {
+              "message": "{{trigger.payload.what}}",
+              "channels": [
+                "telegram"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "dev-morning-digest": {
+      "graph": {
+        "name": "trigger",
+        "type": "PIECE_TRIGGER",
+        "settings": {
+          "pieceName": "schedule",
+          "input": {
+            "cron_expression": "0 8 * * *"
+          }
+        },
+        "nextAction": {
+          "name": "open",
+          "type": "PIECE",
+          "settings": {
+            "pieceName": "@jarvispieces/piece-jarvis-context",
+            "actionName": "commitments_list",
+            "input": {
+              "status": "pending"
+            }
+          },
+          "nextAction": {
+            "name": "digest",
+            "type": "PIECE",
+            "settings": {
+              "pieceName": "@jarvispieces/piece-jarvis-ask",
+              "actionName": "ask",
+              "input": {
+                "prompt": "Turn exactly these pending commitments into a short digest: {{open}}"
+              }
+            },
+            "nextAction": {
+              "name": "send",
+              "type": "PIECE",
+              "settings": {
+                "pieceName": "@jarvispieces/piece-jarvis-notify",
+                "actionName": "notify",
+                "input": {
+                  "message": "{{digest.text}}",
+                  "channels": [
+                    "dashboard"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "dev-call-followup": {
+      "graph": {
+        "name": "trigger",
+        "type": "PIECE_TRIGGER",
+        "settings": {
+          "pieceName": "@jarvispieces/piece-jarvis-trigger",
+          "triggerName": "on_event",
+          "input": {
+            "eventType": "awareness.session_ended"
+          }
+        },
+        "nextAction": {
+          "name": "match",
+          "type": "ROUTER",
+          "settings": {
+            "executionType": "EXECUTE_FIRST_MATCH",
+            "branches": [
+              {
+                "branchType": "CONDITION",
+                "conditions": [
+                  [
+                    {
+                      "firstValue": "{{trigger.payload.topic}}",
+                      "operator": "TEXT_CONTAINS",
+                      "secondValue": "customer"
+                    }
+                  ]
+                ]
+              },
+              {
+                "branchType": "FALLBACK"
+              }
+            ]
+          },
+          "children": [
+            {
+              "name": "tell",
+              "type": "PIECE",
+              "settings": {
+                "pieceName": "@jarvispieces/piece-jarvis-notify",
+                "actionName": "notify",
+                "input": {
+                  "message": "Follow up on: {{trigger.payload.topic}}",
+                  "channels": [
+                    "desktop"
+                  ]
+                }
+              }
+            },
+            null
+          ]
+        }
+      }
+    },
+    "dev-stripe-forward": {
+      "graph": {
+        "name": "trigger",
+        "type": "PIECE_TRIGGER",
+        "settings": {
+          "pieceName": "@jarvispieces/piece-jarvis-trigger",
+          "triggerName": "on_event",
+          "input": {
+            "eventType": "observer.notification_received"
+          }
+        },
+        "nextAction": {
+          "name": "match",
+          "type": "ROUTER",
+          "settings": {
+            "executionType": "EXECUTE_FIRST_MATCH",
+            "branches": [
+              {
+                "branchType": "CONDITION",
+                "conditions": [
+                  [
+                    {
+                      "firstValue": "{{trigger.payload.app}}",
+                      "operator": "TEXT_EXACTLY_MATCHES",
+                      "secondValue": "Stripe"
+                    }
+                  ]
+                ]
+              },
+              {
+                "branchType": "FALLBACK"
+              }
+            ]
+          },
+          "children": [
+            {
+              "name": "tell",
+              "type": "PIECE",
+              "settings": {
+                "pieceName": "@jarvispieces/piece-jarvis-notify",
+                "actionName": "notify",
+                "input": {
+                  "message": "{{trigger.payload.title}}: {{trigger.payload.body}}",
+                  "channels": [
+                    "telegram"
+                  ]
+                }
+              }
+            },
+            null
+          ]
+        }
+      }
+    },
+    "dev-summarise-now": {
+      "blocked": "This is a one-off request; answer it directly instead of creating a workflow."
+    },
+    "dev-call-lead": {
+      "blocked": "No phone calling capability is installed."
+    },
+    "dev-linux-script": {
+      "blocked": "No Linux machine is connected, and running arbitrary commands is not a supported workflow step."
+    },
+    "dev-laptop-copy": {
+      "blocked": "No machine called laptop is connected, and the report location is not specified."
+    }
+  }
+}

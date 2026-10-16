@@ -3,6 +3,7 @@ import type { ApprovalExecutionMode, ApprovalExecutionOutcome, ApprovalStatus } 
 import type { GoalHealth, GoalStatus } from '../goals/types.ts';
 import type { WorkItem } from '../goals/work-items.ts';
 import type { MessageRole } from '../vault/conversations.ts';
+import type { BriefAttachmentRef } from './attachment-contracts.ts';
 import type { FactBasis, FactState } from '../vault/fact-policy.ts';
 import type { FlowStatus } from '../workflows/db/repos/flow.ts';
 import type { FlowVersionState } from '../workflows/db/repos/flow-version.ts';
@@ -42,13 +43,14 @@ export interface BriefTurnRef {
   requestId: string;
 }
 export interface BriefCancelTurn extends BriefTurnRef {}
-export interface BriefSendTurn extends BriefTurnRef { text: string; speak?: boolean }
+export interface BriefSendTurn extends BriefTurnRef { text: string; speak?: boolean; attachmentIds?: string[] }
 export type BriefTurnState = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 export interface BriefMessage extends BriefTurnRef {
   messageId: string;
   role: MessageRole;
   content: string;
   createdAt: BriefTimestamp;
+  attachments?: BriefAttachmentRef[];
 }
 export interface BriefActivity {
   activityId: string;

@@ -53,10 +53,18 @@ describe('engine piece-executor admission gate', () => {
   test('an approval-required verdict parks the step instead of running it', () => {
     const flat = squash(source);
     expect(flat).toContain("params.hookResponse = { ...params.hookResponse, type: 'paused' }");
+    // Parked for an approval, or held while Jarvis is paused (Q-08).
     expect(flat).toContain(
-      "const output = (governance.governed && governance.dispatch === 'approval_required') "
-      + "? { approval: governance.approval } : await runMethodToExecute(backwardCompatibleContext)",
+      "const parked = 'dispatch' in governance && (governance.dispatch === 'approval_required' || governance.dispatch === 'held')",
     );
+    // It records how it was about to run, and its re-run is that run (Q-08):
+    // the runtime proof is emergency-hold-engine.test.ts; this keeps a
+    // re-vendor from dropping the patch unnoticed.
+    expect(flat).toContain(
+      "const output = parked ? { approval: governance.approval, [JARVIS_PARKED]: isPaused ? { executionType: ExecutionType.RESUME, resumePayload } : { executionType: ExecutionType.BEGIN } } : await runMethodToExecute(backwardCompatibleContext)",
+    );
+    expect(flat).toContain('const parkedBefore = jarvisParked(executionState.getStepOutput(action.name))');
+    expect(flat).toContain('resumePayload: resumePayload!,');
     // One call site only: a second, ungoverned one would be a bypass.
     expect(flat.split('runMethodToExecute(backwardCompatibleContext)')).toHaveLength(2);
   });
@@ -68,9 +76,25 @@ describe('engine piece-executor admission gate', () => {
     // Paths are relative to VENDOR_PACKAGES; each must resolve to a real file.
     const vendorPackages = resolve(__dirname, '../activepieces/packages');
     for (const rel of ['../../runtime/piece-effects.ts', '../../runtime/piece-effect-guard.ts',
-      'server/engine/src/lib/handler/piece-executor.ts']) {
+      'server/engine/src/lib/handler/piece-executor.ts', 'server/engine/src/lib/handler/code-executor.ts']) {
       expect(block![1]!).toContain(`'${rel}'`);
       expect(existsSync(resolve(vendorPackages, rel))).toBe(true);
     }
+  });
+});
+
+describe('engine code-executor admission (Q-08)', () => {
+  const source = squash(readFileSync(resolve(ENGINE_DIR, 'code-executor.ts'), 'utf8'));
+
+  test('a CODE step asks the daemon about Pause and Kill before its code runs', () => {
+    const admission = source.indexOf('const admission = await authorizePieceDispatch({');
+    expect(admission).toBeGreaterThan(-1);
+    expect(source).toContain('piece: CODE_STEP_PIECE,');
+    expect(admission).toBeLessThan(source.indexOf('codeSandbox.runCodeModule('));
+  });
+
+  test('a held CODE step parks the run instead of running', () => {
+    expect(source).toContain("if ('dispatch' in admission && admission.dispatch === 'held') {");
+    expect(source).toContain('.setVerdict({ status: FlowRunStatus.PAUSED })');
   });
 });

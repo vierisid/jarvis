@@ -1,0 +1,750 @@
+{
+  "schemaVersion": 1,
+  "version": "founder-development-1",
+  "environment": "founder-v1",
+  "tasks": [
+    {
+      "id": "dev-weekly-notes-file",
+      "split": "development",
+      "category": "recurring_report",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "dev-weekly-notes-file",
+        "description": "Every Friday at 17:00 (cron 0 17 * * 5), write exactly \"Weekly review due\" to /Users/founder/notes/weekly.txt on the Office Mac. Nothing else."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 17 * * 5"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "allowed",
+          "payload": {},
+          "notifications": [],
+          "tools": [
+            {
+              "toolName": "write_file",
+              "params": {
+                "path": "/Users/founder/notes/weekly.txt",
+                "content": "Weekly review due",
+                "target": "Office Mac"
+              }
+            }
+          ]
+        },
+        {
+          "id": "needs-approval",
+          "payload": {},
+          "notifications": [],
+          "tools": [
+            {
+              "toolName": "write_file",
+              "params": {
+                "path": "/Users/founder/notes/weekly.txt",
+                "content": "Weekly review due",
+                "target": "Office Mac"
+              },
+              "outcome": "approval_pending"
+            }
+          ],
+          "status": "PAUSED",
+          "sandbox": {
+            "approvals": [
+              "write_file"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "dev-studio-screen",
+      "split": "development",
+      "category": "recurring_report",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "dev-studio-screen",
+        "description": "Every weekday at 08:00 (cron 0 8 * * 1-5), capture the screen on the Studio PC, then post exactly \"Studio screen captured\" to the dashboard. If the capture fails, post nothing."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 8 * * 1-5"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": [
+        {
+          "id": "online",
+          "payload": {},
+          "notifications": [
+            {
+              "message": "Studio screen captured",
+              "channels": [
+                "dashboard"
+              ]
+            }
+          ],
+          "tools": [
+            {
+              "toolName": "capture_screen",
+              "params": {
+                "target": "Studio PC"
+              }
+            }
+          ]
+        },
+        {
+          "id": "offline",
+          "payload": {},
+          "notifications": [],
+          "tools": [
+            {
+              "toolName": "capture_screen",
+              "params": {
+                "target": "Studio PC"
+              },
+              "outcome": "blocked"
+            }
+          ],
+          "status": "FAILED",
+          "sandbox": {
+            "offlineTargets": [
+              "Studio PC"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "dev-company-brief",
+      "split": "development",
+      "category": "meeting_followup",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "dev-company-brief",
+        "description": "On a webhook with a company field, search my memory for that company, ask Jarvis once to write a one-line brief from what memory returns, and post only that brief to the dashboard."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 1,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "known",
+          "payload": {
+            "company": "Cedar Labs"
+          },
+          "notifications": [
+            {
+              "message": "SIMULATED BRIEF",
+              "channels": [
+                "dashboard"
+              ]
+            }
+          ],
+          "ai": {
+            "reply": "SIMULATED BRIEF",
+            "promptIncludes": [
+              "Cedar Labs",
+              "renewal in March"
+            ]
+          },
+          "sandbox": {
+            "entities": [
+              {
+                "id": "e1",
+                "type": "concept",
+                "name": "Cedar Labs",
+                "properties": {
+                  "note": "renewal in March"
+                }
+              },
+              {
+                "id": "e2",
+                "type": "concept",
+                "name": "Birch Co",
+                "properties": {
+                  "note": "churned"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "dev-draft-thanks",
+      "split": "development",
+      "category": "meeting_followup",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "dev-draft-thanks",
+        "description": "When a webhook arrives, create a Gmail draft (do not send) with the connection founder-gmail to ana@cedar.test, subject \"Thanks for today\", body \"Great meeting. Notes to follow.\""
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "actions": [
+            "@activepieces/piece-gmail:send_email"
+          ]
+        },
+        "external": [
+          {
+            "piece": "@activepieces/piece-gmail",
+            "action": "gmail_create_draft",
+            "connection": "founder-gmail",
+            "input": {
+              "receiver": [
+                "ana@cedar.test"
+              ],
+              "subject": "Thanks for today",
+              "body": "Great meeting. Notes to follow."
+            }
+          }
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "dev-metrics-to-cofounder",
+      "split": "development",
+      "category": "missing_info",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "dev-metrics-to-cofounder",
+        "description": "Every Monday at 09:00 send the weekly metrics to my cofounder on Slack."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 9 * * 1"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "dev-invoice-email-alert",
+      "split": "development",
+      "category": "invoice_review",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "dev-invoice-email-alert",
+        "description": "When an email arrives (observer.email_received) whose subject contains \"Invoice\", notify the desktop with the subject exactly. Otherwise do nothing."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "observer.email_received"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": [
+        {
+          "id": "invoice",
+          "payload": {
+            "eventType": "observer.email_received",
+            "payload": {
+              "from": "billing@birch.test",
+              "subject": "Invoice 2041 due",
+              "snippet": "Please pay"
+            }
+          },
+          "notifications": [
+            {
+              "message": "Invoice 2041 due",
+              "channels": [
+                "desktop"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "other",
+          "payload": {
+            "eventType": "observer.email_received",
+            "payload": {
+              "from": "ana@cedar.test",
+              "subject": "Lunch?",
+              "snippet": "Are you free"
+            }
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "dev-overdue-loop",
+      "split": "development",
+      "category": "invoice_review",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "dev-overdue-loop",
+        "description": "On a webhook, bills is a list of invoices with a boolean overdue and a string reference. For each overdue invoice send its reference exactly to dashboard. Never send anything for invoices that are not overdue. Use a loop, not AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "mixed",
+          "payload": {
+            "bills": [
+              {
+                "overdue": true,
+                "reference": "B-301"
+              },
+              {
+                "overdue": false,
+                "reference": "B-302"
+              }
+            ]
+          },
+          "notifications": [
+            {
+              "message": "B-301",
+              "channels": [
+                "dashboard"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "empty",
+          "payload": {
+            "bills": []
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "dev-hot-lead",
+      "split": "development",
+      "category": "lead_followup",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "dev-hot-lead",
+        "description": "On a webhook from my lead form with name, company and score, when score is strictly greater than 80 send \"<name> from <company>\" (fields filled in) to dashboard. Otherwise do nothing. No AI or email."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true,
+          "pieces": [
+            "@activepieces/piece-gmail"
+          ]
+        }
+      },
+      "scenarios": [
+        {
+          "id": "hot",
+          "payload": {
+            "name": "Ana Ruiz",
+            "company": "Cedar Labs",
+            "score": 91
+          },
+          "notifications": [
+            {
+              "message": "Ana Ruiz from Cedar Labs",
+              "channels": [
+                "dashboard"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "cold",
+          "payload": {
+            "name": "Tom Lee",
+            "company": "Oak AG",
+            "score": 80
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "dev-overdue-commitment",
+      "split": "development",
+      "category": "lead_followup",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "dev-overdue-commitment",
+        "description": "When a commitment becomes overdue (commitment.overdue), send its text exactly to telegram. No AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "commitment.overdue"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "overdue",
+          "payload": {
+            "eventType": "commitment.overdue",
+            "payload": {
+              "id": "c1",
+              "what": "Follow up with the Cedar lead",
+              "when_due": 1759600000000
+            }
+          },
+          "notifications": [
+            {
+              "message": "Follow up with the Cedar lead",
+              "channels": [
+                "telegram"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dev-morning-digest",
+      "split": "development",
+      "category": "recurring_report",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "dev-morning-digest",
+        "description": "Every day at 08:00 (cron 0 8 * * *), list my pending commitments, ask Jarvis once to turn exactly those into a short digest, and send only the digest to dashboard. No agents."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 8 * * *"
+        },
+        "maxAiSteps": 1,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "digest",
+          "payload": {},
+          "notifications": [
+            {
+              "message": "SIMULATED DIGEST",
+              "channels": [
+                "dashboard"
+              ]
+            }
+          ],
+          "ai": {
+            "reply": "SIMULATED DIGEST",
+            "promptIncludes": [
+              "Send the Cedar proposal"
+            ],
+            "promptExcludes": [
+              "Book the offsite venue"
+            ]
+          },
+          "sandbox": {
+            "commitments": [
+              {
+                "id": "c1",
+                "description": "Send the Cedar proposal",
+                "status": "pending",
+                "dueAt": null,
+                "priority": "high"
+              },
+              {
+                "id": "c2",
+                "description": "Book the offsite venue",
+                "status": "completed",
+                "dueAt": null,
+                "priority": "low"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "dev-call-followup",
+      "split": "development",
+      "category": "meeting_followup",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "dev-call-followup",
+        "description": "When a focus session ends (awareness.session_ended) and its topic contains \"customer\", send \"Follow up on: <topic>\" (topic filled in) to desktop. Otherwise do nothing. No AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "awareness.session_ended"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "match",
+          "payload": {
+            "eventType": "awareness.session_ended",
+            "payload": {
+              "sessionId": "s1",
+              "topic": "customer call with Cedar",
+              "durationMs": 1800000
+            }
+          },
+          "notifications": [
+            {
+              "message": "Follow up on: customer call with Cedar",
+              "channels": [
+                "desktop"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "other",
+          "payload": {
+            "eventType": "awareness.session_ended",
+            "payload": {
+              "sessionId": "s2",
+              "topic": "inbox zero",
+              "durationMs": 600000
+            }
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "dev-stripe-forward",
+      "split": "development",
+      "category": "invoice_review",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "dev-stripe-forward",
+        "description": "When a desktop notification arrives (observer.notification_received) from the app \"Stripe\", send \"<title>: <body>\" (filled in) to telegram. Ignore other apps. No AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "observer.notification_received"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "match",
+          "payload": {
+            "eventType": "observer.notification_received",
+            "payload": {
+              "app": "Stripe",
+              "title": "Payment failed",
+              "body": "Invoice 88 for Oak AG"
+            }
+          },
+          "notifications": [
+            {
+              "message": "Payment failed: Invoice 88 for Oak AG",
+              "channels": [
+                "telegram"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "other",
+          "payload": {
+            "eventType": "observer.notification_received",
+            "payload": {
+              "app": "Music",
+              "title": "Now playing",
+              "body": "Song"
+            }
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "dev-summarise-now",
+      "split": "development",
+      "category": "no_automation",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "dev-summarise-now",
+        "description": "Right now, summarise the attached investor memo for me in three bullet points."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "manual"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "dev-call-lead",
+      "split": "development",
+      "category": "missing_capability",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "dev-call-lead",
+        "description": "Every weekday at 10 call my newest lead by phone and introduce us."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 10 * * 1-5"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "dev-linux-script",
+      "split": "development",
+      "category": "unsupported_target",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "dev-linux-script",
+        "description": "Every night at 2 run my backup shell script on my Linux server."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 2 * * *"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "dev-laptop-copy",
+      "split": "development",
+      "category": "missing_info",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "dev-laptop-copy",
+        "description": "Every Friday copy the weekly report to my laptop."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 17 * * 5"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    }
+  ]
+}

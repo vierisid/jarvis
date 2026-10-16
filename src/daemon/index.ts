@@ -1,3 +1,5 @@
+import { registerChatAttachments } from '../brief/registrations/chat-attachments';
+import { BriefAttachmentProvider } from '../brief/attachments';
 /**
  * J.A.R.V.I.S. Daemon
  *
@@ -7,6 +9,7 @@
  */
 
 import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness';
+import { pinUnpinnedEnabledFlows } from '../workflows/db/repos/binding-pins';
 import { mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -16,7 +19,7 @@ import { ServiceRegistry } from "./services.ts";
 import { HealthMonitor } from "./health.ts";
 import { loadConfig } from "../config/loader.ts";
 import { installLogFileSink, logFileIsProcessStdio } from "../util/log-file.ts";
-import { resolveEngineCacheRetention, resolveEngineIdleTtlMs } from "./config-merge.ts";
+import { resolveEngineCacheRetention, resolveEngineIdleTtlMs, resolvePlanningPolicy } from "./config-merge.ts";
 import { activeTurns } from "./active-turns.ts";
 import { writeLockedPort } from "./pid.ts";
 import { AgentService } from "./agent-service.ts";
@@ -47,6 +50,7 @@ import { registerConversations } from '../brief/registrations/conversations.ts';
 import { BriefConversationProvider } from '../brief/conversations.ts';
 import { BriefChatTransport } from '../brief/chat-transport.ts';
 import { registerChatTransport } from '../brief/registrations/chat-transport.ts';
+import { registerChatState } from '../brief/registrations/chat-state.ts';
 import type { BriefCapabilityId } from '../brief/capabilities.ts';
 import { GoogleAuth } from "../integrations/google-auth.ts";
 import { classifyGoogle, googleIdentity, makeGoogleAuth } from "../integrations/google-managed-refresh.ts";
@@ -57,18 +61,19 @@ import { collectExecutionTargets } from "../actions/tools/sidecar-route.ts";
 import { ChannelService } from "./channel-service.ts";
 import { BackgroundAgentService } from "./background-agent-service.ts";
 import { AuthorityEngine } from "../authority/engine.ts";
-import { ApprovalManager } from "../authority/approval.ts";
+import { ApprovalManager, approvalNeedsClick, executionState, UNANSWERED_APPROVAL_TTL_MS, type ApprovalRequest } from "../authority/approval.ts";
+import { applyEmergencyState } from "./emergency-state.ts";
 import { AuditTrail } from "../authority/audit.ts";
 import { wrapUntrusted, inlineUntrusted } from "../roles/untrusted.ts";
 import { isUpdateAvailable, SIDECAR_LATEST_VERSION, SIDECAR_RECOMMENDED_VERSION } from "../sidecar/compat.ts";
 import { containsWakePhrase, hasSpokenContent, wakeCommandFrom } from "../voice/wake-phrase.ts";
 import { AuthorityLearner } from "../authority/learning.ts";
-import { EmergencyController } from "../authority/emergency.ts";
+import { EmergencyController, setActiveEmergencyController } from "../authority/emergency.ts";
 import { ApprovalDelivery, approvalToast, taskCompleteBody } from "../authority/approval-delivery.ts";
 import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { buildBackgroundProfile } from "../authority/background-profile.ts";
 import { buildTaintGating } from "../authority/taint-gating.ts";
-import { channelApprovalReply, notificationApprovalDecision } from "./approval-decision.ts";
+import { channelApprovalReply, notificationApprovalDecision, notificationDecisionNote } from "./approval-decision.ts";
 import { sendDesktopNotification } from "../comms/desktop-notify.ts";
 import { ensureUiBuilt } from "./ui-autobuild.ts";
 import { deliverOpportunityNotification } from './opportunity-notification.ts';
@@ -93,6 +98,7 @@ import { WorkflowEventBus } from "../workflows/runtime/event-bus.ts";
 import { WorkflowEventBuffer } from "../workflows/runtime/event-buffer.ts";
 import { createComposerLlmClient } from "../actions/tools/composer-llm.ts";
 import { composePersistedFlow } from '../actions/tools/persisted-workflow-composer.ts';
+import { activePlanningPolicy, configurePlanningPolicy } from '../actions/tools/composition-provenance.ts';
 import { SuggestionComposer } from '../awareness/suggestion-composer.ts';
 import {
   bootstrapWorkflowEngine,
@@ -4360,6 +4366,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     deferredExecutor.setLearner(learner);
     // Approved actions must respect the kill switch too, not just the gate.
     deferredExecutor.setEmergencyController(emergencyController);
+    // ...and the permissions in force when they run, not when they were asked (Q-08).
+    deferredExecutor.setAuthorityEngine(authorityEngine);
+    // Tool dispatch, the workflow worker, triggers and continuations read the
+    // same controller (Q-08).
+    setActiveEmergencyController(emergencyController);
     // Startup reconciliation. Inline requests are owned by an authority gate
     // blocked in-process; any that survived a restart have no gate anymore,
     // so they go to the deferred path. An approved request that never got a
@@ -4372,6 +4383,20 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     if (reconciled.notStarted > 0 || reconciled.interrupted > 0) {
       console.log(`[Daemon] Approved actions left unresolved by the last shutdown: ${reconciled.notStarted} never started, ${reconciled.interrupted} interrupted. Awaiting a decision in Authority.`);
     }
+    // A chat or background card nobody answered stops being approvable after
+    // 24 hours, instead of never (Q-08). Workflow approvals are left alone.
+    const expireUnanswered = () => {
+      try {
+        const expired = approvalManager.expireUnanswered(UNANSWERED_APPROVAL_TTL_MS);
+        // Drop the cards from the dashboard, which would otherwise still offer them.
+        for (const request of expired) wsService.broadcastApprovalUpdate(request);
+        if (expired.length > 0) console.log(`[Daemon] ${expired.length} unanswered approval request(s) expired after 24 hours`);
+      } catch (err) {
+        console.error('[Daemon] Could not expire unanswered approvals:', err);
+      }
+    };
+    expireUnanswered();
+    setInterval(expireUnanswered, 10 * 60_000).unref?.();
     // Phase 6.3.5b — let WS service resolve approvals from voice intents.
     wsService.setApprovalManager(approvalManager);
     wsService.setDeferredExecutor(deferredExecutor);
@@ -4386,6 +4411,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Persist emergency state changes to the DB settings store
     emergencyController.setStateChangeCallback(async (state) => {
       wsService.broadcastEmergencyState(state);
+      // Pause holds, Kill stops (Q-08): stop runs and deny approvals on Kill,
+      // release held steps on Resume, keep the engine's copy of the state.
+      applyEmergencyState(state, { authorityEngine, approvalManager, auditTrail,
+        onApprovalDenied: (request) => wsService.broadcastApprovalUpdate(request) });
       try {
         const { saveUserSection } = await import('./user-settings.ts');
         if (!jarvisConfig.authority) jarvisConfig.authority = { default_level: 3 } as any;
@@ -4537,7 +4566,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       try {
         return approvalManager
           .getHistory({ limit: 8 })
-          .filter((r) => r.status === 'executed' || r.status === 'approved')
+          // Carried out means a receipt that says so: an approval not yet run,
+          // or one refused, failed or uncertain, is not (Q-08).
+          .filter((r) => r.status === 'executed' && (r.execution_outcome ?? 'committed') === 'committed')
           .slice(0, 3)
           .map((r) => `${trayHumanizeTool(r.tool_name)} · ${trayRelTime(r.executed_at ?? r.decided_at ?? r.created_at)}`);
       } catch {
@@ -4594,6 +4625,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       }
     };
 
+    // Whole, readable requests can be approved from a notification. On-screen
+    // review uses main's approval_review kind, including on macOS. A held
+    // decision can redisplay the card with an explanation in its meta.
+    const notifyApproval = (req: ApprovalRequest, note?: string): void => {
+      const { approvable: _approvable, ...toast } = approvalToast(req);
+      // Keep the full action description; any refusal explains the existing card.
+      notifyAll(note ? { ...toast, meta: `${toast.meta} · ${note}` } : toast);
+    };
+
     // New pending approvals → one notification each, deduped and recent-only so a
     // sidecar reconnect doesn't blast the whole backlog. The same poll also
     // catches approvals that just finished executing → the "done" notification.
@@ -4606,13 +4646,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           if (notifiedApprovalIds.has(req.id)) continue;
           notifiedApprovalIds.add(req.id);
           if (Date.now() - req.created_at > 60_000) continue; // skip the backlog
-          // Product call (founder): Approve/Deny on approval notifications,
-          // including irreversible ones; the impact rides along in `meta`
-          // ("destructive · delete_data") so the toast reads the risk. Since
-          // #791 only when the toast can show what is being approved: above
-          // TOAST_APPROVABLE_MAX_COLUMNS it is review-only (approvalToast).
-          const { approvable: _approvable, ...toast } = approvalToast(req);
-          notifyAll(toast);
+          // Approve/Deny only when the toast can show the full request.
+          // Requests requiring on-screen review remain dashboard-only.
+          notifyApproval(req);
         }
         if (notifiedApprovalIds.size > 200) {
           const pending = new Set(approvalManager.getPending().map((r) => r.id));
@@ -4629,6 +4665,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         for (const req of executed) {
           if (notifiedDoneIds.has(req.id)) continue;
           notifiedDoneIds.add(req.id);
+          // Only a run whose receipt says it happened is "complete" (Q-08).
+          if ((req.execution_outcome ?? 'committed') !== 'committed') continue;
           const doneAt = req.executed_at ?? req.decided_at ?? req.created_at;
           if (Date.now() - doneAt > 60_000) continue; // skip the backlog
           notifyAll({
@@ -4732,7 +4770,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // are handled sidecar-side (it opened the app) so there's nothing to do here.
     sidecarManager.onEvent((_sidecarId, event) => {
       if (event.event_type !== 'notify.action') return;
-      void notificationApprovalDecision(event.payload, { approvalManager, deferredExecutor, wsService })
+      void notificationApprovalDecision(event.payload, { approvalManager, deferredExecutor, wsService, auditTrail })
+        .then((outcome) => {
+          if (!outcome) return;
+          const note = notificationDecisionNote(outcome);
+          if (note && (outcome.status === 'needs_dashboard' || outcome.status === 'held')) notifyApproval(outcome.request, note);
+        })
         .catch((err) => console.error('[Daemon] notification approval decision failed:', err));
     });
 
@@ -4756,6 +4799,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         console.error('[Daemon] Approval delivery error:', err)
       );
     });
+    // A card withdrawn with its cancelled task leaves the dashboard too.
+    orchestrator.setApprovalWithdrawnCallback((request) => wsService.broadcastApprovalUpdate(request));
 
     // Wire authority engine into agent-service for prompt context
     agentService.setAuthorityEngine(authorityEngine);
@@ -4765,7 +4810,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // Wire channel approval handler
     channelService.setApprovalHandler((action, shortId, channel) =>
-      channelApprovalReply(action, shortId, channel, { approvalManager, deferredExecutor, wsService }));
+      channelApprovalReply(action, shortId, channel, { approvalManager, deferredExecutor, wsService, auditTrail }));
 
     console.log(`[Daemon] Authority engine initialized (governed: ${authorityEngine.getConfig().governed_categories.join(', ')})`);
 
@@ -4785,15 +4830,21 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       send: (client, message) => wsService.getServer().sendToClient(client, message),
       tts: () => wsService.getTTSProvider(),
     });
+    const briefAttachments = new BriefAttachmentProvider(getDb(), sidecarManager);
     const briefEnabled: BriefCapabilityId[] = [];
     if (process.env.JARVIS_BRIEF_CONVERSATIONS === '1') briefEnabled.push('conversations');
     if (process.env.JARVIS_BRIEF_CHAT_TRANSPORT === '1') briefEnabled.push('chatTransport');
+    if (process.env.JARVIS_BRIEF_CHAT_ATTACHMENTS === '1') briefEnabled.push('chatAttachments');
+    if (process.env.JARVIS_BRIEF_CHAT_STATE === '1') briefEnabled.push('chatState');
     const briefCapabilities = createBriefCapabilities([
       ...registerConversations(briefConversations), ...registerChatTransport(briefChatTransport),
+      ...registerChatState(briefConversations, briefChatTransport),
+      ...registerChatAttachments(briefAttachments),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
     const apiContext: import('./api-routes.ts').ApiContext & Record<string, unknown> = {
       briefConversations,
+      briefAttachments,
       briefCapabilities,
       daemonStartedAt: Date.now(),
       healthMonitor,
@@ -4883,6 +4934,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // miss-triggered fetch in cachedRealtimeVerdict covers that gap, which is
     // why that fetch exists rather than warming being the only defence.
     settingsReload.setWarmRealtime(warmRealtime);
+
+    // The composer's planning policy: JARVIS_PLANNING_POLICY, else the
+    // workflows.planningPolicy setting, read at each composition so a settings
+    // reload applies a change to the next one (Q-03).
+    configurePlanningPolicy(() => resolvePlanningPolicy(jarvisConfig.workflows?.planningPolicy));
+    activePlanningPolicy(); // logs the starting policy and its source
 
     // Bootstrap the workflow engine: build/locate the bundle, compile pieces,
     // start the loopback SandboxApi, construct the EngineRuntime, extract the
@@ -5016,7 +5073,20 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         return tool ? { params: Object.entries(tool.parameters).map(([name, param]) => ({ name, ...param })) } : null;
       },
       roles: () => new Set(agentService.getSpecialists().keys()),
+      // Q-05: the computers a workflow can be pinned to, and whether this one may run local tools.
+      // `--no-local-tools` reaches the tools only later in startup (9b), after
+      // the pin pass below, so the flag is read here as well.
+      machines: () => sidecarManager.listSidecars(),
+      localTools: () => !config.noLocalTools && !isNoLocalTools(),
     });
+    // Q-05: an enabled flow without pins (one enabled before this build) is
+    // pinned to the bindings it runs against now, before any trigger fires.
+    try {
+      const pinned = pinUnpinnedEnabledFlows();
+      if (pinned) console.log(`[Daemon] Pinned the connections and computer of ${pinned} enabled workflow(s)`);
+    } catch (error) {
+      console.error('[Daemon] Could not pin enabled workflows:', (error as Error).message);
+    }
     const workflowEngineRuntime = engineBoot?.runtime ?? null;
     const workflowSandboxApi = engineBoot?.api ?? null;
 
@@ -5338,7 +5408,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // notification would duplicate it in the chat.
       if (request.tool_name === 'request_approval') return;
       if (request.execution_mode === 'inline') return;
-      const text = `[EXECUTED] ${request.tool_name}: ${result.slice(0, 200)}`;
+      // Labelled by what the receipt says, not by the fact that it was tried (Q-08).
+      const current = approvalManager.getRequest(requestId);
+      const state = current ? executionState(current) : 'committed';
+      const label = state === 'committed' ? '[EXECUTED]' : state === 'blocked' ? '[NOT RUN]' : state === 'unknown' ? '[UNCERTAIN]' : '[FAILED]';
+      const text = `${label} ${request.tool_name}: ${result.slice(0, 200)}`;
       wsService.broadcastNotification(text, 'normal');
     });
 

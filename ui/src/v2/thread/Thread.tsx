@@ -327,6 +327,7 @@ function ItemRenderer({
           category={item.category}
           impact={item.impact}
           highlights={item.highlights}
+          note={item.note}
           onApprove={() => onApprove?.(item.id)}
           onCancel={() => onCancel?.(item.id)}
         />

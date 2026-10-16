@@ -516,7 +516,7 @@ function RunStatusIcon({ status }: { status: FlowRunStatus }): React.ReactElemen
  * uploadRunLog calls, or if the run was paused via a non-webhook path.
  */
 interface RunWaitpoint {
-  id: string; stepName: string; type: string; resumeUrl?: string;
+  id: string; stepName: string; type: string; resumeUrl?: string | null;
   child?: { childRunId: string; status: string; executionPath: Array<[string, number]> };
 }
 
@@ -568,7 +568,12 @@ export function PausedRunCallout({ runId }: { runId: string }): React.ReactEleme
                 {wp.child.executionPath.length > 0 && <> Iteration: {wp.child.executionPath.map(([step, index]) => `${step}[${index}]`).join(' / ')}.</>}
                 {' '}Continues automatically when the child finishes.
               </span> : <span>
-                ({wp.type}) -- POST any JSON body to <code>{wp.resumeUrl}</code> to resume.
+                ({wp.type}) --{" "}
+                {wp.resumeUrl ? (
+                  <>POST any JSON body to <code>{wp.resumeUrl}</code> to resume.</>
+                ) : (
+                  <>held while Jarvis is paused; it continues when Jarvis is resumed.</>
+                )}
               </span>}
             </li>
           ))}

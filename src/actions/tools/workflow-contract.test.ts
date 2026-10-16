@@ -214,6 +214,9 @@ describe('production composition', () => {
     // Enabling runs the published version, and reports the same.
     const enabled = parse(await tool.execute({ action: 'enable', flow: composed.flow.id }));
     expect(enabled.contractReport.violations).toEqual(republished.contractReport.violations);
+    // Publishing again with no new draft republishes the published version (Q-05), and reports the same.
+    const again = parse(await tool.execute({ action: 'publish', flow: composed.flow.id }));
+    expect(again.contractReport.violations).toEqual(republished.contractReport.violations);
     expect(parse(await tool.execute({ action: 'disable', flow: composed.flow.id })).contractReport).toBeUndefined();
     // A flow composed without a contract has nothing to recheck.
     const plain = parse(await tool.execute({ action: 'compose', name: 'Plain summary', description: 'Tell me on the dashboard.' }));
