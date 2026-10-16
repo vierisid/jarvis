@@ -236,7 +236,10 @@ export function createFlowRun(input: CreateFlowRunInput): FlowRun {
       input.flowId,
     ],
   );
-  if (inserted.changes !== 1) {
+  // Zero, not "not one": Bun counts rows written by AFTER INSERT triggers on
+  // flow_run (workflow-inspection-schema.ts records version lock state) in
+  // `changes`, so a successful insert can report more than one.
+  if (inserted.changes === 0) {
     const flowExists = db().query("SELECT 1 FROM flow WHERE id = ?").get(input.flowId);
     throw new Error(flowExists
       ? `createFlowRun: version ${input.flowVersionId} is not a version of flow ${input.flowId}`

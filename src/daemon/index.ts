@@ -1,3 +1,5 @@
+import { WorkflowContext } from '../brief/workflow-context';
+import { registerWorkflowContext } from '../brief/registrations/workflow-context';
 import { WorkflowRemoval } from '../brief/workflow-removal';
 import { registerWorkflowRemoval } from '../brief/registrations/workflow-removal';
 import { MemoryForget } from '../brief/memory-forget';
@@ -4870,6 +4872,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const briefMemoryUsage = getMemoryUsageLedger();
     const briefMemoryForget = new MemoryForget(getDb());
     briefWorkflowRemoval = new WorkflowRemoval(getDb());
+    const briefWorkflowContext = new WorkflowContext(getDb());
     const briefMemoryStream = new MemoryStream(getDb(), briefMemoryUsage, briefMemoryForget);
     const briefDecisions = new DecisionQueue(getDb(), { approvalManager, deferredExecutor, wsService, auditTrail });
     const briefDecisionDocuments = new DecisionDocuments(getDb(), briefDecisions,
@@ -4900,6 +4903,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     if (process.env.JARVIS_BRIEF_MEMORY_STREAM === '1') briefEnabled.push('memoryStream');
     if (process.env.JARVIS_BRIEF_MEMORY_USAGE === '1') briefEnabled.push('memoryUsage');
     if (process.env.JARVIS_BRIEF_MEMORY_FORGET === '1') briefEnabled.push('memoryForget');
+    if (process.env.JARVIS_BRIEF_WORKFLOW_CONTEXT === '1') briefEnabled.push('workflowContext');
     if (process.env.JARVIS_BRIEF_WORKFLOW_REMOVAL === '1') briefEnabled.push('workflowRemoval');
     if (process.env.JARVIS_BRIEF_OUTCOMES === '1') briefEnabled.push('outcomes');
     if (process.env.JARVIS_BRIEF_RECOMMENDATIONS === '1') briefEnabled.push('recommendations');
@@ -4933,6 +4937,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ...registerMemoryUsage(briefMemoryUsage),
       ...registerMemoryForget(briefMemoryForget),
       ...registerWorkflowRemoval(briefWorkflowRemoval),
+      ...registerWorkflowContext(briefWorkflowContext),
       ...registerCompositionIngredients(briefWorkflowComposition),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
@@ -4944,6 +4949,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       briefMemoryUsage,
       briefMemoryForget,
       briefWorkflowRemoval,
+      briefWorkflowContext,
       briefDecisionDocuments,
       briefRecommendations,
       briefConversations,
@@ -5232,6 +5238,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ...createApiRoutes(apiContext),
       ...createWorkflowRoutes({
         recoveryAuthority: authorityEngine,
+        briefWorkflowContext, briefCapabilities,
         triggerManager,
         credentialResolver,
         ...(workflowPieceCatalog ? { pieceRegistry: workflowPieceCatalog } : {}),

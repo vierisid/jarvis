@@ -1,3 +1,4 @@
+import { ensureWorkflowInspectionSchema } from './workflow-inspection-schema';
 import { ensureWorkflowRemovalSchema } from './workflow-removal-schema';
 /**
  * SQLite schema for the Jarvis workflow runtime.
@@ -390,6 +391,7 @@ export function createSchema(db: Database): void {
   applyAdditiveColumnMigrations(db);
   backfillRunProjects(db);
   ensureWorkflowRemovalSchema(db);
+  ensureWorkflowInspectionSchema(db);
 }
 
 /**

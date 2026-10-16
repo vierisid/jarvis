@@ -1,0 +1,25 @@
+{
+  "status": "passed",
+  "sources": [
+    [
+      "runs",
+      "dbce047b453ff8309cd2c3f3195922bfe42d051c",
+      "ui/src/brief/workflows/runs/model.ts"
+    ],
+    [
+      "context",
+      "9c174b760105b41fecec5df5403f0edb1dad19fd",
+      "ui/src/brief/workflows/context/model.ts"
+    ]
+  ],
+  "checks": [
+    "accepted run",
+    "history",
+    "recorded detail",
+    "recorded context",
+    "configured context",
+    "redaction",
+    "request recovery"
+  ],
+  "productionHostBound": false
+}

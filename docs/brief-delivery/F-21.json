@@ -1,0 +1,170 @@
+{
+  "task": "F-21",
+  "title": "Expose run context and inspection projections",
+  "date": "2026-10-12",
+  "branch": "brief/f-21",
+  "base_branch": "brief/f-20",
+  "baseline": "35018804546c18254abd7ba3e062deb812066734",
+  "main_reviewed": "75bf90b1bf92849c3f1c18f90e5f05d2e61f8fb0",
+  "head": {
+    "ref": "brief/f-21",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/F-21.json",
+    "published_head": "Recorded in PR description; receipt is included in that commit."
+  },
+  "worktree": "/home/vieri-balboni/Projects/.worktrees/jarvis-f-21",
+  "isolation": "Dedicated Git worktree created directly after managed-worktree tool returned Not a git repository from parent workspace. Primary checkout retained. New tests use task-specific temporary SQLite databases and Unix sockets; no TCP port or live provider.",
+  "ownership": {
+    "implementer": "Codex",
+    "reviewer": "lapociampi",
+    "review_state": "Codex PR reviewer found four defects at 64609e98; all four fixes have regression coverage. Follow-up automated review and new-head CI reported in PR #939. Human review remains requested from lapociampi."
+  },
+  "dependencies": {
+    "compile": [
+      "F-01"
+    ],
+    "enable": [],
+    "stack": "F-20 remains open and unmerged. No D/Q stack was merged or rebased into this card."
+  },
+  "baseline_review": {
+    "f21_existing_pr": "None at initial and pre-delivery checks",
+    "f20": "https://github.com/vierisid/jarvis/pull/848",
+    "request_guards": "#662 closed without merge. Superseding #666 merged as 770606cabfa1e365c2ee0939d4346bb207583936; its guards are already in this stack and preserved.",
+    "main_isolation": "Reviewed newer main project scoping. The touched /run path now rechecks server-owned project before and after body reads and writes runs in that project. Preserve main resolveProjectId and all other route protections during integration.",
+    "q07": "Additive read contract only; effect reconciliation/recovery writes remain Q-07 ownership. No recovery state machine imported.",
+    "parent_evidence": "evidence/F-21/parent.json"
+  },
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "node": "255:3100",
+    "inspection": "Direct Figma URL was inaccessible through the web tool. Read staged D-19/D-20 contracts and receipts. Backend-only scope; no fresh native Figma or visual screenshot claim."
+  },
+  "contract": {
+    "selection": "Explicit immutable version and optional run ID, matched across sanitized canvas, context and actual run evidence within one SQLite snapshot.",
+    "context": "Configured work-item/prepared goal and fact references, connection/target/rule references; actual retained memory handoffs, linked work, approval and machine-binding evidence remain separate.",
+    "historical": "No current-version fallback. Capture whether a version was locked when a new run was accepted. Mutable/ambiguous legacy history is explicitly unavailable, while retained actual steps remain readable.",
+    "manual": "Existing /api/workflows/:id/run accepts an explicit Brief envelope and bounded object payload; atomic run/job/receipt with maxAttempts=1; durable idempotency and read-only request recovery. Accepted receipts remain recoverable in their original scope after workflow hard deletion.",
+    "read_shape": "Compatible with pinned D-19/D-20 validators; graph projection is read-only and not an editor replacement.",
+    "security": "Exact provider/capability gate, authenticated routes, project-scoped reads, no-store JSON, bounded legacy data, conservative text/key/subtree redaction, no decrypted connections or bearer wait IDs.",
+    "guide": "docs/brief-workflow-context.md"
+  },
+  "activation": {
+    "capability": "workflowContext",
+    "flag": "JARVIS_BRIEF_WORKFLOW_CONTEXT=1",
+    "default": "off",
+    "code_delivered": true,
+    "merged": false,
+    "capability_readiness": "Backend contract verified with fixtures. Production UI host integration and release verification pending.",
+    "release_enabled": false,
+    "deployed": false
+  },
+  "limits": {
+    "source_bytes": 4000000,
+    "response_bytes": 512000,
+    "history_page": 50,
+    "record_rows": 200,
+    "graph_nodes": 100,
+    "field_chars": 8000,
+    "field_depth": 8,
+    "field_values": 256,
+    "manual_payload_bytes": 65536,
+    "manual_depth": 16,
+    "manual_values": 4096,
+    "durable_requests": 10000,
+    "overflow": "Explicit refusal for collection/source/response/request capacity; labeled omission for oversized individual fields; no receipt eviction."
+  },
+  "verification": {
+    "toolchain": {
+      "bun": "1.3.14",
+      "pin": ".github/workflows/test.yml",
+      "install": "Frozen lockfile; no lockfile changes."
+    },
+    "focused": {
+      "command": "bun test --timeout 15000 src/brief/workflow-context.test.ts src/daemon/api-brief-workflow-context.test.ts src/workflows/adapters/untrusted-reach.test.ts",
+      "passed": 52,
+      "failed": 0,
+      "assertions": 245,
+      "files": 3,
+      "evidence": "evidence/F-21/review-focused.log"
+    },
+    "affected": {
+      "command": "bun test --timeout 15000 src/brief src/workflows/api src/workflows/db src/workflows/runner/handler.test.ts src/workflows/runner/triggers/workflow-removal.test.ts src/workflows/runtime/workflow-readiness.test.ts src/workflows/runtime/cancellation.test.ts src/workflows/adapters/untrusted-reach.test.ts src/workflows/sandbox-api/worker-rpc.test.ts src/goals/work-items.test.ts src/daemon/api-brief-workflow-context.test.ts src/daemon/api-brief-workflow-removal.test.ts",
+      "passed": 926,
+      "skipped": 6,
+      "failed": 0,
+      "assertions": 15719,
+      "files": 46,
+      "evidence": "evidence/F-21/review-affected.log",
+      "scope": "Review corrections, all F-21 regressions, affected F stack and sandbox worker RPC tests."
+    },
+    "initial_affected": {
+      "command": "bun test src/brief src/workflows/api src/workflows/db src/workflows/runner/handler.test.ts src/workflows/runner/triggers/workflow-removal.test.ts src/workflows/runtime/workflow-readiness.test.ts src/workflows/runtime/cancellation.test.ts src/workflows/runtime/workflow-authority.test.ts src/workflows/adapters/untrusted-reach.test.ts src/goals/work-items.test.ts src/daemon/api-brief-workflow-context.test.ts src/daemon/api-brief-workflow-removal.test.ts",
+      "passed": 955,
+      "skipped": 6,
+      "failed": 0,
+      "assertions": 15825,
+      "files": 46,
+      "evidence": "evidence/F-21/initial-affected-summary.log",
+      "scope": "Before final projection refinements. Included existing real-engine Authority fixtures with fake effects. That legacy suite uses the default user engine-build cache; new F-21 fixtures and the final affected command avoid building shared engine outputs."
+    },
+    "consumer_compatibility": {
+      "status": "passed",
+      "command": "bun run scripts/probe-brief-workflow-context.ts",
+      "evidence": "evidence/F-21/review-consumers.json",
+      "production_host_bound": false
+    },
+    "typescript": {
+      "status": "passed",
+      "command": "bun x tsc --noEmit",
+      "evidence": "evidence/F-21/review-typescript.log"
+    },
+    "ui_build": {
+      "status": "passed",
+      "command": "bun run build:ui",
+      "evidence": "evidence/F-21/build.log",
+      "warnings": "Existing Tailwind @theme/@tailwind warnings.",
+      "scope": "Original implementation build; review corrections do not change UI sources."
+    },
+    "guards": {
+      "status": "passed",
+      "commands": [
+        "bun run check:no-ee",
+        "bun run check:migrations",
+        "bun run lint:templates",
+        "bun run check:package"
+      ],
+      "evidence": "evidence/F-21/guards.log"
+    },
+    "http": "Real panel authentication over an isolated Unix socket; all readers and existing manual endpoint deny anonymous access. Concurrent UI retry test accepts exactly one run/job.",
+    "runtime": "Existing Worker with a deterministic fake executor records through real DefaultWorkerHandlers, consumes explicit input once and projects the persisted envelope. Nested real-writer loop records and redaction covered; no goal progress writes.",
+    "intermediate_failures": "Fixed a missing fake-executor stepsCount type and two test fixture setup errors. One repeated run during local contention hit four default 5-second timeouts; the final 15-second focused and affected runs passed. No skipped failing assertions.",
+    "hooks": "Initial implementation normal hooks passed all repository guards, 162 related tests / 11173 assertions and TypeScript. Correction commit uses the same normal hooks; result reported in PR #939.",
+    "ci": "Reviewed head 64609e98 passed full CI: 8501 pass, 38 skip, zero fail; one unchanged browser integration needed attempt 3. New-head CI is reported separately in PR #939 after pushing the review fixes.",
+    "self_review": "Reviewed the complete staged diff, auth/scoping, immutable history, redaction, idempotent transaction and rollback. Added regressions for loop/literal identity collisions, malformed legacy step containers, prototype-name statuses and non-finite manual input. Addressed all four independent reviewer findings; compared the changed queries and storage normalization with the real writer and pinned consumer contracts.",
+    "env_classification": {
+      "command": "bun test --timeout 15000 src/util/model-exec-env.test.ts src/model-exec-env-sites.test.ts",
+      "passed": 28,
+      "failed": 0,
+      "assertions": 282,
+      "files": 2,
+      "evidence": "evidence/F-21/env-classification.log"
+    },
+    "review_corrections": "evidence/F-21/review-fixes.json"
+  },
+  "limitations": [
+    "All arbitrary string leaves and field names are redacted until reviewed schemas can safely expose more; numeric/boolean values, structure and typed references remain inspectable.",
+    "No immutable graph reconstruction for legacy mutable or ambiguous version history; those graphs are explicitly unavailable.",
+    "Connection identities, policy snapshots and context not captured by existing run records remain unavailable rather than inferred from configuration.",
+    "Memory reflects retained supplied/outcome-verified events, not complete lifetime coverage or proof of model reliance.",
+    "D-19/D-20 production host binding, shared durable UI command ownership and source navigation are not activated or certified here.",
+    "Six optional Q integrations were skipped because their providers are absent from this staged base. No live provider, paid model, hosted baseline, or deployment certification.",
+    "F-22 is not implemented. Shared roadmap register and private context files were not edited."
+  ],
+  "rollback": "Unset the feature flag and restart. Retain idempotency receipts and version-evidence table/trigger. Do not downgrade to a build that silently treats the Brief request envelope as an unkeyed legacy start. Accepted runs continue normally; no replay or effect rollback.",
+  "quick_verification": [
+    "bun test --timeout 15000 src/brief/workflow-context.test.ts src/daemon/api-brief-workflow-context.test.ts src/workflows/adapters/untrusted-reach.test.ts",
+    "bun run scripts/probe-brief-workflow-context.ts",
+    "bun x tsc --noEmit"
+  ],
+  "evidence_policy": "Only commands, verdicts and fixed metadata are committed; raw fixture output and private context are excluded.",
+  "pull_request": "https://github.com/vierisid/jarvis/pull/939"
+}

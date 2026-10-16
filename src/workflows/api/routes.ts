@@ -1,3 +1,7 @@
+import type { WorkflowContext } from '../../brief/workflow-context';
+import type { BriefCapabilities } from '../../brief/capabilities';
+import { requireWorkflowContext } from '../../brief/workflow-context-routes';
+import { WorkflowInspectionError } from '../../brief/inspection-values';
 /**
  * HTTP routes for the workflow runtime.
  *
@@ -685,6 +689,8 @@ function sampleStepNameRefusal(stepName: string): Response | null {
 
 export interface CreateWorkflowRoutesOptions {
   recoveryAuthority?: AuthorityEngine;
+  briefWorkflowContext?: WorkflowContext;
+  briefCapabilities?: BriefCapabilities;
   /**
    * Optional trigger manager. When provided, every flow status / version
    * change calls `triggerManager.refresh(flowId)` so cron/webhook/event
@@ -1995,6 +2001,21 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // await is the one this run uses rather than the stale pointer.
           const flow = scopedFlow(req, id);
           if (!flow) return err("flow not found", 404);
+          if (Object.hasOwn(read.body, 'brief')) {
+            let response: Response;
+            try {
+              const provider = requireWorkflowContext(opts.briefCapabilities, opts.briefWorkflowContext);
+              if (provider.projectId !== callerProject(req)) return err('flow not found', 404);
+              response = ok(provider.start(id, read.body), 202);
+            } catch (e) {
+              if (e instanceof WorkflowInspectionError) response = ok({ code: e.code }, e.status);
+              else if (e instanceof WorkflowReadinessError || e instanceof CodeStepsRefusedError) response = ok({ code: 'not_ready' }, 409);
+              else if (e instanceof Error && e.message === 'workflow_removed') response = ok({ code: 'workflow_removed' }, 409);
+              else response = ok({ code: 'unavailable' }, 503);
+            }
+            response.headers.set('Cache-Control', 'no-store');
+            return response;
+          }
           const body = read.body as {
             environment?: unknown;
             triggeredBy?: unknown;

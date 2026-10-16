@@ -326,6 +326,9 @@ const REVIEWED_STEP_OUTPUT_READERS = [
   // No trigger inputs, samples, credentials or step outputs reach a model/prompt.
   // workflow-removal.test.ts checks hostile sample/trigger/run payloads stay private.
   'brief/workflow-removal.ts',
+  // F21: authenticated, bounded human inspection. String leaves/keys are redacted;
+  // no model input, decrypted connections or waitpoint capabilities.
+  'brief/workflow-context.ts',
   'brief/adapters.ts',
   'brief/composition.ts',
   'brief/contracts.ts',
