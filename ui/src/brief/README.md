@@ -87,6 +87,8 @@ are not restyled. Domain actions, approvals, Authority and async lifecycles stay
   clipping. Translated action labels belong in `stateLabels` too.
 - Native-disabled controls are not focusable. Explain important unavailability in visible text.
 - Tabs keep mounted state only; they do not persist anything.
+- Tab-strip styles target only `.brief-tabs__list > button`, so buttons and selectors inside a tab
+  panel keep their own control styles.
 - A custom `BriefMenu` trigger must spread the props it receives onto one native `<button>` and give
   it an accessible name. Change `dismissKey` (for example the route hash) to close an open menu when
   something outside it navigates; focus returns to the trigger only if it was inside the menu.
@@ -615,3 +617,37 @@ actions only change local fixture state.
   menu covers ready, long, many, calendar, read-only, stale, deferred, uncertain, refused, empty and
   unavailable.
 - `decisions/figma-reference.json` records the UI-27 source and bounded deviations.
+
+## Goals
+
+- `goals/` is the D-24 Goals room (`goals` and `completed-goals`): goal selectors above one ordered
+  path of stage cards, and settled summary cards with milestones under Completed. The room only
+  reads and navigates; it has no goal writer, calculation or approval path. `onCreate` is optional and
+  must open the host's existing goal-creation flow.
+- Each goal is a `GoalDatum`: `BriefGoal` plus owner-written title strings, with F-15's
+  `progress { value, basis, rollup: "independent" }` required. The percent comes from `progress.value`
+  (0..1) only, never from value/target, a title or child stages. A count is shown only with a
+  qualified measurement (`qualified()` from Today outcomes) with finite baseline and target; a legacy
+  score stays labelled "Score"; anything else reads "Not measured yet". Data basis shows measured vs
+  user reported, baseline, as-of time and provenance.
+- `stages` is an explicit, owner-ordered path. Status is always shown as text, including beside a
+  caption. The filter exposes the real `active`, `draft`, `paused`, `failed` and `killed` statuses;
+  completion never forces 100 percent.
+- The next step is navigation only: `nextGoalRoute` opens the existing Needs you decision
+  (`workItemId`, optional `approvalId`) only for an active goal on a fresh `ready` read whose
+  `next.goalRevision` matches the goal revision, and in live mode only with the `recommendations` and
+  `decisions` capabilities.
+- `GoalsController` owns one authenticated scope; selection is remembered per tab and filter and
+  survives theme, sidebar, Pebble and route changes. Revoking access or `retire()` clears rows and
+  selection, and late reads cannot repopulate a scope. Invalid projections (duplicate roots or stages,
+  missing revision/title, unknown status) fail closed.
+- Opt-in `goalsRegistrations(useBinding)`, not in the production registry. `goalsAvailable` requires
+  a non-empty scope, a `source` matching the shell mode, a controller bound to the same scope and, in
+  live mode, the `goalMeasurements` capability.
+- Wiring (not done here): an adapter over F-15's `GET /api/brief/goals/:id` must supply the complete
+  authorized roots with their owner-ordered paths and titles, pass `measurement` and `progress`
+  through unchanged (see `docs/brief-goal-measurements.md`), and share Today's decision identity so a
+  decision resolved in another room reconciles here.
+- `?brief=preview&specimen=goals#/_brief_preview` opens it over in-memory fixtures (ready, mixed
+  status, score only, decreasing, unknown, long, many, loading, empty, stale, unavailable,
+  unsupported). `goals/figma-reference.json` records the UI-35 source and bounded adaptations.
