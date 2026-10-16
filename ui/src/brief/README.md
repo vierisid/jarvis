@@ -458,3 +458,31 @@ ingredients (ready, loading, unavailable). It sends no request.
 
 `?brief=preview&specimen=workflow-canvas#/_brief_preview` opens the page over an in-memory fixture flow
 (with branches, loops and a detached chain). Save stays in memory; anything else answers 403.
+
+## Workflow runs
+
+- `workflows/runs/` is the D-19 Runs view: run history beside one inline inspection card, never a
+  second overlay. `WorkflowViewHeader` is the Canvas / Runs / Context & rules header shared with the
+  canvas; switching views is a plain room navigation (no document-wide View Transition, whose
+  `::view-transition-*` rules cannot be scoped under `.brief-root`).
+- `WorkflowRunsController` owns one scope + flow + version: selection by immutable run ID (a missing
+  deep link stays missing, never the latest run), late or aborted reads cannot replace the selected
+  run, refresh rebuilds the loaded prefix through the last loaded run (at most 20 pages, then stale with
+  its continuation), and an 8-second poll re-reads projections only. The host keeps the controller
+  across room, chat and sidebar changes and calls `retire()` only when the owner or workflow changes.
+- Run is the optional `port.start`: single-flight, and a lost or mismatched acknowledgement leaves it
+  `uncertain` and locked for that controller. Nothing is retried or re-sent; `not_submitted` is only for
+  a request that was never sent.
+- `readRunHistory(scope, request)` is the `list` half of the port over `GET /api/workflows/:id/runs`
+  (`{ items, nextOffset }`, the offset as the cursor). It copies identity, status and time only, maps a
+  stop whose in-flight call may have completed to `uncertain`, and treats a 404 as unavailable. The
+  `detail` half is F-21's: it must build the redacted projection (step fields, effect receipts with
+  `unknown` kept distinct, waitpoints without resume URLs, Q-19 failure wording) before binding. The
+  card renders strings as text and shows `Redacted` for fields marked so; it is not a redaction layer.
+- Opt-in `workflowRunsRegistration(useBinding)`, not in the production registry. `runsAvailable`
+  requires a non-empty scope, flow, version and title, a `source` matching the shell mode, the routed
+  flow/version, a controller bound to the same scope and the `workflowContext` capability.
+- `workflows/runs/figma-reference.json` records the UI-24 source values and bounded deviations.
+
+`?brief=preview&specimen=workflow-runs#/_brief_preview` opens the view over in-memory fixture runs (all
+seven states, an older version, partial receipts and a waitpoint). Run creates a fixture run only.
