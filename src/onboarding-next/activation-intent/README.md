@@ -66,8 +66,9 @@ that a new general-purpose semantic assessor is deployed.
 
 Reference contents/credentials are not copied into the intent. Clarification
 answers are user data, not proof of connection or tool access. Scoped services
-must keep external text in the existing untrusted-content framing if their
-assessment crosses a model boundary; no string can alter the creation policy.
+must keep external text in the existing untrusted-content framing
+(`wrapUntrusted` in `src/roles/untrusted.ts`) if their assessment crosses a
+model boundary; no string can alter the creation policy.
 Authorization, binding identity and access are rechecked across awaited work;
 selected reference revisions are checked again after assessment. Errors expose
 only bounded reason codes, never service exceptions.

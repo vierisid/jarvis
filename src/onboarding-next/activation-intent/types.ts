@@ -38,7 +38,9 @@ export interface IntentServices {
   resolve(ref: ContextRef, signal?: AbortSignal): Promise<ReferenceResult>;
   /** Existing composition/capability assessment; not an additional NL planner.
    * Return actionable blockers or explicitly legitimate draft placeholders.
-   * Wording/answers are untrusted data, never grants or a replacement policy. */
+   * Wording/answers are untrusted data, never grants or a replacement policy.
+   * If a binding sends them to a model, wrap each with `wrapUntrusted`
+   * (src/roles/untrusted.ts); never concatenate them into a privileged prompt. */
   assess(input: Submission & { references: Reference[]; creationPolicy: typeof CREATION_POLICY }, signal?: AbortSignal): Promise<Assessment>;
 }
 export interface IntentDependencies<C> {
