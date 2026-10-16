@@ -21,6 +21,8 @@ Prepared opportunities continue to use their existing durable records and reader
 
 A WebSocket receipt means a transport accepted the card, not that the user read it or the UI rendered it. Network failure around acknowledgment can still replay an existing ID. The existing durable state and client identity handling retain their semantics. Delivery retries do not publish a second workflow event.
 
+The dashboard does not yet render the `awareness_event` envelope as a live card: it logs it and leaves it out of chat. In quiet mode a non-opportunity suggestion (for example an error suggestion) is therefore visible only through `GET /api/awareness/suggestions`, and an opportunity through the Routine requests panel, which loads its list when opened. A recorded WebSocket receipt does not mean a card was shown.
+
 ## Verify without live providers
 
 From this worktree, run:
@@ -39,7 +41,7 @@ The fixture uses the real WebSocket service, workflow event bus, trigger manager
 
 The review regressions additionally check saved/API/event wording and offline desktop acceptance/refusal. The policy has a separate injectable `desktopWithReceipt` sender so fixtures do not fall through to native notifications; it preserves the distinction between launching a process and receiving delivery acceptance. Run these checks alone with `bun test src/daemon/awareness-delivery-policy.test.ts -t "F11 review"`.
 
-The broader command and output are in `docs/brief-delivery/evidence/F-11/review-affected-command.txt` and `review-affected.log`. TypeScript uses `bun node_modules/typescript/bin/tsc --noEmit`.
+TypeScript uses `bunx tsc --noEmit`.
 
 For an integration deployment, set `JARVIS_BRIEF_QUIET_AWARENESS=1` in that daemon's environment and restart, then check the authenticated `/api/brief/capabilities` response for `quietAwareness.enabled: true`. Keep chat closed while generating synthetic awareness and governed notification events; observe card/safety envelopes without proactive chat or TTS. This task did not change a running daemon or enable the flag in production.
 
@@ -47,4 +49,4 @@ For an integration deployment, set `JARVIS_BRIEF_QUIET_AWARENESS=1` in that daem
 
 Unset the flag and restart to restore legacy delivery. Retain awareness captures, suggestions, opportunity delivery receipts, preparation records and decision history. No data cleanup is needed. Legacy automatic research and interruption behavior returns when quiet mode is off.
 
-This is a backend delivery change. The sole UI edit corrects a stale comment; no layout or screenshot claim is included. F-12 is outside this PR. The branch is stacked on corrected `brief/f-10` at the user's request and stays unmerged until the stack is reviewed.
+This is a backend delivery change. The sole UI edit corrects a stale comment; no layout or screenshot claim is included.
