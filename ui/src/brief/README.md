@@ -370,3 +370,39 @@ fixture binding (Screenshot availability and failure toggles). It picks, uploads
 `?brief=preview&specimen=messages#/_brief_preview` opens the thread with the tab strip, composer and
 attachment fan in the Today specimen with a fixture owner (start, finish, partial failure, long reply,
 replay, offline and unavailable). It sends nothing.
+
+## Workflow creation
+
+- `workflows/create/` renders the UI-21 Workflows page: a centred prompt over the shared D-13
+  composer (only `sendingLabel` / `suggestionsLabel` are added; chat defaults are unchanged) and
+  `workflows/recent-rows/` below it. Suggestions only fill the prompt. It is a room body plus an
+  opt-in `workflowCreationRegistration(useBinding)`; it is not in the production registry, and the
+  released `WorkflowsRoom` is unchanged. It does not mount the Brief chat provider or call
+  `client.send`, so the #1075 rule does not gate it, but it must not be mounted live until the
+  workflow destinations it navigates to exist.
+- Creation goes only through F-07: `createCompositionPort(capabilities, authenticatedFetch)` calls
+  `/api/brief/workflow-compositions` (`JARVIS_BRIEF_WORKFLOW_COMPOSITION`) and re-checks the
+  `workflowComposition` capability before every request. Types and the prompt limit come from
+  `src/brief/composition-contracts.ts`. Requests are prompt-only; F-08 ingredient selection
+  (`JARVIS_BRIEF_COMPOSITION_INGREDIENTS`) belongs to D-17's picker in the `ingredientControl` slot.
+  Never add a second composer, write flows directly, or enable, publish or run from this page: F-07
+  only prepares a DISABLED draft, and enabling stays on the existing gated path (Q-05 enable card).
+- `WorkflowCreationController` is one instance per authenticated account and vault, held above room
+  navigation and disposed when that ownership ends. It persists the request id with the exact prompt
+  (`sessionCreationStorage(scopeId, sessionStorage)`) before the POST. A lost or invalid response keeps
+  that request: **Check request** (and a one-second follow-up while a job is queued or running) looks it
+  up by its exact `requestId` and, only if absent, replays the same request under the same id, so a
+  retry never creates a second draft. A receipt must echo the request id, prompt and name, carry no
+  ingredients, and keep its job id; a ready receipt navigates once to `workflow-draft` with its exact
+  `flowId` and `versionId`. Unreadable saved state makes the record read-only rather than replacing it.
+- Recent rows (`readRecentWorkflows(authenticatedFetch, signal)`) read the existing workflow API with
+  four workers, at most 200 flows and each flow's latest run page (`{ items, nextOffset }`); no implicit
+  polling. A missed read or a larger inventory reports `stale`/`unavailable`, never complete recency.
+  Rows show status-derived copy only (never step output) and open `workflow` with flow, version and
+  run ids. The host owns invocation, caching and abort on scope change.
+- `workflows/create/figma-reference.json` records the UI-21 source values.
+  `f07-compatibility.test.ts` drives F-07's real provider, routes and SQLite through this port with a
+  fake model: a lost POST recovers one populated disabled draft and starts no run.
+
+`?brief=preview&specimen=workflow-create#/_brief_preview` opens the page with a fixture composition
+port (ready, blocked, failed, lost-response, unavailable) and fixture recent rows. It sends no request.

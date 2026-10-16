@@ -15,6 +15,9 @@ interface Props {
   reducedMotion?: boolean;
   /** D-14 supplies its 44px attachment entry; no upload or menu is invented here. */
   attachmentControl?: React.ReactNode;
+  /** Shared writing controls can also prepare a workflow without a chat turn. */
+  sendingLabel?: string;
+  suggestionsLabel?: string;
 }
 export function ConversationComposer(props: Props) {
   const availability = composerAvailability(props.mode, props.binding);
@@ -25,7 +28,7 @@ export function ConversationComposer(props: Props) {
   return <ScopedComposer key={JSON.stringify([props.binding!.scopeId, props.binding!.conversationId])} {...props} binding={props.binding!} />;
 }
 
-function ScopedComposer({ binding, suggestions = [], label = "Message Jarvis", placeholder = "Ask Jarvis…", reducedMotion, attachmentControl }: Props & { binding: ComposerBinding }) {
+function ScopedComposer({ binding, suggestions = [], label = "Message Jarvis", placeholder = "Ask Jarvis…", reducedMotion, attachmentControl, sendingLabel = "Sending…", suggestionsLabel = "Message suggestions" }: Props & { binding: ComposerBinding }) {
   const id = useId(), input = useRef<HTMLTextAreaElement>(null);
   const composing = useRef(false), compositionEnded = useRef(-Infinity);
   const lock = useRef(false), mounted = useRef(true);
@@ -44,7 +47,7 @@ function ScopedComposer({ binding, suggestions = [], label = "Message Jarvis", p
   const notReady = !working && files.count > 0 && !files.ready;
   const disabled = !binding.connected || binding.metadataPending || !!pending || (!working && ((!binding.draft.trim() && !files.count) || !!invalid || notReady));
   const status = error || invalid || (!binding.connected ? "Reconnecting… Your draft is kept." : stopping ? "Stopping response…"
-    : pending === "send" || binding.pendingAcceptance ? "Sending…" : binding.error
+    : pending === "send" || binding.pendingAcceptance ? sendingLabel : binding.error
     ?? (notReady ? "Attachments must finish before sending." : null));
 
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -117,7 +120,7 @@ function ScopedComposer({ binding, suggestions = [], label = "Message Jarvis", p
   }
   return <div className="brief-composer" data-composer-mode="ready" data-reduced-motion={reduced} data-conversation-id={binding.conversationId}>
     <div className="brief-composer-status" id={`${id}-status`} role="status">{status || ""}</div>
-    {!!suggestions.length && <div className="brief-composer-suggestions" aria-label="Message suggestions">
+    {!!suggestions.length && <div className="brief-composer-suggestions" aria-label={suggestionsLabel}>
       {suggestions.map(suggestion => <button type="button" key={suggestion.id} aria-disabled={binding.metadataPending}
         onPointerDown={event => event.preventDefault()} onClick={() => suggest(suggestion.text)}>{suggestion.label}</button>)}
     </div>}
