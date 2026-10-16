@@ -19,6 +19,7 @@ import { createDraftVersion, getFlowVersion, lockVersion, updateDraftVersion } f
 import { queueStats } from "../../db/repos/job-queue";
 import { WorkflowEventBus } from "../../runtime/event-bus";
 import { TriggerManager } from "./manager";
+import { setCronTimezone } from "../../../lib/cron-scheduler";
 
 const silent = () => undefined;
 
@@ -27,6 +28,7 @@ beforeEach(() => {
   configureWorkflowReadiness({ pieces: new PieceCatalog([
     { name: 'jarvis-trigger', displayName: '', description: '', actions: {}, triggers: { on_event: { name: 'on_event', displayName: '', description: '', inputSchema: { fields: [{ name: 'eventType', label: '', type: 'string', required: true }] } } } },
     { name: 'vendored-webhook', displayName: '', description: '', actions: {}, triggers: { on_message: { name: 'on_message', displayName: '', description: '' } } },
+    { name: '@activepieces/piece-schedule', displayName: '', description: '', actions: {}, triggers: { cron_expression: { name: 'cron_expression', displayName: '', description: '' } } },
   ]) });
 });
 
@@ -1120,4 +1122,27 @@ for (const action of ['pause', 'stop']) test(`F10 review R2: ${action} cleans en
     expect(tm.registrationState(flowId, versionId)).toBe('registered'); expect(cron.has(`flow:${flowId}`)).toBe(true);
   } finally { await tm.stop(); }
   expect(hooks).toEqual(['ON_ENABLE', 'ON_DISABLE', 'ON_ENABLE', 'ON_DISABLE']);
+});
+
+
+test('an advisory schedule zone warning is a registered subscription, not one a refresh repairs', async () => {
+  setCronTimezone('America/New_York');
+  const { flowId, versionId } = publishFlowWithTrigger('zone warning receipt', {
+    name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: '@activepieces/piece-schedule', triggerName: 'cron_expression', input: { cronExpression: '30 2 * * *', timezone: 'UTC' } },
+  });
+  const cron = new FakeCronScheduler(), hooks: string[] = []; let schedules = 0;
+  const tm = new TriggerManager({ eventBus: new WorkflowEventBus(), log: silent, enableRetryDelaysMs: [],
+    cronScheduler: { schedule(id: string, expression: string, cb: () => void) { schedules++; cron.schedule(id, expression, cb); },
+      cancel(id: string) { cron.cancel(id); }, cancelAll() { cron.cancelAll(); } } as any,
+    engineRuntime: { async acquire() { return { async executeTriggerHook(hook: string) {
+      hooks.push(hook); return { scheduleOptions: { cronExpression: '30 2 * * *', timezone: 'UTC' }, listeners: [] };
+    }, async release() {} }; } } as any,
+  });
+  try {
+    await tm.refresh(flowId);
+    expect(tm.list()).toEqual([expect.objectContaining({ flowId, warning: expect.stringContaining('This schedule says UTC') })]);
+    expect(tm.registrationState(flowId, versionId)).toBe('registered');
+    await tm.refresh(flowId); await tm.refresh(flowId);
+    expect(schedules).toBe(1); expect(hooks).toEqual(['ON_ENABLE']);
+  } finally { await tm.stop(); setCronTimezone(null); }
 });
