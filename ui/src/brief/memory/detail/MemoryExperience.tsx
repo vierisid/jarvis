@@ -5,7 +5,6 @@ import React, {
   useState,
   useSyncExternalStore,
 } from "react";
-import { isBriefCapabilityEnabled } from "../../../../../src/brief/capabilities";
 import type { BriefRoomModule, BriefShellPort } from "../../contracts";
 import {
   memoryAvailable,
@@ -14,6 +13,7 @@ import {
 } from "../stream/MemoryStreamRoom";
 import { MemoryDetailController } from "./controller";
 import { MemoryDetailRoom } from "./MemoryDetailRoom";
+import { BriefButton } from "../../components/controls";
 export interface MemoryExperienceBinding {
   stream: MemoryBinding;
   detail: MemoryDetailController;
@@ -26,9 +26,7 @@ export function detailAvailable(
     !!binding &&
     memoryAvailable(shell, binding.stream) &&
     binding.detail.scopeId === binding.stream.scopeId &&
-    binding.detail.source === binding.stream.source &&
-    (shell.mode === "preview" ||
-      isBriefCapabilityEnabled(binding.stream.capabilities, "memoryForget"))
+    binding.detail.source === binding.stream.source
   );
 }
 export function nearestReturnId(
@@ -213,8 +211,14 @@ function ConnectedExperience({
     detail.dirty = false;
     setRestoreReady(false);
   }, [restoreReady, reading, streamState, detail]);
-  const open = (factId: string) => {
+  const open = (selected: string) => {
     if (!allowed || !root.current) return;
+    // An edit kept from an earlier visit is never replaced silently by another fact.
+    const drafted = detail.snapshot().factId,
+      factId =
+        drafted && drafted !== selected && !detail.canLeave()
+          ? drafted
+          : selected;
     const rows = [
         ...root.current.querySelectorAll<HTMLButtonElement>(
           ".brief-memory-row",
@@ -265,11 +269,13 @@ function ConnectedExperience({
           <section className="brief-memory-detail">
             <h1 className="brief-type-room-title">Memory</h1>
             <p role="status">Memory detail is unavailable here.</p>
-            <button
+            <BriefButton
+              variant="text"
+              size="sm"
               onClick={() => shell.navigate({ room: "memory", selection: {} })}
             >
               All memories
-            </button>
+            </BriefButton>
           </section>
         ))}
     </div>

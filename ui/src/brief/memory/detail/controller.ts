@@ -4,16 +4,12 @@ import {
   validDetail,
   validFactId,
   validItem,
-  validReceipt,
-  validScope,
   type DetailRead,
-  type ForgetCommand,
-  type ForgetRead,
   type HistoryRead,
   type MemoryDetailPort,
   type ReadFailure,
 } from "./model";
-export type Panel = "correct" | "confirm" | "forget" | null;
+export type Panel = "correct" | "confirm" | null;
 export interface ReturnOrigin {
   factId: string;
   ids: string[];
@@ -28,11 +24,10 @@ export interface DetailState {
   read: DetailRead | { state: "loading" | "idle" };
   history: HistoryRead | { state: "idle" | "loading" };
   panel: Panel;
-  phase: "idle" | "preparing" | "pending" | "unknown";
+  phase: "idle" | "pending" | "unknown";
   object: string;
   reason: string;
   message: string;
-  prepared: Extract<ForgetRead, { state: "ready" }> | null;
 }
 const empty = (): DetailState => ({
   factId: null,
@@ -44,18 +39,17 @@ const empty = (): DetailState => ({
   object: "",
   reason: "",
   message: "",
-  prepared: null,
 });
-function staleRead(
-  read: DetailRead | HistoryRead | ForgetRead,
-): read is ReadFailure & {
-  state: "unavailable" | "missing" | "forgotten" | "conflict";
+function staleRead(read: DetailRead | HistoryRead): read is ReadFailure & {
+  state: "unavailable" | "missing" | "conflict";
 } {
   return (
     "reason" in read &&
-    ["unavailable", "missing", "forgotten", "conflict"].includes(read.state)
+    ["unavailable", "missing", "conflict"].includes(read.state)
   );
 }
+export const UNSAVED_MESSAGE =
+  "You have an unsaved edit. Save it or choose Cancel before leaving this memory.";
 /** One instance per authenticated scope, retained beside the stream controller across routes. */
 export class MemoryDetailController {
   readonly source;
@@ -72,11 +66,11 @@ export class MemoryDetailController {
   private historyAbort?: AbortController;
   private access = false;
   private alive = true;
-  private command: ForgetCommand | null = null;
+  /** Canonical value the open editor started from. */
+  private baseline = "";
   constructor(
     private port: MemoryDetailPort,
     private invalidateStream: () => void,
-    private requestId: () => string = () => crypto.randomUUID(),
   ) {
     this.source = port.source;
     this.scopeId = port.scopeId;
@@ -114,7 +108,6 @@ export class MemoryDetailController {
     this.access = value;
     if (!value) {
       this.cancel();
-      this.command = null;
       this.origin = null;
       this.returnId = null;
       this.returnPending = false;
@@ -132,7 +125,6 @@ export class MemoryDetailController {
   }
   private discardRead(read: ReadFailure) {
     this.cancel();
-    this.command = null;
     this.invalidate();
     this.publish({
       ...empty(),
@@ -144,7 +136,6 @@ export class MemoryDetailController {
   private async load(id: string, replacement: DetailState["replacement"]) {
     if (!this.access || !this.alive) return;
     const { generation, signal } = this.start();
-    this.command = null;
     this.publish({
       ...empty(),
       factId: id,
@@ -174,18 +165,49 @@ export class MemoryDetailController {
         });
     }
   }
-  reload() {
-    if (this.state.factId && this.state.phase !== "pending")
-      return this.open(this.state.factId);
+  /** Re-read the fact. A conflicted draft survives so it can be reapplied to the fresh value. */
+  async reload() {
+    const { factId, phase, panel, object, reason } = this.state;
+    if (!factId || phase === "pending") return;
+    const draft =
+      phase === "idle" && this.unsaved() ? { panel, object, reason } : null;
+    await this.load(factId, null);
+    const read = this.state.read;
+    if (
+      draft &&
+      this.access &&
+      this.state.factId === factId &&
+      read.state === "ready" &&
+      read.data.item.permissions.canCorrect &&
+      read.data.item.status !== "superseded"
+    )
+      this.publish({
+        ...draft,
+        message:
+          "Reloaded the current value. Your unsaved edit is kept; review it before saving.",
+      });
   }
   private invalidate() {
     this.dirty = true;
     this.invalidateStream();
   }
-  close() {
+  /** An open editor whose text differs from the canonical value it started from. */
+  unsaved() {
+    const { panel, phase, object, reason } = this.state;
+    // After an unknown save result the draft was already submitted; reload decides its fate.
+    if (!panel || phase === "unknown") return false;
+    return !!reason.trim() || (panel === "correct" && object !== this.baseline);
+  }
+  /** Leaving never drops an unsaved edit silently: the editor stays and says why. */
+  canLeave() {
     if (this.state.phase === "pending") return false;
+    if (!this.unsaved()) return true;
+    this.publish({ message: UNSAVED_MESSAGE });
+    return false;
+  }
+  close() {
+    if (!this.canLeave()) return false;
     this.cancel();
-    this.command = null;
     this.returnPending = true;
     this.publish(empty());
     return true;
@@ -204,26 +226,24 @@ export class MemoryDetailController {
       read.data.item.status === "superseded"
     )
       return;
+    this.baseline = read.data.fact.object;
     this.publish({
       panel,
       object: read.data.fact.object,
       reason: "",
       message: "",
-      prepared: null,
     });
   }
   cancelPanel() {
     if (this.state.phase === "pending" || this.state.phase === "unknown")
       return;
     this.cancel();
-    this.command = null;
     this.publish({
       panel: null,
       phase: "idle",
       object: "",
       reason: "",
       message: "",
-      prepared: null,
     });
   }
   async loadHistory() {
@@ -321,7 +341,6 @@ export class MemoryDetailController {
           phase: "idle",
           message: result.reason,
           ...(result.state === "conflict" ||
-          result.state === "forgotten" ||
           result.state === "missing" ||
           result.state === "unavailable"
             ? { read: result, history: { state: "idle" } as const }
@@ -338,200 +357,6 @@ export class MemoryDetailController {
           },
           history: { state: "idle" },
           message: "Reload the current fact before another action.",
-        });
-    }
-  }
-  async beginForget() {
-    const { read, factId, phase } = this.state;
-    if (
-      !this.access ||
-      !factId ||
-      phase !== "idle" ||
-      read.state !== "ready" ||
-      !read.data.item.permissions.canForget
-    )
-      return;
-    const { generation, signal } = this.start();
-    this.publish({
-      panel: "forget",
-      phase: "preparing",
-      message: "Checking this fact and its Forget scope…",
-      prepared: null,
-    });
-    try {
-      const prepared = await this.port.prepareForget(factId, signal);
-      if (!this.current(generation)) return;
-      if (
-        prepared.state === "forgotten" &&
-        "receipt" in prepared &&
-        validReceipt(prepared.receipt, factId)
-      ) {
-        this.forgotten();
-        return;
-      }
-      if (staleRead(prepared)) {
-        this.discardRead(prepared);
-        return;
-      }
-      if (
-        prepared.state !== "ready" ||
-        prepared.factId !== factId ||
-        !validScope(prepared.scope) ||
-        !/^[a-f0-9]{64}$/.test(prepared.revision)
-      ) {
-        this.publish({
-          phase: "idle",
-          message: "reason" in prepared ? prepared.reason : FAILURE.reason,
-        });
-        return;
-      }
-      // F17 stream revision includes usage; F19 uses a DIFFERENT source digest. Never substitute one for the other.
-      const current = await this.port.read(factId, signal);
-      if (!this.current(generation)) return;
-      if (staleRead(current)) {
-        this.discardRead(current);
-        return;
-      }
-      if (
-        current.state !== "ready" ||
-        !validDetail(current.data, factId) ||
-        !current.data.item.permissions.canForget ||
-        current.data.item.revision !== read.data.item.revision
-      ) {
-        this.publish({
-          phase: "idle",
-          read: CONFLICT,
-          history: { state: "idle" },
-          message: CONFLICT.reason,
-        });
-        return;
-      }
-      this.command = {
-        requestId: this.requestId(),
-        expectedRevision: prepared.revision,
-        confirmed: true,
-      };
-      this.publish({ phase: "idle", prepared, message: "" });
-    } catch {
-      if (this.current(generation))
-        this.publish({
-          phase: "idle",
-          message: "Could not prepare Forget. Cancel and try again.",
-        });
-    }
-  }
-  private forgotten() {
-    this.invalidate();
-    this.command = null;
-    this.publish({
-      read: { state: "forgotten", reason: "This fact has been forgotten." },
-      history: { state: "idle" },
-      panel: null,
-      phase: "idle",
-      prepared: null,
-      object: "",
-      reason: "",
-      message:
-        "Forgotten from canonical memory. Original sources and backups remain.",
-    });
-  }
-  async confirmForget() {
-    const { factId, prepared, read } = this.state;
-    if (
-      !this.access ||
-      this.state.phase !== "idle" ||
-      this.state.panel !== "forget" ||
-      !factId ||
-      !prepared ||
-      !this.command ||
-      read.state !== "ready" ||
-      !read.data.item.permissions.canForget
-    )
-      return;
-    const { generation, signal } = this.start();
-    const command = { ...this.command };
-    this.invalidate();
-    this.publish({ phase: "pending", message: "Forgetting this fact…" });
-    try {
-      const result = await this.port.forget(factId, command, signal);
-      if (!this.current(generation)) return;
-      if (
-        result.state === "forgotten" &&
-        "receipt" in result &&
-        validReceipt(result.receipt, factId) &&
-        result.receipt.revision === command.expectedRevision
-      ) {
-        this.forgotten();
-        return;
-      }
-      if (result.state === "unknown" || result.state === "forgotten") {
-        this.publish({
-          phase: "unknown",
-          read: {
-            state: "unavailable",
-            reason: "The Forget result is unknown. Check the receipt.",
-          },
-          history: { state: "idle" },
-          message:
-            "The Forget result is unknown. Check its receipt before another action.",
-        });
-      } else
-        this.publish({
-          phase: "idle",
-          prepared: null,
-          read: result,
-          history: { state: "idle" },
-          message: result.reason,
-        });
-    } catch {
-      if (this.current(generation))
-        this.publish({
-          phase: "unknown",
-          read: {
-            state: "unavailable",
-            reason: "The Forget result is unknown. Check the receipt.",
-          },
-          history: { state: "idle" },
-          message: "The Forget result is unknown. Check its receipt.",
-        });
-    }
-  }
-  async checkForget() {
-    const id = this.state.factId;
-    if (
-      !this.access ||
-      !id ||
-      this.state.phase !== "unknown" ||
-      this.state.panel !== "forget"
-    )
-      return;
-    const { generation, signal } = this.start();
-    this.publish({
-      phase: "preparing",
-      message: "Checking the saved receipt…",
-    });
-    try {
-      const result = await this.port.prepareForget(id, signal);
-      if (!this.current(generation)) return;
-      if (
-        result.state === "forgotten" &&
-        "receipt" in result &&
-        validReceipt(result.receipt, id)
-      )
-        this.forgotten();
-      else {
-        await this.open(id);
-        if (this.access && this.state.factId === id)
-          this.publish({
-            message:
-              "No Forget receipt was recovered. Review the current fact before a new decision.",
-          });
-      }
-    } catch {
-      if (this.current(generation))
-        this.publish({
-          phase: "unknown",
-          message: "The receipt is still unavailable. Check again later.",
         });
     }
   }

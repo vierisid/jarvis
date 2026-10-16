@@ -6,42 +6,11 @@ export interface MemoryDetail {
   fact: Fact;
 }
 export type ReadFailure = {
-  state:
-    | "unavailable"
-    | "unsupported"
-    | "conflict"
-    | "error"
-    | "missing"
-    | "forgotten";
+  state: "unavailable" | "unsupported" | "conflict" | "error" | "missing";
   reason: string;
 };
 export type DetailRead = { state: "ready"; data: MemoryDetail } | ReadFailure;
 export type HistoryRead = { state: "ready"; items: MemoryItem[] } | ReadFailure;
-export interface ForgetScope {
-  removed: string[];
-  retained: string[];
-  suppression: string;
-  legacySuppression: string;
-  profile: string;
-  confirmation: "local_confirmation_required";
-}
-export interface ForgetReceipt {
-  factId: string;
-  requestId: string;
-  revision: string;
-  forgottenAt: number;
-  suppressedSources: number;
-  scope: ForgetScope;
-}
-export type ForgetRead =
-  | { state: "ready"; factId: string; revision: string; scope: ForgetScope }
-  | { state: "forgotten"; receipt: ForgetReceipt }
-  | Exclude<ReadFailure, { state: "forgotten" }>;
-export interface ForgetCommand {
-  requestId: string;
-  expectedRevision: string;
-  confirmed: true;
-}
 export interface DecisionCommand {
   kind: "correct" | "confirm";
   factId: string;
@@ -53,11 +22,8 @@ export type DecisionResult =
   | { state: "saved"; factId: string }
   | ReadFailure
   | { state: "unknown"; reason: string };
-export type ForgetResult =
-  | { state: "forgotten"; receipt: ForgetReceipt }
-  | ReadFailure
-  | { state: "unknown"; reason: string };
-/** Host-scoped structural seam. Neither a new writer nor an implicit fixture fallback. */
+/** Host-scoped structural seam. Neither a new writer nor an implicit fixture fallback.
+ * Review and correct only: Forget is not offered until F-19 / Q-16 land on main. */
 export interface MemoryDetailPort {
   source: "live" | "fixture";
   scopeId: string;
@@ -67,12 +33,6 @@ export interface MemoryDetailPort {
     command: DecisionCommand,
     signal: AbortSignal,
   ): Promise<DecisionResult>;
-  prepareForget(factId: string, signal: AbortSignal): Promise<ForgetRead>;
-  forget(
-    factId: string,
-    command: ForgetCommand,
-    signal: AbortSignal,
-  ): Promise<ForgetResult>;
 }
 const record = (value: unknown): value is Record<string, any> =>
   !!value && typeof value === "object" && !Array.isArray(value);
@@ -170,50 +130,6 @@ export function validDetail(value: unknown, id: string): value is MemoryDetail {
         (e.quote === null || text(e.quote)) &&
         time(e.recorded_at),
     )
-  );
-}
-export function validScope(value: unknown): value is ForgetScope {
-  return (
-    record(value) &&
-    value.confirmation === "local_confirmation_required" &&
-    Array.isArray(value.removed) &&
-    value.removed.length === 3 &&
-    ["chosen_canonical_fact", "its_evidence", "future_canonical_recall"].every(
-      (key) => value.removed.includes(key),
-    ) &&
-    Array.isArray(value.retained) &&
-    value.retained.length === 7 &&
-    [
-      "content_free_receipt_and_usage",
-      "other_facts_and_history",
-      "entity_identity_and_relationships",
-      "original_messages_and_source_documents",
-      "profile_settings_and_interview_sources",
-      "backups_and_database_free_pages",
-      "already_sent_model_context",
-    ].every((key) => value.retained.includes(key)) &&
-    value.suppression ===
-      "same_normalized_assertion_and_automatic_source_revision" &&
-    value.legacySuppression ===
-      "unknown_revision_blocks_same_automatic_assertion_until_explicit_manual_input" &&
-    value.profile ===
-      "matching_source_field_is_withheld_from_future_profile_prompts_until_changed"
-  );
-}
-export function validReceipt(
-  value: unknown,
-  id: string,
-): value is ForgetReceipt {
-  return (
-    record(value) &&
-    value.factId === id &&
-    validFactId(value.requestId) &&
-    text(value.revision) &&
-    /^[a-f0-9]{64}$/.test(value.revision) &&
-    time(value.forgottenAt) &&
-    Number.isSafeInteger(value.suppressedSources) &&
-    value.suppressedSources >= 0 &&
-    validScope(value.scope)
   );
 }
 export const FAILURE = {

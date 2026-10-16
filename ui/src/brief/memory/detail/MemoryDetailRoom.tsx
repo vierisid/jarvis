@@ -65,8 +65,7 @@ export function MemoryDetailRoom({
   useLayoutEffect(() => {
     const old = previousPanel.current;
     previousPanel.current = panel;
-    if (panel === "forget") panelRef.current?.focus({ preventScroll: true });
-    else if (panel)
+    if (panel)
       panelRef.current
         ?.querySelector<HTMLElement>("textarea")
         ?.focus({ preventScroll: true });
@@ -104,7 +103,7 @@ export function MemoryDetailRoom({
     void animation.finished.catch(() => {});
     return () => animation.cancel();
   }, [data?.item.factId, reduced, controller]);
-  const locked = phase === "pending" || phase === "preparing";
+  const locked = phase === "pending";
   const editable =
     !!data?.item.permissions.canCorrect && data.item.status !== "superseded";
   return (
@@ -126,7 +125,13 @@ export function MemoryDetailRoom({
         size="sm"
         icon={<ArrowLeft size={14} aria-hidden="true" />}
         disabled={phase === "pending"}
-        onClick={onBack}
+        onClick={() => {
+          if (controller.canLeave()) onBack();
+          else
+            panelRef.current
+              ?.querySelector<HTMLElement>("textarea")
+              ?.focus({ preventScroll: true });
+        }}
       >
         All memories
       </BriefButton>
@@ -163,11 +168,9 @@ export function MemoryDetailRoom({
             <h2>
               {read.state === "loading" || read.state === "idle"
                 ? "Loading memory…"
-                : read.state === "forgotten"
-                  ? "Memory forgotten"
-                  : read.state === "conflict"
-                    ? "Memory has changed"
-                    : "Memory unavailable"}
+                : read.state === "conflict"
+                  ? "Memory has changed"
+                  : "Memory unavailable"}
             </h2>
             {"reason" in read && <p>{read.reason}</p>}
           </div>
@@ -198,17 +201,12 @@ export function MemoryDetailRoom({
               Confirm fact
             </BriefButton>
           )}
-        <BriefButton
-          variant="text"
-          disabled={!data?.item.permissions.canForget || !!panel}
-          onClick={() => void controller.beginForget()}
-        >
-          Forget
-        </BriefButton>
         {data?.item.supersededBy && (
           <BriefButton
             variant="text"
-            onClick={() => onInspect(data.item.supersededBy!)}
+            onClick={() => {
+              if (controller.canLeave()) onInspect(data.item.supersededBy!);
+            }}
           >
             View current value
           </BriefButton>
@@ -231,138 +229,81 @@ export function MemoryDetailRoom({
       </div>
       {panel && (
         <div className="brief-memory-detail-panel" ref={panelRef} tabIndex={-1}>
-          {panel !== "forget" ? (
-            <form
-              aria-label={
-                panel === "correct" ? "Correct memory" : "Confirm memory"
-              }
-              onSubmit={(event) => {
-                event.preventDefault();
-                void controller.save();
-              }}
+          <form
+            aria-label={
+              panel === "correct" ? "Correct memory" : "Confirm memory"
+            }
+            onSubmit={(event) => {
+              event.preventDefault();
+              void controller.save();
+            }}
+          >
+            <h3>
+              {panel === "correct" ? "Correct this value" : "Confirm this fact"}
+            </h3>
+            <p
+              className="brief-memory-detail-note"
+              ref={editNote}
+              style={{ minHeight: editGeometry.note || undefined }}
             >
-              <h3>
-                {panel === "correct"
-                  ? "Correct this value"
-                  : "Confirm this fact"}
-              </h3>
-              <p
-                className="brief-memory-detail-note"
-                ref={editNote}
-                style={{ minHeight: editGeometry.note || undefined }}
-              >
-                {data ? (
-                  <>
-                    Recorded property: {data.fact.predicate}.{" "}
-                    {isSingleValued(data.fact.predicate)
-                      ? "Confirming this value replaces competing values in the same scope and period."
-                      : "Other assertions and scopes are kept."}
-                  </>
-                ) : (
-                  "\u00a0"
-                )}
-              </p>
-              {panel === "correct" && (
-                <BriefTextarea
-                  label="Correct value"
-                  rows={3}
-                  maxLength={4000}
-                  required
-                  value={state.object}
-                  disabled={locked || phase === "unknown"}
-                  onChange={(event) =>
-                    controller.setDraft({ object: event.target.value })
-                  }
-                />
+              {data ? (
+                <>
+                  Recorded property: {data.fact.predicate}.{" "}
+                  {isSingleValued(data.fact.predicate)
+                    ? "Confirming this value replaces competing values in the same scope and period."
+                    : "Other assertions and scopes are kept."}
+                </>
+              ) : (
+                "\u00a0"
               )}
+            </p>
+            {panel === "correct" && (
               <BriefTextarea
-                label="Reason or source"
-                rows={2}
-                maxLength={1000}
+                label="Correct value"
+                rows={3}
+                maxLength={4000}
                 required
-                value={state.reason}
+                value={state.object}
                 disabled={locked || phase === "unknown"}
                 onChange={(event) =>
-                  controller.setDraft({ reason: event.target.value })
+                  controller.setDraft({ object: event.target.value })
                 }
               />
-              <div className="brief-memory-detail-actions">
-                <BriefButton
-                  type="submit"
-                  state={phase === "pending" ? "pending" : "idle"}
-                  disabled={!editable || locked || phase === "unknown"}
-                >
-                  Save confirmed value
-                </BriefButton>
-                <BriefButton
-                  variant="secondary"
-                  disabled={locked || phase === "unknown"}
-                  onClick={() => controller.cancelPanel()}
-                >
-                  Cancel
-                </BriefButton>
-              </div>
-            </form>
-          ) : (
-            <div role="group" aria-label="Forget this memory">
-              <h3>Forget this memory?</h3>
-              <p>
-                This removes the selected fact and its evidence from canonical
-                memory and future recall. Replaying the same automatic source is
-                suppressed.
-              </p>
-              <p>
-                <strong>
-                  Original messages, source documents and backups remain.
-                </strong>{" "}
-                Other facts, history, people and relationships remain.
-                Content-free receipts and recorded usage remain too.
-              </p>
-              <p>
-                Profile settings and interview sources remain editable. A
-                matching profile field is withheld from future prompts until it
-                changes. New explicit input can create a new fact. Already-sent
-                model context cannot be recalled.
-              </p>
-              <p>There is no Undo for Forget.</p>
-              <div className="brief-memory-detail-actions">
-                <BriefButton
-                  variant="danger"
-                  disabled={
-                    !state.prepared || !data || locked || phase === "unknown"
-                  }
-                  state={phase === "pending" ? "pending" : "idle"}
-                  onClick={() => void controller.confirmForget()}
-                >
-                  Forget this memory
-                </BriefButton>
-                <BriefButton
-                  variant="secondary"
-                  disabled={locked || phase === "unknown"}
-                  onClick={() => controller.cancelPanel()}
-                >
-                  Cancel
-                </BriefButton>
-              </div>
+            )}
+            <BriefTextarea
+              label="Reason or source"
+              rows={2}
+              maxLength={1000}
+              required
+              value={state.reason}
+              disabled={locked || phase === "unknown"}
+              onChange={(event) =>
+                controller.setDraft({ reason: event.target.value })
+              }
+            />
+            <div className="brief-memory-detail-actions">
+              <BriefButton
+                type="submit"
+                state={phase === "pending" ? "pending" : "idle"}
+                disabled={!editable || locked || phase === "unknown"}
+              >
+                Save confirmed value
+              </BriefButton>
+              <BriefButton
+                variant="secondary"
+                disabled={locked || phase === "unknown"}
+                onClick={() => controller.cancelPanel()}
+              >
+                Cancel
+              </BriefButton>
             </div>
-          )}
+          </form>
         </div>
       )}
-      {phase === "unknown" && panel === "forget" ? (
-        <BriefButton onClick={() => void controller.checkForget()}>
-          Check Forget result
+      {read.state !== "loading" && read.state !== "ready" && (
+        <BriefButton disabled={locked} onClick={() => void controller.reload()}>
+          Reload current fact
         </BriefButton>
-      ) : (
-        read.state !== "loading" &&
-        read.state !== "ready" &&
-        read.state !== "forgotten" && (
-          <BriefButton
-            disabled={locked}
-            onClick={() => void controller.reload()}
-          >
-            Reload current fact
-          </BriefButton>
-        )
       )}
       {data && (
         <div className="brief-memory-detail-context">
@@ -452,7 +393,9 @@ export function MemoryDetailRoom({
                       <BriefButton
                         variant="text"
                         size="sm"
-                        onClick={() => onInspect(item.factId)}
+                        onClick={() => {
+                          if (controller.canLeave()) onInspect(item.factId);
+                        }}
                       >
                         Inspect value
                       </BriefButton>

@@ -3,13 +3,7 @@ import { MemoryController } from "../stream/controller";
 import { memoryRows, FIXTURE_NOW } from "../stream/fixtures";
 import { ordered, type MemoryPort, type MemoryItem } from "../stream/model";
 import { MemoryDetailController } from "./controller";
-import {
-  CONFLICT,
-  type ForgetReceipt,
-  type ForgetScope,
-  type MemoryDetail,
-  type MemoryDetailPort,
-} from "./model";
+import { CONFLICT, type MemoryDetail, type MemoryDetailPort } from "./model";
 export const DETAIL_SCOPE = "d26-isolated-memory";
 export const DETAIL_EXAMPLES = [
   "ready",
@@ -18,31 +12,12 @@ export const DETAIL_EXAMPLES = [
   "conflict",
   "save-error",
   "lost-save",
-  "lost-forget",
   "unavailable",
   "read-only",
   "loading",
   "no-usage",
 ] as const;
 export type DetailExample = (typeof DETAIL_EXAMPLES)[number];
-const scope: ForgetScope = {
-  removed: ["chosen_canonical_fact", "its_evidence", "future_canonical_recall"],
-  retained: [
-    "content_free_receipt_and_usage",
-    "other_facts_and_history",
-    "entity_identity_and_relationships",
-    "original_messages_and_source_documents",
-    "profile_settings_and_interview_sources",
-    "backups_and_database_free_pages",
-    "already_sent_model_context",
-  ],
-  suppression: "same_normalized_assertion_and_automatic_source_revision",
-  legacySuppression:
-    "unknown_revision_blocks_same_automatic_assertion_until_explicit_manual_input",
-  profile:
-    "matching_source_field_is_withheld_from_future_profile_prompts_until_changed",
-  confirmation: "local_confirmation_required",
-};
 const digest = (n: number) => n.toString(16).padStart(64, "0");
 export function fixtureDetail(item: MemoryItem): MemoryDetail {
   const fact: Fact = {
@@ -79,7 +54,8 @@ export function fixtureDetail(item: MemoryItem): MemoryDetail {
   return {
     item: {
       ...item,
-      permissions: { canRead: true, canCorrect: true, canForget: true },
+      // Forget is not offered until F-19 / Q-16 land on main.
+      permissions: { canRead: true, canCorrect: true, canForget: false },
     },
     fact,
   };
@@ -121,7 +97,6 @@ export function makeMemoryDetailFixture(
       };
   if (example === "no-usage")
     for (const d of facts.values()) d.item.uses = null;
-  const receipts = new Map<string, ForgetReceipt>();
   let revision = 20,
     writes = 0;
   const pause = async () => {
@@ -192,8 +167,6 @@ export function makeMemoryDetailFixture(
           state: "unavailable",
           reason: "Isolated unavailable detail example.",
         };
-      if (receipts.has(id))
-        return { state: "forgotten", reason: "This fact has been forgotten." };
       const data = facts.get(id);
       return data
         ? { state: "ready", data: clone(data) }
@@ -303,46 +276,6 @@ export function makeMemoryDetailFixture(
           }
         : { state: "saved", factId: id };
     },
-    async prepareForget(id) {
-      await pause();
-      const receipt = receipts.get(id);
-      if (receipt) return { state: "forgotten", receipt: clone(receipt) };
-      if (!facts.has(id))
-        return { state: "missing", reason: "Fact not found." };
-      return {
-        state: "ready",
-        factId: id,
-        revision: digest(revision),
-        scope: clone(scope),
-      };
-    },
-    async forget(id, command) {
-      writes++;
-      await pause();
-      const existing = receipts.get(id);
-      if (existing) return { state: "forgotten", receipt: clone(existing) };
-      if (
-        example === "conflict" ||
-        command.expectedRevision !== digest(revision)
-      )
-        return CONFLICT;
-      const receipt = {
-        factId: id,
-        requestId: command.requestId,
-        revision: command.expectedRevision,
-        forgottenAt: FIXTURE_NOW,
-        suppressedSources: 1,
-        scope: clone(scope),
-      };
-      facts.delete(id);
-      receipts.set(id, receipt);
-      return example === "lost-forget"
-        ? {
-            state: "unknown",
-            reason: "The Forget result is unknown. Check its receipt.",
-          }
-        : { state: "forgotten", receipt: clone(receipt) };
-    },
   };
   const stream = new MemoryController(streamPort, () => FIXTURE_NOW + 1);
   const controller = new MemoryDetailController(port, () =>
@@ -354,7 +287,6 @@ export function makeMemoryDetailFixture(
     port,
     streamPort,
     facts,
-    receipts,
     writes: () => writes,
   };
 }

@@ -1,7 +1,6 @@
 import { test, expect } from "bun:test";
-import { MemoryDetailController } from "./controller";
+import { UNSAVED_MESSAGE } from "./controller";
 import { makeMemoryDetailFixture } from "./fixtures";
-import { memoryDetailHttpPort } from "./http";
 import type { DetailRead, HistoryRead } from "./model";
 const id = "fixture-memory-0";
 async function setup(
@@ -65,12 +64,11 @@ test("access loss clears drafts, provenance and pending late reads", async () =>
   await f.controller.open(id);
   expect(f.controller.snapshot().factId).toBeNull();
 });
-test("read-only permissions prevent correction and Forget", async () => {
+test("read-only permissions prevent correction", async () => {
   const f = await setup("read-only");
   f.controller.begin("correct");
-  await f.controller.beginForget();
+  f.controller.begin("confirm");
   await f.controller.save();
-  await f.controller.confirmForget();
   expect(f.controller.snapshot().panel).toBeNull();
   expect(f.writes()).toBe(0);
 });
@@ -90,43 +88,36 @@ test("history access loss clears visible content, drafts and cached stream rows"
   expect(f.controller.dirty).toBe(true);
   expect(f.stream.snapshot().read.state).toBe("loading");
 });
-for (const status of [401, 403, 503]) {
-  for (const stage of ["detail", "prepare", "recheck"] as const) {
-    test(`${status} during ${stage} purges detail and the cached stream`, async () => {
-      const f = await setup();
-      await f.stream.refresh();
-      await f.controller.loadHistory();
-      f.controller.begin("correct");
-      f.controller.setDraft({
-        object: "private draft",
-        reason: "private source",
-      });
-      const denied = memoryDetailHttpPort(
-        "scope",
-        Object.assign(async () => Response.json({}, { status }), {
-          preconnect: fetch.preconnect,
-        }),
-      );
-      if (stage === "prepare") f.port.prepareForget = denied.prepareForget;
-      else f.port.read = denied.read;
-      if (stage === "detail") await f.controller.open(id);
-      else await f.controller.beginForget();
-      const state = f.controller.snapshot();
-      expect(state.read.state).toBe("unavailable");
-      expect(state.history.state).toBe("idle");
-      expect(state.object).toBe("");
-      expect(state.reason).toBe("");
-      expect(state.panel).toBeNull();
-      expect(state.prepared).toBeNull();
-      expect(f.controller.dirty).toBe(true);
-      expect(f.stream.snapshot().read.state).toBe("loading");
-      f.controller.close();
-      expect(f.stream.snapshot().read.state).toBe("loading");
-      expect(f.writes()).toBe(0);
+for (const stage of ["detail", "reload"] as const) {
+  test(`unavailable access during ${stage} purges detail and the cached stream`, async () => {
+    const f = await setup();
+    await f.stream.refresh();
+    await f.controller.loadHistory();
+    f.controller.begin("correct");
+    f.controller.setDraft({
+      object: "private draft",
+      reason: "private source",
     });
-  }
+    f.port.read = async () => ({
+      state: "unavailable",
+      reason: "Memory access ended. Sign in again.",
+    });
+    if (stage === "detail") await f.controller.open(id);
+    else await f.controller.reload();
+    const state = f.controller.snapshot();
+    expect(state.read.state).toBe("unavailable");
+    expect(state.history.state).toBe("idle");
+    expect(state.object).toBe("");
+    expect(state.reason).toBe("");
+    expect(state.panel).toBeNull();
+    expect(f.controller.dirty).toBe(true);
+    expect(f.stream.snapshot().read.state).toBe("loading");
+    expect(f.controller.close()).toBe(true);
+    expect(f.stream.snapshot().read.state).toBe("loading");
+    expect(f.writes()).toBe(0);
+  });
 }
-for (const action of ["cancel", "forget", "rejected-save"] as const) {
+for (const action of ["cancel", "rejected-save"] as const) {
   test(`${action} resets canceled history so it can be retried`, async () => {
     const f = await setup("save-error");
     const slow = deferred<HistoryRead>();
@@ -136,7 +127,6 @@ for (const action of ["cancel", "forget", "rejected-save"] as const) {
     f.controller.setDraft({ object: "New value", reason: "Checked" });
     const pending = f.controller.loadHistory();
     if (action === "cancel") f.controller.cancelPanel();
-    else if (action === "forget") await f.controller.beginForget();
     else await f.controller.save();
     expect(f.controller.snapshot().history.state).toBe("idle");
     slow.resolve({ state: "ready", items: [f.facts.get(id)!.item] });
@@ -236,68 +226,6 @@ test("lost correction response is unknown, never retried automatically, and relo
   expect(read.state).toBe("ready");
   if (read.state === "ready") expect(read.data.item.supersededBy).toBeTruthy();
 });
-test("Forget preparation and cancel send no mutation", async () => {
-  const f = await setup();
-  await f.controller.beginForget();
-  expect(f.controller.snapshot().prepared?.revision).toHaveLength(64);
-  expect(f.controller.snapshot().prepared?.revision).not.toBe(
-    f.facts.get(id)!.item.revision,
-  );
-  f.controller.cancelPanel();
-  await f.controller.confirmForget();
-  expect(f.writes()).toBe(0);
-  expect(f.facts.has(id)).toBe(true);
-});
-test("a changed fact between display and Forget preparation requires a new review", async () => {
-  const f = await setup();
-  f.facts.get(id)!.item.revision = "changed";
-  await f.controller.beginForget();
-  expect(f.controller.snapshot().read.state).toBe("conflict");
-  expect(f.controller.snapshot().prepared).toBeNull();
-  await f.controller.confirmForget();
-  expect(f.writes()).toBe(0);
-});
-test("an unknown future Forget scope fails closed", async () => {
-  const f = await setup();
-  const prepare = f.port.prepareForget;
-  f.port.prepareForget = async (key, signal) => {
-    const result = await prepare(key, signal);
-    if (result.state === "ready") result.scope.retained = [];
-    return result;
-  };
-  await f.controller.beginForget();
-  expect(f.controller.snapshot().prepared).toBeNull();
-  await f.controller.confirmForget();
-  expect(f.writes()).toBe(0);
-});
-test("confirmed Forget purges detail/history/draft and keeps one receipt under repeated click", async () => {
-  const f = await setup("ready", 3);
-  await f.controller.loadHistory();
-  await f.controller.beginForget();
-  const first = f.controller.confirmForget();
-  await f.controller.confirmForget();
-  await first;
-  expect(f.writes()).toBe(1);
-  expect(f.facts.has(id)).toBe(false);
-  expect(f.receipts.size).toBe(1);
-  expect(f.controller.snapshot().read.state).toBe("forgotten");
-  expect(f.controller.snapshot().history.state).toBe("idle");
-  expect(f.controller.snapshot().prepared).toBeNull();
-});
-test("unknown Forget clears text and recovers only through a read receipt", async () => {
-  const f = await setup("lost-forget");
-  await f.controller.beginForget();
-  await f.controller.confirmForget();
-  expect(f.controller.snapshot().phase).toBe("unknown");
-  expect(JSON.stringify(f.controller.snapshot())).not.toContain(
-    "Keep emails short",
-  );
-  await f.controller.confirmForget();
-  expect(f.writes()).toBe(1);
-  await f.controller.checkForget();
-  expect(f.controller.snapshot().read.state).toBe("forgotten");
-  expect(f.writes()).toBe(1);
-});
 test("retiring during a mutation prevents a late success from restoring content", async () => {
   const f = await setup("ready", 5);
   f.controller.begin("correct");
@@ -313,4 +241,46 @@ test("missing detail removes potentially stale stream content", async () => {
   await f.controller.open("missing-id");
   expect(f.controller.snapshot().read.state).toBe("missing");
   expect(f.controller.dirty).toBe(true);
+});
+test("leaving with an unsaved edit is refused with a message until Cancel", async () => {
+  const f = await setup();
+  f.controller.begin("correct");
+  expect(f.controller.canLeave()).toBe(true);
+  f.controller.setDraft({ object: "Unsaved value" });
+  expect(f.controller.close()).toBe(false);
+  expect(f.controller.snapshot().object).toBe("Unsaved value");
+  expect(f.controller.snapshot().message).toBe(UNSAVED_MESSAGE);
+  f.controller.setDraft({ object: f.facts.get(id)!.fact.object, reason: " " });
+  expect(f.controller.canLeave()).toBe(true);
+  f.controller.setDraft({ reason: "A reason alone is an edit" });
+  expect(f.controller.canLeave()).toBe(false);
+  f.controller.cancelPanel();
+  expect(f.controller.close()).toBe(true);
+  expect(f.writes()).toBe(0);
+});
+test("an unknown save result does not trap the user on the detail", async () => {
+  const f = await setup("lost-save");
+  f.controller.begin("correct");
+  f.controller.setDraft({ object: "New value", reason: "Checked" });
+  await f.controller.save();
+  expect(f.controller.snapshot().phase).toBe("unknown");
+  expect(f.controller.close()).toBe(true);
+});
+test("reload after a conflict keeps the unsaved draft on the fresh value", async () => {
+  const f = await setup();
+  f.controller.begin("correct");
+  f.controller.setDraft({ object: "My value", reason: "Checked" });
+  f.facts.get(id)!.item.revision = "changed elsewhere";
+  await f.controller.save();
+  expect(f.controller.snapshot().read.state).toBe("conflict");
+  await f.controller.reload();
+  const state = f.controller.snapshot();
+  expect(state.read.state).toBe("ready");
+  expect(state.panel).toBe("correct");
+  expect(state.object).toBe("My value");
+  expect(state.reason).toBe("Checked");
+  expect(f.controller.unsaved()).toBe(true);
+  await f.controller.save();
+  expect(f.writes()).toBe(2);
+  expect(f.controller.snapshot().read.state).toBe("ready");
 });

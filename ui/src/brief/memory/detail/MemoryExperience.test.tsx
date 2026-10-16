@@ -364,23 +364,59 @@ test("canceling an editor during a history request makes the history button retr
   await click("Show earlier values");
   expect(fixture.controller.snapshot().history.state).toBe("ready");
 });
-test("Forget is a local confirmation, cancel is harmless, and deletion returns to nearest filtered neighbor", async () => {
+test("Forget is not offered: memory is review and correct only", async () => {
+  await render();
+  await open();
+  expect(() => button("Forget")).toThrow();
+  expect(host.textContent).not.toContain("Forget");
+});
+test("All memories with an unsaved edit stays, keeps the draft and says why", async () => {
+  await render();
+  await open();
+  await click("Edit memory");
+  await fill("Correct value", "Unsaved correction");
+  await click("All memories");
+  expect(currentShell.route.room).toBe("memory-detail");
+  expect(host.textContent).toContain("You have an unsaved edit");
+  expect(
+    (host.querySelector(".brief-memory-detail textarea") as HTMLTextAreaElement)
+      .value,
+  ).toBe("Unsaved correction");
+  await click("Cancel");
+  await click("All memories");
+  expect(currentShell.route.room).toBe("memory");
+  expect(fixture.writes()).toBe(0);
+});
+test("leaving through the shell keeps an unsaved edit and another row reopens it", async () => {
+  await render();
+  await open();
+  await click("Edit memory");
+  await fill("Correct value", "Kept across navigation");
+  await React.act(async () => {
+    currentShell.navigate({ room: "memory", selection: {} });
+    await wait();
+  });
+  await open("fixture-memory-1");
+  expect(currentShell.route.selection.factId).toBe("fixture-memory-0");
+  expect(
+    (host.querySelector(".brief-memory-detail textarea") as HTMLTextAreaElement)
+      .value,
+  ).toBe("Kept across navigation");
+  expect(host.textContent).toContain("You have an unsaved edit");
+  expect(fixture.writes()).toBe(0);
+});
+test("a fact removed elsewhere returns to its nearest filtered neighbor", async () => {
   await render();
   await React.act(async () => {
     fixture.stream.setFilters({ source: "Conversation" }, 0);
     await wait();
   });
   await open();
-  await click("Forget");
-  expect(host.textContent).toContain(
-    "Original messages, source documents and backups remain.",
-  );
-  expect(fixture.writes()).toBe(0);
-  expect(document.activeElement?.className).toBe("brief-memory-detail-panel");
-  await click("Cancel");
-  expect(fixture.facts.has("fixture-memory-0")).toBe(true);
-  await click("Forget");
-  await click("Forget this memory");
+  fixture.facts.delete("fixture-memory-0");
+  await React.act(async () => {
+    await fixture.controller.reload();
+    await wait();
+  });
   expect(host.querySelector(".brief-memory-detail")?.textContent).not.toContain(
     "Keep emails short",
   );
@@ -439,7 +475,6 @@ test("disabled per-fact writers stay disabled in the detail UI", async () => {
   await render();
   await open();
   expect(button("Edit memory").disabled).toBe(true);
-  expect(button("Forget").disabled).toBe(true);
   expect(fixture.writes()).toBe(0);
 });
 test("scope replacement cannot display the old fact or old editor", async () => {
@@ -495,8 +530,11 @@ test("return reloads the previously loaded page window and focuses a neighbor be
   await click("Load more memories");
   expect(host.querySelectorAll(".brief-memory-row")).toHaveLength(100);
   await open("fixture-many-080");
-  await click("Forget");
-  await click("Forget this memory");
+  fixture.facts.delete("fixture-many-080");
+  await React.act(async () => {
+    await fixture.controller.reload();
+    await wait();
+  });
   await click("All memories");
   await React.act(wait);
   expect(host.querySelectorAll(".brief-memory-row")).toHaveLength(100);
