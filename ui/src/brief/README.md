@@ -659,10 +659,10 @@ actions only change local fixture state.
   fact ID. It only reads. There is no Add memory action, category tab, writer or second memory engine;
   detail, correction and Forget belong to D-26, which receives only the canonical fact ID through
   `onOpen(factId)`. Without `onOpen` a row is `aria-disabled`.
-- `MemoryPort.read(query, signal)` is the only input. There is no live implementation on main: the
-  F-17 memory stream query (`/api/brief/memory`, #823) and F-18 usage records (#833) are still open.
-  An HTTP port is added together with that wiring. Main's paged legacy reader (`/api/vault/page`) has
-  no search or filters and is not used here.
+- `MemoryPort.read(query, signal)` is the only input, and only a fixture port exists so far. The live
+  port over F-17's `/api/brief/memory` (#823) is a follow-up; the room also needs F-18 usage records
+  (#833) and both capabilities before it can go live. Main's paged legacy reader (`/api/vault/page`)
+  has no search or filters and is not used here.
 - Search, Source and Used in go to the server, never filter one fetched page. Search is literal text up
   to 256 characters; Source is an exact label (whitespace kept, up to 4,000 characters); Used in is
   `conversation:<id>` or `run:<id>` and counts supplied use only, not selected-only. Source and Used in
