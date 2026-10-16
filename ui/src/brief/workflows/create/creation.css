@@ -31,7 +31,6 @@
 .brief-root .brief-recent-status[data-tone="error"] { color:var(--brief-error-text); }
 .brief-root .brief-recent-compact-label { display:none; }
 .brief-root .brief-workflow-notice { color:var(--brief-secondary); font:400 14px/22px var(--brief-sans); min-height:72px; }
-.brief-root .brief-workflow-notice button { color:var(--brief-ink); text-decoration:underline; padding:6px; }
 @container brief-work (max-width: 980px) {
   .brief-root :is(.brief-recent-head,.brief-recent-row) { grid-template-columns:minmax(0,1fr) 116px 108px; gap:6px 18px; }
   .brief-root .brief-recent-result-heading { display:none; }

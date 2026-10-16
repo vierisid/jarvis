@@ -40,7 +40,7 @@ export function WorkflowCreationSpecimen() {
     return new WorkflowCreationController(port,{read:()=>saved,write:value=>{saved=value;}},{source:"fixture",scopeId:`workflow-review-${revision}`});
   },[revision]);
   const shell=useMemo<BriefShellPort>(()=>({mode:"preview",route,sidebar,setSidebar,chatOpen,setChatOpen,theme,setTheme,navigate:setRoute}),[route,sidebar,chatOpen,theme,setTheme]);
-  const nav:BriefNavigationBinding={capabilities:null,view:{source:"fixture",state:{status:"ready",data:{...UNKNOWN_NAVIGATION,workspaceName:"Vieri’s workspace",connection:"connected",account:{name:"Vieri Balboni",plan:{status:"ready",data:"Pro plan"}},badges:{workflows:4}}}}};
+  const nav:BriefNavigationBinding={capabilities:null,view:{source:"fixture",state:{status:"ready",data:{...UNKNOWN_NAVIGATION,workspaceName:"Northwind workspace",connection:"connected",account:{name:"Alex Morgan",plan:{status:"ready",data:"Pro plan"}},badges:{workflows:4}}}}};
   const rows=[
     {flowId:"meeting",versionId:"meeting-v3",runId:"meeting-012",name:"Meeting follow-ups",status:"PAUSED",result:"Follow-up drafted for Alex",at:Date.UTC(2026,9,7,9,14),environment:"PRODUCTION" as const},
     {flowId:"inbox",versionId:"inbox-v2",runId:"inbox-028",name:"Morning inbox brief",status:"SUCCEEDED",result:"14 messages summarised",at:Date.UTC(2026,9,7,8,31),environment:"PRODUCTION" as const},

@@ -11,7 +11,7 @@ export function RecentWorkflows({ mode, binding, selectedRunId, onOpen, onAll }:
   const rows = "data" in state ? state.data : [];
   return <section className="brief-recent-workflows" aria-labelledby="brief-recent-workflows-title">
     <h2 id="brief-recent-workflows-title" className="brief-type-section-heading">Recently run</h2>
-    {state.status === "stale" && <p className="brief-workflow-notice" role="status">Recent results may be incomplete or out of date. {binding?.refresh && <button onClick={binding.refresh}>Refresh</button>}</p>}
+    {state.status === "stale" && <p className="brief-workflow-notice" role="status">Recent results may be incomplete or out of date. {binding?.refresh && <BriefButton variant="text" size="sm" onClick={binding.refresh}>Refresh</BriefButton>}</p>}
     {rows.length > 0 ? <>
       <div className="brief-recent-head" aria-hidden="true"><span>Workflow<span className="brief-recent-compact-label"> &amp; result</span></span><span className="brief-recent-result-heading">Latest result</span><span>Status</span><span>Last run</span></div>
       <ul>{rows.map(row => {
@@ -27,7 +27,7 @@ export function RecentWorkflows({ mode, binding, selectedRunId, onOpen, onAll }:
         </button></li>;
       })}</ul>
     </> : <p className="brief-workflow-notice" role="status">{state.status === "loading" ? "Loading recent runs…" : state.status === "empty" || state.status === "ready" ? "Your recent runs will appear here." : "Recent runs are unavailable."}
-      {(state.status === "unavailable" || state.status === "stale") && binding?.refresh && <> <button onClick={binding.refresh}>Retry</button></>}
+      {(state.status === "unavailable" || state.status === "stale") && binding?.refresh && <> <BriefButton variant="text" size="sm" onClick={binding.refresh}>Retry</BriefButton></>}
     </p>}
     <BriefButton variant="text" onClick={onAll}>See all workflows <ArrowRight size={16} aria-hidden="true" /></BriefButton>
   </section>;
