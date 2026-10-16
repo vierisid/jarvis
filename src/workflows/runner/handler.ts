@@ -18,6 +18,7 @@ import type { Job } from "../db/repos/job-queue";
 import type { JobHandler } from "../queue/worker";
 import { getFlowRun, updateRun, type FlowRun } from "../db/repos/flow-run";
 import { cancelFlowRun, getRunCancellation } from "../db/repos/run-cancellation";
+import { assertRunIngredientsReady } from "../db/repos/flow-readiness";
 import { watchRunCancellation, withRunCancellation } from "../runtime/cancellation";
 import {
   getFlowVersion,
@@ -266,6 +267,8 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
 
     const cancellation = watchRunCancellation(runId);
     try {
+      assertRunIngredientsReady(run, version.trigger,
+        typed.payload.executionType === 'RESUME' ? undefined : typed.payload);
       const result = await withRunCancellation(runId, () => opts.executor.execute({
         run,
         version,

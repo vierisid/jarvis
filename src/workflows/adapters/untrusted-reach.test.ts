@@ -223,6 +223,12 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  *                                     names, readiness messages and a dry
  *                                     sample's bounded error, for a person
  *                                     through the Brief provider.
+ *   awareness/prepared-opportunities.ts BENIGN. Holds the exact prepared version
+ *                                     only to pin its graph and expose identity/state.
+ *                                     Captured sample data never reaches its read model
+ *                                     or model requests; only the saved job specification
+ *                                     reaches composition. A regression injects hostile
+ *                                     sample fields and checks reads and retries.
  *   brief/contracts.ts                BENIGN. Imports only workflow status
  *                                     TYPES for wire references. It fetches no
  *                                     run/version and exports no captured step
@@ -273,6 +279,13 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  *                                     derived readiness and qualifications at
  *                                     their own prompt boundary.
  *
+ *   onboarding-next/result/reader.ts PERSON-FACING. Returns only the exact
+ *                                     authorized draft's title/graph and bounded
+ *                                     readiness, with receipt identities. No run,
+ *                                     captured output, composition text or whole
+ *                                     version is forwarded; no model is called.
+ *                                     See result/reader.test.ts projection tests.
+ *
  * A new entry here means a new file holding a run or a version outside the
  * workflow tree. Decide what frames it before adding it -- "holds a whole object"
  * is enough to land here, because that is how the sample_data leak travelled.
@@ -284,6 +297,7 @@ const REVIEWED_STEP_OUTPUT_READERS = [
   'awareness/prepared-dry-run.ts',
   'awareness/prepared-qualification.ts',
   'awareness/suggestion-composer.ts',
+  'awareness/prepared-opportunities.ts',
   'brief/adapters.ts',
   'brief/composition.ts',
   'brief/contracts.ts',
@@ -292,6 +306,7 @@ const REVIEWED_STEP_OUTPUT_READERS = [
   'goals/work-items.ts',
   'goals/workflow-bridge.ts',
   'onboarding-next/compose-draft/store.ts',
+  'onboarding-next/result/reader.ts',
 ];
 
 describe('#573 premise 1: the reachable tool set is closed and known', () => {

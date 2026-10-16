@@ -192,6 +192,16 @@ readers that carry step output out of the data plane -- are pinned by
 `src/workflows/adapters/untrusted-reach.test.ts`, derived from source. Widening
 either fails that test and sends you back to this section.
 
+The optional onboarding result reader (`src/onboarding-next/result/reader.ts`)
+is a person-facing reader in that inventory. After actor/project receipt and
+exact flow/version checks, it returns only the title, persisted graph, identity
+and current bounded readiness. It never forwards the whole version, captured
+step output, composition responses, notes, or run records, and calls no model.
+Its projection regression includes hostile values in omitted columns. Graph
+labels and inputs remain authored data for the canvas; a future model consumer
+must frame them at its own prompt boundary. This does not widen the workflow
+step adapter's unframed tool-result boundary.
+
 One related correctness note: the adapter **drops** a carrier's trusted trailer
 rather than concatenating it. A trailer is repo-authored instructions to a model
 (the webapp template playbook, reachable here via `browser_snapshot`), and a flow

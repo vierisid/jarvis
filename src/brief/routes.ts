@@ -1,3 +1,5 @@
+import { createPreparedOpportunityRoutes } from './prepared-opportunity-routes';
+import type { PreparedOpportunities } from '../awareness/prepared-opportunities';
 import { createAttachmentRoutes } from './attachment-routes';
 import type { BriefAttachmentProvider } from './attachments';
 import type { BriefCapabilities } from './capabilities.ts';
@@ -7,8 +9,9 @@ import { createCompositionRoutes } from './composition-routes';
 import type { BriefCompositionProvider } from './composition';
 
 /** Mounted only inside the daemon's existing authenticated API route table. */
-export function createBriefRoutes(capabilities: BriefCapabilities, json: (body: unknown, status?: number) => Response, conversations?: BriefConversationProvider, attachments?: BriefAttachmentProvider, composition?: BriefCompositionProvider) {
+export function createBriefRoutes(capabilities: BriefCapabilities, json: (body: unknown, status?: number) => Response, conversations?: BriefConversationProvider, attachments?: BriefAttachmentProvider, composition?: BriefCompositionProvider, prepared?: PreparedOpportunities) {
   return {
+    ...createPreparedOpportunityRoutes(capabilities, json, prepared),
     ...createCompositionRoutes(capabilities, json, composition),
     ...createAttachmentRoutes(capabilities, json, attachments),
     ...createConversationRoutes(capabilities, json, conversations),

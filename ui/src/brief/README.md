@@ -284,3 +284,115 @@ socket or approval.
 
 `?brief=preview&specimen=chat-tabs#/_brief_preview` opens the strip inside the Today specimen with a
 fixture owner (add, select, close, reopen, failing writes and each status mode). It sends nothing.
+
+## Conversation composer
+
+- `chat/composer/` renders the UI-18 compact composer and send pebble. It owns no persistence, send
+  acceptance or cancellation: `bindConversationComposer(owner, source)` projects the F-04 owner
+  (`useBriefConversation()`, or a fixture) to the active conversation's draft, its queued/running or
+  pending turn, error and connection, and the writes `setDraft`/`send`/`cancel`. `owner.test.tsx` pins
+  that the provider's value satisfies the port and drives the real `BriefConversationClient`.
+- The draft is kept until the owner accepts the send; a rejected or failed send keeps it. Stop cancels
+  the exact selected turn (conversation, turn and request ids) and shows "Stopping response..." until
+  the owner reports the turn ended or an error, so a terminal failure after Stop stays visible.
+  Enter sends (not during IME composition); Shift+Enter adds a line. Drafts over 65,536 bytes are
+  refused locally, matching the client.
+- Attachments: the composer only reserves the 44px slot (`attachmentControl`). Attachments must go
+  through F-05's `client.attachments` flow (`JARVIS_BRIEF_CHAT_ATTACHMENTS`), which `client.send`
+  already includes; never add a parallel upload here. The binding projects the active chat's
+  attachment count and readiness: ready attachments can be sent without text, and Send waits while
+  any attachment is uploading, removing or failed, matching `client.send`.
+- Not mounted in the live shell yet, and it calls `client.send`: the same #1075 rule as the tab strip
+  applies. Do not mount the provider or this composer live until Brief-turn approval cards are visible.
+- `chat/composer/figma-reference.json` records the UI-18 source values.
+
+`?brief=preview&specimen=composer#/_brief_preview` opens the composer inside the Today specimen with
+a fixture owner (send, hold, stop, failing send/stop, offline and each status mode). It sends nothing.
+
+## Attachment fan
+
+- `chat/attachment-fan/` renders the UI-19 Document / Image / Screenshot fan in the composer's
+  `attachmentControl` slot. It owns no files, upload, preview, retry, removal or send admission.
+  `bindAttachmentFan(owner, pickers, source)` captures the active conversation and workspace when it
+  is bound and delegates to F-05's `client.attachments.upload` / `capture` (`DraftAttachments`, gated by
+  `JARVIS_BRIEF_CHAT_ATTACHMENTS`), so F-05's size/type limits, SQLite-only storage, one-turn binding
+  and untrusted framing apply unchanged. Never add a second upload path or render attachment content
+  here; the fan shows only its own fixed labels and status strings.
+- The host supplies `pickers`: a native file picker, and for Screenshot a device chooser that shows the
+  device and returns `confirmed: true` only after explicit confirmation. A result arriving after the
+  workspace changed, the chat closed, the connection dropped or the request was aborted is refused or
+  reported as cancelled, and success needs F-05's `ready` reference for the same conversation.
+  `owner.test.ts` drives the real `BriefConversationClient` and `DraftAttachments`.
+- The fan renders through a body portal (it must escape Pebble's clip) with its own outside-click,
+  focus-out and Escape handling, because `BriefMenu` has no staggered fan geometry. It reuses
+  `BriefTooltip` and D-04 `useBriefMotion`; reduced motion places choices immediately. Short
+  conversations fan sideways so the tab strip stays reachable.
+- Not mounted in the live shell yet: the same #1075 rule as the tab strip and composer applies. Do not
+  mount the provider or this fan live until Brief-turn approval cards are visible.
+- `chat/attachment-fan/figma-reference.json` records the UI-19 source values.
+
+`?brief=preview&specimen=attachments#/_brief_preview` opens the fan in the composer specimen with a
+fixture binding (Screenshot availability and failure toggles). It picks, uploads and captures nothing.
+
+## Conversation messages
+
+- `chat/message/` renders the UI-20 thread: a quiet user surface, expandable activity rows and
+  unboxed assistant replies. It owns no transport, history or persistence:
+  `bindConversationMessages(owner, source)` projects the F-04 owner (`useBriefConversation()`, or a
+  fixture) to the active conversation's messages, turns, activity, approvals, saved scroll and
+  `loadOlder`. Items match by conversation/turn/request id, never by array position; tool and system
+  messages are not rendered. `owner.test.tsx` pins that the provider's value satisfies the port and
+  renders the real `ConversationStore`.
+- Activity rows come from F-06 progress events and show only F-06's fixed public labels
+  (`activityText` allowlist); an unknown label falls back to a generic phase string, never raw tool
+  data. Only the newest live start animates; replayed rows never move. Reduced motion stops it.
+- Reply text is untrusted and renders through `components/SafeMarkdown` (#1065): no raw HTML, no image
+  loads, restricted URL schemes. Never add a second markdown renderer or `dangerouslySetInnerHTML`.
+- Failed or cancelled turns keep the partial answer and show a fixed notice; the raw error is not shown.
+- Reading position is kept by semantic anchors (`reading.ts`) across activity toggles, history
+  prepend, width changes and tab switches, and only a reader already at the bottom follows new content.
+- A running turn with a pending approval shows "Waiting for your approval before continuing." The
+  approval card itself is not rendered here: F-04 keeps only the approval id and status (#1075).
+- Not mounted in the live shell yet: the same #1075 rule as the tab strip and composer applies. Do not
+  mount the provider or this thread live until Brief-turn approval cards are visible.
+- `chat/message/figma-reference.json` records the UI-20 source values.
+
+`?brief=preview&specimen=messages#/_brief_preview` opens the thread with the tab strip, composer and
+attachment fan in the Today specimen with a fixture owner (start, finish, partial failure, long reply,
+replay, offline and unavailable). It sends nothing.
+
+## Workflow creation
+
+- `workflows/create/` renders the UI-21 Workflows page: a centred prompt over the shared D-13
+  composer (only `sendingLabel` / `suggestionsLabel` are added; chat defaults are unchanged) and
+  `workflows/recent-rows/` below it. Suggestions only fill the prompt. It is a room body plus an
+  opt-in `workflowCreationRegistration(useBinding)`; it is not in the production registry, and the
+  released `WorkflowsRoom` is unchanged. It does not mount the Brief chat provider or call
+  `client.send`, so the #1075 rule does not gate it, but it must not be mounted live until the
+  workflow destinations it navigates to exist.
+- Creation goes only through F-07: `createCompositionPort(capabilities, authenticatedFetch)` calls
+  `/api/brief/workflow-compositions` (`JARVIS_BRIEF_WORKFLOW_COMPOSITION`) and re-checks the
+  `workflowComposition` capability before every request. Types and the prompt limit come from
+  `src/brief/composition-contracts.ts`. Requests are prompt-only; F-08 ingredient selection
+  (`JARVIS_BRIEF_COMPOSITION_INGREDIENTS`) belongs to D-17's picker in the `ingredientControl` slot.
+  Never add a second composer, write flows directly, or enable, publish or run from this page: F-07
+  only prepares a DISABLED draft, and enabling stays on the existing gated path (Q-05 enable card).
+- `WorkflowCreationController` is one instance per authenticated account and vault, held above room
+  navigation and disposed when that ownership ends. It persists the request id with the exact prompt
+  (`sessionCreationStorage(scopeId, sessionStorage)`) before the POST. A lost or invalid response keeps
+  that request: **Check request** (and a one-second follow-up while a job is queued or running) looks it
+  up by its exact `requestId` and, only if absent, replays the same request under the same id, so a
+  retry never creates a second draft. A receipt must echo the request id, prompt and name, carry no
+  ingredients, and keep its job id; a ready receipt navigates once to `workflow-draft` with its exact
+  `flowId` and `versionId`. Unreadable saved state makes the record read-only rather than replacing it.
+- Recent rows (`readRecentWorkflows(authenticatedFetch, signal)`) read the existing workflow API with
+  four workers, at most 200 flows and each flow's latest run page (`{ items, nextOffset }`); no implicit
+  polling. A missed read or a larger inventory reports `stale`/`unavailable`, never complete recency.
+  Rows show status-derived copy only (never step output) and open `workflow` with flow, version and
+  run ids. The host owns invocation, caching and abort on scope change.
+- `workflows/create/figma-reference.json` records the UI-21 source values.
+  `f07-compatibility.test.ts` drives F-07's real provider, routes and SQLite through this port with a
+  fake model: a lost POST recovers one populated disabled draft and starts no run.
+
+`?brief=preview&specimen=workflow-create#/_brief_preview` opens the page with a fixture composition
+port (ready, blocked, failed, lost-response, unavailable) and fixture recent rows. It sends no request.

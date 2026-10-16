@@ -1,3 +1,7 @@
+import { PreparedOpportunities } from '../awareness/prepared-opportunities';
+import { loadPreparedQualityGate } from '../awareness/prepared-quality-adapter';
+import { registerPreparedOpportunities } from '../brief/registrations/prepared-opportunities';
+import { registerCompositionIngredients } from '../brief/registrations/composition-ingredients';
 import { registerChatAttachments } from '../brief/registrations/chat-attachments';
 import { registerChatProgress } from '../brief/registrations/chat-progress';
 import { BriefAttachmentProvider } from '../brief/attachments';
@@ -111,10 +115,9 @@ import {
   type BootstrapWorkflowEngineResult,
 } from "../workflows/runtime/engine-bootstrap.ts";
 import { CredentialResolver } from "../workflows/credentials/adapter.ts";
-import { metadataToCatalogEntry } from "../workflows/runtime/piece-catalog.ts";
+import { createPieceLibraryChangeHandler } from "../workflows/runtime/piece-library-catalog.ts";
 import { resolveSharedRuntimePaths } from "../workflows/runtime/shared-runtime-paths.ts";
 import { DEFAULT_IDS } from "../workflows/db/schema.ts";
-import { apId } from "../workflows/db/ids.ts";
 import { buildSandboxServiceBackends } from "../workflows/runtime/service-backends.ts";
 import { EngineFlowExecutor } from "../workflows/runner/engine-runtime/engine-flow-executor.ts";
 import { createLimiter } from "../util/concurrency.ts";
@@ -168,6 +171,7 @@ export interface DaemonConfig {
 
 let shutdownInProgress = false;
 let suggestionComposer: SuggestionComposer | null = null;
+let briefPreparedOpportunities: PreparedOpportunities | null = null;
 let briefWorkflowComposition: BriefCompositionProvider | null = null;
 let registry: ServiceRegistry | null = null;
 let healthMonitor: HealthMonitor | null = null;
@@ -350,6 +354,8 @@ async function handleShutdown(signal: ShutdownReason): Promise<void> {
     // (window-state.ts), and phase 3 still calls it on the way out.
     flushWindowState();
   }
+  await briefPreparedOpportunities?.close();
+  briefPreparedOpportunities = null;
   suggestionComposer?.stop();
   suggestionComposer = null;
   briefWorkflowComposition?.stop();
@@ -4844,12 +4850,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     });
     const briefAttachments = new BriefAttachmentProvider(getDb(), sidecarManager);
     briefWorkflowComposition = new BriefCompositionProvider(getDb());
+    briefPreparedOpportunities = new PreparedOpportunities(getDb());
     const briefEnabled: BriefCapabilityId[] = [];
     if (process.env.JARVIS_BRIEF_CONVERSATIONS === '1') briefEnabled.push('conversations');
     if (process.env.JARVIS_BRIEF_CHAT_TRANSPORT === '1') briefEnabled.push('chatTransport');
     if (process.env.JARVIS_BRIEF_CHAT_ATTACHMENTS === '1') briefEnabled.push('chatAttachments');
     if (process.env.JARVIS_BRIEF_CHAT_STATE === '1') briefEnabled.push('chatState');
     if (process.env.JARVIS_BRIEF_CHAT_PROGRESS === '1') briefEnabled.push('chatProgress');
+    if (process.env.JARVIS_BRIEF_COMPOSITION_INGREDIENTS === '1') briefEnabled.push('compositionIngredients');
+    if (process.env.JARVIS_BRIEF_PREPARED_OPPORTUNITIES === '1') briefEnabled.push('preparedOpportunities');
     if (process.env.JARVIS_BRIEF_WORKFLOW_COMPOSITION === '1') briefEnabled.push('workflowComposition');
     const briefCapabilities = createBriefCapabilities([
       ...registerConversations(briefConversations), ...registerChatTransport(briefChatTransport),
@@ -4857,12 +4866,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ...registerChatAttachments(briefAttachments),
       ...registerChatProgress(briefChatTransport),
       ...registerWorkflowComposition(briefWorkflowComposition),
+      ...registerPreparedOpportunities(briefPreparedOpportunities),
+      ...registerCompositionIngredients(briefWorkflowComposition),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
     const apiContext: import('./api-routes.ts').ApiContext & Record<string, unknown> = {
       briefConversations,
       briefAttachments,
       briefWorkflowComposition,
+      briefPreparedOpportunities,
       briefCapabilities,
       daemonStartedAt: Date.now(),
       healthMonitor,
@@ -5134,39 +5146,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // without a daemon restart. Skipped if either the catalog or the engine
     // runtime is missing (engine bootstrap failed earlier -- the install
     // route still mutated disk; the next daemon start reconciles).
-    const onPieceLibraryChanged =
-      workflowPieceCatalog && workflowEngineRuntime
-        ? async (event: {
-            kind: "installed" | "uninstalled";
-            piece: { npmPackage: string; resolvedVersion: string };
-          }) => {
-            // Only ever reached on a SELF-MANAGED install: the Library
-            // mutations that fire this are refused when a host owns the
-            // catalog, and a host owning the catalog is exactly what having a
-            // shared tree means. So an uninstall here has no shared copy to
-            // fall back to — the piece is simply gone.
-            if (event.kind === "uninstalled") {
-              workflowPieceCatalog.remove(event.piece.npmPackage);
-              return;
-            }
-            // Unique runId per acquire so any future parallel installs
-            // (today serialized by the API's library mutex) don't collide on
-            // the engine's runId-keyed state.
-            const handle = await workflowEngineRuntime.acquire({
-              runId: `metadata-extract-runtime-install-${apId()}`,
-              projectId: DEFAULT_IDS.project,
-            });
-            try {
-              const meta = await handle.extractPieceMetadata({
-                pieceName: event.piece.npmPackage,
-                pieceVersion: event.piece.resolvedVersion,
-              });
-              workflowPieceCatalog.upsert(metadataToCatalogEntry(meta));
-            } finally {
-              await handle.release();
-            }
-          }
-        : undefined;
+    const onPieceLibraryChanged = workflowPieceCatalog && workflowEngineRuntime
+      ? createPieceLibraryChangeHandler(workflowPieceCatalog, workflowEngineRuntime)
+      : undefined;
 
     apiContext.onboardingNext = createDaemonOnboardingRuntime(apiContext, runtimeModules);
 
@@ -5408,6 +5390,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           library: composerLibrary, executionTargets: collectExecutionTargets(),
         });
         briefWorkflowComposition?.configure(compositionDependencies);
+        if (process.env.JARVIS_BRIEF_PREPARED_OPPORTUNITIES === '1') {
+          const quality = await loadPreparedQualityGate({ authority: authorityEngine,
+            tool: name => toolRegistry.get(name) ?? null,
+            targets: () => collectExecutionTargets().filter(t => !t.isHost).map(t => ({ ...t,
+              unavailableCapabilities: sidecarManager.listSidecars().find(s => s.id === t.id)?.unavailable_capabilities?.map(c => c.name),
+            })), credentials: credentialResolver,
+          }, engineBoot?.bundlePath, engineBoot?.bundleDigest);
+          briefPreparedOpportunities?.configure(compositionDependencies, quality, () => backgroundBudgetStatus().state === 'ready');
+          briefPreparedOpportunities?.start();
+        }
         suggestionComposer = new SuggestionComposer(
           request => composePersistedFlow(compositionDependencies(), request),
           undefined,

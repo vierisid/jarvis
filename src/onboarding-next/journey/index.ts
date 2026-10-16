@@ -220,6 +220,7 @@ function apply(s: JourneySnapshot, c: Navigation | Acknowledgement): JourneySnap
 /** Creates a dormant, unregistered provider. Only explicit method calls can
  * touch persistence. Navigation cannot acknowledge another provider's work. */
 export function createJourneyProvider(deps: JourneyDependencies) {
+  const validateFinish = deps.validateFinish;
   async function run(input: unknown, lane: 'read' | 'navigation' | 'acknowledgement'): Promise<JourneyResult> {
     try {
       const scope = await deps.authorize();
@@ -247,6 +248,11 @@ export function createJourneyProvider(deps: JourneyDependencies) {
           throw new JourneyError('transition_limit');
         }
         const next = apply(s, request.command);
+        if (request.command.type === 'finish') {
+          let valid = false;
+          try { valid = validateFinish?.(scope, structuredClone(s), tx.resource) === true; } catch { /* Fail closed without exposing reader errors. */ }
+          if (!valid) throw new JourneyError('result_unavailable');
+        }
         next.revision++;
         tx.write({ ...record, snapshot: next, receipts: [...record.receipts, {
           requestId: request.requestId, digest: hash, revision: next.revision,
@@ -260,6 +266,7 @@ export function createJourneyProvider(deps: JourneyDependencies) {
     }
   }
   return {
+    canFinishDraft: typeof validateFinish === 'function',
     read: () => run(undefined, 'read'),
     transition: (request: Transition<Navigation>) => run(request, 'navigation'),
     acknowledge: (request: Transition<Acknowledgement>) => run(request, 'acknowledgement'),

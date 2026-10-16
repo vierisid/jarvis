@@ -11,6 +11,10 @@ import { NavigationSpecimen } from "../shell/navigation/NavigationSpecimen";
 import { PebbleSpecimen } from "../shell/pebble-layout/PebbleSpecimen";
 import { TodaySpecimen } from "../today/preview/TodaySpecimen";
 import { ChatTabsSpecimen } from "../chat/tab-strip/preview/ChatTabsSpecimen";
+import { AttachmentSpecimen } from "../chat/attachment-fan/preview/AttachmentSpecimen";
+import { ComposerSpecimen } from "../chat/composer/preview/ComposerSpecimen";
+import { MessageSpecimen } from "../chat/message/preview/MessageSpecimen";
+import { WorkflowCreationSpecimen } from "../workflows/create/preview/WorkflowCreationSpecimen";
 
 interface PreviewModel { note: string }
 const PreviewBody = bindBriefView<PreviewModel>(() => ({ ...unavailableView<PreviewModel>("No live provider is connected in this preview."), source: "fixture" }),
@@ -35,6 +39,10 @@ const PreviewBody = bindBriefView<PreviewModel>(() => ({ ...unavailableView<Prev
 /** Explicit fixture-only URL. Never used as the fallback for real business data. */
 export function FoundationPreview() {
   const specimen = new URLSearchParams(window.location.search).get("specimen");
+  if (specimen === "workflow-create") return <WorkflowCreationSpecimen />;
+  if (specimen === "messages") return <MessageSpecimen />;
+  if (specimen === "attachments") return <AttachmentSpecimen />;
+  if (specimen === "composer") return <ComposerSpecimen />;
   if (specimen === "chat-tabs") return <ChatTabsSpecimen />;
   if (specimen === "today") return <TodaySpecimen />;
   return specimen === "pebble" ? <PebbleSpecimen /> : specimen === "navigation" ? <NavigationSpecimen /> : specimen === "motion" ? <MotionSpecimen /> : specimen === "controls" ? <ControlSpecimen /> : specimen === "styles" ? <StyleSpecimen /> : <FoundationControls />;
