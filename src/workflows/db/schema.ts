@@ -188,6 +188,12 @@ const STATEMENTS: string[] = [
     waitpoint_id TEXT UNIQUE
   )`,
 
+  // Append-only recovery decisions survive a run/flow deletion as audit evidence.
+  `CREATE TABLE IF NOT EXISTS workflow_recovery_receipt (
+    id TEXT PRIMARY KEY, run_id TEXT NOT NULL, request_id TEXT NOT NULL, record TEXT NOT NULL,
+    UNIQUE(run_id, request_id)
+  )`,
+
   // A delegated sub-agent's conversation while its run waits on a tool
   // approval, and its finished result so a re-run step returns that instead
   // of starting a new conversation. One row per step instance.

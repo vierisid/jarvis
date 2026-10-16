@@ -114,6 +114,8 @@ export interface ComposeRequest {
   description: string;
   /** What the caller states explicitly about the job; the composed graph must keep it (job-contract.ts). */
   contract?: JobContract;
+  /** Supplemental user/reference data, framed as untrusted with the original wording. Never execution authority. */
+  context?: Record<string, unknown>;
 }
 
 /** Versioned source of intent. Preserve the caller's wording, including
@@ -127,6 +129,7 @@ export interface WorkflowJobSpecification {
   description: string;
   /** The caller's explicit contract, as given. Absent when none was stated. */
   contract?: JobContract;
+  context?: Record<string, unknown>;
 }
 
 export interface CompositionCandidate {
@@ -142,6 +145,7 @@ interface CompositionContext extends CompositionCandidate {
 export function jobSpecification(req: ComposeRequest): WorkflowJobSpecification {
   return Object.freeze({ schemaVersion: 1, name: req.name, description: req.description,
     ...(req.contract !== undefined ? { contract: structuredClone(req.contract) } : {}),
+    ...(req.context !== undefined ? { context: structuredClone(req.context) } : {}),
     ...(req.ingredients?.length ? { ingredients: structuredClone(req.ingredients) } : {}) });
 }
 

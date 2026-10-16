@@ -25,6 +25,8 @@ export interface WorkflowEffect {
    * succeeded; the service was not called again.
    */
   replayRefusal?: { outcome: ActionOutcome; at: number };
+  /** Q-07: native connection identity at dispatch; no credential is retained. */
+  providerBinding?: { connectionId: string; credentialDigest: string };
 }
 export function getWorkflowEffect(id: string): WorkflowEffect | null {
   const row = getWorkflowDb().query('SELECT record FROM workflow_effect WHERE id = ?').get(id) as { record: string } | null;

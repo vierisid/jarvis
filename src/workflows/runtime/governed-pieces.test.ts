@@ -25,7 +25,7 @@ import { WorkflowEventBuffer } from './event-buffer';
 import { buildSandboxServiceBackends, type BuildServiceBackendsOptions } from './service-backends';
 import { AUTHORITY_REQUIREMENTS, type ActionCategory } from '../../roles/authority';
 import { GOVERNED_PIECE_ADAPTERS, governedPieceTarget, governedPieceToolDefinition, governedPieceToolName, RESERVED_TARGET_KEYS, isWellFormedPieceActionName, PIECE_ACTION_NAME_MAX_CHARS, reprojectPieceInput,
-  resolveGovernedPieceAction, sanitizePieceInput } from './piece-effects';
+  resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { defangPieceProjection } from './piece-effect-receipt';
 import { digest } from './effect-context';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN, wrapUntrusted } from '../../roles/untrusted';
@@ -66,8 +66,8 @@ function fixture(piece: string, action: string, level = 10, names: { displayName
     wsService: { broadcastNotificationToDashboard: () => {} } as any };
   const backends = buildSandboxServiceBackends(options);
   const context = { runId: run.id, projectId: DEFAULT_IDS.project, stepName, executionPath: [] };
-  const authorize = (input: Record<string, unknown> = {}) =>
-    backends.pieceAuthorize!({ piece, action, input }, context);
+  const authorize = async (input: Record<string, unknown> = {}) =>
+    backends.pieceAuthorize!({ piece, action, input, inputDigest: await pieceInputDigest(input) }, context);
   return { authority, approvals, deliveredApprovals, backends, context, run, version, authorize, options };
 }
 
@@ -91,7 +91,7 @@ describe('governed piece adapters: the catalogue stays open', () => {
       expect(String(url)).toBe('http://127.0.0.1:1/v1/jarvis/pieces/authorize');
       const body = JSON.parse(String(init.body)) as Record<string, unknown>;
       bodies.push(body);
-      return new Response(JSON.stringify(body.piece === GMAIL ? { governed: true, dispatch: 'authorized' } : { governed: false }), { status: 200 });
+      return new Response(JSON.stringify(body.piece === GMAIL ? { governed: true, dispatch: 'authorized', effectId: 'wfe_fixture' } : { governed: false }), { status: 200 });
     }) as unknown as typeof fetch;
     const base = { apiUrl: 'http://127.0.0.1:1/', engineToken: 't', stepName: 'action',
       executionPath: [] as Array<[string, number]>, fetchImpl };
@@ -99,7 +99,7 @@ describe('governed piece adapters: the catalogue stays open', () => {
       .toEqual({ governed: false });
     expect(bodies[0]).toEqual({ piece: COMMUNITY_PIECE, action: 'create_contact', input: {} });
     expect(await authorizePieceDispatch({ ...base, piece: GMAIL, action: 'send_email', input: SEND_INPUT }))
-      .toEqual({ governed: true, dispatch: 'authorized' });
+      .toEqual({ governed: true, dispatch: 'authorized', effectId: 'wfe_fixture' });
     expect(bodies[1]!.inputDigest).toMatch(/^[0-9a-f]{64}$/);
   });
 
@@ -165,9 +165,13 @@ describe('governed piece adapters: gmail', () => {
 
     // The step re-runs on RESUME and re-authorizes rather than trusting the
     // earlier decision; the claim makes the second attempt a replay.
-    expect(await f.authorize(SEND_INPUT)).toEqual({ governed: true, dispatch: 'authorized' });
-    expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'succeeded', decision: 'approval_required' });
-    expect(await f.authorize(SEND_INPUT)).toEqual({ governed: true, dispatch: 'authorized' });
+    const dispatched = await f.authorize(SEND_INPUT) as { effectId: string };
+    expect(dispatched).toMatchObject({ governed: true, dispatch: 'authorized' });
+    expect(typeof dispatched.effectId).toBe('string');
+    expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'dispatching', decision: 'approval_required' });
+    await expect(f.authorize(SEND_INPUT)).rejects.toThrow(/replay is blocked/);
+    f.backends.pieceReceipt!(f.context, dispatched.effectId, { id: 'a123' });
+    expect(await f.authorize(SEND_INPUT)).toEqual({ governed: true, dispatch: 'completed', result: { id: 'a123' } });
     expect(listWorkflowEffects(f.run.id)).toHaveLength(1);
   });
 
@@ -530,8 +534,8 @@ describe('every verified piece is gated', () => {
       updateRun(f.run.id, { status: 'PAUSED' });
       expect(resumeResolvedWorkflowEffects()).toBe(1);
       updateRun(f.run.id, { status: 'RUNNING' });
-      expect(await f.authorize(piece.input)).toEqual({ governed: true, dispatch: 'authorized' });
-      expect(listWorkflowEffects(f.run.id)[0]!.status).toBe('succeeded');
+      expect(await f.authorize(piece.input)).toMatchObject({ governed: true, dispatch: 'authorized' });
+      expect(listWorkflowEffects(f.run.id)[0]!.status).toBe(tracksPieceCompletion(pieceName, piece.action) ? 'dispatching' : 'succeeded');
     });
 
     test(`${piece.id}: ${piece.severe[0]} is gated above the piece's ordinary writes`, async () => {
@@ -1068,7 +1072,9 @@ describe('#722: a field named like the omitted-fields marker', () => {
   test('the stored effect, the approval row and the digest carry the escaped field', async () => {
     const f = fixture(GMAIL, 'send_email');
     f.authority.setGovernedCategories(['send_email']);
-    const pending = await f.authorize(sanitizePieceInput({ ...SEND_INPUT, body: { text: 'hi', omittedFields: 3 } }));
+    const projected = sanitizePieceInput({ ...SEND_INPUT, body: { text: 'hi', omittedFields: 3 } });
+    const inputDigest = await pieceInputDigest(projected);
+    const pending = await f.authorize(projected);
     const approvalId = (pending as { approval: { approvalId: string } }).approval.approvalId;
     const shown = JSON.parse(f.approvals.getRequest(approvalId)!.tool_arguments) as { body: Record<string, unknown> };
     expect(shown.body).toEqual({ text: 'hi', '~omittedFields': 3 });
@@ -1077,8 +1083,8 @@ describe('#722: a field named like the omitted-fields marker', () => {
     // The fence is over the escaped projection: an approval recorded against
     // the bare key does not match it.
     const input = effect.arguments as Record<string, unknown>;
-    expect(effect.requestDigest).toBe(digest({ piece: GMAIL, action: 'send_email', input }));
-    expect(effect.requestDigest).not.toBe(digest({ piece: GMAIL, action: 'send_email',
+    expect(effect.requestDigest).toBe(digest({ piece: GMAIL, action: 'send_email', input, inputDigest }));
+    expect(effect.requestDigest).not.toBe(digest({ piece: GMAIL, action: 'send_email', inputDigest,
       input: { ...input, body: { text: 'hi', omittedFields: 3 } } }));
   });
 });
@@ -1150,7 +1156,7 @@ describe('Q-08: every piece step obeys Pause and Kill', () => {
   });
 
   test('a recorded piece authorization is not handed out again while paused', async () => {
-    const f = fixture(GMAIL, 'send_email');
+    const f = fixture(GMAIL, 'gmail_create_draft');
     expect(await f.authorize(SEND_INPUT)).toMatchObject({ governed: true, dispatch: 'authorized' });
     emergency(f).pause();
     expect(await f.authorize(SEND_INPUT)).toMatchObject({ governed: true, dispatch: 'approval_required', approval: { hold: expect.any(String) } });
@@ -1180,15 +1186,32 @@ describe('Q-08: every piece step obeys Pause and Kill', () => {
     expect(await send(REVIEWED)).toMatchObject({ dispatch: 'authorized' });
   });
 
-  test('an approval parked before the whole-input digest existed runs once, then is bound to it', async () => {
-    const f = fixture(GMAIL, 'send_email');
-    f.authority.setGovernedCategories(['send_email']);
-    // What an engine built before Q-08 sent: the projection alone.
-    const parked = await f.backends.pieceAuthorize!({ piece: GMAIL, action: 'send_email', input: sanitizePieceInput(REVIEWED) }, f.context) as { approval: { approvalId: string } };
+  test('an untracked draft approval parked before the whole-input digest existed runs once, then is bound to it', async () => {
+    const action = 'gmail_create_draft';
+    const f = fixture(GMAIL, action);
+    f.authority.setGovernedCategories(['write_data']);
+    // Q-08's compatibility path still applies to actions without a send fence.
+    const parked = await f.backends.pieceAuthorize!({ piece: GMAIL, action, input: sanitizePieceInput(REVIEWED) }, f.context) as { approval: { approvalId: string } };
     f.approvals.approve(parked.approval.approvalId, 'dashboard');
-    const send = sendWhole(f);
+    const send = async (input: Record<string, unknown>) => f.backends.pieceAuthorize!({
+      piece: GMAIL, action, input: sanitizePieceInput(input), inputDigest: await pieceInputDigest(input) }, f.context);
     expect(await send(REVIEWED)).toMatchObject({ dispatch: 'authorized' });
     await expect(send(CHANGED)).rejects.toThrow(/changed since it was recorded/);
+  });
+
+  test('a tracked send without a whole-input digest needs a fresh, fully bound request', async () => {
+    const f = fixture(GMAIL, 'send_email');
+    f.authority.setGovernedCategories(['send_email']);
+    await expect(f.backends.pieceAuthorize!({ piece: GMAIL, action: 'send_email', input: sanitizePieceInput(REVIEWED) }, f.context))
+      .rejects.toThrow('A tracked send requires the complete input digest');
+    expect(listWorkflowEffects(f.run.id)).toEqual([]);
+    expect(f.approvals.getPending()).toEqual([]);
+    const send = sendWhole(f);
+    const parked = await send(REVIEWED) as { approval: { approvalId: string } };
+    expect(parked).toMatchObject({ dispatch: 'approval_required' });
+    f.approvals.approve(parked.approval.approvalId, 'dashboard');
+    await expect(send(CHANGED)).rejects.toThrow(/changed since it was recorded/);
+    expect(await send(REVIEWED)).toMatchObject({ dispatch: 'authorized' });
   });
 
   test('the whole-input digest leaves the connection out and sees past the cut', async () => {

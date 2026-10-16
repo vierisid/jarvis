@@ -54,6 +54,8 @@ import {
 } from "./routes/jarvis-tools";
 import {
   createJarvisPieceAuthorizeRoute,
+  createJarvisPieceReceiptRoute,
+  type JarvisPiecesRouteDeps,
   type PieceAuthorizeFn,
 } from "./routes/jarvis-pieces";
 import {
@@ -119,6 +121,7 @@ export interface SandboxApiServices {
    * step closed -- the engine only calls it for a piece with an adapter.
    */
   pieceAuthorize?: PieceAuthorizeFn;
+  pieceReceipt?: JarvisPiecesRouteDeps['pieceReceipt'];
   /**
    * Notification backend for the `jarvis-notify` piece. If unset, returns 503.
    */
@@ -270,6 +273,7 @@ export class SandboxApi {
         method: "POST",
         handler: createJarvisPieceAuthorizeRoute(this.services),
       },
+      { path: '/v1/jarvis/pieces/receipt', method: 'POST', handler: createJarvisPieceReceiptRoute(this.services) },
       {
         path: "/v1/jarvis/notify",
         method: "POST",

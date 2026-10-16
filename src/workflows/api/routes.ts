@@ -27,6 +27,8 @@
  */
 
 import { DEFAULT_IDS, getWorkflowDb } from '../db';
+import { getRunRecovery, listRunRecoveries, decideRunRecovery, RecoveryError } from '../runtime/recovery';
+import type { AuthorityEngine } from '../../authority/engine';
 import {
   createFlow,
   deleteFlowInProject,
@@ -632,6 +634,7 @@ const trapErrors = async (fn: () => Promise<Response> | Response): Promise<Respo
   try {
     return await fn();
   } catch (e) {
+    if (e instanceof RecoveryError) return err(e.message, e.status);
     if (e instanceof WorkflowReadinessError) return ok({ error: e.message, code: e.code, ...e.readiness }, e.status);
     if (e instanceof FlowVersionRequestError) return err(e.message, e.status);
     // A refused CODE step is a permission answer, not a bad request: the flow
@@ -677,6 +680,7 @@ function sampleStepNameRefusal(stepName: string): Response | null {
 }
 
 export interface CreateWorkflowRoutesOptions {
+  recoveryAuthority?: AuthorityEngine;
   /**
    * Optional trigger manager. When provided, every flow status / version
    * change calls `triggerManager.refresh(flowId)` so cron/webhook/event
@@ -2149,12 +2153,33 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
+    "/api/workflow-recovery": {
+      GET: req => trapErrors(() => {
+        const params = new URL(req.url).searchParams;
+        return ok(listRunRecoveries(Number(params.get('limit') ?? '50'), params.get('cursor'), callerProject(req)));
+      }),
+    },
+    "/api/workflow-runs/:runId/recovery": {
+      GET: req => trapErrors(() => {
+        const { runId } = (req as RequestWithParams<{ runId: string }>).params;
+        if (!scopedRun(req, runId)) return err('run not found', 404);
+        return ok({ recovery: getRunRecovery(runId) });
+      }),
+      POST: req => trapErrors(async () => {
+        const { runId } = (req as RequestWithParams<{ runId: string }>).params;
+        if (!scopedRun(req, runId)) return err('run not found', 404);
+        const read = await readWriteBody(req, 8192);
+        if ('error' in read) return read.error;
+        const receipt = await decideRunRecovery(runId, read.body, { authority: opts.recoveryAuthority });
+        return ok({ receipt, recovery: getRunRecovery(runId) });
+      }),
+    },
     "/api/workflow-runs/:runId/effects": {
       GET: (req) => trapErrors(async () => {
         const { runId } = (req as RequestWithParams<{ runId: string }>).params;
         if (!scopedRun(req, runId)) return err('run not found', 404);
         const { listWorkflowEffects } = await import('../db/repos/workflow-effect');
-        return ok({ runId, effects: listWorkflowEffects(runId), children: listChildRuns(runId) });
+        return ok({ runId, effects: listWorkflowEffects(runId), children: listChildRuns(runId), recovery: getRunRecovery(runId) });
       }),
     },
 
@@ -2164,7 +2189,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
           const run = scopedRun(req, runId);
           // The delivery that started it (Q-06): which trigger, when it was due, how late.
-          return run ? ok({ ...run, fire: fireForRun(runId) }) : err("run not found", 404);
+          return run ? ok({ ...run, fire: fireForRun(runId), recovery: getRunRecovery(runId) }) : err("run not found", 404);
         }),
     },
 

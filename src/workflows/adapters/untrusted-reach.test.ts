@@ -256,6 +256,22 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  *   goals/workflow-bridge.ts           BENIGN. Holds a whole
  *                                     `FlowVersion`/`FlowRun` but reads only ids
  *                                     and state.
+ *   onboarding-next/compose-draft/store.ts BENIGN. Holds a freshly created or
+ *                                     recovered `FlowVersion`, but projects
+ *                                     only exact artifact ids and state. It
+ *                                     never returns captured sample outputs,
+ *                                     sample inputs, the version object or
+ *                                     composition journal payloads. Readiness
+ *                                     is recomputed from the graph and its
+ *                                     text fields are bounded for the result
+ *                                     a person reads. Recovery returns before
+ *                                     composition, so stored outputs never
+ *                                     feed a new model call. The module's
+ *                                     index.test.ts seeds hostile stored
+ *                                     payloads and checks replay/reconciliation.
+ *                                     Future model consumers must frame graph-
+ *                                     derived readiness and qualifications at
+ *                                     their own prompt boundary.
  *
  * A new entry here means a new file holding a run or a version outside the
  * workflow tree. Decide what frames it before adding it -- "holds a whole object"
@@ -275,6 +291,7 @@ const REVIEWED_STEP_OUTPUT_READERS = [
   'goals/next-action.ts',
   'goals/work-items.ts',
   'goals/workflow-bridge.ts',
+  'onboarding-next/compose-draft/store.ts',
 ];
 
 describe('#573 premise 1: the reachable tool set is closed and known', () => {

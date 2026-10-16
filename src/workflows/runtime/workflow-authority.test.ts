@@ -437,7 +437,7 @@ describe('workflow effect boundary', () => {
   }
 
   for (const [label, failure, effectStatus, receipt] of [
-    ['a thrown error', () => new Error('remote timeout'), 'failed', 'failed'],
+    ['a thrown error', () => new Error('remote timeout'), 'unknown', 'failed'],
     ['a blocked outcome', () => new ActionOutcomeError({ status: 'blocked', code: 'refused', message: 'remote refused', effect: 'not_started' }), 'blocked', 'blocked'],
     ['an unknown outcome', () => new ActionOutcomeError({ status: 'unknown', code: 'lost', message: 'reply lost', effect: 'may_have_occurred' }), 'unknown', 'failed'],
     // Blocked partway: the effect may have happened, so the receipt must not
@@ -687,7 +687,7 @@ describe('workflow effect boundary', () => {
     await expect(f.invoke()).rejects.toThrow('remote timeout');
     await expect(f.invoke()).rejects.toThrow(/partial effects/);
     expect(f.calls).toHaveLength(1);
-    expect(listWorkflowEffects(f.run.id)[0]!.status).toBe('failed');
+    expect(listWorkflowEffects(f.run.id)[0]!.status).toBe('unknown');
     expect(new AuditTrail().query({ agentId: `workflow:${f.run.id}` }).every(entry => entry.executed === 0)).toBe(true);
   });
 

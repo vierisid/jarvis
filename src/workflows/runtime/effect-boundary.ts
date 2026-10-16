@@ -75,6 +75,9 @@ export interface EffectInvocation {
   principal?: EffectPrincipal;
   /** The caller's gate already found this effect needs approval; the boundary never concludes otherwise. */
   approvalRequired?: boolean;
+  /** The engine owns this dispatch. Only its completion receipt can finish it. */
+  externalDispatch?: boolean;
+  providerBinding?: WorkflowEffect['providerBinding'];
   /**
    * The tool's own gate asked for `confirm` and this is its floor: a pure
    * level shortfall above a floor the principal clears becomes an approval
@@ -248,7 +251,8 @@ export class WorkflowEffectBoundary {
           machineBindingVersion: 1,
           triggeredBy: resolved.run.triggeredBy, environment: resolved.run.environment,
           piece: input.piece, action: input.action },
-        decision: 'unresolved', reason: '', status: 'pending', approvalId: null, waitpointId: null, createdAt: Date.now() };
+        decision: 'unresolved', reason: '', status: 'pending', approvalId: null, waitpointId: null, createdAt: Date.now(),
+        ...(input.providerBinding ? { providerBinding: input.providerBinding } : {}) };
       saveWorkflowEffect(effect!);
     }
     const record = effect!;
@@ -459,6 +463,11 @@ export class WorkflowEffectBoundary {
       const { result, verification } = await collectActionVerification(input.toolName, input.toolCategory,
         () => withExecutionScope(checkpoint,
           () => input.execute(JSON.parse(canonicalJson(record.arguments)), checkpoint)));
+      // The provider has not run yet. Leave the durable dispatch fence closed
+      // even if this reply is lost or the engine retries the step. The trail
+      // records the hand-off now, as it does for every piece authorization:
+      // a lost completion receipt must not leave a send with no audit row.
+      if (input.externalDispatch) { log(true); return { result }; }
       if (verification) record.outcome = { status: 'succeeded', verification };
       // NOT bounded and NOT defanged, deliberately: this is replay and
       // idempotency state that a resumed run reads back instead of acting again,
@@ -491,15 +500,20 @@ export class WorkflowEffectBoundary {
       log(true);
       return { result: record.result, ...(record.outcome ? { outcome: record.outcome } : {}) };
     } catch (error) {
+      // A persisted result wins over failure to write a secondary approval or
+      // audit receipt. In particular, never replace success with uncertainty.
+      if (getWorkflowEffect(id)?.status === 'succeeded') throw error;
       if (error instanceof ActionOutcomeError) {
         record.outcome = error.outcome;
         record.status = error.outcome.status === 'error' ? 'failed' : error.outcome.status;
         record.error = error.message;
       } else {
-        // Completion/persistence failed after the adapter returned. Do not
-        // leave a success outcome attached to a failed durable receipt.
-        delete record.outcome;
-        record.status = 'failed'; record.error = `Effect dispatch failed; partial effects may have occurred: ${(error as Error).message}`;
+        // Completion/persistence failed after the adapter returned, or the
+        // adapter threw without a typed outcome. Either way the effect may have
+        // happened: record it as unknown (replacing any success outcome), never
+        // as a plain failure an operator could read as safe to re-run.
+        record.status = 'unknown'; record.error = `Effect dispatch failed; partial effects may have occurred: ${(error as Error).message}`;
+        record.outcome = { status: 'unknown', code: 'DISPATCH_UNCERTAIN', message: record.error, effect: 'may_have_occurred' };
       }
       record.finishedAt = Date.now(); saveWorkflowEffect(record);
       // Dispatched and not succeeded: `blocked` only when the outcome says
