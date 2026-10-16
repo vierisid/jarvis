@@ -1,3 +1,4 @@
+import { ensureCompositionBudget } from '../awareness/composition-budget';
 import type { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
 
@@ -21,6 +22,7 @@ export function suggestionContext(context: string | null): Record<string, unknow
 }
 
 export function ensureSuggestionSchema(db: Database): void {
+  ensureCompositionBudget(db);
   db.run(`CREATE TABLE IF NOT EXISTS suggestion_identities (
     suggestion_id TEXT PRIMARY KEY REFERENCES awareness_suggestions(id) ON DELETE CASCADE,
     pattern_key TEXT NOT NULL

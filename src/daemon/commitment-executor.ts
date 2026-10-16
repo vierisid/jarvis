@@ -12,6 +12,7 @@
 
 import { getDueCommitments, getUpcoming, updateCommitmentStatus, getCommitment, isWorkItemCommitment } from '../vault/commitments.ts';
 import type { Commitment } from '../vault/commitments.ts';
+import { runWithAdmission } from '../llm/background-budget.ts';
 import type { IAgentService } from './agent-service-interface.ts';
 import type { WSMessage } from '../comms/websocket.ts';
 import type { WorkflowEventBus } from '../workflows/runtime/event-bus.ts';
@@ -459,7 +460,10 @@ export class CommitmentExecutor {
         + 'The background authority profile is the control for this turn.');
     }
 
-    const response = await this.agentService!.handleMessage(prompt, 'system');
+    // A commitment is work the person scheduled, run at most once: exempt from
+    // the background budget (src/llm/background-budget.ts), so a busy chat or
+    // a spent daily allowance cannot fail it. Origin stays `background`.
+    const response = await runWithAdmission('exempt', () => this.agentService!.handleMessage(prompt, 'system'));
 
     // Broadcast the execution result
     this.broadcast?.({

@@ -1,3 +1,4 @@
+import { currentOrigin, runWithOrigin } from '../../llm/origin';
 /**
  * The LLM client the workflow composer runs on.
  *
@@ -126,8 +127,12 @@ function textOf(content: unknown): string {
 export function createComposerLlmClient(manager: LLMManager): ComposerLlmClient {
   // The one place composition reaches the LLM. Both paths below go through
   // it, so the tier and the usage label cannot drift apart between them.
-  const route = (messages: LLMMessage[], options: LLMOptions) =>
-    manager.chatTier(COMPOSER_TIER, COMPOSER_SUBSYSTEM, messages, options);
+  const route = (messages: LLMMessage[], options: LLMOptions) => {
+    const call = () => manager.chatTier(COMPOSER_TIER, COMPOSER_SUBSYSTEM, messages, options);
+    // Detached preparation has no foreground turn. Explicit user/workflow origins
+    // retain their semantics; F-09's timer-driven composer uses this adapter too.
+    return currentOrigin() ? call() : runWithOrigin('background', call);
+  };
 
   return {
     async chat(input: Parameters<ComposerLlmClient["chat"]>[0]): Promise<{ text: string }> {

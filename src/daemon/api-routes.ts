@@ -1,3 +1,4 @@
+import { memoryPageResponse } from '../vault/memory-page';
 /**
  * REST API Routes
  *
@@ -136,6 +137,7 @@ import {
   scheduleAutostartRestart,
 } from '../cli/autostart.ts';
 import { runWithOrigin } from '../llm/origin.ts';
+import { runWithAdmission } from '../llm/background-budget.ts';
 import { getGoalApplication } from '../goals/application-service.ts';
 import { readGoalEvents } from '../goals/event-delivery.ts';
 import { GoalValidationError, number as goalNumber, keys as goalKeys, record as goalRecord } from '../goals/validation.ts';
@@ -440,6 +442,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     },
 
     // --- Vault: Entities ---
+    '/api/vault/page': { GET: (req: Request) => memoryPageResponse(req, json) },
+
     '/api/vault/entities': {
       GET: (req: Request) => {
         const params = getSearchParams(req);
@@ -4172,9 +4176,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         try {
           const params = getSearchParams(req);
           const weekStart = params.get('weekStart') ?? undefined;
-          // Background like the rest of awareness: the report is built from
-          // screen-derived session summaries, not from anything typed.
-          const report = await runWithOrigin('background', () => awareness.generateWeeklyReport(weekStart));
+          // Background ORIGIN like the rest of awareness: the report is built
+          // from screen-derived session summaries, not from anything typed. But
+          // someone clicked for it and is waiting, so it is FOREGROUND for the
+          // background budget (src/llm/background-budget.ts) and never refused.
+          const report = await runWithAdmission('foreground',
+            () => runWithOrigin('background', () => awareness.generateWeeklyReport(weekStart)));
           return json(report);
         } catch (err) {
           return error(`Weekly report error: ${err instanceof Error ? err.message : err}`);

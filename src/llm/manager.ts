@@ -1,3 +1,4 @@
+import { BackgroundThrottled, backgroundChat, backgroundStream } from './background-budget';
 import type {
   LLMProvider,
   LLMMessage,
@@ -381,6 +382,7 @@ export class LLMManager {
         });
         return response;
       } catch (err) {
+        if (err instanceof BackgroundThrottled) throw err;
         options?.signal?.throwIfAborted();
         const msg = err instanceof Error ? err.message : String(err);
         const code = getLLMErrorCode(err);
@@ -452,7 +454,7 @@ export class LLMManager {
       } finally {
         // Runs even when the consumer stops iterating mid-stream (client
         // disconnect / stop) so partial calls still land in telemetry.
-        recordUsage({
+        if (terminalError?.code !== 'background_throttled') recordUsage({
           tier, resolved_tier: resolution.tier, subsystem, provider: provider.name,
           model: finalResponse?.model || model || '',
           input_tokens: finalResponse?.usage?.input_tokens ?? 0,
@@ -511,7 +513,7 @@ export class LLMManager {
       options?.signal?.throwIfAborted();
       try {
         const result = await this.withTimeout(
-          (signal) => provider.chat(messages, { ...options, signal }),
+          (signal) => backgroundChat(provider, messages, { ...options, signal }),
           provider.name,
           options?.signal,
           options?.checkDeadline,
@@ -522,6 +524,7 @@ export class LLMManager {
         }
         return result;
       } catch (err) {
+        if (err instanceof BackgroundThrottled) throw err;
         options?.signal?.throwIfAborted();
         const errorMsg = err instanceof Error ? err.message : String(err);
         errors.push(`attempt ${attempt}: ${errorMsg}`);
@@ -560,7 +563,7 @@ export class LLMManager {
       let eventRetryAfterMs: number | undefined;
       try {
         let hasError = false;
-        for await (const event of provider.stream(messages, options)) {
+        for await (const event of backgroundStream(provider, messages, options)) {
           if (event.type === 'error') {
             hasError = true;
             errors.push(`attempt ${attempt}: ${event.error}`);
@@ -651,7 +654,7 @@ export class LLMManager {
         options?.signal?.throwIfAborted();
         try {
           const result = await this.withTimeout(
-            (signal) => provider.chat(messages, { ...options, signal }),
+            (signal) => backgroundChat(provider, messages, { ...options, signal }),
             providerName,
             options?.signal,
             options?.checkDeadline,
@@ -661,6 +664,7 @@ export class LLMManager {
           }
           return result;
         } catch (err) {
+          if (err instanceof BackgroundThrottled) throw err;
           options?.signal?.throwIfAborted();
           const errorMsg = err instanceof Error ? err.message : String(err);
           errors.push(`attempt ${attempt}: ${errorMsg}`);
@@ -725,7 +729,7 @@ export class LLMManager {
         let eventRetryAfterMs: number | undefined;
         try {
           let hasError = false;
-          for await (const event of provider.stream(messages, options)) {
+          for await (const event of backgroundStream(provider, messages, options)) {
             if (event.type === 'error') {
               hasError = true;
               errors.push(`attempt ${attempt}: ${event.error}`);
