@@ -1,1 +1,0 @@
-PASS ten keyboard activity cycles retain focus; suggestion prefills without sending; explicit Send creates one turn and immediate Finish renders its output.
