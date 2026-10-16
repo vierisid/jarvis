@@ -20,7 +20,8 @@ import { createDraftVersion, lockVersion } from '../workflows/db/repos/flow-vers
 import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness';
 import { sampleCatalog } from '../workflows/runtime/test-fixtures';
 import { TriggerManager } from '../workflows/runner/triggers/manager';
-import { createCapture, getRecentSuggestions } from '../vault/awareness';
+import { getRecentSuggestions } from '../vault/awareness';
+import { captureRoutine } from '../awareness/opportunity-test-fixtures';
 import { getOpportunity, getOpportunityMetrics, refreshOpportunity } from '../awareness/opportunities';
 import { OpportunityDelivery } from '../awareness/opportunity-delivery';
 import type { ApprovalRequest } from '../authority/approval';
@@ -142,7 +143,8 @@ test('offline quiet delivery retains its durable inbox and retries the same iden
   let now = Date.now();
   try {
     initWorkflowDb(path);
-    for (let days = 1; days <= 3; days++) createCapture({ timestamp: now - days * 86400000, pixelChangePct: 0.5, appName: 'Accounting', windowTitle: 'Overdue invoices' });
+    // Main's routine detector needs a grounded routine, not three bare captures.
+    for (const days of [3, 2, 1]) captureRoutine(now - days * 86400000);
     const item = refreshOpportunity()!, offline = fixture('1', 0);
     worker = new OpportunityDelivery(s => offline.policy.deliverOpportunity(s), () => now);
     await worker.flush(); await worker.flush();
