@@ -58,6 +58,7 @@
 .brief-root .brief-reply-prose blockquote { margin:20px 0; padding:12px; background:var(--brief-soft); border-radius:var(--brief-corner-control); }
 .brief-root .brief-message-notice { margin:12px 16px; color:var(--brief-secondary); font:400 13px/20px var(--brief-sans); }
 .brief-root .brief-message-notice[data-error="true"] { color:var(--brief-error-text); }
+.brief-root .brief-message-approval { margin:12px 16px; }
 .brief-root .brief-message-unavailable { flex:1; color:var(--brief-secondary); font:400 14px/22px var(--brief-sans); padding:16px; }
 .brief-root :is(.brief-reply-latest,.brief-history-button) { padding:7px 12px; border:1px solid var(--brief-card-edge); border-radius:var(--brief-corner-control); color:var(--brief-secondary); background:var(--brief-menu); font:400 12px/18px var(--brief-sans); cursor:pointer; }
 .brief-root .brief-reply-latest { position:absolute; left:50%; bottom:2px; transform:translateX(-50%); display:flex; align-items:center; gap:6px; white-space:nowrap; box-shadow:0 3px 12px var(--brief-menu-shadow); }
