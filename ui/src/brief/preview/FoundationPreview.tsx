@@ -15,6 +15,7 @@ import { AttachmentSpecimen } from "../chat/attachment-fan/preview/AttachmentSpe
 import { ComposerSpecimen } from "../chat/composer/preview/ComposerSpecimen";
 import { MessageSpecimen } from "../chat/message/preview/MessageSpecimen";
 import { WorkflowCreationSpecimen } from "../workflows/create/preview/WorkflowCreationSpecimen";
+import { OpportunitiesSpecimen } from "../opportunities/OpportunitiesSpecimen";
 
 import { WorkflowContextSpecimen } from "../workflows/context/WorkflowContextSpecimen";
 import { WorkflowManagementSpecimen } from "../workflows/manage-list/WorkflowManagementSpecimen";
@@ -46,6 +47,7 @@ export function FoundationPreview() {
   const specimen = new URLSearchParams(window.location.search).get("specimen");
   if (specimen === "workflow-context") return <WorkflowContextSpecimen />;
   if (specimen === "workflow-manage") return <WorkflowManagementSpecimen />;
+  if (specimen === "opportunities") return <OpportunitiesSpecimen />;
   if (specimen === "workflow-runs") return <WorkflowRunsSpecimen />;
   if (specimen === "workflow-canvas") return <WorkflowCanvasSpecimen />;
   if (specimen === "ingredient-picker") return <WorkflowCreationSpecimen ingredients />;

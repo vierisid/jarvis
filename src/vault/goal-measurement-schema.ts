@@ -13,5 +13,21 @@ export function ensureGoalMeasurementSchema(db: Database): void {
       evidence_key TEXT, measured_at INTEGER,
       PRIMARY KEY(goal_id, request_id), UNIQUE(goal_id, evidence_key)
     )`);
+    // Q-17: one cited entry per counted thing. An entry corrects at most one
+    // earlier entry and is corrected at most once, so each thing's lineage is a
+    // single chain whose last link is its current word. A source version may
+    // appear again in its own thing's lineage (a date fix), so it is indexed,
+    // not unique: the writer keeps it backing one counted thing at a time.
+    db.run(`CREATE TABLE IF NOT EXISTS goal_observation (
+      id TEXT PRIMARY KEY,
+      goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+      seq INTEGER NOT NULL, request_id TEXT NOT NULL, command TEXT NOT NULL,
+      subject_key TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('counted', 'retracted')),
+      source_key TEXT NOT NULL, corrects TEXT REFERENCES goal_observation(id) ON DELETE CASCADE,
+      entry TEXT NOT NULL, receipt TEXT NOT NULL,
+      UNIQUE(goal_id, request_id), UNIQUE(goal_id, seq), UNIQUE(corrects)
+    )`);
+    db.run('CREATE INDEX IF NOT EXISTS idx_goal_observation_subject ON goal_observation(goal_id, subject_key)');
+    db.run('CREATE INDEX IF NOT EXISTS idx_goal_observation_source ON goal_observation(goal_id, source_key)');
   })();
 }
