@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +16,31 @@ function setup() {
   const conversationId = repo.conversations.create().conversationId;
   return { repo, input: { conversationId, turnId: 'turn-1', requestId: 'request-1', text: 'First question' } };
 }
+
+test('turn settlement uses an indexed lookup on fresh and upgraded retained event history', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'jarvis-progress-index-'));
+  const file = join(directory, 'fixture.db');
+  try {
+    initDatabase(file, { quiet: true });
+    const repo = new ChatTurnRepository(getDb());
+    const input = { conversationId: repo.conversations.create().conversationId, turnId: 'turn', requestId: 'request', text: 'Question' };
+    repo.accept(input); repo.start(input); repo.text(input, 'Retained history');
+    const before = repo.snapshot(input.conversationId, 0);
+    const plan = () => getDb().query<{ detail: string }, [string]>(`EXPLAIN QUERY PLAN
+      SELECT payload FROM brief_chat_events WHERE turn_id = ? AND json_extract(payload, '$.kind') = 'activity' ORDER BY sequence`).all(input.turnId).map(row => row.detail).join('\n');
+    expect(plan()).toContain('USING INDEX idx_brief_chat_events_turn');
+    expect(plan()).not.toMatch(/SCAN brief_chat_events|TEMP B-TREE/);
+    // Simulate an older on-disk vault, then exercise the additive migration twice.
+    closeDb();
+    const legacy = new Database(file);
+    try { legacy.run('DROP INDEX idx_brief_chat_events_turn'); } finally { legacy.close(); }
+    initDatabase(file, { quiet: true });
+    ensureChatTurnSchema(getDb()); ensureChatTurnSchema(getDb());
+    expect(plan()).toContain('USING INDEX idx_brief_chat_events_turn');
+    expect(plan()).not.toMatch(/SCAN brief_chat_events|TEMP B-TREE/);
+    expect(new ChatTurnRepository(getDb()).snapshot(input.conversationId, 0)).toEqual(before);
+  } finally { closeDb(); rmSync(directory, { recursive: true, force: true }); }
+});
 
 test('request identity commits one user message and rejects conflicting reuse atomically', () => {
   const { repo, input } = setup();

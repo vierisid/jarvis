@@ -1,3 +1,5 @@
+import { compositionQueueStatus } from './composition-budget';
+import { backgroundBudgetStatus } from '../llm/background-budget';
 import {
   acceptSuggestion, getSuggestionLearning, listSuggestionCompositions, listSuggestionRoutines,
   recordSuggestionDecision, retrySuggestionComposition, SuggestionFeedbackError,
@@ -23,17 +25,22 @@ const handle = async (fn: () => unknown | Promise<unknown>): Promise<Response> =
 
 export function createSuggestionFeedbackRoutes(composer: () => Pick<SuggestionComposer, 'kick'> | null | undefined) {
   return {
+    '/api/awareness/background': { GET: () => handle(() => ({
+      model: backgroundBudgetStatus(), composition: { ...compositionQueueStatus(), workerAvailable: !!composer() },
+    })) },
     '/api/awareness/routines': { GET: (req?: Request) => handle(() => {
       const offset = Number(req ? new URL(req.url).searchParams.get('offset') ?? 0 : 0);
       if (!Number.isSafeInteger(offset) || offset < 0) throw new SuggestionFeedbackError('offset must be a non-negative integer');
       const suggestions = listSuggestionRoutines(offset);
-      return { suggestions, nextOffset: suggestions.length === 100 ? offset + 100 : null };
+      return { suggestions, nextOffset: suggestions.length === 100 ? offset + 100 : null,
+        background: { model: backgroundBudgetStatus(), composition: { ...compositionQueueStatus(), workerAvailable: !!composer() } } };
     }) },
     '/api/awareness/compositions': { GET: (req?: Request) => handle(() => {
       const offset = Number(req ? new URL(req.url).searchParams.get('offset') ?? 0 : 0);
       if (!Number.isSafeInteger(offset) || offset < 0) throw new SuggestionFeedbackError('offset must be a non-negative integer');
       const suggestions = listSuggestionCompositions(offset);
-      return { suggestions, nextOffset: suggestions.length === 100 ? offset + 100 : null };
+      return { suggestions, nextOffset: suggestions.length === 100 ? offset + 100 : null,
+        background: { model: backgroundBudgetStatus(), composition: { ...compositionQueueStatus(), workerAvailable: !!composer() } } };
     }) },
     '/api/awareness/suggestions/:id/learning': {
       GET: (req: RequestWithId) => handle(() => getSuggestionLearning(req.params.id)),
