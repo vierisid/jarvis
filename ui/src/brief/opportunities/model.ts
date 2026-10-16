@@ -1,5 +1,10 @@
 import type { BriefPreparedOpportunity } from "../../../../src/brief/contracts";
+import type { OpportunityActionReceipt } from "../../../../src/brief/opportunity-activation";
 import type { BriefReadState } from "../contracts";
+import {
+  OPPORTUNITY_APPROVE_LABEL,
+  OPPORTUNITY_TIMING,
+} from "../today/opportunity-stack/model";
 
 /** Read-only presentation of one F-09 revision. The provider owns every fact. */
 export interface FinishedOpportunity {
@@ -30,23 +35,8 @@ export interface ActionRequest {
   decision: Decision;
   idempotencyKey: string;
 }
-/** Structural F-10 receipt, without importing its unmerged backend implementation. */
-export interface ActionReceipt {
-  receiptId: string;
-  proposalId: string;
-  revision: string;
-  decision: Decision;
-  workflow: { flowId: string; versionId: string; versionDigest: string } | null;
-  registration: {
-    state: "pending" | "registered" | "blocked" | "not_required";
-    message: string | null;
-  };
-  currentActivation:
-    "enabled" | "paused" | "changed" | "missing" | "not_applicable";
-  decidedAt: number;
-  updatedAt: number;
-  nextProposalId: string | null;
-}
+/** The F-10 receipt itself (type-only), so the port cannot drift from the activation service. */
+export type ActionReceipt = OpportunityActionReceipt;
 /** Only an authenticated adapter can declare that no decision was committed. */
 export interface ActionRefusal {
   state: "refused";
@@ -63,13 +53,9 @@ export interface OpportunitiesPort {
   /** Read the original proposal receipt. Never resend approval during recovery. */
   recover(request: ActionRequest): Promise<ActionReceipt | null>;
 }
-export const APPROVE_LABEL = "Approve & enable";
-export const OPPORTUNITY_MOTION = {
-  acknowledge: 520,
-  dismiss: 360,
-  exit: 160,
-  enter: 180,
-} as const;
+/** Same label and D-11 motion as the Today opportunity stack. */
+export const APPROVE_LABEL = OPPORTUNITY_APPROVE_LABEL;
+export const OPPORTUNITY_MOTION = OPPORTUNITY_TIMING;
 export const activeProposal = (item: FinishedOpportunity) =>
   !["accepted", "dismissed"].includes(item.proposal.state);
 export function approvalBlock(item: FinishedOpportunity): string | null {
