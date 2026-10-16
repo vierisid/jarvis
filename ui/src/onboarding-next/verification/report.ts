@@ -52,7 +52,7 @@ export function assess(report: Report, expectedRevision: string) {
   for (const gate of report.gates ?? []) {
     if (!(GATES as readonly string[]).includes(gate.owner) || gateOwners.has(gate.owner)) errors.push(`Unknown/duplicate gate: ${gate.owner}`);
     gateOwners.add(gate.owner);
-    if (gate.revision !== expectedRevision || gate.outcome !== 'passed' || !gate.evidence?.length) errors.push(`Gate not verified: ${gate.owner}`);
+    if (gate.revision !== expectedRevision || gate.outcome !== 'passed' || !gate.evidence?.some(e => e.path.endsWith('.json'))) errors.push(`Gate not verified: ${gate.owner}`);
   }
   const missingGates = GATES.filter(owner => !gateOwners.has(owner));
   const releaseReady = report.scope === 'runtime' && errors.length === 0 && counts.passed === required.size && missingGates.length === 0;

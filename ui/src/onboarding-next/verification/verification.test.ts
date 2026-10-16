@@ -7,6 +7,7 @@ import { FIGMA, GATES, JOURNEYS, requiredCases, ROOMS, VIEWS } from './matrix';
 import { assess, blockReason, complete, evidenceIndex, hash, safePath, verifyArtifacts } from './report';
 import type { Report } from './report';
 import { problems } from './browser';
+import { RETRY, retryProjection } from './retry-fixture';
 const folders: string[] = [];
 afterEach(async () => { for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true }); });
 async function temp() { const dir = await mkdtemp(resolve(tmpdir(), 'u11-test-')); folders.push(dir); return dir; }
@@ -96,4 +97,20 @@ test('observation bytes bind the case and candidate beyond their file hash', asy
   const contents = JSON.stringify({ candidate, caseId: 'another-case', metrics: { revision, caseId: row.id }, errors: [] });
   await writeFile(resolve(root, 'wrong.metrics.json'), contents); row.evidence = [{ path: 'wrong.metrics.json', sha256: hash(contents) }];
   expect((await verifyArtifacts(r, root)).length).toBe(1);
+});
+
+test('a gate screenshot cannot replace its candidate-bound JSON receipt', () => {
+  const r = report(); r.gates = [{ owner: 'ON-B-13', revision, outcome: 'passed', evidence: [{ path: 'gate.png', sha256: hash('image') }] }];
+  expect(assess(r, revision).errors.join()).toContain('Gate not verified: ON-B-13');
+});
+
+test('retry fixtures preserve draft identity while replacing every old job reference', () => {
+  const original = { jobId: 'old', requestId: 'old-request', flowId: 'flow', versionId: 'version' };
+  const build = retryProjection('build', { ...original, status: { jobId: 'old', outcome: 'succeeded' }, result: { state: 'ready', reference: original } });
+  const result = retryProjection('result', { ...original, result: { ...original, reference: original, recovery: { input: { jobId: 'old', expected: { flowId: 'flow' } } } } });
+  expect(build.result.reference).toEqual({ ...original, ...RETRY });
+  expect(result.result.reference).toEqual(build.result.reference);
+  expect(result.result.recovery.input).toEqual({ jobId: RETRY.jobId, expected: { flowId: 'flow' } });
+  expect(build.status.jobId).toBe(RETRY.jobId); expect(result.jobId).toBe(RETRY.jobId);
+  expect(original.jobId).toBe('old');
 });

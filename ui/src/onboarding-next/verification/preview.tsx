@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { views, host, inventory, candidate } from './catalog';
 import { fixtureProps } from './fixtures';
+import { RETRY, retryProjection } from './retry-fixture';
 import { JOURNEYS, requiredCases } from './matrix';
 import type { Case } from './matrix';
 import '../../brief/styles/index.css';
@@ -41,12 +42,12 @@ function Journey({ name }: { name: string }) {
           const result = await read(context);
           if (key === 'google' && name !== 'skip-connection-interview') result.model.connection = { state: 'connected', attemptId: 'fixture-attempt', accountLabel: 'demo@example.test', grantedAccessSummary: 'Fixture verification only.' };
           if (key === 'build' && failed) result.model = { ...result.model, status: { jobId: result.model.jobId, revision: 100, outcome: 'failed', safeError: 'Fixture build failed before saving.' }, result: { state: 'pending' }, actions: { retry: true, explore: true } };
-          if (key === 'build' && retry) result.model = { ...result.model, jobId: 'fixture-retry', requestId: 'fixture-request-retry', status: { ...result.model.status, jobId: 'fixture-retry' }, result: result.model.result.state === 'ready' ? { ...result.model.result, reference: { ...result.model.result.reference, jobId: 'fixture-retry', requestId: 'fixture-request-retry' } } : result.model.result };
+          if (retry) result.model = retryProjection(key, result.model);
           return result;
         };
         adapter.command = async (context: any, action: string, payload: any) => {
           setTrace(old => [...old, `${key}:${action}`]);
-          if (key === 'build' && action === 'retry') { failed = false; retry++; full.setJourney({ ...full.journey(), revision: full.journey().revision + 1 }); return; }
+          if (key === 'build' && action === 'retry') { failed = false; retry++; full.setJourney({ ...full.journey(), revision: full.journey().revision + 1, jobId: RETRY.jobId, buildRequestId: RETRY.requestId }); return; }
           return command(context, action, payload);
         };
         return adapter;

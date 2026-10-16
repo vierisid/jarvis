@@ -99,16 +99,16 @@ export async function runJourney(options: { tab: any; viewport: any; baseUrl: st
   await viewport.set({ width: test.width, height: test.width === 390 ? 844 : 1000 });
   await tab.goto(`${options.baseUrl}/?case=${encodeURIComponent(test.id)}`);
   const trace: any[] = [], errors: string[] = [];
-  const observe = async (step: string) => {
+  const observe = async (step: string, checkTheme = true) => {
     const snapshot = await tab.playwright.domSnapshot(), metrics = await inspect(tab);
     trace.push({ step, snapshot, metrics });
     if (metrics.revision !== candidate.revision || metrics.dirty !== String(candidate.dirty)) throw Error('Wrong served candidate');
-    if (metrics.childThemes.some((t: string) => t !== test.theme)) errors.push(`${step}: mixed-theme endpoint`);
+    if (checkTheme && metrics.childThemes.some((t: string) => t !== test.theme)) errors.push(`${step}: mixed-theme endpoint`);
     return snapshot;
   };
   const click = async (name: string) => { await tab.playwright.getByRole('button', { name, exact: true }).click(); return observe(name); };
   try {
-    await observe('entry');
+    await observe('entry', false);
     // Theme is controlled by U10's existing useTheme owner, not a CSS override.
     await click(test.theme === 'dark' ? 'Dark' : 'Light');
     await click('Set up Jarvis'); await click('Continue');
