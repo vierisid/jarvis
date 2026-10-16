@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from '../../workflows/db';
 import { createBuildJobsProvider, createSqliteBuildStore, initializeBuildJobStore } from './index';
 import { fixture, gate, input, scope } from './fixtures';
-import { digest, scopeId } from './input';
+import { digest, parseSubmit, scopeId } from './input';
 import type { DraftControl, Result, Scope } from './types';
 
 let directory: string, dbPath: string, now: number, owner: Scope | null;
@@ -247,6 +247,13 @@ for (const missing of ['validate', 'draft', 'journey'] as const) test(`missing $
   expect((await provider.submit(null, input())).availability).not.toBe('ready');
   expect(f.services.store.read(scope, { requestId: 'request-1' })).toBeNull(); expect(f.calls()).toBe(0);
 });
+test('submit-time validation that outlives its bound is aborted and reserves nothing', async () => {
+  let seen: AbortSignal | undefined;
+  f.services.validate = (_value, signal) => { seen = signal; return new Promise(() => {}); };
+  expect(await provider.submit(null, input())).toMatchObject({ reason: 'provider_unavailable' });
+  expect(seen?.aborted).toBe(true); expect(f.acknowledgements).toEqual([]);
+  expect(f.services.store.read(scope, { requestId: 'request-1' })).toBeNull();
+}, 10_000);
 test('authorization changes during validation prevent reservation and acceptance', async () => {
   const validate = f.services.validate!;
   f.services.validate = async value => { const result = await validate(value); owner = { ...scope, actorId: 'other' }; return result; };
@@ -316,4 +323,13 @@ for (const malformed of [null, { ...input(), actorId: 'forged' }, { ...input(), 
   { ...input(), submission: { ...input().submission, action: 'run' } },
   { ...input(), submission: { ...input().submission, answers: { notes: 'x'.repeat(2001) } } }]) test('malformed submission does not reserve or compose', async () => {
   expect(await provider.submit(null, malformed)).toMatchObject({ reason: 'invalid_request' }); expect(f.acknowledgements).toEqual([]); expect(f.calls()).toBe(0);
+});
+test('a submission B07 accepts at its 32 KiB bound still fits the build envelope', async () => {
+  const value = input();
+  value.submission.answers = Object.fromEntries(Array.from({ length: 16 }, (_, i) => [`answer_${i}`, 'x'.repeat(1990)]));
+  const body = new TextEncoder().encode(JSON.stringify(value.submission)).byteLength;
+  expect(body).toBeGreaterThan(31 * 1024); expect(body).toBeLessThanOrEqual(32 * 1024);
+  expect(parseSubmit(value)).toEqual(value);
+  value.submission.answers.answer_16 = 'x'.repeat(1990);
+  expect(() => parseSubmit(value)).toThrow('invalid_request');
 });

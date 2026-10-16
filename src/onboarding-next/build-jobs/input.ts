@@ -10,7 +10,8 @@ export const digest = (s: Submission) => hash([s.request.schemaVersion, s.reques
 export function parseSubmit(value: unknown): SubmitInput {
   try {
     const text = JSON.stringify(value);
-    if (!text || Buffer.byteLength(text) > 30 * 1024) throw new Error();
+    // B07 accepts a 32 KiB submission; leave room for this envelope's journey and intent IDs.
+    if (!text || Buffer.byteLength(text) > 33 * 1024) throw new Error();
     const v: unknown = JSON.parse(text);
     if (!object(v) || !keys(v, ['schemaVersion', 'journeyId', 'intentId', 'submission']) || v.schemaVersion !== 1
       || !id(v.journeyId) || !id(v.intentId) || !object(v.submission) || !keys(v.submission, ['action', 'request', 'answers'])) throw new Error();

@@ -272,7 +272,11 @@ export function createBuildJobsProvider<C>(deps: Dependencies<C>) {
         await trySync(e, prior.id); await e.guard(); return e.store.result(e.owner, prior.id);
       }
       if (!e.services.validate || !e.services.draft) throw new BuildError('provider_unavailable');
-      const checked = await bounded(() => e.services.validate!(structuredClone(parsed.submission)));
+      // Abort validation that outlives its bound so a slow assessment does not keep working unobserved.
+      const validation = new AbortController();
+      let checked: IntentResult;
+      try { checked = await bounded(() => e.services.validate!(structuredClone(parsed.submission), validation.signal)); }
+      catch (error) { validation.abort(); throw error; }
       await e.guard();
       if (!checkIntent(checked, parsed, e.owner)) throw new BuildError('needs_input');
       await reserve(e, parsed); await e.guard();
