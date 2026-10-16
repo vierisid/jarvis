@@ -30,9 +30,9 @@ test('compatibility: journal association is durable before model work and a fail
   const deps = { pieceRegistry: sampleCatalog(), llm: { async chat() {
     calls++; expect(getWorkflowComposition(associated)).toMatchObject({ state: 'COMPOSING' }); return { text: valid };
   } } };
-  const result = await composePersistedFlow(deps, request, { onJournal(id) { associated = id; } });
+  const result = await composePersistedFlow(deps, request, undefined, id => { associated = id; });
   expect(result.compositionRecordId).toBe(associated);
-  await expect(composePersistedFlow(deps, request, { onJournal() { throw new Error('association failed'); } })).rejects.toThrow('association failed');
+  await expect(composePersistedFlow(deps, request, undefined, () => { throw new Error('association failed'); })).rejects.toThrow('association failed');
   expect(calls).toBe(1);
 });
 

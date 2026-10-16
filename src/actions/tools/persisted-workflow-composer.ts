@@ -1,12 +1,7 @@
 import { snapshotComposition } from './composition-provenance';
 import { createCompositionJournal } from "../../workflows/db/repos/workflow-composition";
 import { composeFlow, jobSpecification, type ComposeDeps, type ComposeRequest, type ComposeResult } from "./workflow-composer";
-
-export interface PersistedCompositionOptions {
-  projectId?: string;
-  /** Synchronous durable association, before the first provider call. Failure stops composition. */
-  onJournal?: (id: string) => void;
-}
+import { getWorkflowDb } from '../../workflows/db/index';
 
 /** Production entrypoint for both chat and opportunity composition. Validation
  * is structural, plus the caller's job contract when one is stated; neither
@@ -14,14 +9,19 @@ export interface PersistedCompositionOptions {
  */
 export async function composePersistedFlow(deps: ComposeDeps, input: ComposeRequest,
   /** The project the journal is recorded in: the one the composed flow will be created in (#844). */
-  projectId?: string | PersistedCompositionOptions): Promise<ComposeResult & { compositionRecordId: string }> {
-  const options = typeof projectId === 'string' ? { projectId } : projectId;
+  projectId?: string,
+  /** Synchronous attachment, in the journal's creation transaction, before any provider call. */
+  onJournal?: (id: string) => void): Promise<ComposeResult & { compositionRecordId: string }> {
+  // Snapshot the job (including supplemental context) so caller mutations cannot change intent mid-await.
   const request = { ...jobSpecification(input), signal: input.signal };
   request.signal?.throwIfAborted();
   const snapshot = snapshotComposition(deps);
-  const journal = createCompositionJournal({ ...jobSpecification(request), provenance: snapshot.provenance }, options?.projectId);
+  const journal = getWorkflowDb().transaction(() => {
+    const record = createCompositionJournal({ ...jobSpecification(request), provenance: snapshot.provenance }, projectId);
+    onJournal?.(record.id);
+    return record;
+  }).immediate();
   try {
-    options?.onJournal?.(journal.id);
     const result = await composeFlow({ ...snapshot.deps, onCandidate(candidate) {
       request.signal?.throwIfAborted();
       journal.checkpoint(candidate);

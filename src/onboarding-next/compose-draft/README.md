@@ -41,15 +41,17 @@ expected path for a detached B08 worker and for any retry after a restart. A
 `background_throttled` refusal fails that composition (journal `FAILED`, result
 `composition_failed`) before any save: the receipt stays `pending` and B08
 decides when to retry. Only a binding
-that runs the attempt inside the person's own onboarding request may mark it
-foreground (`runWithOrigin('user', ...)`); it must not grant an exempt class.
+that runs the attempt for a person waiting on it may mark it foreground, as
+F-07's Brief composition does (`runWithAdmission('foreground', () =>
+runWithOrigin('user', ...))`); it must not grant an exempt class.
 
 ## Composition compatibility patch
 
 The existing `composePersistedFlow` remains the only planner and validator.
-Its backward-compatible options argument accepts `onJournal`, a synchronous
-association hook before the first model call; existing string project IDs keep
-working. `ComposeRequest.context` retains clarification answers, qualifications
+B09 uses main's (F-07) optional `projectId` and `onJournal` parameters: the
+synchronous association hook runs in the journal's creation transaction before
+the first model call, so a failed association leaves no journal and no model
+work. `ComposeRequest.context` retains clarification answers, qualifications
 and canonical selected data beside the exact original `description`. It uses
 the existing Q-line untrusted context framing and is snapshotted in the journal
 and repair prompts. Neither optional field changes prompt policy, validators,

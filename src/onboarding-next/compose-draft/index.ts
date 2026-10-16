@@ -74,9 +74,7 @@ export function createComposeDraftProvider<C>(deps: DraftDependencies<C>) {
       const result = await composePersistedFlow({ ...composer, onCandidate(candidate) {
         fence(); composer.onCandidate?.(candidate);
       } }, { name: 'First workflow', description: submission.request.prompt, context: supplemental, signal: control.signal },
-      { projectId: owner.projectId, onJournal(compositionId) {
-        fence(); storage(() => store.journal(owner, requestId, bodyDigest, compositionId));
-      } });
+      owner.projectId, compositionId => { fence(); storage(() => store.journal(owner, requestId, bodyDigest, compositionId)); });
       await validate();
       if (!result.ok) throw new DraftError('composition_failed');
       if (!walkFlowNodes(result.flow.trigger).some(n => n.type === 'PIECE')) throw new DraftError('needs_input');
