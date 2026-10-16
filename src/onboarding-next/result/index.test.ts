@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { closeWorkflowDb, initWorkflowDb } from '../../workflows/db';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -75,6 +76,11 @@ for (const key of ['jobId', 'requestId', 'journeyId', 'requestDigest', 'scopeId'
   const f = fixture(); (f.job as any)[key] = key === 'artifact' ? { ...f.job.artifact, flowId: 'wrong' } : 'wrong';
   if (key === 'journeyId') (f.job as any)[key] = null;
   expect((await provider(f).read(null, input)).availability).toBe('unavailable'); expect(f.writes).toHaveLength(0);
+});
+test('a job owned by another scope is refused even before any draft is saved', async () => {
+  const f = fixture(); f.db.exec('DELETE FROM onboarding_draft_receipt'); f.job.artifact = null; f.job.outcome = 'working'; f.job.resolution = 'unknown';
+  f.job.scopeId = createHash('sha256').update(JSON.stringify([f.owner.actorId, 'another-project'])).digest('hex');
+  expect(await provider(f).read(null, input)).toEqual({ availability: 'unavailable', reason: 'identity_mismatch' }); expect(f.writes).toHaveLength(0);
 });
 for (const raw of [{}, { ...input, schemaVersion: 2 }, { ...input, projectId: 'evil' }, { ...input, requestId: 'also' },
   { ...input, selectedNodeId: '../evil' }, { ...input, expected: {} }]) test('validates version, lookup, selection and client authority', async () => {
