@@ -1,12 +1,14 @@
+import { readIngredients, readSelected, sameIngredients, type SelectedIngredient } from "../ingredient-picker/model";
 import { pendingJob, readJob, validPrompt, type CompositionJob, type CompositionPort, type CompositionRequest } from "./model";
 
 export interface CreationSaved {
+  ingredients?: SelectedIngredient[];
   draft: string; request: CompositionRequest | null; job: CompositionJob | null; openedJobId: string | null;
   selectedRunId: string | null; scrollTop: number;
 }
 export interface CreationStorage { read(): string | null; write(value: string): void }
 export interface CreationSnapshot extends CreationSaved { busy: boolean; error: string | null; storageFailed: boolean }
-const empty = (): CreationSaved => ({ draft: "", request: null, job: null, openedJobId: null, selectedRunId: null, scrollTop: 0 });
+const empty = (): CreationSaved => ({ draft: "", ingredients: [], request: null, job: null, openedJobId: null, selectedRunId: null, scrollTop: 0 });
 
 /** One instance per authenticated account/vault scope, kept above room navigation.
  * A persisted request key precedes every POST. Unknown outcomes retain that key. */
@@ -31,6 +33,8 @@ export class WorkflowCreationController {
           || !(saved.selectedRunId === null || typeof saved.selectedRunId === "string")
           || !(saved.openedJobId === null || typeof saved.openedJobId === "string")
           || (saved.request !== null && (!saved.request || !/^[\w-]{1,128}$/.test(saved.request.requestId) || !validPrompt(saved.request.prompt)))) throw Error("Invalid saved request");
+        saved.ingredients = readSelected(saved.ingredients);
+        if (saved.request) readIngredients(saved.request.ingredients);
         if (saved.job !== null) { if (!saved.request) throw Error("Missing request"); readJob(saved.job, saved.request); }
         this.value = { ...saved, busy: false, error: null, storageFailed: false };
       }
@@ -52,6 +56,7 @@ export class WorkflowCreationController {
     this.value = next; this.listeners.forEach(fn => fn()); return !next.storageFailed;
   }
   setDraft = (draft: string) => { this.update({ draft }); };
+  setIngredients = (ingredients: SelectedIngredient[]) => { this.update({ ingredients: readSelected(ingredients) }); };
   savePosition = (scrollTop: number, selectedRunId = this.value.selectedRunId) => {
     this.update({ scrollTop: Math.max(0, scrollTop), selectedRunId });
   };
@@ -59,7 +64,8 @@ export class WorkflowCreationController {
   submit = async (prompt: string) => {
     if (this.retired || this.value.busy || this.value.storageFailed || !validPrompt(prompt)
       || (this.value.request && pendingJob(this.value.job))) return;
-    const request = { requestId: this.requestId(), prompt };
+    const ingredients = readIngredients(this.value.ingredients?.map(i => i.selection));
+    const request: CompositionRequest = { requestId: this.requestId(), prompt, ...(ingredients.length ? { ingredients } : {}) };
     if (!/^[\w-]{1,128}$/.test(request.requestId)) return;
     if (!this.update({ request, job: null, openedJobId: null, busy: true, error: null })) { this.update({ busy: false }, false); return; }
     await this.operation(async () => this.port.submit(request), request);
@@ -84,8 +90,10 @@ export class WorkflowCreationController {
       const job = readJob(await read(), request);
       if (this.retired) return;
       if (this.value.job && job.jobId !== this.value.job.jobId) throw Error("Changed job identity");
+      const unchanged = job.state === "draft_ready" && this.value.draft === request.prompt
+        && sameIngredients(this.value.ingredients?.map(i => i.selection), request.ingredients);
       this.update({ job, busy: false, error: null,
-        draft: job.state === "draft_ready" && this.value.draft === request.prompt ? "" : this.value.draft });
+        draft: unchanged ? "" : this.value.draft, ingredients: unchanged ? [] : this.value.ingredients });
     } catch {
       this.update({ busy: false, error: "Could not confirm the result. Your prompt is kept. Check this request before starting another." }, false);
     }

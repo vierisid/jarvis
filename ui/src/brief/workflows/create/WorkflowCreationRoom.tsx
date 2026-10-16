@@ -1,3 +1,5 @@
+import { IngredientPicker, IngredientChips } from "../ingredient-picker/IngredientPicker";
+import type { IngredientCatalog } from "../ingredient-picker/model";
 import React, { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { Plus } from "lucide-react";
 import { isBriefCapabilityEnabled } from "../../../../../src/brief/capabilities";
@@ -14,7 +16,8 @@ export interface WorkflowCreationBinding {
   controller: WorkflowCreationController;
   capabilities: unknown;
   recent?: RecentWorkflowBinding;
-  /** D-17 may supply an ingredient entry later. No attachment/upload semantics. */
+  ingredients?: IngredientCatalog;
+  /** Optional host entry; never interpreted as a chat attachment. */
   ingredientControl?: React.ReactNode;
 }
 export function WorkflowCreationRoom({ shell, binding, reducedMotion }: {
@@ -33,7 +36,11 @@ function BoundCreation({ shell, binding, reducedMotion }: { shell: BriefShellPor
   const recentReady = binding.recent?.source === controller.source && ["ready","empty","stale"].includes(binding.recent.state.status);
   const enabled = isBriefCapabilityEnabled(binding.capabilities, "workflowComposition");
   const unresolved = !!state.request && pendingJob(state.job);
-  const locked = state.busy || unresolved || state.storageFailed || !enabled;
+  const ingredientEnabled = isBriefCapabilityEnabled(binding.capabilities, "compositionIngredients");
+  const ingredients = state.ingredients ?? [];
+  const catalog = binding.ingredients?.source === controller.source && binding.ingredients.scopeId === controller.scopeId ? binding.ingredients : undefined;
+  const ingredientBlocked = !!ingredients.length && !ingredientEnabled;
+  const locked = state.busy || unresolved || state.storageFailed || !enabled || ingredientBlocked;
   const job = state.job;
   useEffect(() => {
     if (!enabled || state.error || state.busy || state.storageFailed || !unresolved) return;
@@ -64,7 +71,7 @@ function BoundCreation({ shell, binding, reducedMotion }: { shell: BriefShellPor
     controller.savePosition(restore.current.done ? element.current?.closest<HTMLElement>(".brief-workspace-content")?.scrollTop ?? 0 : restore.current.top, runId);
     shell.navigate(route);
   }
-  const notice = state.error ?? (!enabled ? "Workflow creation is unavailable. Your prompt is kept." : state.busy ? "Preparing your workflow…"
+  const notice = state.error ?? (ingredientBlocked ? "Selected ingredients are unavailable. Your selection is kept; remove them to create without them." : !enabled ? "Workflow creation is unavailable. Your prompt is kept." : state.busy ? "Preparing your workflow…"
     : unresolved ? job?.state === "running" ? "Building and checking your workflow…" : "Waiting to prepare your workflow…"
     : job?.state === "draft_ready" ? "Your draft is ready. It has not been enabled or run."
     : job?.blocker?.message ?? (job?.state === "cancelled" ? "Creation cancelled. Your prompt is kept." : job?.state === "failed" || job?.state === "blocked" ? "Could not prepare this workflow. Your prompt is kept; revise it or send again." : ""));
@@ -73,7 +80,8 @@ function BoundCreation({ shell, binding, reducedMotion }: { shell: BriefShellPor
       <h1 id="brief-workflow-create-title" className="brief-type-room-title">Create your workflow</h1>
       <ConversationComposer mode={shell.mode} reducedMotion={reducedMotion} label="Workflow prompt" placeholder="Describe the work you want to automate…"
         suggestions={WORKFLOW_SUGGESTIONS} sendingLabel="Preparing your workflow…" suggestionsLabel="Workflow suggestions"
-        attachmentControl={binding.ingredientControl ?? <BriefTooltip label="Connection and library selection unavailable"><button type="button" aria-label="Add connection or library node" aria-disabled="true"><Plus size={18} aria-hidden="true" /></button></BriefTooltip>}
+        ingredients={ingredients.length ? <IngredientChips selected={ingredients} onChange={controller.setIngredients}/> : undefined}
+        attachmentControl={catalog ? <IngredientPicker catalog={catalog} selected={ingredients} onChange={controller.setIngredients} enabled={ingredientEnabled && !state.storageFailed} reducedMotion={reducedMotion}/> : binding.ingredientControl ?? <BriefTooltip label="Connection and library selection unavailable"><button type="button" aria-label="Add connection or library node" aria-disabled="true"><Plus size={18} aria-hidden="true" /></button></BriefTooltip>}
         binding={{ source:controller.source, scopeId:controller.scopeId, conversationId:"workflow-creation", mode:"scoped", connected:true,
           draft:state.draft, metadataPending:locked, turn:null, pendingAcceptance:false, error:null, maxBytes:PROMPT_BYTES,
           actions:{ setDraft:controller.setDraft, send:controller.submit, cancel:()=>{} } }} />

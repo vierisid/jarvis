@@ -383,8 +383,8 @@ replay, offline and unavailable). It sends nothing.
 - Creation goes only through F-07: `createCompositionPort(capabilities, authenticatedFetch)` calls
   `/api/brief/workflow-compositions` (`JARVIS_BRIEF_WORKFLOW_COMPOSITION`) and re-checks the
   `workflowComposition` capability before every request. Types and the prompt limit come from
-  `src/brief/composition-contracts.ts`. Requests are prompt-only; F-08 ingredient selection
-  (`JARVIS_BRIEF_COMPOSITION_INGREDIENTS`) belongs to D-17's picker in the `ingredientControl` slot.
+  `src/brief/composition-contracts.ts`. F-08 ingredient pins come only from D-17's picker (below);
+  without one the request is prompt-only.
   Never add a second composer, write flows directly, or enable, publish or run from this page: F-07
   only prepares a DISABLED draft, and enabling stays on the existing gated path (Q-05 enable card).
 - `WorkflowCreationController` is one instance per authenticated account and vault, held above room
@@ -392,8 +392,8 @@ replay, offline and unavailable). It sends nothing.
   (`sessionCreationStorage(scopeId, sessionStorage)`) before the POST. A lost or invalid response keeps
   that request: **Check request** (and a one-second follow-up while a job is queued or running) looks it
   up by its exact `requestId` and, only if absent, replays the same request under the same id, so a
-  retry never creates a second draft. A receipt must echo the request id, prompt and name, carry no
-  ingredients, and keep its job id; a ready receipt navigates once to `workflow-draft` with its exact
+  retry never creates a second draft. A receipt must echo the request id, prompt, name and exact ordered
+  ingredient pins, and keep its job id; a ready receipt navigates once to `workflow-draft` with its exact
   `flowId` and `versionId`. Unreadable saved state makes the record read-only rather than replacing it.
 - Recent rows (`readRecentWorkflows(authenticatedFetch, signal)`) read the existing workflow API with
   four workers, at most 200 flows and each flow's latest run page (`{ items, nextOffset }`); no implicit
@@ -406,3 +406,30 @@ replay, offline and unavailable). It sends nothing.
 
 `?brief=preview&specimen=workflow-create#/_brief_preview` opens the page with a fixture composition
 port (ready, blocked, failed, lost-response, unavailable) and fixture recent rows. It sends no request.
+
+## Workflow ingredients
+
+- `workflows/ingredient-picker/` is the D-17 connection and library picker in the creation composer's
+  `+` slot. It only drives F-08 (`JARVIS_BRIEF_COMPOSITION_INGREDIENTS`, which also needs
+  `JARVIS_BRIEF_WORKFLOW_COMPOSITION`); see `docs/brief-composition-ingredients.md`. A selection is the
+  exact `{selection}` object from discovery (ids and versions only, typed as F-08's
+  `CompositionIngredient`), sent with the prompt and echoed by the receipt. Display names are never
+  identities. No credential, connection metadata or catalog internals are read or stored.
+- `readIngredientCatalog(capabilities, signal, authenticatedFetch)` pages
+  `/api/brief/composition-ingredients` to the end (re-checking the capability before every read and
+  failing closed on a short, duplicated or malformed page). The public
+  `/api/workflows/pieces/library` catalog only supplies service names and non-selectable
+  "Not installed" rows when the Library is not host-managed; it never grants a selection. The host
+  owns invocation and abort, and binds the result with the controller's `source` and `scopeId`; a
+  catalog for another scope is not rendered. It is not wired into a live host yet.
+- The picker does not install pieces or connect accounts. An empty connection list points to the
+  existing Connected workspace flow; no OAuth or credential entry happens here.
+- Selections persist with the draft in the creation controller. A selection without the
+  `compositionIngredients` capability blocks send (it is never silently dropped); removing the chips
+  restores prompt-only creation. Server-side revalidation at job start, attach, readiness, enable,
+  publish and dispatch stays F-08's job.
+- `f08-compatibility.test.ts` drives F-08's real discovery, provider, routes and SQLite through the
+  reader, port and controller with a fake model and a credential canary.
+
+`?brief=preview&specimen=ingredient-picker#/_brief_preview` opens the creation page with fixture
+ingredients (ready, loading, unavailable). It sends no request.
