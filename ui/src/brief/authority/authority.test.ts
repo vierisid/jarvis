@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { AuthorityEngine } from "../../../../src/authority/engine";
 import { EmergencyController } from "../../../../src/authority/emergency";
+import { authorityConfigPatchError } from "../../../../src/authority/config-validation";
 import { createAuthorityPort } from "./adapter";
 import { AuthorityController } from "./controller";
 import {
@@ -107,7 +108,7 @@ test("missing host is unsupported and cannot fabricate default settings", async 
     state: "unavailable",
   });
 });
-for (const level of [0, 11, 2.5, NaN, "3", null])
+for (const level of [-1, 11, 2.5, NaN, "3", null])
   test(`invalid level ${level} does not become a plausible default`, () => {
     expect(
       readSettings({
@@ -117,6 +118,15 @@ for (const level of [0, 11, 2.5, NaN, "3", null])
       }),
     ).toBeNull();
   });
+test("a stored level 0, which main's config route accepts, still displays", () => {
+  expect(
+    readSettings({
+      default_level: 0,
+      governed_categories: [],
+      emergency_state: "normal",
+    })?.default_level,
+  ).toBe(0);
+});
 test("canonical public fields are validated without leaking advanced config or dropping additive categories", () => {
   const input = {
     default_level: 3,
@@ -177,6 +187,30 @@ for (const category of ACTION_CATEGORIES)
     ).toBe(true);
     c.retire();
   });
+test("every write passes main's config validator and carries only the two canonical fields", async () => {
+  const f = await fixture(),
+    c = f.controller;
+  for (const level of [1, 10, 4]) {
+    c.setLevel(level);
+    await c.save();
+  }
+  for (const category of ACTION_CATEGORIES) {
+    c.toggle(
+      category,
+      !c.snapshot().draft!.governed_categories.includes(category),
+    );
+    await c.save();
+  }
+  expect(f.writes.length).toBe(3 + ACTION_CATEGORIES.length);
+  for (const write of f.writes) {
+    expect(
+      authorityConfigPatchError(write as Record<string, unknown>),
+    ).toBeNull();
+    for (const key of Object.keys(write as object))
+      expect(["default_level", "governed_categories"]).toContain(key);
+  }
+  c.retire();
+});
 test("canonical engine still denies a low-level ungoverned action and honors advanced deny overrides", () => {
   const config = {
     default_level: 1,

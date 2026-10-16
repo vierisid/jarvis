@@ -123,10 +123,10 @@ export function AuthoritySpecimen() {
                 status: "ready",
                 data: {
                   ...UNKNOWN_NAVIGATION,
-                  workspaceName: "Preview workspace",
+                  workspaceName: "Northwind workspace",
                   connection: "connected",
                   account: {
-                    name: "Preview owner",
+                    name: "Alex Morgan",
                     plan: { status: "ready", data: "Preview" },
                   },
                 },

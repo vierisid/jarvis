@@ -139,7 +139,7 @@ test("all thirteen current categories are readable with distinct on/off semantic
       String(fixture.current().governed_categories.includes(category)),
     );
   expect(host.textContent).toContain(
-    "Off uses the authority level and other rules",
+    "Off uses the authority level and other rules: overrides, context rules and the approval asked after Jarvis reads outside content still apply.",
   );
   expect(host.querySelector('[role="tablist"]')).toBeNull();
   expect(host.textContent).not.toMatch(/Add a rule|Oct 12|always require/i);
@@ -293,12 +293,14 @@ test("live emergency banner changes while edits stay visible and unsaved", async
       fixture.changeEmergency(state);
       await fixture.controller.refresh();
     });
-    expect(host.textContent?.includes("Authority is paused.")).toBe(
-      state === "paused",
-    );
-    expect(host.textContent?.includes("Emergency stop is active.")).toBe(
-      state === "killed",
-    );
+    expect(
+      host.textContent?.includes(
+        "Paused: tool actions are held until you resume.",
+      ),
+    ).toBe(state === "paused");
+    expect(
+      host.textContent?.includes("Emergency stop is active: tools are refused"),
+    ).toBe(state === "killed");
     expect(slider().value).toBe("10");
     expect(button("Save changes").disabled).toBe(false);
     expect(fixture.writes).toHaveLength(0);

@@ -49,7 +49,7 @@ export function AuthoritySlider({
       data-disabled={disabled}
       style={
         {
-          "--authority-position": `${((position - 1) / 9) * 100}%`,
+          "--authority-position": `${((clamp(position) - 1) / 9) * 100}%`,
         } as CSSProperties
       }
     >

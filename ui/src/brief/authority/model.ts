@@ -54,13 +54,17 @@ export interface AuthorityPort {
     signal: AbortSignal,
   ): Promise<NavigationResult>;
 }
+/** A level this view can set. */
 export const validLevel = (value: unknown): value is number =>
   Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 10;
+/** A level the server can hold: main's config route accepts 0-10, so 0 must still display. */
+const storedLevel = (value: unknown): value is number =>
+  Number.isInteger(value) && Number(value) >= 0 && Number(value) <= 10;
 export function readSettings(value: unknown): AuthoritySettings | null {
   if (!value || typeof value !== "object") return null;
   const v = value as Partial<AuthoritySettings>;
   if (
-    !validLevel(v.default_level) ||
+    !storedLevel(v.default_level) ||
     !Array.isArray(v.governed_categories) ||
     v.governed_categories.length > 200 ||
     v.governed_categories.some(

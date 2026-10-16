@@ -105,8 +105,8 @@ function AuthorityBody({ controller }: { controller: AuthorityController }) {
           {state.saved.emergency_state !== "normal" && (
             <p className="brief-authority-notice" role="status">
               {state.saved.emergency_state === "paused"
-                ? "Authority is paused."
-                : "Emergency stop is active."}{" "}
+                ? "Paused: tool actions are held until you resume."
+                : "Emergency stop is active: tools are refused and agent runs are stopped until you reset."}{" "}
               Use Emergency controls to review the current state.
             </p>
           )}
@@ -129,8 +129,10 @@ function AuthorityBody({ controller }: { controller: AuthorityController }) {
           >
             <h2 id="authority-governed-heading">Governed actions</h2>
             <p className="brief-authority-legend">
-              On adds a governed approval requirement. Off uses the authority
-              level and other rules. Existing overrides still apply.
+              On asks for approval before these actions, even when the level
+              allows them. Off uses the authority level and other rules:
+              overrides, context rules and the approval asked after Jarvis reads
+              outside content still apply.
             </p>
             <div className="brief-authority-categories">
               {[ACTION_CATEGORIES.slice(0, 7), ACTION_CATEGORIES.slice(7)].map(

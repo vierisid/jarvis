@@ -29,6 +29,7 @@ const SHEETS = [
   "../memory/stream/stream.css",
   "../memory/detail/detail.css",
   "../connections/connections.css",
+  "../authority/authority.css",
 ];
 
 function selectors(css: string): string[] {

@@ -67,12 +67,12 @@
 .brief-root
   .brief-authority-slider:not([data-dragging="true"])
   :is(.brief-authority-slider__thumb, .brief-authority-slider__value) {
-  transition: left 80ms ease-out;
+  transition: left 80ms var(--brief-motion-ease, ease-out);
 }
 .brief-root
   .brief-authority-slider:not([data-dragging="true"])
   .brief-authority-slider__fill {
-  transition: width 80ms ease-out;
+  transition: width 80ms var(--brief-motion-ease, ease-out);
 }
 .brief-root .brief-authority-slider__stops {
   display: flex;
