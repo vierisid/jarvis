@@ -119,7 +119,7 @@ test("confirmed callback waits for a fresh canonical account before publishing a
   await pending;
   unsubscribe();
   expect(c.snapshot().setupState).toBe("confirmed");
-  expect(c.snapshot().message).toContain("preview.account.1@studio.example");
+  expect(c.snapshot().message).toContain("preview.account.1@northwind.example");
   c.back();
   expect(c.snapshot().panel).toBe("workspace");
 });
@@ -320,7 +320,7 @@ test("scope access loss clears account data and ignores late setup confirmation"
   expect(c.snapshot().read.state).toBe("unavailable");
   expect(c.snapshot().ticket).toBeNull();
   expect(c.snapshot().service).toBeNull();
-  expect(JSON.stringify(c.snapshot())).not.toContain("studio.example");
+  expect(JSON.stringify(c.snapshot())).not.toContain("northwind.example");
 });
 test("backend access denial during verification purges visible cached account data", async () => {
   const f = await fixture(),
@@ -331,7 +331,7 @@ test("backend access denial during verification purges visible cached account da
   await c.check();
   expect(c.snapshot().read.state).toBe("unavailable");
   expect(c.snapshot().ticket).toBeNull();
-  expect(JSON.stringify(c.snapshot())).not.toContain("studio.example");
+  expect(JSON.stringify(c.snapshot())).not.toContain("northwind.example");
 });
 test("canceling a pending start ignores its late completion", async () => {
   const f = await fixture(),
@@ -443,5 +443,5 @@ for (const action of ["browser", "device"] as const)
       await c.manageDevice("inspect");
     }
     expect(c.snapshot().read.state).toBe("unavailable");
-    expect(JSON.stringify(c.snapshot())).not.toContain("studio.example");
+    expect(JSON.stringify(c.snapshot())).not.toContain("northwind.example");
   });

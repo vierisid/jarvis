@@ -126,26 +126,7 @@
   margin: -18px 0 26px;
 }
 .brief-root .brief-connections-search {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  border-bottom: 1px solid var(--brief-card-edge);
-  padding: 8px 0 12px;
-  color: var(--brief-secondary);
   margin-bottom: 18px;
-}
-.brief-root .brief-connections-search input {
-  border: 0;
-  background: transparent;
-  color: var(--brief-ink);
-  font: inherit;
-  width: 100%;
-  min-width: 0;
-  min-height: 30px;
-}
-.brief-root .brief-connections-search input:focus-visible {
-  outline: 2px solid var(--brief-focus);
-  outline-offset: 4px;
 }
 .brief-root .brief-connections-catalog-row {
   color: var(--brief-ink);
@@ -247,13 +228,6 @@
   margin: 0;
   overflow-wrap: anywhere;
 }
-.brief-root .brief-connections-sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-}
 .brief-root .brief-connections [hidden] {
   display: none !important;
 }
@@ -294,13 +268,4 @@
   display: grid;
   gap: 8px;
   margin: 16px 0;
-}
-.brief-root .brief-connections-account select {
-  max-width: 100%;
-  min-width: 0;
-  padding: 12px;
-  border: 1px solid var(--brief-card-edge);
-  border-radius: 8px;
-  background: var(--brief-soft);
-  color: inherit;
 }

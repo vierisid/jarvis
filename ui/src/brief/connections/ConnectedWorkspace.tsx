@@ -14,12 +14,16 @@ import {
   ArrowLeft,
   ArrowUpRight,
   Plus,
-  Search,
   ChevronRight,
 } from "lucide-react";
 import { isBriefCapabilityEnabled } from "../../../../src/brief/capabilities";
 import type { BriefRoomModule, BriefShellPort } from "../contracts";
-import { BriefButton } from "../components/controls";
+import {
+  BriefButton,
+  BriefIconButton,
+  BriefInput,
+  BriefSelect,
+} from "../components/controls";
 import { ConnectionsController } from "./controller";
 import {
   connectionKey,
@@ -184,15 +188,13 @@ function ConnectedBody({ controller }: { controller: ConnectionsController }) {
         </span>
         <div className="brief-connection-actions">
           {device && item.identity.permissions.canInspect && (
-            <BriefButton
-              variant="text"
+            <BriefIconButton
               size="sm"
-              aria-label={`Manage ${item.name}`}
+              label={`Manage ${item.name}`}
+              icon={<ChevronRight size={16} />}
               disabled={!usable}
               onClick={() => controller.device(key)}
-            >
-              <ChevronRight size={16} aria-hidden="true" />
-            </BriefButton>
+            />
           )}
           {!device &&
             item.setupServiceId &&
@@ -358,17 +360,15 @@ function ConnectedBody({ controller }: { controller: ConnectionsController }) {
             <p className="brief-connections-intro">
               Choose a service to connect to your workspace.
             </p>
-            <label className="brief-connections-search">
-              <Search size={18} aria-hidden="true" />
-              <span className="brief-connections-sr-only">Search services</span>
-              <input
+            <div className="brief-connections-search">
+              <BriefInput
                 type="search"
-                aria-label="Search services"
+                label="Search services"
                 placeholder="Search services"
                 value={state.search}
                 onChange={(e) => controller.setSearch(e.target.value)}
               />
-            </label>
+            </div>
             <ul className="brief-connections-catalog">
               {data.catalog
                 .filter((service) =>
@@ -442,6 +442,12 @@ function ConnectedBody({ controller }: { controller: ConnectionsController }) {
                       ? "Continue in your browser to choose an account and review access. You’ll return here to check the connection."
                       : "Open service settings to enter your credentials and finish setup."}
                   </p>
+                  {reconnectAccount?.identity.kind === "workflow_connection" && (
+                    <p className="brief-connections-note" data-binding-notice>
+                      Workflows that use this connection pause after it changes.
+                      Enable them again to accept the change.
+                    </p>
+                  )}
                   <BriefButton
                     variant="primary"
                     disabled={!usable || !state.service}
@@ -513,10 +519,9 @@ function ConnectedBody({ controller }: { controller: ConnectionsController }) {
                     </p>
                   )}
                   {!!state.candidateKeys.length && (
-                    <label className="brief-connections-account">
-                      Account to verify
-                      <select
-                        aria-label="Account to verify"
+                    <div className="brief-connections-account">
+                      <BriefSelect
+                        label="Account to verify"
                         value={state.selectedKey}
                         onChange={(event) =>
                           controller.selectAccount(event.target.value)
@@ -536,8 +541,8 @@ function ConnectedBody({ controller }: { controller: ConnectionsController }) {
                             )
                           );
                         })}
-                      </select>
-                    </label>
+                      </BriefSelect>
+                    </div>
                   )}
                   <div className="brief-connections-buttons">
                     {state.ticket &&
@@ -602,6 +607,12 @@ function ConnectedBody({ controller }: { controller: ConnectionsController }) {
                   Open device settings to review configuration, update this
                   device or revoke its access.
                 </p>
+                {selectedDevice.identity.permissions.canRevoke && (
+                  <p className="brief-connections-note" data-binding-notice>
+                    Workflows set to run on this computer pause if its access
+                    is revoked, until you enable them again.
+                  </p>
+                )}
                 <div className="brief-connections-buttons">
                   <BriefButton
                     variant="secondary"

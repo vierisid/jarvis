@@ -113,7 +113,7 @@ export function makeConnectionsFixture(
         "google",
         "Gmail",
         "native_service",
-        "alex@studio.example",
+        "alex.morgan@northwind.example",
         true,
         "gmail",
       ),
@@ -121,7 +121,7 @@ export function makeConnectionsFixture(
         "google-calendar",
         "Google Calendar",
         "native_service",
-        "alex@studio.example",
+        "alex.morgan@northwind.example",
         true,
         "calendar",
       ),
@@ -129,7 +129,7 @@ export function makeConnectionsFixture(
         "notion-project",
         "Notion",
         "workflow_connection",
-        "Studio workspace",
+        "Northwind workspace",
         false,
         "notion",
       ),
@@ -145,11 +145,11 @@ export function makeConnectionsFixture(
     }
   if (example === "long") {
     data.connections[0]!.name =
-      "Studio desktop used for the international editorial and production planning workspace";
+      "Northwind desktop used for the international editorial and production planning workspace";
     data.connections[2]!.accountLabel =
-      "alexandra.extended.account.name@international-production-studio.example";
+      "alex.morgan.extended.account.name@international-production-northwind.example";
     data.catalog[0]!.description =
-      "Connect the account you use for long-running production planning, international client correspondence and the studio’s shared editorial work.";
+      "Connect the account you use for long-running production planning, international client correspondence and Northwind’s shared editorial work.";
   }
   if (example === "partial") data.unavailableSources = ["google", "accounts"];
   if (example === "configured") {
@@ -249,7 +249,7 @@ export function makeConnectionsFixture(
         `preview-${service.id}-${starts}`,
         service.name,
         service.kind,
-        `preview.account.${starts}@studio.example`,
+        `preview.account.${starts}@northwind.example`,
         true,
         service.id,
       );

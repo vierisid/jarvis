@@ -130,7 +130,7 @@ test("workspace keeps real device status visible without a brain card, old tabs 
   await render();
   expect(visibleText()).toContain("Travel laptop");
   expect(visibleText()).toContain("Offline");
-  expect(visibleText()).toContain("alex@studio.example");
+  expect(visibleText()).toContain("alex.morgan@northwind.example");
   expect(host.querySelector('[role="tablist"]')).toBeNull();
   expect(visibleText()).not.toMatch(/hosted brain|brain offline/i);
 });
@@ -192,11 +192,11 @@ test("browser focus cannot claim connection success before a verified backend re
   await click("Check connection");
   expect(visibleText()).toContain("Connection confirmed");
   expect(visibleText()).toContain(
-    "Gmail is connected to preview.account.1@studio.example",
+    "Gmail is connected to preview.account.1@northwind.example",
   );
   await click("Done");
   expect(host.querySelector("h1")?.textContent).toBe("Connected workspace");
-  expect(visibleText()).toContain("preview.account.1@studio.example");
+  expect(visibleText()).toContain("preview.account.1@northwind.example");
 });
 test("pending setup and search survive room remount and all eight shell layouts", async () => {
   await render();
@@ -231,6 +231,25 @@ test("expired setup offers an explicit fresh start and reconnect preserves servi
   expect(fixture.starts()).toBe(2);
   expect(host.querySelector("h1")?.textContent).toBe("Notion");
 });
+test("reconnecting a workflow connection says its workflows pause; a new service does not", async () => {
+  await render();
+  await click("Reconnect");
+  expect(host.querySelector("h1")?.textContent).toBe("Notion");
+  expect(visibleText()).toContain(
+    "Workflows that use this connection pause after it changes.",
+  );
+  await click("Connected workspace");
+  await click("Connect a service");
+  await choose("Gmail");
+  expect(visibleText()).not.toContain("Workflows that use this connection");
+});
+test("revoking a device says workflows pinned to it pause", async () => {
+  await render();
+  await click("Manage Travel laptop");
+  expect(visibleText()).toContain(
+    "Workflows set to run on this computer pause if its access is revoked",
+  );
+});
 test("device controls remain reachable and hand off the selected offline device", async () => {
   await render();
   await click("Manage Travel laptop");
@@ -250,7 +269,7 @@ test("device controls remain reachable and hand off the selected offline device"
 });
 test("fixture and scope mismatches never leak preview accounts into a live shell", async () => {
   await render({ mode: "live" });
-  expect(visibleText()).not.toContain("studio.example");
+  expect(visibleText()).not.toContain("northwind.example");
   expect(visibleText()).toContain("unavailable");
   await render({}, { ...binding(), scopeId: "another-scope" });
   expect(fixture.controller.snapshot().read.state).toBe("loading");
@@ -323,10 +342,13 @@ test("saved credentials, explicit account selection and partial-source warnings 
   await choose("Notion");
   await click("Start setup");
   await click("Check connection");
-  const select = host.querySelector<HTMLSelectElement>(
-    'select[aria-label="Account to verify"]',
+  const label = [...host.querySelectorAll("label")].find(
+    (n) => n.textContent === "Account to verify",
   )!;
-  expect(select.textContent).toContain("Studio workspace");
+  const select = host.querySelector<HTMLSelectElement>(
+    `select#${CSS.escape(label.htmlFor)}`,
+  )!;
+  expect(select.textContent).toContain("Northwind workspace");
   await React.act(async () => {
     select.value = select.options[1]!.value;
     select.dispatchEvent(new Event("change", { bubbles: true }));

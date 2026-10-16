@@ -39,7 +39,7 @@ function snapshot(): F22Snapshot {
         sourceId: "account:one",
         kind: "workflow_connection",
         serviceId: "notes",
-        label: "Studio workspace",
+        label: "Northwind workspace",
         status: "configured",
         evidence: "saved_credentials",
         pieceVersion: "1.0.0",
@@ -53,7 +53,7 @@ function snapshot(): F22Snapshot {
         sourceId: "device:one",
         kind: "device",
         serviceId: "sidecar",
-        label: "Studio laptop",
+        label: "Northwind laptop",
         status: "disconnected",
         evidence: "none",
         pieceVersion: null,
@@ -89,7 +89,7 @@ test("F22 projection preserves configured, installed, offline and partial source
     "Offline",
   ]);
   expect(data.connections[1]!.name).toBe("Notes");
-  expect(data.connections[1]!.accountLabel).toBe("Studio workspace");
+  expect(data.connections[1]!.accountLabel).toBe("Northwind workspace");
   expect(data.connections[2]!.device?.canUpdate).toBe(false);
 });
 test("F22 rejects foreign, invalid, and duplicate snapshots instead of treating them as empty", () => {
