@@ -17,6 +17,7 @@ const SHEETS = [
   "../chat/tab-strip/tabs.css", "../chat/tab-strip/preview/specimen.css",
   "../chat/composer/composer.css", "../chat/composer/preview/specimen.css",
   "../chat/attachment-fan/attachment-fan.css", "../chat/attachment-fan/preview/specimen.css",
+  "../chat/message/messages.css",
 ];
 
 function selectors(css: string): string[] {
