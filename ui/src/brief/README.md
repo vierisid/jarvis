@@ -514,3 +514,33 @@ seven states, an older version, partial receipts and a waitpoint). Run creates a
 `?brief=preview&specimen=workflow-context#/_brief_preview` opens the view over in-memory fixture context
 and runs (missing, partial, long, slow, unavailable, unsupported and empty examples, and an illustrative
 run response). It sends no request.
+
+## Workflow management
+
+- `workflows/manage-list/` is the D-21 All workflows list: the name opens the exact flow/version, the
+  Enabled/Paused switch and the bin are separate targets, and Delete confirms inside its own row.
+  Publication and readiness are secondary facts beside the switch; Draft is never a switch state.
+- `WorkflowManagementController` holds one owner scope and survives room, chat and sidebar changes;
+  the host calls `retire()` on logout or owner change. Each command carries scope, flow, version,
+  expected revision and a request ID. A lost or `pending` answer locks that row as uncertain until
+  `Check result` reads the same request through `port.reconcile`; nothing is re-sent. Refresh is blocked
+  while any row is unresolved. A fresh (`ready`) list replaces settled feedback and restores a workflow
+  undone elsewhere into its slot; a `stale` list keeps every removal receipt and slot.
+- Deletion is reversible only: an acknowledged remove carries a server receipt, and Undo restores the
+  same flow and slot paused. There is no adapter to the legacy irreversible `DELETE
+  /api/workflows/:id`. The receipt-backed remove/restore commands are F-20's, which is not on main, so
+  the port is fixture-only until F-20 and its host adapter land.
+- Activation adds no gate of its own and bypasses none (see the `WorkflowManagementPort` doc): enabling
+  goes through the person path, which pins connections and the computer (Q-05; a changed binding shows
+  as the readiness blocker, and enabling again accepts it), and the readiness and contract checks still
+  refuse. Turning a workflow off stops its queued and waiting runs (Q-06); the list says so above the
+  rows and in the result.
+- Opt-in `workflowManagementRegistration(useBinding)`, not in the production registry.
+  `managementAvailable` requires a non-empty scope, a controller bound to it, a `source` matching the
+  shell mode and the `workflowRemoval` capability.
+- The collapse uses the D-04 reflow exit timing and is placed immediately under reduced motion.
+  `workflows/manage-list/figma-reference.json` records the UI-25 source values and bounded deviations.
+
+`?brief=preview&specimen=workflow-manage#/_brief_preview` opens the list over in-memory fixture
+workflows (blocked enable, lost response, expired Undo, long list, stale and unavailable examples).
+Nothing is enabled, deleted or run on an account.
