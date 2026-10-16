@@ -378,7 +378,7 @@ function ConnectedOpportunities({
                     </p>
                   </div>
                 </div>
-                <div className="brief-opportunity-goal">
+                <div className="brief-finished-goal">
                   <Target size={21} aria-hidden="true" />
                   <div>
                     <strong>
