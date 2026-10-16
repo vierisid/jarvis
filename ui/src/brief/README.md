@@ -624,8 +624,8 @@ actions only change local fixture state.
   path of stage cards, and settled summary cards with milestones under Completed. The room only
   reads and navigates; it has no goal writer, calculation or approval path. `onCreate` is optional and
   must open the host's existing goal-creation flow.
-- Each goal is a `GoalDatum`: main's `BriefGoal` plus owner-written title strings and a canonical
-  `progress { value, basis, rollup: "independent" }`. The percent comes from `progress.value`
+- Each goal is a `GoalDatum`: `BriefGoal` plus owner-written title strings, with F-15's
+  `progress { value, basis, rollup: "independent" }` required. The percent comes from `progress.value`
   (0..1) only, never from value/target, a title or child stages. A count is shown only with a
   qualified measurement (`qualified()` from Today outcomes) with finite baseline and target; a legacy
   score stays labelled "Score"; anything else reads "Not measured yet". Data basis shows measured vs
@@ -644,9 +644,10 @@ actions only change local fixture state.
 - Opt-in `goalsRegistrations(useBinding)`, not in the production registry. `goalsAvailable` requires
   a non-empty scope, a `source` matching the shell mode, a controller bound to the same scope and, in
   live mode, the `goalMeasurements` capability.
-- Wiring (not done here): an F-15 adapter must supply the complete authorized roots with their paths
-  and the canonical `progress` projection, and share Today's decision identity so a decision resolved
-  in another room reconciles here.
+- Wiring (not done here): an adapter over F-15's `GET /api/brief/goals/:id` must supply the complete
+  authorized roots with their owner-ordered paths and titles, pass `measurement` and `progress`
+  through unchanged (see `docs/brief-goal-measurements.md`), and share Today's decision identity so a
+  decision resolved in another room reconciles here.
 - `?brief=preview&specimen=goals#/_brief_preview` opens it over in-memory fixtures (ready, mixed
   status, score only, decreasing, unknown, long, many, loading, empty, stale, unavailable,
   unsupported). `goals/figma-reference.json` records the UI-35 source and bounded adaptations.

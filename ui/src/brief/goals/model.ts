@@ -5,17 +5,13 @@ import type {
 import type { BriefReadState, BriefRoute } from "../contracts";
 import { formatNumber, qualified } from "../today/outcomes/model";
 
-/** F-15's additive read projection. No dependency on its unmerged implementation. */
+/** BriefGoal plus owner-written titles. `progress` is F-15's canonical projection, required here. */
 export interface GoalDatum extends BriefGoal {
   title: string;
   pathLabel?: string;
   compactTitle?: string;
   caption?: string;
-  progress: {
-    value: number | null;
-    basis: "measurement" | "legacy_score" | "unknown";
-    rollup: "independent";
-  };
+  progress: NonNullable<BriefGoal["progress"]>;
 }
 export interface GoalPath {
   goal: GoalDatum;
