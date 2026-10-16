@@ -19,6 +19,7 @@ const SHEETS = [
   "../chat/attachment-fan/attachment-fan.css", "../chat/attachment-fan/preview/specimen.css",
   "../chat/message/messages.css",
   "../workflows/ingredient-picker/picker.css",
+  "../workflows/create/creation.css", "../workflows/canvas/canvas.css",
 ];
 
 function selectors(css: string): string[] {
