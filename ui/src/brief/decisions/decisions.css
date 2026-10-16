@@ -5,7 +5,7 @@
   min-height: 0;
   container-type: inline-size;
 }
-.brief-decisions-heading {
+.brief-root .brief-decisions-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -13,10 +13,10 @@
   margin-bottom: 28px;
   flex: none;
 }
-.brief-decisions-heading h1 {
+.brief-root .brief-decisions-heading h1 {
   margin: 0;
 }
-.brief-decisions-grid {
+.brief-root .brief-decisions-grid {
   display: grid;
   grid-template-columns: minmax(240px, 1fr) minmax(0, 2.05fr);
   gap: 24px;
@@ -24,7 +24,7 @@
   min-height: 0;
   padding: 4px;
 }
-.brief-decision-list {
+.brief-root .brief-decision-list {
   display: grid;
   gap: 16px;
   align-content: start;
@@ -54,34 +54,34 @@
     background 160ms,
     border-color 160ms;
 }
-.brief-decision-choice > span:first-child {
+.brief-root .brief-decision-choice > span:first-child {
   display: flex;
   gap: 10px;
   align-items: flex-start;
   font-size: 15px;
   line-height: 1.5;
 }
-.brief-decision-choice svg {
+.brief-root .brief-decision-choice svg {
   flex: none;
   margin-top: 2px;
   color: var(--brief-secondary);
 }
-.brief-decision-choice strong,
-.brief-decision-hint {
+.brief-root .brief-decision-choice strong,
+.brief-root .brief-decision-hint {
   overflow-wrap: anywhere;
 }
-.brief-decision-recipient {
+.brief-root .brief-decision-recipient {
   font-size: 14px;
   font-weight: 400;
   color: var(--brief-secondary);
 }
-.brief-decision-hint {
+.brief-root .brief-decision-hint {
   color: var(--brief-secondary);
   font-size: 14px;
   line-height: 1.5;
   white-space: pre-line;
 }
-.brief-decision-choice small {
+.brief-root .brief-decision-choice small {
   display: flex;
   gap: 5px;
   align-items: center;
@@ -96,17 +96,17 @@
   border-color: var(--brief-focus);
   background: var(--brief-card);
 }
-.brief-decision-choice[aria-pressed="true"] small {
+.brief-root .brief-decision-choice[aria-pressed="true"] small {
   color: var(--brief-focus);
 }
-.brief-decision-choice:disabled {
+.brief-root .brief-decision-choice:disabled {
   cursor: default;
 }
-.brief-decision-choice:focus-visible {
+.brief-root .brief-decision-choice:focus-visible {
   outline: 2px solid var(--brief-focus);
   outline-offset: 2px;
 }
-.brief-decision-paper {
+.brief-root .brief-decision-paper {
   min-width: 0;
   min-height: 0;
   overflow: auto;
@@ -119,18 +119,18 @@
   display: flex;
   flex-direction: column;
 }
-.brief-decision-title {
+.brief-root .brief-decision-title {
   display: flex;
   align-items: flex-start;
   gap: 16px;
   justify-content: space-between;
 }
-.brief-decision-title h2 {
+.brief-root .brief-decision-title h2 {
   margin: 0;
   overflow-wrap: anywhere;
   min-width: 0;
 }
-.brief-decision-badge {
+.brief-root .brief-decision-badge {
   display: inline-flex;
   gap: 6px;
   align-items: center;
@@ -143,14 +143,14 @@
   flex-shrink: 0;
   max-width: 45%;
 }
-.brief-decision-badge i {
+.brief-root .brief-decision-badge i {
   width: 5px;
   height: 5px;
   background: currentColor;
   border-radius: 50%;
   flex: none;
 }
-.brief-decision-context {
+.brief-root .brief-decision-context {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -161,16 +161,16 @@
   border-bottom: 1px solid var(--brief-card-edge);
   margin-bottom: 18px;
 }
-.brief-decision-context > span {
+.brief-root .brief-decision-context > span {
   overflow-wrap: anywhere;
 }
-.brief-decision-document {
+.brief-root .brief-decision-document {
   flex: 1 0 auto;
   font-size: 15px;
   line-height: 1.7;
   min-width: 0;
 }
-.brief-document-field {
+.brief-root .brief-document-field {
   display: grid;
   grid-template-columns: 64px minmax(0, 1fr);
   align-items: start;
@@ -178,28 +178,28 @@
   border-bottom: 1px solid var(--brief-card-edge);
   padding: 8px 0;
 }
-.brief-document-field > label {
+.brief-root .brief-document-field > label {
   font-size: 13px;
   color: var(--brief-secondary);
   padding: 9px 0;
 }
-.brief-document-field[data-multiline="true"] {
+.brief-root .brief-document-field[data-multiline="true"] {
   display: block;
   border: 0;
   padding: 20px 0;
 }
-.brief-document-field[data-multiline="true"] > label {
+.brief-root .brief-document-field[data-multiline="true"] > label {
   position: absolute;
   width: 1px;
   height: 1px;
   overflow: hidden;
   clip-path: inset(50%);
 }
-.brief-document-value {
+.brief-root .brief-document-value {
   display: grid;
   min-width: 0;
 }
-.brief-document-value > * {
+.brief-root .brief-document-value > * {
   grid-area: 1/1;
   box-sizing: border-box;
   margin: 0;
@@ -212,11 +212,11 @@
   border: 1px solid transparent;
   border-radius: var(--brief-corner-control);
 }
-.brief-document-mirror {
+.brief-root .brief-document-mirror {
   visibility: hidden;
   pointer-events: none;
 }
-.brief-document-value textarea {
+.brief-root .brief-document-value textarea {
   resize: none;
   width: 100%;
   height: 100%;
@@ -227,15 +227,15 @@
   outline: none;
   transition: border-color 160ms;
 }
-.brief-document-value textarea:focus-visible {
+.brief-root .brief-document-value textarea:focus-visible {
   border-color: var(--brief-focus);
   box-shadow: 0 0 0 1px var(--brief-focus);
 }
-.brief-document-value textarea:disabled {
+.brief-root .brief-document-value textarea:disabled {
   color: var(--brief-secondary);
   background: var(--brief-soft);
 }
-.brief-decision-document mark {
+.brief-root .brief-decision-document mark {
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
   padding: 4px 6px;
@@ -243,21 +243,21 @@
   background: var(--brief-attention-surface);
   color: var(--brief-attention-text);
 }
-.brief-decision-options {
+.brief-root .brief-decision-options {
   font-size: 13px;
   color: var(--brief-secondary);
 }
-.brief-decision-options > div {
+.brief-root .brief-decision-options > div {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 12px;
   padding: 6px 0;
 }
-.brief-decision-options dd {
+.brief-root .brief-decision-options dd {
   margin: 0;
   overflow-wrap: anywhere;
 }
-.brief-decision-bottom {
+.brief-root .brief-decision-bottom {
   position: sticky;
   bottom: -28px;
   background: var(--brief-paper);
@@ -265,16 +265,16 @@
   margin-top: 16px;
   border-top: 1px solid var(--brief-card-edge);
 }
-.brief-decision-actions {
+.brief-root .brief-decision-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
 }
-.brief-decision-actions .brief-button:last-child {
+.brief-root .brief-decision-actions .brief-button:last-child {
   margin-left: auto;
 }
-.brief-decision-feedback {
+.brief-root .brief-decision-feedback {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -284,14 +284,14 @@
   color: var(--brief-secondary);
   line-height: 1.5;
 }
-.brief-decision-feedback > span {
+.brief-root .brief-decision-feedback > span {
   overflow-wrap: anywhere;
 }
-.brief-decision-paper[data-phase="acknowledge"] .brief-decision-badge {
+.brief-root .brief-decision-paper[data-phase="acknowledge"] .brief-decision-badge {
   background: var(--brief-soft);
   color: var(--brief-secondary);
 }
-.brief-decision-paper[data-phase="acknowledge"] .brief-decision-document {
+.brief-root .brief-decision-paper[data-phase="acknowledge"] .brief-decision-document {
   animation: brief-document-settle 180ms ease both;
 }
 @keyframes brief-document-settle {
@@ -302,27 +302,27 @@
     opacity: 0.72;
   }
 }
-.brief-decisions-empty {
+.brief-root .brief-decisions-empty {
   padding: 50px 24px;
   text-align: center;
   color: var(--brief-secondary);
 }
-.brief-decisions-empty h2 {
+.brief-root .brief-decisions-empty h2 {
   color: var(--brief-ink);
 }
-.brief-decision-notice {
+.brief-root .brief-decision-notice {
   margin: 0 0 16px;
   padding: 12px;
   background: var(--brief-soft);
   font-size: 14px;
 }
 @container (max-width:850px) {
-  .brief-decisions-grid {
+  .brief-root .brief-decisions-grid {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
     gap: 18px;
   }
-  .brief-decision-list {
+  .brief-root .brief-decision-list {
     grid-auto-flow: column;
     grid-auto-columns: minmax(min(100%, 240px), 1fr);
     max-height: 166px;
@@ -332,83 +332,83 @@
     padding: 16px 18px;
     gap: 8px;
   }
-  .brief-decision-hint {
+  .brief-root .brief-decision-hint {
     display: none;
   }
-  .brief-decision-recipient {
+  .brief-root .brief-decision-recipient {
     font-size: 15px;
   }
-  .brief-decision-paper {
+  .brief-root .brief-decision-paper {
     padding: 24px;
   }
-  .brief-decision-bottom {
+  .brief-root .brief-decision-bottom {
     bottom: -24px;
   }
 }
 @container (max-width:480px) {
-  .brief-decision-paper {
+  .brief-root .brief-decision-paper {
     padding: 18px;
   }
-  .brief-decision-bottom {
+  .brief-root .brief-decision-bottom {
     bottom: -18px;
   }
-  .brief-decision-title {
+  .brief-root .brief-decision-title {
     flex-wrap: wrap;
   }
-  .brief-decision-badge {
+  .brief-root .brief-decision-badge {
     max-width: 100%;
   }
-  .brief-decision-actions {
+  .brief-root .brief-decision-actions {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .brief-decision-actions .brief-button:last-child {
+  .brief-root .brief-decision-actions .brief-button:last-child {
     margin-left: 0;
   }
-  .brief-document-field {
+  .brief-root .brief-document-field {
     grid-template-columns: 45px minmax(0, 1fr);
     gap: 6px;
   }
-  .brief-decision-context {
+  .brief-root .brief-decision-context {
     flex-wrap: wrap;
     padding: 8px 0;
   }
 }
 .brief-root
   .brief-pebble-layout[data-pebble-available]
-  .brief-workspace-content:has(> .brief-decisions) {
+  .brief-root .brief-workspace-content:has(> .brief-decisions) {
   overflow: hidden;
   padding-bottom: 24px;
 }
-.brief-decisions[data-reduced="true"] * {
+.brief-root .brief-decisions[data-reduced="true"] * {
   animation: none !important;
   transition: none !important;
 }
 @media (prefers-reduced-motion: reduce) {
-  .brief-decision-paper *,
-  .brief-decision-choice {
+  .brief-root .brief-decision-paper *,
+  .brief-root .brief-decision-choice {
     animation: none !important;
     transition: none !important;
   }
 }
 
-.brief-decision-actions .brief-button:first-child {
+.brief-root .brief-decision-actions .brief-button:first-child {
   min-width: 112px;
 }
-.brief-decision-actions .brief-button:last-child {
+.brief-root .brief-decision-actions .brief-button:last-child {
   min-width: 166px;
 }
-.brief-document-field[data-field="Subject"] .brief-document-read {
+.brief-root .brief-document-field[data-field="Subject"] .brief-document-read {
   font-weight: 600;
 }
 @container (max-width:480px) {
-  .brief-decision-actions .brief-button:first-child,
-  .brief-decision-actions .brief-button:last-child {
+  .brief-root .brief-decision-actions .brief-button:first-child,
+  .brief-root .brief-decision-actions .brief-button:last-child {
     min-width: 0;
   }
 }
 
-.brief-decision-destination {
+.brief-root .brief-decision-destination {
   max-width: 480px;
   border: 1px solid var(--brief-menu-edge);
   border-radius: var(--brief-corner-card);
@@ -417,12 +417,12 @@
   color: var(--brief-ink);
   box-shadow: 3px 5px 0 var(--brief-menu-shadow);
 }
-.brief-decision-destination p {
+.brief-root .brief-decision-destination p {
   font-size: 14px;
   line-height: 1.6;
   color: var(--brief-secondary);
 }
-.brief-decision-destination dd {
+.brief-root .brief-decision-destination dd {
   margin: 8px 0 16px;
   overflow-wrap: anywhere;
 }
