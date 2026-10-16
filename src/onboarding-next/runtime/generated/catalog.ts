@@ -5,4 +5,5 @@ export const runtimeModules: readonly ModuleEntry[] = [
   { manifest: {"schemaVersion":1,"id":"ON-B-02","kind":"provider","entry":"./index.ts","provides":["setup.v1"],"requires":[]}, load: async () => Object.assign({}, ...await Promise.all([import("../../setup/index.ts")])) },
   { manifest: {"schemaVersion":1,"id":"ON-B-03","kind":"provider","entry":"./index.ts","provides":["google-state.v1"],"requires":[]}, load: async () => Object.assign({}, ...await Promise.all([import("../../google/index.ts")])) },
   { manifest: {"schemaVersion":1,"id":"ON-B-04","kind":"provider","entry":"./index.ts","provides":["interview-session.v1"],"requires":["interview-profile.v1"]}, load: async () => Object.assign({}, ...await Promise.all([import("../../interview-session/index.ts")])) },
+  { manifest: {"schemaVersion":1,"id":"ON-B-10","kind":"provider","entry":"./index.ts","provides":["draft-result.v1"],"requires":["build-job.v1"]}, load: async () => Object.assign({}, ...await Promise.all([import("../../result/index.ts")])) },
 ];
