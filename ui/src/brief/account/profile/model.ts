@@ -1,4 +1,4 @@
-/** Optional consumer of F-23 contract v1. No import from the unmerged provider or second profile store. */
+/** Profile form model for F-23 contract v1 (#945). Only a ProfilePort reaches the owner; no second profile store. */
 export const PROFILE_FIELDS = [
   { id: "full_name", label: "Full name", questionId: null, multiline: false },
   {
@@ -77,34 +77,6 @@ export function readProfile(value: unknown): ProfileValue | null {
     revision: value.revision,
     answers: { ...value.answers } as Record<string, string>,
   };
-}
-export function readSnapshot(value: unknown): ProfileValue | null {
-  if (
-    !record(value) ||
-    value.contractVersion !== 1 ||
-    !Array.isArray(value.fields) ||
-    !Array.isArray(value.questions)
-  )
-    return null;
-  // Require F-23's explicit ownership/mapping. Account identity never aliases preferred name.
-  for (const field of PROFILE_FIELDS) {
-    const mapped = value.fields.filter((v) => record(v) && v.id === field.id);
-    if (mapped.length !== 1) return null;
-    const m = mapped[0];
-    if (
-      m.questionId !== field.questionId ||
-      m.owner !== (field.questionId ? "assistant_context" : "account") ||
-      m.state !== (field.questionId ? "editable" : "unavailable")
-    )
-      return null;
-    if (
-      field.questionId &&
-      value.questions.filter((q) => record(q) && q.id === field.questionId)
-        .length !== 1
-    )
-      return null;
-  }
-  return readProfile(value.profile);
 }
 export function draftPatch(draft: ProfileDraft): ProfilePatch {
   return Object.fromEntries(

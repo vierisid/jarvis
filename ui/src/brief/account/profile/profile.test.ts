@@ -1,14 +1,9 @@
 import { expect, test } from "bun:test";
-import { createProfilePort } from "./adapter";
 import { ProfileController } from "./controller";
-import {
-  makeProfileFixture,
-  profileEnvelope,
-  type ProfileExample,
-} from "./fixtures";
+import { makeProfileFixture, type ProfileExample } from "./fixtures";
 import {
   PROFILE_FIELDS,
-  readSnapshot,
+  readProfile,
   type ProfileRead,
   type ProfileSave,
 } from "./model";
@@ -31,44 +26,18 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-test("missing F23 host stays unsupported without fabricated profile values", async () => {
-  const p = createProfilePort("scope");
-  expect(await p.read(signal())).toEqual({ state: "unsupported" });
-  expect(
-    await p.save("0".repeat(64), { company: "Example" }, signal()),
-  ).toEqual({ state: "unsupported" });
-});
-test("all six mappings must be explicit and sign-in identity never aliases assistant context", () => {
-  const f = makeProfileFixture(),
-    data = profileEnvelope(f.current()).data;
-  expect(readSnapshot(data)).toEqual(f.current());
+test("six fields; sign-in identity is never an editable canonical answer", () => {
   expect(PROFILE_FIELDS).toHaveLength(6);
-  expect(readSnapshot({ ...data, contractVersion: 2 })).toBeNull();
-  expect(readSnapshot({ ...data, fields: data.fields.slice(1) })).toBeNull();
+  expect(PROFILE_FIELDS.filter((f) => f.questionId === null)).toEqual([
+    expect.objectContaining({ id: "full_name" }),
+  ]);
+  expect(readProfile({ revision: "unversioned", answers: {} })).toBeNull();
   expect(
-    readSnapshot({
-      ...data,
-      fields: data.fields.map((field) =>
-        field.id === "full_name"
-          ? { ...field, questionId: "preferred_name" }
-          : field,
-      ),
-    }),
-  ).toBeNull();
-  expect(readSnapshot({ ...data, questions: [] })).toBeNull();
-  expect(
-    readSnapshot({
-      ...data,
-      profile: { revision: "unversioned", answers: {} },
-    }),
+    readProfile({ revision: "0".repeat(64), answers: { company: 4 } }),
   ).toBeNull();
   expect(
-    readSnapshot({
-      ...data,
-      profile: { ...data.profile, answers: { company: 4 } },
-    }),
+    readProfile({ revision: "0".repeat(64), answers: { Company: "x" } }),
   ).toBeNull();
-  f.controller.retire();
 });
 for (const field of PROFILE_FIELDS.flatMap((f) =>
   f.questionId ? [f.questionId] : [],
@@ -90,7 +59,7 @@ for (const field of PROFILE_FIELDS.flatMap((f) =>
     expect(f.writes.at(-1)?.answers).toEqual({ [field]: null });
     c.retire();
   });
-test("identity, unknown fields and oversized values cannot be sent to F23", async () => {
+test("identity, unknown fields and oversized values are refused before a write", async () => {
   const f = await fixture(),
     revision = f.current().revision;
   for (const patch of [
@@ -407,33 +376,19 @@ test("read failures retain stale drafts; permission loss purges them", async () 
   expect(c.value("company")).toBe("Draft");
   await c.save();
   expect(f.writes).toHaveLength(0);
-  f.host.request = async () => new Response(null, { status: 403 });
+  f.deny();
   await c.refresh();
   expect(c.snapshot().draft).toEqual({});
   expect(c.snapshot().base).toBeNull();
   c.retire();
 });
-test("bad acknowledgment, mismatched readback and forged port confirmation never say Saved", async () => {
-  for (const mode of ["receipt", "readback", "port"] as const) {
-    const f = await fixture(),
-      c = f.controller,
-      request = f.host.request;
-    if (mode === "port")
-      f.port.save = async () => ({ state: "confirmed", data: f.current() });
-    else
-      f.host.request = async (...args) => {
-        const response = await request(...args);
-        if (args[1].method === "PATCH") {
-          if (mode === "receipt")
-            return Response.json({ profile: f.current() });
-          f.change({ company: "Mismatch" });
-        }
-        return response;
-      };
-    c.edit("company", "Intended");
-    await c.save();
-    expect(c.snapshot().phase).toBe("unknown");
-    expect(c.value("company")).toBe("Intended");
-    c.retire();
-  }
+test("a port confirmation that does not match the submitted values never says Saved", async () => {
+  const f = await fixture(),
+    c = f.controller;
+  f.port.save = async () => ({ state: "confirmed", data: f.current() });
+  c.edit("company", "Intended");
+  await c.save();
+  expect(c.snapshot().phase).toBe("unknown");
+  expect(c.value("company")).toBe("Intended");
+  c.retire();
 });
