@@ -23,9 +23,9 @@ export interface WorkflowCanvasBinding {
   versionId: string;
   capabilities: unknown;
   request: WorkflowRequest;
-  /** Explicit, owner-bounded manual-run command. No automatic retry. */
   /** Host uses this to guard room/account navigation while draft edits exist. */
   onDirtyChange?: (dirty: boolean) => void;
+  /** Explicit, owner-bounded manual-run command. No automatic retry. */
   run?: () => Promise<{ ok: boolean; message: string }>;
 }
 export function canvasAvailable(

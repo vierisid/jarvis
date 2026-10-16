@@ -423,3 +423,28 @@ port (ready, blocked, failed, lost-response, unavailable) and fixture recent row
 
 `?brief=preview&specimen=ingredient-picker#/_brief_preview` opens the creation page with fixture
 ingredients (ready, loading, unavailable). It sends no request.
+
+## Workflow canvas
+
+- `workflows/canvas/` is the D-18 full-workspace workflow page. It is not a second editor: it mounts the
+  released `WorkflowEditor` with `workspace` set inside `WorkflowEditorEnvironment`, which supplies the
+  request function, the portal host for floating pickers and per-page sample drafts. Serialization, save,
+  undo, validation and the `/api/workflows` contract stay in `useWorkflowEditor`. The released
+  `WorkflowsRoom` mounts the editor without the environment and keeps the floating popover and the
+  horizontal layout.
+- Workspace mode only: a vertical default layout (saved positions are kept as authored), the settings
+  inspector inline at 320px with Configure / Input / Output on `BriefTabs`, Enter/Space on a focused
+  node opening it and Escape returning focus to the node, and a viewport that keeps its focal point
+  when the Pebble or sidebar reflows the work area (no refit or zoom change).
+- `WorkflowCanvasRoom` renders only when `canvasAvailable` holds: a non-empty scope, flow and version,
+  a `source` matching the shell mode, the routed `flowId`/`versionId`, and the `workflowContext`
+  capability. The key is `[scopeId, flowId, versionId]`, so a change of owner or version drops the edit
+  buffer. `versionBoundRequest` refuses a flow detail whose editable version is not the bound one.
+- Run is the host's `binding.run`, disabled while dirty or after the version changed; it is never
+  retried here. Runs and Context & rules are navigation handoffs (D-19, D-20). It is an opt-in
+  `workflowCanvasRegistration(useBinding)`, not in the production registry; F-21 supplies the scoped,
+  redacted request before it is mounted live.
+- `workflows/canvas/figma-reference.json` records the UI-23 source values and bounded deviations.
+
+`?brief=preview&specimen=workflow-canvas#/_brief_preview` opens the page over an in-memory fixture flow
+(with branches, loops and a detached chain). Save stays in memory; anything else answers 403.
