@@ -1,6 +1,8 @@
 # F17: paginated memory stream
 
-F17 adds a read projection over canonical vault facts and provenance. It changes no fact writer, recall qualification, usage ledger, legacy vault route or UI. The branch is stacked on corrected F16 `1cd3d429b1842a831d20d0a9e2e137f49d914c20` at the owner's request. Main inspected: `2281a8235d4987af202e3b99f7ea514ac7ed4ff8`. Both roadmap source files, `src/vault/facts.ts` and `ui/src/v2/rooms/memory/useMemoryData.ts`, have identical blobs on this stack, inspected main and pinned audit `69211511c95355776c6c319c01e1df5acd3b8f1e`.
+F17 adds a read projection over canonical vault facts and provenance. It changes no fact writer, recall qualification, usage ledger, legacy vault route or UI.
+
+It does not replace `/api/vault/page` (`src/vault/memory-page.ts`). That route is an unfiltered primary-key keyset pager the Memory room uses to rebuild its full local copy of entities, facts and relationships. F17 answers a different question: a filtered (search, source, Used in, updated range) view ordered by Updated time with exact counts, which an ID keyset cannot serve. Both exclude superseded facts from the current list. The existing Memory room shows every person's facts, and so does this browser; Q-15's named-person scoping applies to recall, not to browsing.
 
 ## Activation and F18 seam
 
@@ -44,15 +46,14 @@ There is no full-text index or new schema migration in F17. Large vaults beyond 
 
 ## Verification and rollback
 
-In WSL, run the isolated fixture suite:
+Run the isolated fixture suite from the repository root:
 
 ```sh
-cd /home/vierisid/.cache/codex/jarvis-f-17
 bun test src/brief/memory-stream.test.ts src/daemon/api-brief-memory.test.ts src/util/model-exec-env.test.ts
 ```
 
-It creates temporary vaults and a real authenticated Unix-socket server. It covers exact combined filters/counts, scope across collection/detail/correction history, whitespace-bearing canonical and provenance Source labels with exact pagination, full long sentences, tied timestamps, a second SQLite writer inserting between pages, stale correction/deletion/provenance/usage, signed query-bound cursors, restart/expiry/eviction, missing versus unused records, lineage, capacity errors, authentication and legacy compatibility. Its usage provider is explicitly a test fixture; production still has no F18 ledger. See `docs/brief-delivery/F-17.json` and the adjacent evidence directory for final results and mutation checks.
+It creates temporary vaults and a real authenticated Unix-socket server. It covers exact combined filters/counts, scope across collection/detail/correction history, whitespace-bearing canonical and provenance Source labels with exact pagination, full long sentences, tied timestamps, a second SQLite writer inserting between pages, stale correction/deletion/provenance/usage, signed query-bound cursors, restart/expiry/eviction, missing versus unused records, lineage, capacity errors, authentication and legacy compatibility. Its usage provider is explicitly a test fixture; production still has no F18 ledger.
 
 After F18 integration, an authenticated client can query `/api/brief/memory?limit=2&q=tea`, repeat those filters with `cursor`, then refresh without a cursor to see newly inserted facts. Correction/deletion during paging must produce 409, not an old fact. Before F18, the production route remains 503 even with the stream flag set.
 
-Rollback by unsetting `JARVIS_BRIEF_MEMORY_STREAM` or disabling its usage dependency. No migration or canonical data cleanup is needed. F18, D20 live adapters, deployment and merging are outside this PR.
+Rollback by unsetting `JARVIS_BRIEF_MEMORY_STREAM` or disabling its usage dependency. No migration or canonical data cleanup is needed. F18 and D20 live adapters are separate work.
