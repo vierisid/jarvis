@@ -8,7 +8,9 @@
 .on-result__eyebrow { font:11px/1.6 'Spline Sans Mono',monospace; text-transform:uppercase; letter-spacing:.04em; color:var(--on-r-muted); margin:0; }
 .on-result__header-actions { display:flex; flex-shrink:0; align-items:center; flex-wrap:wrap; gap:16px; }
 .on-result__badge { color:var(--on-r-muted); font-size:13px; }
-.on-result__body { display:flex; flex:1; min-height:500px; position:relative; }
+/* Reserve the canvas and review card's natural height when stacked. The outer
+   view scrolls; the footer must follow the content instead of overlapping it. */
+.on-result__body { display:flex; flex:1 0 auto; min-height:500px; position:relative; }
 .on-result__canvas { flex:1; min-width:0; position:relative; min-height:500px; }
 .on-result__canvas:focus-visible { outline:2px solid var(--on-r-focus); outline-offset:-3px; }
 .on-result__review { align-self:flex-start; flex:0 0 300px; margin:24px 24px 24px 0; padding:22px; background:var(--on-r-card); border:1px solid var(--on-r-line); border-radius:14px 0 14px 14px; box-shadow:0 6px 18px #00000009; overflow-wrap:anywhere; }

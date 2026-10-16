@@ -80,7 +80,10 @@ the existing canvas, workflow title, review card and review action. Draft/readin
 and recovery copy reflect the roadmap's runtime rules. Dark follows existing
 Brief/onboarding tokens. No landing, tutorial, loading or chat styling is changed.
 The host supplies navigation and Pebble. The review card yields its width to the
-inspector in review mode. Narrow layouts stack the card below the canvas.
+inspector in review mode. Narrow layouts stack the card below the canvas. The body
+reserves their combined natural height so the footer follows the content, and the
+outer view scrolls to keep recovery controls reachable. This also applies when
+Pebble narrows the room without changing the viewport.
 
 The heading focuses on artifact entry; layout/read updates do not steal focus.
 Review focuses the canvas region; D18 handles keyboard node selection and inspector
