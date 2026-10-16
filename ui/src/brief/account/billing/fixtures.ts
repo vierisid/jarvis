@@ -40,7 +40,7 @@ export function makeBillingFixture(
   refresh = () => {},
 ): BillingFixture {
   const summary: BillingSummary = {
-    account: { email: "owner@example.test" },
+    account: { email: "alex.morgan@northwind.example" },
     subscription: {
       status: "active",
       currentPeriodStart: "2026-10-01T12:00:00Z",

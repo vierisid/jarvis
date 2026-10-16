@@ -85,10 +85,10 @@
   flex-shrink: 0;
 }
 .brief-root .brief-billing-chip[data-tone="ok"]::before {
-  background: var(--brief-success, #428568);
+  background: var(--brief-success-text);
 }
 .brief-root .brief-billing-chip[data-tone="warn"]::before {
-  background: var(--brief-warning, #bc7b30);
+  background: var(--brief-attention-text);
 }
 .brief-root .brief-billing .brief-billing-price {
   color: var(--brief-ink);
@@ -147,10 +147,10 @@
   background: var(--brief-secondary);
 }
 .brief-root .brief-billing-track[data-tone="hold"] > span {
-  background: var(--brief-warning, #bc7b30);
+  background: var(--brief-attention-text);
 }
 .brief-root .brief-billing-track[data-tone="fail"] > span {
-  background: var(--brief-danger, #bd5950);
+  background: var(--brief-error-text);
 }
 .brief-root .brief-billing .brief-billing-caption {
   font-size: 11px;

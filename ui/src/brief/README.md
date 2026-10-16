@@ -808,3 +808,24 @@ actions only change local fixture state.
 - `?brief=preview&specimen=settings#/_brief_preview` opens it over in-memory fixtures (local,
   hosted, read-only, voice-unavailable, save-failure, lost-response, conflict, restart-required,
   apply-failure, unavailable, unsupported, error).
+
+## Billing
+
+- `account/billing/` is the D-31 Billing room: plan, AI usage, payment method and billing history.
+  It reads only the existing hosted read model: the shared `useBilling()` store (`GET /api/billing`,
+  `v2/billing/useBilling.ts`) and `useHostedBudget()` (`v2/rooms/usage/`). It adds no endpoint, no
+  plan tier, no price and no write; `account/billing/model.ts` re-validates both answers at the
+  presentation boundary because the shared hooks accept older daemon responses.
+- Every action (change plan, update card, resume, complete payment, cancel, manage, receipts) opens
+  a URL the daemon supplied in `links` or on a payment through `openExternal`, and the page reports
+  a blocked browser instead of claiming the change. Action links must be http(s) without embedded
+  credentials; receipt links must be https. Cancel stays one click away while active.
+- Loading, unavailable, stale (last read shown with its time), self-hosted, restricted and missing
+  usage are shown as such, never as a zero bill, an empty history or 0% usage. The account email is
+  shown only from the billing summary, as the existing Settings billing tab does.
+- The live Body is registered in `rooms/billing/registration.ts` and mounts only through the opt-in
+  Brief route; it never consumes a fixture, and a preview without a fixture shows "unavailable".
+- `?brief=preview&specimen=billing#/_brief_preview` opens it over in-memory fixtures (active, trial,
+  grace, past due, canceling, incomplete, restricted, blocked, no plan, self-hosted, loading,
+  missing, degraded, old response, mixed currency, multiple prices, undated charge, long history).
+  It sends no request; actions record the URL locally.
