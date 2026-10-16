@@ -38,8 +38,8 @@
 .brief-root .brief-reply-prose { margin:0 16px; max-width:72ch; min-width:0; }
 .brief-root .brief-reply-prose :is(h1,h2,h3,h4,h5,h6) { font:700 20px/26px var(--brief-sans); margin:26px 0 18px; text-wrap:balance; }
 .brief-root .brief-reply-prose :is(h3,h4,h5,h6) { font-size:16px; line-height:22px; }
-.brief-root .brief-reply-prose > :first-child { margin-top:0; }
-.brief-root .brief-reply-prose > :last-child { margin-bottom:0; }
+.brief-root .brief-reply-prose > .safe-markdown > :first-child { margin-top:0; }
+.brief-root .brief-reply-prose > .safe-markdown > :last-child { margin-bottom:0; }
 .brief-root .brief-reply-prose p { margin:0 0 20px; }
 .brief-root .brief-reply-prose :is(ul,ol) { padding-left:24px; margin:0 0 24px; }
 .brief-root .brief-reply-prose ol { list-style-type:decimal; }

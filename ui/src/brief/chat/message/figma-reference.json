@@ -22,6 +22,6 @@
     "F-06 fixed public summaries replace illustrative named evidence, never inventing goal/fact titles or claiming an effect succeeded.",
     "Arbitrary content scrolls inside the retained column; older history and Latest messages are functional reading controls.",
     "Completion renders immediately without a second entrance or a timer; only the current live activity marker moves.",
-    "External images remain text placeholders; links use safe explicit schemes."
+    "External images never load; SafeMarkdown shows a click-to-open link instead. Links use its restricted schemes."
   ]
 }

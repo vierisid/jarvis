@@ -15,6 +15,8 @@ export interface ReplyTurn {
 export interface MessageChat {
   messages: readonly Message[]; turns: Readonly<Record<string, ReplyTurn>>;
   activity?: Readonly<Record<string, Activity>>; scroll: ReadingPosition;
+  /** F-04 keeps only id + status per Brief-turn approval (#1075): no card details. */
+  approvals?: Readonly<Record<string, { conversationId: string; turnId: string; requestId: string; status: string }>>;
   history: { state: "idle" | "loading" | "ready" | "error"; cursor: string | null };
 }
 export interface MessageOwner {
@@ -37,7 +39,7 @@ export function bindConversationMessages(owner: MessageOwner, source: MessageBin
 }
 export type ThreadItem = { key: string; time: number } & (
   { kind: "user"; message: Message } |
-  { kind: "reply"; message?: Message; turn?: ReplyTurn; activities: Activity[] }
+  { kind: "reply"; message?: Message; turn?: ReplyTurn; activities: Activity[]; awaitingApproval: boolean }
 );
 export const running = (turn?: ReplyTurn) => turn?.state === "running" || turn?.state === "queued";
 
@@ -51,6 +53,8 @@ export function threadItems(binding: MessageBinding): ThreadItem[] {
     .filter(a => a.conversationId === conversationId && a.turnId === turn.turnId && a.requestId === turn.requestId
       && ["started", "completed", "failed"].includes(a.phase))
     .sort((a,b) => a.firstSequence - b.firstSequence || a.activityId.localeCompare(b.activityId));
+  const awaiting = (turn?: ReplyTurn) => !!turn && running(turn) && Object.values(chat.approvals ?? {})
+    .some(a => a.status === "pending" && a.conversationId === conversationId && a.turnId === turn.turnId && a.requestId === turn.requestId);
   for (const message of chat.messages) {
     if (message.conversation_id !== conversationId || seen.has(message.id)) continue;
     seen.add(message.id);
@@ -59,11 +63,11 @@ export function threadItems(binding: MessageBinding): ThreadItem[] {
       const turn = turns.find(t => t.assistantMessageId === message.id);
       if (turn) matched.add(turn.turnId);
       items.push({ key: turn ? `turn:${turn.turnId}` : `message:${message.id}`, time: turn ? turn.createdAt + .5 : message.created_at,
-        kind: "reply", message, turn, activities: turn ? activities(turn) : [] });
+        kind: "reply", message, turn, activities: turn ? activities(turn) : [], awaitingApproval: awaiting(turn) });
     }
   }
   for (const turn of turns) if (!matched.has(turn.turnId)) items.push({ key: `turn:${turn.turnId}`, time: turn.createdAt + .5,
-    kind: "reply", turn, activities: activities(turn) });
+    kind: "reply", turn, activities: activities(turn), awaitingApproval: awaiting(turn) });
   return items.sort((a,b) => a.time - b.time || a.key.localeCompare(b.key));
 }
 

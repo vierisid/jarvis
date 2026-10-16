@@ -3,7 +3,6 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import type { Root } from "react-dom/client";
 import { bindConversationMessages, threadItems, type Activity, type MessageBinding, type MessageChat, type ReplyTurn } from "./model";
 import { captureReading, restoreReading } from "./reading";
-import { safeReplyUrl } from "./ReplyMarkdown";
 let React: typeof import("react"), createRoot: typeof import("react-dom/client").createRoot;
 let ConversationMessages: typeof import("./ConversationMessages").ConversationMessages;
 let root: Root, host: HTMLDivElement, binding: MessageBinding;
@@ -56,10 +55,14 @@ test("foreign conversations, requests, raw tool/system messages and unsafe label
  await render();await click(toggle());for(const secret of ["FOREIGN","SECRET_TOOL","HIDDEN_REASONING","RAW_ARGS"])expect(host.textContent).not.toContain(secret);expect(host.querySelectorAll(".brief-activity-list li").length).toBe(1);expect(host.textContent).toContain("Activity finished.");
 });
 test("markdown supports tables/code and safe links without HTML or remote image effects",async()=>{
- binding.chat!.messages=[{id:"m",conversation_id:"a",role:"assistant",created_at:1,content:'<script>bad()</script>\n\n[unsafe](javascript:alert%281%29) [safe](https://example.com)\n\n![pixel](https://example.com/track.png)\n\n```js\nconst x = 1;\n```\n\n| Name | Value |\n| --- | --- |\n| Pilot | 6 |'}];binding.chat!.turns={};binding.chat!.activity={};await render();expect(host.querySelector("script,img,iframe")).toBeNull();expect(host.querySelectorAll("a").length).toBe(1);expect(host.querySelector("a")?.rel).toBe("noopener noreferrer");expect(host.querySelector("pre")?.tabIndex).toBe(0);expect(host.querySelector("table")).not.toBeNull();
+ binding.chat!.messages=[{id:"m",conversation_id:"a",role:"assistant",created_at:1,content:'<script>bad()</script>\n\n[unsafe](javascript:alert%281%29) [safe](https://example.com)\n\n![pixel](https://example.com/track.png)\n\n```js\nconst x = 1;\n```\n\n| Name | Value |\n| --- | --- |\n| Pilot | 6 |'}];binding.chat!.turns={};binding.chat!.activity={};await render();expect(host.querySelector("script,img,iframe")).toBeNull();expect(host.textContent).not.toContain("bad()");const links=[...host.querySelectorAll("a")];expect(links.map(a=>a.textContent)).toEqual(["safe","Image: pixel"]);for(const a of links)expect(a.rel).toBe("noopener noreferrer");expect(host.querySelector(".brief-reply-prose .safe-markdown")).not.toBeNull();expect(host.querySelector("pre")?.tabIndex).toBe(0);expect(host.querySelector("table")).not.toBeNull();
 });
-test("URLs reject executable, relative, credentials and malformed destinations",()=>{
- for(const url of ["javascript:alert(1)","data:text/html,test","/admin", "//example.com", "https://user:secret@example.com"] )expect(safeReplyUrl(url)).toBe("");expect(safeReplyUrl("https://example.com")).toBe("https://example.com/");
+test("a turn held on a pending approval says so instead of working; a settled approval clears it",async()=>{
+ setTurn({state:"running"});binding.chat!.activity={};binding.chat!.approvals={p:{conversationId:"a",turnId:"t",requestId:"r",status:"pending"},other:{conversationId:"a",turnId:"t",requestId:"different",status:"pending"}};await render();
+ expect(host.textContent).toContain("Waiting for your approval");expect(host.textContent).not.toContain("Preparing your response");
+ binding.chat!.approvals={p:{conversationId:"a",turnId:"t",requestId:"r",status:"approved"},other:{conversationId:"a",turnId:"t",requestId:"different",status:"pending"}};await render();
+ expect(host.textContent).not.toContain("Waiting for your approval");expect(host.textContent).toContain("Preparing your response");
+ binding.chat!.approvals={p:{conversationId:"a",turnId:"t",requestId:"r",status:"pending"}};setTurn({state:"completed"});await render();expect(host.textContent).not.toContain("Waiting for your approval");
 });
 test("gates never substitute fixture history in live mode",async()=>{await render("live");expect(host.textContent).not.toContain("Prepare my call");binding={...binding,source:"live",mode:"unavailable"};await render("live");expect(host.querySelector(".brief-messages")).toBeNull();});
 test("owner binding captures the exact conversation for scroll and history",()=>{

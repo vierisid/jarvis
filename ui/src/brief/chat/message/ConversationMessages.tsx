@@ -55,7 +55,9 @@ function Thread({ binding, panelId, labelledBy, reducedMotion, memory }: {
           return <article key={item.key} data-thread-item={item.key} className="brief-assistant-reply" aria-label="Jarvis response" data-running={running(turn)}>
             {activities.length > 0 && <ActivityList activities={activities} turn={turn} expanded={expanded} connected={binding.connected} reduced={reduced}
               toggle={() => { scroll.beforeToggle(viewport.current?.querySelector<HTMLElement>(`[data-thread-item="${CSS.escape(item.key)}"] .brief-activity-toggle`) ?? undefined); memory.expanded[item.key] = !expanded; setVersion(v => v + 1); }}/> }
-            {!activities.length && running(turn) && <p className="brief-message-notice" role="status">{binding.connected ? "Preparing your response…" : "Reconnecting…"}</p>}
+            {/* The approval card itself is not shown in Brief yet (#1075). Say why the turn waits instead of "working". */}
+            {item.awaitingApproval && <p className="brief-message-notice" data-reading-anchor="approval" role="status">Waiting for your approval before continuing.</p>}
+            {!activities.length && running(turn) && !item.awaitingApproval && <p className="brief-message-notice" role="status">{binding.connected ? "Preparing your response…" : "Reconnecting…"}</p>}
             {message?.content && <ReplyMarkdown text={message.content}/>}
             {(failed || cancelled) && <p className="brief-message-notice" data-error={failed} data-reading-anchor="terminal" role="status">
               {failed ? "This response could not finish." : "Response stopped."}{message?.content ? " The partial answer is kept above." : ""}</p>}
