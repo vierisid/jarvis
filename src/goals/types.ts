@@ -26,6 +26,8 @@ export type CheckInType = 'morning_plan' | 'evening_review';
 // ── Core Types ──────────────────────────────────────────────────────
 
 export type Goal = {
+  /** Optional additive measurement. Legacy score-only goals remain valid. */
+  measurement?: import('./measurements').GoalMeasurement | null;
   id: string;
   parent_id: string | null;
   level: GoalLevel;

@@ -151,6 +151,10 @@ export interface BriefMeasurement {
   qualification: 'measured' | 'user_reported';
 }
 export interface BriefGoal {
+  /** F-15 additive fields; a child never implicitly contributes to its parent. */
+  measurementRevision?: number;
+  measurementDefinition?: { unit: string; baseline: number; target: number } | null;
+  progress?: { value: number | null; basis: 'measurement' | 'legacy_score' | 'unknown'; rollup: 'independent' };
   goalId: string;
   revision: BriefRevision;
   status: GoalStatus;
