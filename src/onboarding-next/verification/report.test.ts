@@ -30,7 +30,7 @@ async function fixture() {
   for (const spec of requiredCases()) {
     const observation: Observation = { schemaVersion:1,candidate,caseId:spec.id,kind:spec.kind,observedAt:'2026-01-02T00:00:00Z',environment:'synthetic environment',artifacts:[proof],
       details:{ testOnly:true },checks:spec.checks.map(id => ({ id,passed:true })),
-      ...(spec.kind === 'real-provider' ? { profiles:profiles.map(p => ({ ...p,outcome:'passed' as const,spendUsd:1 })) } : {}) };
+      ...(spec.kind === 'real-provider' ? { profiles:profiles.map(p => ({ ...p,startedAt:'2026-01-01T12:00:00Z',outcome:'passed' as const,spendUsd:1 })) } : {}) };
     report.cases.push({ id:spec.id,outcome:'passed',reason:'Synthetic acceptance fixture',evidence:[proof,await save(spec.id.replaceAll('/','--')+'.observation.json',observation)] });
   }
   report.visual = await save('visual.json',{ candidate:{ revision:candidate.frontend,tree:candidate.tree,dirty:false },assessment:{ errors:[],scope:'runtime',counts:{ passed:798 },required:798,missingGates:['ON-B-13'] },errors:[] });
@@ -95,6 +95,25 @@ for (const kind of ['missing-profile','wrong-version','failed-profile','negative
   if(kind==='unapproved') { const a=f.report.staging!.spendApproval; const d=JSON.parse(await readFile(resolve(f.out,a.path),'utf8')); d.approved=false; Object.assign(a,await f.save(a.path,d)); }
   if(kind==='no-registry') delete f.report.staging;
   await f.approve(); const v=await f.verify(); expect(v.releaseReady).toBe(false); expect(v.errors.length).toBeGreaterThan(0);
+});
+for (const kind of ['before-approval','missing','invalid','non-string','after-observation']) test(`rejects each profile's execution start: ${kind}`,async () => {
+  const f=await fixture(), id=f.report.cases.find(r=>r.id.startsWith('models/'))!.id;
+  await f.alterObservation(id,d=>{
+    // The first profile remains valid; observation and owner approvals are later
+    // than the run. A late approval must not legitimize the second profile.
+    if(kind==='before-approval') d.profiles[1].startedAt='2025-12-31T23:30:00Z';
+    if(kind==='missing') delete d.profiles[1].startedAt;
+    if(kind==='invalid') d.profiles[1].startedAt='not-a-date';
+    if(kind==='non-string') d.profiles[1].startedAt=1767268800000;
+    if(kind==='after-observation') d.profiles[1].startedAt='2026-01-02T00:00:01Z';
+  });
+  await f.approve(); const v=await f.verify(); expect(v.releaseReady).toBe(false);
+  expect(v.errors).toContain(`${kind==='before-approval' ? 'Spend was not authorized before run' : 'Invalid provider execution start'}: ${id}/profile-b`);
+});
+test('an approval timestamp at execution start authorizes the run',async () => {
+  const f=await fixture(), id=f.report.cases.find(r=>r.id.startsWith('models/'))!.id;
+  await f.alterObservation(id,d=>{ d.profiles[1].startedAt='2026-01-01T00:00:00Z'; });
+  await f.approve(); expect((await f.verify()).releaseReady).toBe(true);
 });
 test('altering evidence after owner approval invalidates receipts',async () => {
   const f=await fixture(); f.report.cases[0]!.reason='Changed after approval'; expect((await f.verify()).errors.some(e=>e.includes('stale gate'))).toBe(true);

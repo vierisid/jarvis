@@ -3,7 +3,8 @@ import { Database } from 'bun:sqlite';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { ROOT, discover } from './discovery';
+import { ROOT, containedFile, discover } from './discovery';
+import { isNoDraftRecovery } from './recovery';
 import { requiredCases } from './matrix';
 import { readArtifact, sourceCandidate } from './report';
 import { child } from './runner';
@@ -26,5 +27,31 @@ for (const spec of requiredCases().filter(c => !c.suites && c.kind === 'mocked' 
         expect((db.query('SELECT count(*) AS n FROM flow').get() as {n:number}).n).toBeLessThanOrEqual(1);
       } finally { db.close(); }
     } finally { await rm(root,{ recursive:true,force:true }); }
+  },30000);
+  const mode=spec.id.split('/').at(-1)!;
+  if (isNoDraftRecovery(mode)) test(`worker refuses false recovery evidence: ${spec.id}`,async()=>{
+    const root=await mkdtemp(resolve(tmpdir(),'b13-false-recovery-'));
+    try {
+      await writeFile(resolve(root,'candidate.json'),JSON.stringify(await sourceCandidate()));
+      const provider=await containedFile(ROOT,'src/onboarding-next/build-jobs/index.ts');
+      // Mutate only the terminal read boundary in this child process. Real
+      // composition, persistence, reconciliation and result recovery still run.
+      await writeFile(resolve(root,'wrong-outcome.ts'),`
+        import { mock } from 'bun:test';
+        const api = { ...await import(${JSON.stringify(provider)}) };
+        mock.module(${JSON.stringify(provider)}, () => ({ ...api, createBuildJobsProvider: deps => {
+          const build = api.createBuildJobsProvider(deps), read = build.read;
+          return { ...build, read: async (...args) => {
+            const result = await read(...args);
+            if (result.status?.resolution === 'none') result.status.outcome = ${JSON.stringify(mode==='cancel-before-save'?'failed':'needs_input')};
+            return result;
+          } };
+        } }));
+      `);
+      const output=await child([process.execPath,'--preload',resolve(root,'wrong-outcome.ts'),resolve(import.meta.dir,'worker.ts'),spec.id,root,resolve(root,'candidate.json')],ROOT,20000);
+      expect(output.timedOut).toBe(false); expect(output.code).not.toBe(0);
+      expect(output.output).toContain(`${mode}: job outcome`);
+      expect(await Bun.file(resolve(root,'case.observation.json')).exists()).toBe(false);
+    } finally { await rm(root,{recursive:true,force:true}); }
   },30000);
 }
