@@ -6,6 +6,7 @@ import { sampleCatalog } from '../../workflows/runtime/test-fixtures';
 import { getUserProfile } from '../../vault/user-profile';
 import { containedFile, loadProvider, ROOT } from './discovery';
 import { CORE, FULL, PROVIDERS, TASKS } from './matrix';
+import { assertNoDraftRecovery, isNoDraftRecovery } from './recovery';
 
 /** Real providers, SQLite, composer and readiness. Only leaf inference, account,
  * setup-service and room observations are deterministic fixtures. Never registered. */
@@ -181,10 +182,11 @@ export async function scenario(id: string, directory: string, root = ROOT) {
         if (mode === 'crash-after-save') getWorkflowDb().exec('DROP TRIGGER verification_crash');
         await reopen(); now += 30001; await build.run(null, ref);
         const observed = ready(await build.read(null, ref)); record('reconciled-job', observed.status);
-        const noDraft = ['cancel-before-save', 'model-failure', 'timeout', 'unsupported-node'].includes(mode);
-        if (noDraft) {
-          assert.ok(['cancelled', 'failed', 'needs_input'].includes(observed.status.outcome), JSON.stringify(observed.status));
-          assert.equal(observed.status.resolution, 'none'); assert.equal((await result.read(null, ref)).state, 'no_draft');
+        if (isNoDraftRecovery(mode)) {
+          const recovered = await result.read(null, ref);
+          assertNoDraftRecovery(mode, observed.status, recovered);
+          assert.equal(calls, mode === 'model-failure' || mode === 'unsupported-node' ? 1 : 0);
+          record('no-draft-result', recovered);
         } else {
           const saved = ready(await (http ? http('result.read', ref) : result.read(null, ref))); assert.equal(saved.state, 'saved');
           assert.equal(saved.graph.nextAction.settings.input.prompt, task.prompt);

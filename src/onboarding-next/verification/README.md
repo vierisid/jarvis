@@ -6,7 +6,10 @@ all **43 required cases** when a provider, UI host or test file is absent.
 
 Use the repository's pinned Bun version and a new output directory **outside**
 the checkout. Evidence is private and can contain interview text or workflow
-graphs; do not commit staging artifacts.
+graphs; do not commit staging artifacts. The output's existing parent and source
+root are resolved through symlinks before creation; aliases into the checkout
+are rejected, including ignored directories. Existing output directories are
+never reused.
 
 ```sh
 bun test src/onboarding-next/verification
@@ -93,7 +96,7 @@ passed row has exactly one `*.observation.json` plus its supporting artifacts:
   checks: requiredCase.checks.map(id => ({ id, passed: true })),
   details: { /* concrete steps, observed recovery, graph IDs and safety evidence */ },
   artifacts: [/* logs, DB, screenshots, provider receipts, deployed version proof */],
-  profiles: [/* real-provider only: {id, version, outcome: 'passed', spendUsd} */]
+  profiles: [/* real-provider only: {id, version, startedAt, outcome: 'passed', spendUsd} */]
 }
 ```
 
@@ -106,9 +109,14 @@ Set `report.staging = {profiles, registry, spendApproval}`. The registry artifac
 contains `{candidate, profiles, environment, verifiedBy}` from the authoritative
 staging configuration. Spend approval contains
 `{candidate, profiles, approved: true, approvedBy, approvedAt, budgetUsd}`.
-Approval must precede every model observation and the sum of recorded spend
-across all model cases/profiles must fit the approved budget. Missing or changed
-profile versions, failed profiles and incomplete coverage invalidate acceptance.
+Each profile's `startedAt` must record its first paid attempt for that case,
+including retries covered by `spendUsd`. It is bound to the candidate by the
+hashed observation. Approval must be at or before every profile's `startedAt`,
+which must be at or before `observedAt`; a later observation cannot establish
+prior spend authorization. Missing/invalid execution timestamps fail validation.
+The sum of recorded spend across all model cases/profiles must fit the approved
+budget. Missing or changed profile versions, failed profiles and incomplete
+coverage invalidate acceptance.
 
 Copy U11's actual `report.json` and referenced artifacts into a contained folder
 and set `report.visual` to that report's hash reference. B13 invokes the U11

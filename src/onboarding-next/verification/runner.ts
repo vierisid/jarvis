@@ -1,5 +1,5 @@
-import { mkdir, writeFile } from 'node:fs/promises';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { mkdir, realpath, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { containedFile, discover, ROOT } from './discovery';
 import { requiredCases } from './matrix';
 import { artifact, evidenceIndex, same, sourceCandidate, verifyReport } from './report';
@@ -19,8 +19,16 @@ export function suiteVerdict(result: { code: number; timedOut: boolean; output: 
   return { outcome, reason: `${passed} passed, ${failed} failed, ${skipped} skipped; exit ${result.code}${result.timedOut ? '; timed out' : ''}.` } as const;
 }
 export async function run(directory: string, options: { root?: string; only?: string; frontend?: string; sidecar?: string } = {}) {
-  const root = options.root ?? ROOT, output = resolve(directory), inside = relative(root, output);
-  if (!(inside === '..' || inside.startsWith('..' + sep) || isAbsolute(inside))) throw Error('Evidence must be outside the source checkout.');
+  const source = resolve(options.root ?? ROOT), requested = resolve(directory);
+  const requireOutside = (root: string, output: string) => {
+    const inside = relative(root, output);
+    if (!(inside === '..' || inside.startsWith('..' + sep) || isAbsolute(inside))) throw Error('Evidence must be outside the source checkout.');
+  };
+  requireOutside(source, requested);
+  // Resolve existing ancestors before creating anything: an external alias can
+  // point into an ignored checkout directory without making Git report dirty.
+  const root = await realpath(source), output = resolve(await realpath(dirname(requested)), basename(requested));
+  requireOutside(root, output);
   const required = requiredCases();
   if (options.only && !required.some(c => c.id === options.only)) throw Error('Unknown case');
   await mkdir(output); // Never overwrite or reuse prior evidence/databases.

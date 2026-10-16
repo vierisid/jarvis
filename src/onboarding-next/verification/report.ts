@@ -74,8 +74,12 @@ export async function verifyReport(report: Report, directory: string, expected: 
               check(!!report.staging, `Missing staging authorization: ${row.id}`);
               const profiles = data.profiles;
               check(Array.isArray(profiles) && profiles.length > 0 && same(profiles.map((p: any) => ({ id: p.id, version: p.version })).sort((a: any,b: any) => a.id.localeCompare(b.id)), [...(report.staging?.profiles ?? [])].sort((a,b) => a.id.localeCompare(b.id))), `Unsupported/incomplete profile coverage: ${row.id}`);
-              for (const p of profiles ?? []) { check(p.outcome === 'passed' && Number.isFinite(p.spendUsd) && p.spendUsd >= 0, `Invalid provider result/spend: ${row.id}`); totalSpend += p.spendUsd; }
-              if (report.staging) { const approval = await readArtifact(directory, report.staging.spendApproval, true); check(validDate(approval.approvedAt) && Date.parse(approval.approvedAt) <= Date.parse(data.observedAt), `Spend was not authorized before run: ${row.id}`); }
+              const approval = report.staging ? await readArtifact(directory, report.staging.spendApproval, true) : undefined;
+              for (const p of profiles ?? []) {
+                check(p.outcome === 'passed' && Number.isFinite(p.spendUsd) && p.spendUsd >= 0, `Invalid provider result/spend: ${row.id}`); totalSpend += p.spendUsd;
+                check(validDate(p.startedAt) && validDate(data.observedAt) && Date.parse(p.startedAt) <= Date.parse(data.observedAt), `Invalid provider execution start: ${row.id}/${p.id}`);
+                check(validDate(approval?.approvedAt) && validDate(p.startedAt) && Date.parse(approval.approvedAt) <= Date.parse(p.startedAt), `Spend was not authorized before run: ${row.id}/${p.id}`);
+              }
             }
           }
         } catch (error) { errors.push(`${row.id}: ${String(error)}`); }
