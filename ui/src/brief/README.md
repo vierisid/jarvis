@@ -486,3 +486,31 @@ ingredients (ready, loading, unavailable). It sends no request.
 
 `?brief=preview&specimen=workflow-runs#/_brief_preview` opens the view over in-memory fixture runs (all
 seven states, an older version, partial receipts and a waitpoint). Run creates a fixture run only.
+
+## Workflow context and rules
+
+- `workflows/context/` is the D-20 Context & rules view behind the shared `WorkflowViewHeader`. It shows
+  two separate answers: what the bound version is configured to use (`Configured`) and what a selected
+  run recorded (`Used by run`). A recorded view is never filled by joining today's configuration to an
+  old run; a missing, removed, stale or redacted source stays labelled as such.
+- `WorkflowContextPort.read(scope, query, signal)` is the only input. There is no live implementation on
+  main: F-21 supplies the authorized, project-scoped and redacted projection before this is bound.
+  `validateContext` rejects a document for another scope, flow, version or run, caps sizes, copies only
+  whitelisted fields and replaces anything marked `redacted` before it is cached. It is a presentation
+  safeguard, not the redaction layer.
+- `WorkflowContextController` owns one scope + flow + version with separate caches per query
+  (configured, or recorded by run ID), coalesced reads, stale data kept with a qualifier when a refresh
+  fails, and per-query scroll positions. The host keeps it across room, chat and sidebar changes and
+  calls `retire()` only when the owner or workflow changes. The view is read-only: it writes nothing.
+- Values render as plain text. Source actions hand the exact source ID to the host's `openSource`; only
+  available or stale sources offer one.
+- Run reuses the Runs view's `WorkflowRunsController` (same instance, same scope), so an uncertain
+  request stays locked across both views and an accepted one opens its receipt in Runs.
+- Opt-in `workflowContextRegistration(useBinding)`, not in the production registry. `contextAvailable`
+  requires a non-empty scope, flow, version and title, a `source` matching the shell mode, the routed
+  flow/version, a controller bound to the same scope and the `workflowContext` capability.
+- `workflows/context/figma-reference.json` records the UI-24 source values and bounded deviations.
+
+`?brief=preview&specimen=workflow-context#/_brief_preview` opens the view over in-memory fixture context
+and runs (missing, partial, long, slow, unavailable, unsupported and empty examples, and an illustrative
+run response). It sends no request.
