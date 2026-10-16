@@ -27,6 +27,15 @@ const PINNED_PROMPTS: Record<string, Record<string, string>> = {
     'hosted production': '50b09c7486cfd034ad8e1ce36df92e5869d78cedd1dab6d87ffa251d1ca00968',
     'tool names only': '5f053e6a131f0eae15ee8756433f4657938fa2f41867b3b5e4a3e2e861ae1a1a',
   },
+  // w8-4 (F-08) adds the typed-ingredient instruction, sent only with selected
+  // ingredients (composition-ingredients.test.ts pins it); without them the
+  // prompts are byte-identical to w8-3.
+  'w8-4': {
+    bare: '62395ceb35fe6215beb7a36a19338c5a706f5bf9283e95bf339d400d314fbeee',
+    production: '7d92d0ae8835f01920dc93386697199cd8a9cf4d28d6658fb6c8aab0b24d9d62',
+    'hosted production': '50b09c7486cfd034ad8e1ce36df92e5869d78cedd1dab6d87ffa251d1ca00968',
+    'tool names only': '5f053e6a131f0eae15ee8756433f4657938fa2f41867b3b5e4a3e2e861ae1a1a',
+  },
 };
 const PINNED_POLICIES: Record<PlanningPolicy, string> = {
   'baseline-v1': fingerprint(''),

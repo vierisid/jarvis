@@ -12,7 +12,7 @@ export async function composePersistedFlow(deps: ComposeDeps, input: ComposeRequ
   projectId?: string,
   /** Synchronous attachment, in the journal's creation transaction, before any provider call. */
   onJournal?: (id: string) => void): Promise<ComposeResult & { compositionRecordId: string }> {
-  const request = { ...input };
+  const request = { ...input, ingredients: input.ingredients ? structuredClone(input.ingredients) : undefined };
   request.signal?.throwIfAborted();
   const snapshot = snapshotComposition(deps);
   const journal = getWorkflowDb().transaction(() => {
