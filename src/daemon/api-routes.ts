@@ -159,6 +159,7 @@ export type ApiContext = {
   briefCapabilities?: BriefCapabilities;
   briefConversations?: BriefConversationProvider;
   briefAttachments?: import('../brief/attachments').BriefAttachmentProvider;
+  briefOpportunityActivation?: import('../brief/opportunity-activation').OpportunityActivation;
   briefPreparedOpportunities?: import('../awareness/prepared-opportunities').PreparedOpportunities;
   briefWorkflowComposition?: import('../brief/composition').BriefCompositionProvider;
   suggestionComposer?: import('../awareness/suggestion-composer.ts').SuggestionComposer | null;
@@ -423,7 +424,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
   return {
     ...createOpportunityRoutes(json),
-    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations, ctx.briefAttachments, ctx.briefWorkflowComposition, ctx.briefPreparedOpportunities),
+    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations, ctx.briefAttachments, ctx.briefWorkflowComposition, ctx.briefPreparedOpportunities, ctx.briefOpportunityActivation),
     // --- Health ---
     '/api/health': {
       GET: () => json(ctx.healthMonitor.getHealth()),

@@ -94,6 +94,13 @@ type ActiveSub = {
   warning?: string;
   /** Digest of the trigger the subscription was registered from; a saved draft that changes it re-registers. */
   triggerDigest?: string;
+  /**
+   * Set only when part of an engine subscription failed to register (cron or
+   * every local subscription). Unlike `warning`, which also carries advisory
+   * text such as a schedule zone mismatch, this marks a subscription that a
+   * refresh must repair and that is not yet a registration receipt.
+   */
+  incomplete?: true;
   teardown: () => Promise<void> | void;
 };
 
@@ -239,6 +246,18 @@ export class TriggerManager {
     this.webhooks.setTriggerCallback((flowId, payload, delivery) => this.fire(flowId, payload, "webhook", delivery));
   }
 
+  /** Exact-version registration receipt; refresh resolving alone is not proof of a subscription. */
+  registrationState(flowId: string, versionId: string): 'registered' | 'pending' | 'blocked' | 'changed' {
+    const flow = getFlow(flowId), version = getFlowVersion(versionId);
+    if (!flow || flow.status !== 'ENABLED' || flow.published_version_id !== versionId || !version || version.flowId !== flowId) return 'changed';
+    if (ungrantedCodeSteps(flow, version.trigger)) return 'blocked';
+    try { assertVersionReady(flowId, versionId); } catch { return 'blocked'; }
+    if (version.trigger.type === 'EMPTY') return 'registered'; // Manual-only: no subscription or run is needed.
+    const sub = this.subs.get(flowId);
+    if (sub?.versionId === versionId && !sub.incomplete) return 'registered';
+    return this.inFlight.has(flowId) || this.enableRetries.has(flowId) ? 'pending' : 'blocked';
+  }
+
   /** Public surface for the webhook ingress route. */
   webhookManager(): WebhookManager {
     return this.webhooks;
@@ -313,7 +332,12 @@ export class TriggerManager {
       // trigger says, so an edited schedule replaces the old one.
       const desiredTrigger = desiredVersionId ? getFlowVersion(desiredVersionId)?.trigger : undefined;
       if (existing && existing.versionId === desiredVersionId
-        && (!existing.triggerDigest || existing.triggerDigest === triggerDigest(desiredTrigger))) return;
+        && (!existing.triggerDigest || existing.triggerDigest === triggerDigest(desiredTrigger))) {
+        // Repair an incomplete local subscription from the cached engine state.
+        // Keep working webhook delivery and avoid ON_DISABLE / ON_ENABLE replay.
+        if (existing.kind === 'engine' && existing.incomplete) await this.register(flow);
+        return;
+      }
 
       // Either no sub yet, or a stale sub for a previous version. Tear down
       // the old one (clears engine state + ON_DISABLE) before registering
@@ -620,16 +644,23 @@ export class TriggerManager {
       );
     }
 
+    const noSubscription = !cronTearDown && !webhookTearDown;
+    // ON_ENABLE already owns engine state, even if every local subscription
+    // failed. Keep its teardown so pause/stop clears state and runs ON_DISABLE.
+    // A failed registration outranks the advisory zone warning in `list()`.
+    const failure = noSubscription ? 'No trigger subscription could be registered; the flow is not firing.'
+      : schedule?.cronExpression && !cronTearDown ? 'Cron registration failed; only webhook delivery is active.' : undefined;
     const sub: ActiveSub = {
       flowId: flow.id,
       versionId: version.id,
       kind: "engine",
       triggerDigest: triggerDigest(version.trigger),
-      ...(warning ? { warning } : {}),
+      ...(failure ? { warning: failure, incomplete: true as const } : warning ? { warning } : {}),
       teardown: () => this.teardownEngineTrigger(flow.id, version.id, cronTearDown, webhookTearDown),
     };
     this.subs.set(flow.id, sub);
-    this.clearEnableRetry(flow.id);
+    if (noSubscription) this.scheduleEnableRetry(flow.id, 'No trigger subscription could be registered');
+    else this.clearEnableRetry(flow.id);
   }
 
   /**
