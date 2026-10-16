@@ -27,6 +27,9 @@ through CSP. No credentials, database or live user data are used.
 Discovery validates the pinned six-key manifests, relative entries, versions,
 requirements and regular contained files before generating imports **in memory**.
 It does not execute manifests, fetch code, register capabilities or write catalogs.
+The isolated bundle supplies U10's preview catalog in memory from this inventory,
+so removing a module cannot leave a stale import in the fixture. The production
+catalog and its generation/check commands are untouched.
 No package scripts or central U10/B11 files are changed. Empty, single, partial,
 full and physically removed modules use the same build. The base's ordinary UI
 build never imports this verifier or its fixtures.

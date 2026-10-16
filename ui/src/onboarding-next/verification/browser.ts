@@ -14,7 +14,7 @@ export async function inspect(tab: any) {
     };
     const name = (element: Element) => (element.getAttribute('aria-label') || (element.getAttribute('aria-labelledby') ?? '').split(/\s+/).map(id => document.getElementById(id)?.textContent ?? '').join(' ').trim()
       || [...((element as HTMLInputElement).labels ?? [])].map(label => label.textContent).join(' ') || element.textContent || element.getAttribute('title') || '').trim();
-    const controls = [...(scene?.querySelectorAll('button,a[href],input:not([type=hidden]),textarea,select,[role=button],[tabindex="0"]') ?? [])].filter(visible);
+    const controls = [...(scene?.querySelectorAll('button,a[href],input:not([type=hidden]),textarea,select,summary,[role=button],[tabindex="0"]') ?? [])].filter(visible);
     const clipped = controls.filter(element => {
       const r = element.getBoundingClientRect();
       if (r.width < 1 || r.height < 1 || r.left < -2 || r.right > innerWidth + 2) return true;
@@ -42,7 +42,8 @@ export async function inspect(tab: any) {
       controls: controls.map(name), unnamed: controls.filter(c => !name(c)).length, clipped,
       contour: cardStyle ? { shadow: cardStyle.boxShadow, border: cardStyle.borderColor, width: cardStyle.borderWidth } : null,
       reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
-      focus: active ? { name: name(active), tag: active.tagName, inside: !!scene?.contains(active), visible: visible(active) } : null,
+      focus: active ? { name: name(active), tag: active.tagName, inside: !!scene?.contains(active), visible: visible(active),
+        indicator: active.matches(':focus-visible') && ((parseFloat(getComputedStyle(active).outlineWidth) > 0 && getComputedStyle(active).outlineStyle !== 'none') || getComputedStyle(active).boxShadow !== 'none') } : null,
       pebbleOpen: scene?.querySelector('[data-pebble-open]')?.getAttribute('data-pebble-open'),
       pebbleVisible: !!surface && visible(surface) && !!b && b.width > 0 && b.height > 0 && b.left >= -2 && b.right <= innerWidth + 2,
       buildPhases: [...(scene?.querySelectorAll('.on-build__phase') ?? [])].map(n => n.getAttribute('data-state')),
@@ -73,7 +74,9 @@ export async function runCases(options: { tab: any; viewport: any; baseUrl: stri
     if (test.kind === 'journey') throw Error('Use runJourney for journey cases.');
     await viewport.set({ width: test.width, height: test.width === 390 ? 844 : 1000 });
     await tab.goto(`${options.baseUrl}/?case=${encodeURIComponent(test.id)}`);
+    await tab.playwright.waitForLoadState({ state: 'load' });
     await tab.playwright.locator('[data-u11-scene]').waitFor({ state: 'visible' });
+    await tab.playwright.evaluate(async () => { await document.fonts.ready; return document.fonts.status; });
     await tab.playwright.domSnapshot();
     const metrics = await inspect(tab), errors = problems(test, metrics, candidate), keys: any[] = [];
     if (test.kind === 'keyboard') {
@@ -82,7 +85,7 @@ export async function runCases(options: { tab: any; viewport: any; baseUrl: stri
         const total = metrics.controls.length + 2;
         for (let i = 0; i < total; i++) { await tab.pressKey(null, 'Tab'); keys.push((await inspect(tab)).focus); }
         for (let i = 0; i < total; i++) { await tab.pressKey(null, 'shift+Tab'); keys.push((await inspect(tab)).focus); }
-        if (!keys.some(k => k?.inside) || !keys.some(k => !k?.inside) || keys.some(k => k?.inside && !k.visible)) errors.push('Keyboard traversal did not enter and leave the view with visible focus.');
+        if (!keys.some(k => k?.inside) || !keys.some(k => !k?.inside) || keys.some(k => k?.inside && (!k.visible || !k.indicator))) errors.push('Keyboard traversal did not enter and leave the view with a visible focus indicator.');
       }
     }
     const evidence = [await save(`${test.id}.metrics.json`, JSON.stringify({ candidate, caseId: test.id, metrics, errors, keys }, null, 2)), await save(`${test.id}.ax.txt`, await tab.playwright.domSnapshot()), await save(`${test.id}.png`, await tab.screenshot({ fullPage: true }))];

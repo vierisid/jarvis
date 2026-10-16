@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { mkdtemp, mkdir, rm, symlink, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { catalogSource, discover } from './discovery';
+import { catalogSource, discover, hostCatalogSource } from './discovery';
 import { FIGMA, GATES, JOURNEYS, requiredCases, ROOMS, VIEWS } from './matrix';
 import { assess, blockReason, complete, evidenceIndex, hash, safePath, verifyArtifacts } from './report';
 import type { Report } from './report';
@@ -36,6 +36,13 @@ test('physically removing a required view restores blocked cases without shrinki
   const root = await temp(), dir = await addView(root); const before = await discover(root);
   await rm(dir, { recursive: true }); const after = await discover(root);
   const testCase = requiredCases()[0]!; expect(blockReason(testCase, before)).toBeNull(); expect(blockReason(testCase, after)).toContain('absent'); expect(report().cases.length).toBe(requiredCases().length);
+});
+test('host preview discovery omits removed modules even when its committed catalog is stale', async () => {
+  const root = await temp(), dir = await addView(root);
+  const before = hostCatalogSource(root, await discover(root));
+  expect(before).toContain('ON-U-01'); expect(before).toContain('/welcome/index.tsx');
+  await rm(dir, { recursive: true });
+  expect(hostCatalogSource(root, await discover(root))).toBe('export const viewModules = [];');
 });
 test.each([{ entry: '../other.tsx' }, { id: 'ON-U-99' }, { provides: ['fake.v1'] }, { requires: [] }, { extra: true }, { kind: 'provider' }])('rejects incompatible manifest %j', async patch => {
   const root = await temp(); await addView(root, 0, patch); await expect(discover(root)).rejects.toThrow('Invalid manifest');

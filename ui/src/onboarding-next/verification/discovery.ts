@@ -41,3 +41,12 @@ export function catalogSource(root: string, inventory: Inventory) {
   lines.push(`export const inventory = ${JSON.stringify(inventory)};`);
   return lines.join('\n');
 }
+
+/** Isolated U10 preview input only: a stale committed host catalog must not make
+ * a physically absent view a bundler error before we can report it blocked. */
+export function hostCatalogSource(root: string, inventory: Inventory) {
+  return `export const viewModules = [${VIEWS.filter(v => inventory.views.includes(v.name)).map(v => {
+    const manifest = { schemaVersion: 1, id: v.id, kind: 'view', entry: './index.tsx', provides: [v.capability], requires: v.requires };
+    return `{ manifest: ${JSON.stringify(manifest)}, load: () => import(${JSON.stringify(resolve(root, `ui/src/onboarding-next/views/${v.name}/index.tsx`))}) }`;
+  }).join(',')}];`;
+}
