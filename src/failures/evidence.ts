@@ -19,7 +19,7 @@ const HOSTED: Record<HostedErrorKind, LLMErrorCode> = {
 /** An AI step keeps its provider's error code on its effect record as `PROVIDER_<CODE>`. */
 export const PROVIDER_OUTCOME_PREFIX = 'PROVIDER_';
 /** Provider answers that refused the request: it processed nothing. */
-const PROVIDER_REFUSALS = new Set<LLMErrorCode>(['auth', 'forbidden', 'rate_limit', 'bad_request', 'unsupported_tools',
+const PROVIDER_REFUSALS = new Set<LLMErrorCode>(['background_throttled', 'auth', 'forbidden', 'rate_limit', 'bad_request', 'unsupported_tools',
   'not_found', 'quota_exhausted', 'content_policy', 'restricted']);
 
 /**
@@ -42,7 +42,10 @@ export function providerCode(outcomeCode: string): LLMErrorCode | null {
 export function failureEvidence(error: unknown): FailureEvidence {
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof ActionOutcomeError) return { source: 'action', outcome: error.outcome };
-  if (error instanceof LLMProviderError) return { source: 'provider', code: error.code, message };
+  if (error instanceof LLMProviderError) {
+    return { source: 'provider', code: error.code, message,
+      ...(error.code === 'background_throttled' && error.retryAfterMs !== undefined ? { retryAfterMs: error.retryAfterMs } : {}) };
+  }
   if (error instanceof HostedProxyError) return { source: 'provider', code: HOSTED[error.kind] ?? 'unknown', message };
   if (error instanceof WorkflowReadinessError) {
     return { source: 'readiness', issues: error.readiness.issues.map(issue => ({ code: issue.code, message: issue.message })) };

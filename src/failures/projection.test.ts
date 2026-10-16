@@ -5,7 +5,8 @@ import { HostedProxyError } from '../util/hosted-error';
 import { SidecarRPCError } from '../sidecar/rpc';
 import { WorkflowReadinessError } from '../workflows/db/repos/flow-readiness';
 import { WorkflowCancellationError } from '../workflows/runtime/cancellation-error';
-import { failureEvidence } from './evidence';
+import { failureEvidence, providerOutcome } from './evidence';
+import { BackgroundThrottled } from '../llm/background-budget';
 import { DIAGNOSIS_FIXTURES } from './fixtures';
 import { projectFailure, type FailureEvidence } from './projection';
 
@@ -47,6 +48,22 @@ describe('the projection reads typed evidence, never wording', () => {
     expect(failureEvidence(new WorkflowCancellationError('run-1'))).toMatchObject({ source: 'cancellation', dispatched: true });
     expect(failureEvidence(new SidecarRPCError('METHOD_NOT_FOUND', 'no handler'))).toMatchObject({ outcome: { status: 'blocked', effect: 'not_started' } });
     expect(failureEvidence(new SidecarRPCError('HANDLER_PANIC', 'crashed'))).toMatchObject({ outcome: { status: 'unknown', effect: 'may_have_occurred' } });
+  });
+
+  // Q-20 #1064: Jarvis's own background budget refused it before any provider
+  // call. A pause with its wait, never a provider failure, and an AI step that
+  // was refused this way processed nothing.
+  test('a background throttle is a resource pause with its wait, not a provider failure', () => {
+    const throttled = new BackgroundThrottled('daily_budget', Date.now() + 9 * 60_000);
+    const evidence = failureEvidence(throttled);
+    expect(evidence).toMatchObject({ source: 'provider', code: 'background_throttled' });
+    const failure = projectFailure(evidence, { label: 'The step "Summarize"', sideEffects: false });
+    expect(failure).toMatchObject({ category: 'resource_paused', effect: 'none', outcome: 'Nothing was done.' });
+    expect(failure.headline).toMatch(/^The step "Summarize" was paused: Jarvis is holding back background AI work for now, for about (9|10) minutes\.$/);
+    expect(failure.headline).not.toContain('failed');
+    expect(providerOutcome(throttled)).toMatchObject({ code: 'PROVIDER_BACKGROUND_THROTTLED', effect: 'not_started' });
+    expect(projectFailure(failureEvidence(new BackgroundThrottled('foreground_busy', null)), { label: 'Your request', sideEffects: false }).headline)
+      .toBe('Your request was paused: Jarvis is holding back background AI work for now.');
   });
 });
 

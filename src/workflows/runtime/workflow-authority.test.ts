@@ -642,7 +642,7 @@ describe('workflow effect boundary', () => {
 
   test.each([
     ['an Authority denial', (f: ReturnType<typeof fixture>) => f.authority.addOverride({ action: 'write_data', allowed: false }), 'AUTHORITY_DENIED', 'review_authority'],
-    ['Kill', (f: ReturnType<typeof fixture>) => f.emergency.kill(), 'EMERGENCY_STOPPED', 'run_again'],
+    ['Kill', (f: ReturnType<typeof fixture>) => f.emergency.kill(), 'EMERGENCY_STOPPED', 'run_again_when_resumed'],
   ] as const)('%s is a typed refusal with its own next step', async (_name, refuse, code, step) => {
     const f = fixture();
     refuse(f);

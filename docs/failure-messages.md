@@ -11,7 +11,7 @@ failure itself.
 
 | Field | Contract |
 | --- | --- |
-| `category` | `invalid_input`, `missing_binding`, `provider_limit`, `target_offline`, `approval_denied`, `uncertain_effect`, `not_started`, `cancelled`, `delivery_failed` or `internal`. |
+| `category` | `invalid_input`, `missing_binding`, `provider_limit`, `target_offline`, `approval_denied`, `uncertain_effect`, `not_started`, `resource_paused`, `cancelled`, `delivery_failed` or `internal`. |
 | `effect` | What took effect: `none`, `unknown` or `partial`. Never `none` without evidence that nothing did. |
 | `headline`, `outcome` | One sentence each: what happened, and what did and did not take effect. |
 | `next` | Safe next steps the person starts. Always ends with `open_details`. Nothing in the projection runs, retries or resends anything. |
@@ -31,6 +31,21 @@ Classification reads typed fields only, never the wording of a message:
 
 An approval decision arrives as an action outcome (`APPROVAL_DENIED` and the
 like), the shape the effect boundary records.
+
+Codes with a cause and fix of their own are named, not folded into a generic
+reading:
+
+- `background_throttled` (Jarvis's background admission budget refused the
+  model call before any provider saw it) is `resource_paused`: the work was
+  paused, nothing is wrong with the provider, and the wait is named when the
+  error carries `retryAfterMs`. An AI step refused this way processed nothing.
+- A binding pinned when the workflow was enabled that no longer holds:
+  readiness `BINDING_STALE` and `WORKFLOW_MACHINE_REPLACED` ask the person to
+  check the change and enable the workflow again; `WORKFLOW_FACT_STALE` and
+  `WORKFLOW_FACT_AMBIGUOUS` ask them to update the recipient.
+- `SIDECAR_TOO_OLD_FOR_REVIEWED_ACTION` and
+  `SIDECAR_TOO_OLD_FOR_BROWSER_OUTCOMES` ask them to update Jarvis on that computer.
+- `EMERGENCY_STOPPED` (Kill) says to run it again once Jarvis is running again.
 
 `failureEvidence(error)` maps a thrown error to evidence by its type. An error
 with no typed shape is `unknown`: its text is kept as detail, and for work that

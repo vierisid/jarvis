@@ -36,6 +36,8 @@ export type FailureCategory =
   | 'uncertain_effect'
   /** It stopped before doing anything, for a reason with no category of its own. */
   | 'not_started'
+  /** Jarvis held back its own background AI work to stay within its resource limits. Not a provider failure. */
+  | 'resource_paused'
   | 'cancelled'
   /** A message was not sent on any channel, or only on some. */
   | 'delivery_failed'
@@ -48,7 +50,8 @@ export type FailureEffect = 'none' | 'unknown' | 'partial';
 /** A safe next step the person starts themselves. */
 export type RecoveryStep =
   | 'edit_and_run_again' | 'connect' | 'wait_or_switch_model' | 'bring_online' | 'ask_again' | 'review_authority'
-  | 'check_before_running_again' | 'check_earlier_steps' | 'run_again' | 'resend' | 'check_before_resending' | 'open_details';
+  | 'check_before_running_again' | 'check_earlier_steps' | 'run_again' | 'resend' | 'check_before_resending' | 'open_details'
+  | 'wait_and_run_again' | 'run_again_when_resumed' | 'accept_binding_change' | 'update_recipient' | 'update_desktop_app';
 
 export interface FailureLinks {
   runId?: string; flowId?: string; stepName?: string; effectId?: string;
@@ -87,7 +90,7 @@ export type DeliveryResult = 'delivered' | 'failed' | 'unknown';
 export type FailureEvidence =
   | { source: 'action'; outcome: ActionFailure }
   | { source: 'readiness'; issues: Array<{ code: string; message?: string }> }
-  | { source: 'provider'; code: LLMErrorCode; message?: string }
+  | { source: 'provider'; code: LLMErrorCode; message?: string; retryAfterMs?: number }
   | { source: 'cancellation'; dispatched: boolean; message?: string }
   | { source: 'delivery'; channels: Array<{ channel: string; result: DeliveryResult; error?: string }> }
   | { source: 'unknown'; message: string };
@@ -101,7 +104,20 @@ const BINDING_CODES = new Set([
   'DESKTOP_ACTION_UNSUPPORTED', 'SKILL_NOT_FOUND', 'FLOW_NOT_FOUND', 'VERSION_MISSING',
 ]);
 /** Action codes whose meaning is an unreachable computer or local runtime. */
-const OFFLINE_CODES = new Set(['WORKFLOW_MACHINE_OFFLINE', 'WORKFLOW_MACHINE_UNAVAILABLE', 'SIDECAR_OFFLINE', 'OFFLINE', 'SKILL_NO_SIDECAR', 'LOCAL_TOOLS_DISABLED']);
+const OFFLINE_CODES = new Set(['WORKFLOW_MACHINE_OFFLINE', 'WORKFLOW_MACHINE_UNAVAILABLE', 'SIDECAR_OFFLINE', 'OFFLINE', 'SKILL_NO_SIDECAR', 'LOCAL_TOOLS_DISABLED',
+  'LOCAL_DESKTOP_UNAVAILABLE']);
+/**
+ * Refusals whose cause and fix are specific enough to name: a binding pinned
+ * when the workflow was enabled that no longer holds (Q-05), or a desktop app
+ * too old for a reviewed action (Q-09). Each refused before anything ran.
+ */
+const NAMED_REFUSALS: Record<string, { category: FailureCategory; why: string; step: RecoveryStep }> = {
+  WORKFLOW_MACHINE_REPLACED: { category: 'missing_binding', why: 'the computer it was enabled for is no longer enrolled', step: 'accept_binding_change' },
+  WORKFLOW_FACT_STALE: { category: 'missing_binding', why: 'a recipient it sends to is no longer current in memory', step: 'update_recipient' },
+  WORKFLOW_FACT_AMBIGUOUS: { category: 'missing_binding', why: 'memory holds conflicting values for a recipient it sends to', step: 'update_recipient' },
+  SIDECAR_TOO_OLD_FOR_REVIEWED_ACTION: { category: 'missing_binding', why: 'the Jarvis app on that computer is too old for this approved action', step: 'update_desktop_app' },
+  SIDECAR_TOO_OLD_FOR_BROWSER_OUTCOMES: { category: 'missing_binding', why: 'the Jarvis app on that computer is too old for this approved browser action', step: 'update_desktop_app' },
+};
 /** Action codes whose meaning is invalid input or an invalid definition. */
 const INPUT_CODES = new Set(['DESKTOP_INVALID_KEYS', 'SKILL_BAD_PARAMS', 'SKILL_INVALID', 'INVALID_JSON_OUTPUT', 'OUTPUT_SCHEMA_MISMATCH',
   'WORKFLOW_NOT_READY', 'SELF_RECURSION']);
@@ -115,9 +131,13 @@ const APPROVAL_WHY: Record<string, string> = {
 /** A notification that was sent on no channel at all (the notify step's own outcome). */
 const DELIVERY_FAILED = 'DELIVERY_FAILED';
 /** Readiness issues that name a binding rather than invalid input. */
-const BINDING_ISSUES = new Set(['CONNECTION_BINDING', 'WORKFLOW_BINDING', 'TOOL_BINDING', 'ROLE_BINDING']);
+const BINDING_ISSUES = new Set(['CONNECTION_BINDING', 'WORKFLOW_BINDING', 'TOOL_BINDING', 'ROLE_BINDING', 'BINDING_STALE']);
+/** A connection or computer that changed since the workflow was enabled (Q-05): accepted by enabling it again. */
+const STALE_BINDING_ISSUE = 'BINDING_STALE';
 
 const PROVIDER: Record<LLMErrorCode, { category: FailureCategory; what: string }> = {
+  // Jarvis's own admission budget refused it before any provider was called.
+  background_throttled: { category: 'resource_paused', what: 'Jarvis is holding back background AI work for now' },
   auth: { category: 'missing_binding', what: 'the AI provider did not accept its credentials' },
   forbidden: { category: 'provider_limit', what: 'the AI provider does not allow this model or endpoint for this account' },
   rate_limit: { category: 'provider_limit', what: 'the AI provider is rate limiting requests' },
@@ -145,6 +165,11 @@ const NEXT: Record<RecoveryStep, string> = {
   resend: 'Send it again if it still matters.',
   check_before_resending: 'Check whether it arrived before sending it again. Jarvis will not resend it on its own.',
   open_details: 'Open the details.',
+  wait_and_run_again: 'Wait a little, then run it again. Nothing is wrong with the AI provider.',
+  run_again_when_resumed: 'Once Jarvis is running again, run it again if you still want it.',
+  accept_binding_change: 'Check the change, then enable or publish the workflow again to accept it.',
+  update_recipient: 'Update the recipient in the workflow or in memory, then run it again.',
+  update_desktop_app: 'Update Jarvis on that computer, then run it again.',
 };
 const next = (...steps: RecoveryStep[]) => steps.map(step => ({ step, label: NEXT[step] }));
 /** Recovery steps with their labels, for a reading that adjusts a projected failure. */
@@ -225,7 +250,11 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
           ['review_authority'], links, code, detail);
       }
       if (code === 'EMERGENCY_STOPPED') {
-        return build('cancelled', 'none', `${s} did not run: Jarvis was stopped.`, NOTHING, ['run_again'], links, code, detail);
+        return build('cancelled', 'none', `${s} did not run: Jarvis was stopped.`, NOTHING, ['run_again_when_resumed'], links, code, detail);
+      }
+      if (code && NAMED_REFUSALS[code]) {
+        const named = NAMED_REFUSALS[code];
+        return build(named.category, 'none', `${s} did not run: ${named.why}.`, NOTHING, [named.step], links, code, detail);
       }
       if (code && OFFLINE_CODES.has(code)) {
         return build('target_offline', 'none', `${s} did not run: the computer it needs is offline or not connected.`, NOTHING,
@@ -245,6 +274,10 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
       const codes = evidence.issues.map(issue => issue.code);
       const binding = codes.find(c => BINDING_ISSUES.has(c));
       const detail = evidence.issues.map(issue => `${issue.code}${issue.message ? `: ${issue.message}` : ''}`).join('\n');
+      if (codes.includes(STALE_BINDING_ISSUE)) {
+        return build('missing_binding', 'none', `${s} did not run: a connection or computer it uses changed since it was enabled.`, NOTHING,
+          ['accept_binding_change'], links, STALE_BINDING_ISSUE, detail);
+      }
       return binding
         ? build('missing_binding', 'none', `${s} did not run: a connection or other binding it needs is missing.`, NOTHING,
           ['connect'], links, binding, detail)
@@ -256,6 +289,13 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
       // A model call changes nothing outside Jarvis. Work the same request had
       // already started (a tool it called) may have, so it is never "nothing".
       const effect: FailureEffect = subject.sideEffects ? 'unknown' : 'none';
+      if (mapped.category === 'resource_paused') {
+        // A pause, not a failure of the provider: it refused before calling one.
+        const minutes = evidence.retryAfterMs !== undefined ? Math.max(1, Math.ceil(evidence.retryAfterMs / 60_000)) : null;
+        return build('resource_paused', effect, `${s} was paused: ${mapped.what}${minutes ? `, for about ${minutes} minute${minutes === 1 ? '' : 's'}` : ''}.`,
+          effect === 'none' ? NOTHING : 'Actions it had already taken may have gone through.',
+          effect === 'none' ? ['wait_and_run_again'] : ['check_before_running_again'], links, evidence.code, evidence.message ?? evidence.code);
+      }
       const steps: RecoveryStep[] = mapped.category === 'provider_limit' ? ['wait_or_switch_model']
         : mapped.category === 'missing_binding' ? ['connect']
         : mapped.category === 'target_offline' ? (effect === 'none' ? ['run_again'] : [])
