@@ -35,6 +35,9 @@ const slot = (item: ManagedWorkflow): ManagementSlot => ({
   receipt: null,
   message: null,
 });
+/** Q-06: turning a workflow off stops its queued and waiting runs. Say so. */
+export const PAUSED_MESSAGE =
+  "Workflow paused. Its queued and waiting runs were stopped.";
 /** One owner-scoped instance survives room/shell changes. Retire on logout or
  * owner replacement. An uncertain command can ONLY be cleared by reconciliation. */
 export class WorkflowManagementController {
@@ -135,7 +138,15 @@ export class WorkflowManagementController {
           incoming.delete(r.item.flowId);
           // Only an authoritative active record can supersede a tombstone.
           // A stale pre-deletion snapshot must retain the receipt and slot.
-          if (r.removed && (result.status !== "ready" || !item)) return [r];
+          // An authoritative list also lets an expired Undo go: nothing can
+          // restore it any more, so it would only pile up in the Undo area.
+          if (r.removed && (result.status !== "ready" || !item))
+            return result.status === "ready" &&
+              r.phase === "idle" &&
+              r.receipt &&
+              r.receipt.expiresAt <= this.clock()
+              ? []
+              : [r];
           if (!item) return [];
           // Refresh is blocked while any command is unresolved. Fresh data can
           // therefore replace settled action feedback, including an obsolete
@@ -309,7 +320,7 @@ export class WorkflowManagementController {
             ? "Restored, paused."
             : result.item!.activation === "ENABLED"
               ? "Workflow enabled."
-              : "Workflow paused.",
+              : PAUSED_MESSAGE,
       });
     }
   }

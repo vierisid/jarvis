@@ -214,6 +214,9 @@ function BoundManagement({
           onClick={() => void store.refresh()}
         />
       </div>
+      <p className="brief-management-hint">
+        Pausing a workflow stops its queued and waiting runs.
+      </p>
       {state.read.status !== "ready" && state.read.status !== "empty" && (
         <p role="status" className="brief-management-notice">
           {state.read.status === "loading"

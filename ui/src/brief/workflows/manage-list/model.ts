@@ -51,7 +51,16 @@ export interface WorkflowManagementPort {
   read(signal: AbortSignal): Promise<BriefReadState<WorkflowList>>;
   /** Persist command identity before dispatch. Rejection means no mutation was
    * committed; transport errors are uncertain. Server owns authorization, CAS,
-   * trigger reconciliation, expiry, and same-ID restoration in PAUSED state. */
+   * trigger reconciliation, expiry, and same-ID restoration in PAUSED state.
+   *
+   * A live adapter adds no gate of its own and bypasses none: activation goes
+   * through the server's person path for enable/disable, so enabling pins the
+   * flow's connections and computer (Q-05; a BINDING_STALE blocker shows as
+   * `readiness.reason`, and enabling again is the person accepting that change),
+   * the contract and readiness recheck still refuse, and turning off stops
+   * queued and waiting runs (Q-06). Remove/restore exist only as F-20's
+   * receipt-backed commands, never the legacy irreversible DELETE. Until F-20
+   * and its host adapter land this port is fixture-only. */
   change?: (command: Readonly<ManageCommand>) => Promise<ManageResult>;
   /** Read the durable outcome of this exact request. Never submit/replay it. */
   reconcile?: (command: Readonly<ManageCommand>) => Promise<ManageResult>;

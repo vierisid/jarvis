@@ -267,3 +267,9 @@ test("R2: Refresh cannot show an Enabled switch beside obsolete paused feedback"
   );
   expect(row("meeting").textContent).not.toContain("Workflow paused.");
 });
+test("the list says before any switch that pausing stops queued and waiting runs (Q-06)", async () => {
+  await render();
+  expect(host.querySelector(".brief-management-hint")?.textContent).toBe(
+    "Pausing a workflow stops its queued and waiting runs.",
+  );
+});

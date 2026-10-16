@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { WorkflowManagementController } from "./controller";
+import { PAUSED_MESSAGE, WorkflowManagementController } from "./controller";
 import { makeManagementFixture, MANAGEMENT_SCOPE } from "./fixtures";
 import {
   validateList,
@@ -425,7 +425,7 @@ test("R1: a stale pre-deletion snapshot cannot resurrect a removed workflow or c
 test("R2: fresh external activation supersedes the previous local status message", async () => {
   const f = await ready();
   await f.controller.activate("meeting", false);
-  expect(f.controller.getRow("meeting")!.message).toBe("Workflow paused.");
+  expect(f.controller.getRow("meeting")!.message).toBe(PAUSED_MESSAGE);
   f.records.set("meeting", {
     ...f.records.get("meeting")!,
     activation: "ENABLED",
@@ -464,9 +464,38 @@ test("R2: unchanged fresh data clears transient command feedback, but a stale re
   await f.controller.activate("meeting", false);
   f.setMode("stale");
   await f.controller.refresh();
-  expect(f.controller.getRow("meeting")!.message).toBe("Workflow paused.");
+  expect(f.controller.getRow("meeting")!.message).toBe(PAUSED_MESSAGE);
   f.setMode("normal");
   await f.controller.refresh();
   expect(f.controller.getRow("meeting")!.message).toBeNull();
   expect(f.controller.getRow("meeting")!.item.activation).toBe("DISABLED");
+});
+test("a fresh list drops an expired Undo; a stale list keeps it", async () => {
+  const f = makeManagementFixture();
+  let clock = Date.now();
+  const c = new WorkflowManagementController(
+    MANAGEMENT_SCOPE,
+    "fixture",
+    f.port,
+    () => clock,
+  );
+  c.setAccess(true);
+  await c.load();
+  await remove(c, "meeting");
+  await c.refresh();
+  expect(c.getRow("meeting")?.removed).toBe(true);
+  clock = c.getRow("meeting")!.receipt!.expiresAt + 1;
+  f.setMode("stale");
+  await c.refresh();
+  expect(c.getRow("meeting")?.removed).toBe(true);
+  f.setMode("normal");
+  await c.refresh();
+  expect(c.getRow("meeting")).toBeUndefined();
+  expect(visible(c)).toEqual(["inbox", "competitor", "investor"]);
+});
+test("pausing says its queued and waiting runs were stopped (Q-06)", async () => {
+  const f = await ready();
+  await f.controller.activate("meeting", false);
+  expect(f.controller.getRow("meeting")!.message).toBe(PAUSED_MESSAGE);
+  expect(PAUSED_MESSAGE).toContain("queued and waiting runs");
 });
