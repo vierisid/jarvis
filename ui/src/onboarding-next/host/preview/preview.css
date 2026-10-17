@@ -1,0 +1,6 @@
+html, body, #root { min-height: 100%; margin: 0; }
+.on-preview__toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 12px; border-bottom: 1px solid #909090; font: 13px 'Familjen Grotesk', sans-serif; }
+.on-preview__toolbar button, .on-preview__toolbar select, .on-preview__room button { color: inherit; font: inherit; padding: 8px; border: 1px solid currentColor; border-radius: 8px 8px 8px 0; background: transparent; }
+.on-preview__room { min-height: 400px; padding: clamp(20px, 5vw, 70px); font-family: 'Familjen Grotesk', sans-serif; }
+.on-preview__room textarea { display: block; min-height: 80px; color: inherit; background: transparent; border: 1px solid currentColor; width: min(100%, 400px); }
+.on-host { --on-setup-height: calc(100dvh - 100px); --on-activation-height: calc(100dvh - 100px); min-height: calc(100dvh - 70px); }
