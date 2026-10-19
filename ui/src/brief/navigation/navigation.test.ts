@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { BriefCapabilities } from "../../../../src/brief/capabilities";
-import { registerNavigationCompatibility, type NavigationReadiness } from "../../../../src/brief/navigation-compatibility";
+import { registerNavigationCompatibility, type NavigationReadiness } from "../../../../src/brief/registrations/navigation-compatibility";
 import { DESTINATIONS, destination, legacyLink, roomIntent, targetHref, type DestinationId, type NavigationTarget } from "./destinations";
 import { NavigationCompatibility, destinationPort } from "./controller";
 import { ROOM_KEYS } from "../../v2/router";

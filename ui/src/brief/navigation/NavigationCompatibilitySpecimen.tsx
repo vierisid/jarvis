@@ -1,15 +1,18 @@
 import React, { useMemo, useState } from "react";
 import { BriefCapabilities } from "../../../../src/brief/capabilities";
-import { registerNavigationCompatibility } from "../../../../src/brief/navigation-compatibility";
+import { registerNavigationCompatibility } from "../../../../src/brief/registrations/navigation-compatibility";
 import { NavigationCompatibility } from "./controller";
 import { DESTINATIONS, type DestinationId } from "./destinations";
 import { AttentionRoutes } from "./AttentionRoutes";
 import { MaintenanceLinks } from "./MaintenanceLinks";
 import { attentionKey, type AttentionSnapshot } from "./notifications";
-import "./preview.css";
+import { useTheme } from "../../v2/shell/useTheme";
+import "./specimen.css";
 
-/** Isolated F-25 behavior specimen. No runtime settings, network, voice or account effects. */
-export function NavigationPreview() {
+/** Isolated F-25 behavior specimen. No runtime settings, network, voice or account effects.
+ * Opened with ?brief=preview&specimen=navigation-compatibility#/_brief_preview. */
+export function NavigationCompatibilitySpecimen() {
+  const [theme] = useTheme();
   const [last, setLast] = useState("No destination opened.");
   const [message, setMessage] = useState("");
   const [chatOpen, setChatOpen] = useState(false);
@@ -36,10 +39,10 @@ export function NavigationPreview() {
       { id: "update-fixture", source: "update", kind: "system", title: "Inspect a device update", text: "Fixture update; opening does not install it", timestamp: 3, tone: "neutral", unread: !read.includes("update:update-fixture") },
     ],
   };
-  return <main className="brief-foundation brief-navigation-preview">
-    <h1>F-25 · Navigation compatibility</h1>
+  return <div className="brief-root" data-brief-theme={theme}><main className="brief-navigation-compat-specimen">
+    <h1>Navigation compatibility</h1>
     <p>Isolated behavior preview. All data is a fixture. No actions run.</p>
-    <div className="brief-foundation__controls">
+    <div className="brief-navigation-compat-specimen__controls">
       <button onClick={() => setChatOpen(!chatOpen)}>Conversation: {chatOpen ? "open" : "closed"}</button>
       <button onClick={() => setStale(!stale)}>Notifications: {stale ? "stale" : "ready"}</button>
       <button onClick={() => setDirty(!dirty)}>Draft guard: {dirty ? "cancel" : "allow"}</button>
@@ -52,8 +55,8 @@ export function NavigationPreview() {
       <label>Retained destination <select defaultValue="advanced-settings" onChange={e => void navigation.navigate(e.target.value as DestinationId)}>
         {Object.entries(DESTINATIONS).map(([id, d]) => <option key={id} value={id}>{d.label}</option>)}
       </select></label>
-      <p role="status">{message}</p><pre style={{ whiteSpace: "pre-wrap" }}>{last}</pre>
+      <p role="status">{message}</p><pre>{last}</pre>
     </section>
     <MaintenanceLinks href="http://fixture.invalid/?brief=1#/brief/settings" onNavigate={id => void navigation.navigate(id)} />
-  </main>;
+  </main></div>;
 }

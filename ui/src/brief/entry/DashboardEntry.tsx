@@ -12,7 +12,6 @@ import { canMountNavigation, type BriefNavigationBinding } from "../shell/naviga
 import "./foundation.css";
 import "../styles/index.css";
 import type { BriefConversationBinding } from "../shell/pebble-layout/PebbleLayout";
-import { NavigationPreview } from "../navigation/NavigationPreview";
 import { DESTINATIONS, targetHref } from "../navigation/destinations";
 
 function subscribeLocation(changed: () => void) {
@@ -44,7 +43,6 @@ export function DashboardEntry({ legacy, rooms = BRIEF_ROOMS, Gate = OnboardingG
   const entry = resolveBriefEntry(href);
   if (entry.kind === "legacy") return <>{legacy}</>;
   if (entry.kind === "preview") return <FoundationPreview />;
-  if (entry.kind === "navigation-preview") return <NavigationPreview />;
   if (entry.kind === "moved") return <div className="jarvis-v2-root"><Gate>
     <main className="brief-foundation"><section className="brief-foundation__notice">
       <h1>This view is not part of Brief</h1>

@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { BriefCapabilities } from "../../../../src/brief/capabilities";
-import { registerNavigationCompatibility } from "../../../../src/brief/navigation-compatibility";
+import { registerNavigationCompatibility } from "../../../../src/brief/registrations/navigation-compatibility";
 import { NavigationCompatibility } from "./controller";
 import { browserNavigationHost } from "./browser-host";
 import { deviceNavigation } from "./devices";
@@ -158,7 +158,7 @@ test("device handoff selects only the requested device and never calls update/re
 });
 
 test("F-25 explicit preview mounts no legacy/voice owner and chat closure leaves attention visible", async () => {
-  history.replaceState(null, "", "http://localhost:4425/?brief=preview#/_brief_navigation_preview");
+  history.replaceState(null, "", "http://localhost:4425/?brief=preview&specimen=navigation-compatibility#/_brief_preview");
   await mount(<Entry legacy={<p>Legacy must not mount</p>} Gate={({ children }) => <>{children}</>} />);
   expect(element.textContent).toContain("Isolated behavior preview"); expect(element.textContent).not.toContain("Legacy must not mount");
   expect(element.textContent).toContain("Conversation: closed"); await click("Inspect a device update");

@@ -1,5 +1,5 @@
-import type { BriefProvider } from './providers';
-import type { BriefRegistration } from './capabilities';
+import type { BriefProvider } from '../providers';
+import type { BriefRegistration } from '../capabilities';
 
 export interface NavigationReadiness {
   /** Host integration checks, not inferred from the shell flag or HTTP reachability. */

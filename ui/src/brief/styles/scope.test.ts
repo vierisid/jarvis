@@ -33,6 +33,7 @@ const SHEETS = [
   "../account/profile/profile.css",
   "../account/settings/settings.css",
   "../account/billing/billing.css",
+  "../navigation/specimen.css",
 ];
 
 function selectors(css: string): string[] {
