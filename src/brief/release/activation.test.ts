@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { ACTIVATION_MATRIX, BriefReleaseCapabilities, COMPATIBILITY_CHECKS, RELEASE_CARDS, assessRelease, type ReleaseRecord } from './activation';
 import { BRIEF_CAPABILITY_IDS, BriefCapabilities, isBriefCapabilityEnabled } from '../capabilities';
 import { createBriefRoutes } from '../routes';
-import releaseRecord from '../../../docs/brief-delivery/F-28-release.json';
+import releaseRecord from './fixtures/release-record.json';
 
 const revision = 'a'.repeat(40), runtime = { revision, deployment: 'hosted' as const, hostingRevision: 'b'.repeat(40) };
 const provider = { readiness: () => 'ready' as const };

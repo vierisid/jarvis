@@ -226,27 +226,27 @@
     "fresh": {
       "status": "not_run",
       "revision": "f861eebbfd0b3e60cebe0f47a024be0b881979c1",
-      "evidence": "docs/brief-delivery/F-28.md: candidate runtime not assembled; source tests are recorded separately"
+      "evidence": "candidate runtime not assembled; source tests are recorded separately"
     },
     "upgrade": {
       "status": "not_run",
       "revision": "f861eebbfd0b3e60cebe0f47a024be0b881979c1",
-      "evidence": "docs/brief-delivery/F-28.md: candidate runtime not assembled; source tests are recorded separately"
+      "evidence": "candidate runtime not assembled; source tests are recorded separately"
     },
     "old_client": {
       "status": "not_run",
       "revision": "f861eebbfd0b3e60cebe0f47a024be0b881979c1",
-      "evidence": "docs/brief-delivery/F-28.md: candidate runtime not assembled; source tests are recorded separately"
+      "evidence": "candidate runtime not assembled; source tests are recorded separately"
     },
     "flag_rollback": {
       "status": "not_run",
       "revision": "f861eebbfd0b3e60cebe0f47a024be0b881979c1",
-      "evidence": "docs/brief-delivery/F-28.md: candidate runtime not assembled; source tests are recorded separately"
+      "evidence": "candidate runtime not assembled; source tests are recorded separately"
     },
     "host_bindings": {
       "status": "blocked",
       "revision": "f861eebbfd0b3e60cebe0f47a024be0b881979c1",
-      "evidence": "docs/brief-delivery/F-28.md: candidate runtime not assembled; source tests are recorded separately"
+      "evidence": "candidate runtime not assembled; source tests are recorded separately"
     }
   },
   "observedAt": "2026-10-13",

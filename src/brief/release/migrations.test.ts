@@ -19,7 +19,7 @@ import { BriefReleaseCapabilities } from './activation';
 import { BRIEF_CAPABILITY_IDS } from '../capabilities';
 import provenance from './fixtures/provenance.json';
 
-// Every table added by F-02..F-27 relative to the audited pre-Brief schema.
+// Every table added by F-02..F-27 relative to the audited pre-Brief schema (main has added unrelated tables since).
 const tables = [
   'brief_chat_approvals', 'brief_chat_attachments', 'brief_chat_events', 'brief_chat_sequences', 'brief_chat_turns',
   'brief_conversation_workspace', 'brief_decision_document', 'brief_decision_document_receipt', 'brief_decision_document_revision',
@@ -64,7 +64,8 @@ function seedBrief(db: Database) {
     INSERT INTO brief_decision_document_revision VALUES('decision',1,'approval','{}',1);
     INSERT INTO brief_decision_document_receipt VALUES('doc-request','decision','digest','{}');
     INSERT INTO brief_decision_placement VALUES('decision',10);
-    INSERT INTO brief_recommendation VALUES('recommendation','rec-request','{}',1,'dismissed',NULL,NULL);
+    INSERT INTO brief_recommendation(id,request_id,plan,created_at,disposition,accept_request_id,acceptance)
+      VALUES('recommendation','rec-request','{}',1,'dismissed',NULL,NULL);
     INSERT INTO brief_workflow_composition_jobs(id,project_id,request_id,name,prompt,state,created_at,updated_at)
       VALUES('job','project','job-request','Fixture','Retain prompt','failed',1,1);
     INSERT INTO goal_measurement VALUES('old-goal',1,'{"value":6,"target":10,"unit":"items"}');
@@ -107,7 +108,11 @@ test.each(['fresh', 'pre-brief', 'main'] as const)('%s schema preserves old and 
   expect(rows(db, 'goal_measurement')).toEqual([]); // Legacy score must not become a fabricated count.
   if (baseline === 'pre-brief') {
     const names = (db.query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[]).map(r => r.name);
-    expect(names.filter(name => !(name in oldColumns)).sort()).toEqual([...tables].sort());
+    // Main keeps adding unrelated tables after the pinned baseline, so pin that every F table is new
+    // here and that no Brief-owned table is missing from the list, not the exact set of added tables.
+    const added = names.filter(name => !(name in oldColumns));
+    expect(added).toEqual(expect.arrayContaining(tables));
+    expect(added.filter(name => name.startsWith('brief_') && !tables.includes(name))).toEqual([]);
   }
   const ids = seedBrief(db);
   const before = Object.fromEntries(tables.map(table => [table, rows(db, table)]));

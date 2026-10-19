@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import sourceRecord from '../docs/brief-delivery/F-28-release.json';
+import sourceRecord from '../src/brief/release/fixtures/release-record.json';
 import { BriefCapabilities } from '../src/brief/capabilities';
 
 test('release audit CLI distinguishes blocked, technically ready and unreadable evidence without mutating inputs', () => {
