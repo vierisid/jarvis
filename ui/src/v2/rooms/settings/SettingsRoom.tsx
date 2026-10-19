@@ -86,6 +86,14 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
       window.removeEventListener("hashchange", onLocation);
     };
   }, [mode]);
+  // A retained-control link names its tab in the query. Keep it in step with
+  // the selected tab, or a later remount or reload jumps back to the old one.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (!settingsTabFromHref(url.href) || url.searchParams.get("settingsTab") === tab) return;
+    url.searchParams.set("settingsTab", tab);
+    window.history.replaceState(window.history.state, "", url);
+  }, [tab]);
   // A self-hosted install has no bill, so it gets no Billing tab. Same shared
   // store as the shell banner, and refreshOnMount: false so opening Settings
   // does not itself trigger a read; see billingTabVisible for why the tab stays

@@ -219,3 +219,23 @@ test("an accepted history entry restores the real Settings tab without remountin
   expect(takeRequestedSettingsTab()).toBeNull();
   clearRequestedSettingsTab();
 });
+
+test("a tab chosen after a retained-control link survives a remount instead of the link's old tab", async () => {
+  const { clearRequestedSettingsTab } = await import("../../v2/shell/settings-tab-request");
+  clearRequestedSettingsTab();
+  history.replaceState(null, "", "http://localhost:4425/?briefMaintenance=1&settingsTab=sidecar#/_room_settings");
+  globalThis.fetch = (async (_: unknown, init?: RequestInit) => {
+    expect(init?.method ?? "GET").toBe("GET"); return new Response(null, { status: 503 });
+  }) as typeof fetch;
+  await mount(<Settings mode="expanded" />);
+  expect(element.querySelector('[aria-selected="true"]')?.textContent).toBe("Sidecar");
+  const llm = [...element.querySelectorAll('[role="tab"]')].find(t => t.textContent === "LLM") as HTMLElement;
+  await React.act(async () => llm.click());
+  expect(new URL(location.href).searchParams.get("settingsTab")).toBe("llm");
+  await mount(<p>Another retained room</p>);
+  await mount(<Settings mode="expanded" />);
+  expect(element.querySelector('[aria-selected="true"]')?.textContent).toBe("LLM");
+  history.replaceState(null, "", "http://localhost:4425/?settingsTab=billing2#/_room_settings");
+  const { settingsTabFromHref } = await import("../../v2/shell/settings-tab-request");
+  expect(settingsTabFromHref(location.href)).toBeNull();
+});

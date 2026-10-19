@@ -6,6 +6,7 @@
  */
 
 import type { SettingsTab } from "../rooms/settings/SettingsRoom";
+import { isRoomTab } from "../../../../src/daemon/room-tabs";
 
 export const SETTINGS_TAB_EVENT = "jarvis:settings-tab";
 
@@ -41,7 +42,7 @@ export function settingsTabFromHref(href: string): SettingsTab | null {
   const url = new URL(href, "http://localhost");
   if (!["#/_room_settings", "#/_panel_settings"].includes(url.hash)) return null;
   const tab = url.searchParams.get("settingsTab");
-  return tab && ["general", "profile", "llm", "channels", "voice", "integrations", "billing", "sidecar"].includes(tab) ? tab as SettingsTab : null;
+  return isRoomTab("settings", tab) ? tab : null;
 }
 
 /** Sidecar data changed by an action (an update request); pollers refresh. */
