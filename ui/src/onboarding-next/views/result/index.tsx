@@ -103,10 +103,10 @@ function ResultContent({ model, draft, Canvas, onReview, onContinue, onRefresh, 
         </CanvasBoundary> : <div className="on-result__empty"><h2>{valid ? 'Canvas unavailable' : 'Draft recovery'}</h2><p role="status">{valid ? 'Your draft is saved. Open it in Workflows or check again when the canvas is available.' : unavailableMessage(model.result)}</p></div>}
       </div>
       {valid && !reviewing && <aside className="on-result__review" aria-label="Draft review">
-        <p className="on-result__eyebrow">{reviewing ? 'Review your draft' : 'Ready for your review'}</p>
-        <h2>{reviewing ? 'Make it yours.' : 'Your first workflow is ready.'}</h2>
+        <p className="on-result__eyebrow">Ready for your review</p>
+        <h2>Your first workflow is ready.</h2>
         <p>Review the steps and connections. This workflow is a draft and is not enabled.</p>
-        {reviewing ? <p>Select a step to open its inspector.</p> : <button className="on-result__primary" type="button" onClick={review} disabled={!canvasReady || locked}>Review the steps</button>}
+        <button className="on-result__primary" type="button" onClick={review} disabled={!canvasReady || locked}>Review the steps</button>
         <div className="on-result__readiness" role="status">
           <strong>{draft!.readiness.ready ? 'Draft checks passed' : 'Needs your input'}</strong>
           <p>{draft!.readiness.ready ? 'Running or enabling this workflow requires the existing workflow checks and Authority.' : 'Review the missing inputs and connections before running this workflow.'}</p>
