@@ -1,5 +1,3 @@
-import { ProfileSettings } from '../brief/profile-settings';
-import { registerProfileSettings } from '../brief/registrations/profile-settings';
 import { ConnectedWorkspace } from '../brief/connected-workspace';
 import { connectedGoogle } from '../brief/connected-workspace-runtime';
 import { registerConnections } from '../brief/registrations/connections';
@@ -46,6 +44,8 @@ import { registerWorkflowComposition } from '../brief/registrations/workflow-com
  * starts health monitoring, and handles graceful shutdown.
  */
 
+import { ProfileSettings } from '../brief/profile-settings';
+import { registerProfileSettings } from '../brief/registrations/profile-settings';
 import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness';
 import { pinUnpinnedEnabledFlows } from '../workflows/db/repos/binding-pins';
 import { mkdirSync, existsSync } from "node:fs";
