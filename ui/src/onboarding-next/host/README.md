@@ -78,11 +78,12 @@ subscriptions and releases resources without deleting durable records.
 | Pebble | U06 tour model; existing sandboxed Pebble adapter | U06 navigation intents |
 | Activation | U07 intent/build state and saved request | create, recover, connection intents |
 | Build | U08 ordered events and durable result reference | cancel, resume, retry, open_result |
-| Result | Proposed U09 model and canvas port | review; finish is handled by B01 |
+| Result | U09 model and canvas port | review, finish (B10 continuation, guarded by B01) |
 | Self setup | Existing provider setup model and `View` port | complete, back |
 
 Google skip/back cancels through its owner before navigation. Interview Continue
-and result Finish remain guarded by B01. Back/Explore from activation persist the
+remains guarded by B01; result Finish goes through the result adapter, which
+replays B10's exact continuation, and B01 still validates it. Back/Explore from activation persist the
 current draft first. Render callbacks carry the current journey/revision/view key;
 old callbacks and overlapping actions cannot advance a newer screen. Focus moves
 to the new heading after saving. A same-screen refresh restores the prior control
@@ -97,13 +98,12 @@ adapter owns the draft shape and stable request identities.
 
 ## What remains before activation
 
-U01–U08 are present. U09's `ResultView` export and `onReview`/`onContinue` mapping are
-reserved proposals to confirm when that card lands; the result view/canvas is not
-implemented here. Production feature adapters are deliberately unbound. They must
+U01–U09 are present and listed in the committed catalog. The result canvas port is
+not implemented here. Production feature adapters are deliberately unbound. They must
 connect existing B owners and approved D room/Pebble/canvas renderers as the missing
 providers arrive. B11 currently binds real journey/setup only; Google and interview
-need additional host services and B05–B10 are missing. Completing these adapters,
-U09, U11/B13 and candidate-bound D/F/Q release evidence is required before cutover.
+need additional host services and B05 is still missing. Completing these adapters,
+U11/B13 and candidate-bound D/F/Q release evidence is required before cutover.
 Source discovery alone must never satisfy those checks.
 
 ## Verification and preview
