@@ -25,6 +25,21 @@ async function click(text: string) {
   const button = [...host.querySelectorAll('button')].find(b => b.textContent?.trim() === text);
   expect(button).toBeDefined(); await React.act(async () => button!.click());
 }
+test('production default stays on the legacy gate and never calls the onboarding-next routes', async () => {
+  const { productionConfiguration } = await import('./Entry.tsx');
+  expect(productionConfiguration.enabled).toBe(false);
+  expect(productionConfiguration.candidate).toBeUndefined();
+  expect(Object.keys(productionConfiguration.adapters)).toEqual([]);
+  const original = globalThis.fetch, urls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => { urls.push(String(input)); throw new Error('unexpected fetch'); }) as unknown as typeof fetch;
+  try {
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+    await React.act(async () => root!.render(<Entry legacy={<div>Complete legacy flow</div>}><div>Dashboard shell</div></Entry>));
+    await React.act(async () => { await new Promise(r => setTimeout(r, 5)); });
+    expect(host.textContent).toBe('Complete legacy flow');
+    expect(urls).toEqual([]);
+  } finally { globalThis.fetch = original; }
+});
 for (const mode of ['disabled', 'empty', 'partial'] as const) test(`${mode} registry retains the complete legacy branch`, async () => {
   const assembly = fixture({ mode }); await mount(assembly);
   expect(host.textContent).toBe('Complete legacy flow'); expect(assembly.calls).not.toContain('journey.read');
