@@ -1,1 +1,0 @@
-{"result":"passed","d29":"2168db73bb2430a96a862ca80da19aa016e315b3","d30":"db9f59100091a18e45a9a7a633bd5e74726898d3","main":"f74044de53615dfa91430d2b543f05deffc0c49c","checks":["D27 device identity/projection","D28 retained emergency handoff","D29 cancel/discard draft guard","D30 Settings opened/unavailable handoff","main canonical voice tab names"],"writes":0}
