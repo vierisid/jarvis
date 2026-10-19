@@ -120,7 +120,7 @@ test('memory is cleared as soon as invalidated and failure cannot masquerade as 
   } });
   await tick(); fail = true; projection.refresh();
   expect(projection.getSnapshot()).toMatchObject({ state: 'stale', data: null }); await tick();
-  expect(projection.getSnapshot()).toMatchObject({ state: 'stale', data: null, refreshing: false });
+  expect(projection.getSnapshot()).toMatchObject({ state: 'unavailable', data: null, refreshing: false, reason: 'source_unavailable' });
 });
 test('capability loss, unauthorized reads and stop clear every cache and reject late replies', async () => {
   let capabilities: unknown = ready, unauthorized = false;

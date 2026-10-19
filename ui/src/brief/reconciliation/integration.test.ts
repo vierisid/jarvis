@@ -87,7 +87,7 @@ test('canonical memory deletion during pagination restarts before publishing and
   expect(projection.getSnapshot().data?.total).toBe(1);
   expect(requests.filter(url => url.startsWith('/api/brief/memory?') && !url.includes('cursor')).length).toBe(2);
   unavailable = true; projection.refresh(); expect(projection.getSnapshot().data).toBeNull(); await tick();
-  expect(projection.getSnapshot()).toMatchObject({ state: 'stale', data: null, reason: 'http_503' });
+  expect(projection.getSnapshot()).toMatchObject({ state: 'unavailable', data: null, reason: 'http_503' });
   unavailable = false; const remaining = (await memory.read());
   if (remaining.state !== 'ready') throw Error('Fixture expected a fact'); deleteFact(remaining.data.items[0]!.factId);
   await client.refresh(); await tick(); expect(projection.getSnapshot()).toMatchObject({ state: 'empty', data: { items: [], total: 0 } });

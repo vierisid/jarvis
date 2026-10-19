@@ -86,8 +86,10 @@ export class Projection<T> {
       if (this.job !== owner || generation !== this.generation) return;
       const failure = error instanceof ReadFailure ? error : new ReadFailure('read_failed');
       if (failure.status === 401 || failure.status === 403) { this.onUnauthorized(); return; }
-      const data = failure.clear || failure.unsupported || this.source.retainStale === false ? null : this.value.data;
-      this.publish({ ...this.value, data, state: failure.unsupported ? 'unsupported' : this.value.asOf === null || failure.clear ? 'unavailable' : 'stale',
+      const cleared = failure.clear || this.source.retainStale === false;
+      const data = cleared || failure.unsupported ? null : this.value.data;
+      // A source that drops its cache on failure has nothing stale left to show: say unavailable, never stale or empty.
+      this.publish({ ...this.value, data, state: failure.unsupported ? 'unsupported' : this.value.asOf === null || cleared ? 'unavailable' : 'stale',
         refreshing: false, reason: failure.reason });
     } finally {
       if (this.job === owner) { this.job = undefined; if (this.dirty) this.refresh(); }
