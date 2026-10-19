@@ -164,3 +164,36 @@ describe('#883: an allowed_users value that is not a list of snowflakes', () => 
     expect(await reaches([123456789012345678], '100000000000000099')).toEqual([]);
   });
 });
+
+
+describe('Q-19 delivery with main literal Discord payloads', () => {
+  const adapterFor = (send: (payload: unknown) => Promise<void>) => {
+    const adapter = new DiscordAdapter('test-token');
+    (adapter as unknown as { client: unknown }).client = { channels: { fetch: async () => ({ isTextBased: () => true, send }) } };
+    return adapter;
+  };
+
+  test('a safely refused chunk resumes raw literal text once, without repeating the sent prefix', async () => {
+    const { sendWithRetry } = await import('../../daemon/channel-service');
+    const text = `${'|'.repeat(1000)}${'*'.repeat(1000)} @everyone`;
+    const accepted: unknown[] = [];
+    let calls = 0;
+    const adapter = adapterFor(async payload => {
+      if (++calls === 2) throw Object.assign(new Error('rate limited'), { status: 429, retryAfterMs: 0 });
+      accepted.push(payload);
+    });
+    expect(await sendWithRetry(adapter, 'channel', text, { send: { literal: true }, sleep: async () => {}, baseDelayMs: 0 }))
+      .toEqual({ ok: true, attempts: 2 });
+    expect(accepted).toEqual(discordPayloads(text, { literal: true }));
+    expect((accepted as Array<{ content: string }>).map(p => shown(p.content)).join('')).toBe(text);
+  });
+
+  test('an uncertain chunk stops without retry or reporting the whole message as unsent', async () => {
+    const { sendWithRetry } = await import('../../daemon/channel-service');
+    let calls = 0;
+    const adapter = adapterFor(async () => { if (++calls === 2) throw Object.assign(new Error('timeout'), { name: 'AbortError' }); });
+    expect(await sendWithRetry(adapter, 'channel', '|'.repeat(2500), { send: { literal: true }, sleep: async () => {}, baseDelayMs: 0 }))
+      .toMatchObject({ ok: false, attempts: 1, mayHaveArrived: true });
+    expect(calls).toBe(2);
+  });
+});

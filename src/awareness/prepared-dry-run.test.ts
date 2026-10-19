@@ -107,7 +107,7 @@ describe('prepared dry runner (real engine)', () => {
       simulated: [{ step: 'commitments', service: 'context' }, { step: 'draft', service: 'llm' }, { step: 'tell_me', service: 'notify' }] });
     expect(sample.outputs.draft).toMatchObject({ text: 'Ana, invoice 1042 is two weeks overdue.' });
     // Answered as a delivery succeeds, so later steps behave as in production.
-    expect(sample.outputs.tell_me).toEqual({ delivered: ['dashboard'], failed: [] });
+    expect(sample.outputs.tell_me).toEqual({ delivered: ['dashboard'], failed: [], unknown: [] });
     // The scratch copy, its run and the run's log file are gone; the proposal's workflow never ran.
     expect({ flows: count('flow'), versions: count('flow_version') }).toEqual(before);
     expect(count('flow_run')).toBe(0);

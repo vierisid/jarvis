@@ -17,6 +17,7 @@
  */
 import type { STTConfig, TTSConfig, VoiceConfig } from '../config/types.ts';
 import { IMPACT_MAP } from '../roles/authority.ts';
+import { DEFAULT_PLANNING_POLICY, isPlanningPolicy, PLANNING_POLICIES, type PlanningPolicy } from '../actions/tools/composition-provenance.ts';
 
 type AnyRec = Record<string, unknown>;
 
@@ -218,6 +219,43 @@ export function resolveEngineIdleTtlMs(
     return undefined;
   }
   return raw;
+}
+
+const rejectedPolicies = new Set<string>();
+let announcedPolicy: string | null = null;
+/**
+ * The composer's production planning policy: JARVIS_PLANNING_POLICY wins over
+ * the user-owned `workflows.planningPolicy` setting, as with the idle TTL. An
+ * unknown name falls back to the default with one warning per value until a
+ * valid read, so a typo can never select an unmeasured prompt. Unset means the
+ * default, which moves to the candidate only when a promotion comparison
+ * supports it (Q-03). The policy and its source are logged when they change.
+ */
+export function resolvePlanningPolicy(
+  configured: unknown,
+  env: Record<string, string | undefined> = process.env,
+): PlanningPolicy {
+  const fromEnv = env['JARVIS_PLANNING_POLICY'];
+  const source = fromEnv !== undefined && fromEnv !== '' ? 'JARVIS_PLANNING_POLICY' : 'workflows.planningPolicy';
+  const raw = source === 'JARVIS_PLANNING_POLICY' ? fromEnv : configured;
+  const settle = (policy: PlanningPolicy, from: string) => {
+    const line = `${policy} (${from})`;
+    if (line !== announcedPolicy) {
+      announcedPolicy = line;
+      console.log(`[Daemon] Planning policy: ${line}`);
+    }
+    return policy;
+  };
+  if (raw === undefined || raw === null || raw === '') { rejectedPolicies.clear(); return settle(DEFAULT_PLANNING_POLICY, 'default'); }
+  if (isPlanningPolicy(raw)) { rejectedPolicies.clear(); return settle(raw, source); }
+  const shown = JSON.stringify(raw);
+  if (!rejectedPolicies.has(shown)) {
+    rejectedPolicies.add(shown);
+    console.warn(
+      `[Daemon] Ignoring planning policy ${shown} (${source}): must be one of ${PLANNING_POLICIES.join(', ')}; using ${DEFAULT_PLANNING_POLICY}`,
+    );
+  }
+  return settle(DEFAULT_PLANNING_POLICY, `default; ${source} rejected`);
 }
 
 /**

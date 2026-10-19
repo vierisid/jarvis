@@ -5,7 +5,7 @@
  * served over HTTP so the template domain matching sees real hostnames.
  * Skipped when no Chromium executable is available.
  */
-import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { BrowserController } from '../browser/session.ts';
 import { chromiumExe, launchTestChromium, type TestChromium } from '../browser/fixtures/headless-chromium.ts';
 import { createBrowserTools } from './builtin.ts';
@@ -30,7 +30,10 @@ describe.skipIf(!chromiumExe)('webapp template delivery via browser tools (integ
   let ctrl: BrowserController;
   let tools: Map<string, (params: Record<string, unknown>) => Promise<unknown>>;
 
-  beforeAll(async () => {
+  // CI retries individual tests, including beforeEach, but not beforeAll.
+  // A fresh browser/tool scope per case makes startup retryable and prevents
+  // one failed navigation from contaminating the next assertion.
+  beforeEach(async () => {
     initDatabase(':memory:');
 
     server = Bun.serve({
@@ -72,9 +75,10 @@ describe.skipIf(!chromiumExe)('webapp template delivery via browser tools (integ
     tools = toolMap(ctrl);
   }, 60_000);
 
-  afterAll(async () => {
+  afterEach(async () => {
     try { await ctrl?.disconnect(); } catch { /* already gone */ }
     await chromium?.close();
+    chromium = null;
     server?.stop(true);
   }, 15_000); // close() may wait out the watchdog's 5s TERM grace
 
@@ -96,6 +100,8 @@ describe.skipIf(!chromiumExe)('webapp template delivery via browser tools (integ
 
   test('moving to a different known site delivers that site template', async () => {
     const navigate = tools.get('browser_navigate')!;
+    const first = toolReturnText(await navigate({ url: `http://127.0.0.1:${server.port}/start` }));
+    expect(first).toContain('You are now on LoopbackApp');
     const result = toolReturnText(await navigate({ url: `http://localhost:${server.port}/` }));
     expect(result).toContain('You are now on LocalhostApp');
     expect(result).toContain('LocalhostApp playbook: URL-first.');
@@ -103,10 +109,11 @@ describe.skipIf(!chromiumExe)('webapp template delivery via browser tools (integ
   }, 30_000);
 
   test('snapshot after a link click delivers the template when the domain is new to the conversation', async () => {
-    // Get on the page with the already-delivered tool set, then act through a
-    // FRESH tool set (a new conversation): its first sight of the domain is
+    // Deliver through the first tool set, then act through a FRESH tool set
+    // (a new conversation): its first sight of the domain is
     // the snapshot after the click, which must deliver.
     const nav = toolReturnText(await tools.get('browser_navigate')!({ url: `http://127.0.0.1:${server.port}/start` }));
+    expect(nav).toContain('You are now on LoopbackApp');
     const linkId = nav.match(/\[(\d+)\] a "Next page"/)?.[1];
     expect(linkId).toBeTruthy();
 
@@ -171,8 +178,10 @@ describe.skipIf(!chromiumExe)('webapp template delivery via browser tools (integ
   }, 30_000);
 
   test('separate tool sets deliver independently (main vs background agent)', async () => {
-    // `tools` delivered LoopbackApp long ago in this file; a brand-new tool
-    // set navigating to the same site must still get its own copy.
+    // Deliver in this case instead of relying on a preceding test's state.
+    // A brand-new tool set visiting the same site must get its own copy.
+    const first = toolReturnText(await tools.get('browser_navigate')!({ url: `http://127.0.0.1:${server.port}/start` }));
+    expect(first).toContain('You are now on LoopbackApp');
     const other = toolMap(ctrl);
     const result = toolReturnText(await other.get('browser_navigate')!({ url: `http://127.0.0.1:${server.port}/again` }));
     expect(result).toContain('You are now on LoopbackApp');

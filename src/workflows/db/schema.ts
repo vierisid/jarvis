@@ -23,6 +23,11 @@ export const DEFAULT_IDS = {
 } as const;
 
 const STATEMENTS: string[] = [
+  // Immutable authoring requirements. Graph edits and disabling F-08 cannot erase pins.
+  `CREATE TABLE IF NOT EXISTS workflow_composition_ingredients (
+    flow_id TEXT PRIMARY KEY REFERENCES flow(id) ON DELETE CASCADE,
+    ingredients TEXT NOT NULL
+  )`,
   // Authoring provenance, not an execution queue. Never replay on startup.
   `CREATE TABLE IF NOT EXISTS workflow_composition (
     id TEXT PRIMARY KEY,
@@ -39,6 +44,15 @@ const STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS workflow_run_machine_binding (
     run_id TEXT PRIMARY KEY REFERENCES flow_run(id) ON DELETE CASCADE,
     record TEXT NOT NULL
+  )`,
+  // Q-05: the connection identity each run used, one row per connection, first
+  // writer wins. Every later fetch in the run (a resumed approval, a retried
+  // step) must hand out the same identity or the run stops.
+  `CREATE TABLE IF NOT EXISTS workflow_run_connection_binding (
+    run_id TEXT NOT NULL REFERENCES flow_run(id) ON DELETE CASCADE,
+    external_id TEXT NOT NULL,
+    record TEXT NOT NULL,
+    PRIMARY KEY (run_id, external_id)
   )`,
   // Cancellation is a durable dispatch fence, separate from effect receipts.
   `CREATE TABLE IF NOT EXISTS workflow_run_cancellation (
@@ -79,6 +93,11 @@ const STATEMENTS: string[] = [
     -- before it are stopped and never continue; runs started by hand on the
     -- disabled flow afterwards are not (repos/flow-turn-off.ts, Q-06).
     disabled_at INTEGER,
+    -- Q-05: the connections and computer this flow was enabled against
+    -- (repos/binding-pins.ts). Written only when a person publishes or enables
+    -- the flow, never by an unrelated write such as a metadata PATCH; run
+    -- admission and the engine's connection fetch compare against it.
+    binding_pins TEXT,
     created INTEGER NOT NULL,
     updated INTEGER NOT NULL
   )`,
@@ -168,6 +187,30 @@ const STATEMENTS: string[] = [
     child_run_id TEXT NOT NULL UNIQUE,
     waitpoint_id TEXT UNIQUE
   )`,
+  // Q-19: failures the person dismissed from Today. Keyed by the failure's
+  // stable key, so a dismissal outlives the run it came from.
+  `CREATE TABLE IF NOT EXISTS failure_dismissal (
+    key TEXT PRIMARY KEY, dismissed_at INTEGER NOT NULL
+  )`,
+  // Q-19: what still waits on the person: a run that ended badly, or a notify
+  // step a channel did not confirm. Rows are references, read afresh each time,
+  // and leave when resolved or dismissed. Runs are indexed as they finish, by
+  // the cursor below over flow_run.updated, so Today never rescans history.
+  `CREATE TABLE IF NOT EXISTS open_failure (
+    key TEXT PRIMARY KEY, source TEXT NOT NULL CHECK(source IN ('run', 'delivery')),
+    run_id TEXT NOT NULL, flow_id TEXT NOT NULL, effect_id TEXT, at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_open_failure_flow ON open_failure(flow_id)`,
+  `CREATE TABLE IF NOT EXISTS open_failure_scan (
+    id INTEGER PRIMARY KEY CHECK (id = 1), updated INTEGER NOT NULL, run_rowid INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_flow_run_updated ON flow_run(updated)`,
+
+  // Append-only recovery decisions survive a run/flow deletion as audit evidence.
+  `CREATE TABLE IF NOT EXISTS workflow_recovery_receipt (
+    id TEXT PRIMARY KEY, run_id TEXT NOT NULL, request_id TEXT NOT NULL, record TEXT NOT NULL,
+    UNIQUE(run_id, request_id)
+  )`,
 
   // A delegated sub-agent's conversation while its run waits on a tool
   // approval, and its finished result so a re-run step returns that instead
@@ -198,6 +241,12 @@ const STATEMENTS: string[] = [
     value TEXT NOT NULL,
     metadata TEXT,
     pre_select_for_new_projects INTEGER NOT NULL DEFAULT 0,
+    -- Q-05: counts every replacement of the stored credential. Jarvis keeps no
+    -- account identity, so a rotated key and another account pasted under the
+    -- same name look the same; workflows enabled against an earlier
+    -- generation pause until a person enables them again. Re-encryption
+    -- (key rotation, migration) does not count: it writes the value column directly.
+    credential_generation INTEGER NOT NULL DEFAULT 0,
     created INTEGER NOT NULL,
     updated INTEGER NOT NULL
   )`,
@@ -406,6 +455,14 @@ function applyAdditiveColumnMigrations(db: Database): void {
     { table: "flow", column: "disabled_at", ddl: "ALTER TABLE flow ADD COLUMN disabled_at INTEGER" },
     { table: "flow_run", column: "graph_digest", ddl: "ALTER TABLE flow_run ADD COLUMN graph_digest TEXT" },
     { table: "workflow_trigger_fire", column: "started_at", ddl: "ALTER TABLE workflow_trigger_fire ADD COLUMN started_at INTEGER" },
+    // Q-05: binding pins and the credential generation they compare against.
+    // NULL pins mean "not pinned yet"; the daemon pins enabled flows at boot.
+    { table: "flow", column: "binding_pins", ddl: "ALTER TABLE flow ADD COLUMN binding_pins TEXT" },
+    {
+      table: "app_connection",
+      column: "credential_generation",
+      ddl: "ALTER TABLE app_connection ADD COLUMN credential_generation INTEGER NOT NULL DEFAULT 0",
+    },
   ];
   // One transaction around the ALTERs AND the backfill they key. SQLite DDL is
   // transactional, and the coupling matters: the backfill is keyed on the

@@ -628,7 +628,7 @@ function AuditTab({
         {stats && (
           <div className="v2-auth__audit-stats">
             <StatCard label="Total" value={stats.total} sub="all decisions" />
-            <StatCard label="Allowed" value={stats.allowed} sub="auto-approved" />
+            <StatCard label="Allowed" value={stats.allowed} sub="allowed or approved" />
             <StatCard label="Denied" value={stats.denied} sub="rejected" tone={stats.denied > 0 ? "warn" : "neutral"} />
             <StatCard label="Required approval" value={stats.approvalRequired} sub="user-decided" />
           </div>

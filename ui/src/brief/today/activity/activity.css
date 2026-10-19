@@ -1,0 +1,19 @@
+.brief-root .brief-recent-activity { padding: 18px; container: brief-activity / inline-size; }
+.brief-root .brief-recent-activity h2 { margin: 0 0 18px; }
+.brief-root .brief-recent-activity ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+.brief-root .brief-recent-activity li { min-width: 0; }
+.brief-root .brief-activity-row { display: grid; gap: 8px; width: 100%; text-align: left; position: relative; overflow-wrap: anywhere; }
+.brief-root .brief-activity-row strong { color: var(--brief-ink); }
+.brief-root .brief-activity-row time { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.brief-root button.brief-activity-row { border: 0; border-radius: var(--brief-corner-control); padding: 6px 24px 6px 6px; margin: -6px; background: none; cursor: pointer; }
+.brief-root button.brief-activity-row:hover { background: var(--brief-soft); }
+.brief-root button.brief-activity-row:focus-visible { outline: 2px solid var(--brief-focus); outline-offset: 2px; }
+.brief-root button.brief-activity-row svg { position: absolute; right: 3px; top: 8px; color: var(--brief-secondary); }
+.brief-root .brief-today-layout[data-compact="true"] .brief-recent-activity ul { grid-template-columns: 1fr; gap: 14px; }
+.brief-root .brief-today-layout[data-compact="true"] .brief-activity-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: baseline; gap: 16px; }
+.brief-root .brief-today-layout[data-compact="true"] .brief-activity-meta { text-align: right; }
+@container brief-activity (max-width: 460px) {
+  .brief-root .brief-recent-activity ul { grid-template-columns: 1fr; }
+  .brief-root .brief-today-layout[data-compact="true"] .brief-activity-row { grid-template-columns: 1fr; gap: 4px; }
+  .brief-root .brief-today-layout[data-compact="true"] .brief-activity-meta { text-align: left; }
+}

@@ -1,6 +1,6 @@
 import React from "react";
 import { Mic } from "lucide-react";
-import { Icon } from "../ui";
+import { FailureNotice, Icon } from "../ui";
 import { MarkdownBody } from "./MarkdownBody";
 import type { ThreadItem } from "./types";
 import "./items.css";
@@ -108,6 +108,15 @@ export function ResultItem({
 }: {
   item: Extract<ThreadItem, { kind: "result" }>;
 }) {
+  if (item.failure) {
+    // Q-19: a failed turn reads the way it reads everywhere else.
+    return (
+      <article className="v2-item v2-item--result">
+        <Meta who="Result" time={item.t} />
+        <FailureNotice failure={item.failure} />
+      </article>
+    );
+  }
   return (
     <article className="v2-item v2-item--result">
       <Meta who="Result" time={item.t} />

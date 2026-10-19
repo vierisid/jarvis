@@ -8,7 +8,7 @@ import { AuditTrail } from '../authority/audit.ts';
 import { DeferredExecutor, isAgentStopCard } from '../authority/deferred-executor.ts';
 import { approvalIntentFields } from '../authority/approval-delivery.ts';
 import { assignPersistentAgentTask } from '../actions/tools/agents.ts';
-import { EmergencyController } from '../authority/emergency.ts';
+import { EmergencyController, setActiveEmergencyController } from '../authority/emergency.ts';
 import { runAsApproved } from '../authority/approved-action-scope.ts';
 import { gateVoiceApprovalResolution } from '../roles/authority.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
@@ -20,6 +20,7 @@ import { AgentTaskManager } from './task-manager.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import type { LLMToolCall } from '../llm/provider.ts';
 import { AgentLifecycleRefusal } from './lifecycle-gate.ts';
+import { applyApprovalDecision } from '../daemon/approval-decision.ts';
 import { createApiRoutes, type ApiContext } from '../daemon/api-routes.ts';
 import type { JarvisConfig } from '../config/types.ts';
 
@@ -30,7 +31,7 @@ import type { JarvisConfig } from '../config/types.ts';
  */
 
 beforeEach(() => initDatabase(':memory:', { quiet: true }));
-afterEach(() => closeDb());
+afterEach(() => { setActiveEmergencyController(null); closeDb(); });
 
 function role(id: string, tools: string[], level = 5): RoleDefinition {
   return { id, name: id, description: id, responsibilities: [], autonomous_actions: [], approval_required: [],
@@ -78,6 +79,7 @@ function harness(opts: { overrides?: AuthorityConfig['overrides']; level?: numbe
   const executor = new DeferredExecutor(approvals, audit);
   executor.setToolRegistry(registry);
   executor.setEmergencyController(emergency);
+  executor.setAuthorityEngine(orch.getAuthorityEngine()!);
   /** A persistent agent whose task loop is running. */
   const running = async () => {
     const { agent } = spawnPersistentAgent(deps, 'spec');
@@ -283,6 +285,27 @@ describe('the daemon wires the stop to the task loops (#963)', () => {
 });
 
 describe('stopping an agent, after review (#963)', () => {
+  for (const state of ['paused', 'killed'] as const) {
+    it(`a Stop agent card approved through the shared handler works while ${state}`, async () => {
+      const h = harness();
+      const { agent, taskId } = await h.running();
+      try {
+        const err = await refusal(() => terminatePersistentAgent(h.deps, agent.id));
+        setActiveEmergencyController(h.emergency);
+        if (state === 'paused') h.emergency.pause(); else h.emergency.kill();
+        const outcome = await applyApprovalDecision('approve', err.approvalId!, 'dashboard', {
+          approvalManager: h.approvals, deferredExecutor: h.executor, auditTrail: h.audit,
+        });
+        expect(outcome.status).toBe('approved');
+        expect(h.approvals.getRequest(err.approvalId!)?.execution_outcome).toBe('committed');
+        expect(h.orch.getAgent(agent.id)).toBeUndefined();
+      } finally {
+        h.taskManager.cancel(taskId);
+        await h.settled(taskId);
+      }
+    });
+  }
+
   it('under Kill, at the default level, a stop card still runs and the loop stops', async () => {
     const h = harness();
     const { agent, taskId } = await h.running();

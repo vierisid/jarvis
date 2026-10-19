@@ -10,6 +10,7 @@ import {
   TOAST_TITLE_MAX,
   buildNotifySendArgs,
   buildPowerShellToastScript,
+  senderReceipt,
 } from './desktop-notify.ts';
 
 const BASE64_LITERAL = /FromBase64String\('([^']*)'\)/g;
@@ -131,6 +132,19 @@ describe('buildNotifySendArgs', () => {
       'notify-send', '--urgency=normal', '--expire-time=5000', '--app-name=JARVIS', '--', 'T', 'B',
     ]);
     expect(buildNotifySendArgs('T', 'B', { urgency: 'critical' })).toContain('--expire-time=10000');
+  });
+});
+
+describe('the desktop sender receipt (Q-19)', () => {
+  test('a sender that exits cleanly showed the toast; one that fails did not', async () => {
+    expect(await senderReceipt(Promise.resolve(0), () => {})).toBe('shown');
+    expect(await senderReceipt(Promise.resolve(1), () => {})).toBe('not_shown');
+  });
+
+  test('a sender still running at the wait is stopped and unknown, never not shown: the toast may be up', async () => {
+    let killed = false;
+    expect(await senderReceipt(new Promise<number>(() => {}), () => { killed = true; }, 10)).toBe('unknown');
+    expect(killed).toBe(true);
   });
 });
 

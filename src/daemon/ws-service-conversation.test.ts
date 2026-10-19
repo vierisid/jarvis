@@ -9,6 +9,7 @@ import { initDatabase, closeDb, getDb } from '../vault/schema.ts';
 import { BriefConversationProvider } from '../brief/conversations.ts';
 import { BriefChatTransport } from '../brief/chat-transport.ts';
 import { registerChatTransport } from '../brief/registrations/chat-transport.ts';
+import { registerChatProgress } from '../brief/registrations/chat-progress.ts';
 import { registerConversations } from '../brief/registrations/conversations.ts';
 import { createBriefCapabilities } from '../brief/registrations/index.ts';
 import type { BriefChatEvent } from '../brief/contracts.ts';
@@ -18,7 +19,7 @@ import { listAgentActivity } from '../vault/agent-activity.ts';
 const done = (): LLMStreamEvent => ({ type: 'done', response: { content: 'Answer', tool_calls: [], usage: { input_tokens: 0, output_tokens: 0 }, model: 'fixture', finish_reason: 'stop' } });
 async function until(check: () => boolean) { const end = Date.now() + 2000; while (!check()) { if (Date.now() > end) throw new Error('WebSocket fixture timed out'); await Bun.sleep(1); } }
 
-test('authenticated WebSocket routing gates the feature, scopes approvals and preserves legacy mirroring', async () => {
+for (const progress of [false, true]) test(`authenticated WebSocket routing gates the feature, scopes approvals and preserves legacy mirroring (progress=${progress})`, async () => {
   initDatabase(':memory:', { quiet: true });
   const config = { onboarding: { setup_completed_at: new Date().toISOString() } };
   const fakeAgent = { setDelegationCallback: () => {}, getConfig: () => config,
@@ -31,7 +32,12 @@ test('authenticated WebSocket routing gates the feature, scopes approvals and pr
   service.getServer().setSidecarManager(manager);
   const conversations = new BriefConversationProvider();
   let generations = 0;
-  const approval = { id: 'stable-approval', status: 'pending' } as ApprovalRequest;
+  // A whole request: since #1075 it also reaches the ordinary dashboard card,
+  // which renders every field.
+  const approval: ApprovalRequest = { id: 'stable-approval', status: 'pending', agent_id: 'a1', agent_name: 'PA',
+    tool_name: 'run_command', tool_arguments: '{"command":"make deploy"}', action_category: 'execute_command',
+    urgency: 'normal', reason: 'execute_command requires user approval', context: '', execution_mode: 'deferred',
+    decided_at: null, decided_by: null, executed_at: null, execution_result: null, created_at: 0 };
   const transport = new BriefChatTransport({ db: getDb(), runner: { ready: () => true, stream: () => {
     generations++;
     return { onComplete: async () => {}, stream: (async function* () {
@@ -41,7 +47,7 @@ test('authenticated WebSocket routing gates the feature, scopes approvals and pr
       yield { type: 'text', text: 'Scoped reply' } as LLMStreamEvent; yield done();
     })() };
   } }, send: (client, message) => service.getServer().sendToClient(client, message) });
-  const registrations = [...registerConversations(conversations), ...registerChatTransport(transport)];
+  const registrations = [...registerConversations(conversations), ...registerChatTransport(transport), ...registerChatProgress(transport)];
   service.setBriefChatTransport(transport, createBriefCapabilities(registrations, ['conversations']));
   const clients: WebSocket[] = [];
   try {
@@ -63,12 +69,19 @@ test('authenticated WebSocket routing gates the feature, scopes approvals and pr
     scoped.send('brief_chat_send', send);
     await until(() => scoped.frames.some(frame => frame.type === 'brief_chat_error'));
     expect(generations).toBe(0); expect(conversations.repository.messages(a.conversationId).items).toEqual([]);
-    service.setBriefChatTransport(transport, createBriefCapabilities(registrations, ['conversations', 'chatTransport']));
+    service.setBriefChatTransport(transport, createBriefCapabilities(registrations, ['conversations', 'chatTransport', ...(progress ? ['chatProgress' as const] : [])]));
     scoped.send('brief_chat_send', send);
     await until(() => scoped.frames.some(frame => frame.type === 'brief_chat_event' && (frame.payload as BriefChatEvent).payload.kind === 'terminal'));
     const events = scoped.frames.filter(frame => frame.type === 'brief_chat_event').map(frame => frame.payload as BriefChatEvent);
     expect(events.every(event => event.conversationId === a.conversationId && event.turnId === 'turn-a' && event.requestId === 'request-a')).toBe(true);
     expect(events.filter(event => event.payload.kind === 'activity')).toHaveLength(2);
+    if (progress) {
+      const activity = events.flatMap(event => event.payload.kind === 'activity' ? [event.payload.activity] : []);
+      expect(activity.map(row => row.phase)).toEqual(['started', 'failed']);
+      expect(activity[0]?.activityId).toBe(activity[1]?.activityId);
+      expect(activity[0]?.kind).toBe('task');
+      expect(JSON.stringify(scoped.frames)).not.toContain('Private name');
+    }
     expect(events.find(event => event.payload.kind === 'approval')?.payload).toEqual({ kind: 'approval', approvalId: 'stable-approval', status: 'pending' });
     expect(legacy.frames.some(frame => frame.type === 'brief_chat_event')).toBe(false);
     expect(mirror.frames.some(frame => frame.type === 'brief_chat_event')).toBe(false);
@@ -80,8 +93,20 @@ test('authenticated WebSocket routing gates the feature, scopes approvals and pr
     conversations.repository.activate(b.conversationId);
     service.broadcastApprovalUpdate({ ...approval, status: 'approved' });
     await until(() => scoped.frames.some(frame => frame.type === 'brief_chat_event' && (frame.payload as any).payload.status === 'approved'));
-    expect((scoped.frames.at(-1)!.payload as BriefChatEvent).conversationId).toBe(a.conversationId);
+    // The ordinary card now follows the Brief event (#1075), so pick the event itself.
+    const settled = scoped.frames.filter(frame => frame.type === 'brief_chat_event' && (frame.payload as any).payload.status === 'approved');
+    expect(settled).toHaveLength(1);
+    expect((settled[0]!.payload as BriefChatEvent).conversationId).toBe(a.conversationId);
     expect(transport.repository.approvalOwner(approval.id)?.turnId).toBe('turn-a');
+    // #1075: every dashboard socket, the scoped one included, also gets the
+    // ordinary card with the whole request, once per request and per update.
+    const cards = (reader: { frames: WSMessage[] }, source: string) => reader.frames.filter(frame => frame.type === 'notification'
+      && (frame.payload as any).source === source && (frame.payload as any).request?.id === approval.id);
+    await until(() => [scoped, legacy, mirror].every(reader => cards(reader, 'approval_update').length > 0));
+    for (const reader of [scoped, legacy, mirror]) {
+      expect(cards(reader, 'approval_request').map(frame => (frame.payload as any).request)).toEqual([approval]);
+      expect(cards(reader, 'approval_update').map(frame => (frame.payload as any).request.status)).toEqual(['approved']);
+    }
     // Legacy readers still receive the existing stream/status wire shape.
     const scopedCount = scoped.frames.length;
     service.broadcastSubAgentProgress({ type: 'tool_call', agentName: 'Legacy agent', agentId: 'legacy', data: { secret: 'legacy-private' } });

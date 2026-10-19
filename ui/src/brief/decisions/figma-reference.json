@@ -1,0 +1,36 @@
+{
+  "file": "eNfKeirIKLZLlZEasrurZa",
+  "page": "81:2",
+  "node": "81:3271",
+  "checkpoint": "UI-35 \u00b7 Dashboard craft pass verified \u00b7 prototype limits recorded",
+  "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-3271",
+  "saved_native_source": "/home/vierisid/aios/workspace/Jarvis/dashboard-brief-figma-2026-09-14-v6-1/ui-27-needs-you-2026-10-04",
+  "inspected_exports": [
+    {
+      "file": "81-3271-light.png",
+      "sha256": "1e5b448852dc646d01ab4a2fa7bf5e7d6f75ec09f98a006438e499ff93ae9830"
+    },
+    {
+      "file": "81-3442-dark.png",
+      "sha256": "0df992bb3418ab4f27375d5ac297a36d3b514b794c2a30f5df2c621d0de9e691"
+    },
+    {
+      "file": "README.md",
+      "sha256": "a4dec02f6131024e028dc6a3067f84220f1e2bf141e79ce07f3436368271582d"
+    }
+  ],
+  "preserved": [
+    "Clean Needs you heading; no date/subtitle/Waiting/Resolved tabs",
+    "Persistent selection and central neutral document with attention-only highlight",
+    "Shared action wording, quiet alternatives, one primary; asymmetric paper corners and approved material",
+    "Wide list/document and compact strip/document composition; theme/sidebar/Pebble continuity"
+  ],
+  "bounded_runtime_adaptations": [
+    "Fluid independent selector/document scrolling for arbitrary-length queues and text",
+    "Typed email/calendar editing, complete values and readonly options instead of prefilled click simulation",
+    "F-14 permission receipt is never represented as email execution; unknown requests stay pinned",
+    "Quiet refresh utility and reserved local outcome/recovery region",
+    "Open workflow is adjacent to document context for consistent wide/compact placement; fixture-only destination inspector shows exact IDs",
+    "Shared controller lives outside room mount. Host supplies durable recovery and shared Today identity before activation"
+  ]
+}

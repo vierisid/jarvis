@@ -3,15 +3,20 @@ import { getFlowRun } from '../db/repos/flow-run';
 import { getWaitpoint } from '../db/repos/waitpoint';
 import { stopTurnedOffRun, turnedOffReason } from '../db/repos/flow-turn-off';
 import { claimContinuation } from './continuation';
+import { emergencyHold } from './emergency-hold';
 
 /** Durable polling covers every approval surface and decisions made before park. */
 export function resumeResolvedWorkflowEffects(): number {
+  // A decision made while Jarvis is paused waits for Resume; it is not
+  // carried out under the pause, nor lost to it (Q-08).
+  if (emergencyHold()) return 0;
   const db = getWorkflowDb();
   const rows = db.query(`SELECT e.id, e.run_id, e.waitpoint_id FROM workflow_effect e
     JOIN approval_requests a ON a.id=e.approval_id
     JOIN waitpoint w ON w.id=e.waitpoint_id
     WHERE e.status='pending' AND a.execution_mode='workflow'
-      AND a.status IN ('approved','denied','expired') AND w.resumed_at IS NULL`).all() as Array<{ id: string; run_id: string; waitpoint_id: string }>;
+      AND a.status IN ('approved','denied','expired') AND w.resumed_at IS NULL
+      AND NOT (a.status='expired' AND EXISTS (SELECT 1 FROM brief_decision_document d WHERE d.approval_id=a.id))`).all() as Array<{ id: string; run_id: string; waitpoint_id: string }>;
   let count = 0;
   for (const row of rows) {
     const run = getFlowRun(row.run_id);

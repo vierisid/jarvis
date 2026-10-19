@@ -1,9 +1,13 @@
+import { ensureOutcomeSchema } from './outcome-schema';
+import { ensureGoalMeasurementSchema } from './goal-measurement-schema';
+import { ensureDecisionDocumentSchema } from '../authority/decision-document-schema';
 import { Database } from "bun:sqlite";
 import { ensureSuggestionSchema } from './suggestion-schema.ts';
 import { ensureGoalEventSchema } from './goal-event-schema.ts';
 import { ensureFactSchema } from './fact-schema.ts';
 import { ensureConversationSchema } from './conversation-schema.ts';
 import { ensureChatTurnSchema } from './chat-turn-schema.ts';
+import { ensureChatAttachmentSchema } from './chat-attachment-schema.ts';
 
 let dbInstance: Database | null = null;
 
@@ -351,6 +355,7 @@ function createTables(db: Database): void {
 
   ensureConversationSchema(db);
   ensureChatTurnSchema(db);
+  ensureChatAttachmentSchema(db);
 
   // Content pipeline: items moving through creation stages
   db.run(`
@@ -408,6 +413,8 @@ function createTables(db: Database): void {
 
   db.run(`CREATE INDEX IF NOT EXISTS idx_attachments_content ON content_attachments(content_id)`);
 
+  ensureDecisionDocumentSchema(db);
+
   // Authority: Approval requests
   db.run(`
     CREATE TABLE IF NOT EXISTS approval_requests (
@@ -439,6 +446,11 @@ function createTables(db: Database): void {
   // approve endpoints only flip the status. 'deferred' keeps the legacy
   // execute-on-approve behavior.
   try { db.run(`ALTER TABLE approval_requests ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'deferred'`); } catch {}
+  // Migration (Q-08): who the request was asked for -- the agent's role,
+  // level and profile, as JSON -- so permissions are judged again, as that
+  // agent, when the approved call runs. A row from before has none; it is
+  // refused at execution and asked for again.
+  try { db.run(`ALTER TABLE approval_requests ADD COLUMN principal TEXT`); } catch {}
   // Migration: execution claim and receipt. The claim columns record that one
   // executor took the approved request before dispatch, so a second caller or
   // a restarted daemon cannot run it again. `execution_outcome` qualifies the
@@ -626,7 +638,14 @@ function createTables(db: Database): void {
   db.run(`CREATE TABLE IF NOT EXISTS opportunity_delivery (
     opportunity_id TEXT PRIMARY KEY REFERENCES opportunity_hypotheses(suggestion_id) ON DELETE CASCADE,
     delivered_at INTEGER, channel TEXT, next_attempt_at INTEGER NOT NULL DEFAULT 0,
-    lease_token TEXT, lease_until INTEGER NOT NULL DEFAULT 0
+    lease_token TEXT, lease_until INTEGER NOT NULL DEFAULT 0, unconfirmed_at INTEGER
+  )`);
+  // Q-19: a transport may have taken it without confirming. Never retried.
+  try { db.run('ALTER TABLE opportunity_delivery ADD COLUMN unconfirmed_at INTEGER'); } catch {}
+  // Q-19: a chat turn that failed after it may have acted. Nothing else keeps
+  // its failure, and Today shows it until the person dismisses it.
+  db.run(`CREATE TABLE IF NOT EXISTS chat_failure (
+    key TEXT PRIMARY KEY, failure TEXT NOT NULL, at INTEGER NOT NULL
   )`);
   // Old delivered flags were written before the notification callback. They
   // cannot establish delivery; recover unacknowledged proposals conservatively.
@@ -800,6 +819,8 @@ function createTables(db: Database): void {
   db.run(`CREATE INDEX IF NOT EXISTS idx_gci_created ON goal_check_ins(created_at)`);
 
   ensureGoalEventSchema(db);
+  ensureGoalMeasurementSchema(db);
+  ensureOutcomeSchema(db);
 
   // Additive review audit: the exact bounded inputs and rejected score proposals.
   db.run(`CREATE TABLE IF NOT EXISTS goal_review_evidence (

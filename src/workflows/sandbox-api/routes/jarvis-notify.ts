@@ -2,14 +2,17 @@
  * `/v1/jarvis/notify` -- backs the `jarvis-notify` piece's `notify` action.
  *
  * The piece posts `{ message, channels, priority }`; the route returns
- * `{ delivered, failed }`. Channel routing / fan-out lives in the daemon's
- * notifier; this layer only validates the envelope and dispatches to an
- * injected `NotifyFn`. If no fn is configured the route returns 503.
+ * `{ delivered, failed, unknown }`. Channel routing / fan-out lives in the
+ * daemon's notifier; this layer only validates the envelope and dispatches to
+ * an injected `NotifyFn`. If no fn is configured the route returns 503. A
+ * typed outcome (Q-19: nothing was sent anywhere, or the effect was refused)
+ * comes back as `outcome` with a non-2xx status, as on the tools route.
  */
 
 import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
 import { cancellableWorkflowService } from "../../runtime/cancellation";
 import { workflowEffectContext } from './effect-context';
+import { ActionOutcomeError, type ActionFailure } from '../../../actions/action-outcome';
 import type { WorkflowEffectContext, WorkflowApprovalPending } from '../../runtime/effect-context';
 
 const VALID_CHANNELS = new Set([
@@ -32,7 +35,20 @@ export interface NotifyRequest {
 export interface NotifyResponse {
   delivered: string[];
   failed: { channel: string; error: string }[];
+  /** Channels that may have taken it without confirming. Never reported as not sent. */
+  unknown: { channel: string; error: string }[];
   approval?: WorkflowApprovalPending;
+}
+
+/**
+ * The notify step's outcome when nothing was sent anywhere, with the report
+ * of each channel, so the step's reply still says what happened to each.
+ */
+export class DeliveryFailedError extends ActionOutcomeError {
+  constructor(outcome: ActionFailure, public readonly report: Omit<NotifyResponse, 'approval'>) {
+    super(outcome);
+    this.name = 'DeliveryFailedError';
+  }
 }
 
 export type NotifyFn = (
@@ -80,10 +96,20 @@ export function createJarvisNotifyRoute(
       }
       priority = raw.priority as "low" | "normal" | "high";
     }
-    const reply = await cancellableWorkflowService(deps.notify)(
-      { message: raw.message, channels, priority },
-      workflowEffectContext(ctx),
-    );
+    let reply: NotifyResponse;
+    try {
+      reply = await cancellableWorkflowService(deps.notify)(
+        { message: raw.message, channels, priority },
+        workflowEffectContext(ctx),
+      );
+    } catch (error) {
+      if (!(error instanceof ActionOutcomeError)) throw error;
+      const outcome: ActionFailure = error.outcome;
+      // A replayed refusal has no report; a fresh one keeps each channel's.
+      const report = error instanceof DeliveryFailedError ? error.report : { delivered: [], failed: [], unknown: [] };
+      return json({ ...report, outcome },
+        outcome.status === 'blocked' ? 409 : outcome.status === 'error' ? 422 : 502);
+    }
     return json(reply);
   };
 }

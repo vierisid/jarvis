@@ -1,12 +1,15 @@
 import type { Database } from 'bun:sqlite';
 import type { ApprovalStatus } from '../authority/approval.ts';
 import type { LLMMessage } from '../llm/provider.ts';
-import type { BriefChatEvent, BriefChatPayload, BriefSendTurn, BriefTurnRef, BriefTurnState } from '../brief/contracts.ts';
+import type { BriefActivity, BriefChatEvent, BriefChatPayload, BriefSendTurn, BriefTurnRef, BriefTurnState } from '../brief/contracts.ts';
 import { ConversationRepository, ConversationRequestError } from './conversation-lifecycle.ts';
+import { ChatAttachmentRepository, attachmentIds } from './chat-attachments';
+import type { BriefAttachmentRef } from '../brief/attachment-contracts';
 import { insertConversationMessage } from './conversations.ts';
 
 export interface ChatTurn extends BriefTurnRef {
   text: string;
+  attachments: BriefAttachmentRef[];
   speak: boolean;
   state: BriefTurnState;
   userMessageId: string;
@@ -23,8 +26,10 @@ const MAX_OUTPUT_CHARS = 256_000;
 /** All writes are synchronous SQLite transactions, including message/event/terminal commits. */
 export class ChatTurnRepository {
   readonly conversations: ConversationRepository;
+  readonly attachments: ChatAttachmentRepository;
   constructor(readonly db: Database, workspaceId?: string) {
     this.conversations = new ConversationRepository(db, workspaceId);
+    this.attachments = new ChatAttachmentRepository(db, workspaceId);
   }
 
   get workspaceId(): string { return this.conversations.workspaceId; }
@@ -34,18 +39,20 @@ export class ChatTurnRepository {
     const row = this.db.query<ChatTurn, [string, string, string, string]>(`SELECT ${projection} FROM brief_chat_turns
       WHERE workspace_id = ? AND conversation_id = ? AND turn_id = ? AND request_id = ?`).get(this.workspaceId, ref.conversationId, ref.turnId, ref.requestId);
     if (!row) throw new ConversationRequestError('Turn not found', 404);
-    return { ...row, speak: Boolean(row.speak) };
+    return { ...row, speak: Boolean(row.speak), attachments: this.attachments.forTurn(row.conversationId, row.turnId) };
   }
 
   accept(input: BriefSendTurn, validateNewTurn: () => void = () => {}): { turn: ChatTurn; created: boolean; events: BriefChatEvent[] } {
     return this.db.transaction(() => {
       this.conversations.get(input.conversationId);
+      const ids = attachmentIds(input.attachmentIds);
       const existing = this.db.query<ChatTurn, [string, string, string]>(`SELECT ${projection} FROM brief_chat_turns
         WHERE workspace_id = ? AND (request_id = ? OR turn_id = ?)`).all(this.workspaceId, input.requestId, input.turnId);
       if (existing.length) {
         const row = existing[0]!;
         if (existing.length !== 1 || row.conversationId !== input.conversationId || row.turnId !== input.turnId ||
-            row.requestId !== input.requestId || row.text !== input.text || Boolean(row.speak) !== Boolean(input.speak)) {
+            row.requestId !== input.requestId || row.text !== input.text || Boolean(row.speak) !== Boolean(input.speak) ||
+            JSON.stringify(this.attachments.forTurn(row.conversationId, row.turnId).map(ref => ref.attachmentId)) !== JSON.stringify(ids)) {
           throw new ConversationRequestError('Request identity already used for different input', 409);
         }
         return { turn: this.get(input), created: false, events: [] };
@@ -61,10 +68,11 @@ export class ChatTurnRepository {
         (turn_id, workspace_id, conversation_id, request_id, input, speak, state, user_message_id, assistant_message_id, created_at)
         VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`,
       [input.turnId, this.workspaceId, input.conversationId, input.requestId, input.text, input.speak ? 1 : 0, userMessageId, assistantMessageId, createdAt]);
+      if (ids.length) this.attachments.bind(input.conversationId, input.turnId, ids);
       insertConversationMessage(this.db, input.conversationId, { role: 'user', content: input.text }, userMessageId, createdAt);
       const turn = this.get(input);
       return { turn, created: true, events: [
-        this.append(turn, { kind: 'message', message: { ...this.ref(turn), messageId: userMessageId, role: 'user', content: input.text, createdAt } }),
+        this.append(turn, { kind: 'message', message: { ...this.ref(turn), messageId: userMessageId, role: 'user', content: input.text, createdAt, ...(turn.attachments.length ? { attachments: turn.attachments } : {}) } }),
         this.append(turn, { kind: 'status', state: 'queued' }),
       ] };
     })();
@@ -107,11 +115,28 @@ export class ChatTurnRepository {
   }
 
   finish(ref: BriefTurnRef, state: 'completed' | 'failed' | 'cancelled', error?: { code: string; message: string }): BriefChatEvent | null {
+    return this.finishEvents(ref, state, error).at(-1) ?? null;
+  }
+
+  /** Settle unfinished F-06 observations and the answer atomically, including after restart. */
+  finishEvents(ref: BriefTurnRef, state: 'completed' | 'failed' | 'cancelled', error?: { code: string; message: string }): BriefChatEvent[] {
     return this.db.transaction(() => {
       const turn = this.get(ref);
-      if (isTerminalTurn(turn.state)) return null;
+      if (isTerminalTurn(turn.state)) return [];
+      const latest = new Map<string, BriefActivity>();
+      const rows = this.db.query<{ payload: string }, [string]>(`SELECT payload FROM brief_chat_events
+        WHERE turn_id = ? AND json_extract(payload, '$.kind') = 'activity' ORDER BY sequence`).all(turn.turnId);
+      for (const row of rows) {
+        const activity = (JSON.parse(row.payload) as Extract<BriefChatPayload, { kind: 'activity' }>).activity;
+        if (activity.kind && activity.order) latest.set(activity.activityId, activity);
+      }
+      const events: BriefChatEvent[] = [];
+      for (const activity of latest.values()) if (activity.phase === 'started') events.push(this.append(turn, {
+        kind: 'activity', activity: { ...activity, phase: 'failed', summary: state === 'cancelled' ? 'Activity stopped.' : 'Activity ended without a completion result.' },
+      }));
       this.db.run('UPDATE brief_chat_turns SET state = ?, finished_at = ? WHERE turn_id = ?', [state, Date.now(), turn.turnId]);
-      return this.append(turn, { kind: 'terminal', state, ...(error ? { error } : {}) });
+      events.push(this.append(turn, { kind: 'terminal', state, ...(error ? { error } : {}) }));
+      return events;
     })();
   }
 
@@ -146,7 +171,7 @@ export class ChatTurnRepository {
     const hasMore = rows.length > events.length;
     const nextSequence = hasMore ? events.at(-1)!.sequence : sequence;
     const turns = this.db.query<ChatTurn, [string]>(`SELECT ${projection} FROM brief_chat_turns WHERE conversation_id = ?
-      ORDER BY created_at DESC, turn_id DESC LIMIT 50`).all(conversationId).map(({ text: _input, ...turn }) => ({ ...turn, speak: Boolean(turn.speak) }));
+      ORDER BY created_at DESC, turn_id DESC LIMIT 50`).all(conversationId).map(({ text: _input, ...turn }) => ({ ...turn, speak: Boolean(turn.speak), attachments: this.attachments.forTurn(turn.conversationId, turn.turnId) }));
     return { conversationId, sequence, nextSequence, hasMore, events, turns, messages: this.conversations.messages(conversationId, { limit: 10 }) };
   }
 

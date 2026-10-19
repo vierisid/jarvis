@@ -6,12 +6,12 @@ import { BriefButton } from "./Buttons";
 import { BRIEF_MOTION, useBriefMotion, useBriefReducedMotion } from "../../motion";
 
 /** Default: menus open below and end-align, tooltips prefer above. `top-start` sits above and
- * start-aligned; `right`/`right-end` sit beside a rail target. */
-export type BriefFloatingPlacement = "top-start" | "right-end" | "right";
+ * start-aligned, `bottom-start` below and start-aligned; `right`/`right-end` sit beside a rail target. */
+export type BriefFloatingPlacement = "top-start" | "bottom-start" | "right-end" | "right";
 
 /** Portals escape clipping; native popovers also escape other stacking contexts.
  * The portal explicitly follows the invoking Brief root's chosen appearance. */
-function FloatingSurface({ anchor, kind, children, onReady, placement, className, ...props }:
+export function FloatingSurface({ anchor, kind, children, onReady, placement, className, ...props }:
   HTMLAttributes<HTMLDivElement> & { anchor: RefObject<HTMLElement | null>; kind: "menu" | "tooltip";
     placement?: BriefFloatingPlacement;
     children: ReactNode; onReady?: (element: HTMLDivElement) => void }) {
@@ -39,7 +39,7 @@ function FloatingSurface({ anchor, kind, children, onReady, placement, className
       const preferAbove = kind === "tooltip";
       const top = preferAbove && above >= padding ? above
         : below + box.height <= window.innerHeight - padding ? below : Math.max(padding, above);
-      const desiredLeft = placement === "top-start" ? rect.left
+      const desiredLeft = (placement === "top-start" || placement === "bottom-start") ? rect.left
         : placement === "right" ? rect.right : placement === "right-end" ? rect.right + 24 : rect.right - box.width;
       const desiredTop = placement === "top-start" ? above
         : placement === "right-end" ? rect.bottom - box.height
@@ -52,6 +52,10 @@ function FloatingSurface({ anchor, kind, children, onReady, placement, className
     place();
     const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(place);
     resize?.observe(element); resize?.observe(target);
+    const composer = target.closest(".brief-composer-surface");
+    if (composer) resize?.observe(composer);
+    const workspace = target.closest(".brief-workspace-content");
+    if (composer && workspace) resize?.observe(workspace);
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
     onReady?.(element);
@@ -67,7 +71,7 @@ function FloatingSurface({ anchor, kind, children, onReady, placement, className
   </div>, document.body);
 }
 
-export function BriefTooltip({ label, children, placement, disabled = false }: { label: string; children: ReactElement<HTMLAttributes<HTMLElement>>; placement?: "right"; disabled?: boolean }) {
+export function BriefTooltip({ label, children, placement, disabled = false, delay = 500 }: { label: string; children: ReactElement<HTMLAttributes<HTMLElement>>; placement?: "right"; disabled?: boolean; delay?: number }) {
   const id = useId();
   const anchor = useRef<HTMLSpanElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -88,16 +92,20 @@ export function BriefTooltip({ label, children, placement, disabled = false }: {
   useEffect(() => {
     if (!open) return;
     const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { suppressed.current = true; close(); }
+      if (event.key === "Escape") {
+        // Dismiss the topmost hint before the containing panel sees Escape.
+        event.preventDefault(); event.stopPropagation();
+        suppressed.current = true; close();
+      }
     };
-    document.addEventListener("keydown", escape);
-    return () => document.removeEventListener("keydown", escape);
+    document.addEventListener("keydown", escape, true);
+    return () => document.removeEventListener("keydown", escape, true);
   }, [open]);
   return <span ref={anchor} className="brief-tooltip-anchor"
     onPointerEnter={event => {
       hovering.current = true;
       if (disabled || event.pointerType === "touch" || suppressed.current) return;
-      clear(); timer.current = setTimeout(() => setOpen(true), 500);
+      clear(); timer.current = setTimeout(() => setOpen(true), delay);
     }} onPointerLeave={leave}
     onFocus={() => { clear(); focused.current = true; suppressed.current = false; if (!disabled) setOpen(true); }}
     onBlur={() => { focused.current = false; if (!hovering.current) { suppressed.current = false; close(); } }}

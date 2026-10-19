@@ -4,6 +4,7 @@ import { isNoLocalTools } from '../../actions/tools/local-tools-guard';
 import { withMachineScope, type MachineScope } from '../../actions/machine-scope';
 import type { SidecarCapability, SidecarInfo } from '../../sidecar/types';
 import { ensureRunMachineBinding, getRunMachineBinding, machineBindingBlocked } from '../db/repos/run-machine-binding';
+import { machinePinForRun } from '../db/repos/binding-pins';
 import { assertRunNotCanceled } from './cancellation';
 import { getWorkflowDb } from '../db';
 import { getFlowVersion } from '../db/repos/flow-version';
@@ -111,6 +112,22 @@ export function withWorkflowMachineBinding<T>(ctx: { runId: string; projectId: s
       // fuzzy name matching reinterpret a previously selected ID.
       const requested = selector && prior?.sidecarId !== selector ? identify(selector, inventory).id : selector;
       const binding = ensureRunMachineBinding(ctx.runId, ctx.projectId, () => {
+        // A pinned flow runs on the computer it was enabled against (Q-05),
+        // never on whichever is the default today. Gone is a blocker; offline
+        // binds anyway, so the dispatch fence reports it rather than another
+        // computer quietly doing the work.
+        const pin = machinePinForRun(ctx.runId);
+        if (pin) {
+          const again = 'Enable or publish the workflow again to choose a computer; do not replay completed work.';
+          if (pin.sidecarId !== null && !inventory.some(s => s.id === pin.sidecarId)) {
+            machineBindingBlocked('WORKFLOW_MACHINE_REPLACED', `The computer this workflow was enabled for (${pin.name}) is no longer enrolled.`, again);
+          }
+          if (pin.sidecarId === null && isNoLocalTools()) {
+            machineBindingBlocked('WORKFLOW_MACHINE_UNAVAILABLE', 'This workflow was enabled to run on this computer, and local execution is disabled.', again);
+          }
+          return { sidecarId: pin.sidecarId, sessionId: pin.sidecarId === null ? localSessionId : manager?.getConnectionSessionId(pin.sidecarId) ?? null,
+            selectedBy: 'pinned' };
+        }
         const sidecarId = requested ?? inventory.find(s => s.connected && (!capability ||
           (s.capabilities?.includes(capability) && !s.unavailable_capabilities?.some(c => c.name === capability))))?.id ?? null;
         if (sidecarId === null && isNoLocalTools()) {

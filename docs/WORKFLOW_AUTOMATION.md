@@ -192,6 +192,16 @@ readers that carry step output out of the data plane -- are pinned by
 `src/workflows/adapters/untrusted-reach.test.ts`, derived from source. Widening
 either fails that test and sends you back to this section.
 
+The optional onboarding result reader (`src/onboarding-next/result/reader.ts`)
+is a person-facing reader in that inventory. After actor/project receipt and
+exact flow/version checks, it returns only the title, persisted graph, identity
+and current bounded readiness. It never forwards the whole version, captured
+step output, composition responses, notes, or run records, and calls no model.
+Its projection regression includes hostile values in omitted columns. Graph
+labels and inputs remain authored data for the canvas; a future model consumer
+must frame them at its own prompt boundary. This does not widen the workflow
+step adapter's unframed tool-result boundary.
+
 One related correctness note: the adapter **drops** a carrier's trusted trailer
 rather than concatenating it. A trailer is repo-authored instructions to a model
 (the webapp template playbook, reachable here via `browser_snapshot`), and a flow
@@ -1083,7 +1093,11 @@ Two things produce that resume job, both server-side:
   - a run whose workflow was turned off since it began (409; the run is stopped);
   - a run with another continuation already queued or running (409; retry once it has run);
   - a MANUAL waitpoint whose step already finished (410). A WEBHOOK waitpoint is exempt: the approval piece's Create Approval Links step makes its URL in one step and the run waits for it at a later one;
-  - an already-resumed waitpoint (410).
+  - an already-resumed waitpoint (410);
+  - anything while Jarvis is paused (503 with `Retry-After`; the waitpoint is kept for Resume, Q-08). After Kill the run is already stopped, so the answer is the 409 for a run that is not PAUSED;
+  - a HOLD waitpoint, which parks a step reached while Jarvis is paused (403: Jarvis releases it on Resume). The run's waitpoint list shows a HOLD with no resume URL.
+
+A step parked by Jarvis, for an approval or a hold, records how it was about to run (`jarvisParked` in its output). When it is let go it runs that way: from the start if it had not run, or resuming its own pause with the payload it was resuming with. A Delay held before its first run still waits its full time after Resume.
 - `TimerWaitpointScheduler` (`src/workflows/timer-scheduler.ts`) for TIMER waitpoints, which have no external trigger. It ticks every 15s plus once at boot, so a delay that elapsed entirely during downtime still fires, late, with its lateness recorded. It claims the continuation the same way, so a crash between consuming the waitpoint and queueing the job cannot strand the run. See `docs/workflow-trigger-delivery.md`.
 
 The scheduler's eligibility query (`listDueTimerWaitpoints`) skips waitpoints whose run is still QUEUED or RUNNING, *before* applying its 100-row batch limit. The engine creates the waitpoint row before it publishes PAUSED, so a short delay can come due inside that window; retiring the timer there would strand the run PAUSED with nothing left to wake it. Deferring instead also keeps those rows from filling a scan and starving later PAUSED runs. Missing and terminal runs still get their timers retired.

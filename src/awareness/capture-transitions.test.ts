@@ -10,6 +10,7 @@ import type { LLMManager } from '../llm/manager.ts';
 import type { SidecarEvent } from '../sidecar/protocol.ts';
 import { closeDb, initDatabase } from '../vault/schema.ts';
 import { getRecentCaptures, getSession } from '../vault/awareness.ts';
+import { screenIssueKey } from '../failures/interruptions.ts';
 
 const config: AwarenessConfig = {
   enabled: true, capture_interval_ms: 15000, min_change_threshold: 0.02,
@@ -264,4 +265,16 @@ test('delayed cloud analysis retains the predecessor of its own capture', async 
     await second;
     analyze.mockRestore();
   }
+});
+
+// Q-19: the error suggestion and the daemon's researched fix share one issue
+// key, so one on-screen error interrupts once.
+test('an error suggestion carries the key of the error it is about', async () => {
+  await send('screen_capture', time + 100, { capture_id: 1, image_path: '/fixture/1.png', pixel_change_pct: 0.4,
+    ocr_text: 'Traceback (most recent call last):\n  File "app.py", line 3, in <module>',
+    app_name: 'Terminal', window_title: 'python app.py - Terminal' });
+  const detected = events.find(event => event.type === 'error_detected');
+  const suggestion = events.find(event => event.type === 'suggestion_ready' && event.data.type === 'error');
+  expect(detected).toBeDefined();
+  expect(suggestion?.data.issueKey).toBe(screenIssueKey('error', 'Terminal', String(detected!.data.errorText)));
 });

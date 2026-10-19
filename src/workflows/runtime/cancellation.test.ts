@@ -206,14 +206,14 @@ test.each([false, true])("notification fanout preserves cancellation and deliver
   const entered = deferred(), delivered = deferred();
   const sends: string[] = [];
   const notifier = new JarvisNotifierAdapter({
-    broadcastToDashboard: () => { sends.push("dashboard"); },
+    broadcastToDashboard: () => { sends.push("dashboard"); return 1; },
     broadcastToChannels: (channels, text) => routePerChannel(channels, text, {
       getLastRecipient: () => "recipient",
       getAdapter: name => ({ name, isConnected: () => true, async sendMessage() {
         sends.push(name); entered.resolve(); await delivered.promise;
       } }) as never,
     }),
-    sendDesktop: async () => { sends.push("desktop"); },
+    sendDesktop: async () => { sends.push("desktop"); return true; },
   });
   const notification = withRunCancellation(run.id, () => notifier.notify({ message: "test", channels: ["telegram", "discord", "desktop"] }));
   await entered.promise;
@@ -303,7 +303,7 @@ test.each([false, true])("authenticated sandbox routes reject work after acknowl
   const api = new SandboxApi({ services: {
     credentialResolver: new CredentialResolver(),
     toolsInvoke: async req => { dispatches++; return { toolName: req.toolName, result: "unexpected" }; },
-    notify: async () => { dispatches++; return { delivered: [], failed: [] }; },
+    notify: async () => { dispatches++; return { delivered: [], failed: [], unknown: [] }; },
     agentDelegate: async () => { dispatches++; return { finalMessage: "", toolCalls: [], status: "completed" }; },
     workflowsStart: async () => { dispatches++; return { runId: "unexpected" }; },
     llmChat: async () => { dispatches++; return { text: "unexpected" }; },

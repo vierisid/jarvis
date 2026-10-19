@@ -1,3 +1,5 @@
+import { COMPOSITION_LIMITS, compositionQueueStatus } from './composition-budget';
+import { claimOpportunityComposition } from './composition-leases';
 import { getDb, generateId } from '../vault/schema.ts';
 import { suggestionContext } from '../vault/suggestion-schema.ts';
 import { getGoal } from '../vault/goals.ts';
@@ -116,7 +118,10 @@ export function acceptSuggestion(id: string, input: unknown) {
   return getDb().transaction(() => {
     const row = canonicalSuggestion(id);
     if (row.type !== 'automation') throw new SuggestionFeedbackError('Only automation suggestions can create workflow drafts');
-    const existing = getCompositionRow(row.id);
+    const existing = getCompositionRow(row.id), jobId = existing?.id ?? generateId();
+    if (!claimOpportunityComposition(getDb(), row.id, 'legacy', jobId)) {
+      throw new SuggestionFeedbackError('This opportunity has a prepared proposal; inspect that proposal instead', 409);
+    }
     if (existing) {
       const original = getDb().query<{ payload: string; reason: string }, [string]>(
         'SELECT payload, reason FROM suggestion_feedback WHERE id = ?').get(existing.feedback_id)!;
@@ -132,11 +137,15 @@ export function acceptSuggestion(id: string, input: unknown) {
       goalLink: goal ? { goalId: goal.id, title: goal.title, reason: supplied.goalReason!, basis: 'user_confirmed' } : null,
       observations: observations(row),
     };
+    const queue = compositionQueueStatus();
+    if (queue.queued + queue.running >= COMPOSITION_LIMITS.queued) {
+      throw new SuggestionFeedbackError('Preparation queue is full; retry later', 429);
+    }
     const feedbackId = feedback(row.id, requestId, 'accept', reason, payload);
     const now = Date.now();
     getDb().run(`INSERT INTO suggestion_composition_jobs
       (id, suggestion_id, feedback_id, request, state, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', ?, ?)`,
-      [generateId(), row.id, feedbackId, JSON.stringify(request), now, now]);
+      [jobId, row.id, feedbackId, JSON.stringify(request), now, now]);
     setFlag(row.id, 'acted_on');
     return getSuggestionLearning(row.id);
   }).immediate();
@@ -151,6 +160,9 @@ export function retrySuggestionComposition(id: string, input: unknown) {
     const row = canonicalSuggestion(id);
     const job = getCompositionRow(row.id);
     if (!job) throw new SuggestionFeedbackError('No composition request exists', 409);
+    if (!claimOpportunityComposition(getDb(), row.id, 'legacy', job.id)) {
+      throw new SuggestionFeedbackError('This opportunity has a prepared proposal; inspect that proposal instead', 409);
+    }
     const prior = getDb().query('SELECT id FROM suggestion_feedback WHERE suggestion_id = ? AND request_id = ?').get(row.id, requestId);
     if (prior) {
       feedback(row.id, requestId, 'retry', reason, '{}');
@@ -158,6 +170,9 @@ export function retrySuggestionComposition(id: string, input: unknown) {
     }
     if (row.dismissed) throw new SuggestionFeedbackError('Suggestion was dismissed', 409);
     if (job.state !== 'failed') throw new SuggestionFeedbackError('Only failed composition requests can be retried', 409);
+    if (job.attempts >= COMPOSITION_LIMITS.attemptsPerJob) throw new SuggestionFeedbackError('Preparation attempt limit reached; inspect the saved request', 409);
+    const queue = compositionQueueStatus();
+    if (queue.queued + queue.running >= COMPOSITION_LIMITS.queued) throw new SuggestionFeedbackError('Preparation queue is full; retry later', 429);
     feedback(row.id, requestId, 'retry', reason, '{}');
     getDb().run(`UPDATE suggestion_composition_jobs SET state = 'queued', error = NULL,
       lease_token = NULL, lease_until = 0, updated_at = ? WHERE id = ?`, [Date.now(), job.id]);

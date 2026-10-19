@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createJourneyProvider, createSettingsJourneyPersistence, reconcileJourney } from './index.ts';
 import { journeySettingsKey } from './settings.ts';
-import type { Acknowledgement, JourneyResult, JourneySnapshot, LegacyStatus, Navigation, Scope } from './types.ts';
+import type { Acknowledgement, JourneyDependencies, JourneyResult, JourneySnapshot, LegacyStatus, Navigation, Scope } from './types.ts';
 
 const fresh: LegacyStatus = {
   setup_completed: false, setup_skipped_profile: false, profile_completed: false,
@@ -34,8 +34,12 @@ function fixture(legacy: LegacyStatus = fresh) {
   const db = open();
   // Same table definition as the vault; no daemon, model or real user data.
   db.exec('CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL DEFAULT (unixepoch()))');
-  const make = (scope: Scope | null = owner, connection = db, readLegacy = () => legacy) => createJourneyProvider({
+  const make = (scope: Scope | null = owner, connection = db, readLegacy = () => legacy,
+    validateFinish: JourneyDependencies['validateFinish'] | null = () => true) => createJourneyProvider({
     authorize: () => scope,
+    // These journey-only fixtures acknowledge synthetic drafts. B10 integration
+    // tests exercise the real artifact check on the workflow database.
+    validateFinish: validateFinish ?? undefined,
     persistence: createSettingsJourneyPersistence({ databaseForScope: () => connection, readLegacy }),
   });
   const provider = make();
@@ -443,6 +447,31 @@ describe('acknowledgement boundaries and scoped tutorial replay', () => {
       stepId: 'tour', replayReturnStepId: 'build', jobId: 'accepted-job',
     });
     expect(ready(await ack(f.provider, { type: 'tour_finished', state: 'done' })).stepId).toBe('build');
+  });
+
+  test('finish requires a synchronous guard in the write transaction; failures leave no receipt', async () => {
+    const f = fixture(); await activation(f.provider); await startBuild(f.provider, 'saved-job');
+    ready(await ack(f.provider, { type: 'draft_saved', jobId: 'saved-job', flowId: 'flow', versionId: 'version' }));
+    const before = ready(await f.provider.read()), stored = f.raw();
+    const request = { journeyId: before.journeyId, expectedRevision: before.revision, requestId: 'finish-once', command: { type: 'finish' } } as const;
+    const unbound = f.make(owner, f.db, () => fresh, null);
+    expect(unbound.canFinishDraft).toBe(false);
+    for (const guard of [null, () => false, () => { throw Error('PRIVATE'); },
+      (() => Promise.resolve(true)) as unknown as JourneyDependencies['validateFinish']]) {
+      expect(await f.make(owner, f.db, () => fresh, guard).transition(request)).toEqual({ availability: 'unavailable', reason: 'result_unavailable' });
+      expect(f.raw()).toBe(stored);
+    }
+    let calls = 0;
+    const guarded = f.make(owner, f.db, () => fresh, (scope, snapshot, resource) => {
+      calls++; expect(scope).toEqual(owner); expect(snapshot).toEqual(before);
+      expect(resource).toBe(f.db); expect(f.db.inTransaction).toBe(true);
+      return true;
+    });
+    expect(ready(await guarded.transition(request)).completion).toBe('completed');
+    expect(calls).toBe(1);
+    const completed = f.raw();
+    expect(await unbound.transition(request)).toMatchObject({ availability: 'ready', replayed: true });
+    expect(f.raw()).toBe(completed);
   });
 
   test('tutorial reset preserves completed setup, profile/connection settings and exact draft; disabling provider leaves legacy readable', async () => {

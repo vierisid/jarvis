@@ -1,17 +1,22 @@
-import type { Database } from 'bun:sqlite';
 import { getWorkflowDb } from '../index';
 import { compileWorkflow, type ReadinessContext, type WorkflowReadiness } from '../../runtime/workflow-readiness';
-import type { PieceLookup } from '../../runtime/piece-catalog';
-import type { CredentialResolver } from '../../credentials/adapter';
 import { assertFlowVersionOwnership } from './flow-version-ownership';
+import { workflowReadinessServices } from './readiness-services';
+import { bindingPinIssues } from './binding-pins';
+import { flowIngredientIssues, hasFlowIngredients } from './composition-ingredients';
+import { ensureRunExecutionConfig, type FlowRun, type RunExecutionConfig } from './flow-run';
+import { applyInputOverrides } from '../flow-graph';
+import type { FlowTriggerNode } from './flow-version';
 
-interface ReadinessServices { pieces?: PieceLookup; credentials?: CredentialResolver; tool?: ReadinessContext['tool']; roles?: ReadinessContext['roles'] }
-// Scoped to the live database, not a process-wide test flag. A missing catalog
-// fails closed for piece nodes; primitive/manual graphs need no catalog.
-const services = new WeakMap<Database, ReadinessServices>();
-export function configureWorkflowReadiness(context: ReadinessServices): void {
-  services.set(getWorkflowDb(), context);
-}
+export { configureWorkflowReadiness, type ReadinessServices } from './readiness-services';
+
+/**
+ * How readiness treats the binding pins a person accepted when enabling the
+ * flow (Q-05, repos/binding-pins.ts). Admission compares against them. The
+ * paths where a person enables or publishes ARE that acceptance, so they skip
+ * the comparison and write new pins instead.
+ */
+export interface BindingPinMode { acceptBindings?: boolean }
 
 /**
  * How many issues the thrown MESSAGE names before it summarizes (#633).
@@ -88,7 +93,7 @@ export class WorkflowReadinessError extends Error {
 
 function contextFor(flowId: string, ancestors: string[] = [], cache = new Map<string, WorkflowReadiness>(), budget = { remaining: 100 }): ReadinessContext {
   const db = getWorkflowDb();
-  const configured = services.get(db);
+  const configured = workflowReadinessServices();
   const flow = db.query<{ project_id: string }, [string]>('SELECT project_id FROM flow WHERE id = ?').get(flowId);
   if (!flow) throw new Error('flow not found');
   return {
@@ -97,8 +102,12 @@ function contextFor(flowId: string, ancestors: string[] = [], cache = new Map<st
     roles: configured?.roles,
     connection(externalId, pieceName) {
       if (externalId.startsWith('jarvis:')) {
-        return configured?.credentials?.list().some(source => source.canResolve(externalId))
-          ? null : 'Managed connection source is unavailable';
+        const source = configured?.credentials?.list().find(candidate => candidate.canResolve(externalId));
+        if (!source) return 'Managed connection source is unavailable';
+        // A source that can say it holds no credential to hand out (not
+        // connected, or revoked by the provider) is not ready to run.
+        return source.identity && source.identity(externalId) === null
+          ? 'Managed connection is not connected or was revoked; reconnect it' : null;
       }
       // Metadata only. Preflight never decrypts credentials or refreshes a
       // token inside publication's transaction. Match the engine's piece-less
@@ -128,7 +137,7 @@ function contextFor(flowId: string, ancestors: string[] = [], cache = new Map<st
       if (!version) return 'Target workflow has no executable version';
       let trigger: unknown;
       try { trigger = JSON.parse(version.trigger); } catch { return 'Target workflow graph is unreadable'; }
-      const readiness = compileWorkflow(trigger, contextFor(id, [...ancestors, flowId], cache, budget));
+      const readiness = withIngredients(id, trigger, compileWorkflow(trigger, contextFor(id, [...ancestors, flowId], cache, budget)));
       cache.set(id, readiness);
       const first = readiness.issues[0];
       // Bounded with the same cuts the thrown message uses (#633), because this
@@ -150,27 +159,57 @@ function contextFor(flowId: string, ancestors: string[] = [], cache = new Map<st
   };
 }
 
-export function graphReadiness(flowId: string, trigger: unknown): WorkflowReadiness {
-  return compileWorkflow(trigger, contextFor(flowId));
+function withIngredients(flowId: string, trigger: unknown, readiness: WorkflowReadiness): WorkflowReadiness {
+  // Avoid traversing malformed/oversized graphs a second time.
+  if (readiness.issues.some(i => i.code === 'LIMIT')) return readiness;
+  const issues = flowIngredientIssues(flowId, trigger, workflowReadinessServices()?.pieces)
+    .map(message => ({ node: 'trigger', path: 'ingredients', code: 'INGREDIENT', message }));
+  return { ...readiness, ready: readiness.ready && issues.length === 0, issues: [...readiness.issues, ...issues].slice(0, 100) };
 }
-export function versionReadiness(flowId: string, versionId: string, preview?: ReadinessContext['preview']): WorkflowReadiness {
+
+export function graphReadiness(flowId: string, trigger: unknown): WorkflowReadiness {
+  return withIngredients(flowId, trigger, compileWorkflow(trigger, contextFor(flowId)));
+}
+export function versionReadiness(flowId: string, versionId: string, preview?: ReadinessContext['preview'], mode: BindingPinMode = {}): WorkflowReadiness {
   assertFlowVersionOwnership(flowId, versionId);
   const row = getWorkflowDb().query<{ trigger: string }, [string]>('SELECT trigger FROM flow_version WHERE id = ?').get(versionId)!;
   let trigger: unknown;
   try { trigger = JSON.parse(row.trigger); } catch { trigger = null; }
-  return compileWorkflow(trigger, { ...contextFor(flowId), preview });
+  const compiled = compileWorkflow(trigger, { ...contextFor(flowId), preview });
+  // Check the inputs the engine will actually execute, including account auth.
+  // Keep the compiler's traversal limit before making a second graph walk.
+  const effective = preview?.inputOverride && !compiled.issues.some(i => i.code === 'LIMIT')
+    ? applyInputOverrides(trigger as FlowTriggerNode, { [preview.stepName]: preview.inputOverride })
+    : trigger;
+  // Selected-ingredient pins (F-08) hold on every path, including the ones
+  // where a person accepts new binding pins.
+  const result = withIngredients(flowId, effective, compiled);
+  if (mode.acceptBindings) return result;
+  // A binding that changed since a person enabled the flow is a blocker, never
+  // a silent switch to whatever now answers to the same name.
+  const stale = bindingPinIssues(flowId, versionId, trigger);
+  return stale.length ? { ...result, ready: false, issues: [...result.issues, ...stale] } : result;
 }
-export function assertVersionReady(flowId: string, versionId: string, preview?: ReadinessContext['preview']): void {
-  const result = versionReadiness(flowId, versionId, preview);
+/** Recheck saved pins at dispatch, using the same frozen preview inputs as execution. */
+export function assertRunIngredientsReady(run: Pick<FlowRun, 'id' | 'flowId'>, trigger: FlowTriggerNode, initial?: RunExecutionConfig): void {
+  if (!hasFlowIngredients(run.flowId)) return;
+  // RESUME supplies no initial config: only the original BEGIN may define it.
+  const config = ensureRunExecutionConfig(run.id, initial);
+  const effective = config.sampleInputOverride ? applyInputOverrides(trigger, config.sampleInputOverride) : trigger;
+  const result = withIngredients(run.flowId, effective, { ready: true, issues: [], runtimeChecks: [] });
   if (!result.ready) throw new WorkflowReadinessError(result);
 }
-export function assertFlowReady(flowId: string): void {
+export function assertVersionReady(flowId: string, versionId: string, preview?: ReadinessContext['preview'], mode: BindingPinMode = {}): void {
+  const result = versionReadiness(flowId, versionId, preview, mode);
+  if (!result.ready) throw new WorkflowReadinessError(result);
+}
+export function assertFlowReady(flowId: string, mode: BindingPinMode = {}): void {
   const row = getWorkflowDb().query<{ version_id: string | null }, [string]>(
     `SELECT COALESCE(f.published_version_id, (SELECT id FROM flow_version WHERE flow_id = f.id AND state = 'DRAFT' ORDER BY updated DESC LIMIT 1)) AS version_id FROM flow f WHERE id = ?`,
   ).get(flowId);
   if (!row) throw new Error('flow not found');
   if (!row.version_id) throw new WorkflowReadinessError({ ready: false, runtimeChecks: [], issues: [{ node: 'trigger', path: 'graph', code: 'VERSION', message: 'Create a workflow version before enabling it' }] });
-  assertVersionReady(flowId, row.version_id);
+  assertVersionReady(flowId, row.version_id, undefined, mode);
 }
 export function assertLiveDraftReady(flowId: string, trigger: unknown): void {
   const row = getWorkflowDb().query<{ status: string; published_version_id: string | null }, [string]>(

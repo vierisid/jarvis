@@ -1,3 +1,4 @@
+import { memoryPageResponse } from '../../../../../src/vault/memory-page';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from 'bun:test';
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -31,6 +32,7 @@ beforeEach(() => {
   const routes = createFactDecisionRoutes();
   globalThis.fetch = (async (input, opts = {}) => {
     const url = new URL(String(input), 'http://localhost');
+    if (url.pathname === '/api/vault/page') return memoryPageResponse(new NativeRequest(url));
     if (url.pathname === '/api/vault/entities') return NativeResponse.json(findEntities({}));
     if (url.pathname === '/api/vault/relationships') return NativeResponse.json([]);
     if (url.pathname === '/api/vault/facts') return NativeResponse.json(findFacts({

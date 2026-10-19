@@ -7,7 +7,7 @@ import { decisionView, type DecisionBinding } from "../hero-paper/model";
 import "./today-layout.css";
 
 /** D-09/10/11 supply their independently gated views. No fabricated fallback cards. */
-export interface TodaySlots { goal?: ReactNode; outcomes?: ReactNode; activity?: ReactNode; opportunities?: ReactNode }
+export interface TodaySlots { goal?: ReactNode; outcomes?: ReactNode; activity?: ReactNode; opportunities?: ReactNode; queueNotice?: ReactNode }
 export function TodayLayout({ shell, greeting, dateLabel, dateTime, decision, slots = {}, reducedMotion = false }: {
   shell: BriefShellPort; greeting: string; dateLabel: string; dateTime?: string;
   decision?: DecisionBinding; slots?: TodaySlots; reducedMotion?: boolean;
@@ -28,7 +28,7 @@ export function TodayLayout({ shell, greeting, dateLabel, dateTime, decision, sl
     <header ref={greetingRef} className="brief-today-greeting"><time className="brief-type-data brief-secondary" dateTime={dateTime}>{dateLabel}</time>
       <h1 className="brief-type-today-greeting">{greeting}</h1></header>
     {slots.goal && <PebbleCompanion closedTop={greetingHeight + 58}>{slots.goal}</PebbleCompanion>}
-    <div className="brief-today-primary"><HeroPaper binding={decisionView(shell.mode, decision)} reducedMotion={reducedMotion} /></div>
+    <div className="brief-today-primary"><HeroPaper binding={decisionView(shell.mode, decision)} reducedMotion={reducedMotion} queueNotice={slots.queueNotice} /></div>
     {slots.outcomes && <div className="brief-today-outcomes">{slots.outcomes}</div>}
     {slots.activity && <div className="brief-today-activity">{slots.activity}</div>}
     {slots.opportunities && <section className="brief-today-opportunities" aria-label="Opportunities"><h2 className="brief-type-section-heading">Opportunities</h2>{slots.opportunities}</section>}

@@ -24,8 +24,8 @@ export interface FlowPickerEntry {
  * `displayName` falls back to `(unnamed)` when the field is missing or
  * empty so every entry has something readable.
  */
-export async function fetchFlowsForPicker(): Promise<FlowPickerEntry[]> {
-  const res = await fetch("/api/workflows");
+export async function fetchFlowsForPicker(request: typeof fetch = fetch): Promise<FlowPickerEntry[]> {
+  const res = await request("/api/workflows");
   if (!res.ok) throw new Error(`GET /api/workflows -> ${res.status}`);
   const body = (await res.json()) as unknown;
   return normalizeFlowsResponse(body);

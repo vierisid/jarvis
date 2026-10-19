@@ -3,6 +3,7 @@ import type { ApprovalExecutionMode, ApprovalExecutionOutcome, ApprovalStatus } 
 import type { GoalHealth, GoalStatus } from '../goals/types.ts';
 import type { WorkItem } from '../goals/work-items.ts';
 import type { MessageRole } from '../vault/conversations.ts';
+import type { BriefAttachmentRef } from './attachment-contracts.ts';
 import type { FactBasis, FactState } from '../vault/fact-policy.ts';
 import type { FlowStatus } from '../workflows/db/repos/flow.ts';
 import type { FlowVersionState } from '../workflows/db/repos/flow-version.ts';
@@ -42,16 +43,20 @@ export interface BriefTurnRef {
   requestId: string;
 }
 export interface BriefCancelTurn extends BriefTurnRef {}
-export interface BriefSendTurn extends BriefTurnRef { text: string; speak?: boolean }
+export interface BriefSendTurn extends BriefTurnRef { text: string; speak?: boolean; attachmentIds?: string[] }
 export type BriefTurnState = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 export interface BriefMessage extends BriefTurnRef {
   messageId: string;
   role: MessageRole;
   content: string;
   createdAt: BriefTimestamp;
+  attachments?: BriefAttachmentRef[];
 }
 export interface BriefActivity {
   activityId: string;
+  /** Additive F-06 fields. Order is assigned once within the originating turn. */
+  kind?: 'tool' | 'agent' | 'task';
+  order?: number;
   phase: 'started' | 'completed' | 'failed';
   /** Allowlisted, redacted commentary only. Never hidden reasoning or raw arguments. */
   summary: string;
@@ -146,6 +151,11 @@ export interface BriefMeasurement {
   qualification: 'measured' | 'user_reported';
 }
 export interface BriefGoal {
+  /** F-15 additive fields; a child never implicitly contributes to its parent. */
+  measurementRevision?: number;
+  /** `observations`: counted from cited entries, one per thing (Q-17); `reported`: a typed total with one source. */
+  measurementDefinition?: { unit: string; baseline: number; target: number; basis?: 'reported' | 'observations' } | null;
+  progress?: { value: number | null; basis: 'measurement' | 'legacy_score' | 'unknown'; rollup: 'independent' };
   goalId: string;
   revision: BriefRevision;
   status: GoalStatus;

@@ -1,0 +1,34 @@
+{
+  "task": "D-18",
+  "file": "eNfKeirIKLZLlZEasrurZa",
+  "page": "81:2",
+  "node": "81:1715",
+  "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-1715",
+  "checkpoint": "Approved current UI-35 page, UI-23 canvas handoff",
+  "inspection": "Saved native handoff and Light/Dark exports; no fresh editor session",
+  "source_directory": "/home/vierisid/aios/workspace/Jarvis/dashboard-brief-figma-2026-09-14-v6-1/ui-23-canvas-2026-10-03",
+  "inspected_exports": [
+    {
+      "file": "expanded-closed-Light-Open.png",
+      "sha256": "ea1f996eb01587c319301ef2ed47f2a19a8a4e3966518984d0de74d9d70d3de5"
+    },
+    {
+      "file": "expanded-open-Dark-Open.png",
+      "sha256": "36ae2e3c4bf787b94e35e2bff10b2a74c6792288d2cccfffc0fcfbfec23fa809"
+    }
+  ],
+  "preserved": [
+    "Full-workspace graph, stable name and Run workflow",
+    "Vertical default graph, selected boundary and matching inspector icon/title",
+    "320px inspector; Configure/Input/Output",
+    "Both themes, clean header and shell/Pebble controls"
+  ],
+  "bounded_deviations": [
+    "Existing graph positions remain authored; automatic layout is vertical in Brief only. Branch lanes use the existing tree layout with changed presentation coordinates.",
+    "Editing toolbar retains Save, Discard, Arrange, Undo and rename absent from the illustrative Figma sample.",
+    "Input and Output distinguish real configured input from existing test sample editors. Historical execution I/O awaits F-21/D-19.",
+    "Below 650px of available work width the inspector stacks below the canvas with local scrolling, without hiding advanced settings.",
+    "Actual React Flow zoom and Fit replace finite Figma zoom presets. Narrow reflow can pan to retain the selected node without changing zoom.",
+    "Run is supplied by the F-21 owner. The preview demonstrates local acknowledgement only, and has no network fallback."
+  ]
+}

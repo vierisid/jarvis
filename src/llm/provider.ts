@@ -43,6 +43,7 @@ export type LLMResponse = {
  * user-facing copy without string-matching the upstream error message.
  */
 export type LLMErrorCode =
+  | 'background_throttled' // local resource admission refused; never retry/fail over
   | 'auth'         // 401, invalid or missing API key
   | 'forbidden'    // 403, credentials accepted but this model/endpoint is not allowed
   | 'rate_limit'   // 429, quota exhausted
@@ -202,6 +203,13 @@ export type LLMOptions = {
    * provider attempt and after settlement, even if the abort timer is delayed.
    */
   checkDeadline?: () => void;
+  /**
+   * Internal resource admission for a provider's retry of the same messages.
+   * Call only after the previous transport settles, before starting another,
+   * and use the returned options (including any lower output limit). Throws
+   * when the retry cannot be reserved. Unset for foreground/unmanaged calls.
+   */
+  reserveRetry?: (options: LLMOptions) => LLMOptions;
 };
 
 export interface LLMProvider {
