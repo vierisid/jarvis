@@ -63,6 +63,7 @@ import {
 import { publishFlowVersion } from "../../workflows/db/repos/flow-publication.ts";
 import { assertVersionReady } from '../../workflows/db/repos/flow-readiness';
 import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow } from '../../workflows/db/repos/flow-turn-off';
+import { assertFlowDeletable } from '../../workflows/db/repos/workflow-removal-state';
 import { listFlowFires } from '../../workflows/db/repos/trigger-fire';
 import { bindingChangesToAccept } from '../../workflows/db/repos/binding-pins';
 import { assertCodeStepsAllowed } from "../../workflows/db/repos/flow-code-steps.ts";
@@ -1106,6 +1107,7 @@ function publishOsWarnings(trigger: unknown, deps: ManageWorkflowDeps): string[]
 
 function actDelete(flow: FlowRow, deps: ManageWorkflowDeps, project: string): Record<string, unknown> {
   // The flow was resolved in the caller's project before stopping its runs.
+  assertFlowDeletable(flow.id);
   stopRunsOfDeletedFlow(flow.id);
   // Its own predicate rather than trusting the resolve above for its scope,
   // as #692 made the connections UPDATE carry one.

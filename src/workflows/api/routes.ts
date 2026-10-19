@@ -85,6 +85,7 @@ import {
 } from "../db/repos/waitpoint";
 import { fireForRun, pageFlowFires } from "../db/repos/trigger-fire";
 import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
+import { assertFlowDeletable } from "../db/repos/workflow-removal-state";
 import { claimContinuation } from "../runtime/continuation";
 import { emergencyHold, KILLED_REASON, manualStartRefusal } from "../runtime/emergency-hold";
 import {
@@ -643,6 +644,7 @@ const trapErrors = async (fn: () => Promise<Response> | Response): Promise<Respo
     // is well-formed and the caller is told exactly which grant is missing.
     if (e instanceof CodeStepsRefusedError) return err(e.message, e.status);
     const msg = e instanceof Error ? e.message : String(e);
+    if (['workflow_removed', 'workflow_history_retained'].includes(msg)) return ok({ error: msg, code: msg }, 409);
     if (/not found/i.test(msg)) return err(msg, 404);
     return err(msg, 500);
   }
@@ -1606,6 +1608,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           const project = callerProject(req);
           if (!getFlowInProject(project, id)) return err("flow not found", 404);
+          assertFlowDeletable(id);
           stopRunsOfDeletedFlow(id);
           // BEHAVIOUR CHANGE (#729): a flow that does not exist used to answer
           // 200 `{ ok: true }`. It is a 404 now, because a flow in another

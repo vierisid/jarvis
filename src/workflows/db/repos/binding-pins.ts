@@ -235,7 +235,7 @@ function versionTrigger(versionId: string): unknown {
 /** The version an enabled flow runs: its published version, else its latest draft. */
 function runningVersion(flowId: string): { projectId: string; versionId: string; trigger: unknown } | null {
   const row = getWorkflowDb().query<{ project_id: string; version_id: string | null }, [string]>(
-    `SELECT f.project_id AS project_id, COALESCE(f.published_version_id, (SELECT id FROM flow_version WHERE flow_id = f.id AND state = 'DRAFT' ORDER BY updated DESC LIMIT 1)) AS version_id
+    `SELECT f.project_id AS project_id, COALESCE(f.published_version_id, (SELECT version_id FROM brief_workflow_draft_selection WHERE flow_id = f.id)) AS version_id
        FROM flow f WHERE f.id = ?`,
   ).get(flowId);
   return row?.version_id ? { projectId: row.project_id, versionId: row.version_id, trigger: versionTrigger(row.version_id) } : null;
