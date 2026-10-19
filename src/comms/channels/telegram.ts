@@ -40,6 +40,8 @@ export interface ChannelAdapter {
   sendMessage(to: string, text: string, options?: SendOptions): Promise<void>;
   onMessage(handler: ChannelHandler): void;
   isConnected(): boolean;
+  /** Credential/session evidence for read models; activity flags alone are not authentication. */
+  authenticationState?(): 'verified' | 'rejected' | 'unknown';
 }
 
 export class TelegramSendError extends Error {
@@ -137,6 +139,7 @@ export class TelegramAdapter implements ChannelAdapter {
   private token: string;
   private handler: ChannelHandler | null = null;
   private polling: boolean = false;
+  private authentication: 'verified' | 'rejected' | 'unknown' = 'unknown';
   /**
    * The next `getUpdates` offset. Telegram confirms an update only when a
    * later call passes an offset above it, so this is also what decides which
@@ -187,11 +190,13 @@ export class TelegramAdapter implements ChannelAdapter {
       return;
     }
 
+    this.authentication = 'unknown';
     // Verify bot token by calling getMe (with timeout so an unreachable
     // api.telegram.org or hung connection doesn't block daemon startup)
     try {
       const response = await fetchWithTimeout(`${this.baseUrl}/getMe`, {}, 10_000);
       const data = await response.json() as any;
+      this.observeAuthentication(response.status, data);
 
       if (!data.ok) {
         throw new Error(`Invalid bot token: ${data.description}`);
@@ -217,6 +222,7 @@ export class TelegramAdapter implements ChannelAdapter {
     // first poll and be dropped here only by the check in startPolling.
     this.pollAbort?.abort();
     this.pollAbort = null;
+    this.authentication = 'unknown';
     console.log('[TelegramAdapter] Disconnected');
   }
 
@@ -235,6 +241,7 @@ export class TelegramAdapter implements ChannelAdapter {
         // A proxy/outage 5xx can carry a non-JSON body; map it through the
         // status code instead of letting the parse error escape unclassified.
         const data = await response.json().catch(() => null) as any;
+        this.observeAuthentication(response.status, data);
 
         if (!data?.ok) {
           // Retry without Markdown if parsing failed
@@ -244,7 +251,9 @@ export class TelegramAdapter implements ChannelAdapter {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ chat_id: chatId, text: chunk }),
             }, 15_000);
-            const fallbackError = telegramErrorFromResponse(fallback.status, await fallback.json().catch(() => null));
+            const fallbackData = await fallback.json().catch(() => null);
+            this.observeAuthentication(fallback.status, fallbackData);
+            const fallbackError = telegramErrorFromResponse(fallback.status, fallbackData);
             if (fallbackError) throw fallbackError;
           } else {
             const error = telegramErrorFromResponse(response.status, data);
@@ -270,6 +279,16 @@ export class TelegramAdapter implements ChannelAdapter {
 
   isConnected(): boolean {
     return this.polling;
+  }
+
+  authenticationState(): 'verified' | 'rejected' | 'unknown' { return this.authentication; }
+
+  private observeAuthentication(status: number, body: unknown): void {
+    const data = body as { ok?: boolean; error_code?: number } | null;
+    // A token rejection is sticky for this adapter, including across older in-flight successes.
+    // A new adapter/token or explicit connect performs a new getMe validation.
+    if (status === 401 || data?.error_code === 401) this.authentication = 'rejected';
+    else if (this.authentication !== 'rejected' && data?.ok === true && status >= 200 && status < 300) this.authentication = 'verified';
   }
 
   private async startPolling(): Promise<void> {
@@ -300,6 +319,7 @@ export class TelegramAdapter implements ChannelAdapter {
           await this.processUpdate(update);
         }
       } catch (error) {
+        if (this.authentication !== 'rejected') this.authentication = 'unknown';
         // An aborted poll is disconnect() doing its job, not an error.
         if (this.polling) console.error('[TelegramAdapter] Polling error:', error);
       }
@@ -329,7 +349,12 @@ export class TelegramAdapter implements ChannelAdapter {
           allowed_updates: ['message'],
         }),
         signal: abort.signal,
-      }, 35_000, (r) => r.json() as Promise<TelegramGetUpdatesResponse>);
+      }, 35_000, async (r) => {
+        const body = await r.json() as TelegramGetUpdatesResponse;
+        // A poll disconnect() aborted must not mark a disconnected adapter verified.
+        if (!abort.signal.aborted) this.observeAuthentication(r.status, body);
+        return body;
+      });
     } finally {
       if (this.pollAbort === abort) this.pollAbort = null;
     }

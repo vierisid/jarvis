@@ -1,3 +1,5 @@
+import { createConnectedWorkspaceRoutes } from './connected-workspace-routes';
+import type { ConnectedWorkspace } from './connected-workspace';
 import { createWorkflowContextRoutes } from './workflow-context-routes';
 import type { WorkflowContext } from './workflow-context';
 import { createWorkflowRemovalRoutes } from './workflow-removal-routes';
@@ -31,13 +33,14 @@ import { createCompositionRoutes } from './composition-routes';
 import type { BriefCompositionProvider } from './composition';
 
 /** Mounted only inside the daemon's existing authenticated API route table. */
-export function createBriefRoutes(capabilities: BriefCapabilities, json: (body: unknown, status?: number) => Response, conversations?: BriefConversationProvider, attachments?: BriefAttachmentProvider, composition?: BriefCompositionProvider, prepared?: PreparedOpportunities, activation?: OpportunityActivation, decisions?: DecisionQueue, recommendations?: Recommendations, documents?: DecisionDocuments, goals?: GoalMeasurements, outcomes?: Outcomes, memory?: MemoryStream, memoryUsage?: MemoryUsageLedger, memoryForget?: MemoryForget, workflowRemoval?: WorkflowRemoval, workflowContext?: WorkflowContext) {
+export function createBriefRoutes(capabilities: BriefCapabilities, json: (body: unknown, status?: number) => Response, conversations?: BriefConversationProvider, attachments?: BriefAttachmentProvider, composition?: BriefCompositionProvider, prepared?: PreparedOpportunities, activation?: OpportunityActivation, decisions?: DecisionQueue, recommendations?: Recommendations, documents?: DecisionDocuments, goals?: GoalMeasurements, outcomes?: Outcomes, memory?: MemoryStream, memoryUsage?: MemoryUsageLedger, memoryForget?: MemoryForget, workflowRemoval?: WorkflowRemoval, workflowContext?: WorkflowContext, connections?: ConnectedWorkspace) {
   return {
     ...createMemoryStreamRoutes(capabilities, json, memory),
     ...createMemoryUsageRoutes(capabilities, json, memoryUsage),
     ...createMemoryForgetRoutes(capabilities, json, memoryForget),
     ...createWorkflowRemovalRoutes(capabilities, json, workflowRemoval),
     ...createWorkflowContextRoutes(capabilities, json, workflowContext),
+    ...createConnectedWorkspaceRoutes(capabilities, json, connections),
     ...createOutcomeRoutes(capabilities, json, outcomes),
     ...createGoalMeasurementRoutes(capabilities, json, goals),
     ...createDecisionDocumentRoutes(capabilities, json, documents),

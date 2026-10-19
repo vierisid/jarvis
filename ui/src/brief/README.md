@@ -717,8 +717,7 @@ actions only change local fixture state.
   settings.
 - `ConnectionsPort` is the only input. There is no live implementation on main: `createF22ConnectionsPort`
   bridges to F-22's headless setup adapter (#943) through an injected `F22Binding`, and without one it
-  returns `unsupported`. Its real-module tests are skipped unless `D27_F22_SETUP_MODULE` points at
-  F-22's `ui/src/brief/connections/setup.ts`; they run by default once F-22 is on main.
+  returns `unsupported`. Its real-module tests run against F-22's `ui/src/brief/connections/setup.ts`.
 - Connected comes only from the canonical projection: after a check the controller re-reads and
   requires the exact account (`connectionKey`) with `authenticated === true` and `availability ===
   "ready"`. A browser return or launch is never confirmation, and saved credentials show as
