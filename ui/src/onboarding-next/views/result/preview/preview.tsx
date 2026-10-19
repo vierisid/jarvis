@@ -1,12 +1,21 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { available, WorkflowEditor, WorkflowEditorEnvironment, versionBoundRequest, CANVAS_CATALOG, NavigationShell, UNKNOWN_NAVIGATION } from 'on-u-09-canvas-fixture';
+import { WorkflowEditor } from '../../../../v2/rooms/workflows/WorkflowEditor';
+import { WorkflowEditorEnvironment } from '../../../../v2/rooms/workflows/WorkflowEditorEnvironment';
+import { versionBoundRequest } from '../../../../brief/workflows/canvas/request';
+import { CANVAS_CATALOG } from '../../../../brief/workflows/canvas/fixtures';
+import { NavigationShell } from '../../../../brief/shell/navigation/NavigationShell';
+import { UNKNOWN_NAVIGATION } from '../../../../brief/shell/navigation/model';
+import type { BriefShellPort } from '../../../../brief/contracts';
+import type { BriefNavigationBinding } from '../../../../brief/shell/navigation/model';
+import '../../../../brief/styles/index.css';
+import '../../../../brief/workflows/canvas/canvas.css';
 import { ResultView } from '../index';
 import type { ResultAction, ResultCanvasProps } from '../index';
 import { example, EXAMPLES, modelFor } from './fixtures';
 import './preview.css';
 
-/** Real D18 editor, isolated fixture transport. No global-fetch fallback or live effects. */
+/** D18 editor from this checkout, isolated fixture transport. No global-fetch fallback or live effects. */
 function Canvas({ draft, onDirtyChange, onUnavailable }: ResultCanvasProps) {
   const [portalHost, setPortalHost] = useState<HTMLDivElement | null>(null);
   const samples = useRef(new Map<string, string>());
@@ -52,9 +61,9 @@ function Preview() {
   if (scenario === 'completion unavailable') draft.continuation = null;
   const model = { ...modelFor(draft, revision), theme, result: ['pending', 'no_draft'].includes(scenario) ? { availability: 'ready', state: scenario }
     : scenario === 'deleted' ? { availability: 'unavailable', reason: 'artifact_unavailable' } : scenario === 'stale version' ? { ...draft, versionId: 'replacement' } : draft };
-  const shell = { mode: 'preview', route: { room: 'workflow', selection: draft.workflow.selection }, sidebar, setSidebar, chatOpen, setChatOpen, theme, setTheme,
-    navigate: (route: any) => { if (route.room === 'workflows') setDestination('workflows'); } };
-  const binding = { capabilities: null, view: { source: 'fixture', state: { status: 'ready', data: { ...UNKNOWN_NAVIGATION, workspaceName: 'Sample workspace', connection: 'connected',
+  const shell: BriefShellPort = { mode: 'preview', route: { room: 'workflow', selection: draft.workflow.selection }, sidebar, setSidebar, chatOpen, setChatOpen, theme, setTheme,
+    navigate: route => { if (route.room === 'workflows') setDestination('workflows'); } };
+  const binding: BriefNavigationBinding = { capabilities: null, view: { source: 'fixture', state: { status: 'ready', data: { ...UNKNOWN_NAVIGATION, workspaceName: 'Sample workspace', connection: 'connected',
     account: { name: 'Sam', plan: { status: 'ready', data: 'Preview' } }, objectTitle: draft.title, badges: {} } } } };
   async function action(a: ResultAction) {
     setIntent(a); if (fail) { setFail(false); throw new Error('Illustrative uncertain delivery'); }
@@ -71,11 +80,11 @@ function Preview() {
       <button onClick={()=>setSidebar(sidebar==='rail'?'expanded':'rail')}>Toggle sidebar</button>
       <button onClick={()=>setChatOpen(x=>!x)}>Toggle chat</button>
       <label><input type="checkbox" checked={fail} onChange={e=>setFail(e.target.checked)} />Fail next action</label>
-      <small>Illustrative data · local edits only · {available ? 'real D18 canvas' : 'D18 unavailable'}</small>
+      <small>Illustrative data · local edits only · D18 canvas from this checkout</small>
     </div>
     <div className="result-preview-viewport"><NavigationShell shell={shell} binding={binding} rooms={{ workflow: { id: 'workflow', title: 'Workflows' } }}
       conversation={{ source: 'fixture', content: <div className="result-preview-chat"><h2>General</h2><p>Unsent sample conversation</p><textarea data-pebble-focus aria-label="Unsent chat draft" value={chat} onChange={e=>setChat(e.target.value)} /></div> }}>
-      {destination === 'reveal' ? <ResultView model={model} Canvas={available && scenario !== 'missing canvas' ? Canvas : undefined} onContinue={action} onRefresh={action} onOpenWorkflow={action} onBack={action} />
+      {destination === 'reveal' ? <ResultView model={model} Canvas={scenario !== 'missing canvas' ? Canvas : undefined} onContinue={action} onRefresh={action} onOpenWorkflow={action} onBack={action} />
         : <section className="result-preview-destination"><h1>{destination === 'workflows' ? 'Workflows · saved draft' : destination === 'dashboard' ? 'Dashboard continuation' : 'Your original request'}</h1>
           <p>Illustrative host navigation. Same draft: {draft.flowId} / {draft.versionId}.</p><button onClick={()=>{ setDestination('reveal'); setRevision(x=>x+1); }}>Open saved draft</button></section>}
     </NavigationShell></div><output className="result-preview-output">{intent ? `${intent.action} · ${intent.jobId} · ${intent.draft?.flowId ?? 'recover'} / ${intent.draft?.versionId ?? 'unknown'}` : 'No action submitted'}</output>

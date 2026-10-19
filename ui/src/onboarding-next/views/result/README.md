@@ -94,19 +94,18 @@ screen reader and full assembled-journey acceptance remain U11/B13 release work.
 ## Isolated preview and checks
 
 Run `bun ui/src/onboarding-next/views/result/preview/serve.ts` and open
-http://127.0.0.1:4429/. The preview extracts the locally available D18 object
-85b3c554d276677b63918d8c9fee22dc4675ad03 into a temporary directory, injects its
-real editor, shell and inspector, and supplies isolated illustrative transports.
-No fetching or cherry-picking occurs. Saves only change memory; execution,
-connections, installs and publication are denied. The three fixtures are meeting
-follow-ups, investor update and competitor brief. Scenario controls include long
-labels, missing inputs, deleted/stale results and absent dependencies. All fixture
-navigation is explicitly labeled; it is not a live backend or deployment test.
+http://127.0.0.1:4429/ (loopback only; `ONBOARDING_PREVIEW_PORT` overrides the
+port). The preview imports the D18 editor, shell and inspector from this checkout
+and supplies isolated illustrative transports. Saves only change memory;
+execution, connections, installs and publication are denied. The three fixtures
+are meeting follow-ups, investor update and competitor brief. Scenario controls
+include long labels, missing inputs, deleted/stale results and a missing canvas.
+All fixture navigation is explicitly labeled; it is not a live backend or
+deployment test.
 
-Use `--build` for a preview bundle check, or `ON_U_09_MISSING_CANVAS=1` to check
-absence. Tests: `bun test ui/src/onboarding-next/views/result`; optional compatibility
-tests run when B10/U10 exist, and skip otherwise. Run TypeScript and UI build too.
-Do not commit extracted sibling source or generated UI/runtime catalogs here.
+Tests: `bun test ui/src/onboarding-next/views/result`; the optional U10 host
+compatibility test runs when the U10 host exists and skips otherwise. Run
+TypeScript and the UI build too.
 
 Activation still requires U10/B10/B11 bindings, the selection adapter described
 above, the verified D18/19/20/readiness candidate and U11/B13 release evidence.
