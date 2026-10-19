@@ -6,6 +6,8 @@
  */
 
 import { test, expect, describe, beforeAll, afterAll, beforeEach } from "bun:test";
+import { ActionOutcomeError } from "../../actions/action-outcome";
+import { DeliveryFailedError } from "./routes/jarvis-notify";
 import { EngineTokenSigner, engineTokensEqual } from "./engine-token";
 import { SandboxRegistry } from "./sandbox-registry";
 import { SandboxApi } from "./server";
@@ -748,11 +750,20 @@ describe("SandboxApi routes (G: jarvis-tool/notify/context)", () => {
         credentialResolver: new CredentialResolver(),
         toolsInvoke: async (req) => {
           toolsCalls.push(req);
+          if (req.toolName === "refused_tool") {
+            throw new ActionOutcomeError({ status: "blocked", code: "AUTHORITY_DENIED", effect: "not_started",
+              message: "Authority denied refused_tool: not allowed" });
+          }
           return { result: { ok: true, params: req.params }, toolName: req.toolName };
         },
         notify: async (req) => {
           notifyCalls.push(req);
-          return { delivered: req.channels, failed: [] };
+          if (req.message === "sent nowhere") {
+            throw new DeliveryFailedError({ status: "error", code: "DELIVERY_FAILED", effect: "not_started",
+              message: "Not sent on any channel: telegram (blocked)" },
+              { delivered: [], failed: [{ channel: "telegram", error: "blocked" }], unknown: [] });
+          }
+          return { delivered: req.channels, failed: [], unknown: [] };
         },
         contextProvider: {
           vaultSearch: async (input) => {
@@ -845,6 +856,31 @@ describe("SandboxApi routes (G: jarvis-tool/notify/context)", () => {
     expect(r.status).toBe(200);
     expect(notifyCalls[0]?.channels).toEqual(["auto"]);
     expect(notifyCalls[0]?.priority).toBe("normal");
+  });
+
+  // Q-19: a refusal by Authority is typed, never "internal error", and never a
+  // handled outcome even for a probe step.
+  test("a governance refusal returns its typed outcome, not a 500", async () => {
+    const r = await authedFetch("/v1/jarvis/tools/invoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ toolName: "refused_tool", params: {}, requireSuccess: false }),
+    });
+    expect(r.status).toBe(409);
+    expect(await r.json()).toEqual({ error: "Authority denied refused_tool: not allowed",
+      outcome: { status: "blocked", code: "AUTHORITY_DENIED", effect: "not_started", message: "Authority denied refused_tool: not allowed" } });
+  });
+
+  // Q-19: a step that sent nothing anywhere fails with its typed outcome.
+  test("POST /v1/jarvis/notify returns a typed outcome when nothing was sent", async () => {
+    const r = await authedFetch("/v1/jarvis/notify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "sent nowhere", channels: ["telegram"] }),
+    });
+    expect(r.status).toBe(422);
+    expect(await r.json()).toEqual({ delivered: [], failed: [{ channel: "telegram", error: "blocked" }], unknown: [],
+      outcome: { status: "error", code: "DELIVERY_FAILED", effect: "not_started", message: "Not sent on any channel: telegram (blocked)" } });
   });
 
   test("POST /v1/jarvis/notify 400 on unknown channel", async () => {
@@ -1384,7 +1420,7 @@ describe("SandboxApi /v1/jarvis/* envelope hardening (G+H review #7)", () => {
         // Wire every backend so we exercise the validation layer, not the 503 gate.
         llmChat: async () => ({ text: "" }),
         toolsInvoke: async () => ({ result: {}, toolName: "" }),
-        notify: async () => ({ delivered: [], failed: [] }),
+        notify: async () => ({ delivered: [], failed: [], unknown: [] }),
         contextProvider: {
           vaultSearch: async () => ({ result: [] }),
           vaultGetEntity: async () => ({ result: null }),

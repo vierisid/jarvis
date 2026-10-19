@@ -10,7 +10,7 @@ import { JarvisNotifierAdapter, type NotifierDeps } from "./notifier";
 
 function makeDeps(overrides: Partial<NotifierDeps> = {}): NotifierDeps {
   return {
-    broadcastToDashboard: () => {},
+    broadcastToDashboard: () => 1,
     broadcastToChannels: async (channels) => ({
       delivered: channels,
       failed: [],
@@ -26,6 +26,7 @@ describe("JarvisNotifierAdapter: voice channel", () => {
       makeDeps({
         sendVoice: async (t) => {
           spoken.push(t);
+          return true;
         },
       }),
     );
@@ -43,7 +44,7 @@ describe("JarvisNotifierAdapter: voice channel", () => {
     expect(r.failed[0]?.error).toMatch(/TTS provider not configured/);
   });
 
-  test("surfaces sendVoice errors as failures", async () => {
+  test("a sendVoice that throws after starting may have played part of it: unknown", async () => {
     const adapter = new JarvisNotifierAdapter(
       makeDeps({
         sendVoice: async () => {
@@ -52,7 +53,48 @@ describe("JarvisNotifierAdapter: voice channel", () => {
       }),
     );
     const r = await adapter.notify({ message: "x", channels: ["voice"] });
-    expect(r.failed[0]?.error).toMatch(/websocket closed/);
+    expect(r.failed).toEqual([]);
+    expect(r.unknown).toEqual([{ channel: "voice", error: "websocket closed" }]);
+  });
+
+  test("nothing spoken is failed, not delivered", async () => {
+    const adapter = new JarvisNotifierAdapter(makeDeps({ sendVoice: async () => false }));
+    const r = await adapter.notify({ message: "x", channels: ["voice"] });
+    expect(r.delivered).toEqual([]);
+    expect(r.failed[0]?.channel).toBe("voice");
+  });
+});
+
+// Q-19: a surface with nobody to show it to reports failed, never delivered,
+// and a channel that may have taken it reports unknown, never failed.
+describe("JarvisNotifierAdapter: honest receipts", () => {
+  test("no open dashboard is failed, not delivered", async () => {
+    const adapter = new JarvisNotifierAdapter(makeDeps({ broadcastToDashboard: () => 0 }));
+    const r = await adapter.notify({ message: "x", channels: ["dashboard"] });
+    expect(r).toEqual({ delivered: [], failed: [{ channel: "dashboard", error: "no dashboard was open" }], unknown: [] });
+  });
+
+  test("a desktop that did not show it is failed", async () => {
+    const adapter = new JarvisNotifierAdapter(makeDeps({ sendDesktop: async () => false }));
+    const r = await adapter.notify({ message: "x", channels: ["desktop"] });
+    expect(r).toEqual({ delivered: [], failed: [{ channel: "desktop", error: "the desktop did not show it" }], unknown: [] });
+  });
+
+  test("unconfirmed channels pass through as unknown", async () => {
+    const adapter = new JarvisNotifierAdapter(makeDeps({
+      broadcastToChannels: async () => ({ delivered: ["discord"], failed: [], unknown: [{ channel: "telegram", error: "timed out" }] }),
+    }));
+    const r = await adapter.notify({ message: "x", channels: ["telegram", "discord"] });
+    expect(r).toEqual({ delivered: ["discord"], failed: [], unknown: [{ channel: "telegram", error: "timed out" }] });
+  });
+
+  test("a router that throws part way leaves every channel unknown, not failed", async () => {
+    const adapter = new JarvisNotifierAdapter(makeDeps({
+      broadcastToChannels: async () => { throw new Error("router crashed"); },
+    }));
+    const r = await adapter.notify({ message: "x", channels: ["telegram", "discord"] });
+    expect(r.failed).toEqual([]);
+    expect(r.unknown.map((u) => u.channel)).toEqual(["telegram", "discord"]);
   });
 });
 
@@ -66,6 +108,7 @@ describe("JarvisNotifierAdapter: channel expansion", () => {
       makeDeps({
         broadcastToDashboard: () => {
           calls.dashboard = true;
+          return 1;
         },
         broadcastToChannels: async (channels) => {
           calls.channels = channels;
@@ -154,4 +197,47 @@ describe("JarvisNotifierAdapter: channel expansion", () => {
     await adapter.notify({ message: "x", channels: ["dashboard"] });
     expect(m8Called).toBe(false);
   });
+});
+
+// Review B1, owner rule: a dashboard `auto` chose is skipped when nobody is
+// watching and the desktop shows it instead; a dashboard the step names is strict.
+describe("JarvisNotifierAdapter: auto with no dashboard open", () => {
+  test("auto skips the closed dashboard and shows it on the desktop", async () => {
+    const shown: string[] = [];
+    const adapter = new JarvisNotifierAdapter(makeDeps({ broadcastToDashboard: () => 0, getConnectedExternalChannels: () => new Set(),
+      sendDesktop: async (_title, body) => { shown.push(body); return true; } }));
+    expect(await adapter.notify({ message: "x", channels: ["auto"] })).toEqual({ delivered: ["desktop"], failed: [], unknown: [] });
+    expect(shown).toEqual(["x"]);
+  });
+
+  test("a closed dashboard under auto is not reported failed when another channel delivered", async () => {
+    const adapter = new JarvisNotifierAdapter(makeDeps({ broadcastToDashboard: () => 0, getConnectedExternalChannels: () => new Set(["telegram"]) }));
+    expect(await adapter.notify({ message: "x", channels: ["auto"] })).toEqual({ delivered: ["telegram"], failed: [], unknown: [] });
+  });
+
+  test("when nothing reached anyone, the skipped dashboard is part of why", async () => {
+    const adapter = new JarvisNotifierAdapter(makeDeps({ broadcastToDashboard: () => 0, getConnectedExternalChannels: () => new Set() }));
+    expect(await adapter.notify({ message: "x", channels: ["auto"] }))
+      .toEqual({ delivered: [], failed: [{ channel: "dashboard", error: "no dashboard was open" }], unknown: [] });
+  });
+
+  test("the governed step's frozen auto choice counts the same as auto itself", async () => {
+    const adapter = new JarvisNotifierAdapter(makeDeps({ broadcastToDashboard: () => 0, sendDesktop: async () => true }));
+    expect(await adapter.notify({ message: "x", channels: ["dashboard"], autoDashboard: true })).toEqual({ delivered: ["desktop"], failed: [], unknown: [] });
+  });
+
+  test("a dashboard the step names is strict, and the desktop is not tried for it", async () => {
+    let desktop = 0;
+    const adapter = new JarvisNotifierAdapter(makeDeps({ broadcastToDashboard: () => 0, sendDesktop: async () => { desktop++; return true; } }));
+    expect(await adapter.notify({ message: "x", channels: ["dashboard"] }))
+      .toEqual({ delivered: [], failed: [{ channel: "dashboard", error: "no dashboard was open" }], unknown: [] });
+    expect(desktop).toBe(0);
+  });
+});
+
+// Review C4: a desktop toast that did not confirm in time may be on screen.
+test("a desktop toast that did not confirm in time is unknown, not failed", async () => {
+  const adapter = new JarvisNotifierAdapter(makeDeps({ sendDesktop: async () => "unknown" }));
+  expect(await adapter.notify({ message: "x", channels: ["desktop"] }))
+    .toEqual({ delivered: [], failed: [], unknown: [{ channel: "desktop", error: "it did not confirm in time; it may have shown" }] });
 });

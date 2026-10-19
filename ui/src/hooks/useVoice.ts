@@ -296,7 +296,8 @@ export type UseVoiceReturn = {
    *  (and, when `containsStop`, a spoken stop phrase). */
   handleTTSContainsWake: (containsStop?: boolean) => void;
   handleTTSEnd: (requestId?: string, bargeIn?: boolean) => void;
-  handleError: (message?: string) => void;
+  /** `requestId`: the failed turn, when it was not a text turn this tab sent; ignored unless this hook started it. */
+  handleError: (message?: string, requestId?: string) => void;
   /** Realtime session closed server-side — stop the mic, return to idle.
    *  `reason:"plan"` or `"unavailable"` additionally forces an immediate
    *  availability re-check. */
@@ -356,6 +357,11 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
   const ttsQueueRef = useRef<ArrayBuffer[]>([]);
   const ttsPlayingRef = useRef(false);
   const ttsRequestIdRef = useRef<string | null>(null);
+  /** Voice turns this tab started (Q-19): another tab's failed turn must not cut this tab's audio. */
+  const ownVoiceRequestIdsRef = useRef<string[]>([]);
+  const rememberVoiceRequest = useCallback((requestId: string) => {
+    ownVoiceRequestIdsRef.current = [...ownVoiceRequestIdsRef.current.slice(-19), requestId];
+  }, []);
   const ttsPlaybackGenerationRef = useRef(0);
   const voiceStateRef = useRef<VoiceState>("idle");
   const wakeEngineRef = useRef<any>(null);
@@ -1158,7 +1164,8 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
   // theirs to end: realtime failures arrive as realtime_status errors
   // (handleRealtimeError), and tearing the session down here cut the mic and
   // the model's reply whenever an unrelated chat request failed.
-  const handleError = useCallback(() => {
+  const handleError = useCallback((_message?: string, requestId?: string) => {
+    if (requestId && !ownVoiceRequestIdsRef.current.includes(requestId)) return;
     ttsPlaybackGenerationRef.current++;
     ttsQueueRef.current = [];
     ttsPlayingRef.current = false;
@@ -1257,6 +1264,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
 
     if (browserText) {
       const requestId = uuid();
+      rememberVoiceRequest(requestId);
       ws.send(JSON.stringify({
         type: "voice_text",
         payload: { requestId, text: browserText, currentRoom, shownApprovalId },
@@ -1274,6 +1282,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
     }
 
     const requestId = uuid();
+    rememberVoiceRequest(requestId);
     const wavBuffer = encodeWav(pcmChunksRef.current, sampleRateRef.current);
 
     // Signal start
@@ -1295,7 +1304,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
 
     pcmChunksRef.current = [];
     setVoiceState("processing");
-  }, [encodeWav, wsRef, getCurrentRoom, settleVoiceState]);
+  }, [encodeWav, wsRef, getCurrentRoom, settleVoiceState, rememberVoiceRequest]);
 
   // --- Stop recording ---
   const stopRecordingInternal = useCallback(() => {

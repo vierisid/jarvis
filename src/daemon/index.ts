@@ -1,3 +1,25 @@
+import { MemoryStream } from '../brief/memory-stream';
+import { registerMemoryStream } from '../brief/registrations/memory-stream';
+import { Outcomes } from '../brief/outcomes';
+import { registerOutcomes } from '../brief/registrations/outcomes';
+import { GoalMeasurements } from '../brief/goal-measurements';
+import { registerGoalMeasurements } from '../brief/registrations/goal-measurements';
+import { documentFactBindings } from '../brief/decision-document-bindings';
+import { DecisionDocuments } from '../brief/decision-documents';
+import { registerDecisionEdits } from '../brief/registrations/decision-edits';
+import { Recommendations } from '../brief/recommendations';
+import { nextActionPlanner } from '../brief/recommendation-planner';
+import { registerRecommendations } from '../brief/registrations/recommendations';
+import { DecisionQueue } from '../brief/decisions';
+import { registerDecisions } from '../brief/registrations/decisions';
+import { AwarenessDeliveryPolicy } from './awareness-delivery-policy';
+import { registerQuietAwareness } from '../brief/registrations/quiet-awareness';
+import { OpportunityActivation } from '../brief/opportunity-activation';
+import { registerOpportunityActivation } from '../brief/registrations/opportunity-activation';
+import { PreparedOpportunities } from '../awareness/prepared-opportunities';
+import { loadPreparedQualityGate } from '../awareness/prepared-quality-adapter';
+import { registerPreparedOpportunities } from '../brief/registrations/prepared-opportunities';
+import { registerCompositionIngredients } from '../brief/registrations/composition-ingredients';
 import { registerChatAttachments } from '../brief/registrations/chat-attachments';
 import { registerChatProgress } from '../brief/registrations/chat-progress';
 import { BriefAttachmentProvider } from '../brief/attachments';
@@ -67,7 +89,6 @@ import { AuthorityEngine } from "../authority/engine.ts";
 import { ApprovalManager, approvalNeedsClick, executionState, UNANSWERED_APPROVAL_TTL_MS, type ApprovalRequest } from "../authority/approval.ts";
 import { applyEmergencyState } from "./emergency-state.ts";
 import { AuditTrail } from "../authority/audit.ts";
-import { wrapUntrusted, inlineUntrusted } from "../roles/untrusted.ts";
 import { isUpdateAvailable, SIDECAR_LATEST_VERSION, SIDECAR_RECOMMENDED_VERSION } from "../sidecar/compat.ts";
 import { containsWakePhrase, hasSpokenContent, wakeCommandFrom } from "../voice/wake-phrase.ts";
 import { AuthorityLearner } from "../authority/learning.ts";
@@ -77,9 +98,10 @@ import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { buildBackgroundProfile } from "../authority/background-profile.ts";
 import { buildTaintGating } from "../authority/taint-gating.ts";
 import { channelApprovalReply, notificationApprovalDecision, notificationDecisionNote } from "./approval-decision.ts";
-import { sendDesktopNotification } from "../comms/desktop-notify.ts";
+import { sendDesktopNotification, sendDesktopNotificationReceipt } from "../comms/desktop-notify.ts";
+import { channelLabel, failureText, projectFailure } from "../failures/projection.ts";
+import { runFailureNotice } from "../workflows/runtime/run-failure.ts";
 import { ensureUiBuilt } from "./ui-autobuild.ts";
-import { deliverOpportunityNotification } from './opportunity-notification.ts';
 import { SidecarManager, buildEnrollmentUrls } from "../sidecar/manager.ts";
 import {
   beginDashboardIntro,
@@ -96,7 +118,7 @@ import { TimerWaitpointScheduler } from "../workflows/timer-scheduler.ts";
 import { createRunFlowHandler, RUN_FLOW } from "../workflows/runner/handler.ts";
 import { createWorkflowRoutes } from "../workflows/api/routes.ts";
 import { TriggerManager } from "../workflows/runner/triggers/manager.ts";
-import { AWARENESS_EVENT_TYPE_MAP, OBSERVER_EVENT_TYPE_MAP } from "../workflows/runtime/event-types.ts";
+import { OBSERVER_EVENT_TYPE_MAP } from "../workflows/runtime/event-types.ts";
 import { WorkflowEventBus } from "../workflows/runtime/event-bus.ts";
 import { WorkflowEventBuffer } from "../workflows/runtime/event-buffer.ts";
 import { createComposerLlmClient } from "../actions/tools/composer-llm.ts";
@@ -108,10 +130,9 @@ import {
   type BootstrapWorkflowEngineResult,
 } from "../workflows/runtime/engine-bootstrap.ts";
 import { CredentialResolver } from "../workflows/credentials/adapter.ts";
-import { metadataToCatalogEntry } from "../workflows/runtime/piece-catalog.ts";
+import { createPieceLibraryChangeHandler } from "../workflows/runtime/piece-library-catalog.ts";
 import { resolveSharedRuntimePaths } from "../workflows/runtime/shared-runtime-paths.ts";
 import { DEFAULT_IDS } from "../workflows/db/schema.ts";
-import { apId } from "../workflows/db/ids.ts";
 import { buildSandboxServiceBackends } from "../workflows/runtime/service-backends.ts";
 import { EngineFlowExecutor } from "../workflows/runner/engine-runtime/engine-flow-executor.ts";
 import { createLimiter } from "../util/concurrency.ts";
@@ -165,6 +186,8 @@ export interface DaemonConfig {
 
 let shutdownInProgress = false;
 let suggestionComposer: SuggestionComposer | null = null;
+let briefOpportunityActivation: OpportunityActivation | null = null;
+let briefPreparedOpportunities: PreparedOpportunities | null = null;
 let briefWorkflowComposition: BriefCompositionProvider | null = null;
 let registry: ServiceRegistry | null = null;
 let healthMonitor: HealthMonitor | null = null;
@@ -347,6 +370,10 @@ async function handleShutdown(signal: ShutdownReason): Promise<void> {
     // (window-state.ts), and phase 3 still calls it on the way out.
     flushWindowState();
   }
+  briefOpportunityActivation?.stop();
+  briefOpportunityActivation = null;
+  await briefPreparedOpportunities?.close();
+  briefPreparedOpportunities = null;
   suggestionComposer?.stop();
   suggestionComposer = null;
   briefWorkflowComposition?.stop();
@@ -4829,6 +4856,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     ensureUiBuilt(repoRoot, logWithTimestamp);
 
     // 9b. Set up API routes + dashboard static files
+    const briefGoalMeasurements = new GoalMeasurements(getDb());
+    const briefOutcomes = new Outcomes(getDb());
+    const briefMemoryStream = new MemoryStream(getDb());
+    const briefDecisions = new DecisionQueue(getDb(), { approvalManager, deferredExecutor, wsService, auditTrail });
+    const briefDecisionDocuments = new DecisionDocuments(getDb(), briefDecisions,
+      { approvalManager, deferredExecutor, wsService, auditTrail }, documentFactBindings());
+    const briefRecommendations = new Recommendations(getDb(), briefDecisions,
+      process.env.JARVIS_BRIEF_RECOMMENDATIONS === '1' ? nextActionPlanner() : null);
     const briefConversations = new BriefConversationProvider();
     const briefChatTransport = new BriefChatTransport({
       db: getDb(),
@@ -4841,12 +4876,29 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     });
     const briefAttachments = new BriefAttachmentProvider(getDb(), sidecarManager);
     briefWorkflowComposition = new BriefCompositionProvider(getDb());
+    briefPreparedOpportunities = new PreparedOpportunities(getDb());
+    briefOpportunityActivation = new OpportunityActivation(getDb());
+    const awarenessDelivery = new AwarenessDeliveryPolicy({
+      sockets: wsService, channels: channelService, reactor, coalescer, agent: () => bgAgent,
+      // The workflow bus is initialized before awareness starts, after API setup.
+      eventBus: { publish: (type, payload) => sharedEventBus.publish(type, payload) },
+    }, process.env.JARVIS_BRIEF_QUIET_AWARENESS);
     const briefEnabled: BriefCapabilityId[] = [];
+    if (process.env.JARVIS_BRIEF_GOAL_MEASUREMENTS === '1') briefEnabled.push('goalMeasurements');
+    if (process.env.JARVIS_BRIEF_MEMORY_STREAM === '1') briefEnabled.push('memoryStream');
+    if (process.env.JARVIS_BRIEF_OUTCOMES === '1') briefEnabled.push('outcomes');
+    if (process.env.JARVIS_BRIEF_RECOMMENDATIONS === '1') briefEnabled.push('recommendations');
+    if (process.env.JARVIS_BRIEF_DECISION_EDITS === '1') briefEnabled.push('decisionEdits');
+    if (process.env.JARVIS_BRIEF_DECISIONS === '1') briefEnabled.push('decisions');
+    if (awarenessDelivery.quiet) briefEnabled.push('quietAwareness');
     if (process.env.JARVIS_BRIEF_CONVERSATIONS === '1') briefEnabled.push('conversations');
     if (process.env.JARVIS_BRIEF_CHAT_TRANSPORT === '1') briefEnabled.push('chatTransport');
     if (process.env.JARVIS_BRIEF_CHAT_ATTACHMENTS === '1') briefEnabled.push('chatAttachments');
     if (process.env.JARVIS_BRIEF_CHAT_STATE === '1') briefEnabled.push('chatState');
     if (process.env.JARVIS_BRIEF_CHAT_PROGRESS === '1') briefEnabled.push('chatProgress');
+    if (process.env.JARVIS_BRIEF_COMPOSITION_INGREDIENTS === '1') briefEnabled.push('compositionIngredients');
+    if (process.env.JARVIS_BRIEF_PREPARED_OPPORTUNITIES === '1') briefEnabled.push('preparedOpportunities');
+    if (process.env.JARVIS_BRIEF_OPPORTUNITY_ACTIVATION === '1') briefEnabled.push('opportunityActivation');
     if (process.env.JARVIS_BRIEF_WORKFLOW_COMPOSITION === '1') briefEnabled.push('workflowComposition');
     const briefCapabilities = createBriefCapabilities([
       ...registerConversations(briefConversations), ...registerChatTransport(briefChatTransport),
@@ -4854,12 +4906,30 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ...registerChatAttachments(briefAttachments),
       ...registerChatProgress(briefChatTransport),
       ...registerWorkflowComposition(briefWorkflowComposition),
+      ...registerPreparedOpportunities(briefPreparedOpportunities),
+      ...registerOpportunityActivation(briefOpportunityActivation),
+      ...registerQuietAwareness(awarenessDelivery),
+      ...registerDecisions(briefDecisions),
+      ...registerDecisionEdits(briefDecisionDocuments),
+      ...registerRecommendations(briefRecommendations),
+      ...registerGoalMeasurements(briefGoalMeasurements),
+      ...registerOutcomes(briefOutcomes),
+      ...registerMemoryStream(briefMemoryStream),
+      ...registerCompositionIngredients(briefWorkflowComposition),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
     const apiContext: import('./api-routes.ts').ApiContext & Record<string, unknown> = {
+      briefDecisions,
+      briefGoalMeasurements,
+      briefOutcomes,
+      briefMemoryStream,
+      briefDecisionDocuments,
+      briefRecommendations,
       briefConversations,
       briefAttachments,
       briefWorkflowComposition,
+      briefPreparedOpportunities,
+      briefOpportunityActivation,
       briefCapabilities,
       daemonStartedAt: Date.now(),
       healthMonitor,
@@ -5111,12 +5181,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // to direct event-bus subscription.
     triggerManager = new TriggerManager({
       eventBus: sharedEventBus,
-      onRegistrationBlocked: ({ runId, message }) => notifyAll({
-        id: `workflow-readiness:${runId}`, kind: 'workflow',
-        title: 'Workflow needs attention',
-        body: `A workflow could not start: ${message}. See its failed run for details.`,
-        actions: [{ id: 'review', label: 'Open Jarvis', primary: true }, { id: 'dismiss', label: 'Dismiss' }],
-      }),
+      onRegistrationBlocked: ({ runId, message }) => {
+        // Q-19: the sentence Runs and Today show for this run.
+        notifyAll({
+          id: `workflow-readiness:${runId}`, kind: 'workflow',
+          title: 'Workflow needs attention',
+          body: runFailureNotice(runId) ?? `A workflow could not start: ${message}. See its failed run for details.`,
+          actions: [{ id: 'review', label: 'Open Jarvis', primary: true }, { id: 'dismiss', label: 'Dismiss' }],
+        });
+      },
       ...(workflowEngineRuntime ? { engineRuntime: workflowEngineRuntime } : {}),
     });
 
@@ -5128,39 +5201,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // without a daemon restart. Skipped if either the catalog or the engine
     // runtime is missing (engine bootstrap failed earlier -- the install
     // route still mutated disk; the next daemon start reconciles).
-    const onPieceLibraryChanged =
-      workflowPieceCatalog && workflowEngineRuntime
-        ? async (event: {
-            kind: "installed" | "uninstalled";
-            piece: { npmPackage: string; resolvedVersion: string };
-          }) => {
-            // Only ever reached on a SELF-MANAGED install: the Library
-            // mutations that fire this are refused when a host owns the
-            // catalog, and a host owning the catalog is exactly what having a
-            // shared tree means. So an uninstall here has no shared copy to
-            // fall back to — the piece is simply gone.
-            if (event.kind === "uninstalled") {
-              workflowPieceCatalog.remove(event.piece.npmPackage);
-              return;
-            }
-            // Unique runId per acquire so any future parallel installs
-            // (today serialized by the API's library mutex) don't collide on
-            // the engine's runId-keyed state.
-            const handle = await workflowEngineRuntime.acquire({
-              runId: `metadata-extract-runtime-install-${apId()}`,
-              projectId: DEFAULT_IDS.project,
-            });
-            try {
-              const meta = await handle.extractPieceMetadata({
-                pieceName: event.piece.npmPackage,
-                pieceVersion: event.piece.resolvedVersion,
-              });
-              workflowPieceCatalog.upsert(metadataToCatalogEntry(meta));
-            } finally {
-              await handle.release();
-            }
-          }
-        : undefined;
+    const onPieceLibraryChanged = workflowPieceCatalog && workflowEngineRuntime
+      ? createPieceLibraryChangeHandler(workflowPieceCatalog, workflowEngineRuntime)
+      : undefined;
 
     apiContext.onboardingNext = createDaemonOnboardingRuntime(apiContext, runtimeModules);
 
@@ -5402,6 +5445,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           library: composerLibrary, executionTargets: collectExecutionTargets(),
         });
         briefWorkflowComposition?.configure(compositionDependencies);
+        if (process.env.JARVIS_BRIEF_PREPARED_OPPORTUNITIES === '1') {
+          const quality = await loadPreparedQualityGate({ authority: authorityEngine,
+            tool: name => toolRegistry.get(name) ?? null,
+            targets: () => collectExecutionTargets().filter(t => !t.isHost).map(t => ({ ...t,
+              unavailableCapabilities: sidecarManager.listSidecars().find(s => s.id === t.id)?.unavailable_capabilities?.map(c => c.name),
+            })), credentials: credentialResolver,
+          }, engineBoot?.bundlePath, engineBoot?.bundleDigest);
+          briefPreparedOpportunities?.configure(compositionDependencies, quality, () => backgroundBudgetStatus().state === 'ready');
+          briefPreparedOpportunities?.start();
+        }
         suggestionComposer = new SuggestionComposer(
           request => composePersistedFlow(compositionDependencies(), request),
           undefined,
@@ -5413,14 +5466,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     }
     approvalDelivery.setBroadcaster(wsService);
     approvalDelivery.setChannelSender(channelService);
-    channelService.setDeliveryFailureHandler(({ channel, attempts, error }) => {
+    channelService.setDeliveryFailureHandler(({ channel, error, mayHaveArrived }) => {
       // 'normal', not 'urgent': urgent notifications are echoed back to
       // external channels, which would loop the failure into the channel
       // that just failed. The dashboard is the fallback the user still has.
-      wsService.broadcastNotification(
-        `Could not deliver message to ${channel} after ${attempts} attempt(s): ${error}`,
-        'normal',
-      );
+      // Q-19: a send that may have arrived reads as unconfirmed, never as
+      // not sent, and the evidence shown is redacted.
+      const failure = projectFailure({ source: 'delivery', channels: [{ channel, result: mayHaveArrived ? 'unknown' : 'failed', error }] },
+        { label: `A message to ${channelLabel(channel)}`, sideEffects: true }, { channel });
+      wsService.broadcastNotification(failureText(failure, { detail: true }), 'normal');
     });
     deferredExecutor.setResultCallback((requestId, request, result) => {
       // Notify via WS and channels that an approved action was executed.
@@ -5449,6 +5503,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // buildSandboxServiceBackends if any of these are missing.
       const agentSpecialists = agentService.getSpecialists();
       const backends = buildSandboxServiceBackends({
+        decisionDocumentsEnabled: briefCapabilities.snapshot().capabilities.decisionEdits.enabled,
         credentialResolver: workflowSandboxApi.services.credentialResolver,
         llmManager: agentService.getLLMManager(),
         ...(toolRegistry ? { toolRegistry } : {}),
@@ -5456,7 +5511,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         wsService,
         eventBuffer: workflowEventBuffer,
         sendDesktop: async (title, body) => {
-          sendDesktopNotification(title, body, { urgency: 'normal' });
+          const receipt = await sendDesktopNotificationReceipt(title, body, { urgency: 'normal' });
+          return receipt === 'unknown' ? 'unknown' : receipt === 'shown';
         },
         agentOrchestrator: agentService.getOrchestrator(),
         agentSpecialists,
@@ -5499,6 +5555,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // status flips ENABLED via the v2 API gets reconciled by the route
     // hooks calling `triggerManager.refresh(flowId)`.
     await triggerManager.start();
+    if (process.env.JARVIS_BRIEF_OPPORTUNITY_ACTIVATION === '1' && process.env.JARVIS_BRIEF_PREPARED_OPPORTUNITIES === '1') {
+      briefOpportunityActivation?.configure(briefPreparedOpportunities!, triggerManager);
+      briefOpportunityActivation?.start();
+    }
     logWithTimestamp(`Trigger manager started with ${triggerManager.list().length} active subscription(s)`);
 
     // 10.2. Republish observer events onto the workflow event bus so flows
@@ -5588,170 +5648,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       if (awarenessService) return;
       try {
         const { AwarenessService } = await import('../awareness/service.ts');
-        const awarenessWarnedTypes = new Set<string>();
         const svc = new AwarenessService(
           jarvisConfig,
           agentService.getLLMManager(),
           (event) => {
-            // Route awareness events through existing event pipeline
-            const classified = classifyEvent({
-              type: event.type,
-              data: event.data,
-              timestamp: event.timestamp,
-            });
-            if (classified.priority === 'critical' || classified.priority === 'high') {
-              reactor.react(classified).catch(err =>
-                console.error('[Daemon] Awareness reaction error:', err)
-              );
-            } else {
-              coalescer.addEvent(classified);
-            }
-            // Opportunity notifications use their durable outbox below.
-            if (!event.data.opportunityId) wsService.broadcastAwarenessEvent(event);
-
-            // Republish onto the workflow event bus so flows with `on_event`
-            // triggers (awareness.context_changed, awareness.suggestion_ready, etc.)
-            // can fire on real awareness state. Unknown raw types warn once + fall
-            // back to `awareness.<rawType>` so the bus side never drops events.
-            const mapped = AWARENESS_EVENT_TYPE_MAP[event.type];
-            const canonical = mapped ?? `awareness.${event.type}`;
-            if (!mapped && !awarenessWarnedTypes.has(event.type)) {
-              awarenessWarnedTypes.add(event.type);
-              console.warn(
-                `[Daemon] AwarenessService emitted unknown raw type "${event.type}" — publishing as "${canonical}" but it is not in WORKFLOW_EVENT_TYPES; add a mapping in src/workflows/runtime/event-types.ts so the composer surfaces it.`,
-              );
-            }
-            sharedEventBus.publish(canonical, { ...event.data, _timestamp: event.timestamp });
-
-            // Push suggestions as chat notifications + voice + desktop
-            if (event.type === 'suggestion_ready' && !event.data.opportunityId) {
-              const title = String(event.data.title ?? '');
-              const body = String(event.data.body ?? '');
-              const text = `**${title}**\n${body}`;
-              console.log(`[Daemon] Awareness suggestion firing: "${title}"`);
-
-              const hasWsClients = wsService.getServer().getClientCount() > 0;
-
-              if (hasWsClients) {
-                // Primary: deliver via WebSocket + voice
-                wsService.broadcastNotification(text, 'urgent');
-                sendDesktopNotification(`JARVIS: ${title}`, body, { urgency: 'normal' });
-                wsService.broadcastProactiveVoice(body).catch(err =>
-                  console.error('[Daemon] Awareness TTS error:', err)
-                );
-              } else {
-                // Fallback: no dashboard clients — deliver via external channels + persistent desktop
-                console.log('[Daemon] No WS clients — routing suggestion to external channels');
-                channelService.broadcastToAll(text).catch(err =>
-                  console.error('[Daemon] Channel broadcast error:', err)
-                );
-                sendDesktopNotification(`JARVIS: ${title}`, body, { urgency: 'critical', expireMs: 30000 });
-              }
-            }
-
-            // Auto-research errors: silently investigate and deliver solution
-            if (event.type === 'error_detected' && bgAgent) {
-              const errorText = String(event.data.errorText ?? '');
-              const appName = String(event.data.appName ?? '');
-              if (errorText.length > 5) {
-                console.log(`[Daemon] Auto-researching error: "${errorText.slice(0, 80)}"`);
-                bgAgent.handleMessage(
-                  // `appName` is the active window's app name, which a web page
-                  // controls through document.title -- the same actor that
-                  // supplies the framed errorText below. Framing the error text
-                  // and interpolating the app name raw would leave an unframed
-                  // channel in the sentence that introduces the block, complete
-                  // with newlines to open headings of its own.
-                  `The user is seeing an error in ${inlineUntrusted(appName, 60)}. The error text, read from their screen:\n` +
-                  wrapUntrusted(errorText, 'screen text (OCR)') + '\n\n' +
-                  `Search the web and vault for a solution. Be concise and actionable. ` +
-                  `Start your response with the fix, not a question.`,
-                  'awareness'
-                ).then(solution => {
-                  if (solution && solution.length > 10) {
-                    // A turn that stopped on an approval request is not a fix yet.
-                    const awaiting = bgAgent?.lastTurnRequestedApproval() ?? false;
-                    const heading = awaiting ? `Needs your approval (error in ${appName})` : `Fix for error in ${appName}`;
-                    const solutionText = `**${heading}:**\n${solution.slice(0, 500)}`;
-                    wsService.broadcastNotification(solutionText, 'urgent');
-                    sendDesktopNotification(`JARVIS: ${heading}`, solution.slice(0, 200), { urgency: 'critical', expireMs: 15000 });
-                    // Strip markdown for TTS — voice should sound natural
-                    const voiceText = solution
-                      .replace(/#{1,6}\s*/g, '')
-                      .replace(/\*{1,2}([^*]+)\*{1,2}/g, '$1')
-                      .replace(/`([^`]+)`/g, '$1')
-                      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-                      .replace(/\n{2,}/g, '. ')
-                      .replace(/\n/g, ' ')
-                      .replace(/\s{2,}/g, ' ')
-                      .trim()
-                      .slice(0, 300);
-                    console.log(`[Daemon] Speaking error solution (${voiceText.length} chars): "${voiceText.slice(0, 80)}..."`);
-                    wsService.broadcastProactiveVoice(
-                      awaiting
-                        ? `I need your approval to fix the error in ${appName}. ${voiceText}`
-                        : `I found a fix for the error in ${appName}. ${voiceText}`
-                    ).then(() =>
-                      console.log('[Daemon] Error solution TTS delivered')
-                    ).catch(err =>
-                      console.error('[Daemon] Error solution TTS failed:', err instanceof Error ? err.message : err)
-                    );
-                  }
-                }).catch(err =>
-                  console.error('[Daemon] Error auto-research failed:', err instanceof Error ? err.message : err)
-                );
-              }
-            }
-
-            // Deep-research struggles: for high-confidence code/terminal struggles
-            if (event.type === 'struggle_detected' && bgAgent) {
-              const appCategory = String(event.data.appCategory ?? 'general');
-              const sAppName = String(event.data.appName ?? '');
-              const ocrPreview = String(event.data.ocrPreview ?? '');
-              const compositeScore = event.data.compositeScore as number;
-
-              if (compositeScore >= 0.7 && (appCategory === 'code_editor' || appCategory === 'terminal')) {
-                console.log(`[Daemon] Deep-researching struggle in ${sAppName} (score: ${compositeScore.toFixed(2)})`);
-                bgAgent.handleMessage(
-                  // Same reasoning as the error path above: both of these come
-                  // from observer event data, so both are labels inside trusted
-                  // prose rather than trusted text.
-                  `The user has been struggling in ${inlineUntrusted(sAppName, 60)} (${inlineUntrusted(appCategory, 40)}) for several minutes. ` +
-                  `Here's what's on their screen:\n` +
-                  wrapUntrusted(ocrPreview.slice(0, 800), 'screen text (OCR)') + '\n\n' +
-                  `Search for solutions to any errors visible. Check documentation for the relevant language/framework. ` +
-                  `Provide a specific, actionable fix. Start with the solution, not a question.`,
-                  'awareness'
-                ).then(solution => {
-                  if (solution && solution.length > 10) {
-                    const awaiting = bgAgent?.lastTurnRequestedApproval() ?? false;
-                    const heading = awaiting ? `Needs your approval (${sAppName})` : `Help for ${sAppName}`;
-                    const solutionText = `**${heading}:**\n${solution.slice(0, 500)}`;
-                    wsService.broadcastNotification(solutionText, 'urgent');
-                    sendDesktopNotification(`JARVIS: ${heading}`, solution.slice(0, 200), { urgency: 'critical', expireMs: 15000 });
-                    const voiceText = solution
-                      .replace(/#{1,6}\s*/g, '')
-                      .replace(/\*{1,2}([^*]+)\*{1,2}/g, '$1')
-                      .replace(/`([^`]+)`/g, '$1')
-                      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-                      .replace(/\n{2,}/g, '. ')
-                      .replace(/\n/g, ' ')
-                      .replace(/\s{2,}/g, ' ')
-                      .trim()
-                      .slice(0, 300);
-                    wsService.broadcastProactiveVoice(
-                      awaiting
-                        ? `I need your approval to help with what you're working on in ${sAppName}. ${voiceText}`
-                        : `I found something that might help with what you're working on in ${sAppName}. ${voiceText}`
-                    ).catch(err =>
-                      console.error('[Daemon] Struggle solution TTS failed:', err instanceof Error ? err.message : err)
-                    );
-                  }
-                }).catch(err =>
-                  console.error('[Daemon] Struggle auto-research failed:', err instanceof Error ? err.message : err)
-                );
-              }
-            }
+            awarenessDelivery.handleEvent(event);
 
             // M16: Route awareness events to goal auto-detection
             if (goalService && (event.type === 'context_changed' || event.type === 'session_ended')) {
@@ -5817,16 +5718,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               console.log(`[Daemon] Sidecar capture cleanup: skipped ${offline} offline sidecar(s); their files will be pruned on reconnect`);
             }
           },
-          async suggestion => {
-            const channel = await deliverOpportunityNotification(suggestion, wsService.getServer(), channelService);
-            if (channel === 'websocket') {
-              sendDesktopNotification(`JARVIS: ${suggestion.title}`, suggestion.body, { urgency: 'normal' });
-              wsService.broadcastProactiveVoice(suggestion.body).catch(err =>
-                console.error('[Daemon] Awareness TTS error:', err)
-              );
-            }
-            return channel;
-          },
+          suggestion => awarenessDelivery.deliverOpportunity(suggestion),
         );
         await svc.start();
         awarenessService = svc;

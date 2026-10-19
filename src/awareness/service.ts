@@ -39,6 +39,7 @@ import { getUpcoming } from '../vault/commitments.ts';
 import { generateId } from '../vault/schema.ts';
 import { pruneOpportunityObservations } from '../vault/opportunity-observations.ts';
 import { OpportunityDelivery, type DeliverOpportunity } from './opportunity-delivery.ts';
+import { screenIssueKey } from '../failures/interruptions.ts';
 export class AwarenessService implements Service {
   name = 'awareness';
   private _status: ServiceStatus = 'stopped';
@@ -477,6 +478,11 @@ export class AwarenessService implements Service {
           try { markSuggestionDelivered(suggestion.id, 'websocket'); } catch { /* ignore */ }
         }
 
+        // Q-19: the issue this suggestion is about, so it and the daemon's
+        // researched fix share one interruption.
+        const issue = suggestion.type === 'error' || suggestion.type === 'struggle'
+          ? screenIssueKey(suggestion.type, String(suggestion.context?.appName ?? ''), String(suggestion.context?.errorText ?? ''))
+          : null;
         const suggestionEvent: AwarenessEvent = {
           type: 'suggestion_ready',
           data: {
@@ -484,6 +490,7 @@ export class AwarenessService implements Service {
             type: suggestion.type,
             title: suggestion.title,
             body: suggestion.body,
+            ...(issue ? { issueKey: issue } : {}),
             ...(suggestion.context?.opportunity ? { opportunityId: suggestion.id } : {}),
           },
           timestamp: Date.now(),

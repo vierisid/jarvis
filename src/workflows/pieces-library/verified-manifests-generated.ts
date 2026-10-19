@@ -123,7 +123,7 @@ export const VERIFIED_MANIFESTS: Record<string, VerifiedManifest> = {
     ],
   },
   "gmail": {
-    version: "0.17.5",
+    version: "0.18.1",
     actions: [
       {"name":"create_draft_reply","classification":"WRITE","props":["attachment","attachment_name","body","body_type","include_original_message","message_id","reply_type","sender_name"]},
       {"name":"custom_api_call","classification":"WRITE","props":["body","body_type","failsafe","followRedirects","headers","method","queryParams","response_is_binary","timeout","url"]},
@@ -195,7 +195,7 @@ export const VERIFIED_MANIFESTS: Record<string, VerifiedManifest> = {
     ],
   },
   "google-drive": {
-    version: "0.11.3",
+    version: "0.12.2",
     actions: [
       {"name":"create_new_gdrive_file","classification":"WRITE","props":["fileName","fileType","include_team_drives","parentFolder","text"]},
       {"name":"create_new_gdrive_folder","classification":"WRITE","props":["folderName","include_team_drives","parentFolder"]},
@@ -295,11 +295,11 @@ export const VERIFIED_MANIFESTS: Record<string, VerifiedManifest> = {
     ],
   },
   "openai": {
-    version: "0.12.2",
+    version: "0.13.2",
     actions: [
       {"name":"analyze_sentiment","classification":"READ","props":["model","text"]},
       {"name":"ask_assistant","classification":"WRITE","props":["assistant","deprecationNotice","memoryKey","prompt"]},
-      {"name":"ask_chatgpt","classification":"READ","props":["frequencyPenalty","maxTokens","memoryKey","model","presencePenalty","prompt","roles","temperature","topP"]},
+      {"name":"ask_chatgpt","classification":"READ","props":["frequencyPenalty","maxTokens","memoryInfo","memoryKey","model","presencePenalty","prompt","roles","temperature","topP"]},
       {"name":"classify_text","classification":"READ","props":["input","model"]},
       {"name":"create_embedding","classification":"READ","props":["dimensions","input","model","user"]},
       {"name":"custom_api_call","classification":"WRITE","props":["body","body_type","failsafe","followRedirects","headers","method","queryParams","response_is_binary","timeout","url"]},
@@ -319,7 +319,7 @@ export const VERIFIED_MANIFESTS: Record<string, VerifiedManifest> = {
     ],
   },
   "slack": {
-    version: "0.21.1",
+    version: "0.23.1",
     actions: [
       {"name":"custom_api_call","classification":"WRITE","props":["body","body_type","failsafe","followRedirects","headers","method","queryParams","response_is_binary","timeout","url","useUserToken"]},
       {"name":"delete-message","classification":"DESTRUCTIVE","props":["channel","info","onlyBotChannels","ts"]},
@@ -336,8 +336,8 @@ export const VERIFIED_MANIFESTS: Record<string, VerifiedManifest> = {
       {"name":"list_users","classification":"SEARCH","props":["includeBots","includeDisabled"]},
       {"name":"listUsers","classification":"SEARCH","props":["includeBots","includeDisabled"]},
       {"name":"markdownToSlackFormat","classification":"READ","props":["markdown"]},
-      {"name":"request_action_direct_message","classification":"WRITE","props":["actions","mentionOriginFlow","profilePicture","text","userId","username"]},
-      {"name":"request_action_message","classification":"WRITE","props":["actions","channel","info","mentionOriginFlow","onlyBotChannels","profilePicture","replyBroadcast","text","threadTs","username"]},
+      {"name":"request_action_direct_message","classification":"WRITE","props":["actions","blocks","mentionOriginFlow","profilePicture","text","userId","username"]},
+      {"name":"request_action_message","classification":"WRITE","props":["actions","blocks","channel","info","mentionOriginFlow","onlyBotChannels","profilePicture","replyBroadcast","text","threadTs","username"]},
       {"name":"request_approval_direct_message","classification":"WRITE","props":["mentionOriginFlow","profilePicture","text","userId","username"]},
       {"name":"request_approval_message","classification":"WRITE","props":["channel","info","mentionOriginFlow","onlyBotChannels","profilePicture","text","username"]},
       {"name":"retrieveThreadMessages","classification":"READ","props":["channel","cursor","info","onlyBotChannels","threadTs"]},
@@ -389,9 +389,9 @@ export const VERIFIED_MANIFESTS: Record<string, VerifiedManifest> = {
       {"name":"slack-find-user-by-email","classification":"READ","props":["email"]},
       {"name":"slack-find-user-by-handle","classification":"SEARCH","props":["handle"]},
       {"name":"slack-set-user-status","classification":"WRITE","props":["emoji","expiration","text"]},
-      {"name":"slack-update-profile","classification":"WRITE","props":["email","firstName","lastName","userId"]},
+      {"name":"slack-update-profile","classification":"WRITE","props":["email","empty_fields_info","firstName","lastName","userId"]},
       {"name":"update_group_users","classification":"WRITE","props":["appendUsers","handle","userIds"]},
-      {"name":"update_profile","classification":"WRITE","props":["email","firstName","lastName","userId"]},
+      {"name":"update_profile","classification":"WRITE","props":["email","empty_fields_info","firstName","lastName","userId"]},
       {"name":"updateMessage","classification":"WRITE","props":["blocks","channel","info","mentionOriginFlow","onlyBotChannels","text","ts"]},
       {"name":"uploadFile","classification":"WRITE","props":["channel","file","filename","onlyBotChannels","title"]},
     ],

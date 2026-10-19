@@ -54,17 +54,28 @@ class FakeChannelSender implements ChannelSender {
   private throwOnSend: Error | null;
   public sent: string[] = [];
   public options: Array<SendOptions | undefined> = [];
+  public deliveries: Array<{ approvalCard?: boolean } | undefined> = [];
   constructor(opts?: { throwOnSend?: Error }) {
     this.throwOnSend = opts?.throwOnSend ?? null;
   }
-  async broadcastToAll(text: string, options?: SendOptions): Promise<void> {
+  async broadcastToAll(text: string, options?: SendOptions, delivery?: { approvalCard?: boolean }): Promise<void> {
     if (this.throwOnSend) throw this.throwOnSend;
     this.sent.push(text);
     this.options.push(options);
+    this.deliveries.push(delivery);
   }
 }
 
 describe('ApprovalDelivery', () => {
+  // Owner decision on Q-19: the approval card is the one send allowed a retry after a timeout.
+  test('marks its channel send as an approval card', async () => {
+    const delivery = new ApprovalDelivery();
+    const sender = new FakeChannelSender();
+    delivery.setChannelSender(sender);
+    await delivery.deliver(makeRequest());
+    expect(sender.deliveries).toEqual([{ approvalCard: true }]);
+  });
+
   test('delivers normal-urgency requests to external channels', async () => {
     const delivery = new ApprovalDelivery();
     const sender = new FakeChannelSender();

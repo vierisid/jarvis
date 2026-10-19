@@ -12,7 +12,7 @@ export async function composePersistedFlow(deps: ComposeDeps, input: ComposeRequ
   projectId?: string,
   /** Synchronous attachment, in the journal's creation transaction, before any provider call. */
   onJournal?: (id: string) => void): Promise<ComposeResult & { compositionRecordId: string }> {
-  // Snapshot the job (including supplemental context) so caller mutations cannot change intent mid-await.
+  // Snapshot the job (including supplemental context and selected ingredients) so caller mutations cannot change intent mid-await.
   const request = { ...jobSpecification(input), signal: input.signal };
   request.signal?.throwIfAborted();
   const snapshot = snapshotComposition(deps);

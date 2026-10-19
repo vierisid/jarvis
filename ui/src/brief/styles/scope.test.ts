@@ -16,6 +16,17 @@ const SHEETS = [
   "../today/opportunity-stack/opportunity-stack.css",
   "../chat/tab-strip/tabs.css", "../chat/tab-strip/preview/specimen.css",
   "../chat/composer/composer.css", "../chat/composer/preview/specimen.css",
+  "../chat/attachment-fan/attachment-fan.css", "../chat/attachment-fan/preview/specimen.css",
+  "../chat/message/messages.css",
+  "../workflows/ingredient-picker/picker.css",
+  "../workflows/create/creation.css", "../workflows/canvas/canvas.css",
+  "../workflows/runs/runs.css", "../workflows/runs/header.css",
+  "../workflows/context/context.css",
+  "../workflows/manage-list/management.css",
+  "../opportunities/opportunities.css",
+  "../decisions/decisions.css",
+  "../goals/goals.css",
+  "../memory/stream/stream.css",
 ];
 
 function selectors(css: string): string[] {

@@ -126,6 +126,10 @@ tool dispatch and rejects late stream/audio chunks. Effects already performed ar
 not undone; outstanding canonical approvals retain their IDs and are resolved by
 the existing authority API. Approval updates use their persisted originating turn,
 independent of whichever tab is currently active.
+The Brief approval event carries only the ID and status, so it never replaces the
+ordinary card: every approval request and update, Brief-owned or not, is also
+broadcast as the usual `approval_request` / `approval_update` notification to every
+dashboard socket, and external channels still get exactly one card (#1075).
 Specialist `delegate_task` calls inherit the turn's abort signal through execution
 scope and pass it to their model provider. A cancelled specialist releases the
 generation slot even when the provider ignores the signal; late results are fenced.

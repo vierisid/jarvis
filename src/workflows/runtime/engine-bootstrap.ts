@@ -115,6 +115,10 @@ export interface BootstrapWorkflowEngineResult {
    * `bun run build:workflows`.
    */
   bundleHash: string;
+  /** Existing bundle reused by the isolated prepared-proposal dry runner. */
+  bundlePath?: string;
+  /** The digest the runtime re-checks at every spawn; the dry runner must check the same bytes. */
+  bundleDigest?: string | null;
   /**
    * GLOBAL cache-invalidation key for the piece-metadata cache: projection
    * schema + engine bundle + event-type registry. Per-piece source changes
@@ -333,6 +337,8 @@ export async function bootstrapWorkflowEngine(
     catalog,
     failures,
     bundleHash: cached.hash,
+    bundlePath: cached.bundlePath,
+    bundleDigest: cached.digest,
     catalogCacheKey: cacheKey,
     shutdown: async () => {
       // Kill any pooled idle engine before stopping the SandboxApi -- the

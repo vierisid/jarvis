@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { SidecarRPCError } from '../sidecar/rpc.ts';
 import {
   isPermissionName,
   PERMISSION_NAMES,
@@ -129,7 +130,7 @@ describe('readSystemPermissions', () => {
     // not a red error the user retries forever.
     const host = fakeHost({
       connected: [MAC],
-      dispatch: async () => { throw new Error('METHOD_NOT_FOUND: Unknown method: system.permissions'); },
+      dispatch: async () => { throw new SidecarRPCError('METHOD_NOT_FOUND', 'Unknown method: system.permissions'); },
     });
     expect(await readSystemPermissions(host, null)).toEqual({
       available: false,
@@ -145,6 +146,18 @@ describe('readSystemPermissions', () => {
     });
     const res = await readSystemPermissions(host, null);
     expect(res).toMatchObject({ available: false, reason: 'unreachable' });
+  });
+
+  // Q-19: the typed code decides, not the text. A crash in the app's handler
+  // is an answer, so it does not read as "did not answer".
+  test('an error the app answered with reads as errored', async () => {
+    const host = fakeHost({ connected: [MAC], dispatch: async () => { throw new SidecarRPCError('HANDLER_PANIC', 'index out of range'); } });
+    expect(await readSystemPermissions(host, null)).toEqual({ available: false, reason: 'errored', detail: 'HANDLER_PANIC: index out of range' });
+  });
+
+  test('an untyped error naming a code is still unreachable', async () => {
+    const host = fakeHost({ connected: [MAC], dispatch: async () => { throw new Error('METHOD_NOT_FOUND: relayed text'); } });
+    expect(await readSystemPermissions(host, null)).toMatchObject({ available: false, reason: 'unreachable' });
   });
 
   test('a dispatch that detaches is a failure, not a pending success', async () => {
@@ -259,7 +272,7 @@ describe('failure classification and strictness', () => {
     const host = fakeHost({
       connected: [MAC],
       dispatch: async () => {
-        throw new Error('HANDLER_ERROR: not running as an app bundle: a grant would attach to the launching app');
+        throw new SidecarRPCError('HANDLER_ERROR', 'not running as an app bundle: a grant would attach to the launching app');
       },
     });
     const res = await requestSystemPermission(host, null, 'screen');

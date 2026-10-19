@@ -152,7 +152,8 @@ export class SuggestionEngine {
       id: '', // set by DB
       type: 'error',
       title: `Error detected in ${context.appName}`,
-      body: `I spotted "${errorText.slice(0, 80)}". Researching a fix now...`,
+      // Delivery policy can disable automatic research. Record the observation only.
+      body: `I spotted "${errorText.slice(0, 80)}".`,
       triggerCaptureId: context.captureId,
       context: { errorText, errorContext, appName: context.appName },
     };

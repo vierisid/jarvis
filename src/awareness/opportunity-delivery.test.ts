@@ -4,6 +4,7 @@ import { captureRoutine } from './opportunity-test-fixtures.ts';
 import { getRecentSuggestions, markSuggestionActedOn, markSuggestionDelivered, markSuggestionDismissed } from '../vault/awareness.ts';
 import { getOpportunityMetrics, recordOpportunityFeedback, refreshOpportunity } from './opportunities.ts';
 import { OpportunityDelivery, type DeliverOpportunity } from './opportunity-delivery.ts';
+import { DeliveryUnconfirmedError } from '../comms/delivery.ts';
 import { AwarenessService } from './service.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import type { LLMManager } from '../llm/manager.ts';
@@ -18,8 +19,8 @@ function proposal() {
   }
   return refreshOpportunity()!;
 }
-function worker(deliver: DeliverOpportunity, now = Date.now) {
-  const w = new OpportunityDelivery(deliver, now);
+function worker(deliver: DeliverOpportunity, now = Date.now, sendWaitMs?: number) {
+  const w = new OpportunityDelivery(deliver, now, sendWaitMs);
   workers.push(w);
   return w;
 }
@@ -69,6 +70,73 @@ test('a thrown transport error leaves the proposal pending for another worker', 
   await worker(async suggestion => { seen.push(suggestion.id); return 'telegram'; }, () => now + 300_000).flush();
   expect(seen).toEqual([item.id]);
   expect(getOpportunityMetrics().delivered).toBe(1);
+});
+
+const row = () => getDb().query('SELECT delivered_at, channel, unconfirmed_at FROM opportunity_delivery').get() as
+  { delivered_at: number | null; channel: string | null; unconfirmed_at: number | null };
+
+// Q-19: a transport that may have taken it is never asked again.
+test('an unconfirmed send is recorded and never retried', async () => {
+  const item = proposal();
+  let now = Date.now();
+  const seen: string[] = [];
+  const w = worker(async s => { seen.push(s.id); throw new DeliveryUnconfirmedError(['telegram']); }, () => now);
+  await w.flush();
+  now += 60 * 60_000;
+  await w.flush();
+  expect(seen).toEqual([item.id]);
+  expect(row()).toMatchObject({ delivered_at: null, channel: 'telegram' });
+  expect(row().unconfirmed_at).toBeNumber();
+  // Never due, so a worker without the unconfirmed check (after a rollback) cannot claim it either.
+  expect(getDb().query('SELECT next_attempt_at AS n FROM opportunity_delivery').get()).toEqual({ n: Number.MAX_SAFE_INTEGER });
+  expect(getOpportunityMetrics().delivered).toBe(0);
+});
+
+// Two locks on the same door: an unconfirmed row is never due, and the claim
+// also skips it even if something made it due. Each is pinned on its own.
+test('an unconfirmed row is not claimed even when due', async () => {
+  proposal();
+  const now = Date.now();
+  let sends = 0;
+  await worker(async () => { sends++; throw new DeliveryUnconfirmedError(['telegram']); }, () => now).flush();
+  getDb().run('UPDATE opportunity_delivery SET next_attempt_at = 0');
+  await worker(async () => { sends++; return 'websocket'; }, () => now + 60 * 60_000).flush();
+  expect(sends).toBe(1);
+  expect(row()).toMatchObject({ delivered_at: null, channel: 'telegram' });
+});
+
+test('a send still running when the wait ends is unconfirmed; its late acceptance records delivery', async () => {
+  const item = proposal();
+  let now = Date.now();
+  let finish!: (channel: string | null) => void;
+  let sends = 0;
+  const w = worker(() => { sends++; return new Promise(resolve => { finish = resolve; }); }, () => now, 5);
+  await w.flush();
+  expect(row()).toMatchObject({ delivered_at: null, channel: null });
+  now += 60 * 60_000;
+  await w.flush();
+  expect(sends).toBe(1);
+  finish('telegram');
+  await Bun.sleep(0);
+  expect(row()).toMatchObject({ delivered_at: now, channel: 'telegram', unconfirmed_at: null });
+  expect(getRecentSuggestions().find(s => s.id === item.id)).toMatchObject({ delivered: 1, delivery_channel: 'telegram' });
+});
+
+test('a late answer that nothing was sent makes it pending again', async () => {
+  proposal();
+  let now = Date.now();
+  let finish!: (channel: string | null) => void;
+  let sends = 0;
+  const w = worker(() => { sends++; return sends === 1 ? new Promise(resolve => { finish = resolve; }) : Promise.resolve('websocket'); },
+    () => now, 5);
+  await w.flush();
+  finish(null);
+  await Bun.sleep(0);
+  expect(row().unconfirmed_at).toBeNull();
+  now += 5 * 60_000;
+  await w.flush();
+  expect(sends).toBe(2);
+  expect(row()).toMatchObject({ channel: 'websocket' });
 });
 
 test.each(['dismiss', 'interest', 'validate'])('%s suppresses pending notification recovery', async action => {

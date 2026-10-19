@@ -83,7 +83,7 @@ function dryServices(active: () => Active | null): SandboxApiServices {
     // take in production; the sample lists the step as simulated.
     notify: async (req, ctx) => {
       record('notify', ctx);
-      return { delivered: [...req.channels], failed: [] };
+      return { delivered: [...req.channels], failed: [], unknown: [] };
     },
     toolsInvoke: async (req, ctx) => {
       const { run, step } = record('tool', ctx);

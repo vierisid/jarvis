@@ -442,6 +442,18 @@ describe("session scope", () => {
     expect(voice.voiceState).toBe("speaking");
   });
 
+  // Q-19: every tab hears a turn's error; one this tab did not start must not
+  // cut the audio it is playing for its own turn.
+  test("another tab's failed turn leaves this tab's playback alone", async () => {
+    await mount();
+    await beginTTS("own-turn");
+    await act(async () => { voice.handleError("rate limited", "another-tabs-turn"); });
+    expect(voice.voiceState).toBe("speaking");
+    expect(voice.ttsAudioPlaying).toBe(true);
+    await act(async () => { voice.handleError("rate limited"); });
+    expect(voice.voiceState).toBe("error");
+  });
+
   test("no voice_start goes into a socket that dropped while the mic was starting", async () => {
     const wsRef = await mount();
     Object.defineProperty(navigator, "mediaDevices", {

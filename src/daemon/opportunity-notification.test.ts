@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { WebSocketServer, type WSMessage } from '../comms/websocket.ts';
 import type { Suggestion } from '../awareness/types.ts';
 import { deliverOpportunityNotification } from './opportunity-notification.ts';
+import { DeliveryUnconfirmedError } from '../comms/delivery.ts';
 
 const suggestion: Suggestion = { id: 'stable-opportunity', type: 'automation', title: 'Review invoices',
   body: 'Three observed episodes.', triggerCaptureId: 'capture-1', context: {} };
@@ -16,7 +17,7 @@ test('connected but dropping sockets and failed channels do not count as deliver
       tryBroadcastToChannels: async (channels, text) => {
         expect(channels).toEqual(['telegram']);
         externalText = text;
-        return { delivered: [], failed: [{ channel: 'telegram', error: 'offline' }] };
+        return { delivered: [], failed: [{ channel: 'telegram', error: 'offline' }], unknown: [] };
       } },
     async () => { nativeCalls++; return false; });
   expect(result).toBeNull();
@@ -26,10 +27,33 @@ test('connected but dropping sockets and failed channels do not count as deliver
   expect(messages[1]!.payload).toMatchObject({ opportunityId: suggestion.id });
 });
 
+// Q-19: a timed-out send may have arrived. A critical desktop alert on top of
+// it, or a retry, would show the same opportunity twice.
+test.each([
+  ['a channel did not confirm it', async () => ({ delivered: [], failed: [], unknown: [{ channel: 'telegram', error: 'timed out' }] })],
+  ['the router threw part way', async () => { throw new Error('router crashed'); }],
+] as const)('%s: unconfirmed, with no desktop fallback', async (_name, tryBroadcastToChannels) => {
+  let nativeCalls = 0;
+  const result = deliverOpportunityNotification(suggestion, { broadcastWithReceipt: () => 0 },
+    { getManager: () => ({ listChannels: () => ['telegram'] }), tryBroadcastToChannels },
+    async () => { nativeCalls++; return true; });
+  await expect(result).rejects.toBeInstanceOf(DeliveryUnconfirmedError);
+  await expect(result).rejects.toMatchObject({ channels: ['telegram'] });
+  expect(nativeCalls).toBe(0);
+});
+
+// Review C4: a desktop toast that timed out may be up; it is not shown again.
+test('a desktop fallback that did not confirm in time is unconfirmed, not retried', async () => {
+  const result = deliverOpportunityNotification(suggestion, { broadcastWithReceipt: () => 0 },
+    { getManager: () => ({ listChannels: () => [] }), tryBroadcastToChannels: async () => ({ delivered: [], failed: [], unknown: [] }) },
+    async () => 'unknown');
+  await expect(result).rejects.toMatchObject({ channels: ['desktop'] });
+});
+
 test.each(['telegram', 'desktop'])('%s acceptance establishes delivery', async transport => {
   const result = await deliverOpportunityNotification(suggestion, { broadcastWithReceipt: () => 0 },
     { getManager: () => ({ listChannels: () => ['telegram'] }),
-      tryBroadcastToChannels: async () => ({ delivered: transport === 'telegram' ? ['telegram'] : [], failed: [] }) },
+      tryBroadcastToChannels: async () => ({ delivered: transport === 'telegram' ? ['telegram'] : [], failed: [], unknown: [] }) },
     async () => { expect(transport).toBe('desktop'); return true; });
   expect(result).toBe(transport);
 });

@@ -4,7 +4,7 @@
 
 import { collectActionVerification, verificationSummary, type ActionVerification } from '../actions/action-verification';
 import { isToolResult, type ToolRegistry } from '../actions/tools/registry.ts';
-import { executionState, approvalIntentFromContext, approvalNeedsClick, approvalPrincipal, DASHBOARD_DECIDER, type ApprovalManager, type ApprovalRequest } from './approval.ts';
+import { guardedApprovalWrite, executionState, approvalIntentFromContext, approvalNeedsClick, approvalPrincipal, DASHBOARD_DECIDER, type ApprovalManager, type ApprovalRequest } from './approval.ts';
 import { ABOVE_LEVEL_SUBSTITUTION, resolveToolGate, severityRank, substituteAboveLevel } from './tool-action-map.ts';
 import { combineDecisions, type AuthorityEngine } from './engine.ts';
 import type { ToolDefinition } from '../actions/tools/registry.ts';
@@ -217,7 +217,7 @@ export class DeferredExecutor {
    * trailer (#708), for that same caller: it frames `outside` and appends
    * `trailer` after the block. `result` is still their concatenation.
    */
-  async executeApprovedWithReceipt(requestId: string, claimedBy = 'deferred-executor'): Promise<ApprovedReceipt> {
+  async executeApprovedWithReceipt(requestId: string, claimedBy = 'deferred-executor', assertCurrent?: () => void): Promise<ApprovedReceipt> {
     const request = this.approvalManager.getRequest(requestId);
     if (!request || request.status !== 'approved') {
       return { claimed: false, result: `Error: Request ${requestId} not found or not in approved state` };
@@ -234,7 +234,7 @@ export class DeferredExecutor {
     // One executor per approval. A second caller, or a daemon restarted after
     // the claim, cannot dispatch the same approved action again; the receipt
     // or the reconciled state says what became of the first attempt.
-    if (!this.approvalManager.claimExecution(requestId, claimedBy)) {
+    if (!guardedApprovalWrite(assertCurrent, () => this.approvalManager.claimExecution(requestId, claimedBy))) {
       const current = this.approvalManager.getRequest(requestId);
       return { claimed: false, result: `Error: Request ${requestId} was already taken for execution (${current ? executionState(current) : 'missing'}); check its receipt before deciding on another run` };
     }

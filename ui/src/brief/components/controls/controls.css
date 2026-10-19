@@ -24,18 +24,18 @@
   --brief-switch-off: #BEC7D1;
   --brief-danger-tint: #FCEBEB; --brief-danger-ink: #B33238;
 }
-.brief-root :is(.brief-button,.brief-icon-button,.brief-link,.brief-switch,.brief-tabs button,.brief-segments,.brief-field *, .brief-menu__body) { box-sizing: border-box; }
-.brief-root :is(.brief-button,.brief-icon-button,.brief-link,.brief-switch,.brief-tabs button,.brief-tabs__panel,.brief-menu__body button):focus-visible,
+.brief-root :is(.brief-button,.brief-icon-button,.brief-link,.brief-switch,.brief-tabs__list > button,.brief-segments,.brief-field *, .brief-menu__body) { box-sizing: border-box; }
+.brief-root :is(.brief-button,.brief-icon-button,.brief-link,.brief-switch,.brief-tabs__list > button,.brief-tabs__panel,.brief-menu__body button):focus-visible,
 .brief-root .brief-segment:has(input:focus-visible) {
   outline: 2px solid var(--brief-focus); outline-offset: 3px;
 }
-.brief-root :is(.brief-button,.brief-icon-button,.brief-link,.brief-switch,.brief-tabs button,.brief-segment > span,.brief-menu__body button) {
+.brief-root :is(.brief-button,.brief-icon-button,.brief-link,.brief-switch,.brief-tabs__list > button,.brief-segment > span,.brief-menu__body button) {
   -webkit-tap-highlight-color: transparent;
   /* Ink and surfaces must switch theme in the same frame. Interpolating ink
      through gray against an already-dark canvas briefly destroys contrast. */
   transition: none;
 }
-.brief-root :is(.brief-button,.brief-icon-button,.brief-switch,.brief-tabs button,.brief-menu__body button) { cursor: pointer; font-family: var(--brief-sans); }
+.brief-root :is(.brief-button,.brief-icon-button,.brief-switch,.brief-tabs__list > button,.brief-menu__body button) { cursor: pointer; font-family: var(--brief-sans); }
 .brief-root .brief-button {
   --control-height: 40px; --control-pad: 16px;
   display: inline-flex; justify-content: center; align-items: center; gap: 8px;
@@ -124,12 +124,12 @@
 .brief-root .brief-switch__value { font: 400 .75rem/16px var(--brief-sans); color: var(--brief-secondary); }
 .brief-root .brief-switch-row[data-disabled="true"] .brief-switch__value { color: var(--brief-control-dim); }
 .brief-root .brief-tabs__list { display: flex; gap: 4px; overflow-x: auto; padding: 5px; margin: -5px; border-bottom: 1px solid var(--brief-card-edge); }
-.brief-root .brief-tabs button { position: relative; flex: none; background: transparent; color: var(--brief-secondary); border: 0; border-radius: var(--brief-control-radius); min-height: 44px; padding: 12px 14px; font-size: .875rem; line-height: 20px; }
-.brief-root :is(.brief-tabs button > span,.brief-segment > span) { display: grid; }
-.brief-root :is(.brief-tabs button > span,.brief-segment > span)::after { content: attr(data-label); font-weight: 700; visibility: hidden; height: 0; overflow: hidden; }
-.brief-root .brief-tabs button[aria-selected="true"] { color: var(--brief-ink); font-weight: 700; }
-.brief-root .brief-tabs button[aria-selected="true"]::after { content: ""; position: absolute; bottom: 0; left: 14px; right: 14px; height: 2px; background: var(--brief-ink); }
-.brief-root .brief-tabs button:disabled { color: var(--brief-control-dim); cursor: not-allowed; }
+.brief-root .brief-tabs__list > button { position: relative; flex: none; background: transparent; color: var(--brief-secondary); border: 0; border-radius: var(--brief-control-radius); min-height: 44px; padding: 12px 14px; font-size: .875rem; line-height: 20px; }
+.brief-root :is(.brief-tabs__list > button > span,.brief-segment > span) { display: grid; }
+.brief-root :is(.brief-tabs__list > button > span,.brief-segment > span)::after { content: attr(data-label); font-weight: 700; visibility: hidden; height: 0; overflow: hidden; }
+.brief-root .brief-tabs__list > button[aria-selected="true"] { color: var(--brief-ink); font-weight: 700; }
+.brief-root .brief-tabs__list > button[aria-selected="true"]::after { content: ""; position: absolute; bottom: 0; left: 14px; right: 14px; height: 2px; background: var(--brief-ink); }
+.brief-root .brief-tabs__list > button:disabled { color: var(--brief-control-dim); cursor: not-allowed; }
 .brief-root .brief-tabs__panel { padding-block: 20px 0; border-radius: var(--brief-control-radius); }
 .brief-root .brief-tabs__panel[hidden] { display: none; }
 .brief-root .brief-segments { display: flex; gap: 4px; padding: 4px; min-width: 0; margin: 0; border: 1px solid var(--brief-card-edge); border-radius: var(--brief-control-radius); background: var(--brief-soft); }
@@ -140,11 +140,11 @@
 .brief-root .brief-segment input:checked + span { background: var(--brief-ink); color: var(--brief-card); font-weight: 700; }
 .brief-root .brief-segment input:disabled + span { color: var(--brief-control-dim); background: var(--brief-control-disabled); cursor: not-allowed; }
 @media (hover: hover) {
-  .brief-root .brief-tabs button:not(:disabled):hover { background: var(--brief-control-hover); }
+  .brief-root .brief-tabs__list > button:not(:disabled):hover { background: var(--brief-control-hover); }
   .brief-root .brief-segment:hover input:not(:checked):not(:disabled) + span { background: var(--brief-control-hover); cursor: pointer; }
   .brief-root .brief-switch:not(:disabled):hover .brief-switch__track { box-shadow: inset 0 0 0 1px var(--brief-secondary); }
 }
-.brief-root .brief-tabs button:not(:disabled):active { background: var(--brief-control-pressed); }
+.brief-root .brief-tabs__list > button:not(:disabled):active { background: var(--brief-control-pressed); }
 .brief-root .brief-tooltip-anchor, .brief-root .brief-menu-anchor { display: inline-flex; max-width: 100%; }
 .brief-root.brief-control-layer { display: contents; }
 .brief-root .brief-floating { position: fixed; inset: auto; margin: 0; padding: 8px 0; border: none; background: transparent; color: var(--brief-ink); max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow: visible; }
@@ -163,6 +163,6 @@
 .brief-root .brief-menu__body button:not(:disabled):active { background: var(--brief-control-pressed); }
 .brief-root .brief-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 @media (prefers-reduced-motion: reduce) {
-  .brief-root :is(.brief-button,.brief-icon-button,.brief-link,.brief-link svg,.brief-switch,.brief-switch__track,.brief-switch__thumb,.brief-tabs button,.brief-segment > span,.brief-menu__body button,.brief-field input,.brief-field textarea,.brief-field select) { transition: none; }
+  .brief-root :is(.brief-button,.brief-icon-button,.brief-link,.brief-link svg,.brief-switch,.brief-switch__track,.brief-switch__thumb,.brief-tabs__list > button,.brief-segment > span,.brief-menu__body button,.brief-field input,.brief-field textarea,.brief-field select) { transition: none; }
   .brief-root .brief-control__busy { animation: none; }
 }

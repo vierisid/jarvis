@@ -9,7 +9,7 @@
  * allowed only when nothing happened; closing it is always allowed.
  */
 
-import { APPROVAL_SHORT_ID_LENGTH, approvalNeedsClick, DASHBOARD_DECIDER, executionState, type ApprovalManager, type ApprovalRequest } from '../authority/approval.ts';
+import { APPROVAL_SHORT_ID_LENGTH, guardedApprovalWrite, approvalNeedsClick, DASHBOARD_DECIDER, executionState, type ApprovalManager, type ApprovalRequest } from '../authority/approval.ts';
 import { isAgentStopCard, type DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { AuditTrail, ResolutionChannel } from '../authority/audit.ts';
 import { activeEmergencyState } from '../authority/emergency.ts';
@@ -18,6 +18,8 @@ import { approvalChannelCard, approvalToast } from '../authority/approval-delive
 
 export interface ApprovalDecisionDeps {
   approvalManager: ApprovalManager;
+  /** Optional revision fence supplied by a decision surface. Runs before a durable write. */
+  assertCurrent?: () => void;
   deferredExecutor: DeferredExecutor;
   wsService?: { broadcastApprovalUpdate(request: ApprovalRequest): void } | null;
   /** Records each decision with the surface it came from (Q-08). */
@@ -77,7 +79,7 @@ export async function applyApprovalDecision(
     if (pending?.status === 'pending' && emergency !== 'normal' && !isAgentStopCard(pending)) {
       return { status: 'held', request: pending, state: emergency };
     }
-    const approved = approvalManager.approve(requestId, decidedBy);
+    const approved = guardedApprovalWrite(deps.assertCurrent, () => approvalManager.approve(requestId, decidedBy));
     if (!approved) return { status: 'already_decided' };
     auditDecision(deps, approved, 'approve', decidedBy);
     let executed = false;
@@ -101,7 +103,7 @@ export async function applyApprovalDecision(
     return { status: 'approved', executed, result, request: updated, error };
   }
 
-  const denied = approvalManager.deny(requestId, decidedBy);
+  const denied = guardedApprovalWrite(deps.assertCurrent, () => approvalManager.deny(requestId, decidedBy));
   if (!denied) return { status: 'already_decided' };
   auditDecision(deps, denied, 'deny', decidedBy);
   deferredExecutor.recordDenial(denied);
@@ -238,7 +240,7 @@ export async function applyExecutionResolution(
   }
 
   if (action === 'close') {
-    if (!approvalManager.closeUnresolved(requestId, resolvedBy, note)) return { status: 'not_unresolved' };
+    if (!guardedApprovalWrite(deps.assertCurrent, () => approvalManager.closeUnresolved(requestId, resolvedBy, note))) return { status: 'not_unresolved' };
     const updated = approvalManager.getRequest(requestId) ?? current;
     wsService?.broadcastApprovalUpdate(updated);
     return { status: 'closed', request: updated };
@@ -261,7 +263,7 @@ export async function applyExecutionResolution(
   // Runs through the same claim as every execution, so this is exactly one
   // attempt even if two surfaces resolve the same row at once. A claim lost
   // between the check above and the run is reported as such, not as a run.
-  const { claimed, result } = await deferredExecutor.executeApprovedWithReceipt(requestId, resolvedBy);
+  const { claimed, result } = await deferredExecutor.executeApprovedWithReceipt(requestId, resolvedBy, deps.assertCurrent);
   const updated = approvalManager.getRequest(requestId) ?? current;
   if (!claimed) {
     return { status: 'not_executable', reason: `Another surface took this approval first (${updated.execution_outcome ?? 'in flight'}); its receipt will say what happened.` };

@@ -197,3 +197,62 @@ describe('StreamRelay sentence boundaries', () => {
     expect(sentences).toEqual(['No trailing space.']);
   });
 });
+
+// Q-19: a failed reply carries the typed failure the dashboard renders as is.
+describe('StreamRelay failure frames', () => {
+  async function relayError(events: LLMStreamEvent[]): Promise<WSMessage> {
+    const messages: WSMessage[] = [];
+    const relay = new StreamRelay({ broadcast(message: WSMessage) { messages.push(message); } } as unknown as WebSocketServer);
+    async function* stream(): AsyncGenerator<LLMStreamEvent> { for (const event of events) yield event; }
+    await expect(relay.relayStream(stream(), 'req-7')).rejects.toThrow();
+    return messages.find(m => m.type === 'error')!;
+  }
+
+  test('a typed provider code becomes the failure, with credentials redacted', async () => {
+    const frame = await relayError([{ type: 'error', error: 'Incorrect API key provided: sk-ant-api03-abcdefghijklmnopqrstuvwxyz', code: 'auth' }]);
+    const payload = frame.payload as { message: string; code: string; failure: { category: string; effect: string; links: unknown; detail: string } };
+    expect(payload.code).toBe('auth');
+    expect(payload.failure).toMatchObject({ category: 'missing_binding', effect: 'none', links: { requestId: 'req-7' } });
+    expect(payload.message).not.toContain('abcdefghijklmnop');
+    expect(payload.failure.detail).not.toContain('abcdefghijklmnop');
+  });
+
+  test('without a typed code it stays untyped, whatever the text says', async () => {
+    const frame = await relayError([{ type: 'error', error: '429 Too Many Requests: rate limit' }]);
+    expect(frame.payload).toMatchObject({ code: 'unknown', failure: { category: 'internal' } });
+  });
+
+  test('a turn that already called a tool never reads as "nothing was done"', async () => {
+    const frame = await relayError([
+      { type: 'tool_call', tool_call: { id: 't1', name: 'send_email', arguments: {} } },
+      { type: 'error', error: 'rate limited', code: 'rate_limit' },
+    ]);
+    expect(frame.payload).toMatchObject({ failure: { category: 'provider_limit', effect: 'unknown',
+      outcome: 'Actions it had already taken may have gone through.' } });
+  });
+});
+
+describe('StreamRelay: one error per failed turn', () => {
+  test('a stream that throws is shown once, and the caller is told so with the same failure', async () => {
+    const messages: WSMessage[] = [];
+    const relay = new StreamRelay({ broadcast(message: WSMessage) { messages.push(message); } } as unknown as WebSocketServer);
+    async function* stream(): AsyncGenerator<LLMStreamEvent> { throw new Error('socket hang up'); }
+    const error = await relay.relayStream(stream(), 'req-9').catch(e => e) as Error & { _streamErrorBroadcast?: boolean; failure?: { key: string } };
+    expect(messages.filter(m => m.type === 'error')).toHaveLength(1);
+    expect(error._streamErrorBroadcast).toBe(true);
+    expect(error.failure!.key).toBe((messages[0]!.payload as { failure: { key: string } }).failure.key);
+  });
+});
+
+// Review suggestion: only a call that can change something counts toward
+// "may have acted"; a failed turn after a read alone did nothing.
+test('a turn that only read before failing still reads as nothing done', async () => {
+  const messages: WSMessage[] = [];
+  const relay = new StreamRelay({ broadcast(message: WSMessage) { messages.push(message); } } as unknown as WebSocketServer);
+  async function* stream(): AsyncGenerator<LLMStreamEvent> {
+    yield { type: 'tool_call', tool_call: { id: 't1', name: 'read_file', arguments: { path: '/tmp/a' } } };
+    yield { type: 'error', error: 'rate limited', code: 'rate_limit' };
+  }
+  await expect(relay.relayStream(stream(), 'req-8', { mayAct: call => call.name !== 'read_file' })).rejects.toThrow();
+  expect(messages.find(m => m.type === 'error')!.payload).toMatchObject({ failure: { effect: 'none', outcome: 'Nothing was done.' } });
+});

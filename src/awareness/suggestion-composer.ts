@@ -1,4 +1,5 @@
 import { compositionQueueStatus, COMPOSITION_LIMITS } from './composition-budget';
+import { claimOpportunityComposition, nextOwnedQueuedJob } from './composition-leases';
 import { runWithOrigin } from '../llm/origin';
 import { getDb, generateId } from '../vault/schema.ts';
 import { createFlow } from '../workflows/db/repos/flow.ts';
@@ -22,8 +23,7 @@ export function claimSuggestionComposition(timeoutMs = COMPOSITION_TIMEOUT_MS): 
     const budget = compositionQueueStatus(now);
     if (budget.reason) return null;
     getDb().run("UPDATE suggestion_composition_jobs SET state = 'failed', error = 'Preparation attempt limit reached; inspect the saved request', updated_at = ? WHERE state = 'queued' AND attempts >= ?", [now, COMPOSITION_LIMITS.attemptsPerJob]);
-    const row = getDb().query<CompositionRow, []>(`SELECT * FROM suggestion_composition_jobs
-      WHERE state = 'queued' ORDER BY created_at, id LIMIT 1`).get();
+    const row = nextOwnedQueuedJob<CompositionRow>(getDb(), 'suggestion_composition_jobs', now);
     if (!row) return null;
     getDb().run('DELETE FROM suggestion_composition_attempts WHERE started_at <= ?', [now - COMPOSITION_LIMITS.windowMs]);
     getDb().run('INSERT INTO suggestion_composition_attempts(job_id,started_at) VALUES (?,?)', [row.id, now]);
@@ -45,6 +45,7 @@ export function attachSuggestionDraft(job: CompositionRow, result: Extract<Compo
   return getDb().transaction(() => {
     const current = getDb().query<CompositionRow, [string]>('SELECT * FROM suggestion_composition_jobs WHERE id = ?').get(job.id);
     if (!current || current.state !== 'running' || current.lease_token !== job.lease_token || current.lease_until <= Date.now()) return false;
+    if (!claimOpportunityComposition(getDb(), job.suggestion_id, 'legacy', job.id)) return false;
     if (canonicalSuggestion(job.suggestion_id).dismissed) {
       failSuggestionComposition(job, 'Suggestion was dismissed during composition. No draft was created.');
       return false;
@@ -111,6 +112,7 @@ export class SuggestionComposer {
       this.active = active;
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
+        if (!claimOpportunityComposition(getDb(), job.suggestion_id, 'legacy', job.id)) throw new Error('Another composition owns this opportunity.');
         if (canonicalSuggestion(job.suggestion_id).dismissed) throw new Error('Suggestion was dismissed. No draft was created.');
         const request = JSON.parse(job.request) as CompositionRequest;
         const result = await Promise.race([
