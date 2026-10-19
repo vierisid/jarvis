@@ -1,0 +1,1 @@
+{"schemaVersion":1,"id":"ON-B-12","kind":"provider","entry":"./index.ts","provides":["diagnostics.v1"],"requires":[]}
