@@ -1,3 +1,4 @@
+import type { MemoryForget } from './memory-forget';
 import type { MemoryUsageCoverage } from '../vault/memory-usage';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Database } from 'bun:sqlite';
@@ -51,7 +52,7 @@ export function memoryStreamQuery(input: MemoryStreamQuery): Required<Pick<Memor
 export class MemoryStream {
   private readonly snapshots = new Map<string, Snapshot>();
   private readonly secret = randomBytes(32);
-  constructor(private readonly db: Database, readonly usage?: MemoryUsageReader) {}
+  constructor(private readonly db: Database, readonly usage?: MemoryUsageReader, readonly forget?: MemoryForget) {}
   readiness(): 'ready' | 'unavailable' {
     try {
       if (getDb() !== this.db) return 'unavailable';
@@ -120,7 +121,7 @@ export class MemoryStream {
         revision, ...(usageCoverage ? { usageCoverage } : {}), subjectId: row.subject_id, scope: row.scope, updatedAt, basis, status: row.status,
         validity: { from: row.valid_from, to: row.valid_to }, sourceSummary: { labels, evidenceCount: ev.length },
         provenance: ev.map(e => ({ kind: 'source', id: e.id, revision: digest(e) })), uses: factUses,
-        permissions: { canRead: true, canCorrect: false, canForget: false },
+        permissions: { canRead: true, canCorrect: false, canForget: this.forget?.readiness() === 'ready' },
         detailHref: href, historyHref: `${href}/history`, supersededBy: row.superseded_by });
     }
     return { items, usedIn, ...(usageCoverage ? { usageCoverage } : {}) };
@@ -191,7 +192,10 @@ export class MemoryStream {
     try {
       return this.db.transaction(() => {
         const { items } = this.collection(), item = items.get(id);
-        if (!item) return { state: 'not_found' as const };
+        if (!item) {
+          const forgotten = this.db.query<{ forgotten_at: number }, [string]>('SELECT forgotten_at FROM memory_forget_receipts WHERE fact_id = ?').get(id);
+          return forgotten ? { state: 'forgotten' as const, data: { factId: id, forgottenAt: forgotten.forgotten_at } } : { state: 'not_found' as const };
+        }
         if (!history) return { state: 'ready' as const, data: item, asOf: Date.now() };
         // Follow only canonical supersession edges, never textual similarity.
         const family = new Set([id]); let changed = true;
