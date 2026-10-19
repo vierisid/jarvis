@@ -9,4 +9,5 @@ export const viewModules: readonly ViewModule[] = [
   { manifest: {"schemaVersion":1,"id":"ON-U-06","kind":"view","entry":"./index.tsx","provides":["pebble-tour-view.v1"],"requires":["tour.v1"]}, load: () => import("../../views/pebble-tour/index.tsx") },
   { manifest: {"schemaVersion":1,"id":"ON-U-07","kind":"view","entry":"./index.tsx","provides":["activation-view.v1"],"requires":["activation-intent.v1","build-job.v1"]}, load: () => import("../../views/activation/index.tsx") },
   { manifest: {"schemaVersion":1,"id":"ON-U-08","kind":"view","entry":"./index.tsx","provides":["build-view.v1"],"requires":["build-job.v1","draft-result.v1"]}, load: () => import("../../views/build/index.tsx") },
+  { manifest: {"schemaVersion":1,"id":"ON-U-09","kind":"view","entry":"./index.tsx","provides":["result-view.v1"],"requires":["draft-result.v1"]}, load: () => import("../../views/result/index.tsx") },
 ];
