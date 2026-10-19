@@ -22,7 +22,7 @@ bun run build:ui
 bun scripts/brief-craft/serve.ts   # BRIEF_CRAFT_PORT overrides 4422
 ```
 
-`serve.ts` serves the built `ui/dist` on loopback. It has no database or credentials, rejects `/api/*`, permits only GET/HEAD and sends `connect-src 'none'`, so the page cannot open any connection. Open `http://127.0.0.1:4422/?brief=preview&specimen=billing&craft=1#/_brief_preview`. `craft=1` mounts bounded frame/input/long-task instrumentation in the **explicit fixture preview only**. “Capture craft trace” writes the current trace into a DOM output; it sends nothing externally and does not record input text. Normal previews and live rooms mount no recorder.
+`serve.ts` serves the built `ui/dist` on loopback. It has no database or credentials, rejects `/api/*`, permits only GET/HEAD and sends `connect-src 'none'`, so the page cannot open any connection. In that origin run `localStorage.setItem("jarvis-devtools", "1")` once, then open `http://127.0.0.1:4422/?brief=preview&specimen=billing&craft=1#/_brief_preview`. The runner does not set the flag; without it `prepare()` stops with an error naming the setting. `craft=1` mounts bounded frame/input/long-task instrumentation in the **explicit fixture preview only**. “Capture craft trace” writes the current trace into a DOM output; it sends nothing externally and does not record input text. Normal previews and live rooms mount no recorder.
 
 ## Browser runner
 

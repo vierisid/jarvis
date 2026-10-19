@@ -4,7 +4,7 @@ The shipped `BRIEF_RELEASE` is **off**. D32's live craft gate, F28's activation/
 
 ## Quick verification
 
-Use the stack's Bun 1.3.14 and frozen lockfile:
+Use the frozen lockfile:
 
 ```sh
 bun install --frozen-lockfile
@@ -32,6 +32,35 @@ Open `http://127.0.0.1:4433/`. This server binds loopback and serves only a synt
 `assessBriefRelease` validates the record's structure, provenance labels and candidate/combination match. **It does not open artifacts, execute the three upstream suites, authenticate attestations or certify their truth.** The integration/release owner reviews the actual evidence. Nothing in this PR supplies a passed production record.
 
 The composition check requires every registered room body, live ready navigation and one live conversation. This catches missing destinations and fixture owners; it cannot prove an arbitrary body has no dead controls. Room adapters and F28 still enforce capability/readiness and action guards. Do not replace them with gate booleans.
+
+## Release checklist (manual, before filling BRIEF_RELEASE)
+
+`assessBriefRelease` only checks that the record is complete and names one candidate. It cannot read
+F28's release record or ON-B-13's report, so the release owner ties them together by hand and keeps
+the result with the deployment approval. Every item must hold for the same `candidate`:
+
+1. `candidate` is a full 40-character SHA of a clean checkout of the integrated build that will be
+   deployed (UI and brain come from this one repo, so it is also the brain revision).
+2. F28 (#1005): `src/brief/release/fixtures/release-record.json` (or the release copy of it) has
+   `revision` equal to `candidate`, every listed PR is MERGED with its squash SHA, and
+   `bun scripts/check-brief-release.ts <record> <snapshot> <candidate> <deployment> [hostingRevision]`
+   exits 0 (`ready`). The `deployment` and `hostingRevision` passed there match the `combinations`
+   row that will serve the build. Put the audit output reference in `gates["F-28"].artifact`.
+3. D32: `scripts/brief-craft/verify.mjs` reports `releaseReady: true` for a live report whose `head`
+   is `candidate`. Put its reference in `gates["D-32"].artifact`.
+4. Q22: the quality result is `passed` for `candidate`; put its reference in `gates["Q-22"].artifact`.
+5. Onboarding: if the release also turns on onboarding-next, the ON-B-13 (#1089) report
+   (`src/onboarding-next/verification/`) verifies with `candidate.frontend` and `candidate.backend`
+   equal to `candidate` (and `sidecar` equal to the sidecar build in the matching combination). An
+   ON-B-13 report for another candidate does not carry over.
+6. Every `combinations` row lists the exact brain/hosting/sidecar/schema/flag set, and its migration
+   and rollback records were produced on `candidate`. The flags include no capability that F28's
+   assessment left disabled.
+7. `approval.artifact` names the team's deployment authorization, and that authorization quotes
+   `candidate`.
+
+If any item fails, leave `rollout: "off"`. A later CLI can join these records automatically once the
+first real release record exists; until then this list is the binding.
 
 ## Entry and rollback
 

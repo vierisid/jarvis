@@ -36,3 +36,4 @@ const server = Bun.serve({
 });
 
 console.log(`Brief fixture preview: ${server.url}?brief=preview&specimen=billing&craft=1#/_brief_preview`);
+console.log(`First run localStorage.setItem("jarvis-devtools", "1") in that origin and reload: the release gate keeps fixture URLs closed without it.`);

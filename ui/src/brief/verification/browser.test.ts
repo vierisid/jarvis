@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { inspect, layoutProblems, workflowSelectionProblems } from "../../../../scripts/brief-craft/browser.mjs";
+import { inspect, layoutProblems, runCases, workflowSelectionProblems } from "../../../../scripts/brief-craft/browser.mjs";
+import { requiredCases } from "../../../../scripts/brief-craft/matrix.mjs";
 
 beforeAll(() => {
   GlobalRegistrator.register();
@@ -128,4 +129,26 @@ test("workflow observation detects a changed or lost node even while the Canvas 
   document.querySelector(".wf-node--selected")!.classList.remove("wf-node--selected");
   expect(workflowSelectionProblems("notes", await inspect(tab, room))).toEqual(["Selected workflow node was lost or changed."]);
   expect(workflowSelectionProblems(null, await inspect(tab, room))).toEqual(["Selected workflow node was lost or changed."]);
+});
+
+test("a preview that stays on the current dashboard stops with the developer-setting hint", async () => {
+  // The D33 release gate keeps fixture URLs on v2 unless jarvis-devtools=1 is set in the origin.
+  const test = requiredCases().find(row => row.room === "billing" && row.kind === "layout" && row.state === "ready");
+  const saved: Record<string, string> = {};
+  const visits: string[] = [];
+  const legacyTab = {
+    url: async () => "about:blank",
+    goto: async (href: string) => { visits.push(href); },
+    reload: async () => {},
+    playwright: { locator: () => ({ waitFor: async () => { throw Error("Timed out waiting for .brief-navigation"); } }) },
+  };
+  const results = await runCases({
+    tab: legacyTab, viewport: { set: async () => {} }, baseUrl: "http://127.0.0.1:4422", cases: [test, test],
+    save: async (name: string, data: string) => { saved[name] = data; },
+  });
+  expect(visits).toHaveLength(1);
+  expect(results).toHaveLength(1);
+  expect(results[0]!.status).toBe("failed");
+  expect(results[0]!.reason).toContain('Set localStorage "jarvis-devtools" to "1"');
+  expect(results[0]!.reason).toContain("http://127.0.0.1:4422");
 });
