@@ -3,7 +3,7 @@
  * appropriate channels (WebSocket always, Telegram/Discord too).
  */
 
-import { APPROVAL_SHORT_ID_LENGTH, approvalIntentFromContext, type ApprovalRequest } from './approval.ts';
+import { APPROVAL_SHORT_ID_LENGTH, approvalIntentFromContext, approvalNeedsClick, type ApprovalRequest } from './approval.ts';
 import { boundedReceiptText } from '../roles/untrusted.ts';
 import { commandForCard } from '../util/card-text.ts';
 import { confusableSkeleton } from './ui-intent.ts';
@@ -350,7 +350,8 @@ export function approvalToast(request: ApprovalRequest): ApprovalToast {
   // walks a long one (toastLines stops with the budget).
   const fits = toastLines(`${body} · ${impact}`) <= TOAST_APPROVABLE_LINES;
   const lookAlike = fits && toastLookAlike(body);
-  const approvable = fits && !lookAlike;
+  const clickOnly = approvalNeedsClick(request);
+  const approvable = fits && !lookAlike && !clickOnly;
   if (approvable) {
     // The reason goes last, after the impact and the tool: it says why
     // approval was needed, and it is the part an OS cut may take.
@@ -366,8 +367,8 @@ export function approvalToast(request: ApprovalRequest): ApprovalToast {
   const room = TOAST_APPROVABLE_MAX_COLUMNS - `... · ${impact}`.length;
   return {
     id: request.id, kind: 'approval_review', title: `Review in Jarvis: ${tool}`,
-    body: lookAlike ? body : `${fitColumns(body, room).trimEnd()}...`,
-    meta: `${impact} · ${toolLabel} · ${lookAlike ? 'mixes letters from different alphabets, so check it in Jarvis' : 'too long to approve from a notification'}`, destructive,
+    body: fits ? body : `${fitColumns(body, room).trimEnd()}...`,
+    meta: `${impact} · ${toolLabel} · ${clickOnly ? 'requires on-screen review in Jarvis' : lookAlike ? 'mixes letters from different alphabets, so check it in Jarvis' : 'too long to approve from a notification'}`, destructive,
     actions: [{ id: 'review', label: 'Open Jarvis', primary: true }, { id: 'dismiss', label: 'Dismiss' }],
     approvable,
   };
@@ -664,7 +665,8 @@ export type ApprovalBroadcaster = {
 };
 
 export type ChannelSender = {
-  broadcastToAll(text: string, options?: SendOptions): Promise<void>;
+  /** `delivery.approvalCard`: the one send path allowed a retry after a timeout or drop (owner decision, Q-19). */
+  broadcastToAll(text: string, options?: SendOptions, delivery?: { approvalCard?: boolean }): Promise<void>;
 };
 
 export class ApprovalDelivery {
@@ -691,7 +693,7 @@ export class ApprovalDelivery {
     if (this.channelSender) {
       try {
         const card = approvalChannelCard(request);
-        await this.channelSender.broadcastToAll(card.text, { literal: true });
+        await this.channelSender.broadcastToAll(card.text, { literal: true }, { approvalCard: true });
       } catch (err) {
         console.error('[ApprovalDelivery] Failed to send to external channels:', err);
       }

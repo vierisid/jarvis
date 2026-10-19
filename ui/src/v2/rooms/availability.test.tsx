@@ -373,3 +373,57 @@ test("stale nonempty goal rows remain visible while healthy metrics continue upd
   expect(host.textContent).toContain(goal.title);
   expect(host.querySelector(".v2-goals__stat-value")?.textContent).toBe("1");
 });
+
+// Q-19: a failure that needs the person waits in Today with the sentence Runs
+// and chat show, pins the widget, and leaves when dismissed.
+test("Waiting on you lists an open failure until it is dismissed", async () => {
+  localStorage.setItem("jarvis-now-layout-v2", JSON.stringify([{ id: "goals", size: 1 }]));
+  const failure = { category: "uncertain_effect", effect: "unknown", headline: 'The step "Post to the ledger" may or may not have taken effect.',
+    outcome: "It may already have taken effect.", next: [{ step: "check_before_running_again", label: "Check whether it happened before running it again." },
+      { step: "open_details", label: "Open the details." }], links: { runId: "run-1" }, code: "DISPATCH_UNCERTAIN", detail: "lost", key: "a".repeat(32) };
+  let open = [{ failure, keys: [failure.key], repeats: 0, source: "run", title: "Invoices", flowId: "flow-1", runId: "run-1", at: Date.now() }];
+  const dismissed: unknown[] = [];
+  mock((url, init) => {
+    if (url === "/api/failures/dismiss") { dismissed.push(JSON.parse(String(init?.body))); open = []; return NativeResponse.json({ dismissed: 1 }); }
+    return NativeResponse.json(url === "/api/failures/open" ? open : good(url));
+  });
+  await mount(<NowRoom connection="live" arranging={false} onApprove={() => {}} onCancel={() => {}} />);
+  // Pinned even though the saved layout left it out: it is amber.
+  expect(host.textContent).toContain("waiting on you · 1");
+  expect(host.textContent).toContain(`Invoices${failure.headline} ${failure.outcome}`);
+  // Open lands on the run itself (review C7): the Workflows room takes this focus.
+  await act(async () => { button("Open").click(); });
+  const { useRunFocus } = await import("./workflows/run-focus");
+  const focused: Array<{ flowId: string; runId: string }> = [];
+  function FocusProbe() { useRunFocus((target) => { focused.push(target); }); return null; }
+  const probeHost = document.createElement("div");
+  const probe = createRoot(probeHost);
+  await act(async () => { probe.render(<FocusProbe />); });
+  expect(focused).toEqual([{ flowId: "flow-1", runId: "run-1" }]);
+  await act(async () => probe.unmount());
+  await act(async () => { button("Dismiss").click(); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(dismissed).toEqual([{ keys: [failure.key] }]);
+  expect(host.textContent).not.toContain(failure.headline);
+});
+
+// Task states are pending, active, completed, failed and escalated; the room
+// used to test for "done", so a failed task looked like one still running.
+test("Today colors a failed task as failed, and Tasks due leaves finished ones out", async () => {
+  localStorage.setItem("jarvis-now-layout-v2", JSON.stringify([{ id: "today", size: 2 }, { id: "tasks-due", size: 1 }]));
+  mock(url => NativeResponse.json(good(url)));
+  const { LiveDataProvider } = await import("../shell/LiveDataContext");
+  const task = (id: string, what: string, status: string) => ({ action: "updated" as const, timestamp: Date.now(),
+    task: { id, what, status, when_due: null, context: null, priority: "normal", assigned_to: null, created_from: null,
+      created_at: 0, completed_at: null, result: null, sort_order: 0 } });
+  const live = { approvals: [], clarifiers: [], repeatBacks: [], notices: [], contentEvents: [], agentActivity: [], settingsEvents: [],
+    latestAssistantReply: null, taskEvents: [task("t1", "Draft the brief", "failed"), task("t2", "File receipts", "completed"), task("t3", "Call the bank", "active")] };
+  await mount(<LiveDataProvider value={live}><NowRoom connection="live" arranging={false} onApprove={() => {}} onCancel={() => {}} /></LiveDataProvider>);
+  const dot = (text: string) => ([...host.querySelectorAll(".rs-row")].find(row => row.textContent?.includes(text))
+    ?.querySelector(".rs-dot") as HTMLElement | null)?.style.background;
+  expect(dot("Draft the brief")).toBe("var(--listen)");
+  expect(dot("File receipts")).toBe("var(--ok)");
+  // Each task shows once in Today's activity; only the open one also shows in Tasks due.
+  const rows = (text: string) => [...host.querySelectorAll(".rs-row")].filter(row => row.textContent?.startsWith(text)).length;
+  expect([rows("Call the bank"), rows("Draft the brief"), rows("File receipts")]).toEqual([2, 1, 1]);
+});

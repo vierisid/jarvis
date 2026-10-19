@@ -17,6 +17,7 @@ import { VERIFIED_MANIFESTS } from '../workflows/pieces-library/verified-manifes
 import { CredentialResolver } from '../workflows/credentials/adapter.ts';
 import { WorkflowEventBuffer } from '../workflows/runtime/event-buffer.ts';
 import { buildSandboxServiceBackends } from '../workflows/runtime/service-backends.ts';
+import { pieceInputDigest } from '../workflows/runtime/piece-effect-guard.ts';
 import { AuthorityEngine, type AuthorityConfig } from '../authority/engine.ts';
 import { AuditTrail } from '../authority/audit.ts';
 import { EmergencyController } from '../authority/emergency.ts';
@@ -481,7 +482,7 @@ describe('Authority predictions match the effect boundary', () => {
     'tool with mandatory review': { ...writeFile, gate: { actionCategory: 'write_data', confirm: 'always', intent: 'Review this write' } },
     'tool above its level': { ...writeFile, gate: { actionCategory: 'execute_command', confirm: 'above_level', intent: 'Run this as a command' } },
     gmail: { piece: GMAIL, action: 'send_email', input: { auth: '{{connections.billing-gmail}}', ...SEND_INPUT },
-      call: (b: any, ctx: any) => b.pieceAuthorize({ piece: GMAIL, action: 'send_email', input: SEND_INPUT }, ctx) },
+      call: async (b: any, ctx: any) => b.pieceAuthorize({ piece: GMAIL, action: 'send_email', input: SEND_INPUT, inputDigest: await pieceInputDigest(SEND_INPUT) }, ctx) },
   };
   // Each configuration must produce the outcomes listed, so no comparison is vacuous.
   const configs: Array<[string, Partial<AuthorityConfig>, string[]]> = [
@@ -513,7 +514,7 @@ describe('Authority predictions match the effect boundary', () => {
           approvalManager: new ApprovalManager(), onWorkflowApproval: () => {},
           channelService: { getChannelStatus: () => ({}), getBroadcastRecipient: () => 'owner',
             sendWorkflowNotification: async () => {}, tryBroadcastToChannels: async () => ({ delivered: ['dashboard'], failed: [] }) } as any,
-          wsService: { broadcastNotificationToDashboard: () => {} } as any });
+          wsService: { broadcastNotificationToDashboard: () => 1 } as any });
         let actual: string;
         try {
           const reply = await route.call(backends, { runId: run.id, projectId: DEFAULT_IDS.project, stepName: 'action', executionPath: [] });

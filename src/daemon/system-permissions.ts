@@ -25,6 +25,7 @@
  */
 
 import type { RPCTimeouts } from '../sidecar/protocol.ts';
+import { SidecarRPCError } from '../sidecar/rpc.ts';
 
 /** What the OS says about one permission. "na" = no such concept here. */
 export type PermissionStatus = 'granted' | 'denied' | 'undetermined' | 'na';
@@ -53,7 +54,8 @@ export type PermissionsUnavailable =
   | 'ambiguous' // several machines connected and nothing says which is this one
   | 'unsupported' // connected, but too old to know the RPC
   | 'refused' // it answered, and the answer was no
-  | 'unreachable'; // connected, but the call failed or never came back
+  | 'errored' // it answered with an error of its own, such as a crash in its handler
+  | 'unreachable'; // connected, but the call never came back
 
 /** The machine an answer is about, so the screen can name it. */
 export interface PermissionsHostInfo {
@@ -198,15 +200,17 @@ export function resolvePermissionsHost(
  */
 function classifyDispatchFailure(err: unknown): { reason: PermissionsUnavailable; detail: string } {
   const detail = err instanceof Error ? err.message : String(err);
-  if (detail.includes('METHOD_NOT_FOUND')) return { reason: 'unsupported', detail };
+  // Q-19: the sidecar's typed error code decides, never the message text. An
+  // error without one (a disconnect, a timeout here) never came back.
+  if (!(err instanceof SidecarRPCError)) return { reason: 'unreachable', detail };
+  if (err.code === 'METHOD_NOT_FOUND') return { reason: 'unsupported', detail };
   // A refusal is not a silence. The sidecar answers HANDLER_ERROR for real,
   // considered nos -- "cannot be requested on linux", "not running as an app
   // bundle" -- and describing a prompt, correct answer as "the app did not
   // respond" sends the user to look for a problem that is not there.
-  if (detail.includes('HANDLER_ERROR')) {
-    return { reason: 'refused', detail: detail.replace(/^HANDLER_ERROR:\s*/, '') };
-  }
-  return { reason: 'unreachable', detail };
+  if (err.code === 'HANDLER_ERROR') return { reason: 'refused', detail: detail.slice(`${err.code}: `.length) };
+  // It answered, with an error of its own (HANDLER_PANIC and the like): not "did not answer".
+  return { reason: 'errored', detail };
 }
 
 /**

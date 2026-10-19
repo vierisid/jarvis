@@ -7,7 +7,11 @@ export type WorkflowEffectContext = {
   runId: string; projectId: string; sandboxId?: string;
   stepName?: string; executionPath?: Array<[string, number]>;
 };
-export type WorkflowApprovalPending = { effectId: string; approvalId: string; waitpointId: string };
+export type WorkflowApprovalPending = {
+  effectId: string; approvalId: string; waitpointId: string;
+  /** Set when the step is held because Jarvis is paused (Q-08): no approval is involved, and Resume releases it. */
+  hold?: string;
+};
 
 /** Stable JSON identity, independent of object key insertion order. */
 export function canonicalJson(value: unknown): string {

@@ -147,11 +147,20 @@ describe('desktop outcome API and durable receipts', () => {
     expect(f.dispatches()).toBe(0);
   });
 
-  for (const state of ['denied', 'pause', 'kill'] as const) test(`probe does not bypass ${state}`, async () => {
+  for (const state of ['denied', 'kill'] as const) test(`probe does not bypass ${state}`, async () => {
     const f = fixture(true);
     if (state === 'denied') f.authority.addOverride({ action: 'read_data', allowed: false });
     else f.emergency[state]();
-    await expect(f.call({ requireSuccess: false })).rejects.toThrow(/denied|paused|killed/i);
+    await expect(f.call({ requireSuccess: false })).rejects.toThrow(/denied|killed/i);
+    expect(f.dispatches()).toBe(0);
+  });
+
+  test('probe does not bypass pause: it parks until Resume (Q-08)', async () => {
+    const f = fixture(true);
+    f.emergency.pause();
+    const held = await f.call({ requireSuccess: false });
+    expect(held.status).toBe(202);
+    expect(await held.json()).toMatchObject({ approval: { hold: expect.stringMatching(/paused/i) } });
     expect(f.dispatches()).toBe(0);
   });
 

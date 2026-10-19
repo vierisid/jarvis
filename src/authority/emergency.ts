@@ -45,8 +45,9 @@ export class EmergencyController {
    * delegation) stops at its next fence in `runSubAgent`. The orchestrator's
    * own loops are NOT stopped: a chat turn, a background-agent turn and a
    * conversation-tier task keep calling the model with every tool refused.
-   * Requires explicit reset() to recover. Pending approval cards are NOT
-   * cancelled; the approval executor refuses to run them while killed.
+   * Requires explicit reset() to recover. The daemon also stops
+   * unfinished workflow runs and denies pending cards except Stop agent cards
+   * (Q-08). Tool dispatch stops at its next checkpoint.
    */
   kill(): void {
     this.state = 'killed';
@@ -95,4 +96,19 @@ export class EmergencyController {
     }
     this.onStateChange?.(this.state);
   }
+}
+
+let active: EmergencyController | null = null;
+
+/**
+ * The daemon's controller, for enforcement points it does not hand one to:
+ * tool dispatch, the workflow worker, triggers and continuations (Q-08).
+ */
+export function setActiveEmergencyController(controller: EmergencyController | null): void {
+  active = controller;
+}
+
+/** The active controller's state; normal when none is wired (tests, tools). */
+export function activeEmergencyState(): EmergencyState {
+  return active?.getState() ?? 'normal';
 }

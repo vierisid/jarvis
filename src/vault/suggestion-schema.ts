@@ -1,3 +1,4 @@
+import { ensureCompositionBudget } from '../awareness/composition-budget';
 import type { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
 
@@ -21,6 +22,7 @@ export function suggestionContext(context: string | null): Record<string, unknow
 }
 
 export function ensureSuggestionSchema(db: Database): void {
+  ensureCompositionBudget(db);
   db.run(`CREATE TABLE IF NOT EXISTS suggestion_identities (
     suggestion_id TEXT PRIMARY KEY REFERENCES awareness_suggestions(id) ON DELETE CASCADE,
     pattern_key TEXT NOT NULL
@@ -53,6 +55,13 @@ export function ensureSuggestionSchema(db: Database): void {
     CHECK((flow_id IS NULL) = (version_id IS NULL))
   )`);
   db.run('CREATE INDEX IF NOT EXISTS idx_suggestion_composition_state ON suggestion_composition_jobs(state, created_at)');
+  // Shared by legacy acceptance and prepared opportunities, including when F09 is off.
+  db.run(`CREATE TABLE IF NOT EXISTS opportunity_composition_owners (
+    opportunity_id TEXT PRIMARY KEY REFERENCES awareness_suggestions(id),
+    owner TEXT NOT NULL CHECK(owner IN ('legacy', 'prepared')),
+    job_id TEXT NOT NULL
+  )`);
+
   // Legacy duplicates remain addressable. The earliest row is the canonical ID;
   // feedback resolves aliases to it and considers flags from the whole family.
   db.transaction(() => {

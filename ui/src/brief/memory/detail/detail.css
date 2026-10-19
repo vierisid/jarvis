@@ -1,0 +1,134 @@
+.brief-root .brief-memory-detail {
+  max-width: 1132px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.brief-root .brief-memory-detail > h1 {
+  margin: 0 0 18px;
+  outline: none;
+}
+.brief-root .brief-memory-detail-assertion {
+  max-width: 860px;
+  min-height: 150px;
+  padding: 28px 0 20px;
+}
+.brief-root .brief-memory-detail-sentence {
+  font: 500 26px/1.45 var(--brief-sans);
+  margin: 0 0 14px;
+  white-space: pre-wrap;
+}
+.brief-root .brief-memory-detail-qualification {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--brief-secondary);
+  margin: 4px 0;
+  white-space: pre-wrap;
+}
+.brief-root .brief-memory-detail-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  min-height: 44px;
+}
+.brief-root .brief-memory-detail-note,
+.brief-root .brief-memory-detail-feedback {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--brief-secondary);
+}
+.brief-root .brief-memory-detail-feedback[data-editing="true"] {
+  min-height: 88px;
+}
+.brief-root .brief-memory-detail-feedback {
+  min-height: 48px;
+  max-width: 760px;
+  padding-block: 12px;
+}
+.brief-root .brief-memory-detail-panel {
+  max-width: 760px;
+  margin: 4px 0 28px;
+  padding: 24px;
+  border: 1px solid var(--brief-card-edge);
+  background: var(--brief-soft);
+  border-radius: var(--brief-corner-control);
+}
+.brief-root .brief-memory-detail-panel h3 {
+  margin: 0 0 16px;
+  font-size: 18px;
+  font-weight: 500;
+}
+.brief-root .brief-memory-detail-panel p {
+  font-size: 14px;
+  line-height: 1.65;
+  margin-block: 0 14px;
+}
+.brief-root .brief-memory-detail-panel .brief-field {
+  margin-bottom: 12px;
+}
+.brief-root .brief-memory-detail-panel textarea {
+  resize: vertical;
+}
+.brief-root .brief-memory-detail-context {
+  max-width: 760px;
+  padding-top: 28px;
+  border-top: 1px solid var(--brief-card-edge);
+  color: var(--brief-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.brief-root .brief-memory-detail-context section {
+  margin-bottom: 32px;
+}
+.brief-root .brief-memory-detail-context h3 {
+  font-size: 13px;
+  font-weight: 500;
+  margin: 0 0 12px;
+}
+.brief-root .brief-memory-detail-context p {
+  margin: 8px 0;
+  white-space: pre-wrap;
+}
+.brief-root .brief-memory-detail-context small {
+  font-size: 12px;
+}
+.brief-root .brief-memory-detail-context blockquote {
+  margin: 8px 0;
+  color: var(--brief-ink);
+  white-space: pre-wrap;
+}
+.brief-root .brief-memory-evidence + .brief-memory-evidence,
+.brief-root .brief-memory-history-entry {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--brief-card-edge);
+}
+.brief-root .brief-memory-detail-context summary {
+  cursor: pointer;
+  font-size: 12px;
+  margin-top: 8px;
+}
+.brief-root .brief-memory-detail-unavailable h2 {
+  font-size: 24px;
+  font-weight: 500;
+  margin: 0 0 14px;
+}
+.brief-root .brief-memory-detail-unavailable p {
+  color: var(--brief-secondary);
+}
+.brief-root .brief-memory-row[data-returned="true"] {
+  background: var(--brief-selected);
+  outline: 1px solid var(--brief-focus);
+  outline-offset: 2px;
+}
+@media (max-width: 699px) {
+  .brief-root .brief-memory-detail-sentence {
+    font-size: 23px;
+  }
+  .brief-root .brief-memory-detail-assertion {
+    min-height: 128px;
+  }
+  .brief-root .brief-memory-detail-panel {
+    padding: 18px 14px;
+  }
+}

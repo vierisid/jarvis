@@ -54,17 +54,28 @@ class FakeChannelSender implements ChannelSender {
   private throwOnSend: Error | null;
   public sent: string[] = [];
   public options: Array<SendOptions | undefined> = [];
+  public deliveries: Array<{ approvalCard?: boolean } | undefined> = [];
   constructor(opts?: { throwOnSend?: Error }) {
     this.throwOnSend = opts?.throwOnSend ?? null;
   }
-  async broadcastToAll(text: string, options?: SendOptions): Promise<void> {
+  async broadcastToAll(text: string, options?: SendOptions, delivery?: { approvalCard?: boolean }): Promise<void> {
     if (this.throwOnSend) throw this.throwOnSend;
     this.sent.push(text);
     this.options.push(options);
+    this.deliveries.push(delivery);
   }
 }
 
 describe('ApprovalDelivery', () => {
+  // Owner decision on Q-19: the approval card is the one send allowed a retry after a timeout.
+  test('marks its channel send as an approval card', async () => {
+    const delivery = new ApprovalDelivery();
+    const sender = new FakeChannelSender();
+    delivery.setChannelSender(sender);
+    await delivery.deliver(makeRequest());
+    expect(sender.deliveries).toEqual([{ approvalCard: true }]);
+  });
+
   test('delivers normal-urgency requests to external channels', async () => {
     const delivery = new ApprovalDelivery();
     const sender = new FakeChannelSender();
@@ -786,5 +797,16 @@ describe('#813: the task-complete toast names what was done', () => {
     expect(index).toContain("body: taskCompleteBody(req) || `${trayHumanizeTool(req.tool_name)} finished.`,");
     // Spans the comment between the title and the body (#813 review: `\s*` alone could never match).
     expect(index).not.toMatch(/title: 'Task complete',[\s\S]{0,300}?req\.reason/);
+  });
+});
+
+
+describe('Q-08 on-screen review retains main delivery safeguards', () => {
+  test('a short click-only card uses the review-only notification kind', () => {
+    const t = approvalToast(makeRequest({ tool_name: 'ui_act', action_category: 'send_email',
+      context: JSON.stringify({ confirm: 'always', intent: 'Click Send in Mail' }) }));
+    expect(t).toMatchObject({ approvable: false, kind: 'approval_review', body: 'Click Send in Mail' });
+    expect(t.actions.map((a) => a.id)).toEqual(['review', 'dismiss']);
+    expect(t.meta).toContain('requires on-screen review');
   });
 });

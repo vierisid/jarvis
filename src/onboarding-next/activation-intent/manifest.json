@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "ON-B-07",
+  "kind": "provider",
+  "entry": "./index.ts",
+  "provides": ["activation-intent.v1"],
+  "requires": []
+}

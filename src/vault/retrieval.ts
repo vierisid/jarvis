@@ -1,3 +1,4 @@
+import { capturePackedMemory } from './memory-use-context';
 /**
  * Vault Retrieval — Memory Query Engine
  *
@@ -11,7 +12,7 @@ import { findEntities } from './entities.ts';
 import { getFact } from './facts.ts';
 import { getEntityRelationships } from './relationships.ts';
 import { expandRecallDependencies, isRecallSelfOverview, rankRecall, recallTerms, type RecallFact } from './recall-ranking.ts';
-import { packRecallContext, RECALL_LIMITS, type RecallProfile } from './recall-context.ts';
+import { packRecallContext, packRecallEvidence, RECALL_LIMITS, type RecallProfile } from './recall-context.ts';
 
 export type EntityProfile = RecallProfile;
 export const extractSearchTerms = recallTerms;
@@ -77,8 +78,9 @@ export function formatKnowledgeContext(profiles: EntityProfile[], maxChars?: num
  */
 export function getKnowledgeForMessage(message: string): string {
   try {
-    const profiles = retrieveForMessage(message);
-    return formatKnowledgeContext(profiles);
+    const packed = getDb().transaction(() => packRecallEvidence(retrieveForMessage(message)))();
+    capturePackedMemory(packed);
+    return packed.text;
   } catch (err) {
     console.error('[Retrieval] Error querying vault:', err);
     return '';

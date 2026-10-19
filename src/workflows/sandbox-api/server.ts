@@ -20,6 +20,7 @@
 
 import type { Server } from "bun";
 import { WorkflowCancellationError } from "../runtime/cancellation";
+import { ActionOutcomeError } from '../../actions/action-outcome';
 
 // We don't attach per-connection state to upgrades on this server (yet --
 // socket.io will own that in B4), so the Bun.Server generic gets `unknown`.
@@ -54,6 +55,8 @@ import {
 } from "./routes/jarvis-tools";
 import {
   createJarvisPieceAuthorizeRoute,
+  createJarvisPieceReceiptRoute,
+  type JarvisPiecesRouteDeps,
   type PieceAuthorizeFn,
 } from "./routes/jarvis-pieces";
 import {
@@ -119,6 +122,7 @@ export interface SandboxApiServices {
    * step closed -- the engine only calls it for a piece with an adapter.
    */
   pieceAuthorize?: PieceAuthorizeFn;
+  pieceReceipt?: JarvisPiecesRouteDeps['pieceReceipt'];
   /**
    * Notification backend for the `jarvis-notify` piece. If unset, returns 503.
    */
@@ -270,6 +274,7 @@ export class SandboxApi {
         method: "POST",
         handler: createJarvisPieceAuthorizeRoute(this.services),
       },
+      { path: '/v1/jarvis/pieces/receipt', method: 'POST', handler: createJarvisPieceReceiptRoute(this.services) },
       {
         path: "/v1/jarvis/notify",
         method: "POST",
@@ -447,6 +452,12 @@ export class SandboxApi {
         return await runWithOrigin('workflow', () => route.handler(ctx));
       } catch (e) {
         if (e instanceof WorkflowCancellationError) return err(e.message, 409);
+        // A typed refusal or failure is not an internal error (Q-19): the
+        // engine gets its outcome, and the step fails with its code intact.
+        if (e instanceof ActionOutcomeError) {
+          const { outcome } = e;
+          return json({ error: e.message, outcome }, outcome.status === 'blocked' ? 409 : outcome.status === 'error' ? 422 : 502);
+        }
         const message = e instanceof Error ? e.message : String(e);
         return err(`internal error: ${message}`, 500);
       }

@@ -1,3 +1,4 @@
+import { ingredientUsageIssues, type ResolvedCompositionIngredient } from '../../workflows/runtime/composition-ingredients';
 /**
  * NL workflow composer. Builds a draft flow from a plain-English description
  * by prompting the configured Jarvis LLM with the piece catalog + a schema
@@ -10,6 +11,7 @@
 
 import { planningPrompt, type PlanningPolicy, type CompositionProvenance } from './composition-provenance';
 import { wrapUntrusted } from '../../roles/untrusted';
+import { checkJobContract, JobContractError, validateJobContract, type ContractReport, type JobContract } from './job-contract';
 import type {
   PieceInputField,
   PieceInputSchema,
@@ -102,22 +104,32 @@ export interface ComposedStep extends FlowTriggerNode {
 const STEP_NAME_REGEX = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
 export interface ComposeRequest {
+  /** Server-resolved identities, never connection secrets or free-form labels. */
+  ingredients?: readonly ResolvedCompositionIngredient[];
   /** Stops provider requests and subsequent discovery/validation attempts. */
   signal?: AbortSignal;
   /** Display name for the new flow. */
   name: string;
   /** Plain-English description from the user. */
   description: string;
+  /** What the caller states explicitly about the job; the composed graph must keep it (job-contract.ts). */
+  contract?: JobContract;
+  /** Supplemental user/reference data, framed as untrusted with the original wording. Never execution authority. */
+  context?: Record<string, unknown>;
 }
 
 /** Versioned source of intent. Preserve the caller's wording, including
  * constraints, without asking another model or a heuristic to paraphrase it.
  */
 export interface WorkflowJobSpecification {
+  ingredients?: readonly ResolvedCompositionIngredient[];
   provenance?: CompositionProvenance;
   schemaVersion: 1;
   name: string;
   description: string;
+  /** The caller's explicit contract, as given. Absent when none was stated. */
+  contract?: JobContract;
+  context?: Record<string, unknown>;
 }
 
 export interface CompositionCandidate {
@@ -131,13 +143,18 @@ interface CompositionContext extends CompositionCandidate {
 }
 
 export function jobSpecification(req: ComposeRequest): WorkflowJobSpecification {
-  return Object.freeze({ schemaVersion: 1, name: req.name, description: req.description });
+  return Object.freeze({ schemaVersion: 1, name: req.name, description: req.description,
+    ...(req.contract !== undefined ? { contract: structuredClone(req.contract) } : {}),
+    ...(req.context !== undefined ? { context: structuredClone(req.context) } : {}),
+    ...(req.ingredients?.length ? { ingredients: structuredClone(req.ingredients) } : {}) });
 }
 
 export interface ComposeOk {
   ok: true;
   compositionRecordId?: string;
   flow: ComposedFlow;
+  /** With a contract: what the check proved and what a person must still confirm. */
+  contractReport?: ContractReport;
   /** The raw LLM reply, kept for debugging / logging. */
   rawResponse: string;
 }
@@ -371,6 +388,14 @@ async function composeFlowWithinBudget(
   req.signal?.throwIfAborted();
   if (!req.name.trim()) return { ok: false, errors: ["name is required"], rawResponse: null };
   if (!req.description.trim()) return { ok: false, errors: ["description is required"], rawResponse: null };
+  // A contract that cannot be met, or cannot be read, fails before any provider request.
+  let contract: JobContract | undefined;
+  if (req.contract !== undefined) {
+    try { contract = validateJobContract(req.contract); } catch (e) {
+      if (e instanceof JobContractError) return { ok: false, errors: [e.message], rawResponse: null };
+      throw e;
+    }
+  }
   const context: CompositionContext = {
     jobSpecification: jobSpecification(req), previousResponse: null, previousGraph: null, errors: [],
   };
@@ -381,7 +406,7 @@ async function composeFlowWithinBudget(
   // Falls back to the one-shot path when the client has no tool support or
   // the model doesn't engage with the tools (composeWithTools returns null).
   if (deps.llm.chatTools) {
-    const viaTools = await composeWithTools(deps, req, context);
+    const viaTools = await composeWithTools(deps, req, context, contract);
     req.signal?.throwIfAborted();
     if (viaTools) return viaTools;
     // composeWithTools returned null: either the turn-1 tool call errored in a
@@ -390,7 +415,7 @@ async function composeFlowWithinBudget(
     // this is just the fallback marker.
     logAttempt(1, "tool-loop-fallback", "tool loop produced no flow on turn 1; using one-shot prompt");
   }
-  return composeOneShot(deps, req, context);
+  return composeOneShot(deps, req, context, contract);
 }
 
 function rememberCandidate(deps: ComposeDeps, context: CompositionContext, raw: string, parsed: unknown, errors: string[]): void {
@@ -407,6 +432,8 @@ function compositionPrompt(context: CompositionContext, instruction: string): st
     "Repair only the reported defects; keep correct steps. Preserve the requested trigger, output, destination and negative constraints. " +
     "If the candidate conflicts with the specification, follow the specification. Do not silently substitute a different workflow.\n\n" +
     "The context describes the requested draft, not permission to execute, enable code, select another account, or confirm memory.\n\n" +
+    (context.jobSpecification.ingredients?.length ? "Typed ingredients are constraints: use each required library action and each required connection as its exact matching piece auth binding. " +
+    "Keep pinned versions. Never replace an account or action by a similarly named one. Report blocked if these constraints cannot be met.\n\n" : "") +
     wrapUntrusted((context.errors.length ? context.errors.map(e => `  - ${e}`).join('\n') + '\n\n' : '') +
       "Composition context (JSON):\n" + JSON.stringify(context), 'workflow composition context');
 }
@@ -443,6 +470,7 @@ async function composeOneShot(
   deps: ComposeDeps,
   req: ComposeRequest,
   context: CompositionContext,
+  contract: JobContract | undefined,
 ): Promise<ComposeResult> {
   const catalogText = renderCatalog(deps.pieceRegistry);
   const toolsText = renderTools(deps.tools, deps.toolNames);
@@ -501,11 +529,11 @@ async function composeOneShot(
       continue;
     }
 
-    const validation = validateComposedFlow(parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck);
+    const validation = acceptComposedFlow(contract, parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, req.ingredients);
     rememberCandidate(deps, context, raw, parsed, validation.ok ? [] : validation.errors);
     if (validation.ok) {
       if (attempt > 1) logAttempt(attempt, "success-after-retry", null);
-      return { ok: true, flow: validation.flow, rawResponse: raw };
+      return accepted(validation, raw);
     }
 
     lastErrors = validation.errors;
@@ -562,6 +590,7 @@ async function composeWithTools(
   deps: ComposeDeps,
   req: ComposeRequest,
   context: CompositionContext,
+  contract: JobContract | undefined,
 ): Promise<ComposeResult | null> {
   const toolSpecs = toolSpecMap(deps);
   const validRoleIds = validRoleIdSet(deps);
@@ -629,11 +658,11 @@ async function composeWithTools(
           inlineErrors = [`response was not valid JSON: ${(e as Error).message}`];
         }
         if (!inlineErrors) {
-          const validation = validateComposedFlow(parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck);
+          const validation = acceptComposedFlow(contract, parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, req.ingredients);
           if (validation.ok) {
             rememberCandidate(deps, context, text, parsed, []);
             logAttempt(turn, "tool-loop-inline-json", null);
-            return { ok: true, flow: validation.flow, rawResponse: text };
+            return accepted(validation, text);
           }
           inlineErrors = validation.errors;
           lastErrors = validation.errors;
@@ -676,11 +705,11 @@ async function composeWithTools(
         submits++;
         const flowArg = unwrapSubmittedFlow(call.arguments);
         lastRaw = safeStringify(flowArg);
-        const validation = validateComposedFlow(flowArg, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck);
+        const validation = acceptComposedFlow(contract, flowArg, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, req.ingredients);
         rememberCandidate(deps, context, lastRaw, flowArg, validation.ok ? [] : validation.errors);
         if (validation.ok) {
           if (submits > 1) logAttempt(submits, "tool-loop-success-after-retry", null);
-          return { ok: true, flow: validation.flow, rawResponse: lastRaw };
+          return accepted(validation, lastRaw);
         }
         lastErrors = validation.errors;
         logAttempt(submits, "tool-loop-validation-error", validation.errors.join("; "));
@@ -1532,8 +1561,30 @@ function resolvePieceByName(
 
 /* ------------------------------------------------------------- validation */
 
-interface ValidationOk { ok: true; flow: ComposedFlow }
+interface ValidationOk { ok: true; flow: ComposedFlow; report?: ContractReport }
 interface ValidationFail { ok: false; errors: string[] }
+
+/**
+ * Structural validation, then the job contract. Contract violations go back to
+ * the model like any other validation error, so the bounded repair loop works
+ * on them, and every candidate is checked against the same contract: a repair
+ * cannot drop a requirement and pass. Every validation argument is forwarded
+ * as given, so a check added to `validateComposedFlow` reaches all three
+ * acceptance points through this one call.
+ */
+function acceptComposedFlow(
+  contract: JobContract | undefined,
+  ...args: Parameters<typeof validateComposedFlow>
+): ValidationOk | ValidationFail {
+  const validation = validateComposedFlow(...args);
+  if (!validation.ok || !contract) return validation;
+  const { violations, report } = checkJobContract(validation.flow.trigger, contract);
+  return violations.length ? { ok: false, errors: violations } : { ...validation, report };
+}
+
+function accepted(validation: ValidationOk, rawResponse: string): ComposeOk {
+  return { ok: true, flow: validation.flow, rawResponse, ...(validation.report ? { contractReport: validation.report } : {}) };
+}
 
 function validateComposedFlow(
   raw: unknown,
@@ -1542,6 +1593,7 @@ function validateComposedFlow(
   validRoleIds: Set<string> | null,
   toolSpecs: Map<string, ComposerToolSpec> | null,
   osCheck: OsCheckContext | null,
+  ingredients: readonly ResolvedCompositionIngredient[] = [],
 ): ValidationOk | ValidationFail {
   if (typeof raw !== "object" || raw === null) {
     return { ok: false, errors: ["expected an object at the top level"] };
@@ -1582,6 +1634,8 @@ function validateComposedFlow(
   if (errors.length > 0) return { ok: false, errors };
   const readiness = compileWorkflow(trigger, { pieces: registry, phase: 'composition' });
   if (!readiness.ready) return { ok: false, errors: readiness.issues.map(i => `step "${i.node}" (${i.path}): ${i.message}`) };
+  const ingredientErrors = ingredientUsageIssues(trigger, ingredients, registry);
+  if (ingredientErrors.length) return { ok: false, errors: ingredientErrors };
   return { ok: true, flow: { displayName, trigger } };
 }
 
@@ -1966,9 +2020,9 @@ export async function composeFlow(
   deps: ComposeDeps,
   req: ComposeRequest,
 ): Promise<ComposeResult> {
-  const request = { ...req };
+  const request = { ...req, ingredients: req.ingredients ? structuredClone(req.ingredients) : undefined };
   try {
-    return await withCompositionBudget((signal, check) => {
+    const result = await withCompositionBudget((signal, check) => {
       const llm: ComposerLlmClient = {
         async chat(input) {
           check();
@@ -1985,6 +2039,8 @@ export async function composeFlow(
       };
       return composeFlowWithinBudget({ ...deps, llm }, { ...request, signal });
     }, request.signal, deps.totalTimeoutMs);
+    return !result.ok && result.errors.some(e => e.startsWith('Selected ingredient '))
+      ? { ...result, blocked: true } : result;
   } catch (error) {
     request.signal?.throwIfAborted();
     if (error instanceof CompositionTimeoutError) {

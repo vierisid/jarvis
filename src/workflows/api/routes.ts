@@ -27,6 +27,10 @@
  */
 
 import { DEFAULT_IDS, getWorkflowDb } from '../db';
+import { getRunRecovery, listRunRecoveries, decideRunRecovery, RecoveryError } from '../runtime/recovery';
+import { runFailure } from '../runtime/run-failure';
+import { dismissFailures, listOpenFailures } from '../runtime/open-failures';
+import type { AuthorityEngine } from '../../authority/engine';
 import {
   createFlow,
   deleteFlowInProject,
@@ -82,6 +86,7 @@ import {
 import { fireForRun, pageFlowFires } from "../db/repos/trigger-fire";
 import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
 import { claimContinuation } from "../runtime/continuation";
+import { emergencyHold, KILLED_REASON, manualStartRefusal } from "../runtime/emergency-hold";
 import {
   deleteConnectionInProject,
   getConnectionInProject,
@@ -631,6 +636,7 @@ const trapErrors = async (fn: () => Promise<Response> | Response): Promise<Respo
   try {
     return await fn();
   } catch (e) {
+    if (e instanceof RecoveryError) return err(e.message, e.status);
     if (e instanceof WorkflowReadinessError) return ok({ error: e.message, code: e.code, ...e.readiness }, e.status);
     if (e instanceof FlowVersionRequestError) return err(e.message, e.status);
     // A refused CODE step is a permission answer, not a bad request: the flow
@@ -676,6 +682,7 @@ function sampleStepNameRefusal(stepName: string): Response | null {
 }
 
 export interface CreateWorkflowRoutesOptions {
+  recoveryAuthority?: AuthorityEngine;
   /**
    * Optional trigger manager. When provided, every flow status / version
    * change calls `triggerManager.refresh(flowId)` so cron/webhook/event
@@ -1388,6 +1395,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           if (getWorkflowDb().query('SELECT effect_id FROM workflow_child_run WHERE waitpoint_id=?').get(id)) {
             return err('This waitpoint resumes when the required child workflow completes', 403);
           }
+          // A step parked while Jarvis was paused is released by Jarvis on
+          // Resume, never by a URL (Q-08).
+          if (wp.type === "HOLD") return err("This waitpoint holds a step while Jarvis is paused; Jarvis releases it when resumed", 403);
           if (wp.resumedAt !== null) return err("waitpoint already resumed", 410);
           const run = getFlowRun(wp.flowRunId);
           if (!run) return err("waitpoint references a missing run", 410);
@@ -1450,6 +1460,14 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             case "busy": return err("another continuation of this run is already queued; retry once it has run", 409);
             case "stale": return err("the step this waitpoint was for has already finished", 410);
             case "not-paused": return err("run is no longer paused", 409);
+            // Paused: the waitpoint is kept; retry after Resume (Q-08). Under
+            // Kill the run is being stopped, so there is nothing to retry.
+            case "held": return emergencyHold() === KILLED_REASON
+              ? err("Jarvis was stopped with Kill, so this run will not continue.", 409)
+              : new Response(JSON.stringify({ error: "Jarvis is paused; this run continues once it is resumed. Retry later." }), {
+                status: 503,
+                headers: { "Content-Type": "application/json", "Retry-After": "60" },
+              });
             default: return err("waitpoint already resumed", 410);
           }
         }),
@@ -1952,6 +1970,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         trapErrors(async () => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           if (!scopedFlow(req, id)) return err("flow not found", 404);
+          // Pause holds and Kill stops: nothing starts, by hand either (Q-08).
+          const held = manualStartRefusal();
+          if (held) return err(held, 409);
           // `payload` is one run's trigger input, JSON.stringify'd into
           // `workflow_job.payload`, so this body was unbounded STORAGE, not
           // just parse cost (#649). It is the same kind of thing a resume
@@ -2129,17 +2150,50 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             offset,
           };
           if (status) opts.status = status;
-          const items = listRuns(opts);
+          const items = listRuns(opts).map(run => ({ ...run, failure: runFailure(run) }));
           return ok({ items, nextOffset: items.length === limit ? offset + limit : null });
         }),
     },
 
+    // Q-19: what Today's "Waiting on you" shows, and dismissing it.
+    "/api/failures/open": {
+      GET: req => trapErrors(() => ok(listOpenFailures(Date.now(), callerProject(req)))),
+    },
+    "/api/failures/dismiss": {
+      POST: req => trapErrors(async () => {
+        const read = await readWriteBody(req, 16384);
+        if ('error' in read) return read.error;
+        return ok({ dismissed: dismissFailures(read.body.keys, Date.now(), callerProject(req)) });
+      }),
+    },
+
+    "/api/workflow-recovery": {
+      GET: req => trapErrors(() => {
+        const params = new URL(req.url).searchParams;
+        return ok(listRunRecoveries(Number(params.get('limit') ?? '50'), params.get('cursor'), callerProject(req)));
+      }),
+    },
+    "/api/workflow-runs/:runId/recovery": {
+      GET: req => trapErrors(() => {
+        const { runId } = (req as RequestWithParams<{ runId: string }>).params;
+        if (!scopedRun(req, runId)) return err('run not found', 404);
+        return ok({ recovery: getRunRecovery(runId) });
+      }),
+      POST: req => trapErrors(async () => {
+        const { runId } = (req as RequestWithParams<{ runId: string }>).params;
+        if (!scopedRun(req, runId)) return err('run not found', 404);
+        const read = await readWriteBody(req, 8192);
+        if ('error' in read) return read.error;
+        const receipt = await decideRunRecovery(runId, read.body, { authority: opts.recoveryAuthority });
+        return ok({ receipt, recovery: getRunRecovery(runId) });
+      }),
+    },
     "/api/workflow-runs/:runId/effects": {
       GET: (req) => trapErrors(async () => {
         const { runId } = (req as RequestWithParams<{ runId: string }>).params;
         if (!scopedRun(req, runId)) return err('run not found', 404);
         const { listWorkflowEffects } = await import('../db/repos/workflow-effect');
-        return ok({ runId, effects: listWorkflowEffects(runId), children: listChildRuns(runId) });
+        return ok({ runId, effects: listWorkflowEffects(runId), children: listChildRuns(runId), recovery: getRunRecovery(runId) });
       }),
     },
 
@@ -2149,7 +2203,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
           const run = scopedRun(req, runId);
           // The delivery that started it (Q-06): which trigger, when it was due, how late.
-          return run ? ok({ ...run, fire: fireForRun(runId) }) : err("run not found", 404);
+          return run ? ok({ ...run, fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(run) }) : err("run not found", 404);
         }),
     },
 
@@ -2217,7 +2271,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             created: wp.created,
             ...(children.some(child => child.waitpointId === wp.id)
               ? { child: children.find(child => child.waitpointId === wp.id) }
-              : { resumeUrl: `/api/webhooks/waitpoints/${wp.id}` }),
+              // A HOLD is released by Jarvis on Resume, never by a URL (Q-08).
+              : { resumeUrl: wp.type === "HOLD" ? null : `/api/webhooks/waitpoints/${wp.id}` }),
           }));
           return ok({ runId, waitpoints });
         }),

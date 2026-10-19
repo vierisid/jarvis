@@ -16,3 +16,6 @@ export type { MetaProps } from "./Meta";
 export { Icon } from "./Icon";
 export type { IconProps, IconSize } from "./Icon";
 export { IS_MAC, modKey } from "./platform";
+
+export { FailureNotice, isUserFailure } from "./FailureNotice";
+export type { FailureNoticeProps, UserFailure } from "./FailureNotice";

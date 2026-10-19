@@ -1,3 +1,5 @@
+import { withWorkflowMemory } from '../../vault/memory-use-context';
+import { documentInput, projectDocument } from './decision-document';
 /**
  * Glue layer: wraps existing Jarvis adapters into the function-shape that the
  * SandboxApi service-backend slots expect. Each `/v1/jarvis/*` route takes a
@@ -12,7 +14,7 @@
 
 import type { LLMManager } from "../../llm/manager";
 import type { ToolRegistry } from "../../actions/tools/registry";
-import type { ChannelService } from "../../daemon/channel-service";
+import type { ChannelDeliveryReport, ChannelService } from "../../daemon/channel-service";
 import type { WebSocketService } from "../../daemon/ws-service";
 import type { AgentOrchestrator } from "../../agents/orchestrator";
 import type { AuthorityEngine } from "../../authority/engine";
@@ -32,7 +34,7 @@ import type { LlmChatFn, LlmChatRequest, LlmChatResponse } from "../sandbox-api/
 import type { SystemPromptParts } from "../../roles/prompt-builder";
 import type { ToolsInvokeFn } from "../sandbox-api/routes/jarvis-tools";
 import type { PieceAuthorizeFn } from "../sandbox-api/routes/jarvis-pieces";
-import type { NotifyFn } from "../sandbox-api/routes/jarvis-notify";
+import { DeliveryFailedError, type NotifyFn } from "../sandbox-api/routes/jarvis-notify";
 import type { ContextReply, JarvisContextProvider } from "../sandbox-api/routes/jarvis-context";
 import type { AgentDelegateFn } from "../sandbox-api/routes/jarvis-agent";
 import type { EventsPollFn } from "../sandbox-api/routes/jarvis-events";
@@ -47,11 +49,18 @@ import { resolveToolGate, severityRank } from '../../authority/tool-action-map';
 import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, surfaceBoundRefusal, toolEffectCapability } from './effect-capabilities';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceActionName, reprojectPieceInput,
-  resolveGovernedPieceAction } from './piece-effects';
+  resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
+import { assertRecipientFactsCurrent, recipientAddresses, recipientFactPins, type FactPin } from './fact-bindings';
+import { captureProviderBinding } from './provider-reconciliation';
+import { recordPieceCompletion } from './piece-completion';
 import { defangPieceProjection } from './piece-effect-receipt';
 import { getFlowInProject } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
 import { digest, resolveEffectContext, type WorkflowEffectContext } from './effect-context';
+import { CODE_STEP_PIECE, type PieceAuthorizeRequest, type PieceAuthorizeResponse } from './piece-effect-guard';
+import { holdStep, KILLED_REASON, PAUSED_REASON } from './emergency-hold';
+import { getFlowRun } from '../db/repos/flow-run';
+import { boundedReceiptText } from '../../roles/untrusted';
 import { evaluateLlmOutput } from './llm-output-contract';
 import { withWorkflowMachineBinding } from './machine-binding';
 import { getMachineScope } from '../../actions/machine-scope';
@@ -60,18 +69,23 @@ import { toolReturnText } from '../../roles/untrusted.ts';
 import { withoutTemplateDelivery } from '../../actions/tools/template-delivery-scope.ts';
 import { outsideApprovalScope, runAsApproved } from '../../authority/approved-action-scope.ts';
 import type { ActionCategory } from '../../roles/authority';
+import { sendMayHaveArrived } from '../../comms/delivery.ts';
+import { providerOutcome } from '../../failures/evidence.ts';
 
 export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependencies {
+  /** F-14 enrollment is explicitly enabled only with the F-12 queue. */
+  decisionDocumentsEnabled?: boolean;
   credentialResolver: CredentialResolver;
   llmManager: LLMManager;
   toolRegistry?: ToolRegistry;
   channelService: ChannelService;
   wsService: WebSocketService;
   /**
-   * Optional desktop-notification sender. Receives `(title, body)`. The daemon
-   * passes a function that calls `sendDesktopNotification` with normal urgency.
+   * Optional desktop-notification sender. Receives `(title, body)` and resolves
+   * whether the desktop showed it, or `'unknown'` when the sender timed out and
+   * the toast may already be up. The daemon passes the desktop receipt.
    */
-  sendDesktop?: (title: string, body: string) => Promise<void>;
+  sendDesktop?: (title: string, body: string) => Promise<boolean | 'unknown'>;
   /** Recent-events buffer for `jarvis-trigger:on_event` polling. */
   eventBuffer: WorkflowEventBuffer;
   /**
@@ -121,6 +135,15 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
   buildJarvisSystemPrompt?: (userMessage: string) => SystemPromptParts;
 }
 
+/** Jarvis's own pieces: each of their effects passes the boundary and is audited there. */
+const JARVIS_PIECE_PREFIX = '@jarvispieces/';
+
+/** The built-in steps vendored with the engine (`scripts/sync-activepieces.ts`); never audited as steps. */
+const BUILT_IN_STEP_PIECES: ReadonlySet<string> = new Set([
+  '@activepieces/piece-approval', '@activepieces/piece-delay', '@activepieces/piece-file-helper',
+  '@activepieces/piece-http', '@activepieces/piece-schedule', '@activepieces/piece-store', '@activepieces/piece-webhook',
+]);
+
 export function buildSandboxServiceBackends(
   opts: BuildServiceBackendsOptions,
 ): SandboxApiServices {
@@ -144,7 +167,7 @@ export function buildSandboxServiceBackends(
     //   - no prompt builder wired   : whatever the piece sent (or nothing).
     //                                 Defensive fallback for tests / pre-
     //                                 agent-service bootstrap windows.
-    const jarvisParts = opts.buildJarvisSystemPrompt
+    const jarvisParts = !req.overrideSystem && opts.buildJarvisSystemPrompt
       ? opts.buildJarvisSystemPrompt(req.prompt)
       : undefined;
     let system: string | undefined;
@@ -185,7 +208,20 @@ export function buildSandboxServiceBackends(
       // The prompt is the payload that leaves the device, so it is what gets
       // frozen and reviewed -- not the daemon-composed system prompt above.
       prepare: () => ({ arguments: { ...effectRequest }, target: { destination: 'llm-provider', overrideSystem: req.overrideSystem === true } }),
-      execute: async (args, checkpoint) => { checkpoint(); return callLlm(args as unknown as LlmChatRequest); },
+      execute: async (args, checkpoint) => {
+        checkpoint();
+        const run = getFlowRun(ctx.runId);
+        if (!run) throw new Error('Workflow run unavailable');
+        try {
+          return await withWorkflowMemory(run.id, run.flowId, digest([ctx.stepName, ctx.executionPath]),
+            () => callLlm(args as unknown as LlmChatRequest));
+        } catch (error) {
+          // Q-19: keep the provider's typed code on the record, so a failed run
+          // says what the provider said instead of "may have taken effect".
+          const outcome = providerOutcome(error);
+          throw outcome ? new ActionOutcomeError(outcome) : error;
+        }
+      },
     });
     return reply.approval ? { text: '', approval: reply.approval } : reply.result as LlmChatResponse;
   };
@@ -245,9 +281,9 @@ export function buildSandboxServiceBackends(
     broadcastToChannels: (channels, text) =>
       opts.channelService.tryBroadcastToChannels(channels, text),
     // Voice channel = TTS over the same WS path used by awareness
-    // suggestions. No-op when no client is connected or no TTS provider
-    // is configured; the underlying method handles both.
-    sendVoice: (text) => opts.wsService.broadcastProactiveVoice(text),
+    // suggestions. Nothing is spoken when no client is connected or no TTS
+    // provider is configured, and then it reports failed, not delivered.
+    sendVoice: async (text) => (await opts.wsService.broadcastProactiveVoice(text)) > 0,
     // Drives `auto`-channel expansion so unconfigured external channels
     // don't surface as failures on every notification. Explicit
     // `["telegram"]` still bypasses this and attempts delivery either way.
@@ -265,8 +301,9 @@ export function buildSandboxServiceBackends(
     const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-notify', action: 'notify',
       route: 'notify', toolName: 'workflow_notify', category: 'send_message', toolCategory: 'notification', request: { ...req },
       prepare: () => {
+        const requested = req.channels.length ? req.channels : ['auto'];
         const channels = new Set<string>();
-        for (const channel of req.channels.length ? req.channels : ['auto']) {
+        for (const channel of requested) {
           if (channel !== 'auto') channels.add(channel);
           else {
             channels.add('dashboard');
@@ -275,30 +312,48 @@ export function buildSandboxServiceBackends(
         }
         const recipients = Object.fromEntries([...channels].map(channel => [channel,
           ['telegram', 'discord'].includes(channel) ? opts.channelService.getBroadcastRecipient(channel) : null]));
-        return { arguments: { ...req, channels: [...channels], recipients }, target: { channels: [...channels], recipients } };
+        // Q-19: a dashboard `auto` chose is skipped when nobody is watching and
+        // the desktop shows it instead. Frozen with the rest, so the review
+        // covers the desktop too.
+        const autoDashboard = requested.includes('auto') && !requested.includes('dashboard');
+        const fallback = autoDashboard && opts.sendDesktop ? { autoDashboard: true, fallback: 'desktop' } : autoDashboard ? { autoDashboard: true } : {};
+        return { arguments: { ...req, channels: [...channels], recipients, ...fallback },
+          target: { channels: [...channels], recipients, ...(fallback.fallback ? { fallback: fallback.fallback } : {}) } };
       },
       execute: async (args, checkpoint) => {
         const recipients = args.recipients as Record<string, string | null>;
         const guardedNotifier = new JarvisNotifierAdapter({ ...notifierDeps,
-          broadcastToDashboard: (text, priority) => { checkpoint(); opts.wsService.broadcastNotificationToDashboard(text, priority); },
+          broadcastToDashboard: (text, priority) => { checkpoint(); return opts.wsService.broadcastNotificationToDashboard(text, priority); },
           broadcastToChannels: async (channels, text) => {
-            const delivered: string[] = [], failed: { channel: string; error: string }[] = [];
+            const report: ChannelDeliveryReport = { delivered: [], failed: [], unknown: [] };
             for (const channel of channels) {
+              try { checkpoint(); } catch (error) { report.failed.push({ channel, error: (error as Error).message }); continue; }
               try {
-                checkpoint();
                 await opts.channelService.sendWorkflowNotification(channel, recipients[channel] ?? null, text);
-                delivered.push(channel);
-              } catch (error) { failed.push({ channel, error: (error as Error).message }); }
+                report.delivered.push(channel);
+              } catch (error) {
+                // Q-19: a send that may have arrived is reported unknown, never as not sent.
+                (sendMayHaveArrived(error) ? report.unknown : report.failed).push({ channel, error: (error as Error).message });
+              }
             }
-            return { delivered, failed };
+            return report;
           },
-          sendVoice: async text => { checkpoint(); await opts.wsService.broadcastProactiveVoice(text); },
-          ...(opts.sendDesktop ? { sendDesktop: async (title: string, body: string) => { checkpoint(); await opts.sendDesktop!(title, body); } } : {}),
+          sendVoice: async text => { checkpoint(); return (await opts.wsService.broadcastProactiveVoice(text)) > 0; },
+          ...(opts.sendDesktop ? { sendDesktop: async (title: string, body: string) => { checkpoint(); return opts.sendDesktop!(title, body); } } : {}),
         });
-        return guardedNotifier.notify({ message: args.message as string, channels: args.channels as any, priority: args.priority as any });
+        const report = await guardedNotifier.notify({ message: args.message as string, channels: args.channels as any, priority: args.priority as any,
+          ...(args.autoDashboard === true ? { autoDashboard: true } : {}) });
+        // Q-19, owner decision: the step reports each channel and fails only
+        // when nothing was sent anywhere. A channel that may have taken it
+        // counts as sent: failing would invite a resend that could repeat it.
+        if (report.delivered.length === 0 && report.unknown.length === 0) {
+          throw new DeliveryFailedError({ status: 'error', code: 'DELIVERY_FAILED', effect: 'not_started',
+            message: `Not sent on any channel: ${report.failed.map(f => `${f.channel} (${f.error})`).join('; ')}` }, report);
+        }
+        return report;
       },
     });
-    return reply.approval ? { delivered: [], failed: [], approval: reply.approval } : reply.result as Awaited<ReturnType<NotifyFn>>;
+    return reply.approval ? { delivered: [], failed: [], unknown: [], approval: reply.approval } : reply.result as Awaited<ReturnType<NotifyFn>>;
   };
 
   const contextAdapter = new JarvisContextProviderAdapter();
@@ -736,6 +791,38 @@ export function buildSandboxServiceBackends(
   };
 
   /**
+   * A step with no Jarvis adapter: a community piece the owner installed from
+   * the Library, a CODE step in a workflow granted them, a built-in step
+   * (delay, store, HTTP, ...) or one of Jarvis's own pieces. It stays outside
+   * Authority by those opt-ins, but it obeys Pause and Kill (Q-08). A
+   * community piece or a CODE step leaves an audit row when it is let run:
+   * like a governed piece's, the row records the dispatch, not its outcome.
+   * Jarvis's own pieces leave none here, since each of their effects passes
+   * the boundary and is audited there; built-in steps leave none either. Its
+   * input is never sent here.
+   */
+  const admitUngovernedStep = (req: PieceAuthorizeRequest, ctx: WorkflowEffectContext): PieceAuthorizeResponse => {
+    const run = getFlowRun(ctx.runId);
+    if (!run || run.projectId !== ctx.projectId) throw new Error('Workflow step identity does not match the run');
+    if (run.status !== 'RUNNING') throw new Error(`Workflow step blocked: run is ${run.status}`);
+    const state = opts.emergencyController?.getState() ?? 'normal';
+    if (state === 'killed') throw new Error(KILLED_REASON);
+    const stepName = boundedReceiptText(ctx.stepName ?? 'unknown step', 120);
+    if (state === 'paused') {
+      const hold = holdStep({ runId: run.id, projectId: run.projectId, stepName: ctx.stepName ?? 'unknown step' });
+      return { governed: false, dispatch: 'held', approval: { effectId: '', approvalId: '', waitpointId: hold.id, hold: PAUSED_REASON } };
+    }
+    if (!req.piece.startsWith(JARVIS_PIECE_PREFIX) && !BUILT_IN_STEP_PIECES.has(req.piece)) {
+      try {
+        opts.auditTrail?.log({ agent_id: `workflow:${run.id}`, agent_name: `Workflow ${run.id} / ${stepName}`,
+          tool_name: req.piece === CODE_STEP_PIECE ? 'code step' : `community piece ${boundedReceiptText(`${req.piece}/${req.action}`, 160)}`,
+          action_category: 'execute_command', authority_decision: 'allowed', approval_id: null, executed: true });
+      } catch (error) { console.error('[Workflow Authority] step audit failed:', error); }
+    }
+    return { governed: false };
+  };
+
+  /**
    * Admission for a verified piece's action. The piece itself runs in the
    * engine subprocess, so what passes through the boundary here is the
    * decision to let it dispatch: the same Authority check, the same emergency
@@ -744,7 +831,7 @@ export function buildSandboxServiceBackends(
    * subprocess once this returns, so the record is a dispatch authorization
    * and not a completion receipt.
    *
-   * A piece with no adapter is reported ungoverned and runs as it does today.
+   * A piece with no adapter goes through `admitUngovernedStep` above.
    *
    * One authorization covers one step instance. A step the flow configures to
    * retry re-reads the recorded authorization for the same arguments instead
@@ -752,10 +839,15 @@ export function buildSandboxServiceBackends(
    * failed can repeat that call under the original decision. Any change to the
    * arguments, the version or the Authority decision invalidates the record and
    * stops the dispatch.
+   *
+   * Except a tracked send (Q-07, `tracksPieceCompletion`): its record stays
+   * `dispatching` until the engine posts the completion receipt, so a retry
+   * after a failed or lost send is refused instead of sending again, and a
+   * retry after a recorded receipt gets the stored result back.
    */
   const pieceAuthorize: PieceAuthorizeFn = async (req, ctx) => {
     const resolved = resolveGovernedPieceAction(req.piece, req.action);
-    if (!resolved) return { governed: false };
+    if (!resolved) return admitUngovernedStep(req, ctx);
     // The action becomes `tool_name`: the audit row, the effect record, the
     // approval row and the card's `Action:` line (#651). Refused, not reported
     // ungoverned -- `governed: false` would let the engine run the piece with
@@ -784,7 +876,15 @@ export function buildSandboxServiceBackends(
     // `piece-effects.ts` stays free of the import the engine bundle would have
     // to start tracking. See `piece-effect-receipt.ts` for the whole argument,
     // including which in-flight approvals a changed projection invalidates.
-    const input = defangPieceProjection(reprojectPieceInput(req.input));
+    // F-14: an engine sends a supported decision document whole. What an engine
+    // without that protocol would have sent is the bounded projection, so that
+    // is the read-only input whenever the document path is not taken.
+    const whole = req.documentProtocol === 1 ? documentInput(req.piece, req.action, req.input) : null;
+    if (req.documentProtocol === 1 && !whole) throw new Error('Unsupported document protocol input');
+    const projected = defangPieceProjection(reprojectPieceInput(whole ? sanitizePieceInput(req.input) : req.input));
+    // Q-05: an action that sends to or addresses someone memory knows keeps
+    // the facts the address matched, and stops if they stop holding.
+    const addressing = ['send_email', 'send_message', 'write_data', 'modify_settings'].includes(resolved.category);
     const tool = governedPieceToolDefinition(resolved);
     const capability = (() => {
       try { return toolEffectCapability(tool); }
@@ -793,23 +893,67 @@ export function buildSandboxServiceBackends(
         throw error;
       }
     })();
+    const tracked = tracksPieceCompletion(req.piece, req.action);
+    const route = tracked ? 'piece-dispatch' : 'piece';
+    if (tracked && !req.inputDigest) throw new Error('A tracked send requires the complete input digest');
+    if (tracked && getWorkflowEffect(workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], 'piece'))) {
+      throw new Error('Legacy piece authorization may already have dispatched; inspect it and start a new intentional run');
+    }
+    const run = getFlowRun(ctx.runId);
+    if (!run || run.projectId !== ctx.projectId) throw new Error('Workflow step identity does not match the run');
+    const requestOf = (input: Record<string, unknown>, documentProtocol: boolean) => ({ piece: req.piece, action: req.action, input,
+      ...(req.inputDigest ? { inputDigest: req.inputDigest } : {}),
+      ...(tracked && req.credentialDigest ? { credentialDigest: req.credentialDigest } : {}),
+      ...(documentProtocol ? { documentProtocol: 1 } : {}) });
+    // A recorded effect keeps the protocol it was recorded under, whatever the
+    // flag says now: a pending revision resumes, and an older record stays
+    // read-only. A new one is a document only with the feature on, and only
+    // when no text spells a framing delimiter the defang would rewrite (#634);
+    // such a document keeps the bounded, defanged card instead.
+    const previous = getWorkflowEffect(workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], route));
+    const document = whole && (previous ? previous.requestDigest === digest(requestOf(whole, true))
+      : opts.decisionDocumentsEnabled === true && digest(defangPieceProjection(whole)) === digest(whole)) ? whole : null;
+    const input = document ?? projected;
+    const providerBinding = tracked ? captureProviderBinding({ projectId: ctx.projectId, versionId: run.flowVersionId,
+      stepName: ctx.stepName!, piece: req.piece, credentialDigest: req.credentialDigest }) : undefined;
     const reply = await effects.invoke({ context: ctx, piece: req.piece, action: req.action,
-      route: 'piece', toolName: tool.name, category: capability.category, toolCategory: tool.category,
-      // Digested over the whole resolved input, so a change to any prop -- not
-      // just the ones the card shows -- invalidates an approval granted earlier.
-      request: { piece: req.piece, action: req.action, input },
-      prepare: () => ({ arguments: input, target: capability.target(input) }),
-      validateTarget: (_args, target) => {
-        if (digest(capability.target(input)) !== digest(target)) throw new Error('Workflow execution target changed after review; dispatch blocked');
+      externalDispatch: tracked, providerBinding,
+      route, toolName: tool.name, category: capability.category, toolCategory: tool.category,
+      // Digested over the projection AND the engine's digest of the whole
+      // resolved input, so a change to any prop -- including the part of a
+      // long body or a long recipient list the card cuts -- invalidates an
+      // approval granted earlier (Q-08).
+      request: requestOf(input, !!document),
+      documentReview: !!document,
+      prepare: () => {
+        // Matched once, when the effect is recorded; resumes and retries recheck the record's facts.
+        const facts = addressing ? recipientFactPins(recipientAddresses(input)) : [];
+        return { arguments: input, target: capability.target(input), ...(facts.length ? { bindings: { facts } } : {}) };
       },
-      execute: async (_args, checkpoint) => { checkpoint(); return { dispatch: 'authorized' }; } });
-    return reply.approval ? { governed: true, dispatch: 'approval_required', approval: reply.approval }
-      : { governed: true, dispatch: 'authorized' };
+      // A revised document carries its own reviewed target; anything else is frozen to this input.
+      validateTarget: (args, target) => {
+        if (digest(capability.target(document ? args : input)) !== digest(target)) throw new Error('Workflow execution target changed after review; dispatch blocked');
+      },
+      revalidate: record => assertRecipientFactsCurrent((record.bindings as { facts?: FactPin[] } | undefined)?.facts),
+      revalidateOnReplay: true,
+      // The engine applies exactly the reviewed document it is handed here.
+      execute: async (args, checkpoint) => { checkpoint(); return { dispatch: 'authorized',
+        ...(document ? { document: projectDocument(req.piece, req.action, args) } : {}) }; } });
+    if (reply.approval) return { governed: true, dispatch: 'approval_required', approval: reply.approval };
+    const approved = () => document ? { document: (reply.result as { document: ReturnType<typeof projectDocument> }).document } : {};
+    if (tracked) {
+      const effectId = workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], route);
+      return getWorkflowEffect(effectId)?.status === 'succeeded'
+        ? { governed: true, dispatch: 'completed', result: reply.result }
+        : { governed: true, dispatch: 'authorized', effectId, ...approved() };
+    }
+    return { governed: true, dispatch: 'authorized', ...approved() };
   };
 
   const services: SandboxApiServices = {
     credentialResolver: opts.credentialResolver,
     pieceAuthorize: cancellableWorkflowService(pieceAuthorize),
+    pieceReceipt: (ctx, id, result) => recordPieceCompletion(ctx, id, result, opts),
     llmChat: cancellableWorkflowService(llmChat),
     notify: cancellableWorkflowService(notify),
     contextProvider,

@@ -31,7 +31,7 @@ describe('engine piece-executor admission gate', () => {
   const source = readFileSync(PIECE_EXECUTOR, 'utf8');
 
   test('imports the guard from the daemon runtime, by a path that exists', () => {
-    const match = /import \{ authorizePieceDispatch \} from '([^']+)'/u.exec(source);
+    const match = /import \{ authorizePieceDispatch, executeAuthorizedPiece \} from '([^']+)'/u.exec(source);
     expect(match).not.toBeNull();
     const target = resolve(dirname(PIECE_EXECUTOR), `${match![1]!}.ts`);
     expect(target).toBe(resolve(__dirname, 'piece-effect-guard.ts'));
@@ -40,23 +40,37 @@ describe('engine piece-executor admission gate', () => {
 
   test('authorizes before the piece action runs, never after', () => {
     const flat = squash(source);
-    const authorizeAt = flat.indexOf('await authorizePieceDispatch({');
+    const authorizeAt = flat.indexOf('await authorizePieceDispatch(dispatchParams)');
     const runAt = flat.indexOf('runMethodToExecute(backwardCompatibleContext)');
     expect(authorizeAt).toBeGreaterThan(-1);
     expect(runAt).toBeGreaterThan(-1);
     expect(authorizeAt).toBeLessThan(runAt);
+    // F-14: the guard applies an approved document to processedInput in place,
+    // so the action's context must read that same object, not a copy.
+    expect(flat).toContain('propsValue: processedInput,');
     // The resolved input is what gets authorized: authorizing the unresolved
     // settings would review `{{ ... }}` sources rather than real recipients.
     expect(flat).toContain('input: processedInput,');
+    // F-14: an approved document replaces the editable fields of the censored
+    // run history too, so the run shows what was actually sent.
+    expect(flat).toContain('recordedInput: stepOutput.input,');
   });
 
   test('an approval-required verdict parks the step instead of running it', () => {
     const flat = squash(source);
     expect(flat).toContain("params.hookResponse = { ...params.hookResponse, type: 'paused' }");
+    // Parked for an approval, or held while Jarvis is paused (Q-08).
     expect(flat).toContain(
-      "const output = (governance.governed && governance.dispatch === 'approval_required') "
-      + "? { approval: governance.approval } : await runMethodToExecute(backwardCompatibleContext)",
+      "const parked = 'dispatch' in governance && (governance.dispatch === 'approval_required' || governance.dispatch === 'held')",
     );
+    // It records how it was about to run, and its re-run is that run (Q-08):
+    // the runtime proof is emergency-hold-engine.test.ts; this keeps a
+    // re-vendor from dropping the patch unnoticed.
+    expect(flat).toContain(
+      "const output = parked ? { approval: governance.approval, [JARVIS_PARKED]: isPaused ? { executionType: ExecutionType.RESUME, resumePayload } : { executionType: ExecutionType.BEGIN } } : await executeAuthorizedPiece(dispatchParams, governance, async () => runMethodToExecute(backwardCompatibleContext))",
+    );
+    expect(flat).toContain('const parkedBefore = jarvisParked(executionState.getStepOutput(action.name))');
+    expect(flat).toContain('resumePayload: resumePayload!,');
     // One call site only: a second, ungoverned one would be a bypass.
     expect(flat.split('runMethodToExecute(backwardCompatibleContext)')).toHaveLength(2);
   });
@@ -68,9 +82,25 @@ describe('engine piece-executor admission gate', () => {
     // Paths are relative to VENDOR_PACKAGES; each must resolve to a real file.
     const vendorPackages = resolve(__dirname, '../activepieces/packages');
     for (const rel of ['../../runtime/piece-effects.ts', '../../runtime/piece-effect-guard.ts',
-      'server/engine/src/lib/handler/piece-executor.ts']) {
+      '../../runtime/decision-document.ts', 'server/engine/src/lib/handler/piece-executor.ts', 'server/engine/src/lib/handler/code-executor.ts']) {
       expect(block![1]!).toContain(`'${rel}'`);
       expect(existsSync(resolve(vendorPackages, rel))).toBe(true);
     }
+  });
+});
+
+describe('engine code-executor admission (Q-08)', () => {
+  const source = squash(readFileSync(resolve(ENGINE_DIR, 'code-executor.ts'), 'utf8'));
+
+  test('a CODE step asks the daemon about Pause and Kill before its code runs', () => {
+    const admission = source.indexOf('const admission = await authorizePieceDispatch({');
+    expect(admission).toBeGreaterThan(-1);
+    expect(source).toContain('piece: CODE_STEP_PIECE,');
+    expect(admission).toBeLessThan(source.indexOf('codeSandbox.runCodeModule('));
+  });
+
+  test('a held CODE step parks the run instead of running', () => {
+    expect(source).toContain("if ('dispatch' in admission && admission.dispatch === 'held') {");
+    expect(source).toContain('.setVerdict({ status: FlowRunStatus.PAUSED })');
   });
 });

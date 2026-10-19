@@ -85,6 +85,8 @@ export type JourneyResult =
   | { availability: 'unavailable' | 'unsupported'; reason: string; snapshot?: JourneySnapshot };
 
 export interface JourneyTransaction {
+  /** Opaque backing resource for synchronous guards; settings supplies its SQLite handle. */
+  resource?: unknown;
   /** Null means absent, never a read/parse failure. */
   current: unknown | null;
   /** Must throw on unavailable/corrupt legacy status, never supply defaults. */
@@ -101,4 +103,8 @@ export interface JourneyDependencies {
   /** Re-evaluated on every call from authenticated SERVER context, not client IDs. */
   authorize(): Scope | null | Promise<Scope | null>;
   persistence: JourneyPersistence;
+  /** Required for a new finish transition. Check the exact authorized draft
+   * synchronously inside this transaction; missing/failed checks cannot finish.
+   * No writes, promises or network calls. B10 supplies the result guard. */
+  validateFinish?(scope: Scope, snapshot: JourneySnapshot, resource: unknown): boolean;
 }

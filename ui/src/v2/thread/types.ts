@@ -5,6 +5,7 @@
  */
 
 import type { RoomKey } from "../router";
+import type { UserFailure } from "../ui";
 
 /**
  * Rooms that can render inline as a thread room-window. Excludes
@@ -30,7 +31,7 @@ export type ObjectType =
   | "usage"
   | "settings";
 
-export type JarvisSpeechStatus = "speaking" | "done";
+export type JarvisSpeechStatus = "speaking" | "done" | "failed" | "cancelled";
 
 export type ThreadItem =
   | {
@@ -51,6 +52,7 @@ export type ThreadItem =
       text: string;
       t: string;
       status: JarvisSpeechStatus;
+      error?: string;
     }
   | {
       kind: "jarvis-thought";
@@ -70,6 +72,8 @@ export type ThreadItem =
       impact: Impact;
       /** Highlight spans inside the intent sentence (accent color). */
       highlights?: string[];
+      /** Why an approve was refused; the card is still pending. */
+      note?: string;
       t: string;
     }
   | {
@@ -91,6 +95,8 @@ export type ThreadItem =
       id: string;
       summary: string;
       detail?: string;
+      /** Q-19: a failed turn as the daemon projected it. */
+      failure?: UserFailure;
       t: string;
     }
   | {

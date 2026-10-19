@@ -1,3 +1,5 @@
+import { BackgroundThrottled, backgroundChat, backgroundStream } from './background-budget';
+import { recordMemoryHandoff } from '../vault/memory-use-context';
 import type {
   LLMProvider,
   LLMMessage,
@@ -18,6 +20,18 @@ import {
   resolveTier,
 } from './tiers.ts';
 import { recordUsage } from './usage.ts';
+
+/**
+ * F18: record the packed memory this request carries at the moment the adapter
+ * is called. Background admission runs first, so a throttled request that
+ * never reached a provider is not recorded as supplied.
+ */
+function withMemoryHandoff(provider: LLMProvider): LLMProvider {
+  const wrapped: LLMProvider = Object.create(provider);
+  wrapped.chat = (messages, options) => { recordMemoryHandoff(messages); return provider.chat(messages, options); };
+  wrapped.stream = (messages, options) => { recordMemoryHandoff(messages); return provider.stream(messages, options); };
+  return wrapped;
+}
 
 export class LLMManager {
   private providers: Map<string, LLMProvider> = new Map();
@@ -381,6 +395,7 @@ export class LLMManager {
         });
         return response;
       } catch (err) {
+        if (err instanceof BackgroundThrottled) throw err;
         options?.signal?.throwIfAborted();
         const msg = err instanceof Error ? err.message : String(err);
         const code = getLLMErrorCode(err);
@@ -452,7 +467,7 @@ export class LLMManager {
       } finally {
         // Runs even when the consumer stops iterating mid-stream (client
         // disconnect / stop) so partial calls still land in telemetry.
-        recordUsage({
+        if (terminalError?.code !== 'background_throttled') recordUsage({
           tier, resolved_tier: resolution.tier, subsystem, provider: provider.name,
           model: finalResponse?.model || model || '',
           input_tokens: finalResponse?.usage?.input_tokens ?? 0,
@@ -511,7 +526,7 @@ export class LLMManager {
       options?.signal?.throwIfAborted();
       try {
         const result = await this.withTimeout(
-          (signal) => provider.chat(messages, { ...options, signal }),
+          (signal) => backgroundChat(withMemoryHandoff(provider), messages, { ...options, signal }),
           provider.name,
           options?.signal,
           options?.checkDeadline,
@@ -522,6 +537,7 @@ export class LLMManager {
         }
         return result;
       } catch (err) {
+        if (err instanceof BackgroundThrottled) throw err;
         options?.signal?.throwIfAborted();
         const errorMsg = err instanceof Error ? err.message : String(err);
         errors.push(`attempt ${attempt}: ${errorMsg}`);
@@ -560,7 +576,8 @@ export class LLMManager {
       let eventRetryAfterMs: number | undefined;
       try {
         let hasError = false;
-        for await (const event of provider.stream(messages, options)) {
+        options?.signal?.throwIfAborted();
+        for await (const event of backgroundStream(withMemoryHandoff(provider), messages, options)) {
           if (event.type === 'error') {
             hasError = true;
             errors.push(`attempt ${attempt}: ${event.error}`);
@@ -651,7 +668,7 @@ export class LLMManager {
         options?.signal?.throwIfAborted();
         try {
           const result = await this.withTimeout(
-            (signal) => provider.chat(messages, { ...options, signal }),
+            (signal) => backgroundChat(withMemoryHandoff(provider), messages, { ...options, signal }),
             providerName,
             options?.signal,
             options?.checkDeadline,
@@ -661,6 +678,7 @@ export class LLMManager {
           }
           return result;
         } catch (err) {
+          if (err instanceof BackgroundThrottled) throw err;
           options?.signal?.throwIfAborted();
           const errorMsg = err instanceof Error ? err.message : String(err);
           errors.push(`attempt ${attempt}: ${errorMsg}`);
@@ -725,7 +743,8 @@ export class LLMManager {
         let eventRetryAfterMs: number | undefined;
         try {
           let hasError = false;
-          for await (const event of provider.stream(messages, options)) {
+          options?.signal?.throwIfAborted();
+          for await (const event of backgroundStream(withMemoryHandoff(provider), messages, options)) {
             if (event.type === 'error') {
               hasError = true;
               errors.push(`attempt ${attempt}: ${event.error}`);

@@ -40,13 +40,13 @@ function makeRegistry(): ToolRegistry {
   return reg;
 }
 
-function makeOrchestrator(authConfig: AuthorityConfig): { orch: AgentOrchestrator; audit: AuditTrail } {
+function makeOrchestrator(authConfig: AuthorityConfig, opts: { primary?: boolean } = {}): { orch: AgentOrchestrator; audit: AuditTrail } {
   const orch = new AgentOrchestrator();
   orch.setToolRegistry(makeRegistry());
   orch.setAuthorityEngine(new AuthorityEngine(authConfig));
   const audit = new AuditTrail();
   orch.setAuditTrail(audit);
-  orch.createPrimary(ROLE);
+  if (opts.primary !== false) orch.createPrimary(ROLE);
   return { orch, audit };
 }
 
@@ -77,6 +77,12 @@ describe('orchestrator.executeRealtimeToolCall (auto-approve bridge)', () => {
     const log = audit.query({ limit: 10 });
     expect(log[0]!.authority_decision).toBe('approval_required');
     expect(log[0]!.executed).toBe(1);             // auto-approved
+  });
+
+  test('with no primary agent the gate fails closed instead of running the call ungated', async () => {
+    const { orch } = makeOrchestrator(authorityConfig(), { primary: false });
+    expect(await orch.executeRealtimeToolCall('read_file', { path: '/x' })).toContain('[AUTHORITY DENIED]');
+    expect(executed).toEqual([]);
   });
 
   test('hard deny is enforced — tool does NOT execute', async () => {

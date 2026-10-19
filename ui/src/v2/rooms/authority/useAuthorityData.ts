@@ -167,7 +167,11 @@ export function useAuthorityData() {
       const resp = await fetch(`/api/authority/approvals/${encodeURIComponent(id)}/approve`, {
         method: "POST",
       });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      // A refusal says why (Jarvis paused, the card already decided); show that, not the status code.
+      if (!resp.ok) {
+        const body = (await resp.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error ?? `HTTP ${resp.status}`);
+      }
       refresh();
       return { ok: true, message: "Approved." };
     } catch (err) {

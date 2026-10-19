@@ -12,21 +12,43 @@ export interface WorkflowEffect {
   result?: unknown; error?: string; createdAt: number; finishedAt?: number;
   /** Qualified failure receipt; successful returns already have status/result. */
   outcome?: ActionOutcome;
+  /**
+   * Q-05: what the effect was recorded against beyond its arguments and target
+   * (the memory facts a recipient matched), rechecked before approval and
+   * dispatch. Outside the request digest and the target, so it never changes
+   * what an approval was granted for.
+   */
+  bindings?: Record<string, unknown>;
+  /**
+   * Q-05: the last time the engine's retry of a succeeded authorization was
+   * refused because those bindings stopped holding. The effect stays
+   * succeeded; the service was not called again.
+   */
+  replayRefusal?: { outcome: ActionOutcome; at: number };
+  /** Q-07: native connection identity at dispatch; no credential is retained. */
+  providerBinding?: { connectionId: string; credentialDigest: string };
+  /** F-14 document generation; unchanged by policy/receipt writes. */
+  documentRevision?: number;
 }
 export function getWorkflowEffect(id: string): WorkflowEffect | null {
   const row = getWorkflowDb().query('SELECT record FROM workflow_effect WHERE id = ?').get(id) as { record: string } | null;
   return row ? JSON.parse(row.record) : null;
 }
 export function saveWorkflowEffect(effect: WorkflowEffect): void {
-  getWorkflowDb().run(`INSERT INTO workflow_effect (id, run_id, status, approval_id, waitpoint_id, record)
+  const write = getWorkflowDb().run(`INSERT INTO workflow_effect (id, run_id, status, approval_id, waitpoint_id, record)
     VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,
-    approval_id=excluded.approval_id, waitpoint_id=excluded.waitpoint_id, record=excluded.record`,
+    approval_id=excluded.approval_id, waitpoint_id=excluded.waitpoint_id, record=excluded.record
+    WHERE coalesce(json_extract(workflow_effect.record, '$.documentRevision'), 0) = coalesce(json_extract(excluded.record, '$.documentRevision'), 0)`,
   [effect.id, effect.runId, effect.status, effect.approvalId, effect.waitpointId, JSON.stringify(effect)]);
+  if (!write.changes) throw new Error('Workflow document changed; stale effect write refused');
 }
-/** CAS is the dispatch fence. A crash after this point is uncertain, never retryable. */
+/** CAS is the dispatch fence. A crash after this point is uncertain, never retryable.
+ * The approval and document revision it was read under must still be current. */
 export function claimWorkflowEffect(effect: WorkflowEffect): boolean {
   return getWorkflowDb().run(`UPDATE workflow_effect SET status='dispatching', record=?
-    WHERE id=? AND status='pending'`, [JSON.stringify({ ...effect, status: 'dispatching' }), effect.id]).changes === 1;
+    WHERE id=? AND status='pending' AND approval_id IS ?
+      AND coalesce(json_extract(record, '$.documentRevision'), 0) = ?`,
+    [JSON.stringify({ ...effect, status: 'dispatching' }), effect.id, effect.approvalId, effect.documentRevision ?? 0]).changes === 1;
 }
 export function listWorkflowEffects(runId: string): WorkflowEffect[] {
   const rows = getWorkflowDb().query('SELECT record FROM workflow_effect WHERE run_id=? ORDER BY rowid').all(runId) as Array<{ record: string }>;

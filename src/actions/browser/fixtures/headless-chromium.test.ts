@@ -4,7 +4,7 @@
  * Chromiums used to pile up holding the fixed CDP port.
  */
 import { describe, expect, test } from 'bun:test';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromiumExe, launchTestChromium, processAlive as alive } from './headless-chromium.ts';
@@ -57,6 +57,37 @@ describe.skipIf(!falseExe)('launchTestChromium startup failure', () => {
     // The profile went with it (close() ran on the failure path).
     expect([...new Bun.Glob(`${prefix}*`).scanSync({ cwd: tmpdir(), onlyFiles: false })]).toEqual([]);
   }, 30_000);
+});
+
+
+describe.skipIf(process.platform === 'win32')('launchTestChromium diagnostics', () => {
+  test('retains the CDP failure and browser stderr before cleaning its profile', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jarvis-fixture-diagnostic-'));
+    const executable = join(dir, 'browser');
+    const prefix = `jarvis-fixture-cdp-fail-${process.pid}-`;
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response('not ready', { status: 503 }) });
+    // A live process that writes the same port file as Chromium, but whose
+    // endpoint refuses readiness. No real browser or external service needed.
+    writeFileSync(executable, `#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in --user-data-dir=*) profile=\${arg#*=};; esac
+done
+printf '${server.port}\\n/browser/test\\n' > "$profile/DevToolsActivePort"
+printf 'synthetic browser startup diagnostic\\n' >&2
+exec sleep 60
+`, { mode: 0o755 });
+    try {
+      const err = await launchTestChromium({ profilePrefix: prefix, startupMs: 1_000, executable })
+        .then(() => null, (e: Error) => e);
+      expect(err?.message).toContain('Chromium CDP did not come up');
+      expect(err?.message).toContain('HTTP 503');
+      expect(err?.message).toContain('synthetic browser startup diagnostic');
+      expect([...new Bun.Glob(`${prefix}*`).scanSync({ cwd: tmpdir(), onlyFiles: false })]).toEqual([]);
+    } finally {
+      server.stop(true);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
 });
 
 const sleepExe = process.platform === 'win32' ? null : Bun.which('sleep');

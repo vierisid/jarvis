@@ -13,6 +13,7 @@ import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from
 import { cancellableWorkflowService } from "../../runtime/cancellation";
 import { ActionOutcomeError, type ActionOutcome } from '../../../actions/action-outcome';
 import { workflowEffectContext } from './effect-context';
+import { GOVERNANCE_REFUSALS } from '../../runtime/effect-boundary';
 import type { WorkflowEffectContext, WorkflowApprovalPending } from '../../runtime/effect-context';
 
 export interface ToolsInvokeRequest {
@@ -72,7 +73,8 @@ export function createJarvisToolsInvokeRoute(
         workflowEffectContext(ctx),
       );
     } catch (error) {
-      if (!(error instanceof ActionOutcomeError)) throw error;
+      // A refusal by Authority, an approval or Kill is never a handled outcome.
+      if (!(error instanceof ActionOutcomeError) || GOVERNANCE_REFUSALS.has(error.outcome.code)) throw error;
       reply = { toolName: raw.toolName, result: null, outcome: error.outcome };
     }
     if (reply.approval) return json(reply, 202);

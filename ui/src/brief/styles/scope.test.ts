@@ -11,6 +11,23 @@ const SHEETS = [
   "../shell/navigation/navigation.css", "../shell/navigation/specimen.css",
   "../shell/pebble-layout/pebble.css", "../shell/pebble-layout/specimen.css",
   "../today/hero-paper/hero-paper.css", "../today/layout/today-layout.css", "../today/preview/specimen.css",
+  "../today/decision-transition/decision-transition.css",
+  "../today/outcomes/outcomes.css", "../today/activity/activity.css", "../today/goal-card/goal-card.css",
+  "../today/opportunity-stack/opportunity-stack.css",
+  "../chat/tab-strip/tabs.css", "../chat/tab-strip/preview/specimen.css",
+  "../chat/composer/composer.css", "../chat/composer/preview/specimen.css",
+  "../chat/attachment-fan/attachment-fan.css", "../chat/attachment-fan/preview/specimen.css",
+  "../chat/message/messages.css",
+  "../workflows/ingredient-picker/picker.css",
+  "../workflows/create/creation.css", "../workflows/canvas/canvas.css",
+  "../workflows/runs/runs.css", "../workflows/runs/header.css",
+  "../workflows/context/context.css",
+  "../workflows/manage-list/management.css",
+  "../opportunities/opportunities.css",
+  "../decisions/decisions.css",
+  "../goals/goals.css",
+  "../memory/stream/stream.css",
+  "../memory/detail/detail.css",
 ];
 
 function selectors(css: string): string[] {
@@ -45,7 +62,8 @@ for (const sheet of SHEETS) {
   test(`${sheet} only styles elements inside a Brief root`, () => {
     const css = readFileSync(join(import.meta.dir, sheet), "utf8");
     const list = selectors(css);
-    expect(list.length).toBeGreaterThan(10);
+    // Sanity floor so a parse that finds nothing cannot pass; the smallest sheet has 5 rules.
+    expect(list.length).toBeGreaterThan(4);
     const leaking = list.filter(s => !/^(:root(\[data-theme="dark"\])? )?\.brief-(root|specimen(__[a-z-]+)?)(?![\w-])/.test(s));
     expect(leaking).toEqual([]);
   });

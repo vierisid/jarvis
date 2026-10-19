@@ -153,3 +153,9 @@ test("an empty older page still lets the user return to saved requests", async (
   await act(async () => button("Newer requests").click());
   expect(host.querySelectorAll(".wf-routines__row")).toHaveLength(100);
 });
+
+test('saved waiting work explains unavailable preparation instead of silently appearing stuck', async () => {
+  await mount();
+  expect(host.textContent).toContain('Preparation is unavailable. Your saved requests are kept.');
+  expect(host.textContent).toContain('0 waiting');
+});

@@ -1,0 +1,54 @@
+import type { Database } from 'bun:sqlite';
+import { getDb } from '../vault/schema';
+import { getGoal } from '../vault/goals';
+import { getGoalApplication } from '../goals/application-service';
+import { measurementProgress, readMeasurementReceipt } from '../goals/measurements';
+import { listObservations, readObservationReceipt } from '../goals/observations';
+import type { Goal } from '../goals/types';
+import type { BriefGoal, BriefReadResult } from './contracts';
+import { projectLegacyGoal } from './adapters';
+
+/** Same counts and progress for Today, goal detail and any other Brief consumer. */
+export function projectMeasuredGoal(goal: Goal): BriefGoal {
+  const measurement = goal.measurement ?? null;
+  const value = measurement ? measurementProgress(measurement) : goal.score;
+  return { ...projectLegacyGoal(goal),
+    revision: `${goal.updated_at}:${measurement?.revision ?? 0}`,
+    measurementRevision: measurement?.revision ?? 0,
+    measurementDefinition: measurement ? { unit: measurement.unit, baseline: measurement.baseline, target: measurement.target,
+      basis: measurement.basis ?? 'reported' } : null,
+    progress: { value, basis: measurement ? value === null ? 'unknown' : 'measurement' : 'legacy_score', rollup: 'independent' },
+    measurement: measurement?.value != null ? {
+      value: measurement.value, unit: measurement.unit, baseline: measurement.baseline, target: measurement.target,
+      asOf: measurement.measuredAt!, qualification: 'user_reported',
+      // A counted measure names each counted thing's entry (Q-17), namespaced
+      // apart from awareness observations; a typed total names its one source.
+      provenance: measurement.basis === 'observations'
+        ? (measurement.counted ?? []).map(id => ({ kind: 'observation' as const, id: `goal_observation:${id}`, revision: null }))
+        : [{ kind: 'source', id: measurement.evidence!.id, revision: measurement.evidence!.revision }],
+    } : null,
+  };
+}
+export class GoalMeasurements {
+  constructor(private readonly db: Database) {}
+  readiness(): 'ready' | 'unavailable' {
+    try {
+      if (getDb() !== this.db) return 'unavailable';
+      this.db.query('SELECT goal_id FROM goal_measurement LIMIT 1').get();
+      return 'ready';
+    } catch { return 'unavailable'; }
+  }
+  private available(): void { if (this.readiness() !== 'ready') throw Error('Goal measurements unavailable'); }
+  async read(query: { goalId: string }): Promise<BriefReadResult<BriefGoal>> {
+    this.available(); const goal = getGoal(query.goalId);
+    return goal ? { state: 'ready', data: projectMeasuredGoal(goal), asOf: Date.now() } : { state: 'empty', asOf: Date.now() };
+  }
+  record(goalId: string, command: unknown) { this.available(); return getGoalApplication().recordMeasurement(goalId, command); }
+  receipt(goalId: string, requestId: string) { this.available(); return readMeasurementReceipt(this.db, goalId, requestId); }
+  /** Q-17: count the goal from cited entries. */
+  defineCounted(goalId: string, command: unknown) { this.available(); return getGoalApplication().defineCountedMeasurement(goalId, command); }
+  recordObservation(goalId: string, command: unknown) { this.available(); return getGoalApplication().recordObservation(goalId, command); }
+  /** Every entry, corrections included, oldest first: the lineage behind the count. */
+  observations(goalId: string) { this.available(); return { entries: listObservations(this.db, goalId) }; }
+  observationReceipt(goalId: string, requestId: string) { this.available(); return readObservationReceipt(this.db, goalId, requestId); }
+}

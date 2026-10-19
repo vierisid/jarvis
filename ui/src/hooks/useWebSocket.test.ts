@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { extractNestedMessage, finalizeStreamMessage, formatProviderErrorMessage, mergeRestoredHistory, nextStreamBuffer, retiredVoiceConfirmationId, roomActionRequestFrom, stillPendingVoiceConfirmations } from "./useWebSocket.ts";
+import { errorFrameContent, routeErrorFrame, extractNestedMessage, finalizeStreamMessage, formatProviderErrorMessage, mergeRestoredHistory, nextStreamBuffer, retiredVoiceConfirmationId, roomActionRequestFrom, stillPendingVoiceConfirmations } from "./useWebSocket.ts";
+import type { UserFailure } from "../v2/ui/FailureNotice";
 
 describe("finalizeStreamMessage", () => {
   test("recovers text from the done frame when every stream chunk was missed", () => {
@@ -140,59 +141,21 @@ describe("extractNestedMessage", () => {
   });
 });
 
-describe("formatProviderErrorMessage — buckets", () => {
-  test("auth: 401 status code", () => {
-    const r = formatProviderErrorMessage("OpenAI API error (401): invalid_api_key");
-    expect(r.summary).toContain("API key");
-  });
-
-  test("forbidden: 403 gets model-access copy, not the API-key copy", () => {
-    const r = formatProviderErrorMessage("OpenAI API error (403): model access denied");
-    expect(r.summary).toContain("won't allow this model");
-    expect(r.summary).not.toContain("Check your API key and model settings");
-  });
-
-  test("auth wins when a 401 body also carries permission wording", () => {
-    const r = formatProviderErrorMessage("401 Unauthorized: you do not have access");
-    expect(r.summary).toContain("Check your API key and model settings");
-  });
-
-  test("forbidden: model-access wording with no status code", () => {
-    const r = formatProviderErrorMessage("Project `proj_a` does not have access to model `o3`");
-    expect(r.summary).toContain("won't allow this model");
-  });
-
-  test("auth: invalid x-api-key", () => {
-    const r = formatProviderErrorMessage("authentication_error: invalid x-api-key");
-    expect(r.summary).toContain("API key");
-  });
-
-  test("rate limit: 429 status code — split from network bucket", () => {
-    const r = formatProviderErrorMessage("OpenAI API error (429): rate_limit_exceeded");
-    expect(r.summary).toContain("rate-limit");
-    expect(r.summary).not.toContain("connection");
-  });
-
-  test("rate limit: insufficient_quota", () => {
-    const r = formatProviderErrorMessage("You exceeded your current quota: insufficient_quota");
-    expect(r.summary).toContain("rate-limit");
-  });
-
-  test("network: 503", () => {
-    const r = formatProviderErrorMessage("Service temporarily unavailable (503)");
-    expect(r.summary).toContain("connection");
-    expect(r.summary).not.toContain("rate-limit");
-  });
-
-  test("network: econnrefused", () => {
-    const r = formatProviderErrorMessage("fetch failed: ECONNREFUSED 127.0.0.1:11434");
-    expect(r.summary).toContain("connection");
-  });
-
-  test("fallback: unknown errors still preserve detail", () => {
-    const r = formatProviderErrorMessage("weird: model_not_found");
-    expect(r.summary).toContain("Couldn't reach");
-    expect(r.detail).toBe("weird: model_not_found");
+// Q-19: the summary comes from the server's typed code only. Wording that
+// looks like a status code or a keyword never picks one.
+describe("formatProviderErrorMessage: wording never classifies", () => {
+  test.each([
+    "OpenAI API error (401): invalid_api_key",
+    "OpenAI API error (403): model access denied",
+    "authentication_error: invalid x-api-key",
+    "OpenAI API error (429): rate_limit_exceeded",
+    "You exceeded your current quota: insufficient_quota",
+    "Service temporarily unavailable (503)",
+    "fetch failed: ECONNREFUSED 127.0.0.1:11434",
+  ])("%s: the generic summary, with the text kept as detail", (raw) => {
+    const r = formatProviderErrorMessage(raw);
+    expect(r.summary).toBe("Your request failed. The details say what went wrong.");
+    expect(r.detail).toBe(raw);
   });
 });
 
@@ -268,9 +231,14 @@ describe("formatProviderErrorMessage — structured code branching (Phase B)", (
     expect(r.summary).toContain("server error");
   });
 
-  test("unknown code falls back to keyword heuristic", () => {
+  test("an unknown code gets the generic summary, whatever the text says", () => {
     const r = formatProviderErrorMessage("OpenAI API error (401): invalid_api_key", "unknown");
-    expect(r.summary).toContain("API key");
+    expect(r.summary).toBe("Your request failed. The details say what went wrong.");
+  });
+
+  test("unsupported_tools and setup_required have their own copy", () => {
+    expect(formatProviderErrorMessage("x", "unsupported_tools").summary).toContain("can't use tools");
+    expect(formatProviderErrorMessage("x", "setup_required").summary).toContain("first-run setup");
   });
 
   test("code present but no raw still returns a summary", () => {
@@ -296,9 +264,48 @@ describe("formatProviderErrorMessage — status-code brittleness fix", () => {
     expect(r.summary).not.toContain("rate-limit");
   });
 
-  test("DOES match '\\b401\\b' when it is a real status code", () => {
+  test("a real-looking status code in the text still decides nothing without a code", () => {
     const r = formatProviderErrorMessage("HTTP 401 Unauthorized");
-    expect(r.summary).toContain("Check your API key and model settings");
+    expect(r.summary).not.toContain("Check your API key and model settings");
+    expect(formatProviderErrorMessage("HTTP 401 Unauthorized", "auth").summary).toContain("Check your API key and model settings");
+  });
+});
+
+// Q-19: a turn's error reaches every tab; only the tab that asked reacts.
+describe("routeErrorFrame", () => {
+  const tab = (sent: string[], followingTurn: string | null = null) => ({ sentAsText: (id: string) => sent.includes(id), followingTurn });
+
+  test("a text turn this tab sent: voice reacts and the turn ends", () => {
+    expect(routeErrorFrame({ id: "r1", requestId: "r1" }, tab(["r1"], "r1"))).toEqual({ askedHere: true, voiceRequestId: undefined, endsTurn: true });
+  });
+
+  test("another tab's turn this tab is not following: shown, but this tab's own turn goes on", () => {
+    expect(routeErrorFrame({ id: "r2", requestId: "r2" }, tab(["r1"], "r1"))).toEqual({ askedHere: false, voiceRequestId: "r2", endsTurn: false });
+  });
+
+  test("a mirrored turn this tab was following ends here too, and voice decides whether it was its own", () => {
+    expect(routeErrorFrame({ id: "v1", requestId: "v1" }, tab([], "v1"))).toEqual({ askedHere: false, voiceRequestId: "v1", endsTurn: true });
+  });
+
+  test("an error with no request id was sent to this socket alone", () => {
+    expect(routeErrorFrame({}, tab([]))).toEqual({ askedHere: false, voiceRequestId: undefined, endsTurn: true });
+  });
+});
+
+describe("errorFrameContent", () => {
+  const failure: UserFailure = { category: "provider_limit", effect: "none", headline: "Your request failed: the AI provider is rate limiting requests.",
+    outcome: "Nothing was done.", next: [{ step: "open_details", label: "Open the details." }], links: {}, code: "rate_limit", detail: "429", key: "k" };
+
+  test("the daemon's failure is used as is, on any tab", () => {
+    expect(errorFrameContent({ message: "429", code: "auth", failure }, false)).toEqual({ content: failure.headline, failure });
+  });
+
+  test("without a failure, a chat error this tab sent gets the typed summary", () => {
+    expect(errorFrameContent({ message: "slow down", code: "rate_limit" }, true).content).toContain("rate-limit");
+  });
+
+  test("a non-chat error keeps its own wording", () => {
+    expect(errorFrameContent({ message: "STT not configured." }, false)).toEqual({ content: "STT not configured." });
   });
 });
 

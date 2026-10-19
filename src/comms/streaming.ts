@@ -1,6 +1,8 @@
 import type { LLMStreamEvent } from '../llm/provider.ts';
-import { classifyErrorString } from '../llm/provider.ts';
 import type { WebSocketServer, WSMessage } from './websocket.ts';
+import { chatErrorPayload } from '../failures/chat.ts';
+import { failureEvidence } from '../failures/evidence.ts';
+import type { UserFailure } from '../failures/projection.ts';
 
 export type RelayOptions = {
   /** Called each time a complete sentence is available during streaming. */
@@ -11,6 +13,11 @@ export type RelayOptions = {
   signal?: AbortSignal;
   /** Called once, immediately before the first visible text chunk is relayed. */
   onTextStart?: () => void;
+  /**
+   * Q-19: whether a tool call can change something outside Jarvis. A turn that
+   * failed after one never reads "nothing was done". Absent, every call counts.
+   */
+  mayAct?: (call: { name: string; arguments: Record<string, unknown> }) => boolean;
 };
 
 // Sentence boundary: period, exclamation, question mark, colon followed by
@@ -26,8 +33,13 @@ const SENTENCE_END_RE = /[.!?:]\s/;
 export class StreamRelay {
   private wsServer: WebSocketServer;
 
-  constructor(wsServer: WebSocketServer) {
+  constructor(wsServer: WebSocketServer, private readonly deliver?: (message: WSMessage) => void) {
     this.wsServer = wsServer;
+  }
+
+  private emit(message: WSMessage): void {
+    if (this.deliver) this.deliver(message);
+    else this.wsServer.broadcast(message);
   }
 
   /**
@@ -43,7 +55,10 @@ export class StreamRelay {
     let fullText = '';
     let sentenceBuffer = '';
     let streamError: string | null = null;
+    let streamFailure: UserFailure | null = null;
     let textStarted = false;
+    // Q-19: a turn that already called a tool may have changed something.
+    let toolsRan = false;
 
     try {
       for await (const event of stream) {
@@ -95,8 +110,9 @@ export class StreamRelay {
             timestamp: Date.now(),
           };
 
-          this.wsServer.broadcast(message);
+          this.emit(message);
         } else if (event.type === 'tool_call') {
+          if (options?.mayAct?.(event.tool_call) ?? true) toolsRan = true;
           // Broadcast tool call notification to clients
           const toolMessage: WSMessage = {
             type: 'stream',
@@ -111,22 +127,23 @@ export class StreamRelay {
             timestamp: Date.now(),
           };
 
-          this.wsServer.broadcast(toolMessage);
+          this.emit(toolMessage);
         } else if (event.type === 'error') {
           console.error('[StreamRelay] Stream error:', event.error);
 
+          // Q-19: the typed code the LLM layer attached, never a guess from
+          // the wording here; the failure the dashboard renders as it is.
+          const payload = chatErrorPayload(event.code ? { source: 'provider', code: event.code, message: event.error }
+            : { source: 'unknown', message: event.error }, { requestId, toolsRan });
+          streamFailure = payload.failure;
           const errorMessage: WSMessage = {
             type: 'error',
-            payload: {
-              message: event.error,
-              code: event.code ?? classifyErrorString(event.error),
-              requestId,
-            },
+            payload,
             id: requestId,
             timestamp: Date.now(),
           };
 
-          this.wsServer.broadcast(errorMessage);
+          this.emit(errorMessage);
           streamError = event.error;
           break;
         } else if (event.type === 'done') {
@@ -151,7 +168,7 @@ export class StreamRelay {
             timestamp: Date.now(),
           };
 
-          if (!options?.signal?.aborted) this.wsServer.broadcast(doneMessage);
+          if (!options?.signal?.aborted) this.emit(doneMessage);
         }
       }
 
@@ -160,8 +177,10 @@ export class StreamRelay {
         // the caller's catch path can SKIP sending another error message
         // (otherwise the user sees the same error twice - once from broadcast,
         // once from the handler's catch-block reply).
-        const err = new Error(streamError) as Error & { _streamErrorBroadcast?: boolean };
+        const err = new Error(streamError) as Error & { _streamErrorBroadcast?: boolean; failure?: UserFailure };
         err._streamErrorBroadcast = true;
+        // The failure the clients were shown, so the task records the same one.
+        if (streamFailure) err.failure = streamFailure;
         throw err;
       }
     } catch (error) {
@@ -172,18 +191,20 @@ export class StreamRelay {
       // (e.g., a synchronous throw inside the for-await), so the client
       // hasn't seen anything yet.
       if (!streamError) {
-        const message = error instanceof Error ? error.message : 'Stream relay error';
+        const payload = chatErrorPayload(failureEvidence(error), { requestId, toolsRan });
         const errorMessage: WSMessage = {
           type: 'error',
-          payload: {
-            message,
-            code: classifyErrorString(message),
-            requestId,
-          },
+          payload,
           id: requestId,
           timestamp: Date.now(),
         };
-        this.wsServer.broadcast(errorMessage);
+        this.emit(errorMessage);
+        // Clients have seen it now: mark it, so the caller does not send the
+        // same error a second time (Q-19), and records the same failure.
+        const marked = (error instanceof Error ? error : new Error(String(error))) as Error & { _streamErrorBroadcast?: boolean; failure?: UserFailure };
+        marked._streamErrorBroadcast = true;
+        marked.failure = payload.failure;
+        throw marked;
       }
 
       throw error;

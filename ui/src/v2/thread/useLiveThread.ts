@@ -39,6 +39,8 @@ export function useLiveThread() {
   const ws = useWebSocket();
   const [injectedCards, setInjectedCards] = useState<InjectedCard[]>([]);
   const [roomWindows, setRoomWindows] = useState<RoomWindowItem[]>([]);
+  // Why an approve was refused, by card: the card stays pending and says so.
+  const [approvalNotes, setApprovalNotes] = useState<Record<string, string>>({});
   const layoutStore = useRoomLayout();
 
   const items = useMemo<ThreadItem[]>(() => {
@@ -55,6 +57,7 @@ export function useLiveThread() {
         reason: a.intentReason,
         category: a.category,
         impact: a.impact as Impact,
+        ...(approvalNotes[a.id] ? { note: approvalNotes[a.id] } : {}),
         t: formatTime(a.timestamp),
       }),
     );
@@ -109,7 +112,7 @@ export function useLiveThread() {
     ].sort((a, b) => a.__ts - b.__ts);
 
     return merged.map(({ __ts: _ts, ...rest }) => rest as ThreadItem);
-  }, [ws.messages, ws.approvals, ws.clarifiers, ws.repeatBacks, injectedCards, roomWindows]);
+  }, [ws.messages, ws.approvals, ws.clarifiers, ws.repeatBacks, injectedCards, roomWindows, approvalNotes]);
 
   /**
    * Inject a synthetic `card` ThreadItem at the bottom of the thread.
@@ -247,8 +250,17 @@ export function useLiveThread() {
       method: "POST",
     });
     if (!resp.ok) {
-      throw new Error(`approve failed: ${resp.status}`);
+      // Refused (Jarvis paused, say): the card stays and shows the reason.
+      const body = (await resp.json().catch(() => null)) as { error?: string } | null;
+      const reason = body?.error ?? `approve failed: ${resp.status}`;
+      setApprovalNotes((prev) => ({ ...prev, [id]: reason }));
+      throw new Error(reason);
     }
+    setApprovalNotes((prev) => {
+      if (!(id in prev)) return prev;
+      const { [id]: _cleared, ...rest } = prev;
+      return rest;
+    });
   }, []);
 
   const cancel = useCallback(async (id: string) => {
@@ -336,7 +348,7 @@ function tsFromInjectedId(id: string): number {
   return Number.isFinite(num) ? num : Date.now();
 }
 
-function messageToThreadItem(msg: ChatMessage): (ThreadItem & { __ts: number }) | null {
+export function messageToThreadItem(msg: ChatMessage): (ThreadItem & { __ts: number }) | null {
   const t = formatTime(msg.timestamp);
 
   if (msg.role === "user") {
@@ -365,6 +377,7 @@ function messageToThreadItem(msg: ChatMessage): (ThreadItem & { __ts: number }) 
       kind: "result",
       id: msg.id,
       summary: trimmed,
+      ...(msg.failure ? { failure: msg.failure } : {}),
       t,
     };
   }

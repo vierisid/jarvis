@@ -1,3 +1,4 @@
+import { readMemoryPages } from './memory-pages';
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const POLL_INTERVAL_MS = 8000;
@@ -53,37 +54,53 @@ export function useMemoryData() {
   const [relationships, setRelationships] = useState<Relationship[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const inFlightRef = useRef(false);
+  const inFlightRef = useRef<AbortController | null>(null);
+  const mounted = useRef(false);
 
   const refresh = useCallback(async () => {
-    if (inFlightRef.current) return;
-    inFlightRef.current = true;
+    if (!mounted.current || document.hidden || inFlightRef.current) return;
+    const controller = new AbortController();
+    inFlightRef.current = controller;
+    const timer = window.setTimeout(() => controller.abort(), 10_000);
     try {
-      const [eResp, fResp, rResp] = await Promise.all([
-        fetch("/api/vault/entities"),
-        fetch("/api/vault/facts"),
-        fetch("/api/vault/relationships"),
+      const [entities, facts, relationships] = await Promise.all([
+        readMemoryPages<Entity>('entities', controller.signal),
+        readMemoryPages<Fact>('facts', controller.signal),
+        readMemoryPages<Relationship>('relationships', controller.signal),
       ]);
-      if (eResp.ok) setEntities((await eResp.json()) as Entity[]);
-      if (fResp.ok) setFacts((await fResp.json()) as Fact[]);
-      if (rResp.ok) setRelationships((await rResp.json()) as Relationship[]);
+      if (!mounted.current || controller.signal.aborted) return;
+      setEntities(entities); setFacts(facts); setRelationships(relationships);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load memory");
+      if (mounted.current && !document.hidden && controller.signal.reason !== 'hidden') setError(controller.signal.aborted
+        ? "Memory refresh timed out; showing the previous snapshot."
+        : err instanceof Error ? err.message : "Failed to load memory");
     } finally {
-      inFlightRef.current = false;
-      setLoading(false);
+      controller.abort(); // Cancel sibling page readers after any failed page.
+      window.clearTimeout(timer);
+      if (inFlightRef.current === controller) inFlightRef.current = null;
+      if (mounted.current) setLoading(false);
+      if (mounted.current && !document.hidden && controller.signal.reason === 'hidden') queueMicrotask(() => void refresh());
     }
   }, []);
 
   useEffect(() => {
-    refresh();
+    mounted.current = true;
+    void refresh();
+    const visibility = () => {
+      if (document.hidden) inFlightRef.current?.abort('hidden');
+      else void refresh();
+    };
     window.addEventListener('vault-facts-updated', refresh);
-    const id = window.setInterval(() => {
-      if (typeof document !== "undefined" && document.hidden) return;
-      refresh();
-    }, POLL_INTERVAL_MS);
-    return () => { window.clearInterval(id); window.removeEventListener('vault-facts-updated', refresh); };
+    document.addEventListener('visibilitychange', visibility);
+    const id = window.setInterval(refresh, POLL_INTERVAL_MS);
+    return () => {
+      mounted.current = false;
+      inFlightRef.current?.abort();
+      window.clearInterval(id);
+      window.removeEventListener('vault-facts-updated', refresh);
+      document.removeEventListener('visibilitychange', visibility);
+    };
   }, [refresh]);
 
   const stats = useMemo(

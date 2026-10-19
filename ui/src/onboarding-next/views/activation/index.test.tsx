@@ -101,6 +101,30 @@ test("connection choice only emits the required issue and preserves text", async
   await click("Choose connection"); expect(intents[0]).toEqual({ journeyId: "j-1", revision: 1, from: "activation", action: "resolve_connection", issueId: "google", draft: props.model.draft });
   expect(effects).toBe(0);
 });
+test.each(["checking", "submitting", "accepted", "recovery"] as const)("%s cannot remove a reference from an in-flight request", async phase => {
+  const reference = { kind: "note", id: "selected" };
+  const draft = { prompt: "Draft from my notes", contextRefs: [reference], answers: { notes: "Retain these" } };
+  await mount({ phase: phase === "recovery" ? "ready" : phase, draft,
+    issues: [{ id: "reference-0", kind: "detail", label: "Review this selection", message: "Unavailable", reference }],
+    ...(phase === "recovery" ? { pendingRequest: { request: { schemaVersion: 1, intentVersion: 1, requestId: "pending", prompt: draft.prompt, contextRefs: [reference] }, answers: draft.answers } } : {}) });
+  await click("Remove selection"); expect(props.model.draft).toEqual(draft); expect(intents).toEqual([]); expect(effects).toBe(0);
+});
+test("a stale reference issue cannot remove a newer selection occupying the same position", async () => {
+  const old = { kind: "note", id: "old" }, replacement = { kind: "note", id: "new" };
+  await mount({ issues: [{ id: "reference-0", kind: "detail", label: "Review", message: "Unavailable", reference: old }],
+    draft: { prompt: "Keep my request", contextRefs: [replacement], answers: { notes: "Keep my answer" } } });
+  expect([...host.querySelectorAll("button")].some(b => b.textContent === "Remove selection")).toBe(false);
+  await click("Create my workflow"); const intent = intents[0]!;
+  if (intent.action !== "create") throw Error("Expected create");
+  expect(intent.request.contextRefs).toEqual([replacement]); expect(intent.answers.notes).toBe("Keep my answer");
+});
+test("Create locks reference removal immediately, before React commits the pending state", async () => {
+  const reference = { kind: "note", id: "selected" };
+  const draft = { prompt: "Keep this request", contextRefs: [reference], answers: {} };
+  await mount({ draft, issues: [{ id: "reference-0", kind: "detail", label: "Review", message: "Unavailable", reference }] });
+  await act(async () => { button("Create my workflow").click(); button("Remove selection").click(); });
+  expect(intents.length).toBe(1); expect(props.model.draft.contextRefs).toEqual([reference]);
+});
 test.each(["throw", "reject"] as const)("%s submission retries the exact identity/body and prevents unsafe edits or exit", async failure => {
   await mount({}, { onIntent: intent => { intents.push(intent); if (failure === "throw") throw new Error("secret"); return Promise.reject(new Error("secret")); } });
   await click("Create my workflow"); expect(input().readOnly).toBe(true); expect(host.textContent).not.toContain("secret");

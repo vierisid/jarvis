@@ -1,3 +1,4 @@
+import { useWorkflowRequest } from "./WorkflowEditorEnvironment";
 /**
  * Hook for the Library tab. Fetches the catalog (curated community pieces
  * Jarvis users can install), tracks per-piece "installing" / "uninstalling"
@@ -87,6 +88,7 @@ export interface LibraryState {
 }
 
 export function useLibrary(): LibraryState {
+  const fetch = useWorkflowRequest();
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [managed, setManaged] = useState<boolean>(false);
@@ -117,11 +119,11 @@ export function useLibrary(): LibraryState {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fetch]);
 
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+  }, [refresh, fetch]);
 
   const install: LibraryState["install"] = useCallback(
     async (id) => {

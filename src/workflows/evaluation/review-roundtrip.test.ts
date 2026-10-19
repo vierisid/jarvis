@@ -11,6 +11,7 @@ test('CLI review accepts the exact redacted hosted error row and still rejects c
   const directory = mkdtempSync(join(tmpdir(), 'jarvis-review-redaction-'));
   const key = 'synthetic-review-key-never-a-real-credential';
   const profile = join(directory, 'profile.json');
+  const authorization = join(directory, 'authorization.json');
   const preload = join(directory, 'provider-fixture.ts');
   const output = join(directory, 'run');
   // Exercise the actual CLI/provider path without making any network requests.
@@ -19,6 +20,8 @@ test('CLI review accepts the exact redacted hosted error row and still rejects c
     id: 'review-regression', version: '1', intendedModel: 'terra-fixture',
     baseUrl: 'https://example.invalid', apiKeyEnv: 'W8_REVIEW_TEST_KEY', routingEvidence: 'Synthetic test only',
   }));
+  writeFileSync(authorization, JSON.stringify({ schemaVersion: 1, approvedBy: 'Fixture approver', approvedAt: '2026-01-01',
+    validUntil: '2999-12-31', profileId: 'review-regression', splits: ['development'], maxRequests: 1, maxTokens: 1000 }));
 
   async function cli(args: string[], withProvider = false) {
     const child = Bun.spawn([process.execPath, ...(withProvider ? ['--preload', preload] : []),
@@ -32,8 +35,8 @@ test('CLI review accepts the exact redacted hosted error row and still rejects c
   }
 
   try {
-    const generated = await cli(['--mode', 'hosted', '--profile', profile,
-      '--max-requests', '1', '--out', output], true);
+    const generated = await cli(['--mode', 'hosted', '--split', 'development', '--profile', profile,
+      '--authorization', authorization, '--out', output], true);
     expect(generated.code).toBe(1); // One failed fixture request, with remaining tasks unrun.
     const raw = readFileSync(join(output, 'rows.jsonl'), 'utf8');
     const rows = raw.trim().split('\n').map(line => JSON.parse(line) as EvaluationRow);

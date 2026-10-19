@@ -62,6 +62,7 @@ import { DEFAULT_IDS } from "../../db/schema";
 import type { EngineRuntime } from "../engine-runtime/engine-runtime";
 import { toUpstreamFlowVersion } from "../engine-runtime/flow-version-adapter";
 import { graphDigest } from "../../runtime/continuation";
+import { emergencyHold, PAUSED_REASON } from "../../runtime/emergency-hold";
 
 interface TriggerNode {
   type: string;
@@ -93,6 +94,13 @@ type ActiveSub = {
   warning?: string;
   /** Digest of the trigger the subscription was registered from; a saved draft that changes it re-registers. */
   triggerDigest?: string;
+  /**
+   * Set only when part of an engine subscription failed to register (cron or
+   * every local subscription). Unlike `warning`, which also carries advisory
+   * text such as a schedule zone mismatch, this marks a subscription that a
+   * refresh must repair and that is not yet a registration receipt.
+   */
+  incomplete?: true;
   teardown: () => Promise<void> | void;
 };
 
@@ -238,6 +246,18 @@ export class TriggerManager {
     this.webhooks.setTriggerCallback((flowId, payload, delivery) => this.fire(flowId, payload, "webhook", delivery));
   }
 
+  /** Exact-version registration receipt; refresh resolving alone is not proof of a subscription. */
+  registrationState(flowId: string, versionId: string): 'registered' | 'pending' | 'blocked' | 'changed' {
+    const flow = getFlow(flowId), version = getFlowVersion(versionId);
+    if (!flow || flow.status !== 'ENABLED' || flow.published_version_id !== versionId || !version || version.flowId !== flowId) return 'changed';
+    if (ungrantedCodeSteps(flow, version.trigger)) return 'blocked';
+    try { assertVersionReady(flowId, versionId); } catch { return 'blocked'; }
+    if (version.trigger.type === 'EMPTY') return 'registered'; // Manual-only: no subscription or run is needed.
+    const sub = this.subs.get(flowId);
+    if (sub?.versionId === versionId && !sub.incomplete) return 'registered';
+    return this.inFlight.has(flowId) || this.enableRetries.has(flowId) ? 'pending' : 'blocked';
+  }
+
   /** Public surface for the webhook ingress route. */
   webhookManager(): WebhookManager {
     return this.webhooks;
@@ -312,7 +332,12 @@ export class TriggerManager {
       // trigger says, so an edited schedule replaces the old one.
       const desiredTrigger = desiredVersionId ? getFlowVersion(desiredVersionId)?.trigger : undefined;
       if (existing && existing.versionId === desiredVersionId
-        && (!existing.triggerDigest || existing.triggerDigest === triggerDigest(desiredTrigger))) return;
+        && (!existing.triggerDigest || existing.triggerDigest === triggerDigest(desiredTrigger))) {
+        // Repair an incomplete local subscription from the cached engine state.
+        // Keep working webhook delivery and avoid ON_DISABLE / ON_ENABLE replay.
+        if (existing.kind === 'engine' && existing.incomplete) await this.register(flow);
+        return;
+      }
 
       // Either no sub yet, or a stale sub for a previous version. Tear down
       // the old one (clears engine state + ON_DISABLE) before registering
@@ -619,16 +644,23 @@ export class TriggerManager {
       );
     }
 
+    const noSubscription = !cronTearDown && !webhookTearDown;
+    // ON_ENABLE already owns engine state, even if every local subscription
+    // failed. Keep its teardown so pause/stop clears state and runs ON_DISABLE.
+    // A failed registration outranks the advisory zone warning in `list()`.
+    const failure = noSubscription ? 'No trigger subscription could be registered; the flow is not firing.'
+      : schedule?.cronExpression && !cronTearDown ? 'Cron registration failed; only webhook delivery is active.' : undefined;
     const sub: ActiveSub = {
       flowId: flow.id,
       versionId: version.id,
       kind: "engine",
       triggerDigest: triggerDigest(version.trigger),
-      ...(warning ? { warning } : {}),
+      ...(failure ? { warning: failure, incomplete: true as const } : warning ? { warning } : {}),
       teardown: () => this.teardownEngineTrigger(flow.id, version.id, cronTearDown, webhookTearDown),
     };
     this.subs.set(flow.id, sub);
-    this.clearEnableRetry(flow.id);
+    if (noSubscription) this.scheduleEnableRetry(flow.id, 'No trigger subscription could be registered');
+    else this.clearEnableRetry(flow.id);
   }
 
   /**
@@ -809,6 +841,26 @@ export class TriggerManager {
       this.log(`flow ${flowId} (${opts.source}) not started: ${off}`);
       return { outcome: "blocked", fireId: fire?.id, reason: off, disabled: true };
     }
+    // Pause holds and Kill stops (Q-08): nothing starts. A scheduled time is
+    // skipped and shown, keyed so it is never run late after Resume; a webhook
+    // sender is asked to retry later; anything else is recorded as skipped.
+    // An item a poll had already taken from its source when Pause came has
+    // nowhere else to wait, so it is queued: the worker claims nothing until
+    // Resume. Under Kill it is skipped like everything else.
+    const held = emergencyHold();
+    if (held && !(opts.takenFromSource && held === PAUSED_REASON)) {
+      const reason = held === PAUSED_REASON ? "Jarvis was paused, so this did not run." : "Jarvis was stopped with Kill, so this did not run.";
+      const fire = recordFire({ flowId, flowVersionId: versionId, source: opts.source,
+        dedupeKey: opts.source === "schedule" ? opts.dedupeKey : null, scheduledFor: opts.scheduledFor,
+        lateMs: opts.lateMs ?? null, outcome: "skipped",
+        detail: { reason: opts.source === "webhook" ? `${reason} The sender was asked to retry.` : reason } });
+      this.log(`flow ${flowId} (${opts.source}) not started: ${reason}`);
+      return opts.source === "webhook"
+        // The sender may hold nothing but the URL: it is told to retry, not
+        // that Jarvis is paused or stopped (that stays in the delivery record).
+        ? { outcome: "skipped", fireId: fire?.id, reason: "Service unavailable, retry later", retryAfterSeconds: 60 }
+        : { outcome: "skipped", fireId: fire?.id, reason };
+    }
     const repeat = opts.dedupeKey ? repeatOf({ flowId, source: opts.source, dedupeKey: opts.dedupeKey, duplicateSince: opts.duplicateSince }) : null;
     if (repeat) {
       this.log(`flow ${flowId} (${opts.source}) repeat of ${repeat.id} not run again`);
@@ -982,6 +1034,15 @@ export class TriggerManager {
       if (pureSchedule) recordFire({ flowId, flowVersionId: versionId, source: "schedule", scheduledFor: occurrence?.at ?? null,
         lateMs: occurrence?.lateMs ?? null, outcome, detail: { reason } });
     };
+    // Paused or stopped: no poll at all (Q-08). An event source keeps its
+    // items, picked up by the first poll after Resume; a time of the schedule
+    // piece is skipped and shown. A poll already running when Pause comes
+    // queues what it took (`takenFromSource`), to run after Resume.
+    const held = emergencyHold();
+    if (held) {
+      unrun("skipped", held === PAUSED_REASON ? "Jarvis was paused, so this time was skipped." : "Jarvis was stopped with Kill, so this time was skipped.");
+      return;
+    }
     // Skip if a prior poll for this flow is still running (slow poll vs. fast
     // cron); the next tick will pick up anything missed.
     if (this.pollingInFlight.has(flowId)) {
@@ -1056,6 +1117,8 @@ export class TriggerManager {
         const result = this.startRun({
           flowId, versionId, kind: "engine", source: fireSource, payload, executeTrigger: false,
           dedupeKey: pureSchedule ? occurrence?.key : eventItemKey(payload),
+          // The poll moved the source's cursor past it (Pause may have come mid-poll).
+          ...(pureSchedule ? {} : { takenFromSource: true }),
           ...(pureSchedule ? { scheduledFor: occurrence?.at, lateMs: occurrence?.lateMs, ...shiftedDetail(occurrence) } : {}),
         });
         if (result.outcome === "started") started++;
@@ -1162,6 +1225,8 @@ interface LiveStart {
   scheduledFor?: number;
   lateMs?: number;
   detail?: Record<string, unknown>;
+  /** An item a poll already took from its source: queued while paused, not skipped (Q-08). */
+  takenFromSource?: boolean;
 }
 
 /** Why a schedule ran at a time it does not name: the spring-forward jump skipped its own. */
