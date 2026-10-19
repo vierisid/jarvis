@@ -85,6 +85,13 @@ export class MemoryController {
   clear() {
     this.setFilters({ ...EMPTY_FILTERS }, 0);
   }
+  /** A canonical decision may have taken effect; keep filters but remove cached text immediately. */
+  invalidate() {
+    if (!this.alive || !this.access) return;
+    this.cancel();
+    this.query = undefined;
+    this.publish({ read: { state: "loading" }, loadingMore: false });
+  }
   async refresh() {
     if (!this.alive || !this.access) return;
     this.cancel();
