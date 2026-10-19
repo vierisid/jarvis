@@ -67,6 +67,23 @@ test('legacy profile editor shares CAS and cannot overwrite a newer Brief save',
   expect((await post({ revision: service.profile().revision, answers: { preferred_name: 'Fresh tab', company: 'New company' } })).status).toBe(200);
   expect(getUserProfile()?.answers.preferred_name).toBe('Fresh tab');
 });
+test('flag off: legacy saves without a revision still work; Settings full-form and empty-form saves succeed', async () => {
+  delete process.env.JARVIS_BRIEF_PROFILE_SETTINGS;
+  const legacy = routes(false)['/api/user-profile'];
+  const post = (body: unknown) => legacy.POST(new Request('http://localhost/api/user-profile', { method: 'POST', body: JSON.stringify(body) }));
+  const empty = await (await legacy.GET()).json();
+  expect((await post({ revision: empty.revision, answers: {} })).status).toBe(200);
+  expect((await post({ revision: 'f'.repeat(64), answers: {} })).status).toBe(409);
+  expect(getUserProfile()).toBeNull();
+  expect((await post({ answers: { anything_else: 'Old client' } })).status).toBe(200);
+  const current = await (await legacy.GET()).json();
+  const saved = await post({ revision: current.revision, answers: { ...current.profile.answers, preferred_name: 'Sam', company: '' } });
+  expect(saved.status).toBe(200);
+  expect(getUserProfile()?.answers).toEqual({ anything_else: 'Old client', preferred_name: 'Sam' });
+  const bad = await post({ revision: (await saved.json()).revision, answers: { anything_else: 'x'.repeat(4001) } });
+  expect(bad.status).toBe(400);
+  expect(JSON.stringify(await bad.json())).not.toContain('invalid_patch');
+});
 test('authenticated HTTP feeds the real editor; anonymous reads and mutations fail', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'f23-http-')), socket = join(dir, 'api.sock');
   const server = new WebSocketServer(0, socket), sessions = new PanelSessionStore();

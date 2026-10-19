@@ -1133,7 +1133,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           if (process.env.JARVIS_BRIEF_PROFILE_SETTINGS === '1' && body.revision === undefined) {
             return error('Reload the profile before saving.', 428);
           }
-          const profile = body.revision === undefined ? saveUserProfile(body.answers ?? {}) : patchUserProfile(body.revision, body.answers).profile;
+          const answers = body.answers ?? {};
+          // The Settings form resends every answer; an empty form with a current revision is a no-op, not a malformed patch.
+          const emptyForm = body.revision !== undefined && typeof answers === 'object' && !Array.isArray(answers) && Object.keys(answers).length === 0;
+          if (emptyForm && readEditableProfile().revision !== body.revision) throw new ProfileEditError('revision_conflict', 409);
+          const profile = body.revision === undefined ? saveUserProfile(answers)
+            : emptyForm ? getUserProfile() : patchUserProfile(body.revision, answers).profile;
           return json({
             ok: true,
             profile,
@@ -1145,7 +1150,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             message: 'User profile saved.',
           });
         } catch (err) {
-          if (err instanceof ProfileEditError) return error(err.code === 'revision_conflict' ? 'Profile changed. Reload before saving; your draft has been kept.' : err.code, err.status);
+          if (err instanceof ProfileEditError) return error(err.code === 'revision_conflict' ? 'Profile changed. Reload before saving; your draft has been kept.'
+            : err.code === 'invalid_patch' ? 'Profile answers are invalid or too long.' : 'Profile unavailable.', err.status);
           return error('Failed to save user profile.');
         }
       },
