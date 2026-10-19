@@ -51,10 +51,10 @@ the edit revision; unchanged saves cannot resurrect forgotten projections.
 
 Authenticated daemon routes, all responses `Cache-Control: no-store`:
 
-* `GET /api/brief/profile-settings` → `{status:'ready', data}` (contractVersion 1).
-* `PATCH /api/brief/profile-settings/profile` → `{revision, answers}` request;
+* `GET /api/brief/profile-settings` -> `{status:'ready', data}` (contractVersion 1).
+* `PATCH /api/brief/profile-settings/profile` -> `{revision, answers}` request;
   `{saved:true, profile:{revision,answers}}` response.
-* `PATCH /api/brief/profile-settings/voice` → `{revision, voice}` request;
+* `PATCH /api/brief/profile-settings/voice` -> `{revision, voice}` request;
   `{saved:true, application, voice}` response.
 
 No query parameters or caller-selected scope. Bodies allow only the documented
@@ -78,7 +78,9 @@ returns its canonical empty snapshot directly. Failed compatibility fallback rea
 retain loaded state and explicitly ask for refresh. Revision-bearing
 legacy saves patch only named answers. When F-23 is enabled, missing revisions
 receive HTTP 428 and require a reload; disabled F-23 retains the old unversioned
-POST behavior. Explicit Clear and onboarding replay retain their existing
+POST behavior for clients that send no revision. The Settings form always sends
+the revision it read, so its saves are conflict-checked (409) whether or not the
+flag is on; an empty form with a current revision is a no-op. Explicit Clear and onboarding replay retain their existing
 destructive semantics. Company is additive, but an older binary does not expose
 it and can drop it when rewriting the canonical record: back up before rollback.
 
@@ -123,7 +125,8 @@ offered by this adapter, and no action runs on mount, refresh or browser return.
 Fixture-only tests use temporary SQLite databases, a temporary keychain directory,
 fake reload appliers, and a real authenticated HTTP server over a temporary Unix
 socket. No production daemon, real voice call, email, OAuth, payment or deployment
-is used. See `docs/brief-delivery/F-23.json` for commands and results.
+is used. Focused tests: `bun test src/brief/profile-settings.test.ts
+src/daemon/api-brief-profile-settings.test.ts ui/src/brief/profile-settings`.
 
 Quick verification: in an isolated fixture enable the flag, read capabilities and
 the snapshot, patch Company with its revision, and restart/read it. Reuse the old
