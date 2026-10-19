@@ -24,7 +24,7 @@ export function CraftTrace({ children }: { children: React.ReactNode }) {
       if (inputs.length < 2000) inputs.push({ type: event.type, at: performance.now() - started });
       else truncated = true;
     };
-    const supportsLongTasks = typeof PerformanceObserver !== "undefined" && PerformanceObserver.supportedEntryTypes.includes("longtask");
+    const supportsLongTasks = typeof PerformanceObserver !== "undefined" && !!PerformanceObserver.supportedEntryTypes?.includes("longtask");
     const observer = supportsLongTasks ? new PerformanceObserver(list => {
       for (const entry of list.getEntries()) {
         if (longTasks.length < 2000) longTasks.push({ start: entry.startTime - started, duration: entry.duration });

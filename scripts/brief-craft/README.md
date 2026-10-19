@@ -12,17 +12,15 @@ The harness can land before activation. Its fixture results **cannot authorize r
 
 ## Local checks
 
-Use the branch's Bun 1.3.14 pin:
-
 ```sh
 bun install --frozen-lockfile
 bun test ui/src/brief/verification
 bunx tsc --noEmit
 bun run build:ui
-D25_PREVIEW_PORT=4422 bun scripts/preview-brief-memory.ts
+bun scripts/brief-craft/serve.ts   # BRIEF_CRAFT_PORT overrides 4422
 ```
 
-The static server binds loopback, has no database or credentials, rejects `/api/*`, and permits only GET/HEAD. Open `http://127.0.0.1:4422/?brief=preview&specimen=billing&craft=1#/_brief_preview`. `craft=1` mounts bounded frame/input/long-task instrumentation in the **explicit fixture preview only**. “Capture craft trace” writes the current trace into a DOM output; it sends nothing externally and does not record input text. Normal previews and live rooms mount no recorder.
+`serve.ts` serves the built `ui/dist` on loopback. It has no database or credentials, rejects `/api/*`, permits only GET/HEAD and sends `connect-src 'none'`, so the page cannot open any connection. Open `http://127.0.0.1:4422/?brief=preview&specimen=billing&craft=1#/_brief_preview`. `craft=1` mounts bounded frame/input/long-task instrumentation in the **explicit fixture preview only**. “Capture craft trace” writes the current trace into a DOM output; it sends nothing externally and does not record input text. Normal previews and live rooms mount no recorder.
 
 ## Browser runner
 
