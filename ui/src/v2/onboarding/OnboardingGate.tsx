@@ -1,4 +1,6 @@
 import React from "react";
+import { OptionalOnboardingEntry } from "../../onboarding-next/host/Entry";
+import type { Configuration } from "../../onboarding-next/host/contract";
 import { OnboardingWizard } from "./OnboardingWizard";
 import { useOnboardingStatus } from "./useOnboardingStatus";
 import { RestartRequiredBanner, shouldShowRestartBanner } from "./RestartRequiredBanner";
@@ -12,7 +14,13 @@ import { WorkflowDraftContext } from "./WorkflowDraftContext";
  * localhost) instead of a flash of skeleton — the bone background of
  * the dashboard root is already visible.
  */
-export function OnboardingGate({ children }: { children: React.ReactNode }) {
+export function OnboardingGate({ children, onboarding }: { children: React.ReactNode; onboarding?: Configuration }) {
+  return <OptionalOnboardingEntry configuration={onboarding} legacy={<LegacyOnboardingGate>{children}</LegacyOnboardingGate>}>
+    {children}
+  </OptionalOnboardingEntry>;
+}
+
+function LegacyOnboardingGate({ children }: { children: React.ReactNode }) {
   const { status, loading, refresh } = useOnboardingStatus();
   const [prompt, setPrompt] = React.useState<string | null>(null);
   const consume = React.useCallback(() => setPrompt(null), []);

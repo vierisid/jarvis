@@ -22,6 +22,7 @@
  */
 
 import { isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
+import { documentInput, applyDocument, documentFields, type DecisionDocument } from './decision-document';
 
 export const PIECE_AUTHORIZE_PATH = '/v1/jarvis/pieces/authorize';
 export const PIECE_RECEIPT_PATH = '/v1/jarvis/pieces/receipt';
@@ -41,6 +42,8 @@ export interface PieceAuthorizeRequest {
    */
   inputDigest?: string;
   credentialDigest?: string;
+  /** F-14: `input` is a whole supported decision document, not the bounded projection. */
+  documentProtocol?: 1;
 }
 
 /** Stable JSON: sorted keys, so the same input always digests the same. */
@@ -71,7 +74,7 @@ export type PieceAuthorizeResponse =
   /** No adapter, and Jarvis is paused: the step parks on this waitpoint until Resume (Q-08). */
   | { governed: false; dispatch: 'held'; approval: PieceAuthorizePending }
   /** Authority allowed the dispatch; the effect is recorded and claimed. */
-  | { governed: true; dispatch: 'authorized'; effectId?: string }
+  | { governed: true; dispatch: 'authorized'; effectId?: string; document?: DecisionDocument }
   | { governed: true; dispatch: 'completed'; result: unknown }
   /** Authority wants a human; the step parks on this waitpoint. */
   | { governed: true; dispatch: 'approval_required'; approval: PieceAuthorizePending };
@@ -84,6 +87,8 @@ export interface AuthorizePieceDispatchParams {
   stepName: string;
   executionPath: Array<[string, number]>;
   input: unknown;
+  /** Already-censored run history. Only approved editable fields may replace it. */
+  recordedInput?: Record<string, unknown>;
   /** Injectable for tests; defaults to the ambient fetch. */
   fetchImpl?: typeof fetch;
 }
@@ -91,12 +96,15 @@ export interface AuthorizePieceDispatchParams {
 export async function authorizePieceDispatch(params: AuthorizePieceDispatchParams): Promise<PieceAuthorizeResponse> {
   const governed = isGovernedPiece(params.piece) && typeof params.action === 'string' && params.action.length > 0;
   const url = `${params.apiUrl.replace(/\/+$/u, '')}${PIECE_AUTHORIZE_PATH}`;
+  const editable = documentInput(params.piece, params.action, params.input);
   const body: PieceAuthorizeRequest = {
     piece: typeof params.piece === 'string' && params.piece ? params.piece : 'unknown',
     action: typeof params.action === 'string' && params.action ? params.action : 'unknown',
     // Only a governed piece's input is reviewed; nothing else's leaves the subprocess.
-    input: governed ? sanitizePieceInput(params.input) : {},
+    input: governed ? editable ?? sanitizePieceInput(params.input) : {},
     ...(governed ? { inputDigest: await pieceInputDigest(params.input) } : {}),
+    // F-14: a supported document travels whole, so a reviewer can revise it.
+    ...(governed && editable ? { documentProtocol: 1 as const } : {}),
   };
   // What a refusal names: a governed piece is authorized; any other step, a
   // community piece or a CODE step, is only admitted (Q-08).
@@ -148,6 +156,13 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
   if (reply.dispatch === 'completed' && tracksPieceCompletion(params.piece, params.action)) return reply;
   if (reply.dispatch === 'authorized') {
     if (tracksPieceCompletion(params.piece, params.action) && !reply.effectId) throw new Error('Completion receipt protocol unavailable; send refused');
+    if (reply.document !== undefined) {
+      if (!editable) throw new Error('Document authorization requires a compatible engine input');
+      // The caller runs the action AFTER this await, on this same input object.
+      // Apply only typed editable fields; keep auth and every read-only option.
+      Object.assign(params.input as Record<string, unknown>, applyDocument(body.piece, body.action, editable, reply.document));
+      if (params.recordedInput) Object.assign(params.recordedInput, documentFields(reply.document));
+    }
     return reply;
   }
   throw new Error(`${refused}: malformed authorization reply`);

@@ -1,3 +1,4 @@
+import type { MemoryStreamQuery, MemoryStreamResult } from './memory-stream-contracts';
 import type {
   BriefConversation, BriefDecision, BriefGoal, BriefMemory, BriefConnection,
   BriefOutcome, BriefPreparedOpportunity, BriefPage, BriefPageQuery, BriefReadResult,
@@ -19,5 +20,7 @@ export interface BriefReadProviders {
   goals?: BriefReadProvider<{ goalId: string }, BriefGoal>;
   outcomes?: BriefReadProvider<{ start: number; end: number; timezone: string }, BriefOutcome[]>;
   memory?: BriefReadProvider<BriefPageQuery, BriefPage<BriefMemory>>;
+  /** F17 retains empty counts and never returns cached content with stale cursors. */
+  memoryStream?: BriefProvider & { read(query: MemoryStreamQuery): Promise<MemoryStreamResult> };
   connections?: BriefReadProvider<void, BriefConnection[]>;
 }

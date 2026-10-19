@@ -1,3 +1,14 @@
+import { getMemoryUsageLedger } from '../vault/memory-usage';
+import { registerMemoryUsage } from '../brief/registrations/memory-usage';
+import { MemoryStream } from '../brief/memory-stream';
+import { registerMemoryStream } from '../brief/registrations/memory-stream';
+import { Outcomes } from '../brief/outcomes';
+import { registerOutcomes } from '../brief/registrations/outcomes';
+import { GoalMeasurements } from '../brief/goal-measurements';
+import { registerGoalMeasurements } from '../brief/registrations/goal-measurements';
+import { documentFactBindings } from '../brief/decision-document-bindings';
+import { DecisionDocuments } from '../brief/decision-documents';
+import { registerDecisionEdits } from '../brief/registrations/decision-edits';
 import { Recommendations } from '../brief/recommendations';
 import { nextActionPlanner } from '../brief/recommendation-planner';
 import { registerRecommendations } from '../brief/registrations/recommendations';
@@ -4847,7 +4858,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     ensureUiBuilt(repoRoot, logWithTimestamp);
 
     // 9b. Set up API routes + dashboard static files
+    const briefGoalMeasurements = new GoalMeasurements(getDb());
+    const briefOutcomes = new Outcomes(getDb());
+    const briefMemoryUsage = getMemoryUsageLedger();
+    const briefMemoryStream = new MemoryStream(getDb(), briefMemoryUsage);
     const briefDecisions = new DecisionQueue(getDb(), { approvalManager, deferredExecutor, wsService, auditTrail });
+    const briefDecisionDocuments = new DecisionDocuments(getDb(), briefDecisions,
+      { approvalManager, deferredExecutor, wsService, auditTrail }, documentFactBindings());
     const briefRecommendations = new Recommendations(getDb(), briefDecisions,
       process.env.JARVIS_BRIEF_RECOMMENDATIONS === '1' ? nextActionPlanner() : null);
     const briefConversations = new BriefConversationProvider();
@@ -4870,7 +4887,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       eventBus: { publish: (type, payload) => sharedEventBus.publish(type, payload) },
     }, process.env.JARVIS_BRIEF_QUIET_AWARENESS);
     const briefEnabled: BriefCapabilityId[] = [];
+    if (process.env.JARVIS_BRIEF_GOAL_MEASUREMENTS === '1') briefEnabled.push('goalMeasurements');
+    if (process.env.JARVIS_BRIEF_MEMORY_STREAM === '1') briefEnabled.push('memoryStream');
+    if (process.env.JARVIS_BRIEF_MEMORY_USAGE === '1') briefEnabled.push('memoryUsage');
+    if (process.env.JARVIS_BRIEF_OUTCOMES === '1') briefEnabled.push('outcomes');
     if (process.env.JARVIS_BRIEF_RECOMMENDATIONS === '1') briefEnabled.push('recommendations');
+    if (process.env.JARVIS_BRIEF_DECISION_EDITS === '1') briefEnabled.push('decisionEdits');
     if (process.env.JARVIS_BRIEF_DECISIONS === '1') briefEnabled.push('decisions');
     if (awarenessDelivery.quiet) briefEnabled.push('quietAwareness');
     if (process.env.JARVIS_BRIEF_CONVERSATIONS === '1') briefEnabled.push('conversations');
@@ -4892,12 +4914,22 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ...registerOpportunityActivation(briefOpportunityActivation),
       ...registerQuietAwareness(awarenessDelivery),
       ...registerDecisions(briefDecisions),
+      ...registerDecisionEdits(briefDecisionDocuments),
       ...registerRecommendations(briefRecommendations),
+      ...registerGoalMeasurements(briefGoalMeasurements),
+      ...registerOutcomes(briefOutcomes),
+      ...registerMemoryStream(briefMemoryStream),
+      ...registerMemoryUsage(briefMemoryUsage),
       ...registerCompositionIngredients(briefWorkflowComposition),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
     const apiContext: import('./api-routes.ts').ApiContext & Record<string, unknown> = {
       briefDecisions,
+      briefGoalMeasurements,
+      briefOutcomes,
+      briefMemoryStream,
+      briefMemoryUsage,
+      briefDecisionDocuments,
       briefRecommendations,
       briefConversations,
       briefAttachments,
@@ -5477,6 +5509,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // buildSandboxServiceBackends if any of these are missing.
       const agentSpecialists = agentService.getSpecialists();
       const backends = buildSandboxServiceBackends({
+        decisionDocumentsEnabled: briefCapabilities.snapshot().capabilities.decisionEdits.enabled,
         credentialResolver: workflowSandboxApi.services.credentialResolver,
         llmManager: agentService.getLLMManager(),
         ...(toolRegistry ? { toolRegistry } : {}),

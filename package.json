@@ -57,7 +57,9 @@
     "prepare": "git config core.hooksPath .githooks 2>/dev/null || true",
     "prepublishOnly": "bun run copy:models && bun run build:ui && bun run build:workflows",
     "generate:onboarding-runtime": "bun run scripts/onboarding-next-runtime-manifest.ts",
-    "check:onboarding-runtime": "bun run scripts/onboarding-next-runtime-manifest.ts --check"
+    "check:onboarding-runtime": "bun run scripts/onboarding-next-runtime-manifest.ts --check",
+    "generate:onboarding-ui": "bun run scripts/onboarding-next-ui-manifest.ts",
+    "check:onboarding-ui": "bun run scripts/onboarding-next-ui-manifest.ts --check"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",

@@ -1,0 +1,41 @@
+{
+  "task": "D-21",
+  "file": "eNfKeirIKLZLlZEasrurZa",
+  "page": "81:2",
+  "node": "255:3795",
+  "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=255-3795",
+  "checkpoint": "UI-35 \u00b7 Dashboard craft pass verified \u00b7 prototype limits recorded",
+  "inspection": "Saved native UI-25 artwork and handoff under the approved UI-35 checkpoint. No fresh editor session claimed.",
+  "source_directory": "/home/vierisid/aios/workspace/Jarvis/dashboard-brief-figma-2026-09-14-v6-1/ui-25-workflow-management-2026-10-03",
+  "inspected_exports": [
+    {
+      "file": "255-3795-light.png",
+      "sha256": "be4acee80c3f3699fe970a094e7e08549834e84b101c3f6267a2f25ca4ce2f57"
+    },
+    {
+      "file": "424-29660-dark.png",
+      "sha256": "b7c80abca75ce554fd8fe48d6a350af53374ac36f06d237909b6df8bc7575e8c"
+    },
+    {
+      "file": "dark-inline-confirm.png",
+      "sha256": "7ac76b85fa92734fb2e45ba4b298537d666e704693346792570897c7498aa2d4"
+    },
+    {
+      "file": "final-light-deleted-chat.png",
+      "sha256": "6e2ea862c7041f17b96eac4f651d184a46a35a3ba4fc9f60a43dbbb9b0c951ac"
+    }
+  ],
+  "preserved": [
+    "All workflows heading and Back to workflow creation",
+    "Workflow, Runs when, Status, Latest run and bin columns",
+    "Sharp-edge Enabled/Paused switches; quiet bins and row-local Cancel/Delete",
+    "Light/Dark materials, compact description suppression and in-place shell/chat reflow"
+  ],
+  "bounded_deviations": [
+    "Undo restores DISABLED/Paused as required by the later F-20 implementation card, not the old native prototype prior activation state.",
+    "Publication/readiness are separate secondary facts; Draft never becomes a switch state.",
+    "Long lists scroll with an independent bounded Undo region so feedback covers neither rows nor Pebble. Narrow widths use labeled stacked row cells.",
+    "Refresh, unavailable/stale/blocked/uncertain outcomes and receipt expiry are real UI states absent from four-row Figma fixtures.",
+    "The workflow name cell is the explicit navigation target; switch and bin are sibling targets."
+  ]
+}

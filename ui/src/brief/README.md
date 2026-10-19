@@ -87,6 +87,8 @@ are not restyled. Domain actions, approvals, Authority and async lifecycles stay
   clipping. Translated action labels belong in `stateLabels` too.
 - Native-disabled controls are not focusable. Explain important unavailability in visible text.
 - Tabs keep mounted state only; they do not persist anything.
+- Tab-strip styles target only `.brief-tabs__list > button`, so buttons and selectors inside a tab
+  panel keep their own control styles.
 - A custom `BriefMenu` trigger must spread the props it receives onto one native `<button>` and give
   it an accessible name. Change `dismissKey` (for example the route hash) to close an open menu when
   something outside it navigates; focus returns to the trigger only if it was inside the menu.
@@ -486,3 +488,248 @@ ingredients (ready, loading, unavailable). It sends no request.
 
 `?brief=preview&specimen=workflow-runs#/_brief_preview` opens the view over in-memory fixture runs (all
 seven states, an older version, partial receipts and a waitpoint). Run creates a fixture run only.
+
+## Workflow context and rules
+
+- `workflows/context/` is the D-20 Context & rules view behind the shared `WorkflowViewHeader`. It shows
+  two separate answers: what the bound version is configured to use (`Configured`) and what a selected
+  run recorded (`Used by run`). A recorded view is never filled by joining today's configuration to an
+  old run; a missing, removed, stale or redacted source stays labelled as such.
+- `WorkflowContextPort.read(scope, query, signal)` is the only input. There is no live implementation on
+  main: F-21 supplies the authorized, project-scoped and redacted projection before this is bound.
+  `validateContext` rejects a document for another scope, flow, version or run, caps sizes, copies only
+  whitelisted fields and replaces anything marked `redacted` before it is cached. It is a presentation
+  safeguard, not the redaction layer.
+- `WorkflowContextController` owns one scope + flow + version with separate caches per query
+  (configured, or recorded by run ID), coalesced reads, stale data kept with a qualifier when a refresh
+  fails, and per-query scroll positions. The host keeps it across room, chat and sidebar changes and
+  calls `retire()` only when the owner or workflow changes. The view is read-only: it writes nothing.
+- Values render as plain text. Source actions hand the exact source ID to the host's `openSource`; only
+  available or stale sources offer one.
+- Run reuses the Runs view's `WorkflowRunsController` (same instance, same scope), so an uncertain
+  request stays locked across both views and an accepted one opens its receipt in Runs.
+- Opt-in `workflowContextRegistration(useBinding)`, not in the production registry. `contextAvailable`
+  requires a non-empty scope, flow, version and title, a `source` matching the shell mode, the routed
+  flow/version, a controller bound to the same scope and the `workflowContext` capability.
+- `workflows/context/figma-reference.json` records the UI-24 source values and bounded deviations.
+
+`?brief=preview&specimen=workflow-context#/_brief_preview` opens the view over in-memory fixture context
+and runs (missing, partial, long, slow, unavailable, unsupported and empty examples, and an illustrative
+run response). It sends no request.
+
+## Workflow management
+
+- `workflows/manage-list/` is the D-21 All workflows list: the name opens the exact flow/version, the
+  Enabled/Paused switch and the bin are separate targets, and Delete confirms inside its own row.
+  Publication and readiness are secondary facts beside the switch; Draft is never a switch state.
+- `WorkflowManagementController` holds one owner scope and survives room, chat and sidebar changes;
+  the host calls `retire()` on logout or owner change. Each command carries scope, flow, version,
+  expected revision and a request ID. A lost or `pending` answer locks that row as uncertain until
+  `Check result` reads the same request through `port.reconcile`; nothing is re-sent. Refresh is blocked
+  while any row is unresolved. A fresh (`ready`) list replaces settled feedback and restores a workflow
+  undone elsewhere into its slot; a `stale` list keeps every removal receipt and slot.
+- Deletion is reversible only: an acknowledged remove carries a server receipt, and Undo restores the
+  same flow and slot paused. There is no adapter to the legacy irreversible `DELETE
+  /api/workflows/:id`. The receipt-backed remove/restore commands are F-20's, which is not on main, so
+  the port is fixture-only until F-20 and its host adapter land.
+- Activation adds no gate of its own and bypasses none (see the `WorkflowManagementPort` doc): enabling
+  goes through the person path, which pins connections and the computer (Q-05; a changed binding shows
+  as the readiness blocker, and enabling again accepts it), and the readiness and contract checks still
+  refuse. Turning a workflow off stops its queued and waiting runs (Q-06); the list says so above the
+  rows and in the result.
+- Opt-in `workflowManagementRegistration(useBinding)`, not in the production registry.
+  `managementAvailable` requires a non-empty scope, a controller bound to it, a `source` matching the
+  shell mode and the `workflowRemoval` capability.
+- The collapse uses the D-04 reflow exit timing and is placed immediately under reduced motion.
+  `workflows/manage-list/figma-reference.json` records the UI-25 source values and bounded deviations.
+
+`?brief=preview&specimen=workflow-manage#/_brief_preview` opens the list over in-memory fixture
+workflows (blocked enable, lost response, expired Undo, long list, stale and unavailable examples).
+Nothing is enabled, deleted or run on an account.
+
+## Opportunities room
+
+- `opportunities/` is the D-22 Opportunities room: a proposal selector beside one finished brief
+  (observation, prepared output, goal contribution, workflow steps) for the selected proposal ID and
+  revision. Selector and brief scroll independently; with Pebble open the selector becomes a bounded
+  horizontal strip.
+- `OpportunitiesPort.read()` returns the complete authorized F-09 collection (aggregate every page; never
+  call the first page complete). Terminal proposals are filtered out. Ready, Q-13 qualification and Q-14
+  suppression are owner-side: the room renders the provider's `state`, `readiness` and `canApprove` and
+  infers none. "Approve & enable" stays disabled unless `approvalBlock` passes (ready snapshot and
+  readiness, `canApprove`, goal, composition, evidence, preview basis, a LOCKED + DISABLED reviewed
+  version and every binding `ready`).
+- Output, steps, schedule and target come from the same authorized prepared revision; F-09 exposes no
+  raw sample output, so a missing preview is `output: null` and renders as unavailable. The basis label
+  follows `previewBasis` (verified output, sandbox sample, illustrative); the UI never upgrades it.
+- `act` maps to F-10 `POST /api/brief/opportunity-actions/:id/approve|dismiss` with exactly
+  `{ revision, idempotencyKey }`; `recover` maps to the F-10 `GET` for the original receipt and never
+  resends. `ActionReceipt` is F-10's `OpportunityActionReceipt`. There is no other enable path: the
+  room never enables or runs a flow itself. A receipt must match proposal, revision, decision and the
+  reviewed flow/version; only registered + enabled (or dismissed) advances. Pending or blocked
+  registration stays "Approval saved". A lost response stays locked behind "Check result"; only an
+  adapter-certified `ActionRefusal` releases the attempt, and only after a fresh read.
+- `OpportunitiesController` belongs to one authenticated scope, survives room unmounts and is retired
+  on logout or scope change. Pending decisions are in memory only: before live registration the host
+  must reconcile durable F-10 receipts on reload and share one owner with the Today opportunity stack.
+  Motion and the approve label are the D-11 `OPPORTUNITY_TIMING` / `OPPORTUNITY_APPROVE_LABEL`.
+- Opt-in `opportunitiesRegistration(useBinding)`, not in the production registry. `opportunitiesAvailable`
+  requires a non-empty scope, a `source` matching the shell mode, a controller bound to the same scope
+  and, live, the `preparedOpportunities` capability; writes additionally need `opportunityActivation`.
+  No live adapter is wired yet.
+- `opportunities/figma-reference.json` records the UI-26 source values and bounded deviations.
+
+`?brief=preview&specimen=opportunities#/_brief_preview` opens the room over fixture proposals (pending
+or blocked registration, lost response, refusal, long content, missing preview, many proposals). Its
+actions only change local fixture state.
+
+## Needs you decisions
+
+- `decisions/` is the D-23 Needs you room: a selector list beside one document paper where reading,
+  editing and acting happen in place. It reuses Today's `DecisionPaper`, stable decision ID, action
+  labels and revision; only `document.attention` is highlighted. Document text is untrusted and is
+  rendered as plain text only.
+- `DecisionsController` owns one authenticated scope and survives room, theme, sidebar and Pebble
+  changes; the host calls `retire()` on logout or scope change. Actions need a fresh `ready` read whose
+  revision and `actions` match the rendered item. One request is in flight at a time.
+- The room handles F-14 permission documents only (`approveResult: "permission_granted"`). F-12 intent
+  and effect-recovery actions (`accept_intent`, `reject_intent`) stay with their canonical owners.
+- Each action captures decision ID, revision, action and one request ID before dispatch. Nothing
+  settles locally without a matching receipt: same request and decision, the expected outcome, an
+  approval ID, result revision and generation, and `executed: false`. Permission granted says
+  sending is not confirmed; Keep draft keeps the row with Reopen. A lost response stays pinned and
+  locked; Check result reads the ORIGINAL request receipt and never re-sends. A refusal needs a fresh
+  read before retry.
+- Editing buffers a complete typed email or calendar document. Save does not approve: it yields a new
+  revision and approval to review. A read that changes or removes the decision keeps the unsaved
+  text and Cancel, and disables Save.
+- Wiring (not done here): aggregate every F-12 `GET /api/brief/decisions` page and restart on
+  `queue_changed`; join each item with F-14 `GET /api/brief/decisions/:id/document` only when the
+  revisions match. POST the F-14 document endpoint with `{ requestId, revision, action }` plus
+  `document` for save only (`decisionId` is the path, not a body key). Map recovery to
+  `GET .../document?requestId=<original>`. Persist requests before dispatch and reconcile them after
+  reload; network errors, 5xx and timeouts are unknown, never refusals. Today and Needs you must share
+  one decision owner before activation.
+- Opt-in `decisionsRegistration(useBinding)`, not in the production registry. `decisionsAvailable`
+  requires a non-empty scope, a `source` matching the shell mode, a controller bound to the same scope
+  and, in live mode, the `decisions` capability.
+- `?brief=preview&specimen=decisions#/_brief_preview` opens it over in-memory fixtures; the example
+  menu covers ready, long, many, calendar, read-only, stale, deferred, uncertain, refused, empty and
+  unavailable.
+- `decisions/figma-reference.json` records the UI-27 source and bounded deviations.
+
+## Goals
+
+- `goals/` is the D-24 Goals room (`goals` and `completed-goals`): goal selectors above one ordered
+  path of stage cards, and settled summary cards with milestones under Completed. The room only
+  reads and navigates; it has no goal writer, calculation or approval path. `onCreate` is optional and
+  must open the host's existing goal-creation flow.
+- Each goal is a `GoalDatum`: `BriefGoal` plus owner-written title strings, with F-15's
+  `progress { value, basis, rollup: "independent" }` required. The percent comes from `progress.value`
+  (0..1) only, never from value/target, a title or child stages. A count is shown only with a
+  qualified measurement (`qualified()` from Today outcomes) with finite baseline and target; a legacy
+  score stays labelled "Score"; anything else reads "Not measured yet". Data basis shows measured vs
+  user reported, baseline, as-of time and provenance.
+- `stages` is an explicit, owner-ordered path. Status is always shown as text, including beside a
+  caption. The filter exposes the real `active`, `draft`, `paused`, `failed` and `killed` statuses;
+  completion never forces 100 percent.
+- The next step is navigation only: `nextGoalRoute` opens the existing Needs you decision
+  (`workItemId`, optional `approvalId`) only for an active goal on a fresh `ready` read whose
+  `next.goalRevision` matches the goal revision, and in live mode only with the `recommendations` and
+  `decisions` capabilities.
+- `GoalsController` owns one authenticated scope; selection is remembered per tab and filter and
+  survives theme, sidebar, Pebble and route changes. Revoking access or `retire()` clears rows and
+  selection, and late reads cannot repopulate a scope. Invalid projections (duplicate roots or stages,
+  missing revision/title, unknown status) fail closed.
+- Opt-in `goalsRegistrations(useBinding)`, not in the production registry. `goalsAvailable` requires
+  a non-empty scope, a `source` matching the shell mode, a controller bound to the same scope and, in
+  live mode, the `goalMeasurements` capability.
+- Wiring (not done here): an adapter over F-15's `GET /api/brief/goals/:id` must supply the complete
+  authorized roots with their owner-ordered paths and titles, pass `measurement` and `progress`
+  through unchanged (see `docs/brief-goal-measurements.md`), and share Today's decision identity so a
+  decision resolved in another room reconciles here.
+- `?brief=preview&specimen=goals#/_brief_preview` opens it over in-memory fixtures (ready, mixed
+  status, score only, decreasing, unknown, long, many, loading, empty, stale, unavailable,
+  unsupported). `goals/figma-reference.json` records the UI-35 source and bounded adaptations.
+
+## Memory
+
+- `memory/stream/` is the D-25 Memory room: Search, Source, Used in and Updated filters, an exact
+  result count, rows grouped by Today / Yesterday / Earlier and sorted by Updated descending, then
+  fact ID. It only reads. There is no Add memory action, category tab, writer or second memory engine;
+  detail and correction belong to D-26, which receives only the canonical fact ID through
+  `onOpen(factId)`. Without `onOpen` a row is `aria-disabled`.
+- `MemoryPort.read(query, signal)` is the only input, and only a fixture port exists so far. The live
+  port over F-17's `/api/brief/memory` (#823) is a follow-up; the room also needs F-18 usage records
+  (#833) and both capabilities before it can go live. Main's paged legacy reader (`/api/vault/page`)
+  has no search or filters and is not used here.
+- Search, Source and Used in go to the server, never filter one fetched page. Search is literal text up
+  to 256 characters; Source is an exact label (whitespace kept, up to 4,000 characters); Used in is
+  `conversation:<id>` or `run:<id>` and counts supplied use only, not selected-only. Source and Used in
+  suggestions come from host-supplied authorized catalogs; exact entry works without them.
+- `validPage` rejects a page as a whole (never drops rows, which would falsify counts): wrong counts,
+  duplicate IDs, unreadable rows, an order break, or a status other than `active` / `contested`, so
+  superseded or forgotten facts cannot render. Continuation repeats the frozen query with the opaque
+  cursor and must keep totals, order and identity.
+- `MemoryController` owns one authenticated scope and survives room, theme, sidebar and chat changes;
+  the host calls `retire()` on logout or scope change. A filter edit clears rows at once and late reads
+  of an older query or page are ignored. Stale, unavailable, unsupported and error states carry no
+  cached rows (a fact may have been forgotten) but keep the applied filters. Losing access clears both.
+- Memory text is untrusted (it can hold captured page text) and renders as plain text only.
+  Recorded use means a retained provider handoff, not model reliance; `uses: null` reads "Usage
+  unavailable".
+- Opt-in `memoryRegistrations(useBinding)`, not in the production registry. `memoryAvailable` requires
+  a non-empty scope, a `source` matching the shell mode, a controller bound to the same scope and
+  source and, in live mode, both the `memoryStream` and `memoryUsage` capabilities.
+- `?brief=preview&specimen=memory#/_brief_preview` opens it over in-memory fixtures (ready, loading,
+  empty, stale, error, unavailable, unsupported, long, many with a match beyond page one, no-usage).
+- `memory/detail/` is the D-26 detail: one fact's sentence, qualification, sources ("Where it came
+  from"), recorded use ("Where it helps") and linked correction history, with Edit memory and Confirm
+  fact. It is review and correct only: there is no Forget or delete until F-19 / Q-16 land on main,
+  and per-fact `canForget` is ignored.
+- `MemoryDetailPort` (`read`, `history`, `decide`) is the only input and has no live implementation on
+  main: the detail read needs F-17's `/api/brief/memory/:id` (#823). When that lands, the HTTP port
+  must send `decide` to main's existing `/api/vault/facts/:id/correct` and `/confirm` routes
+  (`confirmed: true` plus a reason), which own supersession and provenance; it never writes the
+  display sentence and keeps F-17's `canCorrect=false` gate.
+- `MemoryDetailController` lives beside the stream controller for one scope. A correction follows the
+  replacement fact ID, invalidates the stream's cached rows, and keeps earlier evidence in history. A
+  conflict or rejection keeps the draft; "Reload current fact" reapplies it to the fresh value. An
+  unknown save result is never retried automatically. Unavailable, missing or conflicting reads clear
+  cached content in both rooms.
+- Leaving never drops an unsaved edit silently: "All memories", "View current value" and history
+  links refuse with a message until Save or Cancel; leaving through the shell keeps the draft, and
+  choosing another row reopens the drafted fact first.
+- Return restores the applied filters, the loaded page window (bounded, never the whole vault), the
+  scroll offset and focus on the original row, its replacement, or the nearest surviving neighbour.
+  The sentence transfer uses `BRIEF_MOTION.transfer` and is skipped under reduced motion.
+- Opt-in `memoryDetailRegistrations(useBinding)`, not in the production registry. `detailAvailable`
+  adds to `memoryAvailable` a detail controller bound to the same scope and source.
+- `?brief=preview&specimen=memory-detail#/_brief_preview` opens it over in-memory fixtures (ready,
+  long, many, conflict, save-error, lost-save, unavailable, read-only, loading, no-usage).
+
+## Connected workspace
+
+- `connections/` is the D-27 Connected workspace: Devices and Services rows, a searchable "Connect a
+  service" catalog, one setup panel per attempt (start, open settings, check, cancel, expire, start
+  again) and a device panel. It owns no OAuth, callback, token, credential form or device effect:
+  setup always hands off to the existing settings surfaces, and device actions hand off to device
+  settings.
+- `ConnectionsPort` is the only input. There is no live implementation on main: `createF22ConnectionsPort`
+  bridges to F-22's headless setup adapter (#943) through an injected `F22Binding`, and without one it
+  returns `unsupported`. Its real-module tests are skipped unless `D27_F22_SETUP_MODULE` points at
+  F-22's `ui/src/brief/connections/setup.ts`; they run by default once F-22 is on main.
+- Connected comes only from the canonical projection: after a check the controller re-reads and
+  requires the exact account (`connectionKey`) with `authenticated === true` and `availability ===
+  "ready"`. A browser return or launch is never confirmation, and saved credentials show as
+  configured but not verified. With several candidate accounts the person picks the one they set up.
+- Reconnecting or editing a workflow connection, and revoking a device, say that workflows using it
+  pause until enabled again (Q-05 `BINDING_STALE`).
+- `ConnectionsController` owns one authenticated scope; the host calls `retire()` on logout or scope
+  change. Losing access clears rows, attempts and saved scroll positions. Search, scroll and focus
+  survive setup and return. A setup that could not be verified is never retried automatically.
+- Opt-in `connectionsRegistration(useBinding)`, not in the production registry. `connectionsAvailable`
+  requires a controller bound to the same scope and source as the binding and, in live mode, both the
+  `connections` and `navigationCompatibility` capabilities.
+- `?brief=preview&specimen=connections#/_brief_preview` opens it over in-memory fixtures (ready,
+  empty, stale, unavailable, read-only, expired, lost-start, lost-cancel, long, configured, partial).

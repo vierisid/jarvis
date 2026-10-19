@@ -1,3 +1,7 @@
+import { ensureMemoryUseSchema } from './memory-use-schema';
+import { ensureOutcomeSchema } from './outcome-schema';
+import { ensureGoalMeasurementSchema } from './goal-measurement-schema';
+import { ensureDecisionDocumentSchema } from '../authority/decision-document-schema';
 import { Database } from "bun:sqlite";
 import { ensureSuggestionSchema } from './suggestion-schema.ts';
 import { ensureGoalEventSchema } from './goal-event-schema.ts';
@@ -352,6 +356,7 @@ function createTables(db: Database): void {
 
   ensureConversationSchema(db);
   ensureChatTurnSchema(db);
+  ensureMemoryUseSchema(db);
   ensureChatAttachmentSchema(db);
 
   // Content pipeline: items moving through creation stages
@@ -409,6 +414,8 @@ function createTables(db: Database): void {
   `);
 
   db.run(`CREATE INDEX IF NOT EXISTS idx_attachments_content ON content_attachments(content_id)`);
+
+  ensureDecisionDocumentSchema(db);
 
   // Authority: Approval requests
   db.run(`
@@ -814,6 +821,8 @@ function createTables(db: Database): void {
   db.run(`CREATE INDEX IF NOT EXISTS idx_gci_created ON goal_check_ins(created_at)`);
 
   ensureGoalEventSchema(db);
+  ensureGoalMeasurementSchema(db);
+  ensureOutcomeSchema(db);
 
   // Additive review audit: the exact bounded inputs and rejected score proposals.
   db.run(`CREATE TABLE IF NOT EXISTS goal_review_evidence (

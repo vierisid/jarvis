@@ -1,0 +1,271 @@
+.brief-root .brief-connections {
+  container: connections / inline-size;
+  min-width: 0;
+  padding: 4px 0 32px;
+}
+.brief-root .brief-connections-heading {
+  margin-bottom: 42px;
+}
+.brief-root .brief-connections-heading h1 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.brief-root .brief-connections-heading > button {
+  margin: 0 0 20px;
+}
+.brief-root .brief-connections section + section {
+  margin-top: 32px;
+}
+.brief-root .brief-connections-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  min-height: 44px;
+  margin-bottom: 10px;
+}
+.brief-root .brief-connections h2 {
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.5;
+  margin: 0;
+}
+.brief-root .brief-connections-list,
+.brief-root .brief-connections-catalog {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.brief-root .brief-connection-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) minmax(115px, auto) 96px;
+  align-items: center;
+  gap: 16px;
+  min-height: 76px;
+  padding: 14px 6px;
+  border-bottom: 1px solid var(--brief-card-edge);
+}
+.brief-root .brief-connection-icon {
+  color: var(--brief-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+}
+.brief-root .brief-connection-label {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.brief-root .brief-connection-label strong,
+.brief-root .brief-connections-catalog-row strong {
+  font-weight: 500;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+.brief-root .brief-connection-label span,
+.brief-root .brief-connection-label small,
+.brief-root .brief-connections-catalog-row small {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--brief-secondary);
+  overflow-wrap: anywhere;
+}
+.brief-root .brief-connection-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--brief-secondary);
+}
+.brief-root .brief-connection-status i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 4px;
+}
+.brief-root .brief-connection-status[data-tone="good"] {
+  color: var(--brief-positive, #4a8d74);
+}
+.brief-root .brief-connection-status[data-tone="warn"] {
+  color: var(--brief-attention-text);
+}
+.brief-root .brief-connection-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.brief-root
+  .brief-connections
+  :is(.brief-button__label, .brief-button__reserve) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.brief-root .brief-connection-actions .brief-button {
+  white-space: nowrap;
+  padding-inline: 8px;
+}
+.brief-root .brief-connections-empty {
+  margin: 0;
+  padding: 26px 0;
+  color: var(--brief-secondary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+.brief-root .brief-connections-refresh {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+.brief-root .brief-connections-intro {
+  color: var(--brief-secondary);
+  font-size: 15px;
+  margin: -18px 0 26px;
+}
+.brief-root .brief-connections-search {
+  margin-bottom: 18px;
+}
+.brief-root .brief-connections-catalog-row {
+  color: var(--brief-ink);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  min-height: 84px;
+  padding: 16px 8px;
+  text-align: left;
+  border: 0;
+  border-bottom: 1px solid var(--brief-card-edge);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  border-radius: var(--brief-corner-control);
+}
+.brief-root .brief-connections-catalog-row > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+.brief-root .brief-connections-catalog-row:hover {
+  background: var(--brief-soft);
+}
+.brief-root .brief-connections-catalog-row:focus-visible {
+  outline: 2px solid var(--brief-focus);
+  outline-offset: 2px;
+}
+.brief-root .brief-connections-catalog-row:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.brief-root .brief-connections-setup {
+  max-width: 650px;
+  margin-top: 8px;
+}
+.brief-root .brief-connections-service {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding-bottom: 28px;
+  border-bottom: 1px solid var(--brief-card-edge);
+  margin-bottom: 28px;
+}
+.brief-root .brief-connections-service .brief-connection-icon {
+  background: var(--brief-soft);
+  padding: 16px;
+  border-radius: var(--brief-corner-control);
+}
+.brief-root .brief-connections-service p {
+  margin: 3px 0 0;
+}
+.brief-root .brief-connections-setup h3 {
+  margin: 0 0 12px;
+  font-size: 21px;
+  font-weight: 500;
+}
+.brief-root .brief-connections-setup p {
+  color: var(--brief-secondary);
+  font-size: 15px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.brief-root .brief-connections-setup > p {
+  margin-bottom: 26px;
+}
+.brief-root .brief-connections-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 28px;
+}
+.brief-root .brief-connections-feedback {
+  min-height: 28px;
+  margin: 24px 0 0;
+  font-size: 13px;
+  color: var(--brief-secondary);
+  overflow-wrap: anywhere;
+}
+.brief-root .brief-connections-notice {
+  padding: 16px;
+  background: var(--brief-soft);
+  border-radius: var(--brief-corner-control);
+  color: var(--brief-secondary);
+}
+.brief-root .brief-connections-device > div {
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr);
+  gap: 20px;
+  margin: 12px 0;
+  font-size: 14px;
+}
+.brief-root .brief-connections-device dt {
+  color: var(--brief-secondary);
+}
+.brief-root .brief-connections-device dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.brief-root .brief-connections [hidden] {
+  display: none !important;
+}
+@container connections (max-width: 560px) {
+  .brief-root .brief-connection-row {
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+    gap: 8px 12px;
+  }
+  .brief-root .brief-connection-label {
+    grid-column: 2;
+  }
+  .brief-root .brief-connection-status {
+    grid-column: 2;
+    grid-row: 2;
+    justify-content: flex-start;
+  }
+  .brief-root .brief-connection-actions {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
+  .brief-root .brief-connections-heading {
+    margin-bottom: 30px;
+  }
+  .brief-root .brief-connections-section-heading {
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .brief-root .brief-connections-buttons {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .brief-root .brief-connections-setup {
+    max-width: 100%;
+  }
+}
+
+.brief-root .brief-connections-account {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0;
+}
