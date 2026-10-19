@@ -1,0 +1,264 @@
+{
+  "version": 1,
+  "revision": "f861eebbfd0b3e60cebe0f47a024be0b881979c1",
+  "deployment": "self_hosted",
+  "approvedCapabilities": [],
+  "rollback": "feature_flags",
+  "prs": [
+    {
+      "card": "F-01",
+      "repository": "vierisid/jarvis",
+      "number": 702,
+      "head": "b1401bcdf8feb5fce39f3e93c8a9f094d7cdc250",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-02",
+      "repository": "vierisid/jarvis",
+      "number": 714,
+      "head": "1b477587eb6471fa32ee54ca67d2b783408e343e",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-03",
+      "repository": "vierisid/jarvis",
+      "number": 727,
+      "head": "6b37f2ff0137deebeb2ef33a9886d38b9c496030",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-04",
+      "repository": "vierisid/jarvis",
+      "number": 738,
+      "head": "72f3078a4857e28ae6738c336f55f2988bf6f31b",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-05",
+      "repository": "vierisid/jarvis",
+      "number": 740,
+      "head": "f98cd312ca0b450bb5180320fc8c0491757cae67",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-06",
+      "repository": "vierisid/jarvis",
+      "number": 745,
+      "head": "23979f3bebab09a68c140aad3cb1843865fef150",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-07",
+      "repository": "vierisid/jarvis",
+      "number": 750,
+      "head": "b53fb22d53ed1337e4dacafa597e6776fe04c060",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-08",
+      "repository": "vierisid/jarvis",
+      "number": 755,
+      "head": "5d9fafea32f0db1a221121ca90b6b5e4f8492a1d",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-09",
+      "repository": "vierisid/jarvis",
+      "number": 766,
+      "head": "8614e886d3118fe08e06b1d4a5020f33419d6505",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-10",
+      "repository": "vierisid/jarvis",
+      "number": 770,
+      "head": "ad6cb75ff4b8b8d80d5fd2791533639c94887bb2",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-11",
+      "repository": "vierisid/jarvis",
+      "number": 772,
+      "head": "5af1fce553b4e7f197f3a682c7e559cbce91cb06",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-12",
+      "repository": "vierisid/jarvis",
+      "number": 775,
+      "head": "f8a323060ca496c6e0d42b754d80a841faa1f3e5",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-13",
+      "repository": "vierisid/jarvis",
+      "number": 777,
+      "head": "d7e1bde053cc905fb5b02406da021c9f8a290cfb",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-14",
+      "repository": "vierisid/jarvis",
+      "number": 785,
+      "head": "1d4cf952aa3ade0abb198f4304ab28df80187063",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-15",
+      "repository": "vierisid/jarvis",
+      "number": 796,
+      "head": "bc0fdf9cda343e45ad8081345a77e1814dbe979a",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-16",
+      "repository": "vierisid/jarvis",
+      "number": 805,
+      "head": "1cd3d429b1842a831d20d0a9e2e137f49d914c20",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-17",
+      "repository": "vierisid/jarvis",
+      "number": 823,
+      "head": "42e54d637f2b4c0e955bae4bd6183b1373bd7442",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-18",
+      "repository": "vierisid/jarvis",
+      "number": 833,
+      "head": "5f83f7876a9bd1ff84e57aa4e00966eb5dc04cb1",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-19",
+      "repository": "vierisid/jarvis",
+      "number": 840,
+      "head": "4d48f4982e0c5f158e4a59415424299bf32a7020",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-20",
+      "repository": "vierisid/jarvis",
+      "number": 848,
+      "head": "35018804546c18254abd7ba3e062deb812066734",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-21",
+      "repository": "vierisid/jarvis",
+      "number": 939,
+      "head": "0acff262a10aafdb501788005e306f53d6a06946",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-22",
+      "repository": "vierisid/jarvis",
+      "number": 943,
+      "head": "9f5b258e8548cd3b481c17b5a1653b20753206a2",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-23",
+      "repository": "vierisid/jarvis",
+      "number": 945,
+      "head": "13beb76554514227e0fb2fa476e7cd78f5432053",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-24",
+      "repository": "usejarvis/hosting",
+      "number": 22,
+      "head": "58a9ff39709f7a6013aff4db2e4dfa7cff83f9ab",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-25",
+      "repository": "vierisid/jarvis",
+      "number": 980,
+      "head": "329b500fd570989dfcf9556c5c45d60ec17cd031",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-26",
+      "repository": "vierisid/jarvis",
+      "number": 994,
+      "head": "70833765929908112de6ccf3b5c4739b00e892ef",
+      "state": "OPEN",
+      "mergeCommit": null
+    },
+    {
+      "card": "F-27",
+      "repository": "vierisid/jarvis",
+      "number": 1002,
+      "head": "f861eebbfd0b3e60cebe0f47a024be0b881979c1",
+      "state": "OPEN",
+      "mergeCommit": null
+    }
+  ],
+  "checks": {
+    "fresh": {
+      "status": "not_run",
+      "revision": "f861eebbfd0b3e60cebe0f47a024be0b881979c1",
+      "evidence": "candidate runtime not assembled; source tests are recorded separately"
+    },
+    "upgrade": {
+      "status": "not_run",
+      "revision": "f861eebbfd0b3e60cebe0f47a024be0b881979c1",
+      "evidence": "candidate runtime not assembled; source tests are recorded separately"
+    },
+    "old_client": {
+      "status": "not_run",
+      "revision": "f861eebbfd0b3e60cebe0f47a024be0b881979c1",
+      "evidence": "candidate runtime not assembled; source tests are recorded separately"
+    },
+    "flag_rollback": {
+      "status": "not_run",
+      "revision": "f861eebbfd0b3e60cebe0f47a024be0b881979c1",
+      "evidence": "candidate runtime not assembled; source tests are recorded separately"
+    },
+    "host_bindings": {
+      "status": "blocked",
+      "revision": "f861eebbfd0b3e60cebe0f47a024be0b881979c1",
+      "evidence": "candidate runtime not assembled; source tests are recorded separately"
+    }
+  },
+  "observedAt": "2026-10-13",
+  "role": "Source-stack inventory, not a production deployment or deployment authorization",
+  "unsupportedCombinations": [
+    "Unmerged F stack; prerequisite merges must be rechecked",
+    "Hosted account on self-hosted or an unverified F-24 hosting/brain pair",
+    "Old or unknown-major capability protocol",
+    "Missing D-33 host bindings for navigation, onboarding or reconciliation",
+    "Pre-F08/F14/F15/F19/F20/F21 binary downgrade after using their retained constraints, suppression or request receipts"
+  ],
+  "activeCapabilities": [],
+  "productionReadiness": "not_run",
+  "releaseEnabled": false
+}
