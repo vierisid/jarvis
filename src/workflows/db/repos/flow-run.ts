@@ -214,7 +214,7 @@ export function createFlowRun(input: CreateFlowRunInput): FlowRun {
   // version would execute B's definition under A's project token and merge
   // its outputs into B's sample data. No caller does that today; this keeps it
   // so rather than leaving it to each of them.
-  const inserted = db().run(
+  db().run(
     `INSERT INTO flow_run (
       id, flow_id, flow_version_id, project_id, parent_run_id, fail_parent_on_failure,
       triggered_by, status, environment, start_time, step_name_to_test, tags, created, updated
@@ -236,10 +236,12 @@ export function createFlowRun(input: CreateFlowRunInput): FlowRun {
       input.flowId,
     ],
   );
-  // Zero, not "not one": Bun counts rows written by AFTER INSERT triggers on
-  // flow_run (workflow-inspection-schema.ts records version lock state) in
-  // `changes`, so a successful insert can report more than one.
-  if (inserted.changes === 0) {
+  // Exactly one row, counted by SQLite's changes(): Bun's `run().changes` also
+  // counts rows an AFTER INSERT trigger on flow_run writes (the inspection
+  // lock-state row, workflow-inspection-schema.ts), while changes() counts only
+  // this statement's own rows. Same connection, read before any other write.
+  const inserted = db().query<{ n: number }, []>("SELECT changes() AS n").get()!.n;
+  if (inserted !== 1) {
     const flowExists = db().query("SELECT 1 FROM flow WHERE id = ?").get(input.flowId);
     throw new Error(flowExists
       ? `createFlowRun: version ${input.flowVersionId} is not a version of flow ${input.flowId}`
