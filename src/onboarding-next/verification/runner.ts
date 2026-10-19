@@ -1,12 +1,13 @@
 import { mkdir, realpath, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { sanitizedEnv } from '../../util/subprocess-env';
 import { containedFile, discover, ROOT } from './discovery';
 import { requiredCases } from './matrix';
 import { artifact, evidenceIndex, same, sourceCandidate, verifyReport } from './report';
 import type { Candidate, Observation, Report } from './types';
 
 export async function child(command: string[], cwd: string, timeoutMs = 180000) {
-  const process = Bun.spawn(command, { cwd, stdout: 'pipe', stderr: 'pipe', env: { ...Bun.env, NO_COLOR: '1' } });
+  const process = Bun.spawn(command, { cwd, stdout: 'pipe', stderr: 'pipe', env: sanitizedEnv() });
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; process.kill('SIGKILL'); }, timeoutMs);
   try { const [code, stdout, stderr] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()]); return { code, timedOut, output: stdout + '\n' + stderr }; }

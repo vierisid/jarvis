@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { discover } from './discovery';
 import { requiredCases, RELEASE_OWNERS } from './matrix';
-import { artifact, evidenceDigest, gitEnvironment, ownersDigest, sourceCandidate, verifyReport } from './report';
+import { artifact, evidenceDigest, ownersDigest, sourceCandidate, verifyReport } from './report';
+import { sanitizedEnv } from '../../util/subprocess-env';
 import type { Report, Observation } from './types';
 
 const directories: string[] = [];
@@ -17,7 +18,7 @@ async function fixture() {
   await mkdir(resolve(repo,'ui/src/onboarding-next/verification'),{ recursive: true });
   await writeFile(resolve(repo,'ui/src/onboarding-next/verification/report.ts'), `export const assess = r => r.assessment; export const verifyArtifacts = async r => r.errors;`);
   for (const args of [['init'],['add','.'],['-c','user.name=Test','-c','user.email=test@example.invalid','-c','core.hooksPath=/dev/null','commit','-m','Synthetic verifier fixture']]) {
-    expect(Bun.spawnSync(['git',...args],{ cwd:repo,env:gitEnvironment() }).exitCode).toBe(0);
+    expect(Bun.spawnSync(['git',...args],{ cwd:repo,env:sanitizedEnv() }).exitCode).toBe(0);
   }
   const candidate = await sourceCandidate(repo), discovered = await discover();
   const report: Report = { schemaVersion: 1, candidate, inventory: { present: [...discovered.present,...discovered.missing], missing: [] }, cases: [], gates: [] };

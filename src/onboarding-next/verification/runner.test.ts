@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { containedFile, discover } from './discovery';
 import { PROVIDERS, requiredCases } from './matrix';
 import { child, run, suiteVerdict } from './runner';
-import { gitEnvironment, sourceCandidate } from './report';
+import { sourceCandidate } from './report';
+import { sanitizedEnv } from '../../util/subprocess-env';
 
 test('empty/partial discovery retains the complete required denominator and rejects substituted manifests', async () => {
   const root=await mkdtemp(resolve(tmpdir(),'b13-discovery-'));
@@ -17,6 +18,11 @@ test('empty/partial discovery retains the complete required denominator and reje
     expect((await discover(root)).present).toEqual([id]); expect(requiredCases()).toHaveLength(43);
     await writeFile(path,JSON.stringify({ schemaVersion:1,id,kind:'provider',entry:'../execute.ts',provides:[cap],requires })); await expect(discover(root)).rejects.toThrow('Invalid manifest');
   } finally { await rm(root,{ recursive:true,force:true }); }
+});
+test('the frozen provider projection matches the runtime catalog contract',async()=>{
+  const { PROVIDERS: runtime } = await import('../runtime/contract');
+  expect(PROVIDERS.map(([id,directory,capability,requires]) => ({ id,directory,capability,requires:[...requires] })))
+    .toEqual(runtime.map(p => ({ id:p.id,directory:p.directory,capability:p.capability,requires:[...p.requires] })));
 });
 test('source and evidence paths reject traversal and symlinked files',async()=>{
   const root=await mkdtemp(resolve(tmpdir(),'b13-path-'));
@@ -41,7 +47,7 @@ test('symlink ancestors and a symlinked source root cannot place evidence in an 
     await mkdir(repo); await mkdir(resolve(repo,'private-evidence')); await symlink(repo,alias);
     await writeFile(resolve(repo,'.gitignore'),'private-evidence/\n');
     for(const args of [['init'],['add','.'],['-c','user.name=Test','-c','user.email=test@example.invalid','-c','core.hooksPath=/dev/null','commit','-m','Isolated path fixture']])
-      expect(Bun.spawnSync(['git',...args],{cwd:repo,env:gitEnvironment()}).exitCode).toBe(0);
+      expect(Bun.spawnSync(['git',...args],{cwd:repo,env:sanitizedEnv()}).exitCode).toBe(0);
     const before=await sourceCandidate(repo); expect(before.dirty).toBe(false);
     for(const [source,output] of [[repo,resolve(alias,'private-evidence/output')],[alias,resolve(repo,'private-evidence/output')]])
       await expect(run(output!,{root:source,only:'journey/hosted'})).rejects.toThrow('outside the source checkout');

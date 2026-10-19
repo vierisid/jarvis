@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { sanitizedEnv } from '../../util/subprocess-env';
 import { containedFile, ROOT } from './discovery';
 import { PROVIDERS, RELEASE_OWNERS, requiredCases, VIEWS } from './matrix';
 import type { Artifact, Candidate, Report } from './types';
@@ -12,11 +13,10 @@ const sha = (s: unknown) => typeof s === 'string' && /^[a-f0-9]{40}$/.test(s);
 const nonempty = (v: unknown) => typeof v === 'string' && v.trim().length > 0;
 const validDate = (v: unknown) => typeof v === 'string' && Number.isFinite(Date.parse(v));
 export const validCandidate = (c: any): c is Candidate => !!c && ['backend','frontend','sidecar','tree'].every(k => sha(c[k])) && c.dirty === false;
-// Hooks export GIT_DIR/GIT_INDEX_FILE; never let them redirect another checkout's
-// identity reads (or the temporary repositories used by regression tests).
-export const gitEnvironment = () => Object.fromEntries(Object.entries(Bun.env).filter(([key]) => !key.startsWith('GIT_')));
+// sanitizedEnv drops every GIT_* name: hooks export GIT_DIR/GIT_INDEX_FILE, which
+// would otherwise redirect another checkout's identity reads.
 export async function sourceCandidate(root = ROOT, frontend?: string, sidecar?: string): Promise<Candidate> {
-  const git = (args: string[]) => { const p = Bun.spawnSync(['git', ...args], { cwd: root, env: gitEnvironment() }); if (p.exitCode) throw Error('Cannot read candidate Git identity'); return p.stdout.toString().trim(); };
+  const git = (args: string[]) => { const p = Bun.spawnSync(['git', ...args], { cwd: root, env: sanitizedEnv() }); if (p.exitCode) throw Error('Cannot read candidate Git identity'); return p.stdout.toString().trim(); };
   const backend = git(['rev-parse','HEAD']);
   return { backend, frontend: frontend ?? backend, sidecar: sidecar ?? backend, tree: git(['rev-parse','HEAD^{tree}']), dirty: !!git(['status','--porcelain','--untracked-files=all']) };
 }

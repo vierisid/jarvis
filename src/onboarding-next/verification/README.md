@@ -71,8 +71,7 @@ bun src/onboarding-next/verification/cli.ts run --out /tmp/onboarding-hosted-rep
 bun src/onboarding-next/verification/cli.ts run --out /tmp/onboarding-crash-replay --case recovery/crash-after-save
 ```
 
-The first is blocked until its providers are present. All other required rows
-remain blocked during a single-case replay. Inspect `case.observation.json`
+All other required rows remain blocked during a single-case replay. Inspect `case.observation.json`
 and `saved.sqlite` under the case folder: `flow.status` must be `DISABLED`,
 `published_version_id` null, and `flow_run` empty. Replay never reuses a live DB.
 
