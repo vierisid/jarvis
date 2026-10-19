@@ -758,3 +758,27 @@ actions only change local fixture state.
 - `?brief=preview&specimen=authority#/_brief_preview` opens it over in-memory fixtures (ready,
   read-only, save-failure, persistence-failure, lost-response, conflict, paused, killed, unavailable,
   error, unsupported).
+
+## Profile
+
+- `account/profile/` is the D-29 Profile form: six fields in two groups (About you, Your context).
+  Full name belongs to the sign-in provider and is shown read-only and empty; it is never sent or
+  aliased to an assistant answer. The other five edit F-23 canonical answers (`preferred_name`,
+  `company`, `work_role`, `current_projects`, `communication_preferences`), up to 4,000 characters
+  each; a blank field clears its answer. Unrelated answers and interview facts are never written.
+- It reads and writes only through `ProfilePort`. F-23 (#945, `/api/brief/profile-settings`) is not
+  on main, so there is no live port yet: the form runs over in-memory fixtures only, and the live
+  room needs both a port and the `profileSettings` capability (`profileAvailable`). It does not
+  touch `/api/user-profile`, the onboarding profile writes or the vault's user-profile source.
+- Edits stay a draft until an explicit Save, survive polls, chat/sidebar changes and remounts, and
+  are dropped only by a confirmed Cancel or leave. Saves are revision-bound partial patches; Saved
+  is shown only when the confirmed profile matches what was submitted. A failed or lost save keeps
+  the draft; Retry re-reads first and reports a conflict instead of overwriting a correction made
+  elsewhere. Permission or scope loss purges the draft.
+- Leaving with edits asks first. Install `guardProfileNavigation(shell, controller)` at the shell
+  host so the sidebar and account menu share the guard; other route sources call `navigateAway`.
+  `beforeunload` warns while a draft exists. Profile values are personal: nothing is logged or
+  shared with other rooms.
+- Opt-in `profileRegistration(useBinding)`, not in the production registry.
+- `?brief=preview&specimen=profile#/_brief_preview` opens it over in-memory fixtures (ready, empty,
+  read-only, save-failure, lost-response, conflict, unavailable, unsupported, error).
