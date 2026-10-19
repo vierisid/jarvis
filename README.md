@@ -10,7 +10,7 @@ AI for judgment. Code for repetition.
 [![npm](https://img.shields.io/npm/v/@usejarvis/brain?label=brain)](https://www.npmjs.com/package/@usejarvis/brain)
 [![License](https://img.shields.io/badge/license-source--available-blue)](LICENSE)
 
-[Website](https://usejarvis.dev) · [Download](https://usejarvis.dev/download/) · [Docs](https://usejarvis.dev/docs/) · [Discord](https://discord.gg/ytG2PHQ6rW)
+[Website](https://usejarvis.dev) | [Download](https://usejarvis.dev/download/) | [Docs](https://usejarvis.dev/docs/) | [Discord](https://discord.gg/ytG2PHQ6rW)
 
 </div>
 
@@ -18,13 +18,14 @@ Jarvis brings together company context, goals, and workflow automation. Describe
 
 The **brain** keeps your memory, conversations, and workflows running. The **desktop app**, also called the sidecar, connects your computers to that brain so Jarvis can work with browsers, local apps, and files. Run the brain yourself or use [managed hosting](https://usejarvis.dev/pricing/).
 
-[Capabilities](#what-you-can-do) · [Get started](#get-started) · [Configuration](#configuration) · [Development](#development) · [Privacy and control](#privacy-and-control)
+[Capabilities](#what-you-can-do) | [Get started](#get-started) | [Configuration](#configuration) | [Development](#development) | [Privacy and control](#privacy-and-control)
 
 ## What you can do
 
 - **Build recurring workflows.** Describe a task in chat or edit it on the visual canvas. Combine app integrations, branching, loops, AI steps, and approvals. Run manually, on schedules, or from supported event and webhook triggers; inspect individual runs afterward.
 - **Keep context across tasks.** Store facts, relationships, preferences, and goals in the memory vault so conversations and automations can use relevant context.
 - **Work across your computers.** Connect desktop apps to one brain. Available tools include browser and desktop control, terminal commands, file access, screenshots, and clipboard access, subject to each device's capabilities and permissions.
+- **Chat from Telegram or Discord.** Enable a channel in Settings and list the user IDs allowed to talk to it. An enabled channel with an empty allow-list is refused and not started.
 - **Talk or type.** Use the dashboard or the floating Pebble desktop interface, with voice, wake-word support, and keyboard shortcuts. Desktop features depend on the operating system and permissions granted.
 - **Set boundaries.** Configure Authority rules for governed actions, review approval requests, inspect the audit trail, and pause or stop execution.
 - **Choose your models.** Self-hosted setups support cloud providers including Anthropic, OpenAI, Gemini, and OpenRouter, plus Ollama and OpenAI-compatible endpoints. Configure providers and model routing in Settings.
@@ -53,13 +54,19 @@ jarvis start -d --no-open
 jarvis enroll "my-desktop"
 ```
 
-The last command prints a device enrollment token. Keep it private: it grants access to your brain.
+Instead of Bun's global install you can use the install script, which installs Bun and the libc headers if missing, clones the repository under `~/.jarvis/daemon`, and links the `jarvis` command (macOS, Linux, and WSL only):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vierisid/jarvis/main/install.sh | bash
+```
+
+`jarvis enroll` prints a device enrollment token. Keep it private: it grants access to your brain.
 
 **2. Connect the desktop app.**
 
-Download the sidecar build for your operating system from [GitHub Releases](https://github.com/vierisid/jarvis/releases), launch it, and paste the enrollment token into its connect window. It opens authenticated dashboard panels and saves the connection for future launches.
+Install the desktop app with the installer from [Download](https://usejarvis.dev/download/), or download the archive for your operating system from [GitHub Releases](https://github.com/vierisid/jarvis/releases) (macOS archives contain `Jarvis.app`). Launch it and paste the enrollment token into its connect window. It opens authenticated dashboard panels and saves the connection for future launches. The desktop app is also published to npm as `@usejarvis/sidecar` (`bun install -g @usejarvis/sidecar`).
 
-If you downloaded an archive, you can also launch the extracted sidecar from its directory:
+On Linux or Windows you can also launch the extracted binary with the token:
 
 ```bash
 ./jarvis --token '<enrollment-token>'
@@ -98,25 +105,26 @@ jarvis doctor              # Check environment and connectivity
 jarvis logs -f             # Follow file logs when configured
 jarvis restart             # Restart the brain
 jarvis stop                # Stop the brain
-jarvis autostart            # Install a login service on Linux or macOS
-jarvis autostart --status   # Inspect that service
-jarvis update              # Update a supported native installation
+jarvis autostart           # Install a login service on Linux or macOS
+jarvis autostart --status  # Inspect that service
+jarvis update              # Update a Bun global or install-script installation
+jarvis uninstall           # Remove a Bun global or install-script installation
 ```
 
-`jarvis start -d` writes to `~/.jarvis/logs/jarvis.log`. For a service or container, use `journalctl` or `docker logs jarvis`, respectively. See [self-hosting operations](docs/SELF_HOSTING.md#running-under-systemd) for service lifecycle, updates, and logging. Docker images and developer checkouts are updated outside `jarvis update`.
+`jarvis start -d` writes to `~/.jarvis/logs/jarvis.log`. For a service or container, use `journalctl` or `docker logs jarvis`, respectively. See [self-hosting operations](docs/SELF_HOSTING.md#running-under-systemd) for service lifecycle, updates, and logging. Docker images and developer checkouts are updated and removed outside `jarvis update` and `jarvis uninstall`.
 
 ## Configuration
 
-System configuration lives in `~/.jarvis/config.yaml` by default; Docker stores it in `/data/config.yaml`. The [configuration reference](config.example.yaml) describes ports, public URLs, timezone, logging, and other deployment settings.
+System configuration lives in `~/.jarvis/config.yaml` by default; in the Docker image, where the home directory is `/data`, it is `/data/.jarvis/config.yaml`. The [configuration reference](config.example.yaml) describes ports, public URLs, timezone, logging, and other deployment settings.
 
-**Configure LLM providers, credentials, and model routing through onboarding or Settings → LLM.** They are stored in the database and encrypted keychain. An `llm:` block in YAML and the old provider-key environment variables are no longer used. Local and compatible providers have [setup guides inside the dashboard](docs/provider-guides/README.md).
+**Configure LLM providers, credentials, and model routing through onboarding or Settings > LLM.** They are stored in the database and encrypted keychain. An `llm:` block in YAML and the old provider-key environment variables are no longer used. Local and compatible providers have [setup guides inside the dashboard](docs/provider-guides/README.md).
 
 Connected accounts, Authority rules, and other user settings are managed in the dashboard. Device enrollment is also available through the CLI:
 
 ```bash
 jarvis sidecars list
 jarvis enroll "work-laptop"
-jarvis revoke '<device-id>'
+jarvis revoke '<sid>'    # the device id shown by sidecars list
 ```
 
 For desktop behavior and permissions, see the [sidecar guide](sidecar/README.md) and [Pebble shortcuts](docs/PEBBLE_HOTKEYS.md).
@@ -176,20 +184,22 @@ Usage telemetry is enabled by default and has **separate brain and sidecar contr
 | Brain | Hashed installation ID, version, install method, OS/architecture | `telemetry.enabled: false` in `~/.jarvis/config.yaml`, `JARVIS_TELEMETRY=0`, or `DO_NOT_TRACK=1` |
 | Desktop app | Hashed device and brain IDs, version, install method, platform, coarse OS/timezone information, connection state, and available capabilities | Privacy settings, `telemetry.enabled: false` in `~/.jarvis/sidecar.yaml`, or `JARVIS_SIDECAR_TELEMETRY=0` |
 
-These usage pings do not contain conversations, API keys, files, or screen contents. Disabling brain telemetry does not disable desktop telemetry. See [Telemetry & Privacy](docs/TELEMETRY.md) for details.
+These usage pings do not contain conversations, API keys, files, or screen contents. Disabling brain telemetry does not disable desktop telemetry. See [Telemetry and Privacy](docs/TELEMETRY.md) for details.
+
+An approved action that a restart interrupted before it finished shows up in Authority as unresolved: it is never rerun on its own, and you decide whether to run it once or close it. Emergency Pause holds actions until you resume; Kill also stops running tasks.
 
 Report security vulnerabilities privately to [team@usejarvis.dev](mailto:team@usejarvis.dev).
 
 ## Documentation and community
 
-- [User documentation](https://usejarvis.dev/docs/) — setup and product guides.
-- [Self-hosting](docs/SELF_HOSTING.md) — authentication, networking, services, and operations.
-- [Workflow architecture](docs/WORKFLOW_AUTOMATION.md) — runtime and contributor reference.
-- [Piece library](src/workflows/pieces-library/README.md) — curated integrations and installation.
-- [Memory vault](docs/VAULT_EXTRACTOR.md) — knowledge extraction and persistence.
-- [Desktop app](sidecar/README.md) — building, running, and platform requirements.
-- [GitHub Issues](https://github.com/vierisid/jarvis/issues) — bugs and feature requests.
-- [Discord](https://discord.gg/ytG2PHQ6rW) — help, discussion, and workflow ideas.
+- [User documentation](https://usejarvis.dev/docs/) - setup and product guides.
+- [Self-hosting](docs/SELF_HOSTING.md) - authentication, networking, services, and operations.
+- [Workflow architecture](docs/WORKFLOW_AUTOMATION.md) - runtime and contributor reference.
+- [Piece library](src/workflows/pieces-library/README.md) - curated integrations and installation.
+- [Memory vault](docs/VAULT_EXTRACTOR.md) - knowledge extraction and persistence.
+- [Desktop app](sidecar/README.md) - building, running, and platform requirements.
+- [GitHub Issues](https://github.com/vierisid/jarvis/issues) - bugs and feature requests.
+- [Discord](https://discord.gg/ytG2PHQ6rW) - help, discussion, and workflow ideas.
 
 ## License
 
