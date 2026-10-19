@@ -78,7 +78,7 @@ They are process-local snapshots, not durable business records or full histories
 | Logger wait | Default 100 ms, configurable from 1 to 1,000 ms |
 
 The key is generated lazily for each instance. A host may inject a secret key of
-32–128 bytes for stable correlation across instances/restarts. Reuse is deliberate;
+32-128 bytes for stable correlation across instances/restarts. Reuse is deliberate;
 rotating it changes pseudonyms. Receipts are not persisted by doing this. Use an
 injected local logger if retention beyond the bounded process lifetime is needed.
 
