@@ -1,6 +1,0 @@
-.f26-fixture .obw { top: 76px; }
-.f26-fixture-toolbar { position: fixed; inset: 0 0 auto; z-index: 300; min-height: 76px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px; background: var(--panel); color: var(--ink); font: 12px var(--sans); }
-.f26-fixture-toolbar button { border: 1px solid var(--rule); background: var(--bg); color: var(--ink); padding: 6px 8px; border-radius: 6px; }
-.f26-fixture-result { padding: 120px 32px; color: var(--ink); background: var(--bg); min-height: 100vh; }
-.f26-fixture-result p { margin: 20px 0; max-width: 70ch; }
-@media (max-width: 700px) { .f26-fixture-toolbar { position: relative; } .f26-fixture .obw { top: 140px; } }
