@@ -92,9 +92,14 @@ function hasProfileEvidence(fact: Fact): boolean {
  * interviewer. Idempotent on (theme, summary) — re-recording the same
  * (theme, summary) pair updates the existing entry's `recorded_at`
  * rather than duplicating it. Used by the `record_profile_facts` tool
- * the interviewer agent calls during the conversation.
+ * the interviewer agent calls during the conversation. Durable hosts can defer
+ * completion until their enclosing fact/wrap transaction succeeds; legacy calls
+ * retain their existing first-fact completion behavior.
  */
-export function appendUserProfileFact(fact: Omit<UserProfileFact, 'recorded_at'>): UserProfileRecord {
+export function appendUserProfileFact(
+  fact: Omit<UserProfileFact, 'recorded_at'>,
+  options: { deferCompletion?: boolean } = {},
+): UserProfileRecord {
   const existing = getUserProfile() ?? createEmptyUserProfile();
   const now = Date.now();
   const facts = [...(existing.interview_facts ?? [])];
@@ -114,7 +119,7 @@ export function appendUserProfileFact(fact: Omit<UserProfileFact, 'recorded_at'>
     ...existing,
     interview_facts: facts,
     updated_at: now,
-    completed_at: existing.completed_at ?? now,
+    completed_at: existing.completed_at ?? (options.deferCompletion ? null : now),
   };
   setSetting(USER_PROFILE_SETTING_KEY, JSON.stringify(profile));
   // Don't re-sync to vault entities — interview facts are summary-level,
