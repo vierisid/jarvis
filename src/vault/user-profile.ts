@@ -1,6 +1,6 @@
 import { captureProfileSources } from './memory-use-context';
 import { predicateKey, valueKey } from './fact-policy';
-import { FactSuppressedError, profileSourceForgotten, profileSourceRef } from './memory-suppression';
+import { FactSuppressedError, profileSourceForgotten, profileSourceSuperseded, profileSourceRef } from './memory-suppression';
 import { deleteSetting, getSetting, setSetting } from './settings.ts';
 import { createEntity, updateEntity } from './entities.ts';
 import { createFact, findFacts, type Fact } from './facts.ts';
@@ -42,13 +42,14 @@ export function getUserProfile(): UserProfileRecord | null {
   }
 }
 
-// Preserve editable source settings, but never re-inject a forgotten source field into model context.
+// Preserve editable settings, but withhold unchanged source fields whose facts
+// were forgotten or superseded (including corrected aliases in free text).
 export function getUserProfileForPrompt(): UserProfileRecord | null {
   const profile = getUserProfile(); if (!profile) return null;
   const answers = { ...profile.answers };
   for (const question of USER_PROFILE_QUESTIONS) {
     const answer = answers[question.id];
-    if (answer && profileSourceForgotten(getDb(), question.id, answer)) delete answers[question.id];
+    if (answer && (profileSourceForgotten(getDb(), question.id, answer) || profileSourceSuperseded(getDb(), question.id, answer))) delete answers[question.id];
   }
   captureProfileSources(answers);
   return { ...profile, answers };

@@ -61,6 +61,13 @@ export function profileSourceForgotten(db: Database, field: string, answer: stri
   return ['answer', 'derived'].some(kind => db.query('SELECT 1 FROM memory_forget_suppressions WHERE source_key = ? LIMIT 1')
     .get(automaticSourceKey(db, { source: 'user_profile', source_ref: profileSourceRef(db, kind, field), quote: answer })));
 }
+/** A paragraph may contain a corrected derived alias. Keep the editable source,
+ * but withhold its unchanged revision instead of reasserting it in new prompts. */
+export function profileSourceSuperseded(db: Database, field: string, answer: string): boolean {
+  return ['answer', 'derived'].some(kind => db.query(`SELECT 1 FROM fact_evidence e
+    JOIN facts f ON f.id = e.fact_id WHERE e.source = 'user_profile' AND e.source_ref = ?
+      AND e.quote = ? AND f.status = 'superseded' LIMIT 1`).get(profileSourceRef(db, kind, field), answer));
+}
 export function assertNoForgottenMemory(db: Database, ids: readonly string[]): void {
   for (const id of ids) if (db.query('SELECT 1 FROM memory_forget_receipts WHERE fact_id = ?').get(id)) {
     throw new Error('Memory was forgotten before provider handoff; refresh the context');
