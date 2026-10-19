@@ -121,3 +121,15 @@ test('retry fixtures preserve draft identity while replacing every old job refer
   expect(build.status.jobId).toBe(RETRY.jobId); expect(result.jobId).toBe(RETRY.jobId);
   expect(original.jobId).toBe('old');
 });
+
+test('the fixture build discovers the real views and U10 host and bundles them', async () => {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
+  const child = Bun.spawnSync(['bun', resolve(import.meta.dir, 'serve.ts'), '--build'], { env, stdout: 'pipe', stderr: 'pipe' });
+  expect(child.exitCode, child.stderr.toString()).toBe(0);
+  const { output, inventory } = JSON.parse(child.stdout.toString().trim().split('\n').pop()!);
+  try {
+    const expected = await discover(resolve(import.meta.dir, '../../../..'));
+    expect(inventory).toEqual(expected);
+    expect(JSON.parse(await readFile(resolve(output, 'candidate.json'), 'utf8')).inventory).toEqual(expected);
+  } finally { await rm(output, { recursive: true, force: true }); }
+}, 60_000);

@@ -49,3 +49,35 @@ test.skipIf(!existsSync(activationEntry))('missing-detail coverage remains disti
   expect(html).toContain('<input');
   expect(html).not.toContain('Choose connection');
 });
+
+const viewEntry = (name: string) => resolve(import.meta.dir, `../views/${name}/index.tsx`);
+test('every layout fixture renders its actual view when the view is present', async () => {
+  for (const view of VIEWS) {
+    if (!existsSync(viewEntry(view.name))) continue;
+    const View = (await import(viewEntry(view.name)))[view.export];
+    for (const c of requiredCases().filter(c => c.view === view.name && c.kind === 'layout' && c.width === 1440)) {
+      const text = renderToStaticMarkup(<View {...fixtureProps(c, () => {})} />).replace(/<[^>]+>/g, ' ').trim();
+      expect(text.length, c.id).toBeGreaterThan(20);
+    }
+  }
+});
+
+test('named fixture states reach the view state they claim', async () => {
+  const render = async (view: string, state: string) => {
+    const spec = VIEWS.find(v => v.name === view)!;
+    if (!existsSync(viewEntry(view))) return null;
+    const View = (await import(viewEntry(view)))[spec.export];
+    const c = requiredCases().find(c => c.view === view && c.state === state && c.kind === 'layout')!;
+    return renderToStaticMarkup(<View {...fixtureProps(c, () => {})} />).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  };
+  const expectations: [string, string, string | RegExp][] = [
+    ['build', 'saved', 'Your draft is saved.'], ['build', 'failed', 'The build needs another try.'],
+    ['build', 'disconnected', 'Reconnecting to your build.'], ['build', 'cancelled', 'The build was cancelled.'],
+    ['interview', 'skipped', 'Interview skipped.'], ['interview', 'unknown-facts', 'Saved context unconfirmed'],
+    ['result', 'ready', /Draft . Not enabled/], ['result', 'deleted', 'This saved draft is unavailable'],
+  ];
+  for (const [view, state, expected] of expectations) {
+    const text = await render(view, state);
+    if (text !== null) expect(text).toMatch(expected);
+  }
+});

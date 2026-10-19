@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { catalogSource, discover, hostCatalogSource } from './discovery';
@@ -22,5 +22,9 @@ if (!process.argv.includes('--build')) {
     const file = resolve(output, '.' + (name === '/' ? '/index.html' : name));
     if (!file.startsWith(output + '/') || !await Bun.file(file).exists()) return new Response('Not found', { status: 404 });
     return new Response(Bun.file(file), { headers: { 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'none'; object-src 'none'; base-uri 'none'" } });
-  } }); console.log(`ON-U-11 fixture: ${server.url}`);
+  } });
+  // Serve mode owns its build folder: remove it on exit. `--build` keeps it for the runner.
+  const stop = async () => { server.stop(true); await rm(output, { recursive: true, force: true }); process.exit(0); };
+  process.on('SIGINT', stop); process.on('SIGTERM', stop);
+  console.log(`ON-U-11 fixture: ${server.url}`);
 }

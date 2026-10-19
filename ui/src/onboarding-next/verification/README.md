@@ -18,7 +18,8 @@ bun ui/src/onboarding-next/verification/serve.ts
 ```
 
 Open http://127.0.0.1:4431/. `ON_U_11_PORT` overrides the port. Build output lives in
-a unique temporary directory, printed with the exact revision/tree, dirty state
+a unique temporary directory (removed when the server exits; `--build` keeps it),
+printed with the exact revision/tree, dirty state
 and discovered inventory. Restart the server and reload after source changes.
 A dirty checkout is useful for development but cannot produce release evidence.
 The loopback server allows GET/HEAD only, has no API and denies fetch/socket
