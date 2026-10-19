@@ -6,12 +6,12 @@ import { BriefButton } from "./Buttons";
 import { BRIEF_MOTION, useBriefMotion, useBriefReducedMotion } from "../../motion";
 
 /** Default: menus open below and end-align, tooltips prefer above. `top-start` sits above and
- * start-aligned; `right`/`right-end` sit beside a rail target. */
-export type BriefFloatingPlacement = "top-start" | "right-end" | "right";
+ * start-aligned, `bottom-start` below and start-aligned; `right`/`right-end` sit beside a rail target. */
+export type BriefFloatingPlacement = "top-start" | "bottom-start" | "right-end" | "right";
 
 /** Portals escape clipping; native popovers also escape other stacking contexts.
  * The portal explicitly follows the invoking Brief root's chosen appearance. */
-function FloatingSurface({ anchor, kind, children, onReady, placement, className, ...props }:
+export function FloatingSurface({ anchor, kind, children, onReady, placement, className, ...props }:
   HTMLAttributes<HTMLDivElement> & { anchor: RefObject<HTMLElement | null>; kind: "menu" | "tooltip";
     placement?: BriefFloatingPlacement;
     children: ReactNode; onReady?: (element: HTMLDivElement) => void }) {
@@ -39,7 +39,7 @@ function FloatingSurface({ anchor, kind, children, onReady, placement, className
       const preferAbove = kind === "tooltip";
       const top = preferAbove && above >= padding ? above
         : below + box.height <= window.innerHeight - padding ? below : Math.max(padding, above);
-      const desiredLeft = placement === "top-start" ? rect.left
+      const desiredLeft = (placement === "top-start" || placement === "bottom-start") ? rect.left
         : placement === "right" ? rect.right : placement === "right-end" ? rect.right + 24 : rect.right - box.width;
       const desiredTop = placement === "top-start" ? above
         : placement === "right-end" ? rect.bottom - box.height
@@ -52,6 +52,10 @@ function FloatingSurface({ anchor, kind, children, onReady, placement, className
     place();
     const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(place);
     resize?.observe(element); resize?.observe(target);
+    const composer = target.closest(".brief-composer-surface");
+    if (composer) resize?.observe(composer);
+    const workspace = target.closest(".brief-workspace-content");
+    if (composer && workspace) resize?.observe(workspace);
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
     onReady?.(element);

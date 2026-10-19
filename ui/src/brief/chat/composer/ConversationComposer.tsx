@@ -15,6 +15,11 @@ interface Props {
   reducedMotion?: boolean;
   /** D-14 supplies its 44px attachment entry; no upload or menu is invented here. */
   attachmentControl?: React.ReactNode;
+  /** Optional workflow ingredients, distinct from conversation attachments. */
+  ingredients?: React.ReactNode;
+  /** Shared writing controls can also prepare a workflow without a chat turn. */
+  sendingLabel?: string;
+  suggestionsLabel?: string;
 }
 export function ConversationComposer(props: Props) {
   const availability = composerAvailability(props.mode, props.binding);
@@ -25,7 +30,7 @@ export function ConversationComposer(props: Props) {
   return <ScopedComposer key={JSON.stringify([props.binding!.scopeId, props.binding!.conversationId])} {...props} binding={props.binding!} />;
 }
 
-function ScopedComposer({ binding, suggestions = [], label = "Message Jarvis", placeholder = "Ask Jarvis…", reducedMotion, attachmentControl }: Props & { binding: ComposerBinding }) {
+function ScopedComposer({ binding, suggestions = [], label = "Message Jarvis", placeholder = "Ask Jarvis…", reducedMotion, attachmentControl, ingredients, sendingLabel = "Sending…", suggestionsLabel = "Message suggestions" }: Props & { binding: ComposerBinding }) {
   const id = useId(), input = useRef<HTMLTextAreaElement>(null);
   const composing = useRef(false), compositionEnded = useRef(-Infinity);
   const lock = useRef(false), mounted = useRef(true);
@@ -33,15 +38,21 @@ function ScopedComposer({ binding, suggestions = [], label = "Message Jarvis", p
   const [pending, setPending] = useState<"send" | "cancel" | null>(null), [error, setError] = useState<string | null>(null);
   const [stopIntent, setStopIntent] = useState<{ turnKey: string; ownerError: string | null } | null>(null);
   const [inputHeight, setInputHeight] = useState(44);
+  const chips = useRef<HTMLDivElement>(null);
+  const [chipHeight, setChipHeight] = useState(0);
   const reduced = useBriefReducedMotion(reducedMotion);
-  const surface = useBriefMotion<HTMLDivElement>({ height: inputHeight + 12 }, { kind: "selection", active: true, reduced });
+  const surface = useBriefMotion<HTMLDivElement>({ height: inputHeight + chipHeight + 12 }, { kind: "selection", active: true, reduced });
   const invalid = draftError(binding.draft, binding.maxBytes);
   const working = !!binding.turn;
   const turnKey = binding.turn ? JSON.stringify([binding.turn.conversationId, binding.turn.turnId, binding.turn.requestId]) : null;
   const stopping = !!stopIntent && stopIntent.turnKey === turnKey && binding.connected && (!binding.error || stopIntent.ownerError === binding.error);
-  const disabled = !binding.connected || binding.metadataPending || !!pending || (!working && (!binding.draft.trim() || !!invalid));
+  // Mirrors client.send: text or attachments, and every attachment ready.
+  const files = binding.attachments ?? { count: 0, ready: true };
+  const notReady = !working && files.count > 0 && !files.ready;
+  const disabled = !binding.connected || binding.metadataPending || !!pending || (!working && ((!binding.draft.trim() && !files.count) || !!invalid || notReady));
   const status = error || invalid || (!binding.connected ? "Reconnecting… Your draft is kept." : stopping ? "Stopping response…"
-    : pending === "send" || binding.pendingAcceptance ? "Sending…" : binding.error);
+    : pending === "send" || binding.pendingAcceptance ? sendingLabel : binding.error
+    ?? (notReady ? "Attachments must finish before sending." : null));
 
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useLayoutEffect(() => {
@@ -79,6 +90,16 @@ function ScopedComposer({ binding, suggestions = [], label = "Message Jarvis", p
     return () => observer?.disconnect();
   }, [binding.draft]);
 
+  useLayoutEffect(() => {
+    const node = chips.current;
+    if (!node) { setChipHeight(0); return; }
+    const measure = () => setChipHeight(node.getBoundingClientRect().height);
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(node);
+    return () => observer?.disconnect();
+  }, [!!ingredients]);
+
   function edit(text: string) {
     try { binding.actions.setDraft(text); setError(null); }
     catch { setError("Your draft could not be saved. Try again."); }
@@ -113,11 +134,11 @@ function ScopedComposer({ binding, suggestions = [], label = "Message Jarvis", p
   }
   return <div className="brief-composer" data-composer-mode="ready" data-reduced-motion={reduced} data-conversation-id={binding.conversationId}>
     <div className="brief-composer-status" id={`${id}-status`} role="status">{status || ""}</div>
-    {!!suggestions.length && <div className="brief-composer-suggestions" aria-label="Message suggestions">
+    {!!suggestions.length && <div className="brief-composer-suggestions" aria-label={suggestionsLabel}>
       {suggestions.map(suggestion => <button type="button" key={suggestion.id} aria-disabled={binding.metadataPending}
         onPointerDown={event => event.preventDefault()} onClick={() => suggest(suggestion.text)}>{suggestion.label}</button>)}
     </div>}
-    <div ref={surface} className="brief-composer-surface" data-invalid={!!invalid}>
+    <div ref={surface} className="brief-composer-surface" data-invalid={!!invalid} style={{"--brief-input-height":`${inputHeight}px`} as React.CSSProperties}>
       <div className="brief-composer-attachment">{attachmentControl ?? <BriefTooltip label="Attachments unavailable">
         <button type="button" aria-label="Add attachment" aria-disabled="true"><Plus size={18} aria-hidden="true" /></button>
       </BriefTooltip>}</div>
@@ -129,6 +150,7 @@ function ScopedComposer({ binding, suggestions = [], label = "Message Jarvis", p
           if (event.key !== "Enter" || event.shiftKey || event.altKey || composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || performance.now() - compositionEnded.current < 32) return;
           event.preventDefault(); if (!event.repeat) void act("send");
         }} />
+      {ingredients && <div className="brief-composer-ingredient-reveal"><div ref={chips} className="brief-composer-ingredients">{ingredients}</div></div>}
       <div className="brief-composer-send-target"><SendPebble disabled={disabled} stopping={stopping} working={working}
         reducedMotion={reduced} onClick={() => void act(working ? "cancel" : "send")} /></div>
     </div>

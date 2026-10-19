@@ -28,6 +28,8 @@
 
 import { DEFAULT_IDS, getWorkflowDb } from '../db';
 import { getRunRecovery, listRunRecoveries, decideRunRecovery, RecoveryError } from '../runtime/recovery';
+import { runFailure } from '../runtime/run-failure';
+import { dismissFailures, listOpenFailures } from '../runtime/open-failures';
 import type { AuthorityEngine } from '../../authority/engine';
 import {
   createFlow,
@@ -2148,9 +2150,21 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             offset,
           };
           if (status) opts.status = status;
-          const items = listRuns(opts);
+          const items = listRuns(opts).map(run => ({ ...run, failure: runFailure(run) }));
           return ok({ items, nextOffset: items.length === limit ? offset + limit : null });
         }),
+    },
+
+    // Q-19: what Today's "Waiting on you" shows, and dismissing it.
+    "/api/failures/open": {
+      GET: req => trapErrors(() => ok(listOpenFailures(Date.now(), callerProject(req)))),
+    },
+    "/api/failures/dismiss": {
+      POST: req => trapErrors(async () => {
+        const read = await readWriteBody(req, 16384);
+        if ('error' in read) return read.error;
+        return ok({ dismissed: dismissFailures(read.body.keys, Date.now(), callerProject(req)) });
+      }),
     },
 
     "/api/workflow-recovery": {
@@ -2189,7 +2203,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
           const run = scopedRun(req, runId);
           // The delivery that started it (Q-06): which trigger, when it was due, how late.
-          return run ? ok({ ...run, fire: fireForRun(runId), recovery: getRunRecovery(runId) }) : err("run not found", 404);
+          return run ? ok({ ...run, fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(run) }) : err("run not found", 404);
         }),
     },
 

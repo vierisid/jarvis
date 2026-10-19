@@ -665,7 +665,8 @@ export type ApprovalBroadcaster = {
 };
 
 export type ChannelSender = {
-  broadcastToAll(text: string, options?: SendOptions): Promise<void>;
+  /** `delivery.approvalCard`: the one send path allowed a retry after a timeout or drop (owner decision, Q-19). */
+  broadcastToAll(text: string, options?: SendOptions, delivery?: { approvalCard?: boolean }): Promise<void>;
 };
 
 export class ApprovalDelivery {
@@ -692,7 +693,7 @@ export class ApprovalDelivery {
     if (this.channelSender) {
       try {
         const card = approvalChannelCard(request);
-        await this.channelSender.broadcastToAll(card.text, { literal: true });
+        await this.channelSender.broadcastToAll(card.text, { literal: true }, { approvalCard: true });
       } catch (err) {
         console.error('[ApprovalDelivery] Failed to send to external channels:', err);
       }

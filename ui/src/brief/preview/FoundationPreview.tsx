@@ -11,7 +11,21 @@ import { NavigationSpecimen } from "../shell/navigation/NavigationSpecimen";
 import { PebbleSpecimen } from "../shell/pebble-layout/PebbleSpecimen";
 import { TodaySpecimen } from "../today/preview/TodaySpecimen";
 import { ChatTabsSpecimen } from "../chat/tab-strip/preview/ChatTabsSpecimen";
+import { AttachmentSpecimen } from "../chat/attachment-fan/preview/AttachmentSpecimen";
 import { ComposerSpecimen } from "../chat/composer/preview/ComposerSpecimen";
+import { MessageSpecimen } from "../chat/message/preview/MessageSpecimen";
+import { WorkflowCreationSpecimen } from "../workflows/create/preview/WorkflowCreationSpecimen";
+import { OpportunitiesSpecimen } from "../opportunities/OpportunitiesSpecimen";
+import { DecisionsSpecimen } from "../decisions/DecisionsSpecimen";
+import { MemoryDetailSpecimen } from "../memory/detail/MemoryDetailSpecimen";
+import { ConnectionsSpecimen } from "../connections/ConnectionsSpecimen";
+import { MemorySpecimen } from "../memory/stream/MemorySpecimen";
+import { GoalsSpecimen } from "../goals/GoalsSpecimen";
+
+import { WorkflowContextSpecimen } from "../workflows/context/WorkflowContextSpecimen";
+import { WorkflowManagementSpecimen } from "../workflows/manage-list/WorkflowManagementSpecimen";
+import { WorkflowRunsSpecimen } from "../workflows/runs/WorkflowRunsSpecimen";
+import { WorkflowCanvasSpecimen } from "../workflows/canvas/WorkflowCanvasSpecimen";
 
 interface PreviewModel { note: string }
 const PreviewBody = bindBriefView<PreviewModel>(() => ({ ...unavailableView<PreviewModel>("No live provider is connected in this preview."), source: "fixture" }),
@@ -36,6 +50,20 @@ const PreviewBody = bindBriefView<PreviewModel>(() => ({ ...unavailableView<Prev
 /** Explicit fixture-only URL. Never used as the fallback for real business data. */
 export function FoundationPreview() {
   const specimen = new URLSearchParams(window.location.search).get("specimen");
+  if (specimen === "workflow-context") return <WorkflowContextSpecimen />;
+  if (specimen === "workflow-manage") return <WorkflowManagementSpecimen />;
+  if (specimen === "opportunities") return <OpportunitiesSpecimen />;
+  if (specimen === "connections") return <ConnectionsSpecimen />;
+  if (specimen === "memory-detail") return <MemoryDetailSpecimen />;
+  if (specimen === "memory") return <MemorySpecimen />;
+  if (specimen === "goals") return <GoalsSpecimen />;
+  if (specimen === "decisions") return <DecisionsSpecimen />;
+  if (specimen === "workflow-runs") return <WorkflowRunsSpecimen />;
+  if (specimen === "workflow-canvas") return <WorkflowCanvasSpecimen />;
+  if (specimen === "ingredient-picker") return <WorkflowCreationSpecimen ingredients />;
+  if (specimen === "workflow-create") return <WorkflowCreationSpecimen />;
+  if (specimen === "messages") return <MessageSpecimen />;
+  if (specimen === "attachments") return <AttachmentSpecimen />;
   if (specimen === "composer") return <ComposerSpecimen />;
   if (specimen === "chat-tabs") return <ChatTabsSpecimen />;
   if (specimen === "today") return <TodaySpecimen />;

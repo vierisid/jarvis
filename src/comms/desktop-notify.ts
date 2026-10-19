@@ -73,27 +73,48 @@ export function sendDesktopNotification(
   }
 }
 
+/**
+ * What became of a desktop notification (Q-19): `shown` when the native sender
+ * exited cleanly, `not_shown` when there is no sender or it failed, `unknown`
+ * when it ran past the wait and was stopped, by which time the toast may
+ * already be on screen (a cold PowerShell launch under WSL2 can take that long).
+ */
+export type DesktopReceipt = 'shown' | 'not_shown' | 'unknown';
+
+export async function sendDesktopNotificationReceipt(
+  title: string, body: string,
+  options?: { urgency?: 'low' | 'normal' | 'critical'; expireMs?: number },
+): Promise<DesktopReceipt> {
+  const m = detectMethod();
+  if (!m) return 'not_shown';
+  try {
+    const child = m === 'notify-send' ? sendViaNotifySend(title, body, options) : sendViaPowerShell(title, body);
+    return await senderReceipt(child.exited, () => child.kill());
+  } catch { return 'not_shown'; }
+}
+
+/** A native sender's receipt: its exit, or `unknown` once it runs past the wait and is stopped. */
+export async function senderReceipt(exited: Promise<number>, kill: () => void, waitMs = 5000): Promise<DesktopReceipt> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      exited.then((code): DesktopReceipt => code === 0 ? 'shown' : 'not_shown'),
+      new Promise<DesktopReceipt>(resolve => {
+        timeout = setTimeout(() => {
+          try { kill(); } catch { /* already exited */ }
+          resolve('unknown');
+        }, waitMs);
+      }),
+    ]);
+  } finally { clearTimeout(timeout); }
+}
+
 /** Wait for the native sender to report acceptance; spawning alone is not delivery. */
 export async function sendDesktopNotificationWithReceipt(
   title: string, body: string,
   options?: { urgency?: 'low' | 'normal' | 'critical'; expireMs?: number },
 ): Promise<boolean> {
-  const m = detectMethod();
-  if (!m) return false;
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const child = m === 'notify-send' ? sendViaNotifySend(title, body, options) : sendViaPowerShell(title, body);
-    return await Promise.race([
-      child.exited.then(code => code === 0),
-      new Promise<false>(resolve => {
-        timeout = setTimeout(() => {
-          try { child.kill(); } catch { /* already exited */ }
-          resolve(false);
-        }, 5000);
-      }),
-    ]);
-  } catch { return false; }
-  finally { clearTimeout(timeout); }
+  return (await sendDesktopNotificationReceipt(title, body, options)) === 'shown';
 }
 
 function sendViaNotifySend(

@@ -9,7 +9,7 @@
 .brief-root .brief-composer-surface { position:relative; height:56px; min-height:56px; border:1px solid var(--brief-field-edge); border-radius:14px 0 14px 14px; background:var(--brief-card); box-sizing:border-box; }
 .brief-root .brief-composer-surface:focus-within { outline:2px solid var(--brief-focus); outline-offset:-2px; }
 .brief-root .brief-composer-surface[data-invalid="true"] { border-color:var(--brief-error-text); }
-.brief-root .brief-composer-surface textarea { position:absolute; left:47px; bottom:5px; width:calc(100% - 101px); height:calc(100% - 10px); min-height:0; max-height:92px; box-sizing:border-box; padding:10px 1px; margin:0; border:0; outline:none; resize:none; overflow-y:auto; overflow-x:hidden; scrollbar-width:thin; background:transparent; color:var(--brief-ink); font:400 14px/24px var(--brief-sans); overflow-wrap:anywhere; }
+.brief-root .brief-composer-surface textarea { position:absolute; left:47px; top:5px; width:calc(100% - 101px); height:min(var(--brief-input-height, 44px), calc(100% - 10px)); min-height:0; max-height:92px; box-sizing:border-box; padding:10px 1px; margin:0; border:0; outline:none; resize:none; overflow-y:auto; overflow-x:hidden; scrollbar-width:thin; background:transparent; color:var(--brief-ink); font:400 14px/24px var(--brief-sans); overflow-wrap:anywhere; }
 .brief-root .brief-composer-surface textarea::placeholder { color:var(--brief-secondary); opacity:1; }
 .brief-root .brief-composer-attachment { position:absolute; left:5px; bottom:5px; width:44px; height:44px; }
 .brief-root .brief-composer-attachment button { width:44px; height:44px; display:grid; place-items:center; padding:0; border:0; border-radius:50%; color:var(--brief-secondary); background:transparent; }
@@ -25,3 +25,8 @@
 .brief-root .brief-composer-send-mark .brief-brand img { width:136.31px; height:38.04px; max-width:none; }
 .brief-root .brief-composer [aria-disabled="true"] { cursor:default; }
 .brief-root .brief-composer-unavailable { flex:none; margin-top:auto; min-height:56px; display:flex; align-items:center; color:var(--brief-secondary); font:400 14px/20px var(--brief-sans); }
+
+/* Reveal only the space the animated surface has made below the intact prompt.
+   Measure the intrinsic inner slot, never the clipped reveal, to avoid feedback loops. */
+.brief-root .brief-composer-ingredient-reveal { position:absolute; left:47px; right:54px; top:calc(5px + var(--brief-input-height, 44px)); bottom:5px; min-height:0; overflow:hidden; }
+.brief-root .brief-composer-ingredients { padding:0 0 4px; max-height:112px; overflow-y:auto; scrollbar-width:thin; }

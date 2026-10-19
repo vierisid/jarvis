@@ -3,7 +3,7 @@ export interface ComposerTurn { conversationId: string; turnId: string; requestI
 export interface ComposerOwner {
   status: { mode: "disabled" | "loading" | "scoped" | "legacy" | "unavailable"; connected: boolean; pending: number; pendingSends: readonly ComposerTurn[] };
   state: { workspaceId: string | null; activeId: string | null; order: readonly string[]; conversations: Readonly<Record<string, {
-    draft: string; error: string | null; turns: Readonly<Record<string, ComposerTurn & { state: string }>>;
+    draft: string; error: string | null; attachments?: readonly { state?: string }[]; turns: Readonly<Record<string, ComposerTurn & { state: string }>>;
   }>> };
   client: { store: { setDraft(id: string, text: string): void; setError(id: string, error: string | null): void }; send(id: string, text: string): unknown; cancel(ref: ComposerTurn): unknown };
 }
@@ -19,6 +19,8 @@ export interface ComposerBinding {
   pendingAcceptance: boolean;
   error: string | null;
   maxBytes?: number;
+  /** F-05 draft attachments of this conversation. A send may carry them without text. */
+  attachments?: { count: number; ready: boolean };
   actions: { setDraft(text: string): void; send(text: string): unknown; cancel(): unknown };
 }
 export interface ComposerSuggestion { id: string; label: string; text: string }
@@ -29,6 +31,7 @@ export function bindConversationComposer(owner: ComposerOwner, source: ComposerB
   const chat = id && owner.state.order.includes(id) ? owner.state.conversations[id] : undefined;
   const pending = owner.status.pendingSends.find(turn => turn.conversationId === id);
   const turn = Object.values(chat?.turns ?? {}).find(turn => turn.conversationId === id && (turn.state === "queued" || turn.state === "running")) ?? pending ?? null;
+  const files = chat?.attachments ?? [];
   const available = () => {
     if (owner.status.mode !== "scoped" || !owner.state.workspaceId || !id || !chat) throw Error("Conversation unavailable");
     return id;
@@ -36,6 +39,7 @@ export function bindConversationComposer(owner: ComposerOwner, source: ComposerB
   return { source, scopeId: owner.state.workspaceId, conversationId: chat ? id : null, mode: owner.status.mode,
     connected: owner.status.connected, metadataPending: owner.status.pending > 0, draft: chat?.draft ?? "",
     turn, pendingAcceptance: !!pending, error: chat?.error ?? null, maxBytes: 65_536,
+    attachments: { count: files.length, ready: files.every(file => file.state === "ready") },
     actions: {
       setDraft: text => owner.client.store.setDraft(available(), text),
       send: text => owner.client.send(available(), text),

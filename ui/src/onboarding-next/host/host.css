@@ -1,0 +1,6 @@
+.on-host { min-height: 100dvh; color: var(--v2-text, #20201e); background: var(--v2-bg, #f6f5f0); }
+.on-host__loading, .on-host__recovery { padding: clamp(24px, 6vw, 80px); font-family: 'Familjen Grotesk', sans-serif; }
+.on-host__recovery { max-width: 680px; margin-inline: auto; min-height: 60dvh; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; gap: 20px; }
+.on-host__recovery h1, .on-host__recovery p { margin: 0; }
+.on-host__recovery button { font: inherit; color: inherit; background: transparent; border: 1px solid currentColor; padding: 12px 20px; border-radius: 16px 16px 16px 0; cursor: pointer; }
+.on-host__recovery button:focus-visible { outline: 2px solid #547ad5; outline-offset: 4px; }

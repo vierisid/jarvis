@@ -87,7 +87,7 @@ function fixture(governed: string[] = []) {
     approvalManager: approvals, onWorkflowApproval: (request) => { delivered.push(request.id); },
     channelService: { getChannelStatus: () => ({}), getBroadcastRecipient: () => null,
       sendWorkflowNotification: async () => {}, tryBroadcastToChannels: async () => ({ delivered: [], failed: [] }) } as never,
-    wsService: { broadcastNotificationToDashboard: () => {} } as never,
+    wsService: { broadcastNotificationToDashboard: () => 1 } as never,
   };
   const backends = buildSandboxServiceBackends(options);
   const context = { runId: run.id, projectId: DEFAULT_IDS.project, stepName: 'action', executionPath: [] };

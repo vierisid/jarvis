@@ -514,7 +514,7 @@ describe('Authority predictions match the effect boundary', () => {
           approvalManager: new ApprovalManager(), onWorkflowApproval: () => {},
           channelService: { getChannelStatus: () => ({}), getBroadcastRecipient: () => 'owner',
             sendWorkflowNotification: async () => {}, tryBroadcastToChannels: async () => ({ delivered: ['dashboard'], failed: [] }) } as any,
-          wsService: { broadcastNotificationToDashboard: () => {} } as any });
+          wsService: { broadcastNotificationToDashboard: () => 1 } as any });
         let actual: string;
         try {
           const reply = await route.call(backends, { runId: run.id, projectId: DEFAULT_IDS.project, stepName: 'action', executionPath: [] });

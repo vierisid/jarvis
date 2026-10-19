@@ -17,7 +17,7 @@ const suggestions = [
 ];
 
 /** UI-only owner with explicit acknowledgments. Production consumes F-04 instead. */
-export function ComposerSpecimen() {
+export function ComposerSpecimen({ attachmentEntry }: { attachmentEntry?: (context: { conversationId: string | null; connected: boolean; reducedMotion: boolean }) => React.ReactNode } = {}) {
   const [chats, setChats] = useState(seed), [order, setOrder] = useState(["general", "investor"]);
   const [activeId, setActive] = useState<string | null>("general"), [pendingSends, setPendingSends] = useState<ComposerTurn[]>([]);
   const [connected, setConnected] = useState(true), [failure, setFailure] = useState(false), [hold, setHold] = useState(false), [failStop, setFailStop] = useState(false);
@@ -83,7 +83,7 @@ export function ComposerSpecimen() {
   };
   const composer = bindConversationComposer(owner, "fixture");
   const current = activeId ? chats[activeId] : null;
-  return <TodaySpecimen reviewTitle="D-13 · Compact writing and send pebble" reviewTools={<>
+  return <TodaySpecimen reviewTitle={attachmentEntry ? "D-14 · Reversible attachment fan" : "D-13 · Compact writing and send pebble"} reviewTools={<>
     <label>Chat mode <select aria-label="Chat mode" value={mode} onChange={event => setMode(event.target.value as typeof mode)}>{["scoped", "loading", "legacy", "unavailable", "disabled"].map(value => <option key={value}>{value}</option>)}</select></label>
     <label><input type="checkbox" checked={connected} onChange={event => setConnected(event.target.checked)} /> Connected</label>
     <label><input type="checkbox" checked={failure} onChange={event => setFailure(event.target.checked)} /> Fail send</label>
@@ -99,6 +99,7 @@ export function ComposerSpecimen() {
       {current?.answer ? <p className="d13-example-answer">{current.answer}</p> : composer.turn ? <p className="d13-example-progress">Preparing your response…</p>
         : <h2 className="brief-type-section-heading">What are we moving forward?</h2>}
     </section>
-    <ConversationComposer mode="preview" binding={composer} suggestions={suggestions} reducedMotion={reduced} />
+    <ConversationComposer mode="preview" binding={composer} suggestions={suggestions} reducedMotion={reduced}
+      attachmentControl={attachmentEntry?.({ conversationId: activeId, connected, reducedMotion: reduced })} />
   </>} />;
 }

@@ -29,6 +29,7 @@ export function createSettingsJourneyPersistence(deps: {
         const current: unknown = row === null ? null : JSON.parse(row.value);
         if (row !== null && current === null) throw new Error('Invalid journey record');
         return operation({
+          resource: db,
           current,
           readLegacy: () => deps.readLegacy(scope),
           write(record) {

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type { PermissionsSidecarHost, PermissionsUnavailable } from '../../daemon/system-permissions.ts';
 import { createDaemonPermissions } from './daemon-adapter.ts';
 import { createSetupProvider } from './provider.ts';
+import { SidecarRPCError } from '../../sidecar/rpc.ts';
 
 const owner = { actorId: 'fixture-owner', projectId: 'fixture-project' };
 const screen = { action: 'screen_observation' };
@@ -84,7 +85,8 @@ describe('native access remains explicit and separate from setup', () => {
   });
   test('old, detached and malformed sidecar replies reuse existing fail-closed checks', async () => {
     const f = fixture();
-    f.sidecars.dispatchRPC = async () => { throw new Error('METHOD_NOT_FOUND'); };
+    // The sidecar's typed error, as the manager rejects it (Q-19 reads the code, not the wording).
+    f.sidecars.dispatchRPC = async () => { throw new SidecarRPCError('METHOD_NOT_FOUND', 'unknown method system.permissions'); };
     expect(await f.provider.checkAction(true, screen)).toMatchObject({ reason: 'unsupported', ready: false });
     f.sidecars.dispatchRPC = async () => 'detached';
     expect(await f.provider.checkAction(true, screen)).toMatchObject({ reason: 'unreachable', ready: false });

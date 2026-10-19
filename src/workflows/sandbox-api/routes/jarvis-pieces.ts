@@ -59,10 +59,12 @@ export function createJarvisPieceAuthorizeRoute(
       return err("inputDigest must be a SHA-256 hex digest", 400);
     }
     if (raw.credentialDigest !== undefined && (typeof raw.credentialDigest !== 'string' || !/^[0-9a-f]{64}$/.test(raw.credentialDigest))) return err('Invalid credential digest', 400);
+    if (raw.documentProtocol !== undefined && raw.documentProtocol !== 1) return err('Unsupported document protocol', 400);
     const reply = await cancellableWorkflowService(deps.pieceAuthorize)(
       { piece: raw.piece, action: raw.action, input: (raw.input as Record<string, unknown>) ?? {},
         ...(typeof raw.inputDigest === "string" ? { inputDigest: raw.inputDigest } : {}),
-        ...(typeof raw.credentialDigest === 'string' ? { credentialDigest: raw.credentialDigest } : {}) },
+        ...(typeof raw.credentialDigest === 'string' ? { credentialDigest: raw.credentialDigest } : {}),
+        ...(raw.documentProtocol === 1 ? { documentProtocol: 1 as const } : {}) },
       workflowEffectContext(ctx),
     );
     return json(reply);
