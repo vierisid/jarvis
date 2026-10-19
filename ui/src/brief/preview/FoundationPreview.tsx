@@ -30,6 +30,7 @@ import { WorkflowContextSpecimen } from "../workflows/context/WorkflowContextSpe
 import { WorkflowManagementSpecimen } from "../workflows/manage-list/WorkflowManagementSpecimen";
 import { WorkflowRunsSpecimen } from "../workflows/runs/WorkflowRunsSpecimen";
 import { WorkflowCanvasSpecimen } from "../workflows/canvas/WorkflowCanvasSpecimen";
+import { CraftTrace } from "../verification/CraftTrace";
 
 interface PreviewModel { note: string }
 const PreviewBody = bindBriefView<PreviewModel>(() => ({ ...unavailableView<PreviewModel>("No live provider is connected in this preview."), source: "fixture" }),
@@ -53,6 +54,11 @@ const PreviewBody = bindBriefView<PreviewModel>(() => ({ ...unavailableView<Prev
 
 /** Explicit fixture-only URL. Never used as the fallback for real business data. */
 export function FoundationPreview() {
+  return new URLSearchParams(window.location.search).get("craft") === "1"
+    ? <CraftTrace><Specimen /></CraftTrace> : <Specimen />;
+}
+
+function Specimen() {
   const specimen = new URLSearchParams(window.location.search).get("specimen");
   if (specimen === "workflow-context") return <WorkflowContextSpecimen />;
   if (specimen === "workflow-manage") return <WorkflowManagementSpecimen />;

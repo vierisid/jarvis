@@ -829,3 +829,18 @@ actions only change local fixture state.
   grace, past due, canceling, incomplete, restricted, blocked, no plan, self-hosted, loading,
   missing, degraded, old response, mixed currency, multiple prices, undated charge, long history).
   It sends no request; actions record the URL locally.
+
+## Craft verification
+
+- `verification/CraftTrace.tsx` mounts only in the fixture preview and only with `craft=1`
+  (`?brief=preview&specimen=<id>&craft=1#/_brief_preview`). It records bounded rAF intervals, click
+  and keydown timestamps (never input text), long tasks and running animations, and writes a trace
+  into a DOM output when "Capture craft trace" is pressed. It sends nothing. Live rooms and normal
+  previews mount no recorder.
+- `scripts/brief-craft/` holds the D-32 case matrix (`matrix.mjs`), the browser runner
+  (`browser.mjs`), the fail-closed report assessment (`report.mjs`, `verify.mjs`) and a loopback
+  read-only preview server (`serve.ts`). Missing rooms, states and manual checks stay in the
+  denominator as blocked cases. Fixture results never make a release ready. See
+  `scripts/brief-craft/README.md` for the runbook.
+- `verification/*.test.ts` are unit tests of the matrix, assessment and DOM observations; they run
+  in the normal suite without a browser.
