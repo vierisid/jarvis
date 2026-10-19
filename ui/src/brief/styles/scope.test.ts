@@ -31,6 +31,7 @@ const SHEETS = [
   "../connections/connections.css",
   "../authority/authority.css",
   "../account/profile/profile.css",
+  "../account/settings/settings.css",
 ];
 
 function selectors(css: string): string[] {

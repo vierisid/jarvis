@@ -19,6 +19,7 @@ import { OpportunitiesSpecimen } from "../opportunities/OpportunitiesSpecimen";
 import { DecisionsSpecimen } from "../decisions/DecisionsSpecimen";
 import { MemoryDetailSpecimen } from "../memory/detail/MemoryDetailSpecimen";
 import { AuthoritySpecimen } from "../authority/AuthoritySpecimen";
+import { SettingsSpecimen } from "../account/settings/SettingsSpecimen";
 import { ProfileSpecimen } from "../account/profile/ProfileSpecimen";
 import { ConnectionsSpecimen } from "../connections/ConnectionsSpecimen";
 import { MemorySpecimen } from "../memory/stream/MemorySpecimen";
@@ -55,6 +56,7 @@ export function FoundationPreview() {
   if (specimen === "workflow-context") return <WorkflowContextSpecimen />;
   if (specimen === "workflow-manage") return <WorkflowManagementSpecimen />;
   if (specimen === "opportunities") return <OpportunitiesSpecimen />;
+  if (specimen === "settings") return <SettingsSpecimen />;
   if (specimen === "profile") return <ProfileSpecimen />;
   if (specimen === "authority") return <AuthoritySpecimen />;
   if (specimen === "connections") return <ConnectionsSpecimen />;

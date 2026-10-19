@@ -781,3 +781,30 @@ actions only change local fixture state.
 - Opt-in `profileRegistration(useBinding)`, not in the production registry.
 - `?brief=preview&specimen=profile#/_brief_preview` opens it over in-memory fixtures (ready, empty,
   read-only, save-failure, lost-response, conflict, unavailable, unsupported, error).
+
+## Settings and Appearance
+
+- `account/settings/` is the D-30 Settings room: Appearance, Conversation (voice), Check-ins and
+  Workspace controls. Appearance is the existing `useTheme()` owner (`ui/src/v2/shell/useTheme.ts`,
+  `jarvis-theme` in localStorage, `data-theme` on `<html>`); every mounted selector and the v2
+  top-bar toggle follow the root attribute, and a change in another tab is picked up from its
+  `storage` event by re-reading the stored value.
+- Voice saves only one of the listed canonical choices, revision-bound, and reports the saved value
+  separately from live application (applied, restart required, failed, unconfirmed). A lost or
+  failed save keeps the selection; Retry re-reads first and reports a conflict instead of
+  overwriting a change made elsewhere. Realtime voice, Authority, Connected workspace and Advanced
+  settings only navigate through host callbacks. Check-in frequency and active hours are shown as
+  unavailable. Hosted installs never expose provider setup.
+- It reads and writes only through `SettingsPort`. F-23 (#945, `/api/brief/profile-settings` and
+  `/api/brief/profile-settings/voice`) is not on main, so there is no live port yet: the room runs
+  over in-memory fixtures only, and the live room needs a port, the `profileSettings` and
+  `navigationCompatibility` capabilities and all four destination callbacks (`settingsAvailable`).
+  The original HTTP adapter is at 93a04bcf (`ui/src/brief/account/settings/adapter.ts`); restore it
+  when F-23 lands.
+- Replay the tutorial asks first, rechecks eligibility before it runs, and delegates only the
+  existing `tutorial` reset scope (`replayExistingTutorial` -> `POST /api/onboarding/reset`). An
+  unconfirmed result is not retried automatically.
+- Opt-in `settingsRegistration(binding)`, not in the production registry.
+- `?brief=preview&specimen=settings#/_brief_preview` opens it over in-memory fixtures (local,
+  hosted, read-only, voice-unavailable, save-failure, lost-response, conflict, restart-required,
+  apply-failure, unavailable, unsupported, error).
