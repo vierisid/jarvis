@@ -795,12 +795,12 @@ actions only change local fixture state.
   overwriting a change made elsewhere. Realtime voice, Authority, Connected workspace and Advanced
   settings only navigate through host callbacks. Check-in frequency and active hours are shown as
   unavailable. Hosted installs never expose provider setup.
-- It reads and writes only through `SettingsPort`. F-23 (#945, `/api/brief/profile-settings` and
-  `/api/brief/profile-settings/voice`) is not on main, so there is no live port yet: the room runs
+- It reads and writes only through `SettingsPort`. F-23 (#945) serves `/api/brief/profile-settings`
+  and `/api/brief/profile-settings/voice` (default off), but no live port adapts them yet: the room runs
   over in-memory fixtures only, and the live room needs a port, the `profileSettings` and
   `navigationCompatibility` capabilities and all four destination callbacks (`settingsAvailable`).
-  The original HTTP adapter is at 93a04bcf (`ui/src/brief/account/settings/adapter.ts`); restore it
-  when F-23 lands.
+  The original HTTP adapter is at 93a04bcf (`ui/src/brief/account/settings/adapter.ts`); restoring it
+  is follow-up work now that F-23 is on main.
 - Replay the tutorial asks first, rechecks eligibility before it runs, and delegates only the
   existing `tutorial` reset scope (`replayExistingTutorial` -> `POST /api/onboarding/reset`). An
   unconfirmed result is not retried automatically.
