@@ -1,4 +1,3 @@
-import { CONNECTION_SETUP_EVENT, takePieceSetup, type PieceSetupRequest } from './connection-setup-request';
 /**
  * Connections panel: list `app_connection` rows + registered Jarvis sources,
  * add / delete connections. Renders inline below the workflows list when the
@@ -9,6 +8,7 @@ import { CONNECTION_SETUP_EVENT, takePieceSetup, type PieceSetupRequest } from '
  */
 
 import React, { useEffect, useState } from "react";
+import { CONNECTION_SETUP_EVENT, takePieceSetup, type PieceSetupRequest } from './connection-setup-request';
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { Button, Chip, Icon } from "../../ui";
 import { RefreshCw, Trash2, Plus, KeyRound } from "lucide-react";

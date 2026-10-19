@@ -1,4 +1,3 @@
-import { CONNECTION_SETUP_EVENT, hasPieceSetup } from './connection-setup-request';
 /**
  * Workflows room (Phase 4 stage 1).
  *
@@ -14,6 +13,7 @@ import { CONNECTION_SETUP_EVENT, hasPieceSetup } from './connection-setup-reques
  *     deferred until pieces have stable output shapes.
  */
 
+import { CONNECTION_SETUP_EVENT, hasPieceSetup } from './connection-setup-request';
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import {
@@ -85,12 +85,13 @@ type RoomTab = "flows" | "connections" | "library" | "routines";
 
 export function WorkflowsRoomBody(): React.ReactElement {
   const data = useWorkflowsData();
+  const [actionMessage, setActionMessage] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
+  const [tab, setTab] = useState<RoomTab>(() => hasPieceSetup() ? "connections" : "flows");
+  // A piece setup handoff opens Connections; a ?workflow= deep link must not pull it back to the editor.
   useEffect(() => {
     const flowId = new URLSearchParams(window.location.search).get('workflow');
     if (flowId && tab === "flows") data.setEditingFlowId(flowId);
   }, [data.setEditingFlowId]);
-  const [actionMessage, setActionMessage] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
-  const [tab, setTab] = useState<RoomTab>(() => hasPieceSetup() ? "connections" : "flows");
   // Q-19: Today's "Open" on a failed run lands on that run.
   const [focusRunId, setFocusRunId] = useState<string | null>(null);
   useRunFocus(useCallback(({ flowId, runId }: RunFocus) => {

@@ -28,23 +28,23 @@ The deployed brain is single tenant. Instance sources and the legacy setup surfa
 
 | Target | Current setup owner |
 | --- | --- |
-| Google OAuth / manual client configuration | Settings → Integrations; existing `/api/auth/google/init` and callback own state, one-time consume and PKCE. |
+| Google OAuth / manual client configuration | Settings -> Integrations; existing `/api/auth/google/init` and callback own state, one-time consume and PKCE. |
 | Managed Google browser | Same Integrations surface delegates to the configured hosting control plane. Missing/unsafe link means no setup action. This PR does not certify a live hosted OAuth grant. |
-| Telegram / Discord | Settings → Channels; existing configuration writer and hot reload. |
-| Device enrollment / hosted sign-in | Settings → Sidecar; same hosted-install predicate as the existing enrollment refusal. Hosted sign-in retains its nonce-based enrollment outside browser JavaScript. |
-| Piece credentials | Workflows → Connections; prefilled package, exact version and auth type, or rotation for the exact selected account. Even OAuth-shaped piece values use the existing **manual** form. No universal OAuth claim. |
+| Telegram / Discord | Settings -> Channels; existing configuration writer and hot reload. |
+| Device enrollment / hosted sign-in | Settings -> Sidecar; same hosted-install predicate as the existing enrollment refusal. Hosted sign-in retains its nonce-based enrollment outside browser JavaScript. |
+| Piece credentials | Workflows -> Connections; prefilled package, exact version and auth type, or rotation for the exact selected account. Even OAuth-shaped piece values use the existing **manual** form. No universal OAuth claim. |
 
 `returned(nonce)` accepts only the matching unexpired local attempt. This nonce coordinates the UI; it is **not** OAuth authority and must never replace the existing provider state/PKCE or enrollment nonce. A callback only marks return. `verify(nonce, selectedRowId?)` rereads the canonical source, checks kind/service/exact account, then reports `connected`, `configured`, or `not_connected`. For a new account the user/host must select its actual returned canonical row ID; seeing some pre-existing account for the service cannot automatically complete the attempt. The result is an observation, not proof that this attempt caused the connection. Cancellation, expiry, source errors and deleted rows never synthesize an account. Pending reads cannot overwrite cancellation or a newer attempt.
 
 D-27 owns the visible Connected room, its return button/browser history binding, focus restoration and presentation of partial source failures. F-25 owns wider compatibility navigation. Neither card is implemented or activated here. The existing V2 setup controls remain the credential and enrollment owners; no secrets pass through the new headless adapter.
 
-## Preserved safety fixes from main
+## Connection route safety
 
-F-21's stack predates the connection isolation fixes in main. This card carries only the connection-route/repository parts of #691 (`581c80f9`) and #728 (`2c70cf0f`): server-owned project scoping, updates by ID, recheck after body reads, no update-to-upsert fallback, and no secret resurrection after deletion. Full flow-route scoping and other main changes must still be preserved when integrating the complete stack; this is not a stack-wide rebase.
+The manual credential form writes through main's connection routes, which already resolve `:id` and list/create inside the server-owned caller project (#692), update by id without an upsert fallback and recheck the row after the body read (#650). This card does not change those routes or the repository.
 
 ## Verification and rollback
 
-Run the commands and fixture tests in `docs/brief-delivery/F-22.json`. The route test serves the real authenticated API on a temporary Unix socket and drives the headless consumer with its response. The legacy component test opens the actual credential form without sending any write. Tests use fake providers and temporary tokens/databases; no real service account, OAuth grant, paid model, email or enrollment is created.
+Focused tests: `bun test src/brief/connected-workspace.test.ts src/daemon/api-brief-connections.test.ts src/comms/channels/authentication-state.test.ts ui/src/brief/connections`. The route test serves the real authenticated API on a temporary Unix socket and drives the headless consumer with its response. The legacy component test opens the actual credential form without sending any write. Tests use fake providers and temporary tokens/databases; no real service account, OAuth grant, paid model, email or enrollment is created.
 
 You can see this contract at `/api/brief/connections` with the flag enabled in a fixture daemon, then inspect separate source IDs, statuses and supported setup actions. The full Connected room awaits D-27 integration; the production dashboard has not been switched on.
 
