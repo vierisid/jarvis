@@ -34,7 +34,8 @@ export function briefHash(route: BriefRoute): string {
 
 export function legacyHref(href: string, hash = "#/"): string {
   const url = new URL(href, "http://localhost");
-  url.searchParams.delete("brief");
+  // Explicit opt-out also overrides an eventual default-on release.
+  url.searchParams.set("brief", "0");
   url.hash = hash;
   return url.toString();
 }

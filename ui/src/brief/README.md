@@ -5,20 +5,34 @@ The Brief dashboard is opt-in. A normal URL still renders `AppShellV2`; `ui/src/
 
 ## Entry points
 
-- `?brief=1#/brief/<room>` opens a registered Brief room behind the existing onboarding gate. Rooms
-  without a `Body` show an explicit "not available in Brief yet" notice with a link back to the
-  current dashboard.
-- `?brief=preview#/_brief_preview` opens an isolated development preview. It starts no brain API,
-  chat WebSocket or voice connection and bypasses the onboarding gate.
+The release switch (`entry/release.ts`, `entry/release-route.ts`) is off: `BRIEF_RELEASE` has
+`rollout: "off"` and `ui/src/main.tsx` supplies no release runtime or live composition, so every
+ordinary URL renders `AppShellV2`. `scripts/brief-release/README.md` holds the integration contract,
+the release checklist and the rollback table.
+
+- Internal review needs the existing developer setting: run
+  `localStorage.setItem("jarvis-devtools", "1")` in the dashboard's origin, then reload. The setting is
+  read once per page load. With it:
+  - `?brief=1#/brief/<room>` opens a registered Brief room behind the existing onboarding gate. Rooms
+    without a `Body` show an explicit "not available in Brief yet" notice with a link back to the
+    current dashboard.
+  - `?brief=preview#/_brief_preview` opens an isolated development preview. It starts no brain API,
+    chat WebSocket or voice connection and bypasses the onboarding gate.
+- Without the developer setting, `?brief=1#/brief/<room>` and `?brief=preview` stay on `AppShellV2`.
+  A `#/brief/<room>` bookmark is rewritten before `AppShellV2` mounts: the hash becomes the matching
+  legacy room, `brief=0` is set and `briefReturn` keeps the Brief route.
 - Anything else, including every existing room, panel, task, answer and developer hash, and any URL
   with an `onboarding` query, stays with `AppShellV2`.
 
-Rollback: remove the `brief` query parameter.
+Rollback: `?brief=0` on a fresh load always opens `AppShellV2`. The "Return to current dashboard"
+links set `brief=0` rather than removing the parameter, so they also override a future default-on
+release.
 
 ## Layout
 
 - `entry/route.ts` owns the exact URL gates and the allow-listed source-ID selection. Unknown
-  destinations fall back to the current app.
+  destinations fall back to the current app. `entry/release-route.ts` applies the release switch on
+  top of it, and `entry/release.ts` assesses the release record.
 - `entry/DashboardEntry.tsx` chooses exactly one root. No thread, voice or socket provider belongs here.
 - `contracts.ts` holds presentation ports only, not domain schemas. Keep source IDs, `unavailable`
   and `empty` distinct; never infer successful data from a missing provider.
@@ -170,7 +184,8 @@ mounted live yet; a composition root wires it after the rooms it targets are rea
   accepts only `ROOM_TABS.settings` names on the Settings hashes, and the room keeps the query in step
   with the selected tab. `briefMaintenance=1` adds the support links to General.
 - An unknown `?brief=1#/brief/<room>` shows a notice with those links and a link to the current
-  dashboard, instead of silently opening the current dashboard.
+  dashboard, instead of silently opening the current dashboard With the release switch off this applies
+  to the developer-setting path; an ordinary document stays on `AppShellV2` (see Entry points).
 
 `?brief=preview&specimen=navigation-compatibility#/_brief_preview` opens these parts over fixture
 notifications. It starts no API read, socket, voice or Settings write.
@@ -868,6 +883,7 @@ actions only change local fixture state.
   (`browser.mjs`), the fail-closed report assessment (`report.mjs`, `verify.mjs`) and a loopback
   read-only preview server (`serve.ts`). Missing rooms, states and manual checks stay in the
   denominator as blocked cases. Fixture results never make a release ready. See
-  `scripts/brief-craft/README.md` for the runbook.
+  `scripts/brief-craft/README.md` for the runbook. The preview origin needs `jarvis-devtools=1` in
+  localStorage before the runner starts (see Entry points).
 - `verification/*.test.ts` are unit tests of the matrix, assessment and DOM observations; they run
   in the normal suite without a browser.

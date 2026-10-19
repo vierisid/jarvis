@@ -1,18 +1,22 @@
-import React, { useMemo, useState, useSyncExternalStore } from "react";
+import React, { lazy, Suspense, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 import { OnboardingGate } from "../../v2/onboarding/OnboardingGate";
 import { useTheme } from "../../v2/shell/useTheme";
 import { BriefButton } from "../components/controls";
 import type { BriefGate, BriefRoomRegistry, BriefRoute, BriefShellPort } from "../contracts";
 import { BRIEF_ROOMS } from "../rooms/registry";
-import { FoundationPreview } from "../preview/FoundationPreview";
-import { briefHash, legacyHref, resolveBriefEntry } from "./route";
+import { briefHash, legacyHref } from "./route";
+import { isDevToolsEnabled } from "../../v2/devtools";
+import { assessBriefRelease, BRIEF_RELEASE, hasReleaseComposition, type BriefReleaseConfig, type BriefReleaseRuntime } from "./release";
+import { resolveReleaseEntry, rollbackHref } from "./release-route";
 import { NavigationShell } from "../shell/navigation/NavigationShell";
 import { canMountNavigation, type BriefNavigationBinding } from "../shell/navigation/model";
 import "./foundation.css";
 import "../styles/index.css";
 import type { BriefConversationBinding } from "../shell/pebble-layout/PebbleLayout";
 import { DESTINATIONS, targetHref } from "../navigation/destinations";
+
+const FoundationPreview = lazy(() => import("../preview/FoundationPreview").then(module => ({ default: module.FoundationPreview })));
 
 function subscribeLocation(changed: () => void) {
   window.addEventListener("hashchange", changed);
@@ -35,14 +39,27 @@ export interface DashboardEntryProps {
   navigation?: BriefNavigationBinding;
   /** One conversation supplied by the existing owner; no second live thread. */
   conversation?: BriefConversationBinding;
+  /** Reviewed configuration and authenticated runtime, supplied before mounting.
+   * No runtime binding/default manifest means production stays on v2. */
+  release?: BriefReleaseConfig;
+  runtime?: BriefReleaseRuntime;
 }
 
 /** Exactly one root is mounted. No live thread, socket, voice or domain writer here. */
-export function DashboardEntry({ legacy, rooms = BRIEF_ROOMS, Gate = OnboardingGate, navigation, conversation }: DashboardEntryProps) {
+export function DashboardEntry({ legacy, rooms = BRIEF_ROOMS, Gate = OnboardingGate, navigation, conversation, release = BRIEF_RELEASE, runtime }: DashboardEntryProps) {
   const href = useSyncExternalStore(subscribeLocation, locationSnapshot, serverSnapshot);
-  const entry = resolveBriefEntry(href);
-  if (entry.kind === "legacy") return <>{legacy}</>;
-  if (entry.kind === "preview") return <FoundationPreview />;
+  // Rollout is a document-start decision. Polling/readiness changes must never
+  // unmount a room with unsaved work. Room action guards still react to outages.
+  // A configured rollback applies on reload, through normal beforeunload guards.
+  const [rollout] = useState(() => hasReleaseComposition(rooms, navigation, conversation)
+    ? assessBriefRelease(release, runtime).rollout : "off");
+  const [devtools] = useState(isDevToolsEnabled);
+  const entry = resolveReleaseEntry(href, rollout, devtools);
+  if (entry.kind === "legacy") {
+    const rollback = rollbackHref(href);
+    return rollback ? <RestoreLegacy href={rollback} /> : <>{legacy}</>;
+  }
+  if (entry.kind === "preview") return <Suspense fallback={null}><FoundationPreview /></Suspense>;
   if (entry.kind === "moved") return <div className="jarvis-v2-root"><Gate>
     <main className="brief-foundation"><section className="brief-foundation__notice">
       <h1>This view is not part of Brief</h1>
@@ -56,6 +73,15 @@ export function DashboardEntry({ legacy, rooms = BRIEF_ROOMS, Gate = OnboardingG
       <Gate><BriefHost route={entry.route} rooms={rooms} navigation={navigation} conversation={conversation} /></Gate>
     </div>
   );
+}
+
+/** Normalize the hash before the legacy router mounts and takes its snapshot. */
+function RestoreLegacy({ href }: { href: string }) {
+  useLayoutEffect(() => {
+    window.history.replaceState(window.history.state, "", href);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }, [href]);
+  return null;
 }
 
 function BriefHost({ route, rooms, navigation, conversation }: { route: BriefRoute; rooms: BriefRoomRegistry; navigation?: BriefNavigationBinding; conversation?: BriefConversationBinding }) {

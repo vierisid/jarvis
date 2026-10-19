@@ -154,7 +154,13 @@ async function prepare(tab, baseUrl, room, test) {
   url.hash = "/_brief_preview";
   if (await tab.url() === url.href) await tab.reload();
   else await tab.goto(url.href);
-  await tab.playwright.locator(".brief-navigation").waitFor({ state: "visible" });
+  try {
+    await tab.playwright.locator(".brief-navigation").waitFor({ state: "visible" });
+  } catch (cause) {
+    // Since D33 the fixture preview mounts only with the developer setting; without it the page
+    // stays on the current dashboard and every case would time out with no hint.
+    throw Error(`Fixture preview did not mount on ${url.origin}. Set localStorage "jarvis-devtools" to "1" on that origin, reload, then rerun.`, { cause });
+  }
   for (const step of room.states[test.state]) {
     const control = tab.playwright.getByLabel(step.label, { exact: true });
     if (step.kind === "check") await control.setChecked(true);
