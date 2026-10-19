@@ -733,3 +733,28 @@ actions only change local fixture state.
   `connections` and `navigationCompatibility` capabilities.
 - `?brief=preview&specimen=connections#/_brief_preview` opens it over in-memory fixtures (ready,
   empty, stale, unavailable, read-only, expired, lost-start, lost-cancel, long, configured, partial).
+
+## Authority
+
+- `authority/` is the D-28 Authority room: the default authority level (1-10 slider, continuous drag,
+  integer on release, keyboard steps) and the thirteen governed-category switches. It adds no policy:
+  it edits only `default_level` and `governed_categories` through main's existing
+  `POST /api/authority/config` (Q-08 validation), and sends only the fields that changed, so
+  overrides, context rules, learning and background restrictions are never written from here.
+- Edits stay a draft until an explicit Save. Before posting, the adapter re-reads
+  `/api/authority/status` and reports a conflict if an edited field changed elsewhere (the endpoint has
+  no revision, so this narrows but does not close the race). Saved is shown only after `ok: true` and a
+  fresh readback that matches. A failed or lost response is never replayed automatically; after a
+  reload the person can choose Retry save or discard it.
+- The emergency banner comes from `EmergencyController` (`emergency_state` on the status route), not
+  the engine's startup config copy. Pause holds tool actions; Kill refuses tools and stops agent runs.
+  Pause, Kill, Resume, Reset and per-action overrides are not here: they stay in the existing controls,
+  reached through the F-25 `advanced-authority` and `emergency-controls` destinations.
+- A stored level of 0 (accepted by main's route) displays; the slider itself sets 1-10.
+- `createAuthorityPort(scopeId, host)` needs an authenticated, scope-bound `AuthorityHost`; there is no
+  live host on main. Opt-in `authorityRegistration(useBinding)`, not in the production registry. In
+  live mode `authorityAvailable` requires the `navigationCompatibility` capability and both F-25
+  destinations.
+- `?brief=preview&specimen=authority#/_brief_preview` opens it over in-memory fixtures (ready,
+  read-only, save-failure, persistence-failure, lost-response, conflict, paused, killed, unavailable,
+  error, unsupported).
