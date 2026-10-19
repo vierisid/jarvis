@@ -147,7 +147,8 @@ test('removal stops queued and waiting runs like turning off (Q-06); Undo does n
   const { flow, version } = fixture(), run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
   enqueue({ jobType: RUN_FLOW, payload: { runId: run.id }, flowId: flow.id, flowVersionId: version.id, flowRunId: run.id });
   const waiting = createFlowRun({ flowId: flow.id, flowVersionId: version.id }); updateRun(waiting.id, { status: 'PAUSED' });
-  clock += 1; const r = remove(flow.id); await service.reconcileFlow(flow.id);
+  // Removal stamps disabled_at from the injected clock; keep it at or after the runs' real created time.
+  clock = Math.max(clock + 1, Date.now()); const r = remove(flow.id); await service.reconcileFlow(flow.id);
   expect(getFlowRun(run.id)?.status).toBe('STOPPED'); expect(getFlowRun(waiting.id)?.status).toBe('STOPPED');
   expect(service.read().data.removals[0]?.runs).toEqual([]);
   expect(service.change(r.restore)).toMatchObject({ status: 'accepted', item: { activation: 'DISABLED' } });
