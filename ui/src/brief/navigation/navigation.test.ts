@@ -41,7 +41,8 @@ test("every retained destination has an owner and an exact released room/setting
     expect(resolved.target).toEqual(value.legacy);
     expect(legacyLink(value.legacy.hash)?.target).toEqual({ kind: "legacy", hash: value.legacy.hash });
     const url = targetHref("https://fixture.invalid/dashboard?brief=1&keep=value#/brief/settings", value.legacy);
-    expect(new URL(url).searchParams.get("brief")).toBeNull();
+    // D33: leaving Brief is an explicit opt-out, so a later default-on release cannot reopen it.
+    expect(new URL(url).searchParams.get("brief")).toBe("0");
     expect(new URL(url).searchParams.get("keep")).toBe("value");
     expect(settingsTabFromHref(url)).toBe("settingsTab" in value.legacy ? value.legacy.settingsTab : null);
   }

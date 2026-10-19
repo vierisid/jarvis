@@ -37,11 +37,13 @@ beforeAll(async () => {
 });
 beforeEach(() => {
   history.replaceState(null, "", "http://localhost:4425/?brief=1#/brief/settings");
+  // D33 keeps Brief and fixture previews behind the developer setting while the release is off.
+  localStorage.setItem("jarvis-devtools", "1");
   globalThis.fetch = (() => { throw Error("No network allowed"); }) as unknown as typeof fetch;
   globalThis.WebSocket = class { constructor() { throw Error("No socket allowed"); } } as unknown as typeof WebSocket;
   element = document.createElement("div"); document.body.append(element); root = createRoot(element);
 });
-afterEach(async () => { await React.act(async () => root.unmount()); element.remove(); globalThis.fetch = originalFetch; globalThis.WebSocket = originalSocket; });
+afterEach(async () => { await React.act(async () => root.unmount()); element.remove(); localStorage.removeItem("jarvis-devtools"); globalThis.fetch = originalFetch; globalThis.WebSocket = originalSocket; });
 afterAll(() => GlobalRegistrator.unregister());
 const mount = async (node: React.ReactNode) => { await React.act(async () => root.render(node)); };
 async function click(text: string) {
@@ -136,7 +138,7 @@ test("browser handoff keeps one root and the in-memory room-action owner, and se
   expect(legacyAlive).toBe(0);
   await React.act(async () => { await nav.navigate("devices"); });
   expect(legacyAlive).toBe(1); expect(legacyMounts).toBe(1); expect(tab as string | null).toBe("sidecar");
-  expect(location.hash).toBe("#/_room_settings"); expect(new URL(location.href).searchParams.has("brief")).toBe(false);
+  expect(location.hash).toBe("#/_room_settings"); expect(new URL(location.href).searchParams.get("brief")).toBe("0");
   await React.act(async () => { await nav.intent("agents"); });
   expect(legacyMounts).toBe(1); expect(location.hash).toBe("#/_room_agents");
 });
@@ -160,6 +162,8 @@ test("device handoff selects only the requested device and never calls update/re
 test("F-25 explicit preview mounts no legacy/voice owner and chat closure leaves attention visible", async () => {
   history.replaceState(null, "", "http://localhost:4425/?brief=preview&specimen=navigation-compatibility#/_brief_preview");
   await mount(<Entry legacy={<p>Legacy must not mount</p>} Gate={({ children }) => <>{children}</>} />);
+  // D33 lazy-loads the preview after its developer gate passes.
+  for (let i = 0; i < 100 && !element.textContent; i++) await React.act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
   expect(element.textContent).toContain("Isolated behavior preview"); expect(element.textContent).not.toContain("Legacy must not mount");
   expect(element.textContent).toContain("Conversation: closed"); await click("Inspect a device update");
   expect(element.querySelector("pre")?.textContent).toContain('"settingsTab":"sidecar"');
