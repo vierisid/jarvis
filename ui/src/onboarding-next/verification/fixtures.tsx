@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
-import { PebbleLayout } from '../../brief/shell/pebble-layout/PebbleLayout.tsx';
-import type { BriefShellPort } from '../../brief/contracts.ts';
+import { PebbleLayout } from './catalog';
 import type { Case } from './matrix';
 const noop = () => {};
 export const LONG = 'Review the meeting notes, confirm the recipient and retain this unfinished draft before continuing. '.repeat(12);
 export function Surface({ open, onOpenChange }: { open: boolean; onOpenChange(value: boolean): void }) {
   const [draft, setDraft] = useState('Unsent fixture draft');
-  return <PebbleLayout enabled shell={{ mode: 'preview', chatOpen: open, setChatOpen: onOpenChange } as BriefShellPort}
+  if (!PebbleLayout) return <p>D06 surface unavailable.</p>;
+  return <PebbleLayout enabled shell={{ mode: 'preview', chatOpen: open, setChatOpen: onOpenChange }}
     conversation={{ source: 'fixture', content: <section className="u11-room"><h2>Sample conversation</h2><p>No provider or socket. Nothing is sent.</p><textarea aria-label="Unsent sample draft" data-pebble-focus value={draft} onChange={e => setDraft(e.target.value)} /></section> }}>
-    <section className="u11-room"><h1>Sample room</h1><p>Illustrative background; not a real room.</p><button>Selected item</button></section>
+    <section className="u11-room"><h1>Sample room</h1><p>Illustrative background; D-line room binding remains blocked.</p><button>Selected item</button></section>
   </PebbleLayout>;
 }
 export function resultModel(theme: string) {
@@ -34,7 +34,7 @@ export function fixtureProps(test: Case, update: (patch: any) => void): any {
   if (view === 'interview') return { model: { ...common, sessionId: 'fixture-session', turnId: 'fixture-turn', cursor: 1, phase: ['resumed','long','navigation-pending'].includes(state) ? 'ready' : state === 'streaming' ? 'thinking' : state === 'saving-error' ? 'error' : state === 'unknown-facts' ? 'done' : state,
     resumed: state === 'resumed', messages: [{ id: 'question', role: 'assistant', text: state === 'long' ? LONG : 'What repeated work takes time from your goals?', streaming: state === 'streaming' }], draft: { text: state === 'long' ? LONG : '', clientRequestId: 'fixture-answer' }, confirmedFactIds: state === 'unknown-facts' ? null : ['fixture-fact'], error: message, recovery: { kind: 'session' }, navigation: { revision: 1, kind: state === 'navigation-pending' ? 'pending' : 'ready' } }, onDraftChange: (text: string) => update({ draft: { text, clientRequestId: 'fixture-answer' } }), onSubmit: noop, onRetry: noop, onSkip: noop, onContinue: noop };
   if (view === 'tour') return { model: { ...common, sessionId: 'fixture-tour', stepId: ['moving','error','unavailable'].includes(state) ? 'today' : state, phase: ['moving','error'].includes(state) ? state : 'ready', sidebar, error: message }, onNavigate: noop,
-    renderer: state === 'unavailable' ? undefined : { isolation: 'fixture-only', renderRoom: ({ step }: any) => ({ status: 'ready', content: <section className="u11-room"><h1>{step.room}</h1><p>Illustrative room slot. The tutorial card is real; real room content is not rendered here.</p></section> }) } };
+    renderer: state === 'unavailable' ? undefined : { isolation: 'fixture-only', renderRoom: ({ step }: any) => ({ status: 'ready', content: <section className="u11-room"><h1>{step.room}</h1><p>Illustrative room slot. The tutorial card is real; full D-line room integration is not verified here.</p></section> }) } };
   if (view === 'pebble-tour') return { model: { ...common, sessionId: 'fixture-tour', phase: ['moving','error'].includes(state) ? state : 'ready', sidebar }, onNavigate: noop,
     adapter: { isolation: 'tutorial-sandbox', status: state === 'unavailable' ? 'unsupported' : state === 'error' ? 'error' : 'ready', open: state === 'open', Surface, onOpenChange: (open: boolean) => update({ open }) } };
   if (view === 'activation') return { model: { ...common, journeyId: 'fixture-journey', availability: ['unavailable','unsupported'].includes(state) ? state : 'ready', phase: state === 'missing-connection' ? 'needs_input' : ['long','unavailable','unsupported'].includes(state) ? 'ready' : state,

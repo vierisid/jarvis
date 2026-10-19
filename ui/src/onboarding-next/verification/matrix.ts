@@ -1,4 +1,4 @@
-/** Fixture states the preview can render for each onboarding view, plus the replayable journeys. */
+/** Fixed acceptance denominator: discovery never removes a required case. */
 export const ROOMS = ['today', 'workflows', 'opportunities', 'needs-you', 'goals', 'memory', 'connected-workspace', 'authority', 'profile', 'settings', 'billing', 'pebble'] as const;
 export const VIEWS = [
   { id: 'ON-U-01', name: 'welcome', export: 'WelcomeView', capability: 'welcome-view.v1', requires: ['journey.v1', 'setup.v1'], states: ['ready', 'pending', 'error', 'self', 'unknown', 'long'] },
@@ -12,13 +12,28 @@ export const VIEWS = [
   { id: 'ON-U-09', name: 'result', export: 'ResultView', capability: 'result-view.v1', requires: ['draft-result.v1'], states: ['ready', 'review', 'needs_input', 'pending', 'deleted', 'missing-canvas', 'long'] },
 ] as const;
 export const JOURNEYS = ['welcome-to-result', 'skip-connection-interview', 'failed-build-retry', 'tour-replay'] as const;
-export type ViewName = typeof VIEWS[number]['name'];
-export interface Case { id: string; owner: string; view: ViewName; state: string; theme: 'light' | 'dark'; sidebar: 'expanded' | 'rail'; }
-/** Every view state in both themes; the tour, Pebble tour and result also in the rail sidebar. */
-export function fixtureCases(): Case[] {
+export const GATES = ['ON-U-10', 'ON-B-11', 'ON-B-13', 'D', 'F', 'Q'] as const;
+export const REVIEW_KINDS = ['keyboard', 'zoom-200', 'reduced-motion', 'screen-reader', 'visual-reference', 'native-webview', 'runtime-binding'] as const;
+export interface Case {
+  id: string; owner: string; view: string; state: string;
+  kind: 'layout' | 'journey' | typeof REVIEW_KINDS[number];
+  theme: 'light' | 'dark'; width: number; sidebar: 'expanded' | 'rail';
+}
+export function requiredCases(): Case[] {
   const cases: Case[] = [];
-  for (const view of VIEWS) for (const theme of ['light', 'dark'] as const) for (const state of view.states)
-    for (const sidebar of view.name === 'tour' || view.name === 'pebble-tour' || view.name === 'result' ? ['expanded', 'rail'] as const : ['expanded'] as const)
-      cases.push({ id: [view.name, state, theme, sidebar].join('--'), owner: view.id, view: view.name, state, theme, sidebar });
+  const add = (row: Omit<Case, 'id'>) => cases.push({ ...row, id: [row.kind, row.view, row.state, row.theme, row.width, row.sidebar].join('--') });
+  for (const view of VIEWS) {
+    for (const theme of ['light', 'dark'] as const) for (const width of [390, 768, 1440]) for (const state of view.states) {
+      for (const sidebar of view.name === 'tour' || view.name === 'pebble-tour' || view.name === 'result' ? ['expanded', 'rail'] as const : ['expanded'] as const)
+        add({ owner: view.id, view: view.name, state, kind: 'layout', theme, width, sidebar });
+    }
+    for (const kind of REVIEW_KINDS) for (const theme of ['light', 'dark'] as const)
+      add({ owner: view.id, view: view.name, state: view.states[0], kind, theme, width: 1440, sidebar: 'expanded' });
+    if (view.name === 'activation') for (const theme of ['light', 'dark'] as const)
+      add({ owner: view.id, view: view.name, state: 'missing-connection', kind: 'keyboard', theme, width: 1440, sidebar: 'expanded' });
+  }
+  for (const state of JOURNEYS) for (const theme of ['light', 'dark'] as const) for (const width of [390, 1440])
+    add({ owner: 'ON-U-10', view: 'journey', state, kind: 'journey', theme, width, sidebar: 'expanded' });
   return cases;
 }
+export const FIGMA = { file: 'eNfKeirIKLZLlZEasrurZa', page: '1097:16402', checkpoint: '2410205462365531104', lightToday: '1097:16634', darkToday: '1097:68695' };
