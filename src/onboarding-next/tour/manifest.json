@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "ON-B-06",
+  "kind": "provider",
+  "entry": "./index.ts",
+  "provides": ["tour.v1"],
+  "requires": ["journey.v1"]
+}
