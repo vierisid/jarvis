@@ -44,6 +44,8 @@ import { registerWorkflowComposition } from '../brief/registrations/workflow-com
  * starts health monitoring, and handles graceful shutdown.
  */
 
+import { ProfileSettings } from '../brief/profile-settings';
+import { registerProfileSettings } from '../brief/registrations/profile-settings';
 import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness';
 import { pinUnpinnedEnabledFlows } from '../workflows/db/repos/binding-pins';
 import { mkdirSync, existsSync } from "node:fs";
@@ -4875,6 +4877,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const briefMemoryUsage = getMemoryUsageLedger();
     const briefMemoryForget = new MemoryForget(getDb());
     briefWorkflowRemoval = new WorkflowRemoval(getDb());
+    const briefProfileSettings = new ProfileSettings(jarvisConfig, settingsReload ? () => settingsReload!.applyNow('tts') : undefined);
     const briefWorkflowContext = new WorkflowContext(getDb());
     let connectedPieces: import('../workflows/runtime/piece-catalog').PieceLookup | null = null;
     const briefConnections = new ConnectedWorkspace(getDb(), {
@@ -4920,6 +4923,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     if (process.env.JARVIS_BRIEF_MEMORY_STREAM === '1') briefEnabled.push('memoryStream');
     if (process.env.JARVIS_BRIEF_MEMORY_USAGE === '1') briefEnabled.push('memoryUsage');
     if (process.env.JARVIS_BRIEF_MEMORY_FORGET === '1') briefEnabled.push('memoryForget');
+    if (process.env.JARVIS_BRIEF_PROFILE_SETTINGS === '1') briefEnabled.push('profileSettings');
     if (process.env.JARVIS_BRIEF_CONNECTIONS === '1') briefEnabled.push('connections');
     if (process.env.JARVIS_BRIEF_WORKFLOW_CONTEXT === '1') briefEnabled.push('workflowContext');
     if (process.env.JARVIS_BRIEF_WORKFLOW_REMOVAL === '1') briefEnabled.push('workflowRemoval');
@@ -4957,6 +4961,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ...registerWorkflowRemoval(briefWorkflowRemoval),
       ...registerWorkflowContext(briefWorkflowContext),
       ...registerConnections(briefConnections),
+      ...registerProfileSettings(briefProfileSettings),
       ...registerCompositionIngredients(briefWorkflowComposition),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
@@ -4970,6 +4975,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       briefWorkflowRemoval,
       briefWorkflowContext,
       briefConnections,
+      briefProfileSettings,
       briefDecisionDocuments,
       briefRecommendations,
       briefConversations,

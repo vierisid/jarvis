@@ -7,6 +7,7 @@ import { memoryPageResponse } from '../vault/memory-page';
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { patchUserProfile, readEditableProfile, ProfileEditError } from '../vault/profile-edit';
 import { createOnboardingRoutes } from '../onboarding-next/runtime/routes.ts';
 import type { OnboardingRuntime } from '../onboarding-next/runtime/runtime.ts';
 import { DEBUG_RPC_HEADER, debugRpcGate, debugRpcTokenMatches } from './debug-rpc-gate.ts';
@@ -164,6 +165,7 @@ export type ApiContext = {
   briefMemoryStream?: import('../brief/memory-stream').MemoryStream;
   briefMemoryUsage?: import('../vault/memory-usage').MemoryUsageLedger;
   briefMemoryForget?: import('../brief/memory-forget').MemoryForget;
+  briefProfileSettings?: import('../brief/profile-settings').ProfileSettings;
   briefWorkflowContext?: import('../brief/workflow-context').WorkflowContext;
   briefConnections?: import('../brief/connected-workspace').ConnectedWorkspace;
   briefWorkflowRemoval?: import('../brief/workflow-removal').WorkflowRemoval;
@@ -435,7 +437,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
   return {
     ...createOpportunityRoutes(json),
-    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations, ctx.briefAttachments, ctx.briefWorkflowComposition, ctx.briefPreparedOpportunities, ctx.briefOpportunityActivation, ctx.briefDecisions, ctx.briefRecommendations, ctx.briefDecisionDocuments, ctx.briefGoalMeasurements, ctx.briefOutcomes, ctx.briefMemoryStream, ctx.briefMemoryUsage, ctx.briefMemoryForget, ctx.briefWorkflowRemoval, ctx.briefWorkflowContext, ctx.briefConnections),
+    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations, ctx.briefAttachments, ctx.briefWorkflowComposition, ctx.briefPreparedOpportunities, ctx.briefOpportunityActivation, ctx.briefDecisions, ctx.briefRecommendations, ctx.briefDecisionDocuments, ctx.briefGoalMeasurements, ctx.briefOutcomes, ctx.briefMemoryStream, ctx.briefMemoryUsage, ctx.briefMemoryForget, ctx.briefWorkflowRemoval, ctx.briefWorkflowContext, ctx.briefConnections, ctx.briefProfileSettings),
     // --- Health ---
     '/api/health': {
       GET: () => json(ctx.healthMonitor.getHealth()),
@@ -1115,29 +1117,42 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     // --- User Profile Wizard ---
     '/api/user-profile': {
       GET: () => {
-        const profile = getUserProfile();
-        return json({
-          questions: USER_PROFILE_QUESTIONS,
-          profile,
-          answered_count: countAnsweredUserProfileQuestions(profile),
-          total_questions: USER_PROFILE_QUESTIONS.length,
-          has_profile: hasUserProfile(profile),
-        });
+        let response: Response;
+        try {
+          const { profile, revision } = readEditableProfile();
+          response = json({ revision, questions: USER_PROFILE_QUESTIONS, profile,
+            answered_count: countAnsweredUserProfileQuestions(profile),
+            total_questions: USER_PROFILE_QUESTIONS.length, has_profile: hasUserProfile(profile) });
+        } catch { response = error('Profile unavailable.', 503); }
+        response.headers.set('Cache-Control', 'no-store');
+        return response;
       },
       POST: async (req: Request) => {
         try {
-          const body = await req.json() as { answers?: Record<string, unknown> };
-          const profile = saveUserProfile(body.answers ?? {});
+          const body = await req.json() as { answers?: Record<string, unknown>; revision?: unknown };
+          if (process.env.JARVIS_BRIEF_PROFILE_SETTINGS === '1' && body.revision === undefined) {
+            return error('Reload the profile before saving.', 428);
+          }
+          const answers = body.answers ?? {};
+          // The Settings form resends every answer; an empty form with a current revision is a no-op, not a malformed patch.
+          const emptyForm = body.revision !== undefined && typeof answers === 'object' && !Array.isArray(answers) && Object.keys(answers).length === 0;
+          if (emptyForm && readEditableProfile().revision !== body.revision) throw new ProfileEditError('revision_conflict', 409);
+          const profile = body.revision === undefined ? saveUserProfile(answers)
+            : emptyForm ? getUserProfile() : patchUserProfile(body.revision, answers).profile;
           return json({
             ok: true,
             profile,
+            revision: readEditableProfile().revision,
+            questions: USER_PROFILE_QUESTIONS,
+            has_profile: hasUserProfile(profile),
             answered_count: countAnsweredUserProfileQuestions(profile),
             total_questions: USER_PROFILE_QUESTIONS.length,
             message: 'User profile saved.',
           });
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return error(`Failed to save user profile: ${msg}`);
+          if (err instanceof ProfileEditError) return error(err.code === 'revision_conflict' ? 'Profile changed. Reload before saving; your draft has been kept.'
+            : err.code === 'invalid_patch' ? 'Profile answers are invalid or too long.' : 'Profile unavailable.', err.status);
+          return error('Failed to save user profile.');
         }
       },
     },
@@ -1145,7 +1160,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/user-profile/clear': {
       POST: () => {
         clearUserProfile();
-        return json({ ok: true, message: 'User profile cleared.' });
+        const { profile, revision } = readEditableProfile();
+        return json({ ok: true, message: 'User profile cleared.', profile, revision,
+          questions: USER_PROFILE_QUESTIONS, answered_count: 0,
+          total_questions: USER_PROFILE_QUESTIONS.length, has_profile: false });
       },
     },
 
