@@ -293,6 +293,17 @@ describe("flow-run repo", () => {
     expect(createFlowRun({ flowId: b.id, flowVersionId: bv.id }).projectId).toBe("proj_other_843");
   });
 
+  test("a row written by an AFTER INSERT trigger on flow_run does not fail run creation (F-21)", () => {
+    // Bun's run().changes counts trigger rows; createFlowRun must still accept
+    // exactly one flow_run row and record the inspection lock state beside it.
+    const flow = createFlow();
+    const v = createDraftVersion({ flowId: flow.id, displayName: "x" });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: v.id });
+    const row = getWorkflowDb().query<{ was_locked: number }, [string]>(
+      "SELECT was_locked FROM workflow_run_inspection_versions WHERE run_id = ?").get(run.id);
+    expect(row?.was_locked).toBe(0);
+  });
+
   test("a run of a flow that does not exist is refused and writes nothing (#843)", () => {
     const flow = createFlow();
     const v = createDraftVersion({ flowId: flow.id, displayName: "v1" });
