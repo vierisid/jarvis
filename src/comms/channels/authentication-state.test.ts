@@ -64,3 +64,17 @@ test('actual Discord SDK gateway close/resume handlers override latched manager 
     transport!.emit('resumed', { shardId: 0 }); expect(adapter.authenticationState()).toBe('rejected');
   } finally { Client.prototype.login = login; await adapter.disconnect(); }
 });
+
+test('Telegram poll that disconnect() aborted cannot mark the adapter verified when its body lands later', async () => {
+  const original = globalThis.fetch, adapter = new TelegramAdapter('fixture-token');
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  try {
+    globalThis.fetch = (async () => ({ status: 200, json: async () => { await gate; return { ok: true, result: [] }; } })) as unknown as typeof fetch;
+    const poll = (adapter as any).getUpdates().catch(() => {});
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await adapter.disconnect();
+    release(); await poll; await new Promise(resolve => setTimeout(resolve, 0));
+    expect(adapter.authenticationState()).toBe('unknown');
+  } finally { globalThis.fetch = original; }
+});
