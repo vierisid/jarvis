@@ -17,6 +17,7 @@ import { MessageSpecimen } from "../chat/message/preview/MessageSpecimen";
 import { WorkflowCreationSpecimen } from "../workflows/create/preview/WorkflowCreationSpecimen";
 import { OpportunitiesSpecimen } from "../opportunities/OpportunitiesSpecimen";
 import { DecisionsSpecimen } from "../decisions/DecisionsSpecimen";
+import { MemorySpecimen } from "../memory/stream/MemorySpecimen";
 import { GoalsSpecimen } from "../goals/GoalsSpecimen";
 
 import { WorkflowContextSpecimen } from "../workflows/context/WorkflowContextSpecimen";
@@ -50,6 +51,7 @@ export function FoundationPreview() {
   if (specimen === "workflow-context") return <WorkflowContextSpecimen />;
   if (specimen === "workflow-manage") return <WorkflowManagementSpecimen />;
   if (specimen === "opportunities") return <OpportunitiesSpecimen />;
+  if (specimen === "memory") return <MemorySpecimen />;
   if (specimen === "goals") return <GoalsSpecimen />;
   if (specimen === "decisions") return <DecisionsSpecimen />;
   if (specimen === "workflow-runs") return <WorkflowRunsSpecimen />;
