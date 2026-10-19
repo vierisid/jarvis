@@ -1,2 +1,0 @@
-bun x tsc --noEmit
-Exit 0; no diagnostics.

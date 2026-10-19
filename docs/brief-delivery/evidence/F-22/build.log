@@ -1,2 +1,0 @@
-bun run build:ui
-Build succeeded. Existing Tailwind @theme/@tailwind warnings only.
