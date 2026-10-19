@@ -765,8 +765,8 @@ actions only change local fixture state.
   aliased to an assistant answer. The other five edit F-23 canonical answers (`preferred_name`,
   `company`, `work_role`, `current_projects`, `communication_preferences`), up to 4,000 characters
   each; a blank field clears its answer. Unrelated answers and interview facts are never written.
-- It reads and writes only through `ProfilePort`. F-23 (#945, `/api/brief/profile-settings`) is not
-  on main, so there is no live port yet: the form runs over in-memory fixtures only, and the live
+- It reads and writes only through `ProfilePort`. F-23 (#945) serves `/api/brief/profile-settings`
+  (default off), but no live port adapts it yet: the form runs over in-memory fixtures only, and the live
   room needs both a port and the `profileSettings` capability (`profileAvailable`). It does not
   touch `/api/user-profile`, the onboarding profile writes or the vault's user-profile source.
 - Edits stay a draft until an explicit Save, survive polls, chat/sidebar changes and remounts, and

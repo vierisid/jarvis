@@ -13,6 +13,7 @@ import { mergeUserSettingsIntoConfig, persistUserPatch, saveUserSection, setSect
 import { SettingsReloadCoordinator } from '../daemon/settings-reload';
 import { effectiveTtsForBinding } from '../daemon/usejarvis-ai';
 import { USER_PROFILE_QUESTIONS } from '../user/profile';
+import { recordMemoryHandoff, withMemoryRecall } from '../vault/memory-use-context';
 
 let dir: string, file: string, config: JarvisConfig, service: ProfileSettings, env: Record<string, string | undefined>;
 beforeEach(() => {
@@ -74,6 +75,17 @@ test('unchanged saves and unrelated edits do not resurrect forgotten profile fac
   edit({ interests: 'Space' });
   expect(getUserProfileForPrompt()?.answers.company).toBeUndefined();
   expect(findFacts({ predicate: 'company' })).toHaveLength(0);
+});
+for (const change of ['edit', 'clear', 'blank'] as const) test(`a revisioned ${change} during a prepared turn ${change === 'edit' ? 'passes' : 'is refused as a delete'} (Q-16)`, () => {
+  edit({ preferred_name: 'Alex', company: 'Example' });
+  const handoff = (text: string) => recordMemoryHandoff([{ role: 'system', content: text }]);
+  withMemoryRecall(() => {
+    const prepared = JSON.stringify(getUserProfileForPrompt()!.answers);
+    edit({ company: change === 'edit' ? 'Example Two' : change === 'clear' ? null : '  ' });
+    if (change === 'edit') expect(() => handoff(prepared)).not.toThrow();
+    else expect(() => handoff(prepared)).toThrow('was deleted');
+  });
+  withMemoryRecall(() => handoff(JSON.stringify(getUserProfileForPrompt()?.answers ?? {})));
 });
 test('invalid/oversized fields, corrupt records and failed projections fail without partial writes', () => {
   const revision = service.profile().revision;
