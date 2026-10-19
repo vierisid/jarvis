@@ -8,6 +8,7 @@ import { StyleSpecimen } from "../styles/StyleSpecimen";
 import { ControlSpecimen } from "../components/controls/ControlSpecimen";
 import { MotionSpecimen } from "../motion/MotionSpecimen";
 import { NavigationSpecimen } from "../shell/navigation/NavigationSpecimen";
+import { NavigationCompatibilitySpecimen } from "../navigation/NavigationCompatibilitySpecimen";
 import { PebbleSpecimen } from "../shell/pebble-layout/PebbleSpecimen";
 import { TodaySpecimen } from "../today/preview/TodaySpecimen";
 import { ChatTabsSpecimen } from "../chat/tab-strip/preview/ChatTabsSpecimen";
@@ -81,6 +82,7 @@ function Specimen() {
   if (specimen === "composer") return <ComposerSpecimen />;
   if (specimen === "chat-tabs") return <ChatTabsSpecimen />;
   if (specimen === "today") return <TodaySpecimen />;
+  if (specimen === "navigation-compatibility") return <NavigationCompatibilitySpecimen />;
   return specimen === "pebble" ? <PebbleSpecimen /> : specimen === "navigation" ? <NavigationSpecimen /> : specimen === "motion" ? <MotionSpecimen /> : specimen === "controls" ? <ControlSpecimen /> : specimen === "styles" ? <StyleSpecimen /> : <FoundationControls />;
 }
 
@@ -103,6 +105,7 @@ function FoundationControls() {
       <a className="brief-foundation__return" href="?brief=preview&specimen=controls#/_brief_preview">Try shared controls</a>{" · "}
       <a className="brief-foundation__return" href="?brief=preview&specimen=motion#/_brief_preview">Try motion reference</a>{" · "}
       <a className="brief-foundation__return" href="?brief=preview&specimen=navigation#/_brief_preview">Try navigation shell</a>{" · "}
+      <a className="brief-foundation__return" href="?brief=preview&specimen=navigation-compatibility#/_brief_preview">Try retained navigation</a>{" · "}
       <a className="brief-foundation__return" href="?brief=preview&specimen=pebble#/_brief_preview">Try Pebble workspace</a>{" · "}
       <a className="brief-foundation__return" href="?brief=preview&specimen=today#/_brief_preview">Try Today composition</a>{" · "}
       <a className="brief-foundation__return" href={legacyHref(window.location.href)}>Return to current dashboard</a>

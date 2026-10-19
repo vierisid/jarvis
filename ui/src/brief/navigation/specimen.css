@@ -1,0 +1,21 @@
+.brief-root .brief-navigation-compat-specimen { padding: 32px; max-width: 960px; margin: auto; }
+.brief-root .brief-navigation-compat-specimen h1 { font-size: 30px; margin-bottom: 12px; }
+.brief-root .brief-navigation-compat-specimen h2 { font-size: 20px; margin: 24px 0 12px; }
+.brief-root .brief-navigation-compat-specimen p { margin: 8px 0; }
+.brief-root .brief-navigation-compat-specimen button, .brief-root .brief-navigation-compat-specimen select, .brief-root .brief-navigation-compat-specimen input {
+  border: 1px solid var(--brief-card-edge); border-radius: 6px; padding: 8px 12px;
+  color: inherit; background: var(--brief-card); font: inherit;
+}
+.brief-root .brief-navigation-compat-specimen button { cursor: pointer; }
+.brief-root .brief-navigation-compat-specimen button:focus-visible, .brief-root .brief-navigation-compat-specimen input:focus-visible, .brief-root .brief-navigation-compat-specimen select:focus-visible {
+  outline: 2px solid currentColor; outline-offset: 3px;
+}
+.brief-root .brief-navigation-compat-specimen ul { list-style: none; padding: 0; }
+.brief-root .brief-navigation-compat-specimen li { padding: 12px 0; border-bottom: 1px solid var(--brief-card-edge); }
+.brief-root .brief-navigation-compat-specimen [aria-label="Navigation checks"] { margin: 24px 0; display: flex; flex-wrap: wrap; gap: 12px; }
+.brief-root .brief-navigation-compat-specimen label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.brief-root .brief-navigation-compat-specimen [role="status"], .brief-root .brief-navigation-compat-specimen pre { flex-basis: 100%; white-space: pre-wrap; }
+.brief-root .brief-navigation-compat-specimen [aria-label="Retained controls"] { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; }
+.brief-root .brief-navigation-compat-specimen [aria-label="Retained controls"] button { width: 100%; text-align: left; }
+@media (max-width: 600px) { .brief-root .brief-navigation-compat-specimen { padding: 20px; } }
+.brief-root .brief-navigation-compat-specimen__controls { display: flex; flex-wrap: wrap; gap: 12px; }

@@ -27,6 +27,7 @@ export function SidecarTab({
   onToast: (text: string, tone?: "ok" | "warn") => void;
 }) {
   const { sidecars } = data;
+  const selectedId = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("sidecarId");
   // Which "add a device" section belongs here, and why: sidecar-add-device.ts.
   const mode = addDeviceMode(data.llm);
 
@@ -89,6 +90,7 @@ export function SidecarTab({
 
   return (
     <div>
+      {selectedId && !data.loading && !sidecars.some(sc => sc.id === selectedId) && <p role="status">The selected device is no longer available. Choose a current device below.</p>}
       {/* Add a device. Hosted installs are told how; self-hosted get the form. */}
       {mode === "unknown" ? (
         <section className="v2-set__section">
@@ -187,13 +189,13 @@ export function SidecarTab({
         ) : (
           <ul className="v2-set__sidecar-list" role="list">
             {sidecars.map((sc) => (
-              <li key={sc.id} className="v2-set__sidecar">
+              <li key={sc.id} className="v2-set__sidecar" aria-current={sc.id === selectedId ? "true" : undefined}>
                 <span
                   className={
                     "v2-set__dot " + (sc.connected ? "v2-set__dot--ok" : "")
                   }
                 />
-                <span className="v2-set__sidecar-name">{sc.name}</span>
+                <span className="v2-set__sidecar-name">{sc.name}{sc.id === selectedId ? " · Selected device" : ""}</span>
                 <div className="v2-set__sidecar-meta">
                   {sc.hostname && <span>{sc.hostname}</span>}
                   {sc.os && sc.platform && <span>· {sc.os}/{sc.platform}</span>}

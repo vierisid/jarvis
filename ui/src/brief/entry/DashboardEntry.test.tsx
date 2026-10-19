@@ -175,8 +175,10 @@ test("missing modules give a truthful fallback instead of fabricated empty busin
   expect(host.textContent).toContain("Open current dashboard");
   expect(gates).toBeGreaterThan(0); expect(connections).toBe(0); expect(network).toEqual([]);
   await route("http://localhost:4381/?brief=1#/brief/unknown");
-  expect(host.querySelector("[data-legacy]")).not.toBeNull();
-  expect(connections).toBe(1);
+  expect(host.querySelector("[data-legacy]")).toBeNull();
+  expect(host.textContent).toContain("This view is not part of Brief");
+  expect(host.textContent).toContain("Open advanced settings and support");
+  expect(connections).toBe(0);
 });
 
 test("Pebble review mounts one isolated conversation without live reads or writers", async () => {

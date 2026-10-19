@@ -148,6 +148,33 @@ renders it, so the room's ancestors stay mounted; only the navigation chrome is 
 `?brief=preview&specimen=navigation#/_brief_preview` opens the shell with local fixture data. It
 starts no API read, socket or account action.
 
+## Retained navigation
+
+`navigation/` routes Brief callers to controls that stay in the current dashboard. Nothing here is
+mounted live yet; a composition root wires it after the rooms it targets are ready.
+
+- `NavigationCompatibility` (`controller.ts`) opens a destination only while the F-01
+  `navigationCompatibility` capability is enabled. Its provider is
+  `src/brief/registrations/navigation-compatibility.ts`; registering it does not enable it. Every
+  open waits for the shared dirty-draft guard, then resolves the target, so a cancel, an abort, a
+  lost capability or a newer open never navigates.
+- `destinations.ts` lists every retained destination with its owner and the exact released room or
+  Settings tab. Opening a destination never runs its action. Room commands that carry an action keep
+  their canonical handler.
+- `notifications.ts` and `AttentionRoutes.tsx` route approvals, failures and updates from the existing
+  notification owner's rows, outside the conversation. A row is marked read only after its
+  destination opened, by `source` plus `id`.
+- `devices.ts` hands a device off to Settings > Sidecar with `sidecarId`. It never updates, revokes or
+  enrolls.
+- Retained links use `?briefMaintenance=1&settingsTab=<tab>#/_room_settings`. `settingsTabFromHref`
+  accepts only `ROOM_TABS.settings` names on the Settings hashes, and the room keeps the query in step
+  with the selected tab. `briefMaintenance=1` adds the support links to General.
+- An unknown `?brief=1#/brief/<room>` shows a notice with those links and a link to the current
+  dashboard, instead of silently opening the current dashboard.
+
+`?brief=preview&specimen=navigation-compatibility#/_brief_preview` opens these parts over fixture
+notifications. It starts no API read, socket, voice or Settings write.
+
 ## Pebble workspace
 
 `shell/pebble-layout/PebbleLayout.tsx` wraps the room inside `NavigationShell`. Opening Pebble grows

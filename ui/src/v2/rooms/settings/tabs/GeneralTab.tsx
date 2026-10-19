@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { MaintenanceLinks } from "../../../../brief/navigation/MaintenanceLinks";
 import type { SettingsHook } from "../useSettingsData";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
 import {
@@ -28,6 +29,7 @@ export function GeneralTab({
 
   return (
     <div>
+      {typeof window !== "undefined" && new URLSearchParams(window.location.search).get("briefMaintenance") === "1" && <MaintenanceLinks href={window.location.href} />}
       {/* Service / Restart */}
       <section className="v2-set__section">
         <div className="v2-set__section-head">

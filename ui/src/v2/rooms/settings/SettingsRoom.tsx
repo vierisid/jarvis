@@ -31,7 +31,7 @@ import { SidecarTab } from "./tabs/SidecarTab";
 import { BillingTab } from "./tabs/BillingTab";
 import { useBilling } from "../../billing/useBilling";
 import { billingTabVisible } from "../../billing/billing-view";
-import { SETTINGS_TAB_EVENT, takeRequestedSettingsTab } from "../../shell/settings-tab-request";
+import { SETTINGS_TAB_EVENT, takeRequestedSettingsTab, settingsTabFromHref, clearRequestedSettingsTab } from "../../shell/settings-tab-request";
 import { isRoomTab, ROOM_TABS, type RoomTab } from "../../../../../src/daemon/room-tabs";
 import { withRoomActionDefaults } from "../../../../../src/daemon/room-action-targets";
 import "./SettingsRoom.css";
@@ -66,11 +66,34 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
   useEffect(() => {
     const onRequest = (e: Event) => {
       const t = (e as CustomEvent<SettingsTab>).detail;
-      if (VALID_TABS.has(t)) setTab(t);
+      if (VALID_TABS.has(t)) {
+        // Inline observers must leave it for the destination mount. An expanded
+        // destination has already received it and must not leak it to a later room.
+        if (mode === "expanded") clearRequestedSettingsTab();
+        setTab(t);
+      }
+    };
+    const onLocation = () => {
+      const t = settingsTabFromHref(window.location.href);
+      if (t) setTab(t);
     };
     window.addEventListener(SETTINGS_TAB_EVENT, onRequest);
-    return () => window.removeEventListener(SETTINGS_TAB_EVENT, onRequest);
-  }, []);
+    window.addEventListener("popstate", onLocation);
+    window.addEventListener("hashchange", onLocation);
+    return () => {
+      window.removeEventListener(SETTINGS_TAB_EVENT, onRequest);
+      window.removeEventListener("popstate", onLocation);
+      window.removeEventListener("hashchange", onLocation);
+    };
+  }, [mode]);
+  // A retained-control link names its tab in the query. Keep it in step with
+  // the selected tab, or a later remount or reload jumps back to the old one.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (!settingsTabFromHref(url.href) || url.searchParams.get("settingsTab") === tab) return;
+    url.searchParams.set("settingsTab", tab);
+    window.history.replaceState(window.history.state, "", url);
+  }, [tab]);
   // A self-hosted install has no bill, so it gets no Billing tab. Same shared
   // store as the shell banner, and refreshOnMount: false so opening Settings
   // does not itself trigger a read; see billingTabVisible for why the tab stays
