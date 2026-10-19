@@ -707,3 +707,29 @@ actions only change local fixture state.
   adds to `memoryAvailable` a detail controller bound to the same scope and source.
 - `?brief=preview&specimen=memory-detail#/_brief_preview` opens it over in-memory fixtures (ready,
   long, many, conflict, save-error, lost-save, unavailable, read-only, loading, no-usage).
+
+## Connected workspace
+
+- `connections/` is the D-27 Connected workspace: Devices and Services rows, a searchable "Connect a
+  service" catalog, one setup panel per attempt (start, open settings, check, cancel, expire, start
+  again) and a device panel. It owns no OAuth, callback, token, credential form or device effect:
+  setup always hands off to the existing settings surfaces, and device actions hand off to device
+  settings.
+- `ConnectionsPort` is the only input. There is no live implementation on main: `createF22ConnectionsPort`
+  bridges to F-22's headless setup adapter (#943) through an injected `F22Binding`, and without one it
+  returns `unsupported`. Its real-module tests are skipped unless `D27_F22_SETUP_MODULE` points at
+  F-22's `ui/src/brief/connections/setup.ts`; they run by default once F-22 is on main.
+- Connected comes only from the canonical projection: after a check the controller re-reads and
+  requires the exact account (`connectionKey`) with `authenticated === true` and `availability ===
+  "ready"`. A browser return or launch is never confirmation, and saved credentials show as
+  configured but not verified. With several candidate accounts the person picks the one they set up.
+- Reconnecting or editing a workflow connection, and revoking a device, say that workflows using it
+  pause until enabled again (Q-05 `BINDING_STALE`).
+- `ConnectionsController` owns one authenticated scope; the host calls `retire()` on logout or scope
+  change. Losing access clears rows, attempts and saved scroll positions. Search, scroll and focus
+  survive setup and return. A setup that could not be verified is never retried automatically.
+- Opt-in `connectionsRegistration(useBinding)`, not in the production registry. `connectionsAvailable`
+  requires a controller bound to the same scope and source as the binding and, in live mode, both the
+  `connections` and `navigationCompatibility` capabilities.
+- `?brief=preview&specimen=connections#/_brief_preview` opens it over in-memory fixtures (ready,
+  empty, stale, unavailable, read-only, expired, lost-start, lost-cancel, long, configured, partial).

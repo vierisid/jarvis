@@ -18,6 +18,7 @@ import { WorkflowCreationSpecimen } from "../workflows/create/preview/WorkflowCr
 import { OpportunitiesSpecimen } from "../opportunities/OpportunitiesSpecimen";
 import { DecisionsSpecimen } from "../decisions/DecisionsSpecimen";
 import { MemoryDetailSpecimen } from "../memory/detail/MemoryDetailSpecimen";
+import { ConnectionsSpecimen } from "../connections/ConnectionsSpecimen";
 import { MemorySpecimen } from "../memory/stream/MemorySpecimen";
 import { GoalsSpecimen } from "../goals/GoalsSpecimen";
 
@@ -52,6 +53,7 @@ export function FoundationPreview() {
   if (specimen === "workflow-context") return <WorkflowContextSpecimen />;
   if (specimen === "workflow-manage") return <WorkflowManagementSpecimen />;
   if (specimen === "opportunities") return <OpportunitiesSpecimen />;
+  if (specimen === "connections") return <ConnectionsSpecimen />;
   if (specimen === "memory-detail") return <MemoryDetailSpecimen />;
   if (specimen === "memory") return <MemorySpecimen />;
   if (specimen === "goals") return <GoalsSpecimen />;
