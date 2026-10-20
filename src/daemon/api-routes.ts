@@ -391,6 +391,9 @@ function buildAgentSnapshots(ctx: ApiContext) {
   };
 }
 
+/** Fact sources a client may label a POST /api/vault/facts write with (#1099). */
+const API_FACT_SOURCES: ReadonlySet<string> = new Set(['dashboard', 'user', 'api']);
+
 /**
  * Create all API route handlers.
  */
@@ -541,11 +544,19 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           if (!body.subject_id || !body.predicate || !body.object) {
             return error('subject_id, predicate, and object are required', 400);
           }
+          // Only user-entered labels. Automatic sources (llm_extraction,
+          // goal_completion, user_profile) carry replay and Forget semantics,
+          // and decision sources (user_correction, user_confirmation) are
+          // written only by the confirm/correct routes (#1099).
+          const source = body.source ?? 'dashboard';
+          if (typeof source !== 'string' || !API_FACT_SOURCES.has(source)) {
+            return error(`source must be one of: ${[...API_FACT_SOURCES].join(', ')}`, 400);
+          }
           const subject = getEntity(body.subject_id);
           if (!subject) return error(`Unknown subject_id: ${body.subject_id}`, 404);
           const fact = createFact(body.subject_id, body.predicate, body.object, {
             confidence: body.confidence,
-            source: body.source ?? 'dashboard',
+            source,
             scope: body.scope, validFrom: body.valid_from, validTo: body.valid_to,
           });
           return json(fact);
