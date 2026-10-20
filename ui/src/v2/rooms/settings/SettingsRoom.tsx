@@ -288,10 +288,10 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
       }
       case "restart_daemon": {
         // Answered from the route, so a restart it refuses (no keepalive
-        // service installed) is a no (#1015). On Linux the route's
-        // `systemctl --no-block restart` can stop the daemon before this
-        // answer reaches it; nothing is heard then, where the old early yes
-        // could be.
+        // service installed) is a no (#1015). The restart itself comes a
+        // moment after the route answers: on Linux from a systemd timer
+        // 2s out (#1037), on macOS from launchctl 1s out. A spoken answer
+        // longer than that can still be cut off by the restart.
         return answerFrom(data.restartDaemon());
       }
 
