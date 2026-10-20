@@ -17,6 +17,7 @@ import { ChannelManager } from '../comms/index.ts';
 import { TELEGRAM_CHANNEL_OFF_DROPPED_REPLY, TELEGRAM_CHANNEL_OFF_MAYBE_DROPPED_REPLY, TELEGRAM_SHUTDOWN_DROPPED_REPLY, TELEGRAM_SHUTDOWN_MAYBE_DROPPED_REPLY, TelegramAdapter, type TelegramResumePoint } from '../comms/channels/telegram.ts';
 import { activeTurns } from './active-turns.ts';
 import { channelAllowList } from '../comms/channels/allow-list.ts';
+import { LITERAL_TEXT_CHANNELS } from '../authority/approval-delivery.ts';
 import { createSTTProvider } from '../comms/voice.ts';
 import { effectiveSttForBinding, usejarvisVoiceCredentials } from './usejarvis-ai.ts';
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
@@ -365,6 +366,13 @@ export class ChannelService implements Service {
     for (const name of this.manager.listChannels()) {
       const adapter = this.manager.getChannel(name);
       if (!adapter?.isConnected()) continue;
+      // An approval card goes only where it is read exactly as written, the
+      // channels that may also approve by reply (#814). Elsewhere it would
+      // tell the reader to reply `approve <id>` and then refuse it.
+      if (delivery?.approvalCard && !LITERAL_TEXT_CHANNELS.has(name)) {
+        console.log(`[ChannelService] ${name} cannot send literal text, skipping the approval card`);
+        continue;
+      }
 
       const lastRecipient = this.getBroadcastRecipient(name);
       if (!lastRecipient) {

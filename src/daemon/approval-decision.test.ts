@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test, expect, describe, beforeEach } from 'bun:test';
 import { getDb, initDatabase } from '../vault/schema.ts';
 import { ApprovalManager } from '../authority/approval.ts';
@@ -5,7 +7,7 @@ import { AuditTrail } from '../authority/audit.ts';
 import { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { ToolRegistry } from '../actions/tools/registry.ts';
 import type { ApprovalRequest } from '../authority/approval.ts';
-import { applyApprovalDecision, channelApprovalReply, CHANNEL_APPROVE_REFUSED, CHANNEL_APPROVE_REFUSED_LOOK_ALIKE, notificationApprovalDecision } from './approval-decision.ts';
+import { applyApprovalDecision, channelApprovalReply, CHANNEL_APPROVE_REFUSED, CHANNEL_APPROVE_REFUSED_CHANNEL, CHANNEL_APPROVE_REFUSED_LOOK_ALIKE, LITERAL_TEXT_CHANNELS, notificationApprovalDecision } from './approval-decision.ts';
 import { APPROVAL_LABEL_DELIVERY_MAX_CHARS, approvalToast } from '../authority/approval-delivery.ts';
 
 function makeRequest(mgr: ApprovalManager, overrides?: { toolName?: string; executionMode?: 'inline' | 'deferred' }) {
@@ -174,6 +176,39 @@ describe('channelApprovalReply', () => {
     expect(executions).toBe(0);
     expect(await channelApprovalReply('deny', req.id.slice(0, 8), 'discord', deps)).toBe('Denied: site_run_command');
     expect(mgr.getRequest(req.id)!.status).toBe('denied');
+  });
+
+  test.each(['whatsapp', 'signal', 'slack', 'Telegram', ''])('#814: approve from %p, which cannot send literal text, is refused and nothing runs', async (channel) => {
+    const req = create('In site project "shop", run: make deploy');
+    expect(await channelApprovalReply('approve', req.id.slice(0, 8), channel, deps)).toBe(CHANNEL_APPROVE_REFUSED_CHANNEL);
+    expect(mgr.getRequest(req.id)!.status).toBe('pending');
+    expect(executions).toBe(0);
+  });
+
+  test('#814 review: every channel that has an allow-list, and so can reach this reply, is opted in', () => {
+    // A channel added to channelAllowList but not here would get a card that
+    // says "Reply with: approve <id>" and then refuses it. Read from the
+    // source so a new channel cannot be missed by a hand-kept list.
+    const source = readFileSync(join(import.meta.dir, '../comms/channels/allow-list.ts'), 'utf8');
+    const body = source.slice(source.indexOf('export function channelAllowList'));
+    const named = [...body.slice(0, body.indexOf('\n}\n')).matchAll(/channel === '([^']+)'/g)].map((m) => m[1]!);
+    expect(named.sort()).toEqual(['discord', 'telegram']);
+    for (const channel of named) expect(LITERAL_TEXT_CHANNELS.has(channel)).toBe(true);
+  });
+
+  test('#814: deny from such a channel still works', async () => {
+    const req = create('In site project "shop", run: make deploy');
+    expect(await channelApprovalReply('deny', req.id.slice(0, 8), 'whatsapp', deps)).toBe('Denied: site_run_command');
+    expect(mgr.getRequest(req.id)!.status).toBe('denied');
+  });
+
+  test('#814: only Telegram and Discord are opted in, and both still approve', async () => {
+    expect([...LITERAL_TEXT_CHANNELS].sort()).toEqual(['discord', 'telegram']);
+    for (const channel of ['telegram', 'discord']) {
+      const req = create(`In site project "shop", run: make deploy-${channel}`);
+      expect(await channelApprovalReply('approve', req.id.slice(0, 8), channel, deps)).toBe('Approved and executed. Result: ran');
+    }
+    expect(executions).toBe(2);
   });
 
   test('#857: the too-long refusal still says it is too long', async () => {

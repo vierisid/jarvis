@@ -14,7 +14,7 @@ import { isAgentStopCard, type DeferredExecutor } from '../authority/deferred-ex
 import type { AuditTrail, ResolutionChannel } from '../authority/audit.ts';
 import { activeEmergencyState } from '../authority/emergency.ts';
 import type { ActionCategory } from '../roles/authority.ts';
-import { approvalChannelCard, approvalToast, LOOK_ALIKE_REASON } from '../authority/approval-delivery.ts';
+import { approvalChannelCard, approvalToast, LITERAL_TEXT_CHANNELS, LOOK_ALIKE_REASON } from '../authority/approval-delivery.ts';
 
 export interface ApprovalDecisionDeps {
   approvalManager: ApprovalManager;
@@ -119,6 +119,12 @@ export const CHANNEL_APPROVE_REFUSED =
 export const CHANNEL_APPROVE_REFUSED_LOOK_ALIKE =
   `This approval ${LOOK_ALIKE_REASON}, so it cannot be approved from a chat. Open the Jarvis dashboard to check it and decide.`;
 
+export { LITERAL_TEXT_CHANNELS };
+
+/** What it answers an `approve` from a channel not in `LITERAL_TEXT_CHANNELS` (#814). */
+export const CHANNEL_APPROVE_REFUSED_CHANNEL =
+  'This chat cannot show an approval card exactly as written, so nothing can be approved from it. Open the Jarvis dashboard to decide; deny still works here.';
+
 /**
  * A Telegram/Discord `approve <id>` or `deny <id>` reply, and the answer sent
  * back to the chat.
@@ -128,6 +134,10 @@ export const CHANNEL_APPROVE_REFUSED_LOOK_ALIKE =
  * only `deny`, and typing `approve` must not get past what the card withheld.
  * The same holds for a card whose intent could be a look-alike (#857), and
  * the answer says which of the two it was.
+ *
+ * An `approve` from a channel that cannot send literal text is refused before
+ * anything else (#814), whatever the id: that channel's card could not be read
+ * as written. `deny` is accepted from any channel.
  * Recomputed from the request rather than remembered, so it holds across a
  * restart and for a card delivered before it.
  */
@@ -137,6 +147,7 @@ export async function channelApprovalReply(
   channel: string,
   deps: ApprovalDecisionDeps,
 ): Promise<string> {
+  if (action === 'approve' && !LITERAL_TEXT_CHANNELS.has(channel)) return CHANNEL_APPROVE_REFUSED_CHANNEL;
   const match = deps.approvalManager.findByShortId(shortId);
   const nothing = action === 'approve' ? 'Nothing was approved.' : 'Nothing was denied.';
   // The id is never echoed when malformed: it is whatever followed the verb.

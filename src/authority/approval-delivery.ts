@@ -1052,6 +1052,18 @@ export type ChannelCardRefusal = 'too_long' | 'look_alike';
  */
 export const CHANNEL_CARD_APPROVABLE_MAX_CHARS = 1000;
 
+/**
+ * The channels whose adapter sends `{ literal: true }` text exactly as written
+ * (#718): Telegram with no parse mode, Discord with every markup character
+ * escaped. Only these are sent an approval card (`ChannelService.broadcastToAll`)
+ * and only these may approve by reply (`channelApprovalReply`, #814). An
+ * adapter that renders markup it cannot escape -- WhatsApp has no escape for
+ * `*`, `_` or `~` -- would show a card with part of it bold, struck or gone,
+ * so a new adapter has to be added here deliberately, after it honours
+ * `literal`, rather than inherit approval authority by registering.
+ */
+export const LITERAL_TEXT_CHANNELS: ReadonlySet<string> = new Set(['telegram', 'discord']);
+
 export type ApprovalBroadcaster = {
   broadcastApprovalRequest(request: ApprovalRequest): void;
 };
