@@ -134,6 +134,58 @@ type TelegramGetUpdatesResponse = {
   result: TelegramUpdate[];
 };
 
+/**
+ * The most updates one `getUpdates` returns: the Bot API's `limit` maximum,
+ * and its default, sent explicitly. It is also the most messages each kind of
+ * lane may hold waiting to start (#910). Before #910 the loop held one whole
+ * batch in memory while it worked through it, so this bound is no looser
+ * than that.
+ */
+export const TELEGRAM_UPDATES_LIMIT = 100;
+
+/**
+ * Where a new adapter for the same bot picks up after a settings save (#882,
+ * #910). `offset` is one past the last update the old adapter fetched and
+ * kept, so the new one is never handed again an update the old one took, even
+ * one it is still answering. `waiting` is what the old adapter fetched but had
+ * not started: the new adapter screens it again, against its own allow-list
+ * (#860), before anything it polls.
+ *
+ * Never the raw poll position. An update fetched after disconnect() (#860)
+ * is not counted, so Telegram hands it to the new adapter instead.
+ */
+export type TelegramResumePoint = { offset: number; waiting: TelegramUpdate[]; savedAt: number };
+
+/**
+ * How old a resume point may be and still be used: 7 days. The Bot API says
+ * that after at least a week with no new updates the next update id is
+ * chosen at random instead of in sequence, so an older offset may lie above
+ * every new id and skip them all. An older point is dropped and the new
+ * adapter starts from Telegram's own record.
+ */
+export const TELEGRAM_RESUME_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * At most one busy reply per chat in this long (#910). The Bot API FAQ asks
+ * bots to send no more than one message per second to a chat and no more
+ * than 20 a minute to a group; one a minute stays under both, so a listed
+ * user's flood cannot run the bot into flood control and delay the approval
+ * cards it sends.
+ */
+export const TELEGRAM_BUSY_REPLY_INTERVAL_MS = 60_000;
+
+/** What `screen` admits, for the asynchronous part of the handling. */
+type TelegramWork = {
+  message: NonNullable<TelegramUpdate['message']>;
+  from: NonNullable<NonNullable<TelegramUpdate['message']>['from']>;
+};
+
+/** What a sender is told when their message would wait behind more than `TELEGRAM_UPDATES_LIMIT` others (#910). */
+export const TELEGRAM_BUSY_REPLY = 'Too many messages are already waiting for an answer, so this one was not read. Send it again once Jarvis has caught up.';
+
+/** What a sender is told when the daemon is shutting down and refuses new turns. */
+export const TELEGRAM_RESTARTING_REPLY = 'Jarvis is restarting, so this message was not answered. Send it again in a minute.';
+
 export class TelegramAdapter implements ChannelAdapter {
   name = 'telegram';
   private token: string;
@@ -141,15 +193,52 @@ export class TelegramAdapter implements ChannelAdapter {
   private polling: boolean = false;
   private authentication: 'verified' | 'rejected' | 'unknown' = 'unknown';
   /**
-   * The next `getUpdates` offset. Telegram confirms an update only when a
-   * later call passes an offset above it, so this is also what decides which
-   * updates are delivered again.
+   * The next `getUpdates` offset: one past the last update this adapter
+   * fetched and kept. Telegram confirms an update only when a later call
+   * passes an offset above it, so this is also what decides which updates
+   * are delivered again.
+   *
+   * It moves past updates still waiting in a lane (#910). Holding it back for
+   * them kept every later update unconfirmed too, a stranger's included, so
+   * a flood could fill the 100-update window and keep the owner's
+   * `approve <id>` from being fetched at all. What waits is kept here
+   * instead, and handed to the next adapter on a settings save; a restart
+   * loses it (see `disconnect`).
    */
   private offset: number = 0;
+  /**
+   * Updates waiting to start, by lane (#910). A lane is one chat's ordinary
+   * messages, which run one at a time and in order since each turn reads and
+   * writes that chat's conversation (in a group, every member's messages wait
+   * for each other, though each has their own conversation), or one chat's
+   * approval decisions, which touch no conversation and so do not wait
+   * behind a long turn.
+   */
+  private lanes = new Map<string, Array<{ update: TelegramUpdate; work: TelegramWork }>>();
+  /** How many updates wait in chat lanes and in decision lanes, each bounded by `TELEGRAM_UPDATES_LIMIT`. */
+  private waitingChat = 0;
+  private waitingDecisions = 0;
+  /** Lanes with a worker running. */
+  private runningLanes = new Set<string>();
+  /** Handed over by the previous adapter, screened at connect(). */
+  private carried: TelegramUpdate[] = [];
+  /** Each running lane's worker, for `runningLaneWork`. */
+  private laneRuns = new Map<string, Promise<void>>();
+  /**
+   * What a chat lane waits for before its first start: that chat's turn
+   * still running in an earlier adapter (#910). Kept until it settles and
+   * passed on in `runningLaneWork`, so a second settings save during the
+   * same turn still waits for it.
+   */
+  private inherited = new Map<string, Promise<void>>();
+  /** When each chat was last sent the busy reply. */
+  private busyRepliedAt = new Map<string, number>();
   /** The long poll in flight, aborted by disconnect() (#882). */
   private pollAbort: AbortController | null = null;
-  /** Told each update id as this adapter starts handling it (#882). */
-  private onUpdateTaken: ((updateId: number) => void) | null = null;
+  /** Told where a new adapter for this bot would pick up, whenever that changes (#882, #910). */
+  private onResumePoint: ((point: TelegramResumePoint) => void) | null = null;
+  /** Whether a typed message is an approval decision, which gets its own lane (#910). */
+  private isDecision: ((text: string) => boolean) | null = null;
   private baseUrl: string;
   private pollingInterval: number = 1000;
   private sttProvider: STTProvider | null = null;
@@ -157,27 +246,76 @@ export class TelegramAdapter implements ChannelAdapter {
   private allowList: AllowList<number>;
 
   /**
-   * `startOffset` (#882): the first update id this adapter may handle. A new
+   * `resume` (#882): where the last adapter for this bot left off. A new
    * adapter used to start at 0, and Telegram had not been told the old one
    * took the update it was in the middle of (that is only said by the NEXT
    * call), so a settings save re-ran that update: the same message answered,
-   * or the same action requested, twice. The channel service passes one past
-   * the last update an adapter took, reported through `onUpdateTaken`.
+   * or the same action requested, twice. The channel service passes what an
+   * adapter last reported through `onResumePoint`.
+   *
+   * `isDecision` (#910): typed text it is true for runs in its chat's decision
+   * lane rather than behind that chat's turn in progress.
    */
   constructor(token: string, opts?: {
     sttProvider?: STTProvider;
     allowedUsers?: unknown;
-    startOffset?: number;
-    onUpdateTaken?: (updateId: number) => void;
+    resume?: TelegramResumePoint;
+    onResumePoint?: (point: TelegramResumePoint) => void;
+    isDecision?: (text: string) => boolean;
+    waitFor?: Map<string, Promise<void>>;
+    now?: () => number;
   }) {
     this.token = token;
     this.baseUrl = `https://api.telegram.org/bot${token}`;
     this.sttProvider = opts?.sttProvider ?? null;
     this.allowList = telegramAllowList(opts?.allowedUsers);
-    if (opts?.startOffset !== undefined && Number.isSafeInteger(opts.startOffset) && opts.startOffset > 0) {
-      this.offset = opts.startOffset;
+    this.now = opts?.now ?? Date.now;
+    const resume = opts?.resume;
+    if (resume && this.now() - resume.savedAt > TELEGRAM_RESUME_MAX_AGE_MS) {
+      console.log('[TelegramAdapter] Not resuming from a point saved more than a week ago: Telegram may have renumbered its updates since.');
+    } else if (resume && Number.isSafeInteger(resume.offset) && resume.offset > 0) {
+      this.offset = resume.offset;
+      this.carried = resume.waiting.filter((u) => u.update_id < resume.offset);
     }
-    this.onUpdateTaken = opts?.onUpdateTaken ?? null;
+    this.onResumePoint = opts?.onResumePoint ?? null;
+    this.isDecision = opts?.isDecision ?? null;
+    for (const [lane, run] of opts?.waitFor ?? []) {
+      this.inherited.set(lane, run);
+      void run.catch(() => {}).finally(() => { if (this.inherited.get(lane) === run) this.inherited.delete(lane); });
+    }
+  }
+
+  private now: () => number;
+
+  /**
+   * For the next adapter's `waitFor` (#910): per lane, what must end before
+   * that lane starts anything there. A lane's own worker ends after the turn
+   * it is in once this adapter is disconnected, and it waited for what this
+   * adapter inherited first; a lane with no worker here passes on what it
+   * inherited. So a chat's next message never starts while its last is still
+   * answered, however many settings saves happened in between.
+   */
+  runningLaneWork(): Map<string, Promise<void>> {
+    const work = new Map(this.inherited);
+    for (const [lane, run] of this.laneRuns) work.set(lane, run);
+    return work;
+  }
+
+  /** See `TelegramResumePoint`. */
+  resumePoint(): TelegramResumePoint {
+    const waiting = [...this.carried];
+    for (const queue of this.lanes.values()) for (const { update } of queue) waiting.push(update);
+    waiting.sort((a, b) => a.update_id - b.update_id);
+    return { offset: this.offset, waiting, savedAt: this.now() };
+  }
+
+  private reportResumePoint(): void {
+    if (!this.onResumePoint) return;
+    try {
+      this.onResumePoint(this.resumePoint());
+    } catch (err) {
+      console.error('[TelegramAdapter] onResumePoint threw:', err);
+    }
   }
 
   setSTTProvider(provider: STTProvider): void {
@@ -211,11 +349,26 @@ export class TelegramAdapter implements ChannelAdapter {
     }
 
     this.polling = true;
+    // What the previous adapter left waiting (#860, #910), screened against
+    // this adapter's list, ahead of anything newer.
+    const carried = this.carried;
+    this.carried = [];
+    for (const update of carried) this.intakeSafely(update);
     this.startPolling();
   }
 
   async disconnect(): Promise<void> {
     this.polling = false;
+    // What waits in a lane never starts here (#860): it was judged against
+    // this adapter's list, and the next adapter must judge it against its own,
+    // so it goes to that adapter through the resume point. A restart starts
+    // with nothing in memory, so there it is lost: the owner sent it while a
+    // turn in the same chat was still running, and is never sent an answer.
+    this.carried = this.resumePoint().waiting;
+    this.lanes.clear();
+    this.waitingChat = 0;
+    this.waitingDecisions = 0;
+    this.reportResumePoint();
     // Abort the long poll rather than leave it running for up to 30s (#882).
     // Whatever it would have returned is unconfirmed, so Telegram hands it to
     // the next adapter; left running, it could land after the new adapter's
@@ -295,8 +448,10 @@ export class TelegramAdapter implements ChannelAdapter {
     console.log('[TelegramAdapter] Starting polling...');
 
     while (this.polling) {
+      let fullBatch = false;
       try {
         const updates = await this.getUpdates();
+        fullBatch = updates.length >= TELEGRAM_UPDATES_LIMIT;
 
         for (const update of updates) {
           // A long poll outlives disconnect() by up to its 30s timeout, and a
@@ -307,17 +462,17 @@ export class TelegramAdapter implements ChannelAdapter {
           // Left unhandled it is never confirmed (the offset only advances on
           // the next call), so Telegram hands it to the new adapter instead.
           if (!this.polling) break;
-          // Taken from here on: the next adapter must not handle it again,
-          // even though it is still being answered (#882). Only updates
-          // reached HERE count, never the poll offset, which also covers the
-          // updates the check above just left for the new adapter.
-          try {
-            this.onUpdateTaken?.(update.update_id);
-          } catch (err) {
-            console.error('[TelegramAdapter] onUpdateTaken threw:', err);
-          }
-          await this.processUpdate(update);
+          // Already fetched and kept: never handle an update twice.
+          if (update.update_id < this.offset) continue;
+          // Counted before it is handled, so an update that throws is not
+          // fetched again on every poll from now on.
+          this.offset = update.update_id + 1;
+          // Handed to a lane, not awaited (#910): a turn can run for minutes,
+          // and awaiting it here held up every later message on the channel,
+          // the owner's `approve <id>` included.
+          this.intakeSafely(update);
         }
+        this.reportResumePoint();
       } catch (error) {
         if (this.authentication !== 'rejected') this.authentication = 'unknown';
         // An aborted poll is disconnect() doing its job, not an error.
@@ -325,6 +480,10 @@ export class TelegramAdapter implements ChannelAdapter {
       }
 
       if (!this.polling) break;
+      // A full batch means more are already waiting at Telegram: fetch them
+      // now, or a flood of dropped updates from strangers outpaces the
+      // loop and the owner's reply waits behind it.
+      if (fullBatch) continue;
       await new Promise(resolve => setTimeout(resolve, this.pollingInterval));
     }
 
@@ -346,6 +505,7 @@ export class TelegramAdapter implements ChannelAdapter {
         body: JSON.stringify({
           offset: this.offset,
           timeout: 30,
+          limit: TELEGRAM_UPDATES_LIMIT,
           allowed_updates: ['message'],
         }),
         signal: abort.signal,
@@ -363,15 +523,98 @@ export class TelegramAdapter implements ChannelAdapter {
       throw new Error('Failed to get updates');
     }
 
-    if (data.result.length > 0) {
-      this.offset = data.result[data.result.length - 1]!.update_id + 1;
-    }
-
     return data.result;
   }
 
+  private intakeSafely(update: TelegramUpdate): void {
+    try {
+      this.intake(update);
+    } catch (err) {
+      console.error(`[TelegramAdapter] Dropped update ${update.update_id}, which could not be read:`, err);
+    }
+  }
+
+  /**
+   * Take an update off the poll (#910). One that can be refused at once is
+   * dropped here, so a stranger's flood never waits in a lane. The rest wait
+   * in their lane until it reaches them.
+   */
+  private intake(update: TelegramUpdate): void {
+    const work = this.screen(update);
+    if (!work) return;
+    const chat = String(work.message.chat.id);
+    // Typed text only: a voice note is not known to be a decision until it is
+    // transcribed, which happens in its turn.
+    const text = work.message.text;
+    const decision = !!text && this.isDecision?.(text) === true;
+    if ((decision ? this.waitingDecisions : this.waitingChat) >= TELEGRAM_UPDATES_LIMIT) {
+      console.warn(`[TelegramAdapter] ${TELEGRAM_UPDATES_LIMIT} messages already wait for an answer; not reading update ${update.update_id}`);
+      const now = this.now();
+      for (const [c, at] of this.busyRepliedAt) if (now - at >= TELEGRAM_BUSY_REPLY_INTERVAL_MS) this.busyRepliedAt.delete(c);
+      if (!this.busyRepliedAt.has(chat)) {
+        this.busyRepliedAt.set(chat, now);
+        // Sent once, never again (Q-07); a failure only gets logged.
+        this.sendMessage(chat, TELEGRAM_BUSY_REPLY).catch((err) => {
+          console.error('[TelegramAdapter] Could not say a message was not read:', err);
+        });
+      }
+      return;
+    }
+    const lane = decision ? `decision:${chat}` : `chat:${chat}`;
+    const queue = this.lanes.get(lane);
+    if (queue) queue.push({ update, work });
+    else this.lanes.set(lane, [{ update, work }]);
+    if (decision) this.waitingDecisions++;
+    else this.waitingChat++;
+    if (!this.runningLanes.has(lane)) {
+      const run = this.runLane(lane);
+      this.laneRuns.set(lane, run);
+      void run.finally(() => { if (this.laneRuns.get(lane) === run) this.laneRuns.delete(lane); });
+    }
+  }
+
+  /** Start a lane's updates one at a time, in order, until it is empty or the adapter is disconnected. */
+  private async runLane(lane: string): Promise<void> {
+    this.runningLanes.add(lane);
+    try {
+      // The same chat's turn the previous adapter is still answering (#910).
+      if (lane.startsWith('chat:')) {
+        try {
+          await this.inherited.get(lane);
+        } catch {
+          // Its outcome is that adapter's to report; only its end matters here.
+        }
+      }
+      while (this.polling) {
+        const queue = this.lanes.get(lane);
+        const next = queue?.shift();
+        if (!next) break;
+        if (queue!.length === 0) this.lanes.delete(lane);
+        if (lane.startsWith('decision:')) this.waitingDecisions--;
+        else this.waitingChat--;
+        // Started: no longer handed to the next adapter (#882), even though
+        // it is still being answered.
+        this.reportResumePoint();
+        try {
+          await this.handle(next.work);
+        } catch (error) {
+          console.error('[TelegramAdapter] Error handling update:', error);
+        }
+      }
+    } finally {
+      this.runningLanes.delete(lane);
+    }
+  }
+
+  /** Screen and handle one update directly, without a lane. Used by tests only. */
   private async processUpdate(update: TelegramUpdate): Promise<void> {
-    if (!update.message || !this.handler) return;
+    const work = this.screen(update);
+    if (work) await this.handle(work);
+  }
+
+  /** The checks that need no I/O: who sent it, and whether it has anything to handle. */
+  private screen(update: TelegramUpdate): TelegramWork | null {
+    if (!update.message || !this.handler) return null;
 
     const { message } = update;
 
@@ -384,7 +627,7 @@ export class TelegramAdapter implements ChannelAdapter {
     // can neither chat, decide, nor become the broadcast recipient.
     if (message.sender_chat || !message.from) {
       console.log(`[TelegramAdapter] Ignoring a message sent on behalf of a chat (${message.sender_chat?.title ?? message.sender_chat?.id ?? 'no sender'}): it cannot be attributed to one person`);
-      return;
+      return null;
     }
     const from = message.from;
 
@@ -393,9 +636,16 @@ export class TelegramAdapter implements ChannelAdapter {
     // names nobody (a string, a quoted id) restricts to nobody (#883).
     if (this.allowList.restricted && !this.allowList.ids.includes(from.id)) {
       console.log(`[TelegramAdapter] Ignoring message from unauthorized user: ${from.id} (${from.username ?? from.first_name})`);
-      return;
+      return null;
     }
 
+    if (!message.text && !message.voice && !message.audio) return null;
+    return { message, from };
+  }
+
+  private async handle({ message, from }: TelegramWork): Promise<void> {
+    const handler = this.handler;
+    if (!handler) return;
     let text = message.text ?? '';
 
     // Handle voice/audio messages via STT
@@ -444,7 +694,7 @@ export class TelegramAdapter implements ChannelAdapter {
     console.log('[TelegramAdapter] Message from', channelMessage.from, ':', channelMessage.text.slice(0, 80));
 
     try {
-      const response = await this.handler(channelMessage);
+      const response = await handler(channelMessage);
 
       if (response) {
         await this.sendMessage(message.chat.id.toString(), response);
@@ -452,9 +702,13 @@ export class TelegramAdapter implements ChannelAdapter {
     } catch (error) {
       console.error('[TelegramAdapter] Error handling message:', error);
 
+      // A daemon shutting down refuses new turns (DrainingError, matched by
+      // name: the daemon is not imported here). This message is not seen
+      // again after the restart, so say so plainly.
+      const restarting = error instanceof Error && error.name === 'DrainingError';
       await this.sendMessage(
         message.chat.id.toString(),
-        'Sorry, I encountered an error processing your message.'
+        restarting ? TELEGRAM_RESTARTING_REPLY : 'Sorry, I encountered an error processing your message.'
       );
     }
   }

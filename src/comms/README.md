@@ -296,6 +296,7 @@ await channels.connectAll();
 
 - **WebSocket**: Bun's native WebSocket support is extremely fast
 - **Telegram Polling**: Uses long polling (30s timeout) to minimize requests
+- **Telegram turns**: Each chat's messages run in order in their own lane, chats run side by side, and an `approve`/`deny` reply does not wait behind its chat's running turn. At most 100 messages of each kind wait; past that the sender is told to send again
 - **Stream Relay**: Zero-copy broadcast to multiple clients
 - **Memory**: Each WebSocket connection uses ~1KB of memory
 

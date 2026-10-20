@@ -14,7 +14,7 @@ import type { ChannelAdapter, ChannelMessage, SendOptions } from '../comms/chann
 import type { STTProvider } from '../comms/voice.ts';
 
 import { ChannelManager } from '../comms/index.ts';
-import { TelegramAdapter } from '../comms/channels/telegram.ts';
+import { TelegramAdapter, type TelegramResumePoint } from '../comms/channels/telegram.ts';
 import { channelAllowList } from '../comms/channels/allow-list.ts';
 import { createSTTProvider } from '../comms/voice.ts';
 import { effectiveSttForBinding, usejarvisVoiceCredentials } from './usejarvis-ai.ts';
@@ -115,16 +115,18 @@ export class ChannelService implements Service {
    */
   private lastRecipients = new Map<string, BroadcastRecipient>();
   /**
-   * The last Telegram update an adapter started handling, kept across the
-   * stop/start a settings save does (#882), per bot token: update ids are
-   * numbered per bot, so another token starts over, and switching back to a
-   * token picks up where that bot left off.
+   * Where the last Telegram adapter left off, kept across the stop/start a
+   * settings save does (#882), per bot token: update ids are numbered per
+   * bot, so another token starts over, and switching back to a token picks up
+   * where that bot left off.
    *
-   * Never the adapter's poll offset. That also counts updates an old adapter
-   * fetched but left unhandled once it was disconnected (#860), which must
-   * reach the new adapter so they are judged against the new allow-list.
+   * It carries what the old adapter had fetched but not started (#910), so
+   * the new adapter judges that against the new allow-list (#860). See
+   * `TelegramResumePoint`.
    */
-  private telegramTaken = new Map<string, number>();
+  private telegramResume = new Map<string, TelegramResumePoint>();
+  /** The Telegram adapter this service last built, and for which token. */
+  private telegram: { adapter: TelegramAdapter; token: string } | null = null;
   /** Handler for approval commands (approve/deny) from external channels */
   private approvalHandler: ApprovalCommandHandler | null = null;
   /** Notified when a send has exhausted its retries (e.g. to alert the dashboard). */
@@ -202,19 +204,42 @@ export class ChannelService implements Service {
         return true;
       };
 
-      if (channels?.telegram?.enabled && channels.telegram.bot_token
-        && !refuseOpen('telegram', channels.telegram.allowed_users)) {
-        warnAllowListProblems('telegram', channels.telegram.allowed_users);
-        const token = channels.telegram.bot_token;
-        const taken = this.telegramTaken.get(token);
+      const telegramOn = !!(channels?.telegram?.enabled && channels.telegram.bot_token
+        && !refuseOpen('telegram', channels.telegram.allowed_users));
+      // What waited behind a turn goes to the adapter built right after it
+      // (#910), and to no other: a message the owner sent before turning the
+      // channel off, or before switching to another bot, must not run when
+      // they switch back hours later. The offsets are kept (#882).
+      const nextToken = telegramOn ? channels!.telegram!.bot_token : null;
+      for (const [token, point] of this.telegramResume) {
+        if (token === nextToken || point.waiting.length === 0) continue;
+        console.log(`[ChannelService] Dropping ${point.waiting.length} Telegram message(s) that were waiting for an answer when that bot was turned off or switched away from.`);
+        this.telegramResume.set(token, { ...point, waiting: [] });
+      }
+      const previous = this.telegram;
+      this.telegram = null;
+
+      if (telegramOn) {
+        warnAllowListProblems('telegram', channels!.telegram!.allowed_users);
+        const token = channels!.telegram!.bot_token!;
+        const resume = this.telegramResume.get(token);
+        // A chat's next message waits for the turn the old adapter is still
+        // answering in that chat (#910): one turn at a time per chat.
+        const stillRunning = previous && previous.token === token ? previous.adapter.runningLaneWork() : new Map<string, Promise<void>>();
         const telegram = new TelegramAdapter(token, {
           sttProvider: this.sttProvider ?? undefined,
-          allowedUsers: channels.telegram.allowed_users,
-          ...(taken !== undefined ? { startOffset: taken + 1 } : {}),
-          onUpdateTaken: (updateId) => {
-            this.telegramTaken.set(token, Math.max(updateId, this.telegramTaken.get(token) ?? 0));
-          },
+          allowedUsers: channels!.telegram!.allowed_users,
+          ...(resume ? { resume } : {}),
+          waitFor: stillRunning,
+          onResumePoint: (point) => { this.telegramResume.set(token, point); },
+          // An approval decision does not wait behind its chat's turn in
+          // progress (#910): it touches no conversation, and the approval it
+          // decides may expire while the turn runs. The same test as
+          // handleChannelMessage's, handler included: without a handler the
+          // text is chat, and chat waits its turn.
+          isDecision: (text) => this.approvalHandler !== null && channelDecisionCommand(text) !== null,
         });
+        this.telegram = { adapter: telegram, token };
         this.manager.register(telegram);
       }
 

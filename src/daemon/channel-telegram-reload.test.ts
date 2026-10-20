@@ -13,7 +13,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { closeDb, initDatabase } from '../vault/schema.ts';
 import { ChannelService } from './channel-service.ts';
-import { TelegramAdapter } from '../comms/channels/telegram.ts';
+import { TELEGRAM_BUSY_REPLY, TELEGRAM_RESTARTING_REPLY, TELEGRAM_RESUME_MAX_AGE_MS, TELEGRAM_UPDATES_LIMIT, TelegramAdapter } from '../comms/channels/telegram.ts';
 
 /** `token` set: only that bot's polls see it (ids are per bot). Unset: every bot's. */
 type Update = { update_id: number; message: Record<string, unknown>; token?: string };
@@ -29,7 +29,7 @@ function fakeBotApi() {
 
   const fetchImpl = (async (url: string, init?: RequestInit) => {
     const token = /\/bot([^/]+)\//.exec(url)?.[1] ?? '';
-    const body = (init?.body ? JSON.parse(String(init.body)) : {}) as { offset?: number; text?: string };
+    const body = (init?.body ? JSON.parse(String(init.body)) : {}) as { offset?: number; limit?: number; text?: string; chat_id?: string };
     if (url.endsWith('/getMe')) return Response.json({ ok: true, result: { username: 'bot' } });
     if (url.endsWith('/sendMessage')) { replies.push(body.text ?? ''); return Response.json({ ok: true }); }
     if (url.endsWith('/getUpdates')) {
@@ -45,7 +45,9 @@ function fakeBotApi() {
         signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
       });
       await Promise.race([hold ?? Bun.sleep(5), aborted]);
-      return Response.json({ ok: true, result: pending.filter((u) => mine(u) && u.update_id >= offset).map(({ token: _t, ...u }) => u) });
+      // At most `limit` (default 100) of them, oldest first, as Telegram does.
+      const batch = pending.filter((u) => mine(u) && u.update_id >= offset).slice(0, body.limit ?? 100);
+      return Response.json({ ok: true, result: batch.map(({ token: _t, ...u }) => u) });
     }
     throw new Error(`unexpected fetch ${url}`);
   }) as typeof fetch;
@@ -55,8 +57,10 @@ function fakeBotApi() {
     pending.push({ update_id: id, token, message: { message_id: id, from: { id: fromId, first_name: 'A' }, chat: { id: fromId, type: 'private' }, date: 0, text } });
     return id;
   };
+  /** Strip an update's chat, as a malformed update would come. */
+  const breakChat = (id: number) => { const u = pending.find((p) => p.update_id === id); if (u) delete u.message.chat; };
   return {
-    fetchImpl, send, offsets, replies, signals,
+    fetchImpl, send, offsets, replies, signals, breakChat,
     holdPolls: () => { let release!: () => void; hold = new Promise<void>((r) => { release = r; }); return () => { hold = null; release(); }; },
   };
 }
@@ -78,6 +82,13 @@ function slowAgent() {
     },
   };
   return { agent, turns, release: (text: string) => gates.get(text)?.() };
+}
+
+function service910(api: ReturnType<typeof fakeBotApi>) {
+  globalThis.fetch = api.fetchImpl;
+  const slow = slowAgent();
+  const config = { channels: { telegram: { enabled: true, bot_token: 'tok', allowed_users: [42] } } };
+  return { svc: new ChannelService(config as never, slow.agent as never), ...slow };
 }
 
 // The fixtures name their senders in `allowed_users` because #908 refuses to
@@ -102,8 +113,7 @@ describe('#882: a settings reload does not re-run what the old Telegram adapter 
       api.send(42, 'slow question');
       await until(() => turns.length === 1, 'the first turn');
 
-      // The save: stop and start, while the old adapter is mid-turn. It
-      // polls no more: it is still inside the turn its last poll returned.
+      // The save: stop and start, while the old adapter is mid-turn.
       const polls = api.offsets.length;
       await svc.stop();
       await svc.start();
@@ -145,10 +155,16 @@ describe('#882: a settings reload does not re-run what the old Telegram adapter 
 
       await svc.stop();
       await svc.start();
-      await until(() => turns.length === 2, 'the second update to reach the new adapter');
-      expect(turns).toEqual(['slow question', 'second']);
+      // It waits for the turn before it in the same chat, still answered by
+      // the old adapter (#910: one turn at a time per chat).
+      const polls = api.offsets.length;
+      await until(() => api.offsets.length > polls, 'the new adapter to poll');
+      await Bun.sleep(30);
+      expect(turns).toEqual(['slow question']);
 
       release('slow question');
+      await until(() => turns.length === 2, 'the second update to reach the new adapter');
+      expect(turns).toEqual(['slow question', 'second']);
       await until(() => api.replies.length === 2, 'both answers');
       await Bun.sleep(30);
       expect(turns).toEqual(['slow question', 'second']);
@@ -273,6 +289,414 @@ describe('#882 review: what the abort and the per-bot record cover', () => {
     } finally {
       release('slow question');
       await svc.stop();
+    }
+  });
+});
+
+/**
+ * #910. The poll loop awaited each update's turn before polling again, so one
+ * long turn held up every later message on the channel, the owner's
+ * `approve <id>` in the same private chat included.
+ */
+describe('#910: one long turn does not hold up the rest of the channel', () => {
+  let originalFetch: typeof fetch;
+  beforeEach(() => { initDatabase(':memory:'); originalFetch = globalThis.fetch; });
+  afterEach(() => { globalThis.fetch = originalFetch; closeDb(); });
+
+  const service = (api: ReturnType<typeof fakeBotApi>, allowed: number[]) => {
+    globalThis.fetch = api.fetchImpl;
+    const slow = slowAgent();
+    const config = { channels: { telegram: { enabled: true, bot_token: 'tok', allowed_users: allowed } } };
+    const svc = new ChannelService(config as never, slow.agent as never);
+    const decisions: string[] = [];
+    svc.setApprovalHandler(async (action, shortId) => { decisions.push(`${action} ${shortId}`); return `decided ${shortId}`; });
+    return { svc, decisions, ...slow };
+  };
+
+  test('an approve typed in the same private chat is decided while the turn is still running', async () => {
+    const api = fakeBotApi();
+    const { svc, decisions, turns, release } = service(api, [42]);
+    try {
+      await svc.start();
+      api.send(42, 'slow question');
+      await until(() => turns.length === 1, 'the long turn');
+      api.send(42, 'approve 1a2b3c4d');
+      await until(() => api.replies.includes('decided 1a2b3c4d'), 'the decision to be answered');
+      expect(decisions).toEqual(['approve 1a2b3c4d']);
+      // The long turn is still unanswered: the decision did not wait for it.
+      expect(api.replies).toEqual(['decided 1a2b3c4d']);
+    } finally {
+      release('slow question');
+      await svc.stop();
+    }
+  });
+
+  test('another chat is answered while the turn is still running', async () => {
+    const api = fakeBotApi();
+    const { svc, turns, release } = service(api, [42, 9]);
+    try {
+      await svc.start();
+      api.send(42, 'slow question');
+      await until(() => turns.length === 1, 'the long turn');
+      api.send(9, 'hello');
+      await until(() => api.replies.includes('answer to hello'), 'the other chat to be answered');
+      expect(turns).toEqual(['slow question', 'hello']);
+    } finally {
+      release('slow question');
+      await svc.stop();
+    }
+  });
+
+  test('messages in one chat still start in order, each after the one before it ends', async () => {
+    const api = fakeBotApi();
+    const { svc, turns, release } = service(api, [42]);
+    try {
+      await svc.start();
+      api.send(42, 'slow first');
+      await until(() => turns.length === 1, 'the first turn');
+      api.send(42, 'second');
+      // Long enough for the next poll (pollingInterval is 1s) to fetch it.
+      await until(() => api.offsets.length >= 3, 'the next polls');
+      await Bun.sleep(30);
+      expect(turns).toEqual(['slow first']);
+      release('slow first');
+      await until(() => api.replies.length === 2, 'both answers');
+      expect(turns).toEqual(['slow first', 'second']);
+      expect(api.replies).toEqual(['answer to slow first', 'answer to second']);
+    } finally {
+      release('slow first');
+      await svc.stop();
+    }
+  });
+
+  test('a reload hands the new adapter what was still waiting, after the turn before it, and not a decision already made', async () => {
+    // The decision started while an earlier message in its chat still waited.
+    // The new adapter must run the waiting one, once the old adapter's turn
+    // in that chat has ended, and must not decide again.
+    const api = fakeBotApi();
+    const { svc, decisions, turns, release } = service(api, [42]);
+    try {
+      await svc.start();
+      api.send(42, 'slow first');
+      await until(() => turns.length === 1, 'the first turn');
+      api.send(42, 'waiting');
+      api.send(42, 'approve 1a2b3c4d');
+      await until(() => decisions.length === 1, 'the decision');
+
+      await svc.stop();
+      await svc.start();
+      const polls = api.offsets.length;
+      await until(() => api.offsets.length > polls, 'the new adapter to poll');
+      await Bun.sleep(30);
+      expect(turns).toEqual(['slow first']);
+      release('slow first');
+      await until(() => turns.length === 2, 'the waiting message to reach the new adapter');
+      const more = api.offsets.length;
+      await until(() => api.offsets.length > more, 'another poll');
+      await Bun.sleep(30);
+      expect(turns).toEqual(['slow first', 'waiting']);
+      expect(decisions).toEqual(['approve 1a2b3c4d']);
+    } finally {
+      release('slow first');
+      await svc.stop();
+    }
+  });
+
+  test('a message that starts while a poll is in flight runs once', async () => {
+    // The poll was sent before the waiting message started, and its answer
+    // arrives after: whatever it brings, the message must not run again.
+    const api = fakeBotApi();
+    const { svc, turns, release } = service(api, [42]);
+    try {
+      await svc.start();
+      api.send(42, 'slow first');
+      await until(() => turns.length === 1, 'the first turn');
+      api.send(42, 'second');
+      const polls = api.offsets.length;
+      await until(() => api.offsets.length > polls, 'the poll that fetches the second message');
+      await Bun.sleep(30);
+      const releasePolls = api.holdPolls();
+      const held = api.offsets.length;
+      await until(() => api.offsets.length > held, 'a poll to be in flight');
+      release('slow first');
+      await until(() => turns.length === 2, 'the second message to start');
+      releasePolls();
+      const after = api.offsets.length;
+      await until(() => api.offsets.length > after + 1, 'two more polls');
+      await Bun.sleep(30);
+      expect(turns).toEqual(['slow first', 'second']);
+    } finally {
+      release('slow first');
+      await svc.stop();
+    }
+  });
+
+  test('a flood from strangers does not keep an approve from being fetched', async () => {
+    // Messages from someone the list does not name are dropped, and must not
+    // stay in Telegram's 100-update window while the owner's message waits.
+    const api = fakeBotApi();
+    const { svc, decisions, turns, release } = service(api, [42]);
+    try {
+      await svc.start();
+      api.send(42, 'slow first');
+      await until(() => turns.length === 1, 'the first turn');
+      api.send(42, 'waiting');
+      for (let i = 0; i < 120; i++) api.send(666, `spam ${i}`);
+      api.send(42, 'approve 1a2b3c4d');
+      await until(() => decisions.length === 1, 'the approve to be fetched and decided');
+      expect(turns).toEqual(['slow first']);
+    } finally {
+      release('slow first');
+      await svc.stop();
+    }
+  });
+
+  test('past the bound on waiting messages, the sender is told it was not read', async () => {
+    const api = fakeBotApi();
+    const { svc, turns, release } = service(api, [42]);
+    try {
+      await svc.start();
+      api.send(42, 'slow first');
+      await until(() => turns.length === 1, 'the first turn');
+      for (let i = 0; i < TELEGRAM_UPDATES_LIMIT + 1; i++) api.send(42, `queued ${i}`);
+      await until(() => api.replies.includes(TELEGRAM_BUSY_REPLY), 'the busy reply');
+      expect(api.replies).toEqual([TELEGRAM_BUSY_REPLY]);
+      release('slow first');
+      await until(() => turns.length === TELEGRAM_UPDATES_LIMIT + 1, 'every queued message that was read');
+      expect(turns.at(-1)).toBe(`queued ${TELEGRAM_UPDATES_LIMIT - 1}`);
+    } finally {
+      release('slow first');
+      await svc.stop();
+    }
+  });
+});
+
+describe('#910 review: what the lanes must not do', () => {
+  let originalFetch: typeof fetch;
+  beforeEach(() => { initDatabase(':memory:'); originalFetch = globalThis.fetch; });
+  afterEach(() => { globalThis.fetch = originalFetch; closeDb(); });
+
+  test('a waiting message from a user the save removed is screened out by the new adapter (#860)', async () => {
+    const api = fakeBotApi();
+    globalThis.fetch = api.fetchImpl;
+    const { agent, turns, release } = slowAgent();
+    const config = { channels: { telegram: { enabled: true, bot_token: 'tok', allowed_users: [42, 9] } } };
+    const svc = new ChannelService(config as never, agent as never);
+    try {
+      await svc.start();
+      api.send(9, 'slow first');
+      await until(() => turns.length === 1, 'the first turn');
+      api.send(9, 'from the removed user');
+      const polls = api.offsets.length;
+      await until(() => api.offsets.length > polls + 1, 'the waiting message to be fetched');
+      config.channels = { telegram: { ...config.channels.telegram, allowed_users: [42] } };
+      await svc.stop();
+      await svc.start();
+      release('slow first');
+      await until(() => api.replies.length === 1, 'the first answer');
+      const more = api.offsets.length;
+      await until(() => api.offsets.length > more + 1, 'two more polls');
+      await Bun.sleep(30);
+      expect(turns).toEqual(['slow first']);
+    } finally {
+      release('slow first');
+      await svc.stop();
+    }
+  });
+
+  test('two settings saves during one turn still keep the chat in order', async () => {
+    const api = fakeBotApi();
+    globalThis.fetch = api.fetchImpl;
+    const { agent, turns, release } = slowAgent();
+    const config = { channels: { telegram: { enabled: true, bot_token: 'tok', allowed_users: [42] } } };
+    const svc = new ChannelService(config as never, agent as never);
+    try {
+      await svc.start();
+      api.send(42, 'slow first');
+      await until(() => turns.length === 1, 'the first turn');
+      // Neither the second adapter nor the third ever has a lane for chat 42
+      // of its own before the message below.
+      await svc.stop();
+      await svc.start();
+      await svc.stop();
+      await svc.start();
+      api.send(42, 'second');
+      const polls = api.offsets.length;
+      await until(() => api.offsets.length > polls + 1, 'the second message to be fetched');
+      await Bun.sleep(30);
+      expect(turns).toEqual(['slow first']);
+      release('slow first');
+      await until(() => turns.length === 2, 'the second message after the turn');
+      expect(turns).toEqual(['slow first', 'second']);
+    } finally {
+      release('slow first');
+      await svc.stop();
+    }
+  });
+
+  test('turning the channel off drops what waited, so turning it on later does not run it', async () => {
+    const api = fakeBotApi();
+    globalThis.fetch = api.fetchImpl;
+    const { agent, turns, release } = slowAgent();
+    const config = { channels: { telegram: { enabled: true, bot_token: 'tok', allowed_users: [42] } } };
+    const svc = new ChannelService(config as never, agent as never);
+    try {
+      await svc.start();
+      api.send(42, 'slow first');
+      await until(() => turns.length === 1, 'the first turn');
+      api.send(42, 'delete the drafts folder');
+      const polls = api.offsets.length;
+      await until(() => api.offsets.length > polls + 1, 'the waiting message to be fetched');
+      config.channels = { telegram: { ...config.channels.telegram, enabled: false } };
+      await svc.stop();
+      await svc.start();
+      release('slow first');
+      await until(() => api.replies.length === 1, 'the first answer');
+      config.channels = { telegram: { ...config.channels.telegram, enabled: true } };
+      await svc.stop();
+      await svc.start();
+      const more = api.offsets.length;
+      await until(() => api.offsets.length > more + 1, 'the re-enabled bot to poll');
+      await Bun.sleep(30);
+      expect(turns).toEqual(['slow first']);
+    } finally {
+      release('slow first');
+      await svc.stop();
+    }
+  });
+
+  test('a resume point more than a week old is not used: Telegram may have renumbered', async () => {
+    const api = fakeBotApi();
+    globalThis.fetch = api.fetchImpl;
+    const first = (savedAt: number) => {
+      const adapter = new TelegramAdapter('tok', { resume: { offset: 5, waiting: [], savedAt }, now: () => TELEGRAM_RESUME_MAX_AGE_MS + 1000 });
+      adapter.onMessage(async () => '');
+      return adapter;
+    };
+    for (const [savedAt, offset] of [[0, 0], [1000, 5]] as const) {
+      const adapter = first(savedAt);
+      const polls = api.offsets.length;
+      try {
+        await adapter.connect();
+        await until(() => api.offsets.length > polls, 'the first poll');
+        expect(api.offsets[polls]).toEqual({ token: 'tok', offset });
+      } finally {
+        await adapter.disconnect();
+      }
+    }
+  });
+
+  test('after a full batch the next one is fetched at once, so a flood cannot outpace the loop', async () => {
+    const api = fakeBotApi();
+    globalThis.fetch = api.fetchImpl;
+    const seen: string[] = [];
+    const adapter = new TelegramAdapter('tok', { allowedUsers: [42] });
+    adapter.onMessage(async (m) => { seen.push(m.text); return ''; });
+    // Long enough that only a poll made without the pause can fetch the rest.
+    (adapter as unknown as { pollingInterval: number }).pollingInterval = 60_000;
+    try {
+      const releasePolls = api.holdPolls();
+      await adapter.connect();
+      for (let i = 0; i < 150; i++) api.send(666, `spam ${i}`);
+      api.send(42, 'approve 1a2b3c4d');
+      releasePolls();
+      await until(() => seen.length === 1, 'the reply past the first full batch');
+      expect(seen).toEqual(['approve 1a2b3c4d']);
+    } finally {
+      await adapter.disconnect();
+    }
+  });
+
+  test('a listed user past the bound is told once a minute, not once per message', async () => {
+    const api = fakeBotApi();
+    const { svc, turns, release } = service910(api);
+    try {
+      await svc.start();
+      api.send(42, 'slow first');
+      await until(() => turns.length === 1, 'the first turn');
+      for (let i = 0; i < TELEGRAM_UPDATES_LIMIT + 5; i++) api.send(42, `queued ${i}`);
+      await until(() => api.replies.includes(TELEGRAM_BUSY_REPLY), 'the busy reply');
+      const polls = api.offsets.length;
+      await until(() => api.offsets.length > polls + 1, 'the rest to be fetched');
+      await Bun.sleep(30);
+      expect(api.replies).toEqual([TELEGRAM_BUSY_REPLY]);
+    } finally {
+      release('slow first');
+      await svc.stop();
+    }
+  });
+
+  test('with no approval handler, an approve is chat and waits its turn like any other', async () => {
+    const api = fakeBotApi();
+    globalThis.fetch = api.fetchImpl;
+    const { agent, turns, release } = slowAgent();
+    const config = { channels: { telegram: { enabled: true, bot_token: 'tok', allowed_users: [42] } } };
+    const svc = new ChannelService(config as never, agent as never);
+    try {
+      await svc.start();
+      api.send(42, 'slow first');
+      await until(() => turns.length === 1, 'the first turn');
+      api.send(42, 'approve 1a2b3c4d');
+      const polls = api.offsets.length;
+      await until(() => api.offsets.length > polls + 1, 'the approve to be fetched');
+      await Bun.sleep(30);
+      // Two turns at once on one conversation would interleave its writes.
+      expect(turns).toEqual(['slow first']);
+      release('slow first');
+      await until(() => turns.length === 2, 'the approve as chat');
+    } finally {
+      release('slow first');
+      await svc.stop();
+    }
+  });
+
+  test('an update that cannot be read is skipped, not fetched again on every poll', async () => {
+    const api = fakeBotApi();
+    globalThis.fetch = api.fetchImpl;
+    const adapter = new TelegramAdapter('tok', { allowedUsers: [42] });
+    const seen: string[] = [];
+    adapter.onMessage(async (m) => { seen.push(m.text); return ''; });
+    const errors = console.error;
+    console.error = () => {};
+    try {
+      const releasePolls = api.holdPolls();
+      await adapter.connect();
+      const bad = api.send(42, 'no chat');
+      // Malformed: a message with no chat.
+      const good = api.send(42, 'fine');
+      api.breakChat(bad);
+      releasePolls();
+      await until(() => seen.includes('fine'), 'the next update to be handled');
+      await until(() => api.offsets.some((o) => o.offset > good), 'a poll past both');
+      expect(seen).toEqual(['fine']);
+    } finally {
+      console.error = errors;
+      await adapter.disconnect();
+    }
+  });
+});
+
+describe('#910: a message read while the daemon shuts down', () => {
+  let originalFetch: typeof fetch;
+  beforeEach(() => { originalFetch = globalThis.fetch; });
+  afterEach(() => { globalThis.fetch = originalFetch; });
+
+  test('is answered with a plain "send it again", since the restart will not see it', async () => {
+    const api = fakeBotApi();
+    globalThis.fetch = api.fetchImpl;
+    const adapter = new TelegramAdapter('tok', { allowedUsers: [42] });
+    adapter.onMessage(async () => {
+      const err = new Error('daemon is draining; not accepting new work');
+      err.name = 'DrainingError';
+      throw err;
+    });
+    try {
+      await adapter.connect();
+      api.send(42, 'hello');
+      await until(() => api.replies.length === 1, 'the reply');
+      expect(api.replies).toEqual([TELEGRAM_RESTARTING_REPLY]);
+    } finally {
+      await adapter.disconnect();
     }
   });
 });
