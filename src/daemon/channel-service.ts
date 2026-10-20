@@ -227,6 +227,13 @@ export class ChannelService implements Service {
           { read: TELEGRAM_CHANNEL_OFF_DROPPED_REPLY, maybe: TELEGRAM_CHANNEL_OFF_MAYBE_DROPPED_REPLY },
           (userId) => this.allowListNames('telegram', userId),
         );
+        // A shutdown does not wait for a settings reload in progress, so its
+        // stop() may have run during that wait. Building adapters after it
+        // would leave one polling, and confirming updates, after teardown.
+        if (this._status !== 'starting') {
+          console.log('[ChannelService] Stopped while starting; not starting the channels');
+          return;
+        }
       }
       for (const [token, point] of this.telegramResume) {
         if (token === nextToken || point.waiting.length === 0) continue;

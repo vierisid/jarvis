@@ -624,6 +624,110 @@ describe('#910 review: what the lanes must not do', () => {
     }
   });
 
+  test('a stop that lands while a bot switch is still telling senders leaves no adapter running', async () => {
+    // A shutdown does not wait for a settings reload in progress: its stop()
+    // can run while start() awaits the old bot's replies.
+    const api = fakeBotApi();
+    let releaseSends!: () => void;
+    const sendsHeld = new Promise<void>((r) => { releaseSends = r; });
+    let sendsWaiting = 0;
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/sendMessage') && /\/bota\//.test(url)) { sendsWaiting++; await sendsHeld; }
+      return api.fetchImpl(url, init);
+    }) as typeof fetch;
+    const { agent, turns, release } = slowAgent();
+    const config = { channels: { telegram: { enabled: true, bot_token: 'a', allowed_users: [42] } } };
+    const svc = new ChannelService(config as never, agent as never);
+    try {
+      await svc.start();
+      api.send(42, 'slow first', 'a');
+      await until(() => turns.length === 1, 'the first turn');
+      api.send(42, 'waiting', 'a');
+      const polls = api.offsets.length;
+      await until(() => api.offsets.length > polls + 1, 'the waiting message to be fetched');
+      config.channels = { telegram: { ...config.channels.telegram, bot_token: 'b' } };
+      const reload = (async () => { await svc.stop(); await svc.start(); })();
+      await until(() => sendsWaiting === 1, 'the switch to be telling the old bot\'s sender');
+      await svc.stop();
+      releaseSends();
+      await reload;
+      await Bun.sleep(50);
+      expect(api.offsets.filter((o) => o.token === 'b')).toEqual([]);
+      expect(svc.getChannelStatus()).toEqual({});
+    } finally {
+      releaseSends();
+      release('slow first');
+      await svc.stop();
+    }
+  });
+
+  test('a bot switch does not write to a waiting sender the same save removed from the list (#860)', async () => {
+    const api = fakeBotApi();
+    globalThis.fetch = api.fetchImpl;
+    const { agent, turns, release } = slowAgent();
+    const config = { channels: { telegram: { enabled: true, bot_token: 'a', allowed_users: [42, 9] } } };
+    const svc = new ChannelService(config as never, agent as never);
+    try {
+      await svc.start();
+      api.send(9, 'slow first', 'a');
+      await until(() => turns.length === 1, 'the first turn');
+      api.send(9, 'waiting', 'a');
+      const polls = api.offsets.length;
+      await until(() => api.offsets.length > polls + 1, 'the waiting message to be fetched');
+      config.channels = { telegram: { ...config.channels.telegram, bot_token: 'b', allowed_users: [42] } };
+      await svc.stop();
+      await svc.start();
+      expect(api.replies).toEqual([]);
+    } finally {
+      release('slow first');
+      await svc.stop();
+    }
+  });
+
+  test('a bot that keeps getting updates keeps its resume point past the week, and an idle one carries its age along a chain of saves', async () => {
+    const api = fakeBotApi();
+    globalThis.fetch = api.fetchImpl;
+    let clock = 0;
+    const DAY = 24 * 60 * 60 * 1000;
+    const adapter = (resume?: TelegramResumePoint) => {
+      const state: { point: TelegramResumePoint | null } = { point: null };
+      const a = new TelegramAdapter('tok', { allowedUsers: [42], now: () => clock, onResumePoint: (p) => { state.point = p; }, ...(resume ? { resume } : {}) });
+      a.onMessage(async () => '');
+      return { a, state };
+    };
+    // Busy: an update eight days in is fetched, so the point is fresh.
+    const busy = adapter();
+    await busy.a.connect();
+    api.send(42, 'day 0');
+    await until(() => busy.state.point?.offset === 2, 'the first update');
+    clock = 8 * DAY;
+    api.send(42, 'day 8');
+    await until(() => busy.state.point?.offset === 3, 'the second update');
+    await busy.a.disconnect();
+    const kept = adapter(busy.state.point!);
+    let polls = api.offsets.length;
+    await kept.a.connect();
+    await until(() => api.offsets.length > polls, 'the first poll');
+    expect(api.offsets[polls]).toEqual({ token: 'tok', offset: 3 });
+
+    // Idle: a save at day 10 builds an adapter that fetches nothing, and
+    // another save after day 15 must still see the age of day 8.
+    clock = 10 * DAY;
+    await kept.a.disconnect();
+    const middle = adapter(kept.state.point!);
+    await middle.a.connect();
+    polls = api.offsets.length;
+    await until(() => api.offsets.length > polls, 'an idle poll');
+    await middle.a.disconnect();
+    clock = 16 * DAY;
+    const last = adapter(middle.state.point!);
+    polls = api.offsets.length;
+    await last.a.connect();
+    await until(() => api.offsets.length > polls, 'the first poll');
+    expect(api.offsets[polls]).toEqual({ token: 'tok', offset: 0 });
+    await last.a.disconnect();
+  });
+
   test('a resume point more than a week old is not used: Telegram may have renumbered', async () => {
     const api = fakeBotApi();
     globalThis.fetch = api.fetchImpl;

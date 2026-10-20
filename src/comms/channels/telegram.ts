@@ -339,7 +339,7 @@ export class TelegramAdapter implements ChannelAdapter {
     this.lastUpdateAt = this.now();
     const resume = opts?.resume;
     if (resume && this.now() - resume.lastUpdateAt > TELEGRAM_RESUME_MAX_AGE_MS) {
-      console.log('[TelegramAdapter] Not resuming from a point saved more than a week ago: Telegram may have renumbered its updates since.');
+      console.log('[TelegramAdapter] Not resuming: this bot has fetched no update for more than a week, and Telegram may have renumbered its updates since.');
     } else if (resume && Number.isSafeInteger(resume.offset) && resume.offset > 0) {
       this.offset = resume.offset;
       this.lastUpdateAt = resume.lastUpdateAt;
