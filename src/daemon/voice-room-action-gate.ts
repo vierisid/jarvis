@@ -36,7 +36,7 @@ import { roomActionCategories, type RoomActionCategory } from './room-actions.ts
 import type { RoomActionOutcome, RoomAnswer } from './room-action-results.ts';
 import type { AuthorityDecisionType, ResolutionChannel } from '../authority/audit.ts';
 import {
-  collapseRoomActionAliases, matchByTitle, matchEntityByName, matchProjectByName, roomActionArgs, roomActionEntityArg,
+  collapseRoomActionAliases, foldEntityName, matchByTitle, matchEntityByName, matchProjectByName, roomActionArgs, roomActionEntityArg,
   roomActionTargetKind, withRoomActionDefaults, type RoomActionTargetKind,
 } from './room-action-targets.ts';
 
@@ -333,12 +333,14 @@ async function resolveHeldEntity(
     console.warn(`[voice] could not list memory entities for ${ra.room}/${ra.action}:`, err instanceof Error ? err.message : err);
     return { ok: false, message: `${not}: I couldn't look up your memory just now.` };
   }
+  // A defensive guard: no current caller reaches it, since parseRoomAction
+  // and every unsettled path strip the pin (withoutEntityPin). It is kept so
+  // a held action that ever arrives with an id is checked, not trusted.
   if (pinnedId) {
     const entity = entities.find((e) => e.id === pinnedId);
     if (!entity) return { ok: false, message: `${not}: I couldn't find a memory entity with id ${quoted(pinnedId)}.` };
     // The card names it, so another by the same name is one it cannot tell apart.
-    const fold = (s: string) => s.normalize('NFC').trim().toLowerCase();
-    const same = entities.filter((e) => fold(e.name) === fold(entity.name)).length;
+    const same = entities.filter((e) => foldEntityName(e.name) === foldEntityName(entity.name)).length;
     if (same > 1) return { ok: false, message: `${not}: ${same} things in your memory are called ${quoted(entity.name)}, so I can't tell which you mean. Add it from the room.` };
     return { ok: true, ra: { ...ra, args: { ...args, [entityArg]: entity.name, id: entity.id } } };
   }

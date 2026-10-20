@@ -220,8 +220,9 @@ export function useMemoryData() {
    *
    * `entity` is what the daemon settled on before the person approved the
    * card (#1023), taken as given: an id is that entity (a missing one is
-   * refused by the daemon, never swapped for another), and "new" creates
-   * one by the subject's name. With neither (the realtime path, which holds
+   * refused, never swapped for another), and "new" creates one by the
+   * subject's name, unless one by that name has appeared since the card,
+   * which is refused. With neither (the realtime path, which holds
    * no card) the subject is matched as the daemon matches it, against the
    * vault's own list rather than whatever this room has loaded so far:
    * a name that matches two entities is refused, and one that matches none
@@ -241,11 +242,17 @@ export function useMemoryData() {
         return { ok: false, message: "Subject, predicate, and object are required." };
       }
       let target: { id: string; name: string } | null = entity && entity !== "new" ? { id: entity.id, name: subjectTrim } : null;
-      if (!target && entity !== "new") {
+      if (!target) {
         try {
           const resp = await fetch("/api/vault/entities");
           if (!resp.ok) throw new Error(await resp.text() || `HTTP ${resp.status}`);
           const match = matchEntityByName(await resp.json() as Entity[], subjectTrim);
+          // The card said a new entity; one by that name was made since (say
+          // by another card), so neither a second one nor that one is what
+          // was approved.
+          if (entity === "new" && match) {
+            return { ok: false, message: `${subjectTrim} was added to memory since I asked; nothing was saved. Say it again.` };
+          }
           if (match && "ambiguous" in match) {
             return { ok: false, message: `${match.ambiguous} entities match "${subjectTrim}"; add the fact from the entity itself.` };
           }

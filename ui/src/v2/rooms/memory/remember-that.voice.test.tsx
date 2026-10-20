@@ -105,6 +105,8 @@ test("a new entity the card promised is made, though a loaded name (James) holds
   const { answer, calls } = await remember({ subject: "me", predicate: "birthday", object: "march 15", new_entity: true });
   expect(answer).toBe("true accepted");
   expect(calls).toEqual([
+    // Checked first: none by that name has been made since the card.
+    "GET /api/vault/entities",
     `POST /api/vault/entities ${JSON.stringify({ name: "me", type: "concept", source: "dashboard" })}`,
     fact("e-new"),
   ]);
@@ -131,4 +133,12 @@ test("a pinned entity deleted since the card is refused, not swapped for another
   expect(answer).toBe("false rejected");
   expect(calls).toEqual([fact("e-gone")]);
   expect(host.textContent).toContain("Alice Smith is no longer in memory; nothing was saved.");
+});
+
+test("a new entity the card promised is not made when one by that name was added since", async () => {
+  // Another held card for "Alice Smith" made it first; the vault has it now.
+  const { answer, calls } = await remember({ subject: "alice smith", predicate: "birthday", object: "march 15", new_entity: true });
+  expect(answer).toBe("false rejected");
+  expect(calls).toEqual(["GET /api/vault/entities"]);
+  expect(host.textContent).toContain("alice smith was added to memory since I asked; nothing was saved. Say it again.");
 });

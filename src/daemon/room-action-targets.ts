@@ -402,6 +402,14 @@ export function roomActionEntityArg(room: string, action: string): string | null
 }
 
 /**
+ * An entity name as names are compared: NFC, so one typed with combining
+ * accents is the one stored precomposed, trimmed and lowercased.
+ */
+export function foldEntityName(name: string): string {
+  return name.normalize('NFC').trim().toLowerCase();
+}
+
+/**
  * The entity `name` means (#1023): one whose name is it, ignoring case;
  * failing that, one whose name holds it as whole words ("alice" finds "Alice
  * Smith"; "me" does not find "James"). Two or more at the first step that
@@ -412,8 +420,7 @@ export function matchEntityByName<T extends { name: string }>(
   entities: readonly T[],
   name: string,
 ): { entity: T } | { ambiguous: number } | null {
-  // NFC, so a name typed with combining accents is the one stored precomposed.
-  const fold = (s: string) => s.normalize('NFC').trim().toLowerCase();
+  const fold = foldEntityName;
   const q = fold(name);
   if (!q) return null;
   const one = (found: T[]) => (found.length === 1 ? { entity: found[0]! } : found.length > 1 ? { ambiguous: found.length } : null);
