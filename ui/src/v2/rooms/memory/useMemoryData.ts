@@ -1,4 +1,5 @@
 import { readMemoryPages } from './memory-pages';
+import { matchEntityByName } from "../../../../../src/daemon/room-action-targets";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const POLL_INTERVAL_MS = 8000;
@@ -214,15 +215,25 @@ export function useMemoryData() {
   );
 
   /**
-   * Voice path for `remember_that` — fuzzy-find the subject entity by
-   * name; create as a "concept" if missing; attach the fact. The
-   * predicate is taken verbatim from the classifier output (lowercased).
+   * Voice path for `remember_that`: attach the fact to its subject entity,
+   * the predicate lowercased.
+   *
+   * `entity` is what the daemon settled on before the person approved the
+   * card (#1023), taken as given: an id is that entity (a missing one is
+   * refused, never swapped for another), and "new" creates one by the
+   * subject's name, unless one by that name has appeared since the card,
+   * which is refused. With neither (the realtime path, which holds
+   * no card) the subject is matched as the daemon matches it, against the
+   * vault's own list rather than whatever this room has loaded so far:
+   * a name that matches two entities is refused, and one that matches none
+   * creates a "concept".
    */
   const rememberThat = useCallback(
     async (
       subject: string,
       predicate: string,
       object: string,
+      entity: { id: string } | "new" | null = null,
     ): Promise<ActionResult> => {
       const subjectTrim = subject.trim();
       const predicateTrim = predicate.trim().toLowerCase();
@@ -230,20 +241,43 @@ export function useMemoryData() {
       if (!subjectTrim || !predicateTrim || !objectTrim) {
         return { ok: false, message: "Subject, predicate, and object are required." };
       }
-      let entity = findByName(subjectTrim);
-      if (!entity) {
+      let target: { id: string; name: string } | null = entity && entity !== "new" ? { id: entity.id, name: subjectTrim } : null;
+      if (!target) {
+        try {
+          const resp = await fetch("/api/vault/entities");
+          if (!resp.ok) throw new Error(await resp.text() || `HTTP ${resp.status}`);
+          const match = matchEntityByName(await resp.json() as Entity[], subjectTrim);
+          // The card said a new entity; one by that name was made since (say
+          // by another card), so neither a second one nor that one is what
+          // was approved.
+          if (entity === "new" && match) {
+            return { ok: false, message: `${subjectTrim} was added to memory since I asked; nothing was saved. Say it again.` };
+          }
+          if (match && "ambiguous" in match) {
+            return { ok: false, message: `${match.ambiguous} entities match "${subjectTrim}"; add the fact from the entity itself.` };
+          }
+          if (match) target = match.entity;
+        } catch (err) {
+          return { ok: false, message: err instanceof Error ? err.message : "Failed" };
+        }
+      }
+      if (!target) {
         const created = await addEntity(subjectTrim, "concept");
         if (!created.ok) return { ok: false, message: created.message };
-        entity = created.entity;
+        target = created.entity;
       }
-      const factResult = await addFact(entity.id, predicateTrim, objectTrim);
+      const factResult = await addFact(target.id, predicateTrim, objectTrim);
+      // A pinned entity deleted since the card is not swapped for another.
+      if (!factResult.ok && /Unknown subject_id/.test(factResult.message)) {
+        return { ok: false, message: `${target.name} is no longer in memory; nothing was saved.` };
+      }
       if (!factResult.ok) return factResult;
       return {
         ok: true,
-        message: `Remembered: ${entity.name} → ${predicateTrim} → ${objectTrim}.`,
+        message: `Remembered: ${target.name} → ${predicateTrim} → ${objectTrim}.`,
       };
     },
-    [findByName, addEntity, addFact],
+    [addEntity, addFact],
   );
 
   return {

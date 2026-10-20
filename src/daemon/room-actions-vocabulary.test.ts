@@ -13,6 +13,7 @@ import { classifyVoiceIntent } from '../agents/voice-intent-classifier.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import { REALTIME_NAV_TOOLS } from './realtime-nav-tools.ts';
 import { isRoomAction, ROOM_ACTIONS } from './room-actions.ts';
+import { ROOM_ACTION_ARGS } from './room-action-targets.ts';
 import { readFileSync } from 'node:fs';
 
 async function classifierPrompt(): Promise<string> {
@@ -76,6 +77,58 @@ describe('the classifier prompt offers only actions the rooms carry out', () => 
     const prompt = await classifierPrompt();
     expect(prompt).not.toContain('grant_access');
     expect(prompt).not.toContain('revoke_access');
+  });
+});
+
+/** "room/action.arg" for each argument named that the room's handler does not read (#1021). */
+function unread(room: string, action: string, args: readonly string[]): string[] {
+  const listed = ROOM_ACTION_ARGS[room]?.[action] ?? {};
+  return args.filter((a) => !Object.prototype.hasOwnProperty.call(listed, a)).map((a) => `${room}/${action}.${a}`);
+}
+
+describe('the voice vocabularies offer only arguments the handlers read (#1021)', () => {
+  test('every argument the classifier prompt documents, or an example fills in, is one its handler reads', async () => {
+    const prompt = await classifierPrompt();
+    const named: string[] = [];
+    let documented = 0;
+    let room: string | null = null;
+    for (const line of prompt.split('\n')) {
+      const header = /^\w+ room \("room": "(\w+)"\):$/.exec(line);
+      if (header) { room = header[1]!; continue; }
+      if (line.trim() === '') { room = null; continue; }
+      const spec = /^- "(\w+)" \S+ args: \{(.*)\}\s*(?:matches.*)?$/.exec(line);
+      if (spec && room) {
+        const args = [...spec[2]!.matchAll(/"(\w+)"\??:/g)].map((m) => m[1]!);
+        documented += args.length;
+        named.push(...unread(room, spec[1]!, args));
+      }
+      if (line.startsWith('{"verb"')) {
+        const ra = (JSON.parse(line) as { room_action?: { room: string; action: string; args?: Record<string, unknown> } | null }).room_action;
+        if (ra) named.push(...unread(ra.room, ra.action, Object.keys(ra.args ?? {})));
+      }
+    }
+    // Not vacuous: the specs were read and their arguments found.
+    expect(documented).toBeGreaterThan(40);
+    expect(named).toEqual([]);
+  });
+
+  test('every argument the realtime nav tool names is one its handler reads', () => {
+    const tool = REALTIME_NAV_TOOLS.find((t) => t.name === 'dashboard_room_action')!;
+    const named: string[] = [];
+    let found = 0;
+    for (const line of tool.description.split('\n')) {
+      const entry = /^- (\w+): (.*)$/.exec(line);
+      if (!entry) continue;
+      const list = entry[2]!.replace(/\.\s*\(.*\)\s*$/, '');
+      for (const item of topLevelItems(list)) {
+        const m = /^(\w+)(?:\{([^}]*)\})?$/.exec(item)!;
+        const args = (m[2] ?? '').split(',').map((a) => /^\s*(\w+)/.exec(a)?.[1]).filter((a): a is string => !!a);
+        found += args.length;
+        named.push(...unread(entry[1]!, m[1]!, args));
+      }
+    }
+    expect(found).toBeGreaterThan(20);
+    expect(named).toEqual([]);
   });
 });
 

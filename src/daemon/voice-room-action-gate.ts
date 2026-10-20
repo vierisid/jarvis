@@ -36,7 +36,8 @@ import { roomActionCategories, type RoomActionCategory } from './room-actions.ts
 import type { RoomActionOutcome, RoomAnswer } from './room-action-results.ts';
 import type { AuthorityDecisionType, ResolutionChannel } from '../authority/audit.ts';
 import {
-  collapseRoomActionAliases, matchByTitle, matchProjectByName, roomActionTargetKind, withRoomActionDefaults, type RoomActionTargetKind,
+  collapseRoomActionAliases, foldEntityName, matchByTitle, matchEntityByName, matchProjectByName, roomActionArgs, roomActionEntityArg,
+  roomActionTargetKind, withRoomActionDefaults, type RoomActionTargetKind,
 } from './room-action-targets.ts';
 
 export type RealtimeRoomActionContext = {
@@ -202,9 +203,14 @@ export function roomActionAuditRow(
   };
 }
 
-/** The items a held action can act on, read the way the dashboard reads them. */
+/**
+ * The items a held action can act on, read the way the dashboard reads them,
+ * and the memory entities a fact can attach to (#1023).
+ */
 export type RoomActionTargetLists = {
   [K in RoomActionTargetKind]: () => Promise<ReadonlyArray<{ id: string } & Record<string, unknown>>>;
+} & {
+  entity: () => Promise<ReadonlyArray<{ id: string; name: string }>>;
 };
 
 const TARGET_NOUN: Record<RoomActionTargetKind, string> = { project: 'project', content: 'content item', task: 'task' };
@@ -227,9 +233,11 @@ function quoted(s: string): string {
 
 /**
  * `ra` as it will run, settled before the person is asked about it (#1008):
- * every default its handler would supply filled in, and the item it acts on
+ * only the arguments its handler reads (#1021), every default it would
+ * supply filled in, and the item it acts on
  * resolved by the room's own match and pinned by id, its full name shown in
- * place of the one heard. Its handler takes a pinned id as given
+ * place of the one heard (a remembered fact's memory entity likewise,
+ * resolveHeldEntity, #1023). Its handler takes a pinned id as given
  * (pickRoomActionTarget), so the selection and the list changing between the
  * card and the click cannot change what runs.
  *
@@ -244,7 +252,12 @@ export async function resolveHeldRoomAction(
   lists: RoomActionTargetLists,
   what: string,
 ): Promise<{ ok: true; ra: HeldRoomAction } | { ok: false; message: string }> {
-  const args = withRoomActionDefaults(ra.room, ra.action, collapseRoomActionAliases(ra.room, ra.action, ra.args ?? {}));
+  // Only what the handler reads is kept (#1021), so the card shows nothing
+  // that confirming does not use.
+  const args = withRoomActionDefaults(ra.room, ra.action,
+    collapseRoomActionAliases(ra.room, ra.action, roomActionArgs(ra.room, ra.action, ra.args)));
+  const entityArg = roomActionEntityArg(ra.room, ra.action);
+  if (entityArg) return resolveHeldEntity(ra, args, entityArg, lists, what);
   const kind = roomActionTargetKind(ra.room, ra.action);
   if (!kind) return { ok: true, ra: { ...ra, args } };
   const noun = TARGET_NOUN[kind];
@@ -281,4 +294,60 @@ export async function resolveHeldRoomAction(
     return { ok: false, message: `${not}: ${same} ${noun}s are called ${JSON.stringify(shown)}, so I can't tell which you mean. Do it from the room.` };
   }
   return { ok: true, ra: { ...ra, args: { ...args, id: item.id, name: shown } } };
+}
+
+/**
+ * The memory entity a held remember_that attaches to, settled before its
+ * card (#1023): the one its subject names (matchEntityByName, as the Memory
+ * room matches), pinned by `id` with its full name in place of the one heard,
+ * or `new_entity: true` when none has the name, so the card says a new one
+ * will be made. A pinned `id` (parseRoomAction drops one from the
+ * classifier) is checked like an item's, and refused when another entity has
+ * its name. A subject that matches two or more entities, or a list that
+ * cannot be read, is refused, as is a subject or a predicate or object left
+ * out.
+ *
+ * The predicate and object are trimmed, and the predicate lowercased, as the
+ * fact is stored, so the card shows what is written.
+ */
+async function resolveHeldEntity(
+  ra: HeldRoomAction,
+  settled: Record<string, unknown>,
+  entityArg: string,
+  lists: RoomActionTargetLists,
+  what: string,
+): Promise<{ ok: true; ra: HeldRoomAction } | { ok: false; message: string }> {
+  const { id: _id, new_entity: _new, ...args } = settled;
+  const not = `I haven't done "${what}"`;
+  const pinnedId = typeof settled.id === 'string' && settled.id ? settled.id : null;
+  const name = typeof args[entityArg] === 'string' ? (args[entityArg] as string).trim() : '';
+  if (!pinnedId && !name) return { ok: false, message: `${not}: say what it is about, and I'll show you where it goes before I save it.` };
+  if (typeof args.predicate === 'string') args.predicate = args.predicate.trim().toLowerCase();
+  if (typeof args.object === 'string') args.object = args.object.trim();
+  // The room refuses a fact missing either half, so no card is raised for one.
+  if (!args.predicate || !args.object) return { ok: false, message: `${not}: say what to remember about it as well.` };
+  let entities: ReadonlyArray<{ id: string; name: string }>;
+  try {
+    entities = await lists.entity();
+  } catch (err) {
+    console.warn(`[voice] could not list memory entities for ${ra.room}/${ra.action}:`, err instanceof Error ? err.message : err);
+    return { ok: false, message: `${not}: I couldn't look up your memory just now.` };
+  }
+  // A defensive guard: no current caller reaches it, since parseRoomAction
+  // and every unsettled path strip the pin (withoutEntityPin). It is kept so
+  // a held action that ever arrives with an id is checked, not trusted.
+  if (pinnedId) {
+    const entity = entities.find((e) => e.id === pinnedId);
+    if (!entity) return { ok: false, message: `${not}: I couldn't find a memory entity with id ${quoted(pinnedId)}.` };
+    // The card names it, so another by the same name is one it cannot tell apart.
+    const same = entities.filter((e) => foldEntityName(e.name) === foldEntityName(entity.name)).length;
+    if (same > 1) return { ok: false, message: `${not}: ${same} things in your memory are called ${quoted(entity.name)}, so I can't tell which you mean. Add it from the room.` };
+    return { ok: true, ra: { ...ra, args: { ...args, [entityArg]: entity.name, id: entity.id } } };
+  }
+  const match = matchEntityByName(entities, name);
+  if (match && 'ambiguous' in match) {
+    return { ok: false, message: `${not}: ${match.ambiguous} things in your memory match ${quoted(name)}, so I can't tell which you mean. Say its full name, or add it from the room.` };
+  }
+  if (match) return { ok: true, ra: { ...ra, args: { ...args, [entityArg]: match.entity.name, id: match.entity.id } } };
+  return { ok: true, ra: { ...ra, args: { ...args, [entityArg]: name, new_entity: true } } };
 }
