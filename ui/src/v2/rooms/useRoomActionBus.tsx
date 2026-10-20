@@ -167,6 +167,10 @@ function runHandler(handler: RoomActionHandler, req: RoomActionRequest): RoomAct
  * granted when it needs one (#1025). A refused claim, or one whose asker has
  * gone meanwhile, runs nothing and is not reported: the daemon has stopped
  * listening for its answer.
+ *
+ * If the room unmounted during the claim round trip, `handlerFor` falls back
+ * to the handler captured at dispatch, on purpose: the daemon has granted it
+ * and counts it as under way, so it runs rather than vanish.
  */
 function runClaimed(
   req: RoomActionRequest,
@@ -181,6 +185,8 @@ function runClaimed(
   const refused = () => console.warn(`[RoomActionBus] Dropped "${req.action}" for room "${req.room}": the daemon had stopped waiting for it`);
   req.claim().then(
     (granted) => {
+      // stillAsked is a defensive guard: a claim is already refused when its
+      // socket closes, so a grant should never arrive for a gone asker.
       if (granted !== true || req.stillAsked?.() === false) {
         refused();
         return;

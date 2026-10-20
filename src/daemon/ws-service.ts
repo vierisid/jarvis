@@ -75,9 +75,9 @@ import { safeChatIdentity, type BriefChatTransport } from '../brief/chat-transpo
 import { currentBriefTurn } from '../brief/chat-context.ts';
 import { reportExecutionActivity } from '../actions/progress-context.ts';
 
-/** How long a realtime nav tool waits for the room to answer: inside TOOL_RESULT_GRACE_MS. */
 /** Longer than any room action id (a UUID is 36): a claim naming one is ignored (#1025). */
 const ROOM_ACTION_ID_MAX = 64;
+/** How long a realtime nav tool waits for the room to answer: inside TOOL_RESULT_GRACE_MS. */
 const REALTIME_ROOM_ACTION_WAIT_MS = Math.min(ROOM_ACTION_QUEUE_TTL_MS, TOOL_RESULT_GRACE_MS - 500);
 
 type VoiceSession = {
