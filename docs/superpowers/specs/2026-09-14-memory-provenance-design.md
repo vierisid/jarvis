@@ -47,7 +47,9 @@ a fact or supersede a confirmed correction.
 - `POST /api/vault/facts/:id/confirm`: `{confirmed: true, reason}`.
 - `POST /api/vault/facts/:id/correct`: `{confirmed: true, reason, object}`.
 - Existing `POST /api/vault/facts` accepts optional `scope`, `valid_from` and
-  `valid_to` (epoch milliseconds), but cannot establish confirmation. The end of
+  `valid_to` (epoch milliseconds), but cannot establish confirmation. Its
+  `source` is one of `dashboard`, `user` or `api` (default `dashboard`); any
+  other value is refused with 400. The end of
   an interval is exclusive. Missing temporal bounds stay null.
 
 Writes are synchronous database transactions behind the existing authenticated
