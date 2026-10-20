@@ -65,6 +65,22 @@ export interface EffectInvocation {
   prepare: () => { arguments: Record<string, unknown>; target: Record<string, unknown>; bindings?: Record<string, unknown> };
   validateTarget?: (args: Record<string, unknown>, target: Record<string, unknown>) => void;
   /**
+   * Why a card could not show this effect as it would run, or null (#1040).
+   * Asked only when the decision needs a card, before one is raised: a value
+   * the card would cut or could not display is refused, typed and for good,
+   * rather than approved unseen. An effect let run without a card is not
+   * asked, since there is nothing to show it on.
+   */
+  cardRefusal?: (args: Record<string, unknown>) => string | null;
+  /**
+   * The card sentence from the frozen arguments (#1040). `prepare` puts it in
+   * the target; this gives one to a record made before that, by an earlier
+   * build, that reaches its card only now (a step held by Pause across the
+   * upgrade). The target is not part of the request digest, so no identity
+   * changes.
+   */
+  intentFor?: (args: Record<string, unknown>) => string;
+  /**
    * Q-05: recheck what the record was made against beyond its arguments and
    * target, such as the memory facts a recipient matched. Runs before the
    * policy and any approval, inside the dispatch checkpoint and, with
@@ -152,7 +168,7 @@ const refused = (error: PolicyRefusal): ActionFailure =>
  * handles one as an outcome to branch on: it fails the step, even a probe's.
  */
 export const GOVERNANCE_REFUSALS: ReadonlySet<string> = new Set(['EMERGENCY_STOPPED', 'RUN_NOT_RUNNING', 'AUTHORITY_DENIED',
-  'APPROVAL_DENIED', 'APPROVAL_EXPIRED', 'APPROVAL_WITHDRAWN', 'APPROVAL_REQUIRED', 'WORKFLOW_CHANGED']);
+  'APPROVAL_DENIED', 'APPROVAL_EXPIRED', 'APPROVAL_WITHDRAWN', 'APPROVAL_REQUIRED', 'WORKFLOW_CHANGED', 'CARD_CANNOT_SHOW']);
 
 /** The durable identity of an effect: one per run, step, loop position and route. */
 export const workflowEffectId = (runId: string, stepName: string, executionPath: Array<[string, number]>, route: string) =>
@@ -407,6 +423,16 @@ export class WorkflowEffectBoundary {
     if (record.approvalId || decision.requiresApproval) {
       if (!approvals) throw new Error('Workflow approval service unavailable; execution denied');
       if (!record.approvalId) {
+        if (typeof record.target.intent !== 'string' && input.intentFor) {
+          record.target = { ...record.target, intent: input.intentFor(record.arguments) };
+        }
+        const unshowable = input.cardRefusal?.(record.arguments) ?? null;
+        if (unshowable) {
+          record.status = 'blocked'; record.decision = 'denied'; record.error = unshowable;
+          record.outcome = refused(new PolicyRefusal('CARD_CANNOT_SHOW', unshowable));
+          record.reason = record.error; record.finishedAt = Date.now(); saveWorkflowEffect(record);
+          log(false); throw new ActionOutcomeError(record.outcome);
+        }
         // A card waits within its flow's budget (#1012, #1017, #1039): a
         // start in the running-task cap, any other card but a stop in a
         // budget of the same size. The budget is the one the card would be

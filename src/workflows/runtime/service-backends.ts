@@ -26,7 +26,7 @@ import { JarvisToolRegistryAdapter } from "../adapters/tool-registry";
 import { JarvisNotifierAdapter, type NotifierDeps } from "../adapters/notifier";
 import { JarvisContextProviderAdapter } from "../adapters/context-provider";
 import { LlmOnlyAgentDelegator } from "../adapters/agent-delegator";
-import { M7AgentDelegator, type DelegationContinuation } from "../adapters/m7-agent-delegator";
+import { DEFAULT_MAX_ITERATIONS, M7AgentDelegator, type DelegationContinuation } from "../adapters/m7-agent-delegator";
 import { getChildRun } from '../db/repos/child-run';
 import { getDelegation, saveDelegation } from "../db/repos/delegation";
 import { JarvisWorkflowRunnerAdapter } from "../adapters/workflow-runner";
@@ -73,6 +73,9 @@ import { outsideApprovalScope, runAsApproved } from '../../authority/approved-ac
 import type { ActionCategory } from '../../roles/authority';
 import { sendMayHaveArrived } from '../../comms/delivery.ts';
 import { providerOutcome } from '../../failures/evidence.ts';
+import { escapedLiteralForCard, forCard, withoutCardInvisibles } from '../../util/card-text.ts';
+import { AGENT_TASK_MAX_CHARS, checkSpecialistId, SPECIALIST_ID_MAX_CHARS } from '../../actions/tools/agents.ts';
+import { boundedApprovalLabel } from '../../authority/approval-delivery';
 
 export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependencies {
   /** F-14 enrollment is explicitly enabled only with the F-12 queue. */
@@ -135,6 +138,76 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
    * Production wiring passes `AgentService.buildFullSystemPromptParts`.
    */
   buildJarvisSystemPrompt?: (userMessage: string) => SystemPromptParts;
+}
+
+/**
+ * The role a workflow delegation runs when its step names none. Passed to the
+ * delegator explicitly for a delegation whose card named it, so the card and
+ * `M7AgentDelegator`'s own default cannot drift apart.
+ */
+const WORKFLOW_DEFAULT_ROLE = 'workflow-default';
+/** A flow name on a card: the 512 the HTTP routes cap a `displayName` at, as `effect-boundary.ts` labels one. */
+const START_CARD_NAME_MAX_CHARS = 512;
+
+/**
+ * The card sentence for a workflow delegation (#1040): which specialist, and
+ * the goal it will be given. Before, the card read only "Workflow delegate",
+ * although the role and the goal can be wired from trigger data, so a person
+ * approved without seeing either. `delegateTaskGate`'s wording and budgets:
+ * the role short, in the middle; the goal quoted with its quotes escaped and
+ * last, so nothing after it can be forged. `workflowDelegateCardRefusal`
+ * keeps any value this would cut or could not display off a card.
+ */
+export function workflowDelegateIntent(args: Record<string, unknown>): string {
+  const role = typeof args.role === 'string' ? args.role : WORKFLOW_DEFAULT_ROLE;
+  // A step may ask for up to 200 iterations, each an LLM call: a cost the
+  // person approving should see, stated whether the step set it or the
+  // delegator's default applies. The route holds it to a positive integer.
+  const n = typeof args.maxIterations === 'number' ? args.maxIterations : DEFAULT_MAX_ITERATIONS;
+  const steps = `, for at most ${n} iteration${n === 1 ? '' : 's'},`;
+  return `Delegate to a ${forCard(role, SPECIALIST_ID_MAX_CHARS) || 'specialist'} specialist${steps} the goal ${JSON.stringify(forCard(args.goal, AGENT_TASK_MAX_CHARS))}`;
+}
+
+/**
+ * Why a delegation's card could not show it as it would run (#1040), the
+ * bounds `delegate_task` holds its own card to: a role that is not a
+ * specialist (a card naming one would start nothing, and trigger data could
+ * use the role to write words into the sentence), a role id the card cannot
+ * show exactly (#1019), or a goal longer than the card shows in full once the
+ * characters a card cannot display are gone (they are dropped from the goal
+ * an approved delegation runs, below). Asked only when a card is needed, so a
+ * delegation nobody has to approve runs as it did.
+ */
+function workflowDelegateCardRefusal(args: Record<string, unknown>, specialists: ReadonlyMap<string, unknown>): string | null {
+  const role = typeof args.role === 'string' ? args.role : WORKFLOW_DEFAULT_ROLE;
+  if (!specialists.has(role)) {
+    return `Unknown specialist ${escapedLiteralForCard(role.slice(0, SPECIALIST_ID_MAX_CHARS + 20))}, so no card is raised for it. Available: ${[...specialists.keys()].join(', ')}`;
+  }
+  try { checkSpecialistId(role); }
+  catch (error) { return error instanceof Error ? error.message : String(error); }
+  const goal = withoutCardInvisibles(String(args.goal ?? ''));
+  if (goal.length > AGENT_TASK_MAX_CHARS) {
+    return `The goal is ${goal.length} characters; the limit is ${AGENT_TASK_MAX_CHARS}, so the approval card can show all of it. Shorten it.`;
+  }
+  return null;
+}
+
+/**
+ * The card sentence for a step that starts a workflow (#1040): the target's
+ * id and its name, the name one line, bounded, quoted and last. Before, the
+ * card read only "Workflow start". The id is the flow's own (the lookup that
+ * pinned the version found it in the caller's project); the name is the
+ * pinned version's.
+ */
+function workflowStartIntent(flowId: string, name: string, waitForCompletion: boolean): string {
+  return `${waitForCompletion ? 'Start and wait for' : 'Start'} the workflow ${forCard(flowId, 128)} named ${JSON.stringify(boundedApprovalLabel(name, START_CARD_NAME_MAX_CHARS))}`;
+}
+
+/** A start card's sentence from its frozen arguments: the flow and the version it pinned. */
+export function workflowStartIntentOf(args: Record<string, unknown>): string {
+  const pinned = args.pinned as { versionId?: unknown } | undefined;
+  const name = typeof pinned?.versionId === 'string' ? getFlowVersion(pinned.versionId)?.displayName ?? '' : '';
+  return workflowStartIntent(String(args.flowId ?? ''), name, args.waitForCompletion === true);
 }
 
 export function buildSandboxServiceBackends(
@@ -418,6 +491,10 @@ export function buildSandboxServiceBackends(
         orchestrator: opts.agentOrchestrator!,
         llmManager: opts.llmManager,
         specialists: opts.agentSpecialists!,
+        // The bound a delegation card states when the step sets none
+        // (`workflowDelegateIntent`), passed explicitly so the card and the
+        // run cannot drift (#1040).
+        defaultMaxIterations: DEFAULT_MAX_ITERATIONS,
         ...(opts.authorityEngine ? { authorityEngine: opts.authorityEngine } : {}),
         ...(opts.auditTrail ? { auditTrail: opts.auditTrail } : {}),
         ...(opts.emergencyController ? { emergencyController: opts.emergencyController } : {}),
@@ -436,7 +513,21 @@ export function buildSandboxServiceBackends(
     // the conversation instead of asking to delegate a second time.
     const reply = await effects.invoke({ context: ctx, piece: AGENT_PIECE, action: 'delegate',
       route: 'agent', toolName: 'workflow_delegate', category: 'spawn_agent', toolCategory: 'delegation',
-      request: { ...effectRequest }, prepare: () => ({ arguments: { ...effectRequest }, target: { role: req.role ?? 'workflow-default' } }),
+      request: { ...effectRequest },
+      prepare: () => ({ arguments: { ...effectRequest },
+        target: { role: req.role ?? WORKFLOW_DEFAULT_ROLE, intent: workflowDelegateIntent(effectRequest) } }),
+      intentFor: workflowDelegateIntent,
+      cardRefusal: (args) => workflowDelegateCardRefusal(args, opts.agentSpecialists!),
+      // What runs is what the card showed (#1040), the rule the delegated
+      // calls below follow: the sentence recomputed from the frozen request
+      // must still be the one approved. A record from before cards carried
+      // one has nothing to hold.
+      validateTarget: (args, target) => {
+        if (typeof target.intent === 'string' && workflowDelegateIntent(args) !== target.intent) {
+          throw new ActionOutcomeError({ status: 'blocked', code: 'EFFECT_CHANGED_AFTER_REVIEW', effect: 'not_started',
+            message: `What this delegation would do changed after approval (approved: ${JSON.stringify(target.intent)}); dispatch blocked` });
+        }
+      },
       execute: async (_args, checkpoint) => { checkpoint(); return { dispatch: 'authorized' }; },
     });
     if (reply.approval) return { finalMessage: '', toolCalls: [], status: 'approval_required', approval: reply.approval };
@@ -723,10 +814,18 @@ export function buildSandboxServiceBackends(
     // judges, so an authorisation that was never an approval cannot answer an
     // approval the sink asks for. Spent by that one spawn.
     const delegation = getWorkflowEffect(workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, 'agent'));
+    // A delegation approved on a card that named its goal runs that goal
+    // without the characters the card could not display (#1040), as
+    // `delegate_task` does: tag characters spell hidden ASCII. One whose card
+    // named nothing (raised before cards did) runs exactly what it ran
+    // before, so a paused conversation resumes on the goal it began with.
+    // The role the card named is the role run, passed explicitly.
+    const shown = delegation?.approvalId && typeof delegation.target.intent === 'string'
+      ? { ...req, role: req.role ?? WORKFLOW_DEFAULT_ROLE, goal: withoutCardInvisibles(req.goal) } : req;
     const result = delegation?.approvalId
       ? await runAsApproved({ categories: ['spawn_agent'], approvalId: delegation.approvalId, source: 'workflow_effect' },
-        () => m7.delegate(req, continuation))
-      : await m7.delegate(req, continuation);
+        () => m7.delegate(shown, continuation))
+      : await m7.delegate(shown, continuation);
     const uncertain = listWorkflowEffects(ctx.runId).find(effect => effect.stepName === resolved.stepName
       && digest(effect.executionPath) === digest(resolved.executionPath) && effect.route.startsWith('agent-tool:')
       && (effect.status === 'unknown' || effect.status === 'dispatching'));
@@ -776,8 +875,12 @@ export function buildSandboxServiceBackends(
       route: 'workflow', toolName: 'workflow_start', category: 'spawn_agent', toolCategory: 'delegation',
       request: { ...req }, prepare: () => {
         const pinned = childVersion(req.flowId, ctx.projectId);
-        return { arguments: { ...req, pinned }, target: { flowId: req.flowId, ...pinned } };
+        // Named on the card (#1040). The name is kept out of `pinned`, whose
+        // digest a paused run's execute compares against what it froze.
+        const args = { ...req, pinned };
+        return { arguments: args, target: { flowId: req.flowId, ...pinned, intent: workflowStartIntentOf(args) } };
       },
+      intentFor: workflowStartIntentOf,
       execute: async (args, checkpoint) => {
         checkpoint();
         if (digest(childVersion(args.flowId as string, ctx.projectId)) !== digest(args.pinned)) throw new Error('Target workflow changed after approval; start a new run');
