@@ -100,7 +100,12 @@ export function ChannelsTab({
   const [dcGuild, setDcGuild] = useState("");
 
   // STT form
-  const [sttKey, setSttKey] = useState("");
+  // Held per provider: an OpenAI key typed before switching to Groq must not
+  // be saved as, and sent to, Groq (#1066).
+  const [sttKeyByProvider, setSttKeyByProvider] = useState<Record<string, string>>({});
+  const sttKeyProvider = sttCfg?.provider ?? "";
+  const sttKey = sttKeyByProvider[sttKeyProvider] ?? "";
+  const setSttKey = (value: string) => setSttKeyByProvider((keys) => ({ ...keys, [sttKeyProvider]: value }));
   const [sttEndpoint, setSttEndpoint] = useState("http://localhost:8080");
   const [sttServerType, setSttServerType] = useState("whisper_cpp");
 

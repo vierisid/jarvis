@@ -386,7 +386,8 @@ function ManagedUsejarvisRow() {
   );
 }
 
-function ProviderRow({
+/** Exported for its DOM test only. */
+export function ProviderRow({
   name,
   entry,
   data,
@@ -433,6 +434,9 @@ function ProviderRow({
   useEffect(() => {
     setBaseUrl(entry.base_url ?? "");
     setCustomEndpoint(optionalUrl && Boolean(entry.base_url));
+    // The saved endpoint moved under this row, so a key typed for the old one
+    // must not be sent to the new one.
+    setApiKey("");
   }, [entry.base_url, optionalUrl]);
 
   useEffect(() => {
@@ -493,6 +497,9 @@ function ProviderRow({
                 role="switch"
                 onClick={() => {
                   setCustomEndpoint((enabled) => !enabled);
+                  // Official key and gateway token are for different
+                  // destinations; neither follows the toggle (#1066).
+                  setApiKey("");
                   setBaseUrl("");
                   setTestResult(null);
                 }}
@@ -600,7 +607,8 @@ function ProviderRow({
   );
 }
 
-function NewProviderRow({
+/** Exported for its DOM test only. */
+export function NewProviderRow({
   existing,
   data,
   onToast,
@@ -648,6 +656,9 @@ function NewProviderRow({
               value={kind}
               onChange={(e) => {
                 setKind(e.target.value as LLMProviderKind);
+                // A key typed for one kind must not go to the next kind's
+                // endpoint, least of all a URL the user types (#1066).
+                setApiKey("");
                 setBaseUrl("");
                 setCustomEndpoint(false);
                 setTestResult(null);
@@ -691,6 +702,9 @@ function NewProviderRow({
               role="switch"
               onClick={() => {
                 setCustomEndpoint((enabled) => !enabled);
+                // The Anthropic key and a gateway's auth token are for
+                // different destinations (#1066).
+                setApiKey("");
                 setBaseUrl("");
                 setTestResult(null);
               }}
