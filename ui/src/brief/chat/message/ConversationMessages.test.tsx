@@ -116,3 +116,16 @@ test("delayed initial history preserves the saved reading position through empty
   if(scrollHeight)Object.defineProperty(HTMLElement.prototype,"scrollHeight",scrollHeight);else delete (HTMLElement.prototype as any).scrollHeight;
  }
 });
+test("the waiting line names what needs approval and says when another arrives, in the same live element (#1092)",async()=>{
+ setTurn({state:"running"});binding.chat!.activity={};
+ binding.chat!.approvals={p:{conversationId:"a",turnId:"t",requestId:"r",status:"pending"}};await render();
+ const line=host.querySelector<HTMLElement>('[data-reading-anchor="approval"]')!;
+ expect(line.getAttribute("role")).toBe("status");expect(line.textContent!.trim()).toBe("Waiting for your approval before continuing.");
+ // The card's details land after the id: the same line now names the action, for screen readers only.
+ binding.approvalCards={p:{id:"p",intent:"Send the report to Dana",intentReason:"",category:"send_email",impact:"external"}};await render();
+ expect(host.querySelector('[data-reading-anchor="approval"]')).toBe(line);expect(line.querySelector(".brief-sr-only")?.textContent).toContain("Send the report to Dana");
+ binding.chat!.approvals={...binding.chat!.approvals,q:{conversationId:"a",turnId:"t",requestId:"r",status:"pending"}};
+ binding.approvalCards={...binding.approvalCards,q:{id:"q",intent:"Delete the draft",intentReason:"",category:"delete_data",impact:"destructive"}};await render();
+ // Same element, new text: a screen reader hears the change in an existing live region.
+ expect(host.querySelector('[data-reading-anchor="approval"]')).toBe(line);expect(line.querySelector(".brief-sr-only")?.textContent).toContain("2 actions");
+});
