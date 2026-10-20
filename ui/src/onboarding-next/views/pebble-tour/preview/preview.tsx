@@ -1,6 +1,9 @@
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
-import { available, BriefBrand, PebbleLayout } from "on-u-06-shell-fixture";
+import type { BriefShellPort } from "../../../../brief/contracts";
+import { PebbleLayout } from "../../../../brief/shell/pebble-layout/PebbleLayout";
+import { BriefBrand } from "../../../../brief/styles/BriefBrand";
+import "../../../../brief/styles/index.css";
 import { PebbleTourView } from "../index";
 import type { PebbleTourIntent, PebbleTourSurfaceProps } from "../index";
 import "./preview.css";
@@ -8,7 +11,12 @@ import "./preview.css";
 /** Actual D-06 layout and official mark, with inert illustrative room content and
  * an unsent local draft. There is no provider, socket, upload or send callback. */
 function Surface({ open, onOpenChange, reducedMotion }: PebbleTourSurfaceProps) {
-  return <PebbleLayout shell={{ mode: "preview", chatOpen: open, setChatOpen: onOpenChange }} enabled
+  // PebbleLayout uses only mode, chatOpen and setChatOpen; the rest is an inert preview port.
+  const shell: BriefShellPort = {
+    mode: "preview", route: { room: "today", selection: {} }, sidebar: "expanded", chatOpen: open, theme: "light",
+    setSidebar: () => {}, setChatOpen: onOpenChange, setTheme: () => {}, navigate: () => {},
+  };
+  return <PebbleLayout shell={shell} enabled
     reducedMotion={reducedMotion} conversation={{ source: "fixture", content: <Conversation /> }}>
     <Room />
   </PebbleLayout>;
@@ -59,7 +67,7 @@ function Preview() {
       <div className="demo-main"><header>Sample workspace <span>/</span> <strong>Today</strong><i aria-label="Sample connected state" /></header>
         {intent ? <div className="demo-handoff"><p>Preview handoff · no journey completed</p><h1>{intent.to === "first-workflow" ? "Let’s make room for your work." : "Return to Billing tour step"}</h1><p>The host receives <code>{intent.action} → {intent.to}</code>. The first-workflow prompt belongs to ON-U-07.</p><button onClick={() => { setIntent(null); setRevision(n => n + 1); }}>Return to Pebble tutorial</button></div>
           : <PebbleTourView model={{ sessionId: `preview-${session}`, revision, phase: "ready", theme, sidebar }}
-            adapter={!missing && available ? { isolation: "tutorial-sandbox", status: "ready", open, Surface, onOpenChange: setOpen } : undefined}
+            adapter={!missing ? { isolation: "tutorial-sandbox", status: "ready", open, Surface, onOpenChange: setOpen } : undefined}
             reducedMotion={reduced} onNavigate={setIntent} />}
       </div>
     </div>
