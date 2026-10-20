@@ -68,7 +68,9 @@ concurrency:
 # repository's default token scope -- read-only today, but a setting outside
 # this file, one toggle away from write. This workflow builds and STARTS a
 # container from the PR's own tree; it pushes nothing and has no registry
-# login, so it needs to read the repository and nothing else.
+# login, so it needs to read the repository and nothing else. Its checkout
+# leaves no token in .git/config (#1001): nothing here runs git against a
+# remote, and the build and the smoke run execute the PR's own tree.
 permissions:
   contents: read
 
@@ -88,9 +90,18 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
+        # BuildKit by digest, not the action's default tag
+        # moby/buildkit:buildx-stable-1 (#1048): a PAT-opened catalog PR starts
+        # this run with no approval, and the builder runs every Dockerfile step.
+        # The same image release-exec.yml pins (BUILDKIT_IMAGE); buildx-stable-1
+        # and v0.33.1 both resolved to this digest on 2026-10-20.
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
 
       # PR check is single-arch for speed; release workflow validates linux/amd64 + linux/arm64.
       #

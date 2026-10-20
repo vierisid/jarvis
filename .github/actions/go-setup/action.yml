@@ -1,0 +1,84 @@
+name: Go setup
+description: Install the Go that sidecar/go.mod names, and restore the module and build caches by their exact key only.
+
+# The Actions cache is shared by every run on main, and a job that runs
+# upstream code there (the webview_go bump builds it on the host runner) can
+# reach the runtime token a later step holds and write entries (#1047). So the
+# caches are restored by their exact key only:
+#   - setup-go's own cache is off. It restores whatever its key prefix-matches
+#     (the cache service matches the key itself as a prefix too) and has no
+#     switch to refuse that.
+#   - A lookup that downloads nothing asks whether the exact key exists, and
+#     actions/cache downloads only then (otherwise it looks up again without
+#     downloading, which keeps its post-job save). So a prefix match is not
+#     extracted, which matters because actions/cache extracts with tar -P,
+#     which can write outside path:, the Go toolchain included. The one
+#     exception: the exact entry is evicted or deleted between the lookup
+#     and the download, and the download falls back to a prefix match.
+#   - cache-hit is true only for the exact key, so the step after it empties
+#     both caches on anything else (that same exception); it cannot undo
+#     what tar -P wrote outside them. go clean for the module cache, which is
+#     read-only on disk; rm for the build cache, which go clean -cache only
+#     partly empties.
+# What this does not stop: an entry written at the exact key before CI wrote
+# it, by anyone holding the runtime token on main. Go reuses cached modules
+# and build output without re-verifying them, so this is held to workflows
+# that hold no authority; where authority is held the hardening test refuses
+# any cache restore at all.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        # Single source of truth for the toolchain: the exact version go.mod names.
+        go-version-file: sidecar/go.mod
+        cache: false
+
+    - name: Locate the Go caches
+      id: go-cache-dirs
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Assigned first, so a failing go env stops the step (set -e does
+        # not see a failure inside echo "$(...)") rather than writing an
+        # empty path, and refused when empty all the same.
+        mod="$(go env GOMODCACHE)"
+        build="$(go env GOCACHE)"
+        version="$(go env GOVERSION)"
+        : "${mod:?go env GOMODCACHE is empty}" "${build:?go env GOCACHE is empty}" "${version:?go env GOVERSION is empty}"
+        {
+          echo "mod=$mod"
+          echo "build=$build"
+          echo "version=$version"
+          echo "image=${ImageOS:-none}"
+        } >>"$GITHUB_OUTPUT"
+
+    - name: Look up the Go caches by their exact key
+      id: go-cache-lookup
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ${{ steps.go-cache-dirs.outputs.mod }}
+          ${{ steps.go-cache-dirs.outputs.build }}
+        key: go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-cache-dirs.outputs.image }}-${{ steps.go-cache-dirs.outputs.version }}-${{ hashFiles('sidecar/go.sum') }}
+        lookup-only: true
+
+    - name: Go module and build cache
+      id: go-cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ${{ steps.go-cache-dirs.outputs.mod }}
+          ${{ steps.go-cache-dirs.outputs.build }}
+        key: go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-cache-dirs.outputs.image }}-${{ steps.go-cache-dirs.outputs.version }}-${{ hashFiles('sidecar/go.sum') }}
+        lookup-only: ${{ steps.go-cache-lookup.outputs.cache-hit != 'true' }}
+
+    - name: Discard a Go cache that is not an exact key match
+      if: steps.go-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GOMODCACHE: ${{ steps.go-cache-dirs.outputs.mod }}
+        GOCACHE: ${{ steps.go-cache-dirs.outputs.build }}
+      run: |
+        go clean -modcache
+        rm -rf "$GOCACHE"
