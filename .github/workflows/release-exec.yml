@@ -848,9 +848,13 @@ jobs:
           no-cache: true
           bun-version: ${{ env.BUN_VERSION }}
 
+      # package-manager-cache: false (#1046 review): setup-node turns on its
+      # npm cache by itself when package.json names npm as packageManager,
+      # and the Actions cache is writable by any run on main.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
+          package-manager-cache: false
 
       # The same npm that publishes packs, so the tarball is the one npm
       # itself would have built from the directory.
@@ -955,9 +959,13 @@ jobs:
       contents: read
       id-token: write
     steps:
+      # package-manager-cache: false (#1046 review): setup-node turns on its
+      # npm cache by itself when package.json names npm as packageManager,
+      # and the Actions cache is writable by any run on main.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
+          package-manager-cache: false
           registry-url: "https://registry.npmjs.org"
 
       # Exact version: see NPM_VERSION at the top. The check is there so a
