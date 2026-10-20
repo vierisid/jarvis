@@ -214,6 +214,10 @@ describe('parseIntent — room_action defensive parsing', () => {
     };
     const intent = parseIntent(JSON.stringify({ verb: 'create', impact: 'write', confidence: 0.9, room_action: ra }), 'q');
     expect(intent.room_action).toEqual({ room: 'calendar', action: 'schedule_event', args: { title: 'Dentist', when: 'tomorrow at 3pm' } });
+    // The memory entity a fact lands on is the daemon's to settle (#1023).
+    const pinned = parseIntent(JSON.stringify({ verb: 'create', impact: 'write', confidence: 0.9,
+      room_action: { room: 'memory', action: 'remember_that', args: { subject: 'Mom', predicate: 'likes', object: 'tea', id: 'e-9', new_entity: true } } }), 'q');
+    expect(pinned.room_action?.args).toEqual({ subject: 'Mom', predicate: 'likes', object: 'tea' });
     // An action no handler carries out keeps no arguments at all.
     const unknown = parseIntent(JSON.stringify({ verb: 'show', impact: 'read', confidence: 0.9, room_action: { room: 'tasks', action: 'nuke', args: { all: true } } }), 'q');
     expect(unknown.room_action?.args).toEqual({});

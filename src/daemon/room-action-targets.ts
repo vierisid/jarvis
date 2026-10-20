@@ -31,8 +31,9 @@
  *  - every argument a case reads is in ROOM_ACTION_ARGS, and nothing else
  *    is (#1021).
  * It reads each case's own code. A default or lookup inside a data hook the
- * case calls (useMemoryData's rememberThat finds its subject itself) is not
- * seen, so remember_that is not covered here.
+ * case calls is not seen. remember_that attaches to a memory entity rather
+ * than picking an item from the room's list, and creates one when none has
+ * the name, so it has its own table (ROOM_ACTION_ENTITY_TARGETS, #1023).
  *
  * NO IMPORTS: the UI bundles this file, as it does room-actions.ts.
  */
@@ -128,6 +129,7 @@ export type RoomActionArgType = 'string' | 'number' | 'boolean';
 
 const S = ['string'] as const;
 const N = ['number'] as const;
+const B = ['boolean'] as const;
 /** The item a picking action acts on (pickRoomActionTarget reads both). */
 const PICK = { id: S, name: S } as const;
 
@@ -151,7 +153,8 @@ const PICK = { id: S, name: S } as const;
  * including those read through pickRoomActionTarget (id, name) and
  * withRoomActionDefaults (the action's defaults, and whatever is read off
  * what it returns). The arguments the daemon pins into a held action (an
- * item's id) are arguments the handler reads, so they are listed too.
+ * item's id; the memory entity, #1023) are arguments the handler reads, so
+ * they are listed too.
  */
 export const ROOM_ACTION_ARGS: Record<string, Record<string, Record<string, readonly RoomActionArgType[]>>> = {
   settings: {
@@ -188,7 +191,8 @@ export const ROOM_ACTION_ARGS: Record<string, Record<string, Record<string, read
     search: { query: S },
     set_filter: { type: S },
     select: { name: S },
-    remember_that: { subject: S, predicate: S, object: S },
+    // `id` or `new_entity` is the entity the daemon settled on (#1023).
+    remember_that: { subject: S, predicate: S, object: S, id: S, new_entity: B },
   },
   goals: {
     switch_tab: { tab: S },
@@ -361,4 +365,65 @@ export function matchByTitle<T>(items: readonly T[], titleOf: (item: T) => strin
   const exact = items.find((i) => titleOf(i).toLowerCase() === q);
   if (exact) return exact;
   return items.find((i) => titleOf(i).toLowerCase().includes(q)) ?? null;
+}
+
+/**
+ * room -> action -> the argument naming the memory entity it attaches to
+ * (#1023). remember_that found its subject inside the Memory room's data
+ * hook after the yes: by a substring of whatever the room had loaded (so "me"
+ * found "James"), and with nothing loaded yet it made a duplicate. The card
+ * showed the fact and not where it would land.
+ *
+ * So the daemon settles the entity before the card, as it does an item: it
+ * pins the existing entity by `id` with its full name in the argument, or
+ * marks `new_entity: true` when none has the name, and the card says which.
+ * The hook takes either as given (useMemoryData.rememberThat) and never
+ * looks the name up again.
+ */
+export const ROOM_ACTION_ENTITY_TARGETS: Record<string, Record<string, string>> = {
+  memory: { remember_that: 'subject' },
+};
+
+/**
+ * `args` without the entity pin (`id`, `new_entity`) for an entity action,
+ * else as they are (#1023 review). Only the daemon's settling of a held
+ * action sets the pin; an action that was not settled (the classifier's own
+ * reading, the realtime model's call) is matched by name in the room, so a
+ * pin it carries would be one nobody checked.
+ */
+export function withoutEntityPin(room: string, action: string, args: Record<string, unknown>): Record<string, unknown> {
+  if (roomActionEntityArg(room, action) === null || !(own(args, 'id') || own(args, 'new_entity'))) return args;
+  const { id: _id, new_entity: _new, ...rest } = args;
+  return rest;
+}
+
+/** The argument naming the entity `room`'s `action` attaches to, or null. */
+export function roomActionEntityArg(room: string, action: string): string | null {
+  if (!own(ROOM_ACTION_ENTITY_TARGETS, room)) return null;
+  const actions = ROOM_ACTION_ENTITY_TARGETS[room]!;
+  return own(actions, action) ? actions[action]! : null;
+}
+
+/**
+ * The entity `name` means (#1023): one whose name is it, ignoring case;
+ * failing that, one whose name holds it as whole words ("alice" finds "Alice
+ * Smith"; "me" does not find "James"). Two or more at the first step that
+ * finds any is `ambiguous`, as the card could not say which; none is null.
+ * The daemon and the Memory room both match with this.
+ */
+export function matchEntityByName<T extends { name: string }>(
+  entities: readonly T[],
+  name: string,
+): { entity: T } | { ambiguous: number } | null {
+  // NFC, so a name typed with combining accents is the one stored precomposed.
+  const fold = (s: string) => s.normalize('NFC').trim().toLowerCase();
+  const q = fold(name);
+  if (!q) return null;
+  const one = (found: T[]) => (found.length === 1 ? { entity: found[0]! } : found.length > 1 ? { ambiguous: found.length } : null);
+  const exact = one(entities.filter((e) => fold(e.name) === q));
+  if (exact) return exact;
+  const words = (s: string) => ` ${fold(s).replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim()} `;
+  const qWords = words(q);
+  if (qWords.trim() === '') return null;
+  return one(entities.filter((e) => words(e.name).includes(qWords)));
 }

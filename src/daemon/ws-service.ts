@@ -69,7 +69,8 @@ import {
   type RealtimeRoomActionContext, type RoomActionTargetLists,
 } from './voice-room-action-gate.ts';
 import { findContent } from '../vault/content-pipeline.ts';
-import { roomActionArgs, roomActionTargetKind } from './room-action-targets.ts';
+import { findEntities } from '../vault/entities.ts';
+import { roomActionArgs, roomActionEntityArg, roomActionTargetKind, withoutEntityPin } from './room-action-targets.ts';
 import type { BriefCapabilities } from '../brief/capabilities.ts';
 import { safeChatIdentity, type BriefChatTransport } from '../brief/chat-transport.ts';
 import { currentBriefTurn } from '../brief/chat-context.ts';
@@ -2067,7 +2068,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   /**
    * The lists a held room action's item is found in (#1008), read from the
    * same sources the rooms load them from: /api/sites/projects, /api/content
-   * and /api/vault/commitments.
+   * and /api/vault/commitments, and the memory entities a remembered fact
+   * attaches to (#1023), as /api/vault/entities lists them.
    */
   protected roomActionTargetLists(): RoomActionTargetLists {
     return {
@@ -2077,6 +2079,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       },
       content: async () => findContent({}),
       task: async () => findCommitments({}),
+      entity: async () => findEntities({}),
     };
   }
 
@@ -2170,7 +2173,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         const room = String(args.room ?? '');
         const action = String(args.action ?? '');
         if (!room || !action) return 'Room and action are required.';
-        const innerArgs = (args.args && typeof args.args === 'object') ? args.args as Record<string, unknown> : {};
+        // A memory entity pin is the daemon's to set on a held action (#1023).
+        const innerArgs = withoutEntityPin(room, action, (args.args && typeof args.args === 'object') ? args.args as Record<string, unknown> : {});
         if (!(REALTIME_ROOM_KEYS as readonly string[]).includes(room)) return `There is no "${room}" room.`;
         // Only what the room's handler carries out is sent (#969): nothing on
         // this path consults the authority engine, so an authority grant, or
@@ -3352,6 +3356,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // reading, or the person's yes to a hold (its id, and click or voice).
     audit: { origin: Exclude<RoomActionOrigin, 'realtime'>; approvalId?: string; channel?: Exclude<ResolutionChannel, 'system'> } = { origin: 'classifier' },
   ): Promise<void> {
+    // Only a confirmed hold carries a memory entity the daemon settled (#1023).
+    if (audit.origin !== 'confirm' && ra.args) ra = { ...ra, args: withoutEntityPin(ra.room, ra.action, ra.args) };
     const auditOpts = { approvalId: audit.approvalId ?? null, channel: audit.channel ?? 'voice' };
     // The classifier turns plain speech into this with no confirmation, so
     // it is held to the same list as the realtime tool (#969).
@@ -3577,15 +3583,24 @@ function navigateRoomNotice(key: string, requestId?: string): WSMessage {
  * beside it is that item's own, set when it was pinned, and no other item
  * has it (an ambiguous name is refused), so the id says nothing more to the
  * person, and would be read aloud.
+ *
+ * A remembered fact says where it lands (#1023): on the existing memory
+ * entity it was pinned to, named in full, or on a new one, in words rather
+ * than as the `id` or `new_entity` it is pinned by.
  */
 export function describeRoomAction(ra: { room: string; action: string; args?: Record<string, unknown> }): string {
-  const pinned = roomActionTargetKind(ra.room, ra.action) !== null;
+  const entityArg = roomActionEntityArg(ra.room, ra.action);
+  const pinned = roomActionTargetKind(ra.room, ra.action) !== null || entityArg !== null;
   const args = Object.entries(ra.args ?? {})
-    .filter(([k]) => !(pinned && k === 'id'))
+    .filter(([k]) => !(pinned && (k === 'id' || (entityArg !== null && k === 'new_entity'))))
     .map(([k, v]) => `${visible(JSON.stringify(k))}: ${visible(JSON.stringify(v) ?? String(v))}`);
   const head = `${roomTitle(ra.room)}: ${ra.action.replace(/_/g, ' ')}`;
+  const entityName = entityArg !== null && typeof ra.args?.[entityArg] === 'string' ? visible(JSON.stringify(ra.args[entityArg])) : null;
+  const lands = entityName === null ? []
+    : typeof ra.args?.id === 'string' && ra.args.id ? [`to the memory entity ${entityName}`]
+      : ra.args?.new_entity === true ? [`to a new memory entity ${entityName} (a concept)`] : [];
   const effects = roomActionCategories(ra.room, ra.action).map((c) => ROOM_ACTION_EFFECT[c]);
-  return [args.length > 0 ? `${head} {${args.join(', ')}}` : head, ...(effects.length > 0 ? [`(${effects.join('; ')})`] : [])].join(' ');
+  return [args.length > 0 ? `${head} {${args.join(', ')}}` : head, ...lands, ...(effects.length > 0 ? [`(${effects.join('; ')})`] : [])].join(' ');
 }
 
 /**

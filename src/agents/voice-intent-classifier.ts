@@ -22,7 +22,7 @@ import {
   type Verb,
 } from '../voice/intent.ts';
 import { ROOM_TABS, type TabbedRoom } from '../daemon/room-tabs.ts';
-import { roomActionArgs } from '../daemon/room-action-targets.ts';
+import { roomActionArgs, withoutEntityPin } from '../daemon/room-action-targets.ts';
 
 /**
  * The `switch_tab` line for a room, built from ROOM_TABS: the tabs its room
@@ -703,10 +703,11 @@ function parseRoomAction(raw: unknown): RoomAction | undefined {
     room: obj.room as RoomKey,
     action: obj.action,
     // Only the arguments the room's handler reads, of the types it takes
-    // (#1021): any other key would ride along to a held action's card.
+    // (#1021): any other key would ride along to a held action's card. The
+    // memory entity a fact lands on is the daemon's to settle (#1023).
     args:
       obj.args && typeof obj.args === 'object'
-        ? roomActionArgs(obj.room, obj.action, obj.args as Record<string, unknown>)
+        ? withoutEntityPin(obj.room, obj.action, roomActionArgs(obj.room, obj.action, obj.args as Record<string, unknown>))
         : undefined,
   };
 }

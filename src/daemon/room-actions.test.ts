@@ -17,8 +17,9 @@ import {
 } from './room-actions.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import {
-  collapseRoomActionAliases, matchByTitle, matchProjectByName, pickRoomActionTarget, ROOM_ACTION_ALIASES, ROOM_ACTION_ARGS,
-  ROOM_ACTION_DEFAULTS, ROOM_ACTION_TARGETS, roomActionArgs, withRoomActionDefaults,
+  collapseRoomActionAliases, matchByTitle, matchEntityByName, matchProjectByName, pickRoomActionTarget, ROOM_ACTION_ALIASES,
+  ROOM_ACTION_ARGS, ROOM_ACTION_DEFAULTS, ROOM_ACTION_ENTITY_TARGETS, ROOM_ACTION_TARGETS, roomActionArgs, roomActionEntityArg,
+  withoutEntityPin, withRoomActionDefaults,
 } from './room-action-targets.ts';
 
 // Every category the table can name is a real authority category.
@@ -1001,5 +1002,50 @@ describe('withRoomActionDefaults and pickRoomActionTarget (#1008)', () => {
     expect(matchByTitle(tasks, (t) => t.what, 'RENT')).toBe(tasks[1]!);
     expect(matchByTitle(tasks, (t) => t.what, 'landlord')).toBe(tasks[0]!);
     expect(matchByTitle(tasks, (t) => t.what, '')).toBeNull();
+  });
+});
+
+describe('a remembered fact lands on the entity settled before its card (#1023)', () => {
+  test('matchEntityByName: the exact name, else a whole-word part of one; two is ambiguous, none is null', () => {
+    const es = [{ name: 'James' }, { name: 'Alice Smith' }, { name: 'Bob' }, { name: 'bob ' }, { name: 'Jos\u00e9 Garc\u00eda' }];
+    expect(matchEntityByName(es, 'ALICE smith')).toEqual({ entity: es[1]! });
+    expect(matchEntityByName(es, 'smith')).toEqual({ entity: es[1]! });
+    expect(matchEntityByName(es, 'jos\u00e9')).toEqual({ entity: es[4]! });
+    // "me" is inside "James" but is not a word of it.
+    expect(matchEntityByName(es, 'me')).toBeNull();
+    expect(matchEntityByName(es, 'ali')).toBeNull();
+    expect(matchEntityByName(es, 'Bob')).toEqual({ ambiguous: 2 });
+    expect(matchEntityByName(es, '  ')).toBeNull();
+    expect(matchEntityByName(es, '--')).toBeNull();
+    // An exact match wins over a longer name that holds it.
+    expect(matchEntityByName([{ name: 'Alice' }, { name: 'Alice Smith' }], 'alice')).toEqual({ entity: { name: 'Alice' } });
+    expect(matchEntityByName([{ name: 'Alice Jones' }, { name: 'Alice Smith' }], 'alice')).toEqual({ ambiguous: 2 });
+    // A name typed with a combining accent is the one stored precomposed.
+    expect(matchEntityByName(es, 'Jose\u0301 Garci\u0301a')).toEqual({ entity: es[4]! });
+    expect(matchEntityByName(es, 'jose\u0301')).toEqual({ entity: es[4]! });
+  });
+
+  test('withoutEntityPin drops the pin from an entity action only', () => {
+    expect(withoutEntityPin('memory', 'remember_that', { subject: 's', id: 'e', new_entity: true })).toEqual({ subject: 's' });
+    const args = { name: 'rent', id: 't1' };
+    expect(withoutEntityPin('tasks', 'complete_task', args)).toBe(args);
+    expect(withoutEntityPin('__proto__', 'toString', args)).toBe(args);
+  });
+
+  test('every entity action is a side-effecting room action whose case reads the pinned entity', () => {
+    const entries = tableEntries(ROOM_ACTION_ENTITY_TARGETS);
+    expect(entries).toEqual(['memory/remember_that']);
+    for (const entry of entries) {
+      const [room, action] = entry.split('/') as [string, string];
+      expect([entry, isPresentationRoomAction(room, action), isRoomAction(room, action)]).toEqual([entry, false, true]);
+      const arg = roomActionEntityArg(room, action)!;
+      // The case reads the name, the id it is pinned by, and the new-entity mark.
+      expect(Object.keys(ROOM_ACTION_ARGS[room]![action]!)).toEqual(expect.arrayContaining([arg, 'id', 'new_entity']));
+      const { nodes, args } = handlerCode()[room]![action]!;
+      expect(argReads(nodes, args)).toEqual(expect.arrayContaining([arg, 'id', 'new_entity']));
+    }
+    expect(roomActionEntityArg('memory', 'select')).toBeNull();
+    expect(roomActionEntityArg('__proto__', 'toString')).toBeNull();
+    expect(roomActionEntityArg('memory', 'constructor')).toBeNull();
   });
 });
