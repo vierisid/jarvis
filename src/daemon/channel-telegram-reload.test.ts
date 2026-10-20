@@ -13,7 +13,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { closeDb, initDatabase } from '../vault/schema.ts';
 import { ChannelService } from './channel-service.ts';
-import { TELEGRAM_BUSY_REPLY, TELEGRAM_CHANNEL_OFF_DROPPED_REPLY, TELEGRAM_RESTARTING_REPLY, TELEGRAM_RESUME_MAX_AGE_MS, TELEGRAM_SHUTDOWN_DROPPED_REPLY, TELEGRAM_SHUTDOWN_MAYBE_DROPPED_REPLY, TELEGRAM_UPDATES_LIMIT, TelegramAdapter } from '../comms/channels/telegram.ts';
+import { TELEGRAM_BUSY_REPLY, TELEGRAM_CHANNEL_OFF_DROPPED_REPLY, TELEGRAM_RESTARTING_REPLY, TELEGRAM_RESUME_MAX_AGE_MS, TELEGRAM_SHUTDOWN_DROPPED_REPLY, TELEGRAM_SHUTDOWN_MAYBE_DROPPED_REPLY, TELEGRAM_UPDATES_LIMIT, TelegramAdapter, type TelegramResumePoint } from '../comms/channels/telegram.ts';
 
 /** `token` set: only that bot's polls see it (ids are per bot). Unset: every bot's. */
 type Update = { update_id: number; message: Record<string, unknown>; token?: string };
@@ -594,11 +594,41 @@ describe('#910 review: what the lanes must not do', () => {
     }
   });
 
+  test('the week is counted from the last update, not the last poll: polling an idle bot does not make its offset fresh', async () => {
+    const api = fakeBotApi();
+    globalThis.fetch = api.fetchImpl;
+    let clock = 0;
+    let point: TelegramResumePoint | null = null;
+    const first = new TelegramAdapter('tok', { allowedUsers: [42], now: () => clock, onResumePoint: (p) => { point = p; } });
+    first.onMessage(async () => '');
+    try {
+      await first.connect();
+      api.send(42, 'hello');
+      await until(() => point !== null && point.offset === 2, 'the update to be taken');
+      // Eight idle days, during which the adapter keeps polling and reporting.
+      clock = TELEGRAM_RESUME_MAX_AGE_MS + 24 * 60 * 60 * 1000;
+      const polls = api.offsets.length;
+      await until(() => api.offsets.length > polls + 1, 'idle polls after the jump');
+    } finally {
+      await first.disconnect();
+    }
+    const second = new TelegramAdapter('tok', { allowedUsers: [42], resume: point!, now: () => clock });
+    second.onMessage(async () => '');
+    try {
+      const polls = api.offsets.length;
+      await second.connect();
+      await until(() => api.offsets.length > polls, 'the first poll');
+      expect(api.offsets[polls]).toEqual({ token: 'tok', offset: 0 });
+    } finally {
+      await second.disconnect();
+    }
+  });
+
   test('a resume point more than a week old is not used: Telegram may have renumbered', async () => {
     const api = fakeBotApi();
     globalThis.fetch = api.fetchImpl;
     const first = (savedAt: number) => {
-      const adapter = new TelegramAdapter('tok', { resume: { offset: 5, waiting: [], savedAt }, now: () => TELEGRAM_RESUME_MAX_AGE_MS + 1000 });
+      const adapter = new TelegramAdapter('tok', { resume: { offset: 5, waiting: [], lastUpdateAt: savedAt }, now: () => TELEGRAM_RESUME_MAX_AGE_MS + 1000 });
       adapter.onMessage(async () => '');
       return adapter;
     };
@@ -841,7 +871,7 @@ describe('#911: a restart does not re-run the update the old process took', () =
     // polls (its getMe failed, say): it must still confirm on its way out.
     const api = fakeBotApi();
     globalThis.fetch = api.fetchImpl;
-    const adapter = new TelegramAdapter('tok', { resume: { offset: 5, waiting: [], savedAt: Date.now(), confirmed: 0 } });
+    const adapter = new TelegramAdapter('tok', { resume: { offset: 5, waiting: [], lastUpdateAt: Date.now(), confirmed: 0 } });
     await adapter.disconnect();
     expect(api.offsets).toEqual([{ token: 'tok', offset: 5 }]);
   });
@@ -947,12 +977,12 @@ describe('#911: a restart does not re-run the update the old process took', () =
     globalThis.fetch = api.fetchImpl;
     const update = { update_id: 3, message: { message_id: 3, from: { id: 9, first_name: 'Removed' }, chat: { id: 9, type: 'private' }, date: 0, text: 'hello' } };
     // Never connected: its carried update was never screened.
-    const adapter = new TelegramAdapter('tok', { allowedUsers: [42], resume: { offset: 5, waiting: [update], savedAt: Date.now(), confirmed: 5 } });
+    const adapter = new TelegramAdapter('tok', { allowedUsers: [42], resume: { offset: 5, waiting: [update], lastUpdateAt: Date.now(), confirmed: 5 } });
     adapter.onMessage(async () => '');
     await adapter.dropWaiting({ read: TELEGRAM_SHUTDOWN_DROPPED_REPLY, maybe: TELEGRAM_SHUTDOWN_MAYBE_DROPPED_REPLY });
     expect(api.replies).toEqual([]);
     // The same message from a listed sender is told.
-    const listed = new TelegramAdapter('tok', { allowedUsers: [42, 9], resume: { offset: 5, waiting: [update], savedAt: Date.now(), confirmed: 5 } });
+    const listed = new TelegramAdapter('tok', { allowedUsers: [42, 9], resume: { offset: 5, waiting: [update], lastUpdateAt: Date.now(), confirmed: 5 } });
     listed.onMessage(async () => '');
     await listed.dropWaiting({ read: TELEGRAM_SHUTDOWN_DROPPED_REPLY, maybe: TELEGRAM_SHUTDOWN_MAYBE_DROPPED_REPLY });
     expect(api.replies).toEqual([TELEGRAM_SHUTDOWN_DROPPED_REPLY]);

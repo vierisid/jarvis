@@ -185,7 +185,8 @@ export const TELEGRAM_CONFIRM_TIMEOUT_MS = 3_000;
 export type TelegramResumePoint = {
   offset: number;
   waiting: TelegramUpdate[];
-  savedAt: number;
+  /** When the last update was fetched; see `TELEGRAM_RESUME_MAX_AGE_MS`. */
+  lastUpdateAt: number;
   /** The offset Telegram is known to have been told (#911), so a new adapter does not assume an old one's failed confirm landed. */
   confirmed?: number;
   /** The highest offset any call to Telegram carried, answered or not (#911): it may have acted on it. */
@@ -193,11 +194,14 @@ export type TelegramResumePoint = {
 };
 
 /**
- * How old a resume point may be and still be used: 7 days. The Bot API says
- * that after at least a week with no new updates the next update id is
- * chosen at random instead of in sequence, so an older offset may lie above
- * every new id and skip them all. An older point is dropped and the new
- * adapter starts from Telegram's own record.
+ * How long a bot may have gone without a new update for its resume point to
+ * still be used: 7 days. The Bot API says that after at least a week with no
+ * new updates the next update id is chosen at random instead of in sequence,
+ * so the saved offset may then lie above every new id and skip them all.
+ * Counted from the last update fetched, not the last poll: polling an idle
+ * bot does not stop Telegram renumbering it. An older point is dropped, and
+ * the new adapter starts from Telegram's own record, which every poll kept
+ * current.
  */
 export const TELEGRAM_RESUME_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -291,6 +295,8 @@ export class TelegramAdapter implements ChannelAdapter {
    * same turn still waits for it.
    */
   private inherited = new Map<string, Promise<void>>();
+  /** When this bot's last update was fetched, carried in the resume point. */
+  private lastUpdateAt: number;
   /** When each chat was last sent the busy reply. */
   private busyRepliedAt = new Map<string, number>();
   /** The long poll in flight, aborted by disconnect() (#882). */
@@ -330,11 +336,13 @@ export class TelegramAdapter implements ChannelAdapter {
     this.sttProvider = opts?.sttProvider ?? null;
     this.allowList = telegramAllowList(opts?.allowedUsers);
     this.now = opts?.now ?? Date.now;
+    this.lastUpdateAt = this.now();
     const resume = opts?.resume;
-    if (resume && this.now() - resume.savedAt > TELEGRAM_RESUME_MAX_AGE_MS) {
+    if (resume && this.now() - resume.lastUpdateAt > TELEGRAM_RESUME_MAX_AGE_MS) {
       console.log('[TelegramAdapter] Not resuming from a point saved more than a week ago: Telegram may have renumbered its updates since.');
     } else if (resume && Number.isSafeInteger(resume.offset) && resume.offset > 0) {
       this.offset = resume.offset;
+      this.lastUpdateAt = resume.lastUpdateAt;
       const confirmed = resume.confirmed;
       if (confirmed !== undefined && Number.isSafeInteger(confirmed) && confirmed >= 0) this.confirmedOffset = Math.min(confirmed, resume.offset);
       const sent = resume.sent;
@@ -371,7 +379,7 @@ export class TelegramAdapter implements ChannelAdapter {
     const waiting = [...this.carried];
     for (const queue of this.lanes.values()) for (const { update } of queue) waiting.push(update);
     waiting.sort((a, b) => a.update_id - b.update_id);
-    return { offset: this.offset, waiting, savedAt: this.now(), confirmed: this.confirmedOffset, sent: this.sentOffset };
+    return { offset: this.offset, waiting, lastUpdateAt: this.lastUpdateAt, confirmed: this.confirmedOffset, sent: this.sentOffset };
   }
 
   private reportResumePoint(): void {
@@ -602,6 +610,7 @@ export class TelegramAdapter implements ChannelAdapter {
       try {
         const updates = await this.getUpdates();
         fullBatch = updates.length >= TELEGRAM_UPDATES_LIMIT;
+        if (updates.length > 0 && this.polling) this.lastUpdateAt = this.now();
 
         for (const update of updates) {
           // A long poll outlives disconnect() by up to its 30s timeout, and a
