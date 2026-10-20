@@ -668,6 +668,30 @@ describe("Q-19: one retry after a timeout, for approval cards only", () => {
     expect(failures).toMatchObject([{ channel: "discord", attempts: 1, mayHaveArrived: true }]);
   });
 
+  test("#814: an approval card is not sent to a channel that cannot send literal text; other broadcasts are", async () => {
+    // No such channel can have a recipient today (channelAllowList knows only
+    // telegram and discord), so this stands in for one that someday does.
+    class FutureRecipients extends ChannelService {
+      override getBroadcastRecipient(channel: string): string | null {
+        return channel === "whatsapp" ? "wa-chat" : super.getBroadcastRecipient(channel);
+      }
+    }
+    initDatabase(":memory:");
+    setSetting("channel.lastRecipient.discord", JSON.stringify({ to: "chat-1", userId: U1 }));
+    const svc = new FutureRecipients(allowListConfig({ discord: [U1] }), {} as never);
+    await svc.start();
+    const discord = new TimeoutOnceAdapter(0);
+    const whatsapp = new TimeoutOnceAdapter(0);
+    whatsapp.name = "whatsapp";
+    svc.getManager().register(discord as unknown as ChannelAdapter);
+    svc.getManager().register(whatsapp as unknown as ChannelAdapter);
+    await svc.broadcastToAll("approval card", { literal: true }, { approvalCard: true });
+    expect(discord.calls).toEqual([["chat-1", "approval card", { literal: true }]]);
+    expect(whatsapp.calls).toEqual([]);
+    await svc.broadcastToAll("hello");
+    expect(whatsapp.calls).toEqual([["wa-chat", "hello"]]);
+  });
+
   test("sendWithRetry resends a request that may have arrived only within uncertainRetries", async () => {
     const { sleep } = makeSleepRecorder();
     const plain = new TimeoutOnceAdapter(1);
