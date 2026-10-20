@@ -97,6 +97,9 @@
 #      checks each package directory again where npm runs; both steps are
 #      executed against hostile fixtures, setup-node never restores the npm
 #      cache where authority is held, and the repository holds no .npmrc.
+#  11. (#1001) No checkout in any workflow, local composite actions included,
+#      leaves its token in .git/config: persist-credentials is false on every
+#      one, read-only workflows too, since their later steps run PR code.
 #
 # Each rule is also run against a mutated copy that breaks it, and must report
 # it, so a neutered check fails here instead of passing everything.
@@ -129,7 +132,7 @@ trap 'rm -rf "$WORK"' EXIT
 # check <rule> <file>: one violation per line, nothing when clean.
 #   rule = scoped | publish-perms | pinned | authority | reach | untrusted
 #          | mutable | narrow | pushcache | opens-pr | catalog-pr | npmpin
-#          | runs
+#          | runs | persist
 check() {
 	# shellcheck disable=SC2016 # JavaScript source, not shell: nothing should expand.
 	RULE="$1" FILE="$2" REPO="${REPO_DIR:-${HERE}/../..}" bun -e '
@@ -1779,6 +1782,25 @@ if (rule === "npmpin") {
     }
   }
 }
+if (rule === "persist") {
+  // (#1001) No checkout anywhere leaves its token in .git/config, whatever
+  // the workflow holds. The narrower checks in untrusted and narrow came
+  // first; this one covers the read-only workflows too, whose later steps
+  // run the code of the PR under test, which can read that file.
+  // Input names are case-insensitive to GitHub, so a second spelling of the
+  // key is read too: exactly one, and false (#1001 review).
+  for (const [name, job] of Object.entries(jobs)) {
+    // A remote reusable workflow runs steps this rule cannot read.
+    if (typeof job.uses === "string" && !job.uses.startsWith("./"))
+      out.push(name + ": calls the remote workflow " + job.uses + ", whose checkouts this rule cannot see");
+    for (const { st, via } of flatSteps(job.steps)) {
+      if (!String(st.uses ?? "").toLowerCase().startsWith("actions/checkout@")) continue;
+      const set = Object.entries(st.with ?? {}).filter(([k]) => k.toLowerCase() === "persist-credentials");
+      if (set.length !== 1 || set[0][1] !== false)
+        out.push(name + (via ? " (via " + via.slice(0, -3) + ")" : "") + ": checkout leaves the token in .git/config (persist-credentials is not false)");
+    }
+  }
+}
 if (rule === "pinned") {
   const uses = [];
   for (const [name, job] of Object.entries(jobs)) {
@@ -1838,6 +1860,44 @@ echo "every job's token scope is explicit"
 for f in "$WORKFLOWS"/*.yml; do
 	expect_clean "$(basename "$f")" scoped "$f"
 done
+
+echo
+echo "no checkout leaves its token in .git/config, in any workflow (#1001)"
+for f in "$WORKFLOWS"/*.yml; do
+	expect_clean "$(basename "$f")" persist "$f"
+done
+expect_caught 'a read-only PR workflow checkout back to the default (#1001)' persist "$WORKFLOWS/test.yml" \
+	$'      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - uses: dorny/paths-filter@' \
+	$'      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - uses: dorny/paths-filter@' \
+	'changes: checkout leaves the token in .git/config'
+expect_caught 'the image build checkout back to the default (#1001)' persist "$WORKFLOWS/docker-build.yml" \
+	$'        with:\n          persist-credentials: false\n\n      - name: Set up Docker Buildx' \
+	$'\n      - name: Set up Docker Buildx' \
+	'docker-build: checkout leaves the token in .git/config'
+expect_caught 'persist-credentials set to true on a read-only checkout (#1001)' persist "$WORKFLOWS/test.yml" \
+	$'          persist-credentials: false\n      - name: Parse every plist' \
+	$'          persist-credentials: true\n      - name: Parse every plist' \
+	'plist-lint: checkout leaves the token in .git/config'
+expect_caught 'a checkout spelled in another case (#1001)' persist "$WORKFLOWS/test.yml" \
+	$'      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - name: Parse every plist' \
+	$'      - uses: Actions/Checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - name: Parse every plist' \
+	'plist-lint: checkout leaves the token in .git/config'
+expect_caught 'persist-credentials spelled a second way, set to true (#1001 review)' persist "$WORKFLOWS/test.yml" \
+	$'          persist-credentials: false\n      - name: Parse every plist' \
+	$'          Persist-Credentials: true\n          persist-credentials: false\n      - name: Parse every plist' \
+	'plist-lint: checkout leaves the token in .git/config'
+expect_caught 'a remote reusable workflow, whose checkouts cannot be read (#1001 review)' persist "$WORKFLOWS/test.yml" \
+	$'\n  plist-lint:\n' $'\n  remote:\n    uses: octo/ci/.github/workflows/build.yml@3d3c42e5aac5ba805825da76410c181273ba90b1\n  plist-lint:\n' \
+	'remote: calls the remote workflow octo/ci/.github/workflows/build.yml@'
+# ...and one reached through a local composite action, which the rule
+# expands like every other rule that reads steps.
+rm -rf "${WORK}/persist-repo" && mkdir -p "${WORK}/persist-repo/.github/actions/co"
+printf '%s\n' 'name: co' 'description: checkout' 'runs:' '  using: composite' '  steps:' \
+	'    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1' >"${WORK}/persist-repo/.github/actions/co/action.yml"
+REPO_DIR="${WORK}/persist-repo" expect_caught 'a checkout inside a local composite action (#1001)' persist "$WORKFLOWS/docker-build.yml" \
+	$'\n      - name: Set up Docker Buildx' \
+	$'\n      - uses: ./.github/actions/co\n\n      - name: Set up Docker Buildx' \
+	'docker-build (via ./.github/actions/co): checkout leaves the token in .git/config'
 
 echo
 echo "the publish path holds nothing by default"
@@ -3352,10 +3412,10 @@ await Bun.write(process.env.TO, s.replace(old, "    timeout-minutes: 30\n    per
 		$'        with:\n          persist-credentials: false\n      - uses: actions/setup-go@' '      - uses: actions/setup-go@' \
 		'build: checkout leaves the token in .git/config'
 	expect_caught 'a read-only job persisting a secret it checked out with (#982)' narrow "$WORKFLOWS/docker-build.yml" \
-		$'\n\n      - name: Set up Docker Buildx\n' $'\n        with:\n          token: ${{ secrets.SOME_PAT }}\n\n      - name: Set up Docker Buildx\n' \
+		$'        with:\n          persist-credentials: false\n\n      - name: Set up Docker Buildx\n' $'        with:\n          token: ${{ secrets.SOME_PAT }}\n\n      - name: Set up Docker Buildx\n' \
 		'docker-build: checkout leaves the token in .git/config'
 	expect_caught 'the same checkout spelled in another case (#982)' narrow "$WORKFLOWS/docker-build.yml" \
-		$'      - uses: actions/checkout@' $'      - with:\n          token: ${{ secrets.SOME_PAT }}\n        uses: Actions/Checkout@' \
+		$'      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n' $'      - with:\n          token: ${{ secrets.SOME_PAT }}\n        uses: Actions/Checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n' \
 		'docker-build: checkout leaves the token in .git/config'
 	expect_caught 'the release branch pushed with no credential helper (#982)' narrow "$WORKFLOWS/release.yml" \
 		$'          GIT_CONFIG_KEY_1: credential.https://github.com.helper\n' '' \

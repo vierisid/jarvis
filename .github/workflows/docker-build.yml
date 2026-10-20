@@ -68,7 +68,9 @@ concurrency:
 # repository's default token scope -- read-only today, but a setting outside
 # this file, one toggle away from write. This workflow builds and STARTS a
 # container from the PR's own tree; it pushes nothing and has no registry
-# login, so it needs to read the repository and nothing else.
+# login, so it needs to read the repository and nothing else. Its checkout
+# leaves no token in .git/config (#1001): nothing here runs git against a
+# remote, and the build and the smoke run execute the PR's own tree.
 permissions:
   contents: read
 
@@ -88,6 +90,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
