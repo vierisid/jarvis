@@ -260,4 +260,21 @@ describe("#1066 provider switch never carries a typed key", () => {
     await toggle();
     expect(keyInput().value).toBe("");
   });
+
+  test("OmniRoute's catalog read never sends its key to another provider's URL", async () => {
+    await toBrain();
+    await pick("OmniRoute");
+    await type(keyInput(), "omniroute-key");
+    await type(urlInput(), "http://omniroute.example/v1");
+    await settle();
+    await pick("LiteLLM");
+    await type(urlInput(), "http://litellm.example/v1");
+    await pick("OmniRoute");
+    await settle();
+    const reads = sent.filter((s) => s.url === "/api/config/llm/omniroute/models").map((s) => s.body?.base_url);
+    // Reads of OmniRoute's own URLs (default or typed) are fine; the
+    // LiteLLM URL must never receive OmniRoute's key.
+    expect({ typed: reads.includes("http://omniroute.example/v1"), litellm: reads.includes("http://litellm.example/v1") })
+      .toEqual({ typed: true, litellm: false });
+  });
 });

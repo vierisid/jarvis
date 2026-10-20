@@ -96,6 +96,7 @@ type Provider = {
   noConfig?: boolean; needsKey?: boolean; keyOptional?: boolean; needsBaseUrl?: boolean; optionalBaseUrl?: boolean; freeModel?: boolean;
   keyLabel?: string; urlLabel?: string; urlPh?: string; models?: string[]; hint?: string;
 };
+const OMNIROUTE_DEFAULT_URL = "http://localhost:20128/v1";
 const PROVIDERS: Provider[] = [
   // Hosted brain. `soon: true` is the self-hosted default; the wizard flips
   // it off when GET /api/config/llm reports hosted_llm (see provList below).
@@ -374,7 +375,7 @@ export function OnboardingWizard({
     const p = PROVIDERS.find((x) => x.id === provId)!;
     setModel(p.models?.[0] ?? "");
     const nextBaseUrl = urlByProvider.current[provId]
-      ?? (provId === "omniroute" ? "http://localhost:20128/v1" : "");
+      ?? (provId === "omniroute" ? OMNIROUTE_DEFAULT_URL : "");
     setBaseUrl(nextBaseUrl);
     setCustomEndpoint(provId === "anthropic" && Boolean(nextBaseUrl));
     testEpoch.current++;
@@ -443,12 +444,14 @@ export function OnboardingWizard({
   // providers, free routes, and custom combos. Read it live instead of
   // shipping a stale shortlist. The key travels in a POST body, never a URL.
   // In the commit that switches to OmniRoute, baseUrl still holds the previous
-  // provider's URL; only the debounce, cleared when the [provId] effect above
-  // sets the new URL, keeps this key from going there. Keep both (#1066).
+  // provider's URL until the [provId] effect above restores OmniRoute's. Read
+  // only when baseUrl IS OmniRoute's URL, so its key never goes to another
+  // provider's URL whatever the effect order or debounce (#1066).
   const [omniRouteModels, setOmniRouteModels] = useState<string[] | null>(null);
   const [omniRouteLoading, setOmniRouteLoading] = useState(false);
   useEffect(() => {
     if (provId !== "omniroute") return;
+    if (baseUrl !== (urlByProvider.current.omniroute ?? OMNIROUTE_DEFAULT_URL)) return;
     // No URL to probe: also drop a catalog fetched with earlier inputs so a
     // stale list doesn't linger on screen.
     if (!baseUrl.trim()) { setOmniRouteModels(null); return; }
