@@ -14,7 +14,8 @@ import type { ChannelAdapter, ChannelMessage, SendOptions } from '../comms/chann
 import type { STTProvider } from '../comms/voice.ts';
 
 import { ChannelManager } from '../comms/index.ts';
-import { TelegramAdapter } from '../comms/channels/telegram.ts';
+import { TELEGRAM_CHANNEL_OFF_DROPPED_REPLY, TELEGRAM_CHANNEL_OFF_MAYBE_DROPPED_REPLY, TELEGRAM_SHUTDOWN_DROPPED_REPLY, TELEGRAM_SHUTDOWN_MAYBE_DROPPED_REPLY, TelegramAdapter, type TelegramResumePoint } from '../comms/channels/telegram.ts';
+import { activeTurns } from './active-turns.ts';
 import { channelAllowList } from '../comms/channels/allow-list.ts';
 import { createSTTProvider } from '../comms/voice.ts';
 import { effectiveSttForBinding, usejarvisVoiceCredentials } from './usejarvis-ai.ts';
@@ -115,25 +116,32 @@ export class ChannelService implements Service {
    */
   private lastRecipients = new Map<string, BroadcastRecipient>();
   /**
-   * The last Telegram update an adapter started handling, kept across the
-   * stop/start a settings save does (#882), per bot token: update ids are
-   * numbered per bot, so another token starts over, and switching back to a
-   * token picks up where that bot left off.
+   * Where the last Telegram adapter left off, kept across the stop/start a
+   * settings save does (#882), per bot token: update ids are numbered per
+   * bot, so another token starts over, and switching back to a token picks up
+   * where that bot left off.
    *
-   * Never the adapter's poll offset. That also counts updates an old adapter
-   * fetched but left unhandled once it was disconnected (#860), which must
-   * reach the new adapter so they are judged against the new allow-list.
+   * It carries what the old adapter had fetched but not started (#910), so
+   * the new adapter judges that against the new allow-list (#860). See
+   * `TelegramResumePoint`.
    */
-  private telegramTaken = new Map<string, number>();
+  private telegramResume = new Map<string, TelegramResumePoint>();
+  /** The Telegram adapter this service last built, and for which token. */
+  private telegram: { adapter: TelegramAdapter; token: string } | null = null;
   /** Handler for approval commands (approve/deny) from external channels */
   private approvalHandler: ApprovalCommandHandler | null = null;
   /** Notified when a send has exhausted its retries (e.g. to alert the dashboard). */
   private deliveryFailureHandler: DeliveryFailureHandler | null = null;
 
-  constructor(config: JarvisConfig, agentService: AgentService) {
+  /** Whether the daemon is shutting down rather than reloading settings (#911). */
+  private shuttingDown: () => boolean;
+
+  constructor(config: JarvisConfig, agentService: AgentService, opts?: { shuttingDown?: () => boolean }) {
     this.config = config;
     this.agentService = agentService;
     this.manager = new ChannelManager();
+    // A shutdown quiesces turns before it stops services; a settings save does not.
+    this.shuttingDown = opts?.shuttingDown ?? (() => activeTurns.isDraining);
   }
 
   setApprovalHandler(handler: ApprovalCommandHandler): void {
@@ -202,19 +210,58 @@ export class ChannelService implements Service {
         return true;
       };
 
-      if (channels?.telegram?.enabled && channels.telegram.bot_token
-        && !refuseOpen('telegram', channels.telegram.allowed_users)) {
-        warnAllowListProblems('telegram', channels.telegram.allowed_users);
-        const token = channels.telegram.bot_token;
-        const taken = this.telegramTaken.get(token);
+      const telegramOn = !!(channels?.telegram?.enabled && channels.telegram.bot_token
+        && !refuseOpen('telegram', channels.telegram.allowed_users));
+      // What waited behind a turn goes to the adapter built right after it
+      // (#910), and to no other: a message the owner sent before turning the
+      // channel off, or before switching to another bot, must not run when
+      // they switch back hours later. The offsets are kept (#882).
+      const nextToken = telegramOn ? channels!.telegram!.bot_token : null;
+      const previous = this.telegram;
+      this.telegram = null;
+      // Their senders are told, once and with no retry (Q-07). Only the
+      // adapter built last can hold any: every other bot's were dropped when
+      // it stopped being that one.
+      if (previous && previous.token !== nextToken) {
+        await previous.adapter.dropWaiting(
+          { read: TELEGRAM_CHANNEL_OFF_DROPPED_REPLY, maybe: TELEGRAM_CHANNEL_OFF_MAYBE_DROPPED_REPLY },
+          (userId) => this.allowListNames('telegram', userId),
+        );
+        // A shutdown does not wait for a settings reload in progress, so its
+        // stop() may have run during that wait. Building adapters after it
+        // would leave one polling, and confirming updates, after teardown.
+        if (this._status !== 'starting') {
+          console.log('[ChannelService] Stopped while starting; not starting the channels');
+          return;
+        }
+      }
+      for (const [token, point] of this.telegramResume) {
+        if (token === nextToken || point.waiting.length === 0) continue;
+        console.log(`[ChannelService] Dropping ${point.waiting.length} Telegram message(s) that were waiting for an answer when that bot was turned off or switched away from.`);
+        this.telegramResume.set(token, { ...point, waiting: [] });
+      }
+
+      if (telegramOn) {
+        warnAllowListProblems('telegram', channels!.telegram!.allowed_users);
+        const token = channels!.telegram!.bot_token!;
+        const resume = this.telegramResume.get(token);
+        // A chat's next message waits for the turn the old adapter is still
+        // answering in that chat (#910): one turn at a time per chat.
+        const stillRunning = previous && previous.token === token ? previous.adapter.runningLaneWork() : new Map<string, Promise<void>>();
         const telegram = new TelegramAdapter(token, {
           sttProvider: this.sttProvider ?? undefined,
-          allowedUsers: channels.telegram.allowed_users,
-          ...(taken !== undefined ? { startOffset: taken + 1 } : {}),
-          onUpdateTaken: (updateId) => {
-            this.telegramTaken.set(token, Math.max(updateId, this.telegramTaken.get(token) ?? 0));
-          },
+          allowedUsers: channels!.telegram!.allowed_users,
+          ...(resume ? { resume } : {}),
+          waitFor: stillRunning,
+          onResumePoint: (point) => { this.telegramResume.set(token, point); },
+          // An approval decision does not wait behind its chat's turn in
+          // progress (#910): it touches no conversation, and the approval it
+          // decides may expire while the turn runs. The same test as
+          // handleChannelMessage's, handler included: without a handler the
+          // text is chat, and chat waits its turn.
+          isDecision: (text) => this.approvalHandler !== null && channelDecisionCommand(text) !== null,
         });
+        this.telegram = { adapter: telegram, token };
         this.manager.register(telegram);
       }
 
@@ -257,6 +304,15 @@ export class ChannelService implements Service {
   async stop(): Promise<void> {
     this._status = 'stopping';
     await this.manager.disconnectAll();
+    // On a shutdown, what waited behind a turn is not handed on: the next
+    // process starts with nothing in memory. Its senders are told (#911).
+    // After the disconnect, so nothing newer is fetched meanwhile.
+    if (this.shuttingDown()) {
+      await this.telegram?.adapter.dropWaiting(
+        { read: TELEGRAM_SHUTDOWN_DROPPED_REPLY, maybe: TELEGRAM_SHUTDOWN_MAYBE_DROPPED_REPLY },
+        (userId) => this.allowListNames('telegram', userId),
+      );
+    }
     // Drop the adapters, not just their connections: start() only registers
     // adapters for channels that are ENABLED in the current config, so a
     // stop/start cycle (settings hot reload) must not leave a stale adapter
@@ -519,6 +575,10 @@ export class ChannelService implements Service {
       // Discord, anyone on Telegram -- and that must not extend to approving
       // a gated action.
       if (!allowListed) return channelDecisionNeedsAllowList(channelTag);
+      // A forward carries someone else's words (#914). Forwarding is a quick
+      // action, and the text need not look like a command to the person
+      // forwarding it, so it is never their decision.
+      if (msg.forwarded === true) return channelDecisionForwarded(channelTag);
       try {
         return await this.approvalHandler(decision.action, decision.shortId, channelTag);
       } catch (err) {
@@ -600,6 +660,14 @@ export function isPrivateChat(msg: Pick<ChannelMessage, 'channel' | 'metadata'>)
  */
 export function channelDecisionNeedsAllowList(channel: string): string {
   return `Approvals can only be decided from ${channel} by a user listed under Allowed user IDs in Jarvis Settings > Channels, and that list is empty or does not include you. Nothing was approved or denied. Open the Jarvis dashboard to decide.`;
+}
+
+/**
+ * The answer to an `approve <id>` or `deny <id>` found in a forwarded message
+ * (#914). Nothing is decided.
+ */
+export function channelDecisionForwarded(channel: string): string {
+  return `That approve or deny is in a forwarded message, so it was written by someone else and does not count as your decision. Nothing was approved or denied. Type the reply yourself in ${channel}, or open the Jarvis dashboard to decide.`;
 }
 
 /**

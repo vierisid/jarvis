@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { ChannelService, channelDecisionCommand, channelDecisionNeedsAllowList, isPrivateChat, parsePersistedRecipient, recipientWarning, routePerChannel, sendWithRetry, type ChannelRouterServices, type DeliveryFailure } from "./channel-service";
+import { ChannelService, channelDecisionCommand, channelDecisionForwarded, channelDecisionNeedsAllowList, isPrivateChat, parsePersistedRecipient, recipientWarning, routePerChannel, sendWithRetry, type ChannelRouterServices, type DeliveryFailure } from "./channel-service";
 import type { ChannelAdapter, ChannelMessage } from "../comms/channels/telegram";
 import { initDatabase } from "../vault/schema";
 import { getSetting, setSetting } from "../vault/settings";
@@ -721,6 +721,54 @@ describe("#811: an approve or deny needs a sender the allow-list names", () => {
     const { decisions, chats, handle } = setup();
     expect(await handle(message("what is on my calendar", false))).toBe("chat reply");
     expect(chats).toEqual(["what is on my calendar"]);
+    expect(decisions).toEqual([]);
+  });
+});
+
+/**
+ * #914. A listed user who forwards a message forwards its words, not their
+ * decision: whoever wrote `approve <id>` may be anyone.
+ */
+describe("#914: a forwarded approve or deny decides nothing", () => {
+  const message = (text: string, forwarded?: boolean): ChannelMessage => ({
+    id: "m1", channel: "telegram", from: "owner", text, timestamp: 0,
+    metadata: { chatId: 42, userId: 42, chatType: "private" },
+    senderAllowListed: true,
+    ...(forwarded === undefined ? {} : { forwarded }),
+  });
+  const setup = () => {
+    initDatabase(":memory:");
+    const decisions: unknown[][] = [];
+    const chats: string[] = [];
+    const agent = { handleThreadMessage: async (text: string) => { chats.push(text); return "chat reply"; } };
+    const svc = new ChannelService(allowListConfig({ telegram: [42] }), agent as never);
+    svc.setApprovalHandler(async (...args) => { decisions.push(args); return "decided"; });
+    const handle = (msg: ChannelMessage) =>
+      (svc as unknown as { handleChannelMessage(m: ChannelMessage): Promise<string> }).handleChannelMessage(msg);
+    return { decisions, chats, handle };
+  };
+
+  test("a listed user's forwarded approve or deny is refused, and the reply says why", async () => {
+    const { decisions, chats, handle } = setup();
+    expect(await handle(message("approve 1a2b3c4d", true))).toBe(channelDecisionForwarded("telegram"));
+    expect(await handle(message("deny 1a2b3c4d", true))).toBe(channelDecisionForwarded("telegram"));
+    expect(decisions).toEqual([]);
+    // Refused outright, not handed to the agent as chat either.
+    expect(chats).toEqual([]);
+  });
+
+  test("the same text typed by the listed user still decides", async () => {
+    for (const forwarded of [false, undefined]) {
+      const { decisions, handle } = setup();
+      expect(await handle(message("approve 1a2b3c4d", forwarded))).toBe("decided");
+      expect(decisions).toEqual([["approve", "1a2b3c4d", "telegram"]]);
+    }
+  });
+
+  test("a forwarded message that is not a decision is still chat", async () => {
+    const { decisions, chats, handle } = setup();
+    expect(await handle(message("look at this article", true))).toBe("chat reply");
+    expect(chats).toEqual(["look at this article"]);
     expect(decisions).toEqual([]);
   });
 });
