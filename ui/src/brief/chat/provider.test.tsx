@@ -223,7 +223,7 @@ for (const change of ['disconnect', 'mode change', 'unmount'] as const) {
     const action = (id: string) => ({ source: 'room_action', room: 'tasks', action: 'create_task',
       args: { title: id }, resultId: id, resultFrom: 'dashboard' });
     await React.act(async () => first.receive('notification', action('old-action')));
-    const oldAction = socketState.roomActionRequest!;
+    const oldAction = socketState.roomActionRequests.at(-1)!;
     expect(oldAction.resultId).toBe('old-action');
     expect(oldAction.stillAsked?.()).toBe(true);
 
@@ -248,14 +248,17 @@ for (const change of ['disconnect', 'mode change', 'unmount'] as const) {
     expect(sockets).toHaveLength(2);
     const current = sockets[1]!; await open(current);
     await React.act(async () => current.receive('notification', action('current-action')));
-    const currentAction = socketState.roomActionRequest!;
+    const currentAction = socketState.roomActionRequests.at(-1)!;
     expect(currentAction.resultId).toBe('current-action');
     expect(currentAction.stillAsked?.()).toBe(true);
     await React.act(async () => {
       oldClose();
       oldMessage({ data: JSON.stringify({ type: 'notification', payload: action('late-action'), timestamp: 20 }) });
     });
-    expect(socketState.roomActionRequest).toBe(currentAction);
+    expect(socketState.roomActionRequests.at(-1)).toBe(currentAction);
+    // The old socket's action left the queue when the current one arrived,
+    // and the late one from it never joined.
+    expect(socketState.roomActionRequests.map(r => r.resultId)).toEqual(['current-action']);
     expect(currentAction.stillAsked?.()).toBe(true);
     expect(oldAction.stillAsked?.()).toBe(false);
     expect(socketState.isConnected).toBe(true);
@@ -270,7 +273,7 @@ test('the provider passes through every dashboard socket output it does not re-d
   await React.act(async () => root.render(<ConnectionProbe />));
   const socketKeys = Object.keys(socketState).filter(key => !REDERIVED.includes(key));
   // Not vacuous: the fields the issue names are among them.
-  expect(socketKeys).toEqual(expect.arrayContaining(['approvals', 'clarifiers', 'repeatBacks', 'roomActionRequest']));
+  expect(socketKeys).toEqual(expect.arrayContaining(['approvals', 'clarifiers', 'repeatBacks', 'roomActionRequests', 'ackRoomActionRequests']));
   await React.act(async () => root.render(<div />));
   const { client } = clientFixture(); await render(client);
   for (const key of socketKeys) expect(observed).toHaveProperty(key);
@@ -295,7 +298,7 @@ test('a scoped conversation still shows approvals, clarifiers, repeat-backs and 
   expect(observed.approvals.map(approval => approval.id)).toEqual([request.id]);
   expect(observed.clarifiers.map(clarifier => clarifier.id)).toEqual(['clarify-1']);
   expect(observed.repeatBacks.map(repeat => repeat.id)).toEqual(['repeat-1']);
-  expect(observed.roomActionRequest?.resultId).toBe('act-1');
+  expect(observed.roomActionRequests.map(r => r.resultId)).toEqual(['act-1']);
   // The card settles live too, and nothing went back to the REST list for it
   // (a regression guard: no client code re-fetches on a Brief approval event).
   await React.act(async () => socket.receive('notification', { source: 'approval_update', request: { ...request, status: 'approved' } }));

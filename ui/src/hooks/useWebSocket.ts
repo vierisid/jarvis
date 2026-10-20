@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { uuid } from "../lib/uuid";
 import { isPresentationRoomAction } from "../../../src/daemon/room-actions";
-import { roomActionExpiry } from "../../../src/daemon/room-action-results";
+import { ROOM_ACTION_QUEUE_TTL_MS, roomActionExpiry } from "../../../src/daemon/room-action-results";
 import { isUserFailure, type UserFailure } from "../v2/ui/FailureNotice";
 
 export type MessageRole = "user" | "assistant" | "system";
@@ -626,7 +626,14 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
     target: string; // RoomKey or "most_recent"
     ts: number;
   } | null>(null);
-  const [roomActionRequest, setRoomActionRequest] = useState<DashboardRoomActionRequest | null>(null);
+  // A queue, not one slot (#1024): two actions handled before a render, or
+  // stamped in the same millisecond, used to run only one. The bridge runs
+  // each by its `seq` and acks it, which takes it off.
+  const [roomActionRequests, setRoomActionRequests] = useState<readonly QueuedRoomActionRequest[]>([]);
+  const roomActionSeqRef = useRef(0);
+  const ackRoomActionRequests = useCallback((upToSeq: number) => {
+    setRoomActionRequests((prev) => (prev.some((r) => r.seq <= upToSeq) ? prev.filter((r) => r.seq > upToSeq) : prev));
+  }, []);
   const wsRef = useRef<WebSocket | null>(null);
   const observerRef = useRef<WebSocketObserver | undefined>(undefined);
   useEffect(() => {
@@ -1208,8 +1215,8 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
       } else if (payload.source === "room_action") {
         // Phase 6.3.5 — Room control via voice. Daemon broadcasts a
         // structured action; the UI's action bus dispatches to whichever
-        // Room is currently registered. `ts` bumps so the same action
-        // repeated produces a new effect.
+        // Room is currently registered. Each one is queued under its own
+        // `seq`, so the same action repeated, or two at once, all run (#1024).
         const req = roomActionRequestFrom(payload, msg.timestamp);
         if (req?.resultId) {
           // The daemon stops waiting the moment this socket closes, and says
@@ -1218,7 +1225,13 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
           const socket = socketGenerationRef.current;
           req.stillAsked = () => socketGenerationRef.current === socket;
         }
-        if (req) setRoomActionRequest(req);
+        if (req) {
+          const queued: QueuedRoomActionRequest = { ...req, seq: ++roomActionSeqRef.current, receivedAt: performance.now() };
+          // Nothing is lost to the slot any more, so nothing may pile up in
+          // it either: what no bridge has taken by the time the bus would
+          // have dropped it goes, as it would have there.
+          setRoomActionRequests((prev) => [...prev.filter((r) => stillDeliverable(r, queued.receivedAt)), queued]);
+        }
       } else if (payload.source === "window_control") {
         // Phase 6.1.5 follow-up: voice window-control ("close", "expand",
         // "minimize" etc.) — daemon regex-matches and broadcasts here so
@@ -1398,7 +1411,8 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
     thinking,
     roomNavRequest,
     windowControlRequest,
-    roomActionRequest,
+    roomActionRequests,
+    ackRoomActionRequests,
     wsRef,
     voiceCallbacksRef,
   };
@@ -1459,6 +1473,25 @@ export type DashboardRoomActionRequest = {
   /** False once the socket the action came on has closed (#1010). */
   stillAsked?: () => boolean;
 };
+
+/**
+ * A room action as the dashboard queues it for its bridge (#1024): `seq` is
+ * this page's own count, so two actions never share a key the way two
+ * messages stamped in the same millisecond did, and `receivedAt` is when it
+ * arrived, on the monotonic clock `expiresAt` uses.
+ */
+export type QueuedRoomActionRequest = DashboardRoomActionRequest & { seq: number; receivedAt: number };
+
+/**
+ * Whether a queued room action could still run at `now`: the bus would drop
+ * it otherwise (its asker gone, past its deadline, or older than the bus's
+ * own queue TTL), so the queue need not keep it for a bridge.
+ */
+export function stillDeliverable(req: QueuedRoomActionRequest, now: number): boolean {
+  if (req.stillAsked?.() === false) return false;
+  if (req.expiresAt !== undefined && now >= req.expiresAt) return false;
+  return now - req.receivedAt < ROOM_ACTION_QUEUE_TTL_MS;
+}
 
 /**
  * The clarifier or repeat-back card a daemon notification takes down, or

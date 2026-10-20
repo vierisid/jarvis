@@ -250,8 +250,8 @@ export function RoomActionBusProvider({ children }: { children: React.ReactNode 
 }
 
 /**
- * AppShell hook — wires WS `roomActionRequest` to the bus. Runs an effect
- * on every new request (`ts` bumps even on identical args repeats).
+ * AppShell hook: the dashboard's RoomActionBridge dispatches each queued
+ * `roomActionRequests` entry through this once, by its `seq` (#1024).
  */
 export function useRoomActionDispatcher() {
   const bus = useContext(BusContext);

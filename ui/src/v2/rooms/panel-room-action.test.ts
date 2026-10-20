@@ -87,9 +87,12 @@ test("a room's pending answer reaches the daemon as pending, not as a refusal (#
 
 test("the dashboard shell wires daemon room actions through the answering dispatch (#965)", async () => {
   const { readFileSync } = await import("node:fs");
+  // The bridge moved to its own module (#1024); the shell renders it with
+  // the socket's queue, and the bridge dispatches through the answering path.
   const shell = readFileSync(new URL("../shell/AppShell.tsx", import.meta.url), "utf8");
-  expect(shell).toContain("dispatchDashboardRoomAction(request, dispatch, (text) => {");
-  expect(shell).toContain("wsRef={live.wsRef}");
+  expect(shell).toContain("<RoomActionBridge requests={live.roomActionRequests} ack={live.ackRoomActionRequests} forceIdle={voice.forceIdle} wsRef={live.wsRef} />");
+  const bridge = readFileSync(new URL("../shell/RoomActionBridge.tsx", import.meta.url), "utf8");
+  expect(bridge).toContain("dispatchDashboardRoomAction(request, dispatch, (text) => {");
   const ws = readFileSync(new URL("../../hooks/useWebSocket.ts", import.meta.url), "utf8");
   expect(ws).toContain("const req = roomActionRequestFrom(payload, msg.timestamp);");
 });
