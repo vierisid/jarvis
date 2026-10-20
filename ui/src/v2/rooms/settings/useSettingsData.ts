@@ -960,31 +960,6 @@ export function useSettingsData() {
     [refresh],
   );
 
-  // ── Heartbeat (config write — root /api/config) ─────────────────────
-  // Note: backend has no dedicated heartbeat endpoint; field-level writes
-  // would go through /api/config (POST). This room exposes the read but
-  // defers heartbeat WRITES to a future backend endpoint — the UI button
-  // is still keyboard-only and disabled with a tooltip until then.
-  const setHeartbeatInterval = useCallback(
-    async (_minutes: number): Promise<ActionResult> => {
-      return {
-        ok: false,
-        message: "Heartbeat write endpoint not yet wired in daemon.",
-      };
-    },
-    [],
-  );
-
-  const setHeartbeatAggressiveness = useCallback(
-    async (_level: "passive" | "moderate" | "aggressive"): Promise<ActionResult> => {
-      return {
-        ok: false,
-        message: "Heartbeat write endpoint not yet wired in daemon.",
-      };
-    },
-    [],
-  );
-
   // ── Service control ─────────────────────────────────────────────────
   const restartDaemon = useCallback(async (): Promise<ActionResult> => {
     try {
@@ -1177,8 +1152,6 @@ export function useSettingsData() {
     setSTTLanguage,
     setTTS,
     setVoiceConfig,
-    setHeartbeatInterval,
-    setHeartbeatAggressiveness,
     restartDaemon,
     saveProfile,
     clearProfile,

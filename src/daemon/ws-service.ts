@@ -3799,10 +3799,6 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
       return a.provider ? `Switching TTS to ${String(a.provider)}.` : `Updating TTS provider.`;
     case 'set_tts_voice':
       return a.voice ? `Setting voice to ${String(a.voice)}.` : `Updating voice.`;
-    case 'set_heartbeat_interval':
-      return a.minutes ? `Setting heartbeat to ${String(a.minutes)} minutes.` : `Updating heartbeat.`;
-    case 'set_heartbeat_aggressiveness':
-      return a.level ? `Setting heartbeat to ${String(a.level)}.` : `Updating heartbeat.`;
     case 'restart_daemon':
       return `Restarting Jarvis. The dashboard will reconnect in a few seconds.`;
     case 'replay_onboarding': {
