@@ -162,9 +162,21 @@ export function voiceApprovalMismatch(
 /**
  * Why voice may not decide this approval at all, though it is the one on
  * screen (#856): it is destructive, the tool that asked for it requires a
- * click, or the classifier was not sure the answer was a yes or a no.
+ * click, it would stop an agent and the answer was a "no" (`agent_stop`,
+ * #887), or the classifier was not sure the answer was a yes or a no.
  */
-export type VoiceApprovalGateReason = 'destructive' | 'click_only' | 'low_confidence';
+export type VoiceApprovalGateReason = 'destructive' | 'click_only' | 'agent_stop' | 'low_confidence';
+
+/**
+ * A card that stops an agent (#887, owner decision): the exact stop call
+ * (`isAgentStopCard`, which Kill keeps and the Terminate button raises) or any
+ * other `terminate_agent` request (a superset; the stop call is named so the
+ * rule reads as the owner set it). Denying one is not the safe direction, it
+ * leaves the agent running, so a spoken "no" never denies it.
+ */
+function isVoiceHeldStopCard(request: ApprovalRequest): boolean {
+  return isAgentStopCard(request) || request.action_category === 'terminate_agent';
+}
 
 /**
  * What a gated spoken yes or no gets back (#856), as an assistant message in
@@ -174,9 +186,11 @@ export type VoiceApprovalGateReason = 'destructive' | 'click_only' | 'low_confid
  * indistinguishable from not being heard.
  *
  * Each reason says what to do differently, because they differ: a
- * destructive or click-only request will never take a voice answer, so the
- * only way is its card; a low-confidence answer was simply unclear, so saying
- * it again plainly can work.
+ * click-only request will never take a voice answer, so the only way is its
+ * card; a destructive one takes only a voice "no" (#887), so it is approved
+ * on its card; a low-confidence answer was simply unclear, so saying it again
+ * plainly can work. A destructive "no" is never gated on that reason, so its
+ * message is only ever the approve one.
  *
  * That suggestion carries a condition, "while it is still the only request
  * waiting" (#856 review). A second answer is judged afresh, by what is on
@@ -196,9 +210,16 @@ export function voiceApprovalGatedMessage(
   const label = voiceApprovalLabel(request);
   switch (reason) {
     case 'destructive':
-      return `That request is marked destructive, and destructive requests are decided only with a click, never by voice, so ${nothing}. Waiting for you: ${label}. Approve or deny it on its card.`;
+      // Only a yes is gated on this (#887): a clear "no" denies a destructive
+      // request, so the message says that is still open to them, on the same
+      // condition as the low-confidence offer below.
+      return `That request is marked destructive, and destructive requests are approved only with a click, never by voice, so ${nothing}. Waiting for you: ${label}. Approve or deny it on its card, or, while it is still the only request waiting, say "no" plainly to deny it.`;
     case 'click_only':
       return `That request has to be confirmed with a click, never by voice, so ${nothing}. Waiting for you: ${label}. Approve or deny it on its card.`;
+    case 'agent_stop':
+      // Reached only for a "no" (#887): a yes is gated as destructive. Saying
+      // no again will not help, so there is no offer to repeat it.
+      return `That request stops an agent, and turning down a stop would leave the agent running, so a stop is declined only with a click, never by voice, and ${nothing}. Waiting for you: ${label}. Approve or deny it on its card.`;
     case 'low_confidence': {
       const word = decision === 'approve' ? 'yes' : 'no';
       return `I wasn't sure that was a clear "${word}", so ${nothing}. Waiting for you: ${label}. Decide it on its card, or, while it is still the only request waiting, say "${word}" again plainly.`;
@@ -2636,6 +2657,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // on chitchat are a worse failure mode than just answering, so when
     // the transcript is plainly parseable English we upgrade to `ask` and
     // let the chat agent reply naturally.
+    // What the classifier itself said, before that upgrade: a spoken yes or
+    // no is held to the voice approval floor on this, not on the 0.85 the
+    // upgrade sets (#887 review), or an unsure "no" would deny a card.
+    const classifierConfidence = intent.confidence;
     if (intent.verb === 'unknown' && intent.confidence < 0.6) {
       const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
       const hasChattySignal =
@@ -2734,13 +2759,13 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // Resolve the most-recent pending action (approval > clarifier >
     // repeat-back). When nothing is pending, fall through to chat so
     // "yes" / "no" still work as conversational replies. Approvals run
-    // through gateVoiceApprovalResolution first — destructive actions
-    // refuse voice resolution outright; non-destructive require
-    // confidence ≥ 0.85.
+    // through gateVoiceApprovalResolution first: a destructive action is
+    // never approved by voice, though a clear "no" denies it (#887), and
+    // every voice answer needs confidence >= 0.85.
     if (route === 'act' && intent.confirmation_response) {
       const decision = intent.confirmation_response;
       try {
-        const resolved = await this.resolveLatestPendingByVoice(decision, intent.confidence, shownApprovalId, { transcript: trimmed, ws });
+        const resolved = await this.resolveLatestPendingByVoice(decision, classifierConfidence, shownApprovalId, { transcript: trimmed, ws });
         if (resolved) {
           if (resolved.kind === 'refused') {
             // In the thread, where the person reads replies: nothing was
@@ -2867,7 +2892,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    */
   async resolveLatestPendingByVoice(
     decision: 'approve' | 'cancel',
-    confidence = 1,
+    confidence: number,
     shownApprovalId?: string | null,
     speaker?: { transcript: string; ws: ServerWebSocket<unknown> },
   ): Promise<
@@ -2917,18 +2942,25 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
           return { kind: 'refused', message: voiceApprovalAmbiguous(decision, pending.length) };
         }
 
-        // Two-tier safety: destructive impacts never resolve by voice;
-        // non-destructive require confidence ≥ 0.85. Gate decision is a
+        // Two-tier safety: destructive impacts are never approved by voice,
+        // though a confident "no" denies one (#887); every voice answer
+        // requires confidence >= 0.85. Gate decision is a
         // pure helper so it's unit-testable without spinning up the
         // approval pipeline. See gateVoiceApprovalResolution.
         // A request whose tool marked it click-only (`confirm: 'always'`,
-        // `approvalNeedsClick`) is gated like a destructive one, the card must
-        // be clicked, but reported as click_only (#856): it may not be
-        // destructive at all. Checked first, so a request that is both is
-        // reported as click_only.
+        // `approvalNeedsClick`) is gated in both directions, a "no" included,
+        // since its card must be clicked (Q-08), and reported as click_only
+        // (#856): it may not be destructive at all. Checked first, so a
+        // request that is both is reported as click_only, and a "no" never
+        // reaches the destructive rule that would let it deny (#887).
+        // A "no" to a card that stops an agent is held too (#887, owner
+        // decision), after click-only and before the gate, whatever the
+        // confidence: denying it would leave the agent running.
         const gate = approvalNeedsClick(latest)
           ? { kind: 'clarify' as const, reason: 'click_only' as const }
-          : gateVoiceApprovalResolution(latest.action_category as ActionCategory, confidence);
+          : decision === 'cancel' && isVoiceHeldStopCard(latest)
+            ? { kind: 'clarify' as const, reason: 'agent_stop' as const }
+            : gateVoiceApprovalResolution(latest.action_category as ActionCategory, confidence, decision);
         if (gate.kind === 'clarify') {
           // Pending approval STAYS in the queue — user can resolve via
           // dashboard click. We log a 'voice' channel audit row marked

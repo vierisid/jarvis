@@ -401,10 +401,10 @@ describe('#856: a gated voice answer says so in the thread, and why', () => {
 
   test('the resolver reports the reason it gated on', async () => {
     const destructive = request('delete_data');
-    const gated = await svc.resolveLatestPendingByVoice('cancel', 1, destructive.id);
+    const gated = await svc.resolveLatestPendingByVoice('approve', 1, destructive.id);
     expect(gated).toEqual({
       kind: 'gated', label: expect.any(String), reason: 'destructive',
-      message: voiceApprovalGatedMessage('cancel', 'destructive', mgr.getRequest(destructive.id)!),
+      message: voiceApprovalGatedMessage('approve', 'destructive', mgr.getRequest(destructive.id)!),
     });
     mgr.deny(destructive.id, 'test');
     const ordinary = request('send_email');
@@ -446,11 +446,11 @@ describe('#856: a gated voice answer says so in the thread, and why', () => {
     expect(replies()).toHaveLength(1);
   });
 
-  test('a no through the voice pipeline is gated the same way, and says nothing was cancelled', async () => {
-    classifierReply = classified('cancel');
+  test('an unclear no through the voice pipeline is gated, and says nothing was cancelled', async () => {
+    classifierReply = JSON.stringify({ verb: 'unknown', object: null, args: {}, impact: 'read', confidence: 0.7, confirmation_response: 'cancel' });
     const req = request('delete_data');
     await say('no', req.id);
-    expect(replies()).toEqual([voiceApprovalGatedMessage('cancel', 'destructive', mgr.getRequest(req.id)!)]);
+    expect(replies()).toEqual([voiceApprovalGatedMessage('cancel', 'low_confidence', mgr.getRequest(req.id)!)]);
     expect(replies()[0]).toContain("I haven't cancelled anything");
     expect(status(req)).toBe('pending');
   });
@@ -531,5 +531,165 @@ describe('#888: an acknowledgement never shares an id with its transcript or ano
     expect(acks).toHaveLength(2);
     expect(acks.every((id) => typeof id === 'string' && id.length > 0)).toBe(true);
     expect(new Set([...acks, 'r1']).size).toBe(3);
+  });
+});
+
+/**
+ * #887 (owner decision 2026-10-20). A confident spoken "no" denies a
+ * destructive request: denying is the safe direction, and refusing it left
+ * the action pending and the agent blocked. A "yes" still never approves one.
+ * A click-only card stays dashboard-only in both directions (Q-08), and the
+ * shown-card checks (#809, #855) still run first.
+ */
+describe('#887: a confident spoken no denies a destructive request', () => {
+  const routeMessage = (msg: unknown) =>
+    (svc as unknown as { routeMessage: (m: unknown, ws: unknown) => Promise<unknown> }).routeMessage(msg, {});
+  const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0)); };
+  const say = async (text: string, shownApprovalId: string) => {
+    await routeMessage({ type: 'voice_text', payload: { requestId: 'r1', text, shownApprovalId }, timestamp: 0 });
+    await settle();
+  };
+  const destructive = (opts: { context?: string; at?: number } = {}) => {
+    const req = mgr.createRequest({
+      agentId: 'a1', agentName: 'PA', toolName: 'delete_file', toolArguments: { path: '/tmp/x' },
+      actionCategory: 'delete_data', urgency: 'normal', reason: 'delete_data requires user approval', context: opts.context ?? '',
+    });
+    if (opts.at !== undefined) getDb().run('UPDATE approval_requests SET created_at = ? WHERE id = ?', [opts.at, req.id]);
+    return mgr.getRequest(req.id)!;
+  };
+
+  test('through the voice pipeline: the request is denied, audited as a voice denial, and the thread says so', async () => {
+    const audit = new AuditTrail();
+    svc.setAuditTrail(audit);
+    classifierReply = classified('cancel');
+    const req = destructive();
+    await say('no', req.id);
+    expect(status(req)).toBe('denied');
+    expect(mgr.getRequest(req.id)!.decided_by).toBe('voice');
+    expect(replies()).toHaveLength(1);
+    expect(replies()[0]).toStartWith('Cancelling ');
+    expect(audit.query({ limit: 5 })).toContainEqual(expect.objectContaining({
+      approval_id: req.id, authority_decision: 'denied', executed: 0, channel: 'voice' }));
+  });
+
+  test('a yes on the same request is still gated to a click', async () => {
+    const req = destructive();
+    await say('yes', req.id);
+    expect(status(req)).toBe('pending');
+    expect(replies()).toEqual([voiceApprovalGatedMessage('approve', 'destructive', mgr.getRequest(req.id)!)]);
+  });
+
+  test('the gated yes says a plain no still denies it, while it is the only one waiting', () => {
+    const message = voiceApprovalGatedMessage('approve', 'destructive', destructive());
+    expect(message).toContain('approved only with a click');
+    expect(message).toContain('while it is still the only request waiting, say "no" plainly to deny it');
+    expect(message).not.toContain('decided only with a click');
+  });
+
+  test('an unsure no that reads as chat is not lifted to the floor: it denies nothing (#887 review)', async () => {
+    // The chat upgrade sets confidence to 0.85 for a chatty utterance the
+    // classifier was unsure of; the gate must see what the classifier said.
+    classifierReply = JSON.stringify({ verb: 'unknown', object: null, args: {}, impact: 'read', confidence: 0.5, confirmation_response: 'cancel' });
+    const req = destructive();
+    await say("no I don't think you should", req.id);
+    expect(status(req)).toBe('pending');
+    expect(replies()).toEqual([voiceApprovalGatedMessage('cancel', 'low_confidence', mgr.getRequest(req.id)!)]);
+  });
+
+  test('an unsure yes that reads as chat no longer approves an ordinary request either (#887 review)', async () => {
+    // The same capture: before it, the upgrade's 0.85 cleared the floor and
+    // this approved and sent the email.
+    classifierReply = JSON.stringify({ verb: 'unknown', object: null, args: {}, impact: 'read', confidence: 0.5, confirmation_response: 'approve' });
+    const req = pendingEmail('alice@example.com', 1000);
+    await say('yes I think you should', req.id);
+    expect(status(req)).toBe('pending');
+    expect(executions).toEqual([]);
+    expect(replies()).toEqual([voiceApprovalGatedMessage('approve', 'low_confidence', mgr.getRequest(req.id)!)]);
+  });
+
+  test('a stop card is not denied by a confident no: the agent stop stays pending (owner decision)', async () => {
+    const audit = new AuditTrail();
+    svc.setAuditTrail(audit);
+    classifierReply = classified('cancel');
+    const stop = mgr.createRequest({
+      agentId: 'a1', agentName: 'PA', toolName: 'manage_agents', toolArguments: { action: 'terminate', agent_id: 'agent-7' },
+      actionCategory: 'terminate_agent', urgency: 'normal', reason: 'terminate_agent requires user approval', context: '',
+    });
+    await say('no', stop.id);
+    expect(status(stop)).toBe('pending');
+    expect(replies()).toEqual([voiceApprovalGatedMessage('cancel', 'agent_stop', mgr.getRequest(stop.id)!)]);
+    expect(replies()[0]).toContain('stops an agent');
+    expect(replies()[0]).toContain("I haven't cancelled anything");
+    expect(replies()[0]).not.toContain('say "no"');
+    expect(audit.query({ limit: 5 })).toContainEqual(expect.objectContaining({
+      approval_id: stop.id, authority_decision: 'approval_required', executed: 0, channel: 'voice' }));
+  });
+
+  test('any terminate_agent card is held the same way, not only the exact stop call', async () => {
+    const card = mgr.createRequest({
+      agentId: 'a1', agentName: 'PA', toolName: 'manage_agents', toolArguments: { action: 'terminate', agent_id: 'agent-7', note: 'x' },
+      actionCategory: 'terminate_agent', urgency: 'normal', reason: 'terminate_agent requires user approval', context: '',
+    });
+    const resolved = await svc.resolveLatestPendingByVoice('cancel', 1, card.id);
+    expect(resolved?.kind === 'gated' && resolved.reason).toBe('agent_stop');
+    expect(status(card)).toBe('pending');
+  });
+
+  test('a yes on a stop card is still gated as destructive', async () => {
+    const stop = mgr.createRequest({
+      agentId: 'a1', agentName: 'PA', toolName: 'manage_agents', toolArguments: { action: 'terminate', agent_id: 'agent-7' },
+      actionCategory: 'terminate_agent', urgency: 'normal', reason: 'terminate_agent requires user approval', context: '',
+    });
+    const resolved = await svc.resolveLatestPendingByVoice('approve', 1, stop.id);
+    expect(resolved?.kind === 'gated' && resolved.reason).toBe('destructive');
+    expect(status(stop)).toBe('pending');
+  });
+
+  test('a click-only card is not denied by a confident no through the voice pipeline either', async () => {
+    classifierReply = classified('cancel');
+    const req = destructive({ context: JSON.stringify({ confirm: 'always' }) });
+    await say('no', req.id);
+    expect(status(req)).toBe('pending');
+    expect(replies()).toEqual([voiceApprovalGatedMessage('cancel', 'click_only', mgr.getRequest(req.id)!)]);
+  });
+
+  test('a click-only destructive card is not denied by a confident no', async () => {
+    const req = destructive({ context: JSON.stringify({ confirm: 'always' }) });
+    const resolved = await svc.resolveLatestPendingByVoice('cancel', 1, req.id);
+    expect(resolved?.kind === 'gated' && resolved.reason).toBe('click_only');
+    expect(status(req)).toBe('pending');
+  });
+
+  test('a click-only ordinary card is not denied by a confident no either', async () => {
+    const req = mgr.createRequest({
+      agentId: 'a1', agentName: 'PA', toolName: 'send_email', toolArguments: { to: 'alice@example.com', subject: 'Q3' },
+      actionCategory: 'send_email', urgency: 'normal', reason: 'send_email requires user approval', context: JSON.stringify({ confirm: 'always' }),
+    });
+    const resolved = await svc.resolveLatestPendingByVoice('cancel', 1, req.id);
+    expect(resolved?.kind === 'gated' && resolved.reason).toBe('click_only');
+    expect(status(req)).toBe('pending');
+  });
+
+  test('an unclear no is gated as unclear, and denies nothing', async () => {
+    const req = destructive();
+    const resolved = await svc.resolveLatestPendingByVoice('cancel', 0.84, req.id);
+    expect(resolved?.kind === 'gated' && resolved.reason).toBe('low_confidence');
+    expect(status(req)).toBe('pending');
+  });
+
+  test('the shown-card checks still run first: a no answering an older card denies neither', async () => {
+    const a = destructive({ at: 1000 });
+    const b = destructive({ at: 2000 });
+    const resolved = await svc.resolveLatestPendingByVoice('cancel', 1, a.id);
+    expect(resolved?.kind).toBe('refused');
+    expect([status(a), status(b)]).toEqual(['pending', 'pending']);
+  });
+
+  test('and with two destructive cards up, a no on the newest denies neither', async () => {
+    const a = destructive({ at: 1000 });
+    const b = destructive({ at: 2000 });
+    const resolved = await svc.resolveLatestPendingByVoice('cancel', 1, b.id);
+    expect(resolved).toEqual({ kind: 'refused', message: voiceApprovalAmbiguous('cancel', 2) });
+    expect([status(a), status(b)]).toEqual(['pending', 'pending']);
   });
 });
