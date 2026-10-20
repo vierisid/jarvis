@@ -534,6 +534,8 @@ export class TelegramAdapter implements ChannelAdapter {
       this.reportResumePoint();
     } catch (err) {
       console.warn('[TelegramAdapter] Could not confirm the updates taken before disconnecting; a restart may handle the last one again:', err instanceof Error ? err.message : err);
+      // `sentOffset` moved for this call even so: keep the stored point true.
+      this.reportResumePoint();
     }
   }
 

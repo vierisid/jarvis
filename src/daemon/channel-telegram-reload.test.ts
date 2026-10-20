@@ -22,6 +22,7 @@ function fakeBotApi() {
   const pending: Update[] = [];
   const offsets: Array<{ token: string; offset: number }> = [];
   const replies: string[] = [];
+  const replyChats: string[] = [];
   const signals: AbortSignal[] = [];
   let nextId = 1;
   /** Hold the next getUpdates open until released, to keep a poll in flight. */
@@ -31,7 +32,7 @@ function fakeBotApi() {
     const token = /\/bot([^/]+)\//.exec(url)?.[1] ?? '';
     const body = (init?.body ? JSON.parse(String(init.body)) : {}) as { offset?: number; limit?: number; text?: string; chat_id?: string };
     if (url.endsWith('/getMe')) return Response.json({ ok: true, result: { username: 'bot' } });
-    if (url.endsWith('/sendMessage')) { replies.push(body.text ?? ''); return Response.json({ ok: true }); }
+    if (url.endsWith('/sendMessage')) { replies.push(body.text ?? ''); replyChats.push(String(body.chat_id)); return Response.json({ ok: true }); }
     if (url.endsWith('/getUpdates')) {
       const signal = init?.signal ?? undefined;
       if (signal) signals.push(signal);
@@ -60,7 +61,7 @@ function fakeBotApi() {
   /** Strip an update's chat, as a malformed update would come. */
   const breakChat = (id: number) => { const u = pending.find((p) => p.update_id === id); if (u) delete u.message.chat; };
   return {
-    fetchImpl, send, offsets, replies, signals, breakChat,
+    fetchImpl, send, offsets, replies, replyChats, signals, breakChat,
     holdPolls: () => { let release!: () => void; hold = new Promise<void>((r) => { release = r; }); return () => { hold = null; release(); }; },
   };
 }
@@ -1053,7 +1054,7 @@ describe('#911: a restart does not re-run the update the old process took', () =
     }
   });
 
-  test('a waiting message Telegram was never asked past gets no reply: it comes back to the next process', async () => {
+  test('a waiting message Telegram was never asked past gets no reply: Telegram still holds it', async () => {
     const api = fakeBotApi();
     globalThis.fetch = api.fetchImpl;
     const gate = slowAgent();
@@ -1074,6 +1075,25 @@ describe('#911: a restart does not re-run the update the old process took', () =
       gate.release('slow first');
       await adapter.disconnect();
     }
+  });
+
+  test('a chat with one message surely read and one maybe read is told "may not have been read"', async () => {
+    // "Were not read" invites a resend; for the one Telegram may still hand
+    // to the next process, that would run it twice.
+    const api = fakeBotApi();
+    globalThis.fetch = api.fetchImpl;
+    const msg = (id: number, user: number) => ({ update_id: id, message: { message_id: id, from: { id: user, first_name: 'A' }, chat: { id: user, type: 'private' }, date: 0, text: `m${id}` } });
+    const adapter = new TelegramAdapter('tok', {
+      allowedUsers: [42, 43],
+      resume: { offset: 10, waiting: [msg(3, 42), msg(4, 43), msg(7, 42)], lastUpdateAt: Date.now(), confirmed: 5, sent: 10 },
+    });
+    adapter.onMessage(async () => '');
+    await adapter.dropWaiting({ read: 'read', maybe: 'maybe' });
+    expect(new Set(api.replies)).toEqual(new Set(['maybe', 'read']));
+    expect(api.replies).toHaveLength(2);
+    expect(api.replyChats).toEqual(expect.arrayContaining(['42', '43']));
+    expect(api.replies[api.replyChats.indexOf('42')]).toBe('maybe');
+    expect(api.replies[api.replyChats.indexOf('43')]).toBe('read');
   });
 
   test('a shutdown does not write to the sender of a handed-over message the current list does not name', async () => {
