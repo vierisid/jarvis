@@ -124,3 +124,43 @@ describe('gateVoiceApprovalResolution — security gate for voice approvals', ()
     }
   });
 });
+
+/**
+ * #887. Denying is the safe direction: a confident spoken "no" may deny a
+ * destructive request, while a spoken "yes" still never approves one. The
+ * confidence floor applies to a "no" as to a "yes".
+ */
+describe('#887: a confident spoken no may deny a destructive request', () => {
+  const destructive: ActionCategory[] = [
+    'execute_command', 'install_software', 'make_payment',
+    'modify_settings', 'delete_data', 'terminate_agent',
+  ];
+
+  test('a no at or above the floor resolves for every destructive category', () => {
+    for (const cat of destructive) {
+      expect(gateVoiceApprovalResolution(cat, 1.0, 'cancel').kind).toBe('resolve');
+      expect(gateVoiceApprovalResolution(cat, VOICE_APPROVAL_CONFIDENCE_FLOOR, 'cancel').kind).toBe('resolve');
+    }
+  });
+
+  test('a no below the floor is gated as low confidence, not as destructive', () => {
+    for (const cat of destructive) {
+      const gate = gateVoiceApprovalResolution(cat, VOICE_APPROVAL_CONFIDENCE_FLOOR - 0.0001, 'cancel');
+      expect(gate.kind === 'clarify' && gate.reason).toBe('low_confidence');
+    }
+  });
+
+  test('a yes is still refused for every destructive category, explicitly or by default', () => {
+    for (const cat of destructive) {
+      for (const gate of [gateVoiceApprovalResolution(cat, 1.0, 'approve'), gateVoiceApprovalResolution(cat, 1.0)]) {
+        expect(gate.kind === 'clarify' && gate.reason).toBe('destructive_impact');
+      }
+    }
+  });
+
+  test('a no on a non-destructive request keeps the same floor', () => {
+    expect(gateVoiceApprovalResolution('send_email', 0.9, 'cancel').kind).toBe('resolve');
+    const low = gateVoiceApprovalResolution('send_email', 0.5, 'cancel');
+    expect(low.kind === 'clarify' && low.reason).toBe('low_confidence');
+  });
+});

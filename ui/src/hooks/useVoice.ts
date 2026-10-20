@@ -287,7 +287,8 @@ export type UseVoiceReturn = {
   isMicAvailable: boolean;
   isWakeWordReady: boolean;
   ttsAudioPlaying: boolean;
-  cancelTTS: () => void;
+  /** 'clip' (default) stops what is playing; 'everything' also any turn the daemon runs. */
+  cancelTTS: (scope?: "clip" | "everything") => void;
   activeWakeEngine: ActiveWakeEngine;
   // Called by useWebSocket for TTS events
   handleTTSBinary: (data: ArrayBuffer) => void;
@@ -357,6 +358,10 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
   const ttsQueueRef = useRef<ArrayBuffer[]>([]);
   const ttsPlayingRef = useRef(false);
   const ttsRequestIdRef = useRef<string | null>(null);
+  // The clip still playing, kept after the daemon's tts_end (which comes when
+  // it has sent the clip, not when it has played). A cancel names it, so it
+  // stops that clip and not a chat turn left open beside it (#889).
+  const ttsPlayingRequestIdRef = useRef<string | null>(null);
   /** Voice turns this tab started (Q-19): another tab's failed turn must not cut this tab's audio. */
   const ownVoiceRequestIdsRef = useRef<string[]>([]);
   const rememberVoiceRequest = useCallback((requestId: string) => {
@@ -401,7 +406,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
   const ttsContainsStopRef = useRef(false);
   const startRecordingRef = useRef<(autoStop?: boolean) => void>(() => {});
   const autoStopRef = useRef(false);
-  const cancelTTSRef = useRef<() => void>(() => {});
+  const cancelTTSRef = useRef<(scope?: "clip" | "everything") => void>(() => {});
   const forceIdleRef = useRef<() => void>(() => {});
   // Availability chooses how to START a recording. It says nothing about the
   // format of incoming audio: ordinary replies/proactive TTS still use MP3/WAV.
@@ -778,7 +783,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
           console.log(`[Voice] Speech wake phrase detected: "${transcript}"`);
           const s = voiceStateRef.current;
           if (stopOnly && s !== "idle") {
-            cancelTTSRef.current();
+            cancelTTSRef.current("everything");
             forceIdleRef.current();
             return;
           }
@@ -993,6 +998,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
     if (!chunk) {
       ttsPlayingRef.current = false;
       if (!ttsRequestIdRef.current) {
+        ttsPlayingRequestIdRef.current = null;
         // Server is done sending and queue is empty
         settleVoiceState();
         setTtsAudioPlaying(false);
@@ -1052,6 +1058,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
       audioContextRef.current = null;
     }
     ttsRequestIdRef.current = requestId;
+    ttsPlayingRequestIdRef.current = requestId;
     ttsContainsWakeRef.current = containsWake;
     ttsContainsStopRef.current = containsStop;
     ttsQueueRef.current = [];
@@ -1110,8 +1117,18 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
     // Otherwise playNextTTSChunk will transition when queue drains
   }, [settleVoiceState]);
 
-  const cancelTTS = useCallback(() => {
-    const requestId = ttsRequestIdRef.current;
+  const cancelTTS = useCallback((scope: "clip" | "everything" = "clip") => {
+    // A 'clip' cancel (a barge-in, the speaking timeout) names what is
+    // playing, so the daemon stops that and not a chat turn left open beside
+    // it (#889). The playing id counts only while its audio is still in
+    // flight: once played out it is stale, and naming it would make the
+    // daemon skip the turn actually running. 'everything' (a stop phrase,
+    // mute) names nothing, which the daemon reads as stop whatever runs.
+    const playing = ttsPlayingRef.current || ttsQueueRef.current.length > 0;
+    const requestId = scope === "everything"
+      ? null
+      : ttsRequestIdRef.current ?? (playing ? ttsPlayingRequestIdRef.current : null);
+    ttsPlayingRequestIdRef.current = null;
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({
@@ -1170,6 +1187,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
     ttsQueueRef.current = [];
     ttsPlayingRef.current = false;
     ttsRequestIdRef.current = null;
+    ttsPlayingRequestIdRef.current = null;
     audioContextRef.current?.close();
     audioContextRef.current = null;
     setTtsAudioPlaying(false);
@@ -1198,6 +1216,8 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
     }
     // Release the TTS turn so its queued audio drains to a settled state
     // instead of waiting on a tts_end that will never come.
+    // A clip id from the old socket means nothing on the next one.
+    ttsPlayingRequestIdRef.current = null;
     if (ttsRequestIdRef.current) {
       ttsRequestIdRef.current = null;
       ttsContainsWakeRef.current = false;
@@ -1475,6 +1495,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
     ttsQueueRef.current = [];
     ttsPlayingRef.current = false;
     ttsRequestIdRef.current = null;
+    ttsPlayingRequestIdRef.current = null;
     setTtsAudioPlaying(false);
     setVoiceState("idle");
   }, []);
@@ -1491,7 +1512,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
       if (voiceStateRef.current === "recording") {
         stopRecordingInternal();
       }
-      cancelTTSRef.current();
+      cancelTTSRef.current("everything");
       setPartialTranscript("");
       setMicLevel(0);
     }
