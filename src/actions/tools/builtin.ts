@@ -34,6 +34,7 @@ import { listSidecarsTool } from './sidecar-list.ts';
 import { DESKTOP_TOOLS, localScreenshotResult } from './desktop.ts';
 import { awaitCaptureTool, awaitCaptureToolOutput, captureViaPrivateFileAsync, CaptureTimeoutError } from '../app-control/capture-file.ts';
 import { sanitizedEnv } from '../../util/subprocess-env.ts';
+import { linuxSystemExe, SystemExeNotFoundError } from '../../util/system-exe.ts';
 import { WorkflowCancellationError } from '../../workflows/runtime/cancellation-error.ts';
 import { UI_TOOLS } from './ui.ts';
 import { SKILL_TOOLS } from './skills.ts';
@@ -680,6 +681,21 @@ export const listDirectoryTool: ToolDefinition = {
 const CLIPBOARD_READ = { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' } as const;
 const clipboardWrite = (content: string) => ({ stdin: Buffer.from(content, 'utf-8'), stdout: 'ignore', stderr: 'pipe' } as const);
 
+/**
+ * The Linux tools here come in pairs, the second tried when the first fails
+ * (xclip then xsel, scrot then import), and both are taken from the system
+ * directories only (#900). When neither is there, say so for both, not just
+ * for the one tried last; when the first ran and failed and the second is not
+ * there, the first one's failure is the one that explains it.
+ */
+function neitherInstalled(what: string, firstErr: unknown, secondErr: unknown): unknown {
+  if (!(secondErr instanceof SystemExeNotFoundError)) return secondErr;
+  if (firstErr instanceof SystemExeNotFoundError) {
+    return new Error(`no ${what} tool: ${firstErr.message}; ${secondErr.message}`);
+  }
+  return firstErr;
+}
+
 async function localClipboardRead(): Promise<string> {
   const os = platform();
   if (os === 'darwin') {
@@ -697,10 +713,14 @@ async function localClipboardRead(): Promise<string> {
       .replace(/\r\n/g, '\n').trimEnd();
   } else {
     try {
-      return await awaitCaptureToolOutput(Bun.spawn(['xclip', '-selection', 'clipboard', '-o'], CLIPBOARD_READ), 'xclip');
+      return await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xclip'), '-selection', 'clipboard', '-o'], CLIPBOARD_READ), 'xclip');
     } catch (err) {
       if (err instanceof CaptureTimeoutError) throw err;
-      return awaitCaptureToolOutput(Bun.spawn(['xsel', '--clipboard', '--output'], CLIPBOARD_READ), 'xsel');
+      try {
+        return await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xsel'), '--clipboard', '--output'], CLIPBOARD_READ), 'xsel');
+      } catch (e) {
+        throw neitherInstalled('clipboard', err, e);
+      }
     }
   }
 }
@@ -720,10 +740,14 @@ async function localClipboardWrite(content: string): Promise<void> {
     await awaitCaptureTool(Bun.spawn([windowsSystemExe('clip.exe')], clipboardWrite(content)), 'clip.exe');
   } else {
     try {
-      await awaitCaptureTool(Bun.spawn(['xclip', '-selection', 'clipboard'], clipboardWrite(content)), 'xclip');
+      await awaitCaptureTool(Bun.spawn([linuxSystemExe('xclip'), '-selection', 'clipboard'], clipboardWrite(content)), 'xclip');
     } catch (err) {
       if (err instanceof CaptureTimeoutError) throw err;
-      await awaitCaptureTool(Bun.spawn(['xsel', '--clipboard', '--input'], clipboardWrite(content)), 'xsel');
+      try {
+        await awaitCaptureTool(Bun.spawn([linuxSystemExe('xsel'), '--clipboard', '--input'], clipboardWrite(content)), 'xsel');
+      } catch (e) {
+        throw neitherInstalled('clipboard', err, e);
+      }
     }
   }
 }
@@ -765,12 +789,16 @@ async function localCaptureScreen(): Promise<string> {
       }), 'powershell capture');
     } else {
       try {
-        await awaitCaptureTool(Bun.spawn(['scrot', file], tool), 'scrot');
+        await awaitCaptureTool(Bun.spawn([linuxSystemExe('scrot'), file], tool), 'scrot');
       } catch (err) {
         // A scrot that hung says the display is wedged, and import would only
         // hang on it too; any other failure (scrot not installed) falls back.
         if (err instanceof CaptureTimeoutError) throw err;
-        await awaitCaptureTool(Bun.spawn(['import', '-window', 'root', file], tool), 'import');
+        try {
+          await awaitCaptureTool(Bun.spawn([linuxSystemExe('import'), '-window', 'root', file], tool), 'import');
+        } catch (e) {
+          throw neitherInstalled('screenshot', err, e);
+        }
       }
     }
   })).toString('base64');

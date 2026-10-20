@@ -1,0 +1,245 @@
+/**
+ * #900: the Linux tools the daemon runs are taken from fixed system
+ * directories, and only when nobody but root could have put or changed them
+ * there. These tests drive findLinuxSystemExe/linuxSystemExe through an
+ * injected filesystem, so ownership and modes can be anything; the last block
+ * uses the real one.
+ */
+import { afterEach, describe, expect, test } from 'bun:test';
+import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { isAbsolute, join, posix } from 'node:path';
+import {
+  LINUX_SYSTEM_DIRS, SystemExeNotFoundError, __setLinuxSystemDirsForTests, findLinuxSystemExe, linuxSystemExe,
+  type ExeFs,
+} from './system-exe.ts';
+
+type Entry =
+  | { kind: 'dir'; uid?: number; mode?: number }
+  | { kind: 'file'; uid?: number; mode?: number }
+  | { kind: 'link'; target: string };
+
+/** A fake filesystem: absolute path -> entry. Parents must be listed too. */
+function fakeFs(entries: Record<string, Entry>): ExeFs {
+  const get = (path: string) => entries[posix.normalize(path)];
+  const realpath = (path: string): string | null => {
+    let parts = posix.normalize(path).split('/').filter(Boolean);
+    let resolved = '/';
+    for (let hops = 0, i = 0; i < parts.length; i++) {
+      const next = posix.join(resolved, parts[i]!);
+      const entry = get(next);
+      if (!entry) return null;
+      if (entry.kind === 'link') {
+        if (++hops > 40) return null;
+        const target = isAbsolute(entry.target) ? entry.target : posix.join(resolved, entry.target);
+        parts = [...posix.normalize(target).split('/').filter(Boolean), ...parts.slice(i + 1)];
+        resolved = '/';
+        i = -1;
+        continue;
+      }
+      resolved = next;
+    }
+    return resolved;
+  };
+  return {
+    lstat(path) {
+      const entry = get(path);
+      if (!entry) return null;
+      if (entry.kind === 'link') return { uid: 0, mode: 0o120777, isFile: false, isDirectory: false, isSymbolicLink: true };
+      return {
+        uid: entry.uid ?? 0,
+        mode: entry.mode ?? (entry.kind === 'dir' ? 0o40755 : 0o100755),
+        isFile: entry.kind === 'file',
+        isDirectory: entry.kind === 'dir',
+        isSymbolicLink: false,
+      };
+    },
+    readlink(path) {
+      const entry = get(path);
+      return entry?.kind === 'link' ? entry.target : null;
+    },
+    realpath,
+  };
+}
+
+/** The usual system layout: every LINUX_SYSTEM_DIRS entry root-owned, 0755. */
+const SYSTEM: Record<string, Entry> = {
+  '/': { kind: 'dir' },
+  '/usr': { kind: 'dir' },
+  '/usr/local': { kind: 'dir' },
+  '/usr/local/bin': { kind: 'dir' },
+  '/usr/bin': { kind: 'dir' },
+  '/bin': { kind: 'link', target: 'usr/bin' },
+  '/home': { kind: 'dir' },
+  '/home/u': { kind: 'dir', uid: 1000 },
+  '/home/u/.local': { kind: 'dir', uid: 1000 },
+  '/home/u/.local/bin': { kind: 'dir', uid: 1000 },
+  '/etc': { kind: 'dir' },
+  '/etc/alternatives': { kind: 'dir' },
+};
+
+const UID = 1000;
+const look = (entries: Record<string, Entry>, name: Parameters<typeof findLinuxSystemExe>[0] = 'xclip') =>
+  findLinuxSystemExe(name, { fs: fakeFs({ ...SYSTEM, ...entries }) });
+
+afterEach(() => __setLinuxSystemDirsForTests(null));
+
+describe('findLinuxSystemExe (#900)', () => {
+  test('looks in /usr/local/bin, /usr/bin, /bin and the NixOS system profile, in that order', () => {
+    expect(LINUX_SYSTEM_DIRS).toEqual(['/usr/local/bin', '/usr/bin', '/bin', '/run/current-system/sw/bin']);
+    expect(look({ '/usr/bin/xclip': { kind: 'file' } })).toEqual({ path: '/usr/bin/xclip' });
+    expect(look({ '/usr/bin/xclip': { kind: 'file' }, '/usr/local/bin/xclip': { kind: 'file' } }))
+      .toEqual({ path: '/usr/local/bin/xclip' });
+  });
+
+  test('a copy outside the system directories is never found, whatever PATH says', () => {
+    expect(look({ '/home/u/.local/bin/xclip': { kind: 'file', uid: UID } })).toEqual({ path: null, rejected: [] });
+  });
+
+  test('a program not owned by root, or writable by its group or others, is skipped for the next directory', () => {
+    for (const bad of [{ uid: UID }, { mode: 0o100775 }, { mode: 0o100757 }]) {
+      expect(look({ '/usr/local/bin/xclip': { kind: 'file', ...bad }, '/usr/bin/xclip': { kind: 'file' } }))
+        .toEqual({ path: '/usr/bin/xclip' });
+    }
+    const alone = look({ '/usr/local/bin/xclip': { kind: 'file', uid: UID } });
+    expect(alone).toEqual({ path: null, rejected: ['/usr/local/bin/xclip (/usr/local/bin/xclip is owned by uid 1000)'] });
+  });
+
+  test('a system directory handed to a user (npm -g without sudo) is not trusted', () => {
+    const userLocal = { '/usr/local/bin': { kind: 'dir', uid: UID } as Entry, '/usr/local/bin/xclip': { kind: 'file' } as Entry };
+    expect(look(userLocal)).toEqual({ path: null, rejected: ['/usr/local/bin/xclip (/usr/local/bin is owned by uid 1000)'] });
+    expect(look({ ...userLocal, '/usr/bin/xclip': { kind: 'file' } })).toEqual({ path: '/usr/bin/xclip' });
+    expect(look({ '/usr/local/bin': { kind: 'dir', mode: 0o40777 }, '/usr/local/bin/xclip': { kind: 'file' } }))
+      .toEqual({ path: null, rejected: ['/usr/local/bin/xclip (/usr/local/bin is writable by its group or by others)'] });
+  });
+
+  test('every directory above a checked one must be root\'s too (#900 review)', () => {
+    // A /usr/local handed to a user above a root-owned bin: the user could
+    // move bin aside and make their own.
+    expect(look({ '/usr/local': { kind: 'dir', uid: UID }, '/usr/local/bin/xclip': { kind: 'file' }, '/usr/bin/xclip': { kind: 'file' } }))
+      .toEqual({ path: '/usr/bin/xclip' });
+    expect(look({ '/usr/local': { kind: 'dir', uid: UID }, '/usr/local/bin/xclip': { kind: 'file' } }))
+      .toEqual({ path: null, rejected: ['/usr/local/bin/xclip (/usr/local is owned by uid 1000)'] });
+    expect(look({ '/usr': { kind: 'dir', mode: 0o40775 }, '/usr/bin/xclip': { kind: 'file' } }).path).toBeNull();
+    // Through a link: the hop's directory resolves under a user-owned parent.
+    expect(look({
+      '/usr/bin/xclip': { kind: 'link', target: '/opt/x/bin/xclip' },
+      '/opt': { kind: 'dir' }, '/opt/x': { kind: 'dir', uid: UID }, '/opt/x/bin': { kind: 'dir' }, '/opt/x/bin/xclip': { kind: 'file' },
+    })).toEqual({ path: null, rejected: ['/usr/bin/xclip (/opt/x is owned by uid 1000)'] });
+  });
+
+  test('a root-owned sticky ancestor passes (the NixOS store); a sticky directory holding the program does not', () => {
+    const nix: Record<string, Entry> = {
+      '/run': { kind: 'dir' }, '/run/current-system': { kind: 'link', target: '/nix/store/abc-system' },
+      '/nix': { kind: 'dir' }, '/nix/store': { kind: 'dir', mode: 0o41775 },
+      '/nix/store/abc-system': { kind: 'dir', mode: 0o40555 }, '/nix/store/abc-system/sw': { kind: 'dir', mode: 0o40555 },
+      '/nix/store/abc-system/sw/bin': { kind: 'dir', mode: 0o40555 },
+      '/nix/store/abc-system/sw/bin/xclip': { kind: 'link', target: '/nix/store/def-xclip/bin/xclip' },
+      '/nix/store/def-xclip': { kind: 'dir', mode: 0o40555 }, '/nix/store/def-xclip/bin': { kind: 'dir', mode: 0o40555 },
+      '/nix/store/def-xclip/bin/xclip': { kind: 'file', mode: 0o100555 },
+    };
+    expect(look(nix)).toEqual({ path: '/run/current-system/sw/bin/xclip' });
+    // The same store, owned by a user (single-user Nix): not root's.
+    expect(look({ ...nix, '/nix/store': { kind: 'dir', uid: UID, mode: 0o41775 } }).path).toBeNull();
+    // A sticky, world-writable directory holding the program itself.
+    expect(look({ '/usr/local/bin': { kind: 'dir', mode: 0o41777 }, '/usr/local/bin/xclip': { kind: 'file' } }))
+      .toEqual({ path: null, rejected: ['/usr/local/bin/xclip (/usr/local/bin is writable by its group or by others)'] });
+  });
+
+  test('a program that is not executable or not a regular file is skipped', () => {
+    expect(look({ '/usr/bin/xclip': { kind: 'file', mode: 0o100644 } }))
+      .toEqual({ path: null, rejected: ['/usr/bin/xclip (/usr/bin/xclip is not executable)'] });
+    expect(look({ '/usr/bin/xclip': { kind: 'dir' } }).path).toBeNull();
+  });
+
+  test('a symlink is followed and every hop checked, and the path returned is the link, not its target', () => {
+    // An alternatives link, as `import` often is.
+    expect(look({
+      '/usr/bin/import': { kind: 'link', target: '/etc/alternatives/import' },
+      '/etc/alternatives/import': { kind: 'link', target: '../../usr/bin/import-im6.q16' },
+      '/usr/bin/import-im6.q16': { kind: 'file' },
+    }, 'import')).toEqual({ path: '/usr/bin/import' });
+    // wslpath -> /init, which picks what to be from argv[0]: the link must be run.
+    expect(look({ '/init': { kind: 'file' }, '/usr/bin/wslpath': { kind: 'link', target: '/init' } }, 'wslpath'))
+      .toEqual({ path: '/usr/bin/wslpath' });
+  });
+
+  test('a link that leads through or into a directory a user controls is rejected', () => {
+    expect(look({
+      '/usr/bin/xclip': { kind: 'link', target: '/home/u/.local/bin/xclip' },
+      '/home/u/.local/bin/xclip': { kind: 'file' },
+    }).path).toBeNull();
+    // Through a user's link that currently points back at a root-owned file:
+    // the user could re-point it at any time, so the chain is not trusted.
+    expect(look({
+      '/usr/bin/xclip': { kind: 'link', target: '/home/u/.local/bin/hop' },
+      '/home/u/.local/bin/hop': { kind: 'link', target: '/usr/bin/xclip-real' },
+      '/usr/bin/xclip-real': { kind: 'file' },
+    }).path).toBeNull();
+  });
+
+  test('a symlink loop is rejected, not followed forever', () => {
+    const result = look({
+      '/usr/bin/xclip': { kind: 'link', target: '/usr/bin/xclip-b' },
+      '/usr/bin/xclip-b': { kind: 'link', target: '/usr/bin/xclip' },
+    });
+    expect(result.path).toBeNull();
+    expect((result as { rejected: string[] }).rejected[0]).toContain('has more than 40 symlinks');
+  });
+});
+
+describe('linuxSystemExe (#900)', () => {
+  test('throws a SystemExeNotFoundError naming where it looked and the copies it did not use', () => {
+    const saved = process.env.PATH;
+    const savedHome = process.env.HOME;
+    process.env.PATH = '/home/u/.local/bin:/usr/bin';
+    process.env.HOME = '/home/u';
+    try {
+      const fs = fakeFs({ ...SYSTEM, '/home/u/.local/bin/xclip': { kind: 'file', uid: UID }, '/usr/local/bin/xclip': { kind: 'file', uid: UID } });
+      let error: unknown;
+      try { linuxSystemExe('xclip', { fs }); } catch (e) { error = e; }
+      expect(error).toBeInstanceOf(SystemExeNotFoundError);
+      expect((error as SystemExeNotFoundError).tool).toBe('xclip');
+      expect((error as Error).message).toBe(
+        'xclip has no usable copy in a system directory (/usr/local/bin, /usr/bin, /bin, /run/current-system/sw/bin); ' +
+        'not used: /usr/local/bin/xclip (/usr/local/bin/xclip is owned by uid 1000); ~/.local/bin/xclip (not a system directory)');
+      // Nothing there at all: not installed.
+      expect(() => linuxSystemExe('xsel', { fs: fakeFs(SYSTEM) })).toThrow(
+        'xsel is not installed in a system directory (/usr/local/bin, /usr/bin, /bin, /run/current-system/sw/bin)');
+    } finally {
+      process.env.PATH = saved;
+      process.env.HOME = savedHome;
+    }
+  });
+
+  test('returns the path when it is there', () => {
+    expect(linuxSystemExe('xdotool', { fs: fakeFs({ ...SYSTEM, '/usr/bin/xdotool': { kind: 'file' } }) })).toBe('/usr/bin/xdotool');
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('on the real filesystem', () => {
+  test('the test seam trusts this user\'s own files only while it is set; root\'s are trusted either way', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jarvis-system-exe-'));
+    try {
+      writeFileSync(join(dir, 'xclip'), '#!/bin/sh\n');
+      chmodSync(join(dir, 'xclip'), 0o755);
+      __setLinuxSystemDirsForTests([dir]);
+      expect(findLinuxSystemExe('xclip')).toEqual({ path: join(dir, 'xclip') });
+      chmodSync(join(dir, 'xclip'), 0o775);
+      expect(findLinuxSystemExe('xclip').path).toBeNull();
+      chmodSync(join(dir, 'xclip'), 0o755);
+      // Explicit dirs, no seam: root only.
+      __setLinuxSystemDirsForTests(null);
+      const own = findLinuxSystemExe('xclip', { dirs: [dir] });
+      if (process.getuid?.() === 0) expect(own.path).toBe(join(dir, 'xclip'));
+      else expect(own.path).toBeNull();
+      // A link to a root-owned program, from the seam's directory.
+      __setLinuxSystemDirsForTests([dir]);
+      rmSync(join(dir, 'xclip'));
+      symlinkSync('/bin/sh', join(dir, 'xclip'));
+      expect(findLinuxSystemExe('xclip')).toEqual({ path: join(dir, 'xclip') });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

@@ -3,9 +3,10 @@
  * `$()` or a backtick in a path ran in the Linux shell, and a `"` in a
  * PowerShell script crossed the Windows command-line layer unprotected.
  *
- * These tests run the real class against fake `wslpath` (first on PATH),
- * `cmd.exe` and `powershell.exe` (in a fake Windows directory, since #896 they
- * are not looked up on PATH), each of which records the argv and environment
+ * These tests run the real class against fake `wslpath` (in a fake system
+ * directory, since #900 it is not looked up on PATH either), `cmd.exe` and
+ * `powershell.exe` (in a fake Windows directory, since #896 they are not
+ * looked up on PATH), each of which records the argv and environment
  * it actually received. Hostile input must arrive as exactly
  * one argv element, byte for byte, and nothing may be executed along the way:
  * every payload tries to create the same marker file, which must never exist.
@@ -24,11 +25,14 @@ import {
   WSLBridge, buildPowerShellCommand, POWERSHELL_COMMAND_MAX, runArgv,
   __setMountTableForTests, __setWindowsDirForTests, drvfsDriveRoots, windowsSystemExe,
 } from './wsl-bridge.ts';
+import { __setLinuxSystemDirsForTests } from '../../util/system-exe.ts';
 
 const IS_WINDOWS = process.platform === 'win32';
 
 const root = mkdtempSync(join(tmpdir(), 'jarvis-wsl-bridge-'));
 const binDir = join(root, 'bin');
+/** The fake system directory wslpath is taken from (#900); binDir is only on PATH. */
+const sysDir = join(root, 'usr-bin');
 const logDir = join(root, 'log');
 const PWNED = join(root, 'pwned');
 
@@ -45,6 +49,7 @@ const winDir = join(root, 'Windows');
 const WIN_PATHS: Record<string, string> = {
   'cmd.exe': join(winDir, 'System32', 'cmd.exe'),
   'powershell.exe': join(winDir, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+  wslpath: join(sysDir, 'wslpath'),
 };
 
 /**
@@ -86,7 +91,8 @@ exec sleep 5
 };
 
 /**
- * What a planted cmd.exe or powershell.exe earlier on PATH would be (#896):
+ * What a planted cmd.exe, powershell.exe (#896) or wslpath (#900) earlier on
+ * PATH would be:
  * one that records it ran, and answers as convincingly as the real fake.
  */
 const PLANTED = (name: string, reply: string) => `#!/bin/sh
@@ -102,7 +108,10 @@ for (const [name, body] of Object.entries(FAKES)) {
   writeFileSync(path, body);
   chmodSync(path, 0o755);
 }
-for (const [name, reply] of [['cmd.exe', 'C:\\\\Users\\\\planted\\r\\n'], ['powershell.exe', 'planted\\r\\n']] as const) {
+// Not group-writable whatever the umask: the system-directory lookup (#900)
+// would refuse it.
+chmodSync(sysDir, 0o755);
+for (const [name, reply] of [['cmd.exe', 'C:\\\\Users\\\\planted\\r\\n'], ['powershell.exe', 'planted\\r\\n'], ['wslpath', 'planted\\n']] as const) {
   writeFileSync(join(binDir, name), PLANTED(name, reply));
   chmodSync(join(binDir, name), 0o755);
 }
@@ -147,6 +156,7 @@ beforeEach(() => {
     rmSync(join(logDir, `planted.${name}`), { force: true });
   }
   __setWindowsDirForTests(winDir);
+  __setLinuxSystemDirsForTests([sysDir]);
 });
 
 afterEach(() => {
@@ -156,6 +166,7 @@ afterEach(() => {
   }
   saved.clear();
   __setWindowsDirForTests(null);
+  __setLinuxSystemDirsForTests(null);
   isWSLSpy?.mockRestore();
   isWSLSpy = undefined;
 });
@@ -204,6 +215,24 @@ describe.skipIf(IS_WINDOWS)('WSLBridge path conversion', () => {
       expect(existsSync(PWNED)).toBe(false);
     });
   }
+
+  test('the system directory\'s wslpath runs, not the one first on PATH (#900)', async () => {
+    const bridge = bridgeWithoutDetection();
+
+    expect(await bridge.convertToWindowsPath('/home/user')).toBe('converted:/home/user');
+    expect(recordedArgv('wslpath')).toEqual(['-w', '/home/user']);
+    expect(existsSync(join(logDir, 'planted.wslpath'))).toBe(false);
+  });
+
+  test('with no wslpath in a system directory the conversion is refused, and the PATH copy is not run (#900)', async () => {
+    const bridge = bridgeWithoutDetection();
+    const empty = mkdtempSync(join(root, 'empty-'));
+    __setLinuxSystemDirsForTests([empty]);
+
+    await expect(bridge.convertToWindowsPath('/home/user'))
+      .rejects.toThrow(`wslpath is not installed in a system directory (${empty}); not used: ${join(binDir, 'wslpath')} (not a system directory)`);
+    expect(existsSync(join(logDir, 'planted.wslpath'))).toBe(false);
+  });
 
   test('refuses a path wslpath would read as an option, without spawning', async () => {
     const bridge = bridgeWithoutDetection();
