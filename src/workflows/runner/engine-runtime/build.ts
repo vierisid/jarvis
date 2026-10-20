@@ -138,6 +138,13 @@ export interface EngineBundle {
    * (#671, #762; see bundle-integrity.ts).
    */
   digest: string | null;
+  /**
+   * Only on a fresh BUILD: every file this build wrote into `bundleDir`, by
+   * name, with the sha256 of the bytes it wrote, computed in memory like
+   * `digest`. The hosting builder copies exactly these, checked against these
+   * values (#862), so a stale or planted file beside them never ships.
+   */
+  builtFiles?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -1054,10 +1061,14 @@ export async function buildEngineBundle(opts?: {
   // Published by rename, `main.js` LAST: the sourcemap and metafile first, so
   // the file whose existence means "built" never appears before its siblings,
   // and a reader (or a crash) never sees it torn.
+  const metaJson = JSON.stringify(result.metafile);
+  const builtFiles: Record<string, string> = {};
+  for (const f of outputs) builtFiles[relative(bundleDir, f.target)] = createHash("sha256").update(f.contents).digest("hex");
+  builtFiles[relative(bundleDir, bundlePath + ".meta.json")] = createHash("sha256").update(metaJson).digest("hex");
   for (const f of outputs) if (f !== main) publishAtomically(f.target, f.contents);
-  publishAtomically(bundlePath + ".meta.json", JSON.stringify(result.metafile));
+  publishAtomically(bundlePath + ".meta.json", metaJson);
   publishAtomically(bundlePath, main.contents);
-  return { bundlePath, hash, bundleDir, digest };
+  return { bundlePath, hash, bundleDir, digest, builtFiles };
 }
 
 /**

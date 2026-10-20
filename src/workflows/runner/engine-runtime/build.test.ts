@@ -484,9 +484,16 @@ describe("engine bundle build", () => {
         // above load-bearing rather than decorative.
         expect(dockerfile).toContain("ENV JARVIS_ENGINE_CACHE_ROOT=/app/engine-cache");
 
+        // The hosting builder writes it through publishSharedEngine (#862),
+        // which writes it only after the pieces ran, from the build's own
+        // digest; shared-engine-publish.test.ts holds that on behaviour. Here:
+        // the script still routes its engine through it, and the module still
+        // writes that file name.
         const sharedRuntime = readFileSync(resolve(repoRoot, "scripts", "build-shared-runtime.ts"), "utf8");
-        expect(sharedRuntime).toContain('"main.js.sha256"');
-        expect(sharedRuntime).toMatch(/createHash\("sha256"\)/u);
+        expect(sharedRuntime).toMatch(/await publishSharedEngine\(bundle, engineOutDir, /u);
+        const publisher = readFileSync(resolve(import.meta.dir, "shared-engine-publish.ts"), "utf8");
+        expect(publisher).toContain('export const ENGINE_MANIFEST_NAME = "main.js.sha256";');
+        expect(publisher).toMatch(/writeEngineManifest\(engineOutDir, engineDigest\);/u);
       });
     });
   });
@@ -672,6 +679,22 @@ describe("engine bundle build", () => {
       expect(existsSync(built.bundlePath + ".meta.json")).toBe(true);
       const { readdirSync } = await import("node:fs");
       expect(readdirSync(built.bundleDir).filter((n) => n.endsWith(".tmp"))).toEqual([]);
+      // #862: the build names every file it wrote with the sha256 of the bytes
+      // it wrote, which is what the hosting builder copies and checks.
+      const sha = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
+      expect(built.builtFiles).toEqual(Object.fromEntries(
+        readdirSync(built.bundleDir).sort().map((n) => [n, sha(resolve(built.bundleDir, n))]),
+      ));
+      expect(built.builtFiles?.["main.js"]).toBe(built.digest!);
+    });
+
+    test("a file left in the bundle dir by anything else is not among the build's outputs (#862)", async () => {
+      const { stagingDir } = seededStaging();
+      const bundleRoot = tmp("user");
+      mkdirSync(resolve(bundleRoot, bundleHash()), { recursive: true });
+      writeFileSync(resolve(bundleRoot, bundleHash(), "planted.js"), "// not built\n");
+      const built = await buildEngineBundle({ force: true, sharedRoot: null, bundleRoot, stagingDir });
+      expect(Object.keys(built.builtFiles ?? {}).sort()).toEqual(["main.js", "main.js.map", "main.js.meta.json"]);
     });
 
     test("force rebuilds over an existing per-user bundle", async () => {
