@@ -226,6 +226,12 @@ export const TELEGRAM_BUSY_REPLY = 'Too many messages are already waiting for an
  */
 export const TELEGRAM_SHUTDOWN_DROPPED_REPLY = 'Jarvis is restarting, so the messages you sent while it was still answering were not read. Send them again in a minute.';
 
+/** What waiting senders are told when the owner turns the Telegram channel off or switches it to another bot (#910). */
+export const TELEGRAM_CHANNEL_OFF_DROPPED_REPLY = 'Jarvis stopped using this Telegram bot, so the messages you sent while it was still answering were not read. Send them again once it is back.';
+
+/** The same, when Telegram may or may not have been told they were read. */
+export const TELEGRAM_CHANNEL_OFF_MAYBE_DROPPED_REPLY = 'Jarvis stopped using this Telegram bot, so the messages you sent while it was still answering may not have been read. If you get no answer to them, send them again once it is back.';
+
 /** The same, when Telegram may or may not have been told they were read (a confirm that failed, a poll that never got its answer). */
 export const TELEGRAM_SHUTDOWN_MAYBE_DROPPED_REPLY = 'Jarvis is restarting, so the messages you sent while it was still answering may not have been read. If you get no answer to them in a few minutes, send them again.';
 

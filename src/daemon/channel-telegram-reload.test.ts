@@ -13,7 +13,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { closeDb, initDatabase } from '../vault/schema.ts';
 import { ChannelService } from './channel-service.ts';
-import { TELEGRAM_BUSY_REPLY, TELEGRAM_RESTARTING_REPLY, TELEGRAM_RESUME_MAX_AGE_MS, TELEGRAM_SHUTDOWN_DROPPED_REPLY, TELEGRAM_SHUTDOWN_MAYBE_DROPPED_REPLY, TELEGRAM_UPDATES_LIMIT, TelegramAdapter } from '../comms/channels/telegram.ts';
+import { TELEGRAM_BUSY_REPLY, TELEGRAM_CHANNEL_OFF_DROPPED_REPLY, TELEGRAM_RESTARTING_REPLY, TELEGRAM_RESUME_MAX_AGE_MS, TELEGRAM_SHUTDOWN_DROPPED_REPLY, TELEGRAM_SHUTDOWN_MAYBE_DROPPED_REPLY, TELEGRAM_UPDATES_LIMIT, TelegramAdapter } from '../comms/channels/telegram.ts';
 
 /** `token` set: only that bot's polls see it (ids are per bot). Unset: every bot's. */
 type Update = { update_id: number; message: Record<string, unknown>; token?: string };
@@ -550,8 +550,10 @@ describe('#910 review: what the lanes must not do', () => {
       config.channels = { telegram: { ...config.channels.telegram, enabled: false } };
       await svc.stop();
       await svc.start();
+      // Its sender is told, once: it will not be answered.
+      expect(api.replies).toEqual([TELEGRAM_CHANNEL_OFF_DROPPED_REPLY]);
       release('slow first');
-      await until(() => api.replies.length === 1, 'the first answer');
+      await until(() => api.replies.length === 2, 'the first answer');
       config.channels = { telegram: { ...config.channels.telegram, enabled: true } };
       await svc.stop();
       await svc.start();
@@ -559,6 +561,33 @@ describe('#910 review: what the lanes must not do', () => {
       await until(() => api.offsets.length > more + 1, 'the re-enabled bot to poll');
       await Bun.sleep(30);
       expect(turns).toEqual(['slow first']);
+    } finally {
+      release('slow first');
+      await svc.stop();
+    }
+  });
+
+  test('switching to another bot tells the senders of what waited on the old one, once', async () => {
+    const api = fakeBotApi();
+    globalThis.fetch = api.fetchImpl;
+    const { agent, turns, release } = slowAgent();
+    const config = { channels: { telegram: { enabled: true, bot_token: 'a', allowed_users: [42] } } };
+    const svc = new ChannelService(config as never, agent as never);
+    try {
+      await svc.start();
+      api.send(42, 'slow first', 'a');
+      await until(() => turns.length === 1, 'the first turn');
+      api.send(42, 'waiting', 'a');
+      const polls = api.offsets.length;
+      await until(() => api.offsets.length > polls + 1, 'the waiting message to be fetched');
+      config.channels = { telegram: { ...config.channels.telegram, bot_token: 'b' } };
+      await svc.stop();
+      await svc.start();
+      expect(api.replies).toEqual([TELEGRAM_CHANNEL_OFF_DROPPED_REPLY]);
+      // A plain save of the same bot hands it over instead, and tells no one.
+      await svc.stop();
+      await svc.start();
+      expect(api.replies).toEqual([TELEGRAM_CHANNEL_OFF_DROPPED_REPLY]);
     } finally {
       release('slow first');
       await svc.stop();

@@ -14,7 +14,7 @@ import type { ChannelAdapter, ChannelMessage, SendOptions } from '../comms/chann
 import type { STTProvider } from '../comms/voice.ts';
 
 import { ChannelManager } from '../comms/index.ts';
-import { TELEGRAM_SHUTDOWN_DROPPED_REPLY, TELEGRAM_SHUTDOWN_MAYBE_DROPPED_REPLY, TelegramAdapter, type TelegramResumePoint } from '../comms/channels/telegram.ts';
+import { TELEGRAM_CHANNEL_OFF_DROPPED_REPLY, TELEGRAM_CHANNEL_OFF_MAYBE_DROPPED_REPLY, TELEGRAM_SHUTDOWN_DROPPED_REPLY, TELEGRAM_SHUTDOWN_MAYBE_DROPPED_REPLY, TelegramAdapter, type TelegramResumePoint } from '../comms/channels/telegram.ts';
 import { activeTurns } from './active-turns.ts';
 import { channelAllowList } from '../comms/channels/allow-list.ts';
 import { createSTTProvider } from '../comms/voice.ts';
@@ -217,13 +217,22 @@ export class ChannelService implements Service {
       // channel off, or before switching to another bot, must not run when
       // they switch back hours later. The offsets are kept (#882).
       const nextToken = telegramOn ? channels!.telegram!.bot_token : null;
+      const previous = this.telegram;
+      this.telegram = null;
+      // Their senders are told, once and with no retry (Q-07). Only the
+      // adapter built last can hold any: every other bot's were dropped when
+      // it stopped being that one.
+      if (previous && previous.token !== nextToken) {
+        await previous.adapter.dropWaiting(
+          { read: TELEGRAM_CHANNEL_OFF_DROPPED_REPLY, maybe: TELEGRAM_CHANNEL_OFF_MAYBE_DROPPED_REPLY },
+          (userId) => this.allowListNames('telegram', userId),
+        );
+      }
       for (const [token, point] of this.telegramResume) {
         if (token === nextToken || point.waiting.length === 0) continue;
         console.log(`[ChannelService] Dropping ${point.waiting.length} Telegram message(s) that were waiting for an answer when that bot was turned off or switched away from.`);
         this.telegramResume.set(token, { ...point, waiting: [] });
       }
-      const previous = this.telegram;
-      this.telegram = null;
 
       if (telegramOn) {
         warnAllowListProblems('telegram', channels!.telegram!.allowed_users);
