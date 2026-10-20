@@ -494,7 +494,7 @@ describe('voice room actions are limited to what the rooms carry out (#969)', ()
   });
 
   test('the realtime tool refuses an action the room does not carry out and broadcasts nothing', async () => {
-    for (const [room, action] of [['settings', 'set_primary_llm'], ['workflows', 'run'], ['usage', 'switch_tab']] as const) {
+    for (const [room, action] of [['settings', 'set_primary_llm'], ['settings', 'set_heartbeat_interval'], ['settings', 'set_heartbeat_aggressiveness'], ['workflows', 'run'], ['usage', 'switch_tab']] as const) {
       const { internals, speaker, roomFrames } = setup();
       const reply = await internals.executeRealtimeNavTool('dashboard_room_action', { room, action, args: {} }, speaker.ws);
       expect(roomFrames()).toEqual([]);

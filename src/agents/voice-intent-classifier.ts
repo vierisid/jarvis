@@ -286,10 +286,6 @@ ${switchTabSpec('settings')}
    matches "change the voice to aria", "set the tts voice to Guy"
    The "voice" is the voice ID — for edge it looks like "en-US-AriaNeural";
    for elevenlabs it's the elevenlabs voice_id; for sarvam it's the speaker name.
-- "set_heartbeat_interval" — args: { "minutes": number }
-   matches "set heartbeat to 30 minutes", "check in every hour"
-- "set_heartbeat_aggressiveness" — args: { "level": "passive"|"moderate"|"aggressive" }
-   matches "make jarvis more aggressive", "set heartbeat to passive"
 - "restart_daemon" — args: {}
    matches "restart jarvis", "restart the daemon", "apply the changes"
    Confirmation required — disconnects the WebSocket briefly. Voice should

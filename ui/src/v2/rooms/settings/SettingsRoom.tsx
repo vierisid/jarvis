@@ -274,18 +274,6 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
       }
 
       // ── General ──
-      case "set_heartbeat_interval": {
-        const minutes = Number(args.minutes);
-        if (!Number.isFinite(minutes) || minutes <= 0) return false;
-        setTab("general");
-        return answerFrom(data.setHeartbeatInterval(minutes));
-      }
-      case "set_heartbeat_aggressiveness": {
-        const level = String(args.level).toLowerCase();
-        if (!["passive", "moderate", "aggressive"].includes(level)) return false;
-        setTab("general");
-        return answerFrom(data.setHeartbeatAggressiveness(level as any));
-      }
       case "restart_daemon": {
         // Answered from the route, so a restart it refuses (no keepalive
         // service installed) is a no (#1015). The restart itself comes a
