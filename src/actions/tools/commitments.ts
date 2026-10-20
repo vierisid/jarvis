@@ -113,7 +113,9 @@ export const commitmentsTool: ToolDefinition = {
           `Priority: ${item.priority}`,
           `Due: ${item.when_due ? new Date(item.when_due).toLocaleString() : 'none'}`,
           `Assigned to: ${item.assigned_to || 'unassigned'}`,
-          `Context: ${item.context || 'none'}`,
+          // Context may span lines (#1036); each further line is indented so
+          // it cannot read as one of the fields around it.
+          `Context: ${item.context ? item.context.split(/\r\n|\r|\n/).join('\n  ') : 'none'}`,
           `Created: ${new Date(item.created_at).toLocaleString()}`,
           item.completed_at ? `Completed: ${new Date(item.completed_at).toLocaleString()}` : null,
           item.result ? `Result: ${item.result}` : null,
