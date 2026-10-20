@@ -857,7 +857,8 @@ describe('voice room actions are held to what their handlers do (#973)', () => {
   test('once the person speaks again the same action goes', async () => {
     const { taint, frames, realtime } = setup({ tainted: true });
     expect(await realtime('tasks', 'create_task', { title: 'x' })).toContain('[BLOCKED]');
-    taint.userTurnStarted();
+    taint.userTurnStarted('item-2');
+    taint.userTranscript('item-2', 'add a task called x');
     expect(await realtime('tasks', 'create_task', { title: 'x' })).not.toContain('[BLOCKED]');
     expect(frames()).toEqual(['navigate_room:tasks', 'room_action:create_task']);
   });
@@ -919,6 +920,16 @@ describe('voice room actions are held to what their handlers do (#973)', () => {
       expect(frames()).toEqual([]);
       expect(await realtime('agents', 'switch_tab', { tab: 'builder' })).not.toContain('[SYSTEM');
     }
+  });
+
+  test('the live session forwards a user transcript\'s item id to the dashboard (#1007)', async () => {
+    const src = await Bun.file(new URL('./ws-service.ts', import.meta.url)).text();
+    expect(src).toContain('payload: { role: t.role, text: t.text, final: t.final, ...(t.itemId ? { itemId: t.itemId } : {}) },');
+  });
+
+  test('the live session charges its input transcription to the BYO budget (#1007)', async () => {
+    const src = await Bun.file(new URL('./ws-service.ts', import.meta.url)).text();
+    expect(src).toContain('onTranscriptionCostUsd: (usd) => recordTranscriptionSpend(() => this.getRealtimeBudget(), resolved.provider, usd),');
   });
 
   // #928: the dashboard bridge judges tool calls and room actions against the

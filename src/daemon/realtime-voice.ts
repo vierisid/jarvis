@@ -8,6 +8,7 @@
  */
 
 import {
+  REALTIME_INPUT_TRANSCRIPTION_MODEL,
   RealtimeSession,
   type RealtimeSessionOptions,
   type RealtimeTranscript,
@@ -18,6 +19,7 @@ import type { LLMTool } from '../llm/provider.ts';
 import { recordUsage } from '../llm/usage.ts';
 import { hostedRealtimeError } from '../util/hosted-error.ts';
 import { RealtimeTaint } from '../agents/realtime-taint.ts';
+import { estimateTranscriptionCostUsd } from './realtime-budget.ts';
 
 export type RealtimeVoiceDeps = {
   /** Shared tool schema (same `LLMTool[]` the text providers use). */
@@ -40,6 +42,12 @@ export type RealtimeVoiceDeps = {
   /** Fired when the underlying session closes (for ws-service cleanup).
    *  `detail` is the socket's close code/reason when the server gave one. */
   onClose?: (detail?: string) => void;
+  /**
+   * The estimated USD cost of one input transcription, billed apart from the
+   * session's minutes. The dashboard adds it to the BYO monthly budget; a
+   * hosted session leaves billing to the proxy.
+   */
+  onTranscriptionCostUsd?: (usd: number) => void;
   /** Hashed user id for OpenAI abuse monitoring. */
   safetyIdentifier?: string;
   /** Injectable session factory (tests). Defaults to a real `RealtimeSession`. */
@@ -74,15 +82,23 @@ export class RealtimeVoiceSession {
     };
     this.session = deps.sessionFactory ? deps.sessionFactory(opts) : new RealtimeSession(opts);
 
-    this.session.onTranscript((t) => this.deps.onTranscript?.(t));
+    this.session.onTranscript((t) => {
+      // Only a final transcript of something the user said clears the
+      // session's taint, and only what was read before that utterance began
+      // (#1007; see RealtimeTaint).
+      if (t.role === 'user' && t.final) this.taint.userTranscript(t.itemId, t.text);
+      this.deps.onTranscript?.(t);
+    });
     // The taint-gating turn boundary, wired HERE rather than by each caller:
-    // it is the same event for every surface, and leaving it to the callers is
-    // what left the pebble without one. A voice session has no turn objects,
-    // so this is the only thing that clears the session's taint, and
-    // `executeRealtimeToolCall` refuses a taint-gated call outright rather
-    // than auto-approving it. Optional call because a test fake of the inner
-    // session may not implement it.
-    this.session.onUserTurnStart?.(() => this.taint.userTurnStarted());
+    // it is the same events for every surface, and leaving it to the callers
+    // is what left the pebble without one. A voice session has no turn
+    // objects, so the user's own words are the only thing that clears the
+    // session's taint, and `executeRealtimeToolCall` refuses a taint-gated
+    // call outright rather than auto-approving it. The VAD start only records
+    // where an utterance began; its transcript (above) clears (#1007).
+    // Optional call because a test fake of the inner session may not
+    // implement it.
+    this.session.onUserTurnStart?.((itemId) => this.taint.userTurnStarted(itemId));
     // The one place both realtime surfaces (the dashboard socket in ws-service
     // and the pebble in pebble-realtime) receive session errors, so the hosted
     // rule lives here rather than in each of them. The proxy relays upstream
@@ -115,6 +131,28 @@ export class RealtimeVoiceSession {
         output_tokens: u.output_tokens,
         latency_ms: u.latency_ms,
       });
+    });
+
+    // The user-side transcription (#1007) is billed apart from the response
+    // tokens, on its own model. Recorded as its own subsystem so the Usage
+    // room shows it, and costed for the BYO budget. Optional call because a
+    // test fake of the inner session may not implement it.
+    this.session.onTranscriptionUsage?.((u) => {
+      recordUsage({
+        tier: 'conversation',
+        resolved_tier: 'conversation',
+        subsystem: 'realtime_transcription',
+        provider: resolved.provider,
+        model: REALTIME_INPUT_TRANSCRIPTION_MODEL,
+        // A duration-billed model reports seconds, not tokens: its row counts
+        // the call with no token volume, and its cost reaches the budget
+        // below. gpt-4o-mini-transcribe always reports tokens.
+        input_tokens: u.input_tokens,
+        output_tokens: u.output_tokens,
+        latency_ms: 0,
+      });
+      const usd = estimateTranscriptionCostUsd(u);
+      if (usd > 0) this.deps.onTranscriptionCostUsd?.(usd);
     });
 
     // The critical path: model requests a tool -> run it through the

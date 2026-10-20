@@ -101,16 +101,27 @@ export function newTranscriptAccumulator(): TranscriptAccumulator {
  * they append to the buffer and surface at most every `throttleMs` (each push
  * is a set_state RPC; unthrottled deltas flooded the sidecar dozens/sec). The
  * assistant-final event carries the complete utterance and always emits, so the
- * bubble ends on the full response. A user-final resets for the next turn and
- * flips the pebble back to listening.
+ * bubble ends on the full response. User transcripts change nothing: the user
+ * starting to speak already shows listening (signalStopPlayback, on every VAD
+ * speech start). Their transcript is asynchronous (and only arrives at all
+ * since input transcription was turned on for #1007), so acting on it flipped
+ * the pebble to listening mid-reply, dropping the start of the bubble, or
+ * after the reply's final while its audio was still playing.
  */
 export function foldTranscript(
   acc: TranscriptAccumulator,
-  t: { role: 'user' | 'assistant'; text: string; final: boolean },
+  t: { role: 'user' | 'assistant'; text: string; final: boolean; interrupted?: boolean },
   now: number,
   throttleMs = 400,
 ): { state: PebbleRealtimeState; text?: string } | null {
   if (t.role === 'assistant') {
+    // A reply cancelled on barge-in: the user has the turn, and the text
+    // holds words never played. The pebble stays listening.
+    if (t.final && t.interrupted) {
+      acc.buffer = '';
+      acc.lastEmitAt = 0;
+      return null;
+    }
     if (t.final) {
       acc.buffer = '';
       acc.lastEmitAt = 0;
@@ -121,10 +132,7 @@ export function foldTranscript(
     acc.lastEmitAt = now;
     return { state: 'speaking', text: acc.buffer };
   }
-  if (!t.final) return null;
-  acc.buffer = '';
-  acc.lastEmitAt = 0;
-  return { state: 'listening' };
+  return null;
 }
 
 /**
@@ -209,7 +217,16 @@ export class PebbleRealtimeManager {
       // buffer too — the next response must not inherit it.
       signalStopPlayback: () => {
         const entry = this.sessions.get(sidecarId);
-        if (entry) entry.transcript = newTranscriptAccumulator();
+        if (entry) {
+          entry.transcript = newTranscriptAccumulator();
+          // The user is talking (VAD speech start): show it now, rather than
+          // when their transcript lands, which can be after the reply to it
+          // has started streaming.
+          if (entry.lastState !== 'listening') {
+            entry.lastState = 'listening';
+            this.deps.onState?.(sidecarId, 'listening');
+          }
+        }
         const ch = this.deps.getAudioChannel(sidecarId);
         if (ch) { ch.sendFlush(); return; }
         this.deps.dispatchNotify(sidecarId, 'pebble.stop_audio', {});
@@ -264,8 +281,15 @@ export class PebbleRealtimeManager {
       // Resolves only once the socket is OPEN (comms/realtime.ts connect), so
       // `live` and the listening pebble now mean the session really is up.
       await session.connect();
-      this.deps.onStatus?.(sidecarId, 'live', resolved.model);
-      this.deps.onState?.(sidecarId, 'listening'); // mic hot, awaiting the user
+      // Mic hot, awaiting the user. Recorded, so the first speech start does
+      // not push it again; skipped, with the `live` status, if a stop()
+      // already closed the session and set the pebble idle.
+      const entry = this.sessions.get(sidecarId);
+      if (entry?.session === session) {
+        this.deps.onStatus?.(sidecarId, 'live', resolved.model);
+        entry.lastState = 'listening';
+        this.deps.onState?.(sidecarId, 'listening');
+      }
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       this.deps.onStatus?.(sidecarId, 'error', `Realtime connect failed: ${detail}`);

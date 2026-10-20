@@ -50,7 +50,7 @@ import { tagRealtimePcm } from '../comms/realtime-frame.ts';
 import { RealtimeVoiceSession } from './realtime-voice.ts';
 import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES, REALTIME_ROOM_KEYS, REALTIME_WINDOW_ACTIONS } from './realtime-nav-tools.ts';
 import { TOOL_RESULT_GRACE_MS } from '../comms/realtime.ts';
-import { RealtimeBudgetTracker } from './realtime-budget.ts';
+import { RealtimeBudgetTracker, recordTranscriptionSpend } from './realtime-budget.ts';
 import { hostedRealtimeIncluded } from './realtime-gate.ts';
 import { chatErrorPayload, recordChatFailure } from '../failures/chat.ts';
 import { failureEvidence } from '../failures/evidence.ts';
@@ -2139,10 +2139,17 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         }
         return orchestrator.executeRealtimeToolCall(name, args, { blockedCategories: resolved.blockedCategories, taint });
       },
+      // Billed apart from the session's minutes (#1007). Hosted: the proxy is
+      // the billing authority and this BYO ledger is not charged, as for the
+      // minutes (closeRealtimeVoice).
+      onTranscriptionCostUsd: (usd) => recordTranscriptionSpend(() => this.getRealtimeBudget(), resolved.provider, usd),
       onTranscript: (t) =>
         this.wsServer.sendToClient(ws, {
           type: 'realtime_transcript',
-          payload: { role: t.role, text: t.text, final: t.final },
+          // The user line's item id, for a client that wants to order it
+          // before the reply it prompted, which can arrive first (#1007).
+          // The dashboard does not yet; it appends finals as they arrive.
+          payload: { role: t.role, text: t.text, final: t.final, ...(t.itemId ? { itemId: t.itemId } : {}) },
           timestamp: Date.now(),
         }),
       onError: (err) => {

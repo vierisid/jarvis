@@ -163,7 +163,44 @@ each pebble's) owns its taint: what one session reads never refuses an action
 spoken in another, and a turn boundary in one never clears another's. The
 session's tool calls run inside it, so a sub-agent a call starts inherits that
 session's taint and no other. Outside any turn or session there is no taint.
-The session's turn boundary is the user starting a new utterance.
+
+**What clears it (#1007).** Only a final transcript of the user's speech that
+has words in it. A VAD speech start is any sound (a cough, a door), so it only
+records where the utterance began. The transcript clears the marks read before
+its utterance began and nothing read after, because the transcript is
+asynchronous and can arrive after that utterance's own response has already
+read a page. Speech from anyone the mic hears (another person, the TV) still
+transcribes to words and still clears it. A request made right after a read is
+refused when its tool call beats its own transcript, and stays refused until
+that transcript lands (or, if its transcription fails, a later utterance's), so
+saying it again works. Input transcription (`audio.input.transcription`,
+`gpt-4o-mini-transcribe`) is turned on in `session.update` for this: the GA API
+leaves it off, and without it the transcript never arrives and the taint never
+clears.
+
+**Metering the transcription.** It is billed apart from the realtime response
+tokens, per `conversation.item.input_audio_transcription.completed`'s `usage`
+(`{type:'tokens', input_tokens, output_tokens}`; only Whisper reports
+`{type:'duration', seconds}`, so that shape never arrives with the pinned
+model). Each one is written to `llm_usage` as subsystem
+`realtime_transcription`, model `gpt-4o-mini-transcribe`, and costed at the
+published rates ($1.25 / 1M input tokens, $5 / 1M output tokens; Whisper's
+$0.006 / minute for duration usage; read 2026-10-20 from
+developers.openai.com). On a BYO key that cost is added to the
+`monthly_budget_usd` ledger on top of the per-minute session estimate. On a
+hosted session it is not: the proxy is the billing authority, as for the
+minutes. The pebble path writes the same `llm_usage` rows but charges nothing
+to the monthly budget ledger, minutes or transcription (a gap that predates
+this).
+
+What the hosted proxy does with it (checked in the hosting repo, not live):
+LiteLLM (v1.96.2) meters a realtime websocket only through its built-in
+realtime logging; the hosting repo has no callback that reads realtime events,
+and its live check only proved that a text-only `response.done` records spend.
+Whether that logging adds the transcription usage is unverified and likely
+not, and if it did it would charge it at the `uj-realtime` deployment's
+hand-set token rates rather than transcription prices. Nothing on the proxy
+inspects `session.update`, so the transcription model is not refused there.
 
 Every realtime tool call is written to the audit trail tagged `channel: 'voice'`;
 an auto-approved call is logged as `approval_required` + `executed: true` so the

@@ -1,6 +1,6 @@
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { RealtimeVoiceSession } from './realtime-voice.ts';
-import type { RealtimeSession, RealtimeFunctionCall, RealtimeTranscript, RealtimeUsage } from '../comms/realtime.ts';
+import type { RealtimeSession, RealtimeFunctionCall, RealtimeTranscript, RealtimeUsage, RealtimeTranscriptionUsage } from '../comms/realtime.ts';
 import { BrowserAudioTransport } from '../comms/audio-transport.ts';
 import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
 import { initDatabase, closeDb, getDb } from '../vault/schema.ts';
@@ -16,9 +16,10 @@ class FakeRealtimeSession {
   fnCb: ((c: RealtimeFunctionCall) => void) | null = null;
   transcriptCb: ((t: RealtimeTranscript) => void) | null = null;
   usageCb: ((u: RealtimeUsage) => void) | null = null;
+  transcriptionUsageCb: ((u: RealtimeTranscriptionUsage) => void) | null = null;
   errorCb: ((e: string) => void) | null = null;
   closeCb: (() => void) | null = null;
-  turnStartCb: (() => void) | null = null;
+  turnStartCb: ((itemId?: string) => void) | null = null;
   results: Array<{ callId: string; result: unknown }> = [];
   connected = false;
   closed = false;
@@ -26,10 +27,11 @@ class FakeRealtimeSession {
   onTranscript(cb: (t: RealtimeTranscript) => void) { this.transcriptCb = cb; }
   onFunctionCall(cb: (c: RealtimeFunctionCall) => void) { this.fnCb = cb; }
   onUsage(cb: (u: RealtimeUsage) => void) { this.usageCb = cb; }
+  onTranscriptionUsage(cb: (u: RealtimeTranscriptionUsage) => void) { this.transcriptionUsageCb = cb; }
   onError(cb: (e: string) => void) { this.errorCb = cb; }
   onOpen() {}
   onClose(cb: () => void) { this.closeCb = cb; }
-  onUserTurnStart(cb: () => void) { this.turnStartCb = cb; }
+  onUserTurnStart(cb: (itemId?: string) => void) { this.turnStartCb = cb; }
   onSpeechStarted() {}
   async connect() { this.connected = true; }
   sendFunctionResult(callId: string, result: unknown) { this.results.push({ callId, result }); }
@@ -60,11 +62,16 @@ describe('RealtimeVoiceSession', () => {
   // life of the daemon, at any authority level. It is wired here now, so a
   // surface cannot have a session without one.
   test('the session registers its own turn boundary with the inner session', () => {
-    const { fake, rv } = setup(async () => 'ok');
+    const { fake, rv, transcripts } = setup(async () => 'ok');
     expect(fake.turnStartCb).not.toBeNull();
     rv.taint.marks.add('browser_snapshot');
-    fake.turnStartCb!();
+    fake.turnStartCb!('item-1');
+    // A VAD start alone is any sound: it clears nothing (#1007).
+    expect([...rv.taint.marks]).toEqual(['browser_snapshot']);
+    fake.transcriptCb!({ role: 'user', text: 'thanks', final: true, itemId: 'item-1' });
     expect([...rv.taint.marks]).toEqual([]);
+    // The transcript still reaches the caller.
+    expect(transcripts).toEqual([{ role: 'user', text: 'thanks', final: true, itemId: 'item-1' }]);
   });
 
   // #928: every surface's session used to share one process-wide taint set.
@@ -79,7 +86,8 @@ describe('RealtimeVoiceSession', () => {
     expect(seen[0]).toBe(a.rv.taint);
     expect(seen[1]).toBe(b.rv.taint);
     a.rv.taint.marks.add('browser_snapshot');
-    b.fake.turnStartCb!();
+    b.fake.turnStartCb!('b-item');
+    b.fake.transcriptCb!({ role: 'user', text: 'hello', final: true, itemId: 'b-item' });
     expect([...a.rv.taint.marks]).toEqual(['browser_snapshot']);
   });
 
@@ -148,6 +156,30 @@ describe('RealtimeVoiceSession usage tracking', () => {
     // is now defensive (catches resolver throws), but resetting here keeps
     // process state clean and matches the documented best-effort contract.
     setUsageDatabase(() => null);
+  });
+
+  // #1007 turned on input transcription; it is billed apart, on its own model.
+  test('input transcription usage lands in llm_usage on its own model and is costed', async () => {
+    const fake = new FakeRealtimeSession();
+    const costs: number[] = [];
+    const rv = new RealtimeVoiceSession(RESOLVED, new BrowserAudioTransport({ sendAudio: () => {}, inputSampleRate: 24000 }), {
+      tools: [], instructions: 'persona', executeToolCall: async () => 'ok',
+      onTranscriptionCostUsd: (usd) => costs.push(usd),
+      sessionFactory: () => fake as unknown as RealtimeSession,
+    });
+    await rv.connect();
+    fake.transcriptionUsageCb!({ input_tokens: 400, output_tokens: 20 });
+    const rows = getDb()!
+      .query<{ tier: string; subsystem: string; provider: string; model: string; input_tokens: number; output_tokens: number }, []>(
+        'SELECT tier, subsystem, provider, model, input_tokens, output_tokens FROM llm_usage',
+      )
+      .all();
+    expect(rows).toEqual([{
+      tier: 'conversation', subsystem: 'realtime_transcription', provider: 'usejarvis_ai',
+      model: 'gpt-4o-mini-transcribe', input_tokens: 400, output_tokens: 20,
+    }]);
+    expect(costs).toHaveLength(1);
+    expect(costs[0]).toBeCloseTo(400 * 1.25e-6 + 20 * 5e-6, 12);
   });
 
   test('usage events land in llm_usage as conversation/realtime_voice', async () => {

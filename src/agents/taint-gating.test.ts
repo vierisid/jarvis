@@ -279,8 +279,10 @@ describe('orchestrator taint gating', () => {
     // The refusal names what THIS session read.
     expect(out).toContain('this session read outside content (browser_snapshot)');
     expect(calls).not.toContain('run_command');
-    // A fresh user utterance clears it.
-    voice.taint.userTurnStarted();
+    // A fresh user utterance, once its transcript lands, clears it (#1007).
+    voice.taint.userTurnStarted('item-2');
+    expect(await orch.executeRealtimeToolCall('run_command', {}, voice)).toContain('[BLOCKED]');
+    voice.taint.userTranscript('item-2', 'run it');
     expect(await orch.executeRealtimeToolCall('run_command', {}, voice)).toBe('ok');
   });
 });
@@ -323,8 +325,9 @@ describe('realtime voice taint is per session (#928)', () => {
     const dashboard = { taint: new RealtimeTaint() };
     const pebble = { taint: new RealtimeTaint() };
     await orch.executeRealtimeToolCall('browser_snapshot', {}, dashboard);
-    // Someone starts speaking at the pebble.
-    pebble.taint.userTurnStarted();
+    // Someone speaks at the pebble.
+    pebble.taint.userTurnStarted('p-1');
+    pebble.taint.userTranscript('p-1', 'what time is it');
     expect(await orch.executeRealtimeToolCall('run_command', {}, dashboard)).toContain('[BLOCKED]');
     expect(calls).toEqual(['browser_snapshot']);
   });

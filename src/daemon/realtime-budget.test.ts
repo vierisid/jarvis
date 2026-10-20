@@ -8,6 +8,8 @@ import {
   isOverBudget,
   monthKey,
   ESTIMATED_USD_PER_MINUTE,
+  estimateTranscriptionCostUsd,
+  recordTranscriptionSpend,
   type BudgetState,
   type BudgetStore,
 } from './realtime-budget.ts';
@@ -116,5 +118,45 @@ describe('RealtimeBudgetTracker file persistence', () => {
     // Wrong-typed fields are also rejected.
     writeFileSync(path, JSON.stringify({ month: 5, spentUsd: 'lots' }), 'utf8');
     expect(RealtimeBudgetTracker.fromFile(path).getMonthSpend(NOW)).toBe(0);
+  });
+});
+
+// #1007 turned on input transcription, billed apart from the session minutes.
+describe('input transcription spend', () => {
+  test('token usage is costed at the published gpt-4o-mini-transcribe rates', () => {
+    // $1.25 / 1M input, $5 / 1M output.
+    expect(estimateTranscriptionCostUsd({ input_tokens: 1_000_000, output_tokens: 0 })).toBeCloseTo(1.25, 10);
+    expect(estimateTranscriptionCostUsd({ input_tokens: 0, output_tokens: 1_000_000 })).toBeCloseTo(5, 10);
+    expect(estimateTranscriptionCostUsd({ input_tokens: 400, output_tokens: 20 })).toBeCloseTo(400 * 1.25e-6 + 20 * 5e-6, 12);
+  });
+
+  test('duration usage (Whisper only) is costed at Whisper\'s published $0.006 per minute', () => {
+    expect(estimateTranscriptionCostUsd({ input_tokens: 0, output_tokens: 0, seconds: 120 })).toBeCloseTo(0.012, 10);
+    expect(estimateTranscriptionCostUsd({ input_tokens: 0, output_tokens: 0, seconds: 0 })).toBe(0);
+  });
+
+  test('a BYO session charges it to the monthly budget, on top of the minutes', () => {
+    const store = memStore();
+    const tracker = new RealtimeBudgetTracker(store);
+    const now = new Date('2026-10-20T12:00:00Z');
+    tracker.recordSessionSeconds(60, now);
+    recordTranscriptionSpend(() => tracker, 'openai', 0.01, now);
+    expect(tracker.getMonthSpend(now)).toBeCloseTo(ESTIMATED_USD_PER_MINUTE + 0.01, 10);
+  });
+
+  test('a hosted session does not: the proxy bills it', () => {
+    const store = memStore();
+    const tracker = new RealtimeBudgetTracker(store);
+    recordTranscriptionSpend(() => tracker, 'usejarvis_ai', 0.01);
+    expect(store.state).toBeNull();
+  });
+
+  test('it can tip a BYO budget over the cap', () => {
+    const tracker = new RealtimeBudgetTracker(memStore());
+    const now = new Date('2026-10-20T12:00:00Z');
+    tracker.recordSessionSeconds(60 * 10, now); // $3.00 of minutes
+    expect(tracker.canStart(3.005, now)).toBe(true);
+    recordTranscriptionSpend(() => tracker, 'openai', estimateTranscriptionCostUsd({ input_tokens: 0, output_tokens: 0, seconds: 120 }), now);
+    expect(tracker.canStart(3.005, now)).toBe(false);
   });
 });

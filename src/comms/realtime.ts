@@ -39,6 +39,18 @@ export type RealtimeTranscript = {
   text: string;
   /** true once the utterance is complete (vs. a streaming delta). */
   final: boolean;
+  /**
+   * A user transcript's conversation item: the same id the server gave the
+   * utterance's `input_audio_buffer.speech_started`, which is how the taint
+   * boundary pairs the two (#1007). Absent when the server sent none.
+   */
+  itemId?: string;
+  /**
+   * An assistant final of a reply cancelled on barge-in: the user has taken
+   * the turn, and the text may include words that were never played. Set
+   * only when true.
+   */
+  interrupted?: boolean;
 };
 
 /**
@@ -52,6 +64,33 @@ export type RealtimeUsage = {
   /** Wall-clock since `response.created` for this response, in ms. */
   latency_ms: number;
 };
+
+/**
+ * Usage of the user-side input transcription, reported on
+ * `conversation.item.input_audio_transcription.completed` and billed apart
+ * from the realtime response tokens. Token-billed models (gpt-4o-*-transcribe)
+ * report tokens; duration-billed ones (whisper-1) report seconds instead.
+ */
+export type RealtimeTranscriptionUsage = {
+  input_tokens: number;
+  output_tokens: number;
+  /** Seconds of input audio, when the model is billed by duration. */
+  seconds?: number;
+};
+
+/** The `usage` of an input transcription event, or null when absent or malformed. */
+export function parseTranscriptionUsage(raw: unknown): RealtimeTranscriptionUsage | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const u = raw as Record<string, unknown>;
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
+  if (u.type === 'duration') {
+    const seconds = num(u.seconds);
+    return seconds > 0 ? { input_tokens: 0, output_tokens: 0, seconds } : null;
+  }
+  const input = num(u.input_tokens);
+  const output = num(u.output_tokens);
+  return input > 0 || output > 0 ? { input_tokens: input, output_tokens: output } : null;
+}
 
 /** Minimal WebSocket surface we depend on — lets tests inject a fake. */
 export interface RealtimeSocket {
@@ -103,6 +142,9 @@ export function convertToolsForRealtime(tools: LLMTool[]): Array<Record<string, 
   }));
 }
 
+/** The model that transcribes the user's side of a realtime session. */
+export const REALTIME_INPUT_TRANSCRIPTION_MODEL = 'gpt-4o-mini-transcribe';
+
 /** Build the `session.update` payload for a speech-to-speech session. */
 export function buildSessionUpdate(
   resolved: ResolvedRealtimeVoice,
@@ -126,6 +168,15 @@ export function buildSessionUpdate(
         // first-turn "doesn't start" was dropped opening audio, fixed by the
         // transport buffering — not the VAD. Leave this alone.
         turn_detection: { type: 'semantic_vad' },
+        // Transcribe what the user says. Off by default in the GA API, and it
+        // never was on here, so the user's own transcript -- the only thing
+        // that clears a voice session's taint (#1007) -- never arrived. The
+        // hosted proxy forwards this update verbatim, so it reaches OpenAI as
+        // written. It also makes the dashboard show the user's utterances,
+        // which it already renders when they arrive (in arrival order, so a
+        // slow transcript can land after the reply to it). Its usage is
+        // metered on its own (onTranscriptionUsage; realtime-voice.ts).
+        transcription: { model: REALTIME_INPUT_TRANSCRIPTION_MODEL },
       },
       output: {
         // `rate` is required on output format too (confirmed via live smoke test).
@@ -182,12 +233,13 @@ export class RealtimeSession {
   private transcriptCb: ((t: RealtimeTranscript) => void) | null = null;
   private functionCallCb: ((c: RealtimeFunctionCall) => void) | null = null;
   private usageCb: ((u: RealtimeUsage) => void) | null = null;
+  private transcriptionUsageCb: ((u: RealtimeTranscriptionUsage) => void) | null = null;
   private errorCb: ((err: string) => void) | null = null;
   private openCb: (() => void) | null = null;
   private closeCb: ((detail?: string) => void) | null = null;
   private speechStartedCb: (() => void) | null = null;
   /** Separate from speechStartedCb, which the session uses for barge-in playback control. */
-  private userTurnStartCb: (() => void) | null = null;
+  private userTurnStartCb: ((itemId?: string) => void) | null = null;
   // Response-latency instrumentation (user-stopped → first audio).
   private turnEndedAt = 0;
   private loggedResponseLatency = false;
@@ -213,8 +265,9 @@ export class RealtimeSession {
   // Wall-clock the current response started (response.created), used to compute
   // a per-response latency for the usage record on response.done.
   private responseStartedAt = 0;
-  // Set on barge-in: suppress any output audio deltas still arriving from the
-  // response we just cancelled, until the next response begins.
+  // Set on barge-in: suppress any output audio and transcript deltas still
+  // arriving from the response we just cancelled, and mark its final
+  // transcript interrupted, until the next one begins.
   private suppressOutputAudio = false;
 
   constructor(opts: RealtimeSessionOptions) {
@@ -236,6 +289,8 @@ export class RealtimeSession {
   onFunctionCall(cb: (c: RealtimeFunctionCall) => void): void { this.functionCallCb = cb; }
   /** Fires once per `response.done` with the token + latency accounting. */
   onUsage(cb: (u: RealtimeUsage) => void): void { this.usageCb = cb; }
+  /** Fires once per completed input transcription that carries usage. */
+  onTranscriptionUsage(cb: (u: RealtimeTranscriptionUsage) => void): void { this.transcriptionUsageCb = cb; }
   onError(cb: (err: string) => void): void { this.errorCb = cb; }
   onOpen(cb: () => void): void { this.openCb = cb; }
   /** Fired when the socket closes. `detail` carries the close code/reason
@@ -245,13 +300,14 @@ export class RealtimeSession {
   /** Fired when the model detects the user started speaking (barge-in). */
   onSpeechStarted(cb: () => void): void { this.speechStartedCb = cb; }
   /**
-   * Fired when the server VAD hears the user start a new utterance. This is
-   * ordered BEFORE the response (and any tool calls) for that utterance,
-   * unlike the input transcription event, which is asynchronous and can land
-   * after the model has already started acting. Used as the taint-gating
-   * turn boundary for voice.
+   * Fired when the server VAD hears the user start a new utterance, with the
+   * id of the conversation item the utterance will become. This is ordered
+   * BEFORE the response (and any tool calls) for that utterance, unlike the
+   * input transcription event, which is asynchronous and can land after the
+   * model has already started acting. The voice taint boundary records here
+   * where the utterance began; only its transcript clears (#1007).
    */
-  onUserTurnStart(cb: () => void): void { this.userTurnStartCb = cb; }
+  onUserTurnStart(cb: (itemId?: string) => void): void { this.userTurnStartCb = cb; }
 
   /**
    * Connect, send session.update, and wire the transport's mic + playback.
@@ -495,18 +551,30 @@ export class RealtimeSession {
         break;
       }
       case 'response.output_audio_transcript.delta': {
+        // Fragments of a reply cancelled on barge-in are dropped with its
+        // audio: nobody heard them, and on the pebble a stray fragment flipped
+        // the user's turn back to speaking. Its final transcript still goes
+        // out (below), marked interrupted, so the dashboard keeps the reply's
+        // text and the pebble can ignore it.
+        if (this.suppressOutputAudio) break;
         const delta = evt.delta as string | undefined;
         if (delta) this.transcriptCb?.({ role: 'assistant', text: delta, final: false });
         break;
       }
       case 'response.output_audio_transcript.done': {
         const text = evt.transcript as string | undefined;
-        if (text) this.transcriptCb?.({ role: 'assistant', text, final: true });
+        if (text) {
+          this.transcriptCb?.({ role: 'assistant', text, final: true, ...(this.suppressOutputAudio ? { interrupted: true } : {}) });
+        }
         break;
       }
       case 'conversation.item.input_audio_transcription.completed': {
         const text = evt.transcript as string | undefined;
-        if (text) this.transcriptCb?.({ role: 'user', text, final: true });
+        const itemId = typeof evt.item_id === 'string' ? evt.item_id : undefined;
+        if (text) this.transcriptCb?.({ role: 'user', text, final: true, ...(itemId ? { itemId } : {}) });
+        // Billed whether or not it heard words, so read before the text check.
+        const usage = parseTranscriptionUsage(evt.usage);
+        if (usage) this.transcriptionUsageCb?.(usage);
         break;
       }
       case 'input_audio_buffer.speech_started': {
@@ -524,7 +592,7 @@ export class RealtimeSession {
         // be refused. Should no response ever follow, the next one lifts it.
         this.userTurnOpen = true;
         this.speechStartedCb?.();
-        this.userTurnStartCb?.();
+        this.userTurnStartCb?.(typeof evt.item_id === 'string' ? evt.item_id : undefined);
         break;
       }
       case 'response.output_item.added': {
