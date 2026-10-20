@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jarvis/sidecar/internal/update"
 )
@@ -375,6 +376,7 @@ func TestUpdaterRestorePanicOnTheErrorPathIsReportedAsAFailedRestore(t *testing.
 	}
 }
 
+// Guards against the naive half-fix: clearing applying in the error branch AND in finishApply.
 // checkThenApply's registry failure must clear applying exactly once, after
 // its report: a Start that wins the flag while that report is being delivered
 // owns it, and the first attempt's end must not clear it from under it (two
@@ -398,5 +400,97 @@ func TestUpdaterCheckThenApplyDoesNotClearTheNextAttemptsFlag(t *testing.T) {
 	}
 	if !secondWon.Load() && f.applying.Load() {
 		t.Fatal("applying is still set after a failed registry check")
+	}
+}
+
+// The restore failed on the ordinary error path (it returned an error), then
+// reporting that failure panicked in a hook. The failure was already recorded
+// with the restore error in it, and must not be replaced by a generic "still
+// installed".
+func TestUpdaterHookPanicAfterAFailedRestoreKeepsTheRestoreFailure(t *testing.T) {
+	f, _ := pmUpdaterWithAside(t)
+	f.moveAside = func(string) (func() error, error) {
+		return func() error { return errors.New("access denied") }, nil
+	}
+	f.pmRun = func(context.Context, []string, string) error { return errors.New("EACCES") }
+	var panicked atomic.Bool
+	f.emit = func(s UpdateState) {
+		if s.Phase == updatePhaseFailed && panicked.CompareAndSwap(false, true) {
+			panic("emit")
+		}
+	}
+	f.applying.Store(true)
+	if r := escaped(func() { f.apply("0.10.0") }); r != nil {
+		t.Fatalf("panic escaped apply: %v", r)
+	}
+	if !panicked.Load() {
+		t.Fatal("the failure report never ran: the test did not exercise the path it is about")
+	}
+	s := offerWithin(t, f.Updater).State
+	if s.Phase != updatePhaseFailed || strings.Contains(s.Error, "still installed") ||
+		!strings.Contains(s.Error, "restoring the previous version failed: access denied") {
+		t.Errorf("state = %+v, want failed naming the failed restore, never \"still installed\"", s)
+	}
+	if f.applying.Load() {
+		t.Error("applying is still set after a contained panic")
+	}
+}
+
+// The restore failed on the ordinary error path, then the panic came BEFORE
+// the failure was recorded (here: the clock fail reads). Nothing specific was
+// recorded, so the contained panic reports the failed restore itself.
+func TestUpdaterPanicBeforeReportingAFailedRestoreReportsTheRestoreFailure(t *testing.T) {
+	f, _ := pmUpdaterWithAside(t)
+	f.moveAside = func(string) (func() error, error) {
+		return func() error { return errors.New("access denied") }, nil
+	}
+	f.pmRun = func(context.Context, []string, string) error { return errors.New("EACCES") }
+	var panicked atomic.Bool
+	base := f.now
+	f.now = func() time.Time {
+		if panicked.CompareAndSwap(false, true) {
+			panic("clock")
+		}
+		return base()
+	}
+	f.applying.Store(true)
+	if r := escaped(func() { f.apply("0.10.0") }); r != nil {
+		t.Fatalf("panic escaped apply: %v", r)
+	}
+	s := offerWithin(t, f.Updater).State
+	if s.Phase != updatePhaseFailed || !strings.HasPrefix(s.Error, applyPanicRestoreError) ||
+		!strings.Contains(s.Error, "access denied") {
+		t.Errorf("state = %+v, want failed with %q naming the restore error", s, applyPanicRestoreError)
+	}
+	if f.applying.Load() {
+		t.Error("applying is still set after a contained panic")
+	}
+}
+
+// A hook panic after the specific failure was recorded keeps that failure:
+// the generic panic text would hide the real cause (mirrors check's recorded).
+func TestUpdaterHookPanicAfterTheFailureWasRecordedKeepsIt(t *testing.T) {
+	f, restores := pmUpdaterWithAside(t)
+	f.pmRun = func(context.Context, []string, string) error { return errors.New("EACCES") }
+	f.emit = func(s UpdateState) {
+		if s.Phase == updatePhaseFailed {
+			panic("emit")
+		}
+	}
+	f.applying.Store(true)
+	if r := escaped(func() { f.apply("0.10.0") }); r != nil {
+		t.Fatalf("panic escaped apply: %v", r)
+	}
+	s := offerWithin(t, f.Updater).State
+	if s.Phase != updatePhaseFailed || !strings.Contains(s.Error, "EACCES") || s.ManualCommand == "" {
+		t.Errorf("state = %+v, want the recorded EACCES failure kept", s)
+	}
+	if n := restores.Load(); n != 1 {
+		t.Errorf("restored %d times, want 1", n)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failedAt.IsZero() {
+		t.Error("failedAt not set")
 	}
 }
