@@ -16,7 +16,7 @@ import type { CommitmentExecutor } from './commitment-executor.ts';
 import type { ChannelService } from './channel-service.ts';
 import type { Commitment } from '../vault/commitments.ts';
 import type { ContentItem } from '../vault/content-pipeline.ts';
-import type { STTProvider, TTSProvider } from '../comms/voice.ts';
+import { splitIntoSentences, type STTProvider, type TTSProvider } from '../comms/voice.ts';
 import { PROJECT_SITE_CHAT_SCOPE } from '../actions/tools/tool-scope.ts';
 import { approvalNeedsClick, type ApprovalRequest, type ApprovalManager } from '../authority/approval.ts';
 import { isAgentStopCard, type DeferredExecutor } from '../authority/deferred-executor.ts';
@@ -157,6 +157,50 @@ export function voiceApprovalMismatch(
     return `A new request arrived while you were answering, so ${nothing}. The one you were looking at is still waiting: ${voiceApprovalLabel(shown)}. The new one: ${latest}. Decide each on its card.`;
   }
   return `The request you were looking at has already been decided or has expired, so ${nothing}. Another one is waiting: ${latest}. Decide it on its card.`;
+}
+
+/**
+ * What is said aloud of a reply to a spoken yes or no (#889): the reply
+ * without any sentence that quotes a request. A request's label is written by
+ * the model that asked for it, and on screen it is a code span, set apart
+ * from what Jarvis says (#809); read aloud in Jarvis's voice it would not be
+ * set apart at all. The card is where it is read. Each code span is taken out
+ * before the reply is split into sentences, so a sentence inside a label
+ * cannot come out on its own.
+ */
+export function spokenVoiceReply(text: string): string {
+  const QUOTED = '\u0000';
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] !== '`') { out += text[i]; i++; continue; }
+    let n = 0;
+    while (text[i + n] === '`') n++;
+    // The closing run is the next run of exactly n backticks (CommonMark).
+    let j = i + n;
+    let close = -1;
+    while (j < text.length) {
+      if (text[j] !== '`') { j++; continue; }
+      let m = 0;
+      while (text[j + m] === '`') m++;
+      if (m === n) { close = j; break; }
+      j += m;
+    }
+    if (close === -1) { out += text.slice(i, i + n); i += n; continue; }
+    out += QUOTED;
+    i = close + n;
+  }
+  // A sentence that only said what is waiting still says that much. A gated
+  // reply has already named its request ("That request ..."), so it is "it".
+  const named = text.startsWith('That request');
+  return splitIntoSentences(out).flatMap((sentence) => {
+    if (!sentence.includes(QUOTED)) return [sentence];
+    if (sentence.startsWith('Waiting for you:')) return [named ? 'It is still waiting for you.' : 'A request is waiting for you.'];
+    if (sentence.startsWith('Another one is waiting:')) return ['Another request is waiting for you.'];
+    if (sentence.startsWith('The one you were looking at is still waiting:')) return ['The one you were looking at is still waiting.'];
+    if (sentence.startsWith('The new one:')) return ['A new one is waiting too.'];
+    return [];
+  }).join(' ');
 }
 
 /**
@@ -411,11 +455,22 @@ export class WebSocketService implements Service {
   private ttsProvider: TTSProvider | null = null;
   private sttProvider: STTProvider | null = null;
   private voiceSessions = new Map<ServerWebSocket<unknown>, VoiceSession>();
-  /** One foreground chat turn per dashboard socket. A new turn supersedes it. */
+  /**
+   * One foreground chat turn per dashboard socket. A new turn supersedes it.
+   * `ttsStreaming` is true from the turn's tts_start to its tts_end, so a
+   * spoken voice answer can tell a turn that is talking from one that is only
+   * open, e.g. blocked on an inline approval (#889).
+   */
   private activeChats = new Map<
     ServerWebSocket<unknown>,
-    { requestId: string; controller: AbortController }
+    { requestId: string; controller: AbortController; ttsStreaming?: boolean }
   >();
+  /**
+   * The reply to a spoken yes or no being spoken on a socket (#889), at most
+   * one each. Kept apart from activeChats: it may play while a chat turn is
+   * open, and it must not replace that turn's entry.
+   */
+  private voiceAnswers = new Map<ServerWebSocket<unknown>, { requestId: string; controller: AbortController; started: boolean }>();
   private pendingVoiceConfirmations = new Map<string, PendingVoiceConfirmation>();
   /**
    * Premium realtime voice (gpt-realtime-2) sessions, keyed by socket. Present
@@ -672,6 +727,7 @@ export class WebSocketService implements Service {
   private handleClientDisconnect(ws: ServerWebSocket<unknown>): void {
     this.briefChat?.transport.detach(ws);
     this.cancelActiveChat(ws, 'disconnect', false);
+    this.stopVoiceAnswer(ws, false);
     // A room action this dashboard was asked about can no longer be
     // answered: say so now rather than after the wait (#965).
     this.roomActionResults.abandonAnswerer(ws);
@@ -1233,6 +1289,7 @@ export class WebSocketService implements Service {
       await this.briefChat.transport.handle(msg, ws, this.briefChat.capabilities);
       if (!wasScoped && this.briefChat.transport.hasClient(ws)) {
         this.cancelActiveChat(ws, 'superseded');
+        this.stopVoiceAnswer(ws);
         this.closeRealtimeVoice(ws);
       }
       return;
@@ -1247,6 +1304,7 @@ export class WebSocketService implements Service {
         // user input, and voice_end will process it normally.
         const requestId = (msg.payload as { requestId?: string } | undefined)?.requestId;
         this.cancelActiveChat(ws, 'user', true, requestId);
+        this.stopVoiceAnswer(ws, true, requestId);
         this.realtimeSessions.get(ws)?.session.interrupt();
         return undefined;
       }
@@ -1458,7 +1516,10 @@ export class WebSocketService implements Service {
     // A dashboard socket owns at most one foreground turn. This is the
     // server-side half of typed barge-in: cancel old generation/TTS before
     // classifying or starting the replacement message.
-    if (ws) this.cancelActiveChat(ws, 'superseded');
+    if (ws) {
+      this.cancelActiveChat(ws, 'superseded');
+      this.stopVoiceAnswer(ws);
+    }
 
     // Text-driven Room navigation + room actions. Run the same intent
     // classifier the voice path uses on the typed text. If it parses
@@ -1563,7 +1624,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       }
     }
 
-    const activeChat = ws
+    const activeChat: { requestId: string; controller: AbortController; ttsStreaming?: boolean } | null = ws
       ? { requestId, controller: new AbortController() }
       : null;
     if (ws && activeChat) this.activeChats.set(ws, activeChat);
@@ -1652,6 +1713,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
               timestamp: Date.now(),
             });
             ttsStartSent = false; // prevent duplicate tts_end
+            if (activeChat) activeChat.ttsStreaming = false;
             retainActiveForTTS = false;
             if (activeChat && this.activeChats.get(ws) === activeChat) {
               this.activeChats.delete(ws);
@@ -1673,6 +1735,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         // Send tts_start exactly once before the first audio chunk
         if (!ttsStartSent) {
           ttsStartSent = true;
+          // The turn talks now: a voice answer still playing would be mixed
+          // into its audio, so it ends here (#889).
+          if (activeChat) activeChat.ttsStreaming = true;
+          this.stopVoiceAnswer(ws);
           this.wsServer.sendToClient(ws, {
             type: 'tts_start',
             payload: { requestId, containsWake: sentenceHasWake, containsStop: sentenceHasStop },
@@ -1761,6 +1827,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
             timestamp: Date.now(),
           });
           ttsStartSent = false;
+          if (activeChat) activeChat.ttsStreaming = false;
         }
         // Otherwise speakNextSentence will send tts_end when queue drains
         retainActiveForTTS = ttsSpeaking || ttsSentenceQueue.length > 0 || ttsStartSent;
@@ -2574,6 +2641,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // user bubble, an LLM answer, or another overlapping TTS stream.
     if (isVoiceStopCommand(trimmed)) {
       this.cancelActiveChat(ws, 'voice');
+      this.stopVoiceAnswer(ws);
       this.realtimeSessions.get(ws)?.session.interrupt();
       this.wsServer.sendToClient(ws, {
         type: 'tts_end',
@@ -2770,14 +2838,17 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
           if (resolved.kind === 'refused') {
             // In the thread, where the person reads replies: nothing was
             // decided, and which request is waiting (#809).
-            this.broadcastAssistantAck(resolved.message, requestId);
+            this.answerVoiceDecision(resolved.message, requestId, ws, trimmed, { decided: false });
           } else if (resolved.kind === 'gated') {
             // In the thread too, and saying which reason (#856).
-            this.broadcastAssistantAck(resolved.message, requestId);
+            this.answerVoiceDecision(resolved.message, requestId, ws, trimmed, { decided: false });
           } else if (!(resolved.kind === 'room_action' && decision === 'approve')) {
             // A confirmed room action has already said what its room did.
             const verb = decision === 'approve' ? 'Approving' : 'Cancelling';
-            this.broadcastAssistantAck(`${verb} ${resolved.label}.`, requestId);
+            // A confirmed clarifier or repeat-back has already run its chat
+            // turn, which kept and spoke its own answer: this is shown only.
+            const answeredByChat = decision === 'approve' && (resolved.kind === 'clarifier' || resolved.kind === 'repeat_back');
+            this.answerVoiceDecision(`${verb} ${resolved.label}.`, requestId, ws, trimmed, { decided: true, spoken: answeredByChat ? '' : `${verb} the request.` });
           }
           this.broadcastThinkingEnd(requestId);
           return;
@@ -3437,6 +3508,144 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       id: `assistant-ack:${requestId ?? 'none'}:${crypto.randomUUID()}`,
       timestamp: Date.now(),
     });
+  }
+
+  /**
+   * The reply to a spoken yes or no on a pending request (#889): shown in the
+   * thread like any ack, kept in the voice conversation so a reload still
+   * shows it, and spoken to the socket that asked. Someone answering by voice
+   * is usually not looking at the screen, so a reply that is only shown tells
+   * them nothing, least of all that their answer decided nothing.
+   *
+   * What is kept is the spoken form, which quotes no request (#889 review):
+   * the voice conversation is read back to the classifier and the chat agent
+   * as what Jarvis said, and a request's label is written by the model that
+   * asked for it. The card, its history and the audit keep the label. The
+   * spoken yes or no is kept before it as the person's turn. An empty
+   * `spoken` means the reply is shown only: nothing is kept or said.
+   *
+   * Nothing is kept while a chat turn is open on the socket: that turn has
+   * kept its user message and keeps its reply when it ends, and these two
+   * would land between them on reload.
+   *
+   * `decided` is true when the answer approved or cancelled something; false
+   * when it was refused or gated and decided nothing (see speakVoiceAnswer).
+   */
+  private answerVoiceDecision(
+    text: string,
+    requestId: string,
+    ws: ServerWebSocket<unknown>,
+    transcript: string,
+    opts: { decided: boolean; spoken?: string },
+  ): void {
+    const spoken = opts.spoken ?? spokenVoiceReply(text);
+    this.broadcastAssistantAck(text, requestId);
+    if (!spoken) return;
+    if (!this.activeChats.has(ws)) {
+      try {
+        // The person's own words first, so the reply answers something.
+        const conversationId = getOrCreateConversation('websocket').id;
+        addMessage(conversationId, { role: 'user', content: transcript });
+        addMessage(conversationId, { role: 'assistant', content: spoken });
+      } catch (err) {
+        console.warn('[WSService] could not keep a voice decision reply:', err);
+      }
+    }
+    this.speakVoiceAnswer(spoken, requestId, ws, opts.decided).catch((err) =>
+      console.warn('[WSService] could not speak a voice decision reply:', err));
+  }
+
+  /**
+   * Speak `text` to `ws` alone, never to other dashboards (#881's narrowed
+   * delivery), under the voice turn's own `requestId`. Skipped with no TTS
+   * provider, and on a socket with a realtime session, whose model speaks for
+   * itself and whose open mic would take the clip back in.
+   *
+   * A chat turn open on the socket is never cancelled or superseded; it may be
+   * the turn this answer unblocks. While it is open:
+   *   - an answer that `decided` something is not spoken, since the turn's
+   *     own reply says what came of it;
+   *   - one that decided nothing (refused or gated) is spoken unless the turn
+   *     has started talking (`ttsStreaming`, from its tts_start to its
+   *     tts_end). That is the common case: an inline approval keeps its turn
+   *     open, so a refusal there was never heard. A turn that spoke before it
+   *     blocked still counts as talking for the rest of the turn, since its
+   *     later audio carries no new tts_start and would be dropped after this
+   *     answer's tts_end; such a refusal is shown only.
+   * If the turn starts talking, it ends this answer (handleChat's tts_start).
+   *
+   * The open turn is not necessarily the one waiting on the card answered: a
+   * decided answer is then shown only even so. Telling the two apart needs the
+   * turn that raised the card, which the request does not record.
+   *
+   * A stop, a cancel, a new chat turn, a disconnect or the next voice answer
+   * ends it too.
+   */
+  private async speakVoiceAnswer(text: string, requestId: string, ws: ServerWebSocket<unknown>, decided: boolean): Promise<void> {
+    const tts = this.ttsProvider;
+    if (!tts || !text.trim()) return;
+    if (this.realtimeSessions.has(ws)) return;
+    const open = this.activeChats.get(ws);
+    if (open && (decided || open.ttsStreaming)) return;
+    this.stopVoiceAnswer(ws);
+    const active = { requestId, controller: new AbortController(), started: false };
+    this.voiceAnswers.set(ws, active);
+    const aborted = () => active.controller.signal.aborted;
+    try {
+      for (const sentence of splitIntoSentences(text)) {
+        if (aborted()) break;
+        if (!active.started) {
+          active.started = true;
+          this.wsServer.sendToClient(ws, {
+            type: 'tts_start',
+            payload: { requestId, containsWake: containsWakePhrase(text), containsStop: containsStopPhrase(text) },
+            id: requestId,
+            timestamp: Date.now(),
+          });
+        }
+        try {
+          for await (const chunk of tts.synthesizeStream(sentence)) {
+            if (aborted()) break;
+            this.wsServer.sendBinary(ws, chunk);
+          }
+        } catch (err) {
+          console.error('[WSService] voice decision TTS sentence error:', err);
+        }
+      }
+    } finally {
+      if (this.voiceAnswers.get(ws) === active) this.voiceAnswers.delete(ws);
+      // A stop already sent its own tts_end.
+      if (active.started && !aborted()) {
+        this.wsServer.sendToClient(ws, {
+          type: 'tts_end',
+          payload: { requestId },
+          id: requestId,
+          timestamp: Date.now(),
+        });
+      }
+    }
+  }
+
+  /**
+   * End the voice answer being spoken on `ws`, if any (and, with
+   * `expectedRequestId`, only that one). With `notify`, a started one gets a
+   * cancelled tts_end, as a cancelled reply does, so the dashboard stops
+   * playing it.
+   */
+  private stopVoiceAnswer(ws: ServerWebSocket<unknown>, notify = true, expectedRequestId?: string): void {
+    const active = this.voiceAnswers.get(ws);
+    if (!active) return;
+    if (expectedRequestId && active.requestId !== expectedRequestId) return;
+    this.voiceAnswers.delete(ws);
+    active.controller.abort();
+    if (notify && active.started) {
+      this.wsServer.sendToClient(ws, {
+        type: 'tts_end',
+        payload: { requestId: active.requestId, cancelled: true },
+        id: active.requestId,
+        timestamp: Date.now(),
+      });
+    }
   }
 
   /** Voice pipeline: STT-final received, agent now reasoning. */

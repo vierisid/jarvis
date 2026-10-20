@@ -137,7 +137,7 @@ afterAll(() => {
   GlobalRegistrator.unregister();
 });
 
-async function mount(options: { errorFlashMs?: number; getShownApprovalId?: () => string | null } = {}) {
+async function mount(options: { errorFlashMs?: number; getShownApprovalId?: () => string | null; nativeWakeActive?: boolean; wakeEngine?: "webspeech" } = {}) {
   const wsRef = { current: socket(sent) as WebSocket | null };
   function Harness() {
     voice = useVoice({ wsRef, nativeWakeActive: true, ...options });
@@ -187,6 +187,86 @@ describe("dashboard audio format and lifecycle", () => {
     expect(voice.voiceState).toBe("idle");
     expect(decoded.length).toBe(1);
     expect(raw.length).toBe(0);
+  });
+
+  test("a cancel after the daemon's tts_end, while the clip still plays, names that clip (#889)", async () => {
+    // The daemon ends a clip when it has sent it, long before it has played.
+    // A barge-in then must still say which clip it stops: an id-less cancel
+    // is read as "stop whatever is running" and would end an open chat turn
+    // that the clip (a spoken voice answer) was played alongside.
+    await mount();
+    await beginTTS("voice-answer-1");
+    await act(async () => { voice.handleTTSEnd("voice-answer-1"); });
+    expect(voice.voiceState).toBe("speaking");
+    await act(async () => { voice.cancelTTS(); });
+    const cancels = messages().filter(m => m.type === "cancel");
+    expect(cancels).toEqual([expect.objectContaining({ payload: { requestId: "voice-answer-1" }, id: "voice-answer-1" })]);
+  });
+
+  test("once a clip has played out, a later cancel names nothing", async () => {
+    await mount();
+    await beginTTS("voice-answer-1");
+    await act(async () => { voice.handleTTSEnd("voice-answer-1"); sources()[0]!.onended?.(); });
+    expect(voice.voiceState).toBe("idle");
+    await act(async () => { voice.cancelTTS(); });
+    expect(messages().filter(m => m.type === "cancel").map(m => m.payload)).toEqual([{}]);
+  });
+
+  test("mute stops everything, not only the clip still playing", async () => {
+    // A barge-in names the clip; muting is a hard stop of whatever runs.
+    await mount();
+    await beginTTS("voice-answer-1");
+    await act(async () => { voice.handleTTSEnd("voice-answer-1"); });
+    await act(async () => { voice.setMuted(true); });
+    expect(messages().filter(m => m.type === "cancel").map(m => m.payload)).toEqual([{}]);
+  });
+
+  test('"Jarvis stop" while a clip plays stops everything, not only the clip', async () => {
+    const recognizers: Array<{ onresult: ((e: unknown) => void) | null; onstart: (() => void) | null }> = [];
+    const saved = globals.SpeechRecognition;
+    globals.SpeechRecognition = class {
+      onresult: ((e: unknown) => void) | null = null;
+      onstart: (() => void) | null = null;
+      onend: (() => void) | null = null;
+      onerror: ((e: unknown) => void) | null = null;
+      constructor() { recognizers.push(this); }
+      start() { this.onstart?.(); }
+      stop() {}
+      abort() {}
+    };
+    try {
+      await mount({ nativeWakeActive: false, wakeEngine: "webspeech" });
+      await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+      await beginTTS("voice-answer-1");
+      await act(async () => { voice.handleTTSEnd("voice-answer-1"); });
+      expect(voice.voiceState).toBe("speaking");
+      expect(recognizers.length).toBeGreaterThan(0);
+      const final = Object.assign([{ transcript: "jarvis stop" }], { isFinal: true });
+      await act(async () => { recognizers.at(-1)!.onresult?.({ resultIndex: 0, results: [final] }); });
+      expect(messages().filter(m => m.type === "cancel").map(m => m.payload)).toEqual([{}]);
+    } finally {
+      globals.SpeechRecognition = saved;
+    }
+  });
+
+  test("a clip that played out before its tts_end leaves no id behind for a later cancel", async () => {
+    // A chat turn speaks a sentence and keeps working: its audio ends first.
+    await mount();
+    await beginTTS("chat-old");
+    await act(async () => { sources()[0]!.onended?.(); });
+    await act(async () => { voice.handleTTSEnd("chat-old"); });
+    expect(voice.voiceState).toBe("idle");
+    // "Jarvis stop" or mute on a newer turn must still stop it.
+    await act(async () => { voice.cancelTTS(); });
+    expect(messages().filter(m => m.type === "cancel").map(m => m.payload)).toEqual([{}]);
+  });
+
+  test("after a dropped socket, a cancel names no clip from before it, even one still playing", async () => {
+    await mount();
+    await beginTTS("chat-old");
+    await act(async () => { voice.handleDisconnect(); });
+    await act(async () => { voice.cancelTTS(); });
+    expect(messages().filter(m => m.type === "cancel").map(m => m.payload)).toEqual([{}]);
   });
 
   test("availability alone never authorizes raw playback", async () => {
