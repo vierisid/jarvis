@@ -69,6 +69,7 @@ func newFakeUpdater(t *testing.T, running string, mode update.Mode) *fakeUpdater
 		return nil
 	}
 	u.verifyPM = func(string) error { return nil }
+	u.moveAside = moveRunningExeAside
 	u.verBin = func(string) (string, error) { return "", errors.New("unset") }
 	u.now = time.Now
 	u.markPending = func(string, string, string) error { return nil }

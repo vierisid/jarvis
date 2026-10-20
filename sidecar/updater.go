@@ -98,6 +98,9 @@ type Updater struct {
 	pmRun     func(ctx context.Context, args []string, pathEnv string) error
 	verifyPM  func(exe string) error // signature of what the package manager installed
 	verBin    func(exe string) (string, error)
+	// moveAside parks the running exe for a package-manager update and
+	// returns how to put it back (moveRunningExeAside; a no-op off Windows).
+	moveAside func(exe string) (restore func() error, err error)
 	handOff   func(exe string) error // relaunch exe and exit this process once it is up
 	// markPending / clearPending keep the startup-rollback marker
 	// (update_pending.go) for a native update.
@@ -143,14 +146,15 @@ func newUpdater(running string) *Updater {
 		}
 	}
 	u := &Updater{
-		running:  running,
-		registry: updateRegistryURL(),
-		exe:      exe,
-		resolve:  update.ResolveRelease,
-		install:  installNative,
-		pmRun:    runPackageManager,
-		verifyPM: verifyInstalledPayload,
-		verBin:   binaryVersion,
+		running:   running,
+		registry:  updateRegistryURL(),
+		exe:       exe,
+		resolve:   update.ResolveRelease,
+		install:   installNative,
+		pmRun:     runPackageManager,
+		verifyPM:  verifyInstalledPayload,
+		verBin:    binaryVersion,
+		moveAside: moveRunningExeAside,
 		schedule: func(d time.Duration, f func()) func() {
 			t := time.AfterFunc(d, f)
 			return func() { t.Stop() }
@@ -572,14 +576,31 @@ func (u *Updater) Start(version string) error {
 	return nil
 }
 
+// applyPanicError is the failure an install attempt that panicked reports
+// when nothing it changed is left behind. applyPanicRestoreError is the one
+// for when putting the previous version back did not work, which must not
+// claim the current version is still installed.
+const (
+	applyPanicError        = "the update failed unexpectedly; the current version is still installed"
+	applyPanicRestoreError = "the update failed unexpectedly, and restoring the previous version failed"
+)
+
 // ErrUpdateCooldown refuses a retry right after a failed attempt.
 var ErrUpdateCooldown = errors.New("the last attempt just failed; try again in a few seconds")
 
 // checkThenApply confirms version on the registry, then installs it. Called
 // with applying already set.
+//
+// Like apply, it runs on its own goroutine and contains a panic (#842): the
+// registry lookup happens before anything apply would defer, so before this a
+// panic there ended the process, and would have left applying set for good.
 func (u *Updater) checkThenApply(version string) {
+	var att applyAttempt
+	defer u.finishApply(version, &att)
 	if _, err := u.resolve(u.registry, version); err != nil {
-		u.applying.Store(false)
+		// applying is cleared by finishApply, after this report: clearing it
+		// here as well would let a Start that wins it during the report have
+		// it cleared again from under it.
 		u.setState(registryStateFor(version, err))
 		return
 	}
@@ -588,47 +609,153 @@ func (u *Updater) checkThenApply(version string) {
 		u.available = version
 	}
 	u.mu.Unlock()
-	u.apply(version)
+	u.runApply(version, &att)
 }
 
 // apply runs one update attempt. On success the process hands off to the new
 // binary and exits (applying stays set until then); on failure it keeps
 // running the current version and reports the failure with a manual command.
 func (u *Updater) apply(version string) {
-	handedOff := false
-	defer func() {
-		if !handedOff {
-			u.applying.Store(false)
+	var att applyAttempt
+	defer u.finishApply(version, &att)
+	u.runApply(version, &att)
+}
+
+// applyAttempt is what one install attempt has done that its end must know
+// about: whether the new binary took over, and how to undo a change on disk
+// that has not been handed off yet.
+type applyAttempt struct {
+	handedOff bool
+	// undo puts the previous version back: set while the running exe is moved
+	// aside (package manager) or a payload is swapped in (native) and the new
+	// binary has not taken over. Run it through runUndo, which clears it
+	// first, so nothing undoes the same change twice.
+	undo func() error
+	// undoing is set while undo runs, so a panic inside it (on any path) is
+	// reported as a failed restore and not retried.
+	undoing bool
+	// restoreErr is what a restore that ran and failed returned, so a panic
+	// after it is still reported as a failed restore.
+	restoreErr error
+	// reported is set once failAttempt has recorded this attempt's failure in
+	// the updater's state. A panic after that (a hook delivering the report)
+	// keeps the specific failure rather than overwriting it with the generic
+	// one: check's `recorded`, for an install attempt.
+	reported bool
+}
+
+func (a *applyAttempt) runUndo() error {
+	undo := a.undo
+	a.undo = nil
+	if undo == nil {
+		return nil
+	}
+	a.undoing = true
+	err := undo()
+	a.undoing = false
+	if err != nil {
+		a.restoreErr = err
+	}
+	return err
+}
+
+// finishApply ends an install attempt, deferred by both goroutines Start runs
+// one on (#842). Nothing above them recovers, so before this a panic anywhere
+// in an attempt ended the process. On Windows a package-manager update has
+// moved the running exe out of the package tree by then, and the panic
+// skipped putting it back: autostart found no jarvis.exe at the next login.
+//
+// A contained panic is a failed attempt. What it changed on disk and has not
+// handed off is undone first (the moved-aside exe goes back; a swapped-in
+// payload is rolled back, the same as a hand-off that fails), then the failure
+// is reported with the manual command and the retry cooldown, and only then is
+// applying cleared, so a new attempt cannot start before the cooldown is
+// armed. A panic in the hand-off itself is treated as a hand-off that did not
+// happen: handOff returns nil only once the new process is up, and a panic is
+// not that. That is only certain for a panic before the new process was
+// started; SidecarClient.handOff has no realistic panic site after it, so the
+// rest is accepted rather than handled: a child that did start keeps running
+// (on Windows it gives up waiting for the instance lock after 30s; elsewhere
+// two sidecars can run until one is quit). A panic inside update.Swap itself,
+// between its two renames, is not covered either: undo is only armed once
+// install has returned, and Swap is two os.Rename calls with nothing that can
+// realistically panic between them.
+//
+// The follow-up work is contained one step at a time, because a second panic
+// here, in a deferred function, would not be caught by anything. A restore
+// that fails or panics is reported as such, never as "still installed".
+func (u *Updater) finishApply(version string, att *applyAttempt) {
+	if r := recover(); r != nil {
+		pending := att.undo != nil
+		log.Printf("[update] updating to sidecar %s panicked (undo pending: %v): %v\n%s",
+			version, pending, r, debug.Stack())
+		att.handedOff = false
+		if pending {
+			// A restore that panics here leaves att.undoing set; one that
+			// fails leaves att.restoreErr. Both are read below.
+			containUpdaterPanic("restoring the current version", func() { _ = att.runUndo() })
 		}
-	}()
+		var failure error
+		switch {
+		case att.undoing:
+			// The restore itself panicked, here or on an error path.
+			failure = fmt.Errorf("%s: the restore panicked", applyPanicRestoreError)
+		case att.restoreErr != nil:
+			failure = fmt.Errorf("%s: %w", applyPanicRestoreError, att.restoreErr)
+		default:
+			failure = errors.New(applyPanicError)
+		}
+		if att.reported {
+			log.Printf("[update] the failure of sidecar %s was already recorded; keeping it (the panic would have reported: %v)",
+				version, failure)
+		} else {
+			containUpdaterPanic("reporting the failed update", func() {
+				u.failAttempt(att, version, failure)
+			})
+		}
+	}
+	if !att.handedOff {
+		u.applying.Store(false)
+	}
+}
+
+func (u *Updater) runApply(version string, att *applyAttempt) {
 	if !update.StrictlyNewer(version, u.running) {
-		u.fail(version, fmt.Errorf("sidecar %s is not newer than the running %s", version, u.running))
+		u.failAttempt(att, version, fmt.Errorf("sidecar %s is not newer than the running %s", version, u.running))
 		return
 	}
 	ctx := context.Background()
 	switch u.mode.Kind {
 	case update.ModeNative:
-		handedOff = u.applyNative(ctx, version)
+		u.applyNative(ctx, version, att)
 	case update.ModePackageManager:
-		handedOff = u.applyPackageManager(ctx, version)
+		u.applyPackageManager(ctx, version, att)
 	default:
-		u.fail(version, fmt.Errorf("this sidecar cannot update itself: %s", u.mode.Reason))
+		u.failAttempt(att, version, fmt.Errorf("this sidecar cannot update itself: %s", u.mode.Reason))
 	}
 }
 
-func (u *Updater) applyNative(ctx context.Context, version string) bool {
+func (u *Updater) applyNative(ctx context.Context, version string, att *applyAttempt) {
 	u.setState(UpdateState{Phase: updatePhaseDownloading, Version: version})
 	rel, err := u.resolve(u.registry, version)
 	if err != nil {
-		u.fail(version, err)
-		return false
+		u.failAttempt(att, version, err)
+		return
 	}
 	dir := u.mode.InstallDir
 	if err := u.install(ctx, rel, dir, func(phase string) {
 		u.setState(UpdateState{Phase: phase, Version: version})
 	}); err != nil {
-		u.fail(version, err)
-		return false
+		u.failAttempt(att, version, err)
+		return
+	}
+	// The payload is in place. Until the new binary takes over, failing means
+	// putting the previous one back.
+	att.undo = func() error {
+		u.clearPending()
+		rbErr := update.Rollback(dir)
+		_ = update.RefreshRegistration(dir, u.running)
+		return rbErr
 	}
 	if err := update.RefreshRegistration(dir, version); err != nil {
 		log.Printf("[update] could not refresh the uninstall entry: %v", err)
@@ -638,32 +765,31 @@ func (u *Updater) applyNative(ctx context.Context, version string) bool {
 		log.Printf("[update] could not record the pending update (no startup rollback): %v", err)
 	}
 	if err := u.handOff(update.ExecutableIn(dir)); err != nil {
-		u.clearPending()
-		rbErr := update.Rollback(dir)
-		if rbErr != nil {
+		if rbErr := att.runUndo(); rbErr != nil {
 			err = fmt.Errorf("%w (and restoring the previous version failed: %v)", err, rbErr)
 		}
-		_ = update.RefreshRegistration(dir, u.running)
-		u.fail(version, fmt.Errorf("the new sidecar did not start: %w", err))
-		return false
+		u.failAttempt(att, version, fmt.Errorf("the new sidecar did not start: %w", err))
+		return
 	}
-	return true
+	att.undo = nil
+	att.handedOff = true
 }
 
-func (u *Updater) applyPackageManager(ctx context.Context, version string) bool {
+func (u *Updater) applyPackageManager(ctx context.Context, version string, att *applyAttempt) {
 	u.setState(UpdateState{Phase: updatePhaseInstalling, Version: version})
 	args, pathEnv, err := u.pmResolve(u.mode.PackageManager, version)
 	if err != nil {
-		u.fail(version, err)
-		return false
+		u.failAttempt(att, version, err)
+		return
 	}
 	// Windows will not let a package manager overwrite the executable this
 	// process is running from, but it does allow moving it aside.
-	restore, err := moveRunningExeAside(u.exe)
+	restore, err := u.moveAside(u.exe)
 	if err != nil {
-		u.fail(version, err)
-		return false
+		u.failAttempt(att, version, err)
+		return
 	}
+	att.undo = restore
 	runCtx, cancel := context.WithTimeout(ctx, packageManagerTimeout)
 	err = u.pmRun(runCtx, args, pathEnv)
 	cancel()
@@ -680,30 +806,46 @@ func (u *Updater) applyPackageManager(ctx context.Context, version string) bool 
 		}
 	}
 	if err != nil {
-		restore()
-		u.fail(version, err)
-		return false
+		if rbErr := att.runUndo(); rbErr != nil {
+			err = fmt.Errorf("%w (and restoring the previous version failed: %v)", err, rbErr)
+		}
+		u.failAttempt(att, version, err)
+		return
 	}
 	u.setState(UpdateState{Phase: updatePhaseRestarting, Version: version})
 	if err := u.handOff(u.exe); err != nil {
-		restore()
-		u.fail(version, fmt.Errorf("the new sidecar did not start: %w", err))
-		return false
+		if rbErr := att.runUndo(); rbErr != nil {
+			err = fmt.Errorf("%w (and restoring the previous version failed: %v)", err, rbErr)
+		}
+		u.failAttempt(att, version, fmt.Errorf("the new sidecar did not start: %w", err))
+		return
 	}
-	return true
+	att.undo = nil
+	att.handedOff = true
 }
 
-func (u *Updater) fail(version string, err error) {
+// failAttempt records a failed attempt (state, cooldown) and then tells the
+// brain and the tray. att is marked reported once the state is
+// recorded, before any hook runs. The clock is read outside u.mu: a panic in
+// it with the lock held would leave every later Offer blocked.
+func (u *Updater) failAttempt(att *applyAttempt, version string, err error) {
 	log.Printf("[update] updating to sidecar %s failed: %v", version, err)
-	u.mu.Lock()
-	u.failedAt = u.now()
-	u.mu.Unlock()
-	u.setState(UpdateState{
+	now := u.now()
+	s := UpdateState{
 		Phase:         updatePhaseFailed,
 		Version:       version,
 		Error:         err.Error(),
 		ManualCommand: u.ManualCommand(version),
-	})
+	}
+	u.mu.Lock()
+	u.failedAt = now
+	u.state = s
+	u.mu.Unlock()
+	att.reported = true
+	if u.emit != nil {
+		u.emit(s)
+	}
+	u.changed()
 }
 
 // cleanupPrevious drops the copy a previous self-update kept for rollback,
