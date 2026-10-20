@@ -3664,6 +3664,21 @@ const scripts = [
   [
     "set -euo pipefail",
     "in=\"$RUNNER_TEMP/webview-bump\"",
+    "files=\"$(find \"$in\" -type f | wc -l)\"",
+    "dirs=\"$(find \"$in\" -type d | wc -l)\"",
+    "if [ \"$files\" -gt 100 ] || [ \"$dirs\" -gt 50 ]; then",
+    "echo \"::error::the webview-bump artifact holds more than 100 files or 50 directories (#1049)\"",
+    "exit 1",
+    "fi",
+    "sizes=\"$(find \"$in\" -type f -printf \x27%s\\n\x27)\"",
+    "bytes=0",
+    "while read -r size; do",
+    "bytes=$((bytes + size))",
+    "done <<<\"$sizes\"",
+    "if [ \"$bytes\" -gt 8388608 ]; then",
+    "echo \"::error::the webview-bump artifact holds more than 8 MiB (#1049)\"",
+    "exit 1",
+    "fi",
     "if [ -n \"$(find \"$in\" -mindepth 1 -not -type f -not -type d -print -quit)\" ]; then",
     "echo \"::error::the webview-bump artifact holds something other than files and directories\"",
     "exit 1",
@@ -3682,6 +3697,58 @@ const scripts = [
     "fi",
     "if [ \"$(cat \"$in/webview_go/UPSTREAM_VERSION\" 2>/dev/null)\" != \"$VERSION\" ]; then",
     "echo \"::error::the vendored tree records another version than ${VERSION}\"",
+    "exit 1",
+    "fi",
+    "top=\"$(find \"$in/webview_go\" -mindepth 1 -maxdepth 1 -printf \x27%y %f\\n\x27)\"",
+    "libs=\"$(find \"$in/webview_go\" -mindepth 2 -type f -printf \x27%P\\n\x27)\"",
+    "while read -r kind name; do",
+    "case \"$kind $name\" in",
+    "\"d libs\" | \"f go.mod\" | \"f go.sum\" | \"f UPSTREAM_VERSION\" | \"f JARVIS_PATCH.md\" | \"f jarvis.patch\" | \"f .gitattributes\" | \"f LICENSE\") ;;",
+    "\"f \"*_test.go) echo \"::error::the vendored tree holds ${name}, a test file vendor-webview.sh does not copy (#1049)\"; exit 1 ;;",
+    "\"f \"*.go | \"f \"*.cc | \"f \"*.c | \"f \"*.h) ;;",
+    "*) echo \"::error::the vendored tree holds ${name}, which vendor-webview.sh does not copy (#1049)\"; exit 1 ;;",
+    "esac",
+    "done <<<\"$top\"",
+    "while read -r name; do",
+    "case \"$name\" in",
+    "\"\" | libs/*_test.go) [ -z \"$name\" ] || { echo \"::error::the vendored tree holds ${name}, a test file (#1049)\"; exit 1; } ;;",
+    "libs/*.h | libs/*.go | libs/*.txt | libs/*/LICENSE) ;;",
+    "*) echo \"::error::the vendored tree holds ${name}, which is not a header, Go file, text or license under libs/ (#1049)\"; exit 1 ;;",
+    "esac",
+    "done <<<\"$libs\"",
+    "for f in .gitattributes jarvis.patch JARVIS_PATCH.md; do",
+    "if ! cmp -s \"$in/webview_go/$f\" \"sidecar/third_party/webview_go/$f\"; then",
+    "echo \"::error::the bump changes ${f}, which vendor-webview.sh keeps from main (#1049)\"",
+    "exit 1",
+    "fi",
+    "done",
+    "if [ -n \"$(find \"$in/webview_go\" -mindepth 2 -iname \x27.git*\x27 -print -quit)\" ]; then",
+    "echo \"::error::the vendored tree holds a .git file below its top, such as a .gitattributes (#1049)\"",
+    "exit 1",
+    "fi",
+    "if ! cmp -s \"$in/go.sum\" sidecar/go.sum; then",
+    "echo \"::error::the bumped sidecar/go.sum differs from main (#1049)\"",
+    "exit 1",
+    "fi",
+    "if [ ! -f \"$in/webview_go/go.mod\" ]; then",
+    "echo \"::error::the vendored tree holds no go.mod (#1049)\"",
+    "exit 1",
+    "fi",
+    "directives() {",
+    "awk \x27{ sub(/\\/\\/.*/, \"\") } NF == 0 { next } { $1 = $1 } $0 == \")\" { block = \"\"; next } NF == 2 && $2 == \"(\" { block = $1; next } block != \"\" { print block \" \" $0; next } { print }\x27 \"$1\" | LC_ALL=C sort",
+    "}",
+    "main_mod=\"$(directives sidecar/go.mod)\"",
+    "new_mod=\"$(directives \"$in/go.mod\")\"",
+    "if [ \"$new_mod\" != \"$main_mod\" ]; then",
+    "echo \"::error::the bumped sidecar/go.mod differs from main in its directives (#1049):\"",
+    "diff <(printf \x27%s\\n\x27 \"$main_mod\") <(printf \x27%s\\n\x27 \"$new_mod\") | cat -v || true",
+    "exit 1",
+    "fi",
+    "main_mod=\"$(directives sidecar/third_party/webview_go/go.mod | awk \x27$1 != \"go\" && $1 != \"require\"\x27)\"",
+    "new_mod=\"$(directives \"$in/webview_go/go.mod\" | awk \x27$1 != \"go\" && $1 != \"require\"\x27)\"",
+    "if [ \"$new_mod\" != \"$main_mod\" ]; then",
+    "echo \"::error::the vendored go.mod differs from main in a directive other than go and require (#1049):\"",
+    "diff <(printf \x27%s\\n\x27 \"$main_mod\") <(printf \x27%s\\n\x27 \"$new_mod\") | cat -v || true",
     "exit 1",
     "fi",
     "rm -rf sidecar/third_party/webview_go",
@@ -3832,20 +3899,30 @@ const st = (d.jobs?.publish?.steps ?? []).find((s) => s.name === "Put the vendor
 if (!st || typeof st.run !== "string") process.exit(2);
 process.stdout.write(st.run);
 ')" || COPY_STEP=""
+REAL_SIDECAR="${HERE}/../../sidecar"
 # copy_case <label> <ok|refused> <shell run in the artifact dir to shape it>
 copy_case() {
 	local label="$1" want="$2" shape="$3" d="${WORK}/wvcopy"
 	rm -rf "$d" && mkdir -p "$d/ws/sidecar/third_party/webview_go/libs" "$d/tmp/webview-bump/webview_go/libs/webview"
 	printf 'old\n' >"$d/ws/sidecar/third_party/webview_go/dropped.go"
-	printf 'old attrs\n' >"$d/ws/sidecar/third_party/webview_go/.gitattributes"
-	printf 'module old\n' >"$d/ws/sidecar/go.mod"
-	printf 'old sum\n' >"$d/ws/sidecar/go.sum"
+	# The files vendor-webview.sh keeps, as main has them, on both sides.
+	for f in .gitattributes jarvis.patch JARVIS_PATCH.md; do
+		cp "$REAL_SIDECAR/third_party/webview_go/$f" "$d/ws/sidecar/third_party/webview_go/$f"
+		cp "$REAL_SIDECAR/third_party/webview_go/$f" "$d/tmp/webview-bump/webview_go/$f"
+	done
+	# The module files as main has them (#1049): the step compares the
+	# artifact with these, directive for directive.
+	cp "$REAL_SIDECAR/go.mod" "$d/ws/sidecar/go.mod"
+	cp "$REAL_SIDECAR/third_party/webview_go/go.mod" "$d/ws/sidecar/third_party/webview_go/go.mod"
+	cp "$REAL_SIDECAR/go.sum" "$d/ws/sidecar/go.sum"
 	printf 'package webview\n' >"$d/tmp/webview-bump/webview_go/webview.go"
-	printf '* -text\n' >"$d/tmp/webview-bump/webview_go/.gitattributes"
 	printf 'v1.2.3\n' >"$d/tmp/webview-bump/webview_go/UPSTREAM_VERSION"
 	printf 'header\n' >"$d/tmp/webview-bump/webview_go/libs/webview/webview.h"
-	printf 'module new\n' >"$d/tmp/webview-bump/go.mod"
-	printf 'new sum\n' >"$d/tmp/webview-bump/go.sum"
+	cp "$REAL_SIDECAR/third_party/webview_go/go.mod" "$d/tmp/webview-bump/webview_go/go.mod"
+	# Same directives, written differently (a comment, spacing), so the
+	# accepted copy still shows go.mod is replaced.
+	{ printf '// go mod tidy\n'; sed 's/^go \(.*\)$/go   \1   \/\/ toolchain line/' "$REAL_SIDECAR/go.mod"; } >"$d/tmp/webview-bump/go.mod"
+	cp "$REAL_SIDECAR/go.sum" "$d/tmp/webview-bump/go.sum"
 	(cd "$d/tmp/webview-bump" && eval "$shape") || {
 		no "webview copy: ${label} (the fixture could not be shaped)"
 		return
@@ -3859,6 +3936,11 @@ copy_case() {
 		cmp -s "$d/tmp/webview-bump/go.mod" "$d/ws/sidecar/go.mod" && cmp -s "$d/tmp/webview-bump/go.sum" "$d/ws/sidecar/go.sum" && ok_=1 ;;
 	refused) [ "$rc" -ne 0 ] && grep -q '^::error::' "$d/log" && diff -r "$d/before" "$d/ws" >/dev/null && ok_=1 ;;
 	esac
+	# A #1049 case is refused by a #1049 check, or by the one it names,
+	# not by whatever else happens to fail (security review of #1049).
+	local reason="${4:-}"
+	[ -z "$reason" ] && [[ "$label" == *"(#1049"* ]] && reason="(#1049)"
+	if [ "$want" = refused ] && [ -n "$reason" ] && ! grep -qF -- "$reason" "$d/log"; then ok_=0; fi
 	if [ "$ok_" = 1 ]; then ok "webview copy: ${label}"; else no "webview copy: ${label}" "exit ${rc}; log: $(cat "$d/log")"; fi
 }
 if [ -z "$COPY_STEP" ]; then
@@ -3878,6 +3960,52 @@ else
 	copy_case 'a name with a space in it is refused' refused 'printf x >"webview_go/a b.go"'
 	copy_case 'a tree recording another version is refused' refused 'printf "v9.9.9\n" >webview_go/UPSTREAM_VERSION'
 	copy_case 'a tree recording no version is refused' refused 'rm webview_go/UPSTREAM_VERSION'
+	# #1049: the content of the artifact, not only its shape.
+	copy_case 'the committed vendor tree, as a re-vendor of the pinned version gives it, is accepted (#1049)' ok \
+		'rm -r webview_go && cp -R "$REAL_SIDECAR/third_party/webview_go" webview_go && printf "v1.2.3\n" >webview_go/UPSTREAM_VERSION && cp "$REAL_SIDECAR/go.mod" "$REAL_SIDECAR/go.sum" .'
+	copy_case 'a new replace in sidecar/go.mod is refused (#1049)' refused 'printf "replace golang.org/x/sys => ../evil\n" >>go.mod'
+	copy_case 'a new replace inside a block is refused (#1049)' refused 'printf "replace (\n\tgolang.org/x/sys => ../evil\n)\n" >>go.mod'
+	copy_case 'the existing replace pointed elsewhere is refused (#1049)' refused 'sed -i "s|=> ./third_party/webview_go|=> ../evil|" go.mod'
+	copy_case 'a toolchain directive is refused (#1049)' refused 'printf "toolchain go1.99.0\n" >>go.mod'
+	copy_case 'a tool directive is refused (#1049)' refused 'printf "tool evil.example/x\n" >>go.mod'
+	copy_case 'a godebug directive is refused (#1049)' refused 'printf "godebug x509sha1=1\n" >>go.mod'
+	copy_case 'a moved go directive is refused (#1049)' refused 'sed -i "s/^go   .*/go 1.99.0/" go.mod'
+	copy_case 'a require block turned into an exclude block is refused (#1049)' refused 'sed -i "s/^require (/exclude (/" go.mod && grep -q "^exclude (" go.mod'
+	copy_case 'a new require is refused (#1049)' refused 'printf "require evil.example/x v1.0.0\n" >>go.mod'
+	copy_case 'a require moved to another version inside the block is refused (#1049)' refused 'sed -i "s|golang.org/x/sys v[0-9.]*|golang.org/x/sys v0.1.0|" go.mod && grep -q "x/sys v0.1.0" go.mod'
+	copy_case 'a replace in the vendored go.mod is refused (#1049)' refused 'printf "replace golang.org/x/sys => ../evil\n" >>webview_go/go.mod'
+	copy_case 'a vendored tree with no go.mod is refused (#1049)' refused 'rm webview_go/go.mod' 'holds no go.mod'
+	copy_case 'a vendored go.mod with no module line is refused (#1049)' refused 'sed -i "/^module/d" webview_go/go.mod' 'the vendored go.mod differs'
+	copy_case 'a vendored go.mod moving its own go line is accepted (#1049)' ok 'sed -i "s/^go .*/go 1.21/" webview_go/go.mod'
+	copy_case 'a build script at the top of the vendored tree is refused (#1049)' refused 'printf "#!/bin/sh\n" >webview_go/build.sh'
+	copy_case 'a test file at the top of the vendored tree is refused (#1049)' refused 'printf "package webview\n" >webview_go/webview_test.go'
+	copy_case 'an upstream README at the top of the vendored tree is refused (#1049)' refused 'printf x >webview_go/README.md'
+	copy_case 'a directory other than libs at the top of the vendored tree is refused (#1049)' refused 'mkdir webview_go/examples && printf x >webview_go/examples/main.go'
+	copy_case 'a new C source is accepted (#1049)' ok 'printf "int x;\n" >webview_go/extra.c'
+	copy_case 'a license under another name is for a person to take (#1049 review)' refused 'printf x >webview_go/LICENSE-THIRD-PARTY' 'holds LICENSE-THIRD-PARTY'
+	# Security review of #1049: built files under a license name, files
+	# the script keeps, hidden diffs, go.sum, directories, a carriage return,
+	# and go.mod spellings the normaliser must not read as main.
+	copy_case 'a LICENSE.syso, which Go links by its extension, is refused (#1049 review)' refused 'printf x >webview_go/LICENSE.syso' 'holds LICENSE.syso'
+	copy_case 'a LICENSE_windows_amd64.syso is refused (#1049 review)' refused 'printf x >webview_go/LICENSE_windows_amd64.syso' 'holds LICENSE_windows_amd64.syso'
+	copy_case 'a LICENSE_test.go is refused (#1049 review)' refused 'printf "package webview\n" >webview_go/LICENSE_test.go' 'holds LICENSE_test.go'
+	copy_case 'a .syso under libs is refused (#1049 review)' refused 'printf x >webview_go/libs/webview/evil_windows_amd64.syso' 'holds libs/webview/evil_windows_amd64.syso'
+	copy_case 'assembly under libs is refused (#1049 review)' refused 'printf x >webview_go/libs/webview/evil.S' 'holds libs/webview/evil.S'
+	copy_case 'a test file under libs is refused (#1049 review)' refused 'printf "package webview\n" >webview_go/libs/webview/x_test.go' 'a test file'
+	copy_case 'a changed .gitattributes is refused (#1049 review)' refused 'printf "*.go -diff linguist-generated=true\n" >>webview_go/.gitattributes' 'changes .gitattributes'
+	copy_case 'a changed jarvis.patch is refused (#1049 review)' refused 'printf "\n" >>webview_go/jarvis.patch' 'changes jarvis.patch'
+	copy_case 'a changed JARVIS_PATCH.md is refused (#1049 review)' refused 'printf "\n" >>webview_go/JARVIS_PATCH.md' 'changes JARVIS_PATCH.md'
+	copy_case 'a .gitattributes under libs is refused (#1049 review)' refused 'printf "* -diff\n" >webview_go/libs/.gitattributes'
+	copy_case 'a header inside a .git-named directory under libs is refused (#1049 review)' refused 'mkdir -p webview_go/libs/.gitmodules.d && printf x >webview_go/libs/.gitmodules.d/a.h' 'a .git file below its top'
+	copy_case 'a line added to go.sum is refused (#1049 review)' refused 'printf "evil.example/x v1.0.0 h1:AAAA=\n" >>go.sum' 'go.sum differs'
+	copy_case 'more than 50 directories is refused (#1049 review)' refused 'for i in $(seq 1 50); do mkdir "webview_go/libs/d$i"; done' '50 directories'
+	copy_case 'a CRLF go.mod is refused (#1049 review)' refused 'sed -i "s/\$/\r/" go.mod' 'sidecar/go.mod differs'
+	copy_case 'require( with no space is refused (#1049 review)' refused 'sed -i "s/^require (/require(/" go.mod' 'sidecar/go.mod differs'
+	copy_case 'a quoted module path is refused (#1049 review)' refused 'sed -i "s|github.com/google/uuid|\"github.com/google/uuid\"|" go.mod' 'sidecar/go.mod differs'
+	copy_case 'a workflow command after a carriage return is printed inert (#1049 review)' refused 'printf "toolchain go1.25.0\r::warning title=ok::bump checks passed\n" >>go.mod' 'toolchain go1.25.0^M::warning'
+	copy_case 'more than 100 files is refused (#1049)' refused 'for i in $(seq 1 100); do printf x >"webview_go/libs/f$i.h"; done'
+	copy_case 'more than 8 MiB is refused (#1049)' refused 'head -c 8388609 /dev/zero >webview_go/libs/big.h'
+	copy_case 'a 7 MiB header is accepted (#1049)' ok 'head -c 7340032 /dev/zero >webview_go/libs/big.h'
 	# copy_mutant <label> <exact text> <replacement> <copy_case arguments...>
 	copy_mutant() {
 		local label="$1" old="$2" new="$3"
@@ -3896,16 +4024,67 @@ else
 			'a link inside the vendored tree is refused' refused 'ln -s /etc/passwd webview_go/libs/evil.h'
 		copy_mutant 'the webview copy taking a .git (#983)' \
 			'-iname .git -print -quit' '-iname .nothing -print -quit' \
-			'a nested .git directory is refused' refused 'mkdir -p webview_go/libs/.git/hooks && printf x >webview_go/libs/.git/hooks/pre-commit'
+			'a nested .git directory is refused' refused 'mkdir -p webview_go/libs/.git/hooks && printf x >webview_go/libs/.git/hooks/pre-commit' 'holds a .git'
 		copy_mutant 'the webview copy taking any shape of artifact (#983)' \
 			'if [ "$(find "$in" -mindepth 1 -maxdepth 1 | wc -l)" != 3 ] || [ ! -f "$in/go.mod" ] || [ ! -f "$in/go.sum" ] || [ ! -d "$in/webview_go" ]; then' 'if false; then' \
 			'an extra file beside the tree is refused' refused 'printf x >evil.sh'
 		copy_mutant 'the webview copy matching .git in one case only (review of #983)' \
 			'-iname .git -print -quit' '-name .git -print -quit' \
-			'a .GIT directory, which a case-insensitive git reads as .git, is refused' refused 'mkdir -p webview_go/libs/.GIT/hooks && printf x >webview_go/libs/.GIT/hooks/post-checkout'
+			'a .GIT directory, which a case-insensitive git reads as .git, is refused' refused 'mkdir -p webview_go/libs/.GIT/hooks && printf x >webview_go/libs/.GIT/hooks/post-checkout' 'holds a .git'
 		copy_mutant 'the webview copy taking any name (review of #983)' \
 			"-name '*[!A-Za-z0-9._+-]*' -print -quit" '-false -print -quit' \
 			'a name with a space in it is refused' refused 'printf x >"webview_go/a b.go"'
+		copy_mutant 'the webview copy with no size cap (#1049)' \
+			'[ "$bytes" -gt 8388608 ]' '[ "$bytes" -gt 999999999999 ]' \
+			'more than 8 MiB is refused (#1049)' refused 'head -c 8388609 /dev/zero >webview_go/libs/big.h'
+		copy_mutant 'the webview copy with no file count cap (#1049)' \
+			'[ "$files" -gt 100 ]' '[ "$files" -gt 100000 ]' \
+			'more than 100 files is refused (#1049)' refused 'for i in $(seq 1 100); do printf x >"webview_go/libs/f$i.h"; done'
+		copy_mutant 'the webview copy taking any top-level file (#1049)' \
+			'*) echo "::error::the vendored tree holds ${name}, which vendor-webview.sh does not copy (#1049)"; exit 1 ;;' '*) ;;' \
+			'a build script at the top of the vendored tree is refused (#1049)' refused 'printf "#!/bin/sh\n" >webview_go/build.sh'
+		copy_mutant 'the webview copy taking a top-level test file (#1049)' \
+			'"f "*_test.go) echo' '"f "*_nothing.go) echo' \
+			'a test file at the top of the vendored tree is refused (#1049)' refused 'printf "package webview\n" >webview_go/webview_test.go'
+		copy_mutant 'the webview copy not comparing sidecar/go.mod (#1049)' \
+			'new_mod="$(directives "$in/go.mod")"' 'new_mod="$main_mod"' \
+			'a new replace in sidecar/go.mod is refused (#1049)' refused 'printf "replace golang.org/x/sys => ../evil\n" >>go.mod'
+		copy_mutant 'the webview copy blind to block entries (#1049)' \
+			'block != "" { print block " " $0; next }' 'block != "" { next }' \
+			'a require moved to another version inside the block is refused (#1049)' refused 'sed -i "s|golang.org/x/sys v[0-9.]*|golang.org/x/sys v0.1.0|" go.mod && grep -q "x/sys v0.1.0" go.mod'
+		copy_mutant 'the webview copy reading a block entry without its keyword (#1049)' \
+			'block != "" { print block " " $0; next }' 'block != "" { print; next }' \
+			'a require block turned into an exclude block is refused (#1049)' refused 'sed -i "s/^require (/exclude (/" go.mod && grep -q "^exclude (" go.mod'
+		copy_mutant 'the webview copy not comparing the vendored go.mod (#1049)' \
+			'new_mod="$(directives "$in/webview_go/go.mod" | awk' 'new_mod="$(directives sidecar/third_party/webview_go/go.mod | awk' \
+			'a replace in the vendored go.mod is refused (#1049)' refused 'printf "replace golang.org/x/sys => ../evil\n" >>webview_go/go.mod'
+		copy_mutant 'LICENSE matched as a prefix again (#1049 review)' \
+			'| "f LICENSE") ;;' '| "f LICENSE"*) ;;' \
+			'a LICENSE.syso, which Go links by its extension, is refused (#1049 review)' refused 'printf x >webview_go/LICENSE.syso'
+		copy_mutant 'libs taking any file (#1049 review)' \
+			'libs/*.h | libs/*.go | libs/*.txt | libs/*/LICENSE) ;;' 'libs/*) ;;' \
+			'a .syso under libs is refused (#1049 review)' refused 'printf x >webview_go/libs/webview/evil_windows_amd64.syso'
+		copy_mutant 'the kept files taken as the artifact has them (#1049 review)' \
+			'for f in .gitattributes jarvis.patch JARVIS_PATCH.md; do' 'for f in; do' \
+			'a changed .gitattributes is refused (#1049 review)' refused 'printf "*.go -diff linguist-generated=true\n" >>webview_go/.gitattributes'
+		copy_mutant 'a .git name below the top let through (#1049 review)' \
+			"-mindepth 2 -iname '.git*' -print -quit" '-false -print -quit' \
+			'a header inside a .git-named directory under libs is refused (#1049 review)' refused 'mkdir -p webview_go/libs/.gitmodules.d && printf x >webview_go/libs/.gitmodules.d/a.h'
+		copy_mutant 'go.sum taken as the artifact has it (#1049 review)' \
+			'if ! cmp -s "$in/go.sum" sidecar/go.sum; then' 'if false; then' \
+			'a line added to go.sum is refused (#1049 review)' refused 'printf "evil.example/x v1.0.0 h1:AAAA=\n" >>go.sum'
+		copy_mutant 'no directory cap (#1049 review)' \
+			'[ "$dirs" -gt 50 ]' '[ "$dirs" -gt 50000 ]' \
+			'more than 50 directories is refused (#1049 review)' refused 'for i in $(seq 1 50); do mkdir "webview_go/libs/d$i"; done'
+		copy_mutant 'the go.mod difference printed raw (#1049 review)' \
+			'| cat -v || true' '|| true' \
+			'a workflow command after a carriage return is printed inert (#1049 review)' refused 'printf "toolchain go1.25.0\r::warning title=ok::bump checks passed\n" >>go.mod' 'toolchain go1.25.0^M::warning'
+		copy_mutant 'go.mod comments kept, so a tidy comment reads as a change (#1049 review)' \
+			'{ sub(/\/\/.*/, "") }' '{ }' \
+			'the vendored tree replaces the old one, its hidden file kept and a dropped file dropped' ok ':'
+		copy_mutant 'go.mod spacing kept, so reformatting reads as a change (#1049 review)' \
+			'{ $1 = $1 }' '{ }' \
+			'the vendored tree replaces the old one, its hidden file kept and a dropped file dropped' ok ':'
 		copy_mutant 'the webview copy taking a tree of another version (review of #983)' \
 			'!= "$VERSION" ]; then' '= x ]; then' \
 			'a tree recording another version is refused' refused 'printf "v9.9.9\n" >webview_go/UPSTREAM_VERSION'
