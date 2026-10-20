@@ -172,9 +172,6 @@ export const ROOM_ACTION_ARGS: Record<string, Record<string, Record<string, read
     disable_tts: {},
     set_tts_provider: { provider: S },
     set_tts_voice: { voice: S },
-    // Number(args.minutes): "30" and 30 are the same to it.
-    set_heartbeat_interval: { minutes: ['number', 'string'] },
-    set_heartbeat_aggressiveness: { level: S },
     restart_daemon: {},
     replay_onboarding: { scope: S },
   },

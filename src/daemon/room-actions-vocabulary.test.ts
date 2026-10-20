@@ -167,3 +167,28 @@ describe('the daemon\'s acknowledgements name only real actions', () => {
     expect(cases.filter((c) => !all.has(c))).toEqual([]);
   });
 });
+
+describe('the heartbeat actions are not offered (#1033)', () => {
+  // Nothing writes heartbeat config: the daemon ignores interval_minutes and
+  // reads aggressiveness once at boot, so these could only ever answer no.
+  const HEARTBEAT = ['set_heartbeat_interval', 'set_heartbeat_aggressiveness'];
+
+  test('no room carries them out', () => {
+    for (const action of HEARTBEAT) expect([action, isRoomAction('settings', action)]).toEqual([action, false]);
+    // Not vacuous: the Settings actions that remain still are.
+    expect(isRoomAction('settings', 'set_tts_voice')).toBe(true);
+  });
+
+  test('neither voice vocabulary nor the acknowledgements name them', async () => {
+    const prompt = await classifierPrompt();
+    const tool = REALTIME_NAV_TOOLS.find((t) => t.name === 'dashboard_room_action')!;
+    const src = readFileSync(new URL('./ws-service.ts', import.meta.url), 'utf8');
+    const from = src.indexOf('function ackForRoomAction(');
+    expect(from).toBeGreaterThan(-1);
+    const acks = src.slice(from, src.indexOf('\n}\n', from));
+    for (const [where, text] of [['classifier', prompt], ['realtime tool', tool.description], ['acks', acks]] as const) {
+      expect([where, text.includes('set_tts_voice')]).toEqual([where, true]);
+      expect([where, /heartbeat/i.test(text)]).toEqual([where, false]);
+    }
+  });
+});

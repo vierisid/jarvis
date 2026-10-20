@@ -43,7 +43,7 @@ export const REALTIME_NAV_TOOL_NAMES = new Set([
 // "matches ..." examples from the classifier are omitted to keep token cost
 // low; the GPT-5-class model infers usage from names + args).
 const ROOM_ACTION_REFERENCE = `Available actions by room (pass via dashboard_room_action):
-- settings: ${switchTab('settings')}, set_model{provider,model}, test_provider{provider}, enable_telegram, disable_telegram, enable_discord, disable_discord, set_stt_provider{provider}, enable_tts, disable_tts, set_tts_provider{provider}, set_tts_voice{voice}, set_heartbeat_interval{minutes}, set_heartbeat_aggressiveness{level: passive|moderate|aggressive}, restart_daemon, replay_onboarding{scope?: all|setup|profile|tutorial}. (Do NOT set API keys by voice.)
+- settings: ${switchTab('settings')}, set_model{provider,model}, test_provider{provider}, enable_telegram, disable_telegram, enable_discord, disable_discord, set_stt_provider{provider}, enable_tts, disable_tts, set_tts_provider{provider}, set_tts_voice{voice}, restart_daemon, replay_onboarding{scope?: all|setup|profile|tutorial}. (Do NOT set API keys by voice.)
 - tools: set_filter{filter: all|read|write|external|destructive}, search{query}, select{name}
 - workflows: create_from_nl{prompt}
 - agents: ${switchTab('agents')}, open_spawn_dialog, close_dialog, set_search{query}, spawn_agent{specialist,task?,context?}

@@ -87,9 +87,12 @@ test("a room's pending answer reaches the daemon as pending, not as a refusal (#
 
 test("the dashboard shell wires daemon room actions through the answering dispatch (#965)", async () => {
   const { readFileSync } = await import("node:fs");
+  // The bridge moved to its own module (#1024); the shell renders it with
+  // the socket's queue, and the bridge dispatches through the answering path.
   const shell = readFileSync(new URL("../shell/AppShell.tsx", import.meta.url), "utf8");
-  expect(shell).toContain("dispatchDashboardRoomAction(request, dispatch, (text) => {");
-  expect(shell).toContain("wsRef={live.wsRef}");
+  expect(shell).toContain("<RoomActionBridge requests={live.roomActionRequests} ack={live.ackRoomActionRequests} forceIdle={voice.forceIdle} wsRef={live.wsRef} />");
+  const bridge = readFileSync(new URL("../shell/RoomActionBridge.tsx", import.meta.url), "utf8");
+  expect(bridge).toContain("dispatchDashboardRoomAction(request, dispatch, (text) => {");
   const ws = readFileSync(new URL("../../hooks/useWebSocket.ts", import.meta.url), "utf8");
   expect(ws).toContain("const req = roomActionRequestFrom(payload, msg.timestamp);");
 });
@@ -141,4 +144,15 @@ test("a panel never runs an action that changes more than the screen (#974)", ()
     expect(dispatched).toEqual([]);
     expect(sent).toEqual([]);
   }
+});
+
+test("the dashboard hands the bus the daemon's claim with the action (#1025)", () => {
+  const dispatched: Array<{ claim?: unknown }> = [];
+  const claim = async () => true;
+  dispatchDashboardRoomAction(
+    { room: "tasks", action: "create_task", args: { title: "x" }, ts: 1, resultId: "r10", claim },
+    (req) => { dispatched.push(req); },
+    () => {},
+  );
+  expect(dispatched[0]?.claim).toBe(claim);
 });

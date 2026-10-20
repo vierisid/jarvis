@@ -260,17 +260,89 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
     expect(actionTo(speaker)!.payload.expiresInMs).toBe(ROOM_ACTION_QUEUE_TTL_MS);
   });
 
+  // #1025: the dashboard's deadline is on its own clock, so an action could
+  // still run after the daemon had said it got no answer. The dashboard now
+  // asks the daemon to claim it just before it runs, and the daemon grants a
+  // claim only while it is still waiting.
+  test('the dashboard asked must claim the action, and a claim is granted only while the daemon waits', async () => {
+    const { svc, internals, speaker, other, actionTo } = setup();
+    const claim = async (from: { ws: unknown; sent: Sent[] }, resultId: unknown) => {
+      const reply = await internals.routeMessage({ type: 'room_action_claim', payload: { resultId }, timestamp: Date.now() }, from.ws);
+      expect(reply).toBeUndefined();
+      const answer = from.sent.filter((m) => m.type === 'room_action_claim_result').at(-1);
+      return answer?.payload;
+    };
+    const p = svc.requestRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x' } }, 40, { client: speaker.ws as never });
+    const id = actionTo(speaker)!.payload.resultId;
+    expect(actionTo(speaker)!.payload.claim).toBe(true);
+    // Only the dashboard asked may claim it.
+    expect(await claim(other, id)).toEqual({ resultId: id, granted: false });
+    expect(await claim(speaker, id)).toEqual({ resultId: id, granted: true });
+    // Claimed and not yet answered when the wait runs out: it is running, so
+    // the model is told not to ask again rather than that nobody answered.
+    expect(await p).toBe('started');
+    // Once the wait is over, a claim is refused, so the action never runs.
+    const q = svc.requestRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'y' } }, 10, { client: speaker.ws as never });
+    const late = speaker.sent.filter((m) => m.payload?.source === 'room_action').at(-1)!.payload.resultId;
+    expect(await q).toBe('no_answer');
+    expect(await claim(speaker, late)).toEqual({ resultId: late, granted: false });
+    // An id it never sent, or none, is refused too.
+    expect(await claim(speaker, 'no-such-id')).toEqual({ resultId: 'no-such-id', granted: false });
+    const before = speaker.sent.length;
+    await internals.routeMessage({ type: 'room_action_claim', payload: { resultId: 7 }, timestamp: Date.now() }, speaker.ws);
+    expect(speaker.sent.length).toBe(before);
+  });
+
+  test('a grant the dashboard never got is not taken as the action running', async () => {
+    const { svc, internals, speaker, actionTo } = setup();
+    const p = svc.requestRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x' } }, 30, { client: speaker.ws as never });
+    const id = actionTo(speaker)!.payload.resultId;
+    // The socket takes no more frames: the grant is dropped on the way out.
+    speaker.ws.send = () => 0;
+    await internals.routeMessage({ type: 'room_action_claim', payload: { resultId: id }, timestamp: Date.now() }, speaker.ws);
+    expect(await p).toBe('no_answer');
+  });
+
+  test('a claim naming an id longer than any the daemon makes gets no reply', async () => {
+    const { internals, speaker } = setup();
+    const before = speaker.sent.length;
+    await internals.routeMessage({ type: 'room_action_claim', payload: { resultId: 'x'.repeat(65) }, timestamp: Date.now() }, speaker.ws);
+    expect(speaker.sent.length).toBe(before);
+    // Not vacuous: one at the limit is answered (refused: nothing has that id).
+    await internals.routeMessage({ type: 'room_action_claim', payload: { resultId: 'x'.repeat(64) }, timestamp: Date.now() }, speaker.ws);
+    expect(speaker.sent.length).toBe(before + 1);
+  });
+
+  test('a presentation action addressed to the dashboard is not claimed: run late it only moves the screen', async () => {
+    const { svc, speaker, actionTo } = setup();
+    await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 10, { client: speaker.ws as never });
+    expect(actionTo(speaker)!.payload.resultFrom).toBe('dashboard');
+    expect(actionTo(speaker)!.payload.claim).toBeUndefined();
+  });
+
+  test('a claimed action answered in time is settled by its answer', async () => {
+    const { svc, internals, speaker, actionTo, answer } = setup();
+    const p = svc.requestRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x' } }, 1000, { client: speaker.ws as never });
+    const id = actionTo(speaker)!.payload.resultId;
+    await internals.routeMessage({ type: 'room_action_claim', payload: { resultId: id }, timestamp: Date.now() }, speaker.ws);
+    await answer(speaker, id, false);
+    expect(await p).toBe('rejected');
+  });
+
   test('the panels are told too; a dashboard not asked is not', async () => {
     const { svc, speaker, other, actionTo } = setup();
     // The pebble's request: every panel may answer, so every one is told.
     await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 20);
     for (const c of [speaker, other]) expect(actionTo(c)!.payload).toMatchObject({ expiresInMs: 20 });
+    // Nobody is named to claim the pebble's request (#1025): any panel may run it.
+    for (const c of [speaker, other]) expect(actionTo(c)!.payload.claim).toBeUndefined();
     const { svc: svc2, speaker: s2, other: o2, actionTo: to2 } = setup();
     await svc2.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 20, { client: s2.ws as never });
     expect(to2(s2)!.payload.expiresInMs).toBe(20);
     // The copy every other dashboard gets for a tab switch is not waited on.
     expect(to2(o2)!.payload.resultId).toBeUndefined();
     expect(to2(o2)!.payload.expiresInMs).toBeUndefined();
+    expect(to2(o2)!.payload.claim).toBeUndefined();
   });
 
   test('an accepted presentation action is not reported as work done', async () => {
@@ -423,7 +495,7 @@ describe('voice room actions are limited to what the rooms carry out (#969)', ()
   });
 
   test('the realtime tool refuses an action the room does not carry out and broadcasts nothing', async () => {
-    for (const [room, action] of [['settings', 'set_primary_llm'], ['workflows', 'run'], ['usage', 'switch_tab']] as const) {
+    for (const [room, action] of [['settings', 'set_primary_llm'], ['settings', 'set_heartbeat_interval'], ['settings', 'set_heartbeat_aggressiveness'], ['workflows', 'run'], ['usage', 'switch_tab']] as const) {
       const { internals, speaker, roomFrames } = setup();
       const reply = await internals.executeRealtimeNavTool('dashboard_room_action', { room, action, args: {} }, speaker.ws);
       expect(roomFrames()).toEqual([]);
@@ -1232,6 +1304,69 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
     expect(c.brief()).toEqual(['allowed:ran:voice:room_action(settings/test_provider; via classifier; read_data; started)']);
     const said = c.speaker.sent.filter((m) => m.payload?.source === 'assistant_message').map((m) => m.payload.text);
     expect(said.at(-1)).toBe('Settings started that and is still working on it. It shows the result on screen.');
+  });
+
+  // #1034: the row for a started action said it ran, and the room's real
+  // answer, arriving after the wait, was dropped without a trace. A late
+  // answer from the dashboard asked now gets its own row, with what it was.
+  test('a late answer to an action that ran out its wait is recorded as its own row', async () => {
+    const t = setup();
+    t.answering({ started: true } as never);
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'workspaces', action: 'start_server', args: { name: 'demo' } }, t.speaker.ws);
+    const id = t.speaker.sent.find((m) => m.payload?.source === 'room_action')!.payload.resultId;
+    const late = (from: { ws: unknown }, accepted: boolean) =>
+      t.internals.routeMessage({ type: 'room_action_result', payload: { resultId: id, accepted }, timestamp: Date.now() }, from.ws);
+    // Not from a dashboard that was not asked.
+    await late(t.other, true);
+    expect(t.brief()).toHaveLength(1);
+    await late(t.speaker, false);
+    expect(t.brief()).toEqual([
+      'allowed:ran:voice:room_action(workspaces/start_server; via realtime; execute_command; started)',
+      'allowed:not-run:voice:room_action(workspaces/start_server; via realtime; execute_command; late_rejected_after_started)',
+    ]);
+    // Once: a second late answer adds nothing.
+    await late(t.speaker, true);
+    expect(t.brief()).toHaveLength(2);
+  });
+
+  test('a late answer after no answer, on the confirm path, keeps the hold\'s id and channel', async () => {
+    const t = setup();
+    await t.internals.routeClassifiedVoiceIntent(t.intent('tasks', 'create_task', { title: 'x' }), 'add x', 'r', t.speaker.ws);
+    expect(await t.svc.resolveVoiceConfirmation('i-tasks-create_task', 'confirm')).toEqual({ ok: true });
+    const id = t.speaker.sent.find((m) => m.payload?.source === 'room_action' && m.payload.resultId)!.payload.resultId;
+    await t.internals.routeMessage({ type: 'room_action_result', payload: { resultId: id, accepted: true, outcome: 'accepted' }, timestamp: Date.now() }, t.speaker.ws);
+    expect(t.brief().slice(1)).toEqual([
+      'allowed:not-run:click:room_action(tasks/create_task; via confirm; write_data; no_answer)',
+      'allowed:ran:click:room_action(tasks/create_task; via confirm; write_data; late_accepted_after_no_answer)',
+    ]);
+    expect(t.rows.map((r) => r.approval_id)).toEqual(['i-tasks-create_task', 'i-tasks-create_task', 'i-tasks-create_task']);
+  });
+
+  // A started action, or a claimed one, is recorded as run. If its dashboard
+  // goes before the room's answer comes, that row must not be the last word.
+  test('a started action whose dashboard leaves before answering gets a disconnected row, not run', async () => {
+    const t = setup();
+    t.answering({ started: true } as never);
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'workspaces', action: 'start_server', args: { name: 'demo' } }, t.speaker.ws);
+    t.internals.handleClientDisconnect(t.speaker.ws);
+    expect(t.brief()).toEqual([
+      'allowed:ran:voice:room_action(workspaces/start_server; via realtime; execute_command; started)',
+      'allowed:not-run:voice:room_action(workspaces/start_server; via realtime; execute_command; late_disconnected_after_started)',
+    ]);
+    // An unanswered one already says it did not run: nothing to add.
+    const u = setup();
+    await u.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, u.speaker.ws);
+    u.internals.handleClientDisconnect(u.speaker.ws);
+    expect(u.brief()).toEqual(['allowed:not-run:voice:room_action(tasks/create_task; via realtime; write_data; no_answer)']);
+  });
+
+  test('a late answer from a dashboard that has since gone is not heard', async () => {
+    const t = setup();
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws);
+    const id = t.speaker.sent.find((m) => m.payload?.source === 'room_action')!.payload.resultId;
+    t.internals.handleClientDisconnect(t.speaker.ws);
+    await t.internals.routeMessage({ type: 'room_action_result', payload: { resultId: id, accepted: true }, timestamp: Date.now() }, t.speaker.ws);
+    expect(t.brief()).toEqual(['allowed:not-run:voice:room_action(tasks/create_task; via realtime; write_data; no_answer)']);
   });
 
   test('a room that never answers is not recorded as having run it', async () => {

@@ -771,7 +771,8 @@ describe('a room action carries only the arguments its handler reads (#1021)', (
     expect(roomActionArgs('goals', 'create_goal', { title: { text: 'x' }, level: ['task'], deadline: 'next week' })).toEqual({});
     expect(roomActionArgs('goals', 'create_goal', { title: 'Ship', deadline: 1700000000000 })).toEqual({ title: 'Ship', deadline: 1700000000000 });
     expect(roomActionArgs('goals', 'create_goal', { title: 'Ship', deadline: Number.NaN })).toEqual({ title: 'Ship' });
-    expect(roomActionArgs('settings', 'set_heartbeat_interval', { minutes: '30' })).toEqual({ minutes: '30' });
+    // The heartbeat actions are gone (#1117), and take nothing.
+    expect(roomActionArgs('settings', 'set_heartbeat_interval', { minutes: '30' })).toEqual({});
     expect(roomActionArgs('settings', 'restart_daemon', { now: true })).toEqual({});
     // An action no handler carries out takes nothing, and a hostile name is no action.
     expect(roomActionArgs('settings', 'set_primary_llm', { provider: 'x' })).toEqual({});
