@@ -180,13 +180,7 @@ func handleNotifyURI(uri string) {
 	}
 	// Let the brain act on approve/deny; everything else (review/view/reconnect/
 	// restart) opens the app. Emit for all so the brain can mark-seen.
-	notifyEmitAction(vals.Get("id"), vals.Get("kind"), action)
-	switch action {
-	case "review", "view", "reconnect", "restart":
-		if trayOpenChat != nil {
-			go trayOpenChat()
-		}
-	}
+	dispatchNotifyAction(vals.Get("id"), vals.Get("kind"), action, trayOpenChat)
 }
 
 // ── primary path: WinRT toast with buttons via hidden PowerShell ─────────────
