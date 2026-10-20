@@ -33,6 +33,63 @@ export type ChatMessage = {
   failure?: UserFailure;
 };
 
+/** Socket events seen while one pending-approvals read is in flight (#1087). */
+export type ApprovalRehydrateWindow = { added: Set<string>; settled: Set<string> };
+
+/**
+ * Fold a pending-approvals read into the live list. The server answer replaces
+ * cards that predate the read (they may have been settled while the socket was
+ * down), but it was taken at some instant inside the window, so it cannot drop a
+ * card the socket added after that instant or bring back one the socket settled.
+ */
+export function mergeRehydratedApprovals(
+  server: PendingApproval[],
+  live: PendingApproval[],
+  seen: ApprovalRehydrateWindow,
+): PendingApproval[] {
+  const merged = server.filter((a) => !seen.settled.has(a.id));
+  const known = new Set(merged.map((a) => a.id));
+  for (const a of live) {
+    if (seen.added.has(a.id) && !seen.settled.has(a.id) && !known.has(a.id)) {
+      merged.push(a);
+      known.add(a.id);
+    }
+  }
+  return merged;
+}
+
+/** The card for an approval_request, or for an approval_update that still says pending. */
+export function pendingApprovalFrom(payload: unknown, timestamp: number): PendingApproval | null {
+  const p = payload as {
+    request?: {
+      id: string;
+      agent_name: string;
+      tool_name: string;
+      action_category: string;
+      urgency: "urgent" | "normal";
+      reason: string;
+    };
+    shortId?: string;
+    impact?: ApprovalImpact;
+    intent?: string;
+    intent_action?: string;
+    intent_reason?: string;
+  };
+  if (!p.request?.id) return null;
+  return {
+    id: p.request.id,
+    shortId: p.shortId ?? p.request.id.slice(0, 8),
+    ...approvalSentence(p.intent_action, p.intent_reason, p.intent ?? p.request.reason ?? p.request.tool_name),
+    category: p.request.action_category,
+    impact: p.impact ?? "write",
+    agentName: p.request.agent_name,
+    toolName: p.request.tool_name,
+    urgency: p.request.urgency,
+    reason: p.request.reason,
+    timestamp,
+  };
+}
+
 /**
  * Merge vault history into whatever already landed in the chat list.
  *
@@ -593,6 +650,8 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
   /** Request whose chunks currently own the single foreground composer turn. */
   const currentChatRequestIdRef = useRef<string | null>(null);
   const mountedRef = useRef(false);
+  /** Open while this socket's pending-approvals read is in flight (#1087). */
+  const approvalWindowRef = useRef<ApprovalRehydrateWindow | null>(null);
 
   const connect = useCallback(() => {
     if (!enabled || !mountedRef.current) return;
@@ -639,6 +698,8 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
       // visible card. Server is authoritative.
       // Phase 5B: REST now includes `intent` + `impact` directly (matches
       // WS broadcast shape), so no more client-side derivation.
+      const approvalWindow: ApprovalRehydrateWindow = { added: new Set(), settled: new Set() };
+      approvalWindowRef.current = approvalWindow;
       try {
         const resp = await fetch("/api/authority/approvals?status=pending");
         if (resp.ok) {
@@ -668,10 +729,12 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
             reason: r.reason,
             timestamp: r.created_at,
           }));
-          setApprovals(rehydrated);
+          setApprovals((prev) => mergeRehydratedApprovals(rehydrated, prev, approvalWindow));
         }
       } catch (err) {
         console.warn("[WS] Failed to rehydrate approvals:", err);
+      } finally {
+        if (approvalWindowRef.current === approvalWindow) approvalWindowRef.current = null;
       }
 
       // Take down every voice card that ended while this socket was down
@@ -1054,41 +1117,28 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
           },
         ]);
       } else if (payload.source === "approval_request") {
-        const p = payload as {
-          request?: {
-            id: string;
-            agent_name: string;
-            tool_name: string;
-            action_category: string;
-            urgency: "urgent" | "normal";
-            reason: string;
-          };
-          shortId?: string;
-          impact?: ApprovalImpact;
-          intent?: string;
-          intent_action?: string;
-          intent_reason?: string;
-        };
-        if (p.request) {
-          const pending: PendingApproval = {
-            id: p.request.id,
-            shortId: p.shortId ?? p.request.id.slice(0, 8),
-            ...approvalSentence(p.intent_action, p.intent_reason, p.intent ?? p.request.reason ?? p.request.tool_name),
-            category: p.request.action_category,
-            impact: p.impact ?? "write",
-            agentName: p.request.agent_name,
-            toolName: p.request.tool_name,
-            urgency: p.request.urgency,
-            reason: p.request.reason,
-            timestamp: msg.timestamp,
-          };
+        const pending = pendingApprovalFrom(payload, msg.timestamp);
+        if (pending) {
+          approvalWindowRef.current?.added.add(pending.id);
           setApprovals((prev) =>
             prev.some((a) => a.id === pending.id) ? prev : [...prev, pending],
           );
         }
       } else if (payload.source === "approval_update") {
-        const requestId = (payload as { request?: { id: string } }).request?.id;
-        if (requestId) {
+        const request = (payload as { request?: { id: string; status?: string } }).request;
+        const requestId = request?.id;
+        if (requestId && request.status === "pending") {
+          // A Brief document save re-files its approval and announces the new
+          // row, still pending, only as an update: show or refresh its card (#1087).
+          const pending = pendingApprovalFrom(payload, msg.timestamp);
+          if (pending) {
+            approvalWindowRef.current?.added.add(pending.id);
+            setApprovals((prev) =>
+              prev.some((a) => a.id === pending.id) ? prev.map((a) => (a.id === pending.id ? pending : a)) : [...prev, pending],
+            );
+          }
+        } else if (requestId) {
+          approvalWindowRef.current?.settled.add(requestId);
           setApprovals((prev) => prev.filter((a) => a.id !== requestId));
         }
       } else if (payload.source === "clarifier_request") {
