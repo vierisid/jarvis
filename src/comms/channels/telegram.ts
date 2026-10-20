@@ -144,6 +144,16 @@ type TelegramGetUpdatesResponse = {
 export const TELEGRAM_UPDATES_LIMIT = 100;
 
 /**
+ * Bound on the call `disconnect()` makes to confirm what was taken (#911).
+ * A fresh-connection `getUpdates` with `timeout: 0` to api.telegram.org took
+ * 0.11 to 0.28s over 10 runs (curl, TLS handshake included, 2026-10-20), so
+ * this is 10x the worst seen. Waited for, so the call is made before a
+ * shutdown exits and before a reload's new adapter polls; it delays a stop
+ * this long only when Telegram does not answer.
+ */
+export const TELEGRAM_CONFIRM_TIMEOUT_MS = 3_000;
+
+/**
  * Where a new adapter for the same bot picks up after a settings save (#882,
  * #910). `offset` is one past the last update the old adapter fetched and
  * kept, so the new one is never handed again an update the old one took, even
@@ -154,7 +164,13 @@ export const TELEGRAM_UPDATES_LIMIT = 100;
  * Never the raw poll position. An update fetched after disconnect() (#860)
  * is not counted, so Telegram hands it to the new adapter instead.
  */
-export type TelegramResumePoint = { offset: number; waiting: TelegramUpdate[]; savedAt: number };
+export type TelegramResumePoint = {
+  offset: number;
+  waiting: TelegramUpdate[];
+  savedAt: number;
+  /** The offset Telegram is known to have been told (#911), so a new adapter does not assume an old one's failed confirm landed. */
+  confirmed?: number;
+};
 
 /**
  * How old a resume point may be and still be used: 7 days. The Bot API says
@@ -183,6 +199,13 @@ type TelegramWork = {
 /** What a sender is told when their message would wait behind more than `TELEGRAM_UPDATES_LIMIT` others (#910). */
 export const TELEGRAM_BUSY_REPLY = 'Too many messages are already waiting for an answer, so this one was not read. Send it again once Jarvis has caught up.';
 
+/**
+ * What a sender is told, once per chat, when the daemon shuts down while
+ * their messages still wait behind a turn (#911). They are not handed to the
+ * next process: Telegram has been told they were read.
+ */
+export const TELEGRAM_SHUTDOWN_DROPPED_REPLY = 'Jarvis is restarting, so the messages you sent while it was still answering were not read. Send them again in a minute.';
+
 /** What a sender is told when the daemon is shutting down and refuses new turns. */
 export const TELEGRAM_RESTARTING_REPLY = 'Jarvis is restarting, so this message was not answered. Send it again in a minute.';
 
@@ -206,6 +229,8 @@ export class TelegramAdapter implements ChannelAdapter {
    * loses it (see `disconnect`).
    */
   private offset: number = 0;
+  /** The highest offset a `getUpdates` was answered for: Telegram has been told everything below it is done (#911). */
+  private confirmedOffset: number = 0;
   /**
    * Updates waiting to start, by lane (#910). A lane is one chat's ordinary
    * messages, which run one at a time and in order since each turn reads and
@@ -275,6 +300,8 @@ export class TelegramAdapter implements ChannelAdapter {
       console.log('[TelegramAdapter] Not resuming from a point saved more than a week ago: Telegram may have renumbered its updates since.');
     } else if (resume && Number.isSafeInteger(resume.offset) && resume.offset > 0) {
       this.offset = resume.offset;
+      const confirmed = resume.confirmed;
+      if (confirmed !== undefined && Number.isSafeInteger(confirmed) && confirmed >= 0) this.confirmedOffset = Math.min(confirmed, resume.offset);
       this.carried = resume.waiting.filter((u) => u.update_id < resume.offset);
     }
     this.onResumePoint = opts?.onResumePoint ?? null;
@@ -306,7 +333,7 @@ export class TelegramAdapter implements ChannelAdapter {
     const waiting = [...this.carried];
     for (const queue of this.lanes.values()) for (const { update } of queue) waiting.push(update);
     waiting.sort((a, b) => a.update_id - b.update_id);
-    return { offset: this.offset, waiting, savedAt: this.now() };
+    return { offset: this.offset, waiting, savedAt: this.now(), confirmed: this.confirmedOffset };
   }
 
   private reportResumePoint(): void {
@@ -375,8 +402,80 @@ export class TelegramAdapter implements ChannelAdapter {
     // first poll and be dropped here only by the check in startPolling.
     this.pollAbort?.abort();
     this.pollAbort = null;
+    // After the abort: two getUpdates at once and Telegram ends one of them
+    // with a 409.
+    await this.confirmTaken();
     this.authentication = 'unknown';
     console.log('[TelegramAdapter] Disconnected');
+  }
+
+  /**
+   * For a shutdown, not a settings save (#911): tell each chat with messages
+   * still waiting that they were not read, once and without a retry (Q-07),
+   * and forget them, so they are not handed to a next adapter either. Bounded
+   * like the confirm, so a Telegram outage cannot hold the shutdown.
+   */
+  async dropWaiting(reply: string): Promise<void> {
+    const chats = new Set<string>();
+    // Only what Telegram has been told was read. An update above the
+    // confirmed offset (the confirm failed, say) comes back to the next
+    // process and is answered then; "send it again" would run it twice.
+    const lost = (update: TelegramUpdate) => update.update_id < this.confirmedOffset;
+    for (const queue of this.lanes.values()) {
+      for (const { update, work } of queue) if (lost(update)) chats.add(String(work.message.chat.id));
+    }
+    // Handed over but never screened here if this adapter never connected:
+    // screened now, so a sender the current list does not name is not
+    // written to (#860).
+    for (const update of this.carried) {
+      const work = lost(update) ? this.screen(update) : null;
+      if (work) chats.add(String(work.message.chat.id));
+    }
+    this.lanes.clear();
+    this.carried = [];
+    this.waitingChat = 0;
+    this.waitingDecisions = 0;
+    this.reportResumePoint();
+    if (chats.size === 0) return;
+    const sends = Promise.allSettled([...chats].map((chat) => this.sendMessage(chat, reply)));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([sends, new Promise<void>((r) => { timer = setTimeout(r, TELEGRAM_CONFIRM_TIMEOUT_MS); })]);
+    clearTimeout(timer);
+  }
+
+  /**
+   * Tell Telegram the updates this adapter fetched are done (#911), so a
+   * restart, which starts with nothing in memory, is not handed the update
+   * this process took and answered (or was answering) again. Only the NEXT
+   * `getUpdates` confirms an update, and on a stop there is no next one.
+   *
+   * This adapter's own offset, which never counts an update fetched after
+   * disconnect() (#860): that one stays unconfirmed for whoever polls next.
+   *
+   * Nothing is persisted. An unclean exit still re-runs an update taken in
+   * the last `pollingInterval` before it, since the loop polls again that
+   * soon after handing an update off (#910). Persisting the offset would
+   * also be unsafe: after a week without updates Telegram may number the
+   * next one below it, and a saved offset would then skip every update.
+   */
+  private async confirmTaken(): Promise<void> {
+    const offset = this.offset;
+    if (offset <= this.confirmedOffset) return;
+    try {
+      const ok = await fetchWithTimeout(`${this.baseUrl}/getUpdates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ offset, timeout: 0, limit: 1, allowed_updates: ['message'] }),
+      }, TELEGRAM_CONFIRM_TIMEOUT_MS, async (r) => {
+        const body = await r.json().catch(() => null) as { ok?: unknown } | null;
+        return r.ok && body?.ok === true;
+      });
+      if (!ok) throw new Error('Telegram did not accept the call');
+      this.confirmedOffset = offset;
+      this.reportResumePoint();
+    } catch (err) {
+      console.warn('[TelegramAdapter] Could not confirm the updates taken before disconnecting; a restart may handle the last one again:', err instanceof Error ? err.message : err);
+    }
   }
 
   async sendMessage(chatId: string, text: string, options?: SendOptions): Promise<void> {
@@ -495,6 +594,7 @@ export class TelegramAdapter implements ChannelAdapter {
     // `timeout` value changes, raise this bound to match.
     const abort = new AbortController();
     this.pollAbort = abort;
+    const offset = this.offset;
     let data: TelegramGetUpdatesResponse;
     try {
       // The body is read inside the timeout and the abort too: reading it
@@ -503,7 +603,7 @@ export class TelegramAdapter implements ChannelAdapter {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          offset: this.offset,
+          offset,
           timeout: 30,
           limit: TELEGRAM_UPDATES_LIMIT,
           allowed_updates: ['message'],
@@ -522,6 +622,8 @@ export class TelegramAdapter implements ChannelAdapter {
     if (!data.ok) {
       throw new Error('Failed to get updates');
     }
+    // Counted only once answered: a poll that failed may never have arrived.
+    this.confirmedOffset = Math.max(this.confirmedOffset, offset);
 
     return data.result;
   }

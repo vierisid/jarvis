@@ -13,7 +13,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { closeDb, initDatabase } from '../vault/schema.ts';
 import { ChannelService } from './channel-service.ts';
-import { TELEGRAM_BUSY_REPLY, TELEGRAM_RESTARTING_REPLY, TELEGRAM_RESUME_MAX_AGE_MS, TELEGRAM_UPDATES_LIMIT, TelegramAdapter } from '../comms/channels/telegram.ts';
+import { TELEGRAM_BUSY_REPLY, TELEGRAM_RESTARTING_REPLY, TELEGRAM_RESUME_MAX_AGE_MS, TELEGRAM_SHUTDOWN_DROPPED_REPLY, TELEGRAM_UPDATES_LIMIT, TelegramAdapter } from '../comms/channels/telegram.ts';
 
 /** `token` set: only that bot's polls see it (ids are per bot). Unset: every bot's. */
 type Update = { update_id: number; message: Record<string, unknown>; token?: string };
@@ -696,6 +696,236 @@ describe('#910: a message read while the daemon shuts down', () => {
       await until(() => api.replies.length === 1, 'the reply');
       expect(api.replies).toEqual([TELEGRAM_RESTARTING_REPLY]);
     } finally {
+      await adapter.disconnect();
+    }
+  });
+});
+
+/**
+ * #911. The taken update is confirmed to Telegram only by the NEXT getUpdates,
+ * and a restart starts a process with nothing in memory, so an update taken
+ * just before the daemon stopped was delivered again and run twice.
+ */
+describe('#911: a restart does not re-run the update the old process took', () => {
+  let originalFetch: typeof fetch;
+  beforeEach(() => { initDatabase(':memory:'); originalFetch = globalThis.fetch; });
+  afterEach(() => { globalThis.fetch = originalFetch; closeDb(); });
+
+  test('stopping confirms what was taken, so the next process does not get it again', async () => {
+    const api = fakeBotApi();
+    globalThis.fetch = api.fetchImpl;
+    const config = { channels: { telegram: { enabled: true, bot_token: 'tok', allowed_users: [42] } } };
+    const before = slowAgent();
+    const after = slowAgent();
+    const first = new ChannelService(config as never, before.agent as never);
+    let second: ChannelService | null = null;
+    try {
+      await first.start();
+      api.send(42, 'slow question');
+      await until(() => before.turns.length === 1, 'the turn');
+      // Stopped before the loop's next poll (pollingInterval is 1s) could
+      // confirm it.
+      await first.stop();
+
+      // A new process: nothing carried over in memory, so it asks from 0.
+      second = new ChannelService(config as never, after.agent as never);
+      await second.start();
+      const polls = api.offsets.length;
+      await until(() => api.offsets.length > polls, 'the new process to poll');
+      await Bun.sleep(50);
+      expect(after.turns).toEqual([]);
+    } finally {
+      before.release('slow question');
+      await first.stop();
+      await second?.stop();
+    }
+  });
+
+  test('the confirm is sent after the long poll is aborted, and a refused confirm is reported', async () => {
+    const api = fakeBotApi();
+    const confirms: Array<{ pollAborted: boolean }> = [];
+    let polls = 0;
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/getUpdates')) {
+        const body = JSON.parse(String(init?.body)) as { timeout?: number };
+        if (body.timeout === 0) {
+          confirms.push({ pollAborted: api.signals.at(-1)!.aborted });
+          return Response.json({ ok: false, error_code: 409, description: 'Conflict' }, { status: 409 });
+        }
+        polls++;
+      }
+      return api.fetchImpl(url, init);
+    }) as typeof fetch;
+    const warnings: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args); };
+    const adapter = new TelegramAdapter('tok', { allowedUsers: [42] });
+    const seen: string[] = [];
+    adapter.onMessage(async (m) => { seen.push(m.text); return ''; });
+    try {
+      await adapter.connect();
+      api.send(42, 'hello');
+      await until(() => seen.length === 1, 'the message to be taken');
+      // The next long poll, which would confirm it, is held in flight.
+      const releasePolls = api.holdPolls();
+      await until(() => polls >= 2, 'the next long poll to be in flight');
+      await adapter.disconnect();
+      releasePolls();
+      expect(confirms).toEqual([{ pollAborted: true }]);
+      expect(warnings.some((w) => String(w[0]).includes('Could not confirm'))).toBe(true);
+    } finally {
+      console.warn = originalWarn;
+      await adapter.disconnect();
+    }
+  });
+
+  test('a confirm that failed is not counted: the next disconnect sends it again', async () => {
+    const api = fakeBotApi();
+    let confirms = 0;
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/getUpdates') && (JSON.parse(String(init?.body)) as { timeout?: number }).timeout === 0) {
+        confirms++;
+        return Response.json({ ok: false, error_code: 502, description: 'Bad Gateway' }, { status: 502 });
+      }
+      return api.fetchImpl(url, init);
+    }) as typeof fetch;
+    const originalWarn = console.warn;
+    console.warn = () => {};
+    const seen: string[] = [];
+    const adapter = new TelegramAdapter('tok', { allowedUsers: [42] });
+    adapter.onMessage(async (m) => { seen.push(m.text); return ''; });
+    try {
+      await adapter.connect();
+      api.send(42, 'hello');
+      await until(() => seen.length === 1, 'the message to be taken');
+      await adapter.disconnect();
+      await adapter.disconnect();
+      expect(confirms).toBe(2);
+    } finally {
+      console.warn = originalWarn;
+      await adapter.disconnect();
+    }
+  });
+
+  test('a new adapter does not assume the old one\'s confirm landed', async () => {
+    // The old adapter's confirm failed, and the new one stops before it ever
+    // polls (its getMe failed, say): it must still confirm on its way out.
+    const api = fakeBotApi();
+    globalThis.fetch = api.fetchImpl;
+    const adapter = new TelegramAdapter('tok', { resume: { offset: 5, waiting: [], savedAt: Date.now(), confirmed: 0 } });
+    await adapter.disconnect();
+    expect(api.offsets).toEqual([{ token: 'tok', offset: 5 }]);
+  });
+
+  test('a shutdown tells each chat with messages still waiting that they were not read, once', async () => {
+    const api = fakeBotApi();
+    globalThis.fetch = api.fetchImpl;
+    const { agent, turns, release } = slowAgent();
+    const config = { channels: { telegram: { enabled: true, bot_token: 'tok', allowed_users: [42] } } };
+    let shuttingDown = false;
+    const svc = new ChannelService(config as never, agent as never, { shuttingDown: () => shuttingDown });
+    try {
+      await svc.start();
+      api.send(42, 'slow first');
+      await until(() => turns.length === 1, 'the first turn');
+      api.send(42, 'waiting one');
+      api.send(42, 'waiting two');
+      const polls = api.offsets.length;
+      await until(() => api.offsets.length > polls + 1, 'the waiting messages to be fetched');
+      shuttingDown = true;
+      await svc.stop();
+      expect(api.replies).toEqual([TELEGRAM_SHUTDOWN_DROPPED_REPLY]);
+    } finally {
+      release('slow first');
+      await svc.stop();
+    }
+  });
+
+  test('a shutdown whose confirm failed tells no one: Telegram delivers those messages again', async () => {
+    const api = fakeBotApi();
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/getUpdates') && (JSON.parse(String(init?.body)) as { timeout?: number }).timeout === 0) {
+        return Response.json({ ok: false, error_code: 502, description: 'Bad Gateway' }, { status: 502 });
+      }
+      return api.fetchImpl(url, init);
+    }) as typeof fetch;
+    const originalWarn = console.warn;
+    console.warn = () => {};
+    const { agent, turns, release } = slowAgent();
+    const config = { channels: { telegram: { enabled: true, bot_token: 'tok', allowed_users: [42] } } };
+    const svc = new ChannelService(config as never, agent as never, { shuttingDown: () => true });
+    try {
+      await svc.start();
+      api.send(42, 'slow first');
+      await until(() => turns.length === 1, 'the first turn');
+      // Hold the next poll, so the one that fetches this is the last answered.
+      api.send(42, 'waiting');
+      const polls = api.offsets.length;
+      await until(() => api.offsets.length > polls, 'the waiting message to be fetched');
+      const releasePolls = api.holdPolls();
+      const held = api.offsets.length;
+      await until(() => api.offsets.length > held, 'the next poll to be in flight');
+      await svc.stop();
+      releasePolls();
+      expect(api.replies).toEqual([]);
+    } finally {
+      console.warn = originalWarn;
+      release('slow first');
+      await svc.stop();
+    }
+  });
+
+  test('a shutdown does not write to the sender of a handed-over message the current list does not name', async () => {
+    const api = fakeBotApi();
+    globalThis.fetch = api.fetchImpl;
+    const update = { update_id: 3, message: { message_id: 3, from: { id: 9, first_name: 'Removed' }, chat: { id: 9, type: 'private' }, date: 0, text: 'hello' } };
+    // Never connected: its carried update was never screened.
+    const adapter = new TelegramAdapter('tok', { allowedUsers: [42], resume: { offset: 5, waiting: [update], savedAt: Date.now(), confirmed: 5 } });
+    adapter.onMessage(async () => '');
+    await adapter.dropWaiting(TELEGRAM_SHUTDOWN_DROPPED_REPLY);
+    expect(api.replies).toEqual([]);
+    // The same message from a listed sender is told.
+    const listed = new TelegramAdapter('tok', { allowedUsers: [42, 9], resume: { offset: 5, waiting: [update], savedAt: Date.now(), confirmed: 5 } });
+    listed.onMessage(async () => '');
+    await listed.dropWaiting(TELEGRAM_SHUTDOWN_DROPPED_REPLY);
+    expect(api.replies).toEqual([TELEGRAM_SHUTDOWN_DROPPED_REPLY]);
+  });
+
+  test('a settings save does not tell anyone: what waited goes to the new adapter', async () => {
+    const api = fakeBotApi();
+    globalThis.fetch = api.fetchImpl;
+    const { agent, turns, release } = slowAgent();
+    const config = { channels: { telegram: { enabled: true, bot_token: 'tok', allowed_users: [42] } } };
+    const svc = new ChannelService(config as never, agent as never, { shuttingDown: () => false });
+    try {
+      await svc.start();
+      api.send(42, 'slow first');
+      await until(() => turns.length === 1, 'the first turn');
+      api.send(42, 'waiting');
+      const polls = api.offsets.length;
+      await until(() => api.offsets.length > polls + 1, 'the waiting message to be fetched');
+      await svc.stop();
+      expect(api.replies).toEqual([]);
+    } finally {
+      release('slow first');
+      await svc.stop();
+    }
+  });
+
+  test('stopping with nothing new taken sends nothing extra', async () => {
+    const api = fakeBotApi();
+    globalThis.fetch = api.fetchImpl;
+    const releasePolls = api.holdPolls();
+    const adapter = new TelegramAdapter('tok');
+    adapter.onMessage(async () => '');
+    try {
+      await adapter.connect();
+      await until(() => api.offsets.length === 1, 'the first poll');
+      await adapter.disconnect();
+      await Bun.sleep(30);
+      expect(api.offsets).toEqual([{ token: 'tok', offset: 0 }]);
+    } finally {
+      releasePolls();
       await adapter.disconnect();
     }
   });

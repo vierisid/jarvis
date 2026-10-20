@@ -14,7 +14,8 @@ import type { ChannelAdapter, ChannelMessage, SendOptions } from '../comms/chann
 import type { STTProvider } from '../comms/voice.ts';
 
 import { ChannelManager } from '../comms/index.ts';
-import { TelegramAdapter, type TelegramResumePoint } from '../comms/channels/telegram.ts';
+import { TELEGRAM_SHUTDOWN_DROPPED_REPLY, TelegramAdapter, type TelegramResumePoint } from '../comms/channels/telegram.ts';
+import { activeTurns } from './active-turns.ts';
 import { channelAllowList } from '../comms/channels/allow-list.ts';
 import { createSTTProvider } from '../comms/voice.ts';
 import { effectiveSttForBinding, usejarvisVoiceCredentials } from './usejarvis-ai.ts';
@@ -132,10 +133,15 @@ export class ChannelService implements Service {
   /** Notified when a send has exhausted its retries (e.g. to alert the dashboard). */
   private deliveryFailureHandler: DeliveryFailureHandler | null = null;
 
-  constructor(config: JarvisConfig, agentService: AgentService) {
+  /** Whether the daemon is shutting down rather than reloading settings (#911). */
+  private shuttingDown: () => boolean;
+
+  constructor(config: JarvisConfig, agentService: AgentService, opts?: { shuttingDown?: () => boolean }) {
     this.config = config;
     this.agentService = agentService;
     this.manager = new ChannelManager();
+    // A shutdown quiesces turns before it stops services; a settings save does not.
+    this.shuttingDown = opts?.shuttingDown ?? (() => activeTurns.isDraining);
   }
 
   setApprovalHandler(handler: ApprovalCommandHandler): void {
@@ -282,6 +288,10 @@ export class ChannelService implements Service {
   async stop(): Promise<void> {
     this._status = 'stopping';
     await this.manager.disconnectAll();
+    // On a shutdown, what waited behind a turn is not handed on: the next
+    // process starts with nothing in memory. Its senders are told (#911).
+    // After the disconnect, so nothing newer is fetched meanwhile.
+    if (this.shuttingDown()) await this.telegram?.adapter.dropWaiting(TELEGRAM_SHUTDOWN_DROPPED_REPLY);
     // Drop the adapters, not just their connections: start() only registers
     // adapters for channels that are ENABLED in the current config, so a
     // stop/start cycle (settings hot reload) must not leave a stale adapter
