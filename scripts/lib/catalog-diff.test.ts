@@ -6,6 +6,7 @@ import {
   verdictFor,
   type GeneratedEntryLike,
 } from "./catalog-diff";
+import type { HoldReason } from "./verified-upgrade";
 
 const SHA = "d04e6807c485ecd788a72af0d04abffba78563c7";
 
@@ -295,5 +296,145 @@ describe("renderReport", () => {
     ];
     const { markdown } = renderReport(diffCatalogs(oldE, newE, { ...meta, oldSha: "aaa", newSha: "bbb" }), reportOpts);
     expect(markdown).not.toMatch(/[—–→⇒←]/);
+  });
+});
+
+// #985: since #981 the catalog PR is opened with RELEASE_PR_TOKEN, so it is
+// authored by the PAT owner. A closing keyword in its body would close one of
+// our issues as the owner when it merges, and an @mention would ping as the
+// owner. GitHub resolves neither inside a code span (the GFM renderer, asked
+// for this repository, linked `@vierisid` and `#1` outside a span and left
+// them plain inside one), so every free-form upstream string must land inside
+// one, unable to leave it by a backtick or a newline. ids and npm package
+// names are not free-form: the sync drops an id outside [a-z][a-z0-9-]*, and
+// the package is the checked prefix plus that id.
+describe("renderReport keeps upstream text inside code spans (#985)", () => {
+  // Each payload tries to leave its span by a backtick and by a blank line
+  // (which ends the paragraph, and the span with it), and carries a tag
+  // naming the field it was put in.
+  const evil = (tag: string) => `x\` closes #1 @owner-${tag}\n\nCloses #2 \`y`;
+  // Every code span on a line removed: what GitHub would read as prose. This
+  // pairs single backticks, which is what CommonMark does only while no run
+  // of two or more backticks is on the line; the first test holds that.
+  const prose = (markdown: string) =>
+    markdown
+      .split("\n")
+      .map((line) => line.replace(/`[^`]*`/g, ""))
+      .join("\n");
+  const spans = (markdown: string) =>
+    markdown.split("\n").flatMap((line) => line.match(/`[^`]*`/g) ?? []);
+
+  // What renderReport is handed but prints only by kind: upstream text in
+  // the error and the action description must not reach the body at all.
+  const heldReasons: HoldReason[] = [
+    { kind: "unavailable", error: evil("held-error") },
+    { kind: "unmapped", actions: [{ name: "act", classification: null, props: [], description: evil("held-desc") }] },
+  ];
+
+  const hostile = () => {
+    const oldE = [
+      entry({ id: "lic", licenseSpdx: evil("license-from") }),
+      entry({ id: "ver", latestVersion: evil("version-from") }),
+      entry({ id: "vbump", latestVersion: evil("verified-from") }),
+      entry({ id: "meta", displayName: evil("display-from"), description: evil("description-from") }),
+    ];
+    const newE = [
+      entry({ id: "lic", licenseSpdx: evil("license-to") }),
+      entry({ id: "ver", latestVersion: evil("version-to") }),
+      entry({ id: "vbump", latestVersion: evil("verified-to") }),
+      entry({ id: "meta", displayName: evil("display-to"), description: evil("description-to") }),
+      entry({ id: "newbie", licenseSpdx: evil("license-added") }),
+    ];
+    const diff = diffCatalogs(oldE, newE, { ...meta, verified: new Set(["vbump"]) });
+    return renderReport(diff, {
+      ...reportOpts,
+      carriedForward: [{ id: "stale", version: evil("carried") }],
+      verifiedUpgrades: [
+        {
+          id: "gmail",
+          from: evil("upgrade-from"),
+          to: evil("upgrade-to"),
+          ok: true,
+          added: [evil("action-added")],
+          removed: [evil("action-removed")],
+          reasons: [],
+        },
+        {
+          id: "slack",
+          from: evil("held-from"),
+          to: evil("held-to"),
+          ok: false,
+          added: [],
+          removed: [],
+          reasons: heldReasons,
+        },
+      ],
+    }).markdown;
+  };
+
+  test("a closing keyword or an @mention in any upstream field stays inside a code span", () => {
+    const markdown = hostile();
+    expect(markdown).not.toMatch(/``/);
+    const outside = prose(markdown);
+    expect(outside).not.toMatch(/@owner/);
+    expect(outside).not.toMatch(/closes #/i);
+    expect(outside).not.toMatch(/#[12]\b/);
+  });
+
+  test("each hostile field was rendered, so the check above saw it", () => {
+    const inSpans = spans(hostile()).join("\n");
+    for (const tag of [
+      "license-from",
+      "license-to",
+      "license-added",
+      "version-from",
+      "version-to",
+      "verified-from",
+      "verified-to",
+      "carried",
+      "upgrade-from",
+      "upgrade-to",
+      "action-added",
+      "action-removed",
+      "held-from",
+      "held-to",
+    ]) {
+      expect(inSpans).toContain(`closes #1 @owner-${tag} Closes #2`);
+    }
+  });
+
+  test("a license that is only whitespace renders as (unspecified), not as an empty span", () => {
+    const oldE = [entry({ id: "gmail" })];
+    const newE = [entry({ id: "gmail" }), entry({ id: "acme", licenseSpdx: " \n\t" })];
+    const { markdown } = renderReport(diffCatalogs(oldE, newE, meta), reportOpts);
+    expect(markdown).toContain("license (unspecified)");
+    expect(markdown).not.toMatch(/``/);
+  });
+
+  test("a version or action name that is only whitespace renders as (unspecified), not as an empty span", () => {
+    const oldE = [entry({ id: "ver", latestVersion: "1.0.0" })];
+    const newE = [entry({ id: "ver", latestVersion: " " })];
+    const { markdown } = renderReport(diffCatalogs(oldE, newE, meta), {
+      ...reportOpts,
+      carriedForward: [{ id: " ", version: "\n" }],
+      verifiedUpgrades: [
+        { id: "gmail", from: " ", to: "1.0.0", ok: true, added: ["\t"], removed: [" "], reasons: [] },
+        { id: "slack", from: " ", to: "\n", ok: false, added: [], removed: [], reasons: [] },
+      ],
+    });
+    expect(markdown).toContain("`1.0.0` -> (unspecified)");
+    expect(markdown).toContain("- (unspecified) -- kept at (unspecified)");
+    expect(markdown).toContain("+1 ((unspecified), already mapped), -1 ((unspecified))");
+    expect(markdown).toContain("stays at (unspecified), (unspecified) available");
+    expect(markdown).not.toMatch(/``/);
+  });
+
+  test("display names, descriptions and hold-reason text are never rendered, only the field names and kinds", () => {
+    const markdown = hostile();
+    expect(markdown).not.toContain("@owner-display");
+    expect(markdown).not.toContain("@owner-description");
+    expect(markdown).not.toContain("@owner-held-error");
+    expect(markdown).not.toContain("@owner-held-desc");
+    expect(markdown).toContain("- `meta`: displayName, description");
   });
 });

@@ -56,9 +56,12 @@ mkdir -p "$VENDOR_DIR"
 # Copy only the buildable source set (matches the original minimal vendoring):
 # top-level go/c/c++/headers, the module files, the license, and libs/. Skip
 # upstream extras we don't build -- examples/, .github/, README, CHANGELOG,
-# .gitignore, and *_test.go -- to keep the vendored tree lean.
+# .gitignore, and *_test.go -- to keep the vendored tree lean. The license is
+# LICENSE exactly, never LICENSE*: the update-webview publish step refuses any
+# other name, since Go builds a LICENSE.syso or LICENSE.S by its extension.
 shopt -s nullglob
-for f in "$SRC"/*.go "$SRC"/*.cc "$SRC"/*.c "$SRC"/*.h "$SRC"/go.mod "$SRC"/go.sum "$SRC"/LICENSE*; do
+for f in "$SRC"/*.go "$SRC"/*.cc "$SRC"/*.c "$SRC"/*.h "$SRC"/go.mod "$SRC"/go.sum "$SRC"/LICENSE; do
+  [ -e "$f" ] || continue
   bn="$(basename "$f")"
   case "$bn" in *_test.go) continue ;; esac
   cp "$f" "$VENDOR_DIR/$bn"
