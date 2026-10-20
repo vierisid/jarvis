@@ -50,7 +50,7 @@ import { getFlowVersion, getLatestDraft } from '../workflows/db/repos/flow-versi
 const VALID_ENTITY_TYPES = new Set(['person', 'project', 'tool', 'place', 'concept', 'event']);
 import { getDb } from '../vault/schema.ts';
 import { findCommitments, getUpcoming, createCommitment, getCommitment, patchCommitment, reorderCommitments } from '../vault/commitments.ts';
-import { validateCommitmentPatch } from './commitment-patch.ts';
+import { COMMITMENT_CREATE_MAX_BODY_BYTES, readBoundedJson, validateCommitmentCreate, validateCommitmentPatch } from './commitment-patch.ts';
 import { getOrCreateConversation, getMessages, getRecentConversation } from '../vault/conversations.ts';
 import { telegramAllowList, discordAllowList } from '../comms/channels/allow-list.ts';
 import { getRecentObservations, summarizeObservation } from '../vault/observations.ts';
@@ -692,27 +692,25 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (overdue === 'true') query.overdue = true;
         return json(findCommitments(query));
       },
+      // The PATCH's rules, which this never had (#1036): one-line text where
+      // the commitments tool lists it one task per line, bounded fields and a
+      // bounded body, and nothing it does not write.
       POST: async (req: Request) => {
+        const read = await readBoundedJson(req, COMMITMENT_CREATE_MAX_BODY_BYTES);
+        if (!read.ok) return error(read.error, read.status);
+        const parsed = validateCommitmentCreate(read.body);
+        if (!parsed.ok) return error(parsed.error);
+        const { what, ...opts } = parsed.create;
+        let commitment: ReturnType<typeof createCommitment>;
         try {
-          const body = await req.json() as {
-            what: string;
-            when_due?: number;
-            context?: string;
-            priority?: CommitmentPriority;
-            assigned_to?: string;
-          };
-          if (!body.what) return error('Missing "what" field');
-          const commitment = createCommitment(body.what, {
-            when_due: body.when_due,
-            context: body.context,
-            priority: body.priority,
-            assigned_to: body.assigned_to,
-          });
-          ctx.wsService?.broadcastTaskUpdate(commitment, 'created');
-          return json(commitment, 201);
+          commitment = createCommitment(what, opts);
         } catch (err) {
-          return error('Invalid request body');
+          // Not the request's fault: it used to be reported as a bad body.
+          console.error('[api] task create failed:', err);
+          return error('Could not create the task', 500);
         }
+        ctx.wsService?.broadcastTaskUpdate(commitment, 'created');
+        return json(commitment, 201);
       },
     },
 

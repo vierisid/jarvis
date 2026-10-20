@@ -12,6 +12,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { c, printOk, printErr, printWarn } from './helpers.ts';
 import { getLogDir } from '../daemon/pid.ts';
+import { alreadyScheduled, runCommand, scheduleUnitRestart, type CommandRunner } from './systemd-unit.ts';
 import { MODEL_EXEC_ENV_KEY_FLAG, MODEL_EXEC_MARKER_ENV } from '../util/model-exec-marker.ts';
 
 function canSpawnBinary(binary: string): boolean {
@@ -257,18 +258,36 @@ async function startSystemdService(): Promise<boolean> {
   }
 }
 
-export function scheduleSystemdRestart(spawnSync: SpawnSyncFn = defaultSpawnSync): boolean {
+/**
+ * Restart the keepalive unit from inside it: the daemon's
+ * `/api/system/autostart/restart`, which the Settings room and the voice
+ * `restart_daemon` call, and which has to answer before it goes (#1037).
+ *
+ * It used to run `systemctl --user --no-block restart` in the request. From
+ * inside the unit's cgroup that is not fast enough: systemd starts the stop
+ * job and SIGTERMs every process in the cgroup, that systemctl included,
+ * before it returns. Measured on systemd 262 with a probe unit that ran this
+ * exact pair from an HTTP handler, 10 of 10 requests saw systemctl killed by
+ * SIGTERM (no exit code), so this reported a failed restart for every restart
+ * that happened, and the daemon was already draining while it answered. The
+ * voice answer, which has to come back over the socket after the HTTP one and
+ * then be spoken, had no time at all.
+ *
+ * So the restart now goes through the transient timer `jarvis restart` uses
+ * from inside the unit (systemd-unit.ts scheduleUnitRestart, #525): it fires
+ * SCHEDULE_DELAY_SEC later, outside the cgroup, and what this answers is
+ * whether systemd accepted the timer, which nothing kills. What could make
+ * the old command fail at once is still checked at once: the unit must be
+ * loaded (not missing, masked or unreadable), or this is a no. A timer still
+ * pending from an earlier request is a restart already on its way, so a yes.
+ */
+export function scheduleSystemdRestart(run: CommandRunner = runCommand): boolean {
   try {
-    // The unit's StartLimitBurst counts EVERY start in the window, not only the
-    // ones Restart= triggers: enough restarts or updates in two minutes and
-    // systemd refuses the next start. Clear the counter first, or --no-block
-    // reports success below while JARVIS stays down. A no-op (exit 0) on a unit
-    // that is running normally, so the result is deliberately ignored.
-    spawnSync(['systemctl', '--user', 'reset-failed', 'jarvis.service']);
-    // --no-block returns immediately; systemd queues the restart through its own
-    // lifecycle, so the calling HTTP handler can return before the unit cycles.
-    const res = spawnSync(['systemctl', '--user', '--no-block', 'restart', 'jarvis.service']);
-    return res.exitCode === 0;
+    // `KEY=value` rather than `--value`, which needs systemd 230 (as unitInfo).
+    const load = run(['systemctl', '--user', 'show', '--property=LoadState', 'jarvis.service']);
+    if (load.exitCode !== 0 || load.stdout.trim() !== 'LoadState=loaded') return false;
+    const scheduled = scheduleUnitRestart({ name: 'jarvis.service' }, run);
+    return scheduled.exitCode === 0 || alreadyScheduled(scheduled);
   } catch {
     return false;
   }
