@@ -22,6 +22,9 @@ export type WSMessage = {
       // A native panel's answer to a room_action that carried a resultId:
       // { resultId, accepted }. See src/daemon/room-action-results.ts.
       | 'room_action_result'
+      // The dashboard asked to run a room action asks to go ahead just before
+      // it runs it, { resultId }, and is told { resultId, granted } (#1025).
+      | 'room_action_claim' | 'room_action_claim_result'
       | 'thinking_start' | 'thinking_end'
       | 'workflow_event'
       | 'goal_event'

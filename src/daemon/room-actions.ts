@@ -72,8 +72,6 @@ export const ROOM_ACTIONS = {
     disable_tts: ['modify_settings'],
     set_tts_provider: ['modify_settings'],
     set_tts_voice: ['modify_settings'],
-    set_heartbeat_interval: ['modify_settings'],
-    set_heartbeat_aggressiveness: ['modify_settings'],
     // Restarts the 24/7 service through launchctl or systemctl.
     restart_daemon: ['execute_command'],
     // Scope "all" (the default) clears the user profile.

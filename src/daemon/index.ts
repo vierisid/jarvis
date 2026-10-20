@@ -74,7 +74,7 @@ import { hostedRealtimeIncluded, warmRealtimeGateFor } from './realtime-gate.ts'
 import { resolveRealtimeVoice } from "../config/realtime.ts";
 import { pebbleHotkeyRequestKey, resolvePebbleHotkeys, shouldCloseBeforeSpawn } from "../config/pebble-hotkeys.ts";
 import { isHostedInstall, realtimeEnablement } from "./usejarvis-ai.ts";
-import { pebbleRoomActionResult, REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from "./realtime-nav-tools.ts";
+import { REALTIME_NAV_TOOLS } from "./realtime-nav-tools.ts";
 import { EventReactor } from "./event-reactor.ts";
 import { EventCoalescer } from "./event-coalescer.ts";
 import { CommitmentExecutor } from "./commitment-executor.ts";
@@ -164,6 +164,7 @@ import {
   SUB_PEBBLE_COLORS, PEBBLE_ROOMS, exactRoomKey, findRoomKey, type PanelLookups, type SubPebbleCand,
 } from "./pebble-intents.ts";
 import { makeSpeakConfirmation } from "./pebble-confirmation.ts";
+import { makePalettePick, makePebbleNavTool } from "./pebble-nav-tool.ts";
 import { osFamily } from "../util/execution-environment.ts";
 import { isLocalBrowserDisabled, isNoLocalTools } from "../actions/tools/local-tools-guard.ts";
 
@@ -1057,79 +1058,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
       // Realtime nav-tool execution for the pebble: open a native room panel (or
       // window-manage it) on the pebble's machine, mirroring the one-shot intent
-      // path. (ROOMS/dashboardURL/boundsForRoom/trackPanel/findPanel are defined
-      // further down in this same scope; this closure runs at tool-call time, by
-      // when they're initialised.) Returns a confirmation, or null if `name`
-      // isn't a nav tool so the caller falls through to the agent tool bridge.
-      const executePebbleNavTool = async (
-        sidecarId: string,
-        name: string,
-        args: Record<string, unknown>,
-      ): Promise<string | null> => {
-        if (!REALTIME_NAV_TOOL_NAMES.has(name)) return null;
-        const openRoom = async (key: string): Promise<string> => {
-          const meta = ROOMS[key];
-          if (!meta) return `I don't have a "${key}" screen.`;
-          try {
-            const result = await sidecarManager.dispatchRPC(sidecarId, 'panel.spawn', {
-              url: dashboardURL(key),
-              title: meta.title,
-              bounds: boundsForRoom(key, meta.w, meta.h),
-              resizable: true,
-              always_on_top: meta.alwaysOnTop ?? false,
-              multi_instance: false,
-            });
-            const id = (result && typeof result === 'object' && 'id' in (result as object))
-              ? String((result as { id?: unknown }).id ?? '') : '';
-            if (id) trackPanel(sidecarId, { id, key, title: meta.title });
-            return `Opened ${meta.title}.`;
-          } catch (err) {
-            console.warn(`[pebble-realtime] open room "${key}" failed:`, err);
-            return `I couldn't open ${meta.title}.`;
-          }
-        };
-        switch (name) {
-          case 'open_dashboard_room':
-            return openRoom(String(args.room ?? ''));
-          case 'dashboard_room_action':
-            // Only the room is opened here; the action itself is not sent. The
-            // model is told so, or "Opened Settings." reads as the TTS toggle
-            // it asked for having happened (#965).
-            return pebbleRoomActionResult(await openRoom(String(args.room ?? '')), String(args.action ?? ''));
-          case 'control_dashboard_window': {
-            const action = String(args.action ?? '');
-            const target = findPanel(sidecarId, args.target ? String(args.target) : undefined);
-            if (!target) return "There's no window open to do that with.";
-            const stateMap: Record<string, string> = {
-              maximize: 'maximized', maximized: 'maximized',
-              minimize: 'minimized', minimized: 'minimized',
-              restore: 'normal', normal: 'normal',
-            };
-            try {
-              if (action === 'close') {
-                await sidecarManager.dispatchRPC(sidecarId, 'panel.close', { id: target.id });
-                untrackPanel(sidecarId, target.id);
-                return `Closed ${target.title}.`;
-              }
-              if (action === 'focus') {
-                await sidecarManager.dispatchRPC(sidecarId, 'panel.focus', { id: target.id });
-                return 'Here it is.';
-              }
-              if (stateMap[action]) {
-                await sidecarManager.dispatchRPC(sidecarId, 'panel.set_window_state', { id: target.id, state: stateMap[action] });
-                return `Done.`;
-              }
-              return "I'm not sure how to do that with the window.";
-            } catch {
-              return "I couldn't do that with the window.";
-            }
-          }
-          case 'go_back_to_thread':
-            return 'Okay.'; // the pebble has no dashboard thread to return to
-          default:
-            return null;
-        }
-      };
+      // path (pebble-nav-tool.ts). dashboardURL/boundsForRoom/trackPanel/
+      // untrackPanel/findPanel are defined further down in this same scope;
+      // the deps below only call them at tool-call time, by when they're
+      // initialised. Returns a confirmation, or null if `name` isn't a nav tool
+      // so the caller falls through to the agent tool bridge.
+      const executePebbleNavTool = makePebbleNavTool({
+        dispatchRPC: (sidecarId, method, params) => sidecarManager.dispatchRPC(sidecarId, method, params),
+        dashboardURL: (key) => dashboardURL(key),
+        boundsForRoom: (key, w, h) => boundsForRoom(key, w, h),
+        trackPanel: (sidecarId, entry) => trackPanel(sidecarId, entry),
+        untrackPanel: (sidecarId, id) => untrackPanel(sidecarId, id),
+        findPanel: (sidecarId, hint) => findPanel(sidecarId, hint),
+      });
 
       // ─────────────────── Native pebble realtime voice ───────────────────
       // The summon hotkey toggles a perpetual realtime (gpt-realtime) session
@@ -2551,44 +2492,20 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // exactly the same way.
       const { setPaletteHandler } = await import('./palette-controller.ts');
       setPaletteHandler({
-        async pick({ kind, key }) {
-          if (kind !== 'room') return; // object picks not yet wired in panel mode
-          const meta = ROOMS[key];
-          if (!meta) {
-            console.warn(`[palette] pick: unknown room "${key}"`);
-            return;
-          }
-          // Pick the sidecar whose palette is currently open. Fall back
-          // to the first sidecar if state is missing (dashboard-only
-          // dev path).
-          let sidecarId: string | null = null;
-          for (const [sid] of palettePanelBySidecar) { sidecarId = sid; break; }
-          if (!sidecarId) {
-            const list = sidecarManager.listSidecars();
-            sidecarId = list.find((s) => s.connected)?.id ?? null;
-          }
-          if (!sidecarId) return;
-          // Close palette before spawning the room so the focus doesn't
-          // bounce. Spawn returns an `id` we track for window-mgmt
-          // commands.
-          await closePalettePanel(sidecarId);
-          try {
-            const result = await sidecarManager.dispatchRPC(sidecarId, 'panel.spawn', {
-              url: dashboardURL(key),
-              title: meta.title,
-              bounds: boundsForRoom(key, meta.w, meta.h),
-              resizable: true,
-              always_on_top: meta.alwaysOnTop ?? false,
-              multi_instance: false,
-            });
-            const id = (result && typeof result === 'object' && 'id' in (result as object))
-              ? String((result as { id?: unknown }).id ?? '')
-              : '';
-            if (id) trackPanel(sidecarId, { id, key, title: meta.title });
-          } catch (err) {
-            console.warn(`[palette] panel.spawn(${key}) from pick failed:`, err);
-          }
-        },
+        pick: makePalettePick({
+          dispatchRPC: (sidecarId, method, params) => sidecarManager.dispatchRPC(sidecarId, method, params),
+          dashboardURL,
+          boundsForRoom,
+          trackPanel,
+          // The sidecar whose palette is currently open. Fall back to the
+          // first connected sidecar if state is missing (dashboard-only dev
+          // path).
+          pickSidecar: () => {
+            for (const [sid] of palettePanelBySidecar) return sid;
+            return sidecarManager.listSidecars().find((s) => s.connected)?.id ?? null;
+          },
+          closePalette: closePalettePanel,
+        }),
         async close() {
           // Close the palette on whichever sidecar has it open.
           for (const [sid] of palettePanelBySidecar) {

@@ -23,11 +23,16 @@ concurrency:
 # those jobs can reach should never be able to write. Nothing here needs more:
 # paths-filter lists a PR's files through the API with contents: read on this
 # public repository (it already does under the read-only default).
+#
+# Every checkout sets persist-credentials: false (#1001). The default leaves
+# this token in .git/config for every later step, and those steps run the
+# PR's own code; read-only is not nothing (it reads what the token can reach
+# and enumerates the API as the repository). No job here runs git against a
+# remote with it: paths-filter lists a PR's files through the API with its
+# own token input, and on a push it fetches the previous commit anonymously,
+# which this public repository allows.
 permissions:
   contents: read
-
-env:
-  GO_VERSION: "1.25"
 
 jobs:
   # ─── Which areas did this push/PR touch? ───────────────────────
@@ -48,6 +53,8 @@ jobs:
       toast: ${{ steps.filter.outputs.toast }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
@@ -55,6 +62,8 @@ jobs:
             sidecar:
               - 'sidecar/**'
               - '.github/workflows/test.yml'
+              # The Go toolchain and cache setup every sidecar job runs.
+              - '.github/actions/go-setup/**'
               # The release workflows call sidecar/scripts/sign-windows.sh —
               # a change to how they invoke it must re-run its tests.
               - '.github/workflows/sidecar-release.yml'
@@ -93,6 +102,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/bun-setup
       - run: bun run scripts/check-no-ee-imports.ts
       - run: bun run scripts/check-migrations.ts
@@ -158,6 +169,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/bun-setup
       # Scoped to the lifecycle + service-definition files, not all of src/cli.
       # This job exists for the macOS-only behaviour (what launchd's KeepAlive
@@ -228,13 +241,10 @@ jobs:
       X_HOTKEY_TEST_COUNT: '8'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # Single source of truth for the toolchain — tracks sidecar/go.mod so
-          # the build gate can't drift from the declared Go version (GO_VERSION
-          # env is now unused; left in place to avoid touching unrelated jobs).
-          go-version-file: sidecar/go.mod
-          cache-dependency-path: sidecar/go.sum
+          persist-credentials: false
+      # Go from sidecar/go.mod, its caches restored by exact key only (#1047).
+      - uses: ./.github/actions/go-setup
 
       - name: Install Linux UI libraries + mingw
         run: |
@@ -398,7 +408,7 @@ jobs:
           # -count=1 below is load-bearing, not habit. DISPLAY is read by
           # libX11's C getenv, which go test's cache cannot observe, so a cached
           # SKIP from a run without a display can be replayed verbatim in a run
-          # where Xvfb is up -- reproduced locally. setup-go caches GOCACHE
+          # where Xvfb is up -- reproduced locally. GOCACHE is cached
           # across runs, so that is not hypothetical.
           set +e
           go test -v -count=1 -run "$X_HOTKEY_TESTS" . 2>&1 | tee "$log"
@@ -586,10 +596,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: sidecar/go.mod
-          cache-dependency-path: sidecar/go.sum
+          persist-credentials: false
+      # Go from sidecar/go.mod, its caches restored by exact key only (#1047).
+      - uses: ./.github/actions/go-setup
       - name: Run windows-tagged unit tests (amd64, cgo)
         working-directory: sidecar
         shell: bash
@@ -628,10 +638,15 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           # Same pin as .github/actions/bun-setup.
           bun-version: "1.4.2"
+          # Downloaded, not restored from the Actions cache (#1047): see
+          # .github/actions/bun-setup.
+          no-cache: true
       - name: Toast XML under Windows PowerShell 5.1 and WinRT
         working-directory: src/comms
         shell: bash
@@ -655,10 +670,10 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: sidecar/go.mod
-          cache-dependency-path: sidecar/go.sum
+          persist-credentials: false
+      # Go from sidecar/go.mod, its caches restored by exact key only (#1047).
+      - uses: ./.github/actions/go-setup
       - name: Build + vet (darwin, cgo)
         working-directory: sidecar
         env:
@@ -700,6 +715,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Parse every plist
         run: |
           set -euo pipefail
@@ -719,6 +736,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Compile + probe desktop.applescript
         run: |
           set -euo pipefail
@@ -752,6 +771,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Build universal ocr-helper
         working-directory: sidecar

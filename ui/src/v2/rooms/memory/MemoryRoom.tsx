@@ -177,8 +177,12 @@ export function MemoryRoomBody({ mode }: { mode: RoomBodyMode }) {
         const predicate = typeof args.predicate === "string" ? args.predicate : "";
         const object = typeof args.object === "string" ? args.object : "";
         if (!subject || !predicate || !object) return false;
+        // The entity the daemon settled on before the card (#1023), taken as
+        // given: the one it pinned by id, or a new one. The daemon strips a
+        // pin from any action it did not settle, which the hook matches by name.
+        const entity = typeof args.id === "string" && args.id ? { id: args.id } : args.new_entity === true ? "new" as const : null;
         // Answered once the write has settled, with whether it worked (#1015).
-        return data.rememberThat(subject, predicate, object).then((r) => {
+        return data.rememberThat(subject, predicate, object, entity).then((r) => {
           setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
           return r.ok;
         });

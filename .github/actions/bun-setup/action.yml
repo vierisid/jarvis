@@ -18,15 +18,47 @@ runs:
     - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       with:
         bun-version: ${{ inputs.bun-version }}
+        # Downloaded, not restored from the Actions cache (#1047). setup-bun
+        # takes whatever its key prefix-matches and runs it (bun --revision)
+        # before it compares the version, with no switch to refuse a match
+        # that is not exact. The restore took about as long as the download.
+        no-cache: true
 
-    # setup-bun does not cache the install cache, only the toolchain. Without
-    # this every run re-downloads the whole tree from npm.
+    # The install cache, restored by its exact key only (#1047). The Actions
+    # cache is shared by every run on main, and a job that runs upstream code
+    # there can write entries. A prefix match (restore-keys, or the key
+    # itself, which the cache service also matches as a prefix) is whatever
+    # any run left, and actions/cache extracts it with tar -P, which can write
+    # outside path:. So the first step only asks whether the exact key exists,
+    # downloading nothing; the second downloads only when it does, and
+    # otherwise looks up again without downloading, which keeps its post-job
+    # save; the third empties the cache path if that still was not an exact
+    # hit (the exact entry was evicted or deleted between the two steps, and
+    # the download fell back to a prefix match), though it cannot undo
+    # what tar -P wrote elsewhere. What this does not stop: an entry written
+    # at the exact key before CI wrote it, by anyone holding the runtime token
+    # on main. Without the cache every run re-downloads the whole tree from
+    # npm.
+    - name: Look up the bun install cache by its exact key
+      id: bun-install-lookup
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.bun/install/cache
+        key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+        lookup-only: true
+
     - name: Cache bun install cache
+      id: bun-install-cache
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.bun/install/cache
         key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-        restore-keys: ${{ runner.os }}-bun-
+        lookup-only: ${{ steps.bun-install-lookup.outputs.cache-hit != 'true' }}
+
+    - name: Discard a bun install cache that is not an exact key match
+      if: steps.bun-install-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: rm -rf ~/.bun/install/cache
 
     # --frozen-lockfile: a package.json edit that never made it into bun.lock
     # fails here instead of silently resolving something the lockfile has never

@@ -13,6 +13,7 @@ import { classifyVoiceIntent } from '../agents/voice-intent-classifier.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import { REALTIME_NAV_TOOLS } from './realtime-nav-tools.ts';
 import { isRoomAction, ROOM_ACTIONS } from './room-actions.ts';
+import { ROOM_ACTION_ARGS } from './room-action-targets.ts';
 import { readFileSync } from 'node:fs';
 
 async function classifierPrompt(): Promise<string> {
@@ -79,6 +80,58 @@ describe('the classifier prompt offers only actions the rooms carry out', () => 
   });
 });
 
+/** "room/action.arg" for each argument named that the room's handler does not read (#1021). */
+function unread(room: string, action: string, args: readonly string[]): string[] {
+  const listed = ROOM_ACTION_ARGS[room]?.[action] ?? {};
+  return args.filter((a) => !Object.prototype.hasOwnProperty.call(listed, a)).map((a) => `${room}/${action}.${a}`);
+}
+
+describe('the voice vocabularies offer only arguments the handlers read (#1021)', () => {
+  test('every argument the classifier prompt documents, or an example fills in, is one its handler reads', async () => {
+    const prompt = await classifierPrompt();
+    const named: string[] = [];
+    let documented = 0;
+    let room: string | null = null;
+    for (const line of prompt.split('\n')) {
+      const header = /^\w+ room \("room": "(\w+)"\):$/.exec(line);
+      if (header) { room = header[1]!; continue; }
+      if (line.trim() === '') { room = null; continue; }
+      const spec = /^- "(\w+)" \S+ args: \{(.*)\}\s*(?:matches.*)?$/.exec(line);
+      if (spec && room) {
+        const args = [...spec[2]!.matchAll(/"(\w+)"\??:/g)].map((m) => m[1]!);
+        documented += args.length;
+        named.push(...unread(room, spec[1]!, args));
+      }
+      if (line.startsWith('{"verb"')) {
+        const ra = (JSON.parse(line) as { room_action?: { room: string; action: string; args?: Record<string, unknown> } | null }).room_action;
+        if (ra) named.push(...unread(ra.room, ra.action, Object.keys(ra.args ?? {})));
+      }
+    }
+    // Not vacuous: the specs were read and their arguments found.
+    expect(documented).toBeGreaterThan(40);
+    expect(named).toEqual([]);
+  });
+
+  test('every argument the realtime nav tool names is one its handler reads', () => {
+    const tool = REALTIME_NAV_TOOLS.find((t) => t.name === 'dashboard_room_action')!;
+    const named: string[] = [];
+    let found = 0;
+    for (const line of tool.description.split('\n')) {
+      const entry = /^- (\w+): (.*)$/.exec(line);
+      if (!entry) continue;
+      const list = entry[2]!.replace(/\.\s*\(.*\)\s*$/, '');
+      for (const item of topLevelItems(list)) {
+        const m = /^(\w+)(?:\{([^}]*)\})?$/.exec(item)!;
+        const args = (m[2] ?? '').split(',').map((a) => /^\s*(\w+)/.exec(a)?.[1]).filter((a): a is string => !!a);
+        found += args.length;
+        named.push(...unread(entry[1]!, m[1]!, args));
+      }
+    }
+    expect(found).toBeGreaterThan(20);
+    expect(named).toEqual([]);
+  });
+});
+
 describe('the realtime nav tool offers only actions the rooms carry out', () => {
   test('every action in the reference is one of its room\'s ROOM_ACTIONS', () => {
     const tool = REALTIME_NAV_TOOLS.find((t) => t.name === 'dashboard_room_action');
@@ -112,5 +165,30 @@ describe('the daemon\'s acknowledgements name only real actions', () => {
     // An ack for an action no handler runs (grant_access used to have one)
     // can never be said; it only misleads whoever reads the table.
     expect(cases.filter((c) => !all.has(c))).toEqual([]);
+  });
+});
+
+describe('the heartbeat actions are not offered (#1033)', () => {
+  // Nothing writes heartbeat config: the daemon ignores interval_minutes and
+  // reads aggressiveness once at boot, so these could only ever answer no.
+  const HEARTBEAT = ['set_heartbeat_interval', 'set_heartbeat_aggressiveness'];
+
+  test('no room carries them out', () => {
+    for (const action of HEARTBEAT) expect([action, isRoomAction('settings', action)]).toEqual([action, false]);
+    // Not vacuous: the Settings actions that remain still are.
+    expect(isRoomAction('settings', 'set_tts_voice')).toBe(true);
+  });
+
+  test('neither voice vocabulary nor the acknowledgements name them', async () => {
+    const prompt = await classifierPrompt();
+    const tool = REALTIME_NAV_TOOLS.find((t) => t.name === 'dashboard_room_action')!;
+    const src = readFileSync(new URL('./ws-service.ts', import.meta.url), 'utf8');
+    const from = src.indexOf('function ackForRoomAction(');
+    expect(from).toBeGreaterThan(-1);
+    const acks = src.slice(from, src.indexOf('\n}\n', from));
+    for (const [where, text] of [['classifier', prompt], ['realtime tool', tool.description], ['acks', acks]] as const) {
+      expect([where, text.includes('set_tts_voice')]).toEqual([where, true]);
+      expect([where, /heartbeat/i.test(text)]).toEqual([where, false]);
+    }
   });
 });

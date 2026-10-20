@@ -112,6 +112,18 @@ export const PEBBLE_ROOMS: Record<string, RoomMeta> = {
   usage:       { aliases: ['token usage', 'usage room'],              title: 'Usage',       w: 800, h: 600 },
 };
 
+/**
+ * The room `key` names, or null. Keys come from the realtime model's tool
+ * arguments and the palette's POST body, and PEBBLE_ROOMS is a plain object:
+ * indexing it with "constructor" or "__proto__" finds what every object
+ * inherits (#975). Only the table's own keys are rooms, and only as strings:
+ * the palette's JSON body can carry ["settings"], which Object.hasOwn would
+ * coerce to a room while the panel got tracked under the array.
+ */
+export function pebbleRoom(key: unknown): RoomMeta | null {
+  return typeof key === 'string' && Object.hasOwn(PEBBLE_ROOMS, key) ? PEBBLE_ROOMS[key]! : null;
+}
+
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** Aliases longest first, so "tool catalog" wins over "tools". */

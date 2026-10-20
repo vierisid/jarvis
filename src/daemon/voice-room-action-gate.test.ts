@@ -45,10 +45,50 @@ const lists = (over: Partial<RoomActionTargetLists> = {}): RoomActionTargetLists
   project: async () => [{ id: 'p1', name: 'jarvis-landing' }, { id: 'p2', name: 'demo-app' }],
   content: async () => [{ id: 'c1', title: 'Launch post draft' }, { id: 'c2', title: 'Launch' }],
   task: async () => [{ id: 't1', what: 'Pay rent to landlord' }, { id: 't2', what: 'Call mum' }],
+  entity: async () => [{ id: 'e1', name: 'James' }, { id: 'e2', name: 'Alice Smith' }, { id: 'e3', name: 'Bob' }, { id: 'e4', name: 'bob' }],
   ...over,
 });
 
 describe('resolveHeldRoomAction (#1008)', () => {
+  test('a remembered fact is pinned to the entity its subject names, before the card (#1023)', async () => {
+    const held = (args: Record<string, unknown>, over: Partial<RoomActionTargetLists> = {}) =>
+      resolveHeldRoomAction({ room: 'memory', action: 'remember_that', args: { predicate: ' Birthday ', object: ' march 15 ', ...args } }, lists(over), 'Memory: remember that');
+    const fact = { predicate: 'birthday', object: 'march 15' };
+    // The exact name, ignoring case, and a whole-word part of one.
+    expect(await held({ subject: 'alice smith' })).toEqual({ ok: true, ra: { room: 'memory', action: 'remember_that', args: { ...fact, subject: 'Alice Smith', id: 'e2' } } });
+    expect(await held({ subject: 'Alice' })).toEqual({ ok: true, ra: { room: 'memory', action: 'remember_that', args: { ...fact, subject: 'Alice Smith', id: 'e2' } } });
+    // "me" is inside "James", but not a word of it: a new entity, said so.
+    expect(await held({ subject: 'me' })).toEqual({ ok: true, ra: { room: 'memory', action: 'remember_that', args: { ...fact, subject: 'me', new_entity: true } } });
+    // The classifier's own marker does not decide: an entity by that name is used.
+    expect(await held({ subject: 'James', new_entity: true })).toEqual({ ok: true, ra: { room: 'memory', action: 'remember_that', args: { ...fact, subject: 'James', id: 'e1' } } });
+    // An id it gave is checked, and shown by that entity's name.
+    expect(await held({ subject: 'Alice', id: 'e1' })).toEqual({ ok: true, ra: { room: 'memory', action: 'remember_that', args: { ...fact, subject: 'James', id: 'e1' } } });
+  });
+
+  test('a remembered fact whose entity cannot be settled is not held (#1023)', async () => {
+    const held = (args: Record<string, unknown>, over: Partial<RoomActionTargetLists> = {}) =>
+      resolveHeldRoomAction({ room: 'memory', action: 'remember_that', args: { predicate: 'p', object: 'o', ...args } }, lists(over), 'Memory: remember that');
+    expect(await held({ subject: 'bob' })).toEqual({ ok: false, message: 'I haven\'t done "Memory: remember that": 2 things in your memory match "bob", so I can\'t tell which you mean. Say its full name, or add it from the room.' });
+    expect(await held({ subject: 'Alice', id: 'gone' })).toEqual({ ok: false, message: 'I haven\'t done "Memory: remember that": I couldn\'t find a memory entity with id "gone".' });
+    // A pinned id whose name another entity shares: the card could not tell them apart.
+    expect(await held({ subject: 'x', id: 'e3' })).toEqual({ ok: false, message: 'I haven\'t done "Memory: remember that": 2 things in your memory are called "Bob", so I can\'t tell which you mean. Add it from the room.' });
+    // A fact missing either half, which the room would refuse after the yes.
+    expect(await held({ subject: 'Alice', predicate: '  ' })).toEqual({ ok: false, message: 'I haven\'t done "Memory: remember that": say what to remember about it as well.' });
+    expect(await resolveHeldRoomAction({ room: 'memory', action: 'remember_that', args: { subject: 'Alice', predicate: 'p' } }, lists(), 'Memory: remember that'))
+      .toEqual({ ok: false, message: 'I haven\'t done "Memory: remember that": say what to remember about it as well.' });
+    expect(await held({ subject: '  ' })).toEqual({ ok: false, message: 'I haven\'t done "Memory: remember that": say what it is about, and I\'ll show you where it goes before I save it.' });
+    expect(await held({ subject: 'Alice' }, { entity: async () => { throw new Error('db locked'); } }))
+      .toEqual({ ok: false, message: 'I haven\'t done "Memory: remember that": I couldn\'t look up your memory just now.' });
+  });
+
+  test('a held action keeps only the arguments its handler reads, so its card shows nothing that does not run (#1021)', async () => {
+    expect(await resolveHeldRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'Pay rent', note: 'pre-approved', when: ['x'] } }, lists(), 't'))
+      .toEqual({ ok: true, ra: { room: 'tasks', action: 'create_task', args: { title: 'Pay rent' } } });
+    // The item is pinned as before, and an extra key beside it is dropped.
+    expect(await resolveHeldRoomAction({ room: 'tasks', action: 'reassign', args: { name: 'rent', agent: 'research', also: 'delete all' } }, lists(), 't'))
+      .toEqual({ ok: true, ra: { room: 'tasks', action: 'reassign', args: { name: 'Pay rent to landlord', agent: 'research', id: 't1' } } });
+  });
+
   test('a default the handler would supply is shown and pinned', async () => {
     expect(await resolveHeldRoomAction({ room: 'settings', action: 'replay_onboarding' }, lists(), 'Settings: replay onboarding'))
       .toEqual({ ok: true, ra: { room: 'settings', action: 'replay_onboarding', args: { scope: 'all' } } });

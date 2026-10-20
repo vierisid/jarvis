@@ -60,7 +60,7 @@ import { maybeCreateUserProfileFollowupPrompt, recordUserProfileTurn } from '../
 import { runWithOrigin } from '../llm/origin.ts';
 import { buildProjectSiteContext, formatProjectList } from '../sites/prompt-context.ts';
 import type { FileEntry } from '../sites/types.ts';
-import { ROOM_ACTION_QUEUE_TTL_MS, RoomActionResults, type RoomActionOutcome } from './room-action-results.ts';
+import { ROOM_ACTION_QUEUE_TTL_MS, RoomActionResults, type LateRoomAnswer, type RoomActionOutcome } from './room-action-results.ts';
 import { PEBBLE_ROOMS, tabSwitchReply } from './pebble-intents.ts';
 import { isPresentationRoomAction, isRoomAction, roomActionCategories, type RoomActionCategory } from './room-actions.ts';
 import {
@@ -69,12 +69,15 @@ import {
   type RealtimeRoomActionContext, type RoomActionTargetLists,
 } from './voice-room-action-gate.ts';
 import { findContent } from '../vault/content-pipeline.ts';
-import { roomActionTargetKind } from './room-action-targets.ts';
+import { findEntities } from '../vault/entities.ts';
+import { roomActionArgs, roomActionEntityArg, roomActionTargetKind, withoutEntityPin } from './room-action-targets.ts';
 import type { BriefCapabilities } from '../brief/capabilities.ts';
 import { safeChatIdentity, type BriefChatTransport } from '../brief/chat-transport.ts';
 import { currentBriefTurn } from '../brief/chat-context.ts';
 import { reportExecutionActivity } from '../actions/progress-context.ts';
 
+/** Longer than any room action id (a UUID is 36): a claim naming one is ignored (#1025). */
+const ROOM_ACTION_ID_MAX = 64;
 /** How long a realtime nav tool waits for the room to answer: inside TOOL_RESULT_GRACE_MS. */
 const REALTIME_ROOM_ACTION_WAIT_MS = Math.min(ROOM_ACTION_QUEUE_TTL_MS, TOOL_RESULT_GRACE_MS - 500);
 
@@ -1436,6 +1439,23 @@ export class WebSocketService implements Service {
         return undefined;
       }
 
+      case 'room_action_claim': {
+        // The dashboard asked to run a room action asks to go ahead just
+        // before it does (#1025): granted only while requestRoomAction still
+        // waits on it, so nothing runs after the caller was told "no answer".
+        // Ids are UUIDs: anything longer names nothing, and is neither
+        // logged nor echoed back.
+        const resultId = (msg.payload as { resultId?: unknown } | undefined)?.resultId;
+        if (typeof resultId !== 'string' || resultId.length > ROOM_ACTION_ID_MAX) return undefined;
+        const granted = this.roomActionResults.claim(resultId, ws);
+        if (!granted) console.warn(`[WSService] refused a claim for room action ${resultId}: no longer waiting on it`);
+        const told = this.wsServer.sendToClient(ws, { type: 'room_action_claim_result', payload: { resultId, granted }, timestamp: Date.now() });
+        // A grant the dashboard never got runs nothing: the wait running out
+        // is then no answer, not under way.
+        if (granted && !told) this.roomActionResults.unclaim(resultId);
+        return undefined;
+      }
+
       default:
         return {
           type: 'error',
@@ -2155,7 +2175,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   /**
    * The lists a held room action's item is found in (#1008), read from the
    * same sources the rooms load them from: /api/sites/projects, /api/content
-   * and /api/vault/commitments.
+   * and /api/vault/commitments, and the memory entities a remembered fact
+   * attaches to (#1023), as /api/vault/entities lists them.
    */
   protected roomActionTargetLists(): RoomActionTargetLists {
     return {
@@ -2165,6 +2186,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       },
       content: async () => findContent({}),
       task: async () => findCommitments({}),
+      entity: async () => findEntities({}),
     };
   }
 
@@ -2191,6 +2213,25 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     } catch (err) {
       console.warn(`[WSService] could not audit room action ${ra.room}/${ra.action}:`, err instanceof Error ? err.message : err);
     }
+  }
+
+  /**
+   * The follow-up row for a room's answer that came after its wait ran out
+   * (#1034). The first row said `started` (run) or `no_answer`; this one
+   * says what the room answered, with the same action, origin, hold and
+   * channel, so a failure after `started` no longer stands as run, and a
+   * run after `no_answer` is on record.
+   */
+  private auditLateRoomAnswer(
+    ra: { room: string; action: string },
+    origin: RoomActionOrigin,
+    opts: { approvalId?: string | null; channel?: ResolutionChannel },
+  ): LateRoomAnswer {
+    return (answer, reported) => {
+      console.warn(`[WSService] late answer for room action ${ra.room}/${ra.action}: ${answer}, after it was reported ${reported}`);
+      const reason = answer === 'disconnected' ? 'late_disconnected_after_started' as const : `late_${answer}_after_${reported}` as const;
+      this.auditRoomAction(ra, origin, 'allowed', answer === 'accepted', { ...opts, reason });
+    };
   }
 
   /** `ra` with its defaults and its item settled before its card (#1008). */
@@ -2258,7 +2299,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         const room = String(args.room ?? '');
         const action = String(args.action ?? '');
         if (!room || !action) return 'Room and action are required.';
-        const innerArgs = (args.args && typeof args.args === 'object') ? args.args as Record<string, unknown> : {};
+        // A memory entity pin is the daemon's to set on a held action (#1023).
+        const innerArgs = withoutEntityPin(room, action, (args.args && typeof args.args === 'object') ? args.args as Record<string, unknown> : {});
         if (!(REALTIME_ROOM_KEYS as readonly string[]).includes(room)) return `There is no "${room}" room.`;
         // Only what the room's handler carries out is sent (#969): nothing on
         // this path consults the authority engine, so an authority grant, or
@@ -2289,7 +2331,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         // Shorter than the realtime session's wait for sibling tool results,
         // so a slow room cannot leave this result to be voiced on its own
         // (and the model, seeing none, calling the tool again).
-        const outcome = await this.requestRoomAction(ra, REALTIME_ROOM_ACTION_WAIT_MS, { client: ws });
+        const outcome = await this.requestRoomAction(ra, REALTIME_ROOM_ACTION_WAIT_MS, {
+          client: ws, onLate: this.auditLateRoomAnswer(ra, 'realtime', {}),
+        });
         this.auditRoomAction(ra, 'realtime', 'allowed', roomActionExecuted(outcome), { reason: outcome });
         const reply = roomActionReply(ra, outcome);
         // The model, told only "didn't accept", may call again and raise a
@@ -2874,8 +2918,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       // the transcript, which has no way to carry it out. One that changes
       // more than the screen is always a repeat-back, the card that shows
       // what confirming runs (#973); a clarifier shows only the intent.
+      // Only the arguments its handler reads, view actions too (#1021).
       let roomAction: PendingVoiceConfirmation['roomAction'] = intent.room_action && isRoomAction(intent.room_action.room, intent.room_action.action)
-        ? intent.room_action : undefined;
+        ? { ...intent.room_action, args: roomActionArgs(intent.room_action.room, intent.room_action.action, intent.room_action.args) } : undefined;
       // A side-effecting one is settled before its card, as above (#1008).
       if (roomAction && !isPresentationRoomAction(roomAction.room, roomAction.action)) {
         const settled = await this.settleHeldRoomAction(roomAction);
@@ -3382,7 +3427,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   requestRoomAction(
     action: { room: string; action: string; args?: Record<string, unknown> },
     timeoutMs: number = ROOM_ACTION_QUEUE_TTL_MS,
-    opts?: { client?: ServerWebSocket<unknown> },
+    opts?: { client?: ServerWebSocket<unknown>; onLate?: LateRoomAnswer },
   ): Promise<RoomActionOutcome> {
     // Backstop for every caller (#969): an action no room handler carries out
     // is never broadcast, whoever asked for it.
@@ -3399,7 +3444,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       console.warn(`[WSService] refused room action ${action.room}/${action.action}: it changes more than the screen, and no dashboard was named to run it`);
       return Promise.resolve('rejected');
     }
-    const { id, outcome } = this.roomActionResults.open(timeoutMs, client);
+    const { id, outcome } = this.roomActionResults.open(timeoutMs, client, opts?.onLate);
     const payload = {
       source: 'room_action',
       room: action.room,
@@ -3418,7 +3463,12 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     if (client) {
       reached = this.wsServer.getClients().has(client) && this.wsServer.sendToClient(client, {
         type: 'notification',
-        payload: { ...payload, ...waited, resultFrom: 'dashboard' },
+        // `claim`: ask before running it, and run it only if granted (#1025).
+        // That deadline is on the dashboard's clock, which starts late by the
+        // network, the send queue and a busy page; the claim is on this one.
+        // Not for a presentation action: run late, it only changes the
+        // screen, as its copies on every other client do unclaimed.
+        payload: { ...payload, ...waited, resultFrom: 'dashboard', ...(presentation ? {} : { claim: true }) },
         timestamp: Date.now(),
       });
       // The others follow the dashboard that asked, and only once it has the
@@ -3454,6 +3504,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // reading, or the person's yes to a hold (its id, and click or voice).
     audit: { origin: Exclude<RoomActionOrigin, 'realtime'>; approvalId?: string; channel?: Exclude<ResolutionChannel, 'system'> } = { origin: 'classifier' },
   ): Promise<void> {
+    // Only a confirmed hold carries a memory entity the daemon settled (#1023).
+    if (audit.origin !== 'confirm' && ra.args) ra = { ...ra, args: withoutEntityPin(ra.room, ra.action, ra.args) };
     const auditOpts = { approvalId: audit.approvalId ?? null, channel: audit.channel ?? 'voice' };
     // The classifier turns plain speech into this with no confirmation, so
     // it is held to the same list as the realtime tool (#969).
@@ -3481,7 +3533,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     let outcome: RoomActionOutcome;
     try {
       this.navigateForRoomAction(ra, ws, requestId);
-      outcome = await this.requestRoomAction(ra, ROOM_ACTION_QUEUE_TTL_MS, { client: ws });
+      outcome = await this.requestRoomAction(ra, ROOM_ACTION_QUEUE_TTL_MS, {
+        client: ws, onLate: this.auditLateRoomAnswer(ra, audit.origin, auditOpts),
+      });
     } catch (err) {
       // The decision still gets its row, so a hold is never left open in it.
       this.auditRoomAction(ra, audit.origin, 'allowed', false, { ...auditOpts, reason: 'failed' });
@@ -3812,23 +3866,33 @@ function navigateRoomNotice(key: string, requestId?: string): WSMessage {
 
 /**
  * A held room action as the repeat-back shows it (#973): the room, the action,
- * every argument the classifier filled in, in full and JSON-quoted so a value
- * cannot pass for another argument, and what the action can do. The
- * arguments are what the classifier may have read wrong.
+ * every argument it carries, in full and JSON-quoted so a value cannot pass
+ * for another argument, and what the action can do. The arguments are what
+ * the classifier may have read wrong. A held action carries only those its
+ * handler reads (roomActionArgs, #1021), so each one shown is one that runs.
  *
  * The id a held action's item is pinned by (#1008) is left out: the name
  * beside it is that item's own, set when it was pinned, and no other item
  * has it (an ambiguous name is refused), so the id says nothing more to the
  * person, and would be read aloud.
+ *
+ * A remembered fact says where it lands (#1023): on the existing memory
+ * entity it was pinned to, named in full, or on a new one, in words rather
+ * than as the `id` or `new_entity` it is pinned by.
  */
 export function describeRoomAction(ra: { room: string; action: string; args?: Record<string, unknown> }): string {
-  const pinned = roomActionTargetKind(ra.room, ra.action) !== null;
+  const entityArg = roomActionEntityArg(ra.room, ra.action);
+  const pinned = roomActionTargetKind(ra.room, ra.action) !== null || entityArg !== null;
   const args = Object.entries(ra.args ?? {})
-    .filter(([k]) => !(pinned && k === 'id'))
+    .filter(([k]) => !(pinned && (k === 'id' || (entityArg !== null && k === 'new_entity'))))
     .map(([k, v]) => `${visible(JSON.stringify(k))}: ${visible(JSON.stringify(v) ?? String(v))}`);
   const head = `${roomTitle(ra.room)}: ${ra.action.replace(/_/g, ' ')}`;
+  const entityName = entityArg !== null && typeof ra.args?.[entityArg] === 'string' ? visible(JSON.stringify(ra.args[entityArg])) : null;
+  const lands = entityName === null ? []
+    : typeof ra.args?.id === 'string' && ra.args.id ? [`to the memory entity ${entityName}`]
+      : ra.args?.new_entity === true ? [`to a new memory entity ${entityName} (a concept)`] : [];
   const effects = roomActionCategories(ra.room, ra.action).map((c) => ROOM_ACTION_EFFECT[c]);
-  return [args.length > 0 ? `${head} {${args.join(', ')}}` : head, ...(effects.length > 0 ? [`(${effects.join('; ')})`] : [])].join(' ');
+  return [args.length > 0 ? `${head} {${args.join(', ')}}` : head, ...lands, ...(effects.length > 0 ? [`(${effects.join('; ')})`] : [])].join(' ');
 }
 
 /**
@@ -4044,10 +4108,6 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
       return a.provider ? `Switching TTS to ${String(a.provider)}.` : `Updating TTS provider.`;
     case 'set_tts_voice':
       return a.voice ? `Setting voice to ${String(a.voice)}.` : `Updating voice.`;
-    case 'set_heartbeat_interval':
-      return a.minutes ? `Setting heartbeat to ${String(a.minutes)} minutes.` : `Updating heartbeat.`;
-    case 'set_heartbeat_aggressiveness':
-      return a.level ? `Setting heartbeat to ${String(a.level)}.` : `Updating heartbeat.`;
     case 'restart_daemon':
       return `Restarting Jarvis. The dashboard will reconnect in a few seconds.`;
     case 'replay_onboarding': {
