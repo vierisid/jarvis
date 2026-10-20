@@ -10,6 +10,7 @@ GlobalRegistrator.register({ url: 'http://localhost/' });
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let act: typeof import('react').act, createRoot: typeof import('react-dom/client').createRoot;
 let Gate: typeof import('../../v2/onboarding/OnboardingGate').OnboardingGate;
+let BriefHost: typeof import('../../v2/onboarding/OnboardingGate').BriefOnboardingHost;
 let Wizard: typeof import('../../v2/onboarding/OnboardingWizard').OnboardingWizard;
 const realFetch = globalThis.fetch, realSocket = globalThis.WebSocket, realAudio = globalThis.AudioContext;
 let root: ReturnType<typeof createRoot>, container: HTMLElement;
@@ -24,10 +25,11 @@ class InterviewSocket {
   send() {} close() { this.readyState = 3; }
 }
 beforeAll(async () => { ({ act } = await import('react')); ({ createRoot } = await import('react-dom/client'));
-  ({ OnboardingGate: Gate } = await import('../../v2/onboarding/OnboardingGate'));
+  ({ OnboardingGate: Gate, BriefOnboardingHost: BriefHost } = await import('../../v2/onboarding/OnboardingGate'));
   ({ OnboardingWizard: Wizard } = await import('../../v2/onboarding/OnboardingWizard')); });
 beforeEach(() => {
   status = { ...complete }; hosted = true; failProgress = failStatus = failCompose = failOpen = false;
+  // The URL no longer picks the adapter (#1105, see mountGate); it is kept as a realistic Brief URL.
   posts = []; requests = []; opened = []; window.history.replaceState(null, '', '/?brief=1#/brief/today');
   globalThis.WebSocket = InterviewSocket as never;
   globalThis.AudioContext = class { constructor() { throw Error('No audio allowed'); } } as never;
@@ -69,7 +71,12 @@ afterAll(() => { globalThis.fetch = realFetch; globalThis.WebSocket = realSocket
 const button = (label: string) => [...container.querySelectorAll('button')].find(b => b.textContent?.trim() === label)!;
 async function waitFor(check: () => boolean) { for (let n = 0; n < 400 && !check(); n++) await act(async () => { await new Promise(r => setTimeout(r, 10)); }); expect(check()).toBe(true); }
 async function click(label: string) { await waitFor(() => !!button(label)); expect(!!button(label)).toBe(true); expect(button(label).disabled).toBe(false); await act(async () => button(label).click()); }
-async function mountGate() { await act(async () => { root.render(<Gate brief={draft}><div>Live shell</div></Gate>); }); await waitFor(() => !!container.textContent); }
+// The Brief adapter follows the host the gate renders inside (#1105), so a
+// Brief run mounts the gate under BriefOnboardingHost as DashboardEntry does.
+async function mountGate(insideBrief = true) {
+  const gate = <Gate brief={draft}><div>Live shell</div></Gate>;
+  await act(async () => { root.render(insideBrief ? <BriefHost>{gate}</BriefHost> : gate); }); await waitFor(() => !!container.textContent);
+}
 async function mountWizard() { await act(async () => root.render(<Wizard status={status} brief={draft} onComplete={() => {}} />)); }
 async function enter(text: string) { await act(async () => {
   const el = container.querySelector('textarea')!;
@@ -100,7 +107,7 @@ test('failed progress stays on the current step and replay resumes the saved tar
 for (const flag of [false, true]) for (const install of ['hosted','local'] as const) {
   test(`fresh ${install}, Brief flag ${flag}: setup selection and written interview remain canonical`, async () => {
     hosted = install === 'hosted'; status = { ...complete, setup_completed: false, profile_completed: false };
-    window.history.replaceState(null, '', flag ? '/?brief=1#/brief/today' : '/'); await mountGate();
+    window.history.replaceState(null, '', flag ? '/?brief=1#/brief/today' : '/'); await mountGate(flag);
     await click('Set up Jarvis');
     await click('Continue');
     if (hosted) {
@@ -195,7 +202,7 @@ test('Explore ignores a late background poll and tutorial replay can prepare a n
 
 for (const flag of [false, true]) test(`tutorial replay with Brief flag ${flag} preserves canonical dismissal and completion`, async () => {
   window.history.replaceState(null, '', flag ? '/?brief=1#/brief/settings' : '/#/_room_settings');
-  await mountGate();
+  await mountGate(flag);
   expect(container.textContent).toContain('1 of 5');
   for (let i = 0; i < 4; i++) await click('Next');
   await click('Finish'); expect(status.tutorial_completed).toBe(true); expect(status.tutorial_dismissed).toBe(false);
