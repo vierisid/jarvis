@@ -39,10 +39,17 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        # Assigned first, so a failing go env stops the step (set -e does
+        # not see a failure inside echo "$(...)") rather than writing an
+        # empty path, and refused when empty all the same.
+        mod="$(go env GOMODCACHE)"
+        build="$(go env GOCACHE)"
+        version="$(go env GOVERSION)"
+        : "${mod:?go env GOMODCACHE is empty}" "${build:?go env GOCACHE is empty}" "${version:?go env GOVERSION is empty}"
         {
-          echo "mod=$(go env GOMODCACHE)"
-          echo "build=$(go env GOCACHE)"
-          echo "version=$(go env GOVERSION)"
+          echo "mod=$mod"
+          echo "build=$build"
+          echo "version=$version"
           echo "image=${ImageOS:-none}"
         } >>"$GITHUB_OUTPUT"
 

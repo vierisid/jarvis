@@ -1138,7 +1138,7 @@ if (rule === "mutable") {
           // Names that change what the discard runs: never in its env (but
           // GOMODCACHE, for go clean -modcache), nor in the job, workflow or
           // enclosing step env that reaches it (#1047 review 3).
-          const steer = /^(?:GO[A-Z0-9_]*|BASH_ENV|ENV|HOME|PATH|IFS|PS4|SHELLOPTS|BASHOPTS|LD_[A-Z0-9_]*|BASH_FUNC_.*|XDG_[A-Z0-9_]*)$/i;
+          const steer = /^(?:GO[A-Z0-9_]*|BASH_ENV|ENV|HOME|PATH|IFS|PS4|SHELLOPTS|BASHOPTS|LD_[A-Z0-9_]*|BASH_FUNC_.*|XDG_[A-Z0-9_]*|APPDATA|LOCALAPPDATA|USERPROFILE)$/i;
           const fromEnv = (k) => typeof env[k] === "string" && !env[k].trim().startsWith("~");
           const plain = lines.length > 0 && lines.every((l) => {
             let m;
@@ -3058,6 +3058,16 @@ fi
 	expect_caught 'two GITHUB_ENV writes on one line, one of them a steering name (#1047 review 4)' mutable "$WORKFLOWS/test.yml" \
 		$'      - uses: ./.github/actions/bun-setup\n' $'      - run: echo "GOFLAGS=-n" >> "$GITHUB_ENV" && echo "FOO=1" >> "$GITHUB_ENV"\n      - uses: ./.github/actions/bun-setup\n' \
 		'GOFLAGS (written to GITHUB_ENV by an earlier step)'
+	# On Windows Go places its caches under these, as HOME on the others.
+	expect_caught 'USERPROFILE for the Windows Go job, which moves the module cache (#1047 review 5)' mutable "$WORKFLOWS/test.yml" \
+		$'  sidecar-test-windows:\n' $'  sidecar-test-windows:\n    env:\n      USERPROFILE: /tmp/elsewhere\n' \
+		'the job, workflow or enclosing step sets USERPROFILE'
+	expect_caught 'LOCALAPPDATA on the step that uses go-setup (#1047 review 5)' mutable "$WORKFLOWS/test.yml" \
+		$'      - uses: ./.github/actions/go-setup\n' $'      - uses: ./.github/actions/go-setup\n        env:\n          LOCALAPPDATA: /tmp/x\n' \
+		'the job, workflow or enclosing step sets LOCALAPPDATA'
+	expect_caught 'APPDATA for the whole workflow (#1047 review 5)' mutable "$WORKFLOWS/test.yml" \
+		$'\njobs:\n' $'\nenv:\n  APPDATA: /tmp/x\n\njobs:\n' \
+		'the job, workflow or enclosing step sets APPDATA'
 	expect_caught 'Bun restored from the Actions cache by the toast job (#1047)' mutable "$WORKFLOWS/test.yml" \
 		$'          no-cache: true\n' '' \
 		'toast-windows: step oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6: setup-bun without no-cache: true'
