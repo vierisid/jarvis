@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { __setCaptureTimeoutForTests, awaitCaptureTool, awaitCaptureToolOutput, CaptureTimeoutError, captureViaPrivateFileAsync } from './capture-file.ts';
+import { __setCaptureMaxOutputForTests, __setCaptureTimeoutForTests, awaitCaptureTool, awaitCaptureToolOutput, CaptureTimeoutError, captureViaPrivateFileAsync } from './capture-file.ts';
 import { encodePng } from './fixtures/png.ts';
 import { MacAppController } from './macos.ts';
 import { __setNativeExecTimeoutForTests, defaultExec, runNative, type NativeExec } from './native-exec.ts';
@@ -308,6 +308,64 @@ describe('capture tool bounds (#802)', () => {
     const started = performance.now();
     await expect(awaitCaptureToolOutput(proc as never, 'xdotool search')).rejects.toThrow('xdotool search exited but its output never closed');
     expect(performance.now() - started).toBeLessThan(2000);
+  });
+
+  test('a lookup that exceeds the output cap is stopped instead of buffering unbounded stdout', async () => {
+    __setCaptureMaxOutputForTests(1024);
+    try {
+      let killed = 0;
+      const empty = () => new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
+      const proc = {
+        exited: new Promise<number>(() => {}),
+        exitCode: null,
+        signalCode: null,
+        stderr: empty(),
+        stdout: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array(2048)); } }),
+        kill: () => { killed++; },
+      };
+      await expect(awaitCaptureToolOutput(proc, 'xprop')).rejects.toThrow('xprop output passed 1024 bytes and was stopped');
+      expect(killed).toBe(1);
+    } finally {
+      __setCaptureMaxOutputForTests(null);
+    }
+  });
+
+  test('stderr exceeding the output cap is stopped instead of buffering unbounded output', async () => {
+    __setCaptureMaxOutputForTests(1024);
+    try {
+      let killed = 0;
+      const proc = {
+        exited: new Promise<number>(() => {}),
+        exitCode: null,
+        signalCode: null,
+        stderr: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array(2048)); } }),
+        kill: () => { killed++; },
+      };
+      await expect(awaitCaptureTool(proc, 'scrot')).rejects.toThrow('scrot output passed 1024 bytes and was stopped');
+      expect(killed).toBe(1);
+    } finally {
+      __setCaptureMaxOutputForTests(null);
+    }
+  });
+
+  test('overflow takes precedence over the child exit code', async () => {
+    __setCaptureMaxOutputForTests(1024);
+    try {
+      let killed = 0;
+      const empty = () => new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
+      const proc = {
+        exited: Bun.sleep(50).then(() => 3),
+        exitCode: null,
+        signalCode: null,
+        stderr: empty(),
+        stdout: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array(2048)); } }),
+        kill: () => { killed++; },
+      };
+      await expect(awaitCaptureToolOutput(proc, 'xprop')).rejects.toThrow('xprop output passed 1024 bytes and was stopped');
+      expect(killed).toBe(1);
+    } finally {
+      __setCaptureMaxOutputForTests(null);
+    }
   });
 
   test('a capture tool that fails is reported with its exit code and stderr', async () => {

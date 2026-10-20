@@ -43,9 +43,18 @@ type CaptureProcess = { readonly exited: Promise<number>; readonly exitCode: num
 export const CAPTURE_TIMEOUT_MS = 30_000;
 let captureTimeoutMs = CAPTURE_TIMEOUT_MS;
 
+/** Mirrors native-exec's former spawnSync maxBuffer for capture-tool output. */
+export const CAPTURE_MAX_OUTPUT = 64 * 1024 * 1024;
+let captureMaxOutput = CAPTURE_MAX_OUTPUT;
+
 /** @internal Test only: shorten the bound (null restores it). */
 export function __setCaptureTimeoutForTests(ms: number | null): void {
   captureTimeoutMs = ms ?? CAPTURE_TIMEOUT_MS;
+}
+
+/** @internal Test only: lower the output cap (null restores it). */
+export function __setCaptureMaxOutputForTests(bytes: number | null): void {
+  captureMaxOutput = bytes ?? CAPTURE_MAX_OUTPUT;
 }
 
 /** A capture tool that ran past CAPTURE_TIMEOUT_MS and was killed. */
@@ -81,9 +90,32 @@ export async function awaitCaptureToolOutput(proc: CaptureProcess & { readonly s
 /** How long a killed tool gets to be reaped before it is given up on regardless. */
 const KILL_GRACE_MS = 1000;
 
+/** Read a pipe to the end, refusing more than `limit` bytes. */
+async function readCapped(stream: ReadableStream<Uint8Array>, limit: number, onOverflow: () => void): Promise<string> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        onOverflow();
+        throw new Error(`output passed ${limit} bytes`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks).toString('utf-8');
+}
+
 async function settleCaptureTool(proc: CaptureProcess, what: string, stdoutStream: ReadableStream<Uint8Array> | null, extraMs: number): Promise<string> {
   const bound = captureTimeoutMs + extraMs;
   let timedOut = false;
+  let overflow: Error | undefined;
   let killed!: () => void;
   const wasKilled = new Promise<void>((resolve) => { killed = resolve; });
   const timer = setTimeout(() => {
@@ -93,10 +125,16 @@ async function settleCaptureTool(proc: CaptureProcess, what: string, stdoutStrea
     try { proc.kill('SIGKILL'); } catch {}
     killed();
   }, bound);
-  // Both read alongside the run, so a chatty tool cannot fill a pipe and
-  // stall. On success stderr is left unread: nothing needs it.
-  const stderr = new Response(proc.stderr).text().catch(() => '');
-  const stdout = stdoutStream ? new Response(stdoutStream).text().catch(() => '') : Promise.resolve('');
+  // Both pipes are read alongside the run, so a chatty tool cannot fill a pipe and
+  // stall, and either pipe exceeding the cap stops the tool. stderr's text is only
+  // used when the tool fails.
+  const stopForOverflow = () => {
+    overflow ??= new Error(`${what} output passed ${captureMaxOutput} bytes and was stopped`);
+    try { proc.kill('SIGKILL'); } catch {}
+    killed();
+  };
+  const stderr = readCapped(proc.stderr, captureMaxOutput, stopForOverflow).catch(() => '');
+  const stdout = stdoutStream ? readCapped(stdoutStream, captureMaxOutput, stopForOverflow).catch(() => '') : Promise.resolve('');
   let code: number | null = null;
   try {
     // Past the kill, only a short grace: a process in uninterruptible sleep
@@ -107,6 +145,7 @@ async function settleCaptureTool(proc: CaptureProcess, what: string, stdoutStrea
     clearTimeout(timer);
   }
   if (timedOut) throw new CaptureTimeoutError(`${what} did not finish within ${bound / 1000}s and was stopped`);
+  if (overflow) throw overflow;
   // Bounded: a descendant still holding a pipe must not hold this too.
   const drained = <T>(p: Promise<T>, fallback: T): Promise<T> => Promise.race([p, Bun.sleep(250).then(() => fallback)]);
   if (code !== 0) {
