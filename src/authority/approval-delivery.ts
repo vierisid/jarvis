@@ -18,13 +18,44 @@ import { impactFromCategory } from '../roles/authority.ts';
 const LABEL_BREAKS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/gu;
 
 /**
- * Every format character (`\p{Cf}`): the bidi embeddings, overrides and
- * isolates that can visually reorder the rest of a line on a client that
- * applies bidi -- `Agent: ` followed by a reversed tail -- and the zero-width
- * characters. A label needs none of them, and they are removed rather than
- * spaced, since none of them stands for a gap.
+ * Every format character (`\p{Cf}`) and every other default-ignorable code
+ * point (#859): the bidi embeddings, overrides and isolates that can visually
+ * reorder the rest of a line on a client that applies bidi -- `Agent: `
+ * followed by a reversed tail -- the zero-width characters, and the 4036
+ * default-ignorables that are not `Cf` (measured): the combining grapheme
+ * joiner, variation selectors, tag characters and the Hangul fillers such as
+ * U+3164, which renders blank yet took two columns of the toast's budget. A
+ * label needs none of them, and they are removed rather than spaced, since
+ * none of them stands for a gap. It is the set `forCard` strips since #838,
+ * less two.
+ *
+ * The two kept are U+FE0E and U+FE0F, the text and emoji presentation
+ * selectors (the owner's choice for #859), and only where they do that job:
+ * directly after an `\p{Extended_Pictographic}` character or a keycap base
+ * (`#`, `*`, a digit). There they only pick a glyph style, and an emoji with
+ * VS16 (`❤️`) is ordinary model-written text, so an intent with one is still
+ * requested rather than refused (`approvalLabelAlteration`). Anywhere else
+ * (#859 review) one renders as nothing and only breaks up what is around it
+ * (`pạypal.` + U+FE0F + `com`), so it is removed like the rest.
  */
-const LABEL_FORMAT = /\p{Cf}+/gu;
+const LABEL_FORMAT = /([\p{Extended_Pictographic}#*0-9][\ufe0e\ufe0f])|[\p{Cf}\p{Default_Ignorable_Code_Point}]+/gu;
+
+/**
+ * `text` with `LABEL_FORMAT` applied: a base and its selector (group 1) stay,
+ * every other match goes. A kept pair is matched rather than looked behind
+ * for, because Bun's lookbehind misreads an astral emoji before the selector.
+ */
+function stripLabelFormat(text: string): string {
+  return text.replace(LABEL_FORMAT, (_match, kept: string | undefined) => kept ?? '');
+}
+
+/** The first character `stripLabelFormat` would remove, and where, or null. */
+function firstLabelFormat(text: string): { ch: string; index: number } | null {
+  for (const m of text.matchAll(LABEL_FORMAT)) {
+    if (m[1] === undefined) return { ch: m[0], index: m.index };
+  }
+  return null;
+}
 
 /**
  * One line of an approval card's label, safe to put in front of a human (#651).
@@ -40,7 +71,10 @@ const LABEL_FORMAT = /\p{Cf}+/gu;
  * byte-exact.
  */
 export function boundedApprovalLabel(text: string, maxChars: number): string {
-  const oneLine = text.replace(LABEL_FORMAT, '').replace(LABEL_BREAKS, ' ');
+  // Lone surrogates become U+FFFD first, so stripping cannot join two halves
+  // into a new character or leave one beside a kept selector, and a label
+  // reduced twice reads as it did once (#859 review).
+  const oneLine = stripLabelFormat(text.toWellFormed()).replace(LABEL_BREAKS, ' ');
   const bounded = boundedReceiptText(oneLine, maxChars);
   return oneLine.length > maxChars ? `${bounded}...` : bounded;
 }
@@ -78,14 +112,16 @@ function codePointName(ch: string): string {
  *
  * It refuses ordinary text that carries a format character, too: an emoji
  * built with a zero-width joiner, a left-to-right or right-to-left mark in
- * Hebrew or Arabic text, a soft hyphen. Each of those is stripped by the
- * label reduction, so the card would not show what was written.
+ * Hebrew or Arabic text, a soft hyphen, and since #859 a combining grapheme
+ * joiner, a Hangul filler, a tag character, or a variation selector other than
+ * U+FE0E/U+FE0F directly after an emoji or keycap base. Each of those is stripped by the label reduction, so the card
+ * would not show what was written.
  */
 export function approvalLabelAlteration(text: string): string | null {
   const brk = new RegExp(LABEL_BREAKS.source, 'u').exec(text);
   if (brk) return `it contains a line break, tab or other control character (${codePointName(brk[0])} at position ${brk.index})`;
-  const fmt = new RegExp(LABEL_FORMAT.source, 'u').exec(text);
-  if (fmt) return `it contains an invisible formatting character (${codePointName(fmt[0])} at position ${fmt.index})`;
+  const fmt = firstLabelFormat(text);
+  if (fmt) return `it contains an invisible formatting character (${codePointName(fmt.ch)} at position ${fmt.index})`;
   if (text.length > APPROVAL_LABEL_DELIVERY_MAX_CHARS) {
     return `it is ${text.length} characters long; the approval card shows at most ${APPROVAL_LABEL_DELIVERY_MAX_CHARS}`;
   }
@@ -135,8 +171,8 @@ const TOAST_LINE_COLUMNS = TOAST_APPROVABLE_MAX_COLUMNS / TOAST_APPROVABLE_LINES
 
 /** Precomposed Latin, Greek and Cyrillic letters, ASCII, Latin-1 and the common dashes, quotes and the euro sign: one Latin cell each. Deliberately narrow (#791 review): Letterlike Symbols such as U+213B and per-mille signs render two or three cells wide, and right-to-left letters reorder the runs around them. U+2024 ONE DOT LEADER is left out (#812 re-review): it is the one punctuation mark here whose skeleton is exactly `.`, so `paypal․com` read as a domain; out of the list its width is unknown and the toast is review-only. */
 const ONE_COLUMN = /^[ -~\u00a0-\u024f\u0370-\u03ff\u0400-\u0482\u048a-\u04ff\u1e00-\u1eff\u2010-\u2023\u2025-\u2027\u20ac]$/u;
-/** East Asian Wide/Fullwidth text and the emoji and pictograph blocks: two columns. */
-const TWO_COLUMNS = /^[\u1100-\u115f\u2600-\u27bf\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6\u{1f300}-\u{1f64f}\u{1f680}-\u{1f6ff}\u{1f900}-\u{1f9ff}\u{1fa70}-\u{1faff}\u{20000}-\u{3fffd}]$/u;
+/** East Asian Wide/Fullwidth text and the emoji and pictograph blocks: two columns. Less the two Hangul fillers inside those ranges, U+115F and U+3164 (#859), which render blank. Measured, the only other default-ignorable either list holds is U+00AD SOFT HYPHEN in the one-column list, which the label strips before any width is counted. */
+const TWO_COLUMNS = /^[\u1100-\u115e\u2600-\u27bf\u2e80-\u303e\u3041-\u3163\u3165-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6\u{1f300}-\u{1f64f}\u{1f680}-\u{1f6ff}\u{1f900}-\u{1f9ff}\u{1fa70}-\u{1faff}\u{20000}-\u{3fffd}]$/u;
 
 /** One character's width in columns, or null when it is not known. */
 function charColumns(ch: string): number | null {
@@ -256,7 +292,13 @@ function mixesScripts(text: string): boolean {
  * ASCII or digits (`сахар`, `гора`, `Горох и сахар: 2 кг`, `Send to Саша`,
  * `Pay 300 RUB to МТС`). The check only ever removes Approve.
  */
-export function toastLookAlike(body: string): boolean {
+export function toastLookAlike(shown: string): boolean {
+  // Read past what a reader does not see (#859 review): a selector after the
+  // dot of `pạypal.com` broke the address shape every rule below looks for
+  // while the card still read as the name. The label now keeps U+FE0E/U+FE0F
+  // only after an emoji; this drops any that reach here all the same. Only
+  // the check's input drops them; the card shows them as written.
+  const body = shown.replace(/\p{Default_Ignorable_Code_Point}+/gu, '');
   const labels = splitLabels(body);
   return labels.some((label) => (mixesScripts(label) && confusableSkeleton(label) !== label) || asciiLookAlike(label)
     || (STAND_IN_CYRILLIC.test(label) && wholeBodyReadsAsAscii(label)))

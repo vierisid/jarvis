@@ -10,6 +10,7 @@ import {
   toastLines,
   taskCompleteBody,
   boundedApprovalLabel,
+  approvalLabelAlteration,
   LOOK_ALIKE_REASON,
   toastLookAlike,
   type ApprovalBroadcaster,
@@ -346,6 +347,112 @@ describe('the dashboard intent built from a model-written reason', () => {
   });
 });
 
+/**
+ * #859. The label reduction stripped `\p{Cf}` only, so the card and toast kept
+ * about 4000 default-ignorable code points `forCard` strips, and the toast
+ * counted a blank Hangul filler as two columns.
+ */
+describe('#859: labels drop every default-ignorable but the two emoji presentation selectors', () => {
+  const cp = (n: number) => String.fromCodePoint(n);
+
+  test.each([
+    ['a combining grapheme joiner', 0x34f],
+    ['a Hangul choseong filler', 0x115f],
+    ['a Hangul filler', 0x3164],
+    ['a halfwidth Hangul filler', 0xffa0],
+    ['a Mongolian free variation selector', 0x180b],
+    ['variation selector 1', 0xfe00],
+    ['a tag letter', 0xe0041],
+    ['a supplementary variation selector', 0xe0100],
+  ])('%s is stripped from a label, and refused in a request_approval intent', (_label, n) => {
+    expect(boundedApprovalLabel(`Delete ${cp(n)}${cp(n)}backups`, 512)).toBe('Delete backups');
+    expect(approvalLabelAlteration(`Delete ${cp(n)}backups`))
+      .toBe(`it contains an invisible formatting character (U+${n.toString(16).toUpperCase().padStart(4, '0')} at position 7)`);
+  });
+
+  test('an emoji with its emoji or text presentation selector is kept whole and not refused', () => {
+    for (const text of ['Send ❤️ to mom', 'Call ☎︎ the office', 'Post \u{1f44d}️ to #team']) {
+      expect(boundedApprovalLabel(text, 512)).toBe(text);
+      expect(approvalLabelAlteration(text)).toBeNull();
+    }
+  });
+
+  test('null still means unchanged, over every code point: refused exactly when the card would alter it', () => {
+    // The #724 contract, checked exhaustively now the set is wider.
+    const ignorable = /^[\p{Cf}\p{Default_Ignorable_Code_Point}]$/u;
+    let refusedIgnorables = 0;
+    for (let n = 0x20; n <= 0x10ffff; n++) {
+      if (n >= 0xd800 && n <= 0xdfff) continue;
+      const text = `a${cp(n)}b`;
+      const unchanged = boundedApprovalLabel(text, APPROVAL_LABEL_DELIVERY_MAX_CHARS) === text;
+      const alteration = approvalLabelAlteration(text);
+      if ((alteration === null) !== unchanged) throw new Error(`U+${n.toString(16)}: alteration ${alteration} but unchanged=${unchanged}`);
+      if (ignorable.test(cp(n)) && alteration !== null) refusedIgnorables++;
+    }
+    // Every one of the 4206 format or default-ignorable code points, U+FE0E
+    // and U+FE0F included: after `a` they select nothing (#859 review).
+    expect(refusedIgnorables).toBe(4206);
+  }, 30_000);
+
+  test('#859 review: a presentation selector is kept only after an emoji or keycap base', () => {
+    for (const base of ['\u2764', '\u260e', '\u{1f44d}', '\u2122', '#', '*', '1']) {
+      for (const vs of ['\ufe0e', '\ufe0f']) {
+        expect(approvalLabelAlteration(`Send ${base}${vs} now`)).toBeNull();
+        expect(boundedApprovalLabel(`Send ${base}${vs} now`, 512)).toBe(`Send ${base}${vs} now`);
+      }
+    }
+    for (const text of ['Open p\u1ea1ypal.\ufe0fcom', 'Send to bob\ufe0e', 'Send \u2764\ufe0f\ufe0f now', 'Send \u2764\u200d\ufe0f now']) {
+      expect(approvalLabelAlteration(text)).not.toBeNull();
+    }
+    expect(boundedApprovalLabel('Open p\u1ea1ypal.\ufe0fcom', 512)).toBe('Open p\u1ea1ypal.com');
+    expect(boundedApprovalLabel('Send \u2764\ufe0f\ufe0f now', 512)).toBe('Send \u2764\ufe0f now');
+  });
+
+  test.each([
+    ['a mark below in a domain', 'Open p\u1ea1ypal.\ufe0fcom now'],
+    ['a mark below in a domain, text selector', 'Open p\u1ea1ypal.\ufe0ecom now'],
+    ['an all-Cyrillic domain in a Russian sentence', '\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0430\u0440\u0440\u04cf\u0435.\ufe0f\u0441\u043e'],
+  ])('#859 review: a presentation selector does not hide a look-alike from the chat card: %s', (_label, text) => {
+    // The label drops a selector that follows no emoji, and the check reads
+    // past one even when handed the raw text.
+    expect(toastLookAlike(text)).toBe(true);
+    const card = approvalChannelCard(makeRequest({ tool_name: 'request_approval', action_category: 'send_email', reason: text }));
+    expect(card.text.split('\n')).toContain(`Intent: ${text.replace(/[\ufe0e\ufe0f]/gu, '')}`);
+    expect(card.refusal).toBe('look_alike');
+  });
+
+  test('#859 review: a label reduced twice reads as it did once, lone surrogates included', () => {
+    const label = (t: string) => boundedApprovalLabel(t, APPROVAL_LABEL_DELIVERY_MAX_CHARS);
+    // Stripping the joiner used to fuse two lone halves into a thumbs-up the
+    // text never held; a lone half before a selector changed on a second pass.
+    expect(label('a\ud83d​\udc4db')).not.toContain('\u{1f44d}');
+    for (const t of ['\ud83d️', '❤\ud83d️͏', '\ud83d️\udc4d❤\ud83d', '\ud83d\ud83d️']) {
+      expect(label(label(t))).toBe(label(t));
+    }
+    const parts = ['\ud83d', '\udc4d', '\ude00', '​', '️', '❤', 'a', '1', '͏', '\u{1f44d}'];
+    let seed = 7;
+    const next = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+    for (let i = 0; i < 20_000; i++) {
+      let t = '';
+      for (let j = 1 + Math.floor(next() * 5); j > 0; j--) t += parts[Math.floor(next() * parts.length)];
+      const once = label(t);
+      if (label(once) !== once) throw new Error(`not idempotent: ${JSON.stringify(t)}`);
+    }
+  });
+
+  test('the toast neither shows nor counts a blank Hangul filler', () => {
+    expect(toastColumns(cp(0x3164))).toBeNull();
+    expect(toastColumns(cp(0x115f))).toBeNull();
+    const t = approvalToast(makeRequest({ tool_name: 'request_approval', action_category: 'send_message', reason: `파일${cp(0x3164).repeat(30)} 삭제` }));
+    expect(t.body).toBe('파일 삭제');
+  });
+
+  test('nor does the chat card', () => {
+    const card = approvalChannelCard(makeRequest({ tool_name: 'request_approval', action_category: 'send_message', reason: `Send${cp(0x34f)} to ${cp(0x3164)}bob` }));
+    expect(card.text.split('\n')).toContain('Intent: Send to bob');
+  });
+});
+
 describe('boundedApprovalLabel', () => {
   test('within the cap and on one line, it is the identity', () => {
     const text = 'Workflow: Nightly reconciliation / send_summary';
@@ -408,6 +515,8 @@ describe('#724: request_approval refuses an intent the card would alter', () => 
     ['a line separator', `Send email${c(0x2028)}to bob`, '(U+2028 at position 10)'],
     ['a bidi override', `Send report${c(0x202e)}fdp.exe to bob`, 'invisible formatting character (U+202E at position 11)'],
     ['a zero-width space', `Send to bo${c(0x200b)}b`, 'invisible formatting character (U+200B at position 10)'],
+    ['a Hangul filler (#859)', `Send to ${c(0x3164)}bob`, 'invisible formatting character (U+3164 at position 8)'],
+    ['a combining grapheme joiner (#859)', `Send to b${c(0x34f)}ob`, 'invisible formatting character (U+034F at position 9)'],
     ['more than the ceiling', 'x'.repeat(APPROVAL_LABEL_DELIVERY_MAX_CHARS + 1), `it is ${APPROVAL_LABEL_DELIVERY_MAX_CHARS + 1} characters long`],
     ['a framing marker', `Send ${UNTRUSTED_OPEN} to bob`, 'content-framing marker'],
   ])('%s is refused with an error the model can act on, and nothing is requested', async (_label, intent, why) => {
@@ -459,6 +568,15 @@ describe('#724: request_approval refuses an intent the card would alter', () => 
     expect(String(await tool.execute({ action_category: 'send_message', intent: `Send ${family} to the family chat` })))
       .toContain('(U+200D at position 7)');
     expect(created).toEqual([]);
+  });
+
+  test('#859: an emoji with VS16 is requested, and the card shows it whole', async () => {
+    const { tool, sender, created } = harness();
+    const intent = `Send ${c(0x2764)}${c(0xfe0f)} to mom`;
+    await tool.execute({ action_category: 'send_message', intent });
+    expect(created).toHaveLength(1);
+    await Promise.resolve();
+    expect(sender.sent[0]!.split('\n')).toContain(`Intent: ${intent}`);
   });
 
   test('outer whitespace is still trimmed, not refused', async () => {
