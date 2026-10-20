@@ -445,13 +445,20 @@ export class ConvOrchestrator {
 
         // Dispatch produces a result envelope. We notify the caller as the
         // task moves through its lifecycle via the registry subscription.
+        // The registry is shared by every chat, and every turn with no
+        // context key (main chat, pebble, voice, background turns) shares the
+        // null context, so the context check alone let another such turn's
+        // task report as this one's (#915). Filter by this dispatch's own
+        // id, as the resume path does; the dispatcher reports it at creation,
+        // before the task can start running.
+        let ownId: string | null = null;
         const unsub = this.registry.subscribe(rec => {
-          if (rec.status === 'running' && rec.id && this.sameContext(rec, turn)) {
+          if (rec.status === 'running' && ownId !== null && rec.id === ownId) {
             onTaskEvent?.({ type: 'task_started', record: rec });
           }
         });
         try {
-          const envelope = await this.dispatcher.dispatch(request, turn);
+          const envelope = await this.dispatcher.dispatch(request, turn, (created) => { ownId = created.id; });
           const rec = this.registry.get(envelope.task_id);
           if (rec) {
             if (envelope.status === 'completed') {
