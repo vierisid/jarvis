@@ -14,7 +14,7 @@ import type { ChannelAdapter, ChannelMessage, SendOptions } from '../comms/chann
 import type { STTProvider } from '../comms/voice.ts';
 
 import { ChannelManager } from '../comms/index.ts';
-import { TELEGRAM_SHUTDOWN_DROPPED_REPLY, TelegramAdapter, type TelegramResumePoint } from '../comms/channels/telegram.ts';
+import { TELEGRAM_SHUTDOWN_DROPPED_REPLY, TELEGRAM_SHUTDOWN_MAYBE_DROPPED_REPLY, TelegramAdapter, type TelegramResumePoint } from '../comms/channels/telegram.ts';
 import { activeTurns } from './active-turns.ts';
 import { channelAllowList } from '../comms/channels/allow-list.ts';
 import { createSTTProvider } from '../comms/voice.ts';
@@ -291,7 +291,12 @@ export class ChannelService implements Service {
     // On a shutdown, what waited behind a turn is not handed on: the next
     // process starts with nothing in memory. Its senders are told (#911).
     // After the disconnect, so nothing newer is fetched meanwhile.
-    if (this.shuttingDown()) await this.telegram?.adapter.dropWaiting(TELEGRAM_SHUTDOWN_DROPPED_REPLY);
+    if (this.shuttingDown()) {
+      await this.telegram?.adapter.dropWaiting(
+        { read: TELEGRAM_SHUTDOWN_DROPPED_REPLY, maybe: TELEGRAM_SHUTDOWN_MAYBE_DROPPED_REPLY },
+        (userId) => this.allowListNames('telegram', userId),
+      );
+    }
     // Drop the adapters, not just their connections: start() only registers
     // adapters for channels that are ENABLED in the current config, so a
     // stop/start cycle (settings hot reload) must not leave a stale adapter
