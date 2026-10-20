@@ -85,7 +85,11 @@ export interface SpawnEngineOptions {
   networkMode?: "STRICT";
   customPiecesPaths?: string[];
   devPieces?: string[];
-  /** Override `process.execPath`. Default: same Bun binary running the daemon. */
+  /**
+   * Override `process.execPath`. Default: same Bun binary running the daemon.
+   * Tests only: an override is run with none of the Bun flags below, including
+   * the empty config and --no-env-file (#863).
+   */
   runtime?: string;
   /** Extra env merged on top of the defaults; only engine names (isEngineEnvName) are kept. */
   env?: Record<string, string | undefined>;
@@ -265,6 +269,49 @@ export function engineEnv(opts: Omit<SpawnEngineOptions, "expectedDigest">): Rec
   env["WS_NO_BUFFER_UTIL"] = "1";
   env["WS_NO_UTF_8_VALIDATE"] = "1";
   return env;
+}
+
+/**
+ * The committed, empty Bun config every engine runs with (#863), so a
+ * `bunfig.toml` in the engine's cwd is never read. See `engineConfigArg`.
+ */
+export const ENGINE_BUNFIG_PATH = join(import.meta.dir, "engine-bunfig.toml");
+
+/**
+ * `--config=<path>` for an engine spawn, after checking that `path` is an
+ * absolute, regular, EMPTY file. Throws otherwise: a config with anything in
+ * it is the same preload moved to a new address, and a missing one makes Bun
+ * refuse to start with an error that does not say why.
+ *
+ * Only the `--config=<path>` spelling works. Measured on Bun 1.3.8 and 1.4.2
+ * with a cwd `bunfig.toml` whose preload writes a marker:
+ *   - `--config=<empty file>`: no preload. The explicit file REPLACES the cwd
+ *     one; a non-empty explicit file runs only its own preload, not both.
+ *   - `--config <empty file>`, `-c <empty file>`, `-c=<empty file>`: the cwd
+ *     preload STILL RUNS, with no error.
+ *   - `--config=` (empty value): the cwd preload still runs.
+ * HOME and XDG bunfigs are not read for `bun <file>` in either version.
+ */
+export function engineConfigArg(path: string = ENGINE_BUNFIG_PATH): string {
+  if (!isAbsolute(path)) {
+    throw new TypeError(`engine config ${path} must be absolute, or the engine resolves it against its own cwd`);
+  }
+  let st: ReturnType<typeof lstatSync>;
+  try {
+    st = lstatSync(path);
+  } catch (e) {
+    throw new Error(
+      `engine config ${path} is missing (${(e as NodeJS.ErrnoException).code ?? String(e)}): every engine starts ` +
+        `with it so a cwd bunfig.toml cannot preload code (#863). Restore it from the package.`,
+    );
+  }
+  if (!st.isFile() || st.size !== 0) {
+    throw new Error(
+      `engine config ${path} must be an empty regular file (#863): anything in it would run before the ` +
+        `bundle the digest pin checks. Restore it from the package.`,
+    );
+  }
+  return `--config=${path}`;
 }
 
 export const TRANSPILER_CACHE_ENV = "BUN_RUNTIME_TRANSPILER_CACHE_PATH";
@@ -451,7 +498,25 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
   // of a COMPUTED name is invisible to that check, so the engine is also told
   // never to fetch one. It cannot break a piece: Bun only auto-installs for a
   // file with no `node_modules` above it, and pieces load from installed trees.
-  const args = opts.runtime ? [opts.bundlePath] : ["--smol", "--no-install", opts.bundlePath];
+  //
+  // --config=<empty> (#863): Bun reads a `bunfig.toml` from the process's CWD,
+  // and its `preload` runs before `main.js` -- code that neither the digest pin
+  // above nor the bundle's self-containment covers. The default cwd is inside
+  // the install tree (EngineRuntime's `cwd`). An explicit config REPLACES the
+  // cwd one rather than merging with it (measured, Bun 1.3.8 and 1.4.2), and it
+  // is also what the engine hands its CODE-step children (no-op-code-sandbox).
+  //
+  // --no-env-file (#863): Bun also loads a `.env` (and `.env.local`, and one
+  // named after NODE_ENV) from the cwd into the engine's environment, whatever
+  // `env` says and whatever the config is (measured, 1.3.8, 1.4.2, and 1.4.2
+  // on Windows): a planted one sets any variable engineEnv does not, such as
+  // HTTPS_PROXY for every piece's traffic or AP_SSRF_ALLOW_LIST.
+  //
+  // `opts.runtime` (tests only, with /bin/true) gets none of these: they are
+  // Bun flags, and that binary is not Bun.
+  const args = opts.runtime
+    ? [opts.bundlePath]
+    : [engineConfigArg(), "--no-env-file", "--smol", "--no-install", opts.bundlePath];
   const child = spawn(runtime, args, {
     env,
     cwd: opts.cwd,

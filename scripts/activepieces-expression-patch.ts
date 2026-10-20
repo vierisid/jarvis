@@ -34,6 +34,16 @@ export const expressionPatches = {
       '        // Jarvis: expressions may read data, never execute arbitrary code or callbacks.\n' +
       '        return evaluateWorkflowExpression(script, scriptContext)',
     ],
+    // #837 and #863: the CODE child runs with --no-install and the engine's
+    // --config=<empty bunfig>. Registered so a vendor sync re-applies both.
+    [
+      "async function runInChildProcess(",
+      "/**\n * Jarvis (#863): the Bun config the CODE child must run with, as argv. The\n * engine is spawned with `--config=<empty file>` (spawnEngine, spawn.ts), and\n * the child gets that same argument. Only that spelling, with a non-empty\n * value, replaces the cwd `bunfig.toml`: `--config <path>`, `-c` and\n * `--config=` all leave it read (measured). With none to forward -- this module\n * run outside a spawned engine, as unit tests do -- POSIX gets `/dev/null`,\n * which Bun reads as an empty config (measured, 1.3.8 and 1.4.2). Windows has\n * no such path, so it refuses rather than run the step with the cwd config.\n */\nexport function codeChildConfigArgs(execArgv: readonly string[] = process.execArgv, platform: string = process.platform): string[] {\n    const own = execArgv.filter(a => a.startsWith('--config='))\n    const last = own[own.length - 1]\n    if (last !== undefined && last.length > '--config='.length) return [last]\n    if (platform !== 'win32') return ['--config=/dev/null']\n    throw new Error('CODE step refused: the engine was not started with --config=<empty bunfig>, so the step would read a bunfig.toml from its working directory (#863).')\n}\n\nasync function runInChildProcess(",
+    ],
+    [
+      "        const child = spawn(process.execPath, ['--eval', CODE_RUNNER_SCRIPT], {",
+      "        // Jarvis (#837): `--no-install`, because a step file has no `node_modules`\n        // above it unless the daemon installed its declared dependencies there\n        // (code-materialize.ts), and with none Bun AUTO-INSTALLS any bare name the\n        // code requires: fetches the latest version from the npm registry and runs\n        // it. Measured with `is-number`, into an empty install cache. Bun-only:\n        // under Node there is no auto-install and the flag would be rejected.\n        //\n        // Jarvis (#863): and the engine's own `--config=<empty bunfig>`, so a\n        // `bunfig.toml` in the cwd this child inherits is never read: its\n        // `preload` would run before the step, as code nothing pins. And\n        // `--no-env-file`, so a `.env` there cannot add variables to the\n        // sanitized env below (a proxy for every request the step makes).\n        const args = process.versions.bun ? [...codeChildConfigArgs(), '--no-env-file', '--no-install', '--eval', CODE_RUNNER_SCRIPT] : ['--eval', CODE_RUNNER_SCRIPT]\n        const child = spawn(process.execPath, args, {",
+    ],
   ],
   'packages/server/engine/src/lib/helper/trigger-helper.ts': [
     ["import { isValidCron } from 'cron-validator'", "import { validateCronExpression } from '../../../../../../../../lib/cron-scheduler'"],

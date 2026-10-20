@@ -72,6 +72,10 @@ export const REQUIRED: Requirement[] = [
     path: "src/workflows/runner/engine-runtime/engine-staging.lock",
     why: "bundleHash() and every engine build read it by path (#836); without it no installed daemon can name or build its engine bundle",
   },
+  {
+    path: "src/workflows/runner/engine-runtime/engine-bunfig.toml",
+    why: "spawnEngine reads it by path and refuses to start any engine without it (#863)",
+  },
 ];
 
 /**
