@@ -114,6 +114,11 @@
 #      The toolchain caches of setup-bun, setup-go and setup-node take any
 #      prefix match of their key, so they stay refused in every workflow
 #      rule 5 reads.
+#  13. (#1048) Rule 5 reads every workflow rule 3 does: authority or reach.
+#      Every container:, services: and docker:// image in every workflow is
+#      pinned by digest. Not checked: the BuildKit layer cache docker-build
+#      reads with cache-from type=gha, whose index is the latest any run
+#      on main wrote, not an exact key.
 #
 # Each rule is also run against a mutated copy that breaks it, and must report
 # it, so a neutered check fails here instead of passing everything.
@@ -146,7 +151,7 @@ trap 'rm -rf "$WORK"' EXIT
 # check <rule> <file>: one violation per line, nothing when clean.
 #   rule = scoped | publish-perms | pinned | authority | reach | untrusted
 #          | mutable | narrow | pushcache | opens-pr | catalog-pr | npmpin
-#          | runs | persist
+#          | runs | persist | images
 check() {
 	# shellcheck disable=SC2016 # JavaScript source, not shell: nothing should expand.
 	RULE="$1" FILE="$2" REPO="${REPO_DIR:-${HERE}/../..}" bun -e '
@@ -1068,7 +1073,8 @@ if (rule === "mutable") {
           if (/\b(?:curl|wget)\b[^|]*\|\s*(?:sudo\s+)?(?:ba|z)?sh\b/.test(line))
             out.push(label + ": pipes a download into a shell: " + raw.trim());
         }
-      const uses = String(s.uses ?? "");
+      // Owner and repository names are case-insensitive to GitHub (#1048).
+      const uses = String(s.uses ?? "").toLowerCase();
       // A pinned version is only what is requested: these actions restore
       // the bytes from the Actions cache, which any run on main can write.
       if (uses.startsWith("oven-sh/setup-bun@") && String(s.with?.["no-cache"]) !== "true")
@@ -1897,6 +1903,37 @@ if (rule === "npmpin") {
     }
   }
 }
+if (rule === "images") {
+  // (#1048) Every container: and services: image, and every docker:// step,
+  // in every workflow, by digest. The runner pulls each before any step
+  // runs, by whatever the tag points at then, and runs it with the job.
+  const envRef = /\$\{\{\s*env\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
+  const digest = /@sha256:[0-9a-f]{64}$/;
+  for (const [name, job] of Object.entries(jobs)) {
+    const resolve = (v) => String(v ?? "").replace(envRef, (m, k) => {
+      for (const e of [job.env, doc.env]) if (e && typeof e === "object" && k in e) return String(e[k]);
+      return m;
+    }).trim();
+    const pinned = (img) => digest.test(resolve(img));
+    if (job.container !== undefined) {
+      const img = typeof job.container === "object" && job.container !== null ? job.container.image : job.container;
+      if (!pinned(img)) out.push(name + ": container image is not pinned by digest (" + JSON.stringify(String(img ?? "")) + ")");
+    }
+    if (job.services !== undefined) {
+      if (job.services === null || typeof job.services !== "object") out.push(name + ": services is not a mapping this rule can read");
+      else
+        for (const [sv, def] of Object.entries(job.services)) {
+          const img = typeof def === "object" && def !== null ? def.image : def;
+          if (!pinned(img)) out.push(name + ": service " + sv + " image is not pinned by digest (" + JSON.stringify(String(img ?? "")) + ")");
+        }
+    }
+    for (const { st, via } of flatSteps(job.steps)) {
+      const u = String(st.uses ?? "");
+      if (u.toLowerCase().startsWith("docker://") && !digest.test(u))
+        out.push(name + (via ? " (via " + via.slice(0, -3) + ")" : "") + ": runs " + u + ", not pinned by digest");
+    }
+  }
+}
 if (rule === "persist") {
   // (#1001) No checkout anywhere leaves its token in .git/config, whatever
   // the workflow holds. The narrower checks in untrusted and narrow came
@@ -2015,6 +2052,44 @@ REPO_DIR="${WORK}/persist-repo" expect_caught 'a checkout inside a local composi
 	'docker-build (via ./.github/actions/co): checkout leaves the token in .git/config'
 
 echo
+echo "every container, service and docker:// image is pinned by digest, in any workflow (#1048)"
+for f in "$WORKFLOWS"/*.yml; do
+	expect_clean "$(basename "$f")" images "$f"
+done
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	expect_caught 'a job container by tag in a PR workflow (#1048)' images "$WORKFLOWS/docker-build.yml" \
+		$'    timeout-minutes: 30\n' $'    timeout-minutes: 30\n    container: node:22\n' \
+		'docker-build: container image is not pinned by digest ("node:22")'
+	expect_caught 'a job container image by tag, in the long form (#1048)' images "$WORKFLOWS/test.yml" \
+		$'  plist-lint:\n' $'  plist-lint:\n    container:\n      image: ubuntu:24.04\n' \
+		'plist-lint: container image is not pinned by digest ("ubuntu:24.04")'
+	expect_caught 'a service image by tag (#1048)' images "$WORKFLOWS/test.yml" \
+		$'  plist-lint:\n' $'  plist-lint:\n    services:\n      db:\n        image: postgres:16\n' \
+		'plist-lint: service db image is not pinned by digest ("postgres:16")'
+	expect_caught 'a service image by tag through env (#1048)' images "$WORKFLOWS/test.yml" \
+		$'  plist-lint:\n' $'  plist-lint:\n    env:\n      DB: postgres:16\n    services:\n      db:\n        image: ${{ env.DB }}\n' \
+		'plist-lint: service db image is not pinned by digest'
+	expect_caught 'a service image with a digest followed by more text (#1048)' images "$WORKFLOWS/test.yml" \
+		$'  plist-lint:\n' $'  plist-lint:\n    services:\n      db:\n        image: postgres@sha256:0000000000000000000000000000000000000000000000000000000000000000-x\n' \
+		'plist-lint: service db image is not pinned by digest'
+	expect_caught 'a docker:// step by tag in a workflow that holds authority (#1048)' images "$WORKFLOWS/release.yml" \
+		'      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' $'      - uses: docker://alpine:3\n      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' \
+		'runs docker://alpine:3, not pinned by digest'
+}
+# ...and a digest is accepted, so the rule is not simply refusing every image.
+copy="${WORK}/images-ok.yml"
+FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+await Bun.write(process.env.TO, s.replace("\n  plist-lint:\n", "\n  plist-lint:\n    container:\n      image: ubuntu@sha256:" + "a".repeat(64) + "\n    services:\n      db: postgres@sha256:" + "b".repeat(64) + "\n"));
+'
+if grep -q 'sha256:a' "$copy" && [ -z "$(check images "$copy")" ]; then
+	ok "an image pinned by digest is accepted (#1048)"
+else
+	no "an image pinned by digest is accepted (#1048)" "$(check images "$copy")"
+fi
+
+echo
 echo "the publish path holds nothing by default"
 expect_clean "release-exec.yml: permissions {} at the top, every job explicit" publish-perms "$WORKFLOWS/release-exec.yml"
 
@@ -2024,6 +2099,7 @@ held=0
 reached=()
 authed=()
 pinchecked=()
+mutchecked=()
 for f in "$WORKFLOWS"/*.yml; do
 	auth="$(check authority "$f")" || {
 		no "$(basename "$f"): authority check ran" "the bun helper failed"
@@ -2038,9 +2114,13 @@ for f in "$WORKFLOWS"/*.yml; do
 	[ -n "$auth" ] || [ -n "$reach" ] || continue
 	pinchecked+=("$(basename "$f")")
 	expect_clean "$(basename "$f")" pinned "$f"
+	# (#1048) mutable too, on the same set: a workflow a PR starts runs
+	# whatever a moved name fetches just as unattended. Its cache part holds
+	# a workflow with no authority to the exact-key form (#1047).
+	mutchecked+=("$(basename "$f")")
+	expect_clean "$(basename "$f"): fetches nothing by a floating version or an undigested image" mutable "$f"
 	[ -n "$auth" ] || continue
 	held=$((held + 1))
-	expect_clean "$(basename "$f"): fetches nothing by a floating version or an undigested image" mutable "$f"
 done
 # The two PR workflows that hold no authority, which only the reach
 # derivation brings under the pin (#984): read from what the loop above
@@ -2053,6 +2133,19 @@ for f in docker-build.yml test.yml; do
 		no "the pin rule is applied to ${f}, which a PAT-opened PR starts (#984)" "pin-checked: ${pinchecked[*]}"
 	fi
 done
+# (#1048) The mutable rule reaches the same two, and the same set as the pin.
+for f in docker-build.yml test.yml; do
+	if printf '%s\n' "${mutchecked[@]}" | grep -qxF "$f"; then
+		ok "the mutable rule is applied to ${f}, which a PAT-opened PR starts (#1048)"
+	else
+		no "the mutable rule is applied to ${f}, which a PAT-opened PR starts (#1048)" "mutable-checked: ${mutchecked[*]}"
+	fi
+done
+if [ "$(printf '%s\n' "${mutchecked[@]}" | LC_ALL=C sort -u)" = "$(printf '%s\n' "${pinchecked[@]}" | LC_ALL=C sort -u)" ]; then
+	ok "the mutable rule is applied to every workflow the pin rule is (#1048)"
+else
+	no "the mutable rule is applied to every workflow the pin rule is (#1048)" "pin: ${pinchecked[*]}; mutable: ${mutchecked[*]}"
+fi
 # ...and to exactly the workflows that hold authority or that a push or a
 # PR can start, no fewer.
 want="$(printf '%s\n' "${authed[@]}" "${reached[@]}" | sed '/^$/d' | LC_ALL=C sort -u | tr '\n' ' ')"
@@ -2758,6 +2851,31 @@ await Bun.write(process.env.FROM, s.replace(process.env.OLD, () => process.env.N
 else
 	no "the bun-setup tag mutant could be applied (action.yml no longer has the text it mutates)"
 fi
+# (#1048) mutable on the PR workflows, which hold no authority.
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	expect_caught 'BuildKit back to its default image in the PR image build (#1048)' mutable "$WORKFLOWS/docker-build.yml" \
+		$'        with:\n          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea\n' '' \
+		'docker-build: step Set up Docker Buildx: BuildKit image is not pinned by digest ("default buildx-stable-1")'
+	expect_caught 'BuildKit by tag in the PR image build (#1048)' mutable "$WORKFLOWS/docker-build.yml" \
+		'image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea' 'image=moby/buildkit:buildx-stable-1' \
+		'BuildKit image is not pinned by digest ("moby/buildkit:buildx-stable-1")'
+	expect_caught 'a floating Go version back in the PR test workflow (#1048)' mutable "$WORKFLOWS/test.yml" \
+		$'\njobs:\n' $'\nenv:\n  GO_VERSION: "1.25"\n\njobs:\n' \
+		'env.GO_VERSION is "1.25"'
+	expect_caught 'a download piped into a shell in the PR test workflow (#1048)' mutable "$WORKFLOWS/test.yml" \
+		'      - name: Parse every plist' $'      - run: curl -fsSL https://bun.sh/install | bash\n      - name: Parse every plist' \
+		'pipes a download into a shell'
+	expect_caught 'a floating Bun in the toast job (#1048)' mutable "$WORKFLOWS/test.yml" \
+		'          bun-version: "1.4.2"' '          bun-version: latest' \
+		'toast-windows: step oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6: bun-version resolves to "latest"'
+	expect_caught 'a cache restore spelled in another case, where authority is held (#1048)' mutable "$WORKFLOWS/release.yml" \
+		'      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' $'      - uses: Actions/Cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0\n        with:\n          path: x\n          key: k\n      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' \
+		'restores from the Actions cache (writable by any run on main)'
+	expect_caught 'setup-bun spelled in another case, with its cache on (#1048)' mutable "$WORKFLOWS/test.yml" \
+		'      - name: Parse every plist' $'      - uses: Oven-sh/Setup-Bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0\n      - name: Parse every plist' \
+		'plist-lint: step Oven-sh/Setup-Bun@0c5077e51419868618aeaa5fe8019c62421857d6: setup-bun without no-cache: true'
+}
 # (#1047) A cached Bun inside a local composite action, refused where
 # authority is held: since #1047 bun-setup downloads Bun and restores its
 # install cache by exact key only, which is refused there too, so this
