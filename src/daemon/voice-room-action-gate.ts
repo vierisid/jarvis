@@ -33,7 +33,7 @@
 
 import { DEFAULT_TAINT_GOVERNED, taintProfile, type TaintGating } from '../authority/taint-gating.ts';
 import { roomActionCategories, type RoomActionCategory } from './room-actions.ts';
-import type { RoomActionOutcome } from './room-action-results.ts';
+import type { RoomActionOutcome, RoomAnswer } from './room-action-results.ts';
 import type { AuthorityDecisionType, ResolutionChannel } from '../authority/audit.ts';
 import {
   collapseRoomActionAliases, matchByTitle, matchProjectByName, roomActionTargetKind, withRoomActionDefaults, type RoomActionTargetKind,
@@ -133,6 +133,9 @@ export type RoomActionAuditRow = {
  */
 export type RoomActionAuditReason =
   | RoomActionOutcome
+  // The room's answer after its wait ran out, and what the first row said
+  // then, on a follow-up row (#1034).
+  | `late_${RoomAnswer}_after_${'started' | 'no_answer'}`
   | 'held' | 'refused_yes' | 'cancelled' | 'unsettled' | 'blocked' | 'tainted'
   | 'paused' | 'killed' | 'expired' | 'disconnected' | 'shutdown' | 'failed' | 'not_a_room_action';
 
@@ -162,7 +165,11 @@ export function roomActionExecuted(outcome: RoomActionOutcome): boolean {
  * on it when the wait ran out (reason `started`, #1015, whose end the row
  * cannot know). The reason says whether a false one was declined, held for
  * a card (`pending`, #1016), unreached, or unanswered, which may still have
- * run. `approval_id` is the hold's id, linking a hold to what became of it.
+ * run. When the room answers after `started` or `no_answer`, a follow-up row
+ * says what it answered and what the first row reported, e.g.
+ * `late_rejected_after_started` (#1034), with `executed` true only for
+ * accepted. `approval_id` is the
+ * hold's id, linking a hold to what became of it.
  *
  * An authority grant or revoke is not a room action and has no categories,
  * but a voice path asking for one is what #969 refuses by name, so its

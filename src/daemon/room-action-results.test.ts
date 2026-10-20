@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { RoomActionResults } from './room-action-results.ts';
+import { LATE_ANSWER_LIMIT, RoomActionResults } from './room-action-results.ts';
 
 let n = 0;
 const ids = () => `r${++n}`;
@@ -110,5 +110,68 @@ describe('RoomActionResults', () => {
     results.started(w.id, gone);
     results.abandonAnswerer(gone);
     expect(await w.outcome).toBe('no_answer');
+  });
+
+  // #1034: a late answer used to be dropped, so a started action that then
+  // failed stayed recorded as run.
+  test('a late answer from the client asked is passed on once, with what the wait reported', async () => {
+    const results = new RoomActionResults(ids);
+    const asked = {};
+    const heard: string[] = [];
+    const slow = results.open(10, asked, (answer, reported) => heard.push(`${reported}->${answer}`));
+    results.started(slow.id, asked);
+    expect(await slow.outcome).toBe('started');
+    const silent = results.open(10, asked, (answer, reported) => heard.push(`${reported}->${answer}`));
+    expect(await silent.outcome).toBe('no_answer');
+    expect(results.lateSize).toBe(2);
+    results.answer(slow.id, true, {}); // not the client asked
+    results.answer(slow.id, 'yes', asked); // malformed
+    expect(heard).toEqual([]);
+    results.answer(slow.id, false, asked);
+    results.answer(silent.id, false, asked, 'pending');
+    results.answer(slow.id, true, asked); // once
+    expect(heard).toEqual(['started->rejected', 'no_answer->pending']);
+    expect(results.lateSize).toBe(0);
+  });
+
+  test('nothing is kept for a late answer without a listener or a named client, or once the client has gone', async () => {
+    const results = new RoomActionResults(ids);
+    const heard: string[] = [];
+    await results.open(5, {}).outcome;
+    await results.open(5, undefined, () => heard.push('panels')).outcome;
+    expect(results.lateSize).toBe(0);
+    const gone = {};
+    const w = results.open(5, gone, () => heard.push('gone'));
+    expect(await w.outcome).toBe('no_answer');
+    expect(results.lateSize).toBe(1);
+    results.abandonAnswerer(gone);
+    expect(results.lateSize).toBe(0);
+    results.answer(w.id, true, gone);
+    expect(heard).toEqual([]);
+  });
+
+  test('an answer in time is not also heard as late', async () => {
+    const results = new RoomActionResults(ids);
+    const asked = {};
+    const heard: string[] = [];
+    const w = results.open(1000, asked, () => heard.push('late'));
+    results.answer(w.id, true, asked);
+    expect(await w.outcome).toBe('accepted');
+    results.answer(w.id, false, asked);
+    expect(heard).toEqual([]);
+    expect(results.lateSize).toBe(0);
+  });
+
+  test('past the limit the oldest wait is forgotten first', async () => {
+    const results = new RoomActionResults(ids);
+    const asked = {};
+    const heard: string[] = [];
+    const waits = Array.from({ length: LATE_ANSWER_LIMIT + 1 }, (_, i) => results.open(1, asked, () => heard.push(String(i))));
+    await Promise.all(waits.map((w) => w.outcome));
+    expect(results.lateSize).toBe(LATE_ANSWER_LIMIT);
+    results.answer(waits[0]!.id, true, asked);
+    results.answer(waits[1]!.id, true, asked);
+    results.answer(waits[LATE_ANSWER_LIMIT]!.id, true, asked);
+    expect(heard).toEqual(['1', String(LATE_ANSWER_LIMIT)]);
   });
 });

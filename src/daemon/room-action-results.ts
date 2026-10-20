@@ -90,8 +90,33 @@ export function roomAnswerOf(accepted: unknown, outcome?: unknown): RoomAnswer |
  */
 export type RoomActionOutcome = RoomAnswer | 'started' | 'no_answer' | 'unreached';
 
+/**
+ * Told the room's answer to an action whose wait had already run out (#1034),
+ * and what the wait was reported as then: `started` (recorded as run) or
+ * `no_answer`. Called at most once.
+ */
+export type LateRoomAnswer = (answer: RoomAnswer, reported: 'started' | 'no_answer') => void;
+
+/**
+ * How many waits that ran out are remembered for a late answer at once
+ * (#1034). A memory bound, not a timing one: a room's request has no
+ * deadline of its own (a dev server alone gets 30s to come up, and a fetch
+ * from the page none), so a late answer is heard for as long as its
+ * dashboard stays connected, and the oldest is forgotten past this many.
+ */
+export const LATE_ANSWER_LIMIT = 256;
+
+type Pending = { settle: (o: RoomActionOutcome) => void; answerer?: unknown; started?: boolean; onLate?: LateRoomAnswer };
+
 export class RoomActionResults {
-  private pending = new Map<string, { settle: (o: RoomActionOutcome) => void; answerer?: unknown; started?: boolean }>();
+  private pending = new Map<string, Pending>();
+  /**
+   * Waits that ran out while the room may still answer (#1034), by id, oldest
+   * first. Only for a caller that asked to hear (`onLate`) and a named
+   * answerer: a late answer must come from the dashboard that was asked, and
+   * goes when it does.
+   */
+  private late = new Map<string, { answerer: unknown; reported: 'started' | 'no_answer'; onLate: LateRoomAnswer }>();
 
   constructor(private readonly newId: () => string = () => crypto.randomUUID()) {}
 
@@ -100,11 +125,19 @@ export class RoomActionResults {
    * `timeoutMs` with `started` when the room said it had started on it, else
    * `no_answer`. With `answerer`, only an answer from that client counts
    * (#965): a dashboard voice turn asks the dashboard the user spoke to.
+   * With `onLate` too, that client's answer after the wait ran out is passed
+   * to it rather than dropped (#1034): the outcome said `started` or
+   * `no_answer`, and the room's real answer is still worth recording.
    */
-  open(timeoutMs: number, answerer?: unknown): { id: string; outcome: Promise<RoomActionOutcome> } {
+  open(timeoutMs: number, answerer?: unknown, onLate?: LateRoomAnswer): { id: string; outcome: Promise<RoomActionOutcome> } {
     const id = this.newId();
     const outcome = new Promise<RoomActionOutcome>((resolve) => {
-      const timer = setTimeout(() => this.finish(id, this.pending.get(id)?.started ? 'started' : 'no_answer'), timeoutMs);
+      const timer = setTimeout(() => {
+        const entry = this.pending.get(id);
+        const reported = entry?.started ? 'started' : 'no_answer';
+        if (entry?.onLate && entry.answerer !== undefined) this.remember(id, entry.answerer, reported, entry.onLate);
+        this.finish(id, reported);
+      }, timeoutMs);
       // A pending answer must not hold the daemon open at shutdown.
       (timer as { unref?: () => void }).unref?.();
       this.pending.set(id, {
@@ -113,6 +146,7 @@ export class RoomActionResults {
           resolve(o);
         },
         answerer,
+        onLate,
       });
     });
     return { id, outcome };
@@ -128,8 +162,26 @@ export class RoomActionResults {
     const answer = roomAnswerOf(accepted, outcome);
     if (typeof id !== 'string' || answer === null) return;
     const entry = this.pending.get(id);
-    if (entry?.answerer !== undefined && entry.answerer !== from) return;
+    if (!entry) {
+      this.answerLate(id, answer, from);
+      return;
+    }
+    if (entry.answerer !== undefined && entry.answerer !== from) return;
     this.finish(id, answer);
+  }
+
+  /** A late answer (#1034): heard once, and only from the client asked. */
+  private answerLate(id: string, answer: RoomAnswer, from: unknown): void {
+    const late = this.late.get(id);
+    if (!late || late.answerer !== from) return;
+    this.late.delete(id);
+    late.onLate(answer, late.reported);
+  }
+
+  private remember(id: string, answerer: unknown, reported: 'started' | 'no_answer', onLate: LateRoomAnswer): void {
+    this.late.set(id, { answerer, reported, onLate });
+    // Map order is insertion order, so the first key is the oldest.
+    while (this.late.size > LATE_ANSWER_LIMIT) this.late.delete(this.late.keys().next().value!);
   }
 
   /**
@@ -159,11 +211,20 @@ export class RoomActionResults {
     for (const [id, entry] of [...this.pending]) {
       if (entry.answerer === answerer) this.finish(id, 'no_answer');
     }
+    // Nothing late can come from it now either.
+    for (const [id, late] of [...this.late]) {
+      if (late.answerer === answerer) this.late.delete(id);
+    }
   }
 
   /** Entries still waiting. */
   get size(): number {
     return this.pending.size;
+  }
+
+  /** Waits that ran out and may still hear a late answer (#1034). */
+  get lateSize(): number {
+    return this.late.size;
   }
 
   private finish(id: string, outcome: RoomActionOutcome): void {

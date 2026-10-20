@@ -1168,6 +1168,51 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
     expect(said.at(-1)).toBe('Settings started that and is still working on it. It shows the result on screen.');
   });
 
+  // #1034: the row for a started action said it ran, and the room's real
+  // answer, arriving after the wait, was dropped without a trace. A late
+  // answer from the dashboard asked now gets its own row, with what it was.
+  test('a late answer to an action that ran out its wait is recorded as its own row', async () => {
+    const t = setup();
+    t.answering({ started: true } as never);
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'workspaces', action: 'start_server', args: { name: 'demo' } }, t.speaker.ws);
+    const id = t.speaker.sent.find((m) => m.payload?.source === 'room_action')!.payload.resultId;
+    const late = (from: { ws: unknown }, accepted: boolean) =>
+      t.internals.routeMessage({ type: 'room_action_result', payload: { resultId: id, accepted }, timestamp: Date.now() }, from.ws);
+    // Not from a dashboard that was not asked.
+    await late(t.other, true);
+    expect(t.brief()).toHaveLength(1);
+    await late(t.speaker, false);
+    expect(t.brief()).toEqual([
+      'allowed:ran:voice:room_action(workspaces/start_server; via realtime; execute_command; started)',
+      'allowed:not-run:voice:room_action(workspaces/start_server; via realtime; execute_command; late_rejected_after_started)',
+    ]);
+    // Once: a second late answer adds nothing.
+    await late(t.speaker, true);
+    expect(t.brief()).toHaveLength(2);
+  });
+
+  test('a late answer after no answer, on the confirm path, keeps the hold\'s id and channel', async () => {
+    const t = setup();
+    await t.internals.routeClassifiedVoiceIntent(t.intent('tasks', 'create_task', { title: 'x' }), 'add x', 'r', t.speaker.ws);
+    expect(await t.svc.resolveVoiceConfirmation('i-tasks-create_task', 'confirm')).toEqual({ ok: true });
+    const id = t.speaker.sent.find((m) => m.payload?.source === 'room_action' && m.payload.resultId)!.payload.resultId;
+    await t.internals.routeMessage({ type: 'room_action_result', payload: { resultId: id, accepted: true, outcome: 'accepted' }, timestamp: Date.now() }, t.speaker.ws);
+    expect(t.brief().slice(1)).toEqual([
+      'allowed:not-run:click:room_action(tasks/create_task; via confirm; write_data; no_answer)',
+      'allowed:ran:click:room_action(tasks/create_task; via confirm; write_data; late_accepted_after_no_answer)',
+    ]);
+    expect(t.rows.map((r) => r.approval_id)).toEqual(['i-tasks-create_task', 'i-tasks-create_task', 'i-tasks-create_task']);
+  });
+
+  test('a late answer from a dashboard that has since gone is not heard', async () => {
+    const t = setup();
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws);
+    const id = t.speaker.sent.find((m) => m.payload?.source === 'room_action')!.payload.resultId;
+    t.internals.handleClientDisconnect(t.speaker.ws);
+    await t.internals.routeMessage({ type: 'room_action_result', payload: { resultId: id, accepted: true }, timestamp: Date.now() }, t.speaker.ws);
+    expect(t.brief()).toEqual(['allowed:not-run:voice:room_action(tasks/create_task; via realtime; write_data; no_answer)']);
+  });
+
   test('a room that never answers is not recorded as having run it', async () => {
     const t = setup();
     await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws);

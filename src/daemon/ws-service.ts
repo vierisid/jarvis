@@ -60,7 +60,7 @@ import { maybeCreateUserProfileFollowupPrompt, recordUserProfileTurn } from '../
 import { runWithOrigin } from '../llm/origin.ts';
 import { buildProjectSiteContext, formatProjectList } from '../sites/prompt-context.ts';
 import type { FileEntry } from '../sites/types.ts';
-import { ROOM_ACTION_QUEUE_TTL_MS, RoomActionResults, type RoomActionOutcome } from './room-action-results.ts';
+import { ROOM_ACTION_QUEUE_TTL_MS, RoomActionResults, type LateRoomAnswer, type RoomActionOutcome } from './room-action-results.ts';
 import { PEBBLE_ROOMS, tabSwitchReply } from './pebble-intents.ts';
 import { isPresentationRoomAction, isRoomAction, roomActionCategories, type RoomActionCategory } from './room-actions.ts';
 import {
@@ -2105,6 +2105,24 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     }
   }
 
+  /**
+   * The follow-up row for a room's answer that came after its wait ran out
+   * (#1034). The first row said `started` (run) or `no_answer`; this one
+   * says what the room answered, with the same action, origin, hold and
+   * channel, so a failure after `started` no longer stands as run, and a
+   * run after `no_answer` is on record.
+   */
+  private auditLateRoomAnswer(
+    ra: { room: string; action: string },
+    origin: RoomActionOrigin,
+    opts: { approvalId?: string | null; channel?: ResolutionChannel },
+  ): LateRoomAnswer {
+    return (answer, reported) => {
+      console.warn(`[WSService] late answer for room action ${ra.room}/${ra.action}: ${answer}, after it was reported ${reported}`);
+      this.auditRoomAction(ra, origin, 'allowed', answer === 'accepted', { ...opts, reason: `late_${answer}_after_${reported}` });
+    };
+  }
+
   /** `ra` with its defaults and its item settled before its card (#1008). */
   private settleHeldRoomAction(ra: { room: string; action: string; args?: Record<string, unknown> }) {
     return resolveHeldRoomAction(ra, this.roomActionTargetLists(), `${roomTitle(ra.room)}: ${ra.action.replace(/_/g, ' ')}`);
@@ -2201,7 +2219,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         // Shorter than the realtime session's wait for sibling tool results,
         // so a slow room cannot leave this result to be voiced on its own
         // (and the model, seeing none, calling the tool again).
-        const outcome = await this.requestRoomAction(ra, REALTIME_ROOM_ACTION_WAIT_MS, { client: ws });
+        const outcome = await this.requestRoomAction(ra, REALTIME_ROOM_ACTION_WAIT_MS, {
+          client: ws, onLate: this.auditLateRoomAnswer(ra, 'realtime', {}),
+        });
         this.auditRoomAction(ra, 'realtime', 'allowed', roomActionExecuted(outcome), { reason: outcome });
         const reply = roomActionReply(ra, outcome);
         // The model, told only "didn't accept", may call again and raise a
@@ -3279,7 +3299,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   requestRoomAction(
     action: { room: string; action: string; args?: Record<string, unknown> },
     timeoutMs: number = ROOM_ACTION_QUEUE_TTL_MS,
-    opts?: { client?: ServerWebSocket<unknown> },
+    opts?: { client?: ServerWebSocket<unknown>; onLate?: LateRoomAnswer },
   ): Promise<RoomActionOutcome> {
     // Backstop for every caller (#969): an action no room handler carries out
     // is never broadcast, whoever asked for it.
@@ -3296,7 +3316,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       console.warn(`[WSService] refused room action ${action.room}/${action.action}: it changes more than the screen, and no dashboard was named to run it`);
       return Promise.resolve('rejected');
     }
-    const { id, outcome } = this.roomActionResults.open(timeoutMs, client);
+    const { id, outcome } = this.roomActionResults.open(timeoutMs, client, opts?.onLate);
     const payload = {
       source: 'room_action',
       room: action.room,
@@ -3378,7 +3398,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     let outcome: RoomActionOutcome;
     try {
       this.navigateForRoomAction(ra, ws, requestId);
-      outcome = await this.requestRoomAction(ra, ROOM_ACTION_QUEUE_TTL_MS, { client: ws });
+      outcome = await this.requestRoomAction(ra, ROOM_ACTION_QUEUE_TTL_MS, {
+        client: ws, onLate: this.auditLateRoomAnswer(ra, audit.origin, auditOpts),
+      });
     } catch (err) {
       // The decision still gets its row, so a hold is never left open in it.
       this.auditRoomAction(ra, audit.origin, 'allowed', false, { ...auditOpts, reason: 'failed' });
