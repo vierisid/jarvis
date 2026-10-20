@@ -152,7 +152,8 @@ if (values.mode === 'hosted') {
   if (!profile) reasons.push('Hosted profile is missing (--profile).');
   else if (!key) reasons.push('The credential named by ' + profile.apiKeyEnv + ' is not set.');
   if (!authorization) reasons.push('Spend authorization is missing (--authorization).');
-  else if (profile) reasons.push(...authorizationProblems(authorization, { profileId: profile.id, split: values.split!, now: startedAt }));
+  else if (profile) reasons.push(...authorizationProblems(authorization, { profileId: profile.id, split: values.split!,
+    taskset: { version: taskset.version, sha256: taskset.sha256 }, now: startedAt }));
   if (values.split === 'heldout') {
     if (profile && !evidence) reasons.push('A held-out run needs admin evidence for the plan profile (profile.admin).');
     reasons.push(...rubricProblems(rubric.rubric, startedAt));

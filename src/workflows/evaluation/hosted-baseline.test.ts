@@ -104,16 +104,50 @@ test('token budget stops before the next request, and unreported usage stops the
   });
 });
 
-test('spend authorization is explicit, scoped to one profile and split, and dated', () => {
-  const auth = validateAuthorization({ schemaVersion: 1, approvedBy: 'Owner', approvedAt: '2026-10-05', validUntil: '2026-10-12',
-    profileId: 'starter', splits: ['heldout'], maxRequests: 400, maxTokens: 2_000_000 });
-  const now = new Date('2026-10-06T10:00:00Z');
-  expect(authorizationProblems(auth, { profileId: 'starter', split: 'heldout', now })).toEqual([]);
-  expect(authorizationProblems(auth, { profileId: 'starter', split: 'heldout', now: new Date('2026-10-12T23:00:00Z') })).toEqual([]);
-  expect(authorizationProblems(auth, { profileId: 'plus', split: 'development', now: new Date('2026-10-13T00:00:01Z') })).toHaveLength(3);
-  expect(authorizationProblems(auth, { profileId: 'starter', split: 'heldout', now: new Date('2026-10-04T00:00:00Z') })).toHaveLength(1);
+const w8Heldout = loadTasks('heldout', 'w8'), founderHeldout = loadTasks('heldout', 'founder');
+const setOf = (t: { version: string; sha256: string }) => ({ version: t.version, sha256: t.sha256 });
+
+test('spend authorization is explicit, scoped to one profile, split and task set, and dated', () => {
+  const auth = validateAuthorization({ schemaVersion: 2, approvedBy: 'Owner', approvedAt: '2026-10-05', validUntil: '2026-10-12',
+    profileId: 'starter', splits: ['heldout'], tasksets: [setOf(w8Heldout)], maxRequests: 400, maxTokens: 2_000_000 });
+  const now = new Date('2026-10-06T10:00:00Z'), taskset = setOf(w8Heldout);
+  expect(authorizationProblems(auth, { profileId: 'starter', split: 'heldout', taskset, now })).toEqual([]);
+  expect(authorizationProblems(auth, { profileId: 'starter', split: 'heldout', taskset, now: new Date('2026-10-12T23:00:00Z') })).toEqual([]);
+  expect(authorizationProblems(auth, { profileId: 'plus', split: 'development', taskset, now: new Date('2026-10-13T00:00:01Z') })).toHaveLength(3);
+  expect(authorizationProblems(auth, { profileId: 'starter', split: 'heldout', taskset, now: new Date('2026-10-04T00:00:00Z') })).toHaveLength(1);
   for (const bad of [{ ...auth, approvedBy: '' }, { ...auth, splits: [] }, { ...auth, maxRequests: 0 }, { ...auth, maxTokens: 1.5 },
-    { ...auth, validUntil: 'soon' }, { ...auth, schemaVersion: 2 }])
+    { ...auth, validUntil: 'soon' }, { ...auth, schemaVersion: 3 }])
+    expect(() => validateAuthorization(bad)).toThrow();
+});
+
+test('#1082: an authorization for one task set does not admit another of the same profile and split', () => {
+  // The issue's case: written for w8 held-out (12 tasks), it must not admit founder held-out (66 tasks).
+  expect([w8Heldout.tasks.length, founderHeldout.tasks.length]).toEqual([12, 66]);
+  const auth = validateAuthorization({ schemaVersion: 2, approvedBy: 'Owner', approvedAt: '2026-10-05', validUntil: '2026-10-12',
+    profileId: 'starter', splits: ['heldout'], tasksets: [setOf(w8Heldout)], maxRequests: 400, maxTokens: 2_000_000 });
+  const run = { profileId: 'starter', split: 'heldout', now: new Date('2026-10-06T10:00:00Z') };
+  expect(authorizationProblems(auth, { ...run, taskset: setOf(w8Heldout) })).toEqual([]);
+  expect(authorizationProblems(auth, { ...run, taskset: setOf(founderHeldout) })).toEqual([
+    'Spend authorization does not cover task set founder-heldout-1 (sha256 ' + founderHeldout.sha256 + ').']);
+  // Both halves must match: an edited task set under the same version, or the same content renamed, is refused.
+  expect(authorizationProblems(auth, { ...run, taskset: { version: w8Heldout.version, sha256: founderHeldout.sha256 } })).toHaveLength(1);
+  expect(authorizationProblems(auth, { ...run, taskset: { version: founderHeldout.version, sha256: w8Heldout.sha256 } })).toHaveLength(1);
+  // Listing both admits both.
+  const both = { ...auth, tasksets: [setOf(w8Heldout), setOf(founderHeldout)] };
+  expect(authorizationProblems(both, { ...run, taskset: setOf(founderHeldout) })).toEqual([]);
+});
+
+test('#1082: a schemaVersion 1 authorization still parses but never starts a run, and names what to reissue', () => {
+  const legacy = validateAuthorization({ schemaVersion: 1, approvedBy: 'Owner', approvedAt: '2026-10-05', validUntil: '2026-10-12',
+    profileId: 'starter', splits: ['heldout'], maxRequests: 400, maxTokens: 2_000_000 });
+  const problems = authorizationProblems(legacy, { profileId: 'starter', split: 'heldout', taskset: setOf(w8Heldout), now: new Date('2026-10-06T10:00:00Z') });
+  expect(problems).toEqual(['Spend authorization schemaVersion 1 does not name the task sets it covers; reissue it as schemaVersion 2'
+    + ' with tasksets including w8-heldout-1 (sha256 ' + w8Heldout.sha256 + ').']);
+  // A v1 file cannot smuggle a task set list past the version check, and v2 requires a well-formed one.
+  const v2 = { ...legacy, schemaVersion: 2 };
+  for (const bad of [{ ...legacy, tasksets: [setOf(w8Heldout)] }, v2, { ...v2, tasksets: [] }, { ...v2, tasksets: [{ version: 'w8-heldout-1' }] },
+    { ...v2, tasksets: [{ version: '', sha256: w8Heldout.sha256 }] }, { ...v2, tasksets: [{ version: 'x', sha256: 'abc' }] },
+    { ...v2, tasksets: [{ version: 'x', sha256: w8Heldout.sha256.toUpperCase() }] }, { ...v2, tasksets: setOf(w8Heldout) }, { ...v2, tasksets: [null] }])
     expect(() => validateAuthorization(bad)).toThrow();
 });
 
@@ -267,8 +301,8 @@ test('CLI: a held-out hosted run without a frozen rubric and admin evidence is n
     writeFileSync(preload, `globalThis.fetch = async () => { require('node:fs').writeFileSync(${JSON.stringify(sentinel)}, 'x'); throw new Error('no network'); };\n`);
     const plain = { ...hosted }; delete plain.admin;
     writeFileSync(join(directory, 'profile.json'), JSON.stringify(plain));
-    writeFileSync(join(directory, 'auth.json'), JSON.stringify({ schemaVersion: 1, approvedBy: 'Owner', approvedAt: '2026-01-01',
-      validUntil: '2999-12-31', profileId: 'starter', splits: ['heldout'], maxRequests: 5, maxTokens: 1000 }));
+    writeFileSync(join(directory, 'auth.json'), JSON.stringify({ schemaVersion: 2, approvedBy: 'Owner', approvedAt: '2026-01-01',
+      validUntil: '2999-12-31', profileId: 'starter', splits: ['heldout'], tasksets: [setOf(w8Heldout)], maxRequests: 5, maxTokens: 1000 }));
     const env = { EVAL_TEST_KEY: 'synthetic-key' };
     const gated = await cli(['--mode', 'hosted', '--profile', join(directory, 'profile.json'), '--authorization', join(directory, 'auth.json'),
       '--out', join(directory, 'run')], env, preload);
@@ -277,6 +311,7 @@ test('CLI: a held-out hosted run without a frozen rubric and admin evidence is n
     expect(runReport.status).toBe('not_run');
     expect(runReport.reasons.join(' ')).toContain('admin evidence');
     expect(runReport.reasons.join(' ')).toContain('not frozen');
+    expect(runReport.reasons.join(' ')).not.toContain('Spend authorization');
     const manifest = JSON.parse(readFileSync(join(directory, 'run/manifest.json'), 'utf8'));
     expect(manifest.rubric.sha256).toBe(loadRubric().sha256);
     expect(manifest.argv).toContain('--authorization');
@@ -293,6 +328,31 @@ test('CLI: a held-out hosted run without a frozen rubric and admin evidence is n
     const baseline = await cli(['--mode', 'baseline', '--runs', join(directory, 'run'), '--out', join(directory, 'baseline')], {});
     expect(baseline.code).toBe(2);
     expect(JSON.parse(readFileSync(join(directory, 'baseline/baseline-report.json'), 'utf8')).status).toBe('not_run');
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+}, 120_000);
+
+test('#1082 CLI: a hosted run outside the authorized task sets is not_run and sends nothing', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'jarvis-taskset-gate-'));
+  try {
+    const sentinel = join(directory, 'fetched'), preload = join(directory, 'fetch.ts');
+    writeFileSync(preload, `globalThis.fetch = async () => { require('node:fs').writeFileSync(${JSON.stringify(sentinel)}, 'x'); throw new Error('no network'); };\n`);
+    writeFileSync(join(directory, 'profile.json'), JSON.stringify(hosted));
+    const w8Development = loadTasks('development', 'w8'), founderDevelopment = loadTasks('development', 'founder');
+    const base = { approvedBy: 'Owner', approvedAt: '2026-01-01', validUntil: '2999-12-31', profileId: 'starter',
+      splits: ['development'], maxRequests: 5, maxTokens: 1000 };
+    writeFileSync(join(directory, 'w8.json'), JSON.stringify({ ...base, schemaVersion: 2, tasksets: [setOf(w8Development)] }));
+    writeFileSync(join(directory, 'v1.json'), JSON.stringify({ ...base, schemaVersion: 1 }));
+    const env = { EVAL_TEST_KEY: 'synthetic-key' };
+    const run = (auth: string, out: string) => cli(['--mode', 'hosted', '--split', 'development', '--taskset', 'founder',
+      '--profile', join(directory, 'profile.json'), '--authorization', join(directory, auth), '--out', join(directory, out)], env, preload);
+    const other = await run('w8.json', 'other');
+    expect(other.code).toBe(2);
+    expect(JSON.parse(readFileSync(join(directory, 'other/report.json'), 'utf8')).reasons).toEqual([
+      'Spend authorization does not cover task set founder-development-1 (sha256 ' + founderDevelopment.sha256 + ').']);
+    const legacy = await run('v1.json', 'legacy');
+    expect(legacy.code).toBe(2);
+    expect(JSON.parse(readFileSync(join(directory, 'legacy/report.json'), 'utf8')).reasons.join(' ')).toContain('reissue it as schemaVersion 2');
+    expect(existsSync(sentinel)).toBe(false);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }, 120_000);
 
