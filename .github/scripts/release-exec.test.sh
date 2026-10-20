@@ -3375,10 +3375,12 @@ sp_log_case() {
 		printf 'FAIL\t%s\t%s\n' "$1" "exit ${SP_RC}; publish calls: $(printf '%s' "$got" | tr '\n' '|')" >>"${WORK}/sp/results"
 	fi
 }
-# sp_want5 <flags>: the five platform publish calls with those flags.
+# sp_want5 <flags>: the five platform publish calls with those flags. Each
+# carries --ignore-scripts (#1046): a directory publish otherwise runs the
+# package.json lifecycle scripts with the OIDC publish token in reach.
 sp_want5() {
 	local i
-	for i in 1 2 3 4 5; do printf 'npm publish --access public%s\n' "${1:+ $1}"; done
+	for i in 1 2 3 4 5; do printf 'npm publish --access public --ignore-scripts%s\n' "${1:+ $1}"; done
 }
 sp_suite() {
 	: >"${WORK}/sp/results"
@@ -3404,10 +3406,10 @@ sp_suite() {
 	sp_log_case "real run of a prerelease: --tag next on all five" "$(sp_want5 "--tag next")"
 	sp_fixture
 	sp_run "$wrap" false 0.12.0-rc.1
-	sp_log_case "wrapper, real run of a prerelease: --tag next" "npm publish --access public --tag next"
+	sp_log_case "wrapper, real run of a prerelease: --tag next" "npm publish --access public --ignore-scripts --tag next"
 	sp_fixture
 	sp_run "$wrap" true 0.11.0
-	sp_log_case "wrapper, dry run, nothing on npm yet: rehearses with --dry-run" "npm publish --access public --dry-run"
+	sp_log_case "wrapper, dry run, nothing on npm yet: rehearses with --dry-run" "npm publish --access public --ignore-scripts --dry-run"
 	# #966: already on npm, on a dry run.
 	sp_fixture
 	sp_published "${SP_ALL_PLATFORMS[@]}"
@@ -3678,12 +3680,12 @@ $(cut -f1,2 "${WORK}/sp/results")"
 		'              elif false; then' \
 		'real run, all five already on npm: success'
 	behaviour_mutant 'npm output of the platform publishes swallowed' \
-		$'            npm publish --access public "${flags[@]}" 2>&1 | tee "$err"\n' \
-		$'            npm publish --access public "${flags[@]}" >"$err" 2>&1 | true\n' \
+		$'            npm publish --access public --ignore-scripts "${flags[@]}" 2>&1 | tee "$err"\n' \
+		$'            npm publish --access public --ignore-scripts "${flags[@]}" >"$err" 2>&1 | true\n' \
 		'npm output shown when a platform publish fails'
 	behaviour_mutant 'npm output of the wrapper publish swallowed' \
-		$'\n          npm publish --access public "${flags[@]}" 2>&1 | tee "$err"\n' \
-		$'\n          npm publish --access public "${flags[@]}" >"$err" 2>&1 | true\n' \
+		$'\n          npm publish --access public --ignore-scripts "${flags[@]}" 2>&1 | tee "$err"\n' \
+		$'\n          npm publish --access public --ignore-scripts "${flags[@]}" >"$err" 2>&1 | true\n' \
 		'npm output shown when the wrapper publish succeeds'
 	behaviour_mutant 'the status of tee taken for the status of the publish' \
 		$'            if [ "${PIPESTATUS[0]}" -ne 0 ]; then\n' \

@@ -922,10 +922,56 @@ jobs:
         with:
           persist-credentials: false
 
+      # npm runs in this checkout with the OIDC publish token in reach
+      # (#1046), so what the checkout says to npm is held here, before the
+      # first npm command. Every npm version and directory npm publish below
+      # passes --ignore-scripts, which skips the preversion, version,
+      # postversion, prepublishOnly, prepack, prepare, postpack, publish and
+      # postpublish scripts (measured on npm 12.1.0: without it all nine
+      # ran), and npm version passes --workspaces=false, without which a
+      # workspaces field in a package.json above it made it install that
+      # workspace root (measured). The flags do nothing about config:
+      #   * a .npmrc in the directory npm runs from is read as project config
+      #     (measured: one there set the registry npm used), so none may exist
+      #     anywhere in the checkout;
+      #   * sidecar/npm is exactly the files committed there, with no link: a
+      #     link (bin -> .) let an artifact Prepare unpacks below land a
+      #     .npmrc or a package.json beside npm after this check (security
+      #     review), so Prepare checks each package directory again too;
+      #   * each package.json carries only its listed fields, its own name,
+      #     and files: ["bin"]; publishConfig (measured) redirects the
+      #     publish, scripts run, and the name picks what gets published.
+      - name: Refuse npm config and package fields that change what npm runs
+        run: |
+          set -euo pipefail
+          if [ -n "$(find . -name .npmrc -print -quit)" ]; then
+            echo "::error::the checkout holds a .npmrc, which npm would read as config in a job holding id-token (#1046)"
+            exit 1
+          fi
+          tree="$(find sidecar/npm -mindepth 1 -printf '%y %P\n' | LC_ALL=C sort | tr '\n' ' ')"
+          if [ "$tree" != "d darwin-arm64 d darwin-x64 d jarvis-sidecar d jarvis-sidecar/bin d linux-arm64 d linux-x64 d win32-x64 f darwin-arm64/package.json f darwin-x64/package.json f jarvis-sidecar/bin/jarvis f jarvis-sidecar/package.json f linux-arm64/package.json f linux-x64/package.json f win32-x64/package.json " ]; then
+            echo "::error::sidecar/npm is not exactly the six packages and the wrapper launcher, as plain files and directories, so npm could act on something this check never read (#1046)"
+            exit 1
+          fi
+          for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do
+            if ! jq -e --arg name "@usejarvis/sidecar-${platform}" 'type == "object" and (keys - ["cpu", "description", "files", "name", "os", "repository", "version"] == []) and .name == $name and .files == ["bin"]' "sidecar/npm/${platform}/package.json" >/dev/null; then
+              echo "::error::sidecar/npm/${platform}/package.json is not named @usejarvis/sidecar-${platform}, does not ship bin alone, or has a field beyond name, version, description, repository, os, cpu and files, such as scripts or publishConfig, which npm would act on in a job holding id-token (#1046)"
+              exit 1
+            fi
+          done
+          if ! jq -e 'type == "object" and (keys - ["bin", "description", "files", "name", "optionalDependencies", "repository", "version"] == []) and .name == "@usejarvis/sidecar" and .files == ["bin"] and .bin == {"jarvis": "bin/jarvis"} and (.optionalDependencies | type == "object" and keys == ["@usejarvis/sidecar-darwin-arm64", "@usejarvis/sidecar-darwin-x64", "@usejarvis/sidecar-linux-arm64", "@usejarvis/sidecar-linux-x64", "@usejarvis/sidecar-win32-x64"] and all(.[]; type == "string" and test("\\A[0-9]+\\.[0-9]+\\.[0-9]+\\z")))' sidecar/npm/jarvis-sidecar/package.json >/dev/null; then
+            echo "::error::sidecar/npm/jarvis-sidecar/package.json is not the @usejarvis/sidecar wrapper of the five platform packages at plain versions, or has a field beyond name, version, description, repository, files, bin and optionalDependencies, which npm would act on in a job holding id-token (#1046)"
+            exit 1
+          fi
+
+      # package-manager-cache: false (#1046 review): setup-node turns on its
+      # npm cache by itself when package.json names npm as packageManager,
+      # and the Actions cache is writable by any run on main.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
 
       - name: Ensure npm supports Trusted Publishing
         run: |
@@ -1098,20 +1144,35 @@ jobs:
                 ;;
             esac
 
+            # The artifact went in under bin/ alone (#1046): checked here,
+            # where npm is about to run, not only at checkout.
+            if [ "$(find "${pkg_dir}" -mindepth 1 -maxdepth 1 -printf '%y %f\n' | LC_ALL=C sort | tr '\n' ' ')" != "d bin f package.json " ]; then
+              echo "::error::${pkg_dir} holds more than bin/ and package.json once its artifact is in, so npm could read config from it (#1046)"
+              exit 1
+            fi
+
             # Update version
             cd "${pkg_dir}"
-            npm version "${VERSION}" --no-git-tag-version --allow-same-version
+            npm version "${VERSION}" --no-git-tag-version --allow-same-version --ignore-scripts --workspaces=false
             cd "$GITHUB_WORKSPACE"
           done
 
           # Update wrapper package version and dependency versions
           cd sidecar/npm/jarvis-sidecar
-          npm version "${VERSION}" --no-git-tag-version --allow-same-version
+          npm version "${VERSION}" --no-git-tag-version --allow-same-version --ignore-scripts --workspaces=false
 
           # Update optionalDependencies versions
           for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do
             sed -i "s|\"@usejarvis/sidecar-${platform}\": \".*\"|\"@usejarvis/sidecar-${platform}\": \"${VERSION}\"|" package.json
           done
+          # sed edits lines and assumes npm version left one key per line
+          # (npm 12.1.0 does: it rewrote a value on a line of its own back
+          # onto its key, measured), so the result is read back rather than
+          # trusting that (security review of #1046).
+          if ! jq -e --arg v "$VERSION" '[.optionalDependencies[]] | length == 5 and all(. == $v)' package.json >/dev/null; then
+            echo "::error::the wrapper does not depend on all five platform packages at ${VERSION} after the rewrite (#1046)"
+            exit 1
+          fi
 
       # A version npm already has refuses the publish, dry or real. On a dry
       # run that refusal, and only that one, is a notice (#966): `resolve`
@@ -1201,7 +1262,7 @@ jobs:
             pkg="@usejarvis/sidecar-${platform}"
             echo "Publishing ${pkg}@${VERSION}... ${flags[*]}"
             cd "sidecar/npm/${platform}"
-            npm publish --access public "${flags[@]}" 2>&1 | tee "$err"
+            npm publish --access public --ignore-scripts "${flags[@]}" 2>&1 | tee "$err"
             if [ "${PIPESTATUS[0]}" -ne 0 ]; then
               if ! npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
                 exit 1
@@ -1248,7 +1309,7 @@ jobs:
 
           # As for the platform packages (#966).
           cd sidecar/npm/jarvis-sidecar
-          npm publish --access public "${flags[@]}" 2>&1 | tee "$err"
+          npm publish --access public --ignore-scripts "${flags[@]}" 2>&1 | tee "$err"
           if [ "${PIPESTATUS[0]}" -ne 0 ]; then
             if ! npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
               exit 1
