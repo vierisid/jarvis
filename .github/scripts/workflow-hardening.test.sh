@@ -503,6 +503,7 @@ if (rule === "runs") {
         jq: [
           "jq -e \x27type == \"object\" and (keys - [\"bin\", \"description\", \"files\", \"name\", \"optionalDependencies\", \"repository\", \"version\"] == []) and .name == \"@usejarvis/sidecar\" and .files == [\"bin\"] and .bin == {\"jarvis\": \"bin/jarvis\"} and (.optionalDependencies | type == \"object\" and keys == [\"@usejarvis/sidecar-darwin-arm64\", \"@usejarvis/sidecar-darwin-x64\", \"@usejarvis/sidecar-linux-arm64\", \"@usejarvis/sidecar-linux-x64\", \"@usejarvis/sidecar-win32-x64\"] and all(.[]; type == \"string\" and test(\"\\\\A[0-9]+\\\\.[0-9]+\\\\.[0-9]+\\\\z\")))\x27 sidecar/npm/jarvis-sidecar/package.json",
           "jq -e --arg v \"$VERSION\" \x27[.optionalDependencies[]] | length == 5 and all(. == $v)\x27 package.json",
+          "jq -e --arg name \"@usejarvis/sidecar-${platform}\" \x27type == \"object\" and (keys - [\"cpu\", \"description\", \"files\", \"name\", \"os\", \"repository\", \"version\"] == []) and .name == $name and .files == [\"bin\"]\x27 \"${pkg_dir}/package.json\"",
           "jq -e --arg name \"@usejarvis/sidecar-${platform}\" \x27type == \"object\" and (keys - [\"cpu\", \"description\", \"files\", \"name\", \"os\", \"repository\", \"version\"] == []) and .name == $name and .files == [\"bin\"]\x27 \"sidecar/npm/${platform}/package.json\"",
         ],
         local: [
@@ -4261,6 +4262,11 @@ else
 	# and the npm here only logs, so this stands for an npm that does not.
 	PREP_SPLIT='sed -i "s|\"@usejarvis/sidecar-linux-x64\": \"0.1.0\"|\"@usejarvis/sidecar-linux-x64\":\n      \"0.1.0\"|" sidecar/npm/jarvis-sidecar/package.json && jq -e . sidecar/npm/jarvis-sidecar/package.json >/dev/null && grep -qx "      \"0.1.0\"," sidecar/npm/jarvis-sidecar/package.json'
 	prep_case 'a wrapper dependency the line-based rewrite misses is refused' refused-wrapper "$PREP_SPLIT"
+	# The field check again where npm runs (review of the branch): a
+	# package.json that differs from what the checkout check passed, here
+	# one carrying a script, stops Prepare before its npm version.
+	PREP_SCRIPT='jq ".scripts = {version: \"id\"}" sidecar/npm/darwin-arm64/package.json >pj.tmp && mv pj.tmp sidecar/npm/darwin-arm64/package.json'
+	prep_case 'a platform package.json that changed after the checkout check is refused before npm runs there' refused "$PREP_SCRIPT"
 	mutated="$(SRC="$PREP_STEP" bun -e 'const s = process.env.SRC; const o = "if [ \"$(find \"${pkg_dir}\" -mindepth 1 -maxdepth 1"; if (!s.includes(o)) process.exit(2); process.stdout.write(s.replace(o, () => "if false && [ \"$(find \"${pkg_dir}\" -mindepth 1 -maxdepth 1"));')" || mutated=""
 	if [ -z "$mutated" ]; then
 		no "Prepare mutant could be applied (the step no longer has the text it mutates)"
@@ -4268,6 +4274,14 @@ else
 		ok "reports: Prepare no longer checking the package directory before npm (#1046 review)"
 	else
 		no "reports: Prepare no longer checking the package directory before npm (#1046 review)" "the case passed a step with this hole"
+	fi
+	mutated="$(SRC="$PREP_STEP" bun -e 'const s = process.env.SRC; const o = "if ! jq -e --arg name"; if (!s.includes(o)) process.exit(2); process.stdout.write(s.replace(o, () => "if false && jq -e --arg name"));')" || mutated=""
+	if [ -z "$mutated" ]; then
+		no "Prepare field re-check mutant could be applied (the step no longer has the text it mutates)"
+	elif grep -q "^  FAIL" <<<"$(PREP_STEP_UNDER_TEST="$mutated" prep_case 'x' refused "$PREP_SCRIPT")"; then
+		ok "reports: Prepare no longer checking package.json fields before npm (review of #1046)"
+	else
+		no "reports: Prepare no longer checking package.json fields before npm (review of #1046)" "the case passed a step with this hole"
 	fi
 	mutated="$(SRC="$PREP_STEP" bun -e 'const s = process.env.SRC; const o = "if ! jq -e --arg v"; if (!s.includes(o)) process.exit(2); process.stdout.write(s.replace(o, () => "if false && jq -e --arg v"));')" || mutated=""
 	if [ -z "$mutated" ]; then

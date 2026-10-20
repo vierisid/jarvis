@@ -1150,6 +1150,12 @@ jobs:
               echo "::error::${pkg_dir} holds more than bin/ and package.json once its artifact is in, so npm could read config from it (#1046)"
               exit 1
             fi
+            # ...and its package.json is still the one the checkout check
+            # passed, field for field, where npm reads it.
+            if ! jq -e --arg name "@usejarvis/sidecar-${platform}" 'type == "object" and (keys - ["cpu", "description", "files", "name", "os", "repository", "version"] == []) and .name == $name and .files == ["bin"]' "${pkg_dir}/package.json" >/dev/null; then
+              echo "::error::${pkg_dir}/package.json is not the one the checkout check passed by the time npm runs there (#1046)"
+              exit 1
+            fi
 
             # Update version
             cd "${pkg_dir}"
