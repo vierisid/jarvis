@@ -22,6 +22,7 @@ import {
   type Verb,
 } from '../voice/intent.ts';
 import { ROOM_TABS, type TabbedRoom } from '../daemon/room-tabs.ts';
+import { roomActionArgs } from '../daemon/room-action-targets.ts';
 
 /**
  * The `switch_tab` line for a room, built from ROOM_TABS: the tabs its room
@@ -380,7 +381,7 @@ calendar room ("room": "calendar"):
    matches "search calendar for meeting", "find events about q3"
 - "select_event" — args: { "title": string }
    matches "open the morning standup", "select the launch event"
-- "schedule_event" — args: { "title": string, "when": string, "duration"?: string, "with"?: string, "priority"?: "low"|"normal"|"high"|"critical" }
+- "schedule_event" — args: { "title": string, "when": string, "with"?: string, "priority"?: "low"|"normal"|"high"|"critical" }
    matches "schedule a meeting Tuesday at 3 with Alice for an hour",
    "block off tomorrow morning to write the spec",
    "add a task to email the team next monday at 9am",
@@ -388,7 +389,6 @@ calendar room ("room": "calendar"):
    Extract:
      "title" — the imperative content ("call mom", "email the team", "meeting with Alice")
      "when" — the natural-language time spec verbatim ("Tuesday at 3", "tomorrow morning", "next monday at 9am"). The daemon parses this with parseRelativeDate; supported formats include "today / tomorrow / yesterday + at HH(am|pm)?", weekday names ("monday / tuesday / next friday"), "in N days/hours/minutes", absolute "YYYY-MM-DD HH:MM".
-     "duration" — only if the user said one ("for an hour", "30 minutes")
      "with" — only if the user named a person
      "priority" — only if the user said "urgent"/"high priority" etc.
 
@@ -642,7 +642,7 @@ Transcript: "revoke browser access"
 {"verb":"revoke","object":{"type":"authority","query":"access_browser"},"args":{},"impact":"write","confidence":0.9,"room_action":null}
 
 Transcript: "schedule a meeting tuesday at 3 with alice for an hour"
-{"verb":"create","object":null,"args":{},"impact":"write","confidence":0.92,"room_action":{"room":"calendar","action":"schedule_event","args":{"title":"meeting with alice","when":"tuesday at 3pm","duration":"1 hour","with":"alice"}}}
+{"verb":"create","object":null,"args":{},"impact":"write","confidence":0.92,"room_action":{"room":"calendar","action":"schedule_event","args":{"title":"meeting with alice","when":"tuesday at 3pm","with":"alice"}}}
 
 Transcript: "remind me to call mom tomorrow at 2"
 {"verb":"create","object":null,"args":{},"impact":"write","confidence":0.93,"room_action":{"room":"calendar","action":"schedule_event","args":{"title":"call mom","when":"tomorrow at 2pm"}}}
@@ -702,9 +702,11 @@ function parseRoomAction(raw: unknown): RoomAction | undefined {
   return {
     room: obj.room as RoomKey,
     action: obj.action,
+    // Only the arguments the room's handler reads, of the types it takes
+    // (#1021): any other key would ride along to a held action's card.
     args:
       obj.args && typeof obj.args === 'object'
-        ? (obj.args as Record<string, unknown>)
+        ? roomActionArgs(obj.room, obj.action, obj.args as Record<string, unknown>)
         : undefined,
   };
 }

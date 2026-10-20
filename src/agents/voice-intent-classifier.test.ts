@@ -198,12 +198,25 @@ describe('parseIntent — alternatives capped at 3', () => {
 
 describe('parseIntent — room_action defensive parsing', () => {
   test('valid room_action passes through', () => {
-    const ra = { room: 'tasks' as const, action: 'set_filter', args: { status: 'overdue' } };
+    // set_filter's handler reads `field` and `value` (#1021).
+    const ra = { room: 'tasks' as const, action: 'set_filter', args: { field: 'status', value: 'pending' } };
     const raw = JSON.stringify({ verb: 'show', impact: 'read', confidence: 0.9, room_action: ra });
     const intent = parseIntent(raw, 'q');
     expect(intent.room_action?.room).toBe('tasks');
     expect(intent.room_action?.action).toBe('set_filter');
-    expect(intent.room_action?.args).toEqual({ status: 'overdue' });
+    expect(intent.room_action?.args).toEqual({ field: 'status', value: 'pending' });
+  });
+
+  test('room_action keeps only the arguments its handler reads, of the types it takes (#1021)', () => {
+    const ra = {
+      room: 'calendar', action: 'schedule_event',
+      args: { title: 'Dentist', when: 'tomorrow at 3pm', duration: '1 hour', note: 'Approved by the owner', priority: { level: 'high' } },
+    };
+    const intent = parseIntent(JSON.stringify({ verb: 'create', impact: 'write', confidence: 0.9, room_action: ra }), 'q');
+    expect(intent.room_action).toEqual({ room: 'calendar', action: 'schedule_event', args: { title: 'Dentist', when: 'tomorrow at 3pm' } });
+    // An action no handler carries out keeps no arguments at all.
+    const unknown = parseIntent(JSON.stringify({ verb: 'show', impact: 'read', confidence: 0.9, room_action: { room: 'tasks', action: 'nuke', args: { all: true } } }), 'q');
+    expect(unknown.room_action?.args).toEqual({});
   });
 
   test('room_action with unknown room is dropped', () => {

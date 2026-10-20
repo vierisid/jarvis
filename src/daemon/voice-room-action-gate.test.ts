@@ -49,6 +49,14 @@ const lists = (over: Partial<RoomActionTargetLists> = {}): RoomActionTargetLists
 });
 
 describe('resolveHeldRoomAction (#1008)', () => {
+  test('a held action keeps only the arguments its handler reads, so its card shows nothing that does not run (#1021)', async () => {
+    expect(await resolveHeldRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'Pay rent', note: 'pre-approved', when: ['x'] } }, lists(), 't'))
+      .toEqual({ ok: true, ra: { room: 'tasks', action: 'create_task', args: { title: 'Pay rent' } } });
+    // The item is pinned as before, and an extra key beside it is dropped.
+    expect(await resolveHeldRoomAction({ room: 'tasks', action: 'reassign', args: { name: 'rent', agent: 'research', also: 'delete all' } }, lists(), 't'))
+      .toEqual({ ok: true, ra: { room: 'tasks', action: 'reassign', args: { name: 'Pay rent to landlord', agent: 'research', id: 't1' } } });
+  });
+
   test('a default the handler would supply is shown and pinned', async () => {
     expect(await resolveHeldRoomAction({ room: 'settings', action: 'replay_onboarding' }, lists(), 'Settings: replay onboarding'))
       .toEqual({ ok: true, ra: { room: 'settings', action: 'replay_onboarding', args: { scope: 'all' } } });

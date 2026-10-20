@@ -27,7 +27,9 @@
  *    withRoomActionDefaults, and not written in the case;
  *  - an argument that stands in for another is in ROOM_ACTION_ALIASES;
  *  - an item is found only through pickRoomActionTarget(<list>, args, ...),
- *    never by a direct find, findBy*, matcher or the selection.
+ *    never by a direct find, findBy*, matcher or the selection;
+ *  - every argument a case reads is in ROOM_ACTION_ARGS, and nothing else
+ *    is (#1021).
  * It reads each case's own code. A default or lookup inside a data hook the
  * case calls (useMemoryData's rememberThat finds its subject itself) is not
  * seen, so remember_that is not covered here.
@@ -119,6 +121,145 @@ export function collapseRoomActionAliases(room: string, action: string, args: Re
   if (!own(ROOM_ACTION_ALIASES, room)) return args;
   const actions = ROOM_ACTION_ALIASES[room]!;
   return own(actions, action) ? actions[action]!(args) : args;
+}
+
+/** What an argument's value may be: a JSON scalar of one of these types. */
+export type RoomActionArgType = 'string' | 'number' | 'boolean';
+
+const S = ['string'] as const;
+const N = ['number'] as const;
+/** The item a picking action acts on (pickRoomActionTarget reads both). */
+const PICK = { id: S, name: S } as const;
+
+/**
+ * room -> action -> every argument its handler reads, and the types of value
+ * it takes for each (#1021). The classifier writes whatever keys it likes,
+ * and a held action's card printed them all, so a key no handler reads (text
+ * the classifier picked up from what it was shown, or a `duration` the
+ * calendar never stored) sat on the card as part of what the person approved.
+ * roomActionArgs keeps only what is listed here, and the card shows what is
+ * left.
+ *
+ * A type is what the handler uses: one that checks `typeof args.x ===
+ * "string"` lists only "string", since any other value is the argument left
+ * out. Objects and arrays are never kept: no handler reads one. Only those
+ * `typeof` checks are held to the handlers; a type for an argument read
+ * through String(), Number() or a cast is set here by hand.
+ *
+ * room-actions.test.ts reads every handler case with the TypeScript parser
+ * and holds this table to the arguments it reads in both directions,
+ * including those read through pickRoomActionTarget (id, name) and
+ * withRoomActionDefaults (the action's defaults, and whatever is read off
+ * what it returns). The arguments the daemon pins into a held action (an
+ * item's id) are arguments the handler reads, so they are listed too.
+ */
+export const ROOM_ACTION_ARGS: Record<string, Record<string, Record<string, readonly RoomActionArgType[]>>> = {
+  settings: {
+    switch_tab: { tab: S },
+    read_status: {},
+    set_default_model: { ref: S, provider: S, model: S },
+    set_model: { ref: S, provider: S, model: S },
+    test_provider: { provider: S, name: S },
+    enable_telegram: {},
+    disable_telegram: {},
+    enable_discord: {},
+    disable_discord: {},
+    set_stt_provider: { provider: S },
+    enable_tts: {},
+    disable_tts: {},
+    set_tts_provider: { provider: S },
+    set_tts_voice: { voice: S },
+    // Number(args.minutes): "30" and 30 are the same to it.
+    set_heartbeat_interval: { minutes: ['number', 'string'] },
+    set_heartbeat_aggressiveness: { level: S },
+    restart_daemon: {},
+    replay_onboarding: { scope: S },
+  },
+  agents: {
+    switch_tab: { tab: S },
+    open_spawn_dialog: {},
+    close_dialog: {},
+    set_search: { query: S },
+    spawn_agent: { specialist: S, task: S, context: S },
+  },
+  authority: { switch_tab: { tab: S }, set_filter: { decision: S } },
+  memory: {
+    switch_tab: { tab: S },
+    search: { query: S },
+    set_filter: { type: S },
+    select: { name: S },
+    remember_that: { subject: S, predicate: S, object: S },
+  },
+  goals: {
+    switch_tab: { tab: S },
+    search: { query: S },
+    set_filter: { field: S, value: S },
+    select: { name: S },
+    create_goal: { title: S, level: S, deadline: N },
+  },
+  tasks: {
+    switch_view: { view: S },
+    search: { query: S },
+    set_filter: { field: S, value: S },
+    select: { name: S },
+    create_task: { title: S, when: S, priority: S, assigned_to: S },
+    complete_task: PICK,
+    update_priority: { ...PICK, level: S },
+    reassign: { ...PICK, agent: S },
+  },
+  workspaces: {
+    switch_view: { view: S },
+    search: { query: S },
+    select_project: PICK,
+    back_to_list: {},
+    create_project: { name: S, template: S },
+    start_server: PICK,
+    stop_server: PICK,
+  },
+  content: {
+    switch_view: { view: S },
+    search: { query: S },
+    set_filter: { field: S, value: S },
+    select: { name: S },
+    create_content: { title: S, type: S },
+    advance: PICK,
+    regress: PICK,
+    schedule: { ...PICK, when: S },
+  },
+  tools: { set_filter: { filter: S }, search: { query: S }, select: { name: S } },
+  logs: { toggle_source: { source: S }, set_time_window: { window: S }, toggle_live_tail: {}, refresh: {} },
+  calendar: {
+    switch_view: { view: S },
+    search: { query: S },
+    select_event: { title: S },
+    schedule_event: { title: S, when: S, priority: S, with: S },
+  },
+  workflows: { create_from_nl: { prompt: S } },
+};
+
+function argsFor(room: string, action: string): Record<string, readonly RoomActionArgType[]> | null {
+  if (!own(ROOM_ACTION_ARGS, room)) return null;
+  const actions = ROOM_ACTION_ARGS[room]!;
+  return own(actions, action) ? actions[action]! : null;
+}
+
+/**
+ * `args` with only the arguments `room`'s handler reads for `action`, each of
+ * a type it takes (#1021). Anything else is dropped, so it is neither shown
+ * on a card nor sent: a key the table does not list, a value of another
+ * type, an object or an array, and every argument of an action no handler
+ * carries out.
+ */
+export function roomActionArgs(room: string, action: string, args: Record<string, unknown> | undefined): Record<string, unknown> {
+  const spec = argsFor(room, action);
+  const out: Record<string, unknown> = {};
+  if (!spec || !args || typeof args !== 'object') return out;
+  for (const [name, types] of Object.entries(spec)) {
+    if (!own(args, name)) continue;
+    const v = args[name];
+    if ((types as readonly string[]).includes(typeof v) && !(typeof v === 'number' && !Number.isFinite(v))) out[name] = v;
+  }
+  return out;
 }
 
 export type RoomActionTargetKind = 'project' | 'content' | 'task';

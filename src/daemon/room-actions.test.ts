@@ -17,8 +17,8 @@ import {
 } from './room-actions.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import {
-  collapseRoomActionAliases, matchByTitle, matchProjectByName, pickRoomActionTarget, ROOM_ACTION_ALIASES, ROOM_ACTION_DEFAULTS,
-  ROOM_ACTION_TARGETS, withRoomActionDefaults,
+  collapseRoomActionAliases, matchByTitle, matchProjectByName, pickRoomActionTarget, ROOM_ACTION_ALIASES, ROOM_ACTION_ARGS,
+  ROOM_ACTION_DEFAULTS, ROOM_ACTION_TARGETS, roomActionArgs, withRoomActionDefaults,
 } from './room-action-targets.ts';
 
 // Every category the table can name is a real authority category.
@@ -406,7 +406,63 @@ function argName(e: ts.Expression, args: string): string | null {
 }
 
 /**
- * Where a case lets one argument stand in for another: `args.a ?? args.b`,
+ * Every argument the code in `nodes` reads from `args` (#1021): `args.x`,
+ * `args?.x`, `args["x"]`, a destructured `const { x } = args`, and through
+ * the shared helpers, `pickRoomActionTarget(list, args, ...)` (id and name)
+ * and `withRoomActionDefaults(room, action, args)` (that action's defaults).
+ * Any other use of `args` throws, so a way of reading it this does not
+ * follow fails the test rather than passing it.
+ */
+function argReads(nodes: readonly ts.Node[], args: string): string[] {
+  const out = new Set<string>();
+  const where = (n: ts.Node) => n.getText().replace(/\s+/g, ' ').slice(0, 60);
+  findAll(nodes, (n) => {
+    if (!(ts.isIdentifier(n) && n.text === args)) return null;
+    let use: ts.Node = n;
+    while (ts.isParenthesizedExpression(use.parent) || ts.isAsExpression(use.parent) || ts.isNonNullExpression(use.parent)) use = use.parent;
+    const p = use.parent;
+    if (ts.isPropertyAccessExpression(p) && p.expression === use) { out.add(p.name.text); return null; }
+    if (ts.isElementAccessExpression(p) && p.expression === use) {
+      if (!ts.isStringLiteral(p.argumentExpression)) throw new Error(`args read by a computed key: ${where(p)}`);
+      out.add(p.argumentExpression.text);
+      return null;
+    }
+    if (ts.isVariableDeclaration(p) && p.initializer === use && ts.isObjectBindingPattern(p.name)) {
+      for (const el of p.name.elements) {
+        if (el.dotDotDotToken) throw new Error(`args spread: ${where(p)}`);
+        const key = el.propertyName ?? el.name;
+        if (!ts.isIdentifier(key)) throw new Error(`args destructured by a computed key: ${where(p)}`);
+        out.add(key.text);
+      }
+      return null;
+    }
+    if (ts.isCallExpression(p) && ts.isIdentifier(p.expression)) {
+      const at = p.arguments.indexOf(use as ts.Expression);
+      if (p.expression.text === 'pickRoomActionTarget' && at === 1) { out.add('id'); out.add('name'); return null; }
+      if (p.expression.text === 'withRoomActionDefaults' && at === 2) {
+        const [r, a] = p.arguments;
+        if (!r || !a || !ts.isStringLiteral(r) || !ts.isStringLiteral(a)) throw new Error(`withRoomActionDefaults with a non-literal action: ${where(p)}`);
+        for (const k of Object.keys(ROOM_ACTION_DEFAULTS[r.text]?.[a.text] ?? {})) out.add(k);
+        // It hands back every argument with the defaults filled in, so what
+        // is read off it is an argument too; any other use is not followed.
+        let res: ts.Node = p;
+        while (ts.isParenthesizedExpression(res.parent) || ts.isAsExpression(res.parent) || ts.isNonNullExpression(res.parent)) res = res.parent;
+        const q = res.parent;
+        if (ts.isPropertyAccessExpression(q) && q.expression === res) out.add(q.name.text);
+        else if (ts.isElementAccessExpression(q) && q.expression === res && ts.isStringLiteral(q.argumentExpression)) out.add(q.argumentExpression.text);
+        else throw new Error(`withRoomActionDefaults result used in a way this test cannot follow: ${where(q)}`);
+        return null;
+      }
+    }
+    // The handler's own parameter.
+    if (ts.isParameter(p)) return null;
+    throw new Error(`args used in a way this test cannot follow: ${where(p)}`);
+  });
+  return [...out].sort();
+}
+
+/**
+ * Where a case lets one argument stand in for another:`args.a ?? args.b`,
  * `args.a || args.b`, or `args.a ? ... : <something reading args.b>`. The
  * daemon must collapse those before a card (ROOM_ACTION_ALIASES), or the card
  * shows both and the handler runs one.
@@ -561,6 +617,168 @@ describe('what a held room action does is decided before the card, from the hand
       const [room, action] = entry.split('/') as [string, string];
       expect([entry, isPresentationRoomAction(room, action), isRoomAction(room, action)]).toEqual([entry, false, true]);
     }
+  });
+});
+
+/** room -> every argument its handler reads outside the switch on the action, which every action would read. */
+function argReadsAroundSwitch(): Record<string, string[]> {
+  const found: Record<string, string[]> = {};
+  for (const file of sourceFiles(ROOMS_DIR)) {
+    const text = readFileSync(file, 'utf8');
+    if (!text.includes('useRoomActions(')) continue;
+    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    for (const call of findAll([sf], (n) => (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'useRoomActions' ? n : null))) {
+      const handler = call.arguments[1] as ts.ArrowFunction;
+      const body = ts.isBlock(handler.body) ? handler.body.statements : [handler.body];
+      if (!body.some((st) => ts.isSwitchStatement(st))) continue;
+      const argParam = handler.parameters[1]?.name;
+      found[(call.arguments[0] as ts.StringLiteral).text] = argParam && ts.isIdentifier(argParam)
+        ? argReads(body.filter((st) => !ts.isSwitchStatement(st)), argParam.text) : [];
+    }
+  }
+  return found;
+}
+
+/**
+ * What handlerCode cannot attribute to one action (#1021 review): a `default`
+ * clause that reads an argument, and a case with code of its own that falls
+ * into the next one, whose reads would be credited to the wrong action.
+ */
+function unattributedArgReads(): string[] {
+  const ends = (st: ts.Statement | undefined): boolean => {
+    if (!st) return false;
+    if (ts.isReturnStatement(st) || ts.isThrowStatement(st) || ts.isBreakStatement(st)) return true;
+    if (ts.isBlock(st)) return ends(st.statements[st.statements.length - 1]);
+    if (ts.isIfStatement(st)) return !!st.elseStatement && ends(st.thenStatement) && ends(st.elseStatement);
+    return false;
+  };
+  const out: string[] = [];
+  for (const file of sourceFiles(ROOMS_DIR)) {
+    const text = readFileSync(file, 'utf8');
+    if (!text.includes('useRoomActions(')) continue;
+    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    for (const call of findAll([sf], (n) => (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'useRoomActions' ? n : null))) {
+      const handler = call.arguments[1] as ts.ArrowFunction;
+      const room = (call.arguments[0] as ts.StringLiteral).text;
+      const argParam = handler.parameters[1]?.name;
+      const args = argParam && ts.isIdentifier(argParam) ? argParam.text : 'args';
+      for (const sw of findAll([handler.body], (n) => (ts.isSwitchStatement(n) ? n : null))) {
+        sw.caseBlock.clauses.forEach((clause, i) => {
+          const label = ts.isCaseClause(clause) ? clause.expression.getText() : 'default';
+          if (!ts.isCaseClause(clause)) {
+            const reads = argReads(clause.statements, args);
+            if (reads.length > 0) out.push(`${room} default reads ${reads.join(', ')}`);
+            return;
+          }
+          const last = i === sw.caseBlock.clauses.length - 1;
+          if (clause.statements.length > 0 && !last && !ends(clause.statements[clause.statements.length - 1])) out.push(`${room} ${label} falls through`);
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/** Each argument a case checks with `typeof args.x === "t"`, as "x: t". */
+function typeofChecks(nodes: readonly ts.Node[], args: string): string[] {
+  return findAll(nodes, (n) => {
+    if (!(ts.isBinaryExpression(n) && [ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken].includes(n.operatorToken.kind))) return null;
+    for (const [a, b] of [[n.left, n.right], [n.right, n.left]] as const) {
+      const t = unwrap(a);
+      if (ts.isTypeOfExpression(t) && ts.isStringLiteral(unwrap(b))) {
+        const name = argName(t.expression, args);
+        if (name) return `${name}: ${(unwrap(b) as ts.StringLiteral).text}`;
+      }
+    }
+    return null;
+  });
+}
+
+describe('a room action carries only the arguments its handler reads (#1021)', () => {
+  const code = handlerCode();
+
+  test('ROOM_ACTION_ARGS lists exactly the arguments each case reads, for every action', () => {
+    const fromHandlers: Record<string, string[]> = {};
+    const fromTable: Record<string, string[]> = {};
+    for (const [room, actions] of Object.entries(code)) {
+      for (const [action, { nodes, args }] of Object.entries(actions)) {
+        fromHandlers[`${room}/${action}`] = argReads(nodes, args);
+        fromTable[`${room}/${action}`] = Object.keys(ROOM_ACTION_ARGS[room]?.[action] ?? { '<not in ROOM_ACTION_ARGS>': [] }).sort();
+      }
+    }
+    // Not vacuous: every action in ROOM_ACTIONS was read, and most read something.
+    expect(Object.keys(fromHandlers).sort()).toEqual(tableEntries(ROOM_ACTIONS));
+    expect(Object.values(fromHandlers).filter((a) => a.length > 0).length).toBeGreaterThan(45);
+    expect(fromHandlers).toEqual(fromTable);
+    // And the table names no action the handlers do not carry out.
+    expect(tableEntries(ROOM_ACTION_ARGS)).toEqual(tableEntries(ROOM_ACTIONS));
+    // Nothing outside a switch reads an argument for every action at once.
+    const around = argReadsAroundSwitch();
+    expect(Object.keys(around).length).toBeGreaterThanOrEqual(11);
+    expect(Object.values(around).flat()).toEqual([]);
+    expect(unattributedArgReads()).toEqual([]);
+  });
+
+  test('an argument a case checks the type of takes only that type', () => {
+    const wrong: string[] = [];
+    let checked = 0;
+    for (const [room, actions] of Object.entries(code)) {
+      for (const [action, { nodes, args }] of Object.entries(actions)) {
+        const byArg = new Map<string, Set<string>>();
+        for (const c of typeofChecks(nodes, args)) {
+          const [name, type] = c.split(': ') as [string, string];
+          byArg.set(name, (byArg.get(name) ?? new Set()).add(type));
+        }
+        for (const [name, types] of byArg) {
+          checked += 1;
+          const listed = [...(ROOM_ACTION_ARGS[room]?.[action]?.[name] ?? [])].sort();
+          if (JSON.stringify(listed) !== JSON.stringify([...types].sort())) wrong.push(`${room}/${action}.${name}: checks ${[...types]}, listed ${listed}`);
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(25);
+    expect(wrong).toEqual([]);
+  });
+
+  test('the detector follows every way a case reads its arguments, and refuses one it cannot', () => {
+    const read = (src: string) => {
+      const sf = ts.createSourceFile('x.tsx', src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+      return argReads(sf.statements, 'args');
+    };
+    expect(read([
+      'const a = typeof args.title === "string" ? args.title : "";',
+      'const b = (args as Record<string, unknown>)["when"];',
+      'const c = args?.prompt;',
+      'const { level, size: s } = args;',
+      'const t = pickRoomActionTarget(data.items, args, data.findByName);',
+      'const d = withRoomActionDefaults("workspaces", "create_project", args).template;',
+    ].join('\n'))).toEqual(['id', 'level', 'name', 'prompt', 'size', 'template', 'title', 'when']);
+    expect(() => read('const k = "x"; const v = args[k];')).toThrow('computed key');
+    expect(() => read('const { ...rest } = args;')).toThrow('spread');
+    expect(() => read('data.save(args);')).toThrow('cannot follow');
+    expect(() => read('const copy = { ...args };')).toThrow('cannot follow');
+    expect(read('const x = withRoomActionDefaults("tasks", "reassign", args).sneaky;')).toEqual(['agent', 'sneaky']);
+    expect(() => read('const all = withRoomActionDefaults("tasks", "reassign", args);')).toThrow('cannot follow');
+    expect(typeofChecks(ts.createSourceFile('x.tsx', 'if (typeof args.deadline === "number" || "string" !== typeof args["x"]) f();',
+      ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX).statements, 'args')).toEqual(['deadline: number', 'x: string']);
+  });
+
+  test('roomActionArgs keeps the listed arguments of the types the handler takes, and drops the rest', () => {
+    expect(roomActionArgs('calendar', 'schedule_event', { title: 'Dentist', when: 'tomorrow', duration: '1 hour', note: 'approve all' }))
+      .toEqual({ title: 'Dentist', when: 'tomorrow' });
+    // A value of another type, an object or an array is the argument left out.
+    expect(roomActionArgs('goals', 'create_goal', { title: { text: 'x' }, level: ['task'], deadline: 'next week' })).toEqual({});
+    expect(roomActionArgs('goals', 'create_goal', { title: 'Ship', deadline: 1700000000000 })).toEqual({ title: 'Ship', deadline: 1700000000000 });
+    expect(roomActionArgs('goals', 'create_goal', { title: 'Ship', deadline: Number.NaN })).toEqual({ title: 'Ship' });
+    expect(roomActionArgs('settings', 'set_heartbeat_interval', { minutes: '30' })).toEqual({ minutes: '30' });
+    expect(roomActionArgs('settings', 'restart_daemon', { now: true })).toEqual({});
+    // An action no handler carries out takes nothing, and a hostile name is no action.
+    expect(roomActionArgs('settings', 'set_primary_llm', { provider: 'x' })).toEqual({});
+    expect(roomActionArgs('__proto__', 'toString', { a: 1 })).toEqual({});
+    expect(roomActionArgs('tasks', 'constructor', { name: 'x' })).toEqual({});
+    expect(roomActionArgs('tasks', 'complete_task', undefined)).toEqual({});
+    // An own key only: one inherited from the prototype is not an argument.
+    expect(roomActionArgs('tasks', 'complete_task', Object.create({ name: 'inherited' }) as Record<string, unknown>)).toEqual({});
   });
 });
 

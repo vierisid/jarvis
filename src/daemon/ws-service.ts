@@ -69,7 +69,7 @@ import {
   type RealtimeRoomActionContext, type RoomActionTargetLists,
 } from './voice-room-action-gate.ts';
 import { findContent } from '../vault/content-pipeline.ts';
-import { roomActionTargetKind } from './room-action-targets.ts';
+import { roomActionArgs, roomActionTargetKind } from './room-action-targets.ts';
 import type { BriefCapabilities } from '../brief/capabilities.ts';
 import { safeChatIdentity, type BriefChatTransport } from '../brief/chat-transport.ts';
 import { currentBriefTurn } from '../brief/chat-context.ts';
@@ -2778,8 +2778,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       // the transcript, which has no way to carry it out. One that changes
       // more than the screen is always a repeat-back, the card that shows
       // what confirming runs (#973); a clarifier shows only the intent.
+      // Only the arguments its handler reads, view actions too (#1021).
       let roomAction: PendingVoiceConfirmation['roomAction'] = intent.room_action && isRoomAction(intent.room_action.room, intent.room_action.action)
-        ? intent.room_action : undefined;
+        ? { ...intent.room_action, args: roomActionArgs(intent.room_action.room, intent.room_action.action, intent.room_action.args) } : undefined;
       // A side-effecting one is settled before its card, as above (#1008).
       if (roomAction && !isPresentationRoomAction(roomAction.room, roomAction.action)) {
         const settled = await this.settleHeldRoomAction(roomAction);
@@ -3567,9 +3568,10 @@ function navigateRoomNotice(key: string, requestId?: string): WSMessage {
 
 /**
  * A held room action as the repeat-back shows it (#973): the room, the action,
- * every argument the classifier filled in, in full and JSON-quoted so a value
- * cannot pass for another argument, and what the action can do. The
- * arguments are what the classifier may have read wrong.
+ * every argument it carries, in full and JSON-quoted so a value cannot pass
+ * for another argument, and what the action can do. The arguments are what
+ * the classifier may have read wrong. A held action carries only those its
+ * handler reads (roomActionArgs, #1021), so each one shown is one that runs.
  *
  * The id a held action's item is pinned by (#1008) is left out: the name
  * beside it is that item's own, set when it was pinned, and no other item

@@ -36,7 +36,8 @@ import { roomActionCategories, type RoomActionCategory } from './room-actions.ts
 import type { RoomActionOutcome } from './room-action-results.ts';
 import type { AuthorityDecisionType, ResolutionChannel } from '../authority/audit.ts';
 import {
-  collapseRoomActionAliases, matchByTitle, matchProjectByName, roomActionTargetKind, withRoomActionDefaults, type RoomActionTargetKind,
+  collapseRoomActionAliases, matchByTitle, matchProjectByName, roomActionArgs, roomActionTargetKind, withRoomActionDefaults,
+  type RoomActionTargetKind,
 } from './room-action-targets.ts';
 
 export type RealtimeRoomActionContext = {
@@ -217,7 +218,8 @@ function quoted(s: string): string {
 
 /**
  * `ra` as it will run, settled before the person is asked about it (#1008):
- * every default its handler would supply filled in, and the item it acts on
+ * only the arguments its handler reads (#1021), every default it would
+ * supply filled in, and the item it acts on
  * resolved by the room's own match and pinned by id, its full name shown in
  * place of the one heard. Its handler takes a pinned id as given
  * (pickRoomActionTarget), so the selection and the list changing between the
@@ -234,7 +236,10 @@ export async function resolveHeldRoomAction(
   lists: RoomActionTargetLists,
   what: string,
 ): Promise<{ ok: true; ra: HeldRoomAction } | { ok: false; message: string }> {
-  const args = withRoomActionDefaults(ra.room, ra.action, collapseRoomActionAliases(ra.room, ra.action, ra.args ?? {}));
+  // Only what the handler reads is kept (#1021), so the card shows nothing
+  // that confirming does not use.
+  const args = withRoomActionDefaults(ra.room, ra.action,
+    collapseRoomActionAliases(ra.room, ra.action, roomActionArgs(ra.room, ra.action, ra.args)));
   const kind = roomActionTargetKind(ra.room, ra.action);
   if (!kind) return { ok: true, ra: { ...ra, args } };
   const noun = TARGET_NOUN[kind];
