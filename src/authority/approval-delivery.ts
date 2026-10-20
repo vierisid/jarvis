@@ -542,7 +542,8 @@ const PATH_LIKE = /(?:^|[^\p{L}\p{N}\p{M}])(?:~|\.{1,2})?\/|^[A-Za-z]:[\\/]|\\|:
  * letters stay approvable: Vietnamese writes them in almost every word.
  *
  * The cost: a real Vietnamese, Romanian (`ș`, `ț`), Polish (`ą`, `ę`) or
- * Turkish (`ş`, `ç`) domain, address or path is review-only.
+ * Turkish (`ş`, `ç`) domain, address or path is review-only on the toast and
+ * deny-only from chat (#857).
  */
 function markBelowInAddress(body: string): boolean {
   for (const token of body.split(/\s+/u)) {
@@ -916,15 +917,46 @@ function cardLine(text: string): { shown: string; cut: boolean } {
  * as one piece, so either card then offers only `deny` and sends the person
  * to the dashboard to approve;
  * `approvable` is what the channel reply handler (`channelApprovalReply`)
- * checks before it acts on an `approve`. Denying something you could not
- * read whole is always safe.
+ * checks before it acts on an `approve`, and `refusal` says why it is false.
+ * Denying something you could not read whole is always safe.
+ *
+ * An Intent line that could be a look-alike (`toastLookAlike`: `pаypal.com`
+ * with a Cyrillic `а`, `paypal．com`, `pạypal.com`) withholds approval too
+ * (#857), the check the desktop toast runs on its body (#812, #858). In a chat
+ * the whole card is text, with no hover and no URL bar, so a look-alike is read
+ * as the name it imitates. The card is shown whole, with that reason. Only the
+ * Intent line is checked, as only the toast body is: it is what is approved.
+ * The tool name is a registered id, the reason is the engine's wording or the
+ * owner's own rule, and an agent name needs no look-alike to claim anything
+ * (a workflow can simply be called "Jarvis"). Checking them would make every
+ * workflow named in Cyrillic, beside its ASCII run id, deny-only from chat.
+ *
+ * The cost carries over from the toast, and chat is where people who do not
+ * write English approve. Each of these is deny-only from chat and has to be
+ * approved on the dashboard:
+ * - a word that puts a Turkish `ı`, a French `æ`/`œ` or `þ` beside ASCII
+ *   letters (`Dosyayı`, `cœur`);
+ * - a word, or a run of words, in another script made only of letters that
+ *   read as ASCII among ASCII text (`Fly to Куба`, a reply `Ага, хорошо`);
+ * - a word of 4 or more such letters, or a 3-letter acronym, anywhere in an
+ *   intent with ASCII or digits (R5): `сахар`, `гора`, `Горох и сахар: 2 кг`,
+ *   a name such as `Саша` in English (`Send to Саша`), an acronym such as
+ *   `МТС` (`Pay 300 RUB to МТС`). The legal forms ООО, ОАО, ЗАО, АО, ТОО and
+ *   ИП are exempt (`ООО Ромашка`);
+ * - a Vietnamese, Romanian, Polish or Turkish domain, address or path with a
+ *   mark below (`markBelowInAddress`), or a Hausa, Maltese, Sami, Icelandic or
+ *   Faroese one with a hooked or barred letter (`ɓ`, `ħ`, `ŧ`, `ð`,
+ *   `hookLetterInAddress`).
+ * Because the check runs per label, an intent that mixes scripts word by word
+ * (`Send email to Дмитрий`, a Russian subject line, `ファイル /tmp/x を削除`)
+ * stays approvable.
  *
  * The card is sent as literal text (`{ literal: true }`): Telegram's Markdown
  * and Discord's markdown would otherwise render a label's own `[text](url)`,
  * `||spoiler||`, `*`/`_` pairs or mentions, which can hide or drop part of
  * what is being approved.
  */
-export function approvalChannelCard(request: ApprovalRequest): { text: string; approvable: boolean } {
+export function approvalChannelCard(request: ApprovalRequest): { text: string; approvable: boolean; refusal: ChannelCardRefusal | null } {
   const shortId = request.id.slice(0, APPROVAL_SHORT_ID_LENGTH);
   const { action, reason } = approvalIntentParts(request);
   const intent = cardLine(action);
@@ -944,19 +976,30 @@ export function approvalChannelCard(request: ApprovalRequest): { text: string; a
   // several messages can interleave with another card sent at the same time,
   // so one card's tail -- its `approve` line included -- would sit under
   // another card's head (#718 review).
-  const approvable = ![intent, tool, agent, why].some((line) => line.cut)
+  const whole = ![intent, tool, agent, why].some((line) => line.cut)
     && approvableText.length <= CHANNEL_CARD_APPROVABLE_MAX_CHARS;
-  if (approvable) return { approvable, text: approvableText };
+  // Checked only on a card shown whole, like the toast, so it never walks a
+  // label the backstop cut.
+  const refusal: ChannelCardRefusal | null = !whole ? 'too_long' : toastLookAlike(intent.shown) ? 'look_alike' : null;
+  if (refusal === null) return { approvable: true, refusal, text: approvableText };
   return {
-    approvable,
+    approvable: false,
+    refusal,
     text: [
       ...head,
-      `This is too long to show whole in one message here, so it cannot be approved from this chat.`,
-      `Open the Jarvis dashboard to read all of it and decide, or reply:`,
+      refusal === 'too_long'
+        ? `This is too long to show whole in one message here, so it cannot be approved from this chat.`
+        : `The intent ${LOOK_ALIKE_REASON}, so it cannot be approved from this chat.`,
+      refusal === 'too_long'
+        ? `Open the Jarvis dashboard to read all of it and decide, or reply:`
+        : `Open the Jarvis dashboard to check it and decide, or reply:`,
       `  deny ${shortId}`,
     ].join('\n'),
   };
 }
+
+/** Why a chat approval card offers only `deny`: a line or the card would be cut, or the intent could be a look-alike. */
+export type ChannelCardRefusal = 'too_long' | 'look_alike';
 
 /**
  * The longest approval card that can be approved by reply: one that every

