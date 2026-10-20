@@ -115,11 +115,13 @@ export type PalettePickDeps = PebbleRoomDeps & {
  * "open workflows" uses, so the room shows up tracked exactly the same way.
  */
 export function makePalettePick(deps: PalettePickDeps) {
-  return async ({ kind, key }: { kind: string; key: string }): Promise<void> => {
+  return async ({ kind, key }: { kind: string; key: unknown }): Promise<void> => {
     if (kind !== 'room') return; // object picks not yet wired in panel mode
+    // The key is the POST body's, any JSON value; pebbleRoom only answers for
+    // a string, and the typeof narrows it for the calls below.
     const meta = pebbleRoom(key);
-    if (!meta) {
-      console.warn(`[palette] pick: unknown room "${key}"`);
+    if (!meta || typeof key !== 'string') {
+      console.warn(`[palette] pick: unknown room "${String(key)}"`);
       return;
     }
     const sidecarId = deps.pickSidecar();

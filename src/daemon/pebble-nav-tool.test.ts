@@ -120,7 +120,7 @@ describe('palette room pick', () => {
     // that no later "close the settings window" could find.
     for (const key of [['settings'], { toString: () => 'settings' }, 7]) {
       const h = harness();
-      await h.pick({ kind: 'room', key: key as never });
+      await h.pick({ kind: 'room', key });
       expect([key, h.closed, h.rpcs]).toEqual([key, [], []]);
     }
   });
@@ -142,6 +142,6 @@ describe('the daemon uses these', () => {
   test('the pebble realtime session and the palette pick go through this module', () => {
     expect(src).toContain('const executePebbleNavTool = makePebbleNavTool({');
     expect(src).toContain('const nav = await executePebbleNavTool(sidecarId, name, args);');
-    expect(src).toContain('setPaletteHandler({\n        pick: makePalettePick({');
+    expect(src).toMatch(/setPaletteHandler\(\{\s*pick:\s*makePalettePick\(\{/);
   });
 });
