@@ -1931,6 +1931,17 @@ if (rule === "images") {
       const u = String(st.uses ?? "");
       if (u.toLowerCase().startsWith("docker://") && !digest.test(u))
         out.push(name + (via ? " (via " + via.slice(0, -3) + ")" : "") + ": runs " + u + ", not pinned by digest");
+      // A local Docker action runs its image, or builds one from its
+      // Dockerfile, whose FROM this rule does not read: only a docker://
+      // image by digest passes (#1048 review).
+      if (u.startsWith("./") && !/\.ya?ml$/.test(u)) {
+        let action = null;
+        for (const f of ["action.yml", "action.yaml"])
+          try { action = Bun.YAML.parse(require("node:fs").readFileSync(process.env.REPO + "/" + u.slice(2).replace(/\/$/, "") + "/" + f, "utf8")); break; } catch {}
+        const img = String(action?.runs?.image ?? "");
+        if (action?.runs?.using === "docker" && !(img.toLowerCase().startsWith("docker://") && digest.test(img)))
+          out.push(name + (via ? " (via " + via.slice(0, -3) + ")" : "") + ": runs the local Docker action " + u + " (image " + JSON.stringify(img) + "), not pinned by digest");
+      }
     }
   }
 }
@@ -2077,6 +2088,14 @@ done
 		'      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' $'      - uses: docker://alpine:3\n      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' \
 		'runs docker://alpine:3, not pinned by digest'
 }
+# A local Docker action, by tag or built from a Dockerfile (#1048 review).
+for img in 'docker://alpine:3' 'Dockerfile'; do
+	rm -rf "${WORK}/docker-repo" && mkdir -p "${WORK}/docker-repo/.github/actions/d"
+	printf '%s\n' 'name: d' 'description: docker' 'runs:' '  using: docker' "  image: ${img}" >"${WORK}/docker-repo/.github/actions/d/action.yml"
+	REPO_DIR="${WORK}/docker-repo" expect_caught "a local Docker action whose image is ${img} (#1048 review)" images "$WORKFLOWS/test.yml" \
+		'      - name: Parse every plist' $'      - uses: ./.github/actions/d\n      - name: Parse every plist' \
+		"plist-lint: runs the local Docker action ./.github/actions/d (image \"${img}\"), not pinned by digest"
+done
 # ...and a digest is accepted, so the rule is not simply refusing every image.
 copy="${WORK}/images-ok.yml"
 FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
