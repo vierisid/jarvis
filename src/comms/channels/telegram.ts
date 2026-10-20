@@ -16,6 +16,14 @@ export type ChannelMessage = {
    * Absent means false: an adapter that does not say is not trusted to decide.
    */
   senderAllowListed?: boolean;
+  /**
+   * True when the sender forwarded someone else's message rather than writing
+   * it (#914). Its words are not the sender's, so an `approve <id>` or
+   * `deny <id>` in it decides nothing. Telegram and Discord both set it; an
+   * adapter that leaves it out is treated as not forwarding, so a new adapter
+   * that can deliver a forward's text must set it.
+   */
+  forwarded?: boolean;
 };
 
 export type ChannelHandler = (message: ChannelMessage) => Promise<string>;
@@ -106,6 +114,16 @@ type TelegramUpdate = {
     };
     /** Set when the message was sent on behalf of a chat: an anonymous group admin, or a channel (#885). */
     sender_chat?: { id: number; type: string; title?: string };
+    /**
+     * Set on a forwarded message (#914): `forward_origin` since Bot API 7.0,
+     * and the `forward_*` fields it replaced on older servers. Any of them
+     * means the text was written by whoever the origin names, not `from`.
+     */
+    forward_origin?: { type: string; date: number };
+    forward_from?: { id: number };
+    forward_from_chat?: { id: number; type: string };
+    forward_sender_name?: string;
+    forward_date?: number;
     chat: {
       id: number;
       type: string;
@@ -791,6 +809,7 @@ export class TelegramAdapter implements ChannelAdapter {
         isVoice: !!voiceFile,
       },
       senderAllowListed: this.allowList.ids.includes(from.id),
+      forwarded: isTelegramForward(message),
     };
 
     console.log('[TelegramAdapter] Message from', channelMessage.from, ':', channelMessage.text.slice(0, 80));
@@ -839,6 +858,17 @@ export class TelegramAdapter implements ChannelAdapter {
 
     return Buffer.from(await downloadResp.arrayBuffer());
   }
+}
+
+/**
+ * Whether a Telegram message is a forward, by any field a Bot API version has
+ * used to say so (#914). A copy sent with the client's "hide sender name"
+ * option carries none of them and reads as typed text; nothing in the update
+ * tells the two apart.
+ */
+function isTelegramForward(message: NonNullable<TelegramUpdate['message']>): boolean {
+  return message.forward_origin != null || message.forward_from != null || message.forward_from_chat != null
+    || message.forward_sender_name != null || message.forward_date != null;
 }
 
 /**

@@ -554,6 +554,10 @@ export class ChannelService implements Service {
       // Discord, anyone on Telegram -- and that must not extend to approving
       // a gated action.
       if (!allowListed) return channelDecisionNeedsAllowList(channelTag);
+      // A forward carries someone else's words (#914). Forwarding is a quick
+      // action, and the text need not look like a command to the person
+      // forwarding it, so it is never their decision.
+      if (msg.forwarded === true) return channelDecisionForwarded(channelTag);
       try {
         return await this.approvalHandler(decision.action, decision.shortId, channelTag);
       } catch (err) {
@@ -635,6 +639,14 @@ export function isPrivateChat(msg: Pick<ChannelMessage, 'channel' | 'metadata'>)
  */
 export function channelDecisionNeedsAllowList(channel: string): string {
   return `Approvals can only be decided from ${channel} by a user listed under Allowed user IDs in Jarvis Settings > Channels, and that list is empty or does not include you. Nothing was approved or denied. Open the Jarvis dashboard to decide.`;
+}
+
+/**
+ * The answer to an `approve <id>` or `deny <id>` found in a forwarded message
+ * (#914). Nothing is decided.
+ */
+export function channelDecisionForwarded(channel: string): string {
+  return `That approve or deny is in a forwarded message, so it was written by someone else and does not count as your decision. Nothing was approved or denied. Type the reply yourself in ${channel}, or open the Jarvis dashboard to decide.`;
 }
 
 /**

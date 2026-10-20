@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, MessageFlags, Partials, Status, type Message } from 'discord.js';
+import { Client, GatewayIntentBits, MessageFlags, MessageReferenceType, Partials, Status, type Message } from 'discord.js';
 import type { ChannelAdapter, ChannelHandler, ChannelMessage, SendOptions } from './telegram.ts';
 import type { STTProvider } from '../voice.ts';
 import { discordAllowList, type AllowList } from './allow-list.ts';
@@ -213,6 +213,10 @@ export class DiscordAdapter implements ChannelAdapter {
         isVoice: !!audioAttachment,
       },
       senderAllowListed: this.allowList.ids.includes(message.author.id),
+      // A forward has empty `content` today, so it stops at `if (!text)`
+      // above. Said anyway, so a forward that ever does carry text still
+      // cannot decide an approval (#914).
+      forwarded: message.reference?.type === MessageReferenceType.Forward || (message.messageSnapshots?.size ?? 0) > 0,
     };
 
     console.log('[DiscordAdapter] Message from', channelMessage.from, ':', text.slice(0, 80));
