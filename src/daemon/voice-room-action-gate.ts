@@ -136,6 +136,8 @@ export type RoomActionAuditReason =
   // The room's answer after its wait ran out, and what the first row said
   // then, on a follow-up row (#1034).
   | `late_${RoomAnswer}_after_${'started' | 'no_answer'}`
+  // Its dashboard went before answering an action recorded as started.
+  | 'late_disconnected_after_started'
   | 'held' | 'refused_yes' | 'cancelled' | 'unsettled' | 'blocked' | 'tainted'
   | 'paused' | 'killed' | 'expired' | 'disconnected' | 'shutdown' | 'failed' | 'not_a_room_action';
 
@@ -168,8 +170,9 @@ export function roomActionExecuted(outcome: RoomActionOutcome): boolean {
  * run. When the room answers after `started` or `no_answer`, a follow-up row
  * says what it answered and what the first row reported, e.g.
  * `late_rejected_after_started` (#1034), with `executed` true only for
- * accepted. `approval_id` is the
- * hold's id, linking a hold to what became of it.
+ * accepted; a started one whose dashboard goes first gets
+ * `late_disconnected_after_started`, not run. `approval_id` is the hold's
+ * id, linking a hold to what became of it.
  *
  * An authority grant or revoke is not a room action and has no categories,
  * but a voice path asking for one is what #969 refuses by name, so its

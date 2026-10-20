@@ -99,7 +99,7 @@ export type RoomActionOutcome = RoomAnswer | 'started' | 'no_answer' | 'unreache
  * and what the wait was reported as then: `started` (recorded as run) or
  * `no_answer`. Called at most once.
  */
-export type LateRoomAnswer = (answer: RoomAnswer, reported: 'started' | 'no_answer') => void;
+export type LateRoomAnswer = (answer: RoomAnswer | 'disconnected', reported: 'started' | 'no_answer') => void;
 
 /**
  * How many waits that ran out are remembered for a late answer at once
@@ -240,9 +240,14 @@ export class RoomActionResults {
     for (const [id, entry] of [...this.pending]) {
       if (entry.answerer === answerer) this.finish(id, 'no_answer');
     }
-    // Nothing late can come from it now either.
+    // Nothing late can come from it now either. One reported `started` was
+    // recorded as run on the room's word, or on a claim it may never have
+    // received; with no answer to come, say the dashboard went, so that row
+    // is not the last word.
     for (const [id, late] of [...this.late]) {
-      if (late.answerer === answerer) this.late.delete(id);
+      if (late.answerer !== answerer) continue;
+      this.late.delete(id);
+      if (late.reported === 'started') late.onLate('disconnected', 'started');
     }
   }
 

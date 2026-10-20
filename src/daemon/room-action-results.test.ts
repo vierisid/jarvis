@@ -193,4 +193,19 @@ describe('RoomActionResults', () => {
     expect(results.claim(panels.id, undefined)).toBe(false);
     expect(await panels.outcome).toBe('no_answer');
   });
+
+  test('a started wait whose client goes before answering is told so, once; an unanswered one is not', async () => {
+    const results = new RoomActionResults(ids);
+    const gone = {};
+    const heard: string[] = [];
+    const started = results.open(5, gone, (answer, reported) => heard.push(`${reported}->${answer}`));
+    results.started(started.id, gone);
+    expect(await started.outcome).toBe('started');
+    const silent = results.open(5, gone, (answer, reported) => heard.push(`${reported}->${answer}`));
+    expect(await silent.outcome).toBe('no_answer');
+    results.abandonAnswerer(gone);
+    results.abandonAnswerer(gone);
+    expect(heard).toEqual(['started->disconnected']);
+    expect(results.lateSize).toBe(0);
+  });
 });

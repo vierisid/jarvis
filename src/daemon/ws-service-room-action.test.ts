@@ -1276,6 +1276,24 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
     expect(t.rows.map((r) => r.approval_id)).toEqual(['i-tasks-create_task', 'i-tasks-create_task', 'i-tasks-create_task']);
   });
 
+  // A started action, or a claimed one, is recorded as run. If its dashboard
+  // goes before the room's answer comes, that row must not be the last word.
+  test('a started action whose dashboard leaves before answering gets a disconnected row, not run', async () => {
+    const t = setup();
+    t.answering({ started: true } as never);
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'workspaces', action: 'start_server', args: { name: 'demo' } }, t.speaker.ws);
+    t.internals.handleClientDisconnect(t.speaker.ws);
+    expect(t.brief()).toEqual([
+      'allowed:ran:voice:room_action(workspaces/start_server; via realtime; execute_command; started)',
+      'allowed:not-run:voice:room_action(workspaces/start_server; via realtime; execute_command; late_disconnected_after_started)',
+    ]);
+    // An unanswered one already says it did not run: nothing to add.
+    const u = setup();
+    await u.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, u.speaker.ws);
+    u.internals.handleClientDisconnect(u.speaker.ws);
+    expect(u.brief()).toEqual(['allowed:not-run:voice:room_action(tasks/create_task; via realtime; write_data; no_answer)']);
+  });
+
   test('a late answer from a dashboard that has since gone is not heard', async () => {
     const t = setup();
     await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws);

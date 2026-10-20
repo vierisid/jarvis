@@ -2138,7 +2138,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   ): LateRoomAnswer {
     return (answer, reported) => {
       console.warn(`[WSService] late answer for room action ${ra.room}/${ra.action}: ${answer}, after it was reported ${reported}`);
-      this.auditRoomAction(ra, origin, 'allowed', answer === 'accepted', { ...opts, reason: `late_${answer}_after_${reported}` });
+      const reason = answer === 'disconnected' ? 'late_disconnected_after_started' as const : `late_${answer}_after_${reported}` as const;
+      this.auditRoomAction(ra, origin, 'allowed', answer === 'accepted', { ...opts, reason });
     };
   }
 
