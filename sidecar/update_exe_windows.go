@@ -21,8 +21,9 @@ func asideDir() string { return filepath.Join(configDir, "update") }
 // an executing image but does allow moving it. When the profile sits on
 // another volume (the move would be a copy), it falls back to renaming it in
 // place. The returned restore puts the original back after a failed update,
-// moving any half-written replacement out of the way first.
-func moveRunningExeAside(exe string) (restore func(), err error) {
+// moving any half-written replacement out of the way first, and says when it
+// could not.
+func moveRunningExeAside(exe string) (restore func() error, err error) {
 	aside := ""
 	if err := os.MkdirAll(asideDir(), 0700); err == nil {
 		candidate := filepath.Join(asideDir(), fmt.Sprintf("jarvis-%d.exe.old", os.Getpid()))
@@ -38,14 +39,18 @@ func moveRunningExeAside(exe string) (restore func(), err error) {
 			return nil, fmt.Errorf("could not move the running sidecar aside for the update: %w", err)
 		}
 	}
-	return func() {
+	return func() error {
 		if _, err := os.Stat(exe); err == nil {
 			failed := fmt.Sprintf("%s.failed-%d", exe, time.Now().UnixNano())
-			if os.Rename(exe, failed) != nil {
-				return // keep whatever is there rather than lose both copies
+			if err := os.Rename(exe, failed); err != nil {
+				// Keep whatever is there rather than lose both copies.
+				return fmt.Errorf("could not move the new copy out of the way (the previous copy is at %s): %w", aside, err)
 			}
 		}
-		_ = os.Rename(aside, exe)
+		if err := os.Rename(aside, exe); err != nil {
+			return fmt.Errorf("could not move the previous copy back from %s: %w", aside, err)
+		}
+		return nil
 	}, nil
 }
 

@@ -87,7 +87,11 @@ type cdpClient struct {
 	//                 snapshot's number. It does NOT close the window after a
 	//                 reply is sent and before the click runs -- nothing
 	//                 sidecar-side can, and the daemon's own local path has the
-	//                 same property.
+	//                 same property. takePageSnapshot also compares it across
+	//                 its own script (#878): a drop that lands from just before
+	//                 the world is fetched through the fill means the fill
+	//                 would reinstall coordinates the drop said are gone, so
+	//                 the snapshot fails instead.
 	//   elemFrames    the ids that came from a same-origin SUBFRAME, and a
 	//                 digest of every frame's loaderId. A child document can
 	//                 navigate itself while the main frame's loaderId holds
