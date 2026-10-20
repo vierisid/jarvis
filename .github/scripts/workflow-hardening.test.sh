@@ -100,6 +100,20 @@
 #  11. (#1001) No checkout in any workflow, local composite actions included,
 #      leaves its token in .git/config: persist-credentials is false on every
 #      one, read-only workflows too, since their later steps run PR code.
+#  12. (#1047) A workflow that holds no authority and that no other workflow
+#      can call may restore from the Actions cache by its exact key only, in
+#      one form: a lookup-only actions/cache/restore, then actions/cache on
+#      the same key and path with no restore-keys that downloads only on that
+#      exact hit, then a bash step that removes every cached path (rm -rf, or
+#      go clean -modcache) unless its own hit is exact. So a prefix match is
+#      not extracted unless the exact entry is evicted or deleted between the
+#      first two steps. Nor may the env that reaches the discard, written in
+#      the YAML or to GITHUB_ENV/GITHUB_PATH by an earlier step, change what
+#      it runs (what actions write there is not read).
+#      Not stopped: an entry written at the exact key before CI wrote it.
+#      The toolchain caches of setup-bun, setup-go and setup-node take any
+#      prefix match of their key, so they stay refused in every workflow
+#      rule 5 reads.
 #
 # Each rule is also run against a mutated copy that breaks it, and must report
 # it, so a neutered check fails here instead of passing everything.
@@ -144,10 +158,12 @@ const rule = process.env.RULE;
 // recursively: a workflow that pins everything it names can otherwise reach
 // unpinned code one level down. In a composite step, ${{ inputs.X }} is
 // replaced by what the caller passes, or by the input default.
-const flatSteps = (steps, via = "", depth = 0) => {
+// penv: the env of the steps that use the enclosing local actions, which
+// GitHub hands down to the steps inside them (#1047 review 3).
+const flatSteps = (steps, via = "", depth = 0, penv = {}) => {
   const outSteps = [];
   for (const st of steps ?? []) {
-    outSteps.push({ st, via });
+    outSteps.push({ st, via, penv });
     const u = String(st.uses ?? "");
     if (!u.startsWith("./") || /\.ya?ml$/.test(u)) continue;
     // Every rule that reads steps would otherwise pass what it cannot see.
@@ -163,7 +179,7 @@ const flatSteps = (steps, via = "", depth = 0) => {
     for (const [k, v] of Object.entries(st.with ?? {})) inputs.set(k.toLowerCase(), v);
     const fill = (x) => JSON.parse(JSON.stringify(x).replace(/\$\{\{\s*inputs\.([A-Za-z0-9_-]+)\s*\}\}/g,
       (m, k) => inputs.has(k.toLowerCase()) ? JSON.stringify(String(inputs.get(k.toLowerCase()))).slice(1, -1) : m));
-    outSteps.push(...flatSteps(action.runs.steps.map(fill), via + u + " > ", depth + 1));
+    outSteps.push(...flatSteps(action.runs.steps.map(fill), via + u + " > ", depth + 1, { ...penv, ...(st.env ?? {}) }));
   }
   return outSteps;
 };
@@ -765,8 +781,10 @@ if (rule === "publish-perms") {
   for (const [name, job] of Object.entries(jobs))
     if (job.permissions === undefined) out.push(name + ": declares no permissions of its own");
 }
-if (rule === "authority") {
-  // Prints "yes" when the workflow holds authority (see header), else nothing.
+// Whether the workflow holds authority (see header). The authority rule
+// prints it; mutable reads it too, to hold the cache restores of a workflow
+// that holds none to the exact-key form instead of refusing them (#1047).
+const holdsAuthority = () => {
   const grants = (perm) => perm === "write-all" ||
     (perm && typeof perm === "object" && Object.values(perm).some((v) => v === "write"));
   const on = doc.on ?? doc[true] ?? {};
@@ -781,10 +799,10 @@ if (rule === "authority") {
   // hold braces (format strings), so read up to the closing }} lazily.
   const exprs = [...JSON.stringify({ env: doc.env, jobs }).matchAll(/\$\{\{([\s\S]*?)\}\}/g)].map((m) => m[1]);
   const secret = exprs.some((e) => /\bsecrets\b(?!\s*\.\s*GITHUB_TOKEN\b)/i.test(e));
-  if (grants(doc.permissions) || Object.values(jobs).some((j) => grants(j.permissions)) ||
-      triggers.includes("pull_request_target") || secret || Object.values(jobs).some((j) => j.secrets === "inherit"))
-    out.push("yes");
-}
+  return Boolean(grants(doc.permissions) || Object.values(jobs).some((j) => grants(j.permissions)) ||
+      triggers.includes("pull_request_target") || secret || Object.values(jobs).some((j) => j.secrets === "inherit"));
+};
+if (rule === "authority" && holdsAuthority()) out.push("yes");
 if (rule === "reach") {
   // Prints "yes" when a push or a pull request can start the workflow (#984).
   // The triggers that cannot are listed, not the ones that can: an event
@@ -989,11 +1007,15 @@ if (rule === "mutable") {
   });
   for (const [k, v] of Object.entries(doc.env ?? {}))
     if (/version$/i.test(k) && floating(v)) out.push("env." + k + " is " + JSON.stringify(v));
+  const authority = holdsAuthority();
+  const on = doc.on ?? doc[true] ?? {};
+  const callable = (typeof on === "string" ? [on] : Array.isArray(on) ? on : Object.keys(on)).includes("workflow_call");
   for (const [name, job] of Object.entries(jobs)) {
     for (const [k, v] of Object.entries(job.env ?? {}))
       if (/version$/i.test(k) && floating(resolve(v, doc.env)))
         out.push(name + ": env." + k + " is " + JSON.stringify(v));
-    for (const [i, { st: s, via }] of flatSteps(job.steps).entries()) {
+    const flat = flatSteps(job.steps);
+    for (const [i, { st: s, via }] of flat.entries()) {
       const label = name + ": step " + (via ? "(via " + via.slice(0, -3) + ") " : "") + (s.name ?? s.id ?? s.uses ?? String(i));
       const scopes = [s.env, job.env, doc.env];
       for (const [k, v] of Object.entries(s.env ?? {}))
@@ -1051,8 +1073,101 @@ if (rule === "mutable") {
       // the bytes from the Actions cache, which any run on main can write.
       if (uses.startsWith("oven-sh/setup-bun@") && String(s.with?.["no-cache"]) !== "true")
         out.push(label + ": setup-bun without no-cache: true restores Bun from the Actions cache");
-      if (/^actions\/cache(\/restore)?@/.test(uses))
-        out.push(label + ": restores from the Actions cache (writable by any run on main)");
+      // (#1047) A workflow that holds no authority may restore from the
+      // Actions cache by its exact key only, in one form, three steps in a
+      // row: actions/cache/restore with lookup-only true (downloads nothing,
+      // reports cache-hit true only for the exact key); actions/cache with
+      // the same key and path and lookup-only exactly "not that exact hit",
+      // so a prefix match (the cache service matches the key itself as a
+      // prefix too) is not extracted, tar -P and all, unless the exact entry
+      // is evicted or deleted between the two steps; and a discard of every cached path unless
+      // its own hit is exact. Both cache steps take only path, key and
+      // lookup-only, read case-insensitively as GitHub does. The discard is
+      // read line by line: rm -rf of a literal path or of "$K" from its env,
+      // or go clean -modcache with GOMODCACHE in its env, and nothing else;
+      // its env holds exactly those names, none starting with ~, and neither
+      // the job nor the workflow sets a name that changes what it runs. A
+      // workflow_call callee counts as holding authority here: with no
+      // permissions of its own it runs with its caller token. Not stopped: an
+      // entry written at the exact key before CI wrote it. The toolchain
+      // actions above restore through their own key and take any prefix
+      // match, with no switch to refuse it, so they stay refused everywhere.
+      if (/^actions\/cache(\/restore)?@/.test(uses)) {
+        const one = (x) => String(x ?? "").replace(/\s+/g, " ").trim();
+        const hitIs = (id) => "steps." + id + ".outputs.cache-hit != \x27true\x27";
+        const isCache = (x, kind) => x !== undefined && x.via === via && new RegExp("^actions/cache" + kind + "@").test(String(x.st.uses ?? "").toLowerCase());
+        // with: keyed in lower case; null when two keys differ only by case.
+        const lower = (w) => {
+          const m = {};
+          for (const [k, v] of Object.entries(w ?? {})) { const l = k.toLowerCase(); if (l in m) return null; m[l] = v; }
+          return m;
+        };
+        const w = lower(s.with);
+        const rk = w?.["restore-keys"];
+        const prefixed = rk !== undefined && rk !== null && String(rk).trim() !== "";
+        const onlyThese = (x) => x !== null && Object.keys(x).every((k) => ["path", "key", "lookup-only"].includes(k));
+        if (authority || callable) out.push(label + ": restores from the Actions cache (writable by any run on main)");
+        else if (prefixed) out.push(label + ": restores by a key prefix (restore-keys), not by its exact key only");
+        else if (!onlyThese(w)) out.push(label + ": takes inputs other than path, key and lookup-only, or one spelled twice");
+        else if (/^actions\/cache\/restore@/.test(uses)) {
+          // Only as the lookup in front of the actions/cache step below.
+          const next = flat[i + 1];
+          if (String(w["lookup-only"]) !== "true" || !isCache(next, ""))
+            out.push(label + ": actions/cache/restore here is not a lookup-only step right before the actions/cache step it gates");
+        } else {
+          const prev = flat[i - 1], next = flat[i + 1];
+          const pw = prev !== undefined ? lower(prev.st.with) : null;
+          const lid = isCache(prev, "/restore") ? String(prev.st.id ?? "") : "";
+          const gated = lid !== "" && onlyThese(pw) && String(pw["lookup-only"]) === "true" &&
+            one(pw.key) === one(w.key) && one(pw.path) === one(w.path) &&
+            one(w["lookup-only"]) === "${{ " + hitIs(lid) + " }}";
+          if (!gated)
+            out.push(label + ": not gated by a lookup-only actions/cache/restore of the same key and path right before it (lookup-only: ${{ steps.<lookup id>.outputs.cache-hit != \x27true\x27 }}), so a prefix match is extracted");
+          const id = String(s.id ?? "");
+          const paths = String(w.path ?? "").split("\n").map((x) => x.trim()).filter(Boolean);
+          const d = next !== undefined && next.via === via ? next.st : undefined;
+          const env = d?.env ?? {};
+          const removed = new Set(), used = new Set();
+          const lines = d && typeof d.run === "string" ? d.run.split("\n").map((x) => x.trim()).filter(Boolean) : [];
+          // Names that change what the discard runs: never in its env (but
+          // GOMODCACHE, for go clean -modcache), nor in the job, workflow or
+          // enclosing step env that reaches it (#1047 review 3).
+          const steer = /^(?:GO[A-Z0-9_]*|BASH_ENV|ENV|HOME|PATH|IFS|PS4|SHELLOPTS|BASHOPTS|LD_[A-Z0-9_]*|BASH_FUNC_.*|XDG_[A-Z0-9_]*)$/i;
+          const fromEnv = (k) => typeof env[k] === "string" && !env[k].trim().startsWith("~");
+          const plain = lines.length > 0 && lines.every((l) => {
+            let m;
+            if (l === "go clean -modcache" && fromEnv("GOMODCACHE")) { removed.add(env.GOMODCACHE.trim()); used.add("GOMODCACHE"); return true; }
+            if ((m = /^rm -rf (?:-- )?"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"$/.exec(l)) && fromEnv(m[1]) && (m[1] === "GOCACHE" || !steer.test(m[1]))) { removed.add(env[m[1]].trim()); used.add(m[1]); return true; }
+            if ((m = /^rm -rf (?:-- )?([^\s"\x27$;&|`<>()]+)$/.exec(l))) { removed.add(m[1]); return true; }
+            return false;
+          });
+          // An env this rule cannot read as a mapping (one expression for the
+          // whole block) could hold any of them (#1047 review 4).
+          const mapping = (e) => e === undefined || e === null || (typeof e === "object" && !Array.isArray(e) && Object.keys(e).every((k) => !k.includes("${{")));
+          const steered = Object.keys({ ...(doc.env ?? {}), ...(job.env ?? {}), ...(next?.penv ?? {}) }).filter((k) => steer.test(k));
+          if (![doc.env, job.env, next?.penv, d?.env].every(mapping)) steered.push("an env this rule cannot read as a mapping");
+          // ...and so could any step before it that writes GITHUB_ENV or
+          // GITHUB_PATH at run time: only a literal NAME=value echoed or
+          // printed into GITHUB_ENV, under a name steer does not match, is
+          // read (#1047 review 4). What actions write there (setup-go puts Go
+          // on PATH) is not readable here and is not checked.
+          for (const { st: b } of flat.slice(0, i + 1)) {
+            const run = typeof b.run === "string" ? b.run : "";
+            if (/GITHUB_PATH/.test(run)) steered.push("GITHUB_PATH (written by an earlier step)");
+            for (const l of run.split("\n").filter((x) => /GITHUB_ENV/.test(x))) {
+              const names = [...l.matchAll(/(?:^|[\s;&|(])(?:echo|printf)\s+["\x27]?([A-Za-z_][A-Za-z0-9_]*)=[^>]*?["\x27]?\s*>>\s*"?\$\{?GITHUB_ENV\}?"?/g)].map((m) => m[1]);
+              if (names.length !== (l.match(/GITHUB_ENV/g) ?? []).length) steered.push("GITHUB_ENV written in a form this rule cannot read (by an earlier step)");
+              for (const n of names) if (steer.test(n)) steered.push(n + " (written to GITHUB_ENV by an earlier step)");
+            }
+          }
+          const discards = id !== "" && d !== undefined && one(d.if) === hitIs(id) &&
+            Object.keys(d).every((k) => ["name", "if", "shell", "env", "run"].includes(k)) && d.shell === "bash" &&
+            plain && Object.keys(env).every((k) => used.has(k)) && steered.length === 0 &&
+            paths.length > 0 && paths.every((p) => removed.has(p));
+          if (!discards)
+            out.push(label + ": a restore that is not an exact key match is not discarded by the step right after it (if: " + hitIs(id || "<id>") + ", shell bash, rm -rf or go clean -modcache of every cached path and nothing else, env only what those lines read" + (steered.length ? "; the job, workflow or enclosing step sets " + steered.join(", ") : "") + ")");
+        }
+      }
       // setup-node turns on its npm cache when package.json names npm as
       // packageManager, unless told not to (#1046 review).
       if (uses.startsWith("actions/setup-node@") && (String(s.with?.["package-manager-cache"]) !== "false" || s.with?.cache !== undefined))
@@ -2597,10 +2712,13 @@ fi
 # only gains a secret reference; its tag (put back, as above) must surface.
 # shellcheck disable=SC2016 # JavaScript source, not shell.
 FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
+// test.yml has no top-level env since #1047, so one is added in front of
+// jobs:, and a missing anchor writes nothing, which fails the check below.
 const s = await Bun.file(process.env.FROM).text();
-await Bun.write(process.env.TO, s.replace("\nenv:\n", "\nenv:\n  SOME_KEY: ${{ secrets.SOME_KEY }}\n").replace("uses: actions/checkout@", "uses: actions/checkout@v7 #"));
-'
-if [ -n "$(check authority "$copy")" ] && [ -n "$(check pinned "$copy")" ]; then
+if (s.split("\njobs:\n").length !== 2) process.exit(2);
+await Bun.write(process.env.TO, s.replace("\njobs:\n", "\nenv:\n  SOME_KEY: ${{ secrets.SOME_KEY }}\n\njobs:\n").replace("uses: actions/checkout@", "uses: actions/checkout@v7 #"));
+' && ok_written=1 || ok_written=0
+if [ "$ok_written" = 1 ] && [ -n "$(check authority "$copy")" ] && [ -n "$(check pinned "$copy")" ]; then
 	ok "reports: a read-only workflow that reads a secret while using tags"
 else
 	no "reports: a read-only workflow that reads a secret while using tags"
@@ -2608,10 +2726,13 @@ fi
 # ...and secrets.GITHUB_TOKEN alone is not: its scope is the permissions block.
 # shellcheck disable=SC2016 # JavaScript source, not shell.
 FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
+// test.yml has no top-level env since #1047, so one is added in front of
+// jobs:, and a missing anchor writes nothing, which fails the check below.
 const s = await Bun.file(process.env.FROM).text();
-await Bun.write(process.env.TO, s.replace("\nenv:\n", "\nenv:\n  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"));
-'
-if [ -z "$(check authority "$copy")" ]; then
+if (s.split("\njobs:\n").length !== 2) process.exit(2);
+await Bun.write(process.env.TO, s.replace("\njobs:\n", "\nenv:\n  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n\njobs:\n"));
+' && ok_written=1 || ok_written=0
+if [ "$ok_written" = 1 ] && [ -z "$(check authority "$copy")" ]; then
 	ok "a read-only workflow reading only secrets.GITHUB_TOKEN holds no authority"
 else
 	no "a read-only workflow reading only secrets.GITHUB_TOKEN holds no authority"
@@ -2637,25 +2758,214 @@ await Bun.write(process.env.FROM, s.replace(process.env.OLD, () => process.env.N
 else
 	no "the bun-setup tag mutant could be applied (action.yml no longer has the text it mutates)"
 fi
-expect_caught 'a cached Bun inside a local composite action, used where authority is held' mutable "$WORKFLOWS/release.yml" \
+# (#1047) A cached Bun inside a local composite action, refused where
+# authority is held: since #1047 bun-setup downloads Bun and restores its
+# install cache by exact key only, which is refused there too, so this
+# mutant names the reason (it replaced an older one that named none).
+expect_caught 'an exact-key cache restore, used where authority is held (#1047)' mutable "$WORKFLOWS/release.yml" \
 	'      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' '      - uses: ./.github/actions/bun-setup
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' \
+	'(via ./.github/actions/bun-setup) Cache bun install cache: restores from the Actions cache (writable by any run on main)'
+echo
+echo "a workflow that holds no authority restores its caches by exact key only (#1047)"
+# The cache part of mutable, on test.yml as it stands: nothing about a cache.
+found="$(check mutable "$WORKFLOWS/test.yml")" || found="(the bun helper failed)"
+if ! grep -qiE 'cache|restore|helper failed' <<<"$found"; then
+	ok "test.yml restores no cache but by its exact key, through bun-setup and go-setup (#1047)"
+else
+	no "test.yml restores no cache but by its exact key, through bun-setup and go-setup (#1047)" "$found"
+fi
+# A reusable workflow runs with its caller token, so its caches are refused
+# as where authority is held (#1047 review).
+expect_caught 'an exact-key cache in a workflow another can call (#1047 review)' mutable "$WORKFLOWS/test.yml" \
+	$'  pull_request:\n' $'  pull_request:\n  workflow_call:\n' \
+	'(via ./.github/actions/bun-setup) Cache bun install cache: restores from the Actions cache (writable by any run on main)'
+# action_case <label> <action> <exact text> <replacement> <reason>: the
+# mutable rule on test.yml with one local composite action mutated, in a
+# copy of .github/actions; the report must contain the reason.
+action_case() {
+	local repo="${WORK}/action-repo"
+	# sidecar/go.mod too: go-setup reads go-version-file from the repository.
+	rm -rf "$repo" && mkdir -p "${repo}/.github" "${repo}/sidecar" && cp -R "${HERE}/../actions" "${repo}/.github/actions" &&
+		cp "${HERE}/../../sidecar/go.mod" "${repo}/sidecar/go.mod"
+	if ! FROM="${repo}/.github/actions/$2/action.yml" OLD="$3" NEW="$4" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+if (s.split(process.env.OLD).length !== 2) process.exit(2);
+await Bun.write(process.env.FROM, s.replace(process.env.OLD, () => process.env.NEW));
+'; then
+		no "mutant '$1' could be applied (the action no longer has the text it mutates, once)"
+		return
+	fi
+	local found
+	found="$(REPO_DIR="$repo" check mutable "$WORKFLOWS/test.yml")" || {
+		no "reports: $1" "the check could not read the mutated action: ${found}"
+		return
+	}
+	if grep -qF -- "$5" <<<"$found"; then ok "reports: $1"; else no "reports: $1, for the reason it exists" "wanted '${5}', got:
+${found:-nothing}"; fi
+}
+# The copy action_case reads, unmutated, is clean: so each case below is
+# reported for its mutation, not for the copy.
+rm -rf "${WORK}/action-repo" && mkdir -p "${WORK}/action-repo/.github" "${WORK}/action-repo/sidecar" &&
+	cp -R "${HERE}/../actions" "${WORK}/action-repo/.github/actions" && cp "${HERE}/../../sidecar/go.mod" "${WORK}/action-repo/sidecar/go.mod"
+if found="$(REPO_DIR="${WORK}/action-repo" check mutable "$WORKFLOWS/test.yml")" && [ -z "$found" ]; then
+	ok "the action copy the cases below mutate is clean as it stands (#1047)"
+else
+	no "the action copy the cases below mutate is clean as it stands (#1047)" "$found"
+fi
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	action_case 'the bun install cache restored by a key prefix again (#1047)' bun-setup \
+		$'        lookup-only: ${{ steps.bun-install-lookup.outputs.cache-hit != \'true\' }}\n' \
+		$'        lookup-only: ${{ steps.bun-install-lookup.outputs.cache-hit != \'true\' }}\n        restore-keys: ${{ runner.os }}-bun-\n' \
+		'Cache bun install cache: restores by a key prefix (restore-keys)'
+	action_case 'the bun install cache kept on a match that is not exact (#1047)' bun-setup \
+		$'\n    - name: Discard a bun install cache that is not an exact key match\n      if: steps.bun-install-cache.outputs.cache-hit != \'true\'\n      shell: bash\n      run: rm -rf ~/.bun/install/cache\n' '' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'the bun install cache discarded only on an exact hit (#1047)' bun-setup \
+		$'      if: steps.bun-install-cache.outputs.cache-hit != \'true\'' $'      if: steps.bun-install-cache.outputs.cache-hit == \'true\'' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'the bun install cache discard pointed at another directory (#1047)' bun-setup \
+		'      run: rm -rf ~/.bun/install/cache' '      run: rm -rf ~/.bun/install/tmp' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'the bun install cache step with no id to test (#1047)' bun-setup \
+		$'      id: bun-install-cache\n' '' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'a step between the bun install cache and its discard (#1047)' bun-setup \
+		$'\n    - name: Discard a bun install cache' $'\n    - run: ls ~/.bun/install/cache\n      shell: bash\n\n    - name: Discard a bun install cache' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'Bun itself restored from the Actions cache in a PR workflow (#1047)' bun-setup \
+		$'        no-cache: true\n' '' \
+		'setup-bun without no-cache: true restores Bun from the Actions cache'
+	action_case 'the Go module cache left out of the discard (#1047)' go-setup \
+		$'        GOMODCACHE: ${{ steps.go-cache-dirs.outputs.mod }}\n' '' \
+		'Go module and build cache: a restore that is not an exact key match is not discarded'
+	action_case 'the Go caches restored by a key prefix (#1047)' go-setup \
+		$'        lookup-only: ${{ steps.go-cache-lookup.outputs.cache-hit != \'true\' }}\n' $'        lookup-only: ${{ steps.go-cache-lookup.outputs.cache-hit != \'true\' }}\n        restore-keys: go-\n' \
+		'Go module and build cache: restores by a key prefix (restore-keys)'
+	action_case 'setup-go back to its own prefix-matched cache in a PR workflow (#1047)' go-setup \
+		$'        cache: false\n' '' \
+		'setup-go without cache: false restores modules and build output from the Actions cache'
+	action_case 'the bun install cache with no exact-key lookup in front (#1047 review)' bun-setup \
+		$'        lookup-only: true\n' $'        lookup-only: false\n' \
+		'Cache bun install cache: not gated by a lookup-only actions/cache/restore'
+	action_case 'the bun install cache downloading whatever it matches (#1047 review)' bun-setup \
+		$'        lookup-only: ${{ steps.bun-install-lookup.outputs.cache-hit != \'true\' }}\n' '' \
+		'Cache bun install cache: not gated by a lookup-only actions/cache/restore'
+	action_case 'the bun install cache looked up on another key (#1047 review)' bun-setup \
+		$'        key: ${{ runner.os }}-bun-${{ hashFiles(\'bun.lock\') }}\n        lookup-only: true\n' $'        key: ${{ runner.os }}-bun-other\n        lookup-only: true\n' \
+		'Cache bun install cache: not gated by a lookup-only actions/cache/restore'
+	action_case 'the bun install cache discard that removes nothing (#1047 review)' bun-setup \
+		'      run: rm -rf ~/.bun/install/cache' '      run: ls ~/.bun/install/cache' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'the bun install cache discard aimed at a longer name (#1047 review)' bun-setup \
+		'      run: rm -rf ~/.bun/install/cache' '      run: rm -rf ~/.bun/install/cache-old' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'the bun install cache discard allowed to fail (#1047 review)' bun-setup \
+		$'      shell: bash\n      run: rm -rf ~/.bun/install/cache' $'      shell: bash\n      continue-on-error: true\n      run: rm -rf ~/.bun/install/cache' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'the Go build cache left out of the discard (#1047 review)' go-setup \
+		$'        rm -rf "$GOCACHE"\n' '' \
+		'Go module and build cache: a restore that is not an exact key match is not discarded'
+	action_case 'the Go module cache env renamed, so go clean ignores it (#1047 review)' go-setup \
+		$'        GOMODCACHE: ${{ steps.go-cache-dirs.outputs.mod }}\n' $'        MODDIR: ${{ steps.go-cache-dirs.outputs.mod }}\n' \
+		'Go module and build cache: a restore that is not an exact key match is not discarded'
+	action_case 'a lone actions/cache/restore that downloads (#1047 review)' go-setup \
+		$'        lookup-only: true\n' '' \
+		'Look up the Go caches by their exact key: actions/cache/restore here is not a lookup-only step'
+	action_case 'GOFLAGS on the Go discard, which turns go clean into a dry run (#1047 review 2)' go-setup \
+		$'        GOCACHE: ${{ steps.go-cache-dirs.outputs.build }}\n' $'        GOCACHE: ${{ steps.go-cache-dirs.outputs.build }}\n        GOFLAGS: -n\n' \
+		'Go module and build cache: a restore that is not an exact key match is not discarded'
+	action_case 'BASH_ENV on the bun install cache discard (#1047 review 2)' bun-setup \
+		$'      shell: bash\n      run: rm -rf ~/.bun/install/cache' $'      shell: bash\n      env:\n        BASH_ENV: /tmp/x\n      run: rm -rf ~/.bun/install/cache' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'a quoted ~ in the discard env, which bash does not expand (#1047 review 2)' bun-setup \
+		$'      shell: bash\n      run: rm -rf ~/.bun/install/cache' $'      shell: bash\n      env:\n        D: ~/.bun/install/cache\n      run: rm -rf "$D"' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'restore-keys spelled in another case (#1047 review 2)' bun-setup \
+		$'        lookup-only: ${{ steps.bun-install-lookup.outputs.cache-hit != \'true\' }}\n' $'        lookup-only: ${{ steps.bun-install-lookup.outputs.cache-hit != \'true\' }}\n        Restore-Keys: ${{ runner.os }}-bun-\n' \
+		'Cache bun install cache: restores by a key prefix (restore-keys)'
+	action_case 'lookup-only spelled twice, once as false (#1047 review 2)' bun-setup \
+		$'        lookup-only: ${{ steps.bun-install-lookup.outputs.cache-hit != \'true\' }}\n' $'        lookup-only: ${{ steps.bun-install-lookup.outputs.cache-hit != \'true\' }}\n        Lookup-Only: false\n' \
+		'Cache bun install cache: takes inputs other than path, key and lookup-only, or one spelled twice'
+	action_case 'another input on the cache step (#1047 review 2)' bun-setup \
+		$'        lookup-only: ${{ steps.bun-install-lookup.outputs.cache-hit != \'true\' }}\n' $'        lookup-only: ${{ steps.bun-install-lookup.outputs.cache-hit != \'true\' }}\n        enableCrossOsArchive: true\n' \
+		'Cache bun install cache: takes inputs other than path, key and lookup-only'
+	action_case 'the bun install cache discard under sh (#1047 review 2)' bun-setup \
+		$'      shell: bash\n      run: rm -rf ~/.bun/install/cache' $'      shell: sh\n      run: rm -rf ~/.bun/install/cache' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'the Go caches looked up on another path (#1047 review 2)' go-setup \
+		$'          ${{ steps.go-cache-dirs.outputs.build }}\n        key: go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-cache-dirs.outputs.image }}-${{ steps.go-cache-dirs.outputs.version }}-${{ hashFiles(\'sidecar/go.sum\') }}\n        lookup-only: true\n' \
+		$'          /tmp/other\n        key: go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-cache-dirs.outputs.image }}-${{ steps.go-cache-dirs.outputs.version }}-${{ hashFiles(\'sidecar/go.sum\') }}\n        lookup-only: true\n' \
+		'Go module and build cache: not gated by a lookup-only actions/cache/restore'
+	action_case 'GOCACHE gone from the discard env while rm still names it (#1047 review 2)' go-setup \
+		$'        GOCACHE: ${{ steps.go-cache-dirs.outputs.build }}\n' '' \
+		'Go module and build cache: a restore that is not an exact key match is not discarded'
+	expect_caught 'HOME set for the whole job, which moves the discard (#1047 review 2)' mutable "$WORKFLOWS/test.yml" \
+		$'\n  test:\n' $'\n  test:\n    env:\n      HOME: /nonexistent\n' \
+		'test: step (via ./.github/actions/bun-setup) Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'GOFLAGS on the Go discard, read by an extra rm line (#1047 review 3)' go-setup \
+		$'        GOCACHE: ${{ steps.go-cache-dirs.outputs.build }}\n      run: |\n' $'        GOCACHE: ${{ steps.go-cache-dirs.outputs.build }}\n        GOFLAGS: -n\n      run: |\n        rm -rf -- "$GOFLAGS"\n' \
+		'Go module and build cache: a restore that is not an exact key match is not discarded'
+	action_case 'BASH_ENV on the bun discard, read by an extra rm line (#1047 review 3)' bun-setup \
+		$'      shell: bash\n      run: rm -rf ~/.bun/install/cache' $'      shell: bash\n      env:\n        BASH_ENV: ./x.sh\n      run: |\n        rm -rf "$BASH_ENV"\n        rm -rf ~/.bun/install/cache' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'HOME on the bun discard, read by an extra rm line (#1047 review 3)' bun-setup \
+		$'      shell: bash\n      run: rm -rf ~/.bun/install/cache' $'      shell: bash\n      env:\n        HOME: /nonexistent\n      run: |\n        rm -rf "$HOME"\n        rm -rf ~/.bun/install/cache' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	expect_caught 'GOFLAGS on the step that uses go-setup (#1047 review 3)' mutable "$WORKFLOWS/test.yml" \
+		$'      - uses: ./.github/actions/go-setup\n' $'      - uses: ./.github/actions/go-setup\n        env:\n          GOFLAGS: -n\n' \
+		'the job, workflow or enclosing step sets GOFLAGS'
+	expect_caught 'HOME on the step that uses bun-setup (#1047 review 3)' mutable "$WORKFLOWS/test.yml" \
+		$'      - uses: ./.github/actions/bun-setup\n' $'      - uses: ./.github/actions/bun-setup\n        env:\n          HOME: /nonexistent\n' \
+		'the job, workflow or enclosing step sets HOME'
+	expect_caught 'an exported bash function for the whole job (#1047 review 3)' mutable "$WORKFLOWS/test.yml" \
+		$'\n  test:\n' $'\n  test:\n    env:\n      BASH_FUNC_rm%%: "() { :; }"\n' \
+		'the job, workflow or enclosing step sets BASH_FUNC_rm%%'
+	expect_caught 'XDG_CONFIG_HOME for the whole workflow, where go reads its env file (#1047 review 3)' mutable "$WORKFLOWS/test.yml" \
+		$'\njobs:\n' $'\nenv:\n  XDG_CONFIG_HOME: /tmp/x\n\njobs:\n' \
+		'the job, workflow or enclosing step sets XDG_CONFIG_HOME'
+	expect_caught 'GOFLAGS written to GITHUB_ENV before go-setup (#1047 review 4)' mutable "$WORKFLOWS/test.yml" \
+		$'      - uses: ./.github/actions/go-setup\n' $'      - run: echo "GOFLAGS=-n" >> "$GITHUB_ENV"\n      - uses: ./.github/actions/go-setup\n' \
+		'GOFLAGS (written to GITHUB_ENV by an earlier step)'
+	expect_caught 'a directory put on PATH before bun-setup (#1047 review 4)' mutable "$WORKFLOWS/test.yml" \
+		$'      - uses: ./.github/actions/bun-setup\n' $'      - run: echo "$PWD/tools" >> "$GITHUB_PATH"\n      - uses: ./.github/actions/bun-setup\n' \
+		'GITHUB_PATH (written by an earlier step)'
+	expect_caught 'GITHUB_ENV written from a file before bun-setup (#1047 review 4)' mutable "$WORKFLOWS/test.yml" \
+		$'      - uses: ./.github/actions/bun-setup\n' $'      - run: cat env.txt >> "$GITHUB_ENV"\n      - uses: ./.github/actions/bun-setup\n' \
+		'GITHUB_ENV written in a form this rule cannot read'
+	expect_caught 'the job env as one expression (#1047 review 4)' mutable "$WORKFLOWS/test.yml" \
+		$'\n  test:\n' $'\n  test:\n    env: ${{ fromJSON(vars.TEST_ENV) }}\n' \
+		'an env this rule cannot read as a mapping'
+	expect_caught 'two GITHUB_ENV writes on one line, one of them a steering name (#1047 review 4)' mutable "$WORKFLOWS/test.yml" \
+		$'      - uses: ./.github/actions/bun-setup\n' $'      - run: echo "GOFLAGS=-n" >> "$GITHUB_ENV" && echo "FOO=1" >> "$GITHUB_ENV"\n      - uses: ./.github/actions/bun-setup\n' \
+		'GOFLAGS (written to GITHUB_ENV by an earlier step)'
+	expect_caught 'Bun restored from the Actions cache by the toast job (#1047)' mutable "$WORKFLOWS/test.yml" \
+		$'          no-cache: true\n' '' \
+		'toast-windows: step oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6: setup-bun without no-cache: true'
+}
 # shellcheck disable=SC2016 # JavaScript source, not shell.
 FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
+// test.yml has no top-level env since #1047, so one is added in front of
+// jobs:, and a missing anchor writes nothing, which fails the check below.
 const s = await Bun.file(process.env.FROM).text();
-await Bun.write(process.env.TO, s.replace("\nenv:\n", "\nenv:\n  ALL: ${{ toJSON(secrets) }}\n"));
-'
-if [ -n "$(check authority "$copy")" ]; then
+if (s.split("\njobs:\n").length !== 2) process.exit(2);
+await Bun.write(process.env.TO, s.replace("\njobs:\n", "\nenv:\n  ALL: ${{ toJSON(secrets) }}\n\njobs:\n"));
+' && ok_written=1 || ok_written=0
+if [ "$ok_written" = 1 ] && [ -n "$(check authority "$copy")" ]; then
 	ok "reports: a workflow that serialises the whole secrets context holds authority"
 else
 	no "reports: a workflow that serialises the whole secrets context holds authority"
 fi
 # shellcheck disable=SC2016 # JavaScript source, not shell.
 FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
+// test.yml has no top-level env since #1047, so one is added in front of
+// jobs:, and a missing anchor writes nothing, which fails the check below.
 const s = await Bun.file(process.env.FROM).text();
-await Bun.write(process.env.TO, s.replace("\nenv:\n", "\nenv:\n  K: ${{ format(\x27{0}\x27, SECRETS.SOME_KEY) }}\n"));
-'
-if [ -n "$(check authority "$copy")" ]; then
+if (s.split("\njobs:\n").length !== 2) process.exit(2);
+await Bun.write(process.env.TO, s.replace("\njobs:\n", "\nenv:\n  K: ${{ format(\x27{0}\x27, SECRETS.SOME_KEY) }}\n\njobs:\n"));
+' && ok_written=1 || ok_written=0
+if [ "$ok_written" = 1 ] && [ -n "$(check authority "$copy")" ]; then
 	ok "reports: a secret read inside a format string, in upper case"
 else
 	no "reports: a secret read inside a format string, in upper case"

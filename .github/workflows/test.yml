@@ -34,9 +34,6 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  GO_VERSION: "1.25"
-
 jobs:
   # ─── Which areas did this push/PR touch? ───────────────────────
   # The Go jobs below are expensive (GTK + mingw apt install; a macOS runner
@@ -65,6 +62,8 @@ jobs:
             sidecar:
               - 'sidecar/**'
               - '.github/workflows/test.yml'
+              # The Go toolchain and cache setup every sidecar job runs.
+              - '.github/actions/go-setup/**'
               # The release workflows call sidecar/scripts/sign-windows.sh —
               # a change to how they invoke it must re-run its tests.
               - '.github/workflows/sidecar-release.yml'
@@ -244,13 +243,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          # Single source of truth for the toolchain — tracks sidecar/go.mod so
-          # the build gate can't drift from the declared Go version (GO_VERSION
-          # env is now unused; left in place to avoid touching unrelated jobs).
-          go-version-file: sidecar/go.mod
-          cache-dependency-path: sidecar/go.sum
+      # Go from sidecar/go.mod, its caches restored by exact key only (#1047).
+      - uses: ./.github/actions/go-setup
 
       - name: Install Linux UI libraries + mingw
         run: |
@@ -414,7 +408,7 @@ jobs:
           # -count=1 below is load-bearing, not habit. DISPLAY is read by
           # libX11's C getenv, which go test's cache cannot observe, so a cached
           # SKIP from a run without a display can be replayed verbatim in a run
-          # where Xvfb is up -- reproduced locally. setup-go caches GOCACHE
+          # where Xvfb is up -- reproduced locally. GOCACHE is cached
           # across runs, so that is not hypothetical.
           set +e
           go test -v -count=1 -run "$X_HOTKEY_TESTS" . 2>&1 | tee "$log"
@@ -604,10 +598,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: sidecar/go.mod
-          cache-dependency-path: sidecar/go.sum
+      # Go from sidecar/go.mod, its caches restored by exact key only (#1047).
+      - uses: ./.github/actions/go-setup
       - name: Run windows-tagged unit tests (amd64, cgo)
         working-directory: sidecar
         shell: bash
@@ -652,6 +644,9 @@ jobs:
         with:
           # Same pin as .github/actions/bun-setup.
           bun-version: "1.4.2"
+          # Downloaded, not restored from the Actions cache (#1047): see
+          # .github/actions/bun-setup.
+          no-cache: true
       - name: Toast XML under Windows PowerShell 5.1 and WinRT
         working-directory: src/comms
         shell: bash
@@ -677,10 +672,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: sidecar/go.mod
-          cache-dependency-path: sidecar/go.sum
+      # Go from sidecar/go.mod, its caches restored by exact key only (#1047).
+      - uses: ./.github/actions/go-setup
       - name: Build + vet (darwin, cgo)
         working-directory: sidecar
         env:
