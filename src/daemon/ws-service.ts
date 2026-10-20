@@ -3393,12 +3393,16 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * Short assistant-side acknowledgement message broadcast as a chat row.
    * Used when the daemon handled the user's request itself (e.g. opening
    * a Room) and the chat agent isn't going to produce its own reply.
+   *
+   * Its id is its own (#888): the thread keys each row on its id, and the
+   * transcript echo already carries `requestId`, as can a second ack for the
+   * same request. The request id stays in it as a prefix, for reading logs.
    */
   broadcastAssistantAck(text: string, requestId?: string): void {
     this.broadcastLegacyChat({
       type: 'notification',
       payload: { source: 'assistant_message', text },
-      id: requestId,
+      id: `assistant-ack:${requestId ?? 'none'}:${crypto.randomUUID()}`,
       timestamp: Date.now(),
     });
   }

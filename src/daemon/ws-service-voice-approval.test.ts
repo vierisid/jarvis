@@ -500,3 +500,36 @@ describe('Q-08: a spoken yes while Jarvis is paused waits for Resume', () => {
     }
   });
 });
+
+/**
+ * #888. The transcript echo and the acknowledgement were both sent with
+ * `id: requestId`, and the thread keys each row on its id, so every voice
+ * acknowledgement rendered two rows under one React key. Two acknowledgements
+ * for one request collided with each other the same way.
+ */
+describe('#888: an acknowledgement never shares an id with its transcript or another acknowledgement', () => {
+  const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0)); };
+  const ids = (source: string) => (sent as Array<Sent & { id?: string }>)
+    .filter((m) => m.payload?.source === source).map((m) => m.id);
+
+  test('a voice yes: the echoed transcript and the reply are two rows with two ids', async () => {
+    const a = pendingEmail('alice@example.com', 1000);
+    await (svc as unknown as { routeMessage: (m: unknown, ws: unknown) => Promise<unknown> })
+      .routeMessage({ type: 'voice_text', payload: { requestId: 'r1', text: 'yes', shownApprovalId: a.id }, timestamp: 0 }, {});
+    await settle();
+    const [echo] = ids('voice_transcript');
+    const [ack] = ids('assistant_message');
+    expect(echo).toBe('r1');
+    expect(typeof ack).toBe('string');
+    expect(ack).not.toBe(echo);
+  });
+
+  test('two acknowledgements for one request get two ids', () => {
+    svc.broadcastAssistantAck('one', 'r1');
+    svc.broadcastAssistantAck('two', 'r1');
+    const acks = ids('assistant_message');
+    expect(acks).toHaveLength(2);
+    expect(acks.every((id) => typeof id === 'string' && id.length > 0)).toBe(true);
+    expect(new Set([...acks, 'r1']).size).toBe(3);
+  });
+});
