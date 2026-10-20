@@ -36,6 +36,26 @@ export class HttpError extends Error {
 
 // Track scoped registries for persistent agents so they can be reused across tasks
 const agentRegistries = new Map<string, ReturnType<typeof createScopedToolRegistry>>();
+/**
+ * Orchestrators whose reaps already clear `agentRegistries` (#1044). Before,
+ * only a manage_agents terminate or a failed start removed an entry, so an
+ * agent reaped any other way (with its parent, at shutdown) left its registry
+ * here for the life of the process.
+ */
+const clearedOnReap = new WeakSet<AgentOrchestrator>();
+
+function keepRegistry(orchestrator: AgentOrchestrator, agentId: string, registry: ReturnType<typeof createScopedToolRegistry>): void {
+  if (!clearedOnReap.has(orchestrator)) {
+    orchestrator.onAgentReaped((id) => { agentRegistries.delete(id); });
+    clearedOnReap.add(orchestrator);
+  }
+  agentRegistries.set(agentId, registry);
+}
+
+/** Whether `agentId` still has a managed agent's tool registry. */
+export function hasManagedRegistry(agentId: string): boolean {
+  return agentRegistries.has(agentId);
+}
 
 export type PersistentAgentSummary = {
   agent_id: string;
@@ -155,7 +175,7 @@ export function spawnPersistentAgent(deps: AgentToolDeps, specialistId: string, 
     via: spawnCall(request ?? { specialist: specialistId }),
   });
   const scopedRegistry = createScopedToolRegistry(agent.agent.authority.allowed_tools);
-  agentRegistries.set(agent.id, scopedRegistry);
+  keepRegistry(deps.orchestrator, agent.id, scopedRegistry);
 
   // A persistent agent should start idle until it has a task.
   agent.idle();
@@ -285,7 +305,10 @@ export async function assignPersistentAgentTask(
 export function listPersistentAgents(deps: AgentToolDeps) {
   const allAgents = deps.orchestrator.getAllAgents();
   const primary = deps.orchestrator.getPrimary();
-  const subAgents = allAgents.filter(a => a.id !== primary?.id);
+  // A sub-agent asking sees only its own agents and their tasks (#1044); the
+  // primary and the dashboard see all of them.
+  const visible = (agentId: string) => deps.orchestrator.mayInspectAgent(agentId);
+  const subAgents = allAgents.filter(a => a.id !== primary?.id && visible(a.id));
 
   const agents: PersistentAgentSummary[] = subAgents.map(a => ({
     agent_id: a.id,
@@ -296,7 +319,7 @@ export function listPersistentAgents(deps: AgentToolDeps) {
     busy: deps.taskManager.isAgentBusy(a.id),
   }));
 
-  const tasks = deps.taskManager.listTasks().map(t => {
+  const tasks = deps.taskManager.listTasks().filter((t) => visible(t.agentId)).map(t => {
     // Trim and clip the agent's response so the strip can render an inline
     // preview after completion without flooding the small panel. Strip
     // markdown noise (asterisks, leading list markers) and collapse
@@ -336,9 +359,15 @@ export function terminatePersistentAgent(deps: AgentToolDeps, agentId: string, o
   }
 
   const agent = deps.orchestrator.getAgent(agentId);
-  if (!agent) throw new HttpError(404, `Agent "${agentId}" not found`);
+  // A sub-agent may stop any managed agent (#1014), but what this answers
+  // tells one it cannot inspect nothing `status` would not (#1044 review):
+  // every refusal reads the same, whether the agent exists or not, and
+  // neither a refusal nor a stop names its role or its task.
+  const visible = deps.orchestrator.mayInspectAgent(agentId);
+  const hidden = () => new HttpError(404, `Agent "${agentId}" not found, or not a managed agent running that task; nothing was stopped.`);
+  if (!agent) throw visible ? new HttpError(404, `Agent "${agentId}" not found`) : hidden();
   if (!agentRegistries.has(agentId)) {
-    throw new HttpError(404, `Agent "${agentId}" is not a persistent managed agent.`);
+    throw visible ? new HttpError(404, `Agent "${agentId}" is not a persistent managed agent.`) : hidden();
   }
 
   const name = agent.agent.role.name;
@@ -349,10 +378,10 @@ export function terminatePersistentAgent(deps: AgentToolDeps, agentId: string, o
   if (opts.taskId !== undefined) {
     const pinned = deps.taskManager.getTask(opts.taskId);
     if (!pinned || pinned.agentId !== agentId) {
-      throw new HttpError(404, `Task "${opts.taskId}" is not ${name}'s.`);
+      throw visible ? new HttpError(404, `Task "${opts.taskId}" is not ${name}'s.`) : hidden();
     }
     if (pinned.status !== 'running') {
-      throw new HttpError(409, `${name}'s task "${forCard(pinned.task, 80)}" is no longer running; nothing was stopped.`);
+      throw visible ? new HttpError(409, `${name}'s task "${forCard(pinned.task, 80)}" is no longer running; nothing was stopped.`) : hidden();
     }
   }
   const taskId = opts.taskId ?? runningTasks[0]?.id;
@@ -366,13 +395,14 @@ export function terminatePersistentAgent(deps: AgentToolDeps, agentId: string, o
 
   console.log(`[ManageAgents] Terminated ${name} (${agentId})`);
 
+  const shown = visible ? name : 'The agent';
   return {
     terminated: agentId,
-    name,
+    name: visible ? name : null,
     stopped_tasks: runningTasks.length,
     // "Asked to stop", not "cancelled": a tool call already running finishes
     // first, and the task shows as cancelled once its loop has returned.
-    message: runningTasks.length > 0 ? `${name} removed; its running task was asked to stop.` : `${name} terminated.`,
+    message: runningTasks.length > 0 ? `${shown} removed; its running task was asked to stop.` : `${shown} terminated.`,
   };
 }
 
@@ -539,7 +569,8 @@ function handleStatus(deps: AgentToolDeps, params: Record<string, unknown>): str
 
   if (taskId) {
     const task = deps.taskManager.getTask(taskId);
-    if (!task) return `Error: Task "${taskId}" not found`;
+    // Another caller's task reads exactly as a missing one (#1044).
+    if (!task || !deps.orchestrator.mayInspectAgent(task.agentId)) return `Error: Task "${taskId}" not found`;
 
     const elapsed = task.completedAt
       ? task.completedAt - task.startedAt
@@ -558,7 +589,7 @@ function handleStatus(deps: AgentToolDeps, params: Record<string, unknown>): str
 
   if (agentId) {
     const agent = deps.orchestrator.getAgent(agentId);
-    if (!agent) return `Error: Agent "${agentId}" not found`;
+    if (!agent || !deps.orchestrator.mayInspectAgent(agentId)) return `Error: Agent "${agentId}" not found`;
 
     const agentTask = deps.taskManager.getAgentTask(agentId);
     return JSON.stringify({
@@ -584,7 +615,7 @@ function handleCollect(deps: AgentToolDeps, params: Record<string, unknown>): st
   if (!taskId) return 'Error: "task_id" is required for collect';
 
   const task = deps.taskManager.getTask(taskId);
-  if (!task) return `Error: Task "${taskId}" not found`;
+  if (!task || !deps.orchestrator.mayInspectAgent(task.agentId)) return `Error: Task "${taskId}" not found`;
 
   if (task.status === 'running') {
     const elapsed = Math.round((Date.now() - task.startedAt) / 1000);

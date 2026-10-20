@@ -517,6 +517,36 @@ export class AgentOrchestrator {
    */
   private starterRoles = new Map<string, string[]>();
 
+  /** Who started each agent: the agent that asked, else its hierarchy parent (#1044). */
+  private startedBy = new Map<string, string>();
+
+  /** Told the id of every agent removed, so state kept elsewhere goes with it (#1044). */
+  private reapListeners = new Set<(agentId: string) => void>();
+
+  onAgentReaped(listener: (agentId: string) => void): () => void {
+    this.reapListeners.add(listener);
+    return () => { this.reapListeners.delete(listener); };
+  }
+
+  /**
+   * Whether whoever is acting may read `agentId`'s status, tasks and results
+   * (#1044). Nobody but the primary or the person acting: yes, everything. A
+   * sub-agent: only itself and the agents it started, directly or through
+   * agents of its own. A call that has returned, or an agent that is gone,
+   * reads nothing.
+   */
+  mayInspectAgent(agentId: string): boolean {
+    const acting = actingAgent();
+    if (!acting) return true;
+    if (acting.settled || !this.hierarchy.getAgent(acting.agentId)) return false;
+    const seen = new Set<string>();
+    for (let id: string | undefined = agentId; id !== undefined && !seen.has(id); id = this.startedBy.get(id)) {
+      if (id === acting.agentId) return true;
+      seen.add(id);
+    }
+    return false;
+  }
+
   /**
    * The deny and requires-approval overrides scoped to a role that started
    * `agentId`, as a profile (#1043, owner decision): a deny becomes a denied
@@ -698,6 +728,7 @@ export class AgentOrchestrator {
     // parent, as the child's authority is capped by both.
     const starters = [...new Set([actor, parent].flatMap((a) => [...(this.starterRoles.get(a.id) ?? []), a.agent.role.id]))];
     this.starterRoles.set(agent.id, starters);
+    this.startedBy.set(agent.id, actor.id);
     recordSpawn();
 
     // Add system message with role context for sub-agents. Communication
@@ -803,6 +834,14 @@ export class AgentOrchestrator {
     this.exposureLedgers.delete(agentId);
     this.inheritedRestrictions.delete(agentId);
     this.starterRoles.delete(agentId);
+    this.startedBy.delete(agentId);
+    for (const listener of this.reapListeners) {
+      try {
+        listener(agentId);
+      } catch (err) {
+        console.warn(`[Orchestrator] a reap listener failed for ${agentId}:`, err instanceof Error ? err.message : err);
+      }
+    }
   }
 
   getPrimary(): AgentInstance | undefined {
