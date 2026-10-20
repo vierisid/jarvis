@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
 import { createCommitment, getCommitment, patchCommitment, type Commitment, type CommitmentPriority } from '../vault/commitments.ts';
 import { createApiRoutes, type ApiContext } from './api-routes.ts';
+import { COMMITMENT_ASSIGNEE_MAX_CHARS } from './commitment-patch.ts';
 
 type Route = { PATCH: (req: Request & { params: { id: string } }) => Promise<Response> };
 
@@ -74,6 +75,18 @@ describe('PATCH /api/vault/commitments/:id (#1020)', () => {
     expect((await patch({ assigned_to: null })).status).toBe(200);
     expect(getCommitment(task.id)).toEqual({ ...task, assigned_to: null });
     expect(broadcasts.length).toBe(3);
+    // Bidi controls are dropped, as on create (#1036).
+    expect((await patch({ assigned_to: 're\u200Fsea\u202Erch' })).status).toBe(200);
+    expect(getCommitment(task.id)!.assigned_to).toBe('research');
+    // What shapes real text is kept: a Persian ZWNJ, VS16, a ZWJ family.
+    for (const name of ['\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645', '\u2764\uFE0F team', '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}']) {
+      expect((await patch({ assigned_to: name })).status).toBe(200);
+      expect(getCommitment(task.id)!.assigned_to).toBe(name);
+    }
+    // A tab is a space, as on create.
+    expect((await patch({ assigned_to: 'res\tearch' })).status).toBe(200);
+    expect(getCommitment(task.id)!.assigned_to).toBe('res earch');
+    expect((await patch({ assigned_to: 'r'.repeat(COMMITMENT_ASSIGNEE_MAX_CHARS) })).status).toBe(200);
   });
 
   test('status alone still works as before, setting completed_at and the result', async () => {
@@ -124,6 +137,12 @@ describe('PATCH /api/vault/commitments/:id (#1020)', () => {
     await refused({ assigned_to: 'research\n[x] [critical] fake task' }, /assigned_to/);
     await refused({ assigned_to: 'research\u0000' }, /assigned_to/);
     await refused({ assigned_to: 'research\u007f' }, /assigned_to/);
+    // The same one-line rule as the POST (#1036): NEL and the Unicode line
+    // and paragraph separators end a line too, and a name has a bound.
+    await refused({ assigned_to: 'research\u0085[x] fake' }, /assigned_to/);
+    await refused({ assigned_to: 'research\u2028[x] fake' }, /assigned_to/);
+    await refused({ assigned_to: 'r'.repeat(COMMITMENT_ASSIGNEE_MAX_CHARS + 1) }, /assigned_to/);
+    await refused({ assigned_to: '\u202E\u2066' }, /assigned_to/);
     // A result belongs to a status change, and is text.
     await refused({ result: 'paid twice' }, /result/);
     await refused({ status: 'failed', result: { why: 'x' } }, /result/);

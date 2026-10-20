@@ -292,7 +292,7 @@ function describeFailure(result: CommandResult): string {
 }
 
 /** Transient unit names derive from the service's, e.g. `jarvis-restart`. */
-function transientName(unit: SystemdUnit, purpose: 'restart' | 'update'): string {
+function transientName(unit: Pick<SystemdUnit, 'name'>, purpose: 'restart' | 'update'): string {
   return `${unit.name.replace(/\.service$/, '').replace(/[^A-Za-z0-9_-]/g, '-')}-${purpose}`;
 }
 
@@ -301,7 +301,7 @@ function transientName(unit: SystemdUnit, purpose: 'restart' | 'update'): string
  * fail with "already loaded" instead of queuing a second restart that would
  * bounce the fresh daemon. That failure means the work is already scheduled.
  */
-function alreadyScheduled(result: CommandResult): boolean {
+export function alreadyScheduled(result: CommandResult): boolean {
   return result.exitCode !== 0 && /already (loaded|exists|active)/i.test(`${result.stderr}\n${result.stdout}`);
 }
 
@@ -317,9 +317,10 @@ function refuseUnreachable(unit: SystemdUnit, manual: string): false {
 /**
  * Ask systemd to restart the unit a moment from now, from a transient timer
  * that runs outside the unit's cgroup: for a caller inside that cgroup, which
- * a restart it waited on would kill.
+ * a restart it waited on would kill. The daemon's own restart route uses it
+ * too (autostart.ts scheduleSystemdRestart, #1037).
  */
-export function scheduleUnitRestart(unit: SystemdUnit, run: CommandRunner = runCommand): CommandResult {
+export function scheduleUnitRestart(unit: Pick<SystemdUnit, 'name'>, run: CommandRunner = runCommand): CommandResult {
   // Resolved here: the transient service gets the manager's PATH.
   const systemctl = Bun.which('systemctl', { PATH: process.env.PATH ?? '' }) ?? 'systemctl';
   // Clear the unit's start rate-limit (see clearStartLimit) before scheduling:
@@ -331,7 +332,7 @@ export function scheduleUnitRestart(unit: SystemdUnit, run: CommandRunner = runC
   return run([
     'systemd-run', '--user', '--quiet', '--collect',
     `--unit=${transientName(unit, 'restart')}`,
-    `--description=Restart ${unit.name} (jarvis restart)`,
+    `--description=Restart ${unit.name} (JARVIS)`,
     `--on-active=${SCHEDULE_DELAY_SEC}s`,
     // A timer's default accuracy is a minute.
     '--timer-property=AccuracySec=100ms',
