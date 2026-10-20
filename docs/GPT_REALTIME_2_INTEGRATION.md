@@ -158,6 +158,13 @@ never blocked on a dashboard click. The spoken command is the authorization
 - an approval a tainted session's profile asks for, which voice cannot give,
 - a primary agent to judge for: with none, nothing runs.
 
+**Taint is per session (#928).** Each realtime session (the dashboard socket's,
+each pebble's) owns its taint: what one session reads never refuses an action
+spoken in another, and a turn boundary in one never clears another's. The
+session's tool calls run inside it, so a sub-agent a call starts inherits that
+session's taint and no other. Outside any turn or session there is no taint.
+The session's turn boundary is the user starting a new utterance.
+
 Every realtime tool call is written to the audit trail tagged `channel: 'voice'`;
 an auto-approved call is logged as `approval_required` + `executed: true` so the
 trail shows no human confirmed it.

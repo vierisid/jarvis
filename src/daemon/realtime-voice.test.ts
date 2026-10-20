@@ -5,6 +5,7 @@ import { BrowserAudioTransport } from '../comms/audio-transport.ts';
 import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
 import { initDatabase, closeDb, getDb } from '../vault/schema.ts';
 import { setUsageDatabase } from '../llm/usage.ts';
+import { RealtimeTaint } from '../agents/realtime-taint.ts';
 
 const RESOLVED: ResolvedRealtimeVoice = {
   apiKey: 'k', provider: 'usejarvis_ai', url: 'wss://proxy.test/v1/realtime', model: 'gpt-realtime-2', reasoningEffort: 'low', maxSessionMinutes: 10, blockedCategories: [],
@@ -36,22 +37,20 @@ class FakeRealtimeSession {
   close() { this.closed = true; }
 }
 
-function setup(executeToolCall: (n: string, a: Record<string, unknown>) => Promise<string>) {
+function setup(executeToolCall: (n: string, a: Record<string, unknown>, taint: RealtimeTaint) => Promise<string>) {
   const fake = new FakeRealtimeSession();
   const transport = new BrowserAudioTransport({ sendAudio: () => {}, inputSampleRate: 24000 });
   const transcripts: RealtimeTranscript[] = [];
   let closeCalls = 0;
-  let turnStarts = 0;
   const rv = new RealtimeVoiceSession(RESOLVED, transport, {
     tools: [],
     instructions: 'persona',
     executeToolCall,
-    onUserTurnStart: () => { turnStarts++; },
     onTranscript: (t) => transcripts.push(t),
     onClose: () => { closeCalls++; },
     sessionFactory: () => fake as unknown as RealtimeSession,
   });
-  return { fake, rv, transcripts, getCloseCalls: () => closeCalls, getTurnStarts: () => turnStarts };
+  return { fake, rv, transcripts, getCloseCalls: () => closeCalls };
 }
 
 describe('RealtimeVoiceSession', () => {
@@ -60,12 +59,28 @@ describe('RealtimeVoiceSession', () => {
   // left every later machine-changing action refused as taint-gated for the
   // life of the daemon, at any authority level. It is wired here now, so a
   // surface cannot have a session without one.
-  test('the session registers the deps user-turn handler with the inner session', () => {
-    const { fake, getTurnStarts } = setup(async () => 'ok');
+  test('the session registers its own turn boundary with the inner session', () => {
+    const { fake, rv } = setup(async () => 'ok');
     expect(fake.turnStartCb).not.toBeNull();
+    rv.taint.marks.add('browser_snapshot');
     fake.turnStartCb!();
-    fake.turnStartCb!();
-    expect(getTurnStarts()).toBe(2);
+    expect([...rv.taint.marks]).toEqual([]);
+  });
+
+  // #928: every surface's session used to share one process-wide taint set.
+  test('each session hands its tool calls its own taint, which another session never touches', async () => {
+    const seen: RealtimeTaint[] = [];
+    const a = setup(async (_n, _a, taint) => { seen.push(taint); return 'ok'; });
+    const b = setup(async (_n, _a, taint) => { seen.push(taint); return 'ok'; });
+    expect(a.rv.taint).not.toBe(b.rv.taint);
+    await a.fake.fnCb!({ callId: 'a1', name: 'read_file', args: {} });
+    await b.fake.fnCb!({ callId: 'b1', name: 'read_file', args: {} });
+    await Promise.resolve();
+    expect(seen[0]).toBe(a.rv.taint);
+    expect(seen[1]).toBe(b.rv.taint);
+    a.rv.taint.marks.add('browser_snapshot');
+    b.fake.turnStartCb!();
+    expect([...a.rv.taint.marks]).toEqual(['browser_snapshot']);
   });
 
   test('connect() delegates to the underlying session', async () => {
@@ -174,7 +189,6 @@ describe('RealtimeVoiceSession error copy', () => {
         tools: [],
         instructions: 'persona',
         executeToolCall: async () => 'ok',
-        onUserTurnStart: () => {},
         onError: (e) => errors.push(e),
         sessionFactory: () => fake as unknown as RealtimeSession,
       },

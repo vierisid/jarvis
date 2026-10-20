@@ -13,6 +13,7 @@ import { initDatabase, closeDb } from '../vault/schema.ts';
 import { LLMManager } from '../llm/manager.ts';
 import type { LLMProvider, LLMMessage, LLMOptions, LLMResponse, LLMStreamEvent, LLMToolCall } from '../llm/provider.ts';
 import { AgentOrchestrator } from './orchestrator.ts';
+import { RealtimeTaint } from './realtime-taint.ts';
 import { AgentInstance } from './agent.ts';
 import { runSubAgent } from './sub-agent-runner.ts';
 import { ToolRegistry, type ToolDefinition } from '../actions/tools/registry.ts';
@@ -127,17 +128,23 @@ describe('desktop.enabled: false answers before the gate', () => {
   test('realtime: refused, no gate row, not run', async () => {
     desktopOn = false;
     const { orch, ran, audit } = build();
-    const reply = await orch.executeRealtimeToolCall('desktop_list_windows', {}, {});
+    const taint = new RealtimeTaint();
+    const reply = await orch.executeRealtimeToolCall('desktop_list_windows', {}, { taint });
     expect(reply).toBe(DESKTOP_DISABLED_MESSAGE);
     expect(ran).toEqual([]);
+    // Nothing was read, so the session is not tainted (#928).
+    expect([...taint.marks]).toEqual([]);
     expect(audit.query({ limit: 20 }).map((r) => [r.tool_name, r.authority_decision, r.executed, r.channel]))
       .toEqual([['desktop_disabled(desktop_list_windows)', 'denied', 0, 'voice']]);
   });
 
   test('with the switch on the same calls reach the gate and run (the fixture is live)', async () => {
     const realtime = build();
-    expect(await realtime.orch.executeRealtimeToolCall('desktop_list_windows', {}, {})).toContain('ok');
+    const taint = new RealtimeTaint();
+    expect(await realtime.orch.executeRealtimeToolCall('desktop_list_windows', {}, { taint })).toContain('ok');
     expect(realtime.ran).toEqual(['desktop_list_windows']);
+    // A read that ran taints the session that made it.
+    expect([...taint.marks]).toEqual(['desktop_list_windows']);
     expect(realtime.audit.query({ limit: 20 }).filter((r) => r.tool_name === 'desktop_list_windows')).toHaveLength(1);
 
     closeDb();

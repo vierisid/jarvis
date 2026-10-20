@@ -76,6 +76,7 @@ import type { BriefCapabilities } from '../brief/capabilities.ts';
 import { safeChatIdentity, type BriefChatTransport } from '../brief/chat-transport.ts';
 import { currentBriefTurn } from '../brief/chat-context.ts';
 import { reportExecutionActivity } from '../actions/progress-context.ts';
+import type { RealtimeTaint } from '../agents/realtime-taint.ts';
 
 /** Longer than any room action id (a UUID is 36): a claim naming one is ignored (#1025). */
 const ROOM_ACTION_ID_MAX = 64;
@@ -2127,19 +2128,17 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       // prompt — the big context was the dominant per-turn latency for simple
       // questions. Tools stay, so capability is unchanged. See agent-service.
       instructions: this.agentService.buildRealtimeVoiceInstructions(),
-      executeToolCall: (name, args) => {
+      // `taint` is this session's own (#928): its tool calls and its room
+      // actions are judged against what IT read, never another session's.
+      executeToolCall: (name, args, taint) => {
         // Dashboard nav/in-room actions are handled here (they broadcast to the
         // dashboard); everything else goes through the auto-approve tool bridge.
         if (REALTIME_NAV_TOOL_NAMES.has(name)) {
-          return this.executeRealtimeNavTool(name, args, ws, { blockedCategories: resolved.blockedCategories })
+          return this.executeRealtimeNavTool(name, args, ws, { blockedCategories: resolved.blockedCategories, taint })
             .then((nav) => nav ?? 'Unknown navigation tool.');
         }
-        return orchestrator.executeRealtimeToolCall(name, args, { blockedCategories: resolved.blockedCategories });
+        return orchestrator.executeRealtimeToolCall(name, args, { blockedCategories: resolved.blockedCategories, taint });
       },
-      // Voice has no turn objects: the user starting to speak is the taint
-      // gating boundary (ordered before that utterance's tool calls; the
-      // transcript event is not).
-      onUserTurnStart: () => orchestrator.resetRealtimeTaint(),
       onTranscript: (t) =>
         this.wsServer.sendToClient(ws, {
           type: 'realtime_transcript',
@@ -2289,17 +2288,18 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
 
   /**
    * What a realtime room action is judged against (#973), read from the
-   * orchestrator: its emergency state, and the taint gating and the session
-   * taint its own realtime tool calls are judged against.
+   * orchestrator: its emergency state, and the taint gating and the taint of
+   * the session that asked (#928), the same its own realtime tool calls are
+   * judged against.
    */
-  private realtimeRoomActionContext(blockedCategories: readonly string[]): RealtimeRoomActionContext {
+  private realtimeRoomActionContext(blockedCategories: readonly string[], taint: RealtimeTaint): RealtimeRoomActionContext {
     const orchestrator = this.agentService.getOrchestrator();
     const emergency = orchestrator.getEmergencyController();
     return {
       halted: emergency && !emergency.canExecute() ? emergency.getState() : null,
       blockedCategories,
       taintGating: orchestrator.getTaintGating(),
-      taint: orchestrator.getTurnTaint(),
+      taint: orchestrator.getRealtimeSessionTaint(taint),
     };
   }
 
@@ -2314,7 +2314,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     name: string,
     args: Record<string, unknown>,
     ws: ServerWebSocket<unknown>,
-    opts: { blockedCategories?: readonly string[] } = {},
+    opts: { blockedCategories?: readonly string[]; taint: RealtimeTaint },
   ): Promise<string | null> {
     if (!REALTIME_NAV_TOOL_NAMES.has(name)) return null;
     const reqId = crypto.randomUUID();
@@ -2364,7 +2364,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         // that changes more than the screen is refused under Pause or Kill,
         // in a blocked category, or once the session has read outside
         // content. Nothing is sent, not even the navigation.
-        const held = realtimeRoomActionDecision({ room, action }, this.realtimeRoomActionContext(opts.blockedCategories ?? []));
+        const held = realtimeRoomActionDecision({ room, action }, this.realtimeRoomActionContext(opts.blockedCategories ?? [], opts.taint));
         if (held) {
           console.warn(`[WSService] refused realtime room action ${room}/${action}: ${held.message}`);
           this.auditRoomAction({ room, action }, 'realtime', 'denied', false, { reason: held.reason });

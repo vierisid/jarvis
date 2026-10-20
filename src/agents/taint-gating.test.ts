@@ -12,6 +12,7 @@ import { runSubAgent } from './sub-agent-runner.ts';
 import type { RoleDefinition } from '../roles/types.ts';
 import type { LLMMessage } from '../llm/provider.ts';
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
+import { RealtimeTaint } from './realtime-taint.ts';
 
 type Exec = { executeTool: (tc: { id: string; name: string; arguments: Record<string, unknown> }, signal?: AbortSignal, taint?: Set<string>) => Promise<unknown> };
 const exec = (o: AgentOrchestrator, name: string, turn: Set<string>) =>
@@ -270,14 +271,126 @@ describe('orchestrator taint gating', () => {
 
   test('realtime voice refuses a taint-gated call instead of auto-approving it', async () => {
     const { orch, calls } = build();
-    // No turn object in voice: the session taint is used.
-    expect(String(await orch.executeRealtimeToolCall('browser_snapshot', {}))).toContain('Page: evil');
-    const out = await orch.executeRealtimeToolCall('run_command', {});
+    // No turn object in voice: the session's own taint is used.
+    const voice = { taint: new RealtimeTaint() };
+    expect(String(await orch.executeRealtimeToolCall('browser_snapshot', {}, voice))).toContain('Page: evil');
+    const out = await orch.executeRealtimeToolCall('run_command', {}, voice);
     expect(out).toContain('[BLOCKED]');
+    // The refusal names what THIS session read.
+    expect(out).toContain('this session read outside content (browser_snapshot)');
     expect(calls).not.toContain('run_command');
     // A fresh user utterance clears it.
-    orch.resetRealtimeTaint();
-    expect(await orch.executeRealtimeToolCall('run_command', {})).toBe('ok');
+    voice.taint.userTurnStarted();
+    expect(await orch.executeRealtimeToolCall('run_command', {}, voice)).toBe('ok');
+  });
+});
+
+// #928: the realtime taint was one set on the orchestrator, shared by the
+// dashboard's session and every pebble's. A read on one surface refused an
+// action spoken on another; anyone speaking on one cleared what another read.
+describe('realtime voice taint is per session (#928)', () => {
+  beforeEach(() => { initDatabase(':memory:'); });
+  afterEach(() => { closeDb(); });
+
+  function build() {
+    const calls: string[] = [];
+    const registry = new ToolRegistry();
+    for (const t of tools(calls)) registry.register(t);
+    const orch = new AgentOrchestrator();
+    orch.setToolRegistry(registry);
+    orch.setAuthorityEngine(new AuthorityEngine(config()));
+    orch.setApprovalManager(new ApprovalManager());
+    orch.setTaintGating(buildTaintGating(undefined));
+    orch.createPrimary(role);
+    // What a tool (or a sub-agent it starts) sees of the session it runs in.
+    registry.register({ name: 'list_sidecars', description: 't', category: 'general', parameters: {}, // read_data, not a taint source
+      execute: async () => `taint=[${[...orch.getTurnTaint()].join(',')}] profile=${orch.getEffectiveProfile()?.label ?? 'none'}` });
+    return { orch, calls, registry };
+  }
+
+  test('a page read in one session does not refuse an action spoken in another', async () => {
+    const { orch, calls } = build();
+    const dashboard = { taint: new RealtimeTaint() };
+    const pebble = { taint: new RealtimeTaint() };
+    await orch.executeRealtimeToolCall('browser_snapshot', {}, dashboard);
+    expect(await orch.executeRealtimeToolCall('run_command', {}, pebble)).toBe('ok');
+    expect(await orch.executeRealtimeToolCall('run_command', {}, dashboard)).toContain('[BLOCKED]');
+    expect(calls).toEqual(['browser_snapshot', 'run_command']);
+  });
+
+  test('a turn boundary in one session does not clear another session\'s taint', async () => {
+    const { orch, calls } = build();
+    const dashboard = { taint: new RealtimeTaint() };
+    const pebble = { taint: new RealtimeTaint() };
+    await orch.executeRealtimeToolCall('browser_snapshot', {}, dashboard);
+    // Someone starts speaking at the pebble.
+    pebble.taint.userTurnStarted();
+    expect(await orch.executeRealtimeToolCall('run_command', {}, dashboard)).toContain('[BLOCKED]');
+    expect(calls).toEqual(['browser_snapshot']);
+  });
+
+  test('two sessions running at once keep their taint apart', async () => {
+    const { orch, registry } = build();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    registry.register({ name: 'browser_slow_read', description: 't', category: 'browser', parameters: {},
+      execute: async () => { await gate; return page; } });
+    const dashboard = { taint: new RealtimeTaint() };
+    const pebble = { taint: new RealtimeTaint() };
+    const reading = orch.executeRealtimeToolCall('browser_slow_read', {}, dashboard);
+    // While the dashboard's read is in flight, the pebble's calls interleave.
+    expect(await orch.executeRealtimeToolCall('list_sidecars', {}, pebble)).toContain('taint=[] profile=none');
+    release();
+    await reading;
+    expect(await orch.executeRealtimeToolCall('list_sidecars', {}, pebble)).toContain('taint=[] profile=none');
+    expect(await orch.executeRealtimeToolCall('run_command', {}, pebble)).toBe('ok');
+    // The read landed in the session that made it, and a tool running there
+    // (a sub-agent it would start) sees it.
+    const seen = await orch.executeRealtimeToolCall('list_sidecars', {}, dashboard);
+    expect(seen).toContain('taint=[browser_slow_read]');
+    expect(seen).toContain('outside content');
+    expect(await orch.executeRealtimeToolCall('run_command', {}, dashboard)).toContain('[BLOCKED]');
+  });
+
+  // #1038 freezes the caller's profile into a sub-agent it starts or assigns
+  // (delegate_task and manage_agents call getProfileFor inside the call).
+  test('a sub-agent started from a voice call is restricted by that session\'s taint only', async () => {
+    const { orch, registry } = build();
+    registry.register({ name: 'research_queue', description: 't', category: 'general', parameters: {}, // read_data, not a taint source
+      execute: async () => `child=${orch.getProfileFor('child-agent')?.label ?? 'none'}` });
+    const dashboard = { taint: new RealtimeTaint() };
+    const pebble = { taint: new RealtimeTaint() };
+    await orch.executeRealtimeToolCall('browser_snapshot', {}, dashboard);
+    expect(await orch.executeRealtimeToolCall('research_queue', {}, dashboard)).toContain('browser_snapshot');
+    expect(await orch.executeRealtimeToolCall('research_queue', {}, pebble)).toContain('child=none');
+  });
+
+  test('outside any turn or session nothing a voice session read is visible', async () => {
+    const { orch } = build();
+    await orch.executeRealtimeToolCall('browser_snapshot', {}, { taint: new RealtimeTaint() });
+    // A background intent or a workflow path asks with no turn of its own.
+    expect([...orch.getTurnTaint()]).toEqual([]);
+    expect(orch.getEffectiveProfile()).toBeNull();
+  });
+
+  // The surviving mutant: a currentTaint() that falls back to one shared set
+  // keeps a write made outside any turn or session for the next caller.
+  test('a taint write outside any turn or session does not persist', () => {
+    const { orch } = build();
+    const internals = orch as unknown as { noteTaint: (n: string, c: string) => void; noteDeclinedIntent: (c: unknown) => void };
+    internals.noteTaint('browser_snapshot', 'browser');
+    internals.noteDeclinedIntent('send_email');
+    expect([...orch.getTurnTaint()]).toEqual([]);
+    expect(orch.getEffectiveProfile()).toBeNull();
+  });
+
+  test('the room-action accessor reads the named session only', async () => {
+    const { orch } = build();
+    const dashboard = new RealtimeTaint();
+    const pebble = new RealtimeTaint();
+    await orch.executeRealtimeToolCall('browser_snapshot', {}, { taint: dashboard });
+    expect([...orch.getRealtimeSessionTaint(dashboard)]).toEqual(['browser_snapshot']);
+    expect([...orch.getRealtimeSessionTaint(pebble)]).toEqual([]);
   });
 });
 

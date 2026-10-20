@@ -22,6 +22,8 @@ import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import { buildTaintGating } from '../authority/taint-gating.ts';
 import { EmergencyController } from '../authority/emergency.ts';
 import type { Intent } from '../voice/intent.ts';
+import { RealtimeTaint } from '../agents/realtime-taint.ts';
+import { ToolRegistry } from '../actions/tools/registry.ts';
 
 // Panel sessions as the sidecar manager resolves them: session id -> the
 // sidecar whose token opened it. A session missing here is revoked or unknown.
@@ -220,7 +222,7 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
     base.internals.wsServer.getClients().add(other.ws);
     const internals = base.svc as unknown as {
       routeMessage: (msg: unknown, ws: unknown) => Promise<unknown>;
-      executeRealtimeNavTool: (name: string, args: Record<string, unknown>, ws: unknown) => Promise<string | null>;
+      executeRealtimeNavTool: (name: string, args: Record<string, unknown>, ws: unknown, opts: { blockedCategories?: string[]; taint: RealtimeTaint }) => Promise<string | null>;
       handleVoiceRoomAction: (ra: unknown, requestId: string, ws: unknown) => Promise<void>;
     };
     const actionTo = (c: { sent: Sent[] }) => c.sent.find((m) => m.payload?.source === 'room_action');
@@ -285,7 +287,7 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
     (svc as unknown as { wsServer: { getClients: () => Set<unknown> } }).wsServer.getClients().add(closing.ws);
     for (const ws of [closing.ws, client().ws]) {
       other.sent.length = 0;
-      const reply = await internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'set_filter', args: { field: 'status', value: 'done' } }, ws);
+      const reply = await internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'set_filter', args: { field: 'status', value: 'done' } }, ws, { taint: new RealtimeTaint() });
       expect(reply).toBe("I couldn't reach Tasks on the dashboard, so nothing was done.");
       expect(other.sent.filter((m) => m.payload?.source === 'room_action' || m.payload?.source === 'navigate_room')).toEqual([]);
     }
@@ -304,7 +306,7 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
       shortWait(svc);
       if (accepted !== null) answerWhenSent(speaker, accepted);
       const reply = await internals.executeRealtimeNavTool(
-        'dashboard_room_action', { room: 'settings', action: 'disable_tts', args: {} }, speaker.ws);
+        'dashboard_room_action', { room: 'settings', action: 'disable_tts', args: {} }, speaker.ws, { taint: new RealtimeTaint() });
       expect(reply).toBe(said);
     }
   });
@@ -322,7 +324,7 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
       clearInterval(tick);
       void internals.routeMessage({ type: 'room_action_result', payload: { resultId: a.payload.resultId, started: true }, timestamp: Date.now() }, speaker.ws);
     }, 1);
-    const reply = await internals.executeRealtimeNavTool('dashboard_room_action', { room: 'workspaces', action: 'start_server', args: { name: 'demo' } }, speaker.ws);
+    const reply = await internals.executeRealtimeNavTool('dashboard_room_action', { room: 'workspaces', action: 'start_server', args: { name: 'demo' } }, speaker.ws, { taint: new RealtimeTaint() });
     clearInterval(tick);
     expect(reply).toBe('Workspaces started that and is still working on it. It shows the result on screen. (It has not finished; do not call this again for this request.)');
     // Started is not an answer: one that follows in time settles it.
@@ -356,7 +358,7 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
   test('the realtime tool waits less than the bus queues, and says so in the action', async () => {
     const { internals, speaker, actionTo, answerWhenSent } = setup();
     answerWhenSent(speaker, true);
-    await internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, speaker.ws);
+    await internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, speaker.ws, { taint: new RealtimeTaint() });
     const waited = actionTo(speaker)!.payload.expiresInMs as number;
     // The measured gap the issue named: 3500ms against the bus's 5000ms.
     expect(waited).toBe(3500);
@@ -459,7 +461,7 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
     const { internals, speaker, answerWhenSent } = setup();
     answerWhenSent(speaker, true);
     const args = { field: 'status', value: 'pending' };
-    const reply = await internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'set_filter', args }, speaker.ws);
+    const reply = await internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'set_filter', args }, speaker.ws, { taint: new RealtimeTaint() });
     // Its own acknowledgement and nothing after it (#1015: the suffix for
     // work is "says it is done").
     expect(reply).toBe(roomActionReply({ room: 'tasks', action: 'set_filter', args }, 'accepted'));
@@ -470,7 +472,7 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
     const { internals, speaker, answerWhenSent } = setup();
     answerWhenSent(speaker, false);
     expect(await internals.executeRealtimeNavTool(
-      'dashboard_room_action', { room: 'settings', action: 'switch_tab', args: { tab: 'billing' } }, speaker.ws))
+      'dashboard_room_action', { room: 'settings', action: 'switch_tab', args: { tab: 'billing' } }, speaker.ws, { taint: new RealtimeTaint() }))
       .toBe("Settings didn't switch to billing.");
   });
 
@@ -515,7 +517,7 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
 
   test('the realtime tool refuses a room that does not exist without waiting', async () => {
     const { internals, speaker, other } = setup();
-    expect(await internals.executeRealtimeNavTool('dashboard_room_action', { room: 'billing', action: 'open' }, speaker.ws))
+    expect(await internals.executeRealtimeNavTool('dashboard_room_action', { room: 'billing', action: 'open' }, speaker.ws, { taint: new RealtimeTaint() }))
       .toBe('There is no "billing" room.');
     expect([...speaker.sent, ...other.sent]).toEqual([]);
   });
@@ -525,7 +527,7 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
     let waited = -1;
     (svc as unknown as { requestRoomAction: (a: unknown, t: number) => Promise<string> }).requestRoomAction =
       async (_a, t) => { waited = t; return 'no_answer'; };
-    await internals.executeRealtimeNavTool('dashboard_room_action', { room: 'settings', action: 'enable_tts' }, speaker.ws);
+    await internals.executeRealtimeNavTool('dashboard_room_action', { room: 'settings', action: 'enable_tts' }, speaker.ws, { taint: new RealtimeTaint() });
     expect(waited).toBeGreaterThan(0);
     expect(waited).toBeLessThan(TOOL_RESULT_GRACE_MS);
   });
@@ -586,7 +588,7 @@ describe('voice room actions are limited to what the rooms carry out (#969)', ()
     base.internals.wsServer.getClients().add(speaker.ws);
     base.internals.wsServer.getClients().add(other.ws);
     const internals = base.svc as unknown as {
-      executeRealtimeNavTool: (name: string, args: Record<string, unknown>, ws: unknown) => Promise<string | null>;
+      executeRealtimeNavTool: (name: string, args: Record<string, unknown>, ws: unknown, opts: { blockedCategories?: string[]; taint: RealtimeTaint }) => Promise<string | null>;
       handleVoiceRoomAction: (ra: unknown, requestId: string, ws: unknown) => Promise<void>;
     };
     const roomFrames = () => [...speaker.sent, ...other.sent]
@@ -598,7 +600,7 @@ describe('voice room actions are limited to what the rooms carry out (#969)', ()
     for (const action of ['grant_access', 'revoke_access']) {
       const { internals, speaker, roomFrames } = setup();
       const reply = await internals.executeRealtimeNavTool(
-        'dashboard_room_action', { room: 'authority', action, args: { action: 'send_email' } }, speaker.ws);
+        'dashboard_room_action', { room: 'authority', action, args: { action: 'send_email' } }, speaker.ws, { taint: new RealtimeTaint() });
       expect(roomFrames()).toEqual([]);
       expect(reply).toBe("Permissions can't be changed by voice. Tell the user to use the Grants tab in Authority.");
     }
@@ -607,7 +609,7 @@ describe('voice room actions are limited to what the rooms carry out (#969)', ()
   test('the realtime tool refuses an action the room does not carry out and broadcasts nothing', async () => {
     for (const [room, action] of [['settings', 'set_primary_llm'], ['settings', 'set_heartbeat_interval'], ['settings', 'set_heartbeat_aggressiveness'], ['workflows', 'run'], ['usage', 'switch_tab']] as const) {
       const { internals, speaker, roomFrames } = setup();
-      const reply = await internals.executeRealtimeNavTool('dashboard_room_action', { room, action, args: {} }, speaker.ws);
+      const reply = await internals.executeRealtimeNavTool('dashboard_room_action', { room, action, args: {} }, speaker.ws, { taint: new RealtimeTaint() });
       expect(roomFrames()).toEqual([]);
       expect(reply).toMatch(/^.+ has no "\w+" action, so I did not send it\.$/);
     }
@@ -646,9 +648,9 @@ describe('realtime navigation says it asked, not that it happened (#969)', () =>
   const setup = () => {
     const base = makeService();
     const internals = base.svc as unknown as {
-      executeRealtimeNavTool: (name: string, args: Record<string, unknown>, ws: unknown) => Promise<string | null>;
+      executeRealtimeNavTool: (name: string, args: Record<string, unknown>, ws: unknown, opts: { blockedCategories?: string[]; taint: RealtimeTaint }) => Promise<string | null>;
     };
-    return { ...base, nav: (name: string, args: Record<string, unknown>) => internals.executeRealtimeNavTool(name, args, base.ws) };
+    return { ...base, nav: (name: string, args: Record<string, unknown>) => internals.executeRealtimeNavTool(name, args, base.ws, { taint: new RealtimeTaint() }) };
   };
   const unconfirmed = /^Asked the dashboard to .+; it does not report back whether it did\.$/;
 
@@ -702,7 +704,7 @@ describe('a side-effecting room action runs on one dashboard only (#974)', () =>
     // A current dashboard says its zone (#1022).
     (base.svc as unknown as { dashboardTimeZones: WeakMap<object, unknown> }).dashboardTimeZones.set(speaker.ws, { zone: 'UTC' });
     const internals = base.svc as unknown as {
-      executeRealtimeNavTool: (name: string, args: Record<string, unknown>, ws: unknown) => Promise<string | null>;
+      executeRealtimeNavTool: (name: string, args: Record<string, unknown>, ws: unknown, opts: { blockedCategories?: string[]; taint: RealtimeTaint }) => Promise<string | null>;
       handleVoiceRoomAction: (ra: unknown, requestId: string, ws: unknown) => Promise<void>;
     };
     const real = base.svc.requestRoomAction.bind(base.svc);
@@ -723,7 +725,7 @@ describe('a side-effecting room action runs on one dashboard only (#974)', () =>
   test('the realtime tool sends a side-effecting action, and its navigation, to the speaker alone', async () => {
     for (const [room, action, args] of sideEffecting) {
       const { internals, speaker, other, panel, frames } = setup();
-      await internals.executeRealtimeNavTool('dashboard_room_action', { room, action, args }, speaker.ws);
+      await internals.executeRealtimeNavTool('dashboard_room_action', { room, action, args }, speaker.ws, { taint: new RealtimeTaint() });
       expect(frames(speaker)).toEqual([`navigate_room:${room}`, `room_action:${action}`]);
       expect(frames(other)).toEqual([]);
       expect(frames(panel)).toEqual([]);
@@ -742,7 +744,7 @@ describe('a side-effecting room action runs on one dashboard only (#974)', () =>
 
   test('a tab switch still goes to every dashboard and panel, with the room opened on each', async () => {
     const { internals, speaker, other, panel, frames } = setup();
-    await internals.executeRealtimeNavTool('dashboard_room_action', { room: 'agents', action: 'switch_tab', args: { tab: 'builder' } }, speaker.ws);
+    await internals.executeRealtimeNavTool('dashboard_room_action', { room: 'agents', action: 'switch_tab', args: { tab: 'builder' } }, speaker.ws, { taint: new RealtimeTaint() });
     for (const c of [speaker, other, panel]) expect(frames(c)).toEqual(['navigate_room:agents', 'room_action:switch_tab']);
     // Only the speaker is asked to answer.
     expect(speaker.sent.find((m) => m.payload?.source === 'room_action')!.payload.resultFrom).toBe('dashboard');
@@ -774,10 +776,12 @@ describe('voice room actions are held to what their handlers do (#973)', () => {
   const setup = (opts: { tainted?: boolean; gating?: Parameters<typeof buildTaintGating>[0]; zone?: string | null } = {}) => {
     const orchestrator = new AgentOrchestrator();
     orchestrator.setTaintGating(buildTaintGating(opts.gating));
+    // The taint of the realtime session the actions are asked for in (#928).
+    const taint = new RealtimeTaint();
     if (opts.tainted) {
-      (orchestrator as unknown as { realtimeTaint: Set<string> }).realtimeTaint.add('browser_navigate');
-      // The service reads it through the public accessor, outside any turn.
-      expect([...orchestrator.getTurnTaint()]).toEqual(['browser_navigate']);
+      taint.marks.add('browser_navigate');
+      // The service reads it through the public accessor, for this session.
+      expect([...orchestrator.getRealtimeSessionTaint(taint)]).toEqual(['browser_navigate']);
     }
     const base = makeService(orchestrator);
     base.internals.wsServer.getClients().clear();
@@ -791,7 +795,7 @@ describe('voice room actions are held to what their handlers do (#973)', () => {
     // A current dashboard says its zone (#1022); a stale tab is set up without one.
     if (opts.zone !== null) (base.svc as unknown as { dashboardTimeZones: WeakMap<object, unknown> }).dashboardTimeZones.set(speaker.ws, { zone: opts.zone ?? 'UTC' });
     const internals = base.svc as unknown as {
-      executeRealtimeNavTool: (name: string, args: Record<string, unknown>, ws: unknown, opts?: { blockedCategories?: string[] }) => Promise<string | null>;
+      executeRealtimeNavTool: (name: string, args: Record<string, unknown>, ws: unknown, opts: { blockedCategories?: string[]; taint: RealtimeTaint }) => Promise<string | null>;
       routeClassifiedVoiceIntent: (intent: Intent, trimmed: string, requestId: string, ws: unknown) => Promise<void>;
       resolveVoiceConfirmation: (id: string, decision: 'confirm' | 'cancel') => Promise<{ ok: boolean }>;
       pendingVoiceConfirmations: Map<string, unknown>;
@@ -810,8 +814,8 @@ describe('voice room actions are held to what their handlers do (#973)', () => {
       .filter((m) => m.payload?.source === 'room_action' || m.payload?.source === 'navigate_room')
       .map((m) => `${m.payload.source}:${String(m.payload.action ?? m.payload.key)}`);
     const realtime = (room: string, action: string, args: Record<string, unknown> = {}, blockedCategories?: string[]) =>
-      internals.executeRealtimeNavTool('dashboard_room_action', { room, action, args }, speaker.ws, { blockedCategories });
-    return { svc: base.svc, orchestrator, internals, speaker, other, frames, realtime };
+      internals.executeRealtimeNavTool('dashboard_room_action', { room, action, args }, speaker.ws, { blockedCategories, taint });
+    return { svc: base.svc, orchestrator, internals, speaker, other, frames, realtime, taint };
   };
 
   // The actions the issue named, and the one it missed: opening a stopped
@@ -851,11 +855,32 @@ describe('voice room actions are held to what their handlers do (#973)', () => {
   });
 
   test('once the person speaks again the same action goes', async () => {
-    const { orchestrator, frames, realtime } = setup({ tainted: true });
+    const { taint, frames, realtime } = setup({ tainted: true });
     expect(await realtime('tasks', 'create_task', { title: 'x' })).toContain('[BLOCKED]');
-    orchestrator.resetRealtimeTaint();
+    taint.userTurnStarted();
     expect(await realtime('tasks', 'create_task', { title: 'x' })).not.toContain('[BLOCKED]');
     expect(frames()).toEqual(['navigate_room:tasks', 'room_action:create_task']);
+  });
+
+  // #928: the taint judged is the asking session's, not one shared by every
+  // realtime session in the process.
+  test('a read in another realtime session does not refuse this one', async () => {
+    const { orchestrator, internals, speaker, frames } = setup();
+    // The other session (a pebble, say) reads a page through its own tool call.
+    const pebble = new RealtimeTaint();
+    const registry = new ToolRegistry();
+    registry.register({ name: 'browser_snapshot', description: 't', category: 'browser', parameters: {}, execute: async () => 'Page: evil' });
+    orchestrator.setToolRegistry(registry);
+    await orchestrator.executeRealtimeToolCall('browser_snapshot', {}, { taint: pebble });
+    expect([...orchestrator.getRealtimeSessionTaint(pebble)]).toEqual(['browser_snapshot']);
+    const dashboard = new RealtimeTaint();
+    const reply = await internals.executeRealtimeNavTool('dashboard_room_action',
+      { room: 'tasks', action: 'create_task', args: { title: 'x' } }, speaker.ws, { taint: dashboard });
+    expect(reply).not.toContain('[BLOCKED]');
+    expect(frames()).toEqual(['navigate_room:tasks', 'room_action:create_task']);
+    // And the pebble's own is still refused.
+    expect(await internals.executeRealtimeNavTool('dashboard_room_action',
+      { room: 'tasks', action: 'create_task', args: { title: 'x' } }, speaker.ws, { taint: pebble })).toContain('[BLOCKED]');
   });
 
   test('a tainted session may still change what the screen shows', async () => {
@@ -896,9 +921,18 @@ describe('voice room actions are held to what their handlers do (#973)', () => {
     }
   });
 
+  // #928: the dashboard bridge judges tool calls and room actions against the
+  // taint the voice session hands it, never one it makes up.
+  test('the live session hands its own taint to its tool calls and room actions (#928)', async () => {
+    const src = await Bun.file(new URL('./ws-service.ts', import.meta.url)).text();
+    expect(src).toContain('executeToolCall: (name, args, taint) => {');
+    expect(src).toContain('orchestrator.executeRealtimeToolCall(name, args, { blockedCategories: resolved.blockedCategories, taint });');
+    expect(src).not.toContain('new RealtimeTaint(');
+  });
+
   test('the live session passes its blocked categories to the room action tool', async () => {
     const src = await Bun.file(new URL('./ws-service.ts', import.meta.url)).text();
-    expect(src).toContain('this.executeRealtimeNavTool(name, args, ws, { blockedCategories: resolved.blockedCategories })');
+    expect(src).toContain('this.executeRealtimeNavTool(name, args, ws, { blockedCategories: resolved.blockedCategories, taint })');
   });
 
   const intent = (room: string, action: string, args: Record<string, unknown>, over: Partial<Intent> = {}): Intent => ({
@@ -1480,7 +1514,8 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
   const setup = (opts: { tainted?: boolean } = {}) => {
     const orchestrator = new AgentOrchestrator();
     orchestrator.setTaintGating(buildTaintGating(undefined));
-    if (opts.tainted) (orchestrator as unknown as { realtimeTaint: Set<string> }).realtimeTaint.add('browser_navigate');
+    const taint = new RealtimeTaint();
+    if (opts.tainted) taint.marks.add('browser_navigate');
     const base = makeService(orchestrator);
     base.internals.wsServer.getClients().clear();
     const mk = () => {
@@ -1493,7 +1528,7 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
     const rows: Row[] = [];
     base.svc.setAuditTrail({ log: (e: Row) => { rows.push(e); return e; } } as never);
     const internals = base.svc as unknown as {
-      executeRealtimeNavTool: (name: string, args: Record<string, unknown>, ws: unknown) => Promise<string | null>;
+      executeRealtimeNavTool: (name: string, args: Record<string, unknown>, ws: unknown, opts: { blockedCategories?: string[]; taint: RealtimeTaint }) => Promise<string | null>;
       routeClassifiedVoiceIntent: (intent: Intent, trimmed: string, requestId: string, ws: unknown) => Promise<void>;
       routeMessage: (msg: unknown, ws: unknown) => Promise<unknown>;
       handleClientDisconnect: (ws: unknown) => void;
@@ -1523,18 +1558,18 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
     });
     const yes = (said: string): Intent => ({ id: `y-${Math.random()}`, utterance: said, verb: 'ask', object: null, args: {}, impact: 'read', confidence: 0.6, confirmation_response: 'approve' });
     const brief = () => rows.map((r) => `${r.authority_decision}:${r.executed ? 'ran' : 'not-run'}:${r.channel}:${r.tool_name}`);
-    return { svc: base.svc, orchestrator, internals, speaker, other, rows, answering, intent, yes, brief };
+    return { svc: base.svc, orchestrator, internals, speaker, other, rows, answering, intent, yes, brief, taint };
   };
 
   test('the realtime path: a run, a refusal, and a view action, which writes nothing', async () => {
     const t = setup();
     t.answering();
-    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws);
-    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'set_filter', args: { field: 'status', value: 'done' } }, t.speaker.ws);
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws, { taint: t.taint });
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'set_filter', args: { field: 'status', value: 'done' } }, t.speaker.ws, { taint: t.taint });
     expect(t.brief()).toEqual(['allowed:ran:voice:room_action(tasks/create_task; via realtime; write_data; accepted)']);
     expect(t.rows[0]).toMatchObject({ action_category: 'write_data', approval_id: null, agent_id: 'voice' });
     const tainted = setup({ tainted: true });
-    await tainted.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'workspaces', action: 'create_project', args: { name: 'x' } }, tainted.speaker.ws);
+    await tainted.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'workspaces', action: 'create_project', args: { name: 'x' } }, tainted.speaker.ws, { taint: tainted.taint });
     expect(tainted.brief()).toEqual(['denied:not-run:voice:room_action(workspaces/create_project; via realtime; install_software, execute_command; tainted)']);
     expect(tainted.rows[0]!.action_category).toBe('install_software');
   });
@@ -1546,7 +1581,7 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
     const t = setup();
     t.answering({ accepted: false, outcome: 'pending' });
     const reply = await t.internals.executeRealtimeNavTool('dashboard_room_action',
-      { room: 'agents', action: 'spawn_agent', args: { specialist: 'research-analyst', task: 'x' } }, t.speaker.ws);
+      { room: 'agents', action: 'spawn_agent', args: { specialist: 'research-analyst', task: 'x' } }, t.speaker.ws, { taint: t.taint });
     expect(reply).toBe('That needs your approval before it runs. A card is waiting for you. '
       + '(Nothing has run. The user approves or refuses it on the card; do not call this again for this request.)');
     expect(reply).not.toContain("didn't accept");
@@ -1567,13 +1602,13 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
     for (const answer of [{ accepted: true, outcome: 'pending' }, { accepted: false, outcome: 'accepted' }, { accepted: false, outcome: 'maybe' }, { accepted: 'yes', outcome: 'pending' }]) {
       const t = setup();
       t.answering(answer as { accepted: boolean; outcome?: string });
-      await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws);
+      await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws, { taint: t.taint });
       expect(`${JSON.stringify(answer)} ${t.brief()}`).toBe(`${JSON.stringify(answer)} allowed:not-run:voice:room_action(tasks/create_task; via realtime; write_data; no_answer)`);
     }
     // Not vacuous: the same harness, answering plainly, is heard.
     const ok = setup();
     ok.answering({ accepted: false, outcome: 'rejected' });
-    await ok.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, ok.speaker.ws);
+    await ok.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, ok.speaker.ws, { taint: ok.taint });
     expect(ok.brief()).toEqual(['allowed:not-run:voice:room_action(tasks/create_task; via realtime; write_data; rejected)']);
   });
 
@@ -1582,7 +1617,7 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
   test('a room still working when the wait runs out is recorded as run, and as started', async () => {
     const t = setup();
     t.answering({ started: true } as never);
-    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'workspaces', action: 'start_server', args: { name: 'demo' } }, t.speaker.ws);
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'workspaces', action: 'start_server', args: { name: 'demo' } }, t.speaker.ws, { taint: t.taint });
     expect(t.brief()).toEqual(['allowed:ran:voice:room_action(workspaces/start_server; via realtime; execute_command; started)']);
     // And on the classifier path, where it is said aloud: test_provider is
     // not governed, so a sure reading runs it.
@@ -1600,7 +1635,7 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
   test('a late answer to an action that ran out its wait is recorded as its own row', async () => {
     const t = setup();
     t.answering({ started: true } as never);
-    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'workspaces', action: 'start_server', args: { name: 'demo' } }, t.speaker.ws);
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'workspaces', action: 'start_server', args: { name: 'demo' } }, t.speaker.ws, { taint: t.taint });
     const id = t.speaker.sent.find((m) => m.payload?.source === 'room_action')!.payload.resultId;
     const late = (from: { ws: unknown }, accepted: boolean) =>
       t.internals.routeMessage({ type: 'room_action_result', payload: { resultId: id, accepted }, timestamp: Date.now() }, from.ws);
@@ -1635,7 +1670,7 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
   test('a started action whose dashboard leaves before answering gets a disconnected row, not run', async () => {
     const t = setup();
     t.answering({ started: true } as never);
-    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'workspaces', action: 'start_server', args: { name: 'demo' } }, t.speaker.ws);
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'workspaces', action: 'start_server', args: { name: 'demo' } }, t.speaker.ws, { taint: t.taint });
     t.internals.handleClientDisconnect(t.speaker.ws);
     expect(t.brief()).toEqual([
       'allowed:ran:voice:room_action(workspaces/start_server; via realtime; execute_command; started)',
@@ -1643,14 +1678,14 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
     ]);
     // An unanswered one already says it did not run: nothing to add.
     const u = setup();
-    await u.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, u.speaker.ws);
+    await u.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, u.speaker.ws, { taint: u.taint });
     u.internals.handleClientDisconnect(u.speaker.ws);
     expect(u.brief()).toEqual(['allowed:not-run:voice:room_action(tasks/create_task; via realtime; write_data; no_answer)']);
   });
 
   test('a late answer from a dashboard that has since gone is not heard', async () => {
     const t = setup();
-    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws);
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws, { taint: t.taint });
     const id = t.speaker.sent.find((m) => m.payload?.source === 'room_action')!.payload.resultId;
     t.internals.handleClientDisconnect(t.speaker.ws);
     await t.internals.routeMessage({ type: 'room_action_result', payload: { resultId: id, accepted: true }, timestamp: Date.now() }, t.speaker.ws);
@@ -1659,7 +1694,7 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
 
   test('a room that never answers is not recorded as having run it', async () => {
     const t = setup();
-    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws);
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws, { taint: t.taint });
     expect(t.brief()).toEqual(['allowed:not-run:voice:room_action(tasks/create_task; via realtime; write_data; no_answer)']);
   });
 
@@ -1757,7 +1792,7 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
 
   test('a voice request for an authority grant is refused with a row, on both paths', async () => {
     const t = setup();
-    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'authority', action: 'grant_access', args: { action: 'send_email' } }, t.speaker.ws);
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'authority', action: 'grant_access', args: { action: 'send_email' } }, t.speaker.ws, { taint: t.taint });
     await t.internals.routeClassifiedVoiceIntent(t.intent('authority', 'revoke_access', { action: 'send_email' }), 'x', 'r', t.speaker.ws);
     expect(t.brief()).toEqual([
       'denied:not-run:voice:room_action(authority/grant_access; via realtime; modify_settings; not_a_room_action)',
@@ -1782,7 +1817,7 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
     const t = setup();
     t.svc.setAuditTrail({ log: () => { throw new Error('disk full'); } } as never);
     t.answering();
-    const reply = await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws);
+    const reply = await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws, { taint: t.taint });
     expect(reply).toContain('Tasks says it is done');
   });
 });

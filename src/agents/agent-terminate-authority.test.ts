@@ -23,6 +23,7 @@ import { AgentLifecycleRefusal } from './lifecycle-gate.ts';
 import { applyApprovalDecision } from '../daemon/approval-decision.ts';
 import { createApiRoutes, type ApiContext } from '../daemon/api-routes.ts';
 import type { JarvisConfig } from '../config/types.ts';
+import { RealtimeTaint } from './realtime-taint.ts';
 
 /**
  * #963: stopping a background agent is a governed act, gated at the sink
@@ -179,7 +180,7 @@ describe('stopping an agent is gated at the sink (#963)', () => {
   it('a realtime manage_agents terminate raises a card even when authority allows it outright', async () => {
     const h = harness({ level: 10 });
     const { agent, taskId } = await h.running();
-    const out = await h.orch.executeRealtimeToolCall('manage_agents', { action: 'terminate', agent_id: agent.id });
+    const out = await h.orch.executeRealtimeToolCall('manage_agents', { action: 'terminate', agent_id: agent.id }, { taint: new RealtimeTaint() });
     expect(out).toContain('[AWAITING_APPROVAL]');
     expect(h.cards).toHaveLength(1);
     expect(h.orch.getAgent(agent.id)).toBeDefined();
@@ -369,9 +370,9 @@ describe('stopping an agent, after review (#963)', () => {
 
   it('a realtime stop for an agent that does not exist raises no card', async () => {
     const h = harness();
-    const out = await h.orch.executeRealtimeToolCall('manage_agents', { action: 'terminate', agent_id: 'ghost' });
+    const out = await h.orch.executeRealtimeToolCall('manage_agents', { action: 'terminate', agent_id: 'ghost' }, { taint: new RealtimeTaint() });
     expect(out).toContain('no background agent');
-    const primary = await h.orch.executeRealtimeToolCall('manage_agents', { action: 'terminate', agent_id: h.primary.id });
+    const primary = await h.orch.executeRealtimeToolCall('manage_agents', { action: 'terminate', agent_id: h.primary.id }, { taint: new RealtimeTaint() });
     expect(primary).toContain('no background agent');
     expect(h.cards).toHaveLength(0);
     expect(h.approvals.getPending()).toHaveLength(0);
@@ -380,8 +381,8 @@ describe('stopping an agent, after review (#963)', () => {
   it('a realtime stop asked twice, with junk keys, is one card', async () => {
     const h = harness({ level: 10 });
     const { agent, taskId } = await h.running();
-    await h.orch.executeRealtimeToolCall('manage_agents', { action: 'terminate', agent_id: agent.id });
-    await h.orch.executeRealtimeToolCall('manage_agents', { action: 'terminate', agent_id: agent.id, junk: 'x' });
+    await h.orch.executeRealtimeToolCall('manage_agents', { action: 'terminate', agent_id: agent.id }, { taint: new RealtimeTaint() });
+    await h.orch.executeRealtimeToolCall('manage_agents', { action: 'terminate', agent_id: agent.id, junk: 'x' }, { taint: new RealtimeTaint() });
     expect(h.approvals.getPending()).toHaveLength(1);
     expect(JSON.parse(h.approvals.getPending()[0]!.tool_arguments)).toEqual({ action: 'terminate', agent_id: agent.id });
     h.taskManager.cancel(taskId);

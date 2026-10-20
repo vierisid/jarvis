@@ -5,6 +5,7 @@ import { AuthorityEngine, type AuthorityConfig } from '../authority/engine.ts';
 import { AuditTrail } from '../authority/audit.ts';
 import { initDatabase, closeDb } from '../vault/schema.ts';
 import type { RoleDefinition } from '../roles/types.ts';
+import { RealtimeTaint } from './realtime-taint.ts';
 
 const ROLE = {
   id: 'personal-assistant',
@@ -56,7 +57,7 @@ describe('orchestrator.executeRealtimeToolCall (auto-approve bridge)', () => {
 
   test('allowed tool executes and returns the result', async () => {
     const { orch, audit } = makeOrchestrator(authorityConfig());
-    const out = await orch.executeRealtimeToolCall('read_file', { path: '/etc/hosts' });
+    const out = await orch.executeRealtimeToolCall('read_file', { path: '/etc/hosts' }, { taint: new RealtimeTaint() });
     // read_file output is outside content, so it comes back framed as untrusted.
     expect(out).toContain('contents of /etc/hosts');
     expect(out).toContain('UNTRUSTED_CONTENT');
@@ -71,7 +72,7 @@ describe('orchestrator.executeRealtimeToolCall (auto-approve bridge)', () => {
     // Force read_data to require approval via an override.
     const cfg = authorityConfig({ overrides: [{ action: 'read_data', allowed: true, requires_approval: true }] });
     const { orch, audit } = makeOrchestrator(cfg);
-    const out = await orch.executeRealtimeToolCall('read_file', { path: '/x' });
+    const out = await orch.executeRealtimeToolCall('read_file', { path: '/x' }, { taint: new RealtimeTaint() });
     expect(out).toContain('contents of /x');      // executed despite needing approval
     expect(executed).toEqual(['read_file:/x']);
     const log = audit.query({ limit: 10 });
@@ -81,28 +82,28 @@ describe('orchestrator.executeRealtimeToolCall (auto-approve bridge)', () => {
 
   test('with no primary agent the gate fails closed instead of running the call ungated', async () => {
     const { orch } = makeOrchestrator(authorityConfig(), { primary: false });
-    expect(await orch.executeRealtimeToolCall('read_file', { path: '/x' })).toContain('[AUTHORITY DENIED]');
+    expect(await orch.executeRealtimeToolCall('read_file', { path: '/x' }, { taint: new RealtimeTaint() })).toContain('[AUTHORITY DENIED]');
     expect(executed).toEqual([]);
   });
 
   test('hard deny is enforced — tool does NOT execute', async () => {
     const cfg = authorityConfig({ overrides: [{ action: 'read_data', allowed: false }] });
     const { orch } = makeOrchestrator(cfg);
-    const out = await orch.executeRealtimeToolCall('read_file', { path: '/x' });
+    const out = await orch.executeRealtimeToolCall('read_file', { path: '/x' }, { taint: new RealtimeTaint() });
     expect(out).toContain('[AUTHORITY DENIED]');
     expect(executed).toEqual([]);
   });
 
   test('blocked_categories backstop blocks even under auto-approve', async () => {
     const { orch } = makeOrchestrator(authorityConfig());
-    const out = await orch.executeRealtimeToolCall('read_file', { path: '/x' }, { blockedCategories: ['read_data'] });
+    const out = await orch.executeRealtimeToolCall('read_file', { path: '/x' }, { blockedCategories: ['read_data'], taint: new RealtimeTaint() });
     expect(out).toContain('[BLOCKED]');
     expect(executed).toEqual([]);
   });
 
   test('unknown tool returns an error string, never throws', async () => {
     const { orch } = makeOrchestrator(authorityConfig());
-    const out = await orch.executeRealtimeToolCall('does_not_exist', {});
+    const out = await orch.executeRealtimeToolCall('does_not_exist', {}, { taint: new RealtimeTaint() });
     expect(out.toLowerCase()).toContain('error');
   });
 });

@@ -22,6 +22,7 @@ import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
 import { hostedRealtimeIncluded } from './realtime-gate.ts';
 import type { LLMTool } from '../llm/provider.ts';
 import type { SidecarAudioChannel } from '../sidecar/manager.ts';
+import type { RealtimeTaint } from '../agents/realtime-taint.ts';
 
 export type PebbleRealtimeState = 'listening' | 'speaking' | 'thinking' | 'idle';
 export type PebbleRealtimeStatus = 'live' | 'closed' | 'error';
@@ -42,14 +43,11 @@ export type PebbleRealtimeDeps = {
   instructions: () => string;
   /** Auto-approving tool bridge (emergency-stop + authority gate enforced).
    *  sidecarId is passed so nav tools (open_dashboard_room, …) can spawn a
-   *  panel on the right machine. */
-  executeToolCall: (sidecarId: string, name: string, args: Record<string, unknown>, blockedCategories: string[]) => Promise<string>;
-  /** The user has begun a new utterance: the taint-gating turn boundary for
-   *  voice. Bind to `orchestrator.resetRealtimeTaint`; see
-   *  `RealtimeVoiceDeps.onUserTurnStart` for why nothing else clears it.
-   *  `sidecarId` is for the caller's logs, not for scoping: the session taint
-   *  it clears is one process-wide set shared with the dashboard's sessions. */
-  onUserTurnStart: (sidecarId: string) => void;
+   *  panel on the right machine. `taint` is the calling session's own
+   *  (#928), handed on to `executeRealtimeToolCall`. */
+  executeToolCall: (
+    sidecarId: string, name: string, args: Record<string, unknown>, blockedCategories: string[], taint: RealtimeTaint,
+  ) => Promise<string>;
   /** Drive the pebble's visual state + bubble text. */
   onState?: (sidecarId: string, state: PebbleRealtimeState, text?: string) => void;
   /** Surface session lifecycle to logs / the sidecar. */
@@ -223,8 +221,7 @@ export class PebbleRealtimeManager {
     const voiceDeps: RealtimeVoiceDeps = {
       tools: this.deps.tools(),
       instructions: this.deps.instructions(),
-      executeToolCall: (name, args) => this.deps.executeToolCall(sidecarId, name, args, resolved.blockedCategories),
-      onUserTurnStart: () => this.deps.onUserTurnStart(sidecarId),
+      executeToolCall: (name, args, taint) => this.deps.executeToolCall(sidecarId, name, args, resolved.blockedCategories, taint),
       onTranscript: (t) => {
         // Drive the pebble: assistant turn → speaking (with growing bubble
         // text), user turn → listening. foldTranscript accumulates the delta

@@ -3,6 +3,7 @@ import { PebbleRealtimeManager, foldTranscript, newTranscriptAccumulator } from 
 import { clearRealtimeGateCache } from './realtime-gate.ts';
 import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
 import type { RealtimeVoiceSession, RealtimeVoiceDeps } from './realtime-voice.ts';
+import { RealtimeTaint } from '../agents/realtime-taint.ts';
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
@@ -30,7 +31,6 @@ const makeManager = (over: Partial<ConstructorParameters<typeof PebbleRealtimeMa
     tools: () => [],
     instructions: () => 'test',
     executeToolCall: async () => 'ok',
-    onUserTurnStart: () => {},
     ...over,
   });
 
@@ -174,39 +174,46 @@ describe('a session that never becomes usable downgrades the summon hotkey', () 
   });
 });
 
-// A voice session has no turn objects, so the user starting to speak is the
-// only thing that clears the session taint -- and executeRealtimeToolCall
-// refuses a taint-gated call outright instead of auto-approving it. The
-// dashboard wired that boundary; the pebble did not, so after one
-// capture_screen (or any page read) every later machine-changing action came
-// back "[BLOCKED] ... voice cannot approve it" for the rest of the daemon's
-// life, however high the authority level was set, and the refusal told the
-// user to say it again -- which could never help.
-describe('the user-turn taint boundary', () => {
-  test('the manager hands the voice session a turn-start handler bound to its own dep', async () => {
+// #928: the realtime taint was one process-wide set, so a pebble's session and
+// the dashboard's read and cleared the same marks. Each voice session now owns
+// its taint, and the manager hands every tool call the calling session's.
+describe('each pebble session judges its tool calls against its own taint', () => {
+  test('a tool call carries the taint of the session that made it, and its sidecar', async () => {
     globalThis.fetch = (async () => new Response(JSON.stringify({ data: [{ id: 'uj-realtime' }] }), {
       status: 200, headers: { 'Content-Type': 'application/json' },
     })) as unknown as typeof fetch;
 
-    const resets: string[] = [];
-    let captured: RealtimeVoiceDeps | null = null;
+    const seen: Array<{ sidecarId: string; taint: RealtimeTaint }> = [];
+    const captured = new Map<string, RealtimeVoiceDeps>();
+    let current = '';
     const mgr = makeManager({
       createSession: ((_r: unknown, _t: unknown, deps: RealtimeVoiceDeps) => {
-        captured = deps;
+        captured.set(current, deps);
         return { connect: async () => {}, close: () => {}, interrupt: () => {} } as unknown as RealtimeVoiceSession;
       }) as NonNullable<ConstructorParameters<typeof PebbleRealtimeManager>[0]['createSession']>,
-      onUserTurnStart: (id) => { resets.push(id); },
+      executeToolCall: async (sidecarId, _name, _args, _blocked, taint) => { seen.push({ sidecarId, taint }); return 'ok'; },
     });
+    current = 'sidecar-1';
     await mgr.start('sidecar-1');
+    current = 'sidecar-2';
+    await mgr.start('sidecar-2');
 
-    // Present at all: a session built without it can never clear its taint.
-    const voiceDeps = captured!;
-    expect(typeof voiceDeps.onUserTurnStart).toBe('function');
-    // And it names the sidecar it belongs to, rather than a bare call.
-    voiceDeps.onUserTurnStart();
-    voiceDeps.onUserTurnStart();
-    expect(resets).toEqual(['sidecar-1', 'sidecar-1']);
-    mgr.stop('sidecar-1');
+    const one = new RealtimeTaint();
+    const two = new RealtimeTaint();
+    await captured.get('sidecar-1')!.executeToolCall('read_file', {}, one);
+    await captured.get('sidecar-2')!.executeToolCall('read_file', {}, two);
+    expect(seen.map((s) => s.sidecarId)).toEqual(['sidecar-1', 'sidecar-2']);
+    expect(seen[0]!.taint).toBe(one);
+    expect(seen[1]!.taint).toBe(two);
+    mgr.stopAll();
+  });
+});
+
+describe('the daemon wires the pebble session taint into the tool bridge (#928)', () => {
+  test('the pebble executor hands the orchestrator the calling session\'s taint', async () => {
+    const src = await Bun.file(new URL('./index.ts', import.meta.url)).text();
+    expect(src).toContain('executeToolCall: async (sidecarId, name, args, blockedCategories, taint) => {');
+    expect(src).toContain('executeRealtimeToolCall(name, args, { blockedCategories, taint })');
   });
 });
 
