@@ -508,9 +508,10 @@ export class AgentOrchestrator {
   /**
    * The sub-agent whose tool call is running, and the restrictions it is
    * under: the profile its run was given, and its taint judged by THIS
-   * orchestrator's taint gating, whether or not its own run gates on taint (a
-   * workflow-delegated run does not). Null when nobody but the primary or the
-   * person is acting.
+   * orchestrator's taint gating, whether or not its own run gates on taint
+   * (every run started here does, and a workflow delegation does since
+   * #1041; an embedded caller may not). Null when nobody but the primary or
+   * the person is acting.
    *
    * Not carried: an override the owner scoped to the caller's ROLE
    * (`overrides[].role_id`). The engine matches those on the role being

@@ -64,7 +64,7 @@ function services(approvals: ApprovalManager, call?: { name: string; args: Recor
     authorityEngine: new AuthorityEngine({ default_level: 10, governed_categories: governed as never, overrides: [],
       context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' }),
     emergencyController: new EmergencyController(), auditTrail: audit, approvalManager: approvals,
-    agentOrchestrator: { getPrimary: () => ({ id: 'primary' }), spawnSubAgent: child, reapAgent: () => {} } as never,
+    agentOrchestrator: { getPrimary: () => ({ id: 'primary' }), getProfileFor: () => null, getTaintGating: () => null, spawnSubAgent: child, reapAgent: () => {} } as never,
     agentSpecialists: new Map([[ROLE.id, ROLE]]) as never,
     agentScopedRegistry: () => registry,
     llmManager: { chatTier: async (_tier: string, _origin: string, messages: Array<{ role: string }>) =>
