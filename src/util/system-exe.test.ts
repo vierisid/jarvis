@@ -10,7 +10,7 @@ import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, posix } from 'node:path';
 import {
-  LINUX_SYSTEM_DIRS, SystemExeNotFoundError, __setLinuxSystemDirsForTests, findLinuxSystemExe, linuxSystemExe,
+  LINUX_SYSTEM_DIRS, SystemExeNotFoundError, __setLinuxSystemDirsForTests, findLinuxSystemExe, linuxSystemExe, win32SystemExe,
   type ExeFs,
 } from './system-exe.ts';
 
@@ -241,5 +241,47 @@ describe.skipIf(process.platform === 'win32')('on the real filesystem', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('win32SystemExe (#907)', () => {
+  const PS = ['System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'].join('\\');
+
+  test('builds the path from %SystemRoot%, read case-insensitively as Windows does', () => {
+    expect(win32SystemExe('powershell.exe', { env: { SystemRoot: 'D:\\Windows' }, isFile: null })).toBe(`D:\\Windows\\${PS}`);
+    expect(win32SystemExe('powershell.exe', { env: { SYSTEMROOT: 'D:\\Windows\\' }, isFile: null })).toBe(`D:\\Windows\\${PS}`);
+  });
+
+  test('falls back to %WINDIR%, and refuses rather than guess C:\\Windows when neither is usable', () => {
+    expect(win32SystemExe('powershell.exe', { env: { windir: 'E:\\WINNT' }, isFile: null })).toBe(`E:\\WINNT\\${PS}`);
+    expect(win32SystemExe('powershell.exe', { env: { SystemRoot: 'C:Windows', WINDIR: 'D:\\Windows' }, isFile: null })).toBe(`D:\\Windows\\${PS}`);
+    expect(() => win32SystemExe('powershell.exe', { env: {}, isFile: null }))
+      .toThrow('powershell.exe was not run: neither %SystemRoot% nor %WINDIR% names the Windows directory');
+  });
+
+  test('a SystemRoot that is not a plain drive-absolute path is not used', () => {
+    for (const bad of ['Windows', '.\\Windows', 'C:Windows', '\\\\evil\\share\\Windows', '\\\\?\\C:\\Windows', 'C:\\Windows\\..\\Users\\x',
+      'C:\\Win"dows', 'C:\\Windows:stream', 'C:\\Windows::$DATA', '/mnt/c/Windows', '',
+      // #907 review: Windows also reads `/` as a separator, and drops
+      // trailing dots and spaces, so these reach outside C:\Windows too.
+      'C:\\Windows/../Users/x', 'C:\\Windows/../..', 'C:/Windows', 'C:\\Windows\\.. \\Users', 'C:\\Windows\\. \\x', 'C:\\Windows\\...',
+      'C:\\Win\ndows', 'C:\\Win\tdows']) {
+      expect(() => win32SystemExe('powershell.exe', { env: { SystemRoot: bad }, isFile: null })).toThrow('neither %SystemRoot% nor %WINDIR%');
+    }
+  });
+
+  test('cmd.exe is under System32', () => {
+    expect(win32SystemExe('cmd.exe', { env: { SystemRoot: 'C:\\Windows' }, isFile: null })).toBe('C:\\Windows\\System32\\cmd.exe');
+  });
+
+  test('refuses, naming the path, when the program is not there', () => {
+    const seen: string[] = [];
+    expect(() => win32SystemExe('powershell.exe', { env: { SystemRoot: 'D:\\Windows' }, isFile: (p) => { seen.push(p); return false; } }))
+      .toThrow(`powershell.exe was not run: it is not at D:\\Windows\\${PS}`);
+    expect(seen).toEqual([`D:\\Windows\\${PS}`]);
+  });
+
+  test.skipIf(process.platform === 'win32')('off Windows the default builds the path without checking it', () => {
+    expect(win32SystemExe('powershell.exe', { env: { SystemRoot: 'C:\\Windows' } })).toBe(`C:\\Windows\\${PS}`);
   });
 });

@@ -1,7 +1,9 @@
 /**
- * #900: no system tool the daemon runs may be named by its bare name, which
- * runs whichever copy comes first on PATH. They are resolved by
- * linuxSystemExe (src/util/system-exe.ts) instead. This scans every non-test
+ * #900, #907: no system tool the daemon runs may be named by its bare name,
+ * which runs whichever copy comes first on PATH or, on native Windows, can
+ * be one in the working directory (see win32SystemExe). They are
+ * resolved by linuxSystemExe and win32SystemExe (src/util/system-exe.ts)
+ * instead. This scans every non-test
  * source file under src/ for the shapes a bare-name launch takes, so a new
  * site that forgets the resolver fails here rather than in a review.
  *
@@ -26,8 +28,18 @@ import ts from 'typescript';
 
 const SRC = import.meta.dir;
 
-/** Linux tools resolved through linuxSystemExe (#900). */
-const BARE_NAMES = new Set(['xdotool', 'xprop', 'wmctrl', 'xclip', 'xsel', 'scrot', 'import', 'notify-send', 'wslpath']);
+/**
+ * Linux tools resolved through linuxSystemExe (#900), and Windows PowerShell,
+ * resolved through win32SystemExe natively (#907) and windowsSystemExe from
+ * WSL (#896).
+ */
+const BARE_NAMES = new Set([
+  'xdotool', 'xprop', 'wmctrl', 'xclip', 'xsel', 'scrot', 'import', 'notify-send', 'wslpath',
+  'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe', 'cmd', 'cmd.exe', 'clip', 'clip.exe',
+]);
+
+/** Windows names are case-insensitive, and the Linux ones are all lower case. */
+const isBareName = (name: string | null | undefined): name is string => !!name && BARE_NAMES.has(name.toLowerCase());
 
 const CHILD_PROCESS_CALLS = new Set(['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync']);
 
@@ -59,7 +71,7 @@ function literalText(node: ts.Node | undefined): string | null {
 function leadingName(command: string): string | null {
   const words = command.trim().split(/\s+/);
   const first = words[0] === 'which' ? words[1] : words[0];
-  return first !== undefined && BARE_NAMES.has(first) ? first : null;
+  return isBareName(first) ? first : null;
 }
 
 function calleeName(expr: ts.Expression): string | null {
@@ -79,12 +91,12 @@ export function scanBareNames(source: string, fileName = 'x.ts'): string[] {
     if (ts.isArrayLiteralExpression(node)) {
       const first = literalText(node.elements[0]);
       const second = literalText(node.elements[1]);
-      if (first !== null && BARE_NAMES.has(first)) report(node, `argv starting with '${first}'`);
-      else if (first === 'which' && second !== null && BARE_NAMES.has(second)) report(node, `argv 'which ${second}'`);
+      if (isBareName(first)) report(node, `argv starting with '${first}'`);
+      else if (first === 'which' && isBareName(second)) report(node, `argv 'which ${second}'`);
     } else if (ts.isCallExpression(node)) {
       const name = calleeName(node.expression);
       const first = literalText(node.arguments[0]);
-      if (name === 'which' && first !== null && BARE_NAMES.has(first)) report(node, `which('${first}')`);
+      if (name === 'which' && isBareName(first)) report(node, `which('${first}')`);
       if (name && CHILD_PROCESS_CALLS.has(name) && first !== null) {
         const bare = leadingName(first);
         if (bare) report(node, `${name}('${first}')`);
@@ -100,7 +112,7 @@ export function scanBareNames(source: string, fileName = 'x.ts'): string[] {
   return found;
 }
 
-describe('system tools are never launched by bare name (#900)', () => {
+describe('system tools are never launched by bare name (#900, #907)', () => {
   test('no source file under src/ does', () => {
     const offenders: string[] = [];
     for (const file of walk(SRC)) {
@@ -121,6 +133,10 @@ describe('system tools are never launched by bare name (#900)', () => {
     expect(scanBareNames(`Bun.spawnSync(['which', 'notify-send']);`)).toEqual(["1: argv 'which notify-send'"]);
     expect(scanBareNames(`const p = Bun.which('xsel');`)).toEqual(["1: which('xsel')"]);
     expect(scanBareNames(`Bun.spawn({ cmd: ['scrot', file] });`)).toEqual(["1: argv starting with 'scrot'"]);
+    expect(scanBareNames(`Bun.spawn(['powershell', '-command', 'Get-Clipboard']);`)).toEqual(["1: argv starting with 'powershell'"]);
+    expect(scanBareNames(`await captureOutput(['powershell.exe', '-NoProfile']);`)).toEqual(["1: argv starting with 'powershell.exe'"]);
+    expect(scanBareNames(`Bun.spawn(['PowerShell.EXE', '-c', x]);`)).toEqual(["1: argv starting with 'PowerShell.EXE'"]);
+    expect(scanBareNames(`Bun.spawn(['cmd.exe', '/c', x]);`)).toEqual(["1: argv starting with 'cmd.exe'"]);
   });
 
   test('the resolver form, and names that are only words, pass', () => {

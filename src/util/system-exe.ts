@@ -11,12 +11,12 @@
  * read. linuxSystemExe looks only in fixed system directories, and only takes
  * a program that nobody but root could have put or changed there.
  *
- * WSL's way to the Windows side is windowsSystemExe in
- * actions/terminal/wsl-bridge.ts, which finds the Windows directory through
- * the mount table.
+ * Native Windows (#907): see win32SystemExe. WSL's way to the Windows side
+ * is windowsSystemExe in actions/terminal/wsl-bridge.ts, which finds the
+ * Windows directory through the mount table instead.
  */
 import { lstatSync, readlinkSync, realpathSync } from 'node:fs';
-import { basename, delimiter, dirname, isAbsolute, join } from 'node:path';
+import { basename, delimiter, dirname, isAbsolute, join, win32 } from 'node:path';
 
 /**
  * Where the Linux tools are taken from, in this order: the directories a
@@ -240,4 +240,80 @@ function homeAsTilde(text: string): string {
   const home = process.env.HOME;
   if (!home || home === '/' || !isAbsolute(home)) return text;
   return text.split(home.replace(/\/+$/, '') + '/').join('~/');
+}
+
+/** The Windows programs the daemon runs natively, under the Windows directory. */
+const WIN32_SYSTEM_EXES = {
+  'powershell.exe': ['System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'],
+  'cmd.exe': ['System32', 'cmd.exe'],
+} as const;
+export type Win32SystemExe = keyof typeof WIN32_SYSTEM_EXES;
+
+/**
+ * A drive-absolute Windows path as the environment gives it, normalized, or
+ * null unless it is a plain one: `C:\Windows`, not a relative path, a UNC
+ * share (`\\server\share`, which would load the program from the network), a
+ * device path (`\\?\`, `\\.\`), a path with `/` in it (which Windows also
+ * reads as a separator, so `C:\Windows/../Users` would get past a `..` check
+ * on `\` alone), a `.`/`..` or dots-and-spaces-only segment (Windows drops
+ * trailing dots and spaces, so `.. ` can mean `..`), an alternate data stream
+ * or a character no Windows path holds.
+ */
+export function win32AbsolutePath(value: string | undefined): string | null {
+  if (!value) return null;
+  if (!/^[A-Za-z]:\\/.test(value)) return null;
+  if (/[\x00-\x1f"*?<>|/]/.test(value) || value.indexOf(':', 2) !== -1) return null;
+  const segments = value.slice(3).split('\\').filter(segment => segment !== '');
+  if (segments.some(segment => /^[. ]+$/.test(segment))) return null;
+  return win32.normalize(value).replace(/\\+$/, '');
+}
+
+/** Case-insensitive, as Windows reads its environment. */
+export function win32EnvValue(env: Record<string, string | undefined>, name: string): string | undefined {
+  const upper = name.toUpperCase();
+  for (const [key, value] of Object.entries(env)) if (key.toUpperCase() === upper) return value;
+  return undefined;
+}
+
+function isWin32File(path: string): boolean {
+  try { return lstatSync(path).isFile(); } catch { return false; }
+}
+
+export type Win32ExeOptions = {
+  env?: Record<string, string | undefined>;
+  /**
+   * Checks the program is there. Defaults to a real check on Windows and none
+   * elsewhere (tests on Linux build the path only); null skips it.
+   */
+  isFile?: ((path: string) => boolean) | null;
+};
+
+/**
+ * The absolute path of a Windows system program, under %SystemRoot% (or
+ * %WINDIR%), never found by name (#907). With neither set to a plain
+ * drive-absolute path it refuses rather than guess C:\Windows: on a machine
+ * whose Windows is on another drive, C:\ may let any user create that folder.
+ *
+ * A bare name is searched for, and on Windows that search can start in the
+ * working directory. Read from Bun's source: Bun 1.4 (src/which/lib.rs
+ * which_for_spawn) looks in the working directory before PATH for every bare
+ * name, as CreateProcessW does, unless NoDefaultCurrentDirectoryInExePath is
+ * set; Bun 1.3.8 (js_bun_spawn_bindings.zig getArgv0) searched PATH itself
+ * when the spawn's env had an exact-case `PATH` key or was inherited, but an
+ * env object without one (Windows spells it `Path`, and a spread or filtered
+ * copy keeps that spelling) handed the bare name to libuv, whose search looks
+ * in the working directory first. An absolute path is not searched for at all.
+ */
+export function win32SystemExe(name: Win32SystemExe, opts: Win32ExeOptions = {}): string {
+  const env = opts.env ?? process.env;
+  const root = win32AbsolutePath(win32EnvValue(env, 'SystemRoot')) ?? win32AbsolutePath(win32EnvValue(env, 'WINDIR'));
+  if (root === null) {
+    throw new Error(`${name} was not run: neither %SystemRoot% nor %WINDIR% names the Windows directory`);
+  }
+  const path = win32.join(root, ...WIN32_SYSTEM_EXES[name]);
+  const isFile = opts.isFile === undefined ? (process.platform === 'win32' ? isWin32File : null) : opts.isFile;
+  if (isFile && !isFile(path)) {
+    throw new Error(`${name} was not run: it is not at ${path}`);
+  }
+  return path;
 }

@@ -34,7 +34,7 @@ import { listSidecarsTool } from './sidecar-list.ts';
 import { DESKTOP_TOOLS, localScreenshotResult } from './desktop.ts';
 import { awaitCaptureTool, awaitCaptureToolOutput, captureViaPrivateFileAsync, CaptureTimeoutError } from '../app-control/capture-file.ts';
 import { sanitizedEnv } from '../../util/subprocess-env.ts';
-import { linuxSystemExe, SystemExeNotFoundError } from '../../util/system-exe.ts';
+import { linuxSystemExe, SystemExeNotFoundError, win32SystemExe } from '../../util/system-exe.ts';
 import { WorkflowCancellationError } from '../../workflows/runtime/cancellation-error.ts';
 import { UI_TOOLS } from './ui.ts';
 import { SKILL_TOOLS } from './skills.ts';
@@ -702,8 +702,9 @@ async function localClipboardRead(): Promise<string> {
     return awaitCaptureToolOutput(Bun.spawn(['pbpaste'], CLIPBOARD_READ), 'pbpaste');
   } else if (os === 'win32') {
     // powershell run directly, not through cmd.exe as execSync did, so the
-    // bound's kill reaches the process doing the work.
-    return (await awaitCaptureToolOutput(Bun.spawn(['powershell', '-command', 'Get-Clipboard'], { ...CLIPBOARD_READ, windowsHide: true }), 'Get-Clipboard')).trimEnd();
+    // bound's kill reaches the process doing the work; by absolute path from
+    // %SystemRoot%, never by name (#907).
+    return (await awaitCaptureToolOutput(Bun.spawn([win32SystemExe('powershell.exe'), '-command', 'Get-Clipboard'], { ...CLIPBOARD_READ, windowsHide: true }), 'Get-Clipboard')).trimEnd();
   } else if (WSLBridge.isWSL()) {
     // On WSL the X clipboard (xclip/xsel via WSLg) is NOT the clipboard the
     // user copies/pastes with -- that's the Windows clipboard. Read it through
@@ -730,7 +731,7 @@ async function localClipboardWrite(content: string): Promise<void> {
   if (os === 'darwin') {
     await awaitCaptureTool(Bun.spawn(['pbcopy'], clipboardWrite(content)), 'pbcopy');
   } else if (os === 'win32') {
-    await awaitCaptureTool(Bun.spawn(['powershell', '-command', 'Set-Clipboard'], { ...clipboardWrite(content), windowsHide: true }), 'Set-Clipboard');
+    await awaitCaptureTool(Bun.spawn([win32SystemExe('powershell.exe'), '-command', 'Set-Clipboard'], { ...clipboardWrite(content), windowsHide: true }), 'Set-Clipboard');
   } else if (WSLBridge.isWSL()) {
     // Write to the Windows clipboard via interop. `clip.exe` is the simplest
     // sink and is always present on WSL; it consumes stdin verbatim. (xclip/
@@ -778,7 +779,7 @@ async function localCaptureScreen(): Promise<string> {
       // leaves its powershell child running. The script has no double quotes
       // and no %, so neither cmd.exe's parsing nor its expansion had any part
       // in what it means.
-      await awaitCaptureTool(Bun.spawn(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', 'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen | ForEach-Object { $bmp = New-Object System.Drawing.Bitmap($_.Bounds.Width, $_.Bounds.Height); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($_.Bounds.Location, [System.Drawing.Point]::Empty, $_.Bounds.Size); $bmp.Save($env:JARVIS_CAPTURE_PATH) }'], {
+      await awaitCaptureTool(Bun.spawn([win32SystemExe('powershell.exe'), '-NoProfile', '-NonInteractive', '-Command', 'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen | ForEach-Object { $bmp = New-Object System.Drawing.Bitmap($_.Bounds.Width, $_.Bounds.Height); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($_.Bounds.Location, [System.Drawing.Point]::Empty, $_.Bounds.Size); $bmp.Save($env:JARVIS_CAPTURE_PATH) }'], {
         ...tool,
         windowsHide: true,
         // sanitizedEnv, not a process.env spread: the allowlist keeps
