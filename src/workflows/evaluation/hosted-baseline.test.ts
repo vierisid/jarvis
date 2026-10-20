@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fingerprint } from '../../actions/tools/composition-provenance';
@@ -10,7 +10,7 @@ import { baselineReport, verdicts, type BaselineRun } from './baseline';
 import { COMPOSITION_ALIAS, MeasuredHostedProvider, resolveAdminEvidence, validateProfile, type HostedProfile } from './hosted';
 import { disposition, measure, unexpectedEffects } from './measures';
 import { loadRubric, rubricProblems, validateRubric, type ReleaseRubric } from './rubric';
-import { loadTasks } from './runner';
+import { loadReserve, loadTasks } from './runner';
 import { rate } from './statistics';
 import type { EvaluationRow, QualityTask } from './types';
 
@@ -137,6 +137,27 @@ test('#1082: an authorization for one task set does not admit another of the sam
   expect(authorizationProblems(both, { ...run, taskset: setOf(founderHeldout) })).toEqual([]);
 });
 
+test('#1082: a reserve authorized from its commitment file starts, without opening the plaintext to approve it', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'jarvis-reserve-auth-'));
+  const reservePath = join(directory, 'reserve.json'), commitmentPath = join(directory, 'commitment.json');
+  try {
+    const source = JSON.parse(readFileSync(join(import.meta.dir, 'tasks/heldout.json'), 'utf8'));
+    const reserve = { ...source, version: 'synthetic-reserve-1' };
+    writeFileSync(reservePath, JSON.stringify(reserve));
+    writeFileSync(commitmentPath, JSON.stringify({ schemaVersion: 1, version: reserve.version, sha256: fingerprint(reserve) }));
+    const loaded = loadReserve(reservePath, commitmentPath);
+    const commitment = JSON.parse(readFileSync(commitmentPath, 'utf8'));
+    const auth = validateAuthorization({ schemaVersion: 2, approvedBy: 'Owner', approvedAt: '2026-10-05', validUntil: '2026-10-12',
+      profileId: 'starter', splits: ['heldout'], tasksets: [{ version: commitment.version, sha256: commitment.sha256 }], maxRequests: 400, maxTokens: 2_000_000 });
+    const run = { profileId: 'starter', split: 'heldout', now: new Date('2026-10-06T10:00:00Z') };
+    expect(authorizationProblems(auth, { ...run, taskset: { version: loaded.version, sha256: loaded.sha256 } })).toEqual([]);
+    // Not vacuous: the same authorization does not cover the public held-out set it was derived from.
+    expect(authorizationProblems(auth, { ...run, taskset: setOf(w8Heldout) })).toHaveLength(1);
+  } finally {
+    rmSync(reservePath, { force: true }); rmSync(commitmentPath, { force: true }); rmdirSync(directory);
+  }
+});
+
 test('#1082: a schemaVersion 1 authorization still parses but never starts a run, and names what to reissue', () => {
   const legacy = validateAuthorization({ schemaVersion: 1, approvedBy: 'Owner', approvedAt: '2026-10-05', validUntil: '2026-10-12',
     profileId: 'starter', splits: ['heldout'], maxRequests: 400, maxTokens: 2_000_000 });
@@ -145,10 +166,12 @@ test('#1082: a schemaVersion 1 authorization still parses but never starts a run
     + ' with tasksets including w8-heldout-1 (sha256 ' + w8Heldout.sha256 + ').']);
   // A v1 file cannot smuggle a task set list past the version check, and v2 requires a well-formed one.
   const v2 = { ...legacy, schemaVersion: 2 };
-  for (const bad of [{ ...legacy, tasksets: [setOf(w8Heldout)] }, v2, { ...v2, tasksets: [] }, { ...v2, tasksets: [{ version: 'w8-heldout-1' }] },
-    { ...v2, tasksets: [{ version: '', sha256: w8Heldout.sha256 }] }, { ...v2, tasksets: [{ version: 'x', sha256: 'abc' }] },
-    { ...v2, tasksets: [{ version: 'x', sha256: w8Heldout.sha256.toUpperCase() }] }, { ...v2, tasksets: setOf(w8Heldout) }, { ...v2, tasksets: [null] }])
-    expect(() => validateAuthorization(bad)).toThrow();
+  for (const bad of [v2, { ...v2, tasksets: [] }, { ...v2, tasksets: [{ version: 'w8-heldout-1' }] },
+    { ...v2, tasksets: [{ version: '', sha256: w8Heldout.sha256 }] }, { ...v2, tasksets: setOf(w8Heldout) }, { ...v2, tasksets: [null] }])
+    expect(() => validateAuthorization(bad)).toThrow('must name the task sets it covers');
+  for (const sha256 of ['abc', w8Heldout.sha256.toUpperCase(), w8Heldout.sha256 + '0'])
+    expect(() => validateAuthorization({ ...v2, tasksets: [{ version: 'x', sha256 }] })).toThrow('sha256 must be 64 lowercase hex characters');
+  expect(() => validateAuthorization({ ...legacy, tasksets: [setOf(w8Heldout)] })).toThrow('tasksets requires schemaVersion 2');
 });
 
 test('the shipped rubric carries the proposed roadmap thresholds and cannot gate a holdout until frozen', () => {

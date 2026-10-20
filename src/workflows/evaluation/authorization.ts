@@ -30,9 +30,11 @@ export function validateAuthorization(value: unknown): SpendAuthorization {
     throw new Error('Spend authorization dates must be ISO dates or timestamps');
   if (!Array.isArray(a.splits) || !a.splits.length || !a.splits.every(s => s === 'development' || s === 'heldout'))
     throw new Error('Spend authorization must name the splits it covers');
-  if (a.schemaVersion === 2 && (!Array.isArray(a.tasksets) || !a.tasksets.length || !a.tasksets.every(t =>
-    typeof t?.version === 'string' && t.version.trim() && typeof t.sha256 === 'string' && /^[0-9a-f]{64}$/.test(t.sha256))))
-    throw new Error('Spend authorization must name the task sets it covers, each by version and sha256');
+  if (a.schemaVersion === 2) {
+    if (!Array.isArray(a.tasksets) || !a.tasksets.length || !a.tasksets.every(t => typeof t?.version === 'string' && t.version.trim() && typeof t.sha256 === 'string'))
+      throw new Error('Spend authorization must name the task sets it covers, each by version and sha256');
+    if (!a.tasksets.every(t => /^[0-9a-f]{64}$/.test(t.sha256))) throw new Error('Spend authorization task set sha256 must be 64 lowercase hex characters');
+  }
   if (a.schemaVersion === 1 && a.tasksets !== undefined) throw new Error('tasksets requires schemaVersion 2');
   if (!Number.isSafeInteger(a.maxRequests) || a.maxRequests < 1 || a.maxRequests > 1000) throw new Error('maxRequests must be 1..1000');
   if (!Number.isSafeInteger(a.maxTokens) || a.maxTokens < 1) throw new Error('maxTokens must be a positive integer');
