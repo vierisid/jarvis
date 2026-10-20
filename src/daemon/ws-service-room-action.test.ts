@@ -259,17 +259,89 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
     expect(actionTo(speaker)!.payload.expiresInMs).toBe(ROOM_ACTION_QUEUE_TTL_MS);
   });
 
+  // #1025: the dashboard's deadline is on its own clock, so an action could
+  // still run after the daemon had said it got no answer. The dashboard now
+  // asks the daemon to claim it just before it runs, and the daemon grants a
+  // claim only while it is still waiting.
+  test('the dashboard asked must claim the action, and a claim is granted only while the daemon waits', async () => {
+    const { svc, internals, speaker, other, actionTo } = setup();
+    const claim = async (from: { ws: unknown; sent: Sent[] }, resultId: unknown) => {
+      const reply = await internals.routeMessage({ type: 'room_action_claim', payload: { resultId }, timestamp: Date.now() }, from.ws);
+      expect(reply).toBeUndefined();
+      const answer = from.sent.filter((m) => m.type === 'room_action_claim_result').at(-1);
+      return answer?.payload;
+    };
+    const p = svc.requestRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x' } }, 40, { client: speaker.ws as never });
+    const id = actionTo(speaker)!.payload.resultId;
+    expect(actionTo(speaker)!.payload.claim).toBe(true);
+    // Only the dashboard asked may claim it.
+    expect(await claim(other, id)).toEqual({ resultId: id, granted: false });
+    expect(await claim(speaker, id)).toEqual({ resultId: id, granted: true });
+    // Claimed and not yet answered when the wait runs out: it is running, so
+    // the model is told not to ask again rather than that nobody answered.
+    expect(await p).toBe('started');
+    // Once the wait is over, a claim is refused, so the action never runs.
+    const q = svc.requestRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'y' } }, 10, { client: speaker.ws as never });
+    const late = speaker.sent.filter((m) => m.payload?.source === 'room_action').at(-1)!.payload.resultId;
+    expect(await q).toBe('no_answer');
+    expect(await claim(speaker, late)).toEqual({ resultId: late, granted: false });
+    // An id it never sent, or none, is refused too.
+    expect(await claim(speaker, 'no-such-id')).toEqual({ resultId: 'no-such-id', granted: false });
+    const before = speaker.sent.length;
+    await internals.routeMessage({ type: 'room_action_claim', payload: { resultId: 7 }, timestamp: Date.now() }, speaker.ws);
+    expect(speaker.sent.length).toBe(before);
+  });
+
+  test('a grant the dashboard never got is not taken as the action running', async () => {
+    const { svc, internals, speaker, actionTo } = setup();
+    const p = svc.requestRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x' } }, 30, { client: speaker.ws as never });
+    const id = actionTo(speaker)!.payload.resultId;
+    // The socket takes no more frames: the grant is dropped on the way out.
+    speaker.ws.send = () => 0;
+    await internals.routeMessage({ type: 'room_action_claim', payload: { resultId: id }, timestamp: Date.now() }, speaker.ws);
+    expect(await p).toBe('no_answer');
+  });
+
+  test('a claim naming an id longer than any the daemon makes gets no reply', async () => {
+    const { internals, speaker } = setup();
+    const before = speaker.sent.length;
+    await internals.routeMessage({ type: 'room_action_claim', payload: { resultId: 'x'.repeat(65) }, timestamp: Date.now() }, speaker.ws);
+    expect(speaker.sent.length).toBe(before);
+    // Not vacuous: one at the limit is answered (refused: nothing has that id).
+    await internals.routeMessage({ type: 'room_action_claim', payload: { resultId: 'x'.repeat(64) }, timestamp: Date.now() }, speaker.ws);
+    expect(speaker.sent.length).toBe(before + 1);
+  });
+
+  test('a presentation action addressed to the dashboard is not claimed: run late it only moves the screen', async () => {
+    const { svc, speaker, actionTo } = setup();
+    await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 10, { client: speaker.ws as never });
+    expect(actionTo(speaker)!.payload.resultFrom).toBe('dashboard');
+    expect(actionTo(speaker)!.payload.claim).toBeUndefined();
+  });
+
+  test('a claimed action answered in time is settled by its answer', async () => {
+    const { svc, internals, speaker, actionTo, answer } = setup();
+    const p = svc.requestRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x' } }, 1000, { client: speaker.ws as never });
+    const id = actionTo(speaker)!.payload.resultId;
+    await internals.routeMessage({ type: 'room_action_claim', payload: { resultId: id }, timestamp: Date.now() }, speaker.ws);
+    await answer(speaker, id, false);
+    expect(await p).toBe('rejected');
+  });
+
   test('the panels are told too; a dashboard not asked is not', async () => {
     const { svc, speaker, other, actionTo } = setup();
     // The pebble's request: every panel may answer, so every one is told.
     await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 20);
     for (const c of [speaker, other]) expect(actionTo(c)!.payload).toMatchObject({ expiresInMs: 20 });
+    // Nobody is named to claim the pebble's request (#1025): any panel may run it.
+    for (const c of [speaker, other]) expect(actionTo(c)!.payload.claim).toBeUndefined();
     const { svc: svc2, speaker: s2, other: o2, actionTo: to2 } = setup();
     await svc2.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 20, { client: s2.ws as never });
     expect(to2(s2)!.payload.expiresInMs).toBe(20);
     // The copy every other dashboard gets for a tab switch is not waited on.
     expect(to2(o2)!.payload.resultId).toBeUndefined();
     expect(to2(o2)!.payload.expiresInMs).toBeUndefined();
+    expect(to2(o2)!.payload.claim).toBeUndefined();
   });
 
   test('an accepted presentation action is not reported as work done', async () => {

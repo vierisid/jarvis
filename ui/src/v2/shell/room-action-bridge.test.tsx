@@ -58,19 +58,22 @@ afterEach(async () => {
 afterAll(() => GlobalRegistrator.unregister());
 
 const ran: string[] = [];
-function TasksRoom() {
+function TasksRoom({ tag = "", throws = false }: { tag?: string; throws?: boolean }) {
   bus.useRoomActions("tasks", (action, args) => {
-    ran.push(`${action}:${String(args.title)}`);
+    if (throws) throw new Error("handler bug");
+    ran.push(`${tag}${action}:${String(args.title)}`);
     return true;
   });
   return null;
 }
 let live: ReturnType<typeof useWebSocket>;
-function Shell({ bridge = true }: { bridge?: boolean }) {
+function Shell({ bridge = true, room = "plain" }: { bridge?: boolean; room?: "plain" | "none" | "other" | "throws" }) {
   live = useWebSocket();
   return (
     <bus.RoomActionBusProvider>
-      <TasksRoom />
+      {room === "plain" && <TasksRoom />}
+      {room === "other" && <TasksRoom key="other" tag="other:" />}
+      {room === "throws" && <TasksRoom key="throws" throws />}
       {bridge && <Bridge requests={live.roomActionRequests} ack={live.ackRoomActionRequests} forceIdle={() => {}} wsRef={live.wsRef} />}
     </bus.RoomActionBusProvider>
   );
@@ -142,4 +145,104 @@ test("an action that went stale before a bridge mounted is taken off the queue, 
   }
   expect(ran).toEqual([]);
   expect(live.roomActionRequests).toEqual([]);
+});
+
+// #1025: the dashboard's deadline for an action is on its own clock, which
+// starts when it reads the message, so a late action could still run after
+// the daemon had said it got no answer. The daemon now asks for a claim
+// (`claim: true`), and the dashboard runs the action only once it is granted.
+const claimed = (id: string) => ({ ...createTask(id), claim: true });
+const claimsSent = (socket: FakeSocket) =>
+  socket.sent.filter((m) => m.type === "room_action_claim").map((m) => String(m.payload.resultId));
+const grant = (socket: FakeSocket, resultId: string, granted: unknown) =>
+  socket.onmessage?.({ data: JSON.stringify({ type: "room_action_claim_result", payload: { resultId, granted }, timestamp: 1 }) });
+
+test("an action the daemon asks to be claimed runs only once the claim is granted", async () => {
+  const socket = await mount();
+  await React.act(async () => socket.receive(claimed("go"), 100));
+  expect(claimsSent(socket)).toEqual(["go"]);
+  expect(ran).toEqual([]);
+  await React.act(async () => grant(socket, "go", true));
+  expect(ran).toEqual(["create_task:go"]);
+  expect(answers(socket)).toEqual(["go:accepted"]);
+});
+
+test("a refused claim runs nothing and answers nothing: the daemon has stopped waiting", async () => {
+  const socket = await mount();
+  // Each its own action: the first answer to a claim settles it.
+  const refusals = [false, "true", 1, undefined, null];
+  for (const [i, granted] of refusals.entries()) {
+    await React.act(async () => socket.receive(claimed(`late-${i}`), 100));
+    await React.act(async () => grant(socket, `late-${i}`, granted));
+  }
+  expect(claimsSent(socket)).toEqual(refusals.map((_, i) => `late-${i}`));
+  // A grant for another id settles nothing here either.
+  await React.act(async () => socket.receive(claimed("mine"), 100));
+  await React.act(async () => grant(socket, "other", true));
+  expect(ran).toEqual([]);
+  expect(answers(socket)).toEqual([]);
+});
+
+test("a claim still open when the socket closes runs nothing", async () => {
+  const socket = await mount();
+  await React.act(async () => socket.receive(claimed("cut"), 100));
+  const warned: string[] = [];
+  const warn = console.warn;
+  console.warn = (...args: unknown[]) => { warned.push(args.map(String).join(" ")); };
+  try {
+    await React.act(async () => socket.close());
+  } finally {
+    console.warn = warn;
+  }
+  // Refused there and then, not left waiting on an answer that cannot come.
+  expect(warned.filter((w) => w.includes('Dropped "create_task"'))).toHaveLength(1);
+  await React.act(async () => grant(socket, "cut", true));
+  expect(ran).toEqual([]);
+});
+
+test("two claimed actions run in the order they came", async () => {
+  const socket = await mount();
+  await React.act(async () => {
+    socket.receive(claimed("first"), 100);
+    socket.receive(claimed("second"), 100);
+  });
+  expect(claimsSent(socket)).toEqual(["first", "second"]);
+  await React.act(async () => { grant(socket, "first", true); grant(socket, "second", true); });
+  expect(ran).toEqual(["create_task:first", "create_task:second"]);
+});
+
+test("a claimed action queued for a room still mounting claims, and runs on the room's handler once granted", async () => {
+  ran.length = 0;
+  await React.act(async () => root.render(<React.StrictMode><Shell room="none" /></React.StrictMode>));
+  const socket = sockets.at(-1)!;
+  await React.act(async () => { socket.open(); await Promise.resolve(); });
+  await React.act(async () => socket.receive(claimed("queued"), 100));
+  await React.act(async () => socket.receive(claimed("refused"), 100));
+  expect(claimsSent(socket)).toEqual([]);
+  await React.act(async () => root.render(<React.StrictMode><Shell room="plain" /></React.StrictMode>));
+  // Drained from the queue, each asks first.
+  expect(claimsSent(socket)).toEqual(["queued", "refused"]);
+  expect(ran).toEqual([]);
+  // The room is replaced while the claim is out: the grant runs it on the
+  // handler there now.
+  await React.act(async () => root.render(<React.StrictMode><Shell room="other" /></React.StrictMode>));
+  await React.act(async () => { grant(socket, "queued", true); grant(socket, "refused", false); });
+  expect(ran).toEqual(["other:create_task:queued"]);
+  expect(answers(socket)).toEqual(["queued:accepted"]);
+});
+
+test("a handler that throws after its claim was granted answers that it did not run", async () => {
+  ran.length = 0;
+  await React.act(async () => root.render(<Shell room="throws" />));
+  const socket = sockets.at(-1)!;
+  await React.act(async () => { socket.open(); await Promise.resolve(); });
+  await React.act(async () => socket.receive(claimed("broken"), 100));
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    await React.act(async () => grant(socket, "broken", true));
+  } finally {
+    console.warn = warn;
+  }
+  expect(answers(socket)).toEqual(["broken:rejected"]);
 });

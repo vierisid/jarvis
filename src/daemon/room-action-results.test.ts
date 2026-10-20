@@ -174,4 +174,23 @@ describe('RoomActionResults', () => {
     results.answer(waits[LATE_ANSWER_LIMIT]!.id, true, asked);
     expect(heard).toEqual(['1', String(LATE_ANSWER_LIMIT)]);
   });
+
+  // #1025: the answerer asks to go ahead, and is let only while the wait is on.
+  test('a claim is granted only to the client asked, only while waiting, and then means the action is under way', async () => {
+    const results = new RoomActionResults(ids);
+    const asked = {};
+    const w = results.open(10, asked);
+    expect(results.claim(w.id, {})).toBe(false);
+    expect(results.claim(7, asked)).toBe(false);
+    expect(results.claim(w.id, asked)).toBe(true);
+    expect(await w.outcome).toBe('started');
+    expect(results.claim(w.id, asked)).toBe(false);
+    // Unclaimed and unanswered stays no_answer; a broadcast has nobody to claim it.
+    const silent = results.open(10, asked);
+    expect(await silent.outcome).toBe('no_answer');
+    expect(results.claim(silent.id, asked)).toBe(false);
+    const panels = results.open(10);
+    expect(results.claim(panels.id, undefined)).toBe(false);
+    expect(await panels.outcome).toBe('no_answer');
+  });
 });

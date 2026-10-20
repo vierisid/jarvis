@@ -417,3 +417,15 @@ describe("stillDeliverable (#1024)", () => {
     expect(stillDeliverable(queued, 1_000 + ROOM_ACTION_QUEUE_TTL_MS)).toBe(false);
   });
 });
+
+describe("roomActionRequestFrom claim (#1025)", () => {
+  const task = { source: "room_action", room: "tasks", action: "create_task", args: { title: "x" }, resultId: "r1", resultFrom: "dashboard" };
+  test("the dashboard asked is told to claim only when the daemon says so", () => {
+    expect(roomActionRequestFrom({ ...task, claim: true }, 5)?.needsClaim).toBe(true);
+    for (const claim of [undefined, false, "true", 1]) expect(roomActionRequestFrom({ ...task, claim }, 5)?.needsClaim).toBeUndefined();
+  });
+  test("a request not addressed to this dashboard claims nothing", () => {
+    const view = { source: "room_action", room: "settings", action: "switch_tab", args: { tab: "voice" }, resultId: "r1", claim: true };
+    expect(roomActionRequestFrom(view, 5)?.needsClaim).toBeUndefined();
+  });
+});

@@ -39,13 +39,17 @@ export const ROOM_ACTION_QUEUE_TTL_MS = 5000;
  * the bus drops the action rather than run it late.
  *
  * The daemon's clock started when it sent the action, this one when the
- * client handled the message, so the action can still run after the daemon
- * gave up by as long as that took: the network, any backlog in the daemon's
- * send queue, and any time the page's main thread was busy before it read the
- * message (a room's code still loading, the late-mount case itself). A
- * relative wait, not the daemon's timestamp, because the two clocks need not
- * agree at all; `receivedAt` should be monotonic (performance.now) so a wall
- * clock step cannot stretch it.
+ * client handled the message, so on its own this lets the action run after
+ * the daemon gave up by as long as that took: the network, any backlog in the
+ * daemon's send queue, and any time the page's main thread was busy before it
+ * read the message (a room's code still loading, the late-mount case
+ * itself). That window is closed by the claim (#1025, `claim` below): the
+ * dashboard asked runs the action only once the daemon, asked just before,
+ * says it still waits. This deadline remains the bus's own early drop, and
+ * the only bound for a dashboard or daemon from before the claim. A relative
+ * wait, not the daemon's timestamp, because the two clocks need not agree at
+ * all; `receivedAt` should be monotonic (performance.now) so a wall clock
+ * step cannot stretch it.
  *
  * Anything but a finite, non-negative number is no deadline, as from a daemon
  * that sends none: the daemon always sends its own timeout, which is neither.
@@ -106,7 +110,7 @@ export type LateRoomAnswer = (answer: RoomAnswer, reported: 'started' | 'no_answ
  */
 export const LATE_ANSWER_LIMIT = 256;
 
-type Pending = { settle: (o: RoomActionOutcome) => void; answerer?: unknown; started?: boolean; onLate?: LateRoomAnswer };
+type Pending = { settle: (o: RoomActionOutcome) => void; answerer?: unknown; started?: boolean; claimed?: boolean; onLate?: LateRoomAnswer };
 
 export class RoomActionResults {
   private pending = new Map<string, Pending>();
@@ -134,7 +138,8 @@ export class RoomActionResults {
     const outcome = new Promise<RoomActionOutcome>((resolve) => {
       const timer = setTimeout(() => {
         const entry = this.pending.get(id);
-        const reported = entry?.started ? 'started' : 'no_answer';
+        // Claimed (#1025): the room was told to go ahead, so it is under way.
+        const reported = entry?.started || entry?.claimed ? 'started' : 'no_answer';
         if (entry?.onLate && entry.answerer !== undefined) this.remember(id, entry.answerer, reported, entry.onLate);
         this.finish(id, reported);
       }, timeoutMs);
@@ -194,6 +199,30 @@ export class RoomActionResults {
     const entry = this.pending.get(id);
     if (!entry || (entry.answerer !== undefined && entry.answerer !== from)) return;
     entry.started = true;
+  }
+
+  /**
+   * The answerer asks to run the action now (#1025). Granted only while this
+   * is still waiting on that client: once the wait has run out the caller has
+   * said it got no answer and may have asked again, so the action must not
+   * run. The answerer's own deadline is on its clock and starts when it read
+   * the message, so it alone cannot promise that. A granted claim means the
+   * action is running: the wait running out before its answer is `started`.
+   * Only for an entry with a named answerer: the pebble's broadcasts have
+   * none, and any panel may run those.
+   */
+  claim(id: unknown, from: unknown): boolean {
+    if (typeof id !== 'string') return false;
+    const entry = this.pending.get(id);
+    if (!entry || entry.answerer === undefined || entry.answerer !== from) return false;
+    entry.claimed = true;
+    return true;
+  }
+
+  /** Take back a claim whose grant never reached the answerer (#1025). */
+  unclaim(id: string): void {
+    const entry = this.pending.get(id);
+    if (entry) entry.claimed = false;
   }
 
   /** Stop waiting now: the action reached no one who could answer (#1011). */

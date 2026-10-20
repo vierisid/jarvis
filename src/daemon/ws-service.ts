@@ -76,6 +76,8 @@ import { currentBriefTurn } from '../brief/chat-context.ts';
 import { reportExecutionActivity } from '../actions/progress-context.ts';
 
 /** How long a realtime nav tool waits for the room to answer: inside TOOL_RESULT_GRACE_MS. */
+/** Longer than any room action id (a UUID is 36): a claim naming one is ignored (#1025). */
+const ROOM_ACTION_ID_MAX = 64;
 const REALTIME_ROOM_ACTION_WAIT_MS = Math.min(ROOM_ACTION_QUEUE_TTL_MS, TOOL_RESULT_GRACE_MS - 500);
 
 type VoiceSession = {
@@ -1354,6 +1356,23 @@ export class WebSocketService implements Service {
         // Word that the room is on it, ahead of its answer (#1015).
         if (p?.started === true) this.roomActionResults.started(p.resultId, ws);
         else this.roomActionResults.answer(p?.resultId, p?.accepted, ws, p?.outcome);
+        return undefined;
+      }
+
+      case 'room_action_claim': {
+        // The dashboard asked to run a room action asks to go ahead just
+        // before it does (#1025): granted only while requestRoomAction still
+        // waits on it, so nothing runs after the caller was told "no answer".
+        // Ids are UUIDs: anything longer names nothing, and is neither
+        // logged nor echoed back.
+        const resultId = (msg.payload as { resultId?: unknown } | undefined)?.resultId;
+        if (typeof resultId !== 'string' || resultId.length > ROOM_ACTION_ID_MAX) return undefined;
+        const granted = this.roomActionResults.claim(resultId, ws);
+        if (!granted) console.warn(`[WSService] refused a claim for room action ${resultId}: no longer waiting on it`);
+        const told = this.wsServer.sendToClient(ws, { type: 'room_action_claim_result', payload: { resultId, granted }, timestamp: Date.now() });
+        // A grant the dashboard never got runs nothing: the wait running out
+        // is then no answer, not under way.
+        if (granted && !told) this.roomActionResults.unclaim(resultId);
         return undefined;
       }
 
@@ -3335,7 +3354,12 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     if (client) {
       reached = this.wsServer.getClients().has(client) && this.wsServer.sendToClient(client, {
         type: 'notification',
-        payload: { ...payload, ...waited, resultFrom: 'dashboard' },
+        // `claim`: ask before running it, and run it only if granted (#1025).
+        // That deadline is on the dashboard's clock, which starts late by the
+        // network, the send queue and a busy page; the claim is on this one.
+        // Not for a presentation action: run late, it only changes the
+        // screen, as its copies on every other client do unclaimed.
+        payload: { ...payload, ...waited, resultFrom: 'dashboard', ...(presentation ? {} : { claim: true }) },
         timestamp: Date.now(),
       });
       // The others follow the dashboard that asked, and only once it has the

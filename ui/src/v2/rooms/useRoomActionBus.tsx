@@ -53,6 +53,14 @@ export interface RoomActionRequest {
    * not ask again and run it twice. Called at most once, before the answer.
    */
   onStarted?: () => void;
+  /**
+   * Asks whoever sent the action whether it may still run (#1025), just
+   * before the handler would run it. The action runs only on true: the
+   * daemon grants it only while it still waits, so nothing runs after it has
+   * said it got no answer. `expiresAt` is this page's estimate of the same
+   * thing, on a clock that started late; this is the daemon's own answer.
+   */
+  claim?: () => Promise<boolean>;
 }
 
 /** Whether `req`'s caller has stopped waiting for it (#1010). */
@@ -154,6 +162,44 @@ function runHandler(handler: RoomActionHandler, req: RoomActionRequest): RoomAct
   return handler(req.action, req.args);
 }
 
+/**
+ * Run `req` on the handler `handlerFor` gives at the time, once its claim is
+ * granted when it needs one (#1025). A refused claim, or one whose asker has
+ * gone meanwhile, runs nothing and is not reported: the daemon has stopped
+ * listening for its answer.
+ */
+function runClaimed(
+  req: RoomActionRequest,
+  handlerFor: () => RoomActionHandler,
+  onResult: RoomActionResultCallback | undefined,
+  label: string,
+): void {
+  if (!req.claim) {
+    report(req, runHandler(handlerFor(), req), onResult, label);
+    return;
+  }
+  const refused = () => console.warn(`[RoomActionBus] Dropped "${req.action}" for room "${req.room}": the daemon had stopped waiting for it`);
+  req.claim().then(
+    (granted) => {
+      if (granted !== true || req.stillAsked?.() === false) {
+        refused();
+        return;
+      }
+      // The daemon now takes this action as under way, so a handler that
+      // throws must say it did not run it rather than leave that standing.
+      let result: RoomActionAnswer | PromiseLike<RoomActionAnswer>;
+      try {
+        result = runHandler(handlerFor(), req);
+      } catch (err) {
+        console.warn(`[RoomActionBus] ${label} "${req.action}" failed in "${req.room}":`, err);
+        result = false;
+      }
+      report(req, result, onResult, label);
+    },
+    refused,
+  );
+}
+
 interface BusInternal {
   /** Most-recent handler per RoomKey wins. */
   register: (room: RoomKey, handler: RoomActionHandler) => () => void;
@@ -196,7 +242,7 @@ export function RoomActionBusProvider({ children }: { children: React.ReactNode 
       console.log(
         `[RoomActionBus] Draining queued action "${req.action}" for room "${req.room}"`,
       );
-      report(req, runHandler(handler, req), onResult, "Queued action");
+      runClaimed(req, () => handlersRef.current[room]?.at(-1) ?? handler, onResult, "Queued action");
     }
   }, []);
 
@@ -241,7 +287,7 @@ export function RoomActionBusProvider({ children }: { children: React.ReactNode 
       return;
     }
     const top = stack[stack.length - 1]!;
-    report(req, runHandler(top, req), onResult, "Action");
+    runClaimed(req, () => handlersRef.current[req.room as RoomKey]?.at(-1) ?? top, onResult, "Action");
   }, []);
 
   const value = useMemo<BusInternal>(() => ({ register, dispatch }), [register, dispatch]);

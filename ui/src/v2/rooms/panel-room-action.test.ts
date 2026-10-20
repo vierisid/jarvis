@@ -145,3 +145,14 @@ test("a panel never runs an action that changes more than the screen (#974)", ()
     expect(sent).toEqual([]);
   }
 });
+
+test("the dashboard hands the bus the daemon's claim with the action (#1025)", () => {
+  const dispatched: Array<{ claim?: unknown }> = [];
+  const claim = async () => true;
+  dispatchDashboardRoomAction(
+    { room: "tasks", action: "create_task", args: { title: "x" }, ts: 1, resultId: "r10", claim },
+    (req) => { dispatched.push(req); },
+    () => {},
+  );
+  expect(dispatched[0]?.claim).toBe(claim);
+});
