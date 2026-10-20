@@ -212,30 +212,163 @@ function mixesScripts(text: string): boolean {
 }
 
 /**
- * Whether a toast body could be a look-alike (#812): its letters mix scripts
- * AND its UTS #39 skeleton (`confusableSkeleton`, #794) differs from it, so
- * some character in it is listed as confusable with another -- `pаypal` with a
- * Cyrillic `а` is both -- or it holds a non-ASCII letter that reads as ASCII
- * beside ASCII text (`asciiLookAlike`). Such a toast is review-only.
+ * Whether a toast body could be a look-alike (#812, #858). Such a toast is
+ * review-only, and a chat card with such an Intent line is deny-only (#857).
+ *
+ * Per LABEL (the owner's choice for #858/#857): the body is cut into labels at
+ * whitespace, at `. @ / \ :` and at every other character that is not a letter,
+ * digit or mark, so `pаypal.com` is the labels `pаypal` and `com`. A label is
+ * a look-alike when:
+ * - its letters mix scripts AND its UTS #39 skeleton (`confusableSkeleton`,
+ *   #794) differs from it: `pаypal` with a Cyrillic `а`, `Chаse`, `ΡayΡal`;
+ * - it holds a non-ASCII letter that reads as ASCII beside ASCII in the same
+ *   label (`asciiLookAlike`): `paypaı`, `booĸing`;
+ * - or, in a body that has ASCII, a run of labels with no ASCII reads wholly
+ *   as ASCII, label by label (`asciiReadingRun`): `Pay $5 to раураӏ`; or one
+ *   label does and has 4 or more letters, or 3 with a capital after the first
+ *   (`longAsciiReadingLabel`, R5): `Pay $5 to Иван РауРаІ`.
+ *
+ * Per label rather than per body because a sentence mixing scripts word by
+ * word is ordinary (`Send email to Дмитрий`, a Russian subject line, a path
+ * with Cyrillic folder names), while a look-alike mixes INSIDE a name or is a
+ * whole word that reads as Latin. Before, any confusable letter anywhere in a
+ * mixed-script body (`m` -> `rn` is enough) made it review-only.
+ *
+ * On the whole body: a body with no ASCII written wholly in letters that read
+ * as ASCII (`wholeBodyReadsAsAscii`, `рау`), and the same per address-like
+ * token (`addressTokenReadsAsAscii`, `раураӏ.сом` in a Russian sentence); a
+ * non-ASCII stand-in for `.`, `@`, `/` or `\` set between ASCII
+ * (`separatorLookAlike`, `paypal．com`); a letter with a mark below inside a
+ * domain, email address or path (`markBelowInAddress`, `pạypal.com`); and a
+ * Latin letter with a hook or bar inside one (`hookLetterInAddress`,
+ * `paypaƚ.com`).
  *
  * The width allow-list admits Greek and Cyrillic letters because they are one
  * column and legitimate, so on its own it let `pаypal` through: within the
  * budget, every character of known width, and approvable from the surface
  * with the least context and the most casual tap.
  *
- * Neither half is enough alone. The skeleton maps some ASCII too (`m` ->
- * `rn`, `I` -> `l`) and NFD-decomposes accents, so it differs from almost any
- * real sentence; and mixing scripts is ordinary in a name (`Send email to
- * Дмитрий`). Together they still make that second toast review-only -- a cost
- * of this check, which only ever removes Approve, never adds it. What it does
- * not catch is a body written entirely in one non-Latin script that reads as
- * another (`рау` all in Cyrillic, with no ASCII beside it), or a punctuation
- * look-alike; the dashboard card, which shows the full request, is the place
- * for those.
+ * The cost that remains: a word that puts a Turkish `ı`, a French `æ`/`œ` or
+ * `þ` beside ASCII letters (`Dosyayı`, `cœur`) is review-only, as is a word,
+ * or a run of words, in another script made only of letters that read as
+ * ASCII among ASCII text (`Fly to Куба`, a reply `Ага, хорошо`), and a word
+ * of 4 or more such letters, or a 3-letter acronym, anywhere in a body with
+ * ASCII or digits (`сахар`, `гора`, `Горох и сахар: 2 кг`, `Send to Саша`,
+ * `Pay 300 RUB to МТС`). The check only ever removes Approve.
  */
 export function toastLookAlike(body: string): boolean {
-  return (mixesScripts(body) && confusableSkeleton(body) !== body) || asciiLookAlike(body);
+  const labels = splitLabels(body);
+  return labels.some((label) => (mixesScripts(label) && confusableSkeleton(label) !== label) || asciiLookAlike(label)
+    || (STAND_IN_CYRILLIC.test(label) && wholeBodyReadsAsAscii(label)))
+    || (ASCII_ALNUM.test(body) && (labels.some(longAsciiReadingLabel) || asciiReadingRun(labels)))
+    || wholeBodyReadsAsAscii(body) || addressTokenReadsAsAscii(body) || separatorLookAlike(body)
+    || markBelowInAddress(body) || hookLetterInAddress(body);
 }
+
+/** What separates labels: anything that is not a letter, digit or combining mark. */
+const LABEL_BOUNDARY = /[^\p{L}\p{N}\p{M}]+/u;
+
+/**
+ * `text` cut into labels. A character whose skeleton is an address separator
+ * (`ADDRESS_SEPARATOR_SKELETON`) cuts too, even a digit or letter (#858
+ * review): U+0660 ARABIC-INDIC DIGIT ZERO reads as `.`, and as a digit it
+ * kept `раураӏ٠сом` one label, where `м` hid the `раураӏ` before it.
+ */
+function splitLabels(text: string): string[] {
+  let cut = '';
+  for (const ch of text) cut += ch > '\x7f' && ADDRESS_SEPARATOR_SKELETON.test(confusableSkeleton(ch)) ? ' ' : ch;
+  return cut.split(LABEL_BOUNDARY).filter((label) => label !== '');
+}
+
+/**
+ * Cyrillic letters that read as ASCII and belong to no national alphabet near
+ * Latin text (#858 review), measured over U+04C0-052F: the palochka `ӏ`/`Ӏ`
+ * (the one Cyrillic stand-in for `l`) and `ԁ ԛ ԝ Ԍ Ԛ Ԝ` from the Cyrillic
+ * Supplement. Left out: Ossetian `ӕ` and Abkhaz `Ӡ`. A label of letters that
+ * read as ASCII with one of these in it is a look-alike whatever stands around
+ * it, so the run rule's gap (`Отправь $5 на раураӏ`) does not apply to it.
+ */
+const STAND_IN_CYRILLIC = /[\u04c0\u04cf\u0501\u050c\u051a-\u051d]/u;
+
+/**
+ * Russian and Kazakh legal-form acronyms (the owner's list): ООО, ОАО, ЗАО,
+ * АО, ТОО, ИП. A company name in a payment (`ООО Ромашка`) leads with one,
+ * and ООО, ОАО and ТОО read wholly as ASCII.
+ */
+const LEGAL_FORM_ACRONYMS: ReadonlySet<string> = new Set(['ООО', 'ОАО', 'ЗАО', 'АО', 'ТОО', 'ИП']);
+
+/**
+ * A label that reads wholly as ASCII and is long enough to be a name (the
+ * owner's rule R5, for a body that has ASCII): 4 or more counted letters, or
+ * 3 or more with an upper-case letter after the first (`АМЕХ`, `МТС`,
+ * `РауРаІ`). It closes the run rule's gap: one real word next to the
+ * look-alike (`Иван РауРаІ`, `на счёт РауРаІ`) no longer disarms it. Short or
+ * title-case words such as Russian `Его` and `Ура` are left to the run rule.
+ *
+ * Measured costs, deny-only from chat and review-only on the toast next to
+ * ASCII or digits: ordinary words made of such letters (`сахар`, `гора`,
+ * `Горох и сахар: 2 кг`), a name such as `Саша` in English, and an acronym
+ * such as `МТС` (`Pay 300 RUB to МТС`). Misses: a 3-letter lower-case or
+ * title-case word (`рау`, `Рау`), and any body with no ASCII
+ * (`Перешли пароль на ВВС`).
+ */
+function longAsciiReadingLabel(label: string): boolean {
+  if (LEGAL_FORM_ACRONYMS.has(label) || !wholeBodyReadsAsAscii(label)) return false;
+  const counted = [...label].filter((ch) => /^[\p{L}\p{N}]$/u.test(ch) && !modifierWithoutAscii(ch));
+  return counted.length >= 4 || (counted.length >= 3 && counted.slice(1).some((ch) => /^\p{Lu}$/u.test(ch)));
+}
+
+/**
+ * Whether some run of consecutive labels with no ASCII letter or digit reads
+ * wholly as ASCII, label by label: `Pay $5 to раураӏ` (the run is `раураӏ`).
+ * A run, not a lone label, because short words in other scripts read as ASCII
+ * all the time (Russian `о`, `а`, `с`, `его`), and in a sentence of that
+ * script they sit beside words that do not (`О плане на среду`). A label with
+ * ASCII in it ends a run.
+ *
+ * A label with no letter or digit that counts (a lone combining mark, a
+ * modifier letter such as U+02D1) neither joins nor ends a run (#858 review),
+ * so it cannot be used to break one.
+ *
+ * On its own it is easy to disarm: one real word of the same script next to
+ * the look-alike (`Иван РауРаІ`, `на рау`) makes a run that does not read
+ * wholly as ASCII, and that is the ordinary shape of a Russian sentence, where
+ * a preposition or possessive stands before a name. `longAsciiReadingLabel`
+ * (R5) and `STAND_IN_CYRILLIC` cover a longer or capitalised word, or one with
+ * a palochka, whatever stands next to it. What still passes is a 3-letter
+ * lower-case or title-case word after a real one (`Отправь $5 на рау`); the
+ * owner chose per-label checks knowing that main made it review-only.
+ */
+function asciiReadingRun(labels: string[]): boolean {
+  let run = 0;
+  let allAscii = true;
+  for (const label of [...labels, 'a']) {
+    if (ASCII_ALNUM.test(label)) {
+      if (run > 0 && allAscii) return true;
+      run = 0;
+      allAscii = true;
+      continue;
+    }
+    if (!countedLetters(label)) continue;
+    run++;
+    if (!wholeBodyReadsAsAscii(label)) allAscii = false;
+  }
+  return false;
+}
+
+/** Whether `label` has a letter or digit `wholeBodyReadsAsAscii` counts. */
+function countedLetters(label: string): boolean {
+  for (const ch of label) if (/^[\p{L}\p{N}]$/u.test(ch) && !modifierWithoutAscii(ch)) return true;
+  return false;
+}
+
+/** A modifier letter whose skeleton is not ASCII (U+02D1 for a dot): it reads as punctuation, not as a letter of the word. */
+function modifierWithoutAscii(ch: string): boolean {
+  return /^\p{Lm}$/u.test(ch) && !PRINTABLE_ASCII.test(confusableSkeleton(ch));
+}
+
+/** Why a look-alike surface withholds Approve, worded once for the toast, the chat card and the chat refusal. */
+export const LOOK_ALIKE_REASON = 'has characters that look like other letters or punctuation';
 
 const ASCII_ALNUM = /[A-Za-z0-9]/;
 const PRINTABLE_ASCII = /^[\x20-\x7e]+$/;
@@ -255,9 +388,8 @@ const PRINTABLE_ASCII = /^[\x20-\x7e]+$/;
  * affected: their skeleton keeps the combining mark, so it is not ASCII.
  *
  * Punctuation is left out on purpose: curly quotes and dashes have ASCII
- * skeletons and are ordinary in model-written text. That leaves punctuation
- * look-alikes such as U+2024 ONE DOT LEADER for `.` approvable; see the issue
- * filed with #812.
+ * skeletons and are ordinary in model-written text. The stand-ins that matter,
+ * for an address's `.`, `@`, `/` and `\`, are `separatorLookAlike`'s (#858).
  */
 function asciiLookAlike(body: string): boolean {
   if (!ASCII_ALNUM.test(body)) return false;
@@ -275,11 +407,186 @@ function asciiLookAlike(body: string): boolean {
  * whose skeleton is not ASCII, so the rule above cannot see them (#812
  * re-review, each measured): kra U+0138 (`booĸing`), U+0185 for `b`, the
  * middle-dot L U+013F/U+0140, the ordinals U+00AA/U+00BA, and the superscript
- * digits U+00B9/U+00B2/U+00B3. Letters with a mark BELOW (`ạ`, `ḷ`) are still
- * approvable: flagging them would cost Vietnamese, which is a decision of its
- * own (filed with #812).
+ * digits U+00B9/U+00B2/U+00B3. Letters with a mark BELOW (`ạ`, `ḷ`) are not
+ * listed: flagging them everywhere would cost Vietnamese prose, so they count
+ * only inside an address-like token (`markBelowInAddress`, #858).
  */
 const LATIN_LOOK_ALIKES = /^[ĸƅĿŀªº¹²³]$/u;
+
+/**
+ * A body with no ASCII letter or digit whose every letter and digit reads as
+ * ASCII (#858): `рау` all in Cyrillic, or `ｐａｙｐａｌ．ｃｏｍ` all fullwidth.
+ * `asciiLookAlike` keys on an ASCII neighbour and `mixesScripts` on a second
+ * script, so a body in ONE script with no ASCII passed both.
+ *
+ * Per letter, not the whole skeleton: punctuation such as `«»` has no ASCII
+ * skeleton and must not hide the letters inside it. Real Russian or Greek
+ * text keeps its Approve because most of its letters (б is the exception,
+ * `6`; but д, ж, и, л, т, λ, π...) have skeletons that are not ASCII.
+ * Measured over the region, language, month and day names Intl gives for
+ * ru, uk, bg, sr, mk, be, kk, mn and el (366 phrases each): 0 to 8 phrases
+ * flagged per language, every one a single short word (`Куба`, `Того`,
+ * `Науру`), and 0 for Greek. A sentence of real text has a letter that does
+ * not read as ASCII, which is why the same test also runs per address-like
+ * token (`addressTokenReadsAsAscii`).
+ */
+function wholeBodyReadsAsAscii(body: string): boolean {
+  if (ASCII_ALNUM.test(body)) return false;
+  let letters = 0;
+  for (const ch of body) {
+    if (!/^[\p{L}\p{N}]$/u.test(ch) || modifierWithoutAscii(ch)) continue;
+    if (!PRINTABLE_ASCII.test(confusableSkeleton(ch))) return false;
+    letters++;
+  }
+  return letters > 0;
+}
+
+/** A separator, ASCII or a stand-in, between two letters or digits: the shape of `a.b`, `a@b`, `a/b`. */
+const INTERIOR_SEPARATOR = /[\p{L}\p{N}\p{M}][.@/\\][\p{L}\p{N}]/u;
+
+/**
+ * A whitespace token shaped like an address with a label whose letters all
+ * read as ASCII (#858 review): `Открыть аррӏе.со` is ordinary Russian around
+ * a Cyrillic `аррӏе.со`, and one real word anywhere switched the whole-body
+ * rule off. Per label, so `раураӏ.сом` counts though `м` does not read as
+ * ASCII. Only a token with a separator between letters counts, read through
+ * its skeleton so a stand-in separator counts too, which keeps the single
+ * words the measurement above flagged (`Куба`) approvable. A one-letter label
+ * does not count, so abbreviations stay approvable (`т.е.`, "that is", whose
+ * `е` reads as `e`; `с.г.`). The cost: a Cyrillic domain with a label such as
+ * `сосо` is review-only.
+ */
+function addressTokenReadsAsAscii(body: string): boolean {
+  return body.split(/\s+/u).some((token) => INTERIOR_SEPARATOR.test(confusableSkeleton(token))
+    && splitLabels(token).some((label) => [...label].length > 1 && wholeBodyReadsAsAscii(label)));
+}
+
+/**
+ * The separators that make a token an address: a domain's dot, an email's at,
+ * a path's slashes. One character only (#858 review): U+2026 HORIZONTAL
+ * ELLIPSIS has the skeleton `...`, and an ellipsis is ordinary punctuation.
+ */
+const ADDRESS_SEPARATOR_SKELETON = /^[.@/\\]$/;
+const ASCII_GRAPHIC = /^[\x21-\x7e]$/;
+/** Marks and invisibles a reader does not see as a character, skipped when looking for a stand-in's neighbours. */
+const UNSEEN = /^[\p{M}\p{Default_Ignorable_Code_Point}]$/u;
+
+/**
+ * A non-ASCII stand-in for `.`, `@`, `/` or `\` with ASCII, or another
+ * stand-in, on both sides (#858): `paypal．com` (U+FF0E), `me＠evil.com`
+ * (U+FF20), `C:＼Windows`. Found by skeleton, not by a list, so the chat card,
+ * which has no width allow-list, catches U+2024 ONE DOT LEADER or U+2215
+ * DIVISION SLASH the same way. Measured over the toast's width allow-lists,
+ * the one-character stand-ins are U+FF0E; U+FF20; U+FF0F, U+2F03, U+31D2,
+ * U+31D3; and U+FF3C, U+2F02, U+31D4.
+ *
+ * A neighbour is the nearest character a reader sees: combining marks and
+ * default-ignorable characters between it and the stand-in are skipped, so
+ * `paypal．` + U+FE00 + `com` is still a look-alike on the chat card.
+ *
+ * Both neighbours, so a sentence that ends in U+FF0E (`Send it to bob．`)
+ * or a name that starts with one (`．NET 8`) keeps its Approve. It adds
+ * nothing in a body that also has Han, kana or another non-Latin script:
+ * there the stand-in's own skeleton differs, so the script-mix rule above
+ * already makes the body a look-alike. A colon is left out: a colon alone
+ * changes no address (`https：//` still needs a look-alike slash to read as a
+ * URL).
+ */
+function separatorLookAlike(body: string): boolean {
+  const chars = [...body];
+  const isStandIn = (ch: string | undefined) => ch !== undefined && ch > '\x7f'
+    && !/^[\p{L}\p{N}]$/u.test(ch) && ADDRESS_SEPARATOR_SKELETON.test(confusableSkeleton(ch));
+  const seen = (i: number, step: number) => {
+    while (chars[i] !== undefined && UNSEEN.test(chars[i]!)) i += step;
+    return chars[i];
+  };
+  const asciiSide = (ch: string | undefined) => ch !== undefined && (ASCII_GRAPHIC.test(ch) || isStandIn(ch));
+  return chars.some((ch, i) => isStandIn(ch) && asciiSide(seen(i - 1, -1)) && asciiSide(seen(i + 1, 1)));
+}
+
+/**
+ * Every combining mark below in the blocks a Latin, Greek or Cyrillic letter
+ * can carry: canonical combining class 202 (attached below), 218, 220, 222
+ * (below) or 233 (double below) in U+0300-036F, U+1AB0-1AFF, U+1DC0-1DFF,
+ * U+20D0-20FF and U+FE20-FE2F, measured with Python's unicodedata (Unicode
+ * 16). The toast's one-column precomposed letters decompose to ten of them
+ * (139 letters); the rest reach the chat card only as decomposed marks, since
+ * the toast fails any combining mark closed on width. Tested on the NFD form,
+ * so a decomposed `a` + U+0323 counts like the precomposed `ạ`.
+ */
+const MARK_BELOW = /[\u0316-\u0319\u031c-\u0333\u0339-\u033c\u0347-\u0349\u034d\u034e\u0353-\u0356\u0359\u035a\u035c\u035f\u0362\u1ab5-\u1aba\u1abd\u1abf\u1ac0\u1ac3\u1ac4\u1aca\u1dc2\u1dca\u1dcf\u1dd0\u1df9\u1dfa\u1dfc\u1dfd\u1dff\u20e8\u20ec-\u20ef\ufe27-\ufe2d]/u;
+
+/**
+ * A token that reads as a domain (a dot then an ASCII label, `x.com`,
+ * `a.co.uk`, `f.ts`), an email address (`a@b`) or a path (`/x`, `~/x`, `./x`,
+ * `"/x"`, `--root=/x`, `C:\x`, `a/b/c`, anything with a backslash or `://`).
+ *
+ * The domain test wants plain ASCII letters after the dot, so a Vietnamese
+ * ward abbreviation (`P.Bạch Mai`) is not a domain, nor is a missing space
+ * before a word with a mark (`bạn.Tôi`). A missing space before a plain ASCII
+ * word is (`được.Anh`), which costs that sentence its Approve. A mark below in
+ * the last label (`paypal.cọm`) is not caught: such a label cannot be
+ * registered, and a full URL is caught by its `://`. One slash between words
+ * (`và/hoặc`, "and/or") is not a path, so neither is a relative path with
+ * one slash (`etc/pạsswd`); the two cannot be told apart.
+ */
+const DOMAIN_LIKE = /[\p{L}\p{N}\p{M}]\.[A-Za-z]{2,}(?![\p{L}\p{N}\p{M}])/u;
+const EMAIL_LIKE = /[\p{L}\p{N}\p{M}]@[\p{L}\p{N}]/u;
+const PATH_LIKE = /(?:^|[^\p{L}\p{N}\p{M}])(?:~|\.{1,2})?\/|^[A-Za-z]:[\\/]|\\|:\/\/|\/.*\//u;
+
+/**
+ * A letter with a mark below inside a domain-, email- or path-like token
+ * (#858, the owner's choice): `pạypal.com`, `bịll@paypal.com`, `/etc/pạsswd`.
+ * The skeleton does not fold a mark below and the mark is easy to miss at
+ * toast size, so the token reads as the ASCII name. In ordinary text the same
+ * letters stay approvable: Vietnamese writes them in almost every word.
+ *
+ * The cost: a real Vietnamese, Romanian (`ș`, `ț`), Polish (`ą`, `ę`) or
+ * Turkish (`ş`, `ç`) domain, address or path is review-only.
+ */
+function markBelowInAddress(body: string): boolean {
+  for (const token of body.split(/\s+/u)) {
+    const nfd = token.normalize('NFD');
+    if (MARK_BELOW.test(nfd) && addressLike(nfd)) return true;
+  }
+  return false;
+}
+
+/** Whether an NFD token reads as a domain, an email address or a path. */
+function addressLike(nfd: string): boolean {
+  return DOMAIN_LIKE.test(nfd) || EMAIL_LIKE.test(nfd) || PATH_LIKE.test(nfd);
+}
+
+/** Latin Extended-B, IPA, the phonetic extensions, Latin Extended-D and -E: where the hooked and barred letters live. */
+const HOOK_LETTER_BLOCKS = /^[\u0180-\u02af\u1d00-\u1dbf\ua720-\ua7ff\uab30-\uab6f]$/u;
+/** Letters of those blocks that are ordinary orthography (Ewe, Akan and other West African `ɛ`/`ɔ`, Azerbaijani `ə`), with the Latin-1 and Extended-A `ł ø đ ŋ` the owner named, which sit outside the blocks anyway. */
+const ADDRESS_ORTHOGRAPHY = /^[łŁøØđĐŋŊɛƐɔƆəƏ]$/u;
+
+/**
+ * A precomposed Latin letter with a hook, bar or other built-in stroke inside
+ * an address-like token (#858 review): `paypaƚ.com` (U+019A, l with bar),
+ * `ɡoogle.com` (U+0261, script g). They do not decompose, so `MARK_BELOW` cannot
+ * see them, and their skeleton is not ASCII, so `asciiLookAlike` cannot either.
+ * Only non-decomposing letters in the blocks above, less `ADDRESS_ORTHOGRAPHY`;
+ * and, wherever it sits, any letter whose skeleton carries a stroke overlay
+ * (#858 review): `ħotmail.com`, `ŧwitter.com`, `ðropbox.com` are Latin-1 and
+ * Extended-A, outside the blocks.
+ * The cost: a domain or path in Hausa (`ɓ`, `ɗ`, `ƙ`), Maltese (`ħ`), Sami
+ * (`ŧ`), Icelandic or Faroese (`ð`), or another orthography that uses these
+ * letters is review-only.
+ */
+const STROKE_OVERLAY = /[\u0335\u0336\u0338]/u;
+function hookLetterInAddress(body: string): boolean {
+  for (const token of body.split(/\s+/u)) {
+    if (!addressLike(token.normalize('NFD'))) continue;
+    for (const ch of token.normalize('NFC')) {
+      if (!/^\p{L}$/u.test(ch) || ADDRESS_ORTHOGRAPHY.test(ch)) continue;
+      if (HOOK_LETTER_BLOCKS.test(ch) && ch.normalize('NFD') === ch) return true;
+      if (STROKE_OVERLAY.test(confusableSkeleton(ch))) return true;
+    }
+  }
+  return false;
+}
 
 /** The longest prefix of `text` that fits `max` columns, an unknown width counted wide. */
 function fitColumns(text: string, max: number): string {
@@ -368,7 +675,7 @@ export function approvalToast(request: ApprovalRequest): ApprovalToast {
   return {
     id: request.id, kind: 'approval_review', title: `Review in Jarvis: ${tool}`,
     body: fits ? body : `${fitColumns(body, room).trimEnd()}...`,
-    meta: `${impact} · ${toolLabel} · ${clickOnly ? 'requires on-screen review in Jarvis' : lookAlike ? 'mixes letters from different alphabets, so check it in Jarvis' : 'too long to approve from a notification'}`, destructive,
+    meta: `${impact} · ${toolLabel} · ${clickOnly ? 'requires on-screen review in Jarvis' : lookAlike ? `${LOOK_ALIKE_REASON}, so check it in Jarvis` : 'too long to approve from a notification'}`, destructive,
     actions: [{ id: 'review', label: 'Open Jarvis', primary: true }, { id: 'dismiss', label: 'Dismiss' }],
     approvable,
   };

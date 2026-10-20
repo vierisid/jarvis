@@ -10,6 +10,8 @@ import {
   toastLines,
   taskCompleteBody,
   boundedApprovalLabel,
+  LOOK_ALIKE_REASON,
+  toastLookAlike,
   type ApprovalBroadcaster,
   type ChannelSender,
 } from './approval-delivery.ts';
@@ -649,7 +651,7 @@ describe('#791 review: the toast budget fails closed on widths it cannot know', 
     expect(t.kind).toBe('approval_review');
     expect(t.actions.map((a) => a.id)).toEqual(['review', 'dismiss']);
     expect(t.body).toBe(body);
-    expect(t.meta).toContain('mixes letters from different alphabets');
+    expect(t.meta).toContain(LOOK_ALIKE_REASON);
     expect(t.meta).not.toContain('too long');
   });
 
@@ -690,7 +692,7 @@ describe('#791 review: the toast budget fails closed on widths it cannot know', 
     expect(toastLines(`${body} · external`)).toBeLessThanOrEqual(2);
     const t = toast(body);
     expect(t.approvable).toBe(false);
-    expect(t.meta).toContain('mixes letters from different alphabets');
+    expect(t.meta).toContain(LOOK_ALIKE_REASON);
   });
 
   test('#812 re-review: a one dot leader for a full stop is review-only, its width now unknown', () => {
@@ -718,10 +720,120 @@ describe('#791 review: the toast budget fails closed on widths it cannot know', 
     expect(toast('Envoyer le cœur').approvable).toBe(false);
   });
 
-  test('#812, the cost: a Cyrillic name in an English sentence is review-only too', () => {
-    // Its skeleton differs (`m` -> `rn`, and Cyrillic letters map), and it
-    // mixes scripts. Pinned so the trade is visible, not discovered.
-    expect(toast('Send email to Дмитрий').approvable).toBe(false);
+  test('#858 per label: a Cyrillic name in an English sentence is approvable again', () => {
+    // #812 checked the whole body, so any confusable letter (`m` -> `rn`) in a
+    // body that mixed scripts took Approve away. Per label, `Дмитрий` mixes
+    // nothing and `email` holds no look-alike.
+    expect(toastLookAlike('Send email to Дмитрий')).toBe(false);
+    expect(toast('Send email to Дмитрий').approvable).toBe(true);
+  });
+
+  test.each([
+    'pаypal.com', 'Pay $5 to раураӏ', 'раураӏ.сом', 'apрle.com',
+    'gооgle.com', 'Login at аmazon', 'Pay Аmazon $40', 'Wire to Chаse bank', 'ΡayΡal', 'paypaı.com',
+    'pạypal.com', 'me﹫evil.com', 'paypal․com', 'paypal.ϲom', '/etc/paѕѕwd',
+    'Отправь на рауpal.com', 'paypaƚ.com', 'ɡoogle.com',
+  ])('#858 per label: the look-alike %p is still caught', (body) => {
+    expect(toastLookAlike(body)).toBe(true);
+  });
+
+  test.each([
+    ['a Russian subject', 'Send email to dima@example.com with subject Отчёт за март'],
+    ['a Russian subject with one-letter and short words that read as ASCII', 'Send email to dima@example.com with subject О плане на среду, отправь его'],
+    ['a Japanese subject', 'Send email to dima@example.com with subject 会議の議事録'],
+    ['a Greek subject', 'Send email to dima@example.com with subject Αναφορά Μαρτίου'],
+    ['a Hebrew subject', 'Send email to dima@example.com with subject דוח חודשי'],
+    ['a Korean subject', 'Send email to dima@example.com with subject 월간 보고서'],
+    ['a path with Cyrillic folders', 'Delete /home/u/Документы/отчет.pdf'],
+    ['a payment to a Russian name', 'Pay 500 ₽ to Иван Петров'],
+    ['a Russian word beside a package name', 'Install пакет numpy'],
+    ['Polish l with stroke in an address', 'Email bołek@example.pl'],
+    ['Azerbaijani schwa in a domain', 'Open əli.az'],
+    ['an Ewe open e in a path', 'Open /docs/ɛvɛ'],
+  ])('#858 per label: %s is not a look-alike', (_label, body) => {
+    expect(toastLookAlike(body)).toBe(false);
+  });
+
+  test('#858 per label, the gap: a look-alike word after a real word of its script is not caught', () => {
+    // Pinned so the trade is visible: the run `на рау` does not read wholly
+    // as ASCII, and this is the ordinary shape of a Russian sentence. Main
+    // made it review-only; the owner chose per-label checks.
+    expect(toastLookAlike('Отправь $5 на рау')).toBe(false);
+  });
+
+  test.each([
+    ['a palochka look-alike after a real Russian word', 'Отправь $5 на раураӏ'],
+    ['a palochka look-alike before a real Russian word', 'Pay раураӏ счёт $5'],
+    ['a Cyrillic Supplement d in a Russian sentence', 'Отправь 5 руб на ваш аррԁе'],
+    ['an Arabic-Indic zero standing in for a dot', 'Отправь на раураӏ٠сом'],
+    ['an extended Arabic-Indic zero standing in for a dot', 'Pay $5 to раураӏ۰сом'],
+    ['a modifier letter after the look-alike', 'Pay $5 to раураӏˑ'],
+    ['a lone combining mark after the look-alike', 'Pay $5 to \u0440\u0430\u0443 \u0301'],
+    ['a modifier letter after a look-alike with no palochka', 'Pay $5 to \u0440\u0430\u0443\u02d1'],
+    ['an h with stroke in a domain', 'Log in to ħotmail.com'],
+    ['a capital H with stroke in a domain', 'Log in to ĦOTMAIL.COM'],
+    ['a t with stroke in a domain', 'Log in to ŧwitter.com'],
+    ['an eth in a domain', 'Log in to ðropbox.com'],
+  ])('#858 review: %s is a look-alike', (_label, body) => {
+    expect(toastLookAlike(body)).toBe(true);
+  });
+
+  test.each([
+    ['Japanese with katakana no beside ASCII', 'ノートを Slack に送る'],
+    ['a Russian sentence with an ASCII amount', 'Переведи 500 руб Ивану'],
+    ['an Ossetian ae, a national letter, after a Russian preposition', '\u041e\u0442\u043f\u0440\u0430\u0432\u044c $5 \u043d\u0430 \u0441\u04d5\u0440'],
+    ['an h with stroke outside an address', 'Write ħ in the notes'],
+  ])('#858 review: %s is not a look-alike', (_label, body) => {
+    expect(toastLookAlike(body)).toBe(false);
+  });
+
+  test.each([
+    'Pay $5 to Иван РауРаІ',
+    'Pay $5 to РауРаІ Россия',
+    'Pay $5 to служба РауРаІ',
+    'Переведи 100 USD на счёт РауРаІ',
+    'Send email to support -- "Ваш аккаунт РауРаІ заблокирован"',
+    'Отправь 5 USD на АМЕХ',
+    'Login to сайт СОСА',
+    'Send to Иван ОРРО support',
+    'Отправь 5 USD на ВВС',
+  ])('#858 R5: a long or capitalised look-alike word next to a real one is caught: %p', (body) => {
+    expect(toastLookAlike(body)).toBe(true);
+  });
+
+  test.each([
+    ['a 3-letter title-case word after a real one', 'Pay 10 EUR to Иван Рау'],
+    ['a 3-letter lower-case word after a preposition', 'Отправь $5 на рау'],
+    ['a body with no ASCII at all', 'Перешли пароль на ВВС'],
+  ])('#858 R5, the documented miss: %s', (_label, body) => {
+    expect(toastLookAlike(body)).toBe(false);
+  });
+
+  test.each([
+    ['a legal-form acronym in a payment', 'Pay 5000 RUB to ООО Ромашка'],
+    ['ОАО', 'Pay 5000 RUB to ОАО Ромашка'],
+    ['ТОО', 'Pay 100 KZT to ТОО Береке'],
+    ['ИП', 'Pay 100 RUB to ИП Иванов'],
+    ['sentence-initial Его', 'Его отчет готов, send to bob'],
+    ['sentence-initial Ура beside a version number', 'Ура, релиз 2.0'],
+  ])('#858 R5: %s stays approvable', (_label, body) => {
+    expect(toastLookAlike(body)).toBe(false);
+  });
+
+  test.each([
+    ['сахар next to a digit', 'Купи сахар и 2 кг соли'],
+    ['гора next to ASCII', 'Поход 5 km, гора'],
+    ['Горох и сахар: 2 кг', 'Горох и сахар: 2 кг'],
+    ['a name such as Саша in English', 'Send to Саша'],
+    ['an acronym such as МТС', 'Pay 300 RUB to МТС'],
+  ])('#858 R5, the cost: %s is a look-alike', (_label, body) => {
+    // Pinned so the trade is visible: these are review-only and deny-only from chat.
+    expect(toastLookAlike(body)).toBe(true);
+  });
+
+  test('#858 review: a hooked letter counts only inside an address', () => {
+    expect(toastLookAlike('Write paypaƚ in the notes')).toBe(false);
+    expect(toastLookAlike('Log in to paypaƚ.com')).toBe(true);
   });
 
   test('#812: Japanese mixing kanji and kana is one script for this check', () => {
@@ -729,6 +841,83 @@ describe('#791 review: the toast budget fails closed on widths it cannot know', 
     // (U+30ED maps to U+53E3), so only the shared bucket keeps it approvable.
     const body = 'ログを削除';
     expect(confusableSkeleton(body)).not.toBe(body);
+    expect(toast(body).approvable).toBe(true);
+  });
+
+  test.each([
+    ['a fullwidth full stop in a domain (U+FF0E)', 'Pay 500 EUR to paypal\uff0ecom'],
+    ['a fullwidth at sign in an address (U+FF20)', 'Send email to billing\uff20paypal.com'],
+    ['a fullwidth slash in a path (U+FF0F)', 'Delete ~\uff0f.ssh/id_rsa'],
+    ['fullwidth backslashes in a Windows path (U+FF3C)', 'Delete C:\uff3cWindows\uff3cSystem32'],
+    ['a body all in Cyrillic that reads as Latin, with no ASCII', '\u0440\u0430\u0443'],
+    ['a body all in fullwidth letters, with no ASCII', '\uff50\uff41\uff59\uff50\uff41\uff4c\uff0e\uff43\uff4f\uff4d'],
+    ['a dot below inside a domain', 'Log in to p\u1ea1ypal.com'],
+    ['a dot below inside an email address', 'Send email to b\u1ecbll@paypal.com'],
+    ['a dot below inside a path', 'Read /etc/p\u1ea1sswd'],
+    ['a cedilla inside a domain', 'Log in to \u00e7loudflare.com'],
+  ])('#858: %s is review-only, with the look-alike reason', (_label, body) => {
+    // Each fits, so length is not what takes Approve away.
+    expect(toastLines(`${body} \u00b7 external`)).toBeLessThanOrEqual(2);
+    const t = toast(body);
+    expect(t.approvable).toBe(false);
+    expect(t.kind).toBe('approval_review');
+    expect(t.body).toBe(body);
+    expect(t.meta).toContain(LOOK_ALIKE_REASON);
+  });
+
+  test('#858: a stand-in separator outside the width allow-list is a look-alike by skeleton too', () => {
+    // The toast already fails these closed on width; the chat card has no
+    // width list, so the rule itself has to see them (U+2024, U+2215).
+    expect(toastLookAlike('Send email to billing@paypal\u2024com')).toBe(true);
+    expect(toastLookAlike('Open https://paypal.com\u2215login')).toBe(true);
+  });
+
+  test.each([
+    ['a decomposed grave below (U+0316)', 'Log in to pa\u0316ypal.com'],
+    ['a combining low line (U+0332)', 'Log in to pa\u0332ypal.com'],
+    ['a mark below from the supplement block (U+1DFA)', 'Log in to pa\u1dfaypal.com'],
+    ['a stand-in full stop followed by a variation selector', 'Pay 500 EUR to paypal\uff0e\ufe00com'],
+    ['a grapheme joiner before a stand-in full stop', 'Pay 500 EUR to paypal\u034f\uff0ecom'],
+    ['an all-Cyrillic domain inside an ordinary Russian sentence', '\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0430\u0440\u0440\u04cf\u0435.\u0441\u043e'],
+    ['a mark below in a quoted absolute path', 'Delete "/b\u1ecbn"'],
+    ['a mark below in a path after an equals sign', 'Run setup --root=/b\u1ecbn'],
+  ])('#858 review: %s is a look-alike (the chat card has no width list to fail it closed)', (_label, body) => {
+    expect(toastLookAlike(body)).toBe(true);
+  });
+
+  test('#858 review, the cost: a missing space before a plain ASCII word makes a Vietnamese sentence a domain', () => {
+    // Pinned so the trade is visible: `\u0111\u01b0\u1ee3c.Anh` reads as a domain with a mark below.
+    expect(toastLookAlike('T\u00f4i \u0111\u00e3 nh\u1eadn \u0111\u01b0\u1ee3c.Anh g\u1eedi l\u1ea1i nh\u00e9')).toBe(true);
+  });
+
+  test('#858: a decomposed mark below counts like a precomposed one', () => {
+    // The toast fails a lone combining mark closed on width already; the
+    // chat card has no width list, so the rule reads the NFD form.
+    expect(toastLookAlike('Log in to pa\u0323ypal.com')).toBe(true);
+    expect(toastLookAlike('Log in to paypal.com')).toBe(false);
+  });
+
+  test.each([
+    ['Vietnamese prose, marks below in nearly every word', 'G\u1eedi b\u00e1o c\u00e1o cho b\u1ea1n H\u1ea1nh v\u00e0o th\u1ee9 S\u00e1u'],
+    ['Vietnamese prose ending in a full stop', 'Xin ch\u00e0o b\u1ea1n, h\u1eb9n g\u1eb7p l\u1ea1i.'],
+    ['a Vietnamese ward abbreviation, not a domain', 'G\u1eedi h\u00e0ng t\u1edbi 12 P.B\u1ea1ch Mai'],
+    ['one slash between Vietnamese words, not a path', 'Ch\u1ecdn v\u00e0/ho\u1eb7c x\u00f3a t\u1ec7p'],
+    ['a Romanian sentence with comma below', 'Trimite \u0219tirile la \u021b\u0103r\u0103'],
+    ['an ASCII address in Vietnamese prose', 'G\u1eedi b\u00e1o c\u00e1o t\u1edbi hanh@example.com'],
+    ['a fullwidth full stop ending a Latin sentence', 'Send the report to bob\uff0e'],
+    ['Japanese ending a sentence with a fullwidth full stop', '\u4f1a\u8b70\u306f\uff13\u6642\u3067\u3059\uff0e'],
+    ['a fullwidth colon beside ASCII, which changes no address', 'Note\uff1acall bob at 5'],
+    ['an ellipsis before a closing quote, whose skeleton is three full stops', 'Post "Launching soon\u2026" to #general'],
+    ['an ellipsis between words', 'Send the draft\u2026then call Bob'],
+    ['a two dot leader between words', 'Wait\u2025ok'],
+    ['a stand-in full stop with ASCII on one side only', 'Install \uff0eNET 8'],
+    ['a Russian sentence with the city abbreviation', '\u0412\u0441\u0442\u0440\u0435\u0447\u0430 \u0432 \u043c\u0430\u0435, \u0433. \u041c\u043e\u0441\u043a\u0432\u0430'],
+    ['a Russian sentence with an abbreviation', '\u0422\u043e \u0435\u0441\u0442\u044c \u0442.\u0435. \u0437\u0430\u0432\u0442\u0440\u0430'],
+    ['a Russian sentence', '\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u043e\u0442\u0447\u0451\u0442 \u0418\u0432\u0430\u043d\u0443 \u0432 \u043f\u044f\u0442\u043d\u0438\u0446\u0443'],
+    ['a Ukrainian sentence', '\u041d\u0430\u0434\u0456\u0441\u043b\u0430\u0442\u0438 \u0437\u0432\u0456\u0442 \u041e\u043a\u0441\u0430\u043d\u0456'],
+    ['a Greek sentence in capitals', '\u03a3\u03a4\u0395\u0399\u039b\u0395 \u03a4\u0397\u039d \u0391\u039d\u0391\u03a6\u039f\u03a1\u0391'],
+  ])('#858: %s stays approvable', (_label, body) => {
+    expect(toastLookAlike(body)).toBe(false);
     expect(toast(body).approvable).toBe(true);
   });
 
