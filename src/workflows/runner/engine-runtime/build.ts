@@ -853,12 +853,15 @@ export function assertHoistedStaging(nodeModules: string): void {
 /** Runs the staging install in `dir` with `args`. Injectable for tests. */
 export type StagingInstaller = (dir: string, args: readonly string[]) => Promise<void>;
 
-const bunStagingInstall: StagingInstaller = (dir, args) =>
+export const bunStagingInstall: StagingInstaller = (dir, args) =>
   new Promise<void>((res, rej) => {
     // Third-party packages, none of which need the daemon's secrets. The
     // allowlist keeps what bun needs (PATH, HOME, proxies, registry and CA
     // settings); lifecycle scripts are skipped -- see BUN_INSTALL_ARGS.
-    const child = spawn("bun", [...args], {
+    // process.execPath, not "bun" (#864): the binary that installs what the
+    // engine is built from is the one running the daemon, never the first
+    // `bun` on PATH.
+    const child = spawn(process.execPath, [...args], {
       cwd: dir,
       stdio: "inherit",
       env: sanitizedEnv(),

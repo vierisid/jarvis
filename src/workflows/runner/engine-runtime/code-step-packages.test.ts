@@ -433,8 +433,10 @@ describe("the install is bounded", () => {
     expect(Date.now() - started).toBeLessThan(10_000);
   }, 20_000);
 
-  // The real installer, run against a fake `bun` first on PATH that records
-  // what it was given (the spawn-env-sites pattern), so no registry is needed.
+  // The real installer, run against a fake `bun` that records what it was
+  // given (the spawn-env-sites pattern), so no registry is needed. The fake is
+  // process.execPath for the call, because that is what the installer runs
+  // (#864); install-runs-own-bun.test.ts holds that a `bun` on PATH is not.
   test.skipIf(process.platform === "win32")("the real installer runs bun install, scripts off, hoisted, in the dir, without the daemon's secrets", async () => {
     const root = scratch();
     const bin = join(root, "bin");
@@ -444,7 +446,13 @@ describe("the install is bounded", () => {
     const log = join(root, "argv.txt");
     writeFileSync(join(bin, "bun"),
       `#!/bin/sh\nprintf '%s\\n' "$PWD" "$@" "secret=$ANTHROPIC_API_KEY" > ${JSON.stringify(log)}\n`, { mode: 0o755 });
-    await withEnv({ PATH: `${bin}:${process.env.PATH ?? ""}`, ANTHROPIC_API_KEY: "sentinel-do-not-log" }, () => bunInstall(work));
+    const realExecPath = process.execPath;
+    process.execPath = join(bin, "bun");
+    try {
+      await withEnv({ ANTHROPIC_API_KEY: "sentinel-do-not-log" }, () => bunInstall(work));
+    } finally {
+      process.execPath = realExecPath;
+    }
     const [cwd, ...rest] = readFileSync(log, "utf8").trim().split("\n");
     expect(cwd).toBe(work);
     expect(rest).toEqual(["install", "--silent", "--ignore-scripts", "--linker=hoisted", "secret="]);
