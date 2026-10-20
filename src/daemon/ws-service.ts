@@ -60,7 +60,7 @@ import { maybeCreateUserProfileFollowupPrompt, recordUserProfileTurn } from '../
 import { runWithOrigin } from '../llm/origin.ts';
 import { buildProjectSiteContext, formatProjectList } from '../sites/prompt-context.ts';
 import type { FileEntry } from '../sites/types.ts';
-import { ROOM_ACTION_QUEUE_TTL_MS, RoomActionResults, type RoomActionOutcome } from './room-action-results.ts';
+import { ROOM_ACTION_QUEUE_TTL_MS, RoomActionResults, type LateRoomAnswer, type RoomActionOutcome } from './room-action-results.ts';
 import { PEBBLE_ROOMS, tabSwitchReply } from './pebble-intents.ts';
 import { isPresentationRoomAction, isRoomAction, roomActionCategories, type RoomActionCategory } from './room-actions.ts';
 import {
@@ -75,6 +75,8 @@ import { safeChatIdentity, type BriefChatTransport } from '../brief/chat-transpo
 import { currentBriefTurn } from '../brief/chat-context.ts';
 import { reportExecutionActivity } from '../actions/progress-context.ts';
 
+/** Longer than any room action id (a UUID is 36): a claim naming one is ignored (#1025). */
+const ROOM_ACTION_ID_MAX = 64;
 /** How long a realtime nav tool waits for the room to answer: inside TOOL_RESULT_GRACE_MS. */
 const REALTIME_ROOM_ACTION_WAIT_MS = Math.min(ROOM_ACTION_QUEUE_TTL_MS, TOOL_RESULT_GRACE_MS - 500);
 
@@ -1357,6 +1359,23 @@ export class WebSocketService implements Service {
         return undefined;
       }
 
+      case 'room_action_claim': {
+        // The dashboard asked to run a room action asks to go ahead just
+        // before it does (#1025): granted only while requestRoomAction still
+        // waits on it, so nothing runs after the caller was told "no answer".
+        // Ids are UUIDs: anything longer names nothing, and is neither
+        // logged nor echoed back.
+        const resultId = (msg.payload as { resultId?: unknown } | undefined)?.resultId;
+        if (typeof resultId !== 'string' || resultId.length > ROOM_ACTION_ID_MAX) return undefined;
+        const granted = this.roomActionResults.claim(resultId, ws);
+        if (!granted) console.warn(`[WSService] refused a claim for room action ${resultId}: no longer waiting on it`);
+        const told = this.wsServer.sendToClient(ws, { type: 'room_action_claim_result', payload: { resultId, granted }, timestamp: Date.now() });
+        // A grant the dashboard never got runs nothing: the wait running out
+        // is then no answer, not under way.
+        if (granted && !told) this.roomActionResults.unclaim(resultId);
+        return undefined;
+      }
+
       default:
         return {
           type: 'error',
@@ -2105,6 +2124,25 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     }
   }
 
+  /**
+   * The follow-up row for a room's answer that came after its wait ran out
+   * (#1034). The first row said `started` (run) or `no_answer`; this one
+   * says what the room answered, with the same action, origin, hold and
+   * channel, so a failure after `started` no longer stands as run, and a
+   * run after `no_answer` is on record.
+   */
+  private auditLateRoomAnswer(
+    ra: { room: string; action: string },
+    origin: RoomActionOrigin,
+    opts: { approvalId?: string | null; channel?: ResolutionChannel },
+  ): LateRoomAnswer {
+    return (answer, reported) => {
+      console.warn(`[WSService] late answer for room action ${ra.room}/${ra.action}: ${answer}, after it was reported ${reported}`);
+      const reason = answer === 'disconnected' ? 'late_disconnected_after_started' as const : `late_${answer}_after_${reported}` as const;
+      this.auditRoomAction(ra, origin, 'allowed', answer === 'accepted', { ...opts, reason });
+    };
+  }
+
   /** `ra` with its defaults and its item settled before its card (#1008). */
   private settleHeldRoomAction(ra: { room: string; action: string; args?: Record<string, unknown> }) {
     return resolveHeldRoomAction(ra, this.roomActionTargetLists(), `${roomTitle(ra.room)}: ${ra.action.replace(/_/g, ' ')}`);
@@ -2201,7 +2239,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         // Shorter than the realtime session's wait for sibling tool results,
         // so a slow room cannot leave this result to be voiced on its own
         // (and the model, seeing none, calling the tool again).
-        const outcome = await this.requestRoomAction(ra, REALTIME_ROOM_ACTION_WAIT_MS, { client: ws });
+        const outcome = await this.requestRoomAction(ra, REALTIME_ROOM_ACTION_WAIT_MS, {
+          client: ws, onLate: this.auditLateRoomAnswer(ra, 'realtime', {}),
+        });
         this.auditRoomAction(ra, 'realtime', 'allowed', roomActionExecuted(outcome), { reason: outcome });
         const reply = roomActionReply(ra, outcome);
         // The model, told only "didn't accept", may call again and raise a
@@ -3279,7 +3319,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   requestRoomAction(
     action: { room: string; action: string; args?: Record<string, unknown> },
     timeoutMs: number = ROOM_ACTION_QUEUE_TTL_MS,
-    opts?: { client?: ServerWebSocket<unknown> },
+    opts?: { client?: ServerWebSocket<unknown>; onLate?: LateRoomAnswer },
   ): Promise<RoomActionOutcome> {
     // Backstop for every caller (#969): an action no room handler carries out
     // is never broadcast, whoever asked for it.
@@ -3296,7 +3336,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       console.warn(`[WSService] refused room action ${action.room}/${action.action}: it changes more than the screen, and no dashboard was named to run it`);
       return Promise.resolve('rejected');
     }
-    const { id, outcome } = this.roomActionResults.open(timeoutMs, client);
+    const { id, outcome } = this.roomActionResults.open(timeoutMs, client, opts?.onLate);
     const payload = {
       source: 'room_action',
       room: action.room,
@@ -3315,7 +3355,12 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     if (client) {
       reached = this.wsServer.getClients().has(client) && this.wsServer.sendToClient(client, {
         type: 'notification',
-        payload: { ...payload, ...waited, resultFrom: 'dashboard' },
+        // `claim`: ask before running it, and run it only if granted (#1025).
+        // That deadline is on the dashboard's clock, which starts late by the
+        // network, the send queue and a busy page; the claim is on this one.
+        // Not for a presentation action: run late, it only changes the
+        // screen, as its copies on every other client do unclaimed.
+        payload: { ...payload, ...waited, resultFrom: 'dashboard', ...(presentation ? {} : { claim: true }) },
         timestamp: Date.now(),
       });
       // The others follow the dashboard that asked, and only once it has the
@@ -3378,7 +3423,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     let outcome: RoomActionOutcome;
     try {
       this.navigateForRoomAction(ra, ws, requestId);
-      outcome = await this.requestRoomAction(ra, ROOM_ACTION_QUEUE_TTL_MS, { client: ws });
+      outcome = await this.requestRoomAction(ra, ROOM_ACTION_QUEUE_TTL_MS, {
+        client: ws, onLate: this.auditLateRoomAnswer(ra, audit.origin, auditOpts),
+      });
     } catch (err) {
       // The decision still gets its row, so a hold is never left open in it.
       this.auditRoomAction(ra, audit.origin, 'allowed', false, { ...auditOpts, reason: 'failed' });

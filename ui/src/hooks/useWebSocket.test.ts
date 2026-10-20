@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { errorFrameContent, routeErrorFrame, extractNestedMessage, finalizeStreamMessage, formatProviderErrorMessage, mergeRestoredHistory, nextStreamBuffer, retiredVoiceConfirmationId, roomActionRequestFrom, stillPendingVoiceConfirmations } from "./useWebSocket.ts";
+import { errorFrameContent, routeErrorFrame, extractNestedMessage, finalizeStreamMessage, formatProviderErrorMessage, mergeRestoredHistory, nextStreamBuffer, retiredVoiceConfirmationId, roomActionRequestFrom, stillDeliverable, stillPendingVoiceConfirmations } from "./useWebSocket.ts";
 import type { UserFailure } from "../v2/ui/FailureNotice";
+import { ROOM_ACTION_QUEUE_TTL_MS } from "../../../src/daemon/room-action-results";
 
 describe("finalizeStreamMessage", () => {
   test("recovers text from the done frame when every stream chunk was missed", () => {
@@ -398,5 +399,33 @@ describe("roomActionRequestFrom (#965)", () => {
     expect(roomActionRequestFrom({ room: "settings" }, 1)).toBeNull();
     expect(roomActionRequestFrom({ room: 1, action: "x" }, 1)).toBeNull();
     expect(roomActionRequestFrom({ room: "tools", action: "search", args: "nope" }, 1)?.args).toEqual({});
+  });
+});
+
+// #1024: the dashboard queues room actions rather than keeping one, so what no
+// bridge takes must still leave the queue when the bus would have dropped it.
+describe("stillDeliverable (#1024)", () => {
+  const queued = { room: "settings", action: "switch_tab", args: {}, ts: 1, seq: 1, receivedAt: 1_000 };
+  test("an action is kept while the bus could still run it", () => {
+    expect(stillDeliverable(queued, 1_000)).toBe(true);
+    expect(stillDeliverable(queued, 1_000 + ROOM_ACTION_QUEUE_TTL_MS - 1)).toBe(true);
+    expect(stillDeliverable({ ...queued, expiresAt: 4_500, stillAsked: () => true }, 4_499)).toBe(true);
+  });
+  test("and dropped once its asker is gone, its deadline has passed, or the bus's queue TTL has", () => {
+    expect(stillDeliverable({ ...queued, stillAsked: () => false }, 1_000)).toBe(false);
+    expect(stillDeliverable({ ...queued, expiresAt: 4_500 }, 4_500)).toBe(false);
+    expect(stillDeliverable(queued, 1_000 + ROOM_ACTION_QUEUE_TTL_MS)).toBe(false);
+  });
+});
+
+describe("roomActionRequestFrom claim (#1025)", () => {
+  const task = { source: "room_action", room: "tasks", action: "create_task", args: { title: "x" }, resultId: "r1", resultFrom: "dashboard" };
+  test("the dashboard asked is told to claim only when the daemon says so", () => {
+    expect(roomActionRequestFrom({ ...task, claim: true }, 5)?.needsClaim).toBe(true);
+    for (const claim of [undefined, false, "true", 1]) expect(roomActionRequestFrom({ ...task, claim }, 5)?.needsClaim).toBeUndefined();
+  });
+  test("a request not addressed to this dashboard claims nothing", () => {
+    const view = { source: "room_action", room: "settings", action: "switch_tab", args: { tab: "voice" }, resultId: "r1", claim: true };
+    expect(roomActionRequestFrom(view, 5)?.needsClaim).toBeUndefined();
   });
 });

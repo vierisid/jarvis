@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { uuid } from "../lib/uuid";
 import { isPresentationRoomAction } from "../../../src/daemon/room-actions";
-import { roomActionExpiry } from "../../../src/daemon/room-action-results";
+import { ROOM_ACTION_QUEUE_TTL_MS, roomActionExpiry } from "../../../src/daemon/room-action-results";
 import { isUserFailure, type UserFailure } from "../v2/ui/FailureNotice";
 
 export type MessageRole = "user" | "assistant" | "system";
@@ -626,7 +626,16 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
     target: string; // RoomKey or "most_recent"
     ts: number;
   } | null>(null);
-  const [roomActionRequest, setRoomActionRequest] = useState<DashboardRoomActionRequest | null>(null);
+  // A queue, not one slot (#1024): two actions handled before a render, or
+  // stamped in the same millisecond, used to run only one. The bridge runs
+  // each by its `seq` and acks it, which takes it off.
+  const [roomActionRequests, setRoomActionRequests] = useState<readonly QueuedRoomActionRequest[]>([]);
+  const roomActionSeqRef = useRef(0);
+  /** Claims sent and not yet answered, by resultId (#1025). */
+  const roomActionClaimsRef = useRef(new Map<string, (granted: boolean) => void>());
+  const ackRoomActionRequests = useCallback((upToSeq: number) => {
+    setRoomActionRequests((prev) => (prev.some((r) => r.seq <= upToSeq) ? prev.filter((r) => r.seq > upToSeq) : prev));
+  }, []);
   const wsRef = useRef<WebSocket | null>(null);
   const observerRef = useRef<WebSocketObserver | undefined>(undefined);
   useEffect(() => {
@@ -756,8 +765,10 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
 
     ws.onclose = () => {
       if (wsRef.current !== ws || !mountedRef.current) return;
-      // Every room action this socket was asked to answer is now unanswerable.
+      // Every room action this socket was asked to answer is now unanswerable,
+      // and no claim sent on it will be granted (#1025).
       socketGenerationRef.current += 1;
+      refuseRoomActionClaims(roomActionClaimsRef.current);
       ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null;
       wsRef.current = null;
       notifyObserver(observerRef.current, 'onClose');
@@ -790,6 +801,18 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
       try {
         const msg: WSMessage = JSON.parse(event.data);
         notifyObserver(observerRef.current, 'onMessage', msg);
+        // The daemon's answer to a room action claim (#1025). Only `true`
+        // grants it; anything else, or a claim never answered before the
+        // socket closes, runs nothing.
+        if (msg.type === "room_action_claim_result") {
+          const resultId = msg.payload?.resultId;
+          const settle = typeof resultId === "string" ? roomActionClaimsRef.current.get(resultId) : undefined;
+          if (settle) {
+            roomActionClaimsRef.current.delete(resultId);
+            settle(msg.payload?.granted === true);
+          }
+          return;
+        }
         if (chat?.onMessage(msg)) return;
 
         // Voice signal messages → route to voice hook
@@ -1208,8 +1231,8 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
       } else if (payload.source === "room_action") {
         // Phase 6.3.5 — Room control via voice. Daemon broadcasts a
         // structured action; the UI's action bus dispatches to whichever
-        // Room is currently registered. `ts` bumps so the same action
-        // repeated produces a new effect.
+        // Room is currently registered. Each one is queued under its own
+        // `seq`, so the same action repeated, or two at once, all run (#1024).
         const req = roomActionRequestFrom(payload, msg.timestamp);
         if (req?.resultId) {
           // The daemon stops waiting the moment this socket closes, and says
@@ -1217,8 +1240,35 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
           // on the next socket (#1010).
           const socket = socketGenerationRef.current;
           req.stillAsked = () => socketGenerationRef.current === socket;
+          // The daemon decides whether it is still waiting, not this page's
+          // clock (#1025): ask it, on this socket, just before running.
+          if (req.needsClaim) {
+            const resultId = req.resultId;
+            req.claim = () => new Promise<boolean>((resolve) => {
+              const ws = wsRef.current;
+              if (socketGenerationRef.current !== socket || ws?.readyState !== WebSocket.OPEN) {
+                resolve(false);
+                return;
+              }
+              const claims = roomActionClaimsRef.current;
+              claims.get(resultId)?.(false);
+              claims.set(resultId, resolve);
+              try {
+                ws.send(JSON.stringify({ type: "room_action_claim", payload: { resultId }, timestamp: Date.now() }));
+              } catch {
+                claims.delete(resultId);
+                resolve(false);
+              }
+            });
+          }
         }
-        if (req) setRoomActionRequest(req);
+        if (req) {
+          const queued: QueuedRoomActionRequest = { ...req, seq: ++roomActionSeqRef.current, receivedAt: performance.now() };
+          // Nothing is lost to the slot any more, so nothing may pile up in
+          // it either: what no bridge has taken by the time the bus would
+          // have dropped it goes, as it would have there.
+          setRoomActionRequests((prev) => [...prev.filter((r) => stillDeliverable(r, queued.receivedAt)), queued]);
+        }
       } else if (payload.source === "window_control") {
         // Phase 6.1.5 follow-up: voice window-control ("close", "expand",
         // "minimize" etc.) — daemon regex-matches and broadcasts here so
@@ -1278,6 +1328,7 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
       mountedRef.current = false;
       // Cleanup disables onclose below, so invalidate queued room actions here too.
       socketGenerationRef.current += 1;
+      refuseRoomActionClaims(roomActionClaimsRef.current);
       window.removeEventListener("jarvis:ws-reconnect", onManualRetry);
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       const socket = wsRef.current;
@@ -1398,7 +1449,8 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
     thinking,
     roomNavRequest,
     windowControlRequest,
-    roomActionRequest,
+    roomActionRequests,
+    ackRoomActionRequests,
     wsRef,
     voiceCallbacksRef,
   };
@@ -1458,7 +1510,40 @@ export type DashboardRoomActionRequest = {
   expiresAt?: number;
   /** False once the socket the action came on has closed (#1010). */
   stillAsked?: () => boolean;
+  /**
+   * The daemon asked for a claim before the action runs (#1025): it is run
+   * only if the daemon, asked just before, says it is still waiting.
+   */
+  needsClaim?: true;
+  /** Asks the daemon for that go-ahead on the socket the action came on. */
+  claim?: () => Promise<boolean>;
 };
+
+/** Refuse every claim still waiting for the daemon's answer (#1025). */
+function refuseRoomActionClaims(claims: Map<string, (granted: boolean) => void>): void {
+  const waiting = [...claims.values()];
+  claims.clear();
+  for (const settle of waiting) settle(false);
+}
+
+/**
+ * A room action as the dashboard queues it for its bridge (#1024): `seq` is
+ * this page's own count, so two actions never share a key the way two
+ * messages stamped in the same millisecond did, and `receivedAt` is when it
+ * arrived, on the monotonic clock `expiresAt` uses.
+ */
+export type QueuedRoomActionRequest = DashboardRoomActionRequest & { seq: number; receivedAt: number };
+
+/**
+ * Whether a queued room action could still run at `now`: the bus would drop
+ * it otherwise (its asker gone, past its deadline, or older than the bus's
+ * own queue TTL), so the queue need not keep it for a bridge.
+ */
+export function stillDeliverable(req: QueuedRoomActionRequest, now: number): boolean {
+  if (req.stillAsked?.() === false) return false;
+  if (req.expiresAt !== undefined && now >= req.expiresAt) return false;
+  return now - req.receivedAt < ROOM_ACTION_QUEUE_TTL_MS;
+}
 
 /**
  * The clarifier or repeat-back card a daemon notification takes down, or
@@ -1503,7 +1588,7 @@ export function repeatBackFrom(payload: unknown, timestamp: number): PendingRepe
 
 export function roomActionRequestFrom(payload: unknown, ts: number, receivedAt: number = performance.now()): DashboardRoomActionRequest | null {
   if (!payload || typeof payload !== "object") return null;
-  const p = payload as { room?: unknown; action?: unknown; args?: unknown; resultId?: unknown; resultFrom?: unknown; expiresInMs?: unknown };
+  const p = payload as { room?: unknown; action?: unknown; args?: unknown; resultId?: unknown; resultFrom?: unknown; expiresInMs?: unknown; claim?: unknown };
   if (typeof p.room !== "string" || typeof p.action !== "string") return null;
   const req: DashboardRoomActionRequest = {
     room: p.room,
@@ -1517,6 +1602,9 @@ export function roomActionRequestFrom(payload: unknown, ts: number, receivedAt: 
     // dispatching it: the daemon's wait has been running since it sent it.
     const expiresAt = roomActionExpiry(p.expiresInMs, receivedAt);
     if (expiresAt !== undefined) req.expiresAt = expiresAt;
+    // A daemon from before #1025 sends no `claim`, and its actions run as
+    // they did then.
+    if (p.claim === true) req.needsClaim = true;
   }
   // An action that changes more than the screen is run only by the dashboard
   // the daemon addressed (#974); the daemon sends it nowhere else, and this
