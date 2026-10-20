@@ -1,6 +1,6 @@
 import React, { lazy, Suspense, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
-import { OnboardingGate } from "../../v2/onboarding/OnboardingGate";
+import { BriefOnboardingHost, OnboardingGate } from "../../v2/onboarding/OnboardingGate";
 import { useTheme } from "../../v2/shell/useTheme";
 import { BriefButton } from "../components/controls";
 import type { BriefGate, BriefRoomRegistry, BriefRoute, BriefShellPort } from "../contracts";
@@ -60,17 +60,21 @@ export function DashboardEntry({ legacy, rooms = BRIEF_ROOMS, Gate = OnboardingG
     return rollback ? <RestoreLegacy href={rollback} /> : <>{legacy}</>;
   }
   if (entry.kind === "preview") return <Suspense fallback={null}><FoundationPreview /></Suspense>;
-  if (entry.kind === "moved") return <div className="jarvis-v2-root"><Gate>
+  // Both Brief branches tell the gate it is inside Brief; the legacy branch
+  // above never does, whatever the URL says (#1105).
+  if (entry.kind === "moved") return <div className="jarvis-v2-root"><BriefOnboardingHost><Gate>
     <main className="brief-foundation"><section className="brief-foundation__notice">
       <h1>This view is not part of Brief</h1>
       <p>Advanced settings and support has links to the retained controls. Your data has not changed.</p>
       <a href={targetHref(href, DESTINATIONS["advanced-settings"].legacy)}>Open advanced settings and support</a>
       <p><a href={legacyHref(href)}>Open current dashboard</a></p>
     </section></main>
-  </Gate></div>;
+  </Gate></BriefOnboardingHost></div>;
   return (
     <div className="jarvis-v2-root">
-      <Gate><BriefHost route={entry.route} rooms={rooms} navigation={navigation} conversation={conversation} /></Gate>
+      <BriefOnboardingHost>
+        <Gate><BriefHost route={entry.route} rooms={rooms} navigation={navigation} conversation={conversation} /></Gate>
+      </BriefOnboardingHost>
     </div>
   );
 }

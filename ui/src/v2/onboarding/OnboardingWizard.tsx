@@ -96,6 +96,7 @@ type Provider = {
   noConfig?: boolean; needsKey?: boolean; keyOptional?: boolean; needsBaseUrl?: boolean; optionalBaseUrl?: boolean; freeModel?: boolean;
   keyLabel?: string; urlLabel?: string; urlPh?: string; models?: string[]; hint?: string;
 };
+const OMNIROUTE_DEFAULT_URL = "http://localhost:20128/v1";
 const PROVIDERS: Provider[] = [
   // Hosted brain. `soon: true` is the self-hosted default; the wizard flips
   // it off when GET /api/config/llm reports hosted_llm (see provList below).
@@ -272,9 +273,18 @@ export function OnboardingWizard({
   }, [steps, stepKey]);
   const [provId, setProvId] = useState("anthropic");
   const prov = provList.find((p) => p.id === provId)!;
-  const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [customEndpoint, setCustomEndpoint] = useState(false);
+  // One key per destination, never one shared field (#1066). A single apiKey
+  // survived a provider switch, so an OpenAI key typed first went to the URL
+  // typed for LiteLLM, OpenAI-compatible or OmniRoute: by the catalog read,
+  // by Test, and in the saved settings. The custom Anthropic endpoint is its
+  // own slot for the same reason. Derived during render rather than reset by
+  // an effect, so no commit ever pairs the new provider with the old key.
+  const [keyBySlot, setKeyBySlot] = useState<Record<string, string>>({});
+  const keySlot = provId === "anthropic" && customEndpoint ? "anthropic:custom" : provId;
+  const apiKey = keyBySlot[keySlot] ?? "";
+  const setApiKey = (value: string) => setKeyBySlot((keys) => ({ ...keys, [keySlot]: value }));
   const [model, setModel] = useState("");
   const [test, setTest] = useState<TestState>({ status: "idle" });
   // The model catalog read from a custom Anthropic gateway. Kept outside the
@@ -286,7 +296,11 @@ export function OnboardingWizard({
   const testEpoch = useRef(0);
   // hearing
   const [stt, setStt] = useState<"skip" | "openai" | "groq" | "local">("skip");
-  const [sttKey, setSttKey] = useState("");
+  // Per provider for the same reason as the brain key: an OpenAI Whisper key
+  // must not be saved as the Groq one.
+  const [sttKeyByProvider, setSttKeyByProvider] = useState<Record<string, string>>({});
+  const sttKey = sttKeyByProvider[stt] ?? "";
+  const setSttKey = (value: string) => setSttKeyByProvider((keys) => ({ ...keys, [stt]: value }));
   const [sttEndpoint, setSttEndpoint] = useState("http://localhost:8080");
   const [sttServerType, setSttServerType] = useState<LocalSTTServerType>("whisper_cpp");
   const [localSTTLoaded, setLocalSTTLoaded] = useState(false);
@@ -361,7 +375,7 @@ export function OnboardingWizard({
     const p = PROVIDERS.find((x) => x.id === provId)!;
     setModel(p.models?.[0] ?? "");
     const nextBaseUrl = urlByProvider.current[provId]
-      ?? (provId === "omniroute" ? "http://localhost:20128/v1" : "");
+      ?? (provId === "omniroute" ? OMNIROUTE_DEFAULT_URL : "");
     setBaseUrl(nextBaseUrl);
     setCustomEndpoint(provId === "anthropic" && Boolean(nextBaseUrl));
     testEpoch.current++;
@@ -429,10 +443,15 @@ export function OnboardingWizard({
   // OmniRoute's catalog is installation-specific: it includes configured
   // providers, free routes, and custom combos. Read it live instead of
   // shipping a stale shortlist. The key travels in a POST body, never a URL.
+  // In the commit that switches to OmniRoute, baseUrl still holds the previous
+  // provider's URL until the [provId] effect above restores OmniRoute's. Read
+  // only when baseUrl IS OmniRoute's URL, so its key never goes to another
+  // provider's URL whatever the effect order or debounce (#1066).
   const [omniRouteModels, setOmniRouteModels] = useState<string[] | null>(null);
   const [omniRouteLoading, setOmniRouteLoading] = useState(false);
   useEffect(() => {
     if (provId !== "omniroute") return;
+    if (baseUrl !== (urlByProvider.current.omniroute ?? OMNIROUTE_DEFAULT_URL)) return;
     // No URL to probe: also drop a catalog fetched with earlier inputs so a
     // stale list doesn't linger on screen.
     if (!baseUrl.trim()) { setOmniRouteModels(null); return; }
@@ -534,7 +553,11 @@ export function OnboardingWizard({
     const epoch = ++testEpoch.current;
     setTest({ status: "testing" });
     try {
-      const body: Record<string, unknown> = { provider: provId };
+      // Name the destination in full. Without kind and base_url the daemon
+      // inherits them from a provider already saved under this name, so on a
+      // setup re-run a key typed for the official API went to a gateway URL
+      // saved earlier. An empty base_url means the provider's own origin.
+      const body: Record<string, unknown> = { provider: provId, kind: provId, base_url: "" };
       // A custom Anthropic gateway may not recognize public Anthropic model
       // ids. Until its catalog is known, let the daemon discover a model,
       // validate it, and return the exact id that succeeded; afterwards the
@@ -550,6 +573,9 @@ export function OnboardingWizard({
         if (!baseUrl.trim()) { setTest({ status: "err", msg: "Enter a custom endpoint URL first." }); return; }
         body.base_url = baseUrl.trim();
       }
+      // On the provider's own origin, its own auth header too: a header kept
+      // from an earlier gateway would send the key as the wrong credential.
+      if (body.base_url === "") body.auth_header = "";
       const r = await fetch("/api/config/llm/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const data = (await r.json()) as { ok: boolean; model?: string; models?: string[]; error?: string };
       if (epoch !== testEpoch.current) return; // inputs changed mid-flight — verdict is stale
@@ -625,8 +651,12 @@ export function OnboardingWizard({
       } else {
         const entry: Record<string, unknown> = { kind: provId };
         if (prov.needsKey && apiKey) entry.api_key = apiKey;
+        // Explicit, as in the Test above: an omitted base_url keeps one saved
+        // earlier, which would pair the key typed here with that gateway.
+        entry.base_url = "";
         if (prov.needsBaseUrl) entry.base_url = baseUrl.trim();
         if (prov.optionalBaseUrl && customEndpoint && baseUrl.trim()) entry.base_url = baseUrl.trim();
+        if (entry.base_url === "") entry.auth_header = "";
         const validatedModel = test.status === "ok" ? test.validatedModel : undefined;
         payload.llm = {
           providers: { [provId]: entry },
@@ -1415,6 +1445,8 @@ export function OnboardingWizard({
                 setCustomEndpoint((enabled) => !enabled);
                 urlByProvider.current[provId] = "";
                 setBaseUrl("");
+                // The gateway URL is gone, so is the token typed for it.
+                setKeyBySlot(({ "anthropic:custom": _gone, ...keys }) => keys);
               }}
             />
             <span>Use a custom Anthropic endpoint</span>

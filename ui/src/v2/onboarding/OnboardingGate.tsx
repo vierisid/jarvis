@@ -7,6 +7,16 @@ import { RestartRequiredBanner, shouldShowRestartBanner } from "./RestartRequire
 import { WorkflowDraftContext } from "./WorkflowDraftContext";
 import type { OnboardingDraft } from "../../brief/onboarding/draft";
 
+/** True only under the Brief host. DashboardEntry sets it around the gate it
+ * renders for Brief, so the Brief onboarding adapter follows where the gate
+ * actually is: a released foreground alias carries no ?brief=1, and the
+ * current dashboard opened with ?brief=1 is still not Brief (#1105). */
+const BriefHostContext = React.createContext(false);
+
+export function BriefOnboardingHost({ children }: { children: React.ReactNode }) {
+  return <BriefHostContext.Provider value={true}>{children}</BriefHostContext.Provider>;
+}
+
 /**
  * Gates the live shell on setup, the profile interview and the tutorial.
  * Carries an optional first-workflow request across the final status refresh.
@@ -25,8 +35,10 @@ export function OnboardingGate({ children, onboarding, brief }: {
 }
 
 function LegacyOnboardingGate({ children, brief }: { children: React.ReactNode; brief?: OnboardingDraft }) {
-  // Explicit host injection plus the new shell flag. A bookmark cannot install a provider.
-  const adapter = typeof window !== "undefined" && new URL(window.location.href).searchParams.get("brief") === "1" ? brief : undefined;
+  // Explicit host injection plus the Brief host around this gate. A URL can
+  // neither install a provider nor move the current dashboard onto Brief's.
+  const insideBrief = React.useContext(BriefHostContext);
+  const adapter = insideBrief ? brief : undefined;
   return adapter ? <BriefOnboardingGate key={adapter.scope} draft={adapter}>{children}</BriefOnboardingGate>
     : <ClassicOnboardingGate>{children}</ClassicOnboardingGate>;
 }
