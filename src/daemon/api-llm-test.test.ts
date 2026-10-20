@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createApiRoutes, type ApiContext } from './api-routes.ts';
 import { saveLLMSettings } from './llm-settings.ts';
+import { closeDb, initDatabase } from '../vault/schema.ts';
 import type { JarvisConfig, LLMProviderEntry } from '../config/types.ts';
 
 type Handler = (req: Request) => Response | Promise<Response>;
@@ -487,6 +491,81 @@ describe('POST /api/config/llm/test auth header selection', () => {
     expect(body.ok).toBe(false);
     expect(body.error).toContain('invalid auth header name');
     expect(requests).toHaveLength(0);
+  });
+});
+
+/**
+ * An empty auth_header is how a caller returns a provider to its own default
+ * header (the onboarding wizard sends it with base_url "" when no custom
+ * endpoint is in play, #1066). Without it, a header saved for an earlier
+ * gateway would ride along to the official endpoint.
+ */
+describe('empty auth_header returns to the provider default', () => {
+  const realFetch = globalThis.fetch;
+  let requests: CapturedRequest[];
+  let prevSecretsDir: string | undefined;
+  let secretsDir: string;
+
+  beforeEach(() => {
+    requests = [];
+    prevSecretsDir = process.env.JARVIS_SECRETS_DIR;
+    secretsDir = mkdtempSync(join(tmpdir(), 'jarvis-llm-auth-header-'));
+    process.env.JARVIS_SECRETS_DIR = secretsDir;
+    initDatabase(':memory:');
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      requests.push({ url: String(input), authorization: headers.get('authorization'), apiKey: headers.get('x-api-key') });
+      return new Response(JSON.stringify({
+        id: 'msg_test', type: 'message', role: 'assistant', content: [{ type: 'text', text: 'OK' }],
+        model: 'claude-default', stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    closeDb();
+    if (prevSecretsDir === undefined) delete process.env.JARVIS_SECRETS_DIR;
+    else process.env.JARVIS_SECRETS_DIR = prevSecretsDir;
+    rmSync(secretsDir, { recursive: true, force: true });
+  });
+
+  it('a save with auth_header "" clears the stored header', () => {
+    const config = {
+      llm: {
+        providers: {
+          'anthropic-hdr-clear': { kind: 'anthropic', base_url: 'https://gw.example', auth_header: 'x-api-key' },
+        },
+        tiers: {},
+      },
+    } as unknown as JarvisConfig;
+
+    saveLLMSettings(config, {
+      providers: { 'anthropic-hdr-clear': { api_key: 'sk-ant-fresh', base_url: '', auth_header: '' } },
+    });
+
+    const stored = config.llm.providers?.['anthropic-hdr-clear'];
+    if (!stored) throw new Error('provider entry missing after save');
+    expect(stored.base_url).toBe('');
+    expect(stored.auth_header).toBeUndefined();
+    expect(Object.hasOwn(stored, 'api_key')).toBe(false);
+  });
+
+  it('a Test with auth_header "" ignores the stored header; omitting it does not', async () => {
+    const stored = {
+      'anthropic-hdr-clear': { kind: 'anthropic', api_key: 'gw-key', base_url: 'https://gw.example', auth_header: 'Authorization' },
+    } as Record<string, LLMProviderEntry>;
+    const fresh = { name: 'anthropic-hdr-clear', kind: 'anthropic', base_url: '', api_key: 'sk-ant-fresh' };
+
+    // Control: without the empty header the stored Bearer choice is inherited,
+    // so the assertion below is about auth_header "" and not about base_url.
+    await callEndpoint(stored, fresh);
+    expect(requests).toEqual([{ url: 'https://api.anthropic.com/v1/messages', authorization: 'Bearer sk-ant-fresh', apiKey: null }]);
+
+    requests = [];
+    const response = await callEndpoint(stored, { ...fresh, auth_header: '' });
+    expect((await response.json() as { ok: boolean }).ok).toBe(true);
+    expect(requests).toEqual([{ url: 'https://api.anthropic.com/v1/messages', authorization: null, apiKey: 'sk-ant-fresh' }]);
   });
 });
 
