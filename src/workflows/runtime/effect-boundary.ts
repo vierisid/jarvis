@@ -16,12 +16,12 @@ import { assertRunNotCanceled } from './cancellation';
 import { withExecutionScope } from '../../actions/execution-scope';
 import { ActionOutcomeError, type ActionFailure } from '../../actions/action-outcome';
 import { getFlowRun } from '../db/repos/flow-run';
-import { createWaitpoint } from '../db/repos/waitpoint';
+import { createWaitpoint, getWaitpoint } from '../db/repos/waitpoint';
 import { claimWorkflowEffect, getWorkflowEffect, saveWorkflowEffect, type WorkflowEffect } from '../db/repos/workflow-effect';
 import { canonicalJson, digest, resolveEffectContext, type WorkflowApprovalPending, type WorkflowEffectContext } from './effect-context';
 import { aboveLevelMayAsk, governedCategoriesFor, substituteAboveLevel } from '../../authority/tool-action-map';
 import { boundedApprovalLabel } from '../../authority/approval-delivery';
-import { maxWaitingSpawnCards } from '../../agents/lifecycle-gate';
+import { budgetCap, budgetOf, deferredAhead, deferredAheadLimit, waitingWorkflowCards } from './deferred-cards';
 
 /**
  * A flow name on a card or an audit row: the same 512 the HTTP routes cap a
@@ -132,37 +132,8 @@ export function closeEffectApproval(approvals: ApprovalManager | undefined, effe
   } catch (error) { console.error('[Workflow Authority] approval receipt failed:', error); }
 }
 
-/**
- * Workflow cards waiting on a decision for an act that starts an agent, from
- * runs of `flowId` (#1017). A delegation step (`workflow_delegate`), a started
- * workflow (`workflow_start`) and a delegated agent's own spawn call all ask
- * as `spawn_agent`; a stop is `terminate_agent` and is never counted.
- *
- * The flow is the source, not the run: a repeatedly triggered workflow is a
- * new run each time, so a per-run count bounds nothing. Each flow has its own
- * budget, separate from the deferred budget of each agent the lifecycle gate
- * counts, so the bound is per source as #1012 put it, not one global number.
- *
- * Only cards of runs still able to act on them count. A run that was stopped
- * or failed leaves its card pending (nothing closes it), and approving it
- * resumes nothing, so it must not use up the budget of the runs that can. A
- * card whose run no longer exists names no flow and is not counted either.
- */
-const LIVE_RUN_STATUSES: ReadonlySet<string> = new Set(['QUEUED', 'RUNNING', 'PAUSED']);
-function waitingStartCards(approvals: ApprovalManager, flowId: string): number {
-  const runs = new Map<string, string | null>();
-  const flowOf = (agentId: string): string | null => {
-    if (!agentId.startsWith('workflow:')) return null;
-    const runId = agentId.slice('workflow:'.length);
-    if (!runs.has(runId)) {
-      const run = getFlowRun(runId);
-      runs.set(runId, run && LIVE_RUN_STATUSES.has(run.status) ? run.flowId : null);
-    }
-    return runs.get(runId)!;
-  };
-  return approvals.getPending().filter((r) => r.execution_mode === 'workflow' && r.action_category === 'spawn_agent'
-    && flowOf(r.agent_id) === flowId).length;
-}
+/** Budgets for waiting workflow cards, and the steps that wait for a place: `deferred-cards.ts` (#1039). */
+export { maxWaitingWorkflowCards } from './deferred-cards';
 
 /**
  * A refusal decided before anything was dispatched (Q-19). Typed so a failed
@@ -399,7 +370,20 @@ export class WorkflowEffectBoundary {
       return decision;
     };
     const held = holdIfPaused();
-    if (held) return held;
+    if (held) {
+      // A step released from waiting for a place (#1039) that Pause holds
+      // when it runs again keeps that place through the hold: its record
+      // names the HOLD, so only this record's own hold keeps it live
+      // (`deferred-cards.ts`), never another pass of the same step. One not
+      // yet released keeps its open DEFER, which already keeps it live.
+      if (record.deferral && !record.approvalId) {
+        const current = record.waitpointId ? getWaitpoint(record.waitpointId) : null;
+        if (!current || current.type !== 'DEFER' || current.resumedAt !== null) {
+          record.waitpointId = held.approval!.waitpointId; saveWorkflowEffect(record);
+        }
+      }
+      return held;
+    }
     // Bindings first, so a stale one is refused before anyone is asked to approve it.
     try { input.revalidate?.(record); } catch (error) {
       if (error instanceof ActionOutcomeError) {
@@ -423,20 +407,62 @@ export class WorkflowEffectBoundary {
     if (record.approvalId || decision.requiresApproval) {
       if (!approvals) throw new Error('Workflow approval service unavailable; execution denied');
       if (!record.approvalId) {
-        // A start request waits within the same per-source budget a deferred
-        // one does (#1012, #1017): the running-task cap, per flow. Refused
-        // for good, as a policy refusal is, and audited as denied, so a flood
-        // shows in the trail rather than as cards nobody can get through.
-        // Synchronous from the count to the card below, so two runs cannot
-        // both see room for the last one.
-        if (decision.actionCategory === 'spawn_agent') {
-          const waiting = waitingStartCards(approvals, record.flowId);
-          const cap = maxWaitingSpawnCards();
-          if (waiting >= cap) {
-            record.status = 'blocked'; record.decision = 'denied';
-            record.error = `${waiting} requests to start an agent or a workflow are already waiting for your decision (the limit is ${cap}). Approve or deny those in the Authority room first.`;
-            record.reason = record.error; record.finishedAt = Date.now(); saveWorkflowEffect(record);
-            log(false); throw new Error(record.error);
+        // A card waits within its flow's budget (#1012, #1017, #1039): a
+        // start in the running-task cap, any other card but a stop in a
+        // budget of the same size. The budget is the one the card would be
+        // recorded in: keyed on `decision.actionCategory`, the category
+        // `createRequest` below stores as the card's `action_category`, which
+        // is what `waitingWorkflowCards` counts. Past it, or behind steps
+        // already waiting for a place, the step waits with no card instead of
+        // failing (owner, 2026-10-21): it parks on a DEFER waitpoint, which
+        // the timer releases, oldest first, once a place frees. Its record
+        // stays pending and undecided, and is judged afresh when it runs
+        // again. Synchronous from the count to the card below, so two runs
+        // cannot both see room for the last place.
+        const budget = budgetOf(decision.actionCategory);
+        if (budget) {
+          const waiting = waitingWorkflowCards(record.flowId, budget);
+          const ahead = deferredAhead(record, budget);
+          const cap = budgetCap(budget);
+          if (waiting + ahead >= cap) {
+            // Its place in the queue is kept while it waits again in the same
+            // budget. A decision that now lands in the other budget queues it
+            // at the back of that one: it never waited there.
+            const first = record.deferral?.budget !== budget;
+            if (first) record.deferral = { budget, since: Date.now() };
+            // A step the engine ran again before it parked keeps the waitpoint it already has.
+            const current = record.waitpointId ? getWaitpoint(record.waitpointId) : null;
+            getWorkflowDb().transaction(() => {
+              if (!current || current.type !== 'DEFER' || current.resumedAt !== null) {
+                record.waitpointId = createWaitpoint({ flowRunId: record.runId, projectId: record.projectId,
+                  stepName: record.stepName, type: 'DEFER' }).id;
+              }
+              // A run waits at one step at a time. A DEFER of this run's that
+              // is still open belongs to a step the run has gone past, so it
+              // is retired and holds no place (`deferred-cards.ts`): one run
+              // cannot hold several places, whatever calls reach the boundary.
+              getWorkflowDb().run(`UPDATE waitpoint SET resumed_at = ? WHERE flow_run_id = ? AND type = 'DEFER'
+                AND resumed_at IS NULL AND id <> ?`, [Date.now(), record.runId, record.waitpointId!]);
+              saveWorkflowEffect(record);
+            })();
+            // Once per wait, not per tick: a flood shows in the trail as steps
+            // that needed approval and were not run, with no card yet. Under
+            // the decision's category, as the card it stands for will be,
+            // and as the budget is counted.
+            if (first) {
+              audit.log({ agent_id: `workflow:${record.runId}`,
+                agent_name: `Workflow ${flowLabel} / ${stepLabel} / ${record.id}${judged}`,
+                tool_name: record.toolName, action_category: decision.actionCategory,
+                authority_decision: 'approval_required', approval_id: null, executed: false });
+            }
+            const queued = !ahead ? '' : ahead >= deferredAheadLimit(budget)
+              ? `, and ${ahead} or more earlier steps are waiting for a place`
+              : `, and ${ahead} earlier step${ahead === 1 ? ' is' : 's are'} waiting for a place`;
+            const hold = (budget === 'start'
+              ? `${waiting} requests to start an agent or a workflow are already waiting for your decision (the limit is ${cap})`
+              : `${waiting} requests from this workflow, other than to start or stop an agent, are already waiting for your decision (the limit is ${cap})`)
+              + `${queued}. This step waits, and asks you when one of those is approved or denied in the Authority room.`;
+            return { approval: { effectId: id, approvalId: '', waitpointId: record.waitpointId!, hold, code: 'APPROVALS_WAITING' } };
           }
         }
         let request!: ApprovalRequest;
@@ -461,6 +487,7 @@ export class WorkflowEffectBoundary {
               ...(input.confirmation ? { confirm: input.confirmation.confirm } : {}),
               ...(intent ? { intent } : {}) }), executionMode: 'workflow' });
           record.approvalId = request.id;
+          delete record.deferral;
           record.waitpointId = createWaitpoint({ flowRunId: record.runId, projectId: record.projectId,
             stepName: record.stepName, type: 'MANUAL' }).id;
           record.decision = 'approval_required'; saveWorkflowEffect(record);

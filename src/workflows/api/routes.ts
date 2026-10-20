@@ -1411,6 +1411,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // A step parked while Jarvis was paused is released by Jarvis on
           // Resume, never by a URL (Q-08).
           if (wp.type === "HOLD") return err("This waitpoint holds a step while Jarvis is paused; Jarvis releases it when resumed", 403);
+          // A step waiting for a place in its flow's card budget is released
+          // by Jarvis when one frees, never by a URL (#1039).
+          if (wp.type === "DEFER") return err("This waitpoint holds a step until its workflow has room for another approval card; Jarvis releases it", 403);
           if (wp.resumedAt !== null) return err("waitpoint already resumed", 410);
           const run = getFlowRun(wp.flowRunId);
           if (!run) return err("waitpoint references a missing run", 410);
@@ -2278,7 +2281,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           if (!run) return err("run not found", 404);
           // Acknowledgement closes the durable dispatch fence. It does not
           // claim that an already-dispatched remote effect was rolled back.
-          return ok({ ok: true, ...cancelFlowRun(run.id) });
+          // The ids of the cards it closed are for the daemon's surfaces, not this answer.
+          const { closedApprovalIds: _closed, ...result } = cancelFlowRun(run.id);
+          return ok({ ok: true, ...result });
         }),
     },
 
@@ -2300,8 +2305,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             created: wp.created,
             ...(children.some(child => child.waitpointId === wp.id)
               ? { child: children.find(child => child.waitpointId === wp.id) }
-              // A HOLD is released by Jarvis on Resume, never by a URL (Q-08).
-              : { resumeUrl: wp.type === "HOLD" ? null : `/api/webhooks/waitpoints/${wp.id}` }),
+              // A HOLD is released by Jarvis on Resume, a DEFER when its flow
+              // has room for its card; never by a URL (Q-08, #1039).
+              : { resumeUrl: wp.type === "HOLD" || wp.type === "DEFER" ? null : `/api/webhooks/waitpoints/${wp.id}` }),
           }));
           return ok({ runId, waitpoints });
         }),
