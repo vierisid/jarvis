@@ -506,6 +506,47 @@ export class AgentOrchestrator {
   private inheritedRestrictions = new Map<string, AuthorityProfile>();
 
   /**
+   * The roles whose restrictive overrides bind an agent (#1043): the role of
+   * every agent that started it, directly or through agents of its own, and
+   * of its hierarchy parent. Kept as role ids and read against the engine
+   * whenever a run starts or a lifecycle decision is made, so an override the
+   * owner adds or removes later applies from the agent's next run or spawn.
+   * A run already going keeps the profile it started with, as it keeps every
+   * other restriction it was handed; Pause is the immediate lever. Removed
+   * when the agent is.
+   */
+  private starterRoles = new Map<string, string[]>();
+
+  /**
+   * The deny and requires-approval overrides scoped to a role that started
+   * `agentId`, as a profile (#1043, owner decision): a deny becomes a denied
+   * category and a requires-approval a governed one. An allow is never
+   * carried, so this only tightens, and a profile is applied after the
+   * child's own decision, so it wins over the child's role-specific allow.
+   * Global overrides are not carried here: the engine already applies them to
+   * every role.
+   */
+  private roleOverrideRestrictions(agentId: string): AuthorityProfile | null {
+    return this.restrictiveRoleOverrides(this.starterRoles.get(agentId) ?? []);
+  }
+
+  /** The deny and requires-approval overrides scoped to any of `roles`, as a profile. */
+  private restrictiveRoleOverrides(roles: readonly string[]): AuthorityProfile | null {
+    if (!roles.length || !this.authorityEngine) return null;
+    const binding = this.authorityEngine.getConfig().overrides
+      .filter((o) => o.role_id !== undefined && roles.includes(o.role_id) && (!o.allowed || o.requires_approval));
+    if (binding.length === 0) return null;
+    const denied = [...new Set(binding.filter((o) => !o.allowed).map((o) => o.action))];
+    const governed = [...new Set(binding.filter((o) => o.allowed && o.requires_approval).map((o) => o.action))];
+    const from = [...new Set(binding.map((o) => o.role_id!))];
+    return {
+      label: `an override on a role above it (${from.join(', ')})`,
+      ...(governed.length ? { governed_categories: governed } : {}),
+      ...(denied.length ? { denied_categories: denied } : {}),
+    };
+  }
+
+  /**
    * The sub-agent whose tool call is running, and the restrictions it is
    * under: the profile its run was given, and its taint judged by THIS
    * orchestrator's taint gating, whether or not its own run gates on taint
@@ -513,12 +554,11 @@ export class AgentOrchestrator {
    * #1041; an embedded caller may not). Null when nobody but the primary or
    * the person is acting.
    *
-   * Not carried: an override the owner scoped to the caller's ROLE
-   * (`overrides[].role_id`). The engine matches those on the role being
-   * judged, so a child of another role is not bound by them -- exactly as a
-   * specialist the primary starts is not bound by an override on the
-   * primary's role. What is carried is everything the caller's run is
-   * restricted by as a profile, plus its level and tools.
+   * Also carried since #1043: the deny and requires-approval overrides the
+   * owner scoped to the role of an agent that started this one
+   * (`roleOverrideRestrictions`). Never an allow. What is carried is
+   * everything the caller's run is restricted by as a profile, plus its
+   * level and tools.
    */
   private actingCaller(action: LifecycleAction, subject: string): { agent: AgentInstance; restrictions: AuthorityProfile | null } | null {
     const acting = actingAgent();
@@ -538,7 +578,8 @@ export class AgentOrchestrator {
         ? 'The tool call that asked for this has already finished, so nothing was done.'
         : 'The agent that asked for this is no longer running, so nothing was done.');
     }
-    return { agent, restrictions: tighten(acting.profile, taintProfile(this.taintGating, new Set(acting.taint))) };
+    return { agent, restrictions: tighten(acting.profile, this.roleOverrideRestrictions(agent.id),
+      taintProfile(this.taintGating, new Set(acting.taint))) };
   }
 
   /**
@@ -551,7 +592,13 @@ export class AgentOrchestrator {
   getProfileFor(agentId: string): AuthorityProfile | null {
     // An assign is gated as a start (`manageAgentsGate`), so it is refused as one.
     const caller = this.actingCaller('spawn_agent', this.hierarchy.getAgent(agentId)?.agent.role.id ?? agentId);
-    return tighten(this.getEffectiveProfile(), this.inheritedRestrictions.get(agentId) ?? null, caller?.restrictions ?? null);
+    // And a sub-agent asking for this run binds it by its OWN role's
+    // overrides too (#1043 review): a task it assigns to an agent somebody
+    // else started would otherwise run free of them. On a spawn the actor's
+    // role is in the child's starter roles already; this is for an assign.
+    return tighten(this.getEffectiveProfile(), this.inheritedRestrictions.get(agentId) ?? null,
+      this.roleOverrideRestrictions(agentId), caller?.restrictions ?? null,
+      caller ? this.restrictiveRoleOverrides([caller.agent.agent.role.id]) : null);
   }
 
   /**
@@ -646,6 +693,11 @@ export class AgentOrchestrator {
     // (`getProfileFor`), including a task the primary assigns it later.
     const inherited = tighten(caller?.restrictions ?? null, this.inheritedRestrictions.get(actor.id) ?? null);
     if (inherited) this.inheritedRestrictions.set(agent.id, inherited);
+    // And by the overrides on the role of whoever started it, and on every
+    // role above that one (#1043): the agent that asked and the hierarchy
+    // parent, as the child's authority is capped by both.
+    const starters = [...new Set([actor, parent].flatMap((a) => [...(this.starterRoles.get(a.id) ?? []), a.agent.role.id]))];
+    this.starterRoles.set(agent.id, starters);
     recordSpawn();
 
     // Add system message with role context for sub-agents. Communication
@@ -750,6 +802,7 @@ export class AgentOrchestrator {
     // of the process.
     this.exposureLedgers.delete(agentId);
     this.inheritedRestrictions.delete(agentId);
+    this.starterRoles.delete(agentId);
   }
 
   getPrimary(): AgentInstance | undefined {

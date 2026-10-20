@@ -96,6 +96,8 @@ type Options = {
   distinctChildren?: boolean;
   /** The orchestrator hands out the main agent's default taint gating (#1041). */
   taintGating?: boolean;
+  /** What the orchestrator says a new child's run is restricted by, read at each spawn (#1043). */
+  profileFor?: () => import('../../authority/engine').AuthorityProfile | null;
 };
 
 /** Real backends, boundary, Authority and SQLite; only the model and the tools are scripted. */
@@ -158,7 +160,7 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
   const services = buildSandboxServiceBackends({ credentialResolver: new CredentialResolver(), eventBuffer: new WorkflowEventBuffer(),
     toolRegistry: registry, authorityEngine: authority, emergencyController: emergency, auditTrail,
     approvalManager: approvals,
-    agentOrchestrator: { getPrimary: () => ({ id: 'primary' }), getProfileFor: () => null, getTaintGating: () => (opts.taintGating ? buildTaintGating() : null), spawnSubAgent: child, reapAgent: () => {} } as any,
+    agentOrchestrator: { getPrimary: () => ({ id: 'primary' }), getProfileFor: () => opts.profileFor?.() ?? null, getTaintGating: () => (opts.taintGating ? buildTaintGating() : null), spawnSubAgent: child, reapAgent: () => {} } as any,
     agentSpecialists: new Map([[ROLE.id, ROLE]]) as any,
     agentScopedRegistry: () => registry,
     llmManager: { chatTier: async (_tier: string, _origin: string, messages: Array<{ role: string }>) => {
@@ -251,6 +253,34 @@ describe('delegated approvals through the workflow effect boundary', () => {
     const done = await f.delegate();
     expect(done).toMatchObject({ status: 'completed', outcome: { status: 'succeeded' } });
     expect(f.writes).toEqual([ARGS]);
+  });
+
+  test('a restriction added while the card waits is applied when the paused call is resumed (#1043 review)', async () => {
+    const ids = createRun();
+    let profile: import('../../authority/engine').AuthorityProfile | null = null;
+    const f = backends(ids, { profileFor: () => profile });
+    const parked = await f.delegate();
+    expect(parked.status).toBe('approval_required');
+    // The owner denies writes on the role above the child while the card waits.
+    profile = { label: 'an override on a role above it (pa)', denied_categories: ['write_data'] };
+    f.approvals.approve(parked.approval!.approvalId, 'test');
+    const done = await f.delegate();
+    expect(f.effects()).toBe(0);
+    expect(f.writes).toEqual([]);
+    expect(JSON.stringify(done)).toContain('write_data is denied');
+  });
+
+  test('the recheck names a restriction once, however many routes it came by', async () => {
+    const ids = createRun();
+    let profile: import('../../authority/engine').AuthorityProfile | null = { label: 'carried', governed_categories: ['write_data'] };
+    const f = backends(ids, { profileFor: () => profile });
+    const parked = await f.delegate();
+    profile = { label: 'carried', denied_categories: ['write_data'] };
+    f.approvals.approve(parked.approval!.approvalId, 'test');
+    const text = JSON.stringify(await f.delegate());
+    expect(text).toContain('carried: write_data is denied');
+    expect(text).not.toContain('carried; carried');
+    expect(f.writes).toEqual([]);
   });
 
   test('approval resumes the delegation: the tool runs once and the conversation finishes', async () => {

@@ -75,6 +75,12 @@ export type AuthorityProfile = {
   level_cap?: number;
   /** Categories that require approval for this agent even when the base config allows them. */
   governed_categories?: ActionCategory[];
+  /**
+   * Categories denied to this agent whatever the base config says, a grant or
+   * an "always allow" override included (#1043: a deny override on the role
+   * that started it).
+   */
+  denied_categories?: ActionCategory[];
 };
 
 export type AuthorityCheckParams = {
@@ -377,9 +383,24 @@ export function combineDecisions(decisions: readonly AuthorityDecision[]): Autho
  * add a denial (level cap) or an approval requirement (governed category).
  */
 export function applyProfile(base: AuthorityDecision, profile: AuthorityProfile): AuthorityDecision {
-  if (!base.allowed) return base;
   const label = profile.label ?? 'agent profile';
   const { actionCategory } = base;
+
+  // Before the early return below: a denial that is only a level shortfall
+  // may still be turned into an approval (`substituteAboveLevel`), so a
+  // profile deny replaces it with one nothing can lift. Any other denial
+  // already stands and keeps its own reason.
+  if (profile.denied_categories?.includes(actionCategory) && (base.allowed || base.deniedByLevel)) {
+    return {
+      allowed: false,
+      requiresApproval: false,
+      reason: `${label}: ${actionCategory} is denied`,
+      actionCategory,
+      profileLabel: label,
+    };
+  }
+
+  if (!base.allowed) return base;
 
   if (profile.level_cap !== undefined) {
     const requiredLevel = AUTHORITY_REQUIREMENTS[actionCategory];
