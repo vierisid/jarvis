@@ -717,6 +717,9 @@ async function localClipboardRead(): Promise<string> {
       return await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xclip'), '-selection', 'clipboard', '-o'], CLIPBOARD_READ), 'xclip');
     } catch (err) {
       if (err instanceof CaptureTimeoutError) throw err;
+      // Past the output cap (#904): xsel would read the same selection to the
+      // same cap, so it is not tried.
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOBUFS') throw err;
       try {
         return await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xsel'), '--clipboard', '--output'], CLIPBOARD_READ), 'xsel');
       } catch (e) {

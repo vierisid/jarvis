@@ -24,6 +24,9 @@ export async function readCapped(stream: ReadableStream<Uint8Array>, limit: numb
       size += value.byteLength;
       if (size > limit) {
         onOverflow();
+        // Closes our end, so a descendant still writing gets EPIPE rather
+        // than a pipe nobody reads (#904 review).
+        await reader.cancel().catch(() => {});
         throw codedError(`output passed ${limit} bytes`, 'ENOBUFS');
       }
       chunks.push(value);

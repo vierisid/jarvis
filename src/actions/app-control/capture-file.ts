@@ -23,7 +23,8 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readCapped } from './read-capped.ts';
+import { NATIVE_EXEC_MAX_OUTPUT } from './native-exec.ts';
+import { codedError, readCapped } from './read-capped.ts';
 /** What awaitCaptureTool needs of a spawned tool: Bun.spawn with stderr piped. */
 type CaptureProcess = { readonly exited: Promise<number>; readonly exitCode: number | null; readonly signalCode: string | null; readonly stderr: ReadableStream<Uint8Array>; kill(signal?: NodeJS.Signals | number): void };
 
@@ -47,6 +48,24 @@ let captureTimeoutMs = CAPTURE_TIMEOUT_MS;
 /** @internal Test only: shorten the bound (null restores it). */
 export function __setCaptureTimeoutForTests(ms: number | null): void {
   captureTimeoutMs = ms ?? CAPTURE_TIMEOUT_MS;
+}
+
+/**
+ * The most a capture or lookup tool may print on either pipe before it is
+ * killed (#904). Both pipes were read in full with no cap, and the lookups
+ * (xprop, xdotool, wmctrl) and clipboard reads all come through here. This is
+ * native-exec.ts's cap, so the two seams that run desktop tools agree. What
+ * the lookups print is far below it: measured with xprop 1.2.8 against a
+ * window carrying a seven-size _NET_WM_ICON (16 to 256 px), `xprop -id` printed
+ * 31 KB (it draws icons up to some size as text and leaves larger ones out),
+ * and the three properties linux.ts asks for printed 89 bytes.
+ */
+export const CAPTURE_MAX_OUTPUT = NATIVE_EXEC_MAX_OUTPUT;
+let captureMaxOutput = CAPTURE_MAX_OUTPUT;
+
+/** @internal Test only: lower the output cap (null restores it). */
+export function __setCaptureMaxOutputForTests(bytes: number | null): void {
+  captureMaxOutput = bytes ?? CAPTURE_MAX_OUTPUT;
 }
 
 /** A capture tool that ran past CAPTURE_TIMEOUT_MS and was killed. */
@@ -84,23 +103,34 @@ const KILL_GRACE_MS = 1000;
 
 async function settleCaptureTool(proc: CaptureProcess, what: string, stdoutStream: ReadableStream<Uint8Array> | null, extraMs: number): Promise<string> {
   const bound = captureTimeoutMs + extraMs;
-  let timedOut = false;
+  // Whichever stopped the tool first, the bound or the cap; the other then
+  // leaves it alone, so a late overflow is never reported as a hang.
+  let stoppedBy: 'timeout' | 'overflow' | null = null;
   let killed!: () => void;
   const wasKilled = new Promise<void>((resolve) => { killed = resolve; });
-  const timer = setTimeout(() => {
-    // A tool that exited (or crashed) just as the bound passed is not a timeout.
-    if (proc.exitCode !== null || proc.signalCode !== null) return;
-    timedOut = true;
+  const stop = (why: 'timeout' | 'overflow') => {
+    // Only what stopped a running tool: one that had already exited, and a
+    // leftover child then flooding a pipe, keeps its own exit as its report.
+    if (stoppedBy !== null || proc.exitCode !== null || proc.signalCode !== null) return;
+    stoppedBy = why;
     try { proc.kill('SIGKILL'); } catch {}
     killed();
-  }, bound);
+  };
+  // A tool that exited (or crashed) just as the bound passed is not a timeout.
+  const timer = setTimeout(() => stop('timeout'), bound);
+  // Past the cap on either pipe, killed like a hung tool (#904): what it
+  // printed is not read any further, and is never returned.
+  let stdoutOverflowed = false;
   // Both read alongside the run, so a chatty tool cannot fill a pipe and
   // stall. On success stderr is left unread: nothing needs it.
   // stderr keeps what has arrived (#902): a tool's error is written before it
   // exits, and a descendant still holding the pipe must not cost the reason.
   const stderrChunks: Uint8Array[] = [];
-  const stderr = readCapped(proc.stderr, Number.POSITIVE_INFINITY, () => {}, stderrChunks).catch(() => null);
-  const stdout = stdoutStream ? new Response(stdoutStream).text().catch(() => '') : Promise.resolve('');
+  const stderr = readCapped(proc.stderr, captureMaxOutput, () => stop('overflow'), stderrChunks).catch(() => null);
+  // A stdout that could not be read is no answer, never an empty one.
+  const stdout = stdoutStream
+    ? readCapped(stdoutStream, captureMaxOutput, () => { stdoutOverflowed = true; stop('overflow'); }).catch(() => null)
+    : Promise.resolve('');
   let code: number | null = null;
   try {
     // Past the kill, only a short grace: a process in uninterruptible sleep
@@ -110,7 +140,14 @@ async function settleCaptureTool(proc: CaptureProcess, what: string, stdoutStrea
   } finally {
     clearTimeout(timer);
   }
-  if (timedOut) throw new CaptureTimeoutError(`${what} did not finish within ${bound / 1000}s and was stopped`);
+  const tooMuch = () => codedError(`${what} was stopped: output passed ${captureMaxOutput} bytes`, 'ENOBUFS');
+  if (stoppedBy === 'timeout') throw new CaptureTimeoutError(`${what} did not finish within ${bound / 1000}s and was stopped`);
+  // A tool that exited 0 succeeded whatever a descendant still writes to its
+  // stderr afterwards; only its answer, stdout, has to be whole. One that
+  // exited on its own with a failure (no signal: the kill did not land, it was
+  // already on its way out) is reported for that failure, not the flood.
+  const ownExit = code !== null && proc.signalCode === null;
+  if (stoppedBy === 'overflow' && (stdoutOverflowed || !ownExit)) throw tooMuch();
   // Bounded: a descendant still holding a pipe must not hold this too.
   const drained = <T>(p: Promise<T>, fallback: T): Promise<T> => Promise.race([p, Bun.sleep(250).then(() => fallback)]);
   if (code !== 0) {
@@ -119,6 +156,8 @@ async function settleCaptureTool(proc: CaptureProcess, what: string, stdoutStrea
   }
   // Not a fallback for stdout: a missing answer must not read as an empty one.
   const out = await drained<string | null>(stdout, null);
+  // A tool can print past the cap and exit before the reader gets there.
+  if (stdoutOverflowed) throw tooMuch();
   if (out === null) throw new CaptureTimeoutError(`${what} exited but its output never closed`);
   return out;
 }

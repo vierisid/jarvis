@@ -171,6 +171,16 @@ const CAPTURE_TOOL = { stdin: 'ignore', stdout: 'ignore', stderr: 'pipe' } as co
 const LOOKUP_TOOL = { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' } as const;
 
 /**
+ * The only window properties read here (extractXpropValue), asked for by name
+ * (#904). A bare `xprop -id` prints every property the window has, the icon
+ * included, once per window: measured with xprop 1.2.8 against one window
+ * with a seven-size _NET_WM_ICON, 31 KB against 89 bytes for these three. A
+ * property the window lacks prints as "NAME:  not found.", which reads as
+ * missing, as before.
+ */
+const XPROP_FIELDS = ['WM_NAME', 'WM_CLASS', '_NET_WM_PID'] as const;
+
+/**
  * How much longer `xdotool type` may run per character, on top of the bound.
  * xdotool types with a 12 ms delay between keys by default; measured here as
  * 12.8 ms per character, linear (50, 200 and 800 characters: 643, 2559 and
@@ -241,7 +251,7 @@ export class LinuxAppController implements AppController {
         throw new Error('xdotool getactivewindow reported no window id');
       }
 
-      const xpropOutput = await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xprop'), '-id', windowId], LOOKUP_TOOL), 'xprop');
+      const xpropOutput = await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xprop'), '-id', windowId, ...XPROP_FIELDS], LOOKUP_TOOL), 'xprop');
 
       const title = this.extractXpropValue(xpropOutput, 'WM_NAME') || 'Unknown';
       const className = this.extractXpropValue(xpropOutput, 'WM_CLASS') || 'Unknown';
@@ -296,7 +306,7 @@ export class LinuxAppController implements AppController {
         if (!windowId) continue;
 
         try {
-          const xpropOutput = await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xprop'), '-id', windowId], LOOKUP_TOOL), 'xprop');
+          const xpropOutput = await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xprop'), '-id', windowId, ...XPROP_FIELDS], LOOKUP_TOOL), 'xprop');
           const title = this.extractXpropValue(xpropOutput, 'WM_NAME') || 'Unknown';
           const className = this.extractXpropValue(xpropOutput, 'WM_CLASS') || 'Unknown';
           const pid = parseInt(this.extractXpropValue(xpropOutput, '_NET_WM_PID') || '0', 10);
@@ -524,7 +534,7 @@ export class LinuxAppController implements AppController {
 
     for (const windowId of windowIds) {
       try {
-        const xpropOutput = await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xprop'), '-id', windowId], LOOKUP_TOOL), 'xprop');
+        const xpropOutput = await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xprop'), '-id', windowId, ...XPROP_FIELDS], LOOKUP_TOOL), 'xprop');
         const windowPid = parseInt(this.extractXpropValue(xpropOutput, '_NET_WM_PID') || '0', 10);
 
         if (windowPid === pid) {

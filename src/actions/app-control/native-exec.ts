@@ -99,8 +99,14 @@ export const defaultExec: NativeExec = async (cmd, input) => {
   const stdout = readCapped(proc.stdout, nativeExecMaxOutput, overflow).catch(() => undefined);
   // stderr keeps what arrived even if a descendant holds the pipe open past
   // the drain (#893 review): the error text is usually written before that.
+  // Past the cap it stops a running script; once the script has exited, a
+  // leftover child flooding stderr does not turn its exit into a failure
+  // (#904 review; capture-file.ts goes further and also lets a script that
+  // exits 0 before the kill lands succeed).
   const stderrChunks: Uint8Array[] = [];
-  const stderr = readCapped(proc.stderr, nativeExecMaxOutput, overflow, stderrChunks).catch(() => null);
+  const stderr = readCapped(proc.stderr, nativeExecMaxOutput, () => {
+    if (proc.exitCode === null && proc.signalCode === null) overflow();
+  }, stderrChunks).catch(() => null);
 
   let status: number | null = null;
   try {

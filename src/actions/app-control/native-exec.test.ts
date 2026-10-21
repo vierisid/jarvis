@@ -88,6 +88,14 @@ describe.skipIf(process.platform === 'win32')('defaultExec (#893)', () => {
       .toBe(`desktop.ps1 capture-screen was stopped: output passed ${64 * 1024} bytes`);
   });
 
+  test('a script that exited 0 keeps its answer when a leftover child then floods stderr past the cap (#904 review)', async () => {
+    // The child writes nothing to stdout, and starts its flood after the script has exited.
+    const HEAD = Bun.which('head') ?? '/usr/bin/head';
+    const done = script('done.sh', `echo ok; (sleep 0.2; '${HEAD}' -c 200000 /dev/zero >&2; sleep 1) >/dev/null & exit 0`);
+    __setNativeExecMaxOutputForTests(64 * 1024);
+    expect(await settle(runNative(defaultExec, [done], '', 'osascript'), 5000)).toBe('resolved: ok\n');
+  });
+
   test('a failure keeps its stderr even when a leftover child holds the pipe (#893 review)', async () => {
     const held = script('held.sh', 'echo "boom" >&2; (sleep 3) & exit 2');
     expect(await settle(runNative(defaultExec, [held], '', 'desktop.ps1 x'), 6000)).toBe('desktop.ps1 x exited with code 2: boom');
