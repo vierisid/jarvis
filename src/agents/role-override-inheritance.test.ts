@@ -4,6 +4,7 @@ import { AgentOrchestrator } from './orchestrator.ts';
 import { AgentTaskManager } from './task-manager.ts';
 import { runSubAgent, type RunSubAgentOptions } from './sub-agent-runner.ts';
 import { runAsActingAgent } from './acting-agent.ts';
+import { AgentLifecycleRefusal } from './lifecycle-gate.ts';
 import { applyProfile, AuthorityEngine, type AuthorityConfig } from '../authority/engine.ts';
 import { ApprovalManager } from '../authority/approval.ts';
 import { AuditTrail } from '../authority/audit.ts';
@@ -169,6 +170,18 @@ describe('a role override binds the specialists that role starts, and only ever 
     expect(s.launched).toHaveLength(1);
     expect(s.launched[0]!.profile?.denied_categories).toEqual(['read_data']);
     expect(s.launched[0]!.profile?.governed_categories).toEqual(['send_message']);
+  });
+
+  test('a deny on the role that started a sub-agent binds the sub-agent\'s own spawn at the lifecycle gate', () => {
+    const s = setup([]);
+    const worker = s.orch.spawnSubAgent(s.primary.id, WORKER);
+    // Added after the worker started, and read at the sink: the worker's own
+    // role has no override, its run profile is null and it read nothing, so
+    // only the override on the role that started it can refuse this spawn.
+    s.orch.getAuthorityEngine()!.addOverride({ action: 'spawn_agent', role_id: 'pa', allowed: false });
+    expect(() => runAsActingAgent({ agentId: worker.id, profile: null, taint: [] },
+      () => s.orch.spawnSubAgent(s.primary.id, INFO))).toThrow(AgentLifecycleRefusal);
+    expect(s.orch.getAllAgents().some((a) => a.agent.role.id === 'info')).toBe(false);
   });
 
   test('the profile a role\'s child gets names both kinds, and is removed with the child', () => {

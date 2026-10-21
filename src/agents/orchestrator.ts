@@ -510,10 +510,13 @@ export class AgentOrchestrator {
    * every agent that started it, directly or through agents of its own, and
    * of its hierarchy parent. Kept as role ids and read against the engine
    * whenever a run starts or a lifecycle decision is made, so an override the
-   * owner adds or removes later applies from the agent's next run or spawn.
-   * A run already going keeps the profile it started with, as it keeps every
-   * other restriction it was handed; Pause is the immediate lever. Removed
-   * when the agent is.
+   * owner adds later applies from the agent's next run; a run already going
+   * keeps the profile it started with, and Pause is the immediate lever. One
+   * the owner removes later stops binding an agent the primary or the
+   * dashboard started from its next run, but NOT one a sub-agent started:
+   * that agent also inherited its caller's restrictions as of the spawn
+   * (`inheritedRestrictions`), which carried the override then, and keeps
+   * them for its life. Removed when the agent is.
    */
   private starterRoles = new Map<string, string[]>();
 
