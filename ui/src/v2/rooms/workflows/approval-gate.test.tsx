@@ -99,5 +99,8 @@ test('the Authority room says governed categories do not reach community workflo
   expect(host.textContent).toContain('Governed categories');
   expect(host.textContent).toContain(gate.AUTHORITY_SCOPE_NOTE);
   expect(gate.AUTHORITY_SCOPE_NOTE).toMatch(/Community pieces and CODE steps in workflows run without approval/);
-  expect(gate.AUTHORITY_SCOPE_NOTE).toMatch(/Built-in steps such as HTTP requests and webhooks also run without approval/);
+  // #961: the HTTP step is governed now, so the note no longer calls it ungated.
+  expect(gate.AUTHORITY_SCOPE_NOTE).not.toMatch(/HTTP requests? and webhooks also run without approval/);
+  expect(gate.AUTHORITY_SCOPE_NOTE).toMatch(/verified workflow pieces and HTTP request steps\. An HTTP request is judged by its method: a GET reads, a POST, PUT or PATCH sends a message, and a DELETE deletes\./);
+  expect(gate.AUTHORITY_SCOPE_NOTE).toMatch(/Built-in steps that act only inside the workflow, such as Delay, also run without approval and are not recorded one by one/);
 });

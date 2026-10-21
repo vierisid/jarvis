@@ -26,7 +26,8 @@ import {
   ENGINE_BUILD_PATHS,
   findCachedBundle,
 } from "../runner/engine-runtime/build";
-import { buildAllJarvisPieces } from "../runner/engine-runtime/build-pieces";
+import { buildAllVendoredPieces, loadedCorePieceDirs } from "../runner/engine-runtime/build-pieces";
+import type { EgressPolicy } from "./http-egress";
 import {
   pruneEngineBundleCache,
   reapOrphanedEngines,
@@ -70,6 +71,11 @@ export interface BootstrapWorkflowEngineOptions {
    * will be added here.
    */
   pieceRoots?: string[];
+  /**
+   * Where the HTTP step may connect (#961): `private-allowed` for a
+   * self-hosted install, `public-only` for a hosted one. Unset is hosted.
+   */
+  egressPolicy?: EgressPolicy;
   /**
    * Idle TTL for the warm engine subprocess (see EngineRuntimeOptions.
    * poolIdleTtlMs). Default: EngineRuntime's own 5-minute default.
@@ -188,7 +194,7 @@ export async function bootstrapWorkflowEngine(
         return c;
       })(),
     ),
-    labelled("piece-compile", buildAllJarvisPieces()),
+    labelled("piece-compile", buildAllVendoredPieces()),
     labelled("sandbox-api-start", api.start({ host: opts.host ?? "127.0.0.1", port: 0 })),
   ]);
   log(`bundle + pieces + sandbox api ready in ${Date.now() - t0}ms (${api.baseUrl})`);
@@ -262,6 +268,7 @@ export async function bootstrapWorkflowEngine(
     expectedDigest: cached.digest,
     pool: true,
     poolIdleTtlMs: opts.engineIdleTtlMs,
+    ...(opts.egressPolicy ? { egressPolicy: opts.egressPolicy } : {}),
     customPiecesPaths: [
       resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "pieces"),
       piecesBaseDir(),
@@ -274,12 +281,16 @@ export async function bootstrapWorkflowEngine(
   // a fresh extraction. A cache hit is ~instant; a miss spawns the engine
   // (~3s cold) and runs EXTRACT_PIECE_METADATA per piece.
   // pieceRoots feeds discoverPieces -- which walks each root's children for
-  // a `package.json` and registers them in the catalog. Two roots today:
+  // a `package.json` and registers them in the catalog. In order:
   //   1. vendored Jarvis-native pieces (always present)
-  //   2. user-installed community pieces under `~/.jarvis/pieces/node_modules/@activepieces/`
+  //   2. the loaded vendored core pieces, each its own root (#961)
+  //   3. user-installed community pieces under `~/.jarvis/pieces/node_modules/@activepieces/`
   //      (may be missing; discoverPieces handles a missing dir gracefully)
   const pieceRoots = opts.pieceRoots ?? [
     resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "pieces/jarvis"),
+    // The loaded vendored core pieces (#961), one by one and ahead of any
+    // install, so the catalog lists the copy the engine runs.
+    ...loadedCorePieceDirs(),
     resolve(piecesNodeModulesDir(), "@activepieces"),
     // Shared catalog last: discoverPieces is first-wins, so a user install
     // of the same piece shadows the shared copy here too.

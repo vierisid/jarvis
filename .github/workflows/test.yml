@@ -149,6 +149,7 @@ jobs:
           JARVIS_TEST_ENGINE_BUILD=1 bun test --retry=2
           src/workflows/runner/engine-runtime/emergency-hold-engine.test.ts
           src/workflows/runner/engine-runtime/outer-worker-delay.test.ts
+          src/workflows/runner/engine-runtime/core-http-piece.test.ts
       # Not retried: deterministic.
       - run: bunx tsc --noEmit
 

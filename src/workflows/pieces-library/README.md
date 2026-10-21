@@ -37,9 +37,13 @@ The catalog is committed source. Adding a Verified piece = code change +
 review. It is NOT a dynamic registry, NOT a marketplace. Community
 discovery is automated through the sync action; trust elevation is manual.
 
-The catalog is the *only* path by which pieces reach a Jarvis install.
-Users cannot side-load arbitrary npm packages -- the installer accepts ids
-defined in the merged CATALOG, nothing else.
+The catalog is the only path by which *installable* pieces reach a Jarvis
+install. Users cannot side-load arbitrary npm packages -- the installer
+accepts ids defined in the merged CATALOG, nothing else. The other path is
+the vendored tree: Jarvis's own pieces and the upstream core pieces it loads
+(`LOADED_CORE_PIECES`, #961) ship with Jarvis, are curated by hand rather than
+by the sync, and are not in the catalog. See `Core pieces (#961)` in
+`docs/WORKFLOW_AUTOMATION.md`.
 
 ## How a piece reaches a user
 

@@ -5008,6 +5008,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     }
     try {
       engineBoot = await bootstrapWorkflowEngine({
+        // #961: a self-hosted install's HTTP steps may reach its own private
+        // network; a hosted one's reach public addresses only.
+        egressPolicy: isHostedInstall(jarvisConfig) ? 'public-only' : 'private-allowed',
         services: {
           credentialResolver,
           // eventsPoll is the only backend safely wireable up front (no

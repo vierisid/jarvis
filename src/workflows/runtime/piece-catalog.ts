@@ -200,6 +200,18 @@ export class PieceCatalog implements PieceLookup {
   }
 }
 
+const PIECE_PACKAGE_NAME = /(^|\/)piece-[a-z0-9][a-z0-9-]*$/;
+
+/** True for a directory whose own package.json names a piece. */
+function isPieceDir(dir: string): boolean {
+  try {
+    const pkg = JSON.parse(readFileSync(resolve(dir, "package.json"), "utf8")) as { name?: unknown };
+    return typeof pkg.name === "string" && PIECE_PACKAGE_NAME.test(pkg.name);
+  } catch {
+    return false;
+  }
+}
+
 interface PieceDiscoveryEntry {
   name: string;
   version: string;
@@ -210,6 +222,11 @@ interface PieceDiscoveryEntry {
  * Walk each root directory and return its direct subdirs that have a
  * `package.json` with `name` + `version`. Order is alphabetical by piece
  * directory name, deterministic across runs.
+ *
+ * A root that is itself a piece directory (its own `package.json` names a
+ * piece) is that one piece. That is how the loaded vendored core pieces are
+ * listed one by one (#961): their parent also holds core pieces Jarvis does
+ * not load.
  *
  * Dedupes by `name` across multiple roots: if the same piece name appears in
  * two roots (e.g., a half-migrated state where the old and new vendor trees
@@ -225,7 +242,8 @@ export function discoverPieces(rootDirs: string[]): {
   const seen = new Map<string, PieceDiscoveryEntry>();
   for (const root of rootDirs) {
     if (!existsSync(root)) continue;
-    for (const sub of readdirSync(root).sort()) {
+    const single = isPieceDir(root);
+    for (const sub of single ? [""] : readdirSync(root).sort()) {
       const dir = resolve(root, sub);
       let s;
       try {
@@ -250,7 +268,7 @@ export function discoverPieces(rootDirs: string[]): {
       // this filter, those would be treated as pieces and the engine would
       // log INTERNAL_ERROR for each at every bootstrap. Convention: real
       // pieces' npm names follow `<scope>/piece-<id>`.
-      if (!/(^|\/)piece-[a-z0-9][a-z0-9-]*$/.test(pkg.name)) continue;
+      if (!PIECE_PACKAGE_NAME.test(pkg.name)) continue;
       const existing = seen.get(pkg.name);
       if (existing) {
         conflicts.push({ name: pkg.name, kept: existing.dir, dropped: dir });

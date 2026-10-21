@@ -31,6 +31,7 @@ import {
 } from './prepared-qualification.ts';
 
 const GMAIL = '@activepieces/piece-gmail';
+const HTTP = '@activepieces/piece-http';
 const CALENDAR = '@activepieces/piece-google-calendar';
 const JARVIS = '@jarvispieces/piece-jarvis-';
 const field = (name: string, type: string, required = true, sourceType?: string) =>
@@ -42,7 +43,9 @@ const catalog = new PieceCatalog([
     actions: { send_email: action('send_email', mail), gmail_create_draft: action('gmail_create_draft', mail) } },
   { name: CALENDAR, displayName: 'Google Calendar', description: '', auth: { type: 'OAUTH2' },
     actions: { create_google_calendar_event: action('create_google_calendar_event', [field('attendees', 'json', false, 'ARRAY')]) } },
-  { name: '@activepieces/piece-http', displayName: 'HTTP', description: '', actions: { send_request: action('send_request', [field('url', 'string')]) } },
+  { name: '@activepieces/piece-http', displayName: 'HTTP', description: '', actions: { send_request: action('send_request', [field('url', 'string'), field('method', 'string', false)]) } },
+  { name: '@activepieces/piece-delay', displayName: 'Delay', description: '', actions: { delayFor: action('delayFor', [field('delayFor', 'number'), field('unit', 'string')]) } },
+  { name: '@activepieces/piece-activecampaign', displayName: 'ActiveCampaign', description: '', actions: { create_contact: action('create_contact', [field('email', 'string')]) } },
   { name: JARVIS + 'context', displayName: '', description: '', actions: {
     commitments_list: action('commitments_list', []), vault_search: action('vault_search', [field('query', 'string')]) } },
   { name: JARVIS + 'ask', displayName: '', description: '', actions: { ask: action('ask', [field('prompt', 'long_text')]) } },
@@ -355,11 +358,24 @@ describe('prepared proposal qualification', () => {
     expect(unverified.verdict).toBe('review_needed');
     expect(briefReadiness(unverified).state).toBe('blocked');
 
-    // An ungoverned community piece cannot ask first.
-    const http = prepare(schedule(step('post', '@activepieces/piece-http', 'send_request', { url: 'https://hooks.oak.test/invoices' })));
+    // An ungoverned community piece cannot ask first. (This used the core HTTP
+    // piece until #961 governed it; a catalogue community piece stands in.)
+    const http = prepare(schedule(step('post', '@activepieces/piece-activecampaign', 'create_contact', { email: 'ana@cedar.test' })));
     const httpPreview = saveEffects('post', 'runs_automatically');
     expect(codes(proposal(http, { constraints: [], preview: httpPreview }))).toEqual(['effect_ungoverned']);
     expect(codes(proposal(http, { preview: httpPreview }))).toEqual(['effect_ungoverned', 'constraint_violated']);
+    // The HTTP piece is judged by Authority now, by its method: with none set it is the worst case.
+    const core = prepare(schedule(step('post', '@activepieces/piece-http', 'send_request', { url: 'https://hooks.oak.test/invoices' })));
+    expect(codes(proposal(core, { constraints: [], preview: saveEffects('post', 'runs_automatically') }))).toEqual(['authority_denied']);
+    // A method computed at run time is said to be, and is judged at its worst case.
+    const computed = prepare(schedule(step('post', '@activepieces/piece-http', 'send_request', { method: '{{trigger.method}}', url: 'https://hooks.oak.test/invoices' })));
+    expect(stepsOf(computed.version.trigger).post).toMatchObject({ category: 'delete_data', decision: 'denied',
+      unreviewable: ["send_request's Authority decision depends on values known only at run time"] });
+    const fixed = prepare(schedule(step('post', '@activepieces/piece-http', 'send_request', { method: 'GET', url: '{{trigger.url}}' })));
+    expect(stepsOf(fixed.version.trigger).post).toMatchObject({ category: 'read_data', decision: 'auto', unreviewable: [] });
+    // An in-run core step acts on nothing outside the run, so it is not an effect to judge.
+    const wait = prepare(schedule(step('wait', '@activepieces/piece-delay', 'delayFor', { delayFor: 1, unit: 'minutes' })));
+    expect(stepsOf(wait.version.trigger).wait).toBeUndefined();
 
     // forbid reaches every category a step touches, not only its worst.
     registry.get('write_file')!.authorityGate = writeFileTool.authorityGate;
@@ -493,6 +509,11 @@ describe('Authority predictions match the effect boundary', () => {
     'gmail trash': { piece: GMAIL, action: 'gmail_trash_message', input: { auth: '{{connections.billing-gmail}}', message_id: 'm1' },
       call: async (b: any, ctx: any) => b.pieceAuthorize({ piece: GMAIL, action: 'gmail_trash_message', input: { message_id: 'm1' },
         inputDigest: await pieceInputDigest({ message_id: 'm1' }) }, ctx) },
+    // #961: the core HTTP piece's category is its method, predicted from the configured input.
+    ...Object.fromEntries((['GET', 'POST', 'DELETE'] as const).map(method => [`http ${method}`, { piece: HTTP, action: 'send_request',
+      input: { method, url: 'https://ops.example.test/logs', headers: {}, queryParams: {} },
+      call: async (b: any, ctx: any) => b.pieceAuthorize({ piece: HTTP, action: 'send_request', input: { method, url: 'https://ops.example.test/logs', headers: {}, queryParams: {} },
+        inputDigest: await pieceInputDigest({ method, url: 'https://ops.example.test/logs', headers: {}, queryParams: {} }) }, ctx) }])),
     gmail: { piece: GMAIL, action: 'send_email', input: { auth: '{{connections.billing-gmail}}', ...SEND_INPUT },
       call: async (b: any, ctx: any) => b.pieceAuthorize({ piece: GMAIL, action: 'send_email', input: SEND_INPUT, inputDigest: await pieceInputDigest(SEND_INPUT) }, ctx) },
   };
