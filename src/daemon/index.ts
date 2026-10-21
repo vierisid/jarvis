@@ -1997,14 +1997,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       sidecarManager.onEvent(async (sidecarId, event) => {
         if (event.event_type !== 'pebble.blind_toggle') return;
         try {
-          const { persistPlainUserPatch } = await import('./user-settings.ts');
+          const { persistAwarenessChoice } = await import('./user-settings.ts');
           const wasEnabled = jarvisConfig.awareness?.enabled ?? true;
           const nextEnabled = !wasEnabled;
           (jarvisConfig.awareness as { enabled?: boolean }).enabled = nextEnabled;
           // Persist only the key that changed. Writing the whole in-memory
           // section would stamp every DEFAULT_CONFIG fill into the row, pinning
           // this install to today's capture interval and cooldowns forever.
-          persistPlainUserPatch('awareness', { enabled: nextEnabled });
+          // The long-press is the user's own choice, so it is marked as one.
+          persistAwarenessChoice(nextEnabled);
           // Toggle live awareness service if it exists.
           if (awarenessService) awarenessService.toggle(nextEnabled);
           // Push visual: blinded = !enabled.
