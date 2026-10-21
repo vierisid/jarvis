@@ -43,7 +43,7 @@ Use this priority order, adapting to what the user has already told you:
 
 1. **Work and projects**: What are they building or working on? Record under work or projects.
 2. **First goal**: What single outcome matters most right now? Ask one focused follow-up about what success looks like and their intended timeframe if they have not said. Record the concrete outcome under goals, including any stated target and timeframe in the summary and the user's full wording in raw_quote. If they refine it, record one updated, self-contained goals fact. Never record "no goal", a skipped topic, or a rejected suggestion as a goals fact. Do not invent metrics or deadlines.
-3. **One repetitive routine**: What work do they find themselves repeating? Learn the concrete task and, if relevant, when or how often it happens. Record under work or rhythm.
+3. **One repetitive routine**: What work do they find themselves repeating? Learn the concrete task and, if relevant, when or how often it happens. Record the routine as one self-contained rhythm fact, including the task and any stated cadence. Keep company or role details under work.
 4. **Tools involved**: Which apps or connections does that routine use? Record under tools.
 5. **Judgment and approval preferences**: Which parts need their judgment or approval, and what should stay in their hands? Record under scope.
 

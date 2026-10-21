@@ -141,6 +141,7 @@ function uiHost(options: { storage?: Map<string, string>; loseSubmit?: boolean; 
     return response;
   });
   const adapters = createLiveOnboardingAdapters({ transport, available: () => true,
+    readInterviewFacts: async () => new ProfileSettings(DEFAULT_CONFIG).profile().interviewFacts ?? [],
     storage: { getItem: key => values.get(key) ?? null, setItem: (key, value) => { values.set(key, value); } },
     workspace: () => ({ roomId: 'today', selectedObject: null, theme: 'light', sidebar: 'rail', chat: { open: false, conversationId: null } }),
     tour: { renderer: { isolation: 'fixture-only', renderRoom: () => ({ status: 'ready', content: null }) },
@@ -205,17 +206,31 @@ test('a completed interview reaches the dashboard with Profile context and exact
     { id: 'facts', name: 'record_profile_facts', arguments: { facts: [
       { theme: 'work', summary: 'Runs a Cornish surf apparel brand' },
       { theme: 'goals', summary, raw_quote: 'I want 50 orders a month by December.' },
+      { theme: 'rhythm', summary: 'Prepare a Friday sales report' },
     ] } },
     { id: 'wrap', name: 'wrap_interview', arguments: { farewell: 'Your context is saved. Continue to the tour.' } },
   ] });
   const finished = await call('interview.command', { type: 'answer', sessionId: start.snapshot.sessionId,
     turnId: start.snapshot.turnId, clientRequestId: 'answer-first', text: 'I run a Cornish surf brand. I want 50 orders a month by December. That is everything for now.' });
   expect(finished.snapshot.phase).toBe('done');
-  expect(new ProfileSettings(DEFAULT_CONFIG).profile().interviewFacts).toHaveLength(2);
+  expect(new ProfileSettings(DEFAULT_CONFIG).profile().interviewFacts).toHaveLength(3);
   expect(findGoals()).toHaveLength(0);
   await navigate('tour'); const tour = (await call('tour.command', { type: 'read' })).snapshot;
   await call('tour.command', { type: 'navigate', sessionId: tour.sessionId, revision: tour.revision,
     requestId: 'skip-tour', from: tour.stepId, action: 'skip' });
+  const host = uiHost(); await host.start();
+  try {
+    const personalized = host.state().presentation!.model.interview as any;
+    expect(personalized.goal).toBe(summary);
+    expect(personalized.suggestions[0].label).toBe('Prepare a Friday sales report');
+    const prompt = personalized.suggestions[0].prompt;
+    expect(prompt).toContain(summary); expect(prompt).toContain('Runs a Cornish surf apparel brand');
+    host.draft(host.key(), { prompt, contextRefs: [], answers: {} });
+    await host.refresh(); expect((host.state().presentation!.model.draft as any).prompt).toBe(prompt);
+    const assessed = await call('intent.validate', { action: 'create', request: { schemaVersion: 1, intentVersion: 1,
+      requestId: 'personalized-request', prompt, contextRefs: [] }, answers: {} });
+    expect(assessed.state).toBe('ready'); expect(assessed.intent.request.prompt).toBe(prompt);
+  } finally { host.dispose(); }
   const j = await journey(); const exit = { journeyId: j.journeyId, expectedRevision: j.revision, requestId: 'explore', command: { type: 'explore' } };
   getWorkflowDb().exec("CREATE TRIGGER reject_initial_goal BEFORE INSERT ON goals BEGIN SELECT RAISE(ABORT, 'goal write failed'); END");
   expect((await call('journey.transition', exit)).availability).toBe('unavailable');

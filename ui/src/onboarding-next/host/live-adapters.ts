@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react';
+import { interviewSuggestions, type InterviewFact, type InterviewSuggestions } from './activation-suggestions';
 import { uuid } from '../../lib/uuid';
 import { createTourViewAdapter } from '../../../../src/onboarding-next/tour/view-adapter';
 import type { TourResult } from '../../../../src/onboarding-next/tour/types';
@@ -28,6 +29,8 @@ export interface LiveOnboardingPorts {
   /** This trusted host validates and opens the returned provider URL. */
   openGoogle(url: string): void;
   openWorkflow(selection: { flowId: string; versionId: string }, view?: 'workflow-draft' | 'workflow-runs' | 'workflow-context'): Promise<void>;
+  /** Host reads the canonical profile API, which excludes forgotten/superseded facts. */
+  readInterviewFacts?(signal: AbortSignal): Promise<InterviewFact[]>;
   pollMs?: number;
 }
 /** Real transport adapters. Provider responses alone advance progress; local
@@ -73,12 +76,13 @@ export function createLiveOnboardingAdapters(ports: LiveOnboardingPorts): Config
     dispose() { stopTour?.(); stopTour = undefined; tour?.dispose?.(); tour = undefined; tourListeners.clear(); },
   }));
   let activationFeedback: Record<string, unknown> = {}, activationRevision = 0;
+  let suggestions: InterviewSuggestions = { suggestions: [] }, suggestionState: 'ready' | 'unavailable' = 'ready';
   function activation(c: Context) {
     const data = store(c).read('activation') ?? { prompt: '', contextRefs: [], answers: {} };
     if (typeof data.prompt !== 'string' || !Array.isArray(data.contextRefs) || !object(data.answers)) fail();
     const draft = { prompt: data.prompt, contextRefs: data.contextRefs, answers: data.answers };
     return { model: { journeyId: c.journey.journeyId, revision: c.journey.revision + activationRevision,
-      availability: 'ready', phase: 'ready', draft, ...activationFeedback, ...(data.pendingRequest ? { pendingRequest: data.pendingRequest } : {}) } };
+      availability: 'ready', phase: 'ready', draft, interview: { ...suggestions, state: suggestionState }, ...activationFeedback, ...(data.pendingRequest ? { pendingRequest: data.pendingRequest } : {}) } };
   }
   let resultRevision = 0;
   function resultModel(c: Context, result: unknown): ResultModel {
@@ -189,7 +193,16 @@ export function createLiveOnboardingAdapters(ports: LiveOnboardingPorts): Config
       };
     }),
     tour: tourBinding, 'pebble-tour': tourBinding,
-    activation: binding(() => ({ available: ports.available, read: async c => activation(c),
+    activation: binding(() => ({ available: ports.available, async read(c) {
+      check(c); suggestions = { suggestions: [] }; suggestionState = 'ready';
+      if (c.journey.interviewState === 'done' && ports.readInterviewFacts) {
+        try {
+          const facts = await ports.readInterviewFacts(c.signal); check(c);
+          suggestions = interviewSuggestions(facts);
+        } catch { check(c); suggestionState = 'unavailable'; }
+      }
+      return activation(c);
+    },
       setDraft(c, value) {
         if (!object(value) || typeof value.prompt !== 'string' || value.prompt.length > 2000 || !Array.isArray(value.contextRefs) || !object(value.answers)) fail();
         if (store(c).read('activation')?.pendingRequest) fail();

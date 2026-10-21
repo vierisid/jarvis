@@ -21,6 +21,7 @@ import { fromNotificationCenter } from '../navigation/notifications';
 import { ViewHost } from '../../onboarding-next/host/ViewHost';
 import { createSession, type Session } from '../../onboarding-next/host/session';
 import { createTransport } from '../../onboarding-next/host/transport';
+import { readProfile } from '../account/profile/model';
 import { createLiveOnboardingAdapters } from '../../onboarding-next/host/live-adapters';
 import { viewModules } from '../../onboarding-next/host/generated/catalog';
 import { createResultCanvas, ProviderSetup, tutorialRenderer, TutorialPebble } from '../../onboarding-next/host/renderers';
@@ -105,6 +106,13 @@ function OwnedDashboard({ descriptor, route, retained, integration, legacy, inst
     const transport = createTransport(host.transport.request);
     return createSession({ enabled: true, integration: true, modules: viewModules, transport,
       adapters: createLiveOnboardingAdapters({ transport, storage: window.localStorage, available: host.active,
+        readInterviewFacts: async signal => {
+          const value = await host.transport.json('/api/brief/profile-settings', { signal });
+          if (value.status !== 'ready' || value.data?.contractVersion !== 1) throw Error('Profile unavailable');
+          const profile = readProfile(value.data.profile);
+          if (!profile) throw Error('Profile unavailable');
+          return profile.interviewFacts ?? [];
+        },
         workspace: () => ({ roomId: shell.current?.route.room ?? route.room, selectedObject: null,
           theme: shell.current?.theme ?? (document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'), sidebar: shell.current?.sidebar ?? 'expanded',
           chat: { open: shell.current?.chatOpen ?? false, conversationId: host.chat.store.getSnapshot().activeId } }),

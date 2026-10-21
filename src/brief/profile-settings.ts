@@ -26,6 +26,7 @@ export class ProfileSettings {
     const { revision, profile } = readEditableProfile();
     return { revision, answers: profile?.answers ?? {}, interviewFacts: (profile?.interview_facts ?? [])
       .filter(fact => !interviewSourceWithheld(getDb(), fact))
+      .sort((a, b) => a.recorded_at - b.recorded_at)
       .map(({ theme, summary }) => ({ theme, summary })) };
   }
   read(): ProfileSettingsSnapshot {

@@ -38,6 +38,7 @@ export interface ActivationModel {
   availability: "ready" | "unavailable" | "unsupported";
   phase: "ready" | "checking" | "submitting" | "needs_input" | "invalid" | "accepted";
   draft: ActivationDraft;
+  interview?: { state: "ready" | "unavailable"; goal?: string; suggestions: Array<{ id: string; label: string; prompt: string }> };
   issues?: ActivationIssue[];
   message?: string;
   /** Restore this exact request and its answers when a submit needs reconciliation. */
@@ -81,6 +82,8 @@ function ActivationSession({ model, onDraftChange, onIntent, canResolveConnectio
   const valid = Boolean(model.draft.prompt.trim()) && model.draft.prompt.length <= MAX_PROMPT_LENGTH;
   const available = model.availability === "ready";
   const canSubmit = !busy && available && (recovery || valid);
+  const personalized = Boolean(model.interview?.suggestions.length);
+  const examples = personalized ? model.interview!.suggestions : model.interview?.goal || model.interview?.state === "unavailable" ? [] : activationExamples;
   const issues = model.issues?.filter(issue => !issue.reference || model.draft.contextRefs.some(ref =>
     ref.kind === issue.reference!.kind && ref.id === issue.reference!.id)) ?? [];
 
@@ -153,20 +156,25 @@ function ActivationSession({ model, onDraftChange, onIntent, canResolveConnectio
   };
   const notice = localError || model.message || (model.phase === "accepted" ? "Your request was accepted. Opening the build…"
     : busy ? "Checking your request…" : !available ? "Workflow creation isn’t available yet. You can keep your request and explore Jarvis first." : "");
-  return <section className="on-activation" data-theme={model.theme} aria-labelledby={`${id}-title`}>
+  return <section className="on-activation" data-theme={model.theme} data-personalized={personalized || Boolean(model.interview?.goal)} aria-labelledby={`${id}-title`}>
     <div className="on-activation__content">
       {/* Official mark path from the D-line brand asset; geometry is unchanged. */}
       <svg className="on-activation__mark" viewBox="0 0 100 100" aria-hidden="true"><path fill="currentColor" d="M50 0 L80.4 0 A19.6 19.6 0 0 1 100 19.6 L100 50 A50 50 0 0 1 50 100 A50 50 0 0 1 0 50 A50 50 0 0 1 50 0 Z" /></svg>
       <h1 id={`${id}-title`} className="on-activation__title">Let’s make room for your work.</h1>
-      <label className="on-activation__question" htmlFor={`${id}-prompt`}>What’s one task you keep doing?</label>
+      <label className="on-activation__question" htmlFor={`${id}-prompt`}>{personalized || model.interview?.goal ? "Which part of your work should we start with?" : "What’s one task you keep doing?"}</label>
       <form className="on-activation__form" onSubmit={event => { event.preventDefault(); submit(); }}>
-        <p className="on-activation__hint" id={`${id}-hint`}>Start with an example, or describe your own routine.</p>
-        <div className="on-activation__examples" role="group" aria-label="Example workflows">
-          {activationExamples.map(example => <button key={example.id} type="button" aria-disabled={!editable}
+        {model.interview?.goal && <p className="on-activation__goal"><strong>Your goal:</strong> {model.interview.goal}</p>}
+        <p className="on-activation__hint" id={`${id}-hint`}>{model.interview?.state === "unavailable"
+          ? "We couldn’t load your interview. Describe your routine below, or reload to try again."
+          : personalized ? "From your interview. Choose a starting point, then edit the request below."
+          : model.interview?.goal ? "Describe a routine that will help you work toward this goal."
+          : "No interview suggestions yet. Try a general example, or describe your own routine."}</p>
+        {examples.length > 0 && <div className={`on-activation__examples${personalized ? " on-activation__examples--personal" : ""}`} role="group" aria-label={personalized ? "From your interview" : "General workflow examples"}>
+          {examples.map(example => <button key={example.id} type="button" aria-disabled={!editable}
             aria-pressed={model.draft.prompt === example.prompt} className="on-activation__example" onClick={() => {
               if (!editable) return; edit({ ...model.draft, prompt: example.prompt }); input.current?.focus();
             }}>{example.label}</button>)}
-        </div>
+        </div>}
         <div className="on-activation__prompt-space">
           <textarea ref={input} id={`${id}-prompt`} className="on-activation__prompt" value={model.draft.prompt}
             onChange={event => edit({ ...model.draft, prompt: event.target.value })} readOnly={!editable}
