@@ -29,7 +29,8 @@ export function responsesBody(messages: LLMMessage[], options: LLMOptions, model
   }
   return {
     model, input, store: false, stream,
-    ...(options.max_tokens !== undefined ? { max_output_tokens: options.max_tokens } : {}),
+    // Responses requires at least 16, including the five-token connection probe.
+    ...(options.max_tokens !== undefined ? { max_output_tokens: Math.max(16, options.max_tokens) } : {}),
     ...(options.tools?.length ? {
       tools: options.tools.map(tool => ({ type: 'function', ...tool, strict: false })),
       tool_choice: options.tool_choice ?? 'auto',
@@ -75,8 +76,21 @@ export async function postResponses(base: string, headers: Record<string, string
   options.signal?.throwIfAborted();
   const response = await fetch(`${base}/responses`, { method: 'POST', headers, body, signal: options.signal });
   if (!response.ok) {
-    // Keep status and retry metadata; never dump request bodies or credentials.
-    throw new LLMProviderError(`OpenAI Responses API error: HTTP ${response.status}`, classifyHttpStatus(response.status), parseRetryAfterMs(response.headers));
+    // Surface the provider's explanation, not its entire payload. Auth failures
+    // may echo a key, so redact credential headers and recognizable key fragments.
+    let detail = '';
+    try {
+      const payload = await response.json() as { error?: { message?: unknown } };
+      if (typeof payload.error?.message === 'string') detail = payload.error.message;
+    } catch { /* Non-JSON responses still retain their HTTP classification. */ }
+    for (const [name, value] of Object.entries(headers)) {
+      if (name.toLowerCase() === 'content-type' || !value) continue;
+      detail = detail.replaceAll(value, '[redacted]');
+      const credential = value.replace(/^(?:Bearer|Basic)\s+/i, '');
+      if (credential) detail = detail.replaceAll(credential, '[redacted]');
+    }
+    detail = detail.replace(/\bsk-[A-Za-z0-9_.*-]+/g, '[redacted]').replace(/\s+/g, ' ').trim().slice(0, 500);
+    throw new LLMProviderError(`OpenAI Responses API error: HTTP ${response.status}${detail ? `: ${detail}` : ''}`, classifyHttpStatus(response.status), parseRetryAfterMs(response.headers));
   }
   return response;
 }

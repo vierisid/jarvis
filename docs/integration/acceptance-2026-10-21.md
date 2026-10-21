@@ -92,3 +92,23 @@ Owner's iteration rule: commit locally on this same branch, restart the actual
 checkout on port 3146 with fresh brain data and a fresh native profile after each
 pass, and let the owner replay onboarding. Preserve prior data/profile directories
 as local backups; do not create worktrees or deploy.
+
+
+## Walkthrough pass 2: OpenAI connection-test HTTP 400
+
+The first GPT-6 integration passed the connection probe's five-token budget
+straight through to Responses as `max_output_tokens: 5`. A live reproduction
+using the previously configured acceptance OpenAI credential returned HTTP 400:
+"Expected a value >= 16, but got 5 instead." The same request with 16 returned
+HTTP 200/completed. This establishes a Jarvis request defect; it is not an audit
+of the separate credential entered in the native window.
+
+The Responses adapter now raises sub-minimum output budgets to 16, preserves
+larger budgets and reports the upstream JSON error explanation while redacting
+credential values/key fragments. Non-JSON failures retain their HTTP status and
+retry classification. No provider settings or stored credentials were changed.
+
+Two route regressions failed before the fix and passed afterward. All 43 focused
+provider/connection-route tests pass. A real call through `testLLMProvider` with
+`gpt-6.1-sol` returned `{ok: true, model: "gpt-6.1-sol"}` using the acceptance key.
+The source API reference is https://developers.openai.com/api/reference/python/resources/responses/methods/create.

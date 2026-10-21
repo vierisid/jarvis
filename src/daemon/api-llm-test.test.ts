@@ -662,3 +662,40 @@ describe('POST /api/config/llm/test model probing is bounded', () => {
     expect(body.model).toBe('usable');
   });
 });
+
+
+describe('OpenAI Responses connection test', () => {
+  const realFetch = globalThis.fetch;
+  const previousSecretsDir = process.env.JARVIS_SECRETS_DIR;
+  let secretsDir: string;
+  beforeEach(() => {
+    secretsDir = mkdtempSync(join(tmpdir(), 'jarvis-responses-test-'));
+    process.env.JARVIS_SECRETS_DIR = secretsDir;
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    if (previousSecretsDir === undefined) delete process.env.JARVIS_SECRETS_DIR;
+    else process.env.JARVIS_SECRETS_DIR = previousSecretsDir;
+    rmSync(secretsDir, { recursive: true, force: true });
+  });
+  it('uses the Responses minimum budget for the small onboarding probe', async () => {
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      expect(String(url)).toBe('https://api.openai.com/v1/responses');
+      const body = JSON.parse(String(init?.body));
+      if (body.max_output_tokens < 16) return Response.json({ error: { message: "Invalid 'max_output_tokens': expected >= 16" } }, { status: 400 });
+      expect(body.max_output_tokens).toBe(16);
+      return Response.json({ model: body.model, status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'OK' }] }], usage: { input_tokens: 8, output_tokens: 2 } });
+    }) as unknown as typeof fetch;
+    const response = await callEndpoint({}, { provider: 'openai', api_key: 'test-key', model: 'gpt-6.1-sol' });
+    expect(await response.json()).toMatchObject({ ok: true, model: 'gpt-6.1-sol' });
+  });
+  it('returns the actionable upstream explanation without echoing credentials', async () => {
+    globalThis.fetch = (async () => Response.json({ error: { message: 'Invalid key sk-example-secret. Check your API key.' } }, { status: 401 })) as unknown as typeof fetch;
+    const response = await callEndpoint({}, { provider: 'openai', api_key: 'sk-example-secret', model: 'gpt-6.1-sol' });
+    const body = await response.json() as { ok: boolean; error: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain('Check your API key');
+    expect(body.error).toContain('HTTP 401');
+    expect(body.error).not.toContain('sk-example-secret');
+  });
+});
