@@ -5,16 +5,25 @@
 .brief-root .brief-goal-value strong { font-size:34px; line-height:38px; }
 .brief-root .brief-goal-value > span { font-size:20px; color:var(--brief-secondary); }
 .brief-root .brief-goal-value small { font-size:12px; line-height:18px; overflow-wrap:anywhere; }
-.brief-root .brief-goal-value small:last-child { margin-left:auto; }
+.brief-root .brief-goal-value .brief-goal-change { margin-left:auto; }
 .brief-root .brief-goal-body { margin-top:20px; }
 .brief-root .brief-goal-body > p { margin:10px 0 18px; overflow-wrap:anywhere; }
-.brief-root .brief-goal-driver { display:grid; grid-template-columns:minmax(0,1fr) 58px 58px; gap:8px; align-items:center; margin:16px 0; font:400 12px/18px var(--brief-sans); }
+.brief-root .brief-goal-driver { display:grid; grid-template-columns:minmax(0,1fr) 70px max-content; gap:12px; align-items:center; margin:0; font:400 12px/18px var(--brief-sans); }
 .brief-root .brief-goal-driver > span { overflow-wrap:anywhere; }
 .brief-root .brief-goal-driver > span:last-child { text-align:right; font-variant-numeric:tabular-nums; }
-.brief-root .brief-goal-driver .brief-outcome-progress { height:4px; gap:2px; }
+.brief-root .brief-goal-drivers { display:grid; gap:14px; margin-bottom:22px; }
+.brief-root .brief-goal-driver-title { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
+.brief-root .brief-goal-driver-track { height:3px; overflow:hidden; border-radius:var(--brief-corner-segment); background:var(--brief-progress-remaining); }
+.brief-root .brief-goal-driver-track i { display:block; width:100%; height:100%; transform-origin:left; background:var(--brief-progress-complete); transition:transform 180ms ease-out; }
+.brief-root .brief-goal-driver:nth-child(even) .brief-goal-driver-track i { background:var(--brief-progress-middle); }
+.brief-root .brief-goal-card > .brief-progress { --brief-progress-color:var(--brief-progress-middle); }
+.brief-root .brief-goal-value .brief-outcome-number { min-inline-size:0; }
+.brief-root .brief-goal-value small { color:var(--brief-secondary); }
+.brief-root .brief-goal-card[data-reduced="true"] .brief-goal-driver-track i { transition:none; }
+@media (prefers-reduced-motion:reduce) { .brief-root .brief-goal-driver-track i { transition:none; } }
 .brief-root .brief-goal-next { width:100%; display:flex; justify-content:space-between; padding-inline:0; border-top:1px solid var(--brief-card-edge); border-radius:0; padding-top:12px; }
 .brief-root .brief-goal-next .brief-button__labels { flex:1; }
-.brief-root .brief-goal-next .brief-button__label { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.brief-root .brief-goal-next :is(.brief-button__label,.brief-button__reserve) { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .brief-root .brief-goal-next svg { flex:none; }
 .brief-root .brief-goal-actions { display:flex; flex-wrap:wrap; gap:8px; }
 .brief-root .brief-goal-accept { min-width:132px; }

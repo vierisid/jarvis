@@ -22,7 +22,7 @@ import { GoalCard } from '../today/goal-card/GoalCard';
 import { useGoalHandoff } from '../today/goal-card/useGoalHandoff';
 import { OpportunityStack } from '../today/opportunity-stack/OpportunityStack';
 import type { DecisionOperation } from '../today/decision-transition/controller';
-import type { GoalRecommendation } from '../today/goal-card/model';
+import { goalCardData, type GoalRecommendation } from '../today/goal-card/model';
 import { matchesReceipt as matchesDocument } from '../decisions/model';
 import { matchesReceipt as matchesOpportunity, resolvedReceipt } from '../opportunities/model';
 import { useBriefProjection } from '../reconciliation/react';
@@ -79,8 +79,7 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
       rationale: selectedRec.plan.action.rationale.join(' '), evidence: selectedRec.plan.action.evidence, expiresAt: selectedRec.plan.expiresAt,
       state: selectedRec.state, ...(selectedRec.reason ? { reason: selectedRec.reason } : {}) } : null;
     const handoff = useGoalHandoff('live', { source: 'live', capabilities: caps,
-      state: goal ? view(g, () => ({ goalId: goal.goal.goalId, revision: goal.goal.revision, title: goal.goal.title, periodLabel: goal.goal.status === 'draft' ? 'Draft goal · Ready to review' : undefined, progress: goal.goal.measurement,
-        progressLabel: 'Reported progress', change: null, drivers: goal.stages.map(s => ({ goalId: s.goalId, title: s.title, progress: s.measurement })) })) : g.state === 'ready' || g.state === 'empty' ? { status: 'empty' } : view(g, () => { throw new Error('Goal unavailable'); }),
+      state: goal ? view(g, () => goalCardData(goal)) : g.state === 'ready' || g.state === 'empty' ? { status: 'empty' } : view(g, () => { throw new Error('Goal unavailable'); }),
       recommendation: recModel ? view(rec, () => recModel) : rec.state === 'ready' || rec.state === 'empty' ? { status: 'empty' } : view(rec, () => { throw new Error('Recommendation unavailable'); }),
       queue: view(d, rows => rows.filter(row => row.paper.decision.workItemId).map(row => ({ decisionId: row.paper.decision.decisionId, workItemId: row.paper.decision.workItemId!, title: row.paper.title }))),
       onAccept: async request => {

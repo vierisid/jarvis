@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { BriefCapabilities } from "../../../../../src/brief/capabilities";
-import { goalView, matchingReceipt, queuedDestination, type GoalAcceptRequest, type GoalAcceptResult, type GoalCardBinding } from "./model";
+import { goalView, goalCardData, cardProgress, matchingReceipt, queuedDestination, type GoalAcceptRequest, type GoalAcceptResult, type GoalCardBinding } from "./model";
 import { goalFixture, MAYA_TITLE } from "../preview/goalFixtures";
 import { outcomeFixture } from "../preview/outcomeFixtures";
 
@@ -142,10 +142,10 @@ test("a settled receipt highlights once; unchanged refresh and returning to the 
   expect(feedback()).toBe("Added to Today");expect(host.querySelector("[data-work-item-id]")).toBeNull();
 });
 
-test("loading, empty and unavailable recommendations keep a local return; unknown progress is never zero",async()=>{
+test("loading, empty and unavailable recommendations keep a local return and initial zero progress",async()=>{
   for(const scenario of ["loading","empty","unavailable","unsupported"]) {
     await React.act(async()=>root.render(null));binding=goalFixture(outcomeFixture("unknown-goal"),scenario);await render();await open();
-    expect(host.textContent).toContain("Progress not measured yet");expect(host.querySelector(".brief-goal-value")).toBeNull();expect(host.querySelector(".brief-goal-accept")).toBeNull();
+    expect(host.textContent).not.toContain("Not measured");expect(host.querySelector('[aria-label="0% progress"]')).not.toBeNull();expect(host.querySelector(".brief-goal-value")).not.toBeNull();expect(host.querySelector(".brief-goal-accept")).toBeNull();
     expect(document.activeElement?.textContent).toContain("Back to goal");
   }
 });
@@ -257,4 +257,34 @@ test("draft goal review opens Goals without offering an execution recommendation
   expect(host.textContent).not.toContain("What’s next?");
   await click(".brief-goal-next"); expect(reviewed).toBe(1);
   expect(host.querySelector(".brief-goal-accept")).toBeNull();
+});
+
+
+test("dashboard projection keeps canonical zero scores and only direct key results", async () => {
+  const goal = { goalId: "objective", parentId: null, revision: "1", title: "Stock the brand in three shops", status: "active" as const,
+    health: "on_track" as const, score: 0, measurement: null, progress: { basis: "legacy_score" as const, value: 0, rollup: "independent" as const } };
+  const kr = { ...goal, goalId: "kr", parentId: goal.goalId, title: "Build an approved stockist shortlist" };
+  const milestone = { ...kr, goalId: "milestone", parentId: kr.goalId, title: "Research prospective shops" };
+  const data = goalCardData({ goal, pathTitle: goal.title, stages: [kr, milestone] });
+  expect(data.drivers.map(row => row.goalId)).toEqual(["kr"]);
+  expect(data.fraction).toBe(0); expect(data.progress).toBeNull();
+  binding = { ...binding, state: { status: "ready", data } };
+  await render();
+  expect(host.querySelectorAll(".brief-goal-driver")).toHaveLength(1);
+  expect(host.textContent).not.toContain(milestone.title);
+  expect(host.textContent).not.toContain("Not measured");
+  expect(host.querySelector('[aria-label="0% progress"]')).not.toBeNull();
+  expect(host.querySelector('.brief-goal-driver-track')?.getAttribute('aria-label')).toContain('0%');
+  expect(goal.measurement).toBeNull(); // Display must never write a measurement.
+  expect(cardProgress(null, .25)).toEqual({ value: 25, target: 100, percent: true });
+});
+
+test("measured counts remain counts, while a decreasing target uses canonical progress", () => {
+  const measurement = { value: 6, target: 10, baseline: 0, unit: "signed", asOf: Date.now(), qualification: "measured" as const, provenance: [{kind: "receipt" as const, id: "count", revision: "1"}] };
+  expect(cardProgress(measurement, .6)).toEqual({value: 6, target: 10, percent: false});
+  const goal = { goalId: "cost", revision: "1", title: "Reduce cost", status: "active" as const, health: "on_track" as const,
+    score: 0, measurement: {...measurement, value: 80, baseline: 100, target: 60, unit: "USD"},
+    progress: { basis: "measurement" as const, value: .5, rollup: "independent" as const } };
+  const data = goalCardData({goal, pathTitle:goal.title, stages: []});
+  expect(cardProgress(data.progress, data.fraction)).toEqual({value: 50, target: 100, percent: true});
 });
