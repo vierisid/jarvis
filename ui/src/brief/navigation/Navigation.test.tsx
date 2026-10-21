@@ -127,6 +127,12 @@ test("support entry provides explicit retained links without restoring tabs or g
   for (const id of ["emergency-controls", "capture-privacy", "credentials", "channels", "devices", "logs", "usage", "tasks", "calendar", "content", "workspaces", "tools"] as DestinationId[])
     expect(hrefs).toContain(targetHref(window.location.href, DESTINATIONS[id].legacy));
   expect(element.querySelector('[role="tablist"]')).toBeNull(); expect(element.querySelector("footer")).toBeNull();
+  // Destinations that have a Brief room are not "retained controls" (#1102).
+  // (authority and connections share their legacy URL with retained entries, so only these are distinct.)
+  for (const id of ["profile", "billing", "advanced-settings"] as DestinationId[])
+    expect(hrefs).not.toContain(targetHref(window.location.href, DESTINATIONS[id].legacy));
+  // Plain ASCII copy (#1102).
+  expect(element.textContent).not.toMatch(/[^\x00-\x7F]/);
 });
 
 test("browser handoff keeps one root and the in-memory room-action owner, and selects the real Settings tab", async () => {

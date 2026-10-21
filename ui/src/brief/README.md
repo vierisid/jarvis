@@ -173,8 +173,11 @@ mounted live yet; a composition root wires it after the rooms it targets are rea
   open waits for the shared dirty-draft guard, then resolves the target, so a cancel, an abort, a
   lost capability or a newer open never navigates.
 - `destinations.ts` lists every retained destination with its owner and the exact released room or
-  Settings tab. Opening a destination never runs its action. Room commands that carry an action keep
-  their canonical handler.
+  Settings tab. Profile and Billing open the D-29 and D-31 rooms when they are mounted, otherwise
+  Settings > Profile and Settings > Billing. Opening a destination never runs its action. Room
+  commands that carry an action keep their canonical handler. A voice "open settings" opens the
+  Brief Settings room when it is mounted (owner decision on #1102); Advanced settings and support
+  keeps its own destination.
 - `notifications.ts` and `AttentionRoutes.tsx` route approvals, failures and updates from the existing
   notification owner's rows, outside the conversation. A row is marked read only after its
   destination opened, by `source` plus `id`.
