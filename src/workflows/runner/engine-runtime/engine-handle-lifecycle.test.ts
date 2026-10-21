@@ -12,7 +12,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { closeWorkflowDb, initWorkflowDb } from "../../db";
@@ -28,6 +28,7 @@ import type { EngineContract, EngineResponse } from "../../sandbox-api/contracts
 import type { SpawnedEngine } from "./spawn";
 import { EngineHandle } from "./engine-runtime";
 import { CONTROL_OPERATION_TIMEOUT_S, ENGINE_ACK_MARGIN_MS } from "./operation-builder";
+import { pruneCodeTrees } from "./code-tree-prune";
 import type { UpstreamFlowVersion } from "./flow-version-adapter";
 
 interface FakeEngine extends EngineContract {
@@ -237,6 +238,113 @@ describe("EngineHandle operation lifecycle", () => {
     expect(pooled).toBe(false);
     expect(proc.killed[0]).toBe("SIGTERM");
     expect(registry.get(sandboxId)).toBeNull();
+  });
+
+  /**
+   * #865: the engine requires the version's tree while it runs, so the pruner
+   * must not take it away mid-run, even when nothing in the database still
+   * needs the version and the tree looks long unused.
+   */
+  describe("the run's code tree is not pruned under the engine", () => {
+    const staleTree = (versionId: string): string => {
+      const dir = resolve(baseCodeDir, versionId);
+      mkdirSync(resolve(dir, "step_1"), { recursive: true });
+      const old = new Date(Date.now() - 7 * 24 * 60 * 60_000);
+      utimesSync(dir, old, old);
+      return dir;
+    };
+    const pruneAll = () => pruneCodeTrees({ baseCodeDir, needed: () => new Set() });
+
+    test("while the engine is executing the flow", async () => {
+      const dir = staleTree("v-running");
+      let finish!: () => void;
+      let sent!: () => void;
+      const engineHasIt = new Promise<void>((r) => (sent = r));
+      const engine = fakeEngine(() => {
+        sent();
+        return new Promise<EngineResponse<unknown>>((res) => {
+          finish = () => res({ status: "OK", response: undefined });
+        });
+      });
+      const handle = makeHandle(engine, fakeProc());
+      const run = handle.executeFlow({ flowVersion: flowVersion("v-running") });
+      await engineHasIt;
+
+      expect((await pruneAll()).removed).toEqual([]);
+      expect(existsSync(dir)).toBe(true);
+
+      finish();
+      await run;
+      expect((await pruneAll()).removed).toEqual(["v-running"]);
+    });
+
+    test("from the moment the run starts, before anything is materialized", async () => {
+      const dir = staleTree("v-starting");
+      const engine = fakeEngine(async () => ({ status: "OK", response: undefined }));
+      const handle = makeHandle(engine, fakeProc());
+      // executeFlow has not reached its first await's continuation yet.
+      const run = handle.executeFlow({ flowVersion: flowVersion("v-starting") });
+      expect((await pruneAll()).removed).toEqual([]);
+      expect(existsSync(dir)).toBe(true);
+      await run;
+    });
+
+    test("after an abandoned run, until the engine has been killed", async () => {
+      const dir = staleTree("v-abandoned");
+      const engine = fakeEngine(async () => {
+        throw new Error("RPC [executeOperation] failed (timeout: 630000ms): operation has timed out");
+      });
+      const handle = makeHandle(engine, fakeProc());
+      await expect(handle.executeFlow({ flowVersion: flowVersion("v-abandoned") })).rejects.toThrow(/timed out/);
+
+      // The engine was given up on, not stopped: it may still be requiring.
+      expect((await pruneAll()).removed).toEqual([]);
+      expect(existsSync(dir)).toBe(true);
+
+      await handle.release();
+      expect((await pruneAll()).removed).toEqual(["v-abandoned"]);
+    });
+
+    test("a run abandoned after its engine was already killed gives its tree back", async () => {
+      const dir = staleTree("v-late");
+      let fail!: () => void;
+      let sent!: () => void;
+      const engineHasIt = new Promise<void>((r) => (sent = r));
+      const engine = fakeEngine(() => {
+        sent();
+        return new Promise<EngineResponse<unknown>>((_res, rej) => {
+          fail = () => rej(new Error("socket closed"));
+        });
+      });
+      const handle = makeHandle(engine, fakeProc());
+      const run = handle.executeFlow({ flowVersion: flowVersion("v-late") });
+      await engineHasIt;
+      // Released mid-run: the engine is killed while the operation is pending.
+      await handle.release();
+      expect(existsSync(dir)).toBe(true);
+      fail();
+      await expect(run).rejects.toThrow("socket closed");
+      await handle.release();
+      expect((await pruneAll()).removed).toEqual(["v-late"]);
+    });
+
+    test("after a run that failed before reaching the engine", async () => {
+      staleTree("v-refused");
+      const engine = fakeEngine(async () => ({ status: "OK", response: undefined }));
+      const handle = makeHandle(engine, fakeProc());
+      const refused = {
+        ...flowVersion("v-refused"),
+        trigger: {
+          ...flowVersion("v-refused").trigger,
+          nextAction: {
+            name: "../../escape", type: "CODE", valid: true, displayName: "x",
+            settings: { sourceCode: { packageJson: "{}", code: "exports.code = async () => 1;" }, input: {} },
+          },
+        },
+      } as unknown as UpstreamFlowVersion;
+      await expect(handle.executeFlow({ flowVersion: refused })).rejects.toThrow(/outside the code directory/);
+      expect((await pruneAll()).removed).toEqual(["v-refused"]);
+    });
   });
 
   test("releasing while an operation is still in flight destroys the engine", async () => {

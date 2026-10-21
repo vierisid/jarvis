@@ -31,8 +31,22 @@ export function isRegistrySpec(spec: string): boolean {
 }
 
 /**
+ * Most packages one CODE step may declare (#865). What costs disk is the
+ * installed size, which only the install can measure, so that has its own cap
+ * (CODE_STEP_MAX_INSTALL_BYTES in code-materialize.ts); this one is checked by
+ * readiness, so a list that would all but certainly blow through it is
+ * reported on the step when the flow is saved and refused at publish, enable
+ * and run, before anything is installed. Measured with bun 1.3.8, `--ignore-scripts
+ * --linker=hoisted`, apparent size: the median single popular package
+ * installs to 16.5 MiB (19 measured, from pg at 0.4 MiB to googleapis at
+ * 246.5 MiB), and 512 MiB / 16.5 MiB is 31.
+ */
+export const CODE_STEP_MAX_DEPENDENCIES = 32;
+
+/**
  * The dependencies a CODE step's `package.json` declares, validated. Throws,
- * naming the step, on anything that is not a plain registry dependency.
+ * naming the step, on anything that is not a plain registry dependency, and on
+ * more than CODE_STEP_MAX_DEPENDENCIES of them.
  */
 export function declaredDependencies(stepName: string, packageJson: string): Record<string, string> {
   const text = packageJson.trim();
@@ -50,6 +64,13 @@ export function declaredDependencies(stepName: string, packageJson: string): Rec
   if (deps === undefined) return {};
   if (deps === null || typeof deps !== "object" || Array.isArray(deps)) {
     throw new Error(`CODE step "${stepName}": "dependencies" in its package.json must be an object`);
+  }
+  const declared = Object.keys(deps as Record<string, unknown>).length;
+  if (declared > CODE_STEP_MAX_DEPENDENCIES) {
+    throw new Error(
+      `CODE step "${stepName}": its package.json declares ${declared} dependencies; ` +
+        `a CODE step may declare at most ${CODE_STEP_MAX_DEPENDENCIES}`,
+    );
   }
   const out: Record<string, string> = {};
   for (const [name, spec] of Object.entries(deps as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {

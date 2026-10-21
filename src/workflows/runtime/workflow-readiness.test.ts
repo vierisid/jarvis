@@ -85,7 +85,10 @@ test('a CODE step whose package.json the run would refuse is not ready, and says
   const code = (packageJson: string): any => graph({ name: 'calc', type: 'CODE', settings: { sourceCode: { code: 'exports.code = async () => 1', packageJson }, input: {} } });
   expect(compile(code('{}')).ready).toBe(true);
   expect(compile(code(JSON.stringify({ dependencies: { 'is-number': '^7.0.0' } }))).ready).toBe(true);
-  for (const bad of [JSON.stringify({ dependencies: { a: 'file:../x' } }), JSON.stringify({ dependencies: { a: '..' } }), '{not json']) {
+  const many = (n: number) => JSON.stringify({ dependencies: Object.fromEntries(Array.from({ length: n }, (_, i) => [`p${i}`, '1.0.0'])) });
+  // #865: the dependency cap is a readiness issue too, so publish, enable and run refuse it.
+  expect(compile(code(many(32))).ready).toBe(true);
+  for (const bad of [JSON.stringify({ dependencies: { a: 'file:../x' } }), JSON.stringify({ dependencies: { a: '..' } }), '{not json', many(33)]) {
     const result = compile(code(bad));
     expect(result.ready).toBe(false);
     expect(result.issues).toContainEqual(expect.objectContaining({ node: 'calc', path: 'settings.sourceCode.packageJson', code: 'CODE' }));
