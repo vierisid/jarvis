@@ -820,7 +820,7 @@ export function useSettingsData() {
       enabled?: boolean;
       bot_token?: string;
       allowed_users?: string[];
-      guild_id?: string;
+      guild_id?: string | null;
     }): Promise<ActionResult> => {
       try {
         const r = await postJson<{ ok: boolean; message: string }>(
