@@ -78,6 +78,35 @@ export function readProfile(value: unknown): ProfileValue | null {
     answers: { ...value.answers } as Record<string, string>,
   };
 }
+/** Reads F-23's GET /api/brief/profile-settings data. Every field mapping must be explicit. */
+export function readSnapshot(value: unknown): ProfileValue | null {
+  if (
+    !record(value) ||
+    value.contractVersion !== 1 ||
+    !Array.isArray(value.fields) ||
+    !Array.isArray(value.questions)
+  )
+    return null;
+  // Account identity never aliases preferred name.
+  for (const field of PROFILE_FIELDS) {
+    const mapped = value.fields.filter((v) => record(v) && v.id === field.id);
+    if (mapped.length !== 1) return null;
+    const m = mapped[0];
+    if (
+      m.questionId !== field.questionId ||
+      m.owner !== (field.questionId ? "assistant_context" : "account") ||
+      m.state !== (field.questionId ? "editable" : "unavailable")
+    )
+      return null;
+    if (
+      field.questionId &&
+      value.questions.filter((q) => record(q) && q.id === field.questionId)
+        .length !== 1
+    )
+      return null;
+  }
+  return readProfile(value.profile);
+}
 export function draftPatch(draft: ProfileDraft): ProfilePatch {
   return Object.fromEntries(
     Object.entries(draft).map(([key, value]) => [key, value.trim() || null]),
