@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { __setCaptureTimeoutForTests, awaitCaptureTool, awaitCaptureToolOutput, CaptureTimeoutError, captureViaPrivateFileAsync } from './capture-file.ts';
 import { encodePng } from './fixtures/png.ts';
+import { WSL_NO_LOCAL_DESKTOP } from './interface.ts';
 import { MacAppController } from './macos.ts';
 import { __setNativeExecTimeoutForTests, defaultExec, runNative, type NativeExec } from './native-exec.ts';
 
@@ -93,7 +94,12 @@ describe('local captures do not use a predictable path (#746)', () => {
         writeFileSync(join(bin, name), `#!/bin/sh\necho "${name} $*" >> '${argsLog}'\n${script}\n`, { mode: 0o755 });
       }
       const systemExe = join(import.meta.dir, '..', '..', 'util', 'system-exe.ts');
+      // Plain Linux, even on a WSL machine running the tests: under WSL
+      // capture_screen refuses before any tool runs (#901), and the test
+      // for that sets it back.
+      const wsl = join(import.meta.dir, '..', 'terminal', 'wsl-bridge.ts');
       const script = `Date.now = () => ${PINNED_MS};\n` +
+        `(await import(${JSON.stringify(wsl)})).WSLBridge.isWSL = () => false;\n` +
         `(await import(${JSON.stringify(systemExe)})).__setLinuxSystemDirsForTests(${JSON.stringify([bin])});\n${body}`;
       const child = Bun.spawnSync([process.execPath, '-e', script], {
         env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
@@ -125,6 +131,27 @@ describe('local captures do not use a predictable path (#746)', () => {
     } finally {
       cleanup();
     }
+  });
+
+  // #901: under WSL, scrot and import capture WSLg's X display, which holds
+  // none of the Windows desktop, and capture_screen reported that as the
+  // user's screen. It refuses now, as the desktop tools do (#899), before any
+  // tool runs or any capture directory is made.
+  test.skipIf(process.platform !== 'linux')('#901 capture_screen under WSL refuses as LOCAL_DESKTOP_UNAVAILABLE and runs no capture tool', () => {
+    const builtin = join(import.meta.dir, '..', 'tools', 'builtin.ts');
+    const wsl = join(import.meta.dir, '..', 'terminal', 'wsl-bridge.ts');
+    const out = runChild({ scrot: WRITE_LAST_ARG, import: WRITE_LAST_ARG }, `
+      (await import(${JSON.stringify(wsl)})).WSLBridge.isWSL = () => true;
+      const { captureScreenTool } = await import(${JSON.stringify(builtin)});
+      const outcome = await captureScreenTool.execute({}).then(
+        (r) => ({ returned: typeof r === 'string' ? r : 'an image' }),
+        (e) => ({ threw: e?.constructor?.name, outcome: e?.outcome }));
+      process.stdout.write(JSON.stringify(outcome));`);
+    expect({ exitCode: out.exitCode, stderr: out.stderr }).toMatchObject({ exitCode: 0 });
+    expect(JSON.parse(out.stdout)).toEqual({ threw: 'ActionOutcomeError', outcome: {
+      status: 'blocked', code: 'LOCAL_DESKTOP_UNAVAILABLE', effect: 'not_started', message: `Error: ${WSL_NO_LOCAL_DESKTOP}`,
+    } });
+    expect(out.argsLog).toBe('');
   });
 
   // #900: scrot and import were run by bare name, so the first on PATH ran.
