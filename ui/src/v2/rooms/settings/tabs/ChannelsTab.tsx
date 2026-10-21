@@ -314,7 +314,7 @@ export function ChannelsTab({
                 // An emptied field sends null, which clears the saved guild;
                 // undefined is dropped by JSON and keeps it (#913). Before the
                 // config has loaded the field is empty unseen, so keep it then.
-                guild_id: dcGuild.trim() !== "" ? dcGuild : channelCfg ? null : undefined,
+                guild_id: dcGuild.trim() !== "" ? dcGuild.trim() : channelCfg ? null : undefined,
               });
               if (r.ok) setDcToken("");
               onToast(r.message, r.ok ? "ok" : "warn");
