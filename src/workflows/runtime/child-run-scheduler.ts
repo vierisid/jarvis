@@ -2,8 +2,10 @@ import { getWorkflowDb } from '../db';
 import { getChildRun } from '../db/repos/child-run';
 import { cancelFlowRun, retireTerminalRunWaits } from '../db/repos/run-cancellation';
 import { getFlowRun } from '../db/repos/flow-run';
-import { enqueue } from '../db/repos/job-queue';
-import { markWaitpointResumed } from '../db/repos/waitpoint';
+import { stopTurnedOffRun, turnedOffReason } from '../db/repos/flow-turn-off';
+import { getWaitpoint } from '../db/repos/waitpoint';
+import { claimContinuation } from './continuation';
+import { emergencyHold } from './emergency-hold';
 
 /** Required children continue their parent through the ordinary outer worker.
  * Polling survives daemon downtime and child completion before the parent parks.
@@ -45,17 +47,27 @@ export function resumeCompletedChildRuns(onCardClosed?: (approvalId: string) => 
     JOIN workflow_effect e ON e.id=c.effect_id JOIN waitpoint w ON w.id=c.waitpoint_id
     WHERE e.status='succeeded' AND w.resumed_at IS NULL`).all() as Array<{ effect_id: string }>;
   let count = 0;
+  // Paused or stopped: no parent continues, and none is stopped for a
+  // turn-off either (the check below runs before claimContinuation's own
+  // hold); Resume picks them up (Q-08). The timer tick that calls this also
+  // skips the whole sweep while held (src/workflows/timer-scheduler.ts).
+  if (emergencyHold()) return count;
   for (const row of rows) {
-    const resumed = db.transaction(() => {
-      const child = getChildRun(row.effect_id);
-      if (!child?.outcome || !child.waitpointId || getFlowRun(child.parentRunId)?.status !== 'PAUSED') return false;
-      if (db.query("SELECT id FROM workflow_job WHERE flow_run_id=? AND status IN ('QUEUED','RUNNING','CANCELED') LIMIT 1").get(child.parentRunId)) return false;
-      if (!markWaitpointResumed(child.waitpointId)) return false;
-      enqueue({ jobType: 'RUN_FLOW', flowRunId: child.parentRunId, maxAttempts: 1,
-        payload: { runId: child.parentRunId, executionType: 'RESUME', resumePayload: { childRunId: child.childRunId } } });
-      return true;
-    }).immediate();
-    if (resumed) count++;
+    const child = getChildRun(row.effect_id);
+    if (!child?.outcome || !child.waitpointId) continue;
+    const parent = getFlowRun(child.parentRunId);
+    if (parent?.status !== 'PAUSED') continue;
+    // A workflow turned off since this run began does not continue: the
+    // parent is stopped instead (Q-06), as the other continuations do.
+    if (turnedOffReason(parent.id)) { stopTurnedOffRun(parent.flowId, parent.id); continue; }
+    if (db.query("SELECT id FROM workflow_job WHERE flow_run_id=? AND status IN ('QUEUED','RUNNING','CANCELED') LIMIT 1").get(parent.id)) continue;
+    const waitpoint = getWaitpoint(child.waitpointId);
+    if (!waitpoint) continue;
+    // Like every other continuation (#1073): the waitpoint is consumed, the
+    // RESUME job names it, and the trigger ledger records it, in one
+    // transaction. The RUN_FLOW handler then checks that the waitpoint is
+    // this run's, was consumed, and is still the paused step's.
+    if (claimContinuation({ runId: parent.id, waitpoint, kind: 'child', resumePayload: { childRunId: child.childRunId } }) === 'resumed') count++;
   }
   return count;
 }

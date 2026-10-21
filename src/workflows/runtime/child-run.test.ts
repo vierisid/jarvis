@@ -21,9 +21,13 @@ import { PieceCatalog } from './piece-catalog';
 import { createRunFlowHandler } from '../runner/handler';
 import { Worker } from '../queue/worker';
 import { assertActionSucceeded } from '../../actions/action-outcome';
+import { listFlowFires } from '../db/repos/trigger-fire';
+import { enqueue } from '../db/repos/job-queue';
+import { continuationRefusal } from './continuation';
+import { setActiveEmergencyController } from '../../authority/emergency';
 
 beforeEach(() => initWorkflowDb(':memory:'));
-afterEach(() => closeWorkflowDb());
+afterEach(() => { setActiveEmergencyController(null); closeWorkflowDb(); });
 function fixture(governed = false, childTrigger: FlowTriggerNode = { name: 'trigger', type: 'EMPTY' }) {
   const target = createFlow();
   createDraftVersion({ flowId: target.id, displayName: 'Child', trigger: childTrigger });
@@ -53,8 +57,11 @@ test('completion before the parent parks is retained, and resume claim plus job 
     WHEN json_extract(NEW.payload, '$.executionType')='RESUME' BEGIN SELECT RAISE(ABORT, 'synthetic queue failure'); END`);
   expect(() => resumeCompletedChildRuns()).toThrow('synthetic queue failure');
   expect(getWaitpoint(result.waitpointId!)!.resumedAt).toBeNull();
+  // Nor a ledger row, which would refuse the retry as already taken.
+  expect(listFlowFires(f.run.flowId)).toEqual([]);
   getWorkflowDb().run('DROP TRIGGER reject_resume');
   expect(resumeCompletedChildRuns()).toBe(1);
+  expect(listFlowFires(f.run.flowId).map((fire) => fire.outcome)).toEqual(['started']);
   expect(resumeCompletedChildRuns()).toBe(0);
   expect(getFlowRun(f.run.id)!.status).toBe('PAUSED'); // only the worker may complete it
   updateRun(f.run.id, { status: 'RUNNING' });
@@ -62,6 +69,115 @@ test('completion before the parent parks is retained, and resume claim plus job 
   expect(replay.runId).toBe(result.runId);
   expect(replay.child!.outcome).toEqual({ status: 'succeeded' });
   expect(listChildRuns(f.run.id)).toHaveLength(1);
+});
+
+/** The parent's RESUME jobs, oldest first. */
+const resumeJobs = (runId: string) => (getWorkflowDb().query(`SELECT payload FROM workflow_job WHERE flow_run_id=?
+  AND json_extract(payload, '$.executionType')='RESUME' ORDER BY rowid`).all(runId) as Array<{ payload: string }>)
+  .map((row) => JSON.parse(row.payload) as { waitpointId?: string; resumePayload?: unknown });
+
+test('a finished child continues its parent through the ledger, naming its waitpoint (#1073)', async () => {
+  const f = fixture();
+  const result = await f.start();
+  updateRun(result.runId!, { status: 'SUCCEEDED', finishTime: Date.now() });
+  // The parent parked on its run_workflow step, as the engine records it.
+  updateRun(f.run.id, { status: 'PAUSED', steps: { child: { output: { status: 'PAUSED' } } } });
+  expect(resumeCompletedChildRuns()).toBe(1);
+  // The job names the waitpoint it consumed, so the RUN_FLOW handler checks it.
+  expect(resumeJobs(f.run.id)).toEqual([{ runId: f.run.id, executionType: 'RESUME', waitpointId: result.waitpointId,
+    resumePayload: { childRunId: result.runId } } as never]);
+  expect(getWaitpoint(result.waitpointId!)!.resumedAt).not.toBeNull();
+  expect(continuationRefusal(getFlowRun(f.run.id)!, result.waitpointId)).toBeNull();
+  // And the continuation is in the flow's delivery ledger, like any other.
+  expect(listFlowFires(f.run.flowId).map((fire) => [fire.source, fire.outcome, fire.runId, fire.detail?.kind]))
+    .toEqual([['resume', 'started', f.run.id, 'child']]);
+  // Claimed once: another sweep adds neither a job nor a row.
+  expect(resumeCompletedChildRuns()).toBe(0);
+  expect(resumeJobs(f.run.id)).toHaveLength(1);
+  expect(listFlowFires(f.run.flowId)).toHaveLength(1);
+});
+
+test('a child waitpoint whose step already finished is retired, never used to wake the next pause (#1073)', async () => {
+  const f = fixture();
+  const result = await f.start();
+  updateRun(result.runId!, { status: 'SUCCEEDED', finishTime: Date.now() });
+  // The run_workflow step is done and the run is paused on a later step.
+  updateRun(f.run.id, { status: 'PAUSED', steps: { child: { output: { status: 'SUCCEEDED' } }, later: { output: { status: 'PAUSED' } } } });
+  expect(resumeCompletedChildRuns()).toBe(0);
+  expect(resumeJobs(f.run.id)).toEqual([]);
+  expect(getWaitpoint(result.waitpointId!)!.resumedAt).not.toBeNull();
+  expect(listFlowFires(f.run.flowId).map((fire) => [fire.source, fire.outcome, fire.detail?.kind]))
+    .toEqual([['resume', 'skipped', 'child']]);
+  expect(getFlowRun(f.run.id)!.status).toBe('PAUSED');
+});
+
+test('a run_workflow step inside a loop continues on the iteration that paused (#1073)', async () => {
+  const f = fixture();
+  const result = await f.start();
+  updateRun(result.runId!, { status: 'SUCCEEDED', finishTime: Date.now() });
+  // Loop iterations are recorded raw: an earlier one finished, this one paused.
+  updateRun(f.run.id, { status: 'PAUSED', steps: { loop: { output: { status: 'PAUSED', iterations: [
+    { child: { status: 'SUCCEEDED' } }, { child: { status: 'PAUSED' } }] } } } });
+  expect(resumeCompletedChildRuns()).toBe(1);
+  expect(listFlowFires(f.run.flowId).map((fire) => fire.outcome)).toEqual(['started']);
+  expect(continuationRefusal(getFlowRun(f.run.id)!, result.waitpointId)).toBeNull();
+});
+
+test('a child continuation waits while another continuation of the parent is queued (#1073)', async () => {
+  const f = fixture();
+  const result = await f.start();
+  updateRun(result.runId!, { status: 'SUCCEEDED', finishTime: Date.now() });
+  updateRun(f.run.id, { status: 'PAUSED' });
+  enqueue({ jobType: 'RUN_FLOW', flowRunId: f.run.id, maxAttempts: 1, payload: { runId: f.run.id, executionType: 'RESUME' } });
+  expect(resumeCompletedChildRuns()).toBe(0);
+  expect(getWaitpoint(result.waitpointId!)!.resumedAt).toBeNull();
+  expect(listFlowFires(f.run.flowId)).toEqual([]);
+});
+
+test('Pause holds a child continuation and keeps its waitpoint; Resume lets it continue once (#1073, Q-08)', async () => {
+  const f = fixture();
+  const result = await f.start();
+  updateRun(result.runId!, { status: 'SUCCEEDED', finishTime: Date.now() });
+  updateRun(f.run.id, { status: 'PAUSED' });
+  const controller = new EmergencyController();
+  setActiveEmergencyController(controller);
+  controller.pause();
+  expect(resumeCompletedChildRuns()).toBe(0);
+  expect(getWaitpoint(result.waitpointId!)!.resumedAt).toBeNull();
+  expect(resumeJobs(f.run.id)).toEqual([]);
+  controller.resume();
+  expect(resumeCompletedChildRuns()).toBe(1);
+  expect(resumeJobs(f.run.id).map((job) => job.waitpointId)).toEqual([result.waitpointId]);
+});
+
+test('under Pause a parent whose workflow was turned off is held, not stopped, until Resume (#1073, Q-08)', async () => {
+  const f = fixture();
+  const result = await f.start();
+  updateRun(result.runId!, { status: 'SUCCEEDED', finishTime: Date.now() });
+  updateRun(f.run.id, { status: 'PAUSED' });
+  getWorkflowDb().run("UPDATE flow SET status = 'DISABLED', disabled_at = ? WHERE id = ?", [Date.now() + 1, f.run.flowId]);
+  const controller = new EmergencyController();
+  setActiveEmergencyController(controller);
+  controller.pause();
+  expect(resumeCompletedChildRuns()).toBe(0);
+  expect(getFlowRun(f.run.id)!.status).toBe('PAUSED');
+  expect(listFlowFires(f.run.flowId)).toEqual([]);
+  controller.resume();
+  expect(resumeCompletedChildRuns()).toBe(0);
+  expect(getFlowRun(f.run.id)!.status).toBe('STOPPED');
+});
+
+test('a parent whose workflow was turned off is stopped, not continued, when its child finishes (#1073, Q-06)', async () => {
+  const f = fixture();
+  const result = await f.start();
+  updateRun(result.runId!, { status: 'SUCCEEDED', finishTime: Date.now() });
+  updateRun(f.run.id, { status: 'PAUSED' });
+  // Turned off as the API does it (stamping `disabled_at`), after the run began.
+  getWorkflowDb().run("UPDATE flow SET status = 'DISABLED', disabled_at = ? WHERE id = ?", [Date.now() + 1, f.run.flowId]);
+  expect(resumeCompletedChildRuns()).toBe(0);
+  expect(resumeJobs(f.run.id)).toEqual([]);
+  expect(getFlowRun(f.run.id)!.status).toBe('STOPPED');
+  expect(listFlowFires(f.run.flowId).map((fire) => [fire.source, fire.outcome])).toEqual([['lifecycle', 'stopped']]);
 });
 
 test('child creation rolls back its run, queue job and waitpoint if linkage cannot commit', async () => {
