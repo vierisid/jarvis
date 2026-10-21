@@ -6,7 +6,7 @@ import type {
   TTSProvider,
 } from "../useSettingsData";
 import { allowedFieldText, parseDiscordIds, parseTelegramIds } from "./channel-ids";
-import { recipientNotice } from "./channel-recipient";
+import { ownerNotice, recipientNotice } from "./channel-recipient";
 
 import { UJ_VOICES, EDGE_VOICES } from "../../../../../../src/comms/voice-options";
 
@@ -37,14 +37,11 @@ const SARVAM_SPEAKERS = [
   "hitesh",
 ];
 
-// #811, #852: an empty allow-list means different things, so say them. The
-// daemon refuses approve/deny replies from a channel whose list is empty, and
-// sends approval requests and notifications only to a listed user. #884: each
-// sender has their own conversation, but the agent still answers them with
-// the owner's tools and profile, which an owner leaving the list empty should
-// know.
+// #908: an enabled channel needs at least one ID; only listed users may
+// message the bot. #916: the first ID is the channel's owner, the only one who
+// gets approval requests and notifications and may approve or deny.
 export const ALLOW_LIST_HINT =
-  "Leave empty to let anyone who can message the bot chat with Jarvis. Each person gets their own conversation, but Jarvis answers them with your tools and what it knows about you. Approval requests and notifications are sent, and can be approved or denied, only for an ID listed here, and are sent to your last direct message with the bot, never a group.";
+  "Only the people listed here can message the bot, and an enabled channel needs at least one. Put your own ID first: the first ID is the channel's owner. Approval requests and notifications go only to the owner's direct messages with the bot (never a group), once the owner has messaged the bot, and only the owner can approve or deny from here.";
 
 /**
  * Entries of the saved allow-list the daemon ignores, and why (#883). A
@@ -61,6 +58,16 @@ function AllowListProblems({ problems }: { problems?: string[] }) {
           <li key={p}>{p}</li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/** Which saved ID owns the channel, or why none does (#916). */
+function OwnerNotice({ notice }: { notice: { text: string; warn: boolean } | null }) {
+  if (!notice) return null;
+  return (
+    <div className={notice.warn ? "v2-set__hint v2-set__hint--warn" : "v2-set__hint"} role="status">
+      {notice.text}
     </div>
   );
 }
@@ -206,6 +213,7 @@ export function ChannelsTab({
           />
           <div className="v2-set__hint">{ALLOW_LIST_HINT}</div>
           <AllowListProblems problems={channelCfg?.telegram.allowed_users_problems} />
+          <OwnerNotice notice={ownerNotice(channelCfg?.telegram)} />
           <RecipientNotice text={recipientNotice("Telegram", channelStatus?.recipients?.telegram)} />
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -287,6 +295,7 @@ export function ChannelsTab({
           />
           <div className="v2-set__hint">{ALLOW_LIST_HINT}</div>
           <AllowListProblems problems={channelCfg?.discord.allowed_users_problems} />
+          <OwnerNotice notice={ownerNotice(channelCfg?.discord)} />
           <RecipientNotice text={recipientNotice("Discord", channelStatus?.recipients?.discord)} />
         </div>
         <div className="v2-set__field">

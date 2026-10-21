@@ -25,6 +25,13 @@ export type AllowList<T extends number | string> = {
   problems: string[];
   /** Each ignored entry as text, so the settings page can show what was there. */
   rejected: string[];
+  /**
+   * Every entry as text, valid or not, in the order saved (#916 review). The
+   * first one is the owner, so the settings page must show the list in this
+   * order: listing the valid ids first made a bad first entry look like the
+   * second id, and saving the page then made that id the owner.
+   */
+  entries: string[];
 };
 
 /** Largest Discord snowflake: an unsigned 64-bit integer. */
@@ -66,15 +73,17 @@ function parse<T extends number | string>(
   valid: (v: unknown) => v is T,
   why: (v: unknown) => string,
 ): AllowList<T> {
-  if (raw === undefined || raw === null) return { ids: [], restricted: false, problems: [], rejected: [] };
+  if (raw === undefined || raw === null) return { ids: [], restricted: false, problems: [], rejected: [], entries: [] };
   if (!Array.isArray(raw)) {
+    const rejected = typeof raw === 'string'
+      ? raw.split(',').map((s) => s.trim()).filter(Boolean)
+      : [asText(raw)];
     return {
       ids: [],
       restricted: true,
       problems: [`allowed_users must be a list of IDs, but it is ${describe(raw)}. Nobody may use the channel until it is fixed.`],
-      rejected: typeof raw === 'string'
-        ? raw.split(',').map((s) => s.trim()).filter(Boolean)
-        : [asText(raw)],
+      rejected,
+      entries: rejected,
     };
   }
   const ids: T[] = [];
@@ -88,7 +97,7 @@ function parse<T extends number | string>(
     problems.push(`${describe(entry)} is ignored: ${why(entry)}`);
     rejected.push(asText(entry));
   }
-  return { ids, restricted: raw.length > 0, problems, rejected };
+  return { ids, restricted: raw.length > 0, problems, rejected, entries: raw.map(asText) };
 }
 
 /** `allowed_users` for Telegram: positive integer user ids. */
@@ -115,5 +124,28 @@ export function discordAllowList(raw: unknown): AllowList<string> {
 export function channelAllowList(channel: string, raw: unknown): AllowList<number | string> | null {
   if (channel === 'telegram') return telegramAllowList(raw);
   if (channel === 'discord') return discordAllowList(raw);
+  return null;
+}
+
+/**
+ * Who owns a channel (#909, #916): the FIRST entry of its `allowed_users`,
+ * when that entry is a valid id for the channel. Null when the list is empty,
+ * is not a list, or starts with an entry that names nobody.
+ *
+ * The owner is the one listed user whose turns are built from the owner's
+ * private context (profile, knowledge, commitments, observations), the one
+ * approval cards and notifications are sent to, and the one who may approve
+ * or deny from the channel. Every other listed user may chat, as a guest.
+ *
+ * A first entry that is not an id does NOT pass ownership to the next one:
+ * a typo in the owner's id would otherwise hand the owner's private context
+ * and approval rights to whoever was listed second. With no owner, nobody
+ * gets either until the list is fixed.
+ */
+export function channelOwnerId(channel: string, raw: unknown): number | string | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const first: unknown = raw[0];
+  if (channel === 'telegram') return isTelegramUserId(first) ? first : null;
+  if (channel === 'discord') return isDiscordSnowflake(first) ? first : null;
   return null;
 }

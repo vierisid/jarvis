@@ -24,9 +24,10 @@ suites they sit beside (`workflow-authority.test.ts`,
 - **Voice keeps main's room-action checks.** Authority grants and revokes
   require a click; workflow starts and agent actions keep their current gates.
 - **Pause holds, Kill stops** (below).
-- **Chat decisions** require a sender on the channel's current allowed users
-  list for both approve and deny, and exactly the card's 8-character ID.
-  Ambiguous IDs are refused.
+- **Chat decisions** require the channel's owner, the first entry of its
+  current allowed users list (#916), for both approve and deny, and exactly
+  the card's 8-character ID. Other listed users are refused, and so are
+  ambiguous IDs. Cards are sent only to the owner's private chat.
 
 Defaults: a chat or background card nobody answers expires after 24 hours
 (workflow approvals keep their own lifecycle); community pieces and CODE steps

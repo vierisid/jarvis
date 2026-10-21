@@ -83,31 +83,31 @@ export type GoogleConfig = {
  * a value that names nobody (a string, `["042"]`) lets nobody in rather than
  * everyone (#883, comms/channels/allow-list.ts).
  *
- * `allowed_users` means two different things when it is EMPTY (#811):
- *   - chat: everyone who can reach the bot may talk to Jarvis (any Telegram
- *     user who finds it, any member of a Discord guild it is in), each in a
- *     conversation of their own (#884), though with the owner's tools;
- *   - approvals: nobody may approve or deny from that channel. An
- *     `approve <id>` or `deny <id>` reply is refused, and the decision has to
- *     be made in the dashboard. A gated action is the one place "allow all"
- *     is the wrong default.
- *   - notifications: nothing is sent proactively (#852). Approval cards and
- *     other broadcasts go to the private chat of the last sender the list
- *     names (never a group or server channel), so an empty list has no
- *     recipient; a stranger who messages the bot gets replies, never the
- *     owner's cards.
- * A non-empty list admits only the users it names, for all three.
+ * An enabled channel must list at least one user (#908, #918): with an empty
+ * list the channel is not started, and the API refuses to save that state.
+ * Only the users the list names may message the bot.
+ *
+ * The FIRST entry is the channel's owner (#916). Every listed user may chat,
+ * each in a conversation of their own (#884), but only the owner:
+ *   - may approve or deny from the channel. Anyone else's `approve <id>` or
+ *     `deny <id>` is refused.
+ *   - receives approval cards and other broadcasts, in their private chat
+ *     (never a group or server channel). That chat is learned from a direct
+ *     message the owner sent the bot, so until the owner has sent one there
+ *     is no recipient and cards stay on the dashboard.
+ * A first entry that is not a valid id makes nobody the owner; ownership
+ * does not pass to the second entry.
  */
 export type ChannelConfig = {
   telegram?: {
     enabled: boolean;
     bot_token: string;
-    allowed_users: number[];  // Telegram user IDs; empty = anyone may chat, nobody may approve
+    allowed_users: number[];  // Telegram user IDs; the first is the owner (#916)
   };
   discord?: {
     enabled: boolean;
     bot_token: string;
-    allowed_users: string[];  // Discord user IDs; empty = anyone may chat, nobody may approve
+    allowed_users: string[];  // Discord user IDs; the first is the owner (#916)
     guild_id?: string;        // restrict to single guild
   };
 };
