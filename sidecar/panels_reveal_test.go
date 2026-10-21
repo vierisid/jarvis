@@ -42,6 +42,9 @@ func TestPanelReadyInitScriptIsUnchangedWithoutTracking(t *testing.T) {
 // The spawn path must load this script and answer the binding with whether
 // the window is shown: a binding that answers nothing would leave a Windows
 // panel's page never revealed, and refuse every spoken answer in it.
+// This pins source text on purpose: the wiring lives inside Spawn's closure,
+// so a re-indent may need these strings updated, but a binding that answers
+// nothing must not slip through unnoticed.
 func TestPanelSpawnWiresTheRevealAnswer(t *testing.T) {
 	src, err := os.ReadFile("panels_runtime.go")
 	if err != nil {
