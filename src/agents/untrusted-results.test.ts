@@ -588,6 +588,13 @@ describe('#876: a multi-modal result has its text capped before it is framed', (
     expect(out).not.toContain('truncated');
   });
 
+  test('realtime: image tags do not count against the text cap', async () => {
+    const orch = orchestratorWith([blocksTool([{ type: 'text', text: 's'.repeat(CAP - 5) }, IMAGE])]);
+    const out = await orch.executeRealtimeToolCall('browser_screenshot', {});
+    expect(out).toContain('s'.repeat(CAP - 5) + '\n[image]');
+    expect(out).not.toContain('truncated');
+  });
+
   test('capTextBlocks: the same array under the budget, and a note on the block that crosses it', () => {
     const under = [{ type: 'text' as const, text: 'a'.repeat(5) }, IMAGE, { type: 'text' as const, text: 'b'.repeat(5) }];
     expect(capTextBlocks(under, 10)).toBe(under);

@@ -2461,9 +2461,11 @@ export class AgentOrchestrator {
       this.noteTaint(name, category);
       if (isToolResult(raw)) {
         // Realtime function output is text; flatten non-text blocks to a tag.
-        // Capped before it is framed, like the plain result below (#876).
-        const flat = raw.content.map((c) => (c.type === 'text' ? c.text : `[${c.type}]`)).join('\n');
-        return markUntrustedToolResult(name, category, capToolResult(flat));
+        // The text is capped before flattening and framing, like the block
+        // paths above (#876), so the [image] tags do not count against it.
+        const flat = capTextBlocks(raw.content, MAX_TOOL_RESULT_CHARS)
+          .map((c) => (c.type === 'text' ? c.text : `[${c.type}]`)).join('\n');
+        return markUntrustedToolResult(name, category, flat);
       }
       const { outside, trailer } = splitToolReturn(raw);
       let result = outside;
