@@ -122,6 +122,21 @@ describe('findLinuxSystemExe (#900)', () => {
     const sticky = message({ '/etc/profiles/per-user': { kind: 'dir', mode: 0o41777 }, '/etc/profiles/per-user/alice': { kind: 'dir', uid: UID } });
     expect(sticky).toContain('(/etc/profiles/per-user/$USER is owned by uid 1000 in sticky /etc/profiles/per-user)');
     for (const text of [writable, sticky]) expect(text).not.toContain('alice');
+    // Through a link: the reason names the target, which holds the name too.
+    const linked = message({
+      '/etc/profiles/per-user/alice': { kind: 'link', target: '/etc/static/profiles/per-user/alice' },
+      '/etc/static': { kind: 'dir' }, '/etc/static/profiles': { kind: 'dir' }, '/etc/static/profiles/per-user': { kind: 'dir' },
+      '/etc/static/profiles/per-user/alice': { kind: 'dir', mode: 0o40775 },
+      '/etc/static/profiles/per-user/alice/bin': { kind: 'dir' }, '/etc/static/profiles/per-user/alice/bin/xclip': { kind: 'file' },
+    });
+    expect(linked).toContain('(/etc/static/profiles/per-user/$USER is writable by its group or by others)');
+    expect(linked).not.toContain('alice');
+    // Only the whole name: another account's directory is not this one.
+    expect(message({
+      '/etc/profiles/per-user/alice': { kind: 'link', target: '/etc/profiles/per-user/alice2' },
+      '/etc/profiles/per-user/alice2': { kind: 'dir', mode: 0o40775 },
+      '/etc/profiles/per-user/alice2/bin': { kind: 'dir' }, '/etc/profiles/per-user/alice2/bin/xclip': { kind: 'file' },
+    })).toContain('(/etc/profiles/per-user/alice2 is writable by its group or by others)');
   });
 
   test('the per-user profile is listed in an error only where NixOS has one', () => {

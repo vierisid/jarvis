@@ -322,17 +322,19 @@ export function linuxSystemExe(name: LinuxSystemTool, opts: LinuxExeOptions = {}
 
 /**
  * The per-user profile's account name as `$USER`, for the reason homeAsTilde
- * gives: the exact name, as a whole path segment, wherever the path ends.
+ * gives: the exact name, as a whole path segment after any `per-user/` (a
+ * reason can name where the profile's link leads, such as
+ * /etc/static/profiles/per-user/<user>), wherever the path ends.
  */
 function userAsVariable(text: string, user: string | null): string {
   if (user === null) return text;
-  const prefix = PER_USER_PREFIX + user;
+  const prefix = '/per-user/' + user;
   let out = '';
   let from = 0;
   for (let at = text.indexOf(prefix); at !== -1; at = text.indexOf(prefix, at + prefix.length)) {
     const next = text[at + prefix.length];
     if (next !== undefined && next !== '/' && next !== ' ' && next !== ')' && next !== ';') continue;
-    out += text.slice(from, at) + PER_USER_PREFIX + '$USER';
+    out += text.slice(from, at) + '/per-user/$USER';
     from = at + prefix.length;
   }
   return out + text.slice(from);
