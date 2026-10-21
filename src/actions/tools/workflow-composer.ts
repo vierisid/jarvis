@@ -219,6 +219,8 @@ export interface ComposerSpecialistRole {
   name?: string;
   /** Short description, used only for the prompt listing. */
   description?: string;
+  /** Tool categories permitted by this role, not inferred from its description. */
+  tools?: string[];
 }
 
 /** Canonical short name of the sub-agent delegation piece. */
@@ -321,10 +323,13 @@ export interface ComposeDeps {
   /**
    * Optional community-library index. When present (and the tool loop is
    * active), the composer exposes a `search_library` tool so the model can
-   * find an installable piece when nothing installed fits, and suggest it via
-   * `report_blocked` instead of shoehorning the request through a wrong piece.
+   * find an installable piece when nothing installed fits. Interactive callers
+   * can also supply installLibraryPiece; other callers report the missing dependency.
    */
   library?: ComposerLibraryEntry[];
+  /** Interactive callers may install catalog entries and refresh pieceRegistry.
+   * Absent for background composition and host-managed libraries. Never grants credentials. */
+  installLibraryPiece?: (id: string, signal?: AbortSignal) => Promise<void>;
   /**
    * Optional inventory of the machines a step can execute on: the enrolled
    * sidecars plus the brain's own host. When present the composer (a) renders
@@ -597,9 +602,11 @@ async function composeWithTools(
   const osCheck = osCheckContextFor(deps.executionTargets ?? []);
   const rolesText = renderSpecialistRoles(deps.specialistRoles);
   const hasLibrary = (deps.library?.length ?? 0) > 0;
-  const toolDefs = buildComposerToolDefs(toolSpecs !== null, hasLibrary);
+  const canInstall = hasLibrary && !!deps.installLibraryPiece;
+  const installAttempts = new Set<string>();
+  const toolDefs = buildComposerToolDefs(toolSpecs !== null, hasLibrary, canInstall);
   const envText = composerExecutionEnvironment(deps.executionTargets ?? []);
-  const system = planningPrompt(buildToolLoopSystemPrompt(rolesText, hasLibrary, envText), deps.planningPolicy);
+  const system = planningPrompt(buildToolLoopSystemPrompt(rolesText, hasLibrary, envText, canInstall), deps.planningPolicy);
 
   const messages: ComposerChatMessage[] = [
     { role: "system", content: system },
@@ -701,6 +708,13 @@ async function composeWithTools(
     nudges = 0;
     messages.push({ role: "assistant", content: reply.content ?? "", tool_calls: calls });
     for (const call of calls) {
+      req.signal?.throwIfAborted();
+      if (call.name === "install_library_piece") {
+        const result = await installComposerPiece(call.arguments, deps, installAttempts, req.signal);
+        req.signal?.throwIfAborted();
+        messages.push(toolResult(call, wrapUntrusted(result, "workflow library installation")));
+        continue;
+      }
       if (call.name === "submit_flow") {
         submits++;
         const flowArg = unwrapSubmittedFlow(call.arguments);
@@ -799,7 +813,7 @@ function blockedResult(
 }
 
 /** Tool definitions surfaced to the tool-loop model. */
-function buildComposerToolDefs(hasToolSpecs: boolean, hasLibrary: boolean): ComposerToolDef[] {
+function buildComposerToolDefs(hasToolSpecs: boolean, hasLibrary: boolean, canInstall = false): ComposerToolDef[] {
   const defs: ComposerToolDef[] = [
     {
       name: "list_pieces",
@@ -902,7 +916,8 @@ function buildComposerToolDefs(hasToolSpecs: boolean, hasLibrary: boolean): Comp
       description:
         "Search the community piece library (installable, NOT yet usable) by keyword. " +
         "Use when no installed piece or Jarvis tool covers a service the user asked for, " +
-        "then suggest the best match via report_blocked. Never put a library-only piece in a flow.",
+        (canInstall ? "then install the matching entry with install_library_piece and inspect its actual schema. " : "then suggest the best match via report_blocked. ") +
+        "Never put a library-only piece in a flow.",
       parameters: {
         type: "object",
         properties: {
@@ -912,7 +927,33 @@ function buildComposerToolDefs(hasToolSpecs: boolean, hasLibrary: boolean): Comp
       },
     });
   }
+  if (canInstall) defs.push({
+    name: "install_library_piece",
+    description: "Install a matching catalog entry needed for the user's workflow and refresh its available action schemas. " +
+      "Only exact Library IDs are accepted, at most three per composition. Does not connect accounts, authorize OAuth, run actions, or enable workflows. " +
+      "Respect requests not to install anything. After success call get_piece_details; do not guess the schema.",
+    parameters: { type: "object", properties: { id: { type: "string", description: "Exact ID from search_library." } }, required: ["id"] },
+  });
   return defs;
+}
+
+async function installComposerPiece(args: Record<string, unknown>, deps: ComposeDeps, attempts: Set<string>, signal?: AbortSignal): Promise<string> {
+  if (!deps.installLibraryPiece) return "Error: Library installation is not available in this context.";
+  const id = typeof args.id === "string" ? args.id.trim() : "";
+  const entry = deps.library?.find(e => e.id === id);
+  if (!entry) return "Error: Unknown Library ID. Only entries from search_library can be installed.";
+  if (deps.pieceRegistry.get(entry.npmPackage)) return `Already available: ${entry.npmPackage}. Call get_piece_details.`;
+  if (attempts.has(id)) return `Error: Installation already attempted for ${id}; report the previous failure rather than retrying.`;
+  if (attempts.size >= 3) return "Error: Library installation limit reached (3 entries per composition).";
+  attempts.add(id);
+  try {
+    signal?.throwIfAborted();
+    await deps.installLibraryPiece(id, signal);
+    if (!deps.pieceRegistry.get(entry.npmPackage)) return `Error: ${id} installation returned but its action schemas are unavailable. Do not use it in a flow.`;
+    return `Installed and schemas refreshed: ${entry.npmPackage}. Call get_piece_details before using it. Account connection is separate; no credentials were created and no workflow actions ran.`;
+  } catch (e) {
+    return `Error: Could not make ${id} available: ${(e as Error).message}. Do not assume it is usable; report this blocker or inspect a supported browser alternative.`;
+  }
 }
 
 /**
@@ -1064,7 +1105,7 @@ function renderLibrarySearch(deps: ComposeDeps, query: string): string {
   }
   const lines = [
     "Community library matches. These are NOT installed (unless flagged) and CANNOT be used in the flow --",
-    "suggest the best fit via report_blocked so the user can install it first.",
+    deps.installLibraryPiece ? "Install a matching entry with install_library_piece, then inspect get_piece_details before composing." : "suggest the best fit via report_blocked so the user can install it first.",
   ];
   for (const { e } of scored) {
     const flag = installed.has(e.npmPackage) ? " [already installed -- see list_pieces]" : " [not installed]";
@@ -1152,6 +1193,10 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
     "## Hard rules",
     "  - Every required input field MUST be present.",
     "  - The composed flow is created DISABLED. Do NOT claim the flow is running; the user reviews and publishes it explicitly.",
+    "  - Installing a connector does not connect an account. Never invent credentials or connection IDs. If no real connection binding was supplied, leave auth unset in the disabled draft and explain that connecting the account is required before execution. Never execute actions to validate a draft.",
+    "  - Prefer installed native tools or connector actions. If no usable connector exists, consider a jarvis-agent:delegate browser step ONLY when AI/browser use is allowed by the request, registered browser tools exist, a connected machine advertises browser capability, and the chosen role permits browser tools. Inspect the agent and browser schemas first. A role description alone is not proof of browser access.",
+    "  - A browser fallback must target that actual machine and carry the exact read/write restrictions, date boundaries, pagination/completeness requirements and required output in its goal. Browser access does not prove an authenticated session: require the user to sign in if needed and stop on inaccessible or incomplete data. Never treat an inaccessible calendar as an empty calendar or invent results.",
+    "  - Do not use browser automation to bypass denied permissions, a requirement for no AI steps, or an explicit absence of browser access (for example LedgerFox with no connector, API, export or browser access). Report the precise blocker instead. Draft validation proves structure, not a live browser session or successful service access.",
     mode === "tools"
       ? "  - When the user asks for an integration that isn't an installed piece (Gmail, Slack, ...), check the Jarvis tools in list_pieces and use the `jarvis-tool` piece with `toolName` set to one of them."
       : "  - When the user asks for an integration that isn't a registered piece (Gmail, Slack, ...), use the `jarvis-tool` piece with `toolName` set to a registered Jarvis tool. Available tools are listed below.",
@@ -1292,6 +1337,7 @@ function buildToolLoopSystemPrompt(
   rolesText: string,
   hasLibrary: boolean,
   envText: string,
+  canInstall = false,
 ): string {
   return [
     "You are the Jarvis workflow composer. Convert the user's description into a workflow definition.",
@@ -1304,7 +1350,9 @@ function buildToolLoopSystemPrompt(
     "  3. Build the flow and call submit_flow with { displayName, trigger }. If validation errors come back,",
     "     fix ALL of them and call submit_flow again, keeping the parts that were correct.",
     hasLibrary
-      ? "  4. If no installed piece or Jarvis tool covers the request, call search_library for an installable piece,\n     then call report_blocked suggesting the best match. Never force a wrong piece to fit."
+      ? (canInstall
+        ? "  4. If no installed piece or Jarvis tool covers the request, search_library, install the matching entry with install_library_piece, then inspect its actual schema and continue building. Respect any user restriction against installation. If installation fails, explain the exact failure; do not claim the connector is available."
+        : "  4. If no installed piece or Jarvis tool covers the request, call search_library for an installable piece,\n     then call report_blocked suggesting the best match. Never force a wrong piece to fit.")
       : "  4. If no installed piece or Jarvis tool covers the request, call report_blocked explaining what is missing.\n     Never force a wrong piece to fit.",
     "  Keep detail lookups targeted -- fetch the pieces you shortlisted, not the whole catalog.",
     "",
@@ -1354,7 +1402,7 @@ function renderSpecialistRoles(roles: ComposerSpecialistRole[] | undefined): str
     ...roles.map((r) => {
       const desc = r.description ? `: ${firstLine(r.description)}` : "";
       const label = r.name && r.name !== r.id ? ` (${r.name})` : "";
-      return `  - ${r.id}${label}${desc}`;
+      return `  - ${r.id}${label}${desc}${r.tools ? ` [permitted tool categories: ${r.tools.join(", ")}]` : " [tool permissions unknown]"}`;
     }),
   ].join("\n");
 }
@@ -1414,6 +1462,7 @@ function renderPieceBlockLines(
   label: string,
 ): string[] {
   const lines: string[] = [`- ${label} (${piece.displayName}): ${piece.description}`];
+  if (piece.auth) lines.push(`    Connection required: ${piece.auth.type}. Use only a real supplied auth binding; otherwise leave auth unset in the disabled draft and report the connection requirement.`);
   for (const trigger of Object.values(piece.triggers ?? {})) {
     lines.push(`    trigger ${trigger.name}: ${trigger.description}`);
     lines.push(...renderSchemaLines(trigger.inputSchema, 6));
@@ -1633,6 +1682,9 @@ function validateComposedFlow(
     cursor = cursor.nextAction ? (cursor.nextAction as Record<string, unknown>) : null;
   }
 
+  if (trigger.type !== "EMPTY" && !trigger.nextAction) {
+    errors.push("A scheduled or event-driven workflow needs at least one actual action step. A trigger alone or prose describing missing actions is not a completed workflow. Build the supported steps, inspect a permitted browser-agent alternative, or report_blocked.");
+  }
   if (errors.length > 0) return { ok: false, errors };
   const readiness = compileWorkflow(trigger, { pieces: registry, phase: 'composition' });
   if (!readiness.ready) return { ok: false, errors: readiness.issues.map(i => `step "${i.node}" (${i.path}): ${i.message}`) };

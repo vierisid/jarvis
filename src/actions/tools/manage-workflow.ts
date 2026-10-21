@@ -125,6 +125,7 @@ export interface ManageWorkflowDeps {
    * wording from this tool's description and from the composer's prompt.
    */
   library?: ComposerLibraryEntry[];
+  installLibraryPiece?: ComposeDeps["installLibraryPiece"];
   /**
    * Optional. The machines a composed step can execute on -- the enrolled
    * sidecars plus the brain's own host. When provided, the composer knows
@@ -185,8 +186,9 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       "every morning\"). It drafts a flow from plain English (LLM-backed). On",
       "{ ok: false, errors } read the errors, refine the description with concrete",
       "piece/tool names, and call compose again.",
-      ...(hasLibrary
-        ? [
+      ...(hasLibrary && deps.installLibraryPiece
+        ? ["When the user permits installing missing connectors, use compose { name, description, install_missing: true }. This installs required Library entries under software-install authority and refreshes their schemas. Account connection is separate. Report installation failures and missing account bindings honestly; do not retry compose unchanged."]
+        : hasLibrary ? [
             "A failure may also carry suggestedInstalls: community-library pieces that would",
             "make the request possible. Relay them (the user installs them from the",
             "dashboard's Library page) and offer to compose again after; do NOT retry",
@@ -285,13 +287,19 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           '(schedule, webhook, manual) and any concrete services / actions (e.g. "send a Gmail to ...").',
         required: false,
       },
+      install_missing: {
+        type: "boolean",
+        description: "compose/create: allow installing required catalog connectors (default false). Subject to software-install authority. Never connects accounts or runs workflow actions.",
+        required: false,
+      },
       contract: {
         type: "object",
         description:
           "compose: check the user's explicit requirements. trigger {kind: " +
           "manual|schedule|webhook|event|piece, cron, every, timezone, eventType, piece, trigger}; sources, outputs: " +
           "[{notify: {channels}} | {tool, params} | {piece, action, target}]; recipients; forbidden {effects e.g. " +
-          "send_email, pieces, actions, tools, channels, agents}; review. Outputs list all it may send or address.",
+          "send_email, pieces, actions, tools, channels, agents}; review. Outputs list all it may send or address. " +
+          "Forbidden constraints apply to FUTURE workflow execution. A request not to run, notify or read data WHILE DRAFTING is already satisfied by disabled composition; do not encode that as a ban on the reads or notifications the requested workflow must perform later.",
         required: false,
       },
       limit: {
@@ -334,6 +342,11 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
     authorityGate: (params) => {
       const action = String(params.action ?? "");
       switch (action) {
+        case "compose":
+        case "create":
+          return params.install_missing === true && deps.installLibraryPiece
+            ? { actionCategory: "install_software", confirm: "above_level", intent: `Install required Library connectors while composing workflow: ${forCard(params.name)}` }
+            : null;
         case "enable":
         case "publish": {
           // Q-05: enabling or publishing accepts the connections and computer
@@ -400,7 +413,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           const name = requireString(params, "name");
           const description = typeof params["description"] === "string" ? params["description"].trim() : "";
           if (description.length > 0) {
-            const composed = await actCompose(name, description, deps, project, params["contract"]);
+            const composed = await actCompose(name, description, deps, project, params["contract"], params["install_missing"] === true);
             // ACCEPTED COST of one block per action: `note` is repo-authored
             // guidance to the model, and framing the whole return puts it under
             // a preamble that says not to follow instructions inside the block.
@@ -462,7 +475,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           );
         case "compose":
           return framedForModel(
-            await actCompose(requireString(params, "name"), requireString(params, "description"), deps, project, params["contract"]),
+            await actCompose(requireString(params, "name"), requireString(params, "description"), deps, project, params["contract"], params["install_missing"] === true),
             "a composed workflow and the composer's text",
           );
         default:
@@ -1144,6 +1157,7 @@ async function actCompose(
   deps: ManageWorkflowDeps,
   project: string,
   contract?: unknown,
+  installMissing = false,
 ): Promise<Record<string, unknown>> {
   if (!deps.llm) {
     throw new Error("compose: an LLM client is not configured for this build");
@@ -1183,6 +1197,7 @@ async function actCompose(
     if (roles.length > 0) composeDeps.specialistRoles = roles;
   }
   if (deps.library && deps.library.length > 0) composeDeps.library = deps.library;
+  if (installMissing && deps.installLibraryPiece) composeDeps.installLibraryPiece = deps.installLibraryPiece;
   if (deps.executionTargets) {
     const targets = deps.executionTargets();
     if (targets.length > 0) composeDeps.executionTargets = targets;
@@ -1222,6 +1237,7 @@ async function actCompose(
     ...(result.contractReport ? { contractReport: result.contractReport } : {}),
     flow: summarizeFlow(getFlow(flow.id) ?? flow),
     versionId: version.id,
+    readiness: versionReadiness(flow.id, version.id),
     compositionRecordId: result.compositionRecordId,
   };
 }

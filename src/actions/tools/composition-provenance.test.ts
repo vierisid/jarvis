@@ -20,6 +20,13 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
+  // w8-6: timezone discovery, Library installation, account binding and browser fallback rules.
+  'w8-6': {
+    bare: '382e95a19295d50c84df2d0e145a16fc91ce3df2eda7d9f8702fb317415c25ec',
+    production: '44f7016457a38ea9d6cd89962b27304fb5fbdf601c4e40f9655b2e528bddf518',
+    'hosted production': '2ddabb25acb07cfe34a0303a0ff2fb89203133eb8e4a68beb420573d510bbd76',
+    'tool names only': '9ee9f57faaf5b943916e5f96905d11a72aa9306aaef95398c5a4018b36b2eebd',
+  },
   // w8-3 (#1065) fences catalog, tool, role and repair text as untrusted content.
   'w8-3': {
     bare: '62395ceb35fe6215beb7a36a19338c5a706f5bf9283e95bf339d400d314fbeee',

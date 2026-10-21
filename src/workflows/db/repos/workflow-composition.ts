@@ -24,6 +24,12 @@ export function createCompositionJournal(specification: WorkflowJobSpecification
     VALUES (?, ?, ?, 'COMPOSING', ?, ?)`, [id, projectId, JSON.stringify(specification), now, now]);
   return {
     id,
+    recordInstalledPiece(piece: NonNullable<NonNullable<WorkflowJobSpecification['provenance']>['installedPieces']>[number]) {
+      // Append discovery provenance, without rewriting the immutable user specification.
+      db.run(`UPDATE workflow_composition SET specification = json_set(specification,
+        '$.provenance.installedPieces', json_insert(COALESCE(json_extract(specification, '$.provenance.installedPieces'), '[]'), '$[#]', json(?))),
+        updated = ? WHERE id = ? AND state = 'COMPOSING'`, [JSON.stringify(piece), Date.now(), id]);
+    },
     checkpoint(candidate: CompositionCandidate) {
       db.run(`UPDATE workflow_composition SET previous_response = ?, previous_graph = ?, errors = ?, updated = ?
         WHERE id = ? AND state = 'COMPOSING'`, [candidate.previousResponse,

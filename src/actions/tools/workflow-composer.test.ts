@@ -161,9 +161,10 @@ describe("composeFlow", () => {
   });
 
   test("schedule and webhook are accepted as built-in trigger primitives", async () => {
+    const action = { name: "notify", type: "PIECE", settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: "hi" } } };
     const replyA = JSON.stringify({
       displayName: "S",
-      trigger: { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "schedule", input: { cron_expression: "0 * * * *" } } },
+      trigger: { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "schedule", input: { cron_expression: "0 * * * *" } }, nextAction: action },
     });
     const a = await composeFlow(
       { llm: new StubLlm(replyA), pieceRegistry: makeRegistry() },
@@ -173,7 +174,7 @@ describe("composeFlow", () => {
 
     const replyB = JSON.stringify({
       displayName: "W",
-      trigger: { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "webhook", input: {} } },
+      trigger: { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "webhook", input: {} }, nextAction: action },
     });
     const b = await composeFlow(
       { llm: new StubLlm(replyB), pieceRegistry: makeRegistry() },
@@ -1476,6 +1477,97 @@ describe("tool-loop composer", () => {
       description: "Read and write spreadsheet rows.",
     },
   ];
+
+
+  test("installs a catalog entry, discovers refreshed schemas, then composes without credentials", async () => {
+    const registry = makeRegistry();
+    const installed: string[] = [];
+    const piece: PieceCatalogEntry = { name: library[0]!.npmPackage, displayName: "Discord", description: "fixture",
+      auth: { type: "OAUTH2" }, actions: { send: { name: "send", displayName: "Send", description: "fixture",
+        inputSchema: { fields: [{ name: "text", label: "Text", type: "string", required: true }] } } } };
+    const flow = validFlowArgs();
+    Object.assign(flow.trigger.nextAction.settings, { pieceName: piece.name, actionName: "send", input: { text: "hello" } });
+    const llm = new StubToolLlm([
+      { tool_calls: [tc("s", "search_library", { query: "discord" })] },
+      { tool_calls: [tc("i", "install_library_piece", { id: "discord" })] },
+      { tool_calls: [tc("d", "get_piece_details", { pieceName: piece.name })] },
+      { tool_calls: [tc("v", "submit_flow", flow)] },
+    ]);
+    const result = await composeFlow({ llm, pieceRegistry: registry, library,
+      installLibraryPiece: async id => { installed.push(id); registry.upsert(piece); },
+    }, { name: "Discord", description: "Save a disabled Discord notification draft" });
+    expect(result.ok).toBe(true);
+    expect(installed).toEqual(["discord"]);
+    expect(llm.toolTurns[0]!.tools.some(t => t.name === "install_library_piece")).toBe(true);
+    expect(llm.toolTurns[2]!.messages.at(-1)!.content).toContain("schemas refreshed");
+    expect(llm.toolTurns[3]!.messages.at(-1)!.content).toContain("Connection required: OAUTH2");
+    expect(llm.toolTurns[3]!.messages.at(-1)!.content).toContain("input.text");
+  });
+
+  test("rejects unknown installs and does not repeat a failed installation", async () => {
+    const installed: string[] = [];
+    const llm = new StubToolLlm([
+      { tool_calls: [tc("a", "install_library_piece", { id: "made-up-package" })] },
+      { tool_calls: [tc("b", "install_library_piece", { id: "discord" })] },
+      { tool_calls: [tc("c", "install_library_piece", { id: "discord" })] },
+      { tool_calls: [tc("d", "report_blocked", { reason: "Network install unavailable" })] },
+    ]);
+    const result = await composeFlow({ llm, pieceRegistry: makeRegistry(), library,
+      installLibraryPiece: async id => { installed.push(id); throw new Error("Network install unavailable"); },
+    }, { name: "x", description: "x" });
+    expect(result.ok).toBe(false);
+    expect(installed).toEqual(["discord"]);
+    expect(llm.toolTurns[1]!.messages.at(-1)!.content).toContain("Unknown Library ID");
+    expect(llm.toolTurns[2]!.messages.at(-1)!.content).toContain("Network install unavailable");
+    expect(llm.toolTurns[3]!.messages.at(-1)!.content).toContain("already attempted");
+  });
+
+  test("does not claim success until installation refreshes the actual catalog", async () => {
+    const llm = new StubToolLlm([
+      { tool_calls: [tc("i", "install_library_piece", { id: "discord" })] },
+      { tool_calls: [tc("b", "report_blocked", { reason: "Metadata unavailable" })] },
+    ]);
+    await composeFlow({ llm, pieceRegistry: makeRegistry(), library, installLibraryPiece: async () => {} }, { name: "x", description: "x" });
+    expect(llm.toolTurns[1]!.messages.at(-1)!.content).toContain("action schemas are unavailable");
+  });
+
+  test("managed/background contexts cannot install even when a model fabricates the call", async () => {
+    const llm = new StubToolLlm([
+      { tool_calls: [tc("i", "install_library_piece", { id: "discord" })] },
+      { tool_calls: [tc("b", "report_blocked", { reason: "Installation unavailable" })] },
+    ]);
+    await composeFlow({ llm, pieceRegistry: makeRegistry(), library }, { name: "x", description: "x" });
+    expect(llm.toolTurns[0]!.tools.some(t => t.name === "install_library_piece")).toBe(false);
+    expect(llm.toolTurns[1]!.messages.at(-1)!.content).toContain("not available in this context");
+  });
+
+  test("bounds installs to three distinct catalog entries", async () => {
+    const entries = Array.from({ length: 4 }, (_, i) => ({ ...library[0]!, id: `entry-${i}`, npmPackage: `piece-${i}` }));
+    const installed: string[] = [];
+    const llm = new StubToolLlm([
+      { tool_calls: entries.map(e => tc(e.id, "install_library_piece", { id: e.id })) },
+      { tool_calls: [tc("b", "report_blocked", { reason: "Install limit" })] },
+    ]);
+    await composeFlow({ llm, pieceRegistry: makeRegistry(), library: entries,
+      installLibraryPiece: async id => { installed.push(id); },
+    }, { name: "x", description: "x" });
+    expect(installed).toHaveLength(3);
+    expect(llm.toolTurns[1]!.messages.at(-1)!.content).toContain("limit reached");
+  });
+
+  test("rejects a schedule-only draft with invented readiness prose instead of real actions", async () => {
+    const empty = { displayName: "Incomplete calendar", trigger: { name: "trigger", type: "PIECE_TRIGGER",
+      settings: { pieceName: "schedule", input: { cron_expression: "0 8 * * 1-5", timezone: "Europe/Rome" } },
+      readiness: { ready: true, accountConnectionRequired: true, remainingSpecification: "Read events and notify" },
+    } };
+    const llm = new StubToolLlm([
+      { tool_calls: [tc("s", "submit_flow", empty)] },
+      { tool_calls: [tc("b", "report_blocked", { reason: "No supported retrieval path" })] },
+    ]);
+    const result = await composeFlow({ llm, pieceRegistry: makeRegistry() }, { name: "Calendar", description: "Read events and notify" });
+    expect(result.ok).toBe(false);
+    expect(llm.toolTurns[1]!.messages.at(-1)!.content).toContain("at least one actual action step");
+  });
 
   test("explores with tools then submits a valid flow", async () => {
     const llm = new StubToolLlm([

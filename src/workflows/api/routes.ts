@@ -113,6 +113,7 @@ import { CATALOG, excludedReason, findCatalogEntry, sharedBuildCatalog, withdraw
 import { piecesManagedByHost } from "../pieces-library/shared";
 import {
   installPiece,
+  withLibraryLock,
   readManifest,
   uninstallPiece,
   type InstalledPiece,
@@ -794,21 +795,6 @@ export interface CreateWorkflowRoutesOptions {
   };
 }
 
-/**
- * In-process mutex for the Library routes. Two concurrent installs would
- * race on the shared `~/.jarvis/pieces/package.json` + bun-install
- * invocation; we serialize them at the route boundary. One daemon, one
- * writer.
- */
-let libraryMutex: Promise<void> = Promise.resolve();
-function withLibraryLock<T>(fn: () => Promise<T>): Promise<T> {
-  const release = libraryMutex.then(() => fn());
-  libraryMutex = release.then(
-    () => undefined,
-    () => undefined,
-  );
-  return release;
-}
 
 /**
  * What the Library routes answer on a managed install. Says WHOSE decision it
