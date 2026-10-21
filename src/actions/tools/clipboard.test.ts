@@ -137,10 +137,12 @@ describe.skipIf(process.platform !== 'linux')('X clipboard fallback and its boun
 
   const SYSTEM_EXE_TS = new URL('../../util/system-exe.ts', import.meta.url).href;
 
-  async function readIn(binDir: string, write?: string, systemDirs: string[] = [binDir]): Promise<string> {
+  async function readIn(binDir: string, write?: string, systemDirs: string[] = [binDir], capBytes?: number): Promise<string> {
     const code = `
       import { WSLBridge } from ${JSON.stringify(WSL_TS)};
-      import { __setCaptureTimeoutForTests } from ${JSON.stringify(CAPTURE_TS)};
+      import * as captureFile from ${JSON.stringify(CAPTURE_TS)};
+      const { __setCaptureTimeoutForTests } = captureFile;
+      ${capBytes === undefined ? '' : `captureFile.__setCaptureMaxOutputForTests?.(${capBytes});`}
       import { __setLinuxSystemDirsForTests } from ${JSON.stringify(SYSTEM_EXE_TS)};
       __setLinuxSystemDirsForTests(${JSON.stringify(systemDirs)});
       WSLBridge.isWSL = () => false;
@@ -176,6 +178,13 @@ describe.skipIf(process.platform !== 'linux')('X clipboard fallback and its boun
   test('an xclip that hangs is stopped at the bound, and xsel, which waits on the same owner, is not tried', async () => {
     const d = bin(`exec '${SLEEP}' 10`);
     expect(await readIn(d)).toBe('Error reading clipboard: xclip did not finish within 0.5s and was stopped');
+    expect(existsSync(join(d, 'xsel.ran'))).toBe(false);
+  }, 40_000);
+
+  test('#904 review: an xclip that prints past the cap is refused, and xsel, which reads the same selection, is not tried', async () => {
+    // By absolute path: the child's PATH is only the fakes' directory.
+    const d = bin(`'${Bun.which('head') ?? '/usr/bin/head'}' -c 200000 /dev/zero`);
+    expect(await readIn(d, undefined, [d], 64 * 1024)).toBe(`Error reading clipboard: xclip was stopped: output passed ${64 * 1024} bytes`);
     expect(existsSync(join(d, 'xsel.ran'))).toBe(false);
   }, 40_000);
 

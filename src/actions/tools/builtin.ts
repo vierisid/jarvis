@@ -17,6 +17,8 @@ import { homedir } from 'node:os';
 import { hostname, platform, arch, cpus, version } from 'node:os';
 import { TerminalExecutor } from '../terminal/executor.ts';
 import { WSLBridge, windowsSystemExe } from '../terminal/wsl-bridge.ts';
+import { ActionOutcomeError } from '../action-outcome.ts';
+import { WSL_NO_LOCAL_DESKTOP } from '../app-control/interface.ts';
 import { BrowserController, type PageSnapshot } from '../browser/session.ts';
 import { checkNavigationUrl } from '../browser/url-policy.ts';
 import { checkUploadPath, pageOrigin, uploadTargetRefusal } from '../browser/upload-policy.ts';
@@ -717,6 +719,9 @@ async function localClipboardRead(): Promise<string> {
       return await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xclip'), '-selection', 'clipboard', '-o'], CLIPBOARD_READ), 'xclip');
     } catch (err) {
       if (err instanceof CaptureTimeoutError) throw err;
+      // Past the output cap (#904): xsel would read the same selection to the
+      // same cap, so it is not tried.
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOBUFS') throw err;
       try {
         return await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xsel'), '--clipboard', '--output'], CLIPBOARD_READ), 'xsel');
       } catch (e) {
@@ -769,6 +774,17 @@ async function localClipboardWrite(content: string): Promise<void> {
  */
 async function localCaptureScreen(): Promise<string> {
   const os = platform();
+  // Under WSL, scrot and import capture WSLg's X display, which holds none of
+  // the Windows desktop the user is looking at (see WSL_NO_LOCAL_DESKTOP), and
+  // the picture came back as their screen (#901). Refused as the desktop
+  // tools are (#899), before any tool runs; the sidecar on Windows captures
+  // the real desktop, and capture_screen routes to it when one is enrolled.
+  if (os !== 'darwin' && os !== 'win32' && WSLBridge.isWSL()) {
+    throw new ActionOutcomeError({
+      status: 'blocked', code: 'LOCAL_DESKTOP_UNAVAILABLE', effect: 'not_started',
+      message: `Error: ${WSL_NO_LOCAL_DESKTOP}`,
+    });
+  }
   const tool = { stdin: 'ignore', stdout: 'ignore', stderr: 'pipe' } as const;
   return (await captureViaPrivateFileAsync(async (file) => {
     if (os === 'darwin') {
@@ -903,6 +919,8 @@ export const captureScreenTool: ToolDefinition = {
       // A canceled run's fence (#803) is a stop, not a capture error: as in
       // desktop.ts's executeLocal, it goes on up for ToolRegistry to pass on.
       if (err instanceof WorkflowCancellationError) throw err;
+      // A typed refusal (#901) goes up as itself, as desktop_screenshot's does.
+      if (err instanceof ActionOutcomeError) throw err;
       return `Error capturing screen: ${err instanceof Error ? err.message : err}`;
     }
   },

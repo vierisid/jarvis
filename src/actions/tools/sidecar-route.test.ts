@@ -785,7 +785,10 @@ describe('a routed screenshot delivers an image (#658)', () => {
       writeFileSync(join(dir, 'scrot'), `#!/bin/sh\nexec /bin/cp '${png}' "$1"\n`, { mode: 0o755 });
       const builtin = new URL('./builtin.ts', import.meta.url).pathname;
       const systemExe = new URL('../../util/system-exe.ts', import.meta.url).pathname;
-      const script = `(await import(${JSON.stringify(systemExe)})).__setLinuxSystemDirsForTests(${JSON.stringify([dir])});\n`
+      // Plain Linux even on a WSL machine: there local capture refuses (#901).
+      const wsl = new URL('../terminal/wsl-bridge.ts', import.meta.url).pathname;
+      const script = `(await import(${JSON.stringify(wsl)})).WSLBridge.isWSL = () => false;\n`
+        + `(await import(${JSON.stringify(systemExe)})).__setLinuxSystemDirsForTests(${JSON.stringify([dir])});\n`
         + `const { captureScreenTool } = await import(${JSON.stringify(builtin)});\n`
         + `process.stdout.write(JSON.stringify(await captureScreenTool.execute({})));`;
       const child = Bun.spawnSync(['bun', '-e', script], {
@@ -821,7 +824,10 @@ describe('a routed screenshot delivers an image (#658)', () => {
       writeFileSync(join(dir, 'scrot'), `#!/bin/sh\nexec /bin/cp '${png}' "$1"\n`, { mode: 0o755 });
       const builtin = new URL('./builtin.ts', import.meta.url).pathname;
       const systemExe = new URL('../../util/system-exe.ts', import.meta.url).pathname;
-      const script = `(await import(${JSON.stringify(systemExe)})).__setLinuxSystemDirsForTests(${JSON.stringify([dir])});\n`
+      // Plain Linux even on a WSL machine: there local capture refuses (#901).
+      const wsl = new URL('../terminal/wsl-bridge.ts', import.meta.url).pathname;
+      const script = `(await import(${JSON.stringify(wsl)})).WSLBridge.isWSL = () => false;\n`
+        + `(await import(${JSON.stringify(systemExe)})).__setLinuxSystemDirsForTests(${JSON.stringify([dir])});\n`
         + `const { captureScreenTool } = await import(${JSON.stringify(builtin)});\n`
         + `process.stdout.write(JSON.stringify(await captureScreenTool.execute({})));`;
       const child = Bun.spawnSync(['bun', '-e', script], {

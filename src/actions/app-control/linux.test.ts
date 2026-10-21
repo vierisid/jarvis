@@ -45,7 +45,7 @@ type Action =
   | { op: 'listWindows' }
   | { op: 'click'; action?: string }
   | { op: 'focus'; pid: number };
-type Outcome = { ok: boolean; error?: string; code?: string; effect?: string; ms?: number };
+type Outcome = { ok: boolean; error?: string; code?: string; effect?: string; ms?: number; value?: unknown };
 
 const CAPTURE_FILE_TS = new URL('./capture-file.ts', import.meta.url).href;
 const SYSTEM_EXE_TS = new URL('../../util/system-exe.ts', import.meta.url).href;
@@ -83,13 +83,14 @@ async function runController(
       const started = performance.now();
       let o;
       try {
+        let value;
         if (a.op === 'type') await ctrl.typeText(a.text);
-        else if (a.op === 'activeWindow') await ctrl.getActiveWindow();
-        else if (a.op === 'listWindows') await ctrl.listWindows();
+        else if (a.op === 'activeWindow') value = await ctrl.getActiveWindow();
+        else if (a.op === 'listWindows') value = await ctrl.listWindows();
         else if (a.op === 'click') await ctrl.clickElement(element(a.action));
         else if (a.op === 'focus') await ctrl.focusWindow(a.pid);
         else await ctrl.pressKeys(a.keys);
-        o = { ok: true };
+        o = value === undefined ? { ok: true } : { ok: true, value };
       } catch (e) {
         o = { ok: false, error: e instanceof Error ? e.message : String(e) };
         if (e && e.outcome) Object.assign(o, { code: e.outcome.code, effect: e.outcome.effect });
@@ -509,6 +510,45 @@ describe('X tools come from the system directories, never PATH (#900)', () => {
 });
 
 /**
+ * #904: every window lookup ran a bare `xprop -id`, which prints every
+ * property the window has, _NET_WM_ICON included (31 KB for one window with a
+ * seven-size icon set, measured with xprop 1.2.8), once per window. Only three
+ * are read. The fake answers the way xprop does: each asked-for property, or
+ * "not found" for one the window lacks; asked for nothing, it prints an icon.
+ */
+describe('window lookups ask xprop only for what they read (#904)', () => {
+  let dir: string;
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'jarvis-xprop-fields-'));
+    writeFileSync(join(dir, 'xdotool'), ['#!/bin/sh',
+      'case "$1" in search|getactivewindow) echo 77;; getwindowgeometry) printf "Window 77\n  Position: 1,2 (screen: 0)\n  Geometry: 30x40\n";; esac', ''].join('\n'));
+    writeFileSync(join(dir, 'xprop'), ['#!/bin/sh',
+      `printf '%s\\n' "$*" >> '${join(dir, 'calls')}'`,
+      'shift 2',
+      '[ $# -eq 0 ] && { echo "_NET_WM_ICON(CARDINAL) = Icon (16 x 16):"; echo "WM_NAME(STRING) = \"Editor\""; echo "_NET_WM_PID(CARDINAL) = 42"; exit 0; }',
+      'for p in "$@"; do case "$p" in',
+      '  WM_NAME) echo "WM_NAME(STRING) = \"Editor\"";;',
+      '  _NET_WM_PID) echo "_NET_WM_PID(CARDINAL) = 42";;',
+      '  *) echo "$p:  not found.";;',
+      'esac; done', ''].join('\n'));
+    for (const tool of ['xdotool', 'xprop']) chmodSync(join(dir, tool), 0o755);
+  });
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('getActiveWindow, listWindows and focusWindow pass the three properties, and a missing one reads as Unknown', async () => {
+    rmSync(join(dir, 'calls'), { force: true });
+    const outcomes = await runController(dir, [{ op: 'activeWindow' }, { op: 'listWindows' }, { op: 'focus', pid: 42 }]);
+    const window = { pid: 42, title: 'Editor', className: 'Unknown', bounds: { x: 1, y: 2, width: 30, height: 40 }, focused: true };
+    expect(outcomes).toEqual([{ ok: true, value: window }, { ok: true, value: [window] }, { ok: true }]);
+    expect(readFileSync(join(dir, 'calls'), 'utf-8').trim().split('\n')).toEqual(Array(3).fill('-id 77 WM_NAME WM_CLASS _NET_WM_PID'));
+  });
+});
+
+/**
  * #895: the input and window calls went through Bun `$`, which has no
  * timeout, so on a wedged X server they never settled. Each now gives up at
  * the bound, the same SIGKILL-backed one as the captures (#802).
@@ -598,7 +638,7 @@ describe('X calls on a wedged X server give up at the bound (#895)', () => {
       expect(outcome).toMatchObject({ ok: false });
       expect(outcome!.error).toMatch(/xprop did not finish within 0\.3s and was stopped/);
       expect(outcome!.ms!).toBeLessThan(BOUND_MS + 2_500);
-      expect(readFileSync(log, 'utf-8').trim().split('\n').filter((l) => l.startsWith('xprop'))).toEqual(['xprop -id 1']);
+      expect(readFileSync(log, 'utf-8').trim().split('\n').filter((l) => l.startsWith('xprop'))).toEqual(['xprop -id 1 WM_NAME WM_CLASS _NET_WM_PID']);
     } finally {
       rmSync(perWindow, { recursive: true, force: true });
     }
