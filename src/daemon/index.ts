@@ -4940,8 +4940,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // sources (Google OAuth file, etc.) before pieces start asking for
     // connections. Each `jarvis:<source>` external id dispatches to the
     // matching source; non-prefixed ids fall through to the `app_connection`
-    // repo (encrypted at rest).
-    const credentialResolver = new CredentialResolver();
+    // repo (encrypted at rest). A pasted OAuth2 row's token refresh (#954)
+    // connects under the same egress rule as the workflow HTTP step (#961).
+    const credentialResolver = new CredentialResolver({
+      egressPolicy: isHostedInstall(jarvisConfig) ? 'public-only' : 'private-allowed',
+    });
     {
       // Registered unconditionally with a getter reading the live
       // `googleAuth` binding: the settings hot-reload google applier
