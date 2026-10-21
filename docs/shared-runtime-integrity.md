@@ -104,7 +104,10 @@ and publishes as root. On top of that:
    Ignore `engineDigest` in stdout and in the summary file.
 
    The builder must be the ONLY process running as the build uid that holds
-   the pipe's write end. Open it in root's process, then exec the builder
+   the pipe's write end. Root's process keeps only the read end and closes
+   its own copy of the write end once the builder child has it; the child
+   gets only the write end, as fd 3. Open the pipe in root's process, then
+   exec the builder
    (setpriv-style, with no wrapper in between). A wrapper running as the build
    uid that keeps fd 3 open, such as `timeout`, is a second way into the pipe.
    This was measured with a hostile test piece that wrote through
@@ -223,16 +226,20 @@ How the host builds it:
 
 1. Stop setting `BUN_RUNTIME_TRANSPILER_CACHE_PATH` for the builder. Its
    warm-up then lands under its scratch HOME and is discarded with it.
-2. After root has published `main.js` and checked it against `engineDigest`,
+2. After root has published `main.js` and checked it against the digest read
+   from `--digest-fd` (install-version steps 2 and 3; never the summary's
+   `engineDigest`, which a piece can forge),
    boot the engine once to fill an empty cache directory. Run it as a
    dedicated uid that runs nothing else (not `jarvis-build`):
 
    ```
-   BUN_RUNTIME_TRANSPILER_CACHE_PATH=<empty dir> bun --config=<empty file> --smol --no-install <published main.js>
+   BUN_RUNTIME_TRANSPILER_CACHE_PATH=<empty dir> bun --config=<empty file> --no-env-file --smol --no-install <published main.js>
    ```
 
    - The `=` in `--config=<path>` is required. `--config <path>` and `-c`
      silently fall back to the cwd `bunfig.toml` (#863).
+   - `--no-env-file` keeps a `.env` in the cwd out of it. It is ignored
+     before Bun 1.3.3 (measured), so warm with 1.3.3 or later.
    - Leave `SANDBOX_ID` unset, so the engine exits after boot.
 3. Optionally boot it twice into two empty directories and `cmp` the two
    files. The entry is deterministic.
