@@ -857,6 +857,20 @@ export class WebSocketServer {
   getClients(): Set<ServerWebSocket<unknown>> {
     return this.clients;
   }
+
+  /**
+   * Whether a dashboard socket may speak for this sidecar (#1026): its panel
+   * session, re-resolved now so a revoked enrollment no longer counts, was
+   * opened from that sidecar's token. Every /ws socket carries one, except
+   * under `insecure_open_access`, where no socket has an identity and every
+   * one already has the whole dashboard API: there, any socket may.
+   */
+  socketSpeaksForSidecar(ws: unknown, sidecarId: string): boolean {
+    if (this.insecureOpenAccess) return true;
+    const sessionId = (ws as { data?: { panel_session?: unknown } } | null)?.data?.panel_session;
+    if (typeof sessionId !== 'string' || !this.sidecarManager) return false;
+    return this.sidecarManager.resolvePanelSession(sessionId)?.sid === sidecarId;
+  }
 }
 
 /**

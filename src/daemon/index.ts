@@ -164,6 +164,7 @@ import {
   SUB_PEBBLE_COLORS, PEBBLE_ROOMS, exactRoomKey, findRoomKey, type PanelLookups, type SubPebbleCand,
 } from "./pebble-intents.ts";
 import { makeSpeakConfirmation } from "./pebble-confirmation.ts";
+import { runRoomPanelIntent, type RoomPanelDeps } from "./pebble-room-panel.ts";
 import { PEBBLE_CHANNEL } from "./pebble-dialogue.ts";
 import { makePalettePick, makePebbleNavTool } from "./pebble-nav-tool.ts";
 import { fetchPebbleForegroundApp, fetchPebbleScreenshot, pebbleActionDirectives, type PebbleDesktopDispatch } from "./pebble-desktop-context.ts";
@@ -2277,11 +2278,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // but can run to the bus's queue TTL, so show it is working, and
           // drop the reply if the turn was cancelled meanwhile.
           await setState(sidecarId, 'thinking', '');
+          // Only this sidecar's panels may say whether it switched (#1026).
           const outcome = await wsService.requestRoomAction({
             room: target.key,
             action: 'switch_tab',
             args: { tab },
-          });
+          }, undefined, { sidecar: sidecarId });
           console.log(`[ambient-ui] in-panel action: switch_tab tab="${tab}" on ${target.title}: ${outcome}`);
           if (ctrl.cancelled) return true;
           await speakConfirmation(sidecarId, tabSwitchReply(target.title, tabRaw, outcome), ctrl);
@@ -2670,9 +2672,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
       // The one confirmation every fast path speaks; a cancelled turn leaves
       // the pebble to whoever cancelled it (#964). See pebble-confirmation.ts.
+      // Its mirror goes to the dashboard only, never to Telegram or Discord:
+      // it acknowledges something done on this screen (#1026).
       const speakConfirmation = makeSpeakConfirmation({
         setState,
-        heartbeat: (text) => wsService.broadcastHeartbeat(text),
+        heartbeat: (text) => wsService.broadcastHeartbeatToDashboard(text),
         synthesizer: () => {
           const tts = pebbleTTS;
           return tts ? (text) => tts.synthesize(text) : null;
@@ -2916,6 +2920,29 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         return true;
       };
 
+      // What the open/close <room> fast path may do. See pebble-room-panel.ts.
+      const roomPanelDeps: RoomPanelDeps = {
+        setState,
+        speak: speakConfirmation,
+        openPanel: (sidecarId, key) => {
+          const meta = ROOMS[key]!;
+          return sidecarManager.dispatchRPC(sidecarId, 'panel.spawn', {
+            url: dashboardURL(key),
+            title: meta.title,
+            bounds: boundsForRoom(key, meta.w, meta.h),
+            resizable: true,
+            always_on_top: meta.alwaysOnTop ?? false,
+            multi_instance: false,
+          });
+        },
+        closePanel: async (sidecarId, id) => { await sidecarManager.dispatchRPC(sidecarId, 'panel.close', { id }); },
+        findPanel: (sidecarId, key) => findPanel(sidecarId, key),
+        trackPanel,
+        untrackPanel,
+        log: (message) => console.log(message),
+        warn: (message, err) => console.warn(message, err),
+      };
+
       // tryHandlePanelIntent looks for "open|show|launch <room>" or
       // "close|hide|dismiss <room>" anywhere in the user text. On match
       // it dispatches the right panel RPC, speaks a short confirmation
@@ -2995,61 +3022,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (!key) return false;
 
         const meta = ROOMS[key]!;
-        const confirm = roomAction === 'open' ? `Opening ${meta.title}.` : `Closing ${meta.title}.`;
         console.log(`[ambient-ui] panel intent: ${roomAction} ${key} (matched "${m[0]}")`);
-
-        // Speak the confirmation through the queue-based TTS path so the
-        // user hears feedback even before the window finishes spawning. A turn
-        // already cancelled is left to whoever cancelled it (#964).
-        if (ctrl.cancelled) return true;
-        await setState(sidecarId, 'thinking', '');
-        try { wsService.broadcastHeartbeat(confirm); } catch { /* ignore */ }
-
-        if (roomAction === 'open') {
-          try {
-            const result = await sidecarManager.dispatchRPC(sidecarId, 'panel.spawn', {
-              url: dashboardURL(key),
-              title: meta.title,
-              bounds: boundsForRoom(key, meta.w, meta.h),
-              resizable: true,
-              always_on_top: meta.alwaysOnTop ?? false,
-              multi_instance: false,
-            });
-            // panel.spawn returns { id: "<panel-id>" } — track it so
-            // window-management commands ("expand it", "close the
-            // workflows window") can resolve a target.
-            const id = (result && typeof result === 'object' && 'id' in (result as object))
-              ? String((result as { id?: unknown }).id ?? '')
-              : '';
-            if (id) {
-              trackPanel(sidecarId, { id, key, title: meta.title });
-            }
-          } catch (err) {
-            console.warn(`[ambient-ui] panel.spawn(${key}) failed:`, err);
-          }
-        } else {
-          // panel.close — resolve the target by room key against our
-          // tracker. If multiple panels match (e.g. several workflow
-          // windows), close the most recent.
-          try {
-            const target = findPanel(sidecarId, key);
-            if (target) {
-              await sidecarManager.dispatchRPC(sidecarId, 'panel.close', { id: target.id });
-              untrackPanel(sidecarId, target.id);
-            } else {
-              console.log(`[ambient-ui] no tracked panel for key "${key}" — close is a no-op`);
-            }
-          } catch (err) {
-            console.warn(`[ambient-ui] panel.close(${key}) failed:`, err);
-          }
-        }
-
-        // Speak the confirmation (single sentence, fits in one TTS clip). This
-        // was its own copy, which set `speaking` after the clip was synthesized
-        // without looking at the flag again, so a turn cancelled meanwhile was
-        // left in `speaking` (#964). The confirm was already broadcast above, so
-        // no second heartbeat.
-        await speakConfirmation(sidecarId, confirm, ctrl, { heartbeat: false });
+        await runRoomPanelIntent(roomPanelDeps, sidecarId, { action: roomAction, key, title: meta.title }, ctrl);
         return true;
       };
 

@@ -6,6 +6,7 @@
  */
 
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { describeRoomAction, isVoiceAffirmative, roomActionReply, WebSocketService } from './ws-service.ts';
 import { TOOL_RESULT_GRACE_MS } from '../comms/realtime.ts';
 import { ROOM_ACTION_QUEUE_TTL_MS } from './room-action-results.ts';
@@ -22,6 +23,19 @@ import { buildTaintGating } from '../authority/taint-gating.ts';
 import { EmergencyController } from '../authority/emergency.ts';
 import type { Intent } from '../voice/intent.ts';
 
+// Panel sessions as the sidecar manager resolves them: session id -> the
+// sidecar whose token opened it. A session missing here is revoked or unknown.
+const PEBBLE = 'sc-pebble';
+const PEBBLE_SESSION = 'sess-pebble';
+const OTHER_SESSION = 'sess-other';
+const sessionSids = new Map<string, string>([[PEBBLE_SESSION, PEBBLE], [OTHER_SESSION, 'sc-other']]);
+const sessions = {
+  resolvePanelSession: (id: string) => {
+    const sid = sessionSids.get(id);
+    return sid ? { id, sid } : null;
+  },
+};
+
 const makeService = (orchestrator: AgentOrchestrator = new AgentOrchestrator()) => {
   const fakeAgent = {
     setDelegationCallback: () => {},
@@ -30,11 +44,18 @@ const makeService = (orchestrator: AgentOrchestrator = new AgentOrchestrator()) 
   } as never;
   const svc = new WebSocketService(0, fakeAgent);
   const sent: Array<{ type: string; payload: Record<string, unknown> }> = [];
-  const ws = { send: (raw: string) => { sent.push(JSON.parse(raw)); }, sendBinary: () => {} } as never;
+  // A native panel of the pebble's sidecar: its socket carries the panel
+  // session that sidecar's token opened (#1026).
+  const ws = { send: (raw: string) => { sent.push(JSON.parse(raw)); }, sendBinary: () => {}, data: { panel_session: PEBBLE_SESSION } } as never;
   const internals = svc as unknown as {
-    wsServer: { getClients: () => Set<unknown> };
+    wsServer: {
+      getClients: () => Set<unknown>;
+      setSidecarManager: (m: unknown) => void;
+      setInsecureOpenAccess: (on: boolean) => void;
+    };
     routeMessage: (msg: unknown, ws: unknown) => Promise<unknown>;
   };
+  internals.wsServer.setSidecarManager(sessions);
   internals.wsServer.getClients().add(ws);
   const broadcastResultId = (): string => {
     const note = sent.find((m) => m.type === 'notification' && m.payload.source === 'room_action');
@@ -48,7 +69,7 @@ describe('requestRoomAction', () => {
   test('broadcasts the action with a resultId and resolves on the panel answer', async () => {
     for (const [accepted, outcome] of [[true, 'accepted'], [false, 'rejected']] as const) {
       const { svc, ws, sent, internals, broadcastResultId } = makeService();
-      const pending = svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 1000);
+      const pending = svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 1000, { sidecar: PEBBLE });
       expect(sent[0]!.payload).toMatchObject({ source: 'room_action', room: 'settings', action: 'switch_tab', args: { tab: 'voice' } });
       const resultId = broadcastResultId();
       expect(typeof resultId).toBe('string');
@@ -64,7 +85,7 @@ describe('requestRoomAction', () => {
   test('with no answer it says so instead of assuming success', async () => {
     const { svc } = makeService();
     // A real action (#969 refuses workflows/switch_tab, which no handler runs).
-    expect(await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 10))
+    expect(await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 10, { sidecar: PEBBLE }))
       .toBe('no_answer');
   });
 
@@ -73,16 +94,104 @@ describe('requestRoomAction', () => {
     internals.wsServer.getClients().clear();
     const t0 = Date.now();
     // Nothing was sent, so not "sent but no answer" (#1011).
-    expect(await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 60_000))
+    expect(await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 60_000, { sidecar: PEBBLE }))
       .toBe('unreached');
     expect(Date.now() - t0).toBeLessThan(1000);
   });
 
   test('an answer naming another request does not settle this one', async () => {
     const { svc, ws, internals } = makeService();
-    const pending = svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 30);
+    const pending = svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 30, { sidecar: PEBBLE });
     await internals.routeMessage({ type: 'room_action_result', payload: { resultId: 'someone-else', accepted: true } }, ws);
     expect(await pending).toBe('no_answer');
+  });
+});
+
+// #1026: the pebble's tab switch is broadcast with its resultId to every /ws
+// client, and the first answer used to win, so any local client could make
+// the pebble say a switch did or did not happen. Only a socket whose panel
+// session belongs to the asking sidecar is listened to now.
+describe("the pebble's tab switch hears only its own sidecar's panels (#1026)", () => {
+  type Sent = { type: string; payload: Record<string, unknown> };
+  const socket = (session?: string) => {
+    const sent: Sent[] = [];
+    const ws = {
+      send: (raw: string) => { sent.push(JSON.parse(raw)); return raw.length; },
+      sendBinary: () => {},
+      ...(session ? { data: { panel_session: session } } : { data: {} }),
+    };
+    return { ws, sent };
+  };
+  const setup = () => {
+    const base = makeService();
+    base.internals.wsServer.getClients().clear();
+    const own = socket(PEBBLE_SESSION);
+    const foreign = socket(OTHER_SESSION);
+    const anonymous = socket();
+    const revoked = socket('sess-revoked');
+    for (const c of [own, foreign, anonymous, revoked]) base.internals.wsServer.getClients().add(c.ws);
+    const answer = (from: { ws: unknown }, resultId: unknown, accepted: boolean) =>
+      base.internals.routeMessage({ type: 'room_action_result', payload: { resultId, accepted }, timestamp: Date.now() }, from.ws);
+    const started = (from: { ws: unknown }, resultId: unknown) =>
+      base.internals.routeMessage({ type: 'room_action_result', payload: { resultId, started: true }, timestamp: Date.now() }, from.ws);
+    const idSentTo = (c: { sent: Sent[] }) => c.sent.find((m) => m.payload?.source === 'room_action')!.payload.resultId;
+    return { svc: base.svc, internals: base.internals, own, foreign, anonymous, revoked, answer, started, idSentTo };
+  };
+  const switchTab = { room: 'settings', action: 'switch_tab', args: { tab: 'voice' } };
+
+  test('another sidecar, an unbound socket or a revoked session cannot answer it', async () => {
+    const { svc, own, foreign, anonymous, revoked, answer, idSentTo } = setup();
+    const pending = svc.requestRoomAction(switchTab, 1000, { sidecar: PEBBLE });
+    // The action and its resultId still reach everyone: a tab switch keeps
+    // every panel in step (#974).
+    const id = idSentTo(own);
+    for (const c of [foreign, anonymous, revoked]) expect(idSentTo(c)).toBe(id);
+    // The bug: the first of these settled the wait as "Switched".
+    for (const c of [foreign, anonymous, revoked]) await answer(c, id, true);
+    await answer(own, id, false);
+    expect(await pending).toBe('rejected');
+  });
+
+  test('only the own panel can say it started', async () => {
+    const { svc, own, foreign, started, idSentTo } = setup();
+    const foreignOnly = svc.requestRoomAction(switchTab, 20, { sidecar: PEBBLE });
+    await started(foreign, idSentTo(foreign));
+    expect(await foreignOnly).toBe('no_answer');
+    const { svc: svc2, own: own2, started: started2, idSentTo: idSentTo2 } = setup();
+    const ownStarted = svc2.requestRoomAction(switchTab, 20, { sidecar: PEBBLE });
+    await started2(own2, idSentTo2(own2));
+    expect(await ownStarted).toBe('started');
+    void own;
+  });
+
+  test('with no socket of the asking sidecar connected it is unreached at once, though the others still get it', async () => {
+    const { svc, internals, foreign, anonymous, idSentTo } = setup();
+    for (const c of [...internals.wsServer.getClients()]) {
+      if (c !== foreign.ws && c !== anonymous.ws) internals.wsServer.getClients().delete(c);
+    }
+    const t0 = Date.now();
+    expect(await svc.requestRoomAction(switchTab, 60_000, { sidecar: PEBBLE })).toBe('unreached');
+    expect(Date.now() - t0).toBeLessThan(1000);
+    for (const c of [foreign, anonymous]) expect(typeof idSentTo(c)).toBe('string');
+  });
+
+  test('under insecure_open_access no socket has an identity, so any may answer', async () => {
+    const { svc, internals, anonymous, answer, idSentTo } = setup();
+    internals.wsServer.setInsecureOpenAccess(true);
+    const pending = svc.requestRoomAction(switchTab, 1000, { sidecar: PEBBLE });
+    await answer(anonymous, idSentTo(anonymous), true);
+    expect(await pending).toBe('accepted');
+  });
+
+  test('the pebble names its sidecar when it asks', () => {
+    const src = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+    const start = src.indexOf('const tryHandleInPanelAction = async (');
+    const end = src.indexOf('tabSwitchReply(target.title, tabRaw, outcome)', start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const body = src.slice(start, end);
+    const call = body.slice(body.indexOf('await wsService.requestRoomAction({'));
+    expect(call.slice(0, call.indexOf(');') + 2)).toContain('}, undefined, { sidecar: sidecarId });');
   });
 });
 
@@ -333,7 +442,7 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
   test('the panels are told too; a dashboard not asked is not', async () => {
     const { svc, speaker, other, actionTo } = setup();
     // The pebble's request: every panel may answer, so every one is told.
-    await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 20);
+    await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 20, { sidecar: PEBBLE });
     for (const c of [speaker, other]) expect(actionTo(c)!.payload).toMatchObject({ expiresInMs: 20 });
     // Nobody is named to claim the pebble's request (#1025): any panel may run it.
     for (const c of [speaker, other]) expect(actionTo(c)!.payload.claim).toBeUndefined();
@@ -586,7 +695,9 @@ describe('a side-effecting room action runs on one dashboard only (#974)', () =>
     };
     const speaker = mk();
     const other = mk();
+    // A native panel of the pebble's sidecar (#1026).
     const panel = mk();
+    (panel.ws as { data?: unknown }).data = { panel_session: PEBBLE_SESSION };
     for (const c of [speaker, other, panel]) base.internals.wsServer.getClients().add(c.ws);
     // A current dashboard says its zone (#1022).
     (base.svc as unknown as { dashboardTimeZones: WeakMap<object, unknown> }).dashboardTimeZones.set(speaker.ws, { zone: 'UTC' });
@@ -642,8 +753,13 @@ describe('a side-effecting room action runs on one dashboard only (#974)', () =>
     const { svc, speaker, other, panel, frames } = setup();
     expect(await svc.requestRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x' } }, 20)).toBe('rejected');
     for (const c of [speaker, other, panel]) expect(frames(c)).toEqual([]);
-    // A presentation action with nobody named still goes to the panels.
-    expect(await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 20)).toBe('no_answer');
+    // A presentation action from the pebble, named by its sidecar, still goes
+    // to the panels.
+    expect(await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 20, { sidecar: PEBBLE })).toBe('no_answer');
+    for (const c of [speaker, other, panel]) expect(frames(c)).toEqual(['room_action:switch_tab']);
+    // With neither a dashboard nor a sidecar named, nobody's answer could
+    // count (#1026), so it goes nowhere.
+    expect(await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 20)).toBe('rejected');
     for (const c of [speaker, other, panel]) expect(frames(c)).toEqual(['room_action:switch_tab']);
   });
 });
