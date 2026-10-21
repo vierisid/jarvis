@@ -84,6 +84,7 @@ import { TaskDispatcher } from '../agents/conv/task-dispatcher.ts';
 import { DialogueCompactor } from '../agents/conv/dialogue-compactor.ts';
 import type { ConvTaskEvent } from '../agents/conv/conv-orchestrator.ts';
 import { getRecentConversation, getMessages } from '../vault/conversations.ts';
+import { PEBBLE_CHANNEL, PEBBLE_DIALOGUE_WINDOW_MS } from './pebble-dialogue.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import type { ScopedChatInput } from '../brief/chat-transport.ts';
 
@@ -427,6 +428,9 @@ export class AgentService implements Service, IAgentService {
           ...(contextKey ? { contextKey } : {}),
           ...(siteContext ? { siteContext } : {}),
           ...(conversation ? { signal: conversation.signal } : {}),
+          // The router's own "execute, don't ask" (#927); the panel context
+          // above goes to the task tier only.
+          ...(channel === PEBBLE_CHANNEL ? { pebbleVoice: true } : {}),
         }, taskListener)) {
           if (event.type === 'text') {
             // Insert a separator so the acknowledgment text doesn't blur into
@@ -723,6 +727,9 @@ export class AgentService implements Service, IAgentService {
     try {
       const recent = getRecentConversation(channel);
       if (!recent) return [];
+      // A Pebble turn continues only a recent exchange (#927).
+      if (channel === PEBBLE_CHANNEL
+        && Date.now() - recent.conversation.last_message_at > PEBBLE_DIALOGUE_WINDOW_MS) return [];
       conversationId = recent.conversation.id;
     } catch (err) {
       console.warn('[AgentService] Failed to load recent dialogue:', err);

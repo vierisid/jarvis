@@ -164,6 +164,7 @@ import {
   SUB_PEBBLE_COLORS, PEBBLE_ROOMS, exactRoomKey, findRoomKey, type PanelLookups, type SubPebbleCand,
 } from "./pebble-intents.ts";
 import { makeSpeakConfirmation } from "./pebble-confirmation.ts";
+import { PEBBLE_CHANNEL, recordPebbleExchange } from "./pebble-dialogue.ts";
 import { makePalettePick, makePebbleNavTool } from "./pebble-nav-tool.ts";
 import { fetchPebbleForegroundApp, fetchPebbleScreenshot, pebbleActionDirectives, type PebbleDesktopDispatch } from "./pebble-desktop-context.ts";
 import { skipGenericSidecarEvent } from "./sidecar-event-routing.ts";
@@ -3334,13 +3335,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         sidecarId: string,
         userText: string,
         ctrl: { cancelled: boolean },
-        opts?: { image?: { base64: string; mediaType: string } },
+        // `historyText` is what the exchange is stored as when the prompt
+        // carries more than the user said (the region path appends framing
+        // about an image the stored history will not have).
+        opts?: { image?: { base64: string; mediaType: string }; historyText?: string },
       ): Promise<void> => runWithOrigin('user', () => runResponseCycleTurn(sidecarId, userText, ctrl, opts));
       const runResponseCycleTurn = async (
         sidecarId: string,
         userText: string,
         ctrl: { cancelled: boolean },
-        opts?: { image?: { base64: string; mediaType: string } },
+        opts?: { image?: { base64: string; mediaType: string }; historyText?: string },
       ): Promise<void> => {
         const cycleStart = Date.now();
         // Mark this machine as the one in use so any background task launched
@@ -3468,6 +3472,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         let fullText = '';
         const llmStart = Date.now();
         let llmDone = false;
+        // Set on a stream error, so the fallback line is never stored as a
+        // reply (see recordPebbleExchange).
+        let streamFailed = false;
         try {
           // T9 — auto-screenshot for spatial queries. If the user is
           // asking "where is X" / "show me Y" / "how to open Z" and no
@@ -3539,12 +3546,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                 userText,
                 imageInput.base64,
                 imageInput.mediaType,
-                'pebble',
+                PEBBLE_CHANNEL,
                 panelCtx || undefined,
               )
             : agentService.streamMessage(
                 userText,
-                'pebble',
+                PEBBLE_CHANNEL,
                 panelCtx || undefined,
               );
           const { stream, onComplete } = handle;
@@ -3795,6 +3802,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               break;
             } else if (event.type === 'error') {
               console.warn('[ambient-ui] stream error:', event.error);
+              streamFailed = true;
               if (!fullText) fullText = "I had trouble with that — say it again?";
               llmDone = true;
               break;
@@ -3814,6 +3822,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           const tail = unsynth.trim();
           if (tail) enqueueSentence(tail);
           unsynth = '';
+
+          // The finished exchange, so the next Pebble turn has history to
+          // resolve "do that" against (#927). A dismissed turn returned above.
+          if (!streamFailed && !ctrl.cancelled) recordPebbleExchange(opts?.historyText ?? userText, fullText);
 
           // Fire-and-forget extraction + learning.
           void onComplete(fullText);
@@ -4184,6 +4196,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         try {
           await runResponseCycle(sidecarId, promptText, ctrl, {
             image: { base64: imageBase64, mediaType: mimeType },
+            // Stored as what the user said, without the image framing (#927).
+            historyText: userText,
           });
         } catch (err) {
           console.warn('[ambient-ui] region voice cycle error:', err);
