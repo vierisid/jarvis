@@ -50,7 +50,8 @@ const ROOM_ACTION_REFERENCE = `Available actions by room (pass via dashboard_roo
 - content: switch_view{view: kanban|list}, search{query}, set_filter{field: stage|type, value}, select{name}, create_content{title,type?}, advance{name?}, regress{name?}, schedule{name?,when}
 - tasks: set_filter{field: status|priority|assigned_to, value}, search{query}
 - goals: ${switchTab('goals')}, set_filter{field: status|health, value}
-- memory: ${switchTab('memory')}`;
+- memory: ${switchTab('memory')}
+A "when" is a day and/or a time, like 'tomorrow at 3pm', 'friday at 10am', 'friday' or 'in an hour': an hour needs am/pm, a 24-hour clock or a part of day.`;
 // Every action named here must be one its room carries out (ROOM_ACTIONS);
 // anything else is refused before it is sent (#969), and
 // room-actions-vocabulary.test.ts holds this list to the table.

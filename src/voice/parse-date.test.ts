@@ -1,4 +1,4 @@
-import { test, expect, describe } from 'bun:test';
+import { afterEach, test, expect, describe } from 'bun:test';
 import { parseRelativeDate } from './parse-date.ts';
 
 /**
@@ -194,7 +194,7 @@ describe('everyday phrases read with fixed defaults, and what is not read is ref
     expect(ymdhm(parseRelativeDate('next month', new Date(2026, 11, 15, 12, 0).getTime())!.ts)).toBe('2027-01-01 09:00');
   });
 
-  test('spoken clock forms and number words, which need am/pm or a part of day like any hour (#1035)', () => {
+  test('spoken clock forms and number words, which need am/pm or a part of day like any hour (#1022 review)', () => {
     const want: Record<string, string> = {
       'in two hours': '2026-04-28 14:00', 'in five minutes': '2026-04-28 12:05', 'in twelve days': '2026-05-10 12:00',
       "at 5 o'clock pm": '2026-04-28 17:00', '5 oclock in the afternoon': '2026-04-28 17:00',
@@ -212,15 +212,15 @@ describe('everyday phrases read with fixed defaults, and what is not read is ref
     }
   });
 
-  test('"today" alone is 17:00, or tomorrow 09:00 once that has passed; a time today is not moved once passed (#1035)', () => {
+  test('"today" alone is 17:00, or tomorrow 09:00 once that has passed; a time today is not moved once passed (#1022 review)', () => {
     expect(ymdhm(parseRelativeDate('today', NOW)!.ts)).toBe('2026-04-28 17:00');
     expect(ymdhm(parseRelativeDate('today', new Date(2026, 3, 28, 18, 0).getTime())!.ts)).toBe('2026-04-29 09:00');
-    // In the past, not moved to tomorrow as it was before.
+    // In the past, for the daemon to refuse; it was moved to tomorrow before.
     expect(ymdhm(parseRelativeDate('today at 9am', NOW)!.ts)).toBe('2026-04-28 09:00');
     expect(ymdhm(parseRelativeDate('9am today', NOW)!.ts)).toBe('2026-04-28 09:00');
   });
 
-  test('a time said in the minute it names is still now, not tomorrow (#1035)', () => {
+  test('a time said in the minute it names is still now, not tomorrow (#1022 review)', () => {
     const half = new Date(2026, 3, 28, 12, 0, 30).getTime();
     expect(ymdhm(parseRelativeDate('noon', half)!.ts)).toBe('2026-04-28 12:00');
     expect(ymdhm(parseRelativeDate('noon', half + 60_000)!.ts)).toBe('2026-04-29 12:00');
@@ -266,3 +266,114 @@ describe('everyday phrases read with fixed defaults, and what is not read is ref
     }
   });
 });
+
+describe('a time is read in the zone given, not the runtime\'s (#1022)', () => {
+  // Put back by name: in Bun, once TZ is deleted, setting it again no longer
+  // moves the runtime's zone, so the zone it started in is set instead.
+  const runtimeZone = process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  afterEach(() => {
+    process.env.TZ = runtimeZone;
+  });
+  const at = (text: string, now: string, zone: string) => {
+    const r = parseRelativeDate(text, Date.parse(now), zone);
+    return r && new Date(r.ts).toISOString();
+  };
+
+  test('the same words at the same instant are different times in different zones', () => {
+    // The runtime is somewhere else again, and does not decide.
+    process.env.TZ = 'Europe/Rome';
+    expect(at('tomorrow at 9am', '2026-10-20T15:00:00Z', 'America/New_York')).toBe('2026-10-21T13:00:00.000Z');
+    // 23:30 on the 20th in New York is 12:30 on the 21st in Tokyo: "tomorrow" is a different day.
+    expect(at('tomorrow at 9am', '2026-10-21T03:30:00Z', 'America/New_York')).toBe('2026-10-21T13:00:00.000Z');
+    expect(at('tomorrow at 9am', '2026-10-21T03:30:00Z', 'Asia/Tokyo')).toBe('2026-10-22T00:00:00.000Z');
+    expect(at('tomorrow at 9am', '2026-10-20T20:00:00Z', 'Asia/Kolkata')).toBe('2026-10-22T03:30:00.000Z');
+    expect(at('2026-10-21 09:00', '2026-10-20T15:00:00Z', 'UTC')).toBe('2026-10-21T09:00:00.000Z');
+  });
+
+  test('around a clock change: the offset of the day named, a skipped time moves on, a repeated one is the first', () => {
+    process.env.TZ = 'UTC';
+    // Said in EDT, for a day in EST.
+    expect(at('tomorrow at 9am', '2026-10-31T16:00:00Z', 'America/New_York')).toBe('2026-11-01T14:00:00.000Z');
+    // 02:30 does not happen on 2027-03-14 in New York: it is 03:30 EDT.
+    expect(at('2027-03-14 02:30', '2027-03-01T00:00:00Z', 'America/New_York')).toBe('2027-03-14T07:30:00.000Z');
+    // 01:30 happens twice on 2026-11-01: the first, in EDT.
+    expect(at('2026-11-01 01:30', '2026-10-01T00:00:00Z', 'America/New_York')).toBe('2026-11-01T05:30:00.000Z');
+    // Santiago skips midnight: 00:30 is 01:30, and "tomorrow" is that day at 09:00 -03.
+    expect(at('2026-09-06 00:30', '2026-09-01T00:00:00Z', 'America/Santiago')).toBe('2026-09-06T04:30:00.000Z');
+    expect(at('tomorrow', '2026-09-05T16:00:00Z', 'America/Santiago')).toBe('2026-09-06T12:00:00.000Z');
+    // Lord Howe moves by half an hour.
+    expect(at('2026-10-04 02:15', '2026-10-01T00:00:00Z', 'Australia/Lord_Howe')).toBe('2026-10-03T15:45:00.000Z');
+  });
+
+  test('everyday phrases around a clock change', () => {
+    process.env.TZ = 'UTC';
+    // Midnight starts the next day; Santiago has no 00:00 that day, so it is 01:00 -03.
+    expect(at('at midnight', '2026-09-05T23:00:00Z', 'America/Santiago')).toBe('2026-09-06T04:00:00.000Z');
+    // Tonight on the fall-back day is 21:00 EST.
+    expect(at('tonight', '2026-11-01T15:00:00Z', 'America/New_York')).toBe('2026-11-02T02:00:00.000Z');
+    // Said in EST, for the first day of EDT.
+    expect(at('tomorrow afternoon', '2027-03-13T15:00:00Z', 'America/New_York')).toBe('2027-03-14T19:00:00.000Z');
+    expect(at('3pm tomorrow', '2027-03-13T15:00:00Z', 'America/New_York')).toBe('2027-03-14T19:00:00.000Z');
+    expect(at('next week', '2027-03-13T15:00:00Z', 'America/New_York')).toBe('2027-03-15T13:00:00.000Z');
+    // A month-day in the repeated hour is the first; in the skipped one, moved on.
+    expect(at('nov 1 at 1:30am', '2026-10-20T15:00:00Z', 'America/New_York')).toBe('2026-11-01T05:30:00.000Z');
+    expect(at('mar 14 at 2:30am', '2027-03-01T15:00:00Z', 'America/New_York')).toBe('2027-03-14T07:30:00.000Z');
+    // End of day once 17:00 has passed on the fall-back day.
+    expect(at('eod', '2026-11-01T23:00:00Z', 'America/New_York')).toBe('2026-11-02T22:00:00.000Z');
+  });
+
+  test('read in a zone, every phrase is what the runtime reads when it is in that zone', () => {
+    const phrases = ['today at 3pm', 'today at 9am', 'tomorrow', 'tomorrow at 2:30am', 'tomorrow at 1:30am', 'yesterday at noon',
+      'friday', 'next sunday at 2:30am', 'sunday at 1:30am', '3pm', '2:30am', '00:30', 'in 3 hours', '2026-11-01 01:30',
+      '2027-03-14 02:30', '2026-09-06 00:30', '2026-10-04 02:15', 'monkey',
+      'at midnight', 'tonight', 'this morning', 'tomorrow afternoon', '3pm tomorrow', 'eod', 'next week', 'next month', 'oct 30 at 1:30am',
+      'mar 14 at 2:30am', 'nov 1 at 1:30am', 'the day after tomorrow', 'in half an hour', '7 in the evening'];
+    // Hours either side of a change in each zone, and an ordinary day.
+    const zones: Array<[string, string[]]> = [
+      ['America/New_York', ['2026-10-30T12:00:00Z', '2027-03-12T12:00:00Z']],
+      ['Europe/London', ['2026-10-23T12:00:00Z']],
+      ['America/Santiago', ['2026-09-03T12:00:00Z', '2026-04-02T12:00:00Z']],
+      ['Australia/Lord_Howe', ['2026-10-01T12:00:00Z']],
+      ['Asia/Kolkata', ['2026-10-20T12:00:00Z']],
+      ['Pacific/Chatham', ['2026-09-25T12:00:00Z']],
+    ];
+    let compared = 0;
+    let roundTrips = 0;
+    // Wall times these zones skip, which no instant reads back as.
+    const skipped = new Set(['America/New_York 2027-03-14 02:30', 'America/Santiago 2026-09-06 00:30', 'Australia/Lord_Howe 2026-10-04 02:15']);
+    const wallIn = (ts: number, zone: string) => {
+      const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: zone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+        .formatToParts(new Date(ts)).map((x) => [x.type, x.value]));
+      return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`;
+    };
+    for (const [zone, starts] of zones) {
+      process.env.TZ = zone;
+      for (const start of starts) {
+        for (let hour = 0; hour < 96; hour += 1) {
+          const now = Date.parse(start) + hour * 3_600_000 + 17 * 60_000;
+          for (const p of phrases) {
+            const local = parseRelativeDate(p, now)?.ts ?? null;
+            const zoned = parseRelativeDate(p, now, zone)?.ts ?? null;
+            if (local !== zoned) throw new Error(`${zone} ${new Date(now).toISOString()} "${p}": local ${local}, zoned ${zoned}`);
+            compared += 1;
+            // And not only against this runtime's Date: an ISO wall time that
+            // happens in the zone is read back by Intl as that wall time.
+            const iso = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(p);
+            if (iso && zoned !== null && !skipped.has(`${zone} ${p}`)) {
+              const back = wallIn(zoned, zone);
+              if (back !== p) throw new Error(`${zone} "${p}" reads back as ${back}`);
+              roundTrips += 1;
+            }
+          }
+        }
+      }
+    }
+    expect(compared).toBe(8 * 96 * phrases.length);
+    expect(roundTrips).toBeGreaterThan(8 * 96);
+  });
+
+  test('a zone the runtime does not know is an error, not another zone', () => {
+    expect(() => parseRelativeDate('tomorrow', 0, 'Mars/Phobos')).toThrow(RangeError);
+  });
+});
+

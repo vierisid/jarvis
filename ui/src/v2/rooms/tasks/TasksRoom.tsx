@@ -86,12 +86,14 @@ export function TasksRoomBody({ mode }: { mode: RoomBodyMode }) {
       case "select": { const t = data.findByName(typeof args.name === "string" ? args.name : ""); if (!t) return false; setSelectedId(t.id); return true; }
       case "create_task": {
         const title = typeof args.title === "string" ? args.title.trim() : ""; if (!title) return false;
+        // The time the daemon settled and showed on the card, as given (#1022):
+        // the words are not read as a time here, in this browser's zone and
+        // after the yes. A time asked for and not settled is refused, not
+        // dropped: an undated commitment never runs when it was meant to (#1035).
         const when = typeof args.when === "string" ? args.when.trim() : "";
-        const parsed = when ? parseRelativeDate(when) : null;
-        // A time asked for and not read is refused, not dropped: an undated
-        // commitment never runs when it was meant to (#1035).
-        if (when && !parsed) { setToast({ text: `Couldn't read "${when}" as a time, so no task was created.`, tone: "warn" }); return false; }
-        return data.createTask({ what: title, when_due: parsed?.ts, priority: (args.priority as TaskPriority) ?? undefined, assigned_to: typeof args.assigned_to === "string" ? args.assigned_to : undefined })
+        const due = typeof args.when_ts === "number" && Number.isFinite(args.when_ts) ? args.when_ts : undefined;
+        if (when && due === undefined) { setToast({ text: `No settled time came with "${when}", so no task was created.`, tone: "warn" }); return false; }
+        return data.createTask({ what: title, when_due: due, priority: (args.priority as TaskPriority) ?? undefined, assigned_to: typeof args.assigned_to === "string" ? args.assigned_to : undefined })
           .then((r) => answered(r.ok ? { ok: true, message: `Created task "${title}".` } : r));
       }
       // A held voice action arrives with the task pinned by id, and any

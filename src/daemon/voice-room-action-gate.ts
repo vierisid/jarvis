@@ -37,8 +37,9 @@ import type { RoomActionOutcome, RoomAnswer } from './room-action-results.ts';
 import type { AuthorityDecisionType, ResolutionChannel } from '../authority/audit.ts';
 import {
   collapseRoomActionAliases, foldEntityName, matchByTitle, matchEntityByName, matchProjectByName, roomActionArgs, roomActionEntityArg,
-  roomActionTargetKind, withRoomActionDefaults, type RoomActionTargetKind,
+  roomActionTargetKind, roomActionTimeArg, SETTLED_TIME_ARG, withRoomActionDefaults, type RoomActionTargetKind,
 } from './room-action-targets.ts';
+import { PASSED_GRACE_MS, parseRelativeDate } from '../voice/parse-date.ts';
 
 export type RealtimeRoomActionContext = {
   /** The emergency state when it stops execution (paused, killed), else null. */
@@ -221,14 +222,140 @@ function targetName(kind: RoomActionTargetKind, item: Record<string, unknown>): 
   return typeof v === 'string' ? v : '';
 }
 
-export type HeldRoomAction = { room: string; action: string; args?: Record<string, unknown> };
+/**
+ * A room action as it will be sent. `timeZone` is the zone a time it carries
+ * was settled in (#1022), for the card and the reply to name it by; it is
+ * not sent to the room, which takes the settled instant as given.
+ */
+export type HeldRoomAction = { room: string; action: string; args?: Record<string, unknown>; timeZone?: string };
+
+/** When a voice action is settled, and the IANA zone its wall-clock times are in (#1022). */
+export type VoiceClock = { now: number; timeZone: string };
+
+/**
+ * Why a dashboard's times cannot be read (#1022 review): its browser named a
+ * zone this runtime does not know and none is configured. Null instead means
+ * the tab never named one at all (it predates #1022).
+ */
+export type VoiceClockUnavailable = { unavailable: string };
+
+/**
+ * What a refusal says when a dashboard's browser named a zone this runtime
+ * does not know ("Etc/Unknown") and the config sets none.
+ */
+export function unrecognisedTimeZone(reported: string): string {
+  const shown = reported.length > 40 ? `${reported.slice(0, 40)}...` : reported;
+  const said = reported ? `reported a time zone I don't recognise (${quoted(shown)})` : 'did not report a time zone';
+  return `your browser ${said}, and no time zone is set in the Jarvis config. `
+    + 'Set "timezone" in config.yaml and restart Jarvis, or set the time from the room.';
+}
+
+/** A settled time in a refusal: "Wed, Oct 21, 21:00", in its zone. */
+function shortTime(ts: number, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone, weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    // Says which 01:30 on a fall-back night.
+    timeZoneName: 'short',
+  }).format(new Date(ts));
+}
+
+/** How far before now a settled time may be, for the time it takes to say it. */
+const SETTLED_TIME_GRACE_MS = PASSED_GRACE_MS;
+
+/** This process's own IANA zone. */
+export function daemonTimeZone(): string {
+  return new Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+}
+
+/**
+ * `value` as an IANA zone this runtime knows, in its canonical spelling, or
+ * null (#1022). A dashboard says which zone it is in, and anything else it
+ * sends there (not a string, too long, not shaped like a zone name, or a
+ * zone the runtime does not have) is no zone at all.
+ */
+export function voiceTimeZone(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 64) return null;
+  // Digits in the first part too: EST5EDT and GMT0 are zones; so is an
+  // offset ("+05:30") where the runtime takes one.
+  if (!/^[A-Za-z0-9_+-]+(\/[A-Za-z0-9_+-]+){0,2}$/.test(value) && !/^[+-]\d{2}:?\d{2}$/.test(value)) return null;
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: value }).resolvedOptions().timeZone;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A settled time as the card and the reply name it: the date and time in
+ * the zone it was settled in, with that zone's abbreviation or offset, so a
+ * repeated hour on a fall-back night says which it is, and the zone's name
+ * ("Wed, Oct 21, 2026, 09:00 EDT (America/New_York)").
+ */
+export function describeSettledTime(ts: number, timeZone: string): string {
+  const at = new Intl.DateTimeFormat('en-US', {
+    timeZone, weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short',
+  }).format(new Date(ts));
+  return `${at} (${timeZone})`;
+}
+
+/** How far from now a settled time may be: a hundred years either way. */
+const SETTLED_TIME_SPAN_MS = 100 * 366 * 86_400_000;
+
+/**
+ * `ra` with the time it is for settled (#1022): the phrase its time argument
+ * holds ("tomorrow at 9") read by parseRelativeDate at `clock.now` in
+ * `clock.timeZone`, and the instant pinned in SETTLED_TIME_ARG, which is
+ * what the room uses. Any instant `ra` already carries is dropped first:
+ * only this step sets one, so one the classifier or the realtime model wrote
+ * is never taken as settled. An action with no time argument is returned as
+ * it is; one whose phrase is left out keeps none, unless it needs one.
+ *
+ * Refused, with what to say instead, when the action needs a time and none
+ * was given, the phrase does not read as one, or it names a time and there is
+ * no `clock` (the dashboard never said its zone). `what` is how the refusal
+ * names the action.
+ */
+export function settleRoomActionTime(
+  ra: HeldRoomAction,
+  clock: VoiceClock | VoiceClockUnavailable | null,
+  what: string,
+): { ok: true; ra: HeldRoomAction } | { ok: false; message: string } {
+  const spec = roomActionTimeArg(ra.room, ra.action);
+  if (!spec) return { ok: true, ra };
+  const { [SETTLED_TIME_ARG]: _given, ...args } = ra.args ?? {};
+  const said = typeof args[spec.arg] === 'string' ? (args[spec.arg] as string).trim() : '';
+  const not = `I haven't done "${what}"`;
+  if (!said) {
+    if (spec.required) return { ok: false, message: `${not}: say when, like "tomorrow at 3pm", and I'll show you the time before I do it.` };
+    return { ok: true, ra: { ...ra, args } };
+  }
+  // A dashboard tab that never said its zone is one from before #1022: it
+  // reads the words again itself, in its own zone, and ignores the instant.
+  if (!clock) return { ok: false, message: `${not}: the dashboard tab you spoke to did not say its time zone. Reload the dashboard to set times by voice.` };
+  if ('unavailable' in clock) return { ok: false, message: `${not}: ${clock.unavailable}` };
+  const parsed = parseRelativeDate(said, clock.now, clock.timeZone);
+  // "in 999999999 weeks" reads, but as no date a card can show (#1022 review).
+  if (!parsed || Math.abs(parsed.ts - clock.now) > SETTLED_TIME_SPAN_MS) {
+    return { ok: false, message: `${not}: I couldn't tell what time ${quoted(said)} means. Say a day and a time with am or pm, like "tomorrow at 3pm" or "friday at 10am".` };
+  }
+  // A time already gone ("tonight" said at 22:30, "today at 9am" at noon,
+  // "yesterday") is refused, not moved: nothing would run when it was meant to.
+  if (parsed.ts < clock.now - SETTLED_TIME_GRACE_MS) {
+    return { ok: false, message: `${not}: ${quoted(said)} is ${shortTime(parsed.ts, clock.timeZone)}, which has passed. Say a later time.` };
+  }
+  return { ok: true, ra: { ...ra, args: { ...args, [spec.arg]: said, [SETTLED_TIME_ARG]: parsed.ts }, timeZone: clock.timeZone } };
+}
 
 /**
  * A name the classifier gave, as a refusal repeats it to every dashboard:
  * quoted, and cut at 80 characters, since it is not checked against anything.
  */
 function quoted(s: string): string {
-  return JSON.stringify(s.length > 80 ? `${s.slice(0, 80)}...` : s);
+  // JSON leaves bidi overrides and zero-width characters as they are; written
+  // out, one cannot reorder or hide the rest of the reply (#1022 review).
+  return JSON.stringify(s.length > 80 ? `${s.slice(0, 80)}...` : s)
+    .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (c) => `\\u${c.codePointAt(0)!.toString(16).padStart(4, '0')}`);
 }
 
 /**
@@ -246,8 +373,23 @@ function quoted(s: string): string {
  * the person cannot approve. Refused, with what to say instead, when no name
  * was given, nothing matches, or the list cannot be read. `what` is how the
  * refusal names the action.
+ *
+ * The time it is for is settled too (settleRoomActionTime, #1022), at
+ * `clock`, so the card shows the instant that runs, and a phrase that does
+ * not read as a time is refused before the card rather than after the yes.
  */
 export async function resolveHeldRoomAction(
+  ra: HeldRoomAction,
+  lists: RoomActionTargetLists,
+  what: string,
+  clock: VoiceClock | VoiceClockUnavailable | null,
+): Promise<{ ok: true; ra: HeldRoomAction } | { ok: false; message: string }> {
+  const target = await resolveHeldTarget(ra, lists, what);
+  return target.ok ? settleRoomActionTime(target.ra, clock, what) : target;
+}
+
+/** resolveHeldRoomAction but for the time: the arguments, defaults and item. */
+async function resolveHeldTarget(
   ra: HeldRoomAction,
   lists: RoomActionTargetLists,
   what: string,

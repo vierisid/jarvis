@@ -17,7 +17,8 @@
  * Every word must be read (#1035): anything left over that is not a time
  * ("tuesday at 3", "later today") is null, not that date at 09:00, and so is
  * a date or time no calendar has ("2026-02-30", "25:00") and a numeric date
- * that reads both ways ("10/30"). Everyday phrases take fixed defaults
+ * that reads both ways ("10/30"). What is read is shown on the card as an
+ * instant before anything runs, so everyday phrases take fixed defaults
  * rather than being refused:
  *  - a date alone is 09:00; a part of day is morning 09:00, afternoon 15:00,
  *    evening 18:00, night 21:00; "tonight" is today 21:00; "this morning"
@@ -29,7 +30,7 @@
  *    12am" is 00:00 at the start of tomorrow;
  *  - a time alone is today, or tomorrow once it has passed; a time with a
  *    day is that day, even once it has passed ("today at 9am" said at noon
- *    is in the past, not moved to tomorrow);
+ *    is in the past, and the daemon refuses it rather than moving it);
  *  - "next week" is next Monday, "next month" the 1st of next month, "the
  *    day after tomorrow" that day; a month and day with no year is its next
  *    occurrence;
@@ -39,12 +40,22 @@
  *    three" are refused;
  *  - a duration counts in digits or in words one to twelve ("in two hours").
  *
+ * Wall-clock times are read in `timeZone` when one is given (an IANA name),
+ * else in this runtime's own zone (#1022): the daemon settles a voice
+ * action's time in the zone of the dashboard that asked, before its card,
+ * while the rooms' own create dialogs parse in the browser's. A wall time a
+ * zone skips (02:30 on a spring-forward night) and one it repeats (01:30 on
+ * a fall-back night) resolve as `new Date(y, m, d, h, mi)` resolves them in
+ * that zone: the skipped one by the offset before the change (so 03:30),
+ * the repeated one to its first occurrence.
+ *
  * NO IMPORTS: the UI bundles this file.
  */
 
 /**
- * How long a time stays "now": "noon" said at 12:00:30 is today's, not
- * tomorrow's.
+ * How long a time stays "now" (#1022 review): "noon" said at 12:00:30 is
+ * today's, not tomorrow's, and the daemon takes a settled time as passed only
+ * once it is this far behind.
  */
 export const PASSED_GRACE_MS = 60_000;
 
@@ -58,7 +69,7 @@ export interface ParsedDate {
 /** A calendar date: year, month 1-12, day of month. */
 type Ymd = { y: number; m: number; d: number };
 
-/** How wall-clock dates and times map to instants. */
+/** How wall-clock dates and times map to instants, in one zone. */
 type Clock = {
   /** The calendar date at `now`. */
   dateAt(now: number): Ymd;
@@ -76,12 +87,58 @@ const LOCAL_CLOCK: Clock = {
   },
 };
 
+const zoneFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function zoneFormatter(timeZone: string): Intl.DateTimeFormat {
+  let f = zoneFormatters.get(timeZone);
+  if (!f) {
+    // Bounded whatever zones are asked for: a few are in use at a time.
+    if (zoneFormatters.size >= 64) zoneFormatters.clear();
+    // Throws a RangeError for a zone this runtime does not know.
+    f = new Intl.DateTimeFormat('en-US', {
+      timeZone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric',
+      hour: 'numeric', minute: 'numeric', second: 'numeric',
+    });
+    zoneFormatters.set(timeZone, f);
+  }
+  return f;
+}
+
+/** The wall clock in `timeZone` at instant `t`, read as if it were UTC. */
+function wallAsUtc(t: number, timeZone: string): number {
+  const p: Record<string, number> = {};
+  for (const part of zoneFormatter(timeZone).formatToParts(new Date(t))) {
+    if (part.type !== 'literal') p[part.type] = Number(part.value);
+  }
+  return utc(p.year!, p.month!, p.day!, p.hour! % 24, p.minute!, p.second!);
+}
+
 /** Date.UTC without its mapping of years 0-99 to 1900-1999. */
 function utc(y: number, m: number, d: number, h = 0, mi = 0, s = 0): number {
   const x = new Date(0);
   x.setUTCFullYear(y, m - 1, d);
   x.setUTCHours(h, mi, s, 0);
   return x.getTime();
+}
+
+function zonedClock(timeZone: string): Clock {
+  zoneFormatter(timeZone);
+  const offsetAt = (t: number) => wallAsUtc(t, timeZone) - t;
+  return {
+    dateAt(now) {
+      const w = new Date(wallAsUtc(now, timeZone));
+      return { y: w.getUTCFullYear(), m: w.getUTCMonth() + 1, d: w.getUTCDate() };
+    },
+    at(day, h, mi) {
+      const wall = utc(day.y, day.m, day.d, h, mi);
+      // The offsets a day either side: at most one change lies between them.
+      const before = offsetAt(wall - 86_400_000);
+      const after = offsetAt(wall + 86_400_000);
+      const fits = [wall - before, wall - after].filter((t) => wallAsUtc(t, timeZone) === wall);
+      // Repeated: the first. Skipped: by the offset before the change.
+      return fits.length > 0 ? Math.min(...fits) : wall - before;
+    },
+  };
 }
 
 function addDays(day: Ymd, n: number): Ymd {
@@ -95,9 +152,10 @@ function weekday(day: Ymd): number {
 
 /** Parse a relative or absolute date string to a timestamp. Returns null
  *  if the string can't be confidently interpreted. `now` is injectable
- *  for testing (defaults to Date.now()). Wall-clock times are this
- *  runtime's own. */
-export function parseRelativeDate(input: string, now: number = Date.now()): ParsedDate | null {
+ *  for testing (defaults to Date.now()). `timeZone` is the IANA zone its
+ *  wall-clock times are in; left out, this runtime's own. An unknown zone
+ *  throws a RangeError. */
+export function parseRelativeDate(input: string, now: number = Date.now(), timeZone?: string): ParsedDate | null {
   // Speech-to-text ends a phrase with a full stop or a comma ("monday."),
   // and writes "p.m." for pm.
   const plain = input.trim().toLowerCase()
@@ -105,7 +163,7 @@ export function parseRelativeDate(input: string, now: number = Date.now()): Pars
     .replace(/[.,!?;]+$/, '').trim();
   if (!plain) return null;
 
-  const clock = LOCAL_CLOCK;
+  const clock = timeZone === undefined ? LOCAL_CLOCK : zonedClock(timeZone);
   const today = clock.dateAt(now);
 
   // 1. ISO-like absolute: "2026-04-30" or "2026-04-30 15:00" or "2026-04-30T15:00"

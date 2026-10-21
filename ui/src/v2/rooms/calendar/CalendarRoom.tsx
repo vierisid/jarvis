@@ -71,14 +71,16 @@ export function CalendarRoomBody({ mode }: { mode: RoomBodyMode }) {
         const title = typeof args.title === "string" ? args.title.trim() : "";
         const whenStr = typeof args.when === "string" ? args.when.trim() : "";
         if (!title) return false;
-        const parsed = whenStr ? parseRelativeDate(whenStr) : null;
-        // A time asked for and not read is refused, not dropped: an undated
-        // commitment never runs when it was meant to (#1035).
-        if (whenStr && !parsed) { setToast({ text: `Couldn't read "${whenStr}" as a time, so nothing was scheduled.`, tone: "warn" }); return false; }
+        // The time the daemon settled and showed on the card, as given (#1022):
+        // the words are not read as a time here, in this browser's zone and
+        // after the yes. A time asked for and not settled is refused, not
+        // dropped: an undated commitment never runs when it was meant to (#1035).
+        const at = typeof args.when_ts === "number" && Number.isFinite(args.when_ts) ? args.when_ts : undefined;
+        if (whenStr && at === undefined) { setToast({ text: `No settled time came with "${whenStr}", so nothing was scheduled.`, tone: "warn" }); return false; }
         // Answered once the write has settled, with whether it worked (#1015).
-        return data.addEvent({ title, whenMs: parsed?.ts, priority: (args.priority as CalendarPriority) ?? undefined, assigned_to: typeof args.with === "string" ? args.with : undefined }).then((r) => {
-          if (r.ok && parsed) {
-            const offset = Math.round((startOfWeek(parsed.ts) - data.weekStart) / (7 * 86_400_000));
+        return data.addEvent({ title, whenMs: at, priority: (args.priority as CalendarPriority) ?? undefined, assigned_to: typeof args.with === "string" ? args.with : undefined }).then((r) => {
+          if (r.ok && at !== undefined) {
+            const offset = Math.round((startOfWeek(at) - data.weekStart) / (7 * 86_400_000));
             if (offset !== 0) data.goToWeek(offset);
           }
           setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });

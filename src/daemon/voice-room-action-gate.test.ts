@@ -4,7 +4,14 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { realtimeRoomActionDecision, resolveHeldRoomAction, roomActionAuditRow, type RoomActionTargetLists } from './voice-room-action-gate.ts';
+import {
+  describeSettledTime, unrecognisedTimeZone, realtimeRoomActionDecision, resolveHeldRoomAction as resolveHeld, roomActionAuditRow, settleRoomActionTime, voiceTimeZone,
+  type RoomActionTargetLists, type VoiceClock,
+} from './voice-room-action-gate.ts';
+
+/** resolveHeldRoomAction at a fixed clock, unless a test gives its own. */
+const resolveHeldRoomAction = (ra: Parameters<typeof resolveHeld>[0], lists: RoomActionTargetLists, what: string, clock: VoiceClock | null = { now: Date.parse('2026-10-20T15:00:00Z'), timeZone: 'UTC' }) =>
+  resolveHeld(ra, lists, what, clock);
 import { buildTaintGating } from '../authority/taint-gating.ts';
 
 describe('roomActionAuditRow (#1009)', () => {
@@ -169,3 +176,107 @@ describe('resolveHeldRoomAction (#1008)', () => {
     expect(read).toBe(0);
   });
 });
+
+describe('the time a room action is for is settled before anything is shown or sent (#1022)', () => {
+  // 23:30 on 2026-10-20 in New York; already the 21st in Tokyo.
+  const now = Date.parse('2026-10-21T03:30:00Z');
+  const ny = { now, timeZone: 'America/New_York' };
+
+  test('the words are read at the clock given, in its zone, and the instant pinned with the zone', () => {
+    expect(settleRoomActionTime({ room: 'tasks', action: 'create_task', args: { title: 'Pay rent', when: ' tomorrow at 9am ' } }, ny, 'Tasks: create task'))
+      .toEqual({ ok: true, ra: { room: 'tasks', action: 'create_task', args: { title: 'Pay rent', when: 'tomorrow at 9am', when_ts: Date.parse('2026-10-21T13:00:00Z') }, timeZone: 'America/New_York' } });
+    expect(settleRoomActionTime({ room: 'calendar', action: 'schedule_event', args: { title: 'Call', when: 'tomorrow at 9am' } }, { now, timeZone: 'Asia/Tokyo' }, 'c'))
+      .toMatchObject({ ok: true, ra: { args: { when_ts: Date.parse('2026-10-22T00:00:00Z') }, timeZone: 'Asia/Tokyo' } });
+  });
+
+  test('an instant the classifier or the model wrote is never taken as settled', () => {
+    expect(settleRoomActionTime({ room: 'tasks', action: 'create_task', args: { title: 'x', when: '2026-10-22 10:00', when_ts: 1 } }, ny, 't'))
+      .toMatchObject({ ok: true, ra: { args: { when_ts: Date.parse('2026-10-22T14:00:00Z') } } });
+    // With no words to read, no instant at all: an undated task.
+    expect(settleRoomActionTime({ room: 'tasks', action: 'create_task', args: { title: 'x', when_ts: 1 } }, ny, 't'))
+      .toEqual({ ok: true, ra: { room: 'tasks', action: 'create_task', args: { title: 'x' } } });
+  });
+
+  test('words that are not a time, or no time where one is needed, are refused', () => {
+    expect(settleRoomActionTime({ room: 'tasks', action: 'create_task', args: { title: 'x', when: 'later today' } }, ny, 'Tasks: create task'))
+      .toEqual({ ok: false, message: 'I haven\'t done "Tasks: create task": I couldn\'t tell what time "later today" means. Say a day and a time with am or pm, like "tomorrow at 3pm" or "friday at 10am".' });
+    // Words that read, as an instant no card can show (#1022 review).
+    expect(settleRoomActionTime({ room: 'tasks', action: 'create_task', args: { title: 'x', when: 'in 999999999 weeks' } }, ny, 'Tasks: create task'))
+      .toEqual({ ok: false, message: 'I haven\'t done "Tasks: create task": I couldn\'t tell what time "in 999999999 weeks" means. Say a day and a time with am or pm, like "tomorrow at 3pm" or "friday at 10am".' });
+    // Text that would reorder the reply is written out (#1022 review).
+    const rlo = String.fromCodePoint(0x202e);
+    const refused = settleRoomActionTime({ room: 'tasks', action: 'create_task', args: { title: 'x', when: `soon${rlo}yadot` } }, ny, 't');
+    expect(!refused.ok && refused.message).toContain('"soon\\u202eyadot"');
+    expect(settleRoomActionTime({ room: 'content', action: 'schedule', args: { name: 'Launch', when: '  ' } }, ny, 'Content: schedule'))
+      .toEqual({ ok: false, message: 'I haven\'t done "Content: schedule": say when, like "tomorrow at 3pm", and I\'ll show you the time before I do it.' });
+  });
+
+  test('with no clock (a tab that never said its zone) a time is refused, and an undated action is not', () => {
+    expect(settleRoomActionTime({ room: 'tasks', action: 'create_task', args: { title: 'x', when: 'tomorrow at 9am' } }, null, 'Tasks: create task'))
+      .toEqual({ ok: false, message: 'I haven\'t done "Tasks: create task": the dashboard tab you spoke to did not say its time zone. Reload the dashboard to set times by voice.' });
+    expect(settleRoomActionTime({ room: 'tasks', action: 'create_task', args: { title: 'x', when_ts: 3 } }, null, 't'))
+      .toEqual({ ok: true, ra: { room: 'tasks', action: 'create_task', args: { title: 'x' } } });
+  });
+
+  test('a time already gone is refused, with when it was; one within a minute still goes (#1022 review)', () => {
+    // ny.now is 23:30 on Tue Oct 20 in New York.
+    expect(settleRoomActionTime({ room: 'tasks', action: 'create_task', args: { title: 'x', when: 'tonight' } }, ny, 'Tasks: create task'))
+      .toEqual({ ok: false, message: 'I haven\'t done "Tasks: create task": "tonight" is Tue, Oct 20, 21:00 EDT, which has passed. Say a later time.' });
+    for (const when of ['this afternoon', 'tuesday at 9am', 'yesterday', '2026-10-01 09:00', 'today at 9am']) {
+      const r = settleRoomActionTime({ room: 'tasks', action: 'create_task', args: { title: 'x', when } }, ny, 't');
+      expect([when, !r.ok && r.message]).toEqual([when, expect.stringContaining('which has passed. Say a later time.')]);
+    }
+    // 23:29 is exactly a minute before ny.now: still taken, as said. A second later, it has passed.
+    const at2329 = (now: number) => settleRoomActionTime({ room: 'tasks', action: 'create_task', args: { title: 'x', when: 'today at 11:29pm' } }, { ...ny, now }, 't');
+    expect(at2329(ny.now).ok).toBe(true);
+    expect(at2329(ny.now + 1_000).ok).toBe(false);
+  });
+
+  test('a browser zone this runtime does not know is said as such, not as an old tab (#1022 review)', () => {
+    expect(settleRoomActionTime({ room: 'tasks', action: 'create_task', args: { title: 'x', when: 'tomorrow at 9am' } }, { unavailable: unrecognisedTimeZone('Etc/Unknown') }, 'Tasks: create task'))
+      .toEqual({ ok: false, message: 'I haven\'t done "Tasks: create task": your browser reported a time zone I don\'t recognise ("Etc/Unknown"), and no time zone is set in the Jarvis config. Set "timezone" in config.yaml and restart Jarvis, or set the time from the room.' });
+  });
+
+  test('a browser that could not say its zone is told so; a long one is cut and marked (#1022 review)', () => {
+    expect(unrecognisedTimeZone('')).toBe('your browser did not report a time zone, and no time zone is set in the Jarvis config. Set "timezone" in config.yaml and restart Jarvis, or set the time from the room.');
+    expect(unrecognisedTimeZone('Z'.repeat(50))).toContain(`("${'Z'.repeat(40)}...")`);
+  });
+
+  test('a refusal on a fall-back night says which 01:30 it means (#1022 review)', () => {
+    // 01:40 EDT on Nov 1 2026, the first time through; "today at 1:30am" is the first 01:30, gone.
+    const r = settleRoomActionTime({ room: 'tasks', action: 'create_task', args: { title: 'x', when: 'today at 1:30am' } },
+      { now: Date.parse('2026-11-01T05:40:00Z'), timeZone: 'America/New_York' }, 't');
+    expect(!r.ok && r.message).toContain('is Sun, Nov 1, 01:30 EDT, which has passed');
+  });
+
+  test('an action with no time is left as it is', () => {
+    const ra = { room: 'tasks', action: 'complete_task', args: { name: 'x', when_ts: 5 } };
+    expect(settleRoomActionTime(ra, ny, 't')).toEqual({ ok: true, ra });
+  });
+
+  test('a held action is settled at the clock it is given, after its item', async () => {
+    expect(await resolveHeldRoomAction({ room: 'content', action: 'schedule', args: { name: 'launch', when: 'tomorrow at 9am', when_ts: 7 } }, lists(), 'c', ny))
+      .toEqual({ ok: true, ra: { room: 'content', action: 'schedule', args: { name: 'Launch', id: 'c2', when: 'tomorrow at 9am', when_ts: Date.parse('2026-10-21T13:00:00Z') }, timeZone: 'America/New_York' } });
+    expect(await resolveHeldRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x', when: 'tuesday at 3' } }, lists(), 'Tasks: create task', ny))
+      .toMatchObject({ ok: false });
+  });
+
+  test('a zone a dashboard names is used only when it is one', () => {
+    expect(voiceTimeZone('America/New_York')).toBe('America/New_York');
+    expect(voiceTimeZone('america/new_york')).toBe('America/New_York');
+    expect(voiceTimeZone('UTC')).toBe('UTC');
+    expect(voiceTimeZone('EST5EDT')).toBe('EST5EDT');
+    // An offset, where the runtime takes one (Bun 1.3.8 does).
+    expect(voiceTimeZone('+05:30')).toBe('+05:30');
+    expect(voiceTimeZone('-08:00')).toBe('-08:00');
+    for (const bad of ['Mars/Phobos', '../../etc/passwd', 'A'.repeat(65), '', 5, null, undefined, { toString: () => 'UTC' }]) {
+      expect([bad, voiceTimeZone(bad)]).toEqual([bad, null]);
+    }
+  });
+
+  test('the card names the instant with its zone, so a repeated hour says which', () => {
+    expect(describeSettledTime(Date.parse('2026-11-01T05:30:00Z'), 'America/New_York')).toBe('Sun, Nov 1, 2026, 01:30 EDT (America/New_York)');
+    expect(describeSettledTime(Date.parse('2026-11-01T06:30:00Z'), 'America/New_York')).toBe('Sun, Nov 1, 2026, 01:30 EST (America/New_York)');
+  });
+});
+

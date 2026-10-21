@@ -2,8 +2,13 @@
  * The time a voice room action is for (#1035): a create_task or
  * schedule_event whose `when` the room could not read made the item with no
  * date and answered yes, so the person believed something was scheduled that
- * would never fire. content/schedule already refused (#1032). This runs the
- * real room bodies behind a real RoomActionBus and reads what they send.
+ * would never fire. content/schedule already refused (#1032).
+ *
+ * And since #1022 the room does not read the words as a time at all: the
+ * daemon settles them before the card, in the speaker's zone, and sends the
+ * instant as `when_ts`, which the room writes as it is. Words with no settled
+ * instant are refused. This runs the real room bodies behind a real
+ * RoomActionBus and reads what they send.
  */
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
@@ -97,16 +102,22 @@ async function mount(room: string) {
 
 test("a time that does not read as one is refused, and nothing is written (#1035)", async () => {
   for (const [room, action, args, says] of [
-    ["tasks", "create_task", { title: "Pay rent", when: "whenever-ish" }, 'Couldn\'t read "whenever-ish" as a time, so no task was created.'],
+    ["tasks", "create_task", { title: "Pay rent", when: "whenever-ish" }, 'No settled time came with "whenever-ish", so no task was created.'],
     // Read as Tuesday at 09:00 before: the hour was dropped.
-    ["tasks", "create_task", { title: "Pay rent", when: "tuesday at 3" }, 'Couldn\'t read "tuesday at 3" as a time, so no task was created.'],
-    ["calendar", "schedule_event", { title: "Dentist", when: "later today" }, 'Couldn\'t read "later today" as a time, so nothing was scheduled.'],
-    ["calendar", "schedule_event", { title: "Dentist", when: "2026-02-30" }, 'Couldn\'t read "2026-02-30" as a time, so nothing was scheduled.'],
+    ["tasks", "create_task", { title: "Pay rent", when: "tuesday at 3" }, 'No settled time came with "tuesday at 3", so no task was created.'],
+    ["calendar", "schedule_event", { title: "Dentist", when: "friday afternoon" }, 'No settled time came with "friday afternoon", so nothing was scheduled.'],
+    ["calendar", "schedule_event", { title: "Dentist", when: "2026-02-30" }, 'No settled time came with "2026-02-30", so nothing was scheduled.'],
     // Refused already (#1032), side by side with the other two.
-    ["content", "schedule", { name: "Launch post", when: "later today" }, "Couldn't parse that date."],
+    ["content", "schedule", { name: "Launch post", when: "friday afternoon" }, 'No settled time came with "friday afternoon", so nothing was scheduled.'],
+    ["content", "schedule", { name: "Launch post" }, "No time was given, so nothing was scheduled."],
+    // Words that read, but that nobody settled: not read here, in this zone, after the yes (#1022).
+    ["tasks", "create_task", { title: "Pay rent", when: "2030-05-01 15:00" }, 'No settled time came with "2030-05-01 15:00", so no task was created.'],
+    ["calendar", "schedule_event", { title: "Dentist", when: "tomorrow at 9am" }, 'No settled time came with "tomorrow at 9am", so nothing was scheduled.'],
+    ["content", "schedule", { name: "Launch post", when: "tomorrow at 9am" }, 'No settled time came with "tomorrow at 9am", so nothing was scheduled.'],
   ] as const) {
     const { run, sent } = await mount(room);
-    expect([action, args.when, await run(action, args)]).toEqual([action, args.when, "false rejected"]);
+    const said = (args as Record<string, unknown>).when;
+    expect([action, said, await run(action, args)]).toEqual([action, said, "false rejected"]);
     expect(sent).toEqual([]);
     expect(host.textContent).toContain(says);
     await act(async () => root!.unmount());
@@ -130,14 +141,18 @@ test("with no time asked for, the item is made undated, as before", async () => 
   }
 });
 
-test("a time that reads is written with the item", async () => {
-  for (const [room, action, args] of [
-    ["tasks", "create_task", { title: "Pay rent", when: "2030-05-01 15:00" }],
-    ["calendar", "schedule_event", { title: "Dentist", when: "2030-05-01 15:00" }],
+test("the instant the daemon settled is written as it is, whatever this browser would read the words as (#1022)", async () => {
+  // 15:00 in Tokyo, which is not 15:00 here unless this runs in Tokyo.
+  const settled = Date.UTC(2030, 4, 1, 6, 0);
+  expect(settled).not.toBe(new Date(2030, 4, 1, 15, 0).getTime());
+  for (const [room, action, args, url, field] of [
+    ["tasks", "create_task", { title: "Pay rent", when: "2030-05-01 15:00", when_ts: settled }, "POST /api/vault/commitments", "when_due"],
+    ["calendar", "schedule_event", { title: "Dentist", when: "2030-05-01 15:00", when_ts: settled }, "POST /api/vault/commitments", "when_due"],
+    ["content", "schedule", { name: "Launch post", when: "2030-05-01 15:00", when_ts: settled }, "PATCH /api/content/c1", "scheduled_at"],
   ] as const) {
     const { run, sent } = await mount(room);
     expect(await run(action, args)).toBe("true accepted");
-    expect(sent.map((s) => [s.url, s.body.when_due])).toEqual([["POST /api/vault/commitments", new Date(2030, 4, 1, 15, 0).getTime()]]);
+    expect(sent.map((s) => [s.url, s.body[field]])).toEqual([[url, settled]]);
     await act(async () => root!.unmount());
     root = undefined;
     host.remove();
