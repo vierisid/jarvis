@@ -30,7 +30,7 @@ describe("newestApprovalId", () => {
     const read = (rel: string) => readFileSync(join(import.meta.dir, rel), "utf8");
     expect(read("RailConfirmationStack.tsx")).toContain("const sortedApprovals = newestFirst(approvals);");
     const shell = read("../shell/AppShell.tsx");
-    expect(shell).toContain("shownApprovalId(approvalsRef.current, document.visibilityState)");
+    expect(shell).toContain("shownApprovalId(approvalsRef.current, currentVisibility())");
     expect(shell).toMatch(/useVoice\(\{[\s\S]*?getShownApprovalId,[\s\S]*?\}\);/);
   });
 });
