@@ -1,15 +1,13 @@
+import { createSettingsPort, type SettingsHost } from "./adapter";
 import { SettingsController } from "./controller";
 import {
   DESTINATIONS,
-  revision as isRevision,
-  type Application,
   type SettingsDestination,
-  type SettingsPort,
   type SettingsValue,
+  type Application,
 } from "./model";
-
-/** In-memory stand-in for the F-23 settings owner. It makes no HTTP request; the live
- * port lands with F-23 (#945), whose routes are not on main yet. */
+/** In-memory F-23 stand-in. It answers like the real routes, so the preview and the tests
+ * drive the live adapter (createSettingsPort) instead of a second port. */
 export const SETTINGS_SCOPE = "d30-isolated-settings";
 export const SETTINGS_EXAMPLES = [
   "local",
@@ -75,7 +73,8 @@ export function makeSettingsFixture(
     },
     replay: ["profile", "tutorial"],
   };
-  const writes: { revision: string; voice: string }[] = [],
+  const requests: { path: string; method: string; body?: unknown }[] = [],
+    writes: { revision: string; voice: string }[] = [],
     destinations: SettingsDestination[] = [],
     replays: string[] = [];
   const change = (voice: string) => {
@@ -88,67 +87,68 @@ export function makeSettingsFixture(
       },
     };
   };
-  const settle = async (signal: AbortSignal) => {
-    await new Promise((resolve) => setTimeout(resolve, delay));
-    return !signal.aborted;
-  };
-  const denied =
-    example === "unavailable" || example === "unsupported" ? example : null;
-  const canWrite = example !== "read-only";
-  const port: SettingsPort = {
-    scopeId: SETTINGS_SCOPE,
-    source: "fixture",
-    canWrite,
+  const host: SettingsHost = {
+    canWrite: example !== "read-only",
     destinations: Object.fromEntries(
-      DESTINATIONS.map((d) => [d, true]),
-    ) as Record<SettingsDestination, boolean>,
-    canReplayTutorial: canWrite,
-    async read(signal) {
-      if (!(await settle(signal))) return { state: "error" };
-      if (denied) return { state: denied };
-      if (failReads) return { state: "error" };
-      return { state: "ready", data: structuredClone(data) };
+      DESTINATIONS.map((d) => [
+        d,
+        () => {
+          destinations.push(d);
+          navigate?.(d);
+        },
+      ]),
+    ),
+    async replayTutorial() {
+      replays.push("tutorial");
+      return { state: failReplay ? "unknown" : "replayed" };
     },
-    async saveVoice(base, voice, signal) {
-      if (!port.canWrite || signal.aborted) return { state: "unavailable" };
-      if (!isRevision(base) || !voice || voice.length > 200)
-        return { state: "invalid" };
-      if (!(await settle(signal))) return { state: "unknown" };
-      if (denied) return { state: denied };
-      writes.push({ revision: base, voice });
-      if (!recovered && example === "save-failure") return { state: "unknown" };
+    async request(path, init) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      if (init.signal?.aborted) throw Error("Canceled");
+      requests.push({
+        path,
+        method: init.method ?? "GET",
+        body: init.body ? JSON.parse(String(init.body)) : undefined,
+      });
+      if (example === "unavailable") return new Response(null, { status: 403 });
+      if (example === "unsupported") return new Response(null, { status: 501 });
+      if (init.method !== "PATCH")
+        return failReads
+          ? new Response(null, { status: 503 })
+          : Response.json(settingsEnvelope(data));
+      const body = JSON.parse(String(init.body));
+      writes.push(body);
+      if (!recovered && example === "save-failure")
+        return new Response(null, { status: 503 });
       if (!recovered && example === "conflict")
-        change(data.voice.choices.at(-1)!.id);
-      if (base !== data.voice.revision) return { state: "conflict" };
-      if (!data.voice.choices.some((c) => c.id === voice))
-        return { state: "invalid" };
-      change(voice);
-      // The write applied but its acknowledgment was lost.
-      if (!recovered && example === "lost-response") return { state: "unknown" };
+        change(data.voice.choices[2]!.id);
+      if (body.revision !== data.voice.revision)
+        return new Response(null, { status: 409 });
+      if (!data.voice.choices.some((c) => c.id === body.voice))
+        return new Response(null, { status: 422 });
+      change(body.voice);
+      if (!recovered && example === "lost-response")
+        throw Error("Lost response");
       const application: Application =
         example === "restart-required"
           ? "restart_required"
           : example === "apply-failure"
             ? "failed"
             : "applied";
-      return { state: "confirmed", data: structuredClone(data), application };
-    },
-    async navigate(destination) {
-      destinations.push(destination);
-      navigate?.(destination);
-      return { state: "opened" };
-    },
-    async replayTutorial() {
-      if (!port.canWrite) return { state: "unavailable" };
-      replays.push("tutorial");
-      return { state: failReplay ? "unknown" : "replayed" };
+      return Response.json({ saved: true, voice: data.voice, application });
     },
   };
+  const port = {
+    ...createSettingsPort(SETTINGS_SCOPE, host),
+    source: "fixture" as const,
+  };
   return {
+    host,
     port,
     controller: new SettingsController(port),
     current: () => structuredClone(data),
     change,
+    requests,
     writes,
     destinations,
     replays,
