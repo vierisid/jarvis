@@ -86,7 +86,11 @@ export function TasksRoomBody({ mode }: { mode: RoomBodyMode }) {
       case "select": { const t = data.findByName(typeof args.name === "string" ? args.name : ""); if (!t) return false; setSelectedId(t.id); return true; }
       case "create_task": {
         const title = typeof args.title === "string" ? args.title.trim() : ""; if (!title) return false;
-        const parsed = typeof args.when === "string" ? parseRelativeDate(args.when) : null;
+        const when = typeof args.when === "string" ? args.when.trim() : "";
+        const parsed = when ? parseRelativeDate(when) : null;
+        // A time asked for and not read is refused, not dropped: an undated
+        // commitment never runs when it was meant to (#1035).
+        if (when && !parsed) { setToast({ text: `Couldn't read "${when}" as a time, so no task was created.`, tone: "warn" }); return false; }
         return data.createTask({ what: title, when_due: parsed?.ts, priority: (args.priority as TaskPriority) ?? undefined, assigned_to: typeof args.assigned_to === "string" ? args.assigned_to : undefined })
           .then((r) => answered(r.ok ? { ok: true, message: `Created task "${title}".` } : r));
       }

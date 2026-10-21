@@ -69,9 +69,12 @@ export function CalendarRoomBody({ mode }: { mode: RoomBodyMode }) {
       }
       case "schedule_event": {
         const title = typeof args.title === "string" ? args.title.trim() : "";
-        const whenStr = typeof args.when === "string" ? args.when : "";
+        const whenStr = typeof args.when === "string" ? args.when.trim() : "";
         if (!title) return false;
         const parsed = whenStr ? parseRelativeDate(whenStr) : null;
+        // A time asked for and not read is refused, not dropped: an undated
+        // commitment never runs when it was meant to (#1035).
+        if (whenStr && !parsed) { setToast({ text: `Couldn't read "${whenStr}" as a time, so nothing was scheduled.`, tone: "warn" }); return false; }
         // Answered once the write has settled, with whether it worked (#1015).
         return data.addEvent({ title, whenMs: parsed?.ts, priority: (args.priority as CalendarPriority) ?? undefined, assigned_to: typeof args.with === "string" ? args.with : undefined }).then((r) => {
           if (r.ok && parsed) {

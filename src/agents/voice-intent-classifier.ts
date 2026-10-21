@@ -346,7 +346,8 @@ tasks room ("room": "tasks"):
    "remind me to review the PR"
    The "when" field is parsed by the daemon's parseRelativeDate
    (same format as Calendar's schedule_event: today/tomorrow/weekday
-   names/in N units/HH:MM). Optional — undated tasks are valid.
+   names/in N units/HH:MM). Optional — undated tasks are valid. Every word
+   must parse, as for schedule_event: write an hour with am/pm ("3pm").
 - "complete_task" — args: { "name": string }
    matches "mark the OAuth task done", "complete the standup"
 - "update_priority" — args: { "name": string, "level": "low"|"normal"|"high"|"critical" }
@@ -384,7 +385,7 @@ calendar room ("room": "calendar"):
    "remind me to call mom Thursday at 2pm"
    Extract:
      "title" — the imperative content ("call mom", "email the team", "meeting with Alice")
-     "when" — the natural-language time spec verbatim ("Tuesday at 3", "tomorrow morning", "next monday at 9am"). The daemon parses this with parseRelativeDate; supported formats include "today / tomorrow / yesterday + at HH(am|pm)?", weekday names ("monday / tuesday / next friday"), "in N days/hours/minutes", absolute "YYYY-MM-DD HH:MM".
+     "when" — the natural-language time spec verbatim ("Tuesday at 3pm", "tomorrow morning", "next monday at 9am"). The daemon parses this with parseRelativeDate; it reads a day ("today", "tomorrow", "friday", "next friday", "oct 30", "the day after tomorrow", "next week", "next month", "YYYY-MM-DD"), a time ("3pm", "9.30am", "15:00", "noon", "midnight", "7 in the evening"), a part of day ("afternoon", "tonight", "this evening", "end of day"), either order ("3pm tomorrow"), or "in N minutes/hours/days". Every word must parse: an hour with no am/pm ("at 3"), a numeric date ("10/30") or a vague time ("later today") is refused, so write the hour with am/pm when the user's meaning is clear, and otherwise keep their words.
      "with" — only if the user named a person
      "priority" — only if the user said "urgent"/"high priority" etc.
 
