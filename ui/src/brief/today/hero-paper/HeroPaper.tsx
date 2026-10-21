@@ -8,7 +8,7 @@ import { confirmation, type DecisionTransition } from "../decision-transition/co
 import "../decision-transition/decision-transition.css";
 import "./hero-paper.css";
 
-export function HeroPaper({ binding, reducedMotion = false, queueNotice }: { binding: DecisionBinding; reducedMotion?: boolean; queueNotice?: ReactNode }) {
+export function HeroPaper({ binding, reducedMotion = false, queueNotice, emptyContent }: { binding: DecisionBinding; reducedMotion?: boolean; queueNotice?: ReactNode; emptyContent?: ReactNode }) {
   const controller = useDecisionTransition(binding, reducedMotion);
   const stack = useRef<HTMLDivElement>(null);
   const focusReturn = useRef<Element | null>(null);
@@ -31,6 +31,7 @@ export function HeroPaper({ binding, reducedMotion = false, queueNotice }: { bin
         controller.act(item!, action);
       }} /></div>;
   }
+  if (state.status === "empty" && emptyContent) return <>{emptyContent}</>;
   return <div ref={stack} tabIndex={-1} className="brief-decision-stack"><section className="brief-today-decision brief-today-decision--fallback" aria-busy={state.status === "loading" || undefined}>
     {state.status === "loading" ? <><span className="brief-type-utility">Loading your decisions</span><div className="brief-today-skeleton" aria-hidden="true" /><div className="brief-today-skeleton short" aria-hidden="true" /></>
       : <><h2 className="brief-type-hero-heading">{state.status === "empty" ? "No decisions waiting." : "Decisions unavailable."}</h2>

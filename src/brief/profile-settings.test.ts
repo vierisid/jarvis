@@ -185,3 +185,45 @@ test('Profile hides forgotten or superseded interview statements on refresh', ()
   forget.forget(tool.id, { requestId: 'forget-profile-context', expectedRevision: read.revision, confirmed: true });
   expect(service.profile().interviewFacts).toEqual([]);
 });
+
+
+test('setup checklist persists acknowledgements and dismissal without changing authority or onboarding', () => {
+  setSetting('cfg.authority', '{"default_level":0}'); setSetting('onboarding.keep', 'completed');
+  expect(service.gettingStarted()).toEqual({revision:0, completed:[], hidden:false});
+  expect(getSetting('brief.getting-started.v1')).toBeNull();
+  expect(service.saveGettingStarted(0, {item:'authority', done:true}).completed).toEqual(['authority']);
+  expect(() => service.saveGettingStarted(0, {item:'profile', done:true})).toThrow('revision_conflict');
+  service.saveGettingStarted(1, {hidden:true});
+  closeDb(); initDatabase(file, {quiet:true}); service = new ProfileSettings(config);
+  expect(service.gettingStarted()).toEqual({revision:2, completed:['authority'], hidden:true});
+  service.saveGettingStarted(2, {hidden:false});
+  expect(service.saveGettingStarted(3, {item:'authority', done:false})).toEqual({revision:4, completed:[], hidden:false});
+  expect(getSetting('cfg.authority')).toBe('{"default_level":0}'); expect(getSetting('onboarding.keep')).toBe('completed');
+});
+
+test('setup checklist rejects malformed changes and never repairs corrupt saved data silently', () => {
+  for (const change of [null, [], {}, {item:'unknown',done:true}, {item:'goal',done:'yes'}, {hidden:true,extra:1}, {item:'goal',done:true,grant:5}])
+    expect(() => service.saveGettingStarted(0,change)).toThrow('invalid_patch');
+  expect(getSetting('brief.getting-started.v1')).toBeNull();
+  setSetting('brief.getting-started.v1','{"revision":0,"completed":["goal","goal"],"hidden":false}');
+  expect(() => service.gettingStarted()).toThrow('checklist_unreadable');
+  expect(() => service.saveGettingStarted(0,{hidden:true})).toThrow('checklist_unreadable');
+  process.env.JARVIS_BRIEF_PROFILE_SETTINGS='0';
+  expect(() => service.gettingStarted()).toThrow('unavailable');
+});
+
+test('setup checklist routes are gated, reject extra fields and return durable acknowledgement', async () => {
+  const { createProfileSettingsRoutes } = await import('./profile-settings-routes');
+  const { BriefCapabilities } = await import('./capabilities');
+  const json = (v:unknown, status=200) => Response.json(v,{status});
+  const caps = new BriefCapabilities([{id:'profileSettings',provider:service}],['profileSettings']);
+  const route = createProfileSettingsRoutes(caps,json,service)['/api/brief/getting-started'];
+  const request = (value:unknown) => new Request('http://localhost/api/brief/getting-started', {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});
+  expect((await route.GET(new Request('http://localhost/api/brief/getting-started'))).headers.get('cache-control')).toBe('no-store');
+  expect((await route.PATCH(request({revision:0,change:{item:'goal',done:true},extra:1}))).status).toBe(400);
+  const saved = await route.PATCH(request({revision:0,change:{item:'goal',done:true}}));
+  expect(await saved.json()).toEqual({revision:1,completed:['goal'],hidden:false});
+  expect((await route.PATCH(request({revision:0,change:{hidden:true}}))).status).toBe(409);
+  const disabled=createProfileSettingsRoutes(new BriefCapabilities(),json)['/api/brief/getting-started'];
+  expect((await disabled.GET(new Request('http://localhost/api/brief/getting-started'))).status).toBe(501);
+});

@@ -18,6 +18,7 @@ import { MemoryExperience } from '../memory/detail/MemoryExperience';
 import { TodayLayout } from '../today/layout/TodayLayout';
 import { Outcomes } from '../today/outcomes/Outcomes';
 import { RecentActivity } from '../today/activity/RecentActivity';
+import { GettingStarted } from '../today/getting-started/GettingStarted';
 import { GoalCard } from '../today/goal-card/GoalCard';
 import { useGoalHandoff } from '../today/goal-card/useGoalHandoff';
 import { OpportunityStack } from '../today/opportunity-stack/OpportunityStack';
@@ -104,6 +105,7 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
             decisionRead.refresh(); void decisions.refresh();
           } catch { setOperation({ ...request, state: 'unknown', message: 'The decision is not confirmed. Open Needs you to check it.' }); }
         } }} slots={{
+        gettingStarted: isBriefCapabilityEnabled(caps, 'profileSettings') ? <GettingStarted transport={transport} navigate={shell.navigate} goalId={goal?.goal.goalId} compact={d.state !== 'empty'} /> : undefined,
         goal: <GoalCard handoff={handoff} onReviewDraft={goal?.goal.status === 'draft' ? () => shell.navigate({ room: 'goals', selection: { goalId: goal.goal.goalId } }) : undefined} />,
         queueNotice: d.data?.length ? <button onClick={() => shell.navigate({ room: 'needs-you', selection: {} })}>Review {d.data.length} pending {d.data.length === 1 ? 'decision' : 'decisions'}</button> : null,
         outcomes: <Outcomes mode="live" binding={{ source: 'live', capabilities: caps, state: view(outcome, data => ({ window: data.window,

@@ -1,0 +1,22 @@
+.brief-root .brief-setup { padding:24px 28px 14px; min-width:0; }
+.brief-root .brief-setup header { display:flex; align-items:start; justify-content:space-between; gap:12px; }
+.brief-root .brief-setup h2 { margin:0; }
+.brief-root .brief-setup header p { margin:8px 0 0; }
+.brief-root .brief-setup-count { margin:20px 0 8px; color:var(--brief-secondary); font:400 12px/18px var(--brief-sans); font-variant-numeric:tabular-nums; }
+.brief-root .brief-setup ul { list-style:none; padding:0; margin:0; }
+.brief-root .brief-setup li { display:grid; grid-template-columns:40px minmax(0,1fr); border-top:1px solid var(--brief-card-edge); align-items:center; }
+.brief-root .brief-setup-check { min-height:44px; display:grid; place-items:center; cursor:pointer; }
+.brief-root .brief-setup-check input { width:18px; height:18px; margin:0; accent-color:var(--brief-progress-middle); cursor:pointer; }
+.brief-root .brief-setup-open { display:flex; justify-content:space-between; gap:16px; align-items:center; width:100%; border:0; padding:14px 0 14px 8px; background:none; color:var(--brief-ink); text-align:left; cursor:pointer; font:400 14px/20px var(--brief-sans); border-radius:var(--brief-corner-control); }
+.brief-root .brief-setup-open strong { display:block; font-weight:600; }
+.brief-root .brief-setup-open span span { display:block; margin-top:4px; font-size:12px; line-height:18px; }
+.brief-root .brief-setup-open svg { flex:none; color:var(--brief-secondary); }
+.brief-root .brief-setup li[data-complete="true"] strong { color:var(--brief-secondary); }
+.brief-root .brief-setup-toggle { margin-top:10px; }
+.brief-root .brief-setup-resume { padding:8px 0; }
+.brief-root .brief-setup-error { margin-top:12px; }
+.brief-root .brief-setup :is(input,.brief-setup-open):focus-visible { outline:2px solid var(--brief-focus); outline-offset:3px; }
+.brief-root .brief-today-primary > .brief-decision-stack + .brief-setup,
+.brief-root .brief-today-primary > .brief-decision-stack + .brief-setup-resume { margin-top:20px; }
+@media (hover:hover) { .brief-root .brief-setup-open:hover { background:var(--brief-soft); } }
+@container brief-decision (max-width:440px) { .brief-root .brief-setup { padding:20px 16px 12px; } .brief-root .brief-setup-open { gap:8px; } }
