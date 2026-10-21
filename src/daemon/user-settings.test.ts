@@ -385,3 +385,15 @@ describe('persistPlainUserPatch', () => {
     expect(stored.enabled).toBe(false);
   });
 });
+
+describe('#1070: the pebble long-press records an Awareness choice', () => {
+  // The long-press is the only live writer of awareness.enabled. If it went
+  // back to an unmarked write, setup could never keep an explicit "on".
+  test('the blind toggle persists through persistAwarenessChoice', async () => {
+    const src = await Bun.file(join(import.meta.dir, 'index.ts')).text();
+    const toggle = src.slice(src.indexOf("'pebble.blind_toggle'"));
+    const handler = toggle.slice(0, toggle.indexOf('awarenessService.toggle('));
+    expect(handler).toMatch(/persistAwarenessChoice\(\s*nextEnabled\s*\)/);
+    expect(handler).not.toMatch(/persistPlainUserPatch\(\s*['"]awareness['"]/);
+  });
+});

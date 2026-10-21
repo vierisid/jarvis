@@ -38,11 +38,24 @@ export interface ChatStoreState {
   visible: boolean;
   persistenceError: string | null;
 }
-type StoragePort = Pick<Storage, 'getItem' | 'setItem'>;
+/**
+ * removeItem, key and length let the store delete keys that hold nothing worth
+ * keeping (#1088). A port without them stores empty values instead of removing
+ * them, so a closed tab's view fields are overwritten with empties, not deleted.
+ */
+export type StoragePort = Pick<Storage, 'getItem' | 'setItem'> & Partial<Pick<Storage, 'removeItem' | 'key' | 'length'>>;
 type LocalState = Pick<ConversationState, 'draft' | 'attachments' | 'scroll' | 'unread' | 'readSequence'>;
 type Projection = { messages: ConversationMessage[]; turns: Record<string, ChatTurn>; messageSequences: Map<string, number>; historyIds: Set<string> };
 type Replay = { sequence: number; base: Projection; events: Map<string, BriefChatEvent> };
 const localFields = ['draft', 'attachments', 'scroll', 'unread', 'readSequence'] as const;
+/**
+ * Fields that only restore how an open tab looked. A closed conversation keeps
+ * its draft and attachment references (they survive close/reopen), never these.
+ * Accepted cost: a conversation reopened in another window or after a reload
+ * starts at the top with readSequence 0, so if it is reopened while the panel
+ * is hidden its replayed answers show as unread until viewed.
+ */
+const viewFields: ReadonlySet<keyof LocalState> = new Set(['scroll', 'unread', 'readSequence']);
 const terminal = (state: BriefTurnState) => ['completed', 'failed', 'cancelled'].includes(state);
 const compareMessages = (a: ConversationMessage, b: ConversationMessage) => a.created_at - b.created_at || a.id.localeCompare(b.id);
 const emptyLocal = (): LocalState => ({ draft: '', attachments: [], scroll: { top: 0, atBottom: true }, unread: [], readSequence: 0 });
@@ -54,6 +67,10 @@ export class ConversationStore {
   private listeners = new Set<() => void>();
   private replay = new Map<string, Replay>();
   private saved: Record<string, LocalState> = dictionary();
+  /** Read-only fallback from the pre-field single-key format. */
+  private legacy: Record<string, LocalState> = dictionary();
+  /** Field keys this window read or wrote with a value; reset per workspace. */
+  private present = new Set<string>();
   private storageKey = '';
   private requestErrors = new Map<string, string>();
   private dismissedFailures = new Map<string, string>();
@@ -65,15 +82,17 @@ export class ConversationStore {
   private publish(persist = false) {
     if (persist && this.storage && this.storageKey) {
       try {
+        const empty = emptyLocal();
         for (const [id, chat] of Object.entries(this.state.conversations)) {
           const saved = this.saved[id] ?? emptyLocal();
           for (const field of localFields) {
             // Each actual field edit is one atomic storage write. Another window's
             // draft cannot be replaced by this window's stream/scroll/read updates.
-            const value = JSON.stringify(chat[field]);
-            if (value !== JSON.stringify(saved[field])) {
-              this.storage.setItem(this.fieldKey(id, field), value);
-              this.saved[id] = { ...(this.saved[id] ?? saved), [field]: chat[field] };
+            // A closed tab persists no view state; it comes back if reopened here.
+            const next = !chat.conversation.tab.open && viewFields.has(field) ? empty[field] : chat[field];
+            if (JSON.stringify(next) !== JSON.stringify(saved[field])) {
+              this.write(id, field, next);
+              this.saved[id] = { ...(this.saved[id] ?? saved), [field]: next };
             }
           }
         }
@@ -87,12 +106,51 @@ export class ConversationStore {
     return `${this.storageKey}.field.${encodeURIComponent(id)}.${field}`;
   }
 
+  /** True when an absent key reads back as the empty default for this field. */
+  private removable(id: string, field: keyof LocalState, value: unknown) {
+    const empty = JSON.stringify(emptyLocal()[field]);
+    return !!this.storage?.removeItem && JSON.stringify(value) === empty
+      && JSON.stringify(this.legacy[id]?.[field] ?? emptyLocal()[field]) === empty;
+  }
+
+  /** An empty field is removed rather than stored, so used conversations leave no keys behind (#1088). */
+  private write(id: string, field: keyof LocalState, value: unknown) {
+    const key = this.fieldKey(id, field);
+    if (this.removable(id, field, value)) { this.storage!.removeItem!(key); this.present.delete(key); }
+    else { this.storage!.setItem(key, JSON.stringify(value)); this.present.add(key); }
+  }
+
+  /**
+   * Removes view-state keys of conversations that are not open tabs, including
+   * keys left by other windows or older versions. Drafts and attachment
+   * references are never swept: they are the user's unsent work, and another
+   * window may be writing them.
+   */
+  private sweep(open: Set<string>) {
+    const storage = this.storage;
+    if (!storage?.removeItem || !storage.key || typeof storage.length !== 'number') return;
+    const prefix = `${this.storageKey}.field.`, stale: string[] = [];
+    try {
+      for (let index = 0; index < storage.length; index++) {
+        const key = storage.key(index);
+        if (!key?.startsWith(prefix)) continue;
+        const rest = key.slice(prefix.length), dot = rest.lastIndexOf('.');
+        const field = rest.slice(dot + 1) as keyof LocalState;
+        if (dot < 1 || !viewFields.has(field)) continue;
+        let id: string;
+        try { id = decodeURIComponent(rest.slice(0, dot)); } catch { continue; }
+        if (!open.has(id) && this.removable(id, field, emptyLocal()[field])) stale.push(key);
+      }
+      for (const key of stale) storage.removeItem(key);
+    } catch { /* Cleanup is best effort; it never blocks opening the workspace. */ }
+  }
+
   private localState(id: string): LocalState {
     let local = this.saved[id] ?? emptyLocal();
     for (const field of localFields) {
       try {
         const raw = this.storage?.getItem(this.fieldKey(id, field));
-        if (raw != null) local = readLocal({ ...local, [field]: JSON.parse(raw) }) ?? local;
+        if (raw != null) { this.present.add(this.fieldKey(id, field)); local = readLocal({ ...local, [field]: JSON.parse(raw) }) ?? local; }
       } catch { /* Preserve other fields and the legacy fallback if one key is corrupt. */ }
     }
     this.saved[id] = local;
@@ -100,8 +158,9 @@ export class ConversationStore {
   }
 
   restoreTabs(tabs: ConversationTabs) {
+    let sweep = false;
     if (this.state.workspaceId !== tabs.workspaceId) {
-      this.replay.clear(); this.saved = dictionary();
+      this.replay.clear(); this.saved = dictionary(); this.legacy = dictionary(); this.present.clear(); sweep = true;
       this.requestErrors.clear(); this.dismissedFailures.clear();
       this.consumedAttachments.clear();
       this.state = { ...this.state, workspaceId: tabs.workspaceId, conversations: dictionary(), persistenceError: null };
@@ -111,7 +170,7 @@ export class ConversationStore {
         if (value?.version === 1 && value.conversations && typeof value.conversations === 'object') {
           for (const [id, saved] of Object.entries(value.conversations)) {
             const local = readLocal(saved);
-            if (local) this.saved[id] = local;
+            if (local) { this.saved[id] = local; this.legacy[id] = local; }
           }
         }
       } catch { /* Bad/blocked storage never prevents a server-backed conversation from opening. */ }
@@ -126,7 +185,9 @@ export class ConversationStore {
     }
     const order = tabs.tabs.map(chat => chat.conversationId);
     this.state = { ...this.state, conversations, order, activeId: tabs.activeConversationId && order.includes(tabs.activeConversationId) ? tabs.activeConversationId : null };
-    this.markViewed(); this.publish(true);
+    // Once per workspace load: later restores (tab select, reconnect) add nothing
+    // a reload would not sweep, and each sweep walks all of localStorage.
+    this.markViewed(); this.publish(true); if (sweep) this.sweep(new Set(order));
   }
 
   private entry(conversation: BriefConversation, existing?: ConversationState): ConversationState {
@@ -187,7 +248,12 @@ export class ConversationStore {
     let items = chat.attachments;
     try {
       const raw = this.storage?.getItem(this.fieldKey(id, 'attachments'));
-      if (raw != null) {
+      // With removal on, an absent key that this window saw present is another
+      // window's cleared list. One this window never managed to save (quota)
+      // still holds only this window's references.
+      const key = this.fieldKey(id, 'attachments');
+      if (raw == null && this.storage?.removeItem && this.present.has(key)) { this.present.delete(key); items = []; }
+      else if (raw != null) {
         const latest = readLocal({ ...emptyLocal(), attachments: JSON.parse(raw) });
         // Merge the latest saved references before clearing accepted identities.
         if (latest) items = latest.attachments;

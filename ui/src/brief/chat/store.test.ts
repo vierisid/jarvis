@@ -211,3 +211,135 @@ test('replayed failure stays scoped and does not replace a later successful turn
   expect(store.getSnapshot().conversations.a?.error).toBeNull();
   expect(store.getSnapshot().conversations.a?.turns['turn-a']?.error?.message).toBe('Old failure');
 });
+
+/** A Storage-shaped fake with removal and enumeration, like window.localStorage. */
+function deviceStorage(records = new Map<string, string>()) {
+  return { records, getItem: (key: string) => records.get(key) ?? null, setItem: (key: string, value: string) => { records.set(key, value); },
+    removeItem: (key: string) => { records.delete(key); }, key: (index: number) => [...records.keys()][index] ?? null, get length() { return records.size; } };
+}
+const fieldKey = (id: string, field: string) => `jarvis.brief.chat.v1.workspace.field.${id}.${field}`;
+const closed = (id: string) => ({ ...conversation(id), tab: { open: false, order: 0 } });
+const file = (attachmentId: string) => ({ attachmentId, name: attachmentId, size: 1, mediaType: 'text/plain' });
+/** Same storage, but every attachments write fails as if over quota. Keeps the live length getter. */
+function quotaOnAttachments(storage: ReturnType<typeof deviceStorage>) {
+  return { getItem: storage.getItem, removeItem: storage.removeItem, key: storage.key, get length() { return storage.length; },
+    setItem: (key: string, value: string) => { if (key.endsWith('.attachments')) throw new Error('Quota'); storage.setItem(key, value); } };
+}
+
+test('a used and closed conversation leaves no storage keys, while an unsent draft survives close and reload (#1088)', () => {
+  const storage = deviceStorage(), store = fixture(storage);
+  store.setVisible(true);
+  store.applyEvent(event(3, { kind: 'delta', messageId: 'answer', text: 'x' }), 10);
+  store.applyEvent(event(2, { kind: 'delta', messageId: 'answer-b', text: 'y' }, 'b'), 10);
+  store.setScroll('a', { top: 420, atBottom: false });
+  store.setDraft('a', 'sent text'); store.acceptDraft('a', 'sent text');
+  store.setAttachments('a', [{ attachmentId: 'file', name: 'file.txt', size: 4, mediaType: 'text/plain' }]); store.acceptAttachments('a', ['file']);
+  store.setScroll('b', { top: 7, atBottom: false }); store.setDraft('b', 'unsent B');
+  expect([...storage.records.keys()].filter(key => key.includes('.field.a.')).sort()).toEqual([fieldKey('a', 'readSequence'), fieldKey('a', 'scroll')]);
+  store.putConversation(closed('a')); store.putConversation(closed('b'));
+  expect([...storage.records.keys()]).toEqual([fieldKey('b', 'draft')]);
+  // Reopening in this window restores its view; a fresh window reopens with the draft only.
+  store.putConversation(conversation('a'), true);
+  expect(storage.records.get(fieldKey('a', 'scroll'))).toBe(JSON.stringify({ top: 420, atBottom: false }));
+  const fresh = new ConversationStore(storage);
+  fresh.restoreTabs({ workspaceId: 'workspace', activeConversationId: 'b', revision: '1', tabs: [conversation('b')] });
+  expect(fresh.getSnapshot().conversations.b).toMatchObject({ draft: 'unsent B', scroll: { top: 0, atBottom: true } });
+});
+
+test('opening a workspace sweeps view keys of conversations that are not open, never drafts or attachments (#1088)', () => {
+  const records = new Map<string, string>([
+    [fieldKey('gone', 'scroll'), JSON.stringify({ top: 9, atBottom: false })], [fieldKey('gone', 'readSequence'), '12'],
+    [fieldKey('gone', 'unread'), '["m"]'], [fieldKey('gone', 'draft'), '"keep"'],
+    [fieldKey('gone', 'attachments'), JSON.stringify([{ attachmentId: 'f', name: 'f', size: 1, mediaType: 'text/plain' }])],
+    [fieldKey('a', 'scroll'), JSON.stringify({ top: 5, atBottom: false })],
+    ['jarvis.brief.chat.v1.other.field.gone.scroll', '{"top":1,"atBottom":false}'], ['unrelated', 'x'],
+  ]);
+  const store = fixture(deviceStorage(records));
+  expect([...records.keys()].sort()).toEqual([fieldKey('a', 'scroll'), fieldKey('gone', 'attachments'), fieldKey('gone', 'draft'),
+    'jarvis.brief.chat.v1.other.field.gone.scroll', 'unrelated'].sort());
+  expect(store.getSnapshot().conversations.a?.scroll.top).toBe(5);
+  store.putConversation({ ...conversation('gone'), tab: { open: true, order: 2 } });
+  expect(store.getSnapshot().conversations.gone).toMatchObject({ draft: 'keep', scroll: { top: 0 }, readSequence: 0 });
+});
+
+test('a field another window cleared reads empty, and acceptance does not revive its attachments (#1088)', () => {
+  const storage = deviceStorage(), first = fixture(storage);
+  first.setDraft('a', 'old draft'); first.setAttachments('a', [file('one'), file('two')]);
+  const second = fixture(storage);
+  second.setDraft('a', ''); second.setAttachments('a', []);
+  expect(storage.records.has(fieldKey('a', 'draft'))).toBe(false); expect(storage.records.has(fieldKey('a', 'attachments'))).toBe(false);
+  first.acceptAttachments('a', ['one']);
+  expect(first.getSnapshot().conversations.a?.attachments).toEqual([]);
+  expect(fixture(storage).getSnapshot().conversations.a).toMatchObject({ draft: '', attachments: [] });
+});
+
+test('clearing a legacy draft stores the empty value so the legacy copy cannot come back (#1088)', () => {
+  const key = 'jarvis.brief.chat.v1.workspace';
+  const legacy = JSON.stringify({ version: 1, conversations: { a: { draft: 'Legacy draft', attachments: [], scroll: { top: 3, atBottom: false }, unread: [], readSequence: 0 } } });
+  const storage = deviceStorage(new Map([[key, legacy]])), store = fixture(storage);
+  store.setDraft('a', ''); store.setScroll('a', { top: 0, atBottom: true });
+  expect(fixture(storage).getSnapshot().conversations.a).toMatchObject({ draft: '', scroll: { top: 0, atBottom: true } });
+  expect(storage.records.get(key)).toBe(legacy);
+});
+
+test('references this window could not save survive acceptance of another reference (#1088)', () => {
+  const store = fixture(quotaOnAttachments(deviceStorage()));
+  store.setAttachments('a', [file('one'), file('two')]);
+  expect(store.getSnapshot().persistenceError).toContain('could not be saved');
+  store.acceptAttachments('a', ['one']);
+  expect(store.getSnapshot().conversations.a?.attachments.map(item => item.attachmentId)).toEqual(['two']);
+});
+
+test('a legacy reference does not make this window drop references it could not save (#1088)', () => {
+  const legacy = JSON.stringify({ version: 1, conversations: { a: { draft: '', attachments: [file('legacy')], scroll: { top: 0, atBottom: true }, unread: [], readSequence: 0 } } });
+  const store = fixture(quotaOnAttachments(deviceStorage(new Map([['jarvis.brief.chat.v1.workspace', legacy]]))));
+  expect(store.getSnapshot().conversations.a?.attachments.map(item => item.attachmentId)).toEqual(['legacy']);
+  store.setAttachments('a', [file('legacy'), file('new')]);
+  store.acceptAttachments('a', ['legacy']);
+  expect(store.getSnapshot().conversations.a?.attachments.map(item => item.attachmentId)).toEqual(['new']);
+});
+
+test('the sweep runs once per workspace load, not on every tab restore (#1088)', () => {
+  const storage = deviceStorage(), store = fixture(storage);
+  storage.setItem(fieldKey('elsewhere', 'scroll'), JSON.stringify({ top: 3, atBottom: false }));
+  store.restoreTabs({ workspaceId: 'workspace', activeConversationId: 'b', revision: '2', tabs: [conversation('a'), conversation('b', 1)] });
+  expect(storage.records.has(fieldKey('elsewhere', 'scroll'))).toBe(true);
+  fixture(storage);
+  expect(storage.records.has(fieldKey('elsewhere', 'scroll'))).toBe(false);
+});
+
+test('a window that only read saved references sees another window clear them (#1088)', () => {
+  const storage = deviceStorage();
+  fixture(storage).setAttachments('a', [file('one'), file('two')]);
+  const reader = fixture(storage);
+  expect(reader.getSnapshot().conversations.a?.attachments).toHaveLength(2);
+  fixture(storage).setAttachments('a', []);
+  reader.acceptAttachments('a', ['one']);
+  expect(reader.getSnapshot().conversations.a?.attachments).toEqual([]);
+});
+
+test('references saved after this window cleared its own list survive a quota failure (#1088)', () => {
+  const inner = deviceStorage(); let full = false;
+  const storage = { ...quotaOnAttachments(inner), get length() { return inner.length; },
+    setItem: (key: string, value: string) => { if (full && key.endsWith('.attachments')) throw new Error('Quota'); inner.setItem(key, value); } };
+  const store = fixture(storage);
+  store.setAttachments('a', [file('one')]); store.setAttachments('a', []);
+  expect(inner.records.has(fieldKey('a', 'attachments'))).toBe(false);
+  full = true; store.setAttachments('a', [file('two'), file('three')]);
+  store.acceptAttachments('a', ['two']);
+  expect(store.getSnapshot().conversations.a?.attachments.map(item => item.attachmentId)).toEqual(['three']);
+});
+
+test('switching workspaces away and back forgets which keys this window saw (#1088)', () => {
+  const inner = deviceStorage(); let full = false;
+  const storage = { ...quotaOnAttachments(inner), get length() { return inner.length; },
+    setItem: (key: string, value: string) => { if (full && key.endsWith('.attachments')) throw new Error('Quota'); inner.setItem(key, value); } };
+  const store = fixture(storage);
+  store.setAttachments('a', [file('one')]);
+  fixture(inner).setAttachments('a', []);
+  store.restoreTabs({ workspaceId: 'other', activeConversationId: 'a', revision: '1', tabs: [conversation('a', 0, 'other')] });
+  store.restoreTabs({ workspaceId: 'workspace', activeConversationId: 'a', revision: '1', tabs: [conversation('a')] });
+  full = true; store.setAttachments('a', [file('two'), file('three')]);
+  store.acceptAttachments('a', ['two']);
+  expect(store.getSnapshot().conversations.a?.attachments.map(item => item.attachmentId)).toEqual(['three']);
+});

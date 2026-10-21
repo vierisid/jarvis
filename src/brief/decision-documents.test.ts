@@ -7,6 +7,7 @@ import { initWorkflowDb } from '../workflows/db';
 import { createFlow } from '../workflows/db/repos/flow';
 import { createDraftVersion } from '../workflows/db/repos/flow-version';
 import { createFlowRun, updateRun } from '../workflows/db/repos/flow-run';
+import { cancelFlowRun, retireTerminalRunWaits } from '../workflows/db/repos/run-cancellation';
 import { getWorkflowEffect, listWorkflowEffects, saveWorkflowEffect, claimWorkflowEffect } from '../workflows/db/repos/workflow-effect';
 import { AuthorityEngine } from '../authority/engine';
 import { ApprovalManager } from '../authority/approval';
@@ -127,6 +128,33 @@ test('deferral retires permission, survives expiry and restart, stays queued and
   const reopened = await f.command(id, 'reopen'); expect(reopened.approvalId).not.toBe(saved.approvalId);
   expect(documents.get(id).decision.approval!.status).toBe('pending'); expect(resumeResolvedWorkflowEffects()).toBe(0);
   await f.command(id, 'approve'); expect(resumeResolvedWorkflowEffects()).toBe(1); expect(resumeResolvedWorkflowEffects()).toBe(0);
+});
+
+test.each(['canceled','finished'] as const)('a kept draft whose run is %s reads blocked, not deferred, in the document and the queue (#1094)', async how => {
+  const f = setup(), view = await f.pending(), id = view.decision.decisionId;
+  await f.command(id, 'keep_draft'); expect(documents.get(id).state).toBe('deferred'); expect(queue.get(id).state).toBe('deferred');
+  if (how === 'canceled') expect(cancelFlowRun(f.run.id).accepted).toBe(true);
+  else { updateRun(f.run.id, { status: 'SUCCEEDED' }); retireTerminalRunWaits(f.run.id); }
+  expect(listWorkflowEffects(f.run.id)[0]!.status).toBe('blocked');
+  expect(manager.getRequest(view.decision.approval!.approvalId)!.status).toBe('expired');
+  const kept = documents.get(id); expect(kept.state).toBe('blocked'); expect(kept.editable).toBe(false); expect(kept.actions).toEqual([]);
+  expect(queue.get(id).state).toBe('blocked');
+});
+
+test('a kept draft whose effect row is gone still reads deferred in the queue (#1094 fallback)', async () => {
+  const f = setup(), view = await f.pending(), id = view.decision.decisionId;
+  await f.command(id, 'keep_draft');
+  getDb().run('DELETE FROM workflow_effect WHERE run_id=?', [f.run.id]); expect(listWorkflowEffects(f.run.id)).toEqual([]);
+  expect(queue.get(id).state).toBe('deferred');
+});
+
+test('an expired review whose run is canceled reads blocked like the queue, not expired (#1094)', async () => {
+  const f = setup(), view = await f.pending(), id = view.decision.decisionId;
+  getDb().run('UPDATE approval_requests SET created_at=0 WHERE id=?', [view.decision.approval!.approvalId]);
+  manager.expireOld(1); expect(documents.get(id).state).toBe('expired');
+  expect(cancelFlowRun(f.run.id).accepted).toBe(true);
+  expect(manager.getRequest(view.decision.approval!.approvalId)!.status).toBe('expired');
+  expect(documents.get(id).state).toBe('blocked'); expect(queue.get(id).state).toBe('blocked');
 });
 
 test('an expired review can be edited and approved after reload without silently resuming', async () => {
