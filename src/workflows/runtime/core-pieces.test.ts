@@ -131,3 +131,16 @@ describe('the engine is told the install\'s egress policy', () => {
     expect(EGRESS_POLICY_ENV in engineEnv(base)).toBe(false);
   });
 });
+
+describe('#961: the Docker image ships every loaded core piece', () => {
+  // The image's read-only install tree cannot build a piece at boot, so a core
+  // piece the Dockerfile does not prebuild and copy stops the workflow engine.
+  test('the Dockerfile checks and stages exactly LOADED_CORE_PIECES', () => {
+    const dockerfile = readFileSync(resolve(import.meta.dir, '..', '..', '..', 'Dockerfile'), 'utf8');
+    const checked = [...dockerfile.matchAll(/"\$core\/([a-z-]+)\/"/g)].map((m) => m[1]);
+    expect(checked).toEqual([...LOADED_CORE_PIECES]);
+    const staged = dockerfile.match(/for name in ([a-z -]+); do/);
+    expect(staged?.[1]?.trim().split(/\s+/)).toEqual([...LOADED_CORE_PIECES]);
+    expect(dockerfile).toContain('COPY --from=workflows /out/core-pieces/ ./src/workflows/activepieces/packages/pieces/core/');
+  });
+});
