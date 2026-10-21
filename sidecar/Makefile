@@ -54,8 +54,9 @@ app-macos:
 
 # macOS installer app bundle: wraps a built installer binary (BIN_INSTALLER)
 # as "Install Jarvis.app" with its own bundle id (com.jarvis.installer) so TCC
-# and notarization identities never blur with the sidecar's. CI signs and
-# notarizes the result, then wraps it in a DMG via dmg-installer.
+# and notarization identities never blur with the sidecar's. CI builds it
+# here and signs and notarizes it in a separate job (installer-release.yml
+# sign-macos, #870), which wraps it in the DMG with hdiutil itself.
 BIN_INSTALLER     ?= ./jarvis-setup
 INSTALLER_APP_DIR ?= dist/macos/Install Jarvis.app
 app-macos-installer:
@@ -68,8 +69,9 @@ app-macos-installer:
 	@printf 'APPL????' > "$(INSTALLER_APP_DIR)/Contents/PkgInfo"
 	@echo "Built $(INSTALLER_APP_DIR) (installer version $(INSTALLER_VERSION))"
 
-# Wrap the (signed) installer app in a compressed DMG. CI signs + notarizes
-# + staples the DMG afterwards; this target only assembles.
+# Wrap the installer app in a compressed DMG, for a local build. CI does not
+# call it: its signing job holds the Apple secrets and runs no make (#870),
+# so it runs the same hdiutil line itself.
 INSTALLER_DMG ?= dist/macos/Install-Jarvis.dmg
 dmg-installer:
 	@test -d "$(INSTALLER_APP_DIR)" || { echo "'$(INSTALLER_APP_DIR)' not found — run 'make app-macos-installer' first"; exit 1; }
