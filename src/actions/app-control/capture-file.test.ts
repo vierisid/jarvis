@@ -80,10 +80,11 @@ describe('local captures do not use a predictable path (#746)', () => {
     }
   });
 
-  // Linux: the capture tools are faked on PATH, in a child process, because
-  // Bun's execSync and $ inherit the environment the process started with,
-  // not process.env as edited since. The child also pins Date.now before the
-  // code under test is loaded.
+  // Linux: the capture tools are faked in a directory the child's
+  // system-directory lookup (#900) is pointed at, and on its PATH as before;
+  // a child process, because a spawn without an env resolves against the
+  // environment the process started with, not process.env as edited since.
+  // The child also pins Date.now before the code under test is loaded.
   function runChild(fakes: Record<string, string>, body: string): { exitCode: number | null; stdout: string; stderr: string; argsLog: string } {
     const bin = mkdtempSync(join(tmpdir(), 'jarvis-746-bin-'));
     try {
@@ -91,7 +92,9 @@ describe('local captures do not use a predictable path (#746)', () => {
       for (const [name, script] of Object.entries(fakes)) {
         writeFileSync(join(bin, name), `#!/bin/sh\necho "${name} $*" >> '${argsLog}'\n${script}\n`, { mode: 0o755 });
       }
-      const script = `Date.now = () => ${PINNED_MS};\n${body}`;
+      const systemExe = join(import.meta.dir, '..', '..', 'util', 'system-exe.ts');
+      const script = `Date.now = () => ${PINNED_MS};\n` +
+        `(await import(${JSON.stringify(systemExe)})).__setLinuxSystemDirsForTests(${JSON.stringify([bin])});\n${body}`;
       const child = Bun.spawnSync([process.execPath, '-e', script], {
         env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
         cwd: import.meta.dir,
@@ -121,6 +124,35 @@ describe('local captures do not use a predictable path (#746)', () => {
       expect(Buffer.from(result.content[1]!.source!.data, 'base64').toString()).toBe('what the tool wrote');
     } finally {
       cleanup();
+    }
+  });
+
+  // #900: scrot and import were run by bare name, so the first on PATH ran.
+  test.skipIf(process.platform !== 'linux')('capture_screen: the system directory\'s scrot runs, not the one on PATH; with neither tool there it says so (#900)', () => {
+    const system = mkdtempSync(join(tmpdir(), 'jarvis-900-system-'));
+    const empty = mkdtempSync(join(tmpdir(), 'jarvis-900-empty-'));
+    try {
+      writeFileSync(join(system, 'scrot'), '#!/bin/sh\nfor last; do :; done\nprintf "from the system scrot" > "$last"\n', { mode: 0o755 });
+      const builtin = join(import.meta.dir, '..', 'tools', 'builtin.ts');
+      const systemExe = join(import.meta.dir, '..', '..', 'util', 'system-exe.ts');
+      const out = runChild({ scrot: 'printf "planted" > "$(for last; do :; done; echo "$last")"', import: 'exit 0' }, `
+        const { __setLinuxSystemDirsForTests } = await import(${JSON.stringify(systemExe)});
+        const { captureScreenTool } = await import(${JSON.stringify(builtin)});
+        __setLinuxSystemDirsForTests(${JSON.stringify([system])});
+        const a = await captureScreenTool.execute({});
+        __setLinuxSystemDirsForTests(${JSON.stringify([empty])});
+        const b = await captureScreenTool.execute({});
+        process.stdout.write(JSON.stringify([a, b]));`);
+      expect({ exitCode: out.exitCode, stderr: out.stderr }).toMatchObject({ exitCode: 0 });
+      const [a, b] = JSON.parse(out.stdout) as [{ content: Array<{ source?: { data: string } }> }, string];
+      expect(Buffer.from(a.content[1]!.source!.data, 'base64').toString()).toBe('from the system scrot');
+      expect(b).toStartWith(`Error capturing screen: no screenshot tool: scrot is not installed in a system directory (${empty}); not used: `);
+      expect(b).toContain(`; import is not installed in a system directory (${empty}); not used: `);
+      // Neither planted tool ran.
+      expect(out.argsLog).toBe('');
+    } finally {
+      rmSync(system, { recursive: true, force: true });
+      rmSync(empty, { recursive: true, force: true });
     }
   });
 

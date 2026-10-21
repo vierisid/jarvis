@@ -48,13 +48,16 @@ type Action =
 type Outcome = { ok: boolean; error?: string; code?: string; effect?: string; ms?: number };
 
 const CAPTURE_FILE_TS = new URL('./capture-file.ts', import.meta.url).href;
+const SYSTEM_EXE_TS = new URL('../../util/system-exe.ts', import.meta.url).href;
 
 /**
  * Run LinuxAppController in a child whose PATH is only `binDir` and which has
- * no DISPLAY, so a tool missing from `binDir` cannot fall through to a real
- * one on the machine running the tests. A spawn without an env resolves
- * commands against the PATH the process started with (Bun `$` did the same),
- * which is why this is a child and not an in-process PATH swap.
+ * no DISPLAY. Since #900 the controller takes its tools from the system
+ * directories, never PATH; the child points that lookup at `systemDirs`
+ * (default: `binDir` alone), so a tool missing from there cannot fall through
+ * to a real one on the machine running the tests. A child rather than
+ * in-process, because a spawn without an env resolves anything it does find
+ * by name against the PATH the process started with.
  *
  * `boundMs` shortens CAPTURE_TIMEOUT_MS in the child, and `timed` adds each
  * action's duration. The child itself is killed past `deadlineMs`, so a call
@@ -64,11 +67,13 @@ async function runController(
   binDir: string,
   actions: Action[],
   env: Record<string, string> = {},
-  opts: { boundMs?: number; timed?: boolean; deadlineMs?: number } = {},
+  opts: { boundMs?: number; timed?: boolean; deadlineMs?: number; systemDirs?: string[] } = {},
 ): Promise<Outcome[]> {
   const script = `
     import { LinuxAppController } from ${JSON.stringify(LINUX_TS)};
     import { __setCaptureTimeoutForTests } from ${JSON.stringify(CAPTURE_FILE_TS)};
+    import { __setLinuxSystemDirsForTests } from ${JSON.stringify(SYSTEM_EXE_TS)};
+    __setLinuxSystemDirsForTests(${JSON.stringify(opts.systemDirs ?? [binDir])});
     ${opts.boundMs !== undefined ? `__setCaptureTimeoutForTests(${opts.boundMs});` : ''}
     const ctrl = new LinuxAppController();
     const out = [];
@@ -421,7 +426,7 @@ describe('LinuxAppController with a recording xdotool on PATH', () => {
     try {
       const [outcome] = await runController(emptyDir, [{ op: 'type', text: '' }]);
       expect(outcome).toMatchObject({ ok: false });
-      expect(outcome?.error).toMatch(/Required tool 'xdotool' not found/);
+      expect(outcome?.error).toMatch(/Required tool 'xdotool' is not available: xdotool is not installed in a system directory/);
     } finally {
       rmSync(emptyDir, { recursive: true, force: true });
     }
@@ -456,6 +461,50 @@ describe('LinuxAppController with a recording xdotool on PATH', () => {
       expect(o.error).toMatch(/Nothing was pressed\.$/);
     }
     expect(readCalls(binDir)).toEqual([]);
+  });
+});
+
+/**
+ * #900: the X tools were run by bare name, so the first `xdotool` on PATH ran,
+ * and a stock PATH puts ~/.local/bin and ~/.bun/bin ahead of /usr/bin. Here
+ * PATH holds a planted xdotool and the system directory the real one; only
+ * the real one may run, and with none in the system directory the call is
+ * refused, naming the copy it would not use, rather than falling back to PATH.
+ */
+describe('X tools come from the system directories, never PATH (#900)', () => {
+  let planted: string;
+  let system: string;
+  let empty: string;
+
+  beforeAll(() => {
+    planted = mkdtempSync(join(tmpdir(), 'jarvis-900-planted-'));
+    system = mkdtempSync(join(tmpdir(), 'jarvis-900-system-'));
+    empty = mkdtempSync(join(tmpdir(), 'jarvis-900-empty-'));
+    writeRecordingXdotool(planted);
+    writeRecordingXdotool(system);
+  });
+
+  afterAll(() => {
+    for (const dir of [planted, system, empty]) rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('the system directory\'s xdotool runs, not the one first on PATH', async () => {
+    const outcomes = await runController(planted, [{ op: 'type', text: 'hello' }, { op: 'keys', keys: ['ctrl', 's'] }], {}, { systemDirs: [system] });
+    expect(outcomes).toEqual([{ ok: true }, { ok: true }]);
+    expect(readCalls(system).map((c) => c.argv)).toEqual([
+      ['type', '--clearmodifiers', '--', 'hello'],
+      ['key', '--clearmodifiers', '--', 'ctrl+s+'],
+    ]);
+    expect(readCalls(planted)).toEqual([]);
+  });
+
+  test('with no xdotool in a system directory the call is refused and the PATH copy is named, not run', async () => {
+    const [outcome] = await runController(planted, [{ op: 'type', text: 'hello' }], {}, { systemDirs: [empty] });
+    expect(outcome!.ok).toBe(false);
+    expect(outcome!.error).toContain(`Required tool 'xdotool' is not available: xdotool is not installed in a system directory (${empty})`);
+    // The child's HOME is the planted directory, so the copy is shown under ~.
+    expect(outcome!.error).toContain('not used: ~/xdotool (not a system directory)');
+    expect(readCalls(planted)).toEqual([]);
   });
 });
 
@@ -680,7 +729,10 @@ function prepareShim(): { dir: string; log: string } | null {
   writeFileSync(join(dir, 'shim.c'), SHIM_C);
   const cc = spawnSync(compiler, ['-shared', '-fPIC', '-o', join(dir, 'shim.so'), join(dir, 'shim.c')], { encoding: 'utf-8' });
   const bin = join(dir, 'bin');
-  mkdirSync(bin);
+  // 0755 whatever the umask: the system-directory lookup (#900) refuses a
+  // group-writable directory.
+  mkdirSync(bin, { mode: 0o755 });
+  chmodSync(bin, 0o755);
   writeFileSync(join(bin, 'xdotool'), [
     '#!/bin/sh',
     'unset DISPLAY WAYLAND_DISPLAY XAUTHORITY',
@@ -852,6 +904,7 @@ describe.skipIf(!xvfb || !xterm || !realXdotool)('typing into an xterm on a priv
     // The controller finds only the verified xdotool on its PATH.
     const bin = join(dir, 'bin');
     mkdirSync(bin);
+    chmodSync(bin, 0o755);
     symlinkSync(realXdotool!, join(bin, 'xdotool'));
 
     const outcomes = await runController(bin, actions, { DISPLAY: display });

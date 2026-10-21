@@ -1,9 +1,10 @@
-import { test, expect, describe } from 'bun:test';
+import { test, expect, describe, beforeAll, afterAll } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { WindowsAppController, escapeSendKeysText, mapKeysToSendKeys, toAsciiJson } from './windows.ts';
 import type { NativeExec, NativeExecResult } from './native-exec.ts';
+import { win32SystemExe } from '../../util/system-exe.ts';
 
 const SCRIPT_PATH = join(import.meta.dir, 'scripts', 'desktop.ps1');
 
@@ -81,6 +82,19 @@ describe('toAsciiJson', () => {
 });
 
 describe('WindowsAppController fallback', () => {
+  // powershell.exe is taken from %SystemRoot% (#907). Off Windows the test's
+  // environment has none, so it gets one; on Windows the real one is used.
+  let savedRoot: string | undefined;
+  beforeAll(() => {
+    savedRoot = process.env.SystemRoot;
+    if (process.platform !== 'win32') process.env.SystemRoot = 'D:\\Win';
+  });
+  afterAll(() => {
+    if (process.platform === 'win32') return;
+    if (savedRoot === undefined) delete process.env.SystemRoot;
+    else process.env.SystemRoot = savedRoot;
+  });
+
   const windowJson = JSON.stringify({
     pid: 123, focused: true, x: 10, y: 20, width: 300, height: 200,
     className: 'Chrome_WidgetWin_1', title: 'Docs',
@@ -90,7 +104,11 @@ describe('WindowsAppController fallback', () => {
     const { ctrl, calls } = controller(() => ({ stdout: windowJson }));
     await ctrl.getActiveWindow();
     const cmd = calls[0]!.cmd;
-    expect(cmd[0]).toBe('powershell.exe');
+    // powershell.exe by absolute path from %SystemRoot%, never by name (#907):
+    // a bare name can be found in the working directory first.
+    expect(cmd[0]).toBe(win32SystemExe('powershell.exe'));
+    expect(cmd[0]).toEndWith('\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+    if (process.platform !== 'win32') expect(cmd[0]).toBe('D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
     expect(cmd).toContain('-File');
     expect(cmd).toContain(SCRIPT_PATH);
     expect(cmd).toContain('get-active-window');

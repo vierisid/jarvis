@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
 import { defaultExec, runNative, type NativeExec } from './native-exec.ts';
+import { win32SystemExe } from '../../util/system-exe.ts';
 
 /**
  * Windows App Controller.
@@ -173,7 +174,8 @@ export class WindowsAppController implements AppController {
   private async runScript(command: string, payload?: Record<string, unknown>): Promise<string> {
     const stdout = await runNative(
       this.exec,
-      ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', SCRIPT_PATH, command],
+      // By absolute path from %SystemRoot%, never by name (#907).
+      [win32SystemExe('powershell.exe'), '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', SCRIPT_PATH, command],
       payload === undefined ? '' : toAsciiJson(payload),
       `desktop.ps1 ${command}`,
     );
