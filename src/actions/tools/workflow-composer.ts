@@ -865,7 +865,7 @@ function buildComposerToolDefs(hasToolSpecs: boolean, hasLibrary: boolean, canIn
         (hasLibrary
           ? "If search_library found a piece that would cover the request, suggest it in suggestedPieces. "
           : "") +
-        "Use this instead of forcing a wrong piece to fit. Only call it after checking list_pieces" +
+        "Explain both the native blocker and why a permitted browser-agent alternative cannot cover the job (or which user restriction forbids it). Missing connector credentials alone do not rule out a disabled browser draft. Use this instead of forcing a wrong piece to fit. Only call it after checking list_pieces" +
         (hasLibrary ? " and search_library." : "."),
       parameters: {
         type: "object",
@@ -1194,8 +1194,8 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
     "  - Every required input field MUST be present.",
     "  - The composed flow is created DISABLED. Do NOT claim the flow is running; the user reviews and publishes it explicitly.",
     "  - Installing a connector does not connect an account. Never invent credentials or connection IDs. If no real connection binding was supplied, leave auth unset in the disabled draft and explain that connecting the account is required before execution. Never execute actions to validate a draft.",
-    "  - Prefer installed native tools or connector actions. If no usable connector exists, consider a jarvis-agent:delegate browser step ONLY when AI/browser use is allowed by the request, registered browser tools exist, a connected machine advertises browser capability, and the chosen role permits browser tools. Inspect the agent and browser schemas first. A role description alone is not proof of browser access.",
-    "  - A browser fallback must target that actual machine and carry the exact read/write restrictions, date boundaries, pagination/completeness requirements and required output in its goal. Browser access does not prove an authenticated session: require the user to sign in if needed and stop on inaccessible or incomplete data. Never treat an inaccessible calendar as an empty calendar or invent results.",
+    "  - Prefer installed native tools or connector actions. If a native connector is unavailable OR unusable because account/calendar bindings or required behavior are missing, evaluate a jarvis-agent:delegate browser draft before declaring the whole job blocked, but ONLY when AI/browser use is allowed by the request, registered browser tools exist, a connected machine advertises browser capability, and the chosen role permits browser tools. Inspect the agent and browser schemas first. A role description alone is not proof of browser access.",
+    "  - Missing OAuth credentials for a connector do not rule out a browser draft, but neither prove browser login. A browser fallback must target that actual machine and carry the exact read/write restrictions, date boundaries, pagination/completeness requirements and required output in its goal. Browser access does not prove an authenticated session: require the user to sign in if needed and stop on inaccessible or incomplete data. Never treat an inaccessible calendar as an empty calendar or invent results.",
     "  - Do not use browser automation to bypass denied permissions, a requirement for no AI steps, or an explicit absence of browser access (for example LedgerFox with no connector, API, export or browser access). Report the precise blocker instead. Draft validation proves structure, not a live browser session or successful service access.",
     mode === "tools"
       ? "  - When the user asks for an integration that isn't an installed piece (Gmail, Slack, ...), check the Jarvis tools in list_pieces and use the `jarvis-tool` piece with `toolName` set to one of them."
@@ -1352,8 +1352,9 @@ function buildToolLoopSystemPrompt(
     hasLibrary
       ? (canInstall
         ? "  4. If no installed piece or Jarvis tool covers the request, search_library, install the matching entry with install_library_piece, then inspect its actual schema and continue building. Respect any user restriction against installation. If installation fails, explain the exact failure; do not claim the connector is available."
-        : "  4. If no installed piece or Jarvis tool covers the request, call search_library for an installable piece,\n     then call report_blocked suggesting the best match. Never force a wrong piece to fit.")
-      : "  4. If no installed piece or Jarvis tool covers the request, call report_blocked explaining what is missing.\n     Never force a wrong piece to fit.",
+        : "  4. If no installed piece or Jarvis tool covers the request, call search_library for an installable piece,\n     then evaluate the permitted browser fallback described below. If neither route covers the request, call report_blocked suggesting the best match. Never force a wrong piece to fit.")
+      : "  4. If no native piece or tool covers the request, evaluate the permitted browser fallback described below before report_blocked.\n     Never force a wrong piece to fit.",
+    "  5. Before report_blocked, distinguish connector setup from platform capability. An installed connector can still be unusable (missing account/calendar or undocumented pagination). Inspect a permitted browser-agent route in that case; do not stop at native setup alone. If it can cover the job, save that disabled draft with explicit runtime access/completeness checks. Otherwise explain why that alternative is unavailable or prohibited too. Never relax the user's constraints or a supplied job contract to make a graph pass.",
     "  Keep detail lookups targeted -- fetch the pieces you shortlisted, not the whole catalog.",
     "",
     envText,

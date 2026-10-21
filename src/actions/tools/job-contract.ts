@@ -29,6 +29,7 @@ import { getCronTimezone } from '../../lib/cron-scheduler';
 import { VERIFIED_MANIFESTS } from '../../workflows/pieces-library/verified-manifests-generated';
 import { BOUNDED_TOOL_NAMES } from '../../workflows/runtime/effect-capabilities';
 import { ALL_PIECE_ADAPTERS, GOVERNED_PIECE_ADAPTERS, resolveGovernedPieceAction } from '../../workflows/runtime/piece-effects';
+import { PIECE_NOTIFY_CHANNELS } from '../../workflows/jarvis-pieces/types';
 import { walkFlowNodes } from '../../workflows/db/flow-graph';
 import type { FlowTriggerNode } from '../../workflows/db/repos/flow-version';
 
@@ -113,6 +114,9 @@ function step(value: unknown, where: string, notify: boolean): ContractStep {
     only(value.notify as Record<string, unknown>, ['channels'], `${where}.notify`);
     const channels = texts((value.notify as Record<string, unknown>).channels, `${where}.notify.channels`);
     if (channels.includes('auto')) fail(`${where}.notify.channels must name channels; auto is decided at run time`);
+    if (channels.some(c => !(PIECE_NOTIFY_CHANNELS as readonly string[]).includes(c))) {
+      fail(`${where}.notify.channels contains an unsupported channel. Native Jarvis in-app notifications use dashboard. Supported channels: ${PIECE_NOTIFY_CHANNELS.filter(c => c !== 'auto').join(', ')}. Correct the contract without changing the user's requested destination.`);
+    }
     return { notify: { channels } };
   }
   if ('tool' in value) {

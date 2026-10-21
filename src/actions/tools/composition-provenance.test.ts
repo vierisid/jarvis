@@ -20,6 +20,13 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
+  // w8-7: inspect browser fallback before refusing missing connector setup.
+  'w8-7': {
+    bare: '79604471f26e16b11f4deb6edbe2cab47ef1f00db537552f941868629d3d0398',
+    production: 'b5aeaacab78d6cc49a7114a0e0a78c999223c770ec77823baede1c502bb0633f',
+    'hosted production': '8ac8119fae556bb38786262ea77c29cf603ffb3fe7d3bab60a2aad8cfc86a4d0',
+    'tool names only': '3214fa331beaf6102355ce7b1ae40f10c3233aa86f8b9af7c64982e434b27d1b',
+  },
   // w8-6: timezone discovery, Library installation, account binding and browser fallback rules.
   'w8-6': {
     bare: '382e95a19295d50c84df2d0e145a16fc91ce3df2eda7d9f8702fb317415c25ec',

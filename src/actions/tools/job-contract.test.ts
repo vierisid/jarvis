@@ -70,6 +70,15 @@ describe('validating a contract', () => {
     expect(refuse({ recipients: Array.from({ length: 21 }, (_, i) => `r${i}`) })).toContain('1 to 20');
   });
 
+  test('notification contracts reject invented channels without silently substituting one', () => {
+    for (const channel of ['in_app', 'email', 'typo']) {
+      expect(refuse({ outputs: [{ notify: { channels: [channel] } }] })).toContain('Native Jarvis in-app notifications use dashboard');
+    }
+    for (const channel of ['dashboard', 'desktop', 'telegram', 'discord', 'voice']) {
+      expect(refuse({ outputs: [{ notify: { channels: [channel] } }] })).toBeNull();
+    }
+  });
+
   test('a contract no graph can keep is refused, naming why', () => {
     const unmet = (value: unknown) => expect(refuse(value)).toStartWith('Job contract cannot be met: ');
     expect(refuse({ outputs: [{ tool: 'write_file' }], forbidden: { tools: ['write_file'] } }))

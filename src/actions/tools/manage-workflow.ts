@@ -195,6 +195,8 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
             "compose unchanged.",
           ]
         : []),
+      "Preserve the user's original job when composing or retrying. Missing connector setup is not proof that the job is impossible: ask the composer to inspect a browser-agent alternative if native actions cannot cover it and AI/browser use is permitted. It must verify registered browser tools, a connected browser-capable computer and role permissions; never assume a logged-in account. Do not narrow a retry to connector-only unless the user requires it.",
+      "Native Jarvis in-app notifications use channel dashboard, never in_app. Do not invent schema names, account IDs or calendar IDs in the description or contract. Keep unknown implementation choices in plain English for composer discovery.",
       "Composed flows are DISABLED: publish once the user confirms, then run to test.",
       "create makes an EMPTY workflow with a manual trigger and REQUIRES empty: true.",
       "Use it only for an explicitly blank canvas, never for a workflow the user",
@@ -295,7 +297,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       contract: {
         type: "object",
         description:
-          "compose: check the user's explicit requirements. trigger {kind: " +
+          "compose: optional checks of the user's explicit requirements, not guesses about implementation. Use only known schema identifiers (native Jarvis notification channel is dashboard, not in_app). Leave unknown sources/actions out of this object and retain their requirements in description for discovery. Never add connector-only or no-agent restrictions the user did not request. trigger {kind: " +
           "manual|schedule|webhook|event|piece, cron, every, timezone, eventType, piece, trigger}; sources, outputs: " +
           "[{notify: {channels}} | {tool, params} | {piece, action, target}]; recipients; forbidden {effects e.g. " +
           "send_email, pieces, actions, tools, channels, agents}; review. Outputs list all it may send or address. " +
