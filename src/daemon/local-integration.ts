@@ -2,6 +2,7 @@ import { isAbsolute, dirname, basename, join, resolve } from 'node:path';
 import { copyFileSync, existsSync } from 'node:fs';
 import type { JarvisConfig } from '../config/types';
 import { isHostedInstall } from './usejarvis-ai';
+import { sanitizedEnv } from '../util/subprocess-env';
 
 /** Developer acceptance on a separate self-hosted vault; never a release receipt. */
 export function localIntegrationEnabled(config: JarvisConfig, env: Record<string, string | undefined> = process.env): boolean {
@@ -24,7 +25,7 @@ export function localIntegrationEnabled(config: JarvisConfig, env: Record<string
 export function buildLocalIntegrationUi(repoRoot: string): string {
   const out = join(repoRoot, 'ui', 'dist-local-integration');
   const result = Bun.spawnSync([process.execPath, '--no-env-file', 'build', 'ui/local-integration.html', 'ui/pebble.html', '--outdir', out], {
-    cwd: repoRoot, env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', TMPDIR: process.env.TMPDIR ?? '/tmp' },
+    cwd: repoRoot, env: sanitizedEnv(),
     stdout: 'pipe', stderr: 'pipe',
   });
   if (result.exitCode !== 0 || !existsSync(join(out, 'local-integration.html'))) throw Error('Local integration UI build failed: ' + result.stderr.toString());

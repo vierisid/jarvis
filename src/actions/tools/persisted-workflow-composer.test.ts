@@ -173,7 +173,7 @@ test("composition provenance is durable and catalog changes cannot alter a repai
   expect(result.ok).toBe(true);
   closeWorkflowDb(); initWorkflowDb(path);
   const provenance = getWorkflowComposition(result.compositionRecordId)!.specification.provenance!;
-  expect(provenance).toMatchObject({ schemaVersion: 1, promptVersion: "w8-4", planningPolicy: "deterministic-first-v1" });
+  expect(provenance).toMatchObject({ schemaVersion: 1, promptVersion: "w8-5", planningPolicy: "deterministic-first-v1" });
   expect(provenance.catalogSha256).toMatch(/^[a-f0-9]{64}$/);
   expect(provenance.environmentSha256).toMatch(/^[a-f0-9]{64}$/);
 });
