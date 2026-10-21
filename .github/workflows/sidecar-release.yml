@@ -323,9 +323,10 @@ jobs:
           OUT: ${{ env.SIDECAR_BIN }}
           # The self-updater verifies the payloads it installs exactly as
           # Jarvis-Setup does (internal/update), so it carries the same pins:
-          # the Developer ID team on macOS. Empty means chain-only + a
-          # warning in sidecar.log.
+          # the Developer ID team on macOS. Empty fails a real run unless
+          # ALLOW_UNPINNED_MACOS is exactly true; a dry run warns (#922).
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          ALLOW_UNPINNED_MACOS: ${{ vars.ALLOW_UNPINNED_MACOS }}
         run: ../.github/scripts/build-sidecar.sh
 
       # ─── macOS: assemble Jarvis.app, sign, notarize ────────────────
@@ -572,9 +573,10 @@ jobs:
           OUT: ${{ env.SIDECAR_BIN }}.exe
           # The self-updater verifies the payloads it installs exactly as
           # Jarvis-Setup does (internal/update), so it carries the same pin:
-          # the Authenticode publisher. Empty means chain-only + a warning in
-          # sidecar.log.
+          # the Authenticode publisher. Empty fails a real run unless
+          # ALLOW_UNPINNED_WINDOWS is exactly true; a dry run warns (#922).
           SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
+          ALLOW_UNPINNED_WINDOWS: ${{ vars.ALLOW_UNPINNED_WINDOWS }}
         run: ../.github/scripts/build-sidecar.sh
 
       - name: Digest
@@ -821,17 +823,19 @@ jobs:
         working-directory: sidecar
         env:
           # The binary must carry OUR publisher, the same identity the
-          # installer pins at runtime.
+          # installer pins at runtime. Empty fails a real run unless
+          # ALLOW_UNPINNED_WINDOWS is true (#922); the signer leaf is pinned
+          # either way, from the committed chain (#871).
           SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
+          ALLOW_UNPINNED_WINDOWS: ${{ vars.ALLOW_UNPINNED_WINDOWS }}
           # Sectigo's roots are publicly trusted, so demand the FULL
           # verification (osslsigncode exit 0), and a check that runs at all.
           # This is the script's default too; stated here so the release
           # posture is visible at the workflow.
           SIGN_REQUIRE_TRUSTED_CHAIN: "1"
         run: |
-          if [ -z "${SIGNING_PUBLISHER_CN}" ]; then
-            echo "::warning::SIGNING_PUBLISHER_CN repo variable is unset -- the signature's publisher will not be asserted."
-          fi
+          set -euo pipefail
+          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS "${SIDECAR_BIN}.exe"
           scripts/sign-windows.sh --verify-only "${RUNNER_TEMP}/signed/${SIDECAR_BIN}.exe"
 
   # ─── Publish sidecar packages to npm ───────────────────────────
