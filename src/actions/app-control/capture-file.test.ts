@@ -347,6 +347,27 @@ describe('capture tool bounds (#802)', () => {
     await expect(awaitCaptureTool(proc, 'scrot')).rejects.toThrow('scrot exited with code 3: cannot open display');
   });
 
+  // #902: stderr was read with Response.text(), which has nothing until EOF,
+  // and given up on after a short drain; a tool that wrote its error and left
+  // a child holding the pipe was reported with no reason at all.
+  for (const [what, run] of [
+    ['awaitCaptureTool', (p: Bun.Subprocess<'ignore', 'pipe', 'pipe'>) => awaitCaptureTool(p, 'scrot')],
+    ['awaitCaptureToolOutput', (p: Bun.Subprocess<'ignore', 'pipe', 'pipe'>) => awaitCaptureToolOutput(p, 'scrot')],
+  ] as const) {
+    test(`#902 ${what}: a failing tool whose stderr a leftover child holds open is still reported with its reason`, async () => {
+      // sh exits at once with 3; the backgrounded sleep keeps stderr open for 3 s.
+      const proc = Bun.spawn(['sh', '-c', 'echo "cannot open display" >&2; sleep 3 & exit 3'], { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' });
+      const started = performance.now();
+      const outcome = await Promise.race([
+        run(proc).then(() => 'resolved', (e: Error) => e.message),
+        Bun.sleep(4000).then(() => 'still waiting'),
+      ]);
+      expect(outcome).toBe('scrot exited with code 3: cannot open display');
+      // The drain, not the 3 s the leftover child holds the pipe.
+      expect(performance.now() - started).toBeLessThan(2500);
+    });
+  }
+
   test('macOS/Windows seam: a script that ignores SIGTERM is still stopped at the bound', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'jarvis-802-'));
     const hung = join(dir, 'hung.sh');

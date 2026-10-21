@@ -23,6 +23,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readCapped } from './read-capped.ts';
 /** What awaitCaptureTool needs of a spawned tool: Bun.spawn with stderr piped. */
 type CaptureProcess = { readonly exited: Promise<number>; readonly exitCode: number | null; readonly signalCode: string | null; readonly stderr: ReadableStream<Uint8Array>; kill(signal?: NodeJS.Signals | number): void };
 
@@ -95,7 +96,10 @@ async function settleCaptureTool(proc: CaptureProcess, what: string, stdoutStrea
   }, bound);
   // Both read alongside the run, so a chatty tool cannot fill a pipe and
   // stall. On success stderr is left unread: nothing needs it.
-  const stderr = new Response(proc.stderr).text().catch(() => '');
+  // stderr keeps what has arrived (#902): a tool's error is written before it
+  // exits, and a descendant still holding the pipe must not cost the reason.
+  const stderrChunks: Uint8Array[] = [];
+  const stderr = readCapped(proc.stderr, Number.POSITIVE_INFINITY, () => {}, stderrChunks).catch(() => null);
   const stdout = stdoutStream ? new Response(stdoutStream).text().catch(() => '') : Promise.resolve('');
   let code: number | null = null;
   try {
@@ -110,7 +114,7 @@ async function settleCaptureTool(proc: CaptureProcess, what: string, stdoutStrea
   // Bounded: a descendant still holding a pipe must not hold this too.
   const drained = <T>(p: Promise<T>, fallback: T): Promise<T> => Promise.race([p, Bun.sleep(250).then(() => fallback)]);
   if (code !== 0) {
-    const text = (await drained(stderr, '')).trim();
+    const text = ((await drained<string | null>(stderr, null)) ?? Buffer.concat(stderrChunks).toString('utf-8')).trim();
     throw new Error(`${what} exited with code ${code}${text ? `: ${text.slice(0, 500)}` : ''}`);
   }
   // Not a fallback for stdout: a missing answer must not read as an empty one.

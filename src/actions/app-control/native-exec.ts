@@ -1,4 +1,5 @@
 import { modelExecEnv } from '../../util/model-exec-env.ts';
+import { codedError, readCapped } from './read-capped.ts';
 
 /**
  * Minimal exec used by the Windows/macOS fallback controllers. Injectable so
@@ -53,34 +54,6 @@ export function __setNativeExecMaxOutputForTests(bytes: number | null): void {
 const KILL_GRACE_MS = 1000;
 /** After exit, how long the pipes get to close (a descendant may hold them). */
 const DRAIN_MS = 1000;
-
-function codedError(message: string, code: string): Error {
-  return Object.assign(new Error(message), { code });
-}
-
-/**
- * Read a pipe to the end, refusing more than `limit` bytes. What has arrived
- * so far is kept in `chunks`, so a caller that stops waiting can still use it.
- */
-async function readCapped(stream: ReadableStream<Uint8Array>, limit: number, onOverflow: () => void, chunks: Uint8Array[] = []): Promise<string> {
-  const reader = stream.getReader();
-  let size = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > limit) {
-        onOverflow();
-        throw codedError(`output passed ${limit} bytes`, 'ENOBUFS');
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  return Buffer.concat(chunks).toString('utf-8');
-}
 
 export const defaultExec: NativeExec = async (cmd, input) => {
   let proc: ReturnType<typeof Bun.spawn<Buffer, 'pipe', 'pipe'>>;
