@@ -305,6 +305,15 @@ describe('win32SystemExe (#907)', () => {
     }
   });
 
+  test('a drive root alone is not a Windows directory, and no path collapses to a bare drive (#907 re-review)', () => {
+    for (const root of ['C:\\', 'C:\\\\', 'D:\\\\\\']) {
+      expect(win32AbsolutePath(root)).toBeNull();
+      expect(() => win32SystemExe('powershell.exe', { env: { SystemRoot: root }, isFile: null })).toThrow('neither %SystemRoot% nor %WINDIR%');
+    }
+    expect(win32AbsolutePath('C:\\Windows\\')).toBe('C:\\Windows');
+    expect(win32AbsolutePath('C:\\Windows\\\\System32')).toBe('C:\\Windows\\System32');
+  });
+
   test('cmd.exe is under System32', () => {
     expect(win32SystemExe('cmd.exe', { env: { SystemRoot: 'C:\\Windows' }, isFile: null })).toBe('C:\\Windows\\System32\\cmd.exe');
   });

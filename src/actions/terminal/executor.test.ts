@@ -51,4 +51,26 @@ describe('TerminalExecutor.detectShell on win32 (#907)', () => {
       TerminalExecutor.detectShell = original;
     }
   });
+
+  test('a refused shell fails execute() and stream() with the reason, and nothing is run (#907 re-review)', async () => {
+    const original = TerminalExecutor.detectShell;
+    TerminalExecutor.detectShell = () => { throw new Error('neither %SystemRoot% nor %WINDIR% names the Windows directory'); };
+    try {
+      const executor = new TerminalExecutor();
+      await expect(executor.execute('echo ran')).rejects.toThrow(
+        'Command execution failed: neither %SystemRoot% nor %WINDIR% names the Windows directory');
+      const chunks: string[] = [];
+      let error: unknown;
+      try {
+        for await (const chunk of executor.stream('echo ran')) chunks.push(chunk);
+      } catch (e) {
+        error = e;
+      }
+      expect(chunks).toEqual([]);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe('neither %SystemRoot% nor %WINDIR% names the Windows directory');
+    } finally {
+      TerminalExecutor.detectShell = original;
+    }
+  });
 });

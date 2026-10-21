@@ -15,8 +15,21 @@
  *   - a node:child_process call whose first argument is the name, or a
  *     command string starting with it (`execFileSync('xclip', ...)`,
  *     `execSync('xclip -o')`);
- *   - a Bun `$` template starting with the name or with `which <name>`.
- * Not caught: a name assembled at run time. The vendored activepieces tree is
+ *   - a Bun `$` template starting with the name or with `which <name>`;
+ *   - the name held as a value for a later launch: the fallback of `??`,
+ *     `||`, `??=` or `||=`, a parameter's default, a returned value or arrow
+ *     body, a variable's initializer, a branch of `?:`, a `shell:`-like
+ *     property's value, or a plain assignment to a target named like a
+ *     program (`shell = ...`; elsewhere a tool's name is also a label).
+ *     Brackets, `as`, `satisfies`, `<T>` and `!` around it are seen through.
+ * `cmd`, which is also a key in a chord, is caught as an argv only when it
+ * is a launcher's first argument (spawn/exec*, runArgv, captureOutput,
+ * runCommand), a `cmd:` property or a variable named like an argv, and as a
+ * value only as a fallback, a default, or a program-named variable,
+ * property or assignment target; a key mapping may return or hold it.
+ * Not caught: a name assembled at run time, passed straight to a helper
+ * that launches it later, or a `cmd` argv returned from a function or held
+ * in a variable not named like one. The vendored activepieces tree is
  * third-party code and not scanned.
  *
  * Next to spawn-env-guard.test.ts, because it covers all of src/.
@@ -40,6 +53,102 @@ const BARE_NAMES = new Set([
 
 /** Windows names are case-insensitive, and the Linux ones are all lower case. */
 const isBareName = (name: string | null | undefined): name is string => !!name && BARE_NAMES.has(name.toLowerCase());
+
+/**
+ * Names that are also a key or a word: `cmd` is the macOS modifier in a key
+ * chord (`['cmd', 'c']`). They are caught only where a launch takes them, not
+ * in any array or as any value.
+ */
+const AMBIGUOUS_NAMES = new Set(['cmd']);
+const isAmbiguous = (name: string): boolean => AMBIGUOUS_NAMES.has(name.toLowerCase());
+
+/** Calls whose first argument is an argv: Bun's and child_process's, and this repo's argv helpers. */
+const LAUNCHERS = new Set(['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'runArgv', 'captureOutput', 'runCommand']);
+
+/** A variable that holds an argv for a later launch. */
+const ARGV_VARIABLE = /argv|args|cmd|command/i;
+
+/** `node` with any brackets, `as`, `satisfies`, `<T>` or `!` around it: the expression its parent sees. */
+function unwrapped(node: ts.Node): ts.Node {
+  let outer = node;
+  while (ts.isParenthesizedExpression(outer.parent) || ts.isAsExpression(outer.parent) || ts.isSatisfiesExpression(outer.parent)
+    || ts.isTypeAssertionExpression(outer.parent) || ts.isNonNullExpression(outer.parent)) {
+    outer = outer.parent;
+  }
+  return outer;
+}
+
+/**
+ * Whether `array` is where a launch takes its argv: a launcher's first
+ * argument, a `cmd:` property, or a variable named like an argv.
+ */
+function inLaunchPosition(array: ts.ArrayLiteralExpression): boolean {
+  const node = unwrapped(array);
+  const parent = node.parent;
+  if (ts.isCallExpression(parent) && parent.arguments[0] === node) {
+    const name = calleeName(parent.expression);
+    return name !== null && LAUNCHERS.has(name);
+  }
+  if (ts.isVariableDeclaration(parent)) {
+    return parent.initializer === node && ts.isIdentifier(parent.name) && ARGV_VARIABLE.test(parent.name.text);
+  }
+  return ts.isPropertyAssignment(parent) && parent.initializer === node
+    && (ts.isIdentifier(parent.name) || ts.isStringLiteral(parent.name)) && parent.name.text === 'cmd';
+}
+
+/**
+ * Property names whose value is a program to run. Not `cmd` or `name`, which
+ * tables of tools use for a name that is then given to the resolver
+ * (cli/deps.ts), nor `command`, which is usually a whole command line.
+ */
+const PROGRAM_KEYS = new Set(['shell', 'exe', 'executable', 'program', 'binary']);
+
+/**
+ * Whether the string literal `node` is a value that can be launched later
+ * (#907 re-review): the fallback of `??` or `||`, a returned value or an arrow
+ * function's body, a variable's initializer, a branch of `?:`, or the value of a
+ * property named in PROGRAM_KEYS (`{ shell: 'cmd.exe' }`). Not a call argument, a comparison or a type.
+ */
+function inValuePosition(literal: ts.StringLiteral | ts.NoSubstitutionTemplateLiteral): boolean {
+  const node = unwrapped(literal);
+  const parent = node.parent;
+  if (ts.isBinaryExpression(parent)) {
+    if (parent.right !== node) return false;
+    const op = parent.operatorToken.kind;
+    if (op === ts.SyntaxKind.QuestionQuestionToken || op === ts.SyntaxKind.BarBarToken
+      || op === ts.SyntaxKind.QuestionQuestionEqualsToken || op === ts.SyntaxKind.BarBarEqualsToken) return true;
+    // A plain assignment only to a target named like a program: elsewhere a
+    // tool's name is also a label (desktop-notify's `method = 'notify-send'`).
+    return op === ts.SyntaxKind.EqualsToken && PROGRAM_TARGET.test(assignedName(parent.left) ?? '');
+  }
+  if (ts.isParameter(parent)) return parent.initializer === node;
+  // `cmd` is also a key, which a key mapping returns or keeps in a variable:
+  // only the places above, and a variable or property named like a program, count for it.
+  if (isAmbiguous(literal.text)) {
+    if (ts.isVariableDeclaration(parent)) return parent.initializer === node && ts.isIdentifier(parent.name) && PROGRAM_TARGET.test(parent.name.text);
+    return ts.isPropertyAssignment(parent) && parent.initializer === node && PROGRAM_KEYS.has(propertyName(parent) ?? '');
+  }
+  if (ts.isReturnStatement(parent)) return true;
+  if (ts.isArrowFunction(parent)) return parent.body === node;
+  if (ts.isVariableDeclaration(parent)) return parent.initializer === node;
+  if (ts.isConditionalExpression(parent)) return parent.whenTrue === node || parent.whenFalse === node;
+  if (ts.isPropertyAssignment(parent)) return parent.initializer === node && PROGRAM_KEYS.has(propertyName(parent) ?? '');
+  return false;
+}
+
+/** A variable or property that names a program to run, or an argv. */
+const PROGRAM_TARGET = /shell|exe|program|binary|argv|cmd/i;
+
+function propertyName(prop: ts.PropertyAssignment): string | null {
+  return ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name) ? prop.name.text : null;
+}
+
+/** The name an assignment writes: `x` in `x = ...`, `shell` in `opts.shell = ...`. */
+function assignedName(target: ts.Expression): string | null {
+  if (ts.isIdentifier(target)) return target.text;
+  if (ts.isPropertyAccessExpression(target)) return target.name.text;
+  return null;
+}
 
 const CHILD_PROCESS_CALLS = new Set(['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync']);
 
@@ -91,8 +200,11 @@ export function scanBareNames(source: string, fileName = 'x.ts'): string[] {
     if (ts.isArrayLiteralExpression(node)) {
       const first = literalText(node.elements[0]);
       const second = literalText(node.elements[1]);
-      if (isBareName(first)) report(node, `argv starting with '${first}'`);
+      if (isBareName(first) && (!isAmbiguous(first) || inLaunchPosition(node))) report(node, `argv starting with '${first}'`);
       else if (first === 'which' && isBareName(second)) report(node, `argv 'which ${second}'`);
+    } else if ((ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
+      && isBareName(node.text) && inValuePosition(node)) {
+      report(node, `name '${node.text}' as a value`);
     } else if (ts.isCallExpression(node)) {
       const name = calleeName(node.expression);
       const first = literalText(node.arguments[0]);
@@ -137,6 +249,54 @@ describe('system tools are never launched by bare name (#900, #907)', () => {
     expect(scanBareNames(`await captureOutput(['powershell.exe', '-NoProfile']);`)).toEqual(["1: argv starting with 'powershell.exe'"]);
     expect(scanBareNames(`Bun.spawn(['PowerShell.EXE', '-c', x]);`)).toEqual(["1: argv starting with 'PowerShell.EXE'"]);
     expect(scanBareNames(`Bun.spawn(['cmd.exe', '/c', x]);`)).toEqual(["1: argv starting with 'cmd.exe'"]);
+  });
+
+  test('a name held as a value, to be launched later, is caught (#907 re-review)', () => {
+    expect(scanBareNames(`const shell = process.env.COMSPEC ?? 'powershell.exe';`)).toEqual(["1: name 'powershell.exe' as a value"]);
+    expect(scanBareNames(`const shell = env.COMSPEC || 'cmd.exe';`)).toEqual(["1: name 'cmd.exe' as a value"]);
+    expect(scanBareNames(`function shell() { return 'pwsh'; }`)).toEqual(["1: name 'pwsh' as a value"]);
+    expect(scanBareNames(`const shell = () => 'powershell';`)).toEqual(["1: name 'powershell' as a value"]);
+    expect(scanBareNames(`const tool = 'xclip';`)).toEqual(["1: name 'xclip' as a value"]);
+    expect(scanBareNames(`const tool = isX ? 'xsel' : 'wl-paste';`)).toEqual(["1: name 'xsel' as a value"]);
+    expect(scanBareNames(`spawnIt({ shell: 'cmd.exe' });`)).toEqual(["1: name 'cmd.exe' as a value"]);
+    expect(scanBareNames(`const t = [{ name: 'xdotool', cmd: 'xdotool', pkg: 'xdotool' }]; linuxSystemExe(t[0].cmd);`)).toEqual([]);
+  });
+
+  test('the value and launch rules see through brackets, `as`, `satisfies`, assignments and defaults (#907 re-review)', () => {
+    expect(scanBareNames(`shell = 'powershell.exe';`)).toEqual(["1: name 'powershell.exe' as a value"]);
+    expect(scanBareNames(`function f(shell = 'pwsh') {}`)).toEqual(["1: name 'pwsh' as a value"]);
+    expect(scanBareNames(`const t = 'xclip' as const;`)).toEqual(["1: name 'xclip' as a value"]);
+    expect(scanBareNames(`const s = env.X ?? ('cmd.exe');`)).toEqual(["1: name 'cmd.exe' as a value"]);
+    expect(scanBareNames(`Bun.spawn(['cmd', '/c', x] as string[]);`)).toEqual(["1: argv starting with 'cmd'"]);
+    expect(scanBareNames(`Bun.spawn({ cmd: ['cmd', '/c'] as const });`)).toEqual(["1: argv starting with 'cmd'"]);
+    expect(scanBareNames(`Bun.spawn((['cmd', '/c']) satisfies string[]);`)).toEqual(["1: argv starting with 'cmd'"]);
+    expect(scanBareNames(`const argv = ['cmd', '/c', x]; Bun.spawn(argv);`)).toEqual(["1: argv starting with 'cmd'"]);
+    expect(scanBareNames(`const shellArgs: string[] = ['cmd', '/c', x];`)).toEqual(["1: argv starting with 'cmd'"]);
+    // `cmd` as a fallback, a shell-like property or variable, or a default is a program.
+    expect(scanBareNames(`Bun.spawn({ cmd: [env.COMSPEC ?? 'cmd', '/c', x] });`)).toEqual(["1: name 'cmd' as a value"]);
+    expect(scanBareNames(`const shell = 'cmd'; Bun.spawn([shell, '/c', x]);`)).toEqual(["1: name 'cmd' as a value"]);
+    expect(scanBareNames(`run({ shell: 'cmd' });`)).toEqual(["1: name 'cmd' as a value"]);
+    // A label assigned to a variable that is not named like a program passes;
+    // an initializer is a value whatever the name.
+    expect(scanBareNames(`method = 'notify-send';`)).toEqual([]);
+    expect(scanBareNames(`let method = 'notify-send';`)).toEqual(["1: name 'notify-send' as a value"]);
+    expect(scanBareNames(`function key(k) { return k === 'meta' ? 'cmd' : k; } const mod = 'cmd';`)).toEqual([]);
+    // A helper whose name only contains `run` is not a launcher.
+    expect(scanBareNames(`runShortcut(['cmd', 'c']);`)).toEqual([]);
+    expect(scanBareNames(`const keys = ['cmd', 'c'];`)).toEqual([]);
+  });
+
+  test('a key or a word that is also a program name passes; only a launch of `cmd` is caught (#907 re-review)', () => {
+    expect(scanBareNames(`await desktop.pressKeys(['cmd', 'c']);`)).toEqual([]);
+    expect(scanBareNames(`const MODIFIERS = ['cmd', 'command', 'super'];`)).toEqual([]);
+    expect(scanBareNames(`if (key === 'cmd') return 'meta';`)).toEqual([]);
+    // Only the initializer is a value; the names in types are not.
+    expect(scanBareNames(`const tool: LinuxSystemTool = 'xclip'; type T = 'xsel' | 'cmd.exe';`)).toEqual(["1: name 'xclip' as a value"]);
+    expect(scanBareNames(`linuxSystemExe('xclip'); log('xclip failed'); throw new SystemExeNotFoundError('xclip', m);`)).toEqual([]);
+    expect(scanBareNames(`Bun.spawn(['cmd', '/c', x]);`)).toEqual(["1: argv starting with 'cmd'"]);
+    expect(scanBareNames(`Bun.spawn({ cmd: ['cmd', '/c', x] });`)).toEqual(["1: argv starting with 'cmd'"]);
+    expect(scanBareNames(`execFileSync('cmd', ['/c', x]);`)).toEqual(["1: execFileSync('cmd')"]);
+    expect(scanBareNames(`Bun.spawnSync(['which', 'cmd']);`)).toEqual(["1: argv 'which cmd'"]);
   });
 
   test('the resolver form, and names that are only words, pass', () => {

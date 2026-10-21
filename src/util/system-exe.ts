@@ -276,15 +276,16 @@ export type Win32SystemExe = keyof typeof WIN32_SYSTEM_EXES;
  * device path (`\\?\`, `\\.\`), a path with `/` in it (which Windows also
  * reads as a separator, so `C:\Windows/../Users` would get past a `..` check
  * on `\` alone), a `.`/`..` or dots-and-spaces-only segment (Windows drops
- * trailing dots and spaces, so `.. ` can mean `..`), an alternate data stream
- * or a character no Windows path holds.
+ * trailing dots and spaces, so `.. ` can mean `..`), a bare drive root, an
+ * alternate data stream or a character no Windows path holds.
  */
 export function win32AbsolutePath(value: string | undefined): string | null {
   if (!value) return null;
   if (!/^[A-Za-z]:\\/.test(value)) return null;
   if (/[\x00-\x1f"*?<>|/]/.test(value) || value.indexOf(':', 2) !== -1) return null;
   const segments = value.slice(3).split('\\').filter(segment => segment !== '');
-  if (segments.some(segment => /^[. ]+$/.test(segment))) return null;
+  // A drive root alone names no directory to run from, and would normalize to `C:`, which is drive-relative.
+  if (segments.length === 0 || segments.some(segment => /^[. ]+$/.test(segment))) return null;
   return win32.normalize(value).replace(/\\+$/, '');
 }
 
