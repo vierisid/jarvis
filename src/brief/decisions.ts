@@ -181,7 +181,11 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
           item.refs.push({ kind: 'work_item', id: work.work_id }); }
       }
     }
-    if (document?.disposition === 'deferred' && !['denied','approved','executed'].includes(item.approval?.status ?? '')) {
+    // A kept draft reads deferred only while its effect is still pending: run
+    // cancellation blocks the effect without denying the expired approval (#1094).
+    const kept = document && linked.rows.find(row => row.id === document!.effect_id);
+    if (document?.disposition === 'deferred' && (!kept || kept.status === 'pending')
+      && !['denied','approved','executed'].includes(item.approval?.status ?? '')) {
       item.state = 'deferred'; item.actions = ['inspect']; item.supportedActions = ['inspect'];
     }
     item.revision = hash({ source, item, effects: linked.counts, ...(document ? { document } : {}) });
