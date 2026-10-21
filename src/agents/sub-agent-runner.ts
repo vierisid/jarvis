@@ -886,10 +886,21 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       const pending = resume.pending;
       if (!governedTools || !authorityCtx) throw new Error('Cannot resume a paused sub-agent without a governed tool dispatch');
       fence();
+      // Judged with the profile it was parked under AND what this run is
+      // restricted by now (#1043 review): a deny the owner added while the
+      // card waited applies at the recheck, and a checkpoint written before a
+      // restriction existed gains it. Tighten-only, so it can never let
+      // through what the parked profile stopped.
+      // The current part is computed as the gate computes it at a call: the
+      // run's profile plus its taint. Label parts are kept once.
+      const merged = mergeProfiles(mergeProfiles(pending.principal.profile ?? null, authorityCtx.profile ?? null),
+        taintProfile(authorityCtx.taintGating ?? null, authorityCtx.taint));
+      const principal = { ...pending.principal,
+        profile: merged?.label ? { ...merged, label: [...new Set(merged.label.split('; '))].join('; ') } : merged };
       let governed: GovernedToolResult;
       try {
         governed = await asThisAgent(() => inDeliveryScope(() => governedTools({ toolCall: pending.toolCall, sequence: pending.sequence,
-          actionCategory: pending.actionCategory, toolCategory: pending.toolCategory, principal: pending.principal,
+          actionCategory: pending.actionCategory, toolCategory: pending.toolCategory, principal,
           reason: pending.reason })));
       } catch (err) {
         throw new GovernedDispatchError(err instanceof Error ? err.message : String(err), err);

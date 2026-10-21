@@ -328,6 +328,16 @@ export class M7AgentDelegator implements PieceAgentDelegator {
           : {}),
         ...(this.emergencyController ? { emergencyController: this.emergencyController } : {}),
         ...(this.temporaryGrants ? { temporaryGrants: this.temporaryGrants } : {}),
+        // Gated like every other sub-agent (#1041): the restrictions its run
+        // starts under (what the child inherited, as `delegate_task` passes
+        // them), and the main agent's taint gating for what it reads itself.
+        // Without them a delegation that read a web page could write, run or
+        // send with no approval. A call the taint governs needs approval, so
+        // it reaches `governedTools` below and its card is the run's, raised
+        // by the workflow boundary; with no continuation it is refused. The
+        // taint is in every checkpoint, so a resumed conversation stays gated.
+        profile: this.orchestrator.getProfileFor(child.id),
+        taintGating: this.orchestrator.getTaintGating(),
         ...(durable ? {
           governedTools: durable.dispatch,
           // After every completed turn the conversation is durable, so a run

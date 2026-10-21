@@ -81,7 +81,7 @@ function setup(registry: ToolRegistry, name: string, args: Record<string, unknow
     // One orchestrator, as in the daemon, when the call's own tools spawn from
     // it: the delegated agent is then a real agent the spawn sink can judge
     // (#1014). Otherwise a stand-in whose spawn only spends the grant.
-    agentOrchestrator: opts.orchestrator ?? { getPrimary: () => ({ id: 'primary' }), spawnSubAgent: child, reapAgent: () => {} } as never,
+    agentOrchestrator: opts.orchestrator ?? { getPrimary: () => ({ id: 'primary' }), getProfileFor: () => null, getTaintGating: () => null, spawnSubAgent: child, reapAgent: () => {} } as never,
     agentSpecialists: new Map([[ROLE.id, opts.orchestrator ? COORDINATOR : ROLE]]) as never,
     agentScopedRegistry: () => registry,
     llmManager: { chatTier: async (_tier: string, _origin: string, messages: Array<{ role: string }>) =>

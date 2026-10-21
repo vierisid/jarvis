@@ -74,6 +74,9 @@ function makeOrchestratorStub(opts: {
     reapAgent: (id: string) => {
       calls.terminate.push(id);
     },
+    // No restrictions and no taint gating: these fixtures stub the runner.
+    getProfileFor: () => null,
+    getTaintGating: () => null,
   };
   return { orchestrator, calls };
 }
