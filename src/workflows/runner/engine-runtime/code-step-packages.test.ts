@@ -13,13 +13,21 @@
  *     with an injected installer, so no test here needs the registry.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, truncateSync,
+  utimesSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { noOpCodeSandbox } from "../../activepieces/packages/server/engine/src/lib/core/code/no-op-code-sandbox";
 import {
   bunInstall,
   CODE_INSTALL_TIMEOUT_MS,
+  CODE_STEP_MAX_DEPENDENCIES,
+  CODE_STEP_MAX_INSTALL_BYTES,
+  CODE_STEP_MAX_INSTALL_ENTRIES,
+  CodeInstallTooLargeError,
+  measureTree,
   declaredDependencies,
   INSTALLED_MANIFEST_MARKER,
   materializeCodeActions,
@@ -223,6 +231,17 @@ describe("declaredDependencies", () => {
     expect(() => declaredDependencies("my_step", JSON.stringify({ dependencies: deps }))).toThrow(/CODE step "my_step"/);
   });
 
+  // #865: nothing bounded how much one step could declare.
+  test("refuses more than the dependency cap, naming the step and the cap", () => {
+    const many = (n: number) =>
+      JSON.stringify({ dependencies: Object.fromEntries(Array.from({ length: n }, (_, i) => [`pkg-${i}`, "1.0.0"])) });
+    expect(Object.keys(declaredDependencies("s", many(CODE_STEP_MAX_DEPENDENCIES))).length).toBe(CODE_STEP_MAX_DEPENDENCIES);
+    expect(() => declaredDependencies("my_step", many(CODE_STEP_MAX_DEPENDENCIES + 1))).toThrow(
+      new RegExp(`CODE step "my_step".*declares ${CODE_STEP_MAX_DEPENDENCIES + 1} dependencies.*at most ${CODE_STEP_MAX_DEPENDENCIES}`),
+    );
+    expect(CODE_STEP_MAX_DEPENDENCIES).toBe(32);
+  });
+
   test("refuses malformed manifests rather than ignoring them", () => {
     expect(() => declaredDependencies("s", "{not json")).toThrow(/not valid JSON/);
     expect(() => declaredDependencies("s", "[]")).toThrow(/JSON object/);
@@ -357,6 +376,132 @@ describe("materializeCodeActions installs exactly what was declared", () => {
     expect(existsSync(resolve(base, "v_1"))).toBe(false);
   });
 
+  /**
+   * #865. A tree of `node_modules/big/blob.bin` whose total apparent size is
+   * exactly `total`: the directories count too, so the blob makes up the rest.
+   * A sparse file, so it takes no disk.
+   */
+  const treeOf = (total: number) => async (dir: string) => {
+    await fakeInstall(["big"])(dir);
+    const blob = join(dir, "node_modules", "big", "blob.bin");
+    writeFileSync(blob, "");
+    const rest = (await measureTree(join(dir, "node_modules"))).bytes;
+    truncateSync(blob, total - rest);
+  };
+
+  test("a tree over the size cap is refused, naming the step, and the previous tree stays", async () => {
+    const base = scratch();
+    const stepDir = join(base, "v_1", "compute");
+    await materializeCodeActions(versionWithCode(JSON.stringify({ dependencies: { a: "1.0.0" } })), base, {
+      install: fakeInstall(["a"]),
+    });
+    await expect(
+      materializeCodeActions(versionWithCode(JSON.stringify({ dependencies: { big: "1.0.0" } })), base, {
+        install: treeOf(CODE_STEP_MAX_INSTALL_BYTES + 1),
+      }),
+    ).rejects.toThrow(
+      `CODE step "compute": its dependencies install to more than one step may take (512 MiB, 65536 entries); ` +
+        `measured at least ${CODE_STEP_MAX_INSTALL_BYTES + 1} bytes in 2 entries.`, // big/ and big/blob.bin
+    );
+    // The refused tree never replaced the working one, and the install left nothing.
+    expect(existsSync(join(stepDir, "node_modules", "a"))).toBe(true);
+    expect(existsSync(join(stepDir, "node_modules", "big"))).toBe(false);
+    expect(readdirSync(stepDir).filter((e) => e.startsWith(".install-"))).toEqual([]);
+  });
+
+  // #865: the pruner keeps a recently used tree, which is how a run in another
+  // process sharing the directory is protected; materializing is the use.
+  test("materializing marks the version's tree as used now", async () => {
+    const base = scratch();
+    const version = versionWithCode("{}");
+    await materializeCodeActions(version, base, { install: fakeInstall() });
+    const old = new Date(Date.now() - 7 * 24 * 60 * 60_000);
+    utimesSync(join(base, "v_1"), old, old);
+    await materializeCodeActions(version, base, { install: fakeInstall() });
+    expect(Date.now() - statSync(join(base, "v_1")).mtimeMs).toBeLessThan(60 * 60_000);
+  });
+
+  test("an install the watchdog stopped is refused naming the step, and the previous tree stays", async () => {
+    const base = scratch();
+    const stepDir = join(base, "v_1", "compute");
+    await materializeCodeActions(versionWithCode(JSON.stringify({ dependencies: { a: "1.0.0" } })), base, {
+      install: fakeInstall(["a"]),
+    });
+    const stopped = async () => {
+      throw new CodeInstallTooLargeError({ bytes: 9, entries: 70_000 }, { maxBytes: 8, maxEntries: 65_536 });
+    };
+    await expect(
+      materializeCodeActions(versionWithCode(JSON.stringify({ dependencies: { big: "1.0.0" } })), base, { install: stopped }),
+    ).rejects.toThrow(`CODE step "compute": its dependencies install to more than one step may take (512 MiB, 65536 entries); measured at least 9 bytes in 70000 entries.`);
+    expect(existsSync(join(stepDir, "node_modules", "a"))).toBe(true);
+    expect(readdirSync(stepDir).filter((e) => e.startsWith(".install-"))).toEqual([]);
+  });
+
+  test("a tree exactly at the size cap is installed", async () => {
+    const base = scratch();
+    await materializeCodeActions(versionWithCode(JSON.stringify({ dependencies: { big: "1.0.0" } })), base, {
+      install: treeOf(CODE_STEP_MAX_INSTALL_BYTES),
+    });
+    expect(existsSync(join(base, "v_1", "compute", "node_modules", "big", "blob.bin"))).toBe(true);
+  });
+
+  // #865: empty files measure nothing and still take an inode each.
+  const manyEntries = (count: number) => async (dir: string) => {
+    await fakeInstall([])(dir);
+    // node_modules itself is not counted; each file is one entry.
+    for (let i = 0; i < count; i++) writeFileSync(join(dir, "node_modules", `f${i}`), "");
+  };
+
+  test("a tree over the entry cap is refused even when it weighs almost nothing", async () => {
+    const base = scratch();
+    await expect(
+      materializeCodeActions(versionWithCode(JSON.stringify({ dependencies: { many: "1.0.0" } })), base, {
+        install: manyEntries(CODE_STEP_MAX_INSTALL_ENTRIES + 1),
+      }),
+    ).rejects.toThrow(/CODE step "compute": its dependencies install to more than one step may take/);
+    expect(existsSync(join(base, "v_1", "compute", "node_modules"))).toBe(false);
+  }, 60_000);
+
+  test("a tree exactly at the entry cap is installed", async () => {
+    const base = scratch();
+    await materializeCodeActions(versionWithCode(JSON.stringify({ dependencies: { many: "1.0.0" } })), base, {
+      install: manyEntries(CODE_STEP_MAX_INSTALL_ENTRIES),
+    });
+    expect(existsSync(join(base, "v_1", "compute", "node_modules", "f0"))).toBe(true);
+  }, 60_000);
+
+  test("measureTree counts directories and links without following them, and stops early at a limit", async () => {
+    const root = scratch();
+    mkdirSync(join(root, "d", "e"), { recursive: true });
+    writeFileSync(join(root, "d", "e", "f"), "12345");
+    const outside = scratch();
+    writeFileSync(join(outside, "big"), "x".repeat(10_000));
+    symlinkSync(outside, join(root, "link"));
+    const full = await measureTree(root);
+    expect(full.entries).toBe(4); // d, d/e, d/e/f, link
+    const dirs = statSync(join(root, "d")).size + statSync(join(root, "d", "e")).size;
+    expect(full.bytes).toBe(dirs + 5 + lstatSync(join(root, "link")).size);
+    expect(full.bytes).toBeLessThan(10_000);
+    for (let i = 0; i < 300; i++) writeFileSync(join(root, `g${i}`), "");
+    const early = await measureTree(root, { maxBytes: Number.MAX_SAFE_INTEGER, maxEntries: 10 });
+    expect(early.entries).toBeGreaterThan(10);
+    expect(early.entries).toBeLessThan(304);
+  });
+
+  test("a flow with no CODE steps is not held to the version-id rule: it writes nothing there", async () => {
+    const base = scratch();
+    const noCode = { id: "odd.id/with slash", trigger: { name: "trigger", type: "EMPTY" } } as unknown as UpstreamFlowVersion;
+    expect(await materializeCodeActions(noCode, base, { install: fakeInstall() })).toEqual({ written: 0, paths: [] });
+    expect(readdirSync(base)).toEqual([]);
+  });
+
+  test("a version id that is not a plain directory name is refused before anything is written", async () => {
+    const base = scratch();
+    const version = { ...versionWithCode("{}"), id: "../elsewhere" } as UpstreamFlowVersion;
+    await expect(materializeCodeActions(version, base, { install: fakeInstall() })).rejects.toThrow(/not a plain directory name/);
+    expect(readdirSync(base)).toEqual([]);
+  });
+
   test("a step name that escapes the code directory is refused", async () => {
     const base = scratch();
     await expect(materializeCodeActions(versionWithCode("{}", "../../escape"), base, { install: async () => {} }))
@@ -433,6 +578,46 @@ describe("the install is bounded", () => {
     expect(Date.now() - started).toBeLessThan(10_000);
   }, 20_000);
 
+  // #865: without the watchdog this child holds the install until the hang
+  // guard, writing what it likes. Its tree passes the cap at once and then it
+  // waits forever, so only the size check can end it before the timeout.
+  test("an install whose tree passes the size cap is killed and refused, before its timeout", async () => {
+    const dir = scratch();
+    const script =
+      `const fs = require("fs"); fs.mkdirSync("node_modules"); fs.writeFileSync("node_modules/blob", "");` +
+      ` fs.truncateSync("node_modules/blob", 2 * 1024 * 1024); setInterval(() => {}, 1000);`;
+    const err = await runInstall(dir, process.execPath, ["-e", script], 20_000, {
+      maxBytes: 1024 * 1024, maxEntries: 1000, pollMs: 50,
+    }).then(() => null, (e: Error) => e);
+    expect(err).toBeInstanceOf(CodeInstallTooLargeError);
+    expect((err as CodeInstallTooLargeError).limit.maxBytes).toBe(1024 * 1024);
+    expect((err as CodeInstallTooLargeError).size.bytes).toBeGreaterThan(1024 * 1024);
+    expect((err as Error).message).toContain("over the limit for one CODE step's packages (1 MiB, 1000 entries)");
+  }, 40_000);
+
+  test("an install whose tree passes the entry cap is killed and refused, before its timeout", async () => {
+    const dir = scratch();
+    const script =
+      `const fs = require("fs"); fs.mkdirSync("node_modules");` +
+      ` for (let i = 0; i < 200; i++) fs.writeFileSync("node_modules/f" + i, ""); setInterval(() => {}, 1000);`;
+    const err = await runInstall(dir, process.execPath, ["-e", script], 20_000, {
+      maxBytes: 1024 * 1024 * 1024, maxEntries: 100, pollMs: 50,
+    }).then(() => null, (e: Error) => e);
+    expect(err).toBeInstanceOf(CodeInstallTooLargeError);
+    expect((err as CodeInstallTooLargeError).size.entries).toBeGreaterThan(100);
+  }, 40_000);
+
+  test("an install that stays under the size cap succeeds", async () => {
+    const dir = scratch();
+    // Over the cap, but beside node_modules, where the install's own manifest
+    // and lock live: the step's tree is what is measured, as after the install.
+    const script =
+      `const fs = require("fs"); fs.writeFileSync("bun.lock", "x".repeat(4000)); fs.mkdirSync("node_modules");` +
+      ` fs.writeFileSync("node_modules/small.txt", "x".repeat(1000)); setTimeout(() => {}, 300);`;
+    await runInstall(dir, process.execPath, ["-e", script], 20_000, { maxBytes: 2000, maxEntries: 1000, pollMs: 50 });
+    expect(readFileSync(join(dir, "node_modules", "small.txt"), "utf8").length).toBe(1000);
+  }, 40_000);
+
   // The real installer, run against a fake `bun` that records what it was
   // given (the spawn-env-sites pattern), so no registry is needed. The fake is
   // process.execPath for the call, because that is what the installer runs
@@ -457,5 +642,31 @@ describe("the install is bounded", () => {
     expect(cwd).toBe(work);
     expect(rest).toEqual(["install", "--silent", "--ignore-scripts", "--linker=hoisted", "secret="]);
     expect(CODE_INSTALL_TIMEOUT_MS).toBe(5 * 60_000);
+    expect(CODE_STEP_MAX_INSTALL_BYTES).toBe(512 * 1024 * 1024);
   });
+
+  // #865: the real installer carries the size cap. The fake `bun` makes a tree
+  // over it and then waits out any timeout, so only the cap ends it.
+  test.skipIf(process.platform === "win32")("the real installer stops an install over the size cap", async () => {
+    const root = scratch();
+    const bin = join(root, "bin");
+    const work = join(root, "work");
+    mkdirSync(bin);
+    mkdirSync(work);
+    const realExecPath = process.execPath;
+    const grow =
+      `const fs = require("fs"); fs.mkdirSync("node_modules"); fs.writeFileSync("node_modules/blob", "");` +
+      ` fs.truncateSync("node_modules/blob", ${CODE_STEP_MAX_INSTALL_BYTES + 1}); setInterval(() => {}, 1000);`;
+    writeFileSync(join(bin, "bun"), `#!/bin/sh\nexec ${JSON.stringify(realExecPath)} -e ${JSON.stringify(grow)}\n`, {
+      mode: 0o755,
+    });
+    process.execPath = join(bin, "bun");
+    let err: unknown;
+    try {
+      err = await bunInstall(work).then(() => null, (e: unknown) => e);
+    } finally {
+      process.execPath = realExecPath;
+    }
+    expect(err).toBeInstanceOf(CodeInstallTooLargeError);
+  }, 30_000);
 });

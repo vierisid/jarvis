@@ -800,6 +800,40 @@ latest version and ran it. Now:
   `CODE step requires package "<name>", which its package.json does not declare`.
   Nothing is fetched at run time.
 
+### CODE-step installs are capped and old trees are pruned (#865)
+
+- A step may declare at most 32 dependencies. A flow with more can still be
+  saved, but readiness reports the step by name, and publishing, enabling and
+  running it (test runs included) are refused until the step declares 32 or
+  fewer. A flow published before this cap with more than 32 in one step
+  stops running until that step is cut down and the flow published again.
+- A step's installed tree may hold at most 512 MiB (apparent size: the
+  `lstat` size of every file, directory and link) and at most 65,536 entries.
+  The install is measured while it runs and killed once it passes either cap,
+  and the tree is measured again before it is used; either way the step is
+  refused, naming it, and the step's previous tree stays.
+- Where the numbers come from (bun 1.3.8, `--ignore-scripts
+  --linker=hoisted`, 19 popular packages one at a time): googleapis is the
+  largest at 246.5 MiB, googleapis and aws-sdk together 344.6 MiB, the median
+  16.5 MiB (512 / 16.5 gives the count cap); firebase-admin has the most
+  entries at 6,080, the median 1,571, and 32 median packages make 50,272.
+- The caps are per step: a version with several CODE steps can hold that
+  much per step. They bound the step's TREE. Bun downloads into its own install cache
+  (`~/.bun/install/cache`) first and links from there, so a refused install
+  can leave what it already fetched in that cache, and the cache is not
+  pruned here (`bun pm cache rm` clears it).
+- Every version that ran a CODE step has a tree under
+  `~/.jarvis/workflow-codes/<versionId>/`. The daemon removes a tree at start
+  and hourly unless its version is a flow's published version or current
+  draft, the version of a queued, running or paused run or of a queued or
+  running job, a run in the daemon is using it, or it was used in the last 24
+  hours (that last rule protects another process sharing the directory, such
+  as an evaluation run). A tree is rebuilt from its version on every run, so
+  a pruned version that runs again simply installs again.
+- With Bun's install cache on the same filesystem (the default), a tree is
+  hard links into the cache: a second tree of googleapis and aws-sdk took
+  2.5 MB of new disk.
+
 ### `{{ ... }}` expressions are data, not JavaScript
 
 The vendored engine's expression evaluator used `Function(...)`, so any inline

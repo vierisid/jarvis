@@ -30,7 +30,7 @@ import { spawnEngine, type SpawnedEngine, type SpawnEngineOptions } from "./spaw
 import { ENGINE_BUILD_PATHS } from "./build";
 import { loadedCorePieceDirs } from "./build-pieces";
 import type { EgressPolicy } from "../../runtime/http-egress";
-import { materializeCodeActions } from "./code-materialize";
+import { leaseCodeTree, materializeCodeActions } from "./code-materialize";
 import {
   ackTimeoutMsForOperation,
   buildExecuteFlowOperation,
@@ -188,6 +188,12 @@ export class EngineHandle {
    */
   private abandoned = false;
   private terminating: Promise<void> | undefined;
+  /**
+   * Code-tree leases (#865) of runs this handle abandoned: the engine may
+   * still be executing them and reading their tree, so they are given back
+   * only once the process has been killed on release.
+   */
+  private abandonedLeases: Array<() => void> = [];
 
   constructor(
     public readonly sandboxId: string,
@@ -306,6 +312,29 @@ export class EngineHandle {
     const upstream = isUpstreamFlowVersion(opts.flowVersion)
       ? opts.flowVersion
       : toUpstreamFlowVersion(opts.flowVersion);
+    // Taken before the first await, so the pruner never sees this run as not
+    // started yet (#865).
+    const releaseTree = leaseCodeTree(this.baseCodeDir, upstream.id);
+    let keepTree = false;
+    try {
+      return await this.executeFlowOnTree(upstream, opts);
+    } catch (e) {
+      // The engine was given up on, not stopped: it may still be running the
+      // flow and requiring from its tree until release() kills it.
+      if (this.abandoned) {
+        keepTree = true;
+        // Released already (an in-flight release kills the engine): give the
+        // tree back once that kill has finished, not never.
+        if (this.terminating) void this.terminating.then(releaseTree, releaseTree);
+        else this.abandonedLeases.push(releaseTree);
+      }
+      throw e;
+    } finally {
+      if (!keepTree) releaseTree();
+    }
+  }
+
+  private async executeFlowOnTree(upstream: UpstreamFlowVersion, opts: ExecuteFlowOnHandleOptions): Promise<FlowRun> {
     await materializeCodeActions(upstream, this.baseCodeDir);
 
     const baseExecuteFlowOptions: ExecuteFlowOptions = {
@@ -482,7 +511,12 @@ export class EngineHandle {
     // effect callbacks may still finish and save their receipts.
     if (!this.terminating) {
       this.registry.terminate(this.sandboxId);
+      const releaseAbandoned = () => {
+        // The engine is gone, so nothing reads the trees of runs it abandoned.
+        for (const release of this.abandonedLeases.splice(0)) release();
+      };
       this.terminating = this.terminateProcess();
+      void this.terminating.then(releaseAbandoned, releaseAbandoned);
     }
     return this.terminating;
   }

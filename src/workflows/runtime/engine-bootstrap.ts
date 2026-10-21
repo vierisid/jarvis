@@ -33,6 +33,8 @@ import {
   reapOrphanedEngines,
 } from "../runner/engine-runtime/engine-reaper";
 import { EngineRuntime } from "../runner/engine-runtime/engine-runtime";
+import { startCodeTreeRetention } from "../runner/engine-runtime/code-tree-prune";
+import { versionIdsNeedingCodeTrees } from "../db/repos/code-tree-retention";
 import {
   SandboxApi,
   type SandboxApiServices,
@@ -342,6 +344,18 @@ export async function bootstrapWorkflowEngine(
     );
   }
 
+  // Remove the CODE-step trees of versions nothing needs any more (#865),
+  // now and hourly. Started last, so a bootstrap that fails leaves no timer.
+  // Skipped with the rest of start-up maintenance under test: it deletes from
+  // the real ~/.jarvis/workflow-codes.
+  const codeTrees = skipMaintenance
+    ? null
+    : startCodeTreeRetention({
+        baseCodeDir: runtime.codeBaseDir,
+        needed: versionIdsNeedingCodeTrees,
+        log: (m) => log(m),
+      });
+
   return {
     api,
     runtime,
@@ -352,6 +366,11 @@ export async function bootstrapWorkflowEngine(
     bundleDigest: cached.digest,
     catalogCacheKey: cacheKey,
     shutdown: async () => {
+      // Let a pass already running finish: it reads the database only as it
+      // starts and then just deletes renamed trees, so this is milliseconds,
+      // and nothing touches the code directory after shutdown returns.
+      codeTrees?.stop();
+      await codeTrees?.idle();
       // Kill any pooled idle engine before stopping the SandboxApi -- the
       // engine's HTTP/WS callbacks would otherwise spin against a dead server.
       await runtime.shutdown();
