@@ -146,9 +146,15 @@ Success returns `{status:"accepted",requestId,run:RunSummary}` with HTTP 202. Th
 is the original acceptance snapshot, not current run status. Fetch run detail to
 refresh it. D-19's host must gather input, persist the request ID and exact payload
 before dispatch, retain one command owner across Canvas/Runs/Context, and recover
-uncertain HTTP outcomes through the read-only request route. A missing receipt
-must not prompt a new request ID or automatic execution retry. A deliberate new
-run requires a fresh explicit user action and identity.
+uncertain HTTP outcomes through the read-only request route. D-19's
+`briefRunsPort(...).reconcile` is that read, behind the Runs and Context
+`Check result` action (#1093). An accepted receipt unlocks Run. A missing one
+unlocks Run too (#1093, owner decision), but only for a person's next explicit
+Run; it is never retried or replaced automatically, and the view says that a
+request still in transit could yet start. A 404 is true only when read: a
+request still in transit can commit later, and nothing fences it yet. A missing receipt
+must not by itself create a new request ID or retry execution; only a person's
+next explicit Run does, with a fresh identity.
 
 Accepted receipts remain readable after the existing hard-delete endpoint removes
 a workflow and after daemon restart. Recovery checks the receipt's stored project,

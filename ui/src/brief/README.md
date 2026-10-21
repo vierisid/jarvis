@@ -524,7 +524,11 @@ ingredients (ready, loading, unavailable). It sends no request.
   across room, chat and sidebar changes and calls `retire()` only when the owner or workflow changes.
 - Run is the optional `port.start`: single-flight, and a lost or mismatched acknowledgement leaves it
   `uncertain` and locked for that controller. Nothing is retried or re-sent; `not_submitted` is only for
-  a request that was never sent.
+  a request that was never sent. `Check result` (`check()`, #1093) reads that same request back through
+  the optional `port.reconcile`, F-21's `GET /api/brief/workflows/:flowId/run-requests/:requestId`: an
+  accepted receipt shows and selects its run and unlocks Run; F-21's `not_found` (no run has been
+  accepted under that ID yet) unlocks Run for a new, explicit request and says that one still in
+  transit could yet start; any other answer leaves it uncertain.
 - `briefRunsPort(scope, request)` is the read half of the port, over F-21 (#1100): F-21's keyset reader
   owns Brief run history, so `list` reads `GET /api/brief/workflows/:flowId/runs[?cursor=]` (newest
   first, 50 a page, opaque cursor) and `detail` reads `GET /api/brief/workflows/:flowId/runs/:runId`, the

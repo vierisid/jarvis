@@ -213,6 +213,7 @@ export function makeRunsFixture() {
     records.set(runId, run);
   }
   let requests = 0;
+  const receipts = new Map<string, RunDetail>();
   let reads = 0;
   let mode: "normal" | "slow" | "unavailable" | "empty" | "uncertain-command" =
     "normal";
@@ -253,8 +254,6 @@ export function makeRunsFixture() {
     async start(request) {
       requests++;
       await delay(320);
-      if (mode === "uncertain-command")
-        return { status: "uncertain", requestId: request.requestId };
       const n = records.size + 1,
         runId = `meeting-run-${String(n).padStart(3, "0")}`;
       const run: RunDetail = {
@@ -274,15 +273,27 @@ export function makeRunsFixture() {
         inspection: { status: "complete", note: null },
       };
       records.set(runId, run);
+      receipts.set(request.requestId, structuredClone(run));
+      // The run was accepted, but its reply is lost: only its receipt can tell.
+      if (mode === "uncertain-command")
+        return { status: "uncertain", requestId: request.requestId };
       return {
         status: "accepted",
         requestId: request.requestId,
         run: structuredClone(run),
       };
     },
+    async reconcile(request) {
+      reads++;
+      const run = receipts.get(request.requestId);
+      return run
+        ? { status: "accepted", requestId: request.requestId, run: structuredClone(run) }
+        : { status: "not_recorded", requestId: request.requestId };
+    },
   };
   const controller = new WorkflowRunsController(RUN_SCOPE, port);
   return {
+    receipts,
     controller,
     records,
     port,

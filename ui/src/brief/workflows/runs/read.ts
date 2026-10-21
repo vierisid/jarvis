@@ -1,6 +1,7 @@
 import type { BriefReadState } from "../../contracts";
 import {
   validateDetail,
+  type ManualRunCheck,
   validatePage,
   type RunDetail,
   type RunPage,
@@ -27,13 +28,14 @@ function summary(run: RunSummary): RunSummary {
  * read to the daemon's project, so a flow in another project answers 404, which reads
  * as unavailable, never as an empty history. */
 export function briefRunsPort(scope: RunScope, request: Request = fetch):
-  Required<Pick<WorkflowRunsPort, "list" | "detail">> {
+  Required<Pick<WorkflowRunsPort, "list" | "detail" | "reconcile">> {
   const base = `/api/brief/workflows/${encodeURIComponent(scope.flowId)}`;
+  const get = (url: string, signal: AbortSignal) => request(url, {
+    credentials: "same-origin", cache: "no-store",
+    signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+  });
   async function read(url: string, signal: AbortSignal) {
-    const res = await request(url, {
-      credentials: "same-origin", cache: "no-store",
-      signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
-    });
+    const res = await get(url, signal);
     const body = res.ok ? await res.json() as { status?: unknown; data?: unknown } | null : null;
     if (!body || body.status !== "ready") throw Error("Unavailable");
     return body.data;
@@ -58,6 +60,20 @@ export function briefRunsPort(scope: RunScope, request: Request = fetch):
         if (signal.aborted) throw error;
         return { status: "unavailable", reason: "The selected run could not be loaded." };
       }
+    },
+    /** #1093: F-21's accepted-request receipt, `GET .../run-requests/:requestId`. It is
+     * written in the same transaction as the run, so its absence (404 `not_found`) means
+     * no run has been accepted under this ID. Any other answer rejects: the request stays
+     * uncertain. Read-only; it never enqueues or re-sends anything. */
+    async reconcile(manual, signal): Promise<ManualRunCheck> {
+      const res = await get(`${base}/run-requests/${encodeURIComponent(manual.requestId)}`, signal);
+      const body = await res.json().catch(() => null) as
+        { status?: unknown; code?: unknown; requestId?: unknown; run?: RunSummary } | null;
+      if (res.status === 404 && body?.code === "not_found")
+        return { status: "not_recorded", requestId: manual.requestId };
+      if (!res.ok || body?.status !== "accepted" || body.requestId !== manual.requestId || !body.run)
+        throw Error("Unconfirmed run request");
+      return { status: "accepted", requestId: manual.requestId, run: summary(body.run) };
     },
   };
 }

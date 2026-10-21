@@ -259,6 +259,12 @@ test("Run shares the Runs owner and selects its receipt; uncertainty stays locke
   await React.act(async () => root.render(null));
   await render();
   expect(button("Run workflow").disabled).toBe(true);
+  // #1093: reading the receipt back opens the accepted run and unlocks Run.
+  await React.act(async () => button("Check result").click());
+  expect(shell.route.room).toBe("workflow-runs");
+  expect(shell.route.selection.runId).toBe("meeting-run-014");
+  await render();
+  expect(button("Run workflow").disabled).toBe(false);
 });
 test("a wrong-scope command owner is disabled", async () => {
   const other = makeContextFixture();

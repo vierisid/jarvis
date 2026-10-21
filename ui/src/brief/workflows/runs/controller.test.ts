@@ -281,3 +281,102 @@ test("invalid projections cannot smuggle identities or unusable statuses", () =>
     validatePage({ items: [run, run], total: 2, nextCursor: null }, RUN_SCOPE),
   ).toThrow();
 });
+test("an unconfirmed Run is resolved by reading its receipt back: accepted unlocks Run and selects the run (#1093)", async () => {
+  const f = makeRunsFixture();
+  f.setMode("uncertain-command");
+  const s = f.controller;
+  await s.load();
+  await s.start();
+  const request = s.getSnapshot().request!;
+  expect(s.getSnapshot().submission).toBe("uncertain");
+  expect(s.canRun).toBe(false);
+  expect(s.canCheck).toBe(true);
+  const runId = f.receipts.get(request.requestId)!.runId;
+  await s.check();
+  expect(s.getSnapshot().submission).toBe("accepted");
+  expect(s.getSnapshot().selectedId).toBe(runId);
+  const h = s.getSnapshot().history;
+  expect(h.status === "ready" && h.data.items[0]?.runId).toBe(runId);
+  expect(s.canRun).toBe(true);
+  expect(s.canCheck).toBe(false);
+  // Reading the outcome never re-sent the command.
+  expect(f.stats().requests).toBe(1);
+  s.retire();
+});
+test("a request the server holds no receipt for unlocks Run without re-sending it (#1093)", async () => {
+  const f = makeRunsFixture(),
+    seen: string[] = [];
+  let sent = 0;
+  const s = new WorkflowRunsController(RUN_SCOPE, {
+    ...f.port,
+    start: async () => {
+      sent++;
+      throw Error("lost before it was sent");
+    },
+    reconcile: async (r) => {
+      seen.push(r.requestId);
+      return { status: "not_recorded", requestId: r.requestId };
+    },
+  });
+  await s.start();
+  const id = s.getSnapshot().request!.requestId;
+  await s.check();
+  expect(seen).toEqual([id]);
+  expect(s.getSnapshot()).toMatchObject({ submission: "idle", request: null });
+  expect(s.getSnapshot().message).toContain("No run has been recorded for that request yet");
+  expect(s.canRun).toBe(true);
+  expect(sent).toBe(1);
+  s.retire();
+});
+test("a failed, mismatched or invalid read-back keeps the request uncertain and locked (#1093)", async () => {
+  const f = makeRunsFixture();
+  const answers: Array<() => Promise<any>> = [
+    async () => { throw Error("still unreachable"); },
+    async () => ({ status: "not_recorded", requestId: "different" }),
+    async () => ({ status: "accepted", requestId: id, run: { ...detail(f), versionId: "another-version" } }),
+    async () => ({ status: "accepted", requestId: id, run: { ...detail(f), scopeId: "another-scope" } }),
+  ];
+  let id = "";
+  let answer = answers[0]!;
+  const s = new WorkflowRunsController(RUN_SCOPE, {
+    ...f.port,
+    start: async () => { throw Error("lost response"); },
+    reconcile: () => answer(),
+  });
+  await s.start();
+  id = s.getSnapshot().request!.requestId;
+  for (const next of answers) {
+    answer = next;
+    await s.check();
+    expect(s.getSnapshot().submission).toBe("uncertain");
+    expect(s.getSnapshot().request?.requestId).toBe(id);
+    expect(s.canRun).toBe(false);
+    expect(s.canCheck).toBe(true);
+  }
+  s.retire();
+});
+test("without a read-back port an unconfirmed Run stays locked, and retirement drops a late read-back", async () => {
+  const f = makeRunsFixture(),
+    p = deferred<any>();
+  const { reconcile: _, ...withoutCheck } = f.port;
+  const locked = new WorkflowRunsController(RUN_SCOPE, { ...withoutCheck, start: async () => { throw Error("lost"); } });
+  await locked.start();
+  expect(locked.canCheck).toBe(false);
+  await locked.check();
+  expect(locked.getSnapshot().submission).toBe("uncertain");
+  locked.retire();
+  const s = new WorkflowRunsController(RUN_SCOPE, {
+    ...f.port,
+    start: async () => { throw Error("lost"); },
+    reconcile: () => p.promise,
+  });
+  await s.start();
+  const request = s.getSnapshot().request!;
+  const work = s.check();
+  expect(s.getSnapshot().submission).toBe("checking");
+  expect(s.canRun).toBe(false);
+  s.retire();
+  p.resolve({ status: "accepted", requestId: request.requestId, run: detail(f) });
+  await work;
+  expect(s.getSnapshot().selectedId).toBeNull();
+});

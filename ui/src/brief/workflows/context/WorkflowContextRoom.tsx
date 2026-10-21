@@ -172,7 +172,7 @@ function BoundContext({
           onClick={() => void store.refresh(query)}
         />
       </div>
-      {sharedRuns && <ContextRunFeedback store={sharedRuns} />}
+      {sharedRuns && <ContextRunFeedback shell={shell} store={sharedRuns} />}
       <div
         className="brief-context-scroll"
         ref={scroll}
@@ -422,16 +422,63 @@ function ContextRunAction({
   );
 }
 /** Feedback has its own flow row so long failures cannot cover the header controls. */
-function ContextRunFeedback({ store }: { store: WorkflowRunsController }) {
+function ContextRunFeedback({
+  shell,
+  store,
+}: {
+  shell: BriefShellPort;
+  store: WorkflowRunsController;
+}) {
   const state = useSyncExternalStore(
     store.subscribe,
     store.getSnapshot,
     store.getSnapshot,
   );
+  const mounted = useRef(true),
+    activeStore = useRef(store);
+  activeStore.current = store;
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, [store]);
+  /** Read an unconfirmed request's outcome back by its ID; never re-send it (#1093). */
+  async function check() {
+    await store.check();
+    const current = store.getSnapshot();
+    if (
+      mounted.current &&
+      activeStore.current === store &&
+      current.submission === "accepted" &&
+      current.selectedId
+    )
+      shell.navigate({
+        room: "workflow-runs",
+        selection: {
+          flowId: store.scope.flowId,
+          versionId: store.scope.versionId,
+          runId: current.selectedId,
+        },
+      });
+  }
   return (
-    <div role="status" className="brief-context-run-message">
-      {state.message}
-    </div>
+    <>
+      <div role="status" className="brief-context-run-message">
+        {state.message}
+      </div>
+      {(store.canCheck || state.submission === "checking") && (
+        <div className="brief-context-run-check">
+          <BriefButton
+            size="sm"
+            onClick={() => void check()}
+            disabled={!store.canCheck}
+          >
+            {state.submission === "checking" ? "Checking..." : "Check result"}
+          </BriefButton>
+        </div>
+      )}
+    </>
   );
 }
 export function workflowContextRegistration(

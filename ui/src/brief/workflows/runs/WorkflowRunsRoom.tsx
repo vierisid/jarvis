@@ -128,6 +128,13 @@ function BoundRuns({
       if (mounted.current) select(latest.selectedId);
     }
   }
+  /** Read an unconfirmed request's outcome back by its ID; never re-send it (#1093). */
+  async function check() {
+    await store.check();
+    const latest = store.getSnapshot();
+    if (latest.submission === "accepted" && latest.selectedId && mounted.current)
+      select(latest.selectedId);
+  }
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -156,6 +163,17 @@ function BoundRuns({
       <div className="brief-runs-feedback" role="status">
         {state.message}
       </div>
+      {(store.canCheck || state.submission === "checking") && (
+        <div className="brief-runs-check">
+          <BriefButton
+            size="sm"
+            onClick={() => void check()}
+            disabled={!store.canCheck}
+          >
+            {state.submission === "checking" ? "Checking..." : "Check result"}
+          </BriefButton>
+        </div>
+      )}
       <div className="brief-runs-columns">
         <section className="brief-runs-history" aria-label="Run history">
           <div className="brief-runs-history-heading">

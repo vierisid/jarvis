@@ -186,3 +186,25 @@ test("a short run label carries the full run ID in its title and in the inspecti
   const metadata = Array.from(host.querySelectorAll(".brief-run-metadata dt"));
   expect(metadata.find((dt) => dt.textContent === "Run ID")?.nextElementSibling?.textContent).toBe("meeting-run-006");
 });
+
+test("Check result reads an unconfirmed Run's receipt, opens its run and unlocks Run (#1093)", async () => {
+  fixture.setMode("uncertain-command");
+  await render();
+  expect(button("Check result")).toBeUndefined();
+  await React.act(async () => {
+    button("Run workflow").click();
+    // Wait on the request settling, not on a fixed delay.
+    for (let i = 0; i < 400 && fixture.controller.getSnapshot().submission === "pending"; i++)
+      await new Promise((r) => setTimeout(r, 10));
+  });
+  await render();
+  expect(fixture.controller.getSnapshot().submission).toBe("uncertain");
+  expect(button("Run workflow").disabled).toBe(true);
+  expect(button("Check result").disabled).toBe(false);
+  await React.act(async () => button("Check result").click());
+  await render();
+  expect(shell.route.selection.runId).toBe("meeting-run-013");
+  expect(button("Run workflow").disabled).toBe(false);
+  expect(button("Check result")).toBeUndefined();
+  expect(fixture.stats().requests).toBe(1);
+});
