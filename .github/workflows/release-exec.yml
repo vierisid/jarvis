@@ -774,9 +774,10 @@ jobs:
   #
   # id-token for publish-sidecar's Trusted Publishing. The signing secrets
   # are passed because workflow-hardening.test.sh requires a call to pass
-  # exactly what the called workflow declares; on this call the only jobs
-  # that read them, the build legs, are skipped. The single call before #952
-  # passed the same five to the same workflow, so nothing new can read them.
+  # exactly what the called workflow declares; on this call the only job
+  # that reads them, sign-sidecar-darwin (#870), is skipped. The single
+  # call before #952 passed the same five to the same workflow, so nothing
+  # new can read them.
   #
   # Its outputs (released, version, sums) are the ones github-release reads,
   # all three set by its publish-sidecar job, which runs exactly when

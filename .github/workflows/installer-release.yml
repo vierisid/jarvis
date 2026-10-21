@@ -461,13 +461,16 @@ jobs:
           ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe
           scripts/sign-windows.sh --verify-only "${RUNNER_TEMP}/signed/Jarvis-Setup.exe"
 
-  # ─── macOS: universal binary → Install Jarvis.app → signed DMG ──
+  # --- macOS: universal binary -> Install Jarvis.app (unsigned) ----
+  # Builds and holds no Apple secret (#870): go, cgo, clang, lipo and make
+  # run here, and the unsigned app crosses to sign-macos as a tar with its
+  # digest as a job output, as build-windows hands to sign-windows (#779).
   build-macos:
     needs: resolve
     if: needs.resolve.outputs.should_release == 'true'
     runs-on: macos-latest
-    env:
-      HAVE_APPLE_SIGNING: ${{ secrets.APPLE_CERT_P12 != '' }}
+    permissions:
+      contents: read
     outputs:
       sha256: ${{ steps.digest.outputs.sha256 }}
     steps:
@@ -514,9 +517,106 @@ jobs:
           packaging/macos/make-icns.sh
           make app-macos-installer BIN_INSTALLER=./jarvis-setup
 
+      # tar, not the bare bundle: upload-artifact strips exec bits and
+      # symlinks. COPYFILE_DISABLE + --no-mac-metadata keep bsdtar from
+      # archiving xattrs as AppleDouble (._*) entries inside the bundle.
+      - name: Package Install Jarvis.app
+        working-directory: sidecar
+        run: COPYFILE_DISABLE=1 tar --no-mac-metadata -C dist/macos -czf install-jarvis-app.tar.gz "Install Jarvis.app"
+
+      # shasum: macOS has it, and not always sha256sum. Same hex either way.
+      - name: Digest
+        id: digest
+        working-directory: sidecar
+        run: |
+          set -euo pipefail
+          sum="$(shasum -a 256 install-jarvis-app.tar.gz)"
+          echo "sha256=${sum%% *}" >> "$GITHUB_OUTPUT"
+
+      # Not under the installer-* name: that is the signed DMG, which only
+      # sign-macos uploads and publish downloads by that pattern.
+      - name: Upload unsigned installer app
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unsigned-installer-darwin
+          path: sidecar/install-jarvis-app.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  # --- macOS: Developer ID sign, notarize, staple, DMG (#870) -----
+  # The only job here that reads the Apple secrets, and it builds nothing,
+  # installs nothing and checks nothing out: it takes the app build-macos
+  # reported by digest, signs, notarizes and staples it, wraps it in the DMG
+  # with hdiutil directly (never make, which would run the Makefile beside
+  # the secrets), and signs, notarizes and staples that. The DMG crosses to
+  # publish with its digest as this job output.
+  sign-macos:
+    needs: [resolve, build-macos]
+    if: needs.resolve.outputs.should_release == 'true'
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    env:
+      # secrets cannot be referenced in a step if:, so their presence is a
+      # flag the signing steps gate on.
+      HAVE_APPLE_SIGNING: ${{ secrets.APPLE_CERT_P12 != '' }}
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: unsigned-installer-darwin
+          path: ${{ runner.temp }}/unsigned
+
+      # The digest travels as a job output, which only build-macos can set;
+      # the artifact store is writable by every job in this run. Exactly one
+      # regular file, that digest, and only then anything reads it.
+      - name: Verify the installer app
+        env:
+          SHA256: ${{ needs.build-macos.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-macos reported no digest"; exit 1; }
+          in="${RUNNER_TEMP}/unsigned"
+          if [ "$(find "$in" -mindepth 1 -print)" != "${in}/install-jarvis-app.tar.gz" ] || [ -L "${in}/install-jarvis-app.tar.gz" ] || [ ! -f "${in}/install-jarvis-app.tar.gz" ]; then
+            echo "::error::the unsigned-installer-darwin artifact is not exactly one file, install-jarvis-app.tar.gz"
+            exit 1
+          fi
+          echo "${SHA256}  ${in}/install-jarvis-app.tar.gz" | shasum -a 256 -c -
+
+      # The archive holds Install Jarvis.app and nothing else: no member
+      # outside it, no absolute path, no .., nothing but files and
+      # directories, and once unpacked no link, device, fifo or file with a
+      # second name. /usr/bin/tar by path: on macOS that is bsdtar.
+      - name: Unpack the installer app
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          tgz="${RUNNER_TEMP}/unsigned/install-jarvis-app.tar.gz"
+          dest="${RUNNER_TEMP}/work"
+          names="$(/usr/bin/tar -tzf "$tgz")"
+          while IFS= read -r m; do
+            if ! [[ "$m" =~ ^Install\ Jarvis\.app(/|$) ]] || [[ "$m" =~ (^|/)\.\.(/|$) ]]; then
+              printf '::error::the installer app archive holds %q, outside Install Jarvis.app\n' "$m"
+              exit 1
+            fi
+          done <<<"$names"
+          while IFS= read -r m; do
+            if [[ "$m" != [-d]* ]] || [[ "$m" == *" link to "* ]] || [[ "$m" == *" -> "* ]]; then
+              printf '::error::the installer app archive holds a member that is not a plain file or directory: %q\n' "$m"
+              exit 1
+            fi
+          done < <(/usr/bin/tar -tvzf "$tgz")
+          mkdir -p "$dest"
+          /usr/bin/tar -xzf "$tgz" -C "$dest"
+          if [ "$(find "$dest" -mindepth 1 -maxdepth 1 -print)" != "${dest}/Install Jarvis.app" ] || [ -n "$(find "$dest" -mindepth 1 -not -type d -not -type f -print)" ] || [ -n "$(find "$dest" -type f -links +1 -print)" ]; then
+            echo "::error::the installer app is not Install Jarvis.app alone, of plain files and directories"
+            exit 1
+          fi
+          mkdir -p "${RUNNER_TEMP}/out"
+
       - name: Sign, notarize and staple
         if: env.HAVE_APPLE_SIGNING == 'true'
-        working-directory: sidecar
         env:
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
           APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
@@ -525,55 +625,69 @@ jobs:
           ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
         run: |
           set -euo pipefail
-          for v in APPLE_CERT_PASSWORD ASC_KEY_ID ASC_ISSUER_ID ASC_API_KEY_P8; do
-            [ -n "${!v}" ] || { echo "::error::secret $v is required when APPLE_CERT_P12 is set"; exit 1; }
-          done
+          if [ -z "$APPLE_CERT_PASSWORD" ] || [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ] || [ -z "$ASC_API_KEY_P8" ]; then
+            echo "::error::APPLE_CERT_PASSWORD, ASC_KEY_ID, ASC_ISSUER_ID and ASC_API_KEY_P8 are all required when APPLE_CERT_P12 is set"
+            exit 1
+          fi
 
+          # The keychain, under RUNNER_TEMP, is deleted and the search list
+          # put back on the way out, so the identity is not usable by later
+          # steps of this job (#870 review).
+          cert="${RUNNER_TEMP}/cert.p12"
+          key="${RUNNER_TEMP}/asc_key.p8"
+          kc="${RUNNER_TEMP}/sign.keychain-db"
+          trap 'rm -f "$cert" "$key"; security list-keychains -d user -s login.keychain || true; security delete-keychain "$kc" || true' EXIT
           KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-          security set-keychain-settings -lut 3600 build.keychain
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-          printf '%s' "$APPLE_CERT_P12" | base64 -d > /tmp/cert.p12
-          security import /tmp/cert.p12 -k build.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
-          rm /tmp/cert.p12
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain >/dev/null
-          security list-keychains -d user -s build.keychain login.keychain
-          IDENTITY="$(security find-identity -v -p codesigning build.keychain | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$kc"
+          security set-keychain-settings -lut 3600 "$kc"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$kc"
+          (umask 077; printf '%s' "$APPLE_CERT_P12" | base64 -d > "$cert")
+          security import "$cert" -k "$kc" -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          rm -f "$cert"
+          (umask 077; printf '%s' "$ASC_API_KEY_P8" > "$key")
+          # Nothing after this line needs the values, so no program it starts
+          # inherits them (the ones above did, and are Apple and system tools).
+          unset APPLE_CERT_P12 APPLE_CERT_PASSWORD ASC_API_KEY_P8
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$kc" >/dev/null
+          security list-keychains -d user -s "$kc" login.keychain
+          IDENTITY="$(security find-identity -v -p codesigning "$kc" | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
           test -n "$IDENTITY" || { echo "::error::no 'Developer ID Application' identity in APPLE_CERT_P12"; exit 1; }
 
-          trap 'rm -f /tmp/asc_key.p8' EXIT
-          (umask 077; printf '%s' "$ASC_API_KEY_P8" > /tmp/asc_key.p8)
-          APP="dist/macos/Install Jarvis.app"
+          APP="${RUNNER_TEMP}/work/Install Jarvis.app"
 
+          # notarytool exit codes are not reliable on an Invalid verdict, and
+          # under pipefail a failing submit would end the step before its log
+          # is printed (#870 review): the JSON status decides, as in the
+          # sidecar signer.
           # No --entitlements: the installer needs no hardened-runtime
-          # capabilities (it never captures audio/screen — see the sidecar's
+          # capabilities (it never captures audio/screen -- see the sidecar's
           # entitlements.plist, which is deliberately NOT reused here).
           codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
           codesign --verify --strict --verbose=2 "$APP"
-          ditto -c -k --keepParent "$APP" /tmp/InstallJarvis.zip
-          xcrun notarytool submit /tmp/InstallJarvis.zip \
-            --key /tmp/asc_key.p8 --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
-            --wait --timeout 30m --output-format json | tee /tmp/notary-app.json
-          APP_ID="$(jq -r '.id // empty' /tmp/notary-app.json)"
-          if [ "$(jq -r '.status // empty' /tmp/notary-app.json)" != "Accepted" ]; then
+          ditto -c -k --keepParent "$APP" "${RUNNER_TEMP}/InstallJarvis.zip"
+          xcrun notarytool submit "${RUNNER_TEMP}/InstallJarvis.zip" \
+            --key "$key" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+            --wait --timeout 30m --output-format json | tee "${RUNNER_TEMP}/notary-app.json" || true
+          APP_ID="$(jq -r '.id // empty' "${RUNNER_TEMP}/notary-app.json")"
+          if [ "$(jq -r '.status // empty' "${RUNNER_TEMP}/notary-app.json")" != "Accepted" ]; then
             [ -n "$APP_ID" ] && xcrun notarytool log "$APP_ID" \
-              --key /tmp/asc_key.p8 --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
+              --key "$key" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
             echo "::error::installer app notarization failed"; exit 1
           fi
           xcrun stapler staple "$APP"
 
           # The DMG is what users download, so it is signed, notarized and
-          # stapled in its own right — a stapled ticket inside is not enough.
-          make dmg-installer
-          DMG="dist/macos/Install-Jarvis.dmg"
+          # stapled in its own right -- a stapled ticket inside is not enough.
+          DMG="${RUNNER_TEMP}/out/Install-Jarvis.dmg"
+          hdiutil create -volname "Install Jarvis" -srcfolder "$APP" -format UDZO -ov "$DMG"
           codesign --force --timestamp --sign "$IDENTITY" "$DMG"
           xcrun notarytool submit "$DMG" \
-            --key /tmp/asc_key.p8 --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
-            --wait --timeout 30m --output-format json | tee /tmp/notary-dmg.json
-          DMG_ID="$(jq -r '.id // empty' /tmp/notary-dmg.json)"
-          if [ "$(jq -r '.status // empty' /tmp/notary-dmg.json)" != "Accepted" ]; then
+            --key "$key" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+            --wait --timeout 30m --output-format json | tee "${RUNNER_TEMP}/notary-dmg.json" || true
+          DMG_ID="$(jq -r '.id // empty' "${RUNNER_TEMP}/notary-dmg.json")"
+          if [ "$(jq -r '.status // empty' "${RUNNER_TEMP}/notary-dmg.json")" != "Accepted" ]; then
             [ -n "$DMG_ID" ] && xcrun notarytool log "$DMG_ID" \
-              --key /tmp/asc_key.p8 --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
+              --key "$key" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
             echo "::error::installer DMG notarization failed"; exit 1
           fi
           xcrun stapler staple "$DMG"
@@ -581,29 +695,29 @@ jobs:
 
       - name: Build unsigned DMG
         if: env.HAVE_APPLE_SIGNING != 'true'
-        working-directory: sidecar
-        run: |
-          echo "::warning::Apple signing credentials not configured — shipping an unsigned Install-Jarvis.dmg (Gatekeeper will block it)."
-          make dmg-installer
-
-      # shasum: macOS has it, and not always sha256sum. Same hex either way.
-      - name: Digest
-        id: digest
-        working-directory: sidecar
         run: |
           set -euo pipefail
-          sum="$(shasum -a 256 dist/macos/Install-Jarvis.dmg)"
+          echo "::warning::Apple signing credentials not configured -- shipping an unsigned Install-Jarvis.dmg (Gatekeeper will block it)."
+          hdiutil create -volname "Install Jarvis" -srcfolder "${RUNNER_TEMP}/work/Install Jarvis.app" -format UDZO -ov "${RUNNER_TEMP}/out/Install-Jarvis.dmg"
+
+      # The digest of exactly the file the upload below takes, as the output
+      # of this job alone.
+      - name: Digest
+        id: digest
+        run: |
+          set -euo pipefail
+          sum="$(shasum -a 256 "${RUNNER_TEMP}/out/Install-Jarvis.dmg")"
           echo "sha256=${sum%% *}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: installer-darwin
-          path: sidecar/dist/macos/Install-Jarvis.dmg
+          path: ${{ runner.temp }}/out/Install-Jarvis.dmg
           if-no-files-found: error
 
   # ─── Publish ───────────────────────────────────────────────────
   publish:
-    needs: [resolve, sign-windows, verify-windows, build-macos]
+    needs: [resolve, sign-windows, verify-windows, sign-macos]
     if: needs.resolve.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     # The gate (#920). Until now this job held `contents: write` with no
@@ -631,14 +745,14 @@ jobs:
           pattern: installer-*
           path: artifacts
 
-      # Exactly what sign-windows signed and build-macos built (#779): their
+      # Exactly what sign-windows and sign-macos signed (#779, #870): their
       # digests arrive as job outputs, and the artifacts could have been
       # replaced by any job in this run since. Exactly these two files, too:
       # `pattern: installer-*` would fetch any other artifact so named.
       - name: Verify the installers
         env:
           SHA_WIN32_X64: ${{ needs.sign-windows.outputs.sha256 }}
-          SHA_DARWIN: ${{ needs.build-macos.outputs.sha256 }}
+          SHA_DARWIN: ${{ needs.sign-macos.outputs.sha256 }}
         run: |
           set -euo pipefail
           export LC_ALL=C

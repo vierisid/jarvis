@@ -42,6 +42,11 @@
 #   missing inputs.
 #   Plus (#817) post-sign verification in a job without id-token, on the
 #   digest that ships, gating the publish.
+#   Plus (#870) the macOS split: the darwin legs and build-macos build an
+#   unsigned bundle and upload it under unsigned-*, and sign-sidecar-darwin
+#   and sign-macos take it by that digest, unpack only the bundle, sign, and
+#   hand on their own digest. The digest checks and unpack steps executed
+#   verbatim against tampered, extra, missing, linked and escaping fixtures.
 #   Plus (#684, #818) the version gates of sidecar-release.yml and
 #   installer-release.yml, executed verbatim against hostile VERSION files,
 #   and no ${{ }} inside any run: of either workflow, nor (#998) of
@@ -260,17 +265,20 @@ if (mode === "sidecar-digests") {
     return keys.length === 1 && keys[0] === "include" && Array.isArray(m.include) ? m.include.length : Infinity;
   };
   // The digest is taken of the finished file: after it, the job only uploads.
-  const digestLast = (name) => {
+  // want: the artifact names uploaded after it, as a regex; outs: the
+  // outputs that must be exactly the digest step outputs of the same name.
+  const digestLast = (name, want = /^sidecar-/, outs = ["sha256"]) => {
     const steps = jobs[name]?.steps ?? [];
     const at = steps.findIndex((st) => st.id === "digest");
     if (at < 0) { out.push(name + ": no step with id digest"); return; }
     if (!steps.slice(at + 1).length || !steps.slice(at + 1).every(isUpload))
       out.push(name + ": steps other than uploads run after the digest is taken, so it may not describe what is uploaded");
-    if (!steps.slice(at + 1).some((st) => /^sidecar-/.test(String(st.with?.name ?? ""))))
-      out.push(name + ": does not upload a sidecar-* artifact after the digest");
+    if (!steps.slice(at + 1).some((st) => want.test(String(st.with?.name ?? ""))))
+      out.push(name + ": does not upload a " + want.source + " artifact after the digest");
     if (steps[at]["continue-on-error"] !== undefined) out.push(name + ": the digest step has continue-on-error");
-    if (jobs[name]?.outputs?.sha256 !== "${{ steps.digest.outputs.sha256 }}")
-      out.push(name + ": output sha256 must be ${{ steps.digest.outputs.sha256 }} (got " + JSON.stringify(jobs[name]?.outputs?.sha256) + ")");
+    for (const o of outs)
+      if (jobs[name]?.outputs?.[o] !== "${{ steps.digest.outputs." + o + " }}")
+        out.push(name + ": output " + o + " must be ${{ steps.digest.outputs." + o + " }} (got " + JSON.stringify(jobs[name]?.outputs?.[o]) + ")");
   };
   // A matrix shares ONE outputs block across its legs, so any leg can write
   // a name another leg owns. Whatever uploads a sidecar-* artifact is
@@ -279,18 +287,58 @@ if (mode === "sidecar-digests") {
   for (const [name, job] of Object.entries(jobs))
     if ((job.steps ?? []).some((st) => isUpload(st) && /^sidecar-/.test(String(st.with?.name ?? ""))) && legsOf(name) > 1)
       out.push(name + ": uploads a sidecar-* artifact from a matrix of " + legsOf(name) + " legs, any of which can set the digest output");
-  // Each leg job: one leg, the npm package its name says.
+  // Each leg job: one leg, the npm package its name says. The linux legs
+  // upload what ships; the darwin legs upload their unsigned bundle under
+  // unsigned-<leg>, and only sign-sidecar-darwin uploads sidecar-darwin-*
+  // (#870), with the digest of each as an output of its own.
   const expectEnv = {};
   for (const leg of ["linux-x64", "linux-arm64", "darwin-arm64", "darwin-x64"]) {
     const j = "build-sidecar-" + leg;
     if (!jobs[j]) { out.push("no " + j + " job"); continue; }
     const inc = jobs[j].strategy?.matrix?.include ?? [];
     if (legsOf(j) !== 1 || inc[0]?.npm_pkg !== leg) out.push(j + ": must build exactly the " + leg + " leg (got " + JSON.stringify(inc.map((l) => l.npm_pkg)) + ")");
-    digestLast(j);
-    expectEnv[leg] = "needs." + j + ".outputs.sha256";
+    if (leg.startsWith("darwin")) {
+      digestLast(j, /^unsigned-/);
+      // Whatever the build leg uploads, it is not what ships.
+      for (const st of jobs[j].steps ?? [])
+        if (isUpload(st) && /^sidecar-/.test(String(st.with?.name ?? "")) && (st.if === undefined || /darwin/.test(String(st.if)) && !/!=/.test(String(st.if))))
+          out.push(j + ": uploads " + JSON.stringify(st.with?.name) + " itself; the darwin bundle that ships is the one sign-sidecar-darwin uploads (#870)");
+      expectEnv[leg] = "needs.sign-sidecar-darwin.outputs.sha256_" + leg.replace(/-/g, "_");
+    } else {
+      digestLast(j);
+      expectEnv[leg] = "needs." + j + ".outputs.sha256";
+    }
   }
   digestLast("sign-sidecar-windows");
   expectEnv["win32-x64"] = "needs.sign-sidecar-windows.outputs.sha256";
+  // #870: the darwin signer takes each unsigned bundle by the digest of the
+  // build leg that made it, in the step right after its downloads, bound by
+  // name so the two legs cannot cross over, and uploads both signed bundles
+  // after its digest step, one output each. One job, no matrix.
+  const SD = "sign-sidecar-darwin";
+  if (!jobs[SD]) out.push("no " + SD + " job");
+  else {
+    if (legsOf(SD) !== 1) out.push(SD + ": has a matrix, whose legs would share one outputs block");
+    digestLast(SD, /^sidecar-darwin-(?:arm64|x64)$/, ["sha256_darwin_arm64", "sha256_darwin_x64"]);
+    const steps = jobs[SD].steps ?? [];
+    const isDl = (st) => String(st.uses ?? "").toLowerCase().startsWith("actions/download-artifact@");
+    const ups = steps.filter(isUpload).map((st) => [st.with?.name, st.with?.path]);
+    if (JSON.stringify(ups) !== JSON.stringify([["sidecar-darwin-arm64", "${{ runner.temp }}/out/darwin-arm64/jarvis-app.tar.gz"], ["sidecar-darwin-x64", "${{ runner.temp }}/out/darwin-x64/jarvis-app.tar.gz"]]))
+      out.push(SD + ": uploads " + JSON.stringify(ups) + ", not sidecar-darwin-arm64 and sidecar-darwin-x64 from the paths its digest step hashes");
+    const dls = steps.map((st, i) => [st, i]).filter(([st]) => isDl(st));
+    if (JSON.stringify(dls.map(([st]) => [st.with?.name, st.with?.path])) !== JSON.stringify([["unsigned-darwin-arm64", "${{ runner.temp }}/unsigned/darwin-arm64"], ["unsigned-darwin-x64", "${{ runner.temp }}/unsigned/darwin-x64"]]) ||
+        dls.length !== 2 || dls[1][1] !== dls[0][1] + 1)
+      out.push(SD + ": must download exactly unsigned-darwin-arm64 and unsigned-darwin-x64, in two consecutive steps, each into runner.temp/unsigned/<leg>");
+    const chk = dls.length ? steps[dls[dls.length - 1][1] + 1] : undefined;
+    const CENV = { SHA_DARWIN_ARM64: "${{ needs.build-sidecar-darwin-arm64.outputs.sha256 }}", SHA_DARWIN_X64: "${{ needs.build-sidecar-darwin-x64.outputs.sha256 }}" };
+    if (!chk || typeof chk.run !== "string" || !/\bshasum\s+-a\s+256\s+-c\b/.test(chk.run) ||
+        JSON.stringify(Object.entries(chk.env ?? {}).sort()) !== JSON.stringify(Object.entries(CENV).sort()))
+      out.push(SD + ": the step right after its downloads is not a shasum -a 256 -c with env exactly " + JSON.stringify(CENV));
+    else if (chk.if !== undefined || chk["continue-on-error"] !== undefined || dls.some(([st]) => st.if !== undefined || st["continue-on-error"] !== undefined))
+      out.push(SD + ": its downloads or digest check can be skipped or allowed to fail");
+    for (const n of ["build-sidecar-darwin-arm64", "build-sidecar-darwin-x64"])
+      if (!needsOf(SD).includes(n)) out.push(SD + ": does not list " + n + " in needs, so its outputs read as empty");
+  }
   const pub = jobs["publish-sidecar"];
   if (!pub) out.push("no publish-sidecar job");
   else {
@@ -355,7 +403,7 @@ if (mode === "sidecar-digests") {
   // that job built, so the parse back by label cannot cross two legs over.
   // It is empty exactly when this call built nothing, which is how the
   // publish_only call learns there is nothing to publish.
-  const DIGESTS_OUT = "${{ jobs.resolve.outputs.build == \x27true\x27 && format(\x27linux-x64={0} linux-arm64={1} darwin-arm64={2} darwin-x64={3} win32-x64={4}\x27, jobs.build-sidecar-linux-x64.outputs.sha256, jobs.build-sidecar-linux-arm64.outputs.sha256, jobs.build-sidecar-darwin-arm64.outputs.sha256, jobs.build-sidecar-darwin-x64.outputs.sha256, jobs.sign-sidecar-windows.outputs.sha256) || \x27\x27 }}";
+  const DIGESTS_OUT = "${{ jobs.resolve.outputs.build == \x27true\x27 && format(\x27linux-x64={0} linux-arm64={1} darwin-arm64={2} darwin-x64={3} win32-x64={4}\x27, jobs.build-sidecar-linux-x64.outputs.sha256, jobs.build-sidecar-linux-arm64.outputs.sha256, jobs.sign-sidecar-darwin.outputs.sha256_darwin_arm64, jobs.sign-sidecar-darwin.outputs.sha256_darwin_x64, jobs.sign-sidecar-windows.outputs.sha256) || \x27\x27 }}";
   const wc = (doc.on ?? doc[true] ?? {}).workflow_call ?? {};
   if (wc.outputs?.digests?.value !== DIGESTS_OUT)
     out.push("the digests output must be exactly " + DIGESTS_OUT + " (got " + JSON.stringify(wc.outputs?.digests?.value) + ")");
@@ -418,12 +466,13 @@ if (mode === "sidecar-digests") {
 }
 if (mode === "installer-digests") {
   // #779: the installer crosses build-windows -> sign-windows -> publish, and
-  // build-macos -> publish, each by a digest that is a job output of the job
-  // that produced the bytes, checked in the step right after the download.
+  // (#870) build-macos -> sign-macos -> publish, each by a digest that is a
+  // job output of the job that produced the bytes, checked in the step right
+  // after the download.
   const out = [];
   const isUpload = (st) => String(st.uses ?? "").toLowerCase().startsWith("actions/upload-artifact@");
   const isDownload = (st) => String(st.uses ?? "").toLowerCase().startsWith("actions/download-artifact@");
-  for (const name of ["build-windows", "sign-windows", "build-macos"]) {
+  for (const name of ["build-windows", "sign-windows", "build-macos", "sign-macos"]) {
     const job = jobs[name];
     if (!job) { out.push("no " + name + " job"); continue; }
     // None of the three needs a matrix; with one, its legs would share one
@@ -446,7 +495,8 @@ if (mode === "installer-digests") {
     const steps = jobs[job]?.steps ?? [];
     const dl = steps.findIndex(isDownload);
     const v = steps[dl + 1];
-    if (dl < 0 || !v || typeof v.run !== "string" || !/\bsha256sum\b[^\n]*\s-c\b/.test(v.run)) {
+    // shasum -a 256 on macOS, which has it and not always sha256sum (#870).
+    if (dl < 0 || !v || typeof v.run !== "string" || !/\b(?:sha256sum|shasum\s+-a\s+256)\b[^\n]*\s-c\b/.test(v.run)) {
       out.push(job + ": the step right after its download is not a sha256sum -c");
       return;
     }
@@ -459,8 +509,17 @@ if (mode === "installer-digests") {
     }
   };
   check("sign-windows", { SHA256: "needs.build-windows.outputs.sha256" });
-  // The SIGNED installer: its digest comes from the signer, not the build.
-  check("publish", { SHA_WIN32_X64: "needs.sign-windows.outputs.sha256", SHA_DARWIN: "needs.build-macos.outputs.sha256" });
+  check("sign-macos", { SHA256: "needs.build-macos.outputs.sha256" });
+  // The SIGNED installers: their digests come from the signers, not the builds.
+  check("publish", { SHA_WIN32_X64: "needs.sign-windows.outputs.sha256", SHA_DARWIN: "needs.sign-macos.outputs.sha256" });
+  // #870: build-macos uploads only the unsigned app, under a name publish
+  // never downloads; the DMG that ships is the one sign-macos uploads.
+  for (const st of jobs["build-macos"]?.steps ?? [])
+    if (isUpload(st) && String(st.with?.name ?? "") !== "unsigned-installer-darwin")
+      out.push("build-macos: uploads " + JSON.stringify(st.with?.name) + ", not only unsigned-installer-darwin");
+  const smUps = (jobs["sign-macos"]?.steps ?? []).filter(isUpload).map((st) => st.with?.name);
+  if (JSON.stringify(smUps) !== JSON.stringify(["installer-darwin"]))
+    out.push("sign-macos: uploads " + JSON.stringify(smUps) + ", not installer-darwin alone");
   if (out.length) console.log(out.join("\n"));
   process.exit(0);
 }
@@ -2258,7 +2317,27 @@ fi
 		$'  build-sidecar-linux-arm64:\n    needs: resolve\n    if: needs.resolve.outputs.build == \'true\'\n    runs-on: ${{ matrix.runner }}\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}' \
 		$'  build-sidecar-linux-arm64:\n    needs: resolve\n    if: needs.resolve.outputs.build == \'true\'\n    runs-on: ${{ matrix.runner }}\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.other.outputs.sha256 }}'
 	mutant 'publish-sidecar not waiting for one leg, so its digest reads empty (#781)' \
-		' build-sidecar-darwin-x64, sign-sidecar-windows]' ' sign-sidecar-windows]'
+		' sign-sidecar-darwin, sign-sidecar-windows]' ' sign-sidecar-windows]'
+	mutant 'publish-sidecar checking a darwin bundle against the unsigned build digest (#870)' \
+		'          SHA_DARWIN_ARM64: ${{ needs.sign-sidecar-darwin.outputs.sha256_darwin_arm64 }}' '          SHA_DARWIN_ARM64: ${{ needs.build-sidecar-darwin-arm64.outputs.sha256 }}'
+	mutant 'the digests output carrying an unsigned darwin digest (#870)' \
+		'jobs.sign-sidecar-darwin.outputs.sha256_darwin_x64, jobs.sign-sidecar-windows' 'jobs.build-sidecar-darwin-x64.outputs.sha256, jobs.sign-sidecar-windows'
+	mutant 'a darwin build leg uploading under the name that ships (#870)' \
+		'          name: unsigned-${{ matrix.npm_pkg }}' '          name: sidecar-${{ matrix.npm_pkg }}'
+	mutant 'the darwin signer with its two legs crossed over (#870)' \
+		'          SHA_DARWIN_ARM64: ${{ needs.build-sidecar-darwin-arm64.outputs.sha256 }}' '          SHA_DARWIN_ARM64: ${{ needs.build-sidecar-darwin-x64.outputs.sha256 }}'
+	mutant 'the darwin signer checking a digest no build job reported (#870)' \
+		'          SHA_DARWIN_X64: ${{ needs.build-sidecar-darwin-x64.outputs.sha256 }}' '          SHA_DARWIN_X64: ${{ env.SHA_X }}'
+	mutant 'the darwin signer digest taken before it signs (#870)' \
+		'      - name: Sign and notarize (Developer ID)' $'      - id: digest\n        run: "true"\n      - name: Sign and notarize (Developer ID)'
+	mutant 'the darwin signer uploading a file its digest step never hashed (#870)' \
+		'          path: ${{ runner.temp }}/out/darwin-x64/jarvis-app.tar.gz' '          path: ${{ runner.temp }}/work/darwin-x64/jarvis-app.tar.gz'
+	mutant 'the darwin signer downloading a third artifact (#870)' \
+		$'          name: unsigned-darwin-x64\n          path: ${{ runner.temp }}/unsigned/darwin-x64\n' $'          name: unsigned-darwin-x64\n          path: ${{ runner.temp }}/unsigned/darwin-x64\n\n      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: extra\n          path: ${{ runner.temp }}/unsigned/extra\n'
+	mutant 'the darwin signer digest check allowed to fail (#870)' \
+		$'      - name: Verify the bundles\n' $'      - name: Verify the bundles\n        continue-on-error: true\n'
+	mutant 'the darwin signer output not its digest step (#870)' \
+		'      sha256_darwin_x64: ${{ steps.digest.outputs.sha256_darwin_x64 }}' '      sha256_darwin_x64: ${{ steps.other.outputs.sha256_darwin_x64 }}'
 	mutant 'the digest taken before the bundle is packaged (#781)' \
 		'      # tar the bundle before upload' $'      - id: digest\n        run: "true"\n      # tar the bundle before upload'
 	mutant 'the signer digest dropped, so the signed binary has none (#781)' \
@@ -2627,7 +2706,7 @@ found="$(YQ_FILE="$INSTALLER_WORKFLOW" yq installer-digests)" || {
 	found=""
 }
 if [ -z "$found" ]; then
-	ok "build-windows, sign-windows and build-macos output a digest taken last, and each consumer checks the right one first"
+	ok "build-windows, sign-windows, build-macos and sign-macos output a digest taken last, and each consumer checks the right one first"
 else
 	no "installer artifact digests" "$found"
 fi
@@ -2638,14 +2717,24 @@ fi
 	mutant 'publish checking the Windows installer against the UNSIGNED build digest (#779)' \
 		'          SHA_WIN32_X64: ${{ needs.sign-windows.outputs.sha256 }}' '          SHA_WIN32_X64: ${{ needs.build-windows.outputs.sha256 }}'
 	mutant 'publish not waiting for the signer, so its digest reads empty (#779)' \
-		'    needs: [resolve, sign-windows, verify-windows, build-macos]' '    needs: [resolve, build-windows, verify-windows, build-macos]'
-	mutant 'the DMG digest dropped from build-macos (#779)' \
+		'    needs: [resolve, sign-windows, verify-windows, sign-macos]' '    needs: [resolve, build-windows, verify-windows, sign-macos]'
+	mutant 'publish checking the DMG against the unsigned app build digest (#870)' \
+		'          SHA_DARWIN: ${{ needs.sign-macos.outputs.sha256 }}' '          SHA_DARWIN: ${{ needs.build-macos.outputs.sha256 }}'
+	mutant 'the macOS signer checking the app against no build digest (#870)' \
+		'          SHA256: ${{ needs.build-macos.outputs.sha256 }}' '          SHA256: ${{ needs.resolve.outputs.version }}'
+	mutant 'build-macos uploading the DMG that ships itself (#870)' \
+		$'          name: unsigned-installer-darwin\n          path: sidecar/install-jarvis-app.tar.gz' $'          name: installer-darwin\n          path: sidecar/install-jarvis-app.tar.gz'
+	mutant 'the DMG digest taken before the DMG is signed (#870)' \
+		'      - name: Sign, notarize and staple' $'      - id: digest\n        run: "true"\n      - name: Sign, notarize and staple'
+	mutant 'a matrix on the macOS signer, sharing its digest output (#870)' \
+		$'  sign-macos:\n    needs: [resolve, build-macos]\n' $'  sign-macos:\n    strategy:\n      matrix:\n        shard: [a, b]\n    needs: [resolve, build-macos]\n'
+	mutant 'the app digest dropped from build-macos (#779, #870)' \
 		$'    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n        with:\n          # The Actions cache is writable by any run on main, and Go reuses\n          # cached modules and build output without re-verifying them (#681).\n          cache: false\n          go-version-file: sidecar/go.mod\n          cache-dependency-path: sidecar/go.sum\n\n      - name: Build universal' \
 		$'    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n        with:\n          # The Actions cache is writable by any run on main, and Go reuses\n          # cached modules and build output without re-verifying them (#681).\n          cache: false\n          go-version-file: sidecar/go.mod\n          cache-dependency-path: sidecar/go.sum\n\n      - name: Build universal'
 	mutant 'the signed digest taken before signing (#779)' \
 		'      - name: Sign installer (Cloud KMS)' $'      - id: digest\n        run: "true"\n      - name: Sign installer (Cloud KMS)'
 	mutant 'a matrix on the macOS installer build, sharing its digest output (#779 re-review)' \
-		$'    runs-on: macos-latest\n    env:\n      HAVE_APPLE_SIGNING' $'    runs-on: macos-latest\n    strategy:\n      matrix:\n        include:\n          - arch: universal\n        shard: [a, b]\n    env:\n      HAVE_APPLE_SIGNING'
+		$'    runs-on: macos-latest\n    permissions:\n      contents: read\n    outputs:\n      sha256' $'    runs-on: macos-latest\n    strategy:\n      matrix:\n        include:\n          - arch: universal\n        shard: [a, b]\n    permissions:\n      contents: read\n    outputs:\n      sha256'
 	mutant 'the signed digest step allowed to fail (#779 re-review)' \
 		$'      # The SIGNED installer\'s digest: signing changes the bytes, and publish\n      # takes the artifact only by this.\n      - name: Digest\n        id: digest\n' $'      # The SIGNED installer\'s digest: signing changes the bytes, and publish\n      # takes the artifact only by this.\n      - name: Digest\n        id: digest\n        continue-on-error: true\n'
 	mutant 'the publish check switched off on its own (#779)' \
@@ -2707,6 +2796,100 @@ else
 	inst_fixture
 	tmp="$SUM_WIN"; SUM_WIN="$SUM_DMG"; SUM_DMG="$tmp"
 	pub_refused "the two digests crossed over" "FAILED"
+fi
+
+# #870: the macOS signers take the unsigned bundles by digest, then unpack
+# only a bundle and nothing beside it. Executed verbatim, shasum included
+# (what a macOS runner has).
+MACCHECK="$(YQ_FILE="$INSTALLER_WORKFLOW" yq step sign-macos 'Verify the installer app')" || MACCHECK=""
+MACUNPACK="$(YQ_FILE="$INSTALLER_WORKFLOW" yq step sign-macos 'Unpack the installer app')" || MACUNPACK=""
+SDCHECK="$(YQ_FILE="$SIDECAR_WORKFLOW" yq step sign-sidecar-darwin 'Verify the bundles')" || SDCHECK=""
+SDUNPACK="$(YQ_FILE="$SIDECAR_WORKFLOW" yq step sign-sidecar-darwin 'Unpack the bundles')" || SDUNPACK=""
+if ! command -v shasum >/dev/null; then
+	no "shasum is on PATH, for the macOS signer digest checks (#870)"
+elif [ -z "$MACCHECK" ] || [ -z "$MACUNPACK" ] || [ -z "$SDCHECK" ] || [ -z "$SDUNPACK" ]; then
+	no "found the macOS signer digest checks and unpack steps (sign-macos, sign-sidecar-darwin) (#870)"
+else
+	inbox_suite sign-macos "$MACCHECK" unsigned install-jarvis-app.tar.gz no
+	# sign-sidecar-darwin: two bundles, each bound to its own leg digest.
+	sd="${WORK}/sd"
+	sd_fixture() {
+		rm -rf "$sd" && mkdir -p "$sd/rt/unsigned/darwin-arm64" "$sd/rt/unsigned/darwin-x64" "$sd/cwd"
+		printf 'arm64 bundle\n' >"$sd/rt/unsigned/darwin-arm64/jarvis-app.tar.gz"
+		printf 'x64 bundle\n' >"$sd/rt/unsigned/darwin-x64/jarvis-app.tar.gz"
+		SD_ARM="$(sha256sum "$sd/rt/unsigned/darwin-arm64/jarvis-app.tar.gz" | cut -d' ' -f1)"
+		SD_X64="$(sha256sum "$sd/rt/unsigned/darwin-x64/jarvis-app.tar.gz" | cut -d' ' -f1)"
+	}
+	sd_case() { verbatim_case "sign-sidecar-darwin $1" "$2" "$sd/cwd" "$SDCHECK" SHA_DARWIN_ARM64="$SD_ARM" SHA_DARWIN_X64="$SD_X64" RUNNER_TEMP="$sd/rt"; }
+	sd_fixture
+	sd_case "accepts the two bundles their legs hashed" 0
+	sd_fixture
+	printf 'swapped\n' >"$sd/rt/unsigned/darwin-x64/jarvis-app.tar.gz"
+	sd_case "refuses a bundle replaced after its leg hashed it" 1
+	sd_fixture
+	tmp="$SD_ARM"; SD_ARM="$SD_X64"; SD_X64="$tmp"
+	sd_case "refuses the two leg digests crossed over" 1
+	sd_fixture
+	SD_ARM=""
+	sd_case "refuses an empty leg digest" 1
+	sd_fixture
+	printf 'evil\n' >"$sd/rt/unsigned/darwin-arm64/entitlements.plist"
+	sd_case "refuses an artifact that carries a second file" 1
+	sd_fixture
+	rm "$sd/rt/unsigned/darwin-x64/jarvis-app.tar.gz"
+	sd_case "refuses a missing bundle" 1
+	sd_fixture
+	mv "$sd/rt/unsigned/darwin-arm64/jarvis-app.tar.gz" "$sd/real" && ln -s "$sd/real" "$sd/rt/unsigned/darwin-arm64/jarvis-app.tar.gz"
+	sd_case "refuses a link in place of a bundle" 1
+
+	# The unpack steps: Jarvis.app (or Install Jarvis.app) alone, of plain
+	# files and directories, and nothing written outside the work directory.
+	mk_tgz() { # mk_tgz <out> <dir to archive from> <member...>
+		local out="$1" from="$2"
+		shift 2
+		mkdir -p "$(dirname "$out")" && tar -C "$from" -czf "$out" "$@"
+	}
+	up="${WORK}/up"
+	up_reset() { rm -rf "$up" && mkdir -p "$up/src/Jarvis.app/Contents/MacOS" "$up/src/Install Jarvis.app/Contents/MacOS" "$up/cwd" && printf 'bin\n' >"$up/src/Jarvis.app/Contents/MacOS/jarvis" && printf 'bin\n' >"$up/src/Install Jarvis.app/Contents/MacOS/install-jarvis"; }
+	sd_tgz() { mk_tgz "$up/rt/unsigned/darwin-arm64/jarvis-app.tar.gz" "$up/src" "$@" && mk_tgz "$up/rt/unsigned/darwin-x64/jarvis-app.tar.gz" "$up/src" Jarvis.app; }
+	up_reset; sd_tgz Jarvis.app
+	verbatim_case "sign-sidecar-darwin unpacks a bundle that is Jarvis.app alone" 0 "$up/cwd" "$SDUNPACK" RUNNER_TEMP="$up/rt"
+	if [ -f "$up/rt/work/darwin-arm64/Jarvis.app/Contents/MacOS/jarvis" ] && [ -f "$up/rt/work/darwin-x64/Jarvis.app/Contents/MacOS/jarvis" ]; then ok "sign-sidecar-darwin unpacks each leg into its own work directory"; else no "sign-sidecar-darwin unpacks each leg into its own work directory"; fi
+	up_reset; printf 'x\n' >"$up/src/evil.sh"; sd_tgz Jarvis.app evil.sh
+	verbatim_case "sign-sidecar-darwin refuses a bundle archive with a member beside Jarvis.app" 1 "$up/cwd" "$SDUNPACK" RUNNER_TEMP="$up/rt"
+	if [ -e "$up/rt/work/darwin-arm64/evil.sh" ]; then no "sign-sidecar-darwin unpacks nothing it refuses"; else ok "sign-sidecar-darwin unpacks nothing it refuses"; fi
+	up_reset; ln -s /etc/passwd "$up/src/Jarvis.app/Contents/MacOS/link"; sd_tgz Jarvis.app
+	verbatim_case "sign-sidecar-darwin refuses a link inside Jarvis.app" 1 "$up/cwd" "$SDUNPACK" RUNNER_TEMP="$up/rt"
+	up_reset; mkdir -p "$up/src/Jarvis.appx" && printf 'x\n' >"$up/src/Jarvis.appx/y"; sd_tgz Jarvis.app Jarvis.appx
+	verbatim_case "sign-sidecar-darwin refuses a member whose name only starts with Jarvis.app" 1 "$up/cwd" "$SDUNPACK" RUNNER_TEMP="$up/rt"
+	up_reset; mkdir -p "$up/rt/unsigned/darwin-arm64" && tar -C "$up/src" -czf "$up/rt/unsigned/darwin-arm64/jarvis-app.tar.gz" --transform 's|^Jarvis.app/Contents/MacOS/jarvis$|Jarvis.app/../../../escaped|' Jarvis.app && mk_tgz "$up/rt/unsigned/darwin-x64/jarvis-app.tar.gz" "$up/src" Jarvis.app
+	# tar itself refuses this member too, so this pins the outcome; the
+	# name check is what "unpacks nothing it refuses" pins (#870 review).
+	verbatim_case "sign-sidecar-darwin refuses a member that climbs out with .." 1 "$up/cwd" "$SDUNPACK" RUNNER_TEMP="$up/rt"
+	if [ -e "$up/escaped" ] || [ -e "$up/rt/escaped" ]; then no "sign-sidecar-darwin writes nothing outside its work directory"; else ok "sign-sidecar-darwin writes nothing outside its work directory"; fi
+	# A hard link passes both the name check and a type check of what lands
+	# (it is a regular file), so the archive listing decides (#870 review).
+	up_reset; ln "$up/src/Jarvis.app/Contents/MacOS/jarvis" "$up/src/Jarvis.app/Contents/MacOS/hard"; sd_tgz Jarvis.app
+	verbatim_case "sign-sidecar-darwin refuses a hard link inside Jarvis.app" 1 "$up/cwd" "$SDUNPACK" RUNNER_TEMP="$up/rt"
+	if grep -qF "not a plain file or directory" "${WORK}/v.log"; then ok "sign-sidecar-darwin names the hard link as what it refuses"; else no "sign-sidecar-darwin names the hard link as what it refuses" "$(cat "${WORK}/v.log")"; fi
+	in_tgz() { mk_tgz "$up/rt/unsigned/install-jarvis-app.tar.gz" "$up/src" "$@"; }
+	up_reset; in_tgz "Install Jarvis.app"
+	verbatim_case "sign-macos unpacks an archive that is Install Jarvis.app alone" 0 "$up/cwd" "$MACUNPACK" RUNNER_TEMP="$up/rt"
+	if [ -f "$up/rt/work/Install Jarvis.app/Contents/MacOS/install-jarvis" ]; then ok "sign-macos unpacks the app into its work directory"; else no "sign-macos unpacks the app into its work directory"; fi
+	up_reset; in_tgz "Install Jarvis.app" Jarvis.app
+	verbatim_case "sign-macos refuses an archive with a second app" 1 "$up/cwd" "$MACUNPACK" RUNNER_TEMP="$up/rt"
+	up_reset; ln -s /etc "$up/src/Install Jarvis.app/Contents/etc"; in_tgz "Install Jarvis.app"
+	verbatim_case "sign-macos refuses a link inside the app" 1 "$up/cwd" "$MACUNPACK" RUNNER_TEMP="$up/rt"
+	up_reset; ln "$up/src/Install Jarvis.app/Contents/MacOS/install-jarvis" "$up/src/Install Jarvis.app/Contents/h"; in_tgz "Install Jarvis.app"
+	verbatim_case "sign-macos refuses a hard link inside the app" 1 "$up/cwd" "$MACUNPACK" RUNNER_TEMP="$up/rt"
+	# shasum takes the algorithm from the digest length in check mode, so a
+	# SHA-1 must be refused before it gets there (#870 review).
+	sha1="$(sha1sum "$up/src/Install Jarvis.app/Contents/MacOS/install-jarvis" | cut -d' ' -f1)"
+	rm -rf "${WORK}/s1" && mkdir -p "${WORK}/s1/rt/unsigned" "${WORK}/s1/cwd" && cp "$up/src/Install Jarvis.app/Contents/MacOS/install-jarvis" "${WORK}/s1/rt/unsigned/install-jarvis-app.tar.gz"
+	verbatim_case "sign-macos refuses a SHA-1 digest of the right file" 1 "${WORK}/s1/cwd" "$MACCHECK" SHA256="$sha1" RUNNER_TEMP="${WORK}/s1/rt"
+	sd_fixture
+	SD_ARM="$(sha1sum "$sd/rt/unsigned/darwin-arm64/jarvis-app.tar.gz" | cut -d' ' -f1)"
+	sd_case "refuses a SHA-1 digest of the right bundle" 1
 fi
 
 echo
@@ -2779,7 +2962,7 @@ done
 		$'          SIGN_REQUIRE_TRUSTED_CHAIN: "1"\n        run: |\n          set -euo pipefail\n          ../.github/scripts/require-signing-pin.sh' $'          SIGN_REQUIRE_TRUSTED_CHAIN: "0"\n        run: |\n          set -euo pipefail\n          ../.github/scripts/require-signing-pin.sh'
 	MUTANT_FROM="$INSTALLER_WORKFLOW"
 	mutant 'the installer publish not waiting for the signature check (#817)' \
-		'    needs: [resolve, sign-windows, verify-windows, build-macos]' '    needs: [resolve, sign-windows, build-macos]'
+		'    needs: [resolve, sign-windows, verify-windows, sign-macos]' '    needs: [resolve, sign-windows, sign-macos]'
 	mutant 'the installer signature check against the UNSIGNED build digest (#817)' \
 		'          SHA256: ${{ needs.sign-windows.outputs.sha256 }}' '          SHA256: ${{ needs.build-windows.outputs.sha256 }}'
 	mutant 'the installer signature check switched off on its own (#817)' \
@@ -2794,7 +2977,7 @@ done
 	mutant 'the installer signer allowed to fail as a whole (#817 review)' \
 		$'  sign-windows:\n    needs: [resolve, build-windows]\n' $'  sign-windows:\n    needs: [resolve, build-windows]\n    continue-on-error: true\n'
 	mutant 'the installer publish running after a failure (#817 review)' \
-		$'    needs: [resolve, sign-windows, verify-windows, build-macos]\n    if: needs.resolve.outputs.should_release == \'true\'' $'    needs: [resolve, sign-windows, verify-windows, build-macos]\n    if: always() && needs.resolve.outputs.should_release == \'true\''
+		$'    needs: [resolve, sign-windows, verify-windows, sign-macos]\n    if: needs.resolve.outputs.should_release == \'true\'' $'    needs: [resolve, sign-windows, verify-windows, sign-macos]\n    if: always() && needs.resolve.outputs.should_release == \'true\''
 	mutant 'the installer digest check made skippable (#817)' \
 		$'      - name: Verify the signed installer digest\n' $'      - name: Verify the signed installer digest\n        if: false\n'
 	mutant 'the installer signature check pinned to another chain file (#871)' \
