@@ -18,8 +18,8 @@
 .brief-root .brief-pebble-opener:focus-visible { outline: 2px solid var(--brief-focus); outline-offset: 3px; }
 .brief-root .brief-pebble-mark { position: relative; display: block; width: 30px; height: 30px; overflow: hidden; }
 /* Crop the official lockup's existing mark. No new logo path or shape. */
-.brief-root .brief-pebble-mark .brief-brand { position: absolute; width: 136.31px; height: 38.04px; max-width: none; left: -4.02px; top: -4.02px; }
-.brief-root .brief-pebble-mark .brief-brand img { width: 136.31px; height: 38.04px; max-width: none; }
+.brief-root .brief-pebble-mark .brief-brand { position: absolute; width: 140.62px; height: 38.04px; max-width: none; left: -4.02px; top: -4.02px; }
+.brief-root .brief-pebble-mark .brief-brand img { width: 140.62px; height: 38.04px; max-width: none; }
 .brief-root [data-pebble-available="false"] :is(.brief-pebble-surface,.brief-pebble-origin) { visibility: hidden; opacity: 0; pointer-events: none; }
 .brief-root [data-pebble-open="true"] .brief-pebble-origin { visibility: hidden; opacity: 0; pointer-events: none; }
 .brief-root [data-pebble-layout="single"][data-pebble-open="true"] .brief-pebble-work { visibility: hidden; opacity: 0; pointer-events: none; }
