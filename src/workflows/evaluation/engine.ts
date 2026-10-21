@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { buildEngineBundle } from '../runner/engine-runtime/build';
-import { buildAllJarvisPieces } from '../runner/engine-runtime/build-pieces';
+import { buildAllVendoredPieces } from '../runner/engine-runtime/build-pieces';
 import { EngineRuntime } from '../runner/engine-runtime/engine-runtime';
 import { EngineFlowExecutor } from '../runner/engine-runtime/engine-flow-executor';
 import { createRunFlowHandler } from '../runner/handler';
@@ -23,7 +23,7 @@ import type { EffectExecutor, EffectReceipt, Scenario, ScenarioResult } from './
 
 export async function createEvaluationEngine(environment: EvaluationEnvironment = environmentFor('w8')):
   Promise<EffectExecutor & { close(): Promise<void>; readiness: boolean; environment: EvaluationEnvironment }> {
-  await buildAllJarvisPieces();
+  await buildAllVendoredPieces();
   const bundle = await buildEngineBundle();
   let receipts: EffectReceipt[] = [], scenario: Scenario | null = null, approvals = 0;
   const sandbox = () => scenario?.sandbox ?? {};

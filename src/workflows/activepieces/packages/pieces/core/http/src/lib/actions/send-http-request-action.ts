@@ -16,8 +16,10 @@ import {
 import { assertNotNullOrUndefined, isEmpty } from '@activepieces/shared';
 import FormData from 'form-data';
 import { httpMethodDropdown } from '../common/props';
-import { HttpsProxyAgent } from 'https-proxy-agent';
 import axios from 'axios';
+// Jarvis (#961): the egress guard and the one method rule the daemon judges by.
+import { egressGuardedAxios, egressPolicyFromEnv, egressRefusalIn } from '../../../../../../../../runtime/http-egress';
+import { httpRequestIsRead } from '../../../../../../../../runtime/piece-effects';
 
 enum AuthType {
   NONE = 'NONE',
@@ -345,33 +347,28 @@ export const httpSendRequestAction = createAction({
       }
     }
 
+    // === JARVIS PATCH (#961): every connection passes the egress guard ===
+    // Each hop is resolved once, checked against this install's policy and
+    // connected to at the checked address (runtime/http-egress.ts). A proxy
+    // would pick the address itself, so the step refuses one rather than run
+    // unguarded.
     const apiRequest = async () => {
       if (use_proxy) {
-        const proxySettings = context.propsValue.proxy_settings;
-        assertNotNullOrUndefined(proxySettings, 'Proxy Settings');
-        assertNotNullOrUndefined(proxySettings['proxy_host'], 'Proxy Host');
-        assertNotNullOrUndefined(proxySettings['proxy_port'], 'Proxy Port');
-        let proxyUrl;
-
-        if (proxySettings.proxy_username && proxySettings.proxy_password) {
-          proxyUrl = `http://${proxySettings.proxy_username}:${proxySettings.proxy_password}@${proxySettings.proxy_host}:${proxySettings.proxy_port}`;
-        } else {
-          proxyUrl = `http://${proxySettings.proxy_host}:${proxySettings.proxy_port}`;
-        }
-
-        const httpsAgent = new HttpsProxyAgent(proxyUrl);
-        const axiosClient = axios.create({
-          httpsAgent,
-        });
-
-        return await httpClient.sendRequest(request, axiosClient);
+        throw new Error('Jarvis does not send HTTP steps through a proxy: the address check would not apply. Turn off "Use Proxy".');
       }
-      return await httpClient.sendRequest(request);
+      return await httpClient.sendRequest(request, egressGuardedAxios(axios, egressPolicyFromEnv(), { read: httpRequestIsRead({ method, body }) }) as never);
     };
 
     let attempts = 0;
+    // Only a read (a GET or HEAD with no body) is tried again by the step
+    // itself. Anything else may have reached the server whatever the error
+    // says, so it is sent
+    // once (Q-07); "Retry on ..." still decides whether a 5xx or 4xx fails the
+    // step or continues it.
+    const maxAttempts = httpRequestIsRead({ method, body }) ? 3 : 1;
+    // === END JARVIS PATCH ===
 
-    while (attempts < 3) {
+    while (attempts < maxAttempts) {
       try {
         const response = await apiRequest();
         return handleBinaryResponse(
@@ -381,11 +378,15 @@ export const httpSendRequestAction = createAction({
           response_is_binary
         );
       } catch (error) {
+        // Jarvis (#961): a refused address fails the step as itself; it is
+        // never retried or continued past as if the server had answered.
+        const refused = egressRefusalIn(error);
+        if (refused) throw refused;
         attempts++;
 
         switch (failureMode) {
           case 'retry_all': {
-            if (attempts < 3) continue;
+            if (attempts < maxAttempts) continue;
             throw error;
           }
           case 'retry_5xx': {
@@ -393,7 +394,7 @@ export const httpSendRequestAction = createAction({
               (error as HttpError).response.status >= 500 &&
               (error as HttpError).response.status < 600
             ) {
-              if (attempts < 3) continue;
+              if (attempts < maxAttempts) continue;
               throw error; // after 3 tries, throw
             }
             return (error as HttpError).errorMessage(); //throw error; // non 5xxx error
@@ -408,7 +409,7 @@ export const httpSendRequestAction = createAction({
             ) {
               return (error as HttpError).errorMessage();
             }
-            if (attempts < 3) continue;
+            if (attempts < maxAttempts) continue;
             throw error;
           case 'continue_none':
             throw error;

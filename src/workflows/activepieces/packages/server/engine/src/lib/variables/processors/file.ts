@@ -2,6 +2,9 @@ import { ApFile } from '@activepieces/pieces-framework'
 import { isBase64, isNil, isString } from '@activepieces/shared'
 import mime from 'mime-types'
 import { ProcessorFn } from './types'
+import axios from 'axios'
+// Jarvis (#961): a file URL is fetched through the HTTP step's egress guard.
+import { egressPolicyFromEnv, egressRefusalIn, guardedFileDownload } from '../../../../../../../../runtime/http-egress'
 
 export const fileProcessor: ProcessorFn = async (_property, urlOrBase64) => {
     if (isNil(urlOrBase64) || !isString(urlOrBase64)) {
@@ -15,6 +18,9 @@ export const fileProcessor: ProcessorFn = async (_property, urlOrBase64) => {
         return await handleUrlFile(urlOrBase64)
     }
     catch (e) {
+        // Jarvis (#961): a refused address fails the step naming the rule.
+        const refused = egressRefusalIn(e)
+        if (refused) throw refused
         console.error(e)
         return null
     }
@@ -38,14 +44,20 @@ function handleBase64File(propertyValue: string): ApFile | null {
 }
 
 async function handleUrlFile(path: string): Promise<ApFile | null> {
-    const fileResponse = await fetch(path)
+    // Jarvis (#961): resolved, checked and connected to through the egress
+    // guard, redirects included; never a plain fetch of a flow-chosen URL.
+    const fileResponse = await guardedFileDownload(axios, path, egressPolicyFromEnv())
+    const header = (name: string): string | null => {
+        const value = fileResponse.headers[name]
+        return typeof value === 'string' ? value : null
+    }
 
-    const filename = getFileName(path, fileResponse.headers.get('content-disposition'), fileResponse.headers.get('content-type') ?? undefined) ?? 'unknown'
+    const filename = getFileName(path, header('content-disposition'), header('content-type') ?? undefined) ?? 'unknown'
     const extension = filename.split('.').length > 1 ? filename.split('.').pop() : undefined
 
     return new ApFile(
         filename,
-        Buffer.from(await fileResponse.arrayBuffer()),
+        fileResponse.data,
         extension,
     )
 }

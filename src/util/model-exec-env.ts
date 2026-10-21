@@ -232,6 +232,9 @@ export const JARVIS_INTERNAL_ENV_NAMES: readonly string[] = Object.freeze([
   'JARVIS_ENGINE_MARKER', 'JARVIS_ENGINE_OWNER_PID', 'JARVIS_ENGINE_OWNER_START',
   'JARVIS_ENGINE_BUNDLE', 'JARVIS_ENGINE_STARTED_AT',
   'JARVIS_UPDATE_UNIT', 'JARVIS_UPDATE_RUN',
+  // The HTTP step's egress policy (#961), set by the daemon on the engine it
+  // spawns (spawn.ts) from whether the install is hosted.
+  'JARVIS_ENGINE_EGRESS',
   // The private capture path the win32 screenshot one-liner reads instead of
   // taking it from the command text (#746). Set only on that spawn, by the
   // daemon, on a file it just created with mkdtemp.

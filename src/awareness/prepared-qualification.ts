@@ -30,6 +30,7 @@ import type { CredentialResolver } from '../workflows/credentials/adapter.ts';
 import { digest } from '../workflows/runtime/effect-context.ts';
 import { BOUNDED_TOOL_NAMES, GATED_TOOL_NAMES, boundedToolCapability, toolEffectCapability } from '../workflows/runtime/effect-capabilities.ts';
 import { governedPieceToolDefinition, PIECE_ABOVE_LEVEL_ASKS, PIECE_ABOVE_LEVEL_FLOOR, PIECE_TOOL_CATEGORY, resolveGovernedPieceAction } from '../workflows/runtime/piece-effects.ts';
+import { IN_RUN_STEP_PIECES } from '../workflows/runtime/step-admission.ts';
 import type { WorkflowReadiness } from '../workflows/runtime/workflow-readiness.ts';
 import type { JobKind } from './opportunity-types.ts';
 
@@ -483,7 +484,8 @@ function judgeStep(node: FlowTriggerNode, services: Pick<QualificationServices, 
     if (capability.categories.some(c => DELIVERY.has(c))) judged.unreviewable.push(`Who ${toolName} reaches is not modeled`);
     return judged;
   }
-  const resolved = resolveGovernedPieceAction(piece, action);
+  if (IN_RUN_STEP_PIECES.has(piece)) return null;
+  const resolved = resolveGovernedPieceAction(piece, action, input);
   if (!resolved) return unjudged('ungoverned', `${piece} is not a governed piece; its actions run without Authority`);
   const tool = governedPieceToolDefinition(resolved);
   let category: ActionCategory;
@@ -491,6 +493,9 @@ function judgeStep(node: FlowTriggerNode, services: Pick<QualificationServices, 
   catch (error) { return unjudged('unavailable', (error as Error).message); }
   const judged = fact([category], decide(services.authority, { toolName: tool.name, toolCategory: PIECE_TOOL_CATEGORY, category,
     aboveLevelFloor: PIECE_ABOVE_LEVEL_FLOOR, aboveLevelGovernedOnly: PIECE_ABOVE_LEVEL_ASKS }));
+  // #961: the category was read from the configured input (an HTTP method);
+  // one computed when the step runs can land anywhere up to the worst case.
+  if (resolved.byInput && (resolved.categoryProps ?? []).some(prop => hasExpression(input[prop]))) judged.unreviewable.push(`${action}'s Authority decision depends on values known only at run time`);
   const service = resolved.adapter.catalogId, key = `${service}:${action}`;
   if (DELIVERY.has(category)) {
     const delivery = DELIVERIES[key];

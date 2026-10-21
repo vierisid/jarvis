@@ -86,12 +86,13 @@ Practical consequences:
   audit row and obeys Pause and Kill. The dashboard says so (#955) in the
   Library's Community section (both modes), under governed categories in the
   Authority room, and with a "Not approval-gated" badge on each community
-  action step in the flow editor. The built-in steps (HTTP request, webhook,
-  store, delay and the rest vendored with the engine) also run without
-  approval and leave no row of their own; the Authority room note says so, and
-  #961 covers governing them. Which pieces count is
-  `src/workflows/runtime/step-admission.ts`, which both the admission and
-  `/api/workflows/pieces` (`notApprovalGated`) read.
+  action step in the flow editor. Since #961 the HTTP request step is governed
+  (see `Core pieces` below). The built-in steps that act only inside the run
+  (delay, approval links, schedule; store and file helper once loaded) run
+  without approval and leave no row of their own; the Authority room note
+  says so. Which pieces count is `src/workflows/runtime/step-admission.ts`,
+  which both the admission and `/api/workflows/pieces` (`notApprovalGated`)
+  read.
 
 ### A step's tool result is NOT framed as untrusted content
 
@@ -607,6 +608,75 @@ What this does NOT do:
   built for; it does not hold against a malicious piece, which is why it covers
   only pieces that have been read and vetted.
 - It does not cover triggers. Polling triggers run on a different engine path.
+
+### Core pieces (#961)
+
+Upstream keeps its general-purpose pieces in `packages/pieces/core`. Seven are
+vendored (`scripts/sync-activepieces.ts`). Jarvis now builds and loads four of
+them (`LOADED_CORE_PIECES` in `runner/engine-runtime/build-pieces.ts`), lists
+each in the editor's catalog, and runs them from the vendored `dist/`, never
+from an npm copy of the same name:
+
+| Piece | How it is governed |
+|---|---|
+| `http` | Governed (`CORE_PIECE_ADAPTERS` in `runtime/piece-effects.ts`), by method. GET and HEAD with no body are `read_data`; a GET or HEAD that carries a body sends it (axios does) and is `send_message`. POST, PUT and PATCH are `send_message`: they carry content to an endpoint the flow names, which need not be the user's own account, so at the shipped defaults they raise a card naming the method and URL. DELETE, and any other method, is `delete_data`, denied below level 9. `parse_url` is `read_data` (pure). |
+| `approval`, `delay`, `schedule` | Act only inside the run (`IN_RUN_STEP_PIECES` in `runtime/step-admission.ts`); obey Pause and Kill, not audited one by one. |
+| `store`, `file-helper` | Classified in-run, but not loaded yet: they need `deep-equal` and `@zip.js/zip.js`, which the committed engine staging install does not carry. |
+| `webhook` | Not loaded. The editor's Webhook trigger is Jarvis's own ingress (below); the core piece's trigger would never fire through the engine, and its "return response" actions answer a synchronous webhook Jarvis does not hold open. |
+
+`core-pieces.test.ts` holds every vendored core piece to exactly one of these,
+and every action of an in-run piece to a reviewed list.
+
+HTTP request specifics:
+
+- **No resend.** A request that is not a body-less GET or HEAD is a tracked send (Q-07,
+  `tracksPieceCompletion`): an engine retry after a lost or failed request is
+  refused instead of sending again, and the vendored piece's own "Retry on ..."
+  loop tries it once. A GET is tried up to three times as before.
+- **Credentials stay off the card.** The piece takes credentials as plain
+  props. The Basic and Bearer fields, the proxy password, any header, query
+  parameter or URL `user:password@` whose name reads as a credential are shown
+  as `[redacted]` on the card and in the effect record (`redactHttpInput`).
+  Names are matched as words (`author` is content, `X-Api-Key` is not), at any
+  depth of a JSON or form body. The engine's digest of the whole input still
+  binds the approval to what runs.
+- **Egress.** Every connection is resolved once, each address checked, and the
+  connection made to the checked address (`runtime/http-egress.ts`); IP
+  literals and every redirect target are checked too, and a request that is not
+  a read never follows a redirect to another origin. A hosted install reaches
+  public addresses only. A self-hosted install also reaches private ranges
+  (10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7). Neither ever reaches
+  loopback, link-local (the cloud metadata services), the metadata addresses
+  inside private ranges (fd00:ec2::254, 100.100.100.200), Azure's WireServer
+  (168.63.129.16), or the unspecified, multicast, broadcast, documentation,
+  benchmarking, reserved and IPv6 transition ranges (NAT64 64:ff9b::/96
+  included, so an IPv6-only host behind DNS64 cannot reach IPv4 destinations), or any address of the machine Jarvis runs on (its LAN
+  address, a Docker bridge, a VM's own public address). That last check knows
+  only the interfaces Jarvis itself sees: run in a container, the Docker host's
+  own addresses are not among them. Hosted is `isHostedInstall`; the daemon passes the answer
+  in `JARVIS_ENGINE_EGRESS`, and an engine told nothing applies the hosted
+  rule. The piece's proxy option is refused, since a proxy would pick the
+  address. Measured: Bun 1.3.8 ignores a patched `dns.lookup`, a patched
+  `Socket.connect` and an `http.Agent` `lookup`, so upstream's STRICT network
+  mode would not hold here; a per-request `lookup` holds on 1.3.8 and 1.4.2.
+  A pooled keep-alive socket skips the lookup (seen on 1.4.2), so each request
+  gets a fresh agent that keeps none.
+- **File inputs.** The engine downloads a URL given as a file input (the HTTP
+  step's form-data file field, and any piece's file prop) while it resolves the
+  step's props, before Authority is asked. That download now goes through the
+  same guard (`guardedFileDownload`, patched into `processors/file.ts`). A
+  file URL that answers 4xx or 5xx now yields no file, where upstream handed
+  the error body on as the file.
+- **Not covered:** a GET's query string and headers still reach the host with
+  no card, as the owner decided GET is a read; CODE steps and community pieces
+  make their own connections outside this guard; a response's size and a
+  request's duration are bounded only by the run's own deadline.
+
+The Webhook trigger has an optional signing secret, now a field in the editor.
+With one set, `/api/webhooks/<flowId>` refuses a request unless
+`X-Jarvis-Signature` carries the hex HMAC-SHA256 of the raw body keyed with
+it. Without one, the flow id is the whole capability, and either way what a
+request sends is untrusted input.
 
 ### `CODE` steps need a per-flow opt-in
 
@@ -1168,6 +1238,7 @@ work; this policy is containment, not exactly-once execution.
 Two flavors:
 
 - **Jarvis-authored** pieces live in `src/workflows/activepieces/packages/pieces/jarvis/`. They use the same `createPiece` / `createAction` API as upstream Activepieces. They're auto-discovered: drop a directory with a valid `package.json` and the next daemon restart finds it, builds it, and surfaces it in the library.
+- **Core** pieces are upstream's general-purpose pieces, vendored under `packages/pieces/core/` and curated by hand, not by the catalog sync. The ones Jarvis loads (`LOADED_CORE_PIECES`) are built with the Jarvis pieces and always present. See `Core pieces (#961)` above.
 - **Community** pieces ship as npm packages. They install at runtime via the pieces library UI -- the installer writes `~/.jarvis/pieces/installed.json`, runs `bun install`, and asks the engine to extract metadata. They are picked from a curated catalog (Verified or Community tier).
 
 Before adding or editing any piece, walk the checklist in [`PIECE_VERIFICATION.md`](./PIECE_VERIFICATION.md). That doc covers the 8 stages from source shape to test layers.
@@ -1181,7 +1252,7 @@ For the community-pieces curation flow (how a piece reaches the Verified tier, s
 | Source | How it's wired |
 |---|---|
 | `schedule` | Routed to `CronScheduler`. Supports the standard 5-field cron plus a `@every Ns` sub-minute extension. Job ID is `flow:{flowId}`. |
-| `webhook` | Routed to `WebhookManager`. Registers `/api/webhooks/<flowId>`. GET and POST both fire; pieces that need HMAC verify inside their handler. |
+| `webhook` | Routed to `WebhookManager`. Registers `/api/webhooks/<flowId>`. GET and POST both fire. An optional `secret` (the editor's "Signing secret") makes it refuse any request whose `X-Jarvis-Signature` is not the hex HMAC-SHA256 of the raw body. |
 | Engine-managed (anything else) | The piece's trigger logic runs in the engine. `EXECUTE_TRIGGER_HOOK(ON_ENABLE)` returns either `scheduleOptions` (registered with `CronScheduler`) or `listeners` (registered with `WebhookManager`). On disable, `EXECUTE_TRIGGER_HOOK(ON_DISABLE)` runs first; persistent state clears even if the engine call fails. |
 
 Polling triggers (e.g. Gmail's watch) live in this third category: the engine schedules a cron-driven `RUN` of the trigger's polling logic and emits new items.

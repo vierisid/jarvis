@@ -8,12 +8,12 @@
  *   bun run scripts/build-pieces.ts --force  # rebuild every piece
  */
 
-import { buildAllJarvisPieces } from "../src/workflows/runner/engine-runtime/build-pieces";
+import { buildAllVendoredPieces } from "../src/workflows/runner/engine-runtime/build-pieces";
 
 const force = process.argv.includes("--force");
 
 const start = Date.now();
-const results = await buildAllJarvisPieces({ force });
+const results = await buildAllVendoredPieces({ force });
 const elapsed = Date.now() - start;
 
 if (results.length === 0) {

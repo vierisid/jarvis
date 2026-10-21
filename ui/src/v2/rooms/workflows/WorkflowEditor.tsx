@@ -3458,7 +3458,12 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
               configurable block for a piece (the inputs themselves) plus
               the sample-output editor below, so a section header would
               just be visual noise. */}
-          {schema ? (
+          {isTriggerStep && detectedTriggerKind === "webhook" ? (
+            <WebhookTriggerFields
+              secret={step.settings?.input?.["secret"]}
+              onSetSecret={(value) => (value ? onSetInput("secret", value) : onRemoveInputKey("secret"))}
+            />
+          ) : schema ? (
             <SchemaInputs
               schema={schema}
               input={(step.settings?.input ?? {}) as Record<string, unknown>}
@@ -4109,6 +4114,40 @@ function SampleDataSection({
         </Button>
       </div>
     </section>
+  );
+}
+
+/**
+ * The Webhook trigger's one setting (#961): an optional signing secret. The
+ * daemon's ingress (`runner/triggers/webhook.ts`) already refuses a request to
+ * a flow with a secret unless `X-Jarvis-Signature` carries the hex
+ * HMAC-SHA256 of the raw body; until now the editor offered no field for it.
+ */
+export const WEBHOOK_SECRET_HINT =
+  "When set, each request must carry an X-Jarvis-Signature header holding the hex HMAC-SHA256 of the raw request body, keyed with this secret; other requests are refused. Without one, anyone who has this workflow's webhook URL can start it. Either way, what a request sends reaches the workflow as untrusted input.";
+
+export function WebhookTriggerFields({ secret, onSetSecret }: {
+  secret: unknown;
+  onSetSecret: (value: string) => void;
+}): React.ReactElement {
+  const [shown, setShown] = useState(false);
+  return (
+    <>
+      <Field label="Signing secret (optional)">
+        <input
+          type={shown ? "text" : "password"}
+          autoComplete="off"
+          spellCheck={false}
+          value={typeof secret === "string" ? secret : ""}
+          onChange={(e) => onSetSecret(e.target.value)}
+          placeholder="No secret: unsigned requests are accepted"
+        />
+      </Field>
+      <Button variant="ghost" size="sm" onClick={() => setShown((v) => !v)}>
+        {shown ? "Hide secret" : "Show secret"}
+      </Button>
+      <p className="wf-props__hint">{WEBHOOK_SECRET_HINT}</p>
+    </>
   );
 }
 

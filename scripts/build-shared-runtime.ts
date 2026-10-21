@@ -43,7 +43,7 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { buildEngineBundle, ENGINE_BUILD_PATHS } from "../src/workflows/runner/engine-runtime/build";
-import { buildAllJarvisPieces } from "../src/workflows/runner/engine-runtime/build-pieces";
+import { buildAllVendoredPieces, loadedCorePieceDirs } from "../src/workflows/runner/engine-runtime/build-pieces";
 import { EngineRuntime } from "../src/workflows/runner/engine-runtime/engine-runtime";
 import { handOutDigestToFd, publishSharedEngine } from "../src/workflows/runner/engine-runtime/shared-engine-publish";
 import { SandboxApi } from "../src/workflows/sandbox-api/server";
@@ -98,9 +98,10 @@ if (existsSync(out) && readdirSync(out).length > 0) {
 const t0 = Date.now();
 const log = (m: string) => console.error(`[shared-runtime] ${m}`);
 
-// 1. Vendored jarvis pieces must be compiled before metadata extraction (they
-// normally ship prebuilt; on a source checkout this builds them).
-await buildAllJarvisPieces();
+// 1. Vendored pieces (Jarvis's own and the loaded core pieces, #961) must be
+// compiled before metadata extraction (they normally ship prebuilt; on a
+// source checkout this builds them).
+await buildAllVendoredPieces();
 
 // 2. Engine bundle -> <out>/engine/<hash>/ (the whole content-addressed dir,
 // so instances resolve it by the same hash they compute from the install).
@@ -184,6 +185,7 @@ const { result: extraction, engineDigest } = await publishSharedEngine(bundle, e
   });
   const pieceRoots = [
     resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "pieces/jarvis"),
+    ...loadedCorePieceDirs(),
     resolve(piecesDir, "node_modules/@activepieces"),
   ];
   const cacheFile = resolve(out, "piece-metadata.json");

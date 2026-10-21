@@ -1642,7 +1642,8 @@
   padding-top: var(--s-2);
 }
 .wf-props__add-row input,
-.wf-props__field input[type="text"] {
+.wf-props__field input[type="text"],
+.wf-props__field input[type="password"] {
   flex: 1;
   background: var(--paper-3);
   border: 1px solid var(--rule-soft);
@@ -1652,7 +1653,8 @@
   font-size: 0.82rem;
 }
 
-.wf-props__field input[type="text"] { width: 100%; box-sizing: border-box; }
+.wf-props__field input[type="text"],
+.wf-props__field input[type="password"] { width: 100%; box-sizing: border-box; }
 
 .wf-props__segmented {
   display: flex;

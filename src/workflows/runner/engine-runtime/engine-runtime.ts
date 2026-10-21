@@ -28,6 +28,8 @@ import { SandboxRegistry } from "../../sandbox-api/sandbox-registry";
 import { workflowLogsBase } from "../../sandbox-api/config";
 import { spawnEngine, type SpawnedEngine, type SpawnEngineOptions } from "./spawn";
 import { ENGINE_BUILD_PATHS } from "./build";
+import { loadedCorePieceDirs } from "./build-pieces";
+import type { EgressPolicy } from "../../runtime/http-egress";
 import { materializeCodeActions } from "./code-materialize";
 import {
   ackTimeoutMsForOperation,
@@ -87,6 +89,8 @@ export interface EngineRuntimeOptions {
   customPiecesPaths?: string[];
   /** CSV of dev-piece names exposed via AP_DEV_PIECES. Default: jarvis pieces. */
   devPieces?: string[];
+  /** Where the HTTP step may connect (#961). Unset: public addresses only. */
+  egressPolicy?: EgressPolicy;
   /**
    * Engine WS handshake deadline. Default 30s, overridable per-deployment
    * via `JARVIS_ENGINE_HANDSHAKE_TIMEOUT_MS`.
@@ -524,10 +528,15 @@ interface WarmEngine {
  */
 function discoverJarvisDevPieces(): string[] {
   const root = resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "pieces/jarvis");
-  if (!existsSync(root)) return [];
   const out: string[] = [];
-  for (const name of readdirSync(root).sort()) {
-    const dir = resolve(root, name);
+  // The loaded core pieces (#961) resolve from their vendored dist/ too, never
+  // from an npm copy of the same name: the vendored HTTP piece is the one that
+  // carries the egress guard.
+  const dirs = [
+    ...(existsSync(root) ? readdirSync(root).sort().map((name) => resolve(root, name)) : []),
+    ...loadedCorePieceDirs(),
+  ];
+  for (const dir of dirs) {
     let s;
     try { s = statSync(dir); } catch { continue; }
     if (!s.isDirectory()) continue;
@@ -587,6 +596,7 @@ export class EngineRuntime {
   private readonly runtime: string | undefined;
   private readonly cwd: string;
   private readonly devPieces: string[];
+  private readonly egressPolicy: EgressPolicy | undefined;
   private readonly poolEnabled: boolean;
   private readonly poolIdleTtlMs: number;
   /**
@@ -666,6 +676,7 @@ export class EngineRuntime {
     // engine raised PieceNotFoundError at extraction time. Caller can
     // still override via `opts.devPieces` for tests.
     this.devPieces = opts.devPieces ?? discoverJarvisDevPieces();
+    this.egressPolicy = opts.egressPolicy;
   }
 
   /** Expose for callers that need to resolve files into the same baseCodeDir. */
@@ -758,6 +769,7 @@ export class EngineRuntime {
       baseCodeDir: this.baseCodeDir,
       customPiecesPaths: this.customPiecesPaths,
       devPieces: this.devPieces,
+      ...(this.egressPolicy ? { egressPolicy: this.egressPolicy } : {}),
       cwd: this.cwd,
       // Keep the engine's own post-SIGTERM flush window inside the deadline
       // we SIGKILL it on, so the two can't drift apart (see spawn.ts).
