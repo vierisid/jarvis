@@ -30,6 +30,7 @@ import { confirmDialog } from "../../ui/ConfirmDialog";
 import { Button, Chip, Icon } from "../../ui";
 import { ChevronRight, RefreshCw, Download, Trash2, ExternalLink, ShieldCheck } from "lucide-react";
 import { useLibrary, type LibraryEntry, type LibraryActionState } from "./useLibrary";
+import { COMMUNITY_APPROVAL_NOTE } from "./approval-gate";
 
 export function LibraryPanel(): React.ReactElement {
   const lib = useLibrary();
@@ -158,6 +159,10 @@ export function LibraryPanel(): React.ReactElement {
               Community
               <span className="wf-lib__section-count">{community.length}</span>
             </button>
+            {/* Said in both modes, and with the list collapsed (#955): a
+                hosted user who installed nothing still builds flows from
+                these pieces, and nothing else tells them they never ask. */}
+            <p className="wf-lib__section-hint">{COMMUNITY_APPROVAL_NOTE}</p>
             {showCommunity ? (
               <>
                 {/* The opt-in notice is addressed to someone about to

@@ -60,6 +60,7 @@ import type { FlowRun, FlowRunStatus } from "./useWorkflowsData";
 import { CANCELED_EFFECT_WARNING } from "./useWorkflowsData";
 import "./WorkflowEditor.css";
 import { modKey } from "../../ui/platform";
+import { NOT_APPROVAL_GATED_LABEL, NOT_APPROVAL_GATED_TOOLTIP, stepNotApprovalGated } from "./approval-gate";
 
 // Horizontal flow layout. Each step in the flattened chain advances the
 // cursor rightward by NODE_X_STEP; nested branches (loop body / router
@@ -3046,7 +3047,7 @@ function buildGraph(
   return { nodes, edges };
 }
 
-function StepNode({ data }: NodeProps): React.ReactElement {
+export function StepNode({ data }: NodeProps): React.ReactElement {
   const { workspace } = useContext(WorkflowEditorEnvironment);
   const {
     step,
@@ -3074,6 +3075,7 @@ function StepNode({ data }: NodeProps): React.ReactElement {
         : piece.actions.find((a) => a.name === subAction)?.displayName) ?? subAction
     : subAction;
   const isUnconfigured = step.type === "PIECE" && (!step.settings?.pieceName || !step.settings.actionName);
+  const notApprovalGated = stepNotApprovalGated(step, catalog);
 
   const routerKind = step.settings?.routerKind;
   let kindLabel: string;
@@ -3214,6 +3216,15 @@ function StepNode({ data }: NodeProps): React.ReactElement {
           />
         ) : null}
       </div>
+      {/* Its own row, so the step's name keeps the head row (#955). The
+          explanation is part of the note's text for screen readers, not only
+          the mouse-only title. */}
+      {notApprovalGated ? (
+        <div className="wf-node__ungated" role="note" title={NOT_APPROVAL_GATED_TOOLTIP}>
+          <Chip tone="warn" dot={false}>{NOT_APPROVAL_GATED_LABEL}</Chip>
+          <span className="wf-node__ungated-desc">{NOT_APPROVAL_GATED_TOOLTIP}</span>
+        </div>
+      ) : null}
       <div className="wf-node__body">
         {isLoop ? (
           <span className="wf-node__piece">over <code>{String(step.settings?.items ?? "?")}</code></span>

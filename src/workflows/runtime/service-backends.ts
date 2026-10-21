@@ -57,6 +57,7 @@ import { defangPieceProjection } from './piece-effect-receipt';
 import { getFlowInProject } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
 import { digest, resolveEffectContext, type WorkflowEffectContext } from './effect-context';
+import { isCommunityPiece } from './step-admission';
 import { CODE_STEP_PIECE, type PieceAuthorizeRequest, type PieceAuthorizeResponse } from './piece-effect-guard';
 import { holdStep, KILLED_REASON, PAUSED_REASON } from './emergency-hold';
 import { getFlowRun } from '../db/repos/flow-run';
@@ -134,15 +135,6 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
    */
   buildJarvisSystemPrompt?: (userMessage: string) => SystemPromptParts;
 }
-
-/** Jarvis's own pieces: each of their effects passes the boundary and is audited there. */
-const JARVIS_PIECE_PREFIX = '@jarvispieces/';
-
-/** The built-in steps vendored with the engine (`scripts/sync-activepieces.ts`); never audited as steps. */
-const BUILT_IN_STEP_PIECES: ReadonlySet<string> = new Set([
-  '@activepieces/piece-approval', '@activepieces/piece-delay', '@activepieces/piece-file-helper',
-  '@activepieces/piece-http', '@activepieces/piece-schedule', '@activepieces/piece-store', '@activepieces/piece-webhook',
-]);
 
 export function buildSandboxServiceBackends(
   opts: BuildServiceBackendsOptions,
@@ -812,7 +804,8 @@ export function buildSandboxServiceBackends(
       const hold = holdStep({ runId: run.id, projectId: run.projectId, stepName: ctx.stepName ?? 'unknown step' });
       return { governed: false, dispatch: 'held', approval: { effectId: '', approvalId: '', waitpointId: hold.id, hold: PAUSED_REASON } };
     }
-    if (!req.piece.startsWith(JARVIS_PIECE_PREFIX) && !BUILT_IN_STEP_PIECES.has(req.piece)) {
+    // `isCommunityPiece` is also what the editor's "Not approval-gated" badge reads (#955).
+    if (req.piece === CODE_STEP_PIECE || isCommunityPiece(req.piece)) {
       try {
         opts.auditTrail?.log({ agent_id: `workflow:${run.id}`, agent_name: `Workflow ${run.id} / ${stepName}`,
           tool_name: req.piece === CODE_STEP_PIECE ? 'code step' : `community piece ${boundedReceiptText(`${req.piece}/${req.action}`, 160)}`,

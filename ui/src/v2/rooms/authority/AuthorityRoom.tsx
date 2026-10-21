@@ -35,6 +35,7 @@ import {
 import "./AuthorityRoom.css";
 import { ApprovalWhy } from "../../thread/ApprovalWhy";
 import { isRoomTab, type RoomTab } from "../../../../../src/daemon/room-tabs";
+import { AUTHORITY_SCOPE_NOTE } from "../workflows/approval-gate";
 
 type TabId = RoomTab<"authority">;
 
@@ -734,8 +735,9 @@ function GrantsTab({
           <span className="v2-auth__section-count">{config.governed_categories.length}</span>
         </div>
         <p className="v2-auth__section-desc">
-          These categories always require approval, regardless of authority level.
+          These categories never run without your approval. Above the authority level, an action may be refused instead.
         </p>
+        <p className="v2-auth__section-desc">{AUTHORITY_SCOPE_NOTE}</p>
         <div className="v2-auth__chip-row">
           {ACTION_CATEGORIES.map((cat) => {
             const active = config.governed_categories.includes(cat);

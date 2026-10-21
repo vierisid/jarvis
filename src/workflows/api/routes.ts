@@ -105,6 +105,7 @@ import type { CredentialResolver } from "../credentials/adapter";
 import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers/manager";
 import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
 import type { PieceLookup } from "../runtime/piece-catalog";
+import { isCommunityPiece } from "../runtime/step-admission";
 import { CATALOG, findCatalogEntry } from "../pieces-library/catalog";
 import { piecesManagedByHost } from "../pieces-library/shared";
 import {
@@ -908,6 +909,10 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             // renders a connection picker so the user picks an
             // existing connection instead of re-entering credentials.
             ...(p.auth ? { auth: p.auth } : {}),
+            // #955: a community piece's actions run without approval, and the
+            // editor badges its steps. The daemon decides, so the badge and
+            // the gate in `pieceAuthorize` cannot disagree.
+            ...(isCommunityPiece(p.name) ? { notApprovalGated: true } : {}),
             actions: Object.values(p.actions).map((a) => ({
               name: a.name,
               displayName: a.displayName,

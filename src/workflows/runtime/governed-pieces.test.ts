@@ -34,6 +34,7 @@ import { digest } from './effect-context';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN, wrapUntrusted } from '../../roles/untrusted';
 import { authorizePieceDispatch, CODE_STEP_PIECE, pieceInputDigest } from './piece-effect-guard';
 import { getWaitpoint } from '../db/repos/waitpoint';
+import { isCommunityPiece } from './step-admission';
 import { WebSocketService } from '../../daemon/ws-service';
 import { SandboxApi } from '../sandbox-api/server';
 import { EngineTokenSigner } from '../sandbox-api/engine-token';
@@ -1421,5 +1422,25 @@ describe('Q-07 after #953: no Gmail send is replayed by an engine retry', () => 
     expect(await f.authorize(input)).toEqual({ governed: true, dispatch: 'authorized' });
     // The piece parks itself after sending; on resume the engine re-runs the step.
     expect(await f.authorize(input)).toEqual({ governed: true, dispatch: 'authorized' });
+  });
+});
+
+describe('#955: the editor badge and the admission agree on which steps skip approval', () => {
+  test('a step is audited as a community piece exactly when isCommunityPiece says so', async () => {
+    const pieces = [COMMUNITY_PIECE, '@activepieces/piece-mcp', GMAIL, '@jarvispieces/piece-jarvis-notify',
+      '@activepieces/piece-http', '@activepieces/piece-webhook', '@activepieces/piece-delay'];
+    for (const piece of pieces) {
+      // The admission reads the request's piece, not the step's settings; a
+      // governed piece is checked against the pinned graph, so it gets its own.
+      const f = fixture(piece === GMAIL ? GMAIL : COMMUNITY_PIECE, 'send_email');
+      const reply = await f.backends.pieceAuthorize!({ piece, action: 'send_email', input: {}, inputDigest: await pieceInputDigest({}) }, f.context);
+      // Every ungoverned piece was let through by the admission; the verified one went to Authority.
+      expect(reply).toMatchObject({ governed: piece === GMAIL });
+      const audited = (f.options.auditTrail as AuditTrail).query({ limit: 5 })
+        .some((row) => row.tool_name === `community piece ${piece}/send_email`);
+      expect(`${piece}: ${audited}`).toBe(`${piece}: ${isCommunityPiece(piece)}`);
+      closeWorkflowDb(); initWorkflowDb(':memory:');
+    }
+    expect(pieces.filter(isCommunityPiece)).toEqual([COMMUNITY_PIECE, '@activepieces/piece-mcp']);
   });
 });

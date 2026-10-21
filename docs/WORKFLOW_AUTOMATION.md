@@ -82,6 +82,16 @@ Practical consequences:
 - Community pieces are unaffected by the gate: they run in the engine and never
   reach the daemon's tool surface. See `Governed pieces` below for the verified
   ten, and `src/workflows/pieces-library/README.md` for the curation path.
+  Their actions run without approval, but not unseen: each dispatch leaves an
+  audit row and obeys Pause and Kill. The dashboard says so (#955) in the
+  Library's Community section (both modes), under governed categories in the
+  Authority room, and with a "Not approval-gated" badge on each community
+  action step in the flow editor. The built-in steps (HTTP request, webhook,
+  store, delay and the rest vendored with the engine) also run without
+  approval and leave no row of their own; the Authority room note says so, and
+  #961 covers governing them. Which pieces count is
+  `src/workflows/runtime/step-admission.ts`, which both the admission and
+  `/api/workflows/pieces` (`notApprovalGated`) read.
 
 ### A step's tool result is NOT framed as untrusted content
 
