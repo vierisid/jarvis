@@ -510,7 +510,11 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
   // named after NODE_ENV) from the cwd into the engine's environment, whatever
   // `env` says and whatever the config is (measured, 1.3.8, 1.4.2, and 1.4.2
   // on Windows): a planted one sets any variable engineEnv does not, such as
-  // HTTPS_PROXY for every piece's traffic or AP_SSRF_ALLOW_LIST.
+  // HTTPS_PROXY for every piece's traffic or AP_SSRF_ALLOW_LIST. Bun before
+  // 1.3.3 accepts the flag and STILL loads the file (measured: 1.2.0, 1.3.0,
+  // 1.3.2 load it; 1.3.3 on do not), and package.json allows >=1.0.0, so
+  // `jarvis doctor` warns below that (MIN_BUN_FOR_NO_ENV_FILE). The empty
+  // config works on all of them.
   //
   // `opts.runtime` (tests only, with /bin/true) gets none of these: they are
   // Bun flags, and that binary is not Bun.

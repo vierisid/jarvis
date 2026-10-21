@@ -17,10 +17,48 @@ const JARVIS_DIR = join(homedir(), '.jarvis');
 const CONFIG_PATH = join(JARVIS_DIR, 'config.yaml');
 const PACKAGE_ROOT = join(import.meta.dir, '..', '..');
 
-interface CheckResult {
+export interface CheckResult {
   name: string;
   status: 'ok' | 'warn' | 'fail' | 'skip';
   message: string;
+}
+
+/**
+ * The first Bun that honours `--no-env-file`, which every workflow engine and
+ * CODE step is started with (#863). Measured on Linux with a `.env` in the
+ * cwd: 1.2.0, 1.3.0 and 1.3.2 accept the flag and still load the file; 1.3.3,
+ * 1.3.4, 1.3.5 and 1.3.8 do not load it. `--config=<empty>` works on all of
+ * them. package.json `engines` stays at >=1.0.0; this is a warning, not a
+ * refusal.
+ */
+export const MIN_BUN_FOR_NO_ENV_FILE = '1.3.3';
+
+/** Numeric x.y.z comparison; a pre-release or build suffix is ignored. */
+function versionAtLeast(version: string, min: string): boolean {
+  const parse = (v: string) => v.split(/[-+]/)[0]!.split('.').map((n) => Number.parseInt(n, 10) || 0);
+  const a = parse(version);
+  const b = parse(min);
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+  }
+  return true;
+}
+
+/** The Bun Runtime check, for a given `Bun.version`. */
+export function bunRuntimeCheck(bunVersion: string): CheckResult {
+  if (!versionAtLeast(bunVersion, '1.0.0')) {
+    return { name: 'Bun Runtime', status: 'warn', message: `v${bunVersion} (>= 1.0.0 recommended)` };
+  }
+  if (!versionAtLeast(bunVersion, MIN_BUN_FOR_NO_ENV_FILE)) {
+    return {
+      name: 'Bun Runtime',
+      status: 'warn',
+      message:
+        `v${bunVersion}: workflow engines and CODE steps load a .env from their working directory on Bun ` +
+        `before ${MIN_BUN_FOR_NO_ENV_FILE} (--no-env-file is ignored). Upgrade Bun (bun upgrade).`,
+    };
+  }
+  return { name: 'Bun Runtime', status: 'ok', message: `v${bunVersion}` };
 }
 
 export async function runDoctor(): Promise<void> {
@@ -45,13 +83,7 @@ export async function runDoctor(): Promise<void> {
 
   // ── Check 1: Bun Version ──────────────────────────────────────────
 
-  const bunVersion = Bun.version;
-  const [major] = bunVersion.split('.').map(Number);
-  if (major! >= 1) {
-    results.push({ name: 'Bun Runtime', status: 'ok', message: `v${bunVersion}` });
-  } else {
-    results.push({ name: 'Bun Runtime', status: 'warn', message: `v${bunVersion} (>= 1.0.0 recommended)` });
-  }
+  results.push(bunRuntimeCheck(Bun.version));
 
   // ── Check 2: Install Method ───────────────────────────────────────
 
