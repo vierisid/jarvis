@@ -340,6 +340,32 @@ export function substituteAboveLevel(
   };
 }
 
+/** What is governed for a principal: the shared list plus its profile's additions (`applyProfile`). */
+export function governedCategoriesFor(
+  shared: readonly ActionCategory[],
+  profile: { governed_categories?: readonly ActionCategory[] } | null | undefined,
+): ReadonlySet<ActionCategory> {
+  return new Set<ActionCategory>([...shared, ...(profile?.governed_categories ?? [])]);
+}
+
+/**
+ * Whether a level shortfall may be substituted when the substitution is
+ * limited to governed categories (#953, the verified piece route): every
+ * category the call is denied by level must be in `only` AND governed for the
+ * principal. No limit (`only` absent) leaves the decision to the floor alone,
+ * as for a gated tool. The effect boundary and the prepared-proposal
+ * prediction both call this with `governedCategoriesFor` the principal they
+ * judge as, so they cannot disagree.
+ */
+export function aboveLevelMayAsk(
+  decisions: readonly AuthorityDecision[],
+  only: readonly ActionCategory[] | undefined,
+  governed: ReadonlySet<ActionCategory>,
+): boolean {
+  if (!only) return true;
+  return decisions.every((d) => !d.deniedByLevel || (only.includes(d.actionCategory) && governed.has(d.actionCategory)));
+}
+
 /**
  * A call's arguments with anything the tool would resolve later from ambient
  * state pinned now (ToolDefinition.freezeArguments), so the gate, the card and

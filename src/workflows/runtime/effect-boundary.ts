@@ -19,7 +19,7 @@ import { getFlowRun } from '../db/repos/flow-run';
 import { createWaitpoint } from '../db/repos/waitpoint';
 import { claimWorkflowEffect, getWorkflowEffect, saveWorkflowEffect, type WorkflowEffect } from '../db/repos/workflow-effect';
 import { canonicalJson, digest, resolveEffectContext, type WorkflowApprovalPending, type WorkflowEffectContext } from './effect-context';
-import { substituteAboveLevel } from '../../authority/tool-action-map';
+import { aboveLevelMayAsk, governedCategoriesFor, substituteAboveLevel } from '../../authority/tool-action-map';
 import { boundedApprovalLabel } from '../../authority/approval-delivery';
 import { maxWaitingSpawnCards } from '../../agents/lifecycle-gate';
 
@@ -88,6 +88,14 @@ export interface EffectInvocation {
    * to a shell rc at the default level, #522). Absent: a shortfall denies.
    */
   aboveLevelFloor?: ActionCategory;
+  /**
+   * Narrows `aboveLevelFloor` (#953): the substitution is made only when every
+   * category denied by level is one of these AND governed for the principal
+   * (the shared governed list or its profile's), checked afresh on every
+   * recheck. Anything else denied by level stays denied. Absent: the floor
+   * alone decides, as for a gated tool.
+   */
+  aboveLevelGovernedOnly?: readonly ActionCategory[];
 }
 export type EffectReply = { result: unknown; outcome?: ActionOutcome; approval?: never } | { approval: WorkflowApprovalPending; result?: never };
 
@@ -179,6 +187,36 @@ export const GOVERNANCE_REFUSALS: ReadonlySet<string> = new Set(['EMERGENCY_STOP
 export const workflowEffectId = (runId: string, stepName: string, executionPath: Array<[string, number]>, route: string) =>
   'wfe_' + digest([runId, stepName, executionPath, route]);
 
+/**
+ * The Authority decision for one effect, as the principal it runs as: every
+ * category folded, then the above-level substitution. The emergency, run and
+ * cancellation fences, and the ratchets a caller adds, are `policy()`'s.
+ */
+function judgeEffect(authority: AuthorityEngine, input: EffectInvocation, runId: string) {
+  const who = input.principal ?? { agentId: `workflow:${runId}`, agentRoleId: 'workflow-default', agentAuthorityLevel: 0, profile: null };
+  // Fold first, then ratchet. Every category the effect reaches is judged
+  // as the SAME principal -- its level and its merged profile apply to
+  // each one, not just to the nominal category -- and `combineDecisions`
+  // folds them the way the chat gate does. The fold can only tighten: it
+  // returns a denial if any category denies, else an approval if any
+  // requires one, so it can never clear an approval another category
+  // asked for. The caller's ratchet then applies to that folded result,
+  // so a gate that already required approval cannot be talked out of it
+  // by a looser recomputation here, and the fold cannot bypass it.
+  const categories = input.categories?.length ? input.categories : [input.category];
+  const check = (actionCategory: ActionCategory) => authority.checkAuthority({
+    agentId: who.agentId, agentRoleId: who.agentRoleId, agentAuthorityLevel: who.agentAuthorityLevel,
+    toolName: input.toolName, toolCategory: input.toolCategory,
+    actionCategory, temporaryGrants: new Map(), profile: who.profile ?? null });
+  const decisions = categories.map(check);
+  const folded = combineDecisions(decisions);
+  const governed = governedCategoriesFor(authority.getConfig().governed_categories, who.profile);
+  const decision = input.aboveLevelFloor && aboveLevelMayAsk(decisions, input.aboveLevelGovernedOnly, governed)
+    ? substituteAboveLevel(folded, { confirm: 'above_level', floorCategory: input.aboveLevelFloor }, check)
+    : folded;
+  return decision;
+}
+
 /** The daemon owns policy, frozen arguments, approvals and the dispatch fence. */
 export class WorkflowEffectBoundary {
   constructor(private readonly deps: WorkflowAuthorityDependencies) {}
@@ -256,9 +294,39 @@ export class WorkflowEffectBoundary {
       // retry, and the piece then calls the service again: recheck first. A
       // refusal is kept beside the result, which stays what it was.
       if (input.revalidateOnReplay) {
-        try { input.revalidate?.(effect); } catch (error) {
-          if (error instanceof ActionOutcomeError) { effect.replayRefusal = { outcome: error.outcome, at: Date.now() }; saveWorkflowEffect(effect); }
-          throw error;
+        try {
+          input.revalidate?.(effect);
+          // Authority is asked again too: an override, a context rule or an
+          // un-governed category added since the first dispatch stops the
+          // retry, as the checkpoint would have stopped the first one. Not for
+          // a tracked send whose receipt is recorded: its replay hands back
+          // the stored result and calls nothing.
+          if (input.route === 'piece-dispatch') return { result: effect.result, ...(effect.outcome ? { outcome: effect.outcome } : {}) };
+          const current = judgeEffect(authority, input, effect.runId);
+          if (!current.allowed) throw new PolicyRefusal('AUTHORITY_DENIED', `Authority denied ${input.toolName}: ${current.reason}`);
+          if ((current.requiresApproval || input.confirmation || input.approvalRequired) && !effect.approvalId) {
+            throw new PolicyRefusal('APPROVAL_REQUIRED', 'Workflow Authority now requires approval; effect was not dispatched');
+          }
+          // Granted is `approved`, or `executed` with a committed outcome once
+          // the first dispatch recorded its receipt (`executionState`).
+          const approval = effect.approvalId ? approvals?.getRequest(effect.approvalId) : null;
+          const granted = approval?.status === 'approved'
+            || (approval?.status === 'executed' && (approval.execution_outcome ?? 'committed') === 'committed');
+          if (effect.approvalId && !granted) {
+            throw new PolicyRefusal('APPROVAL_WITHDRAWN', 'Workflow approval is no longer approved; dispatch blocked');
+          }
+        } catch (error) {
+          const failure = error instanceof PolicyRefusal ? new ActionOutcomeError(refused(error)) : error;
+          if (failure instanceof ActionOutcomeError) { effect.replayRefusal = { outcome: failure.outcome, at: Date.now() }; saveWorkflowEffect(effect); }
+          // A refused retry is a governance decision, so the trail shows it
+          // like every other refusal, not only the effect record.
+          if (error instanceof PolicyRefusal) {
+            audit.log({ agent_id: `workflow:${effect.runId}`,
+              agent_name: `Workflow ${boundedApprovalLabel(resolved.version.displayName, WORKFLOW_NAME_LABEL_MAX_CHARS)} / ${boundedApprovalLabel(effect.stepName, WORKFLOW_STEP_LABEL_MAX_CHARS)} / ${effect.id}`,
+              tool_name: effect.toolName, action_category: input.category, authority_decision: 'denied',
+              approval_id: effect.approvalId, executed: false });
+          }
+          throw failure;
         }
       }
       return { result: effect.result, ...(effect.outcome ? { outcome: effect.outcome } : {}) };
@@ -317,25 +385,7 @@ export class WorkflowEffectBoundary {
       // rather than reading job rows here, so the boundary and the daemon's
       // other dispatch points can never disagree about whether a run is dead.
       assertRunNotCanceled(record.runId);
-      const who = input.principal ?? { agentId: `workflow:${record.runId}`, agentRoleId: 'workflow-default', agentAuthorityLevel: 0, profile: null };
-      // Fold first, then ratchet. Every category the effect reaches is judged
-      // as the SAME principal -- its level and its merged profile apply to
-      // each one, not just to the nominal category -- and `combineDecisions`
-      // folds them the way the chat gate does. The fold can only tighten: it
-      // returns a denial if any category denies, else an approval if any
-      // requires one, so it can never clear an approval another category
-      // asked for. The caller's ratchet then applies to that folded result,
-      // so a gate that already required approval cannot be talked out of it
-      // by a looser recomputation here, and the fold cannot bypass it.
-      const categories = input.categories?.length ? input.categories : [input.category];
-      const check = (actionCategory: ActionCategory) => authority.checkAuthority({
-        agentId: who.agentId, agentRoleId: who.agentRoleId, agentAuthorityLevel: who.agentAuthorityLevel,
-        toolName: input.toolName, toolCategory: input.toolCategory,
-        actionCategory, temporaryGrants: new Map(), profile: who.profile ?? null });
-      const folded = combineDecisions(categories.map(check));
-      const decision = input.aboveLevelFloor
-        ? substituteAboveLevel(folded, { confirm: 'above_level', floorCategory: input.aboveLevelFloor }, check)
-        : folded;
+      const decision = judgeEffect(authority, input, record.runId);
       if (!decision.allowed) throw new PolicyRefusal('AUTHORITY_DENIED', `Authority denied ${input.toolName}: ${decision.reason}`);
       // A capability whose UI effect cannot be described is reviewed whatever
       // the category check concluded; the card carries the uncertainty.

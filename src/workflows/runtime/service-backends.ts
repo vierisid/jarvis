@@ -49,7 +49,7 @@ import { resolveToolGate, severityRank } from '../../authority/tool-action-map';
 import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, surfaceBoundRefusal, toolEffectCapability } from './effect-capabilities';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceActionName, reprojectPieceInput,
-  resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
+  resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion, PIECE_ABOVE_LEVEL_ASKS, PIECE_ABOVE_LEVEL_FLOOR } from './piece-effects';
 import { assertRecipientFactsCurrent, recipientAddresses, recipientFactPins, type FactPin } from './fact-bindings';
 import { captureProviderBinding } from './provider-reconciliation';
 import { recordPieceCompletion } from './piece-completion';
@@ -896,7 +896,21 @@ export function buildSandboxServiceBackends(
     const tracked = tracksPieceCompletion(req.piece, req.action);
     const route = tracked ? 'piece-dispatch' : 'piece';
     if (tracked && !req.inputDigest) throw new Error('A tracked send requires the complete input digest');
-    if (tracked && getWorkflowEffect(workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], 'piece'))) {
+    const legacy = tracked ? getWorkflowEffect(workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], 'piece')) : null;
+    if (legacy?.status === 'pending' && !legacy.outcome) {
+      // Recorded under the untracked route before an upgrade tracked this
+      // send, and never dispatched. It cannot move to the tracked identity,
+      // so it ends here, typed, and its card cannot be approved for nothing.
+      const message = 'This send was recorded before an upgrade changed how sends are tracked and was not sent; start a new run';
+      legacy.status = 'blocked'; legacy.decision = 'denied'; legacy.error = message; legacy.reason = message;
+      legacy.outcome = { status: 'blocked', code: 'WORKFLOW_UPGRADED', message, effect: 'not_started' };
+      legacy.finishedAt = Date.now(); saveWorkflowEffect(legacy);
+      const card = legacy.approvalId ? opts.approvalManager?.getRequest(legacy.approvalId) : null;
+      if (card?.status === 'pending') opts.approvalManager?.deny(card.id, 'workflow-upgrade');
+      else closeEffectApproval(opts.approvalManager, legacy, 'blocked');
+      throw new ActionOutcomeError(legacy.outcome);
+    }
+    if (legacy) {
       throw new Error('Legacy piece authorization may already have dispatched; inspect it and start a new intentional run');
     }
     const run = getFlowRun(ctx.runId);
@@ -918,6 +932,10 @@ export function buildSandboxServiceBackends(
       stepName: ctx.stepName!, piece: req.piece, credentialDigest: req.credentialDigest }) : undefined;
     const reply = await effects.invoke({ context: ctx, piece: req.piece, action: req.action,
       externalDispatch: tracked, providerBinding,
+      // #953: a governed send or payment over the workflow's level asks
+      // instead of failing the step, as a gated tool does; deletes and
+      // settings changes stay denied by level.
+      aboveLevelFloor: PIECE_ABOVE_LEVEL_FLOOR, aboveLevelGovernedOnly: PIECE_ABOVE_LEVEL_ASKS,
       route, toolName: tool.name, category: capability.category, toolCategory: tool.category,
       // Digested over the projection AND the engine's digest of the whole
       // resolved input, so a change to any prop -- including the part of a

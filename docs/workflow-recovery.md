@@ -6,9 +6,13 @@ reuse an approval, or declare a business outcome achieved.
 
 ## Execution and receipt boundary
 
-Four actions use a completion protocol in addition to the existing Authority
-boundary: Gmail `send_email` / `gmail_send_email`, and Slack
-`send_channel_message` / `slack_post_message`. Identity is the existing tuple
+These actions use a completion protocol in addition to the existing Authority
+boundary: every Gmail send that returns once sent (`send_email`,
+`gmail_send_email`, `reply_to_email`, `gmail_reply_to_thread`,
+`gmail_send_draft`, `gmail_forward_message`; the last four since #953 made Gmail
+sends reachable at the default level), and Slack `send_channel_message` /
+`slack_post_message`. Gmail `request_approval_in_mail` is not tracked: it sends
+and then parks the flow, and its step re-runs on resume to read the decision. Identity is the existing tuple
 (run, step, loop path, route), with route `piece-dispatch`. The whole input digest
 and pinned graph bind its approval. A connection-token digest also binds these
 approvals to the OAuth credential resolved by the engine; the token is not saved.
@@ -28,7 +32,11 @@ because they can contain credentials. Slack returns its API result. Receipts are
 bounded to 256 KiB; an oversized/missing receipt leaves dispatch uncertain.
 
 An existing legacy `piece` authorization for any of these send actions fails
-closed after upgrade. It may already have sent; it must not acquire a new
+closed after upgrade. One that never dispatched (still waiting on its card, or
+approved but not yet sent) ends as `blocked` with `WORKFLOW_UPGRADED`, and its
+card is denied or, if already approved, closed with a `blocked` receipt: start a
+new run for it. Any other legacy record may already have sent and is refused as
+such. It may already have sent; it must not acquire a new
 `piece-dispatch` identity. New engines also refuse a daemon without the completion
 protocol. Rebuild the engine with the daemon; mixed/old engines are not certified.
 
