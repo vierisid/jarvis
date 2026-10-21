@@ -735,7 +735,7 @@ function GrantsTab({
           <span className="v2-auth__section-count">{config.governed_categories.length}</span>
         </div>
         <p className="v2-auth__section-desc">
-          These categories never run without your approval. Above the authority level, an action may be refused instead.
+          These categories run only with your approval, unless an override or rule allows them. Above the authority level, an action may be refused instead.
         </p>
         <p className="v2-auth__section-desc">{AUTHORITY_SCOPE_NOTE}</p>
         <div className="v2-auth__chip-row">
