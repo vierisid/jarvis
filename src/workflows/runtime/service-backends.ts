@@ -903,6 +903,9 @@ export function buildSandboxServiceBackends(
       else closeEffectApproval(opts.approvalManager, legacy, 'blocked');
       throw new ActionOutcomeError(legacy.outcome);
     }
+    // Already ended above (or otherwise settled without sending): repeat its
+    // typed outcome instead of claiming it may have dispatched.
+    if (legacy?.outcome && legacy.outcome.status !== 'succeeded' && legacy.outcome.effect === 'not_started') throw new ActionOutcomeError(legacy.outcome);
     if (legacy) {
       throw new Error('Legacy piece authorization may already have dispatched; inspect it and start a new intentional run');
     }

@@ -1412,6 +1412,8 @@ describe('Q-07 after #953: no Gmail send is replayed by an engine retry', () => 
         outcome: { code: 'WORKFLOW_UPGRADED', effect: 'not_started' } });
       expect(f.approvals.getRequest(approvalId)).toMatchObject(decided
         ? { status: 'executed', execution_outcome: 'blocked' } : { status: 'denied' });
+      // An engine retry of the same step repeats the typed outcome; it does not claim a send may have happened.
+      await expect(f.authorize(REPLY_INPUT)).rejects.toThrow(/before an upgrade changed how sends are tracked/);
     });
   }
 
