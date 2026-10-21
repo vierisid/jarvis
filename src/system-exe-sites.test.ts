@@ -16,9 +16,12 @@
  *     command string starting with it (`execFileSync('xclip', ...)`,
  *     `execSync('xclip -o')`);
  *   - a Bun `$` template starting with the name or with `which <name>`;
- *   - an argv `[sh|bash|dash|zsh, -c|-lc, <command line>]` where any command
- *     in the line (split at `|`, `;`, `&`, `&&`, `||`, brackets and `$(`)
- *     starts with the name, up to its first `${...}`;
+ *   - an argv `[sh|bash|dash|zsh, -c, <command line>]` (also `-lc`, `-ec`
+ *     and the like, after `env NAME=value`, or child_process's split
+ *     `spawn('sh', ['-c', line])`) where any command in the line, split at
+ *     `|`, `;`, `&`, `&&`, `||`, `(`, `)`, `{`, `}` and `$(`, runs the name,
+ *     past `env`, `exec`, `NAME=value`, `if`/`then`/`do` and the like, up to
+ *     the line's first `${...}`;
  *   - the name held as a value for a later launch: the fallback of `??`,
  *     `||`, `??=` or `||=`, a parameter's default, a returned value or arrow
  *     body, a variable's initializer, a branch of `?:`, a `shell:`-like
@@ -27,10 +30,11 @@
  *     Brackets, `as`, `satisfies`, `<T>` and `!` around it are seen through.
  * `cmd` (also a key in a chord), `import` and `clip` (also words) are caught
  * in an argv array only when it is a launcher's first argument (spawn/exec*,
- * runArgv, captureOutput, runCommand), a `cmd:` property or a variable named
- * like an argv, and as a value only as a fallback, a default, or a
- * program-named variable, property or assignment target; a key mapping or a
- * word list may return or hold them.
+ * runArgv, captureOutput, runCommand, through either branch of a `?:`), a
+ * `cmd:` property, or a variable or assignment target named like an argv; a
+ * word list may hold them. `cmd` is caught as a value only as a fallback, a
+ * default, or a program-named variable, property or assignment target, since
+ * a key mapping returns it; `import` and `clip` as values like any name.
  * Not caught: a name assembled at run time, passed straight to a helper
  * that launches it later, or a `cmd`, `import` or `clip` argv returned from
  * a function or held in a variable not named like one. The vendored
@@ -67,6 +71,9 @@ const isBareName = (name: string | null | undefined): name is string => !!name &
 const AMBIGUOUS_NAMES = new Set(['cmd', 'import', 'clip']);
 const isAmbiguous = (name: string): boolean => AMBIGUOUS_NAMES.has(name.toLowerCase());
 
+/** A key a key mapping returns or holds: as a value, caught in fewer places than other names. */
+const isKeyName = (name: string): boolean => name.toLowerCase() === 'cmd';
+
 /** Calls whose first argument is an argv: Bun's and child_process's, and this repo's argv helpers. */
 const LAUNCHERS = new Set(['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'runArgv', 'captureOutput', 'runCommand']);
 
@@ -88,8 +95,13 @@ function unwrapped(node: ts.Node): ts.Node {
  * argument, a `cmd:` property, or a variable named like an argv.
  */
 function inLaunchPosition(array: ts.ArrayLiteralExpression): boolean {
-  const node = unwrapped(array);
+  // Either branch of a `?:` is launched where the whole expression would be.
+  let node = unwrapped(array);
+  while (ts.isConditionalExpression(node.parent) && node.parent.condition !== node) node = unwrapped(node.parent);
   const parent = node.parent;
+  if (ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken && parent.right === node) {
+    return ARGV_VARIABLE.test(assignedName(parent.left) ?? '');
+  }
   if (ts.isCallExpression(parent) && parent.arguments[0] === node) {
     const name = calleeName(parent.expression);
     return name !== null && LAUNCHERS.has(name);
@@ -129,7 +141,7 @@ function inValuePosition(literal: ts.StringLiteral | ts.NoSubstitutionTemplateLi
   if (ts.isParameter(parent)) return parent.initializer === node;
   // `cmd` is also a key, which a key mapping returns or keeps in a variable:
   // only the places above, and a variable or property named like a program, count for it.
-  if (isAmbiguous(literal.text)) {
+  if (isKeyName(literal.text)) {
     if (ts.isVariableDeclaration(parent)) return parent.initializer === node && ts.isIdentifier(parent.name) && PROGRAM_TARGET.test(parent.name.text);
     return ts.isPropertyAssignment(parent) && parent.initializer === node && PROGRAM_KEYS.has(propertyName(parent) ?? '');
   }
@@ -190,7 +202,28 @@ function leadingName(command: string): string | null {
 
 /** Shells whose `-c` command line is scanned like a command string. */
 const SHELLS = new Set(['sh', 'bash', 'dash', 'zsh']);
-const SHELL_COMMAND_FLAGS = new Set(['-c', '-lc']);
+/** `-c`, alone or combined with other single-letter options (`-lc`, `-ec`). */
+const SHELL_COMMAND_FLAG = /^-[a-z]*c[a-z]*$/;
+const baseName = (path: string): string => path.split('/').pop()!;
+
+/**
+ * The command line an argv hands to a shell (`[sh, -c, line]`, optionally
+ * after `env` and its `NAME=value` settings), or null.
+ */
+function shellLine(argv: readonly ts.Expression[]): string | null {
+  let i = 0;
+  if (baseName(literalText(argv[0]) ?? '') === 'env') {
+    i = 1;
+    while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(literalText(argv[i]) ?? '')) i++;
+  }
+  const shell = literalText(argv[i]);
+  const flag = literalText(argv[i + 1]);
+  if (shell === null || !SHELLS.has(baseName(shell)) || flag === null || !SHELL_COMMAND_FLAG.test(flag)) return null;
+  return commandText(argv[i + 2]);
+}
+
+/** Words that run the command after them, or start one: skipped to find the program a command runs. */
+const COMMAND_PREFIXES = new Set(['env', 'exec', 'command', 'nohup', 'time', 'if', 'then', 'else', 'elif', 'while', 'until', 'do', '!', '{']);
 
 /** The literal text of a command line, or the part before its first `${...}`. */
 function commandText(node: ts.Node | undefined): string | null {
@@ -201,8 +234,11 @@ function commandText(node: ts.Node | undefined): string | null {
 
 /** The bare name that some command in a shell command line starts with, or null. */
 function shellCommandName(command: string): string | null {
-  for (const part of command.split(/\|\||&&|[|;&\n()`]|\$\(/)) {
-    const bare = leadingName(part);
+  for (const part of command.split(/\|\||&&|[|;&\n(){}`]|\$\(/)) {
+    const words = part.trim().split(/\s+/);
+    let i = 0;
+    while (i < words.length && (COMMAND_PREFIXES.has(words[i]!) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]!))) i++;
+    const bare = leadingName(words.slice(i).join(' '));
     if (bare) return bare;
   }
   return null;
@@ -225,8 +261,7 @@ export function scanBareNames(source: string, fileName = 'x.ts'): string[] {
     if (ts.isArrayLiteralExpression(node)) {
       const first = literalText(node.elements[0]);
       const second = literalText(node.elements[1]);
-      const shellCommand = first !== null && SHELLS.has(first.split('/').pop()!) && second !== null && SHELL_COMMAND_FLAGS.has(second)
-        ? commandText(node.elements[2]) : null;
+      const shellCommand = shellLine(node.elements);
       if (isBareName(first) && (!isAmbiguous(first) || inLaunchPosition(node))) report(node, `argv starting with '${first}'`);
       else if (first === 'which' && isBareName(second)) report(node, `argv 'which ${second}'`);
       else if (shellCommand !== null && shellCommandName(shellCommand)) report(node, `shell command '${shellCommand}'`);
@@ -237,6 +272,12 @@ export function scanBareNames(source: string, fileName = 'x.ts'): string[] {
       const name = calleeName(node.expression);
       const first = literalText(node.arguments[0]);
       if (name === 'which' && isBareName(first)) report(node, `which('${first}')`);
+      // child_process's split form: spawn('sh', ['-c', line]).
+      const rest = node.arguments[1];
+      if (name && LAUNCHERS.has(name) && first !== null && rest && ts.isArrayLiteralExpression(rest)) {
+        const line = shellLine([node.arguments[0]!, ...rest.elements]);
+        if (line !== null && shellCommandName(line)) report(node, `shell command '${line}'`);
+      }
       if (name && CHILD_PROCESS_CALLS.has(name) && first !== null) {
         const bare = leadingName(first);
         if (bare) report(node, `${name}('${first}')`);
@@ -327,14 +368,40 @@ describe('system tools are never launched by bare name (#900, #907)', () => {
     expect(scanBareNames(`Bun.spawnSync(['which', 'cmd']);`)).toEqual(["1: argv 'which cmd'"]);
   });
 
-  test('`import` and `clip` are words too: caught only where a launch takes them', () => {
+  test('`import` and `clip` are words too: in an array, caught only where a launch takes them', () => {
     expect(scanBareNames(`const verbs = ['import', 'export'];`)).toEqual([]);
     expect(scanBareNames(`const parts = ['clip', 'path'];`)).toEqual([]);
-    expect(scanBareNames(`return mode === 'paste' ? 'clip' : 'import';`)).toEqual([]);
+    // As values they are caught like any name (#900 review): word lists are arrays, not returns.
+    expect(scanBareNames(`return mode === 'paste' ? 'clip' : 'import';`)).toEqual(["1: name 'clip' as a value", "1: name 'import' as a value"]);
     expect(scanBareNames(`Bun.spawn(['import', '-window', 'root', f]);`)).toEqual(["1: argv starting with 'import'"]);
     expect(scanBareNames(`Bun.spawn({ cmd: ['clip'] });`)).toEqual(["1: argv starting with 'clip'"]);
     expect(scanBareNames(`const argv = ['import', '-window', 'root', f];`)).toEqual(["1: argv starting with 'import'"]);
     expect(scanBareNames(`execSync('import -window root x.png');`)).toEqual(["1: execSync('import -window root x.png')"]);
+  });
+
+  test('`import` and `clip` as values, in a `?:` argv or assigned to a cmd are still caught (#900 review)', () => {
+    expect(scanBareNames(`const tool = 'import';`)).toEqual(["1: name 'import' as a value"]);
+    expect(scanBareNames(`function f() { return 'clip'; }`)).toEqual(["1: name 'clip' as a value"]);
+    expect(scanBareNames(`const run = () => 'clip';`)).toEqual(["1: name 'clip' as a value"]);
+    expect(scanBareNames(`const t = big ? 'import' : 'scrot';`)).toEqual(["1: name 'import' as a value", "1: name 'scrot' as a value"]);
+    expect(scanBareNames(`Bun.spawn(useIm ? ['import', f] : ['scrot', f]);`))
+      .toEqual(["1: argv starting with 'import'", "1: argv starting with 'scrot'"]);
+    expect(scanBareNames(`opts.cmd = ['clip'];`)).toEqual(["1: argv starting with 'clip'"]);
+    // `cmd` keeps the narrow value rule: key mappings return it.
+    expect(scanBareNames(`function key() { return 'cmd'; }`)).toEqual([]);
+  });
+
+  test('more shell forms: the split child_process form, combined flags, env, prefixes and braces (#900 review)', () => {
+    expect(scanBareNames(`spawn('sh', ['-c', 'xclip -o']);`)).toEqual(["1: shell command 'xclip -o'"]);
+    expect(scanBareNames(`execFileSync('bash', ['-c', 'xclip -o']);`)).toEqual(["1: shell command 'xclip -o'"]);
+    expect(scanBareNames(`Bun.spawn(['sh', '-ec', 'xclip -o']);`)).toEqual(["1: shell command 'xclip -o'"]);
+    expect(scanBareNames(`Bun.spawn(['/usr/bin/env', 'sh', '-c', 'xclip -o']);`)).toEqual(["1: shell command 'xclip -o'"]);
+    for (const line of ['env xclip -o', 'exec xclip -o', 'DISPLAY=:0 xclip -o', 'env DISPLAY=:0 xclip', 'if true; then xclip -o; fi',
+      '{ xclip -o; }', '! xclip -o', 'while true; do xclip -o; done']) {
+      expect(scanBareNames(`Bun.spawn(['sh', '-c', '${line}']);`)).toEqual([`1: shell command '${line}'`]);
+    }
+    expect(scanBareNames(`Bun.spawn(['sh', '-c', 'env | grep X']);`)).toEqual([]);
+    expect(scanBareNames(`Bun.spawn(['sh', '-ex', 'xclip']);`)).toEqual([]);
   });
 
   test('a bare name run through `sh -c` or `bash -lc` is caught (#900 review)', () => {
