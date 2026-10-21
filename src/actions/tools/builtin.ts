@@ -876,6 +876,8 @@ export const captureScreenTool: ToolDefinition = {
   name: 'capture_screen',
   description: 'Take a screenshot of the screen. Optionally specify a "target" sidecar name/ID to capture a remote machine instead of locally.',
   category: 'general',
+  // The whole screen, like desktop_screenshot: off with desktop.enabled (#905).
+  usesDesktop: true,
   parameters: {
     target: {
       type: 'string',

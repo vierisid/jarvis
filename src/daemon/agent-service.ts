@@ -37,6 +37,7 @@ import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import { loadRole } from '../roles/loader.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
 import { scopeSystemNote, type TurnToolScope } from '../actions/tools/tool-scope.ts';
+import { desktopOffSystemNote } from '../actions/tools/desktop-guard.ts';
 import { BUILTIN_TOOLS, browser } from '../actions/tools/builtin.ts';
 import { createDelegateTool, type DelegateToolDeps } from '../actions/tools/delegate.ts';
 import { createManageAgentsTool, type AgentToolDeps } from '../actions/tools/agents.ts';
@@ -1044,9 +1045,13 @@ export class AgentService implements Service, IAgentService {
     const channelPersonality = getChannelPersonality(personality, channel);
     const personalityPrompt = personalityToPrompt(channelPersonality);
 
+    // The tool guide in the static half documents the desktop tools whatever
+    // the setting, and varying it would miss the prompt cache; this note goes
+    // in the dynamic half instead, and only while desktop.enabled is off (#905).
+    const desktopNote = desktopOffSystemNote();
     return {
       static: `${roleParts.static}\n\n${personalityPrompt}`,
-      dynamic: roleParts.dynamic,
+      dynamic: desktopNote ? `${roleParts.dynamic}\n\n${desktopNote}` : roleParts.dynamic,
     };
   }
 

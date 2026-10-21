@@ -4,6 +4,7 @@ import { createFlow } from '../db/repos/flow';
 import { createDraftVersion } from '../db/repos/flow-version';
 import { createFlowRun } from '../db/repos/flow-run';
 import { ToolRegistry } from '../../actions/tools/registry';
+import { DESKTOP_DISABLED_CODE, setDesktopEnabledSource } from '../../actions/tools/desktop-guard';
 import { AuthorityEngine } from '../../authority/engine';
 import { AuditTrail } from '../../authority/audit';
 import { EmergencyController } from '../../authority/emergency';
@@ -767,6 +768,30 @@ describe('workflow effect boundary', () => {
     await expect(f.backends.toolsInvoke!({ toolName: 'send_invoice_email', params: { to: 'billing@example.test' } }, f.context)).rejects.toThrow(/denied/);
     expect(f.calls).toHaveLength(0);
     expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ actionCategory: 'send_email', target: { recipient: 'billing@example.test' }, status: 'blocked' });
+  });
+
+  test('desktop.enabled: false refuses a desktop step before any effect record or card exists (#905)', async () => {
+    const f = fixture();
+    f.registry.register({ name: 'desktop_list_windows', description: 'Bounded desktop read', category: 'desktop', parameters: {},
+      execute: async () => { f.calls.push('listed'); return 'windows'; } });
+    setDesktopEnabledSource(() => false);
+    try {
+      const refused = await f.backends.toolsInvoke!({ toolName: 'desktop_list_windows', params: {} }, f.context).then(() => null, (e: unknown) => e);
+      expect(refused).toBeInstanceOf(ActionOutcomeError);
+      expect((refused as ActionOutcomeError).outcome).toMatchObject({ status: 'blocked', code: DESKTOP_DISABLED_CODE, effect: 'not_started' });
+      expect(f.calls).toHaveLength(0);
+      expect(listWorkflowEffects(f.run.id)).toEqual([]);
+      expect(f.approvals.getPending()).toEqual([]);
+      // Audited as a refusal, like a capability the boundary will not run.
+      expect((f.options.auditTrail as AuditTrail).query({ limit: 10 }).map((r) => [r.tool_name, r.authority_decision, r.executed]))
+        .toEqual([['desktop_disabled(desktop_list_windows)', 'denied', 0]]);
+    } finally {
+      setDesktopEnabledSource(null);
+    }
+    // The default is unchanged: the same bounded read runs.
+    const ran = await f.backends.toolsInvoke!({ toolName: 'desktop_list_windows', params: {} }, f.context);
+    expect(ran.approval).toBeUndefined();
+    expect(f.calls).toEqual(['listed']);
   });
 
   for (const tool of ['run_command', 'browser_click', 'browser_evaluate']) test(`${tool} cannot hide undeclared business effects`, async () => {
