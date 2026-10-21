@@ -1,3 +1,4 @@
+import { CHAT_MODEL_SUGGESTIONS } from './model-catalog.ts';
 import type {
   LLMProvider,
   LLMMessage,
@@ -96,7 +97,7 @@ const RETRY_BASE_DELAY_MS = 5000; // 5s, 10s, 20s
  * so we match them pre-emptively rather than wait for a 400 in production.
  */
 function modelRejectsTemperature(model: string): boolean {
-  return /claude-(opus-4-[78]|sonnet-5|fable-5)/i.test(model);
+  return /claude-(opus-(4-[78]|5)|sonnet-5|haiku-5|fable-5)/i.test(model);
 }
 
 /**
@@ -484,14 +485,7 @@ export class AnthropicProvider implements LLMProvider {
   }
 
   async listModels(): Promise<string[]> {
-    const knownModels = [
-      'claude-fable-5',
-      'claude-opus-4-8',
-      'claude-sonnet-5',
-      'claude-opus-4-7',
-      'claude-sonnet-4-6',
-      'claude-haiku-4-5-20251001',
-    ];
+    const knownModels = CHAT_MODEL_SUGGESTIONS.anthropic;
     if (!this.bearerAuth) return knownModels;
 
     try {

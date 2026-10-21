@@ -65,3 +65,30 @@ The saved request is currently a read-only disclosure; editing a durably generat
 - Browser screenshots and private test logs are kept outside the repository; no credentials, enrollment tokens, personal logs or database files are committed.
 
 Restart the existing dev command after checkout changes; the launcher does not hot reload. The [launcher guide](local-dashboard-onboarding.md#run-the-real-daemon-with-a-fresh-sidecar) explains fresh data directories and sidecar enrollment.
+
+
+## Walkthrough pass 1: provider models and paid-plan copy
+
+2026-10-21, `fix/local-walkthrough`, primary checkout only. Refreshed Anthropic,
+OpenAI, Gemini, Groq, Ollama and OpenRouter suggestions and shared them between
+onboarding, Settings and the corresponding provider fallbacks. NVIDIA and gateway
+live discovery remain in place. Catalog source links and verification date live
+in `src/llm/model-catalog.ts`. Existing saved model selections are not migrated.
+Jarvis AI now says "Paid / Available on paid plans" on self-hosted setup; hosted
+provisioning still controls availability.
+
+GPT-6 uses the official Responses endpoint, including streaming, tools, images,
+usage, cancellation and typed HTTP errors. Compatible gateway URLs keep Chat
+Completions. Current Claude models omit unsupported temperature parameters.
+
+Verification: provider/onboarding/Settings tests passed, TypeScript passed, UI
+build passed, and the design detector returned zero findings. GPT-6 regressions
+fail against the previous transport and pass with the fix. The real localhost
+screen was checked for all six updated provider choices and the paid-plan label.
+These are protocol fixture tests and browser checks, not paid live calls to every
+provider. Account-specific model access is checked by Test connection.
+
+Owner's iteration rule: commit locally on this same branch, restart the actual
+checkout on port 3146 with fresh brain data and a fresh native profile after each
+pass, and let the owner replay onboarding. Preserve prior data/profile directories
+as local backups; do not create worktrees or deploy.

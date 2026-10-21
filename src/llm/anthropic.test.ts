@@ -450,3 +450,20 @@ describe('AnthropicProvider SSE chat responses', () => {
     expect(result.tool_calls).toEqual([{ id: 't1', name: 'weather', arguments: { city: 'Rome' } }]);
   });
 });
+
+
+describe('Current Claude request parameters', () => {
+  afterEach(() => { globalThis.fetch = originalFetch; });
+  for (const model of ['claude-opus-5-5', 'claude-haiku-5-5']) {
+    it(`omits unsupported temperature for ${model}`, async () => {
+      let body: Record<string, unknown> = {};
+      globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+        body = JSON.parse(String(init?.body));
+        return Response.json(anthropicResponse());
+      }) as unknown as typeof fetch;
+      await new AnthropicProvider('key').chat([{ role: 'user', content: 'hi' }], { model, temperature: 0.3 });
+      expect(body.model).toBe(model);
+      expect(body.temperature).toBeUndefined();
+    });
+  }
+});

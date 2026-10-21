@@ -1,3 +1,5 @@
+import { usesResponses, postResponses, parseResponses, streamResponses } from './openai-responses.ts';
+import { CHAT_MODEL_SUGGESTIONS } from './model-catalog.ts';
 import type {
   LLMProvider,
   LLMMessage,
@@ -25,6 +27,7 @@ import { compactHistory, calculateHistoryBudget } from './history.ts';
 export function modelRejectsCustomTemperature(model: string): boolean {
   const id = model.toLowerCase();
   if (/^o\d/.test(id)) return true;
+  if (id.startsWith('gpt-6')) return true;
   if (id.startsWith('gpt-5') && !id.startsWith('gpt-5-chat')) return true;
   return false;
 }
@@ -205,6 +208,11 @@ export class OpenAIProvider implements LLMProvider {
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
     const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice, signal } = options;
 
+    if (usesResponses(this.baseUrl, model)) {
+      const response = await postResponses(this.baseUrl, this.requestHeaders(), compactHistory(messages, calculateHistoryBudget(128000)), options, model, false);
+      return parseResponses(await response.json());
+    }
+
     // Compact history for large contexts (128k token limit)
     const budget = calculateHistoryBudget(128000);
     const compactedMessages = compactHistory(messages, budget);
@@ -243,6 +251,18 @@ export class OpenAIProvider implements LLMProvider {
 
   async *stream(messages: LLMMessage[], options: LLMOptions = {}): AsyncIterable<LLMStreamEvent> {
     const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice, signal } = options;
+
+    if (usesResponses(this.baseUrl, model)) {
+      try {
+        const response = await postResponses(this.baseUrl, this.requestHeaders(), compactHistory(messages, calculateHistoryBudget(128000)), options, model, true);
+        yield* streamResponses(response);
+      } catch (error) {
+        yield { type: 'error', error: error instanceof Error ? error.message : String(error),
+          code: error instanceof LLMProviderError ? error.code : 'network',
+          ...(error instanceof LLMProviderError && error.retryAfterMs !== undefined ? { retry_after_ms: error.retryAfterMs } : {}) };
+      }
+      return;
+    }
 
     // Compact history for large contexts (128k token limit)
     const budget = calculateHistoryBudget(128000);
@@ -408,13 +428,7 @@ export class OpenAIProvider implements LLMProvider {
         .sort();
     } catch (err) {
       // Fallback to known models if the live /models call fails.
-      return [
-        'gpt-5.5',
-        'gpt-5.5-pro',
-        'gpt-5.4',
-        'gpt-5-mini',
-        'o4-mini',
-      ];
+      return [...CHAT_MODEL_SUGGESTIONS.openai];
     }
   }
 

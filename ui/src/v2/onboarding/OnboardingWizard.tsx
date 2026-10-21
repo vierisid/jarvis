@@ -1,3 +1,4 @@
+import { CHAT_MODEL_SUGGESTIONS } from "../../../../src/llm/model-catalog";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { openExternal, openedOrHandedOff } from "./external-open";
 import { useInterviewSession } from "./useInterviewSession";
@@ -93,21 +94,21 @@ const Glyph = ({ k }: { k: string }) => <span dangerouslySetInnerHTML={{ __html:
 
 /* — providers (backend kind ids); model lists per the design — */
 type Provider = {
-  id: string; name: string; abbr: string; kind: string; reco?: boolean; soon?: boolean;
+  id: string; name: string; abbr: string; kind: string; reco?: boolean; paidOnly?: boolean;
   noConfig?: boolean; needsKey?: boolean; keyOptional?: boolean; needsBaseUrl?: boolean; optionalBaseUrl?: boolean; freeModel?: boolean;
   keyLabel?: string; urlLabel?: string; urlPh?: string; models?: string[]; hint?: string;
 };
 const OMNIROUTE_DEFAULT_URL = "http://localhost:20128/v1";
 const PROVIDERS: Provider[] = [
-  // Hosted brain. `soon: true` is the self-hosted default; the wizard flips
+  // Hosted brain. `paidOnly: true` is the self-hosted default; the wizard flips
   // it off when GET /api/config/llm reports hosted_llm (see provList below).
-  { id: "jarvis", name: "Jarvis AI", abbr: "JA", kind: "included", soon: true, noConfig: true },
-  { id: "anthropic", name: "Anthropic", abbr: "A", kind: "API key", needsKey: true, optionalBaseUrl: true, keyLabel: "API key", urlLabel: "Custom endpoint URL", urlPh: "https://gateway.example.com", models: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5-20251001"], hint: "Enable the custom endpoint option to use ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN-style authentication." },
-  { id: "openai", name: "OpenAI", abbr: "O", kind: "API key", needsKey: true, models: ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5-mini", "o4-mini"] },
-  { id: "groq", name: "Groq", abbr: "G", kind: "API key", needsKey: true, models: ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.6-27b"], hint: "Loads the current model catalog from Groq so decommissioned models are never suggested." },
-  { id: "gemini", name: "Gemini", abbr: "Ge", kind: "API key", needsKey: true, models: ["gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro"] },
-  { id: "ollama", name: "Ollama", abbr: "Ol", kind: "local", needsBaseUrl: true, urlLabel: "Ollama base URL", urlPh: "http://localhost:11434", models: ["llama3.1", "llama3.2", "mistral", "qwen2.5"] },
-  { id: "openrouter", name: "OpenRouter", abbr: "OR", kind: "API key", needsKey: true, models: ["anthropic/claude-opus-4", "openai/gpt-5.4", "google/gemini-2.5-pro"] },
+  { id: "jarvis", name: "Jarvis AI", abbr: "JA", kind: "included", paidOnly: true, noConfig: true },
+  { id: "anthropic", name: "Anthropic", abbr: "A", kind: "API key", needsKey: true, optionalBaseUrl: true, keyLabel: "API key", urlLabel: "Custom endpoint URL", urlPh: "https://gateway.example.com", models: CHAT_MODEL_SUGGESTIONS.anthropic, hint: "Enable the custom endpoint option to use ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN-style authentication." },
+  { id: "openai", name: "OpenAI", abbr: "O", kind: "API key", needsKey: true, models: CHAT_MODEL_SUGGESTIONS.openai },
+  { id: "groq", name: "Groq", abbr: "G", kind: "API key", needsKey: true, models: CHAT_MODEL_SUGGESTIONS.groq, hint: "Loads the current model catalog from Groq so decommissioned models are never suggested." },
+  { id: "gemini", name: "Gemini", abbr: "Ge", kind: "API key", needsKey: true, models: CHAT_MODEL_SUGGESTIONS.gemini },
+  { id: "ollama", name: "Ollama", abbr: "Ol", kind: "local", needsBaseUrl: true, urlLabel: "Ollama base URL", urlPh: "http://localhost:11434", models: CHAT_MODEL_SUGGESTIONS.ollama },
+  { id: "openrouter", name: "OpenRouter", abbr: "OR", kind: "API key", needsKey: true, models: CHAT_MODEL_SUGGESTIONS.openrouter },
   { id: "nvidia", name: "NVIDIA NIM", abbr: "N", kind: "API key", needsKey: true, models: [...NVIDIA_FALLBACK_MODELS], hint: "The catalog includes chat, embedding and vision models. Test connection confirms the selected model supports chat." },
   { id: "openai_compatible", name: "OpenAI-compatible", abbr: "C", kind: "self-hosted", needsKey: true, keyOptional: true, needsBaseUrl: true, freeModel: true, urlLabel: "Base URL", urlPh: "http://localhost:8080/v1", hint: "Any server that speaks /v1/chat/completions: llama.cpp, vLLM, LM Studio, TGI. Include the /v1 suffix." },
   { id: "litellm", name: "LiteLLM", abbr: "L", kind: "proxy", needsKey: true, keyOptional: true, needsBaseUrl: true, freeModel: true, urlLabel: "LiteLLM proxy URL", urlPh: "http://localhost:4000/v1", hint: "The model below must match an alias defined on your proxy." },
@@ -235,7 +236,7 @@ export function OnboardingWizard({
   // request — the recap must not print them as saved.
   const [droppedSections, setDroppedSections] = useState<string[]>([]);
   const provList = useMemo(
-    () => PROVIDERS.map((p) => (p.id === "jarvis" ? { ...p, soon: !hosted } : p)),
+    () => PROVIDERS.map((p) => (p.id === "jarvis" ? { ...p, paidOnly: !hosted } : p)),
     [hosted],
   );
 
@@ -607,7 +608,7 @@ export function OnboardingWizard({
     }
   }, [provId, model, apiKey, baseUrl, customEndpoint, discoveredModels, prov]);
 
-  const brainReady = !prov.soon && (prov.noConfig || test.status === "ok");
+  const brainReady = !prov.paidOnly && (prov.noConfig || test.status === "ok");
 
   /* — the setup POST: fires when leaving Speaking (llm + stt + tts) — */
   const saveSetup = useCallback(async () => {
@@ -1181,21 +1182,21 @@ export function OnboardingWizard({
             Use AI to help design workflows and handle the steps that need judgment.{" "}
             {hosted
               ? "Jarvis AI is included with your plan — nothing to configure. Prefer your own? Ollama runs locally with no key, or add an API key for Anthropic, OpenAI, and more. Change it anytime in Settings."
-              : "Bring your own: Ollama runs locally with no key, or add an API key for Anthropic, OpenAI, and more. Jarvis AI, our hosted brain, is coming soon. Change it anytime in Settings."}
+              : "Bring your own: Ollama runs locally with no key, or add an API key for Anthropic, OpenAI, and more. Jarvis AI is available on paid plans. Change it anytime in Settings."}
           </div>
           <div className="obw-provgrid" style={{ marginTop: 14 }}>
             {provList.map((p) => (
               <button
                 key={p.id}
-                className={`obw-prov ${p.reco ? "reco" : ""} ${p.soon ? "soon" : ""} ${provId === p.id ? "on" : ""}`}
-                disabled={p.soon}
-                aria-disabled={p.soon}
-                onClick={() => { if (!p.soon) setProvId(p.id); }}
+                className={`obw-prov ${p.reco ? "reco" : ""} ${p.paidOnly ? "soon" : ""} ${provId === p.id ? "on" : ""}`}
+                disabled={p.paidOnly}
+                aria-disabled={p.paidOnly}
+                onClick={() => { if (!p.paidOnly) setProvId(p.id); }}
               >
                 <span className="pd">{p.abbr}</span>
                 <div>
-                  <div className="pn">{p.name}{p.soon && <span className="obw-soon">Soon</span>}</div>
-                  <div className="pk">{p.soon ? "coming soon" : p.kind}</div>
+                  <div className="pn">{p.name}{p.paidOnly && <span className="obw-soon">Paid</span>}</div>
+                  <div className="pk">{p.paidOnly ? "Available on paid plans" : p.kind}</div>
                 </div>
               </button>
             ))}
@@ -1494,7 +1495,7 @@ export function OnboardingWizard({
                 </select>
               </div>}
         {provId === "ollama" && ollamaLoading && <div className="obw-hint">Reading installed models from Ollama…</div>}
-        {provId === "ollama" && !ollamaLoading && ollamaModels?.length === 0 && <div className="obw-hint">Could not reach Ollama at this URL — showing suggestions instead. Make sure Ollama is running (models must include their tag, e.g. llama3.1:8b).</div>}
+        {provId === "ollama" && !ollamaLoading && ollamaModels?.length === 0 && <div className="obw-hint">Could not reach Ollama at this URL — showing suggestions instead. Make sure Ollama is running (models must include their tag, e.g. qwen3.5:9b).</div>}
         {provId === "omniroute" && omniRouteLoading && <div className="obw-hint">Loading every OmniRoute model and combo…</div>}
         {provId === "omniroute" && !omniRouteLoading && omniRouteModels?.length === 0 && <div className="obw-hint">Could not read this OmniRoute catalog. Check the URL and API key; you can still test the auto route.</div>}
         {provId === "groq" && groqLoading && <div className="obw-hint">Loading currently supported Groq models…</div>}
