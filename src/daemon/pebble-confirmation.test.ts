@@ -134,7 +134,14 @@ describe('the daemon speaks every fast-path confirmation through it', () => {
   test('no other fast path sets speaking after synthesizing a confirmation', () => {
     // The room open/close fast path had its own copy with the same bug.
     expect(src).not.toContain("await setState(sidecarId, 'speaking', confirm);");
-    expect(src).toContain('await speakConfirmation(sidecarId, confirm, ctrl, { heartbeat: false });');
+    // It now lives in pebble-room-panel.ts (#1026), which speaks only through
+    // the helper it is handed, and the daemon hands it this one.
+    const roomPanel = readFileSync(new URL('./pebble-room-panel.ts', import.meta.url), 'utf8');
+    expect(roomPanel).not.toContain("'speaking'");
+    expect(roomPanel).not.toContain('synthesize');
+    expect(roomPanel).toContain('await deps.speak(sidecarId, roomPanelReply(intent, outcome), ctrl);');
+    expect(src).toContain('speak: speakConfirmation,');
+    expect(src).toContain('await runRoomPanelIntent(roomPanelDeps, sidecarId,');
     // The only other synthesis is the streamed answer's queue; a new inline
     // confirmation copy would add one.
     expect(src.match(/\.synthesize\(/g)?.length).toBe(2);
