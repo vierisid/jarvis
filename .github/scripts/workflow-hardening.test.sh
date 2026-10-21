@@ -784,6 +784,12 @@ if (rule === "runs") {
       fors: ["leg in darwin-arm64 darwin-x64"],
       calls: [],
       assigns: [
+        "absent=\"\"",
+        "absent=\"${absent:+${absent}, }APPLE_CERT_P12\"",
+        "absent=\"${absent:+${absent}, }APPLE_CERT_PASSWORD\"",
+        "absent=\"${absent:+${absent}, }ASC_KEY_ID\"",
+        "absent=\"${absent:+${absent}, }ASC_ISSUER_ID\"",
+        "absent=\"${absent:+${absent}, }ASC_API_KEY_P8\"",
         "IDENTITY=\"$(security find-identity -v -p codesigning \"$kc\" | awk -F\x27\"\x27 \x27/Developer ID Application/ {print $2; exit}\x27)\"",
         "KEYCHAIN_PASSWORD=\"$(openssl rand -hex 24)\"",
         "NOTARY_STATUS=\"$(echo \"$SUBMIT_JSON\" | jq -r \x27.status // empty\x27)\"",
@@ -894,6 +900,12 @@ if (rule === "runs") {
       fors: [],
       calls: [],
       assigns: [
+        "absent=\"\"",
+        "absent=\"${absent:+${absent}, }APPLE_CERT_P12\"",
+        "absent=\"${absent:+${absent}, }APPLE_CERT_PASSWORD\"",
+        "absent=\"${absent:+${absent}, }ASC_KEY_ID\"",
+        "absent=\"${absent:+${absent}, }ASC_ISSUER_ID\"",
+        "absent=\"${absent:+${absent}, }ASC_API_KEY_P8\"",
         "APP=\"${RUNNER_TEMP}/work/Install Jarvis.app\"",
         "APP_ID=\"$(jq -r \x27.id // empty\x27 \"${RUNNER_TEMP}/notary-app.json\")\"",
         "DMG=\"${RUNNER_TEMP}/out/Install-Jarvis.dmg\"",
@@ -3561,7 +3573,7 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 		$'      - name: Unpack the bundles\n' $'      - uses: ./.github/actions/bun-setup\n      - name: Unpack the bundles\n' \
 		"sign-sidecar-darwin: uses ./.github/actions/bun-setup ${R870}"
 	expect_caught 'cgo switched on in the sidecar macOS signing job (#870)' narrow "$WORKFLOWS/sidecar-release.yml" \
-		$'      HAVE_APPLE_SIGNING: ${{ secrets.APPLE_CERT_P12 != \'\' }}\n    steps:\n      # For packaging/macos/entitlements.plist.' $'      HAVE_APPLE_SIGNING: ${{ secrets.APPLE_CERT_P12 != \'\' }}\n      CGO_ENABLED: "1"\n    steps:\n      # For packaging/macos/entitlements.plist.' \
+		$'      signed: ${{ steps.applesign.outputs.ready }}\n    steps:\n      # For packaging/macos/entitlements.plist.' $'      signed: ${{ steps.applesign.outputs.ready }}\n    env:\n      CGO_ENABLED: "1"\n    steps:\n      # For packaging/macos/entitlements.plist.' \
 		"sign-sidecar-darwin: job env sets CGO_ENABLED (a Go or C build) ${R870}"
 	expect_caught 'the Apple secret back in the installer macOS build (#870)' narrow "$WORKFLOWS/installer-release.yml" \
 		$'  build-macos:\n    needs: resolve\n' $'  build-macos:\n    env:\n      HAVE_APPLE_SIGNING: ${{ secrets.APPLE_CERT_P12 != \'\' }}\n    needs: resolve\n' \

@@ -53,8 +53,9 @@ concurrency:
 env:
   # Spelled as in release-exec.yml and sidecar-release.yml (#685), so
   # release-exec.test.sh holds this file to the same one-decision rule: the
-  # readiness step in sign-windows reads it to decide whether a run missing
-  # its signing config may continue (#869), and nothing may redefine it. On a
+  # readiness steps in sign-windows and sign-macos read it to decide whether
+  # a run missing its signing config may continue (#869, #921), and nothing
+  # may redefine it. On a
   # tag push there are no inputs and it is false, as `|| false` gave before.
   DRY_RUN: ${{ inputs.dry_run == true }}
 
@@ -550,18 +551,23 @@ jobs:
   # with hdiutil directly (never make, which would run the Makefile beside
   # the secrets), and signs, notarizes and staples that. The DMG crosses to
   # publish with its digest as this job output.
+  #
+  # A real run that cannot sign FAILS here (#921), as #869 made Windows: see
+  # the readiness step. verify-macos then checks, in a job holding no
+  # secret, that the DMG and the app in it are signed by our team, and
+  # publish waits for it.
   sign-macos:
     needs: [resolve, build-macos]
     if: needs.resolve.outputs.should_release == 'true'
     runs-on: macos-latest
     permissions:
       contents: read
-    env:
-      # secrets cannot be referenced in a step if:, so their presence is a
-      # flag the signing steps gate on.
-      HAVE_APPLE_SIGNING: ${{ secrets.APPLE_CERT_P12 != '' }}
     outputs:
       sha256: ${{ steps.digest.outputs.sha256 }}
+      # Whether the signing step ran, so verify-macos knows whether there is
+      # a signature to check (false only on a dry run or under
+      # ALLOW_UNSIGNED_MACOS, #921).
+      signed: ${{ steps.applesign.outputs.ready }}
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -615,8 +621,55 @@ jobs:
           fi
           mkdir -p "${RUNNER_TEMP}/out"
 
+      # Signing needs all five Apple secrets. A real run missing them FAILS
+      # here (#921). It used to warn and carry on, and a release then shipped
+      # an UNSIGNED Install-Jarvis.dmg, which Gatekeeper refuses to open on
+      # recent macOS, in a green run. Shipping unsigned is now a recorded
+      # choice: set the repository variable ALLOW_UNSIGNED_MACOS to exactly
+      # `true`. A dry run still only warns, so a rehearsal needs no signing
+      # configuration. APPLE_CERT_P12 set with another secret missing is a
+      # broken configuration, and fails every run, dry or not, as it did
+      # before. The secrets reach this step only as whether each is set,
+      # never their values. release-exec.test.sh runs this script verbatim
+      # against every case.
+      - name: macOS signing readiness
+        id: applesign
+        env:
+          HAVE_APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 != '' }}
+          HAVE_APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD != '' }}
+          HAVE_ASC_KEY_ID: ${{ secrets.ASC_KEY_ID != '' }}
+          HAVE_ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID != '' }}
+          HAVE_ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 != '' }}
+          ALLOW_UNSIGNED_MACOS: ${{ vars.ALLOW_UNSIGNED_MACOS }}
+        run: |
+          set -euo pipefail
+          absent=""
+          [ "${HAVE_APPLE_CERT_P12}" = "true" ] || absent="${absent:+${absent}, }APPLE_CERT_P12"
+          [ "${HAVE_APPLE_CERT_PASSWORD}" = "true" ] || absent="${absent:+${absent}, }APPLE_CERT_PASSWORD"
+          [ "${HAVE_ASC_KEY_ID}" = "true" ] || absent="${absent:+${absent}, }ASC_KEY_ID"
+          [ "${HAVE_ASC_ISSUER_ID}" = "true" ] || absent="${absent:+${absent}, }ASC_ISSUER_ID"
+          [ "${HAVE_ASC_API_KEY_P8}" = "true" ] || absent="${absent:+${absent}, }ASC_API_KEY_P8"
+          if [ -z "$absent" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            if [ "${ALLOW_UNSIGNED_MACOS}" = "true" ]; then
+              echo "::warning::ALLOW_UNSIGNED_MACOS is set but signing is configured, so it changed nothing this run. Delete the variable, or the next missing signing secret ships an UNSIGNED Install-Jarvis.dmg instead of failing."
+            fi
+          elif [ "${HAVE_APPLE_CERT_P12}" = "true" ]; then
+            echo "::error::APPLE_CERT_P12 is set but ${absent} is not, so signing cannot complete. Set the missing secret."
+            exit 1
+          elif [ "${DRY_RUN}" = "true" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::macOS signing is not configured (${absent} unset). This dry run continues and builds an UNSIGNED Install-Jarvis.dmg; a real release would stop here unless ALLOW_UNSIGNED_MACOS is true."
+          elif [ "${ALLOW_UNSIGNED_MACOS}" = "true" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::macOS signing is not configured (${absent} unset). Shipping an UNSIGNED Install-Jarvis.dmg because ALLOW_UNSIGNED_MACOS is true (Gatekeeper will refuse to open it)."
+          else
+            echo "::error::macOS signing is not configured (${absent} unset), so this release would ship an UNSIGNED Install-Jarvis.dmg, which Gatekeeper refuses to open. Set the Apple signing secrets, or set the repository variable ALLOW_UNSIGNED_MACOS to true to ship unsigned on purpose."
+            exit 1
+          fi
+
       - name: Sign, notarize and staple
-        if: env.HAVE_APPLE_SIGNING == 'true'
+        if: steps.applesign.outputs.ready == 'true'
         env:
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
           APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
@@ -625,11 +678,6 @@ jobs:
           ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
         run: |
           set -euo pipefail
-          if [ -z "$APPLE_CERT_PASSWORD" ] || [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ] || [ -z "$ASC_API_KEY_P8" ]; then
-            echo "::error::APPLE_CERT_PASSWORD, ASC_KEY_ID, ASC_ISSUER_ID and ASC_API_KEY_P8 are all required when APPLE_CERT_P12 is set"
-            exit 1
-          fi
-
           # The keychain, under RUNNER_TEMP, is deleted and the search list
           # put back on the way out, so the identity is not usable by later
           # steps of this job (#870 review).
@@ -693,11 +741,12 @@ jobs:
           xcrun stapler staple "$DMG"
           spctl --assess --type open --context context:primary-signature -vv "$DMG"
 
+      # Only where the readiness step allowed it: a dry run, or
+      # ALLOW_UNSIGNED_MACOS on a real one. It said why.
       - name: Build unsigned DMG
-        if: env.HAVE_APPLE_SIGNING != 'true'
+        if: steps.applesign.outputs.ready != 'true'
         run: |
           set -euo pipefail
-          echo "::warning::Apple signing credentials not configured -- shipping an unsigned Install-Jarvis.dmg (Gatekeeper will block it)."
           hdiutil create -volname "Install Jarvis" -srcfolder "${RUNNER_TEMP}/work/Install Jarvis.app" -format UDZO -ov "${RUNNER_TEMP}/out/Install-Jarvis.dmg"
 
       # The digest of exactly the file the upload below takes, as the output
@@ -715,9 +764,77 @@ jobs:
           path: ${{ runner.temp }}/out/Install-Jarvis.dmg
           if-no-files-found: error
 
+  # --- macOS: post-sign verification (no secret, no OIDC) (#921) --
+  # The signer runs codesign --verify, which accepts a signature by ANY
+  # identity. This job holds none of the signing credentials, takes the DMG
+  # by the digest sign-macos reported (what publish checks too, so what is
+  # checked here is what ships), refuses an unsigned answer on a real run
+  # without ALLOW_UNSIGNED_MACOS (a second gate, as #869 has for Windows),
+  # and checks the DMG and the app inside it as their users will: our
+  # Developer ID team, a stapled ticket and Gatekeeper. publish waits for
+  # it. Only tools macOS ships are used.
+  verify-macos:
+    needs: [resolve, sign-macos]
+    if: needs.resolve.outputs.should_release == 'true'
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      # For require-signing-pin.sh and verify-macos-signature.sh.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Outside the checkout: extracted over it, an artifact could replace
+      # the scripts that do the checking.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: installer-darwin
+          path: ${{ runner.temp }}/signed
+
+      - name: Verify the signed DMG digest
+        env:
+          SHA256: ${{ needs.sign-macos.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::sign-macos reported no digest"; exit 1; }
+          in="${RUNNER_TEMP}/signed"
+          if [ "$(find "$in" -mindepth 1 -print)" != "${in}/Install-Jarvis.dmg" ] || [ -L "${in}/Install-Jarvis.dmg" ] || [ ! -f "${in}/Install-Jarvis.dmg" ]; then
+            echo "::error::the installer-darwin artifact is not exactly one file, Install-Jarvis.dmg"
+            exit 1
+          fi
+          echo "${SHA256}  ${in}/Install-Jarvis.dmg" | shasum -a 256 -c -
+
+      # #921, checked again in a job that holds no secret: an empty answer
+      # (the signer did not say) is a refusal too.
+      - name: Refuse an unsigned bundle on a real run
+        env:
+          SIGNED: ${{ needs.sign-macos.outputs.signed }}
+          ALLOW_UNSIGNED_MACOS: ${{ vars.ALLOW_UNSIGNED_MACOS }}
+        run: |
+          set -euo pipefail
+          if [ "${SIGNED}" != "true" ] && [ "${DRY_RUN}" != "true" ] && [ "${ALLOW_UNSIGNED_MACOS}" != "true" ]; then
+            echo "::error::sign-macos did not sign Install-Jarvis.dmg, and this is a real run without ALLOW_UNSIGNED_MACOS set to true, so it would ship unsigned. See its macOS signing readiness step."
+            exit 1
+          fi
+
+      # The DMG and the app in it must carry OUR team, the one the installer
+      # links in as its pin. Empty fails a real run unless
+      # ALLOW_UNPINNED_MACOS is true (#922).
+      - name: Verify the Developer ID signature and team
+        if: needs.sign-macos.outputs.signed == 'true'
+        working-directory: sidecar
+        env:
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          ALLOW_UNPINNED_MACOS: ${{ vars.ALLOW_UNPINNED_MACOS }}
+        run: |
+          set -euo pipefail
+          ../.github/scripts/require-signing-pin.sh APPLE_TEAM_ID ALLOW_UNPINNED_MACOS "Install-Jarvis.dmg"
+          ../.github/scripts/verify-macos-signature.sh dmg "${RUNNER_TEMP}/signed/Install-Jarvis.dmg"
+
   # ─── Publish ───────────────────────────────────────────────────
   publish:
-    needs: [resolve, sign-windows, verify-windows, sign-macos]
+    needs: [resolve, sign-windows, verify-windows, sign-macos, verify-macos]
     if: needs.resolve.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     # The gate (#920). Until now this job held `contents: write` with no

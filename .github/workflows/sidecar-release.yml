@@ -79,10 +79,13 @@ on:
         value: ${{ jobs.resolve.outputs.build == 'true' && format('linux-x64={0} linux-arm64={1} darwin-arm64={2} darwin-x64={3} win32-x64={4}', jobs.build-sidecar-linux-x64.outputs.sha256, jobs.build-sidecar-linux-arm64.outputs.sha256, jobs.sign-sidecar-darwin.outputs.sha256_darwin_arm64, jobs.sign-sidecar-darwin.outputs.sha256_darwin_x64, jobs.sign-sidecar-windows.outputs.sha256) || '' }}
     # Every secret this workflow reads, declared so the caller can pass exactly
     # these instead of `secrets: inherit` (#682). Read only by sign-sidecar-
-    # darwin, which builds nothing (#870). All optional: absent, the macOS
-    # bundle ships unsigned with a warning, as on a fork. A secret read
-    # here but not declared would be silently empty when called, so
-    # .github/scripts/workflow-hardening.test.sh checks the two lists match.
+    # darwin, which builds nothing (#870). Optional to GitHub, so a fork or
+    # a dry run without them still runs: absent, the macOS bundle is
+    # unsigned, which sign-sidecar-darwin allows on a dry run or with
+    # ALLOW_UNSIGNED_MACOS set to exactly true, and fails otherwise (#921).
+    # A secret read here but not declared would be silently empty when
+    # called, so .github/scripts/workflow-hardening.test.sh checks the two
+    # lists match.
     secrets:
       APPLE_CERT_P12:
         required: false
@@ -473,6 +476,11 @@ jobs:
   # the bundle. One job for both legs: signing needs no Mac of the leg
   # architecture, and each digest is still the output of the one job that
   # produced those bytes (#781).
+  #
+  # A real run that cannot sign FAILS here (#921), as #869 made Windows: see
+  # the readiness step. verify-sidecar-darwin then checks, in a job holding
+  # no secret, that what ships is signed by our team, and publish-sidecar
+  # waits for it.
   sign-sidecar-darwin:
     needs: [resolve, build-sidecar-darwin-arm64, build-sidecar-darwin-x64]
     if: needs.resolve.outputs.build == 'true'
@@ -482,10 +490,10 @@ jobs:
     outputs:
       sha256_darwin_arm64: ${{ steps.digest.outputs.sha256_darwin_arm64 }}
       sha256_darwin_x64: ${{ steps.digest.outputs.sha256_darwin_x64 }}
-    env:
-      # secrets cannot be referenced in a step if:, so their presence is a
-      # flag the signing steps gate on.
-      HAVE_APPLE_SIGNING: ${{ secrets.APPLE_CERT_P12 != '' }}
+      # Whether the signing step ran, so verify-sidecar-darwin knows whether
+      # there is a signature to check (false only on a dry run or under
+      # ALLOW_UNSIGNED_MACOS, #921).
+      signed: ${{ steps.applesign.outputs.ready }}
     steps:
       # For packaging/macos/entitlements.plist.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -560,12 +568,59 @@ jobs:
             fi
           done
 
-      # Gated on the Apple credentials: absent (forks, pre-onboarding) the
-      # bundles ship unsigned, exactly as before. Signing is inside-out
-      # (nested Mach-Os first, never --deep) with the hardened runtime, then
-      # notarized and stapled so Gatekeeper approves offline.
+      # Signing needs all five Apple secrets. A real run missing them FAILS
+      # here (#921). It used to warn and carry on, and since signing follows
+      # this decision, a release then shipped an UNSIGNED Jarvis.app, which
+      # Gatekeeper refuses to open on recent macOS, in a green run. Shipping
+      # unsigned is now a recorded choice: set the repository variable
+      # ALLOW_UNSIGNED_MACOS to exactly `true`. A dry run still only warns,
+      # so a rehearsal needs no signing configuration. APPLE_CERT_P12 set
+      # with another secret missing is a broken configuration, and fails
+      # every run, dry or not, as it did before. The secrets reach this step
+      # only as whether each is set, never their values. release-exec.test.sh
+      # runs this script verbatim against every case.
+      - name: macOS signing readiness
+        id: applesign
+        env:
+          HAVE_APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 != '' }}
+          HAVE_APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD != '' }}
+          HAVE_ASC_KEY_ID: ${{ secrets.ASC_KEY_ID != '' }}
+          HAVE_ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID != '' }}
+          HAVE_ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 != '' }}
+          ALLOW_UNSIGNED_MACOS: ${{ vars.ALLOW_UNSIGNED_MACOS }}
+        run: |
+          set -euo pipefail
+          absent=""
+          [ "${HAVE_APPLE_CERT_P12}" = "true" ] || absent="${absent:+${absent}, }APPLE_CERT_P12"
+          [ "${HAVE_APPLE_CERT_PASSWORD}" = "true" ] || absent="${absent:+${absent}, }APPLE_CERT_PASSWORD"
+          [ "${HAVE_ASC_KEY_ID}" = "true" ] || absent="${absent:+${absent}, }ASC_KEY_ID"
+          [ "${HAVE_ASC_ISSUER_ID}" = "true" ] || absent="${absent:+${absent}, }ASC_ISSUER_ID"
+          [ "${HAVE_ASC_API_KEY_P8}" = "true" ] || absent="${absent:+${absent}, }ASC_API_KEY_P8"
+          if [ -z "$absent" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            if [ "${ALLOW_UNSIGNED_MACOS}" = "true" ]; then
+              echo "::warning::ALLOW_UNSIGNED_MACOS is set but signing is configured, so it changed nothing this run. Delete the variable, or the next missing signing secret ships an UNSIGNED Jarvis.app instead of failing."
+            fi
+          elif [ "${HAVE_APPLE_CERT_P12}" = "true" ]; then
+            echo "::error::APPLE_CERT_P12 is set but ${absent} is not, so signing cannot complete. Set the missing secret."
+            exit 1
+          elif [ "${DRY_RUN}" = "true" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::macOS signing is not configured (${absent} unset). This dry run continues and builds an UNSIGNED Jarvis.app; a real release would stop here unless ALLOW_UNSIGNED_MACOS is true."
+          elif [ "${ALLOW_UNSIGNED_MACOS}" = "true" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::macOS signing is not configured (${absent} unset). Shipping an UNSIGNED Jarvis.app because ALLOW_UNSIGNED_MACOS is true (Gatekeeper will refuse to open it on other machines, and the self-updater of every installed macOS sidecar will refuse to install it)."
+          else
+            echo "::error::macOS signing is not configured (${absent} unset), so this release would ship an UNSIGNED Jarvis.app, which Gatekeeper refuses to open. Set the Apple signing secrets, or set the repository variable ALLOW_UNSIGNED_MACOS to true to ship unsigned on purpose."
+            exit 1
+          fi
+
+      # Signing is inside-out (nested Mach-Os first, never --deep) with the
+      # hardened runtime, then notarized and stapled so Gatekeeper approves
+      # offline. Gated on the readiness step, and nothing else holds the
+      # secrets.
       - name: Sign and notarize (Developer ID)
-        if: env.HAVE_APPLE_SIGNING == 'true'
+        if: steps.applesign.outputs.ready == 'true'
         working-directory: sidecar
         env:
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
@@ -575,11 +630,6 @@ jobs:
           ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
         run: |
           set -euo pipefail
-          if [ -z "$APPLE_CERT_PASSWORD" ] || [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ] || [ -z "$ASC_API_KEY_P8" ]; then
-            echo "::error::APPLE_CERT_PASSWORD, ASC_KEY_ID, ASC_ISSUER_ID and ASC_API_KEY_P8 are all required when APPLE_CERT_P12 is set"
-            exit 1
-          fi
-
           # trap, not a trailing rm: `set -e` means any failure between here
           # and the end would leave the certificate or the private key on the
           # runner, or the identity usable by every later step of this job
@@ -642,10 +692,6 @@ jobs:
             spctl --assess --type execute -vv "$app"
           done
 
-      - name: Warn -- unsigned macOS build
-        if: env.HAVE_APPLE_SIGNING != 'true'
-        run: echo "::warning::Apple signing credentials not configured -- shipping an unsigned Jarvis.app (Gatekeeper will block it on other machines; notifications unreliable)."
-
       # tar, as the build legs do: upload-artifact strips exec bits and
       # symlinks, which would break the seal. COPYFILE_DISABLE +
       # --no-mac-metadata keep bsdtar from archiving xattrs as AppleDouble
@@ -687,6 +733,108 @@ jobs:
           name: sidecar-darwin-x64
           path: ${{ runner.temp }}/out/darwin-x64/jarvis-app.tar.gz
           if-no-files-found: error
+
+  # --- macOS: post-sign verification (no secret, no OIDC) (#921) ---
+  # The signer runs codesign --verify, which says the seal holds but accepts
+  # a signature by ANY identity: a signer that imported the wrong
+  # certificate would pass it. This job holds none of the signing
+  # credentials, takes the bundles by the digests sign-sidecar-darwin
+  # reported (what publish-sidecar checks too, so what is checked here is
+  # what ships), refuses an unsigned answer on a real run without
+  # ALLOW_UNSIGNED_MACOS (a second gate, as #869 has for Windows), and checks
+  # each bundle as the self-updater will: our Developer ID team (the
+  # requirement internal/update pins), a stapled ticket and Gatekeeper.
+  # publish-sidecar waits for it. Only tools macOS ships are used.
+  verify-sidecar-darwin:
+    needs: [resolve, sign-sidecar-darwin]
+    if: needs.resolve.outputs.build == 'true'
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      # For require-signing-pin.sh and verify-macos-signature.sh.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Outside the checkout: extracted over it, an artifact could replace
+      # the scripts that do the checking.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sidecar-darwin-arm64
+          path: ${{ runner.temp }}/signed/darwin-arm64
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sidecar-darwin-x64
+          path: ${{ runner.temp }}/signed/darwin-x64
+
+      - name: Verify the signed bundle digests
+        env:
+          SHA_DARWIN_ARM64: ${{ needs.sign-sidecar-darwin.outputs.sha256_darwin_arm64 }}
+          SHA_DARWIN_X64: ${{ needs.sign-sidecar-darwin.outputs.sha256_darwin_x64 }}
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          for v in SHA_DARWIN_ARM64 SHA_DARWIN_X64; do
+            [[ "${!v}" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::sign-sidecar-darwin reported no digest for ${v#SHA_}"; exit 1; }
+          done
+          in="${RUNNER_TEMP}/signed"
+          want="$(printf '%s\n' "${in}/darwin-arm64" "${in}/darwin-arm64/jarvis-app.tar.gz" "${in}/darwin-x64" "${in}/darwin-x64/jarvis-app.tar.gz")"
+          if [ "$(find "$in" -mindepth 1 -print | sort)" != "$want" ] || [ -n "$(find "$in" -mindepth 1 -not -type d -not -type f -print)" ]; then
+            echo "::error::the sidecar-darwin-arm64 and sidecar-darwin-x64 artifacts are not exactly one file each, jarvis-app.tar.gz"
+            exit 1
+          fi
+          printf '%s  %s\n' "$SHA_DARWIN_ARM64" "${in}/darwin-arm64/jarvis-app.tar.gz" "$SHA_DARWIN_X64" "${in}/darwin-x64/jarvis-app.tar.gz" | shasum -a 256 -c -
+
+      # #921, checked again in a job that holds no secret: the signer decides
+      # whether to sign, and this refuses its answer when a real run without
+      # ALLOW_UNSIGNED_MACOS says it did not, so a mistake in that decision
+      # cannot reach the publish on its own. An empty answer (the signer did
+      # not say) is a refusal too.
+      - name: Refuse an unsigned bundle on a real run
+        env:
+          SIGNED: ${{ needs.sign-sidecar-darwin.outputs.signed }}
+          ALLOW_UNSIGNED_MACOS: ${{ vars.ALLOW_UNSIGNED_MACOS }}
+        run: |
+          set -euo pipefail
+          if [ "${SIGNED}" != "true" ] && [ "${DRY_RUN}" != "true" ] && [ "${ALLOW_UNSIGNED_MACOS}" != "true" ]; then
+            echo "::error::sign-sidecar-darwin did not sign Jarvis.app, and this is a real run without ALLOW_UNSIGNED_MACOS set to true, so it would ship unsigned. See its macOS signing readiness step."
+            exit 1
+          fi
+
+      # The bundle must carry OUR team, the one the self-updater pins at
+      # runtime. Empty fails a real run unless ALLOW_UNPINNED_MACOS is true
+      # (#922). Each bundle is unpacked under runner.temp, by /usr/bin/tar
+      # (bsdtar on macOS), and must be Jarvis.app alone, of plain files and
+      # directories, as the signer required of what it was given: this
+      # check does not lean on the signer for that (#921 review).
+      - name: Verify the Developer ID signature and team
+        if: needs.sign-sidecar-darwin.outputs.signed == 'true'
+        working-directory: sidecar
+        env:
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          ALLOW_UNPINNED_MACOS: ${{ vars.ALLOW_UNPINNED_MACOS }}
+        run: |
+          set -euo pipefail
+          ../.github/scripts/require-signing-pin.sh APPLE_TEAM_ID ALLOW_UNPINNED_MACOS "Jarvis.app"
+          for leg in darwin-arm64 darwin-x64; do
+            tgz="${RUNNER_TEMP}/signed/${leg}/jarvis-app.tar.gz"
+            dest="${RUNNER_TEMP}/check/${leg}"
+            while IFS= read -r m; do
+              if [[ "$m" != [-d]* ]] || [[ "$m" == *" link to "* ]] || [[ "$m" == *" -> "* ]]; then
+                printf '::error::the signed %s bundle archive holds a member that is not a plain file or directory: %q\n' "$leg" "$m"
+                exit 1
+              fi
+            done < <(/usr/bin/tar -tvzf "$tgz")
+            mkdir -p "$dest"
+            /usr/bin/tar -xzf "$tgz" -C "$dest"
+            if [ "$(find "$dest" -mindepth 1 -maxdepth 1 -print)" != "${dest}/Jarvis.app" ] || [ -n "$(find "$dest" -mindepth 1 -not -type d -not -type f -print)" ] || [ -n "$(find "$dest" -type f -links +1 -print)" ]; then
+              echo "::error::the signed ${leg} bundle is not Jarvis.app alone, of plain files and directories"
+              exit 1
+            fi
+            ../.github/scripts/verify-macos-signature.sh app "${dest}/Jarvis.app"
+          done
 
   # --- Windows: cross-compile (no OIDC) ---
   # Split out of the matrix so the matrix holds no id-token, and split from
@@ -1053,7 +1201,7 @@ jobs:
     # environment name, so this reads the input directly.
     environment:
       name: ${{ inputs.dry_run == true && 'release-dry-run' || 'release' }}
-    needs: [resolve, verify-sidecar-windows, build-sidecar-linux-x64, build-sidecar-linux-arm64, sign-sidecar-darwin, sign-sidecar-windows]
+    needs: [resolve, verify-sidecar-windows, verify-sidecar-darwin, build-sidecar-linux-x64, build-sidecar-linux-arm64, sign-sidecar-darwin, sign-sidecar-windows]
     # Two ways to run, and only two (#952):
     #   * resolve said publish and every job above succeeded in THIS call --
     #     the build and publish of a dispatch, the condition this job had
@@ -1067,7 +1215,8 @@ jobs:
     #     publish artifacts nobody built. It runs only if nothing above failed
     #     or was cancelled; what vouches for the build is the caller, which
     #     starts this call only after the publish: false call succeeded as a
-    #     whole (verify-sidecar-windows included), and the digests it hands
+    #     whole (verify-sidecar-windows and verify-sidecar-darwin included),
+    #     and the digests it hands
     #     over, checked below as strictly as job outputs.
     # The `inputs.publish_only == true` term is what keeps the status
     # functions away from every other call: release-exec.test.sh pins this
@@ -1339,9 +1488,11 @@ jobs:
 
             case "${platform}" in
               darwin-*)
-                # The darwin artifact is a tarred Jarvis.app (signed + notarized
-                # when CI has the Apple credentials) with ocr-helper sealed
-                # inside; the launcher prefers bin/Jarvis.app/Contents/MacOS/jarvis.
+                # The darwin artifact is a tarred Jarvis.app, signed and
+                # notarized by sign-sidecar-darwin (a real run without the
+                # Apple secrets fails unless ALLOW_UNSIGNED_MACOS is true,
+                # #921), with ocr-helper sealed inside; the launcher prefers
+                # bin/Jarvis.app/Contents/MacOS/jarvis.
                 # tar preserves exec bits and the stapled notarization ticket.
                 tar -xzf "artifacts/sidecar-${platform}/jarvis-app.tar.gz" -C "${pkg_dir}/bin/"
                 ;;
