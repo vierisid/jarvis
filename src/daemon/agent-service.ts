@@ -84,7 +84,7 @@ import { TaskDispatcher } from '../agents/conv/task-dispatcher.ts';
 import { DialogueCompactor } from '../agents/conv/dialogue-compactor.ts';
 import type { ConvTaskEvent } from '../agents/conv/conv-orchestrator.ts';
 import { getRecentConversation, getMessages } from '../vault/conversations.ts';
-import { PEBBLE_CHANNEL, PEBBLE_DIALOGUE_WINDOW_MS } from './pebble-dialogue.ts';
+import { PEBBLE_CHANNEL, PEBBLE_DIALOGUE_WINDOW_MS, recordPebbleExchange } from './pebble-dialogue.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import type { ScopedChatInput } from '../brief/chat-transport.ts';
 
@@ -714,6 +714,17 @@ export class AgentService implements Service, IAgentService {
       this.convTaskEventListener ?? undefined,
     );
     return result.text;
+  }
+
+  /**
+   * Store a finished Pebble exchange as dialogue (#927), only when this agent
+   * runs the conversation tier: that tier is the only reader of it (see
+   * loadRecentDialogue), and classic mode would keep transcripts in the vault
+   * for nothing. Returns whether it was stored; never throws.
+   */
+  recordPebbleExchange(userText: string, reply: string): boolean {
+    if (!this.convOrchestrator) return false;
+    return recordPebbleExchange(userText, reply);
   }
 
   /**

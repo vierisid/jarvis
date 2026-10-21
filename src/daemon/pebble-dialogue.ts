@@ -14,6 +14,14 @@
  *
  * One conversation for the channel, shared by every machine's Pebble, which
  * is what the dashboard chat already does for every dashboard socket.
+ *
+ * Only the conversation tier reads this back (classic mode keeps its own
+ * in-memory history), so the daemon stores through
+ * AgentService.recordPebbleExchange, which does nothing in classic mode.
+ *
+ * Nothing expires stored messages: the 4h window below limits what the
+ * router READS, not what stays in the vault. Retention for channel
+ * conversations is a separate, open question.
  */
 import { getDb } from '../vault/schema.ts';
 import { addMessage, getOrCreateConversation } from '../vault/conversations.ts';

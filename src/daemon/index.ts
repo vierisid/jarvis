@@ -164,7 +164,7 @@ import {
   SUB_PEBBLE_COLORS, PEBBLE_ROOMS, exactRoomKey, findRoomKey, type PanelLookups, type SubPebbleCand,
 } from "./pebble-intents.ts";
 import { makeSpeakConfirmation } from "./pebble-confirmation.ts";
-import { PEBBLE_CHANNEL, recordPebbleExchange } from "./pebble-dialogue.ts";
+import { PEBBLE_CHANNEL } from "./pebble-dialogue.ts";
 import { makePalettePick, makePebbleNavTool } from "./pebble-nav-tool.ts";
 import { fetchPebbleForegroundApp, fetchPebbleScreenshot, pebbleActionDirectives, type PebbleDesktopDispatch } from "./pebble-desktop-context.ts";
 import { skipGenericSidecarEvent } from "./sidecar-event-routing.ts";
@@ -3473,7 +3473,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         const llmStart = Date.now();
         let llmDone = false;
         // Set on a stream error, so the fallback line is never stored as a
-        // reply (see recordPebbleExchange).
+        // reply (see pebble-dialogue.ts recordPebbleExchange).
         let streamFailed = false;
         try {
           // T9 — auto-screenshot for spatial queries. If the user is
@@ -3825,7 +3825,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
           // The finished exchange, so the next Pebble turn has history to
           // resolve "do that" against (#927). A dismissed turn returned above.
-          if (!streamFailed && !ctrl.cancelled) recordPebbleExchange(opts?.historyText ?? userText, fullText);
+          if (!streamFailed && !ctrl.cancelled) agentService.recordPebbleExchange(opts?.historyText ?? userText, fullText);
 
           // Fire-and-forget extraction + learning.
           void onComplete(fullText);

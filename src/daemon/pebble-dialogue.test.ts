@@ -131,6 +131,14 @@ describe('#927: the router hears "execute, don\'t ask" on a Pebble turn', () => 
     expect(PEBBLE_VOICE_ROUTING_NOTE).not.toMatch(/Do not ask for (permission|confirmation)/i);
   });
 
+  test('the note routes by the static table, not a tier or template of its own', () => {
+    // A look-up is template=research, a workflow build tier=high, code
+    // template=code (the Delegation Catalog). A note naming one pair would
+    // override all of them on every spoken turn.
+    expect(PEBBLE_VOICE_ROUTING_NOTE).not.toMatch(/tier\s*=|template\s*=|\b(low|medium|high)\b|\b(general|research|code|plan|write)\b/i);
+    expect(PEBBLE_VOICE_ROUTING_NOTE).toContain('Delegation Catalog');
+  });
+
   test('the note is fixed text: no placeholders, nothing per turn', () => {
     expect(PEBBLE_VOICE_ROUTING_NOTE).not.toMatch(/\$\{|\{\{|%s/);
   });
@@ -164,6 +172,31 @@ describe('#927: Pebble turns are kept as a conversation', () => {
     expect(recordPebbleExchange('open the browser', '')).toBe(false);
     expect(recordPebbleExchange('open the browser', '   ')).toBe(false);
     expect(recordPebbleExchange('', 'Opened.')).toBe(false);
+    expect(getRecentConversation(PEBBLE_CHANNEL)).toBeNull();
+  });
+
+  test('the pair is atomic: a failed reply insert leaves no unanswered request behind', () => {
+    // Test-only trigger, to make the SECOND insert of the pair fail.
+    getDb().run(`CREATE TRIGGER fail_reply BEFORE INSERT ON conversation_messages
+      WHEN NEW.role = 'assistant' AND NEW.content = 'BOOM'
+      BEGIN SELECT RAISE(ABORT, 'reply insert failed'); END`);
+    expect(recordPebbleExchange('open the browser', 'BOOM')).toBe(false);
+    const rows = getDb().query('SELECT role FROM conversation_messages').all();
+    expect(rows).toEqual([]);
+    // Non-vacuous: the same trigger lets an ordinary pair through.
+    expect(recordPebbleExchange('open the browser', 'Opened.')).toBe(true);
+    expect(getDb().query('SELECT role FROM conversation_messages ORDER BY rowid').all())
+      .toEqual([{ role: 'user' }, { role: 'assistant' }]);
+  });
+
+  test('only a conversation-tier agent stores Pebble turns; classic mode reads no vault dialogue', () => {
+    const { agent } = convAgent();
+    expect(agent.recordPebbleExchange('open the browser', 'Opened.')).toBe(true);
+    expect(getRecentConversation(PEBBLE_CHANNEL)).not.toBeNull();
+
+    closeDb(); initDatabase(':memory:');
+    const classic = new AgentService({} as never);
+    expect(classic.recordPebbleExchange('open the browser', 'Opened.')).toBe(false);
     expect(getRecentConversation(PEBBLE_CHANNEL)).toBeNull();
   });
 
@@ -214,42 +247,44 @@ describe('#927: Pebble turns are kept as a conversation', () => {
 describe('#927: the Pebble response cycle stores what it finished', () => {
   // index.ts's response cycle is one closure inside the daemon's startup, so
   // its wiring is pinned from source, as pebble-confirmation.test.ts does.
+  // Whitespace-tolerant, so a reformat does not break the pin while a changed
+  // condition or argument still does.
   const src = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
   const start = src.indexOf('const runResponseCycleTurn = async (');
   const end = src.indexOf('audioSessions.onComplete(', start);
   const cycle = src.slice(start, end);
+  const RECORD = /if\s*\(\s*!streamFailed\s*&&\s*!ctrl\.cancelled\s*\)\s*agentService\.recordPebbleExchange\(\s*opts\?\.historyText\s*\?\?\s*userText\s*,\s*fullText\s*,?\s*\)/;
 
   test('the cycle is where the pin looks', () => {
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
-    expect(cycle).toContain('agentService.streamMessage(\n                userText,\n                PEBBLE_CHANNEL,');
+    expect(cycle).toMatch(/agentService\.streamMessage\(\s*userText\s*,\s*PEBBLE_CHANNEL\s*,/);
   });
 
-  test('a finished, unfailed, undismissed turn is stored before the turn hands off', () => {
-    const call = cycle.indexOf('recordPebbleExchange(opts?.historyText ?? userText, fullText)');
-    expect(call).toBeGreaterThan(-1);
-    const line = cycle.slice(cycle.lastIndexOf('\n', call), cycle.indexOf('\n', call));
-    expect(line).toContain('!streamFailed');
-    expect(line).toContain('!ctrl.cancelled');
+  test('a finished, unfailed, undismissed turn is stored, through the agent, before the turn hands off', () => {
+    const m = RECORD.exec(cycle);
+    expect(m).not.toBeNull();
+    const call = m!.index;
+    // Exactly one store in the cycle, and no direct (mode-blind) one.
+    expect(cycle.match(/recordPebbleExchange\(/g)?.length).toBe(1);
     // After the stream loop has drained, not inside it.
-    expect(call).toBeGreaterThan(cycle.indexOf('for await (const event of stream)'));
-    expect(call).toBeLessThan(cycle.indexOf('void onComplete(fullText)'));
+    expect(call).toBeGreaterThan(cycle.search(/for\s+await\s*\(\s*const\s+event\s+of\s+stream\s*\)/));
+    expect(call).toBeLessThan(cycle.search(/void\s+onComplete\(\s*fullText\s*\)/));
   });
 
   test('a region-capture turn is stored as what the user said, not the image framing', () => {
-    expect(cycle).toContain('recordPebbleExchange(opts?.historyText ?? userText, fullText)');
-    const regionCall = src.indexOf('await runResponseCycle(sidecarId, promptText, ctrl, {');
+    const regionCall = src.search(/await\s+runResponseCycle\(\s*sidecarId\s*,\s*promptText\s*,\s*ctrl\s*,\s*\{/);
     expect(regionCall).toBeGreaterThan(-1);
     const args = src.slice(regionCall, src.indexOf('});', regionCall));
-    expect(args).toContain('historyText: userText');
+    expect(args).toMatch(/historyText\s*:\s*userText\b/);
     // promptText is the framed one; userText is the spoken text it wraps.
-    expect(src).toContain('const promptText = `${userText}\\n\\n(I\'ve attached a screenshot');
+    expect(src).toMatch(/const\s+promptText\s*=\s*`\$\{userText\}\\n\\n\(I've attached a screenshot/);
   });
 
   test('a stream error marks the turn failed, so the fallback line is never stored', () => {
-    const errBranch = cycle.indexOf("event.type === 'error'");
+    const errBranch = cycle.search(/event\.type\s*===\s*'error'/);
     expect(errBranch).toBeGreaterThan(-1);
     const branch = cycle.slice(errBranch, cycle.indexOf('break;', errBranch));
-    expect(branch).toContain('streamFailed = true');
+    expect(branch).toMatch(/streamFailed\s*=\s*true/);
   });
 });

@@ -80,6 +80,11 @@ export const SITE_CHAT_ROUTING_NOTE =
  * needs_input), so the note tells the router to relay it, never to answer it:
  * "do not ask" alone would have read as permission to skip it.
  *
+ * It names no tier or template of its own: which tier and template a request
+ * gets is the static Delegation Catalog's call (a look-up is research, a
+ * workflow build is high), and a pair named here would override that table on
+ * every spoken turn.
+ *
  * Rendered in the DYNAMIC half, not the cached static one: the static half is
  * one byte-stable prefix shared by every chat and channel, and a per-channel
  * sentence there would split it into two cached prefixes that evict each
@@ -87,15 +92,14 @@ export const SITE_CHAT_ROUTING_NOTE =
  */
 export const PEBBLE_VOICE_ROUTING_NOTE =
   'This turn was spoken to the desktop voice assistant (the Pebble). A spoken '
-  + 'request IS the user\'s authorization: when they ask you to do something '
-  + '(open, click, type, send, switch, navigate, look something up), delegate it '
-  + 'now (tier=medium, template=general) instead of first asking whether to go '
-  + 'ahead or whether they want you to. Whether a genuinely irreversible action '
-  + 'needs a confirmation is decided after you delegate, not by you. If a '
-  + 'delegated task comes back needing input or confirmation, ask the user its '
-  + 'question as written and wait for their reply; never answer it yourself. '
-  + 'Before delegating, ask a question only when the request is genuinely '
-  + 'ambiguous. Your reply is spoken aloud, so keep it short.';
+  + 'request IS the user\'s authorization: when they ask you to do something, '
+  + 'delegate it now, routed by the Delegation Catalog above, instead of first '
+  + 'asking whether to go ahead or whether they want you to. Whether a genuinely '
+  + 'irreversible action needs a confirmation is decided after you delegate, not '
+  + 'by you. If a delegated task comes back needing input or confirmation, ask '
+  + 'the user its question as written and wait for their reply; never answer it '
+  + 'yourself. Before delegating, ask a question only when the request is '
+  + 'genuinely ambiguous. Your reply is spoken aloud, so keep it short.';
 
 export type ConvSystemContext = {
   /** User persona (name, timezone, role, etc.) - short identity block. */
