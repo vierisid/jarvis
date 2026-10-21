@@ -65,7 +65,7 @@ import { initDebugRpcGate, MIN_SECRET_LENGTH } from "./debug-rpc-gate.ts";
 import { hardenProcessInspection } from "./process-hardening.ts";
 import { modelExecDaemonWarning } from "../util/model-exec-marker.ts";
 import { getRecorder, parseInteractionEvent } from "../skills/recorder.ts";
-import { onRecordingStopped } from "../actions/tools/skills.ts";
+import { endRecordingForDesktopOff, onRecordingStopped } from "../actions/tools/skills.ts";
 import { createObservation } from "../vault/observations.ts";
 import { ObserverService, mapEventType } from "./observer-service.ts";
 import { WebSocketService } from "./ws-service.ts";
@@ -165,6 +165,9 @@ import {
 } from "./pebble-intents.ts";
 import { makeSpeakConfirmation } from "./pebble-confirmation.ts";
 import { makePalettePick, makePebbleNavTool } from "./pebble-nav-tool.ts";
+import { fetchPebbleForegroundApp, fetchPebbleScreenshot, pebbleActionDirectives, type PebbleDesktopDispatch } from "./pebble-desktop-context.ts";
+import { skipGenericSidecarEvent } from "./sidecar-event-routing.ts";
+import { bindDesktopSwitch, desktopEnabledFromSection, desktopValueNeedsWarning, isDesktopEnabled } from "../actions/tools/desktop-guard.ts";
 import { osFamily } from "../util/execution-environment.ts";
 import { isLocalBrowserDisabled, isNoLocalTools } from "../actions/tools/local-tools-guard.ts";
 
@@ -1583,7 +1586,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           );
           // W6 — push initial blinded state so the eye-strike glyph
           // matches awareness.enabled across daemon restarts.
-          const awarenessEnabled = (jarvisConfig.awareness as { enabled?: boolean })?.enabled ?? true;
+          // Blinded too while desktop.enabled is off: awareness ignores captures then (#905).
+          const awarenessEnabled = ((jarvisConfig.awareness as { enabled?: boolean })?.enabled ?? true) && isDesktopEnabled();
           sidecarManager.dispatchRPC(sidecar.id, 'pebble.set_blinded', { blinded: !awarenessEnabled })
             .catch(() => { /* sidecar might not have the cap yet */ });
           // Deliberately last: the pebble comes up first, then the dashboard
@@ -2003,11 +2007,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // Toggle live awareness service if it exists.
           if (awarenessService) awarenessService.toggle(nextEnabled);
           // Push visual: blinded = !enabled.
-          await sidecarManager.dispatchRPC(sidecarId, 'pebble.set_blinded', { blinded: !nextEnabled })
+          // Awareness drops every capture while desktop.enabled is off (#905),
+          // so turning it on then still leaves the pebble blind, and says so.
+          const seeing = nextEnabled && isDesktopEnabled();
+          await sidecarManager.dispatchRPC(sidecarId, 'pebble.set_blinded', { blinded: !seeing })
             .catch(() => { /* sidecar may have detached */ });
-          const ack = nextEnabled
+          const ack = seeing
             ? "Awareness back on. I can see your screen again."
-            : "Awareness off. I can't see anything until you toggle it back.";
+            : nextEnabled
+              ? "Awareness is on, but desktop control is off, so I still can't see your screen."
+              : "Awareness off. I can't see anything until you toggle it back.";
           await speakConfirmation(sidecarId, ack, { cancelled: false });
           console.log(`[ambient-ui] blind toggle → awareness.enabled=${nextEnabled}`);
         } catch (err) {
@@ -2031,6 +2040,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (event.event_type !== 'ui_interaction') return;
         const rec = getRecorder();
         if (!rec.isRecording()) return;
+        // desktop.enabled was turned off mid-recording (#905): stop it and
+        // keep nothing it captured.
+        if (!isDesktopEnabled()) {
+          endRecordingForDesktopOff();
+          return;
+        }
         const interaction = parseInteractionEvent(event.payload);
         if (!interaction) {
           console.warn('[Daemon] Dropped malformed ui_interaction event from the sidecar');
@@ -2047,6 +2062,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       const eyeTimers = new Map<string, ReturnType<typeof setTimeout>>();
       sidecarManager.onEvent((sidecarId, event) => {
         if (event.event_type !== 'screen_capture') return;
+        // Awareness ignores captures while desktop.enabled is off (#905), so
+        // the eye must not say it is looking.
+        if (!isDesktopEnabled()) return;
         // Fire-and-forget; cap concurrency on the wire.
         sidecarManager.dispatchRPC(sidecarId, 'pebble.set_eye', { active: true })
           .catch(() => { /* sidecar may not have pebble cap */ });
@@ -2201,6 +2219,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // don't false-positive on conversational sentences.
         const re = /\b(help|look|explain|what'?s?|what is|describe|tell me about|analy[sz]e)\b[^.?!]*\b(this|that|here|the screen|on (?:my )?screen|the area|the region)\b/;
         if (!re.test(t)) return false;
+        // No region capture while desktop.enabled is off (#905): the turn goes
+        // on without one, and the pebble's directives say why.
+        if (!isDesktopEnabled()) return false;
 
         // The runResponseCycle caller already claimed the pendingSummons
         // slot for this turn (summon hotkey → listening → audio.session_end
@@ -2559,88 +2580,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // it, it can pick the actual pixel location of the button. Returns
       // null on timeout/failure (best-effort).
       const NEEDS_SCREENSHOT = /\b(where|show me|show where|point (?:to|at)|guide (?:me )?to|find (?:me )?(?:the )?|highlight|locate|tell me where|how (?:do I|to)\s+(?:open|get to|find|see|access|click|reach|use|run|do|start|enable|disable|turn on|turn off)|what'?s? (?:on|on my) (?:my )?screen|what (?:am I|are we) looking at|what (?:do you|can you) see|what'?s? (?:this|happening here)|describe (?:my |the )?screen|read (?:my |the )?screen)\b/i;
-      type ScreenshotInfo = {
-        base64: string;
-        mediaType: string;
-        // Scale factors: capture-native pixels per sent-image pixel. The
-        // model picks coordinates in the (downscaled) image; we multiply by
-        // these before dispatching pebble.point_at. =1 when the image was not
-        // resized.
-        //
-        // CAPTURE-NATIVE, not "real-screen" (#604): orig_* is the pixel size
-        // of whatever `platformCaptureScreen` wrote, read off that image's own
-        // header, so it is backing pixels on a Retina Mac and primary-monitor
-        // pixels on Windows. That is not the space the pebble eases in. The
-        // multiply site has the per-platform detail and the reason no
-        // conversion is applied.
-        scaleX: number;
-        scaleY: number;
-        origWidth: number;
-        origHeight: number;
-        sentWidth: number;
-        sentHeight: number;
-      };
-      const fetchScreenshot = async (sidecarId: string): Promise<ScreenshotInfo | null> => {
-        try {
-          const result = await Promise.race<unknown>([
-            // compact: true → sidecar downscales to ≤1600 wide and
-            // re-encodes as JPEG (q=80). Keeps the round-trip well under
-            // the 16 MB WS limit and within vision-LLM-friendly sizes
-            // while still resolving button text legibly.
-            sidecarManager.dispatchRPC(sidecarId, 'capture_screen', { compact: true, max_width: 1600, jpeg_quality: 80 }),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000)),
-          ]);
-          const obj = result as Record<string, unknown> | undefined;
-          const binary = obj?._binary as { data?: string; mime_type?: string } | undefined;
-          if (!binary?.data) return null;
-          const sentWidth = Number(obj?.width ?? 0) || 0;
-          const sentHeight = Number(obj?.height ?? 0) || 0;
-          const origWidth = Number(obj?.orig_width ?? 0) || sentWidth;
-          const origHeight = Number(obj?.orig_height ?? 0) || sentHeight;
-          const scaleX = sentWidth > 0 ? origWidth / sentWidth : 1;
-          const scaleY = sentHeight > 0 ? origHeight / sentHeight : 1;
-          return {
-            base64: binary.data,
-            mediaType: binary.mime_type || 'image/jpeg',
-            scaleX,
-            scaleY,
-            origWidth,
-            origHeight,
-            sentWidth,
-            sentHeight,
-          };
-        } catch (err) {
-          console.warn('[ambient-ui] capture_screen failed:', err);
-          return null;
-        }
-      };
-
-      // T20b — query the sidecar for the currently focused OS window
-      // (Chrome tab, VSCode, CapCut, etc.) so the LLM can answer
-      // "where do I click for X?" without the user having to specify
-      // the app. Returns null on any failure — best-effort context.
-      const fetchForegroundApp = async (sidecarId: string): Promise<{ title: string; processName?: string } | null> => {
-        try {
-          const result = await Promise.race<unknown>([
-            sidecarManager.dispatchRPC(sidecarId, 'list_windows', {}),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 800)),
-          ]);
-          const arr = Array.isArray(result) ? result : (result as { windows?: unknown }).windows;
-          if (!Array.isArray(arr)) return null;
-          for (const w of arr) {
-            const ww = w as Record<string, unknown>;
-            if (ww.is_foreground) {
-              const title = String(ww.title ?? '').trim();
-              const processName = ww.process_name ? String(ww.process_name) : undefined;
-              if (!title && !processName) return null;
-              return { title, processName };
-            }
-          }
-          return null;
-        } catch {
-          return null;
-        }
-      };
+      // Both reads are switched off with desktop.enabled (#905): pebble-desktop-context.ts.
+      const pebbleDispatch: PebbleDesktopDispatch = (sidecarId, method, params) => sidecarManager.dispatchRPC(sidecarId, method, params);
+      const fetchScreenshot = (sidecarId: string) => fetchPebbleScreenshot(pebbleDispatch, sidecarId);
+      const fetchForegroundApp = (sidecarId: string) => fetchPebbleForegroundApp(pebbleDispatch, sidecarId);
 
       const buildPanelContext = async (sidecarId: string): Promise<string> => {
         const list = panelsBySidecar.get(sidecarId);
@@ -2656,34 +2599,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // when there are some.
         const sections: string[] = [];
 
-        // Action-execution directives. Every cycle through here is a
-        // voice command — the user already authorized whatever they
-        // asked for by saying it out loud. The model has been observed
-        // adding extra "may I?" rounds and giving up halfway through
-        // multi-step desktop actions; these directives short-circuit
-        // both failure modes.
-        sections.push(
-          '# Acting on the user\'s machine — execute, don\'t ask',
-          '',
-          'A spoken request IS the authorization. When the user says "click X", "open Y", "send Z", "type ...", just DO it. Do not reply with "I need your permission first" / "shall I go ahead?" / "do you want me to ...?" — the user already said yes by speaking the request. The only exception is genuinely irreversible operations (deleting files, sending money, posting publicly to recipients) — for those, ask once. Clicking icons, opening apps, focusing windows, switching tabs, taking screenshots, navigating URLs are NOT in that category.',
-          '',
-          '**Prefer the efficient automation path — never click via the OS cursor when there\'s a structured alternative.**',
-          '',
-          '  - **Web apps** (Gmail, Notion, GitHub, the JARVIS dashboard, anything in a browser): use `browser_navigate` / `browser_snapshot` / `browser_click` / `browser_type`. These dispatch DOM events through CDP — no OS cursor involved, very reliable, very fast. The user can keep using their mouse for other things while you operate the page.',
-          '',
-          '  - **Native Windows apps** (Notepad, File Explorer, settings, dialogs, menus): `desktop_snapshot` to enumerate UI elements, then `desktop_click({element_id})`. Win32 UIA invokes the element directly via COM patterns where possible — no cursor move when the widget supports the Invoke pattern.',
-          '',
-          '  - **Open an app**: `desktop_launch_app({name: "Chrome"})` is faster and more reliable than clicking a desktop icon. Only fall back to clicking icons if launch_app doesn\'t resolve the app.',
-          '',
-          'The pebble is a *visual narrator only* — it flies to the action target so the user can see what JARVIS is doing, but it does NOT control the user\'s cursor. The user keeps full mouse freedom while you operate apps through the structured paths above.',
-          '',
-          'When the user asks for something that genuinely requires a click on a non-UIA surface (desktop icon, system tray, popup), prefer asking them to do it themselves rather than wrestling with coordinate clicks — coordinate clicks move the OS cursor and steal control from the user.',
-          '',
-          '**Sidecar is primary.** The Go sidecar is connected and exposes desktop / browser / filesystem / clipboard / system_info / screenshot capabilities. Tools auto-route to it — you never need to specify a `target` parameter unless you want to override. If a tool returns "Local desktop control is not available", that\'s the local-only path leaking through; mention it in your reply but try the same call again — the auto-route should pick up the connected sidecar on the second attempt.',
-          '',
-          'When you finish a multi-step task, give a short verbal confirmation ("Done — Chrome is up.") rather than re-narrating each step. The pebble already showed each step visually.',
-          '',
-        );
+        // Action-execution directives; without the desktop half while
+        // desktop.enabled is off (#905). See pebble-desktop-context.ts.
+        sections.push(...pebbleActionDirectives());
 
         if (foreground) {
           sections.push(
@@ -4213,6 +4131,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // "stuck in working" cases are handled by keeping pendingRegion alive
         // for the whole cycle (below) and by the disconnect cleanup handler.
         if (!pending) return;
+        // The switch was turned off while the overlay was up (#905): the image
+        // is dropped unread and the flow ends as a cancel would.
+        if (!isDesktopEnabled()) {
+          pendingRegionByPebble.delete(sidecarId);
+          pending.ctrl.cancelled = true;
+          await setState(sidecarId, 'idle', '');
+          clearSummon(sidecarId, pending.ctrl);
+          return;
+        }
         // A response cycle is already running for this region. Because onEvent
         // listeners aren't awaited serially, a duplicate `region.captured` can
         // land mid-cycle; ignore it rather than tearing down the live cycle.
@@ -4502,6 +4429,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // enabled flag is the one knob with a live setter today.
     settingsReload.registerApplier('awareness', async (cfg) => {
       awarenessService?.toggle(cfg.awareness?.enabled !== false);
+    });
+    // desktop (#905): nothing writes the stored desktop section at run time
+    // today, so this does not fire yet (a change takes a restart). It is here
+    // so that a future writer plus a reload also stops the one thing already
+    // running: a skill recording's input hooks on the sidecar.
+    settingsReload.registerApplier('desktop', async () => {
+      if (!isDesktopEnabled() && endRecordingForDesktopOff()) {
+        console.log('[Tools] desktop.enabled turned off: the running skill recording was stopped and discarded.');
+      }
     });
     // voice: resolveRealtimeVoice reads live config per call, so the dashboard
     // needs no applier, but a connected pebble keeps the realtime verdict it
@@ -5236,6 +5172,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       setNoLocalTools(true);
     }
 
+    // 9b-ter. desktop.enabled (#905). Bound to the live config object, but a
+    // change takes a restart today: see desktop-guard.ts.
+    bindDesktopSwitch(jarvisConfig);
+    {
+      const stored: unknown = jarvisConfig.desktop;
+      if (desktopValueNeedsWarning(stored)) {
+        console.warn(`[Tools] desktop is ${JSON.stringify(stored)}, not { enabled: true | false }; reading it as ${desktopEnabledFromSection(stored) ? 'ON' : 'OFF'}.`);
+      }
+      if (!desktopEnabledFromSection(stored)) {
+        console.log('[Tools] Desktop control is off (desktop.enabled: false). Desktop tools, screen capture, desktop UI reads and awareness captures are refused.');
+      }
+    }
+
     // 9b-bis. What the generic file tools must know about this install
     // (#522): the site projects dir, whose git internals they refuse --
     // registered whether or not the site builder is on or starts, since old
@@ -5890,8 +5839,6 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 10h. Wire sidecar events into the event pipeline (skip awareness events —
     // already handled by the awareness service).
-    const awarenessEventTypes = ['screen_capture', 'context_changed', 'idle_detected'];
-
     // Host-sensing observers (clipboard, file watch, process monitor,
     // notifications) now run in the SIDECAR — the agent that actually lives on
     // the user's machine — instead of the brain. Map each sidecar event_type
@@ -5916,8 +5863,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const internalSidecarEventTypes = ['update_progress'];
 
     sidecarManager.onEvent((sidecarId, event) => {
-      // Skip events already routed to awareness service to avoid double processing
-      if (awarenessService && awarenessEventTypes.includes(event.event_type)) return;
+      // Skip events already routed to awareness service to avoid double
+      // processing, and screen events altogether while desktop.enabled is off
+      // (#905): sidecar-event-routing.ts.
+      if (skipGenericSidecarEvent(event.event_type, !!awarenessService)) return;
       if (recorderEventTypes.includes(event.event_type)) return;
       if (internalSidecarEventTypes.includes(event.event_type)) return;
 

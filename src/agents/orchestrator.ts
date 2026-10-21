@@ -50,6 +50,7 @@ import {
 } from '../actions/tools/tool-relevance/discover.ts';
 import { getToolFilterPolicy } from '../actions/tools/tool-relevance/policy.ts';
 import { toolsInScope, toolInScope, outOfScopeMessage, type TurnToolScope } from '../actions/tools/tool-scope.ts';
+import { desktopRefusal } from '../actions/tools/desktop-guard.ts';
 import { withTurnScopeId } from '../actions/tools/turn-scope-store.ts';
 import { newSnapshotReadLog, withSnapshotReadLog } from '../actions/tools/snapshot-read-log.ts';
 import type { LLMProviderEntry } from '../config/types.ts';
@@ -1731,6 +1732,28 @@ export class AgentOrchestrator {
     return interceptOffList(tc.name, this.discoveryContext(exposed, ledger, scope));
   }
 
+  /**
+   * One denied row for a call refused because desktop.enabled is off (#905),
+   * named like out_of_scope(...) so it never reads as a gate decision on the
+   * tool itself. An audit failure must not take the turn down.
+   */
+  private auditDesktopOff(name: string, channel?: 'voice'): void {
+    try {
+      const agent = this.getPrimary();
+      this.auditTrail?.log({
+        agent_id: agent?.id ?? 'unknown',
+        agent_name: this.auditAgentName(agent?.agent.role.name ?? 'unknown'),
+        tool_name: `desktop_disabled(${name})`,
+        action_category: getActionForTool(name, this.toolRegistry?.get(name)?.category ?? 'unknown'),
+        authority_decision: 'denied',
+        executed: false,
+        ...(channel ? { channel } : {}),
+      });
+    } catch (err) {
+      console.warn('[Orchestrator] could not audit a desktop-off refusal:', err instanceof Error ? err.message : err);
+    }
+  }
+
   /** What both interceptors need: the gate, the emergency check, the audit hook. */
   private discoveryContext(
     exposed: ReadonlySet<string>,
@@ -1944,6 +1967,16 @@ export class AgentOrchestrator {
       return getToolFilterPolicy().enabled
         ? `Error: no tool named "${toolCall.name}" is available. Call discover_tools to see what is.`
         : `Error: no tool named "${toolCall.name}" is available.`;
+    }
+
+    // desktop.enabled: false (#905). Before the gate for the same reason as the
+    // scope check above: a switched-off surface is not a governance decision,
+    // and raising an approval card for a call that would then be refused only
+    // asks the person to approve nothing. The registry refuses it again.
+    const desktopOff = desktopRefusal(this.toolRegistry.get(toolCall.name), toolCall.arguments);
+    if (desktopOff) {
+      this.auditDesktopOff(toolCall.name);
+      return desktopOff;
     }
 
     // Pin what the tool would otherwise resolve at run time (a relative file
@@ -2300,6 +2333,12 @@ export class AgentOrchestrator {
     // announcement about a tool that does not exist.
     if (!this.toolRegistry.has(name)) {
       return `Error: no tool named "${name}" is available.`;
+    }
+    // As on the task path: a switched-off desktop is answered before the gate (#905).
+    const desktopOff = desktopRefusal(this.toolRegistry.get(name), args);
+    if (desktopOff) {
+      this.auditDesktopOff(name, 'voice');
+      return desktopOff;
     }
 
     const primary = this.getPrimary();

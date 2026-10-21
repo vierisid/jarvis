@@ -208,6 +208,7 @@
 
 import type { ToolDefinition } from './registry.ts';
 import { NOT_RUN_MARKER } from './tool-relevance/ledger.ts';
+import { withoutDisabledDesktopTools } from './desktop-guard.ts';
 
 export type TurnToolScope = {
   /**
@@ -355,13 +356,18 @@ export function isScopePinned(tool: Pick<ToolDefinition, 'category'>, scope: Tur
  * The candidate tools for a turn under `scope`. Applied to the registry
  * listing BEFORE the relevance filter and before the discovery catalogue, so
  * neither can offer, reveal or admit what the turn does not have.
+ *
+ * Also the one place the always-desktop tools drop out while
+ * `desktop.enabled` is false (#905, desktop-guard.ts): same reason, nothing
+ * downstream may offer, list or admit a tool that would only be refused.
  */
 export function toolsInScope(
   all: readonly ToolDefinition[],
   scope: TurnToolScope | null | undefined,
 ): readonly ToolDefinition[] {
-  if (!scope || scope.withheld.size === 0) return all;
-  return all.filter((tool) => toolInScope(scope, tool.name));
+  const available = withoutDisabledDesktopTools(all);
+  if (!scope || scope.withheld.size === 0) return available;
+  return available.filter((tool) => toolInScope(scope, tool.name));
 }
 
 /**

@@ -40,6 +40,7 @@ import type { AuthorityEngine, AuthorityProfile } from '../authority/engine.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import { freezeToolArguments, getActionForTool, resolveToolGate, substituteAboveLevel } from '../authority/tool-action-map.ts';
+import { desktopRefusal, withoutDisabledDesktopTools } from '../actions/tools/desktop-guard.ts';
 import { combineDecisions } from '../authority/engine.ts';
 import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFailure, isTaintSourceTool, splitToolReturn } from '../roles/untrusted.ts';
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
@@ -481,6 +482,19 @@ async function executeTool(
     }
 
     const tool = registry.get(toolCall.name);
+    // desktop.enabled: false (#905), answered before the gate as on the main path.
+    const desktopOff = desktopRefusal(tool, toolCall.arguments);
+    if (desktopOff) {
+      authorityCtx?.auditTrail?.log({
+        agent_id: authorityCtx.agent.id,
+        agent_name: authorityCtx.agent.agent.role.name,
+        tool_name: `desktop_disabled(${toolCall.name})`,
+        action_category: getActionForTool(toolCall.name, tool?.category ?? 'unknown'),
+        authority_decision: 'denied',
+        executed: false,
+      });
+      return { text: desktopOff, failed: true };
+    }
     const toolCategory = tool?.category ?? 'unknown';
     const gate = resolveToolGate(tool, toolCall.name, toolCall.arguments);
     const actionCategory = gate.actionCategory;
@@ -801,7 +815,9 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       fence();
       // Filter off: nothing to intercept, and nothing is built for it.
       const discoveryCtx: DiscoveryContext | null = !getToolFilterPolicy().enabled ? null : {
-        all: toolRegistry.list(),
+        // Without the desktop tools while desktop.enabled is off (#905), as
+        // on the main path: nothing may list or admit what would be refused.
+        all: withoutDisabledDesktopTools(toolRegistry.list()),
         ledger: exposure,
         exposed: offered,
         filterEnabled: true,

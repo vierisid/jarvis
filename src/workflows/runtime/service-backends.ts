@@ -46,6 +46,7 @@ import { cancellableWorkflowService } from "./cancellation";
 import { closeEffectApproval, WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
 import { getWorkflowEffect, saveWorkflowEffect, listWorkflowEffects, type WorkflowEffect } from '../db/repos/workflow-effect';
 import { resolveToolGate, severityRank } from '../../authority/tool-action-map';
+import { assertDesktopAllowed } from '../../actions/tools/desktop-guard.ts';
 import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, surfaceBoundRefusal, toolEffectCapability } from './effect-capabilities';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceActionName, reprojectPieceInput,
@@ -235,6 +236,14 @@ export function buildSandboxServiceBackends(
           throw new Error(`tool not found: ${req.toolName}`);
         }
         const tool = opts.toolRegistry!.get(req.toolName)!;
+        // desktop.enabled: false (#905). Typed and not started, before any
+        // effect record or approval card exists for the step; audited like a
+        // capability refusal.
+        try { assertDesktopAllowed(tool, req.params); }
+        catch (error) {
+          effects.auditRefusal({ context: ctx, toolName: `desktop_disabled(${tool.name})`, category: refusedEffectCategory(tool) });
+          throw error;
+        }
         const capability = (() => {
           try { return toolEffectCapability(tool, req.params); }
           catch (error) {
