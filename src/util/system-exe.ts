@@ -44,9 +44,18 @@ export function linuxSystemDirs(user: string | null = currentUser()): readonly s
   return [...LINUX_SYSTEM_DIRS, `${PER_USER_PREFIX}${user}/bin`];
 }
 
-/** This process's account name from the password database, not $USER, or null. */
+let cachedUser: string | null | undefined;
+
+/**
+ * This process's account name from the password database, not $USER, or
+ * null. Looked up once: the uid does not change, and the lookup can go
+ * through NSS (LDAP and the like) on every call otherwise.
+ */
 function currentUser(): string | null {
-  try { return userInfo().username || null; } catch { return null; }
+  if (cachedUser === undefined) {
+    try { cachedUser = userInfo().username || null; } catch { cachedUser = null; }
+  }
+  return cachedUser;
 }
 
 /** The Linux programs the daemon runs. A closed set, so each new one is a reviewed addition. */
@@ -297,19 +306,36 @@ export function linuxSystemExe(name: LinuxSystemTool, opts: LinuxExeOptions = {}
   const found = findLinuxSystemExe(name, opts);
   if (found.path !== null) return found.path;
   const { dirs, fs } = defaults(opts);
+  const user = opts.user === undefined ? currentUser() : opts.user;
   const notUsed = [
     ...found.rejected,
     ...copiesElsewhereOnPath(name, dirs, fs).map(p => `${p} (not a system directory)`),
   ];
+  // The per-user profile is named only where NixOS has made one: elsewhere
+  // it is noise in a message the model reads.
+  const shown = fs.lstat(PER_USER_PREFIX.slice(0, -1)) === null ? dirs.filter(dir => !dir.startsWith(PER_USER_PREFIX)) : dirs;
   const where = found.rejected.length ? 'has no usable copy in a system directory' : 'is not installed in a system directory';
   throw new SystemExeNotFoundError(name, userAsVariable(
-    `${name} ${where} (${dirs.join(', ')})` +
-    (notUsed.length ? `; not used: ${notUsed.map(homeAsTilde).join('; ')}` : '')));
+    `${name} ${where} (${shown.join(', ')})` +
+    (notUsed.length ? `; not used: ${notUsed.map(homeAsTilde).join('; ')}` : ''), user));
 }
 
-/** The per-user profile's account name as `$USER`, for the reason homeAsTilde gives. */
-function userAsVariable(text: string): string {
-  return text.replace(/\/etc\/profiles\/per-user\/[^/]+\//g, `${PER_USER_PREFIX}$USER/`);
+/**
+ * The per-user profile's account name as `$USER`, for the reason homeAsTilde
+ * gives: the exact name, as a whole path segment, wherever the path ends.
+ */
+function userAsVariable(text: string, user: string | null): string {
+  if (user === null) return text;
+  const prefix = PER_USER_PREFIX + user;
+  let out = '';
+  let from = 0;
+  for (let at = text.indexOf(prefix); at !== -1; at = text.indexOf(prefix, at + prefix.length)) {
+    const next = text[at + prefix.length];
+    if (next !== undefined && next !== '/' && next !== ' ' && next !== ')' && next !== ';') continue;
+    out += text.slice(from, at) + PER_USER_PREFIX + '$USER';
+    from = at + prefix.length;
+  }
+  return out + text.slice(from);
 }
 
 /**

@@ -7,7 +7,7 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, userInfo } from 'node:os';
 import { join, posix } from 'node:path';
 import {
   LINUX_SYSTEM_DIRS, SystemExeNotFoundError, __setLinuxSystemDirsForTests, findLinuxSystemExe, linuxSystemDirs, linuxSystemExe, win32AbsolutePath, win32SystemExe,
@@ -105,6 +105,46 @@ describe('findLinuxSystemExe (#900)', () => {
     // The error names the directory without the account's name.
     expect(() => linuxSystemExe('xsel', { fs, user: 'alice' })).toThrow(
       'xsel is not installed in a system directory (/usr/local/bin, /usr/bin, /bin, /run/current-system/sw/bin, /etc/profiles/per-user/$USER/bin)');
+  });
+
+  test('the account name never shows in an error, wherever the per-user path ends, and the reason is kept (#900 review)', () => {
+    const base: Record<string, Entry> = {
+      '/etc/profiles': { kind: 'dir' }, '/etc/profiles/per-user': { kind: 'dir' },
+      '/etc/profiles/per-user/alice': { kind: 'dir' }, '/etc/profiles/per-user/alice/bin': { kind: 'dir' },
+      '/etc/profiles/per-user/alice/bin/xclip': { kind: 'file' },
+    };
+    const message = (entries: Record<string, Entry>) => {
+      try { linuxSystemExe('xclip', { fs: fakeFs({ ...SYSTEM, ...base, ...entries }), user: 'alice' }); } catch (e) { return (e as Error).message; }
+      return '';
+    };
+    const writable = message({ '/etc/profiles/per-user/alice': { kind: 'dir', mode: 0o40775 } });
+    expect(writable).toContain('/etc/profiles/per-user/$USER/bin/xclip (/etc/profiles/per-user/$USER is writable by its group or by others)');
+    const sticky = message({ '/etc/profiles/per-user': { kind: 'dir', mode: 0o41777 }, '/etc/profiles/per-user/alice': { kind: 'dir', uid: UID } });
+    expect(sticky).toContain('(/etc/profiles/per-user/$USER is owned by uid 1000 in sticky /etc/profiles/per-user)');
+    for (const text of [writable, sticky]) expect(text).not.toContain('alice');
+  });
+
+  test('the per-user profile is listed in an error only where NixOS has one', () => {
+    expect(() => linuxSystemExe('xsel', { fs: fakeFs(SYSTEM), user: 'alice' })).toThrow(
+      'xsel is not installed in a system directory (/usr/local/bin, /usr/bin, /bin, /run/current-system/sw/bin)');
+  });
+
+  test('the per-user profile is the account this process runs as, not $USER', () => {
+    const saved = process.env.USER;
+    process.env.USER = 'mallory';
+    try {
+      expect(linuxSystemDirs().at(-1)).toBe(`/etc/profiles/per-user/${userInfo().username}/bin`);
+    } finally {
+      if (saved === undefined) delete process.env.USER; else process.env.USER = saved;
+    }
+  });
+
+  test('a refused path that only exists through `..` in a link is still reported', () => {
+    // /usr/local is group-writable; bin links to x/../real-bin, which holds the copy.
+    expect(look({
+      '/usr/local': { kind: 'dir', mode: 0o42775 }, '/usr/local/bin': { kind: 'link', target: 'x/../real-bin' },
+      '/usr/local/x': { kind: 'dir' }, '/usr/local/real-bin': { kind: 'dir' }, '/usr/local/real-bin/xclip': { kind: 'file' },
+    })).toEqual({ path: null, rejected: ['/usr/local/bin/xclip (/usr/local is writable by its group or by others)'] });
   });
 
   test('a copy outside the system directories is never found, whatever PATH says', () => {
