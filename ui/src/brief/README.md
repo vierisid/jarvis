@@ -187,8 +187,13 @@ mounted live yet; a composition root wires it after the rooms it targets are rea
   accepts only `ROOM_TABS.settings` names on the Settings hashes, and the room keeps the query in step
   with the selected tab. `briefMaintenance=1` adds the support links to General.
 - An unknown `?brief=1#/brief/<room>` shows a notice with those links and a link to the current
-  dashboard, instead of silently opening the current dashboard With the release switch off this applies
-  to the developer-setting path; an ordinary document stays on `AppShellV2` (see Entry points).
+  dashboard, instead of silently opening the current dashboard. With the release switch off this
+  applies to the developer-setting path; an ordinary document stays on `AppShellV2` (see Entry
+  points). Under an approved release (owner decision on #1106) the notice shows only when `<room>`
+  is shaped like a room id (lower-case letters and digits in hyphen-separated words, at most 64
+  characters) and the URL passes the same opt-in rules as a known room; anything else under
+  `#/brief/` is malformed and opens the current dashboard. The developer-setting path still shows
+  the notice for any unknown `#/brief/` hash, malformed or not.
 
 `?brief=preview&specimen=navigation-compatibility#/_brief_preview` opens these parts over fixture
 notifications. It starts no API read, socket, voice or Settings write.

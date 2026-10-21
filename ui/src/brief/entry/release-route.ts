@@ -18,6 +18,17 @@ export const LEGACY_ROOMS: Record<BriefRoomId, RoomKey | null> = {
   authority: "authority", profile: "settings", settings: "settings", billing: "usage",
 };
 
+/** A room segment shaped like a Brief room id, for a room this build does not have (#1106).
+ * Anything else under #/brief/ is malformed and keeps the current dashboard (D-33). */
+const WELL_FORMED_ROOM = /^#\/brief\/[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\?|$)/;
+function wellFormedUnknownRoom(href: string): boolean {
+  const url = new URL(href, "http://localhost");
+  const room = url.hash.slice("#/brief/".length).split("?")[0]!;
+  if (!WELL_FORMED_ROOM.test(url.hash) || room.length > 64) return false;
+  url.searchParams.set("brief", "1");
+  return resolveBriefEntry(url.toString()).kind === "moved";
+}
+
 function directRoute(href: string): BriefRoute | null {
   const url = new URL(href, "http://localhost");
   url.searchParams.set("brief", "1");
@@ -48,6 +59,8 @@ export function resolveReleaseEntry(href: string, rollout: BriefRollout, devtool
   }
   const route = directRoute(href);
   if (route) return { kind: "brief", route };
+  // Owner decision on #1106: a stale link to a room that is gone gets the notice.
+  if (wellFormedUnknownRoom(href)) return { kind: "moved" };
   const hash = url.hash || "#/";
   const room = Object.hasOwn(FOREGROUND_ALIASES, hash) ? FOREGROUND_ALIASES[hash as keyof typeof FOREGROUND_ALIASES] : null;
   return room ? { kind: "brief", route: { room, selection: {} } } : { kind: "legacy" };

@@ -334,6 +334,15 @@ test("native sidecar panels still mount only their legacy owner under an approve
   expect(getV2Route()).toEqual({ kind: "panel", key: "settings" });
   expect(host.textContent).toBe("Current dashboard"); expect(gates).toBe(0); expect(starts).toBe(1);
 });
+test("approved release shows the moved notice for a well-formed unknown room and the dashboard for a malformed one (#1106)", async () => {
+  const props = releaseProps(); props.release!.rollout = "released";
+  await production("http://localhost:4381/?brief=1#/brief/inbox", props);
+  expect(host.textContent).toContain("This view is not part of Brief");
+  expect(host.textContent).toContain("Open current dashboard");
+  expect(host.querySelector("[data-legacy]")).toBeNull(); expect(gates).toBeGreaterThan(0);
+  await route("http://localhost:4381/?brief=1#/brief/__proto__");
+  expect(host.textContent).toBe("Current dashboard"); expect(starts).toBe(1);
+});
 test("old F25 maintenance links keep device settings reachable with a released default", async () => {
   const props = releaseProps(); props.release!.rollout = "released";
   await production("http://localhost:4381/?briefMaintenance=1&settingsTab=sidecar&sidecarId=device-123#/_room_settings", props);
