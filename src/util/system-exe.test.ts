@@ -8,44 +8,25 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { isAbsolute, join, posix } from 'node:path';
+import { join, posix } from 'node:path';
 import {
-  LINUX_SYSTEM_DIRS, SystemExeNotFoundError, __setLinuxSystemDirsForTests, findLinuxSystemExe, linuxSystemExe, win32SystemExe,
+  LINUX_SYSTEM_DIRS, SystemExeNotFoundError, __setLinuxSystemDirsForTests, findLinuxSystemExe, linuxSystemExe, win32AbsolutePath, win32SystemExe,
   type ExeFs,
 } from './system-exe.ts';
 
 type Entry =
   | { kind: 'dir'; uid?: number; mode?: number }
   | { kind: 'file'; uid?: number; mode?: number }
-  | { kind: 'link'; target: string };
+  | { kind: 'link'; target: string; uid?: number };
 
 /** A fake filesystem: absolute path -> entry. Parents must be listed too. */
 function fakeFs(entries: Record<string, Entry>): ExeFs {
   const get = (path: string) => entries[posix.normalize(path)];
-  const realpath = (path: string): string | null => {
-    let parts = posix.normalize(path).split('/').filter(Boolean);
-    let resolved = '/';
-    for (let hops = 0, i = 0; i < parts.length; i++) {
-      const next = posix.join(resolved, parts[i]!);
-      const entry = get(next);
-      if (!entry) return null;
-      if (entry.kind === 'link') {
-        if (++hops > 40) return null;
-        const target = isAbsolute(entry.target) ? entry.target : posix.join(resolved, entry.target);
-        parts = [...posix.normalize(target).split('/').filter(Boolean), ...parts.slice(i + 1)];
-        resolved = '/';
-        i = -1;
-        continue;
-      }
-      resolved = next;
-    }
-    return resolved;
-  };
   return {
     lstat(path) {
       const entry = get(path);
       if (!entry) return null;
-      if (entry.kind === 'link') return { uid: 0, mode: 0o120777, isFile: false, isDirectory: false, isSymbolicLink: true };
+      if (entry.kind === 'link') return { uid: entry.uid ?? 0, mode: 0o120777, isFile: false, isDirectory: false, isSymbolicLink: true };
       return {
         uid: entry.uid ?? 0,
         mode: entry.mode ?? (entry.kind === 'dir' ? 0o40755 : 0o100755),
@@ -58,7 +39,6 @@ function fakeFs(entries: Record<string, Entry>): ExeFs {
       const entry = get(path);
       return entry?.kind === 'link' ? entry.target : null;
     },
-    realpath,
   };
 }
 
@@ -176,6 +156,61 @@ describe('findLinuxSystemExe (#900)', () => {
       '/home/u/.local/bin/hop': { kind: 'link', target: '/usr/bin/xclip-real' },
       '/usr/bin/xclip-real': { kind: 'file' },
     }).path).toBeNull();
+  });
+
+  test('every component of the path run is checked, not only where its directories resolve to (#900 re-review)', () => {
+    // /usr/local handed to a user, with /usr/local/bin a link to /usr/bin:
+    // the files are root's, but the user can re-point /usr/local/bin between
+    // the check and the spawn, so /usr/local/bin/xclip must not be returned.
+    const userLocalLink: Record<string, Entry> = {
+      '/usr/local': { kind: 'dir', uid: UID }, '/usr/local/bin': { kind: 'link', target: '/usr/bin' }, '/usr/bin/xclip': { kind: 'file' },
+    };
+    expect(look(userLocalLink)).toEqual({ path: '/usr/bin/xclip' });
+    expect(look({ ...userLocalLink, '/usr/bin/xclip': { kind: 'file', mode: 0o100644 } })).toEqual({
+      path: null,
+      rejected: ['/usr/local/bin/xclip (/usr/local is owned by uid 1000)', '/usr/bin/xclip (/usr/bin/xclip is not executable)'],
+    });
+    // The same through a later hop: a root link whose target passes through a
+    // user-owned directory's link back into root-owned ones.
+    expect(look({
+      '/usr/bin/xclip': { kind: 'link', target: '/opt/x/bin/xclip' },
+      '/opt': { kind: 'dir' }, '/opt/x': { kind: 'dir', uid: UID }, '/opt/x/bin': { kind: 'link', target: '/usr/lib/xclip' },
+      '/usr/lib': { kind: 'dir' }, '/usr/lib/xclip': { kind: 'dir' }, '/usr/lib/xclip/xclip': { kind: 'file' },
+    })).toEqual({ path: null, rejected: ['/usr/bin/xclip (/opt/x is owned by uid 1000)'] });
+    // A link in a root-owned sticky directory: only its owner can replace it,
+    // so it must be root's.
+    const stickyLink: Record<string, Entry> = {
+      '/usr/bin/xclip': { kind: 'link', target: '/tmp/d/xclip' },
+      '/tmp': { kind: 'dir', mode: 0o41777 }, '/tmp/d': { kind: 'link', target: '/usr/lib' },
+      '/usr/lib': { kind: 'dir' }, '/usr/lib/xclip': { kind: 'file' },
+    };
+    expect(look(stickyLink)).toEqual({ path: '/usr/bin/xclip' });
+    expect(look({ ...stickyLink, '/tmp/d': { kind: 'link', target: '/usr/lib', uid: UID } }))
+      .toEqual({ path: null, rejected: ['/usr/bin/xclip (/tmp/d is owned by uid 1000 in sticky /tmp)'] });
+  });
+
+  test('`..` in a link target is taken from where the link before it leads, as the kernel does (#900 re-review)', () => {
+    // sub/../xclip-real is not xclip-real beside the link: sub leads into
+    // a user's directory, and `..` from there is the user's home.
+    const viaUserDir: Record<string, Entry> = {
+      '/usr/bin/sub': { kind: 'link', target: '/home/u/d' }, '/home/u/d': { kind: 'dir', uid: UID },
+      '/usr/bin/xclip-real': { kind: 'file' }, '/home/u/xclip-real': { kind: 'file', uid: UID },
+    };
+    for (const target of ['sub/../xclip-real', '/usr/bin/sub/../xclip-real']) {
+      expect(look({ ...viaUserDir, '/usr/bin/xclip': { kind: 'link', target } }))
+        .toEqual({ path: null, rejected: ['/usr/bin/xclip (/home/u is owned by uid 1000)'] });
+    }
+    // Through root's own directories `..` is fine.
+    expect(look({
+      '/usr/bin/xclip': { kind: 'link', target: '../lib/x/../xclip-real' },
+      '/usr/lib': { kind: 'dir' }, '/usr/lib/x': { kind: 'dir' }, '/usr/lib/xclip-real': { kind: 'file' },
+    })).toEqual({ path: '/usr/bin/xclip' });
+  });
+
+  test('the last hop may not end in a sticky directory either (#900 re-review)', () => {
+    expect(look({
+      '/usr/bin/xclip': { kind: 'link', target: '/tmp/xclip' }, '/tmp': { kind: 'dir', mode: 0o41777 }, '/tmp/xclip': { kind: 'file' },
+    })).toEqual({ path: null, rejected: ['/usr/bin/xclip (/tmp is writable by its group or by others)'] });
   });
 
   test('a symlink loop is rejected, not followed forever', () => {

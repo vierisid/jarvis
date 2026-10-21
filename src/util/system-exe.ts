@@ -15,8 +15,8 @@
  * is windowsSystemExe in actions/terminal/wsl-bridge.ts, which finds the
  * Windows directory through the mount table instead.
  */
-import { lstatSync, readlinkSync, realpathSync } from 'node:fs';
-import { basename, delimiter, dirname, isAbsolute, join, win32 } from 'node:path';
+import { lstatSync, readlinkSync } from 'node:fs';
+import { delimiter, dirname, isAbsolute, join, win32 } from 'node:path';
 
 /**
  * Where the Linux tools are taken from, in this order: the directories a
@@ -36,7 +36,6 @@ export type ExeFs = {
   /** lstat: null when nothing is there. */
   lstat(path: string): { uid: number; mode: number; isFile: boolean; isDirectory: boolean; isSymbolicLink: boolean } | null;
   readlink(path: string): string | null;
-  realpath(path: string): string | null;
 };
 
 const realFs: ExeFs = {
@@ -50,9 +49,6 @@ const realFs: ExeFs = {
   },
   readlink(path) {
     try { return readlinkSync(path); } catch { return null; }
-  },
-  realpath(path) {
-    try { return realpathSync(path); } catch { return null; }
   },
 };
 
@@ -105,62 +101,86 @@ function untrusted(stat: { uid: number; mode: number }, owners: readonly number[
 /** The sticky bit: in such a directory only an entry's owner can rename or remove it. */
 const STICKY = 0o1000;
 
+/** `problem` is a reason, or 'missing' when nothing is there. */
+type Walked = { real: string } | { problem: string };
+
 /**
- * Why the directory `dir` (already resolved, no symlinks in it) cannot be
- * trusted, or null when it can: it and every directory above it, up to `/`,
- * must be owned by `owners` and not writable by its group or others (#900
- * review). Checking only `dir` would let whoever owns a parent (a `/usr/local`
- * handed to a user, an `/opt/x` above a root-owned `/opt/x/bin`) move `dir`
- * aside and put their own in its place. An ancestor that is writable by others
- * but sticky and root-owned (/tmp; /nix/store, which is 1775 root:nixbld)
- * passes, because the entry below it is checked in turn and only its owner
- * could replace it; `dir` itself gets no such exception, since a stranger
- * could add their own symlink beside a program there.
+ * Resolve `path` one component at a time, as the kernel does when it runs it,
+ * and check that nobody but `owners` could change any step: every directory
+ * passed through, every symlink followed (wherever it sits in the path, and
+ * through every hop of its target) and, when `program` is set, the program at
+ * the end. Returns the resolved path, or why it cannot be trusted ('missing'
+ * when nothing is there).
+ *
+ * Each entry is judged by the directory holding it, since whoever can write
+ * that directory can replace the entry (#900 review, re-review): checking only
+ * where a directory resolves to would trust /usr/local/bin/xclip when
+ * /usr/local/bin is a link to /usr/bin inside a /usr/local handed to a user,
+ * who could re-point the link between this check and the spawn. A directory
+ * that is writable by others but sticky and root-owned (/tmp; /nix/store,
+ * which is 1775 root:nixbld) may hold an entry that `owners` own, because only
+ * that entry's owner could replace it; the directory holding the program gets
+ * no such exception, since a stranger could add their own symlink beside it.
  */
-function untrustedDir(dir: string, fs: ExeFs, owners: readonly number[]): string | null | 'missing' {
-  const parts = dir.split('/').filter(Boolean);
-  for (let i = parts.length; i >= 0; i--) {
-    const path = '/' + parts.slice(0, i).join('/');
-    const stat = fs.lstat(path);
-    if (!stat?.isDirectory) return 'missing';
-    const problem = untrusted(stat, owners);
-    if (!problem) continue;
-    const stickyAncestor = i < parts.length && stat.uid === 0 && (stat.mode & STICKY) !== 0
-      && problem === 'writable by its group or by others';
-    if (!stickyAncestor) return `${path} is ${problem}`;
+function walkChecked(path: string, fs: ExeFs, owners: readonly number[], program: boolean, links: { count: number }): Walked {
+  const root = fs.lstat('/');
+  if (!root?.isDirectory) return { problem: 'missing' };
+  const rootProblem = untrusted(root, owners);
+  if (rootProblem) return { problem: `/ is ${rootProblem}` };
+  const parts = path.split('/').filter(part => part !== '' && part !== '.');
+  let cur = '/';
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i]!;
+    const last = i === parts.length - 1;
+    if (part === '..') {
+      // Every directory above `cur` was passed through, and checked, on the way to it.
+      cur = dirname(cur);
+      continue;
+    }
+    const holder = fs.lstat(cur);
+    if (!holder?.isDirectory) return { problem: 'missing' };
+    const entry = join(cur, part);
+    const stat = fs.lstat(entry);
+    if (stat === null) return { problem: 'missing' };
+    const holderProblem = untrusted(holder, owners);
+    if (holderProblem) {
+      const sticky = holder.uid === 0 && (holder.mode & STICKY) !== 0 && holderProblem === 'writable by its group or by others';
+      if (!sticky || (program && last)) return { problem: `${cur} is ${holderProblem}` };
+      if (!owners.includes(stat.uid)) return { problem: `${entry} is owned by uid ${stat.uid} in sticky ${cur}` };
+    }
+    if (stat.isSymbolicLink) {
+      if (++links.count > MAX_LINKS) return { problem: `more than ${MAX_LINKS} symlinks` };
+      const target = fs.readlink(entry);
+      if (target === null) return { problem: 'missing' };
+      // Not join(): it would settle a `..` in the target as text, while the
+      // kernel takes it from wherever the components before it lead.
+      const next = walkChecked(isAbsolute(target) ? target : `${cur}/${target}`, fs, owners, program && last, links);
+      if (!('real' in next) || (program && last)) return next;
+      cur = next.real;
+      continue;
+    }
+    if (program && last) {
+      if (!stat.isFile) return { problem: `${entry} is not a regular file` };
+      const problem = untrusted(stat, owners);
+      if (problem) return { problem: `${entry} is ${problem}` };
+      if ((stat.mode & 0o111) === 0) return { problem: `${entry} is not executable` };
+      return { real: entry };
+    }
+    if (!stat.isDirectory) return { problem: 'missing' };
+    cur = entry;
   }
-  return null;
+  return program ? { problem: 'missing' } : { real: cur };
 }
 
 /**
- * Follow `candidate` to the program it names, checking every directory a hop
- * sits in (after resolving that directory's own symlinks), together with the
- * directories above it, and the program at the end. Returns null when it can
- * be trusted, the reason otherwise, or 'missing' when nothing is there.
+ * Why the program at `candidate` cannot be trusted, null when it can, or
+ * 'missing' when nothing is there. See walkChecked.
  */
 function checkChain(candidate: string, fs: ExeFs, owners: readonly number[]): string | null | 'missing' {
-  let path = candidate;
-  for (let hop = 0; hop <= MAX_LINKS; hop++) {
-    const dir = fs.realpath(dirname(path));
-    if (dir === null) return 'missing';
-    const dirProblem = untrustedDir(dir, fs, owners);
-    if (dirProblem) return dirProblem;
-    const here = join(dir, basename(path));
-    const stat = fs.lstat(here);
-    if (stat === null) return 'missing';
-    if (stat.isSymbolicLink) {
-      const target = fs.readlink(here);
-      if (target === null) return 'missing';
-      path = isAbsolute(target) ? target : join(dir, target);
-      continue;
-    }
-    if (!stat.isFile) return `${here} is not a regular file`;
-    const problem = untrusted(stat, owners);
-    if (problem) return `${here} is ${problem}`;
-    if ((stat.mode & 0o111) === 0) return `${here} is not executable`;
-    return null;
-  }
-  return `${candidate} has more than ${MAX_LINKS} symlinks`;
+  const walked = walkChecked(candidate, fs, owners, true, { count: 0 });
+  if ('real' in walked) return null;
+  if (walked.problem === `more than ${MAX_LINKS} symlinks`) return `${candidate} has more than ${MAX_LINKS} symlinks`;
+  return walked.problem;
 }
 
 /**
@@ -176,18 +196,18 @@ export function findLinuxSystemExe(name: LinuxSystemTool, opts: LinuxExeOptions 
   if (process.platform === 'win32' && opts.fs === undefined) return { path: null, rejected: [] };
   const { dirs, fs, owners } = defaults(opts);
   const rejected: string[] = [];
-  const seen = new Set<string>();
+  const reasons = new Set<string>();
   for (const dir of dirs) {
-    // /bin is /usr/bin on a merged-/usr system: look there once.
-    const real = fs.realpath(dir);
-    if (real !== null) {
-      if (seen.has(real)) continue;
-      seen.add(real);
-    }
     const candidate = join(dir, name);
     const problem = checkChain(candidate, fs, owners);
     if (problem === null) return { path: candidate };
-    if (problem !== 'missing') rejected.push(`${candidate} (${problem})`);
+    // /bin is /usr/bin on a merged-/usr system: name the same reason once.
+    // Every directory is still looked in, since a link to one can be
+    // untrusted where the directory itself is not.
+    if (problem !== 'missing' && !reasons.has(problem)) {
+      reasons.add(problem);
+      rejected.push(`${candidate} (${problem})`);
+    }
   }
   return { path: null, rejected };
 }
