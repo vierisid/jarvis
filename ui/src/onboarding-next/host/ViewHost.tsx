@@ -106,7 +106,7 @@ function OnboardingViewHost({ session, legacy, children }: { session: Session; l
     case 'legacy-provider-setup': props = { ...props, onComplete: () => action('complete'), onBack: () => action('back') }; break;
   }
   const View = state.view === 'legacy-provider-setup' ? state.presentation?.ports?.View as ComponentType<Record<string, unknown>> : session.views()?.[state.view];
-  return <div className="on-host" data-theme={theme} data-onboarding-step={state.view} ref={headingHost}>
+  return <div className={`on-host${state.view === 'result' ? ' brief-root' : ''}`} data-theme={theme} data-brief-theme={theme} data-onboarding-step={state.view} ref={headingHost}>
     {state.blocked ? <Recovery retry={() => void session.refresh()} /> : <ViewBoundary key={`${state.journey.journeyId}:${state.view}`} recover={() => void session.refresh()}>
       <div className="on-host__view" aria-busy={state.busy} inert={state.busy}>{View ? <View {...props} /> : <Recovery retry={() => void session.refresh()} />}</div>
     </ViewBoundary>}

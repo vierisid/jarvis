@@ -1,0 +1,5 @@
+/* Tutorial surfaces fill the host slot, rather than measuring a zero-width block. */
+.on-host-tutorial-surface { display: flex; flex: 1; width: 100%; min-width: 0; min-height: 0; height: 100%; }
+.brief-root.on-host-tutorial-surface > .brief-navigation { flex: 1; height: 100%; min-height: 0; }
+/* Keep the real editor inside its result slot and leave completion controls reachable. */
+.on-host[data-onboarding-step="result"] .brief-canvas-tools { padding-inline: 16px; }

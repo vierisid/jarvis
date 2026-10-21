@@ -10,7 +10,9 @@ import type { BriefShellPort } from '../../brief/contracts';
 import { NavigationShell } from '../../brief/shell/navigation/NavigationShell';
 import { UNKNOWN_NAVIGATION } from '../../brief/shell/navigation/model';
 import { BRIEF_ROOMS } from '../../brief/rooms/registry';
-import { PebbleLayout } from '../../brief/shell/pebble-layout/PebbleLayout';
+import { BriefButton } from '../../brief/components/controls';
+import '../../brief/workflows/canvas/canvas.css';
+import './renderers.css';
 import { TodayLayout } from '../../brief/today/layout/TodayLayout';
 import { samplePaper } from '../../brief/today/preview/fixtures';
 import { GoalsRoom } from '../../brief/goals/GoalsRoom';
@@ -66,7 +68,7 @@ function TutorialRoom({ request }: { request: TourRoomRequest }) {
     case 'connected-workspace': body = <ConnectedWorkspace shell={shell} binding={bind(CONNECTION_SCOPE, sample.connections.controller)} />; break;
     case 'billing': body = <BillingWorkspace shell={shell} fixture={makeBillingFixture('active', () => false)} />; break;
   }
-  return <div className="brief-root" data-brief-theme={request.theme}><NavigationShell shell={shell} rooms={BRIEF_ROOMS}
+  return <div className="brief-root on-host-tutorial-surface" data-brief-theme={request.theme}><NavigationShell shell={shell} rooms={BRIEF_ROOMS}
     binding={{ capabilities: null, view: { source: 'fixture', state: { status: 'ready', data: { ...UNKNOWN_NAVIGATION, workspaceName: 'Sample workspace' } } } }}>{body}</NavigationShell></div>;
 }
 export const tutorialRenderer: TourRoomRenderer = { isolation: 'fixture-only', renderRoom(request) {
@@ -74,10 +76,11 @@ export const tutorialRenderer: TourRoomRenderer = { isolation: 'fixture-only', r
 } };
 export function TutorialPebble({ open, onOpenChange, reducedMotion }: PebbleTourSurfaceProps) {
   const shell = { ...shellFor({ theme: 'light', sidebar: 'expanded' }, 'today'), chatOpen: open, setChatOpen: onOpenChange };
-  return <div className="brief-root" style={{ height: '100%' }}><PebbleLayout shell={shell} enabled reducedMotion={reducedMotion}
+  return <div className="brief-root on-host-tutorial-surface"><NavigationShell shell={shell} rooms={BRIEF_ROOMS} reducedMotion={reducedMotion}
+    binding={{ capabilities: null, view: { source: 'fixture', state: { status: 'ready', data: { ...UNKNOWN_NAVIGATION, workspaceName: 'Sample workspace' } } } }}
     conversation={{ source: 'fixture', content: <div><h2>Talk beside your work</h2><p>This sample conversation cannot send messages.</p></div> }}>
     <TodayLayout shell={shell} greeting="Your workspace" dateLabel="Sample workspace" dateTime="2026-10-20" decision={{ source: 'fixture', state: { status: 'empty' } }} />
-  </PebbleLayout></div>;
+  </NavigationShell></div>;
 }
 /** Existing provider credential/setup UI, returning before its old interview/tour. */
 export function ProviderSetup(props: Record<string, unknown>) {
@@ -97,10 +100,10 @@ export function createResultCanvas(http: HostTransport) {
     }, [draft.scopeId, draft.flowId, draft.versionId]);
     return <div className="brief-workflow-canvas"><WorkflowEditorEnvironment.Provider value={{ ...environment, portalHost }}>
       <WorkflowEditor workspace flowId={draft.flowId} onClose={noop} onDirtyChange={onDirtyChange} renderHeader={c => <div className="brief-canvas-tools">
-        <button disabled={!c.editor.dirty || c.saving} onClick={() => void c.save()}>Save changes</button>
-        <button disabled={!c.editor.dirty || c.saving} onClick={c.discard}>Discard changes</button>
+        <BriefButton size="sm" disabled={!c.editor.dirty || c.saving} onClick={() => void c.save()}>Save changes</BriefButton>
+        <BriefButton size="sm" disabled={!c.editor.dirty || c.saving} onClick={c.discard}>Discard changes</BriefButton>
         <span role="status">{c.message?.text ?? (c.editor.dirty ? 'Unsaved changes' : 'Saved draft')}</span>
-      </div>} /><div ref={setPortalHost} />
+      </div>} /><div className="brief-workflow-portals" ref={setPortalHost} />
     </WorkflowEditorEnvironment.Provider></div>;
   };
 }
