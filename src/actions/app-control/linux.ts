@@ -1,6 +1,7 @@
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
 import { ActionOutcomeError } from '../action-outcome.ts';
 import { awaitCaptureTool, awaitCaptureToolOutput, CaptureTimeoutError, captureViaPrivateFileAsync } from './capture-file.ts';
+import { typingAllowanceMs } from './typing-allowance.ts';
 import { findLinuxSystemExe, linuxSystemExe, type LinuxSystemTool } from '../../util/system-exe.ts';
 import { modelExecEnv } from '../../util/model-exec-env.ts';
 
@@ -162,7 +163,7 @@ export function toXdotoolKeySequence(keys: string[]): string {
  * 3.4 (max 207), `search --name .` 3.7, `xprop -root` 1.8 -- so the bound
  * leaves ample room and only ever cuts off a call that is not coming back.
  * The exception is `xdotool type`, whose time grows with the text: see
- * TYPE_MS_PER_CHAR.
+ * typing-allowance.ts.
  *
  * CAPTURE_TOOL discards stdout (awaitCaptureTool); LOOKUP_TOOL returns it
  * (awaitCaptureToolOutput).
@@ -179,20 +180,6 @@ const LOOKUP_TOOL = { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' } as const
  * missing, as before.
  */
 const XPROP_FIELDS = ['WM_NAME', 'WM_CLASS', '_NET_WM_PID'] as const;
-
-/**
- * How much longer `xdotool type` may run per character, on top of the bound.
- * xdotool types with a 12 ms delay between keys by default; measured here as
- * 12.8 ms per character, linear (50, 200 and 800 characters: 643, 2559 and
- * 10220 ms median of 3 each). A flat 30 s would stop a text of about 2300
- * characters part-way through; twice the measured rate keeps a slower machine
- * clear of that too. Characters outside the keymap, which xdotool types by
- * remapping a spare keycode for each, cost barely more (#895 review; 100
- * characters, median of 3: e-acute 13.2 ms each, a CJK ideograph 13.3, an
- * emoji 13.3, against 12.9 for "x"). Not measured: a remote X server, where
- * each remap is a network round trip.
- */
-const TYPE_MS_PER_CHAR = 26;
 
 /**
  * Added to a typing or key-press timeout. The kill can land between a key's
@@ -398,9 +385,9 @@ export class LinuxAppController implements AppController {
       // `--` ends xdotool's option parsing, so text such as "-h" or
       // "--file=/home/me/.ssh/id_ed25519" is typed literally instead of
       // being read as an option (--file would type out the named file).
-      // The bound grows with the text: see TYPE_MS_PER_CHAR.
+      // The bound grows with the text: see typing-allowance.ts.
       await awaitCaptureTool(Bun.spawn([linuxSystemExe('xdotool'), 'type', '--clearmodifiers', '--', text], CAPTURE_TOOL), 'xdotool type',
-        [...text].length * TYPE_MS_PER_CHAR);
+        typingAllowanceMs(text));
     } catch (error) {
       throw new Error(`Failed to type text: ${error instanceof Error ? error.message : String(error)}${error instanceof CaptureTimeoutError ? KILLED_MID_INPUT : ''}`);
     }

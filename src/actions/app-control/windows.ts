@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
 import { defaultExec, runNative, type NativeExec } from './native-exec.ts';
+import { typingAllowanceMs } from './typing-allowance.ts';
 import { win32SystemExe } from '../../util/system-exe.ts';
 
 /**
@@ -171,13 +172,14 @@ export class WindowsAppController implements AppController {
    * as ASCII-safe JSON — never on the command line, never interpolated into
    * script text.
    */
-  private async runScript(command: string, payload?: Record<string, unknown>): Promise<string> {
+  private async runScript(command: string, payload?: Record<string, unknown>, extraMs = 0): Promise<string> {
     const stdout = await runNative(
       this.exec,
       // By absolute path from %SystemRoot%, never by name (#907).
       [win32SystemExe('powershell.exe'), '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', SCRIPT_PATH, command],
       payload === undefined ? '' : toAsciiJson(payload),
       `desktop.ps1 ${command}`,
+      extraMs,
     );
     return stdout.trim();
   }
@@ -216,7 +218,9 @@ export class WindowsAppController implements AppController {
   }
 
   async typeText(text: string): Promise<void> {
-    await this.runScript('send-keys', { keys: escapeSendKeysText(text) });
+    // The bound grows with the text (#903): see typing-allowance.ts. Counted
+    // on the text, not the escaped form: "{+}" is one key sent.
+    await this.runScript('send-keys', { keys: escapeSendKeysText(text) }, typingAllowanceMs(text));
   }
 
   async pressKeys(keys: string[]): Promise<void> {

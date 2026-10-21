@@ -19,7 +19,13 @@ export type NativeExecResult = {
  * channel and every other agent stalled behind one hung osascript or
  * desktop.ps1, not just the caller.
  */
-export type NativeExec = (cmd: string[], input: string) => Promise<NativeExecResult>;
+export type NativeExec = (cmd: string[], input: string, opts?: NativeExecOptions) => Promise<NativeExecResult>;
+
+/**
+ * `extraMs` lengthens the bound below for one call whose work grows with its
+ * input, past what any script takes: typing a text (#903, typing-allowance.ts).
+ */
+export type NativeExecOptions = { readonly extraMs?: number };
 
 /**
  * How long one fallback script or tool may run (screencapture, osascript,
@@ -55,7 +61,7 @@ const KILL_GRACE_MS = 1000;
 /** After exit, how long the pipes get to close (a descendant may hold them). */
 const DRAIN_MS = 1000;
 
-export const defaultExec: NativeExec = async (cmd, input) => {
+export const defaultExec: NativeExec = async (cmd, input, opts) => {
   let proc: ReturnType<typeof Bun.spawn<Buffer, 'pipe', 'pipe'>>;
   try {
     proc = Bun.spawn(cmd, {
@@ -77,7 +83,7 @@ export const defaultExec: NativeExec = async (cmd, input) => {
     return { status: null, stdout: '', stderr: '', error: error instanceof Error ? error : new Error(String(error)) };
   }
 
-  const bound = nativeExecTimeoutMs;
+  const bound = nativeExecTimeoutMs + (opts?.extraMs ?? 0);
   let failure: Error | undefined;
   const kill = () => { try { proc.kill('SIGKILL'); } catch { /* already gone */ } };
   let stopped!: () => void;
@@ -140,12 +146,12 @@ export const defaultExec: NativeExec = async (cmd, input) => {
  * they must surface as thrown errors, never as silent no-ops, because the
  * agent plans its next step based on action outcomes.
  */
-export async function runNative(exec: NativeExec, cmd: string[], input: string, what: string): Promise<string> {
-  const result = await exec(cmd, input);
+export async function runNative(exec: NativeExec, cmd: string[], input: string, what: string, extraMs = 0): Promise<string> {
+  const result = await exec(cmd, input, extraMs ? { extraMs } : undefined);
   if (result.error) {
     const code = (result.error as NodeJS.ErrnoException).code;
     if (code === 'ETIMEDOUT') {
-      throw new Error(`${what} did not finish within ${nativeExecTimeoutMs / 1000}s and was stopped`);
+      throw new Error(`${what} did not finish within ${(nativeExecTimeoutMs + extraMs) / 1000}s and was stopped`);
     }
     if (code === 'ENOBUFS') {
       throw new Error(`${what} was stopped: ${result.error.message}`);
