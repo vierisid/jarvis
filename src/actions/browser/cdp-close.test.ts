@@ -8,14 +8,9 @@
  * `finally` would never run and every later snapshot and element action would
  * refuse as busy until the daemon restarted.
  *
- * `close()` clears its pending map without rejecting, and the send timeout only
- * fires for an id still in that map, so reading the code alone says this
- * leaks. It does not, and this pins why: Bun runs a client WebSocket's
- * `onclose` SYNCHRONOUSLY inside `ws.close()` (measured: the handler's log line
- * lands before the line after the call), and that handler rejects every
- * pending call before `close()` reaches its `clear()`. If a Bun upgrade makes
- * the close event asynchronous, the first test here fails, and `close()` has
- * to reject the pending calls itself.
+ * `close()` rejects the pending calls itself. It cannot lean on the socket's
+ * close event: Bun 1.3 runs `onclose` synchronously inside `ws.close()`, but
+ * Bun 1.4 (CI) runs it later, after `close()` has cleared its pending map.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { CDPClient } from './cdp.ts';
@@ -50,6 +45,20 @@ describe('CDPClient.close', () => {
     await cdp.close();
 
     // Well inside the 30-second send timeout, which is not what settles it.
+    const settled = await Promise.race([outcome, Bun.sleep(1000).then(() => 'still pending')]);
+    expect(settled).toBe('CDP connection closed');
+  });
+
+  test('rejects a waiting call even when the close event arrives late or never', async () => {
+    const cdp = new CDPClient();
+    await cdp.connect(endpoint());
+    // Stand in for a runtime that delivers onclose after close() returns.
+    (cdp as unknown as { ws: { onclose: unknown } }).ws.onclose = null;
+    const hung = cdp.send('Never.answered');
+    const outcome = hung.then(() => 'resolved', (err: Error) => err.message);
+
+    await cdp.close();
+
     const settled = await Promise.race([outcome, Bun.sleep(1000).then(() => 'still pending')]);
     expect(settled).toBe('CDP connection closed');
   });
