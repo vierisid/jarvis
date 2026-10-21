@@ -18,7 +18,7 @@ import { MemoryExperience } from '../memory/detail/MemoryExperience';
 import { TodayLayout } from '../today/layout/TodayLayout';
 import { Outcomes } from '../today/outcomes/Outcomes';
 import { RecentActivity } from '../today/activity/RecentActivity';
-import { GettingStarted } from '../today/getting-started/GettingStarted';
+import { GettingStarted, GettingStartedJourney } from '../today/getting-started/GettingStarted';
 import { GoalCard } from '../today/goal-card/GoalCard';
 import { useGoalHandoff } from '../today/goal-card/useGoalHandoff';
 import { OpportunityStack } from '../today/opportunity-stack/OpportunityStack';
@@ -41,6 +41,12 @@ function view<T, U>(state: Snapshot<T>, map: (data: T) => U): BriefReadState<U> 
   if (state.state === 'loading') return { status: 'loading' };
   return { status: state.state === 'unsupported' ? 'unsupported' : 'unavailable', reason: state.reason ?? 'This information is unavailable.' };
 }
+// A background refresh of a previously empty queue does not replace the setup hero.
+// Failed reads still use the explicit unavailable state, and real cached decisions stay primary.
+export function todayDecisionSnapshot<T>(state: Snapshot<T>): Snapshot<T> {
+  return state.state === 'stale' && state.data === null && state.asOf !== null && state.refreshing && state.reason === null
+    ? { ...state, state: 'empty' } : state;
+}
 function source<T>(domains: Source<T>['domains'], capability: Source<T>['capability'], read: () => Promise<BriefReadState<T>>): Source<T> {
   return { domains, capability, read: async signal => {
     const value = await read(); signal.throwIfAborted();
@@ -50,8 +56,9 @@ function source<T>(domains: Source<T>['domains'], capability: Source<T>['capabil
   } };
 }
 export function createDataRooms(host: { scopeId: string; transport: HostTransport; capabilities(): unknown;
-  storage: Pick<Storage, 'setItem'>; reconciliation: BriefReconciliationClient; createGoal(): void }) {
+  storage: Storage; reconciliation: BriefReconciliationClient; createGoal(): void }) {
   const { scopeId, transport, reconciliation } = host;
+  const setup = new GettingStartedJourney(transport, host.storage, scopeId);
   const ports = createDomainPorts(scopeId, transport, host.storage);
   const goals = new GoalsController(ports.goals), decisions = new DecisionsController('live', scopeId, { ...ports.decisions, read: async () => { const result = await ports.decisions.read(); if (result.status !== 'ready') return result; const data = result.data.filter(row => row.actions.length > 0); return data.length ? { status: 'ready', data } : { status: 'empty' }; } }),
     opportunities = new OpportunitiesController('live', scopeId, ports.opportunities), memory = new MemoryController(ports.memory);
@@ -71,6 +78,7 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
   function Memory({ shell }: { shell: BriefShellPort }) { return <><MemoryExperience shell={shell} binding={{ stream: { ...base(), controller: memory }, detail }} /><ForgetMemory detail={detail} http={transport} capabilities={host.capabilities()} scopeId={scopeId} storage={host.storage} changed={() => void memory.refresh()} /></>; }
   function Today({ shell }: { shell: BriefShellPort }) {
     const g = useBriefProjection(goalRead), d = useBriefProjection(decisionRead), o = useBriefProjection(opportunityRead), outcome = useBriefProjection(outcomes), rec = useBriefProjection(recommendations);
+    const decisionSnapshot = todayDecisionSnapshot(d);
     const [operation, setOperation] = useState<DecisionOperation>();
     const caps = host.capabilities(), goal = g.data?.find(row => row.goal.status === 'active')
       ?? g.data?.find(row => row.goal.status === 'draft');
@@ -94,7 +102,7 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
     });
     const now = new Date();
     return <TodayLayout shell={shell} greeting="Make room for what matters." dateLabel={now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })} dateTime={now.toISOString()}
-      decision={{ source: 'live', capabilities: caps, state: view(d, rows => rows[0]!.paper), operation,
+      decision={{ source: 'live', capabilities: caps, state: view(decisionSnapshot, rows => rows[0]!.paper), operation,
         onAction: async (decision, action, requestId = crypto.randomUUID()) => {
           const request = { decisionId: decision.decisionId, revision: decision.revision, requestId, action };
           setOperation({ ...request, state: 'pending' });
@@ -105,7 +113,7 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
             decisionRead.refresh(); void decisions.refresh();
           } catch { setOperation({ ...request, state: 'unknown', message: 'The decision is not confirmed. Open Needs you to check it.' }); }
         } }} slots={{
-        gettingStarted: isBriefCapabilityEnabled(caps, 'profileSettings') ? <GettingStarted transport={transport} navigate={shell.navigate} goalId={goal?.goal.goalId} compact={d.state !== 'empty'} /> : undefined,
+        gettingStarted: isBriefCapabilityEnabled(caps, 'profileSettings') ? <GettingStarted journey={setup} navigate={shell.navigate} goalId={goal?.goal.goalId} compact={decisionSnapshot.state !== 'empty'} /> : undefined,
         goal: <GoalCard handoff={handoff} onReviewDraft={goal?.goal.status === 'draft' ? () => shell.navigate({ room: 'goals', selection: { goalId: goal.goal.goalId } }) : undefined} />,
         queueNotice: d.data?.length ? <button onClick={() => shell.navigate({ room: 'needs-you', selection: {} })}>Review {d.data.length} pending {d.data.length === 1 ? 'decision' : 'decisions'}</button> : null,
         outcomes: <Outcomes mode="live" binding={{ source: 'live', capabilities: caps, state: view(outcome, data => ({ window: data.window,
@@ -141,7 +149,7 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
     opportunities: { ...BRIEF_ROOMS.opportunities, Body: ({ shell }) => <OpportunitiesRoom shell={shell} binding={{ ...base(), controller: opportunities }} /> },
     memory: { ...BRIEF_ROOMS.memory, Body: Memory }, 'memory-detail': { ...BRIEF_ROOMS['memory-detail'], Body: Memory },
   };
-  return { rooms, goals, decisions, opportunities, memory, detail, ports,
+  return { rooms, setup, goals, decisions, opportunities, memory, detail, ports,
     refresh() { goalRead.refresh(); decisionRead.refresh(); opportunityRead.refresh(); outcomes.refresh(); recommendations.refresh(); void goals.refresh(); void decisions.refresh(); void opportunities.refresh(); void memory.refresh(); },
-    retire() { goals.retire(); decisions.retire(); opportunities.retire(); memory.retire(); detail.retire(); } };
+    retire() { setup.retire(); goals.retire(); decisions.retire(); opportunities.retire(); memory.retire(); detail.retire(); } };
 }
