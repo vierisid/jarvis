@@ -27,7 +27,7 @@ export interface LiveOnboardingPorts {
   Setup: ComponentType<Record<string, unknown>>;
   /** This trusted host validates and opens the returned provider URL. */
   openGoogle(url: string): void;
-  openWorkflow(selection: { flowId: string; versionId: string }): Promise<void>;
+  openWorkflow(selection: { flowId: string; versionId: string }, view?: 'workflow-draft' | 'workflow-runs' | 'workflow-context'): Promise<void>;
   pollMs?: number;
 }
 /** Real transport adapters. Provider responses alone advance progress; local
@@ -258,7 +258,7 @@ export function createLiveOnboardingAdapters(ports: LiveOnboardingPorts): Config
         const result = await call(c, 'result.read', { schemaVersion: 1, jobId: c.journey.jobId });
         const model = resultModel(c, result), saved = savedResult(model);
         if (saved && (saved.flowId !== c.journey.draft?.flowId || saved.versionId !== c.journey.draft?.versionId)) fail();
-        return { model: { ...model }, ports: { Canvas: ports.Canvas } };
+        return { model: { ...model }, ports: { Canvas: ports.Canvas, requestText: store(c).read('activation')?.prompt ?? '' } };
       },
       async command(c, action, input) {
         if (!object(input) || input.scopeId !== c.journey.scopeId || input.journeyId !== c.journey.journeyId || input.jobId !== c.journey.jobId) fail();
@@ -269,8 +269,10 @@ export function createLiveOnboardingAdapters(ports: LiveOnboardingPorts): Config
           parseJourney(await call(c, 'journey.transition', saved!.continuation!.input));
         } else if (action === 'open_workflow') {
           if (!saved!.continuation) fail();
+          const view = input.view ?? 'workflow-draft';
+          if (!['workflow-draft', 'workflow-runs', 'workflow-context'].includes(view)) fail();
           parseJourney(await call(c, 'journey.transition', saved!.continuation!.input));
-          await ports.openWorkflow(saved!.workflow.selection);
+          await ports.openWorkflow(saved!.workflow.selection, view);
         }
         else if (!['review', 'refresh'].includes(action)) fail();
       },

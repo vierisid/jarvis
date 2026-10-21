@@ -151,7 +151,8 @@ async function playPreviewAudio(res: Response): Promise<void> {
   const url = URL.createObjectURL(new Blob([buf], { type: "audio/mpeg" }));
   const a = new Audio(url);
   a.onended = () => URL.revokeObjectURL(url);
-  await a.play().catch(() => URL.revokeObjectURL(url));
+  a.onerror = () => URL.revokeObjectURL(url);
+  try { await a.play(); } catch (error) { URL.revokeObjectURL(url); throw error; }
 }
 
 const TOUR = [
@@ -318,6 +319,11 @@ export function OnboardingWizard({
   const [elevenModel, setElevenModel] = useState("eleven_flash_v2_5");
   const [ttsTest, setTtsTest] = useState<TestState>({ status: "idle" });
   const [previewing, setPreviewing] = useState(false);
+  const previewRequest = useRef<AbortController | null>(null);
+  useEffect(() => {
+    setPreviewing(false);
+    return () => { previewRequest.current?.abort(); previewRequest.current = null; };
+  }, [key, tts]);
   // connect
   const [connected, setConnected] = useState<Set<string>>(new Set());
   const [googleState, setGoogleState] = useState<"idle" | "pending" | "connected">("idle");
@@ -875,15 +881,17 @@ export function OnboardingWizard({
   // dashboard (no config round-trip, no Pebble dependency).
   const preview = useCallback(async () => {
     if (previewing) return;
-    setPreviewing(true);
+    const controller = new AbortController(); previewRequest.current = controller;
+    setPreviewing(true); setError(null);
     try {
       const body: Record<string, unknown> = { provider: tts === "elevenlabs" ? "elevenlabs" : "edge" };
       if (tts === "elevenlabs") { body.api_key = elevenKey.trim(); body.voice_id = elevenVoice; body.model = elevenModel; }
       else body.voice = edgeVoice;
-      const r = await fetch("/api/tts/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      if (r.ok) await playPreviewAudio(r);
-    } catch { /* best-effort */ }
-    window.setTimeout(() => setPreviewing(false), 2000);
+      const r = await fetch("/api/tts/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]) });
+      if (!r.ok) throw new Error('Preview unavailable');
+      await playPreviewAudio(r);
+    } catch { if (!controller.signal.aborted) setError('Voice preview is unavailable. Try again, choose another voice, or continue with No voice.'); }
+    finally { if (previewRequest.current === controller) { previewRequest.current = null; setPreviewing(false); } }
   }, [previewing, tts, edgeVoice, elevenKey, elevenVoice, elevenModel]);
 
   const speakReady = tts !== "elevenlabs" || ttsTest.status === "ok";

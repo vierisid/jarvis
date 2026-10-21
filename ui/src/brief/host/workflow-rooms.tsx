@@ -46,20 +46,38 @@ export function createWorkflowRooms(host: WorkflowHost) {
   });
   const selections = new Map<string, { runs: WorkflowRunsController; context: WorkflowContextController }>();
   function controllers(flowId: string, versionId: string, editable: boolean) {
-    const key = JSON.stringify([flowId, versionId]); let value = selections.get(key);
+    const key = JSON.stringify([flowId, versionId, editable]); let value = selections.get(key);
     if (value) return value;
     const base = `/api/brief/workflows/${encodeURIComponent(flowId)}`;
     const scope = { scopeId, flowId, versionId };
+    const journal = `brief:manual-run:pending:v1:${scopeId}:${flowId}:${versionId}`;
+    let pending: import('../workflows/runs/model').ManualRunRequest | undefined;
+    try { const stored = JSON.parse(host.storage.getItem(journal) ?? 'null');
+      if (stored?.scopeId === scopeId && stored.flowId === flowId && stored.versionId === versionId && typeof stored.requestId === 'string') pending = stored;
+    } catch { /* Invalid local state cannot supply an execution identity. */ }
+    const reconcile = async (request: import('../workflows/runs/model').ManualRunRequest) => {
+      const receipt = await transport.json(base + `/run-requests/${encodeURIComponent(request.requestId)}`);
+      if (receipt.status === 'accepted' && receipt.requestId === request.requestId) host.storage.setItem(journal, 'null');
+      return receipt;
+    };
     const runs = new WorkflowRunsController(scope, {
       list: (cursor, signal) => transport.json(base + '/runs' + (cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''), { signal }),
       detail: (runId, signal) => transport.json(base + `/runs/${encodeURIComponent(runId)}`, { signal }),
       ...(!editable ? { start: async (request: import('../workflows/runs/model').ManualRunRequest) => {
         const payload = await host.runInput();
         if (payload === null || transport.signal.aborted || !isBriefCapabilityEnabled(host.capabilities(), 'workflowContext')) return { status: 'not_submitted' as const, requestId: request.requestId };
-        host.storage.setItem(`brief:manual-run:v1:${scopeId}:${request.requestId}`, JSON.stringify({ request, payload }));
-        return transport.json(`/api/workflows/${encodeURIComponent(flowId)}/run`, post({ brief: { scopeId, versionId, requestId: request.requestId }, payload }));
-      } } : {}),
-    });
+        host.storage.setItem(journal, JSON.stringify(request));
+        try {
+          const response = await transport.request(`/api/workflows/${encodeURIComponent(flowId)}/run`, post({ brief: { scopeId, versionId, requestId: request.requestId }, payload }));
+          if (response.ok) { const result = await response.json(); if (result.status === 'accepted' && result.requestId === request.requestId) host.storage.setItem(journal, 'null'); return result; }
+          if ([400, 403, 404, 409, 422].includes(response.status)) {
+            host.storage.setItem(journal, 'null');
+            return { status: 'rejected' as const, requestId: request.requestId, message: 'No run started. Review workflow readiness and Authority, then try again.' };
+          }
+          return await reconcile(request);
+        } catch { return await reconcile(request); }
+      }, reconcile } : {}),
+    }, pending);
     const context = new WorkflowContextController(scope, { read: async (_scope, query, signal) => {
       const params = new URLSearchParams({ versionId });
       if (query.basis === 'recorded') params.set('runId', query.runId);
@@ -116,14 +134,26 @@ export function createWorkflowRooms(host: WorkflowHost) {
         const room = source.kind === 'goal' ? 'goals' : source.kind === 'fact' ? 'memory-detail' : source.kind === 'workflow' ? 'workflow' : source.kind === 'rule' ? 'authority' : 'connected-workspace';
         shell.navigate({ room, selection: source.kind === 'goal' ? { goalId: source.id } : source.kind === 'fact' ? { factId: source.id } : source.kind === 'workflow' ? { flowId: source.id } : {} });
       } }} />;
-    if (shell.route.room === 'workflow-preview' || !selection.editable) return <section className="brief-workflow-canvas">
-      <WorkflowViewHeader shell={shell} flowId={selection.flowId} versionId={selection.versionId} active="canvas" runAction={null} title={<h1>{selection.title}</h1>} />
-      <p>Version {selection.versionId} · Read-only preview</p>
-      {selection.inspection.canvas.status === 'ready' ? <ol aria-label="Workflow steps">{selection.inspection.canvas.data.nodes.map(node => <li key={node.id}>
-        <h2>{node.title}</h2><dl>{node.fields.map((field, index) => <React.Fragment key={index}><dt>{field.label}</dt><dd>{field.value}</dd></React.Fragment>)}</dl>
-      </li>)}</ol> : <p role="status">Workflow preview is unavailable.</p>}
-    </section>;
     return <WorkflowCanvasRoom shell={shell} binding={{ ...binding, request: transport.request,
+      readOnly: !selection.editable,
+      ...(!selection.editable ? { run: async () => {
+        await runs.start(); const state = runs.getSnapshot();
+        if (state.submission === 'accepted' && state.selectedId) shell.navigate({ room: 'workflow-runs', selection: { flowId: selection.flowId, versionId: selection.versionId, runId: state.selectedId } });
+        return { ok: state.submission === 'accepted', message: state.message };
+      }, edit: async () => {
+        const base = `/api/workflows/${encodeURIComponent(selection.flowId)}`;
+        const detail = await transport.json(base);
+        const version = detail.latestDraft ?? await (async () => {
+          const current = await transport.json(`${base}/versions/${encodeURIComponent(selection.versionId)}`);
+          return transport.json(base + '/versions', post({ displayName: current.displayName, trigger: current.trigger, ...(current.uiMeta ? { uiMeta: current.uiMeta } : {}) }));
+        })();
+        if (!version?.id || version.flowId !== selection.flowId || version.state !== 'DRAFT') throw Error('Draft unavailable');
+        shell.navigate({ room: 'workflow-draft', selection: { flowId: selection.flowId, versionId: version.id } });
+      } } : { publish: async () => {
+        const { version } = await transport.json(`/api/workflows/${encodeURIComponent(selection.flowId)}/publish`, post({ versionId: selection.versionId }));
+        if (!version || version.id !== selection.versionId || version.state !== 'LOCKED') throw Error('Publication unconfirmed');
+        shell.navigate({ room: 'workflow', selection: { flowId: selection.flowId, versionId: selection.versionId } });
+      } }),
       onDirtyChange: dirty => host.dirty(`workflow:${selection.flowId}:${selection.versionId}`, dirty) }} />;
   }
   const rooms: BriefRoomRegistry = {

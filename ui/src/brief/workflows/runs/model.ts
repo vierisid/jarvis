@@ -79,6 +79,7 @@ export interface ManualRunRequest extends RunScope {
 export type ManualRunResult =
   | { status: "accepted"; requestId: string; run: RunSummary }
   | { status: "not_submitted"; requestId: string }
+  | { status: "rejected"; requestId: string; message: string }
   | { status: "uncertain"; requestId: string };
 export interface WorkflowRunsPort {
   list(
@@ -92,6 +93,7 @@ export interface WorkflowRunsPort {
   /** Collect/validate explicit bounded input and persist request identity before
    * dispatch. Resolve not_submitted ONLY when no command was sent. No retries. */
   start?: (request: ManualRunRequest) => Promise<ManualRunResult>;
+  reconcile?: (request: ManualRunRequest) => Promise<ManualRunResult>;
 }
 export const STATUS: Record<
   RunStatus | "not_run",

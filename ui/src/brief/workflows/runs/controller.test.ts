@@ -25,6 +25,40 @@ const detail = (fixture: ReturnType<typeof makeRunsFixture>, n = 12) =>
   );
 const ready = <T>(data: T): BriefReadState<T> => ({ status: "ready", data });
 
+test('reload reconciles a pending run receipt without submitting it again', async () => {
+  const f = makeRunsFixture(), request = { ...RUN_SCOPE, requestId: 'pending-run' };
+  let submits = 0, reads = 0;
+  const run = { ...detail(f), ...RUN_SCOPE };
+  const s = new WorkflowRunsController(RUN_SCOPE, { ...f.port,
+    start: async () => { submits++; throw Error('Must not replay'); },
+    reconcile: async () => { reads++; return { status: 'accepted', requestId: request.requestId, run }; },
+  }, request);
+  expect(s.canRun).toBe(false);
+  await s.start();
+  await s.load();
+  expect(submits).toBe(0); expect(reads).toBe(1);
+  expect(s.getSnapshot().submission).toBe('accepted');
+  expect(s.getSnapshot().selectedId).toBe(run.runId);
+  s.retire();
+});
+
+test('failed receipt lookup keeps pending run blocked across reload', async () => {
+  const f = makeRunsFixture();
+  const s = new WorkflowRunsController(RUN_SCOPE, { ...f.port, reconcile: async () => { throw Error(); } }, { ...RUN_SCOPE, requestId: 'pending' });
+  await s.load();
+  expect(s.canRun).toBe(false); expect(s.getSnapshot().submission).toBe('uncertain');
+  s.retire();
+});
+
+test('definitive preflight rejection permits a corrected manual request', async () => {
+  const f = makeRunsFixture();
+  const s = new WorkflowRunsController(RUN_SCOPE, { ...f.port, start: async request => ({ status: 'rejected', requestId: request.requestId, message: 'Review readiness' }) });
+  await s.start();
+  expect(s.canRun).toBe(true); expect(s.getSnapshot().request).toBeNull();
+  expect(s.getSnapshot().message).toBe('Review readiness');
+  s.retire();
+});
+
 test("all seven states and historical versions retain immutable identities", async () => {
   const f = makeRunsFixture();
   await f.controller.load();

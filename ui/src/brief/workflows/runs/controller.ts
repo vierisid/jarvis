@@ -54,8 +54,11 @@ export class WorkflowRunsController {
   constructor(
     scope: RunScope,
     readonly port: WorkflowRunsPort,
+    pending?: ManualRunRequest,
   ) {
     this.scope = { ...scope };
+    if (pending && pending.scopeId === scope.scopeId && pending.flowId === scope.flowId && pending.versionId === scope.versionId && pending.requestId)
+      this.state = { ...this.state, submission: 'uncertain', request: pending, message: 'Checking the previous run request before another run can start.' };
   }
   getSnapshot = () => this.state;
   subscribe = (fn: () => void) => {
@@ -91,6 +94,15 @@ export class WorkflowRunsController {
     if (this.retired) return Promise.resolve();
     if (this.refreshWork) return this.refreshWork;
     const work = Promise.resolve().then(async () => {
+      if (this.state.submission === 'uncertain' && this.state.request && this.port.reconcile) {
+        try {
+          const result = await this.port.reconcile(this.state.request);
+          if (result.status === 'accepted' && result.requestId === this.state.request?.requestId && validSummary(result.run, this.scope) && result.run.versionId === this.scope.versionId) {
+            this.acknowledged.set(result.run.runId, result.run);
+            this.emit({ submission: 'accepted', message: 'Previous run confirmed.' }); this.select(result.run.runId);
+          }
+        } catch { /* A read failure never authorizes another submission. */ }
+      }
       await this.readHistory(false);
       if (this.state.selectedId)
         await this.readDetail(this.state.selectedId, true);
@@ -371,6 +383,10 @@ export class WorkflowRunsController {
           request: null,
           message: "Run was not submitted.",
         });
+        return;
+      }
+      if (result.status === 'rejected') {
+        this.emit({ submission: 'idle', request: null, message: result.message });
         return;
       }
       if (

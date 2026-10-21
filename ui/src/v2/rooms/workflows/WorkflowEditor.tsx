@@ -19,6 +19,7 @@ import { useSampleDraftText } from "./useSampleDraftText";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { WorkflowEditorEnvironment, WorkflowPortal, useWorkflowRequest } from "./WorkflowEditorEnvironment";
 import { BriefTabs } from "../../../brief/components/controls/Choices";
+import { BriefIconButton } from "../../../brief/components/controls";
 // Floating surfaces mount in the editor's portal host: document.body for the
 // legacy editor, the Brief canvas layer in the workspace (WorkflowPortal).
 const portalToEditorHost = (children: React.ReactNode) => <WorkflowPortal>{children}</WorkflowPortal>;
@@ -36,7 +37,7 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Calendar, Box, GitBranch, Repeat2, LayoutGrid, Save, RotateCcw, ShieldAlert, X, Plus, Trash2, Play, History, CheckCircle2, XCircle, Clock, AlertTriangle, Pause, Undo2 } from "lucide-react";
+import { Calendar, Box, Eye, GitBranch, Repeat2, LayoutGrid, Save, RotateCcw, ShieldAlert, X, Plus, Trash2, Play, History, CheckCircle2, XCircle, Clock, AlertTriangle, Pause, Undo2 } from "lucide-react";
 import { Button, Chip, FailureNotice, Icon } from "../../ui";
 import {
   useWorkflowEditor,
@@ -80,6 +81,9 @@ export interface WorkflowEditorControls {
 }
 interface WorkflowEditorProps {
   workspace?: boolean;
+  reviewFirstStep?: boolean;
+  initialSelectedNodeId?: string | null;
+  readOnly?: boolean;
   renderHeader?: (controls: WorkflowEditorControls) => React.ReactNode;
   onDirtyChange?: (dirty: boolean) => void;
   flowId: string;
@@ -118,7 +122,7 @@ interface StepNodeData extends Record<string, unknown> {
   runDuration: number | null;
 }
 
-export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeader, onDirtyChange }: WorkflowEditorProps): React.ReactElement {
+export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeader, onDirtyChange, reviewFirstStep = false, initialSelectedNodeId, readOnly = false }: WorkflowEditorProps): React.ReactElement {
   const fetch = useWorkflowRequest();
   const rootRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLElement>(null);
@@ -158,6 +162,12 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
   // the originating MouseEvent so the popover opens near the cursor rather
   // than at a fixed location. Null when the popover is closed.
   const [popoverAnchor, setPopoverAnchor] = useState<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    if ((!reviewFirstStep && !initialSelectedNodeId) || !editor.allSteps.length) return;
+    const recovered = editor.allSteps.find(item => item.step.name === initialSelectedNodeId);
+    setSelectedStepName(current => current ?? recovered?.step.name ?? editor.allSteps.find(item => item.step.name !== 'trigger')?.step.name ?? editor.allSteps[0]!.step.name);
+    setPopoverAnchor({ x: 0, y: 0 });
+  }, [reviewFirstStep, initialSelectedNodeId, editor.loading]);
   // Anchor for the canvas right-click context menu. Stores both screen
   // coordinates (where to paint the menu) and the corresponding flow
   // coordinates (where any newly-added piece should land in the graph).
@@ -889,12 +899,12 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
               closeLibraryPicker();
               closeNodeContextMenu();
             }}
-            onPaneContextMenu={onPaneContextMenu}
-            onNodeContextMenu={onNodeContextMenu}
-            onNodeDragStop={onNodeDragStop}
-            onConnect={onConnect}
+            onPaneContextMenu={readOnly ? undefined : onPaneContextMenu}
+            onNodeContextMenu={readOnly ? undefined : onNodeContextMenu}
+            onNodeDragStop={readOnly ? undefined : onNodeDragStop}
+            onConnect={readOnly ? undefined : onConnect}
             isValidConnection={isValidConnection}
-            onEdgeContextMenu={onEdgeContextMenu}
+            onEdgeContextMenu={readOnly ? undefined : onEdgeContextMenu}
             fitView
             fitViewOptions={{ padding: 0.15, minZoom: 0.4, maxZoom: 1.25 }}
             // Distance (px) from the pointer at which a connection drag
@@ -908,8 +918,9 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
             // Per-node `draggable` flag (set to false for the trigger in
             // buildGraph) overrides this. Nodes default to draggable.
             autoPanOnNodeFocus={!workspace}
-            nodesDraggable
-            nodesConnectable
+            nodesDraggable={!readOnly}
+            nodesConnectable={!readOnly}
+            deleteKeyCode={readOnly ? null : 'Backspace'}
             elementsSelectable
             panOnDrag
             zoomOnScroll
@@ -941,6 +952,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
           <PropertiesPanel
             key={selectedStep.name}
             workspace={workspace}
+            readOnly={readOnly}
             onChoosePiece={() => setLibraryPicker({screen:popoverAnchor ?? {x:100,y:100},flow:rfInstanceRef.current?.getNode(selectedStep.name)?.position ?? {x:0,y:0},replaceStepName:selectedStep.name})}
             step={selectedStep}
             isTriggerStep={editor.draftTrigger?.name === selectedStep.name}
@@ -1383,6 +1395,7 @@ const NULL_PICKER: VariablePickerHandle = {
 };
 
 const VariablePickerContext = createContext<VariablePickerHandle>(NULL_PICKER);
+export const WorkflowReadOnlyContext = createContext(false);
 
 /**
  * Insert `template` at the input's current selection range and emit the
@@ -1946,7 +1959,7 @@ function caretRangeFromPoint(x: number, y: number): Range | null {
  * another field, ...). The `lastEmittedRef` trick distinguishes "we
  * just emitted this" from "something external set this".
  */
-function VariableChipField({
+export function VariableChipField({
   value,
   onChange,
   placeholder,
@@ -1962,6 +1975,7 @@ function VariableChipField({
   const ref = useRef<HTMLDivElement>(null);
   const lastEmittedRef = useRef<string>(value);
   const picker = useContext(VariablePickerContext);
+  const readOnly = useContext(WorkflowReadOnlyContext);
 
   // Initial render. `useLayoutEffect` so the DOM is populated before the
   // first paint -- otherwise the user sees an empty box flash before
@@ -2098,19 +2112,21 @@ function VariableChipField({
   return (
     <div
       ref={ref}
-      contentEditable
+      contentEditable={!readOnly}
       suppressContentEditableWarning
       role="textbox"
+      aria-readonly={readOnly}
+      tabIndex={readOnly ? 0 : undefined}
       aria-multiline={multiline}
       data-placeholder={placeholder ?? ""}
       className={`wf-chip-field ${multiline ? "wf-chip-field--multiline" : "wf-chip-field--singleline"} ${className}`.trim()}
-      onInput={handleInput}
-      onFocus={handleFocus}
+      onInput={readOnly ? undefined : handleInput}
+      onFocus={readOnly ? undefined : handleFocus}
       onBlur={handleBlur}
-      onKeyDown={handleKeyDown}
-      onDragOver={handleDragOver}
-      onDrop={handleDrop}
-      onPaste={handlePaste}
+      onKeyDown={readOnly ? undefined : handleKeyDown}
+      onDragOver={readOnly ? undefined : handleDragOver}
+      onDrop={readOnly ? undefined : handleDrop}
+      onPaste={readOnly ? undefined : handlePaste}
     />
   );
 }
@@ -2579,6 +2595,7 @@ function PieceLibraryPopover({
           onChange={(e) => setQuery(e.target.value)}
           aria-label="Filter pieces by name or description"
         />
+        <BriefIconButton label="Close node chooser" icon={<X />} disabled={!!installingId} onClick={onClose} />
       </div>
       <div className="wf-library__categories" role="tablist" aria-label="Category">
         {CATEGORY_ORDER.map((c) => (
@@ -3088,7 +3105,8 @@ function StepNode({ data }: NodeProps): React.ReactElement {
     kindLabel = routerKind === "if" ? "If" : "Router";
     kindTone = "warn";
   }
-  else { kindLabel = "Action"; }
+  else if (workspace && step.settings?.pieceName === '@jarvispieces/piece-jarvis-agent') { kindLabel = 'AI judgment'; kindTone = 'accent'; }
+  else { kindLabel = workspace ? 'Programmed' : 'Action'; }
 
   // ROUTER branches feed the right-edge source handles. The handle id
   // encodes the branch name so onConnect can route a connection straight
@@ -3239,7 +3257,7 @@ function StepNode({ data }: NodeProps): React.ReactElement {
 }
 
 function NodeIdentityIcon({step}: {step:FlowStepNode}) {
-  const glyph = step.type === "EMPTY" || step.type === "PIECE_TRIGGER" ? Calendar : step.type === "ROUTER" ? GitBranch : step.type === "LOOP_ON_ITEMS" ? Repeat2 : Box;
+  const glyph = step.type === "EMPTY" || step.type === "PIECE_TRIGGER" ? Calendar : step.type === "ROUTER" ? GitBranch : step.type === "LOOP_ON_ITEMS" ? Repeat2 : step.settings?.pieceName === '@jarvispieces/piece-jarvis-agent' ? Eye : Box;
   return <span className="wf-node-identity"><Icon icon={glyph} size={17}/></span>;
 }
 
@@ -3247,6 +3265,7 @@ function NodeIdentityIcon({step}: {step:FlowStepNode}) {
 
 interface PropertiesPanelProps {
   workspace?: boolean;
+  readOnly?: boolean;
   onChoosePiece?: () => void;
   step: FlowStepNode;
   isTriggerStep: boolean;
@@ -3520,11 +3539,11 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
     <div className="wf-props">
       <header className="wf-props__header">
         {props.workspace && <NodeIdentityIcon step={step}/>}
-        <EditableStepName
+        {props.readOnly ? <h3>{step.displayName ?? step.name}</h3> : <EditableStepName
           name={step.displayName ?? step.name}
           fallback={step.name}
           onCommit={onSetDisplayName}
-        />
+        />}
         <p>
           <code>{step.name}</code> · {isTrigger ? (isManual ? "Manual trigger" : "Piece trigger") : isLoop ? "Loop" : isRouter ? "Router" : "Action"}
         </p>
@@ -3536,7 +3555,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
           value={tab}
           onValueChange={setTab}
           items={[
-            { value: "Configure", label: "Configure", content: configure },
+            { value: "Configure", label: "Configure", content: <WorkflowReadOnlyContext.Provider value={!!props.readOnly}><fieldset className="wf-props__configuration" disabled={props.readOnly}>{configure}</fieldset></WorkflowReadOnlyContext.Provider> },
             { value: "Input", label: "Input", content: <><h3 className="wf-io-title">Configured input</h3><pre className="wf-io-value">{JSON.stringify(step.settings?.input ?? {}, null, 2)}</pre><SampleInputSection stepName={step.name} sampleInput={props.sampleInput} isLocked={props.isLocked} onSetSampleInput={props.onSetSampleInput} /></> },
             { value: "Output", label: "Output", content: <SampleDataSection stepName={step.name} sampleData={props.sampleData} declaredSample={selectedSubAction?.sampleData ?? selectedSubAction?.outputSample} isLocked={props.isLocked} isTriggerStep={isTriggerStep} onSetSampleData={props.onSetSampleData} onTestFromHere={props.onTestFromHere} /> },
           ]}
@@ -3886,7 +3905,7 @@ function SampleInputSection({
   );
 }
 
-function SampleDataSection({
+export function SampleDataSection({
   stepName,
   sampleData,
   declaredSample,
@@ -3943,7 +3962,7 @@ function SampleDataSection({
 
   const handleSave = async (): Promise<void> => {
     const parsed = parseOrError();
-    if (text.trim().length > 0 && parsed === undefined && parseError) {
+    if (text.trim().length > 0 && parsed === undefined) {
       return; // parse error already surfaced
     }
     setBusy("save");

@@ -109,24 +109,32 @@ function OwnedDashboard({ descriptor, route, retained, integration, legacy, inst
           theme: shell.current?.theme ?? (document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'), sidebar: shell.current?.sidebar ?? 'expanded',
           chat: { open: shell.current?.chatOpen ?? false, conversationId: host.chat.store.getSnapshot().activeId } }),
         tour: { renderer: tutorialRenderer, pebble: { isolation: 'tutorial-sandbox', Surface: TutorialPebble } },
-        Canvas: createResultCanvas(host.transport), Setup: ProviderSetup,
+        Canvas: createResultCanvas(host.transport, dirty => host.setWorkflowDirty('onboarding-result', dirty)), Setup: ProviderSetup,
         openGoogle: value => { const url = new URL(value); if (url.protocol !== 'https:' || url.username || url.password) throw Error('Invalid Google destination');
           if (!openedOrHandedOff(openExternal(url.href))) throw Error('Could not open Google'); },
-        openWorkflow: async selection => { const result = await host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'workflow-draft', selection } }, message: null })); if (result.state !== 'opened') throw Error('Workflow unavailable'); },
+        openWorkflow: async (selection, room = 'workflow-draft') => { const result = await host.navigation.open(() => ({ target: { kind: 'brief', route: { room, selection } }, message: null })); if (result.state !== 'opened') throw Error('Workflow unavailable'); },
       }) });
   });
   useEffect(() => { session.current = onboarding; if (onboarding) void onboarding.start(); return () => { session.current = null; onboarding?.dispose(); }; }, [onboarding]);
   useEffect(() => { explain(''); }, [route.room, route.selection.factId, route.selection.flowId]);
   if (revoked) return <main className="brief-root brief-foundation"><h1>Reconnect to your workspace</h1><p>Your session or workspace changed. Reload after signing in.</p><button onClick={() => window.location.reload()}>Reload</button></main>;
-  const content = <BriefConversationProvider enabled chatVisible={open} client={host.chat} reconciliation={host.reconciliation}>
-    <Workspace host={host} route={route} retained={retained} open={open} setOpen={setOpen} reveal={reveal} shellRef={shell} message={message} />
+  const content = (result: ReactNode | null = null) => <BriefConversationProvider enabled chatVisible={open} client={host.chat} reconciliation={host.reconciliation}>
+    <Workspace host={host} route={result && onboarding?.state().journey?.draft ? { room: 'workflow-draft', selection: onboarding.state().journey!.draft! } : route}
+      retained={retained} open={open} setOpen={setOpen} reveal={reveal} shellRef={shell} message={message}
+      beforeNavigate={result ? async () => {
+        if (!onboarding || !await host.canLeave(host.transport.signal)) return false;
+        const state = onboarding.state(), journey = state.journey;
+        if (state.busy || state.blocked || !journey) return false;
+        await onboarding.act(onboarding.key(), 'finish', { scopeId: journey.scopeId, journeyId: journey.journeyId, jobId: journey.jobId });
+        return onboarding.state().mode === 'complete';
+      } : undefined}>{result}</Workspace>
   </BriefConversationProvider>;
   return <div className="jarvis-v2-root"><BriefOnboardingHost>{onboarding
-    ? <ViewHost session={onboarding} legacy={integration ? <main><h1>Local onboarding is unavailable</h1><p>Inspect the local integration diagnostics, then reload.</p></main> : legacy}>{content}</ViewHost>
-    : <OnboardingGate brief={host.onboarding}>{content}</OnboardingGate>}</BriefOnboardingHost></div>;
+    ? <ViewHost session={onboarding} renderWorkspace={content} legacy={integration ? <main><h1>Local onboarding is unavailable</h1><p>Inspect the local integration diagnostics, then reload.</p></main> : legacy} />
+    : <OnboardingGate brief={host.onboarding}>{content()}</OnboardingGate>}</BriefOnboardingHost></div>;
 }
-function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, message }: { host: DashboardOwner; route: BriefRoute; retained: RoomKey | null; open: boolean; setOpen(value: boolean): void;
-  reveal: React.MutableRefObject<(id: string) => void>; shellRef: React.MutableRefObject<BriefShellPort | null>; message: string }) {
+function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, message, children, beforeNavigate }: { host: DashboardOwner; route: BriefRoute; retained: RoomKey | null; open: boolean; setOpen(value: boolean): void;
+  reveal: React.MutableRefObject<(id: string) => void>; shellRef: React.MutableRefObject<BriefShellPort | null>; message: string; children?: ReactNode; beforeNavigate?(): Promise<boolean> }) {
   const owner = useBriefConversation(), billing = useBilling({ refreshOnMount: false }); useBriefProjection(host.refresh);
   const profile = useSyncExternalStore(host.account.profile.subscribe, host.account.profile.snapshot, host.account.profile.snapshot);
   const notices = useNotificationCenter(owner);
@@ -166,20 +174,23 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
       const result = await host.navigation.intent(request.room, true);
       return result.state === 'opened' && host.active();
     }} />{message && <p className="brief-host-notice" role="status">{message}</p>}
-    <BriefHost route={route} rooms={rooms} visibility={{ open, setOpen }} guardShell={base => { shellRef.current = base; return host.guardShell(base); }}
+    <BriefHost route={route} rooms={rooms} visibility={{ open, setOpen }} guardShell={base => { shellRef.current = base;
+      const guarded = host.guardShell(base);
+      return beforeNavigate ? { ...guarded, navigate: next => { void beforeNavigate().then(ok => { if (ok) guarded.navigate(next); }); } } : guarded;
+    }}
       navigation={{ capabilities: host.capabilities(), view: { source: 'live', state: { status: 'ready', data: {
         ...UNKNOWN_NAVIGATION, workspaceName: null, hosting: host.descriptor().installMode,
         connection: owner.isConnected ? 'connected' : owner.status.mode === 'loading' ? 'reconnecting' : 'offline',
         account: { name: profile.base?.answers.preferred_name ?? null, plan: planFromBilling(billing) },
         badges: { 'needs-you': notices.items.length || undefined },
       } } } }} conversation={{ source: 'live', content: <HostConversation host={host} /> }}>
-      {RetainedBody && <LiveDataProvider value={{ approvals: owner.approvals, clarifiers: owner.clarifiers, repeatBacks: owner.repeatBacks,
+      {children ?? (RetainedBody && <LiveDataProvider value={{ approvals: owner.approvals, clarifiers: owner.clarifiers, repeatBacks: owner.repeatBacks,
         notices: owner.notices, taskEvents: owner.taskEvents, contentEvents: owner.contentEvents, agentActivity: owner.agentActivity,
         settingsEvents: owner.settingsEvents, latestAssistantReply: null }}>
         <section className="brief-maintenance"><button onClick={() => void host.navigation.open(() => ({ target: { kind: 'brief', route }, message: null }))}>Back to workspace</button>
           <RetainedBody key={retained} mode="expanded" />
         </section>
-      </LiveDataProvider>}
+      </LiveDataProvider>)}
     </BriefHost>
   </>;
 }

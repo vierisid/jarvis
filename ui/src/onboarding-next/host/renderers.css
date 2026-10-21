@@ -3,3 +3,20 @@
 .brief-root.on-host-tutorial-surface > .brief-navigation { flex: 1; height: 100%; min-height: 0; }
 /* Keep the real editor inside its result slot and leave completion controls reachable. */
 .on-host[data-onboarding-step="result"] .brief-canvas-tools { padding-inline: 16px; }
+
+/* The result is a room inside the authenticated workspace. */
+.brief-root .brief-workspace-content:has(> .on-host) { padding: 0; overflow: hidden; scrollbar-gutter: auto; }
+.brief-root .brief-pebble-layout[data-pebble-available="true"] .brief-workspace-content:has(> .on-host) { padding-bottom: 0; }
+.brief-workspace-content > .on-host { --on-result-height: 100%; }
+.on-host[data-onboarding-step="result"] .on-result__body { flex: 1 1 auto; min-height: 320px; }
+.on-host[data-onboarding-step="result"] :is(.on-result__canvas,.brief-workflow-canvas) { min-height: 320px; }
+.on-host[data-onboarding-step="result"] .wf-editor__body { padding-bottom: 0; }
+.on-host[data-onboarding-step="result"] .on-result__footer { position: sticky; bottom: 0; background: var(--on-r-bg); z-index: 2; flex: none; padding-right: 96px; }
+.on-result__tabs { margin: 0 24px; flex: none; }
+.on-result__request { margin: 0!important; padding: 0 24px; flex: none; }
+.on-result__request p { margin-top: 0; max-width: 80ch; }
+
+.on-tutorial-conversation__empty { flex: 1; min-height: 80px; padding: 24px; }
+.on-tutorial-conversation__empty h2 { font-size: 22px; margin: 0; }
+.on-tutorial-today { width: 100%; min-width: 0; }
+.on-tutorial-conversation { min-height: 0; overflow: auto; }

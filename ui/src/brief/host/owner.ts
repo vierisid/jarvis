@@ -95,6 +95,7 @@ export function createDashboardOwner(initial: HostDescriptor, ports: {
     navigation, chat, reconciliation, workflow, account, data, onboarding, refresh, retire,
     guardShell(shell: BriefShellPort) { return account.guardShell({ ...shell, navigate: route => { void navigation.open(() => ({ target: { kind: 'brief', route }, message: null })); } }); },
     hasUnsaved: () => data.detail.unsaved() || data.detail.snapshot().phase === 'pending' || dirty.size > 0 || account.profile.hasEdits() || account.settings.snapshot().draft !== null,
+    setWorkflowDirty: (key: string, value: boolean) => { if (value) dirty.add(key); else { const existed = dirty.delete(key); if (existed && !dirty.size) ports.explain(''); } },
     active: () => !retired,
     devices: () => devices?.filter(device => device.connected) ?? [],
   };

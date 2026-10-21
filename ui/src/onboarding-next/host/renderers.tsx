@@ -13,6 +13,14 @@ import { BRIEF_ROOMS } from '../../brief/rooms/registry';
 import { BriefButton } from '../../brief/components/controls';
 import '../../brief/workflows/canvas/canvas.css';
 import './renderers.css';
+import { ConversationTabStrip } from '../../brief/chat/tab-strip/ConversationTabStrip';
+import { ConversationComposer } from '../../brief/chat/composer/ConversationComposer';
+import { Outcomes } from '../../brief/today/outcomes/Outcomes';
+import { GoalCard } from '../../brief/today/goal-card/GoalCard';
+import { useGoalHandoff } from '../../brief/today/goal-card/useGoalHandoff';
+import { goalFixture } from '../../brief/today/preview/goalFixtures';
+import { outcomeFixture, activityFixture } from '../../brief/today/preview/outcomeFixtures';
+import { RecentActivity } from '../../brief/today/activity/RecentActivity';
 import { TodayLayout } from '../../brief/today/layout/TodayLayout';
 import { samplePaper } from '../../brief/today/preview/fixtures';
 import { GoalsRoom } from '../../brief/goals/GoalsRoom';
@@ -74,21 +82,47 @@ function TutorialRoom({ request }: { request: TourRoomRequest }) {
 export const tutorialRenderer: TourRoomRenderer = { isolation: 'fixture-only', renderRoom(request) {
   return request.mode === 'tutorial' && request.effects === 'disabled' ? { status: 'ready', content: <TutorialRoom key={request.step.id} request={request} /> } : { status: 'unsupported' };
 } };
-export function TutorialPebble({ open, onOpenChange, reducedMotion }: PebbleTourSurfaceProps) {
-  const shell = { ...shellFor({ theme: 'light', sidebar: 'expanded' }, 'today'), chatOpen: open, setChatOpen: onOpenChange };
-  return <div className="brief-root on-host-tutorial-surface"><NavigationShell shell={shell} rooms={BRIEF_ROOMS} reducedMotion={reducedMotion}
+export function TutorialPebble({ open, onOpenChange, reducedMotion, theme = 'light', sidebar = 'expanded' }: PebbleTourSurfaceProps) {
+  const shell = { ...shellFor({ theme, sidebar }, 'today'), chatOpen: open, setChatOpen: onOpenChange };
+  return <div className="brief-root on-host-tutorial-surface" data-brief-theme={theme}><NavigationShell shell={shell} rooms={BRIEF_ROOMS} reducedMotion={reducedMotion}
     binding={{ capabilities: null, view: { source: 'fixture', state: { status: 'ready', data: { ...UNKNOWN_NAVIGATION, workspaceName: 'Sample workspace' } } } }}
-    conversation={{ source: 'fixture', content: <div><h2>Talk beside your work</h2><p>This sample conversation cannot send messages.</p></div> }}>
-    <TodayLayout shell={shell} greeting="Your workspace" dateLabel="Sample workspace" dateTime="2026-10-20" decision={{ source: 'fixture', state: { status: 'empty' } }} />
+    illustrative conversation={{ source: 'fixture', content: <TutorialConversation /> }}>
+    <TutorialToday shell={shell} />
   </NavigationShell></div>;
+}
+function TutorialToday({ shell }: { shell: BriefShellPort }) {
+  const outcomes = outcomeFixture(), handoff = useGoalHandoff('preview', goalFixture(outcomes));
+  return <div inert className="on-tutorial-today"><TodayLayout shell={shell} greeting="Good morning, Alex." dateLabel="Sample workspace" dateTime="2026-09-17"
+    decision={{ source: 'fixture', state: { status: 'ready', data: samplePaper('follow-up', false) } }}
+    slots={{ goal: <div inert><GoalCard handoff={handoff} /></div>, outcomes: <Outcomes mode="preview" binding={outcomes} />,
+      activity: <RecentActivity mode="preview" binding={activityFixture()} onOpen={noop} /> }} /></div>;
+}
+function TutorialConversation() {
+  const [tabs, setTabs] = useState([{ id: 'general', title: 'General' }]), [activeId, setActive] = useState('general');
+  const [drafts, setDrafts] = useState<Record<string, string>>({}), next = useRef(0);
+  return <div className="brief-host-conversation on-tutorial-conversation">
+    <ConversationTabStrip mode="preview" panelId="tutorial-conversation" binding={{ source: 'fixture', scopeId: 'tutorial',
+      status: { mode: 'scoped', pending: 0, error: null }, tabs, activeId, actions: {
+        add: async () => { const id = `sample-${++next.current}`; setTabs(items => [...items, { id, title: 'New chat' }]); setActive(id); },
+        select: async id => { setActive(id); }, close: async id => { const remaining = tabs.filter(tab => tab.id !== id);
+          if (!remaining.length) { setTabs([{ id: 'general', title: 'General' }]); setActive('general'); setDrafts({}); }
+          else { setTabs(remaining); if (id === activeId) setActive(remaining[0]!.id); } },
+      } }} />
+    <section className="on-tutorial-conversation__empty"><h2>What are we moving forward?</h2></section>
+    <ConversationComposer mode="preview" label="Unsent sample draft" sendUnavailableReason="Sample conversation · nothing will be sent"
+      suggestions={[{ id: 'call', label: 'Prepare a call', text: 'Help me prepare for my next call.' }, { id: 'workflow', label: 'Review a workflow', text: 'Help me review this workflow.' }]}
+      binding={{ source: 'fixture', scopeId: 'tutorial', conversationId: activeId, mode: 'scoped', connected: true, metadataPending: false,
+        draft: drafts[activeId] ?? '', turn: null, pendingAcceptance: false, error: null,
+        actions: { setDraft: value => setDrafts(all => ({ ...all, [activeId]: value })), send: noop, cancel: noop } }} />
+  </div>;
 }
 /** Existing provider credential/setup UI, returning before its old interview/tour. */
 export function ProviderSetup(props: Record<string, unknown>) {
   const { status } = useOnboardingStatus();
   return (props.model as { setup?: { ready?: boolean } })?.setup?.ready || status?.setup_completed ? <button onClick={() => void (props.onComplete as () => Promise<void>)()}>Continue to your workspace</button> : status ? <OnboardingWizard status={status} setupOnly onComplete={props.onComplete as () => Promise<void>} /> : <p role="status">Loading provider setup…</p>;
 }
-export function createResultCanvas(http: HostTransport) {
-  return function ResultCanvas({ draft, onDirtyChange, onUnavailable }: ResultCanvasProps) {
+export function createResultCanvas(http: HostTransport, registerDirty: (dirty: boolean) => void = noop) {
+  return function ResultCanvas({ draft, reviewing, onDirtyChange, onUnavailable }: ResultCanvasProps) {
     const [portalHost, setPortalHost] = useState<HTMLDivElement | null>(null), samples = useRef(new Map<string, string>());
     const invalid = useRef(onUnavailable); invalid.current = onUnavailable;
     const environment = useMemo(() => {
@@ -98,8 +132,9 @@ export function createResultCanvas(http: HostTransport) {
         catch (error) { invalid.current(); throw error; }
       } };
     }, [draft.scopeId, draft.flowId, draft.versionId]);
+    useEffect(() => () => registerDirty(false), []);
     return <div className="brief-workflow-canvas"><WorkflowEditorEnvironment.Provider value={{ ...environment, portalHost }}>
-      <WorkflowEditor workspace flowId={draft.flowId} onClose={noop} onDirtyChange={onDirtyChange} renderHeader={c => <div className="brief-canvas-tools">
+      <WorkflowEditor workspace reviewFirstStep={reviewing} initialSelectedNodeId={draft.selectedNodeId} flowId={draft.flowId} onClose={noop} onDirtyChange={dirty => { onDirtyChange(dirty); registerDirty(dirty); }} renderHeader={c => <div className="brief-canvas-tools">
         <BriefButton size="sm" disabled={!c.editor.dirty || c.saving} onClick={() => void c.save()}>Save changes</BriefButton>
         <BriefButton size="sm" disabled={!c.editor.dirty || c.saving} onClick={c.discard}>Discard changes</BriefButton>
         <span role="status">{c.message?.text ?? (c.editor.dirty ? 'Unsaved changes' : 'Saved draft')}</span>
