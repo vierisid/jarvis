@@ -5457,7 +5457,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       workflowWorker.start();
 
       // Resume TIMER waitpoints whose delay has elapsed (incl. during downtime).
-      timerScheduler = new TimerWaitpointScheduler();
+      // A card the sweep closes for a run that ended before it parked is
+      // dropped from the dashboard, as an expired one is (#1039). A card
+      // already sent to a channel stays there; a reply to it is refused.
+      timerScheduler = new TimerWaitpointScheduler(undefined, (approvalId) => {
+        const request = approvalManager.getRequest(approvalId);
+        if (request) wsService.broadcastApprovalUpdate(request);
+      });
       timerScheduler.start();
     } else {
       console.warn("[Daemon] Workflow worker not started -- engine unavailable; queued RUN_FLOW jobs will pile up");

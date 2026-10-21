@@ -23,6 +23,7 @@ import { workflowEffectId } from './effect-boundary';
 import { resumeResolvedWorkflowEffects } from './effect-approval-scheduler';
 import { CredentialResolver } from '../credentials/adapter';
 import { WorkflowEventBuffer } from './event-buffer';
+import { maxWaitingWorkflowCards } from './deferred-cards';
 import { buildSandboxServiceBackends, type BuildServiceBackendsOptions } from './service-backends';
 import { AUTHORITY_REQUIREMENTS, type ActionCategory } from '../../roles/authority';
 import { DEFAULT_CONFIG } from '../../config/types';
@@ -1290,6 +1291,23 @@ describe('#953: a verified piece action above the level asks only when its categ
     expect(dispatched).toMatchObject({ governed: true, dispatch: 'authorized' });
     await expect(f.authorize(SEND_INPUT)).rejects.toThrow(/replay is blocked/);
     expect(listWorkflowEffects(f.run.id)).toHaveLength(1);
+  });
+
+  test('above-level send cards count against the flow\'s card budget, and one past it waits for a place (#1039)', async () => {
+    const f = shipped('send_email');
+    const cap = maxWaitingWorkflowCards();
+    const authorizeIn = async (runId: string) => f.backends.pieceAuthorize!({ piece: GMAIL, action: 'send_email', input: SEND_INPUT,
+      inputDigest: await pieceInputDigest(SEND_INPUT) }, { ...f.context, runId });
+    const runs = [f.run.id, ...Array.from({ length: cap }, () => createFlowRun({ flowId: f.version.flowId, flowVersionId: f.version.id, status: 'RUNNING' }).id)];
+    for (const runId of runs.slice(0, cap)) expect(await authorizeIn(runId)).toMatchObject({ governed: true, dispatch: 'approval_required' });
+    const cards = f.approvals.getPending().filter((r) => r.execution_mode === 'workflow');
+    // Recorded under the category the budget counts: the send's, not the substitution floor.
+    expect(cards.map((r) => r.action_category)).toEqual(Array(cap).fill('send_email'));
+    const over = await authorizeIn(runs[cap]!) as { dispatch: string; approval: { approvalId: string; code?: string } };
+    expect(over.dispatch).toBe('approval_required');
+    expect(over.approval).toMatchObject({ approvalId: '', code: 'APPROVALS_WAITING' });
+    expect(f.approvals.getPending()).toHaveLength(cap);
+    expect(listWorkflowEffects(runs[cap]!)[0]).toMatchObject({ status: 'pending', approvalId: null, deferral: { budget: 'other' } });
   });
 
   test('a send whose category is not governed stays denied by level', async () => {

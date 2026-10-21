@@ -66,8 +66,9 @@ export interface PieceAuthorizePending {
   effectId: string;
   approvalId: string;
   waitpointId: string;
-  /** Set when the step is held because Jarvis is paused (Q-08); no approval is involved. */
+  /** Set when the step is held with no approval: Jarvis is paused (Q-08), or, with `code`, its flow's cards are at the budget (#1039). */
   hold?: string;
+  code?: 'APPROVALS_WAITING';
 }
 
 export type PieceAuthorizeResponse =
