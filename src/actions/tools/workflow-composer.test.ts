@@ -1507,6 +1507,27 @@ describe("tool-loop composer", () => {
     expect(detailsResult.content).toContain("input.message");
   });
 
+  test('schedule discovery advertises timezone and preserves the weekday reminder graph', async () => {
+    const flow = validFlowArgs();
+    Object.assign(flow.trigger, { type: 'PIECE_TRIGGER', settings: { pieceName: 'schedule', input: { cron_expression: '0 9 * * 1-5', timezone: 'Europe/Rome' } } });
+    flow.trigger.nextAction.settings.input.message = 'Choose your three priorities for today.';
+    const llm = new StubToolLlm([
+      { tool_calls: [tc('1', 'get_piece_details', { pieceName: 'schedule' })] },
+      { tool_calls: [tc('2', 'submit_flow', flow)] },
+    ]);
+    const result = await composeFlow({ llm, pieceRegistry: makeRegistry() }, {
+      name: 'Weekday priorities', description: 'Every weekday at 09:00 Europe/Rome, notify me. No AI step.',
+    });
+    expect(llm.toolTurns[1]!.messages.at(-1)!.content).toContain('input.timezone');
+    expect(llm.toolTurns[1]!.messages.at(-1)!.content).toContain('daylight-saving');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.flow.trigger.settings?.input).toEqual({ cron_expression: '0 9 * * 1-5', timezone: 'Europe/Rome' });
+      expect(result.flow.trigger.nextAction?.settings?.input?.message).toBe('Choose your three priorities for today.');
+      expect(result.flow.trigger.nextAction?.nextAction).toBeUndefined();
+    }
+  });
+
   test("feeds validation errors back as the submit_flow tool result", async () => {
     const llm = new StubToolLlm([
       { tool_calls: [tc("1", "submit_flow", ghostFlowArgs())] },

@@ -61,7 +61,7 @@ import {
   type FlowTriggerNode,
 } from "../../workflows/db/repos/flow-version.ts";
 import { publishFlowVersion } from "../../workflows/db/repos/flow-publication.ts";
-import { assertVersionReady } from '../../workflows/db/repos/flow-readiness';
+import { assertVersionReady, versionReadiness } from '../../workflows/db/repos/flow-readiness';
 import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow } from '../../workflows/db/repos/flow-turn-off';
 import { assertFlowDeletable } from '../../workflows/db/repos/workflow-removal-state';
 import { listFlowFires } from '../../workflows/db/repos/trigger-fire';
@@ -962,14 +962,22 @@ export function versionForModel<V extends { trigger?: unknown } | null | undefin
   return { ...version, trigger: { ...trigger, settings: { ...trigger!.settings, input: { ...input, secret: "[redacted]" } } } };
 }
 
+/** Recompute readiness on read; the stored valid bit is only a historical hint. No execution. */
+function checkedVersion(flowId: string, version: ReturnType<typeof getFlowVersion>) {
+  if (!version) return null;
+  const readiness = versionReadiness(flowId, version.id);
+  return { ...version, valid: readiness.ready, readiness };
+
+}
+
 function actGet(flow: FlowRow): Record<string, unknown> {
   const summary = summarizeFlow(flow);
   const draft = getLatestDraft(flow.id);
   const published = flow.published_version_id ? getFlowVersion(flow.published_version_id) : null;
   return {
     ...summary,
-    latestDraft: versionForModel(draft),
-    published: versionForModel(published),
+    latestDraft: versionForModel(checkedVersion(flow.id, draft)),
+    published: versionForModel(checkedVersion(flow.id, published)),
     // Q-06: what became of its latest scheduled times, deliveries and events,
     // so "why didn't it run?" has an answer: missed, blocked, skipped,
     // delayed, or the run's own state, with how many repeats each absorbed.

@@ -145,7 +145,7 @@ function cadence(cron: string): ContractCadence | null {
 function zoneName(zone: string): string | null {
   try { return new Intl.DateTimeFormat('en-US', { timeZone: zone }).resolvedOptions().timeZone; } catch { return null; }
 }
-/** The time zone every workflow schedule runs in: Jarvis's configured one, else this machine's (lib/cron-scheduler.ts). */
+/** Default for legacy schedules without an explicit workflow timezone. */
 export function scheduleTimeZone(): string {
   return zoneName(getCronTimezone() ?? Intl.DateTimeFormat().resolvedOptions().timeZone) ?? 'UTC';
 }
@@ -224,8 +224,6 @@ export function validateJobContract(value: unknown): JobContract {
     if (timezone !== undefined) {
       const zone = zoneName(timezone);
       if (!zone) fail(`trigger.timezone ${timezone} is not a known time zone`);
-      // Every schedule runs in one time zone, so a job set in another one would run at the wrong hour.
-      if (zone !== scheduleTimeZone()) unmet(`schedules run in ${scheduleTimeZone()}, Jarvis's time zone; the job asks for ${timezone}`);
     }
   }
   for (const key of ['sources', 'outputs'] as const) {
@@ -452,6 +450,10 @@ function checkTrigger(trigger: FlowTriggerNode, want: NonNullable<JobContract['t
       const runs = cadence(cron ?? '');
       violations.push(`the schedule "${cron ?? ''}" ${runs ? `runs once every ${runs}` : 'is not an hourly, daily, weekly or monthly schedule'}; the job asks for once every ${want.every}`);
     }
+    if (want.timezone) {
+      const actual = input.timezone === undefined ? scheduleTimeZone() : typeof input.timezone === 'string' ? zoneName(input.timezone) : null;
+      if (actual !== zoneName(want.timezone)) violations.push(`the schedule timezone is ${actual ?? 'invalid'}; the job asks for ${want.timezone}`);
+    }
     if (want.eventType && input.eventType !== want.eventType) violations.push(`the flow listens for ${clip(input.eventType ?? 'no event')}; the job asks for ${want.eventType}`);
     const piece = String(settings.pieceName ?? ''), name = String(settings.triggerName ?? '');
     if (want.piece && !samePiece(want.piece, piece)) violations.push(`the flow starts on ${piece}; the job asks for ${want.piece}`);
@@ -460,7 +462,6 @@ function checkTrigger(trigger: FlowTriggerNode, want: NonNullable<JobContract['t
   if (violations.length === before) verified.push(`starts with ${TRIGGER_WORDS[want.kind]}${want.cron ? ` on "${want.cron}"` : ''}`
     + `${want.every ? `, once every ${want.every}` : ''}${want.eventType ? ` (${want.eventType})` : ''}`
     + `${want.piece ? `: ${want.piece}${want.trigger ? ' ' + want.trigger : ''}` : ''}`
-    // The zone is Jarvis's configuration, checked when the contract was validated, not part of the graph.
     + `${want.timezone ? `; schedules run in ${want.timezone}, as the job asks` : ''}`);
 }
 

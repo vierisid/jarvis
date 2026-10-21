@@ -23,18 +23,17 @@ Source: `src/workflows/runner/triggers/manager.ts` (live deliveries),
 - **A missed schedule is skipped and shown.** A time that came and went while
   Jarvis was off, asleep or stalled for more than two minutes is recorded as
   missed and never run late.
-- **Schedules run in Jarvis's configured time zone** (the `timezone` config
-  key). A schedule that states another zone fires at that wall-clock time in
-  Jarvis's zone, and the trigger list carries a warning saying so, unless it
-  fires at the same moments in both zones (an hourly schedule between
-  whole-hour zones). The warning compares the next firing times, now and half
-  a year on, so half-hour zones and schedules tied to an hour, a day or a date
-  are caught.
+- **An explicit workflow timezone is honoured.** Built-in schedule triggers use
+  `settings.input.timezone`; engine-managed schedules use their persisted
+  `scheduleOptions.timezone`. Both accept an IANA zone such as `Europe/Rome`
+  and follow its daylight-saving rules. Invalid zones are refused. Schedules
+  without an explicit zone retain Jarvis's configured timezone (or the machine
+  zone when unset). This supersedes the earlier global-zone-only rule.
 
 ## Schedules
 
 The scheduler hands each occurrence to the workflow with its wall-clock minute
-in Jarvis's zone (`2026-11-01T01:30`), which is the occurrence's identity:
+in that schedule's zone (`2026-11-01T01:30`), which is the occurrence's identity:
 
 | Case | What happens |
 | --- | --- |
@@ -56,6 +55,9 @@ workflow is turned off, switched to another trigger, or refused at
 registration, so that time is never reported as missed. The live schedule
 starts where the check stopped, two minutes back, so a time in between runs
 late rather than being lost; one the previous process already ran is a repeat.
+An explicit timezone is part of the watch identity, so changing it does not
+record historical times in the new zone as missed. Legacy zone-less watch
+records remain compatible.
 
 Editing the trigger of the draft an enabled, unpublished workflow runs replaces
 its schedule. Saving a step of that draft leaves the trigger registered.

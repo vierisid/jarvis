@@ -93,10 +93,8 @@ describe('validating a contract', () => {
     expect(refuse({ outputs: [{ piece: 'gmail', action: 'gmail_send_draft' }], recipients: ['ana@example.com'] }))
       .toBe('Job contract cannot be met: it requires gmail gmail_send_draft, which does not state who receives it, and limits recipients');
     expect(refuse({ trigger: { kind: 'schedule', cron: '0 9 * * *', every: 'week' } })).toBe('Job contract cannot be met: its cron "0 9 * * *" does not run once every week');
-    // Every schedule runs in Jarvis's time zone, so a job set in another one would run at the wrong hour.
     expect(scheduleTimeZone()).toBe('Europe/Rome');
-    expect(refuse({ trigger: { kind: 'schedule', cron: '0 9 * * 1', timezone: 'America/New_York' } }))
-      .toBe("Job contract cannot be met: schedules run in Europe/Rome, Jarvis's time zone; the job asks for America/New_York");
+    expect(refuse({ trigger: { kind: 'schedule', cron: '0 9 * * 1', timezone: 'America/New_York' } })).toBeNull();
   });
 
   test('a contract some graph can keep is accepted', () => {
@@ -364,8 +362,12 @@ describe('rechecking a stored contract', () => {
       .toContain(`job contract: step "${edited.name}" sends to telegram, which the job does not allow`);
     setCronTimezone('America/New_York');
     try {
-      expect(recheckJobContract(good(), CONTRACT)).toEqual({ verified: [], review: [],
-        violations: ["Job contract cannot be met: schedules run in America/New_York, Jarvis's time zone; the job asks for Europe/Rome"] });
+      expect(recheckJobContract(good(), CONTRACT)!.violations).toContain('job contract: the schedule timezone is America/New_York; the job asks for Europe/Rome');
+      const explicit = good();
+      (explicit.settings!.input as Record<string, unknown>).timezone = 'Europe/Rome';
+      expect(recheckJobContract(explicit, CONTRACT)!.violations).toEqual([]);
+      (explicit.settings!.input as Record<string, unknown>).timezone = 'UTC';
+      expect(recheckJobContract(explicit, CONTRACT)!.violations).toContain('job contract: the schedule timezone is UTC; the job asks for Europe/Rome');
     } finally { setCronTimezone('Europe/Rome'); }
   });
 });

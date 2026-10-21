@@ -1008,8 +1008,9 @@ function renderPrimitiveDetails(name: "schedule" | "webhook"): string {
   if (name === "schedule") {
     return [
       "schedule (built-in trigger primitive): fires the flow on a cron schedule.",
-      "  Use as the trigger node: type='PIECE_TRIGGER', settings={ pieceName: 'schedule', input: { cron_expression: '<5-field cron>' } }.",
+      "  Use as the trigger node: type='PIECE_TRIGGER', settings={ pieceName: 'schedule', input: { cron_expression: '<5-field cron>', timezone: '<IANA timezone>' } }.",
       "  - input.cron_expression: string, REQUIRED; 5-field cron, e.g. '0 8 * * *' for 8am daily, '*/15 * * * *' for every 15 minutes.",
+      "  - input.timezone: string, optional IANA timezone (for example Europe/Rome). Always set it when the request names a timezone. The scheduler uses this zone including daylight-saving changes; omitted uses Jarvis's configured timezone.",
       "  No triggerName needed. No declared output -- downstream steps should not reference {{trigger.<field>}}.",
     ].join("\n");
   }
@@ -1101,7 +1102,7 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
     "  - Give every node a short human-readable displayName describing its work, such as 'Summarize the notes' or 'Review before sending'. Keep machine names separate from these canvas labels.",
     "  - Step names MUST match /^[a-zA-Z_][a-zA-Z0-9_]*$/ (identifier-style; no spaces or dashes).",
     "  - Use type='EMPTY' for manual / on-demand flows. Use type='PIECE_TRIGGER' for scheduled, webhook, or event-driven.",
-    "  - For schedule triggers: pieceName='schedule', input.cron_expression='<5-field cron>' (e.g. '0 8 * * *' for 8am daily).",
+    "  - For schedule triggers: pieceName='schedule', input.cron_expression='<5-field cron>' (e.g. '0 8 * * *' for 8am daily), plus input.timezone for the requested IANA timezone (e.g. 'Europe/Rome').",
     "  - For webhook triggers: pieceName='webhook', input.secret optional.",
     "  - For event triggers: pieceName='jarvis-trigger', triggerName='on_event', input.eventType='<event type>'.",
     "  - For action steps, type MUST be 'PIECE' and settings MUST include pieceName + actionName.",
@@ -1169,7 +1170,7 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
  */
 const BUILTIN_PRIMITIVE_LINES = [
   "Built-in trigger primitives (no piece registration needed):",
-  "- schedule: settings={pieceName:'schedule', input:{cron_expression:'0 8 * * *'}} fires on cron.",
+  "- schedule: settings={pieceName:'schedule', input:{cron_expression:'0 8 * * *',timezone:'Europe/Rome'}} fires at 08:00 in Europe/Rome, including daylight-saving changes. Use the user's requested zone.",
   "- webhook:  settings={pieceName:'webhook',  input:{secret:'<optional HMAC secret>'}} fires on HTTP POST to /api/webhooks/<flow_id>.",
 ];
 

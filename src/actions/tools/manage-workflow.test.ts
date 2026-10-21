@@ -6,12 +6,12 @@ import { join } from "node:path";
 import { closeWorkflowDb, initWorkflowDb } from "../../workflows/db/index.ts";
 import { findActiveJobForRun, getJob, queueStats } from "../../workflows/db/repos/job-queue.ts";
 import { getFlowRun } from "../../workflows/db/repos/flow-run.ts";
-import { getFlow, updateFlowMetadata } from "../../workflows/db/repos/flow.ts";
+import { createFlow, getFlow, updateFlowMetadata } from "../../workflows/db/repos/flow.ts";
 import { Worker } from "../../workflows/queue/worker.ts";
 import { createRunFlowHandler, FlowExecutionError, RUN_FLOW } from "../../workflows/runner/handler.ts";
 import { asLimit, createManageWorkflowTool } from "./manage-workflow.ts";
 import type { ToolDefinition } from "./registry.ts";
-import { getFlowVersion, getLatestDraft, setSampleDataEntry } from "../../workflows/db/repos/flow-version.ts";
+import { createDraftVersion, getFlowVersion, getLatestDraft, setSampleDataEntry } from "../../workflows/db/repos/flow-version.ts";
 import { updateRun } from "../../workflows/db/repos/flow-run.ts";
 import {
   UNTRUSTED_CLOSE,
@@ -1300,4 +1300,25 @@ describe("#844: manage_workflow acts in one project, for reads by id as well as 
     expect(getWorkflowComposition(recordId, OTHER_PROJECT)?.id).toBe(recordId);
     expect(getWorkflowComposition(recordId, DEFAULT_IDS.project)).toBeNull();
   });
+});
+
+
+test('get recomputes saved draft readiness without publishing, enabling or running', async () => {
+  const flow = createFlow();
+  const version = createDraftVersion({ flowId: flow.id, displayName: 'Weekday reminder', trigger: {
+    name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'schedule', input: { cron_expression: '0 9 * * 1-5', timezone: 'Europe/Rome' } },
+    nextAction: { name: 'notify', type: 'PIECE', settings: { pieceName: 'jarvis-notify', actionName: 'notify', input: { message: 'Choose your three priorities for today.', channels: ['dashboard'] } } },
+  } });
+  expect(version.valid).toBe(false); // Stored creation hint is not a readiness assessment.
+  const out = await call('get', { flow: flow.id }) as any;
+  expect(out.latestDraft.valid).toBe(true);
+  expect(out.latestDraft.readiness).toEqual({ ready: true, issues: [], runtimeChecks: [] });
+  expect(getFlow(flow.id)).toMatchObject({ status: 'DISABLED', published_version_id: null });
+  expect(getFlowVersion(version.id)).toEqual(version);
+  expect(queueStats().queued).toBe(0);
+  // Removing a dependency must invalidate the read, even though the graph hasn't changed.
+  configureWorkflowReadiness({ pieces: new PieceCatalog([]) });
+  const unavailable = await call('get', { flow: flow.id }) as any;
+  expect(unavailable.latestDraft.valid).toBe(false);
+  expect(unavailable.latestDraft.readiness.issues).toContainEqual(expect.objectContaining({ code: 'PIECE' }));
 });

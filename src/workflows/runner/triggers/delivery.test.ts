@@ -25,7 +25,7 @@ import { createManageWorkflowTool } from "../../../actions/tools/manage-workflow
 import { createWorkflowRoutes } from "../../api/routes";
 import { Worker } from "../../queue/worker";
 import { createRunFlowHandler, RUN_FLOW } from "../handler";
-import { scheduleZoneWarning, TriggerManager } from "./manager";
+import { TriggerManager } from "./manager";
 import { EmergencyController, setActiveEmergencyController } from "../../../authority/emergency";
 
 const silent = () => undefined;
@@ -141,14 +141,41 @@ describe("schedules, in Jarvis's configured time zone", () => {
     await d.stop();
   });
 
-  test("a schedule that names another zone still fires in Jarvis's zone, and says so", async () => {
-    setCronTimezone("Europe/Rome");
-    const { flowId } = schedule("0 9 * * *", { timezone: "UTC" });
-    const d = await daemon(at("2026-10-07T06:59:00Z"));
-    expect(d.manager.list()).toEqual([expect.objectContaining({ flowId,
-      warning: 'This schedule says UTC, but schedules run in Jarvis\'s time zone (Europe/Rome): "0 9 * * *" fires at that time in Europe/Rome.' })]);
-    d.tick(flowId, "2026-10-07T07:00:10Z"); // 09:00 in Rome
+  test.each([
+    ['2026-03-27T07:59:00Z', '2026-03-27T08:00:10Z', '2026-03-28T08:00:10Z', '2026-03-30T07:00:10Z'],
+    ['2026-10-23T06:59:00Z', '2026-10-23T07:00:10Z', '2026-10-24T07:00:10Z', '2026-10-26T08:00:10Z'],
+  ])('an explicit Rome weekday schedule survives DST, weekends and restart from %s', async (start, friday, saturday, monday) => {
+    setCronTimezone('UTC');
+    const { flowId } = schedule('0 9 * * 1-5', { timezone: 'Europe/Rome' });
+    let d = await daemon(at(start));
+    expect(d.manager.list()[0]?.warning).toBeUndefined();
+    d.tick(flowId, friday);
     expect(runsOf(flowId)).toHaveLength(1);
+    finishAll(flowId);
+    d.tick(flowId, saturday);
+    expect(runsOf(flowId)).toHaveLength(1);
+    d.tick(flowId, monday);
+    expect(runsOf(flowId)).toHaveLength(2);
+    finishAll(flowId);
+    await d.stop();
+    d = await daemon(at(monday));
+    d.tick(flowId, monday.replace(':10Z', ':40Z'));
+    expect(runsOf(flowId)).toHaveLength(2);
+    expect(listFlowFires(flowId).filter(f => f.outcome === 'missed')).toHaveLength(0);
+    await d.stop();
+  });
+
+  test('different workflow zones coexist without changing the default schedule', async () => {
+    setCronTimezone('UTC');
+    const rome = schedule('0 9 * * 1-5', { timezone: 'Europe/Rome' });
+    const utc = schedule('0 9 * * 1-5');
+    const d = await daemon(at('2026-10-21T06:59:00Z'));
+    d.tick(rome.flowId, '2026-10-21T07:00:10Z');
+    d.tick(utc.flowId, '2026-10-21T07:00:10Z');
+    expect(runsOf(rome.flowId)).toHaveLength(1);
+    expect(runsOf(utc.flowId)).toHaveLength(0);
+    d.tick(utc.flowId, '2026-10-21T09:00:10Z');
+    expect(runsOf(utc.flowId)).toHaveLength(1);
     await d.stop();
   });
 
@@ -452,6 +479,7 @@ describe("webhooks", () => {
 describe("events", () => {
   const onEvent = (eventType: string) => publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "jarvis-trigger", triggerName: "on_event", input: { eventType } } });
 
+
   test("an email announced again after a restart runs its workflow once", async () => {
     const { flowId } = onEvent("observer.email_received");
     let d = await daemon(Date.now());
@@ -517,6 +545,17 @@ describe("through the engine, as production runs triggers", () => {
     enable: { listeners: [], scheduleOptions: { cronExpression: expression, timezone } },
   });
 
+  test('engine schedule honors its persisted explicit zone', async () => {
+    setCronTimezone('UTC');
+    const p = pieceSchedule('0 9 * * 1-5', 'Europe/Rome');
+    const stub = stubEngine({ enable: p.enable, poll: () => [{ date: 'fixture' }] });
+    const d = await daemon(at('2026-10-26T07:59:00Z'), stub.engine);
+    await d.poll(p.flowId, '2026-10-26T08:00:10Z');
+    expect(runsOf(p.flowId)).toHaveLength(1);
+    expect(d.manager.list()[0]?.warning).toBeUndefined();
+    await d.stop();
+  });
+
   test("an email announced again after a restart runs its workflow once", async () => {
     // A restart starts the trigger's cursor over, so the same email comes back under a new buffer id.
     const polls = [
@@ -535,12 +574,12 @@ describe("through the engine, as production runs triggers", () => {
     await d.stop();
   });
 
-  test("the dashboard's schedule piece keeps the schedule rules: the zone warning, the spring-forward time, overlap and missed times", async () => {
-    setCronTimezone("America/New_York");
-    const { flowId, enable } = pieceSchedule("30 2 * * *", "UTC");
+  test("the dashboard's schedule piece keeps the schedule rules: the explicit zone, the spring-forward time, overlap and missed times", async () => {
+    setCronTimezone("UTC");
+    const { flowId, enable } = pieceSchedule("30 2 * * *", "America/New_York");
     const { engine } = stubEngine({ enable, poll: () => [{ firedAt: Date.now() }] });
     let d = await daemon(at("2026-03-08T06:58:30Z"), engine); // 01:58:30 EST
-    expect(d.manager.list()).toEqual([expect.objectContaining({ flowId, warning: expect.stringContaining("This schedule says UTC") })]);
+    expect(d.manager.list()[0]?.warning).toBeUndefined();
     d.tick(flowId, "2026-03-08T06:59:10Z"); // 01:59 EST
     await d.poll(flowId, "2026-03-08T07:00:10Z"); // 03:00 EDT: 02:30 never existed
     expect(listFlowFires(flowId)[0]).toMatchObject({ source: "schedule", dedupeKey: "2026-03-08T02:30", outcome: "started",
@@ -709,20 +748,6 @@ describe("Pause and Kill (Q-08)", () => {
     expect(runsOf(flowId)).toHaveLength(0);
     expect(listFlowFires(flowId)[0]).toMatchObject({ label: "skipped", detail: { reason: "Jarvis was stopped with Kill, so this did not run." } });
     await d.stop();
-  });
-});
-
-describe("the time-zone warning", () => {
-  test("compares when the schedule actually fires in the two zones", () => {
-    setCronTimezone("UTC");
-    expect(scheduleZoneWarning("0 * * * *", "Asia/Kolkata")).toContain("This schedule says Asia/Kolkata"); // :00 UTC is :30 there
-    expect(scheduleZoneWarning("*/15 * * * *", "Asia/Kolkata")).toBeUndefined();
-    setCronTimezone("Europe/Rome");
-    expect(scheduleZoneWarning("0 * * * *", "UTC")).toBeUndefined();
-    // Mondays begin two hours apart, and a two-hourly schedule lines up only in summer.
-    expect(scheduleZoneWarning("0 * * * 1", "UTC", at("2026-10-04T21:00:00Z"))).toContain("This schedule says UTC");
-    expect(scheduleZoneWarning("0 */2 * * *", "UTC", at("2026-07-01T00:00:00Z"))).toContain("This schedule says UTC");
-    expect(scheduleZoneWarning("0 9 * * *", "Europe/Rome")).toBeUndefined();
   });
 });
 

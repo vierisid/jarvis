@@ -584,3 +584,17 @@ test('#633: a nested workflow binding cannot amplify a stored node name', () => 
   expect(nested!.message.length).toBeLessThan(1_500);
   expect(new WorkflowReadinessError(readiness).message.length).toBeLessThan(2_000);
 });
+
+
+test('built-in schedule validates an explicit timezone without requiring one on legacy drafts', () => {
+  for (const timezone of ['Mars/Olympus', '', 42, '{{trigger.timezone}}', null]) {
+    const g = cron();
+    g.settings.input.timezone = timezone;
+    expect(compile(g).issues).toContainEqual(expect.objectContaining({ node: 'trigger', path: 'settings.input.timezone', code: 'TIMEZONE' }));
+  }
+  const g = cron();
+  g.settings.input.timezone = 'Europe/Rome';
+  expect(compile(g).ready).toBe(true);
+  delete g.settings.input.timezone;
+  expect(compile(g).ready).toBe(true);
+});

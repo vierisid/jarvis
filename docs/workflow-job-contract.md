@@ -68,9 +68,12 @@ judging each required step by the same rules the check applies to a graph:
 - it limits recipients and requires a send that cannot state its recipient
   (`gmail_send_draft`);
 - its cron does not run at its stated cadence;
-- it names a time zone other than the one schedules run in. Every schedule runs
-  in Jarvis's configured time zone (`src/lib/cron-scheduler.ts`), so a flow
-  cannot carry its own.
+- it names an invalid time zone.
+
+A schedule may carry its own IANA timezone in `settings.input.timezone`.
+Contract checking compares the saved graph's effective zone against the requested
+zone. Legacy schedules without that field use Jarvis's configured timezone;
+explicit zones remain stable when that default changes.
 
 ## The check and the repair loop
 

@@ -1,4 +1,4 @@
-import { validateCronExpression } from '../../lib/cron-scheduler';
+import { validateCronExpression, validateCronTimezone } from '../../lib/cron-scheduler';
 import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from './piece-catalog';
 import { evaluateWorkflowExpression, workflowExpressionReferences } from './safe-expression';
 import { emptyInput, inputIssue } from './input-validation';
@@ -241,8 +241,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
       try {
         if (typeof input?.cronExpression !== 'string') throw new Error('Schedule requires a static cron expression');
         validateCronExpression(input.cronExpression);
-        if (typeof input.timezone !== 'string') throw new Error('Schedule requires a timezone');
-        new Intl.DateTimeFormat('en-US', { timeZone: input.timezone });
+        validateCronTimezone(input.timezone);
       } catch (error) { issue(node, 'settings.input.cronExpression', 'CRON', (error as Error).message); }
     }
     if (type === 'PIECE' || type === 'PIECE_TRIGGER') {
@@ -252,6 +251,10 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
           if (typeof cron !== 'string') throw new Error('Schedule requires a static cron expression');
           validateCronExpression(cron);
         } catch (error) { issue(node, 'settings.input.cron_expression', 'CRON', (error as Error).message); }
+        if (input && Object.hasOwn(input, 'timezone')) {
+          try { validateCronTimezone(input.timezone); }
+          catch (error) { issue(node, 'settings.input.timezone', 'TIMEZONE', (error as Error).message); }
+        }
       } else if (!(root && pieceName === 'webhook')) {
         const piece = context.pieces?.get(pieceName);
         if (!piece) issue(node, 'settings.pieceName', 'PIECE', context.pieces ? `Unknown piece "${pieceName}"` : 'Piece catalog is unavailable; readiness cannot be verified');
