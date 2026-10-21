@@ -17,11 +17,14 @@
  *     `execSync('xclip -o')`);
  *   - a Bun `$` template starting with the name or with `which <name>`;
  *   - an argv `[sh|bash|dash|zsh, -c, <command line>]` (also `-lc`, `-ec`
- *     and the like, after `env NAME=value`, or child_process's split
- *     `spawn('sh', ['-c', line])`) where any command in the line, split at
- *     `|`, `;`, `&`, `&&`, `||`, `(`, `)`, `{`, `}` and `$(`, runs the name,
- *     past `env`, `exec`, `NAME=value`, `if`/`then`/`do` and the like, up to
- *     the line's first `${...}`;
+ *     and the like, after other options such as `--noprofile` or
+ *     `-o pipefail`, after `env` with its options and `NAME=value`, or
+ *     child_process's split `spawn('sh', ['-c', line])`) where any command in
+ *     the line, split at `|`, `;`, `&`, `&&`, `||`, `(`, `)`, `{`, `}` and
+ *     `$(`, runs the name, past `NAME=value`, `if`/`then`/`do` and the like,
+ *     and wrappers (`env`, `exec`, `command`, `time`, `timeout`, `nice`,
+ *     `sudo`, `xargs`, `nohup`) with their options, up to the line's first
+ *     `${...}`;
  *   - the name held as a value for a later launch: the fallback of `??`,
  *     `||`, `??=` or `||=`, a parameter's default, a returned value or arrow
  *     body, a variable's initializer, a branch of `?:`, a `shell:`-like
@@ -37,7 +40,10 @@
  * a key mapping returns it; `import` and `clip` as values like any name.
  * Not caught: a name assembled at run time, passed straight to a helper
  * that launches it later, or a `cmd`, `import` or `clip` argv returned from
- * a function or held in a variable not named like one. The vendored
+ * a function or held in a variable not named like one, a quoted
+ * `NAME="a b"` assignment before a command, a `sh -c` written as one string
+ * (`exec('sh -c "xclip -o"')`), or a wrapper not listed above. A quoted
+ * `; clip` or a heredoc line can be reported though it runs nothing. The vendored
  * activepieces tree is
  * third-party code and not scanned.
  *
@@ -211,19 +217,28 @@ const baseName = (path: string): string => path.split('/').pop()!;
  * after `env` and its `NAME=value` settings), or null.
  */
 function shellLine(argv: readonly ts.Expression[]): string | null {
+  const word = (at: number) => literalText(argv[at]) ?? '';
   let i = 0;
-  if (baseName(literalText(argv[0]) ?? '') === 'env') {
+  if (baseName(word(0)) === 'env') {
     i = 1;
-    while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(literalText(argv[i]) ?? '')) i++;
+    while (word(i).startsWith('-') || /^[A-Za-z_][A-Za-z0-9_]*=/.test(word(i))) i++;
   }
-  const shell = literalText(argv[i]);
-  const flag = literalText(argv[i + 1]);
-  if (shell === null || !SHELLS.has(baseName(shell)) || flag === null || !SHELL_COMMAND_FLAG.test(flag)) return null;
-  return commandText(argv[i + 2]);
+  if (!SHELLS.has(baseName(word(i)))) return null;
+  // Options before -c: `--noprofile`, `-o pipefail`.
+  for (let j = i + 1; j < argv.length; j++) {
+    const option = word(j);
+    if (SHELL_COMMAND_FLAG.test(option)) return commandText(argv[j + 1]);
+    if (option === '-o' || option === '+o') j++;
+    else if (!/^[-+]/.test(option)) return null;
+  }
+  return null;
 }
 
 /** Words that run the command after them, or start one: skipped to find the program a command runs. */
-const COMMAND_PREFIXES = new Set(['env', 'exec', 'command', 'nohup', 'time', 'if', 'then', 'else', 'elif', 'while', 'until', 'do', '!', '{']);
+const COMMAND_PREFIXES = new Set(['env', 'exec', 'command', 'nohup', 'time', 'timeout', 'nice', 'sudo', 'xargs',
+  'if', 'then', 'else', 'elif', 'while', 'until', 'do', '!', '{']);
+/** Options of those prefixes that take a value (`exec -a name`, `nice -n 10`, `sudo -u root`, `timeout -s KILL`). */
+const PREFIX_VALUE_OPTIONS = new Set(['-a', '-n', '-u', '-g', '-s', '-k', '-C']);
 
 /** The literal text of a command line, or the part before its first `${...}`. */
 function commandText(node: ts.Node | undefined): string | null {
@@ -237,7 +252,17 @@ function shellCommandName(command: string): string | null {
   for (const part of command.split(/\|\||&&|[|;&\n(){}`]|\$\(/)) {
     const words = part.trim().split(/\s+/);
     let i = 0;
-    while (i < words.length && (COMMAND_PREFIXES.has(words[i]!) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]!))) i++;
+    while (i < words.length) {
+      const w = words[i]!;
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) { i++; continue; }
+      if (!COMMAND_PREFIXES.has(w)) break;
+      i++;
+      // The prefix's options, and a duration or niceness (`timeout 5`).
+      while (i < words.length && (words[i]!.startsWith('-') || /^\d+(\.\d+)?[smhd]?$/.test(words[i]!))) {
+        if (PREFIX_VALUE_OPTIONS.has(words[i]!)) i++;
+        i++;
+      }
+    }
     const bare = leadingName(words.slice(i).join(' '));
     if (bare) return bare;
   }
@@ -400,7 +425,15 @@ describe('system tools are never launched by bare name (#900, #907)', () => {
       '{ xclip -o; }', '! xclip -o', 'while true; do xclip -o; done']) {
       expect(scanBareNames(`Bun.spawn(['sh', '-c', '${line}']);`)).toEqual([`1: shell command '${line}'`]);
     }
+    for (const line of ['env -i xclip -o', 'time -p xclip', 'timeout 5 xclip -o', 'nice -n 10 xclip', 'sudo xclip', 'echo x | xargs xclip',
+      'command -v xclip', 'exec -a foo xclip']) {
+      expect(scanBareNames(`Bun.spawn(['sh', '-c', '${line}']);`)).toEqual([`1: shell command '${line}'`]);
+    }
+    expect(scanBareNames(`spawn('bash', ['--noprofile', '-c', 'xclip -o']);`)).toEqual(["1: shell command 'xclip -o'"]);
+    expect(scanBareNames(`Bun.spawn(['bash', '-o', 'pipefail', '-c', 'xclip -o']);`)).toEqual(["1: shell command 'xclip -o'"]);
+    expect(scanBareNames(`Bun.spawn(['env', '-i', 'sh', '-c', 'xclip -o']);`)).toEqual(["1: shell command 'xclip -o'"]);
     expect(scanBareNames(`Bun.spawn(['sh', '-c', 'env | grep X']);`)).toEqual([]);
+    expect(scanBareNames(`Bun.spawn(['sh', '-c', 'timeout 5 sleep 1']);`)).toEqual([]);
     expect(scanBareNames(`Bun.spawn(['sh', '-ex', 'xclip']);`)).toEqual([]);
   });
 
