@@ -370,6 +370,14 @@ const SNAPSHOT_LOCK_BUSY = 'Error: another browser snapshot or typed input is st
   + 'so nothing was done. Try again in a moment.';
 
 /**
+ * The same lock timeout met by `navigate`'s closing snapshot. The navigation was
+ * sent by then (it may have landed on an error page or still be loading), so
+ * "nothing was done" would be false.
+ */
+const NAVIGATED_SNAPSHOT_LOCK_BUSY = 'The navigation was started, but the page could not be read because another '
+  + 'browser snapshot or typed input was still running on this browser. Take a browser_snapshot.';
+
+/**
  * A FIFO mutex with a bounded wait (#875). The local twin of the sidecar's
  * `snapMu` + `lockSnapshots`.
  *
@@ -532,7 +540,9 @@ export class BrowserController {
    * the new point and says 'ok' for a coordinate the reviewed element has left.
    *
    * NEVER taken by `forgetSnapshotElements`, which `snapshot()`'s own cleanup
-   * calls while holding it.
+   * calls while holding it. Nor, deliberately, by the pebble readers
+   * (`viewportScreenOrigin` and `snapshotElementPoint`), matching the sidecar,
+   * where the element-point handler does not take snapMu either.
    */
   private snapshotLock = new SnapshotLock();
 
@@ -744,7 +754,7 @@ export class BrowserController {
 
     await this.waitForSettled();
 
-    return this.snapshot();
+    return this.takeSnapshot(NAVIGATED_SNAPSHOT_LOCK_BUSY);
   }
 
   /**
@@ -1191,11 +1201,16 @@ export class BrowserController {
    * Get a snapshot of the current page: text content + numbered interactive elements.
    */
   async snapshot(): Promise<PageSnapshot> {
+    return this.takeSnapshot(SNAPSHOT_LOCK_BUSY.replace(/^Error: /, ''));
+  }
+
+  /** `snapshot`, throwing `busyMessage` when the snapshot lock's wait runs out. */
+  private async takeSnapshot(busyMessage: string): Promise<PageSnapshot> {
     await this.ensureConnected();
     // From the first frame-tree read through the fill (#875). Taken first, so
     // the cleanup that forgets a half-armed reading also runs under it.
     const release = await this.snapshotLock.acquire(snapshotLockTimeoutMs);
-    if (!release) throw new Error(SNAPSHOT_LOCK_BUSY.replace(/^Error: /, ''));
+    if (!release) throw new Error(busyMessage);
     try {
       return await this.snapshotLocked();
     } finally {
@@ -1667,7 +1682,7 @@ export class BrowserController {
 
     const button = options.button === 'right' ? 'right' : 'left';
     const refused = await this.withCheckedCoordinate(elementId, review.reviewedGen, async (coords, send) => {
-      // Move the pointer onto the element first — hover-sensitive UIs
+      // Move the pointer onto the element first -- hover-sensitive UIs
       // (menus, message toolbars) expect mouseover before the press.
       await send('Input.dispatchMouseEvent', {
         type: 'mouseMoved',

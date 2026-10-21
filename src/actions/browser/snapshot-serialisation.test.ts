@@ -20,6 +20,7 @@ import { describe, test, expect, afterEach } from 'bun:test';
 import { setSnapshotLockTimeoutForTests, type BrowserController } from './session.ts';
 import { collectActionVerification } from '../action-verification.ts';
 import { ActionOutcomeError } from '../action-outcome.ts';
+import { browserActionError } from './action-failure.ts';
 import { FakeRenderer, controllerOver, snapshotInFlight } from './fixtures/fake-renderer.ts';
 
 afterEach(() => setSnapshotLockTimeoutForTests(null));
@@ -355,6 +356,76 @@ describe('#875: a snapshot in flight cannot re-arm the refs under a reviewed act
     expect(await effectOf(async () => {
       verifies = 0;
       return browser.type(1, 'again', true);
+    })).toBe('may_have_occurred');
+  });
+
+  test('a submit holds the lock through its keyUp, so a queued click presses only after the Enter', async () => {
+    // The Enter goes to whatever holds focus, so no other element action may
+    // run between the post-insert verify and the last key event.
+    const fake = new FakeRenderer([{ name: 'To', x: 50, y: 40 }, { name: 'Buy', x: 50, y: 400 }]);
+    const browser = controllerOver(fake);
+    await browser.snapshot();
+    const queued: { click?: Promise<string> } = {};
+    // Queued while the type holds the lock, with the text in and the Enter to come.
+    fake.afterInsert = () => { queued.click = browser.click(2); };
+
+    const result = await browser.type(1, 'hello', true);
+    const clicked = await queued.click;
+
+    expect(result).toBe('Typed "hello" into element [1] and pressed Enter');
+    expect(clicked).toContain('Clicked element [2]');
+    const keyUp = fake.log.lastIndexOf('Input.dispatchKeyEvent');
+    const firstMouse = fake.log.indexOf('Input.dispatchMouseEvent');
+    expect(fake.log.filter((l) => l === 'Input.dispatchKeyEvent')).toHaveLength(3);
+    expect(firstMouse).toBeGreaterThan(-1);
+    expect(firstMouse).toBeGreaterThan(keyUp);
+  }, 10_000);
+
+  test('a type whose connection is re-established before its focus script runs nothing in the page', async () => {
+    const fake = new FakeRenderer([{ name: 'To', x: 50, y: 40 }]);
+    const browser = controllerOver(fake);
+    await browser.snapshot();
+    // The sentinel is the last renderer read before the focus script.
+    fake.afterAnswer = (l) => { if (l === 'evaluate:sentinel') bumpEpoch(browser); };
+
+    const result = await browser.type(1, 'approved text');
+
+    expect(result).toContain('connection was re-established');
+    // The focus script clears the field, so it must not have run either.
+    expect(fake.log).not.toContain('evaluate:focus');
+    expect(fake.typed).toEqual([]);
+
+    let n = 0;
+    fake.afterAnswer = (l) => { if (l === 'evaluate:sentinel' && n++ === 0) bumpEpoch(browser); };
+    expect(await effectOf(() => browser.type(1, 'again'))).toBe('not_started');
+  });
+
+  test('a navigate whose closing snapshot cannot get the lock says it navigated', async () => {
+    setSnapshotLockTimeoutForTests(50);
+    const fake = new FakeRenderer([{ name: 'To', x: 50, y: 40 }]);
+    const browser = controllerOver(fake);
+    (browser as unknown as { waitForSettled: () => Promise<void> }).waitForSettled = async () => {};
+    await browser.snapshot();
+    fake.hangSnapshots = true;
+    void browser.snapshot();
+
+    const outcome = await browser.navigate('https://mail.example.test/next').then(
+      () => 'resolved',
+      (err: Error) => err.message,
+    );
+
+    expect(fake.log).toContain('Page.navigate');
+    expect(outcome).toContain('The navigation was started, but the page could not be read');
+    expect(outcome).toContain('Take a browser_snapshot');
+    expect(outcome).not.toContain('nothing was done');
+    // As the tool reports it: the page did change.
+    expect(await effectOf(async () => {
+      try {
+        await browser.navigate('https://mail.example.test/again');
+        return 'navigated';
+      } catch (err) {
+        return browserActionError(err);
+      }
     })).toBe('may_have_occurred');
   });
 });

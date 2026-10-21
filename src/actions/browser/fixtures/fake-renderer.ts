@@ -60,6 +60,11 @@ export class FakeRenderer {
 
   async close(): Promise<void> {}
 
+  /** Every awaited event (a navigation's load event) has already fired. */
+  waitForEvent(_method: string, _timeoutMs?: number): Promise<unknown> {
+    return Promise.resolve({});
+  }
+
   /** Resolves once the queue has stopped in front of a message matching `when`. */
   pauseBefore(when: (p: Pending) => boolean): Promise<void> {
     return new Promise((reached) => { this.pause = { when, reached }; });
