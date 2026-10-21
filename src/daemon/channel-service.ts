@@ -648,11 +648,16 @@ export class ChannelService implements Service {
     addMessage(conversation.id, { role: 'user', content: msg.text });
 
     // 2. Route to AgentService (non-streaming — external channels are
-    //    request/response), on that conversation's history alone. A sender the
-    //    list does not name does not teach the agent anything either: what it
-    //    learns goes into every later turn's prompt, the owner's included.
+    //    request/response), on that conversation's history alone. Only the
+    //    channel's owner, the first entry of its list, gets the owner's
+    //    assistant (#909): their private context, their tools, and learning
+    //    from the turn. Any other sender is a guest; see
+    //    AgentService.handleGuestMessage for exactly what a guest gets.
+    //    A guest's turn still runs under origin 'user': the owner chose to
+    //    list them, the turn is foreground, and a separate origin would need
+    //    the hosted platform to weigh it. Filed as a follow-up (#909 review).
     const response = await runWithOrigin('user', () => this.agentService.handleThreadMessage(
-      msg.text, channelTag, { conversationId: conversation.id, contextKey: `channel:${channelTag}:${sender}`, learn: allowListed },
+      msg.text, channelTag, { conversationId: conversation.id, contextKey: `channel:${channelTag}:${sender}`, sender: owner ? 'owner' : 'guest' },
     ));
 
     // 3. Persist assistant response to vault

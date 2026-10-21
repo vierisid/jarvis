@@ -24,9 +24,9 @@ describe('#916: ownerNotice', () => {
     expect(ownerNotice({ allowed_users: [42], owner_id: 42 }))
       .toEqual({ warn: false, text: 'Owner: 42 (the first ID).' });
     expect(ownerNotice({ allowed_users: [42, 7], owner_id: 42 })?.text)
-      .toBe('Owner: 42 (the first ID). The other ID may chat, but cannot approve or deny.');
+      .toBe('Owner: 42 (the first ID). The other ID chats as a guest: a plain assistant with no tools and nothing Jarvis knows about you, that cannot approve or deny.');
     expect(ownerNotice({ allowed_users: ['1', '2', '3'], owner_id: '1' })?.text)
-      .toContain('The other 2 IDs may chat');
+      .toContain('The other 2 IDs chat as guests: a plain assistant');
   });
 
   test('warns when the first saved ID is not valid, so nobody owns the channel', () => {

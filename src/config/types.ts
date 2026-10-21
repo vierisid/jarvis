@@ -87,8 +87,13 @@ export type GoogleConfig = {
  * list the channel is not started, and the API refuses to save that state.
  * Only the users the list names may message the bot.
  *
- * The FIRST entry is the channel's owner (#916). Every listed user may chat,
- * each in a conversation of their own (#884), but only the owner:
+ * The FIRST entry is the channel's owner (#909, #916). Every listed user may
+ * chat, each in a conversation of their own (#884), but only the owner:
+ *   - gets turns built from the owner's private context (profile, knowledge,
+ *     commitments, goals, observations) with the owner's tools, and teaches
+ *     the assistant anything. Every other listed user is a guest: a plain
+ *     conversational model with none of that and no tools
+ *     (AgentService.handleGuestMessage).
  *   - may approve or deny from the channel. Anyone else's `approve <id>` or
  *     `deny <id>` is refused.
  *   - receives approval cards and other broadcasts, in their private chat

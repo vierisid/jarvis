@@ -41,7 +41,8 @@ stay opt-in, without per-run approval, but obey Pause and Kill and are audited.
 | Background agent | Same, with its level cap | Same, cap included | Refused | Refused |
 | Chat sub-agent | Same, with the parent's profile | No approvals outside workflows | Refused | Refused |
 | Approval from the dashboard | Compare-and-set decision, then one claim | As above | Approving waits for Resume (refused, saying so); denying works | Work cards denied; Stop agent remains available |
-| Approval from Telegram or Discord | Allowed sender, exact card id | As above; click-only cards refused | Approving waits for Resume | Work cards denied; Stop agent remains available |
+| Telegram or Discord message from a guest (a listed user who is not the channel's owner, #909) | No tools, so nothing to check and no approval can be raised; no owner context, nothing learned | | | |
+| Approval from Telegram or Discord | The channel's owner (first allowed id, #916), exact card id | As above; click-only cards refused | Approving waits for Resume | Work cards denied; Stop agent remains available |
 | Approval from a toast | Only whole, readable cards can be approved; click-only cards use the review-only notification kind | As above | Approving waits for Resume | Work cards denied; Stop agent remains available |
 | Spoken yes or no | Bound to the card shown at speech start; ambiguity, destructive and click-only cards refused | As above | Approving waits for Resume | Work cards denied; Stop agent remains available |
 | Realtime voice | Authority per category; the spoken command is the approval; a tainted session's approval, a click-only card or a blocked category is refused | | Refused | Refused |

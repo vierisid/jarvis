@@ -38,10 +38,11 @@ const SARVAM_SPEAKERS = [
 ];
 
 // #908: an enabled channel needs at least one ID; only listed users may
-// message the bot. #916: the first ID is the channel's owner, the only one who
-// gets approval requests and notifications and may approve or deny.
+// message the bot. #909/#916: the first ID is the channel's owner, the only
+// one answered with the owner's tools and context, sent approval requests and
+// notifications, and able to approve or deny. Everyone else is a guest.
 export const ALLOW_LIST_HINT =
-  "Only the people listed here can message the bot, and an enabled channel needs at least one. Put your own ID first: the first ID is the channel's owner. Approval requests and notifications go only to the owner's direct messages with the bot (never a group), once the owner has messaged the bot, and only the owner can approve or deny from here.";
+  "Only the people listed here can message the bot, and an enabled channel needs at least one. Put your own ID first: the first ID is the channel's owner. Only the owner is answered with your tools and what Jarvis knows about you; anyone else listed chats with a plain assistant that has neither. Approval requests and notifications go only to the owner's direct messages with the bot (never a group), once the owner has messaged the bot, and only the owner can approve or deny from here. In a group or server channel the owner's answers, which can include what Jarvis knows about you, are seen by everyone there.";
 
 /**
  * Entries of the saved allow-list the daemon ignores, and why (#883). A

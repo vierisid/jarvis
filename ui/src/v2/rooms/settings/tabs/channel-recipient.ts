@@ -19,10 +19,11 @@ export function recipientNotice(label: string, status: ChannelRecipientStatus | 
 }
 
 /**
- * Who owns the channel (#916), shown under the allowed IDs: the first saved
- * ID, when it is a valid one. Only the owner gets approval cards and may
- * approve or deny from the channel. Null when nothing is saved, or the daemon
- * did not say.
+ * Who owns the channel (#909, #916), shown under the allowed IDs: the first
+ * saved ID, when it is a valid one. Only the owner gets answers built from
+ * what Jarvis knows about them and with their tools, gets approval cards, and
+ * may approve or deny from the channel. Null when nothing is saved, or the
+ * daemon did not say.
  */
 export function ownerNotice(
   list: { allowed_users: Array<number | string>; owner_id?: number | string | null } | undefined,
@@ -32,12 +33,12 @@ export function ownerNotice(
     if (list.allowed_users.length === 0) return null;
     return {
       warn: true,
-      text: "No owner: the first saved ID is not a valid ID. Until your own ID is first, nobody gets approval cards here, and nobody may approve or deny from this channel.",
+      text: "No owner: the first saved ID is not a valid ID. Until your own ID is first, everyone listed chats as a guest, nobody gets approval cards here, and nobody may approve or deny from this channel.",
     };
   }
   const others = list.allowed_users.length - 1;
   return {
     warn: false,
-    text: `Owner: ${String(list.owner_id)} (the first ID).${others > 0 ? ` The ${others === 1 ? "other ID" : `other ${others} IDs`} may chat, but cannot approve or deny.` : ""}`,
+    text: `Owner: ${String(list.owner_id)} (the first ID).${others > 0 ? ` The ${others === 1 ? "other ID chats" : `other ${others} IDs chat`} as ${others === 1 ? "a guest" : "guests"}: a plain assistant with no tools and nothing Jarvis knows about you, that cannot approve or deny.` : ""}`,
   };
 }
