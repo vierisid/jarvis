@@ -48,7 +48,8 @@ describe.skipIf(skip)('the compiled core HTTP piece', () => {
     }) as never;
   };
   const props = (method: string, extra: Record<string, unknown> = {}) => ({ method, url: 'http://ops.invalid/logs', headers: {},
-    queryParams: {}, authType: 'NONE', body_type: 'none', failureMode: 'retry_all', ...extra });
+    // The piece's own timeout (seconds): a regressed guard fails fast instead of waiting on an unroutable address.
+    queryParams: {}, authType: 'NONE', body_type: 'none', failureMode: 'retry_all', timeout: 3, ...extra });
 
   test('a request that is not a read is sent once, even with "Retry on all errors"; a read is tried three times', async () => {
     failingLookup();

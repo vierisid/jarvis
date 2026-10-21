@@ -10,10 +10,13 @@
  *     else listening on the machine Jarvis runs on;
  *   - link-local (169.254.0.0/16, fe80::/10), which holds the cloud metadata
  *     services, plus the metadata addresses that sit inside private ranges
- *     (fd00:ec2::254, 100.100.100.200);
+ *     (fd00:ec2::254, 100.100.100.200)
+ *     and Azure's WireServer (168.63.129.16), which sits in public space;
  *   - unspecified, multicast, broadcast, documentation, benchmarking,
  *     reserved and protocol-assignment ranges, and the IPv6 transition
  *     prefixes (6to4, Teredo, NAT64) that can carry a private IPv4 address.
+ *     NAT64 (64:ff9b::/96) is refused whole, so an IPv6-only host behind
+ *     DNS64 cannot reach IPv4 destinations through its HTTP step.
  * Nor any address of the machine Jarvis runs on (its LAN address, a Docker
  * bridge, a VM's own public address): a service bound to 0.0.0.0 answers
  * there as it does on loopback.
@@ -60,6 +63,7 @@ type AddressClass = 'public' | 'private' | 'blocked';
 /** IPv4 ranges by first address and prefix length. Order matters: the first match wins. */
 const V4_RANGES: ReadonlyArray<readonly [string, number, AddressClass]> = [
   ['100.100.100.200', 32, 'blocked'], // Alibaba Cloud metadata, inside the CGNAT range below
+  ['168.63.129.16', 32, 'blocked'],   // Azure WireServer: host agent and DNS, in public space
   ['0.0.0.0', 8, 'blocked'],          // "this network", unspecified
   ['10.0.0.0', 8, 'private'],
   ['100.64.0.0', 10, 'private'],      // carrier-grade NAT, and Tailscale's tailnet
@@ -254,6 +258,8 @@ export interface GuardOptions {
   resolve?: LookupImpl;
   /** Test seam: replaces the policy's address check. Production never passes it. */
   allowAddress?: (address: string) => boolean;
+  /** Request timeout in ms; tests set one so a regressed guard fails fast instead of hanging. */
+  timeoutMs?: number;
 }
 
 /**
@@ -270,6 +276,7 @@ export function egressGuardedAxios<A extends AxiosLike>(axios: A, policy: Egress
     lookup,
     // Never an env proxy: the proxy, not the guard, would then pick the address.
     proxy: false,
+    ...(options.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
     beforeRedirect: (next: { hostname?: string; host?: string; protocol?: string; port?: string | number }, _response: unknown) => {
       const host = String(next.hostname ?? next.host ?? '');
       assertHostAllowed(host, policy, allowed);

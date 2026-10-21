@@ -18,6 +18,7 @@ describe('which addresses the HTTP step may reach', () => {
     ['172.15.255.255', 'public'], ['172.32.0.0', 'public'], ['100.63.255.255', 'public'], ['100.128.0.0', 'public'],
     ['127.0.0.1', 'blocked'], ['127.255.255.254', 'blocked'], ['0.0.0.0', 'blocked'], ['0.1.2.3', 'blocked'],
     ['169.254.169.254', 'blocked'], ['169.254.0.1', 'blocked'], ['100.100.100.200', 'blocked'], ['192.0.0.192', 'blocked'],
+    ['168.63.129.16', 'blocked'], ['::ffff:168.63.129.16', 'blocked'], ['168.63.129.15', 'public'], ['168.63.129.17', 'public'],
     ['192.0.2.1', 'blocked'], ['198.51.100.1', 'blocked'], ['203.0.113.9', 'blocked'], ['198.18.0.1', 'blocked'],
     ['192.88.99.1', 'blocked'], ['224.0.0.1', 'blocked'], ['239.255.255.250', 'blocked'], ['255.255.255.255', 'blocked'], ['240.0.0.1', 'blocked'],
     ['2606:4700:4700::1111', 'public'], ['2a00:1450:4001:80b::200e', 'public'], ['2001:4860:4860::8888', 'public'],
@@ -107,8 +108,11 @@ describe('the guarded client connects only where it checked', () => {
     const address = names[host];
     return address ? cb(null, [{ address, family: 4 }]) : cb(Object.assign(new Error(`getaddrinfo ENOTFOUND ${host}`), { code: 'ENOTFOUND' }), []);
   };
+  // A short timeout: were the guard to regress, a refusal test would otherwise
+  // wait minutes on an unroutable address instead of failing.
+  const FAST = 3_000;
   const client = (read: boolean, allowAddress?: (a: string) => boolean) =>
-    egressGuardedAxios(axios, 'public-only', { read, resolve, ...(allowAddress ? { allowAddress } : {}) });
+    egressGuardedAxios(axios, 'public-only', { read, resolve, timeoutMs: FAST, ...(allowAddress ? { allowAddress } : {}) });
 
   test('a name is connected to at the address its lookup checked, with one lookup', async () => {
     lookups = []; seen.length = 0;
@@ -181,11 +185,11 @@ describe('the guarded client connects only where it checked', () => {
 
   test('a file property URL is downloaded through the same guard, redirects included', async () => {
     seen.length = 0;
-    const file = await guardedFileDownload(axios, `http://ops.test:${port}/ok`, 'public-only', { resolve, allowAddress: onlyLocal });
+    const file = await guardedFileDownload(axios, `http://ops.test:${port}/ok`, 'public-only', { resolve, allowAddress: onlyLocal, timeoutMs: FAST });
     expect(JSON.parse(file.data.toString('utf8'))).toEqual({ ok: true, url: '/ok' });
-    await expect(guardedFileDownload(axios, `http://127.0.0.1:${port}/ok`, 'private-allowed')).rejects.toBeInstanceOf(EgressRefusedError);
-    await expect(guardedFileDownload(axios, `http://ops.test:${port}/ok`, 'private-allowed', { resolve })).rejects.toBeInstanceOf(EgressRefusedError);
-    await expect(guardedFileDownload(axios, `http://ops.test:${port}/to-metadata`, 'public-only', { resolve, allowAddress: onlyLocal }))
+    await expect(guardedFileDownload(axios, `http://127.0.0.1:${port}/ok`, 'private-allowed', { timeoutMs: FAST })).rejects.toBeInstanceOf(EgressRefusedError);
+    await expect(guardedFileDownload(axios, `http://ops.test:${port}/ok`, 'private-allowed', { resolve, timeoutMs: FAST })).rejects.toBeInstanceOf(EgressRefusedError);
+    await expect(guardedFileDownload(axios, `http://ops.test:${port}/to-metadata`, 'public-only', { resolve, allowAddress: onlyLocal, timeoutMs: FAST }))
       .rejects.toBeInstanceOf(EgressRefusedError);
     expect(seen).toEqual([`GET ops.test:${port} /ok`, `GET ops.test:${port} /to-metadata`]);
   });

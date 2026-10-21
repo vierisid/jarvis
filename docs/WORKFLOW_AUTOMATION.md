@@ -647,9 +647,10 @@ HTTP request specifics:
   public addresses only. A self-hosted install also reaches private ranges
   (10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7). Neither ever reaches
   loopback, link-local (the cloud metadata services), the metadata addresses
-  inside private ranges (fd00:ec2::254, 100.100.100.200), or the unspecified,
-  multicast, broadcast, documentation, benchmarking, reserved and IPv6
-  transition ranges, or any address of the machine Jarvis runs on (its LAN
+  inside private ranges (fd00:ec2::254, 100.100.100.200), Azure's WireServer
+  (168.63.129.16), or the unspecified, multicast, broadcast, documentation,
+  benchmarking, reserved and IPv6 transition ranges (NAT64 64:ff9b::/96
+  included, so an IPv6-only host behind DNS64 cannot reach IPv4 destinations), or any address of the machine Jarvis runs on (its LAN
   address, a Docker bridge, a VM's own public address). That last check knows
   only the interfaces Jarvis itself sees: run in a container, the Docker host's
   own addresses are not among them. Hosted is `isHostedInstall`; the daemon passes the answer
