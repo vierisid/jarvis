@@ -274,11 +274,12 @@ function runBunInstall(cwd: string): Promise<void> {
  * The packages are third-party npm code, so the child gets the sanitized env
  * rather than the daemon's, and lifecycle scripts do not run at all (see
  * BUN_INSTALL_ARGS for why that is safe for the catalog). `label` only names
- * the caller in the error.
+ * the caller in the error. Run by process.execPath, the Bun running the
+ * daemon, never a `bun` found on PATH (#864).
  */
 export function runPiecesBunInstall(cwd: string, label: string): Promise<void> {
   return new Promise((res, rej) => {
-    const child = spawn("bun", [...BUN_INSTALL_ARGS], {
+    const child = spawn(process.execPath, [...BUN_INSTALL_ARGS], {
       cwd,
       stdio: "inherit",
       env: sanitizedEnv(),

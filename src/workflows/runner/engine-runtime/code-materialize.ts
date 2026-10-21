@@ -73,10 +73,11 @@ export const CODE_INSTALL_TIMEOUT_MS = 5 * 60_000;
 
 /**
  * `bun install` with the daemon's sanitized environment, no lifecycle scripts,
- * and the hoisted layout whatever a bunfig.toml says.
+ * and the hoisted layout whatever a bunfig.toml says. Run by process.execPath,
+ * the Bun running the daemon, never a `bun` found on PATH (#864).
  */
 export const bunInstall: DependencyInstaller = (dir) =>
-  runInstall(dir, "bun", [...BUN_INSTALL_ARGS, "--linker=hoisted"], CODE_INSTALL_TIMEOUT_MS);
+  runInstall(dir, process.execPath, [...BUN_INSTALL_ARGS, "--linker=hoisted"], CODE_INSTALL_TIMEOUT_MS);
 
 /**
  * Run `command` in `dir` with the daemon's sanitized environment, SIGKILLed

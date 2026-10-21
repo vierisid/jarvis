@@ -82,6 +82,24 @@ function isInstalledAbove(dir, name) {
 }
 `
 
+/**
+ * Jarvis (#863): the Bun config the CODE child must run with, as argv. The
+ * engine is spawned with `--config=<empty file>` (spawnEngine, spawn.ts), and
+ * the child gets that same argument. Only that spelling, with a non-empty
+ * value, replaces the cwd `bunfig.toml`: `--config <path>`, `-c` and
+ * `--config=` all leave it read (measured). With none to forward -- this module
+ * run outside a spawned engine, as unit tests do -- POSIX gets `/dev/null`,
+ * which Bun reads as an empty config (measured, 1.3.8 and 1.4.2). Windows has
+ * no such path, so it refuses rather than run the step with the cwd config.
+ */
+export function codeChildConfigArgs(execArgv: readonly string[] = process.execArgv, platform: string = process.platform): string[] {
+    const own = execArgv.filter(a => a.startsWith('--config='))
+    const last = own[own.length - 1]
+    if (last !== undefined && last.length > '--config='.length) return [last]
+    if (platform !== 'win32') return ['--config=/dev/null']
+    throw new Error('CODE step refused: the engine was not started with --config=<empty bunfig>, so the step would read a bunfig.toml from its working directory (#863).')
+}
+
 async function runInChildProcess({ codeFilePath, inputs }: { codeFilePath: string, inputs: Record<string, unknown> }): Promise<unknown> {
     return new Promise((resolve, reject) => {
         // Jarvis (#837): `--no-install`, because a step file has no `node_modules`
@@ -90,7 +108,13 @@ async function runInChildProcess({ codeFilePath, inputs }: { codeFilePath: strin
         // code requires: fetches the latest version from the npm registry and runs
         // it. Measured with `is-number`, into an empty install cache. Bun-only:
         // under Node there is no auto-install and the flag would be rejected.
-        const args = process.versions.bun ? ['--no-install', '--eval', CODE_RUNNER_SCRIPT] : ['--eval', CODE_RUNNER_SCRIPT]
+        //
+        // Jarvis (#863): and the engine's own `--config=<empty bunfig>`, so a
+        // `bunfig.toml` in the cwd this child inherits is never read: its
+        // `preload` would run before the step, as code nothing pins. And
+        // `--no-env-file`, so a `.env` there cannot add variables to the
+        // sanitized env below (a proxy for every request the step makes).
+        const args = process.versions.bun ? [...codeChildConfigArgs(), '--no-env-file', '--no-install', '--eval', CODE_RUNNER_SCRIPT] : ['--eval', CODE_RUNNER_SCRIPT]
         const child = spawn(process.execPath, args, {
             stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
             // Jarvis: this child runs a CODE step, i.e. workflow-authored code.
