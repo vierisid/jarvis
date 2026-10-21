@@ -525,12 +525,15 @@ ingredients (ready, loading, unavailable). It sends no request.
 - Run is the optional `port.start`: single-flight, and a lost or mismatched acknowledgement leaves it
   `uncertain` and locked for that controller. Nothing is retried or re-sent; `not_submitted` is only for
   a request that was never sent.
-- `readRunHistory(scope, request)` is the `list` half of the port over `GET /api/workflows/:id/runs`
-  (`{ items, nextOffset }`, the offset as the cursor). It copies identity, status and time only, maps a
-  stop whose in-flight call may have completed to `uncertain`, and treats a 404 as unavailable. The
-  `detail` half is F-21's: it must build the redacted projection (step fields, effect receipts with
-  `unknown` kept distinct, waitpoints without resume URLs, Q-19 failure wording) before binding. The
-  card renders strings as text and shows `Redacted` for fields marked so; it is not a redaction layer.
+- `briefRunsPort(scope, request)` is the read half of the port, over F-21 (#1100): F-21's keyset reader
+  owns Brief run history, so `list` reads `GET /api/brief/workflows/:flowId/runs[?cursor=]` (newest
+  first, 50 a page, opaque cursor) and `detail` reads `GET /api/brief/workflows/:flowId/runs/:runId`, the
+  redacted inspection (step fields, effect receipts with `unknown` kept distinct, waitpoints without
+  resume URLs, Q-19 failure wording). The offset reader over `GET /api/workflows/:id/runs` is retired
+  for Brief. A 404 is unavailable, never an empty history. Labels are F-21's short `Run <last 6>`
+  (`Test run` for a test run); the full run ID is the label's title and a `Run ID` row in the
+  inspection. The card renders strings as text and shows `Redacted` for fields marked so; it is not a
+  redaction layer.
 - Opt-in `workflowRunsRegistration(useBinding)`, not in the production registry. `runsAvailable`
   requires a non-empty scope, flow, version and title, a `source` matching the shell mode, the routed
   flow/version, a controller bound to the same scope and the `workflowContext` capability.

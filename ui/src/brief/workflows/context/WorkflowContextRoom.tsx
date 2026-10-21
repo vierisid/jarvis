@@ -155,7 +155,10 @@ function BoundContext({
             store.setMode(value as ContextQuery["basis"])
           }
         />
-        <span className="brief-context-version">
+        <span
+          className="brief-context-version"
+          title={query.basis === "recorded" ? query.runId : undefined}
+        >
           {query.basis === "configured"
             ? `Version ${b.versionId}`
             : doc

@@ -115,8 +115,15 @@ test("configured and used-by-run views show their own goal and exact version", a
       .querySelector("[data-context-version]")
       ?.getAttribute("data-context-version"),
   ).toBe("meeting-v2");
+  // The run's short label keeps its full ID in the title (#1100).
+  expect(
+    host.querySelector(".brief-context-version")?.getAttribute("title"),
+  ).toBe("meeting-run-001");
   expect(text()).toContain("Source removed");
   await basis("configured");
+  expect(
+    host.querySelector(".brief-context-version")?.hasAttribute("title"),
+  ).toBe(false);
   expect(text()).toContain("Win 10 design partners");
 });
 test("all eight shell states and remount preserve mode and recorded identity", async () => {

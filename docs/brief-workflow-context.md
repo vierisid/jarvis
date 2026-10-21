@@ -20,7 +20,7 @@ SQLite snapshot.
 | Route | Result |
 | --- | --- |
 | `GET /api/brief/workflows/:flowId/inspection?versionId=…[&runId=…]` | `{status:"ready",data:{scopeId,flowId,versionId,runId,canvas,context,run}}` |
-| `GET /api/brief/workflows/:flowId/runs[?cursor=…]` | D-19 `{status:"ready",data:{items,nextCursor,total:null}}`, at most 50 summaries |
+| `GET /api/brief/workflows/:flowId/runs[?cursor=...]` | D-19 `{status:"ready",data:{items,nextCursor,total:null}}`, at most 50 summaries. The one Brief run-history reader (#1100) |
 | `GET /api/brief/workflows/:flowId/runs/:runId` | D-19 `{status:"ready",data:RunDetail}` |
 | `GET /api/brief/workflows/:flowId/run-requests/:requestId` | Original accepted manual-run receipt; 404 if none |
 
@@ -41,6 +41,12 @@ one stopped because its workflow was turned off or removed reads "Workflow
 turned off." A terminal run also carries Q-07's read-only `recovery` state
 (`unknown`, `blocked` or `recoverable`, never a replay). This is a read
 projection, not effect reconciliation or a permission to replay.
+
+Every run summary, detail and recorded context carries one short label,
+`Run <last 6 characters of the run ID>` (`Test run ...` for a test run). The full
+ID is always `runId`; D-19 and D-20 show it as the label's title and in the
+inspection. D-19 reads history only through this keyset reader (#1100); the
+offset-paged `/api/workflows/:id/runs` stays the classic dashboard's.
 
 Only LOCKED graphs are projected as immutable. New runs record whether their
 version was locked at acceptance via a small additive SQLite trigger. This
@@ -64,6 +70,16 @@ of complete usage inferred from an empty query.
 | Connections | Version connection IDs and exact connection templates in graph auth fields | Q-05 per-run connection bindings (identity only; a refused binding reads stale) |
 | Target | Explicit graph `sidecarId` / `target` references | Captured run machine binding and effect target references |
 | Rules | Routing and code-step references | Retained approval references |
+
+The configured basis also shows Q-05 pin drift (#1100): a connection the
+version names that now resolves to another identity than the one a person
+accepted when enabling or publishing reads `stale`, and so does the pinned
+computer when enabling this version would choose another one. That computer
+entry appears only when the computer inventory could be read and the version
+has a computer step, and an explicit target naming the same computer takes
+precedence. Drift that cannot be read is not shown and never fails the read. Drift names
+kinds and IDs only, never a credential, grant or computer name; enabling or
+publishing again is how a person accepts it.
 
 Configured references are not proof of use. Recorded memory means retained
 provider handoff, not proof of model reliance or complete lifetime coverage.

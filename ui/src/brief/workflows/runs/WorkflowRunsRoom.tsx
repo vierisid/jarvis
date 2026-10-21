@@ -196,6 +196,7 @@ function BoundRuns({
                   state.selectedId === run.runId ? "true" : undefined
                 }
                 aria-label={`Open ${run.label}`}
+                title={run.runId}
                 onClick={() => select(run.runId)}
               >
                 <strong>{run.label}</strong>
@@ -292,7 +293,7 @@ function RunDocument({ run }: { run: RunDetail }) {
   return (
     <div className="brief-run-document" data-run-id={run.runId}>
       <div className="brief-run-document-heading">
-        <h2>{run.label}</h2>
+        <h2 title={run.runId}>{run.label}</h2>
         <Status status={run.status} />
       </div>
       <h3 className="brief-run-summary">
@@ -303,6 +304,8 @@ function RunDocument({ run }: { run: RunDetail }) {
         <dd>{run.trigger ?? "Not recorded"}</dd>
         <dt>Started</dt>
         <dd>{date(run.startedAt)}</dd>
+        <dt>Run ID</dt>
+        <dd>{run.runId}</dd>
         <dt>Version</dt>
         <dd>{run.versionId}</dd>
       </dl>

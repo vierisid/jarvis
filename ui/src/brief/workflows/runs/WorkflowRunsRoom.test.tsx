@@ -174,3 +174,15 @@ test("queued history does not present creation time as a start time", async () =
     "Not started",
   );
 });
+
+test("a short run label carries the full run ID in its title and in the inspection (#1100)", async () => {
+  await render();
+  await React.act(async () => button("Open Run 006").click());
+  await render();
+  expect(button("Open Run 006").getAttribute("title")).toBe("meeting-run-006");
+  const heading = host.querySelector("[data-run-id] h2");
+  expect(heading?.textContent).toBe("Run 006");
+  expect(heading?.getAttribute("title")).toBe("meeting-run-006");
+  const metadata = Array.from(host.querySelectorAll(".brief-run-metadata dt"));
+  expect(metadata.find((dt) => dt.textContent === "Run ID")?.nextElementSibling?.textContent).toBe("meeting-run-006");
+});
