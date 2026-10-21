@@ -52,7 +52,11 @@ function keepRegistry(orchestrator: AgentOrchestrator, agentId: string, registry
   agentRegistries.set(agentId, registry);
 }
 
-/** Whether `agentId` still has a managed agent's tool registry. */
+/**
+ * Test seam (#1044): whether `agentId` still has a managed agent's tool
+ * registry, so a test can see the registry go when the agent is reaped. Not
+ * an authority check; nothing in production reads it.
+ */
 export function hasManagedRegistry(agentId: string): boolean {
   return agentRegistries.has(agentId);
 }
