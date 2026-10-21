@@ -889,6 +889,61 @@ const MAX_ELEM_GEN_LENGTH = 64;
  */
 const remoteSnapshotGenerations = new Map<string, string>();
 
+/**
+ * The most entries `remoteSnapshotGenerations` keeps (#879).
+ *
+ * Each sub-agent spawn that reads a remote browser adds a key, and the run's
+ * keys are dropped when it settles (`forgetSnapshotReader`). That alone does
+ * not bound the map: an approved call whose card a sub-agent raised can run
+ * after the agent has gone, and it records under the reader that raised the
+ * card, re-adding a key nothing will ever drop. So the map is also capped,
+ * least recently WRITTEN first out.
+ *
+ * Far above the keys that are live at once -- one per sidecar for the default
+ * and suppressed readers, plus one per running sub-agent per sidecar, which is
+ * a handful (background tasks are capped at MAX_RUNNING_TASKS, 5; synchronous
+ * delegations and workflow sub-agents add a few more) -- so an entry still in
+ * use is only evicted after 256 other readers have written since it last did.
+ * Orphans come from approved calls run after their reader settled, which
+ * includes a resumed sub-agent's pending call: it runs under the reviewed
+ * (old) reader, while the resumed run has a new id and forgets only its own.
+ * Eviction fails CLOSED: a card raised by that reader binds no generation and
+ * its approved click is refused as unverified. At most 256 keys of a sidecar id
+ * plus a reader name and a value of at most 64 characters (#676).
+ */
+export const REMOTE_SNAPSHOT_GENERATIONS_CAP = 256;
+
+/** Record a generation, keeping the map within its cap (#879). */
+function recordRemoteSnapshotGeneration(key: string, gen: string): void {
+  // Re-inserted so the map's insertion order is the order of last write.
+  remoteSnapshotGenerations.delete(key);
+  remoteSnapshotGenerations.set(key, gen);
+  while (remoteSnapshotGenerations.size > REMOTE_SNAPSHOT_GENERATIONS_CAP) {
+    const oldest = remoteSnapshotGenerations.keys().next().value;
+    if (oldest === undefined) break;
+    remoteSnapshotGenerations.delete(oldest);
+  }
+}
+
+/**
+ * Drop every generation recorded for a template-delivery scope's reader, on
+ * every sidecar (#879). Called when a sub-agent run settles: its scope id is
+ * per spawn, so nothing reads those keys again except an approved call the
+ * agent left behind, and that call carries the generation it was reviewed
+ * against on the approval itself, not in this map.
+ */
+export function forgetSnapshotReader(scopeId: string): void {
+  const suffix = `\u0000named:${scopeId}`;
+  for (const key of [...remoteSnapshotGenerations.keys()]) {
+    if (key.endsWith(suffix)) remoteSnapshotGenerations.delete(key);
+  }
+}
+
+/** Test seam: how many generations are recorded. */
+export function remoteSnapshotGenerationCount(): number {
+  return remoteSnapshotGenerations.size;
+}
+
 /** The map key for `sidecarId` as read by the scope this call runs in. */
 //
 // INSIDE AN APPROVED EXECUTION the reader is the one that raised the card, not
@@ -1018,7 +1073,7 @@ export async function routeBrowserReadToSidecar(
   if (out.kind === 'message') return { text: out.text, pageUrl: null, why: 'no_reply' };
   const { elemGen, documentId, ...read } = readSidecarPageReply(out.result);
   recordActionVerification(method, observedPage(read.pageUrl, documentId));
-  if (elemGen) remoteSnapshotGenerations.set(readerKey(out.sidecarId), elemGen);
+  if (elemGen) recordRemoteSnapshotGeneration(readerKey(out.sidecarId), elemGen);
   else remoteSnapshotGenerations.delete(readerKey(out.sidecarId));
   // The loop's own record too (#827). A read without a generation is kept as
   // null rather than deleted, so a card in this loop does not fall back to the
