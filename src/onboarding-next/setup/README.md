@@ -34,7 +34,9 @@ vaults, route through existing authenticated tenancy before selecting the adapte
   it. So a choice survives setup running again after `/api/onboarding/reset`
   with scope `setup` (#1070); a malformed one blocks setup before any write.
   A hand-edited `awareness.enabled: true` in config.yaml carries no marker, so
-  setup turns it off; the user re-enables it with a long-press. Setup is not
+  setup turns it off; the user re-enables it with a long-press. A long-press
+  made before this change (#390 persisted it unmarked) is unmarked too, so it
+  is also turned off once and needs one long-press again. Setup is not
   Awareness consent.
 - Self-hosted results return `next: 'legacy_setup'` until the existing setup path
   has persisted completion **and** the injected existing LLM check confirms
