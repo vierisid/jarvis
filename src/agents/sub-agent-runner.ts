@@ -19,7 +19,7 @@
 import type { AgentInstance } from './agent.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import type { ContentBlock, LLMMessage, LLMResponse, LLMToolCall, LLMTool } from '../llm/provider.ts';
-import { guardImageSize } from '../llm/provider.ts';
+import { capTextBlocks, guardImageSize } from '../llm/provider.ts';
 import { ToolRegistry, isToolResult, type ToolDefinition } from '../actions/tools/registry.ts';
 import { checkpointExecution } from '../actions/execution-scope.ts';
 import { beginExecutionActivity } from '../actions/progress-context.ts';
@@ -578,12 +578,13 @@ async function executeTool(
     const category = registry.get(toolCall.name)?.category;
     if (authorityCtx && isTaintSourceTool(toolCall.name, category)) authorityCtx.taint.add(toolCall.name);
     audit?.('allowed', true);
-    // A picture (#709), sized and framed the way the orchestrator's direct
+    // A picture (#709), sized, capped (#876) and framed the way the orchestrator's direct
     // path does it. `boundedResult` would JSON-stringify the ToolResult and
     // cap it, so the model got a 6000-character prefix of base64 instead of
     // an image.
     if (isToolResult(raw)) {
-      const blocks = markUntrustedToolBlocks(toolCall.name, category, raw.content.map(guardImageSize));
+      const blocks = markUntrustedToolBlocks(toolCall.name, category,
+        capTextBlocks(raw.content, MAX_TOOL_RESULT_CHARS).map(guardImageSize));
       return { text: blocks.map((b) => (b.type === 'text' ? b.text : `[${b.type}]`)).join('\n'), blocks };
     }
     const bounded = boundedResult(raw);
