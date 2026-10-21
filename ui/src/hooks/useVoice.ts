@@ -3,6 +3,7 @@ import { RealtimeVoiceController } from "../lib/RealtimeVoiceController";
 import { untagRealtimePcm } from "../../../src/comms/realtime-frame";
 import { uuid } from "../lib/uuid";
 import { withWakeMicConstraints } from "../lib/wakeMic";
+import { dashboardTimeZone } from "../lib/timeZone";
 
 const SPEECH_WAKE_INTERRUPT_COMMANDS = new Set([
   "stop",
@@ -1287,7 +1288,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
       rememberVoiceRequest(requestId);
       ws.send(JSON.stringify({
         type: "voice_text",
-        payload: { requestId, text: browserText, currentRoom, shownApprovalId },
+        payload: { requestId, text: browserText, currentRoom, shownApprovalId, timeZone: dashboardTimeZone() ?? "" },
         timestamp: Date.now(),
       }));
       pcmChunksRef.current = [];
@@ -1311,7 +1312,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
     // hosted plan excludes realtime) — the standard STT pipeline handles it.
     ws.send(JSON.stringify({
       type: "voice_start",
-      payload: { requestId, currentRoom, mode: "wav", shownApprovalId },
+      payload: { requestId, currentRoom, mode: "wav", shownApprovalId, timeZone: dashboardTimeZone() ?? "" },
       timestamp: Date.now(),
     }));
 

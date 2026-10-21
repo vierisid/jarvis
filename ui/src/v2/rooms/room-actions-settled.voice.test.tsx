@@ -155,10 +155,11 @@ const ARGS: Record<string, Record<string, unknown>> = {
   "content/create_content": { title: "Draft" },
   "content/advance": { name: "launch" },
   "content/regress": { name: "launch" },
-  "content/schedule": { name: "launch", when: "tomorrow" },
+  // A time comes settled by the daemon, as the instant to use (#1022).
+  "content/schedule": { name: "launch", when: "tomorrow", when_ts: NOW + 86_400_000 },
   "memory/remember_that": { subject: "alice", predicate: "birthday", object: "march 15" },
   "goals/create_goal": { title: "Ship it" },
-  "calendar/schedule_event": { title: "Dentist", when: "tomorrow" },
+  "calendar/schedule_event": { title: "Dentist", when: "tomorrow", when_ts: NOW + 86_400_000 },
   "workflows/create_from_nl": { prompt: "" },
 };
 
