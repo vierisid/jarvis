@@ -8,6 +8,7 @@ export class ChatApiError extends Error {
 export interface ConversationApi {
   capabilities(signal: AbortSignal): Promise<unknown>;
   tabs(signal: AbortSignal): Promise<ConversationTabs>;
+  ensureActive?(signal: AbortSignal): Promise<BriefConversation>;
   create(signal: AbortSignal): Promise<BriefConversation>;
   tab(id: string, open: boolean, signal: AbortSignal): Promise<BriefConversation>;
   select(id: string | null, signal: AbortSignal): Promise<ConversationTabs>;
@@ -37,6 +38,7 @@ export function conversationApi(fetcher: (input: string, init: RequestInit) => P
   return {
     capabilities: signal => request('/api/brief/capabilities', signal),
     tabs: async signal => tabs(await request(`${base}/tabs`, signal)),
+    ensureActive: async signal => conversation(await request(base, signal, 'POST', { ensureActive: true })),
     create: async signal => conversation(await request(base, signal, 'POST', {})),
     tab: async (id, open, signal) => conversation(await request(`${base}/${encodeURIComponent(id)}/tab`, signal, 'PATCH', { open })),
     select: async (id, signal) => tabs(await request(`${base}/active`, signal, 'PUT', { conversationId: id })),

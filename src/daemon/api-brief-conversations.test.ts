@@ -212,3 +212,17 @@ test('provider errors are safe unavailable results and replacing the vault inval
     expect(capabilities.capabilities.conversations).toMatchObject({ supported: true, ready: false, enabled: false });
   });
 });
+
+
+test('opening an empty Pebble atomically ensures one chat behind authenticated HTTP', async () => {
+  await withApi(true, async ({ request }) => {
+    expect((await request('/api/brief/conversations', 'POST', { ensureActive: true }, false)).status).toBe(401);
+    const replies = await Promise.all([1,2,3].map(() => request('/api/brief/conversations', 'POST', { ensureActive: true })));
+    const chats = await Promise.all(replies.map(reply => reply.json())) as BriefConversation[];
+    expect(new Set(chats.map(chat => chat.conversationId)).size).toBe(1);
+    const tabs = await (await request('/api/brief/conversations/tabs')).json() as any;
+    expect(tabs.tabs).toHaveLength(1); expect(tabs.activeConversationId).toBe(chats[0]!.conversationId);
+    for (const data of [{ ensureActive: false }, { ensureActive: true, title: 'Ignore me' }, { ensureActive: 'true' }])
+      expect((await request('/api/brief/conversations', 'POST', data)).status).toBe(400);
+  });
+});

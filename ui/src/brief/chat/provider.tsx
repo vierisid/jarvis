@@ -21,6 +21,10 @@ function useBriefLiveThread(client: BriefConversationClient, enabled: boolean, c
     update(); document.addEventListener('visibilitychange', update);
     return () => { document.removeEventListener('visibilitychange', update); client.store.setVisible(false); };
   }, [client, chatVisible]);
+  useEffect(() => {
+    if (enabled && chatVisible && status.mode === 'scoped' && status.connected && !state.activeId && !status.pending && !status.error)
+      void client.ensureActive().catch(() => {});
+  }, [client, enabled, chatVisible, status.mode, status.connected, status.pending, status.error, state.activeId]);
   const ws = useWebSocket({ enabled: enabled && (status.mode === 'scoped' || status.mode === 'legacy'),
     chat: status.mode === 'scoped' ? client.adapter : undefined, observer });
   // Everything but the chat itself passes through untouched (#1075): approvals,

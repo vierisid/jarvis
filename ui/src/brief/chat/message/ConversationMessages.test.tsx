@@ -129,3 +129,15 @@ test("the waiting line names what needs approval and says when another arrives, 
  // Same element, new text: a screen reader hears the change in an existing live region.
  expect(host.querySelector('[data-reading-anchor="approval"]')).toBe(line);expect(line.querySelector(".brief-sr-only")?.textContent).toContain("2 actions");
 });
+
+
+test("the Figma current-work pebble covers plain replies, pauses offline and disappears on completion", async () => {
+ setTurn({state:"running"}); binding.chat!.activity={}; await render();
+ expect(host.querySelector('.brief-response-working [data-current="true"]')).not.toBeNull();
+ expect(host.querySelector('.brief-response-working')?.getAttribute('data-reduced')).toBe('true');
+ expect(host.querySelectorAll('.brief-activity-list li')).toHaveLength(0);
+ binding={...binding,connected:false}; await render();
+ expect(host.querySelector('.brief-response-working [data-current="true"]')).toBeNull(); expect(host.textContent).toContain('Reconnecting');
+ binding={...binding,connected:true}; setTurn({state:'completed'}); await render();
+ expect(host.querySelector('.brief-response-working')).toBeNull(); expect(host.textContent).toContain('Agree the scope.');
+});

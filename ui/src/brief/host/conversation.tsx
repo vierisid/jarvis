@@ -36,6 +36,10 @@ export function HostConversation({ host }: { host: DashboardOwner }) {
       return { deviceId: device.id, confirmed: true };
     } }, 'live');
   const action = async (run: () => Promise<unknown>) => { try { await run(); setMessage(''); } catch { setMessage('The attachment change could not be confirmed.'); } };
+  if (owner.status.mode === 'scoped' && !owner.state.activeId) return <div className="brief-host-conversation">
+    <p className="brief-message-unavailable" role="status">{owner.status.error ? 'Your chat could not be opened.' : 'Opening your chat…'}</p>
+    {owner.status.error && <button type="button" disabled={owner.status.pending > 0} onClick={() => void owner.client.ensureActive().catch(() => {})}>Try again</button>}
+  </div>;
   return <div className="brief-host-conversation">
     <ConversationTabStrip mode="live" panelId={id} binding={tabs} />
     <ConversationMessages mode="live" panelId={id} labelledBy={tabs.activeId ? chatTabId(id, tabs.activeId) : undefined} binding={bindConversationMessages(owner, 'live')} />

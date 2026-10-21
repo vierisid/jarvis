@@ -32,6 +32,7 @@
 .brief-root .brief-activity-list p { grid-column:1/-1; color:var(--brief-secondary); margin:0; }
 .brief-root .brief-activity-marker { position:absolute; left:2px; top:6px; width:4px; height:4px; border-radius:50%; background:var(--activity-color); }
 .brief-root .brief-activity-marker[data-current="true"] { left:0; top:4px; width:8px; height:8px; border-radius:50% 0 50% 50%; animation:brief-activity-current 900ms ease-in-out infinite alternate; }
+.brief-root .brief-response-working { position:relative; margin:12px 16px; min-height:20px; padding-left:20px; color:var(--brief-secondary); --activity-color:var(--brief-running-text); font:400 13px/20px var(--brief-sans); }
 @keyframes brief-activity-current { to { transform:translate(2px,-2px); } }
 .brief-root [data-reduced="true"] .brief-activity-marker { animation:none; }
 @media(prefers-reduced-motion:reduce) { .brief-root .brief-activity-marker { animation:none; } }
