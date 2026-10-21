@@ -34,6 +34,10 @@
 #   CODESIGN_CERT_FILE  PEM holding the full certificate chain (leaf first).
 #                       Defaults to packaging/windows/codesign-chain.pem next
 #                       to this script. PUBLIC data — commit it.
+#                       Its leaf is also the identity every verification
+#                       pins (#871): the signer's certificate must be that
+#                       exact certificate, by SHA-256, so verifying needs
+#                       this file (and openssl) too.
 #   SIGNING_PUBLISHER_CN         if set, every signature must carry this CN
 #   SIGN_REQUIRE_TRUSTED_CHAIN   1 (default) = also require the chain to verify
 #                                locally, and require verification to run at
@@ -106,7 +110,8 @@ trap cleanup EXIT
 #                   an apt package whose maintainer scripts run as root, and
 #                   the signing job holds the Workload Identity token, so the
 #                   check runs in a job that cannot mint one.
-#   --verify-only   verify only: no credential, no certificate file, no jsign.
+#   --verify-only   verify only: no credential and no jsign. It still reads
+#                   the certificate chain, whose leaf is the pinned signer.
 MODE=sign
 USAGE="usage: $(basename "$0") [--defer-verify | --verify-only] <file.exe> [more.exe ...]"
 case "${1:-}" in
@@ -129,6 +134,47 @@ done
 for f in "$@"; do
 	[ -f "$f" ] || fail "file not found: $f"
 done
+
+# require_chain fails readably unless CODESIGN_CERT_FILE holds a PEM chain.
+# Signing needs it for jsign --certfile, verifying for the leaf pin.
+require_chain() {
+	# Cloud KMS stores the private key ONLY, so jsign cannot discover the
+	# certificate: --certfile is mandatory. Fail on it here rather than letting a
+	# missing file surface as a Java stack trace. The chain is committed, so this
+	# now fires on a partial checkout -- or on the next renewal, if the new chain
+	# is never committed.
+	[ -f "$CODESIGN_CERT_FILE" ] ||
+		fail "certificate chain not found at ${CODESIGN_CERT_FILE} -- Cloud KMS holds only the private key, so the Sectigo chain PEM must be committed at sidecar/packaging/windows/codesign-chain.pem (or pointed at with CODESIGN_CERT_FILE). See code-signing/windows-setup.md in usejarvis-docs."
+	grep -q 'BEGIN CERTIFICATE' "$CODESIGN_CERT_FILE" ||
+		fail "${CODESIGN_CERT_FILE} contains no PEM certificate -- is it still the placeholder?"
+}
+
+# load_leaf_pin sets LEAF_SHA256 to the SHA-256 of the FIRST certificate in
+# CODESIGN_CERT_FILE, the leaf jsign embeds (#871). A CN alone is not an
+# identity: subjects are not unique, so anyone holding a publicly trusted
+# certificate with the same CN would satisfy it. The leaf needs no variable
+# to configure, and a renewal moves the pin with the chain, because the new
+# chain has to be committed for jsign to sign at all.
+#
+# openssl prints "sha256 Fingerprint=AB:CD:..." (3.x) or "SHA256
+# Fingerprint=..." (1.1, LibreSSL): everything after the = with the colons
+# dropped, lower-cased, and then held to exactly 64 hex digits, so a format
+# this does not expect fails here instead of pinning nothing.
+LEAF_SHA256=""
+load_leaf_pin() {
+	[ -n "$LEAF_SHA256" ] && return 0
+	require_chain
+	command -v openssl >/dev/null 2>&1 ||
+		fail "openssl is not installed, so the signer certificate cannot be pinned to the leaf of ${CODESIGN_CERT_FILE}"
+	local fp
+	fp="$(openssl x509 -in "$CODESIGN_CERT_FILE" -noout -fingerprint -sha256 2>&1)" ||
+		fail "openssl cannot read the leaf certificate in ${CODESIGN_CERT_FILE}: ${fp}"
+	fp="${fp#*=}"
+	fp="$(printf '%s' "${fp//:/}" | tr 'A-F' 'a-f')"
+	[[ "$fp" =~ ^[0-9a-f]{64}$ ]] ||
+		fail "could not read a SHA-256 fingerprint for the leaf in ${CODESIGN_CERT_FILE} (got '${fp}')"
+	LEAF_SHA256="$fp"
+}
 
 # verify_signature asserts, after the fact, that the signature actually landed
 # on THESE bytes and came from US.
@@ -157,6 +203,8 @@ verify_signature() {
 		return 0
 	fi
 
+	load_leaf_pin
+
 	# Distro-dependent CA bundle; without one osslsigncode can bail before it
 	# prints anything useful. If none is found, verify without -CAfile: the
 	# chain simply won't build, which the trust branch below already tolerates.
@@ -168,9 +216,9 @@ verify_signature() {
 		done
 	fi
 	if [ -n "$bundle" ]; then
-		out="$(osslsigncode verify -CAfile "$bundle" "$f" 2>&1)" && rc=0 || rc=$?
+		out="$(osslsigncode verify -require-leaf-hash "sha256:${LEAF_SHA256}" -CAfile "$bundle" "$f" 2>&1)" && rc=0 || rc=$?
 	else
-		out="$(osslsigncode verify "$f" 2>&1)" && rc=0 || rc=$?
+		out="$(osslsigncode verify -require-leaf-hash "sha256:${LEAF_SHA256}" "$f" 2>&1)" && rc=0 || rc=$?
 	fi
 
 	# A signature must exist at all. NOTE: "Number of verified signatures" is a
@@ -180,6 +228,36 @@ verify_signature() {
 	case "$out" in
 	*"Number of verified signatures: "[1-9]*) ;;
 	*) fail "no Authenticode signature found on $f after signing" ;;
+	esac
+	# Exactly ONE signature: we never nest. osslsigncode 2.5 and 2.7 print the
+	# loop index and 2.9+ count every signature, so either way this line is
+	# the total. It matters for the leaf check below: a primary signature
+	# without exactly one signer makes osslsigncode return early with no leaf
+	# line at all, so a nested signature of ours would supply the only
+	# "Leaf hash match: ok" and the exit 0 for a file Windows rejects.
+	local counts
+	counts="$(printf '%s\n' "$out" | awk '/Number of verified signatures: / { print }')"
+	[ "$counts" = "Number of verified signatures: 1" ] ||
+		fail "$f carries more than one Authenticode signature (${counts//$'\n'/; }); a release is signed exactly once"
+
+	# The signer is OUR certificate (#871): osslsigncode hashes the DER of the
+	# certificate the signature names as its signer, compares it with
+	# -require-leaf-hash, and prints "Leaf hash match: ok" or "failed" per
+	# signature (2.7, 2.9 and 2.13 alike). A mismatch also prints
+	# "Signature verification: failed", which the check below would report
+	# as a broken signature, so this one goes first and says what is wrong.
+	# Allowlisted as well: an osslsigncode that ignored the option would print
+	# neither line, and that must not read as a pinned signer.
+	# The "failed" branch MUST come first. With a nested signature osslsigncode
+	# prints one line per signature and exits 0 when ANY of them verifies, so
+	# an impostor primary signature over a nested one of ours prints both
+	# "failed" and "ok" (observed with 2.9): any "failed" anywhere refuses.
+	case "$out" in
+	*"Leaf hash match: failed"*)
+		fail "$f is signed by a certificate other than the leaf of ${CODESIGN_CERT_FILE} (SHA-256 ${LEAF_SHA256}); a matching CN does not make it ours"
+		;;
+	*"Leaf hash match: ok"*) ;;
+	*) fail "osslsigncode did not confirm that $f is signed by the leaf of ${CODESIGN_CERT_FILE} (no 'Leaf hash match: ok' in its output)" ;;
 	esac
 
 	# Real failure markers, each observed from osslsigncode 2.9:
@@ -256,7 +334,7 @@ verify_signature() {
 	return 0
 }
 
-# Verification alone needs none of what signing needs below.
+# Verification alone needs none of the credentials signing needs below.
 if [ "$MODE" = verify ]; then
 	for f in "$@"; do
 		verify_signature "$f"
@@ -297,15 +375,7 @@ done
 [[ "$GCP_KMS_KEYRING" =~ ^projects/[^/]+/locations/[^/]+/keyRings/[^/]+$ ]] ||
 	fail "GCP_KMS_KEYRING must be projects/<project>/locations/<location>/keyRings/<keyring> — got '$GCP_KMS_KEYRING' (the key name belongs in GCP_KMS_KEY_ALIAS)"
 
-# Cloud KMS stores the private key ONLY, so jsign cannot discover the
-# certificate: --certfile is mandatory. Fail on it here rather than letting a
-# missing file surface as a Java stack trace. The chain is committed, so this
-# now fires on a partial checkout — or on the next renewal, if the new chain
-# is never committed.
-[ -f "$CODESIGN_CERT_FILE" ] ||
-	fail "certificate chain not found at ${CODESIGN_CERT_FILE} — Cloud KMS holds only the private key, so the Sectigo chain PEM must be committed at sidecar/packaging/windows/codesign-chain.pem (or pointed at with CODESIGN_CERT_FILE). See code-signing/windows-setup.md in usejarvis-docs."
-grep -q 'BEGIN CERTIFICATE' "$CODESIGN_CERT_FILE" ||
-	fail "${CODESIGN_CERT_FILE} contains no PEM certificate — is it still the placeholder?"
+require_chain
 
 # Pinned checksum: jsign runs with a live signing token in hand, so an
 # unverified download is never acceptable here.

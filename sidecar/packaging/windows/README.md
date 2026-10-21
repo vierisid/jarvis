@@ -33,6 +33,17 @@ belongs in the file; USERTrust is the actual root and is omitted.
 included) — `sign-windows.sh` compares it to the signature's CN character for
 character and fails the build on any difference.
 
+The leaf is also the signer identity every post-sign check pins (#871):
+`sign-windows.sh` passes its SHA-256 to `osslsigncode verify
+-require-leaf-hash`, so a signature only passes when it was made with this
+exact certificate, not merely one with the same CN. A renewal moves the pin
+with this file; there is nothing else to update for the leaf. If a
+renewal changes the legal name on the certificate, the CN changes too: set
+the `SIGNING_PUBLISHER_CN` repository variable to the new CN in the same
+change, because installers and sidecars built from then on pin it, and the
+post-sign check compares it exactly. Clients already shipped keep the old CN
+pin and will refuse updates signed under the new name.
+
 **Renewal is due before 2027-08-11.** See code-signing/renewal.md in
 usejarvis-docs; the key stays put, so renewal replaces only this file.
 

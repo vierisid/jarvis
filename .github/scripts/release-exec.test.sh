@@ -819,6 +819,22 @@ if (mode === "postsign") {
       if (ver["continue-on-error"] !== undefined) out.push(T.verify + ": the signature check is allowed to fail");
       if (String(ver.env?.SIGN_REQUIRE_TRUSTED_CHAIN) !== "1") out.push(T.verify + ": SIGN_REQUIRE_TRUSTED_CHAIN is " + JSON.stringify(ver.env?.SIGN_REQUIRE_TRUSTED_CHAIN) + ", not \"1\"");
       if (ver.env?.SIGNING_PUBLISHER_CN !== "${{ vars.SIGNING_PUBLISHER_CN }}") out.push(T.verify + ": the publisher is not taken from vars.SIGNING_PUBLISHER_CN");
+      // #871: the signer is pinned to the leaf of the committed chain, which
+      // the script reads from the checkout by default. Pointed at any other
+      // file, the pin is whatever that file says, so nothing may point it.
+      for (const [lvl, e] of [["workflow", doc.env], ["job", v.env], ["step", ver.env]])
+        if (e && typeof e === "object" && "CODESIGN_CERT_FILE" in e) out.push(T.verify + ": the " + lvl + " env sets CODESIGN_CERT_FILE, so the signer is pinned to a certificate other than the committed leaf");
+      if (/CODESIGN_CERT_FILE/.test(ver.run)) out.push(T.verify + ": the signature check sets CODESIGN_CERT_FILE in its script, so the signer is pinned to a certificate other than the committed leaf");
+      // Nor change the PATH that finds openssl and osslsigncode, which the
+      // pin trusts (#871 review): no GITHUB_ENV or GITHUB_PATH write, no
+      // container, and before the check only checkout and download-artifact
+      // among actions, since an action can export either without saying so.
+      for (const st of steps.slice(0, at)) {
+        if (/GITHUB_(?:ENV|PATH)/.test(String(st.run ?? "") + JSON.stringify(st.with ?? {}))) out.push(T.verify + ": a step before the signature check writes GITHUB_ENV or GITHUB_PATH, which can change the certificate it pins or the tools it trusts");
+        const u = String(st.uses ?? "").toLowerCase();
+        if (u && !u.startsWith("actions/checkout@") && !u.startsWith("actions/download-artifact@")) out.push(T.verify + ": runs " + st.uses + " before the signature check (only checkout and download-artifact), which can change its env or PATH");
+      }
+      if (v.container !== undefined) out.push(T.verify + ": runs in a container, whose env and tools the signature check would trust");
       const inst = steps.findIndex((st) => typeof st.run === "string" && /\bapt-get\s+install\b[^\n]*\bosslsigncode\b/.test(st.run));
       if (inst < 0 || inst > at || steps[inst].if !== SIGNED) out.push(T.verify + ": does not install osslsigncode, under the same condition, before the check");
     }
@@ -2658,6 +2674,12 @@ done
 		'publish-sidecar: runs under'
 	mutant 'the sidecar signature check job run under a condition of its own (#817 review)' \
 		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: needs.resolve.outputs.build == \'true\'\n' $'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: always()\n'
+	mutant 'the sidecar signature check pinned to another chain file (#871)' \
+		$'          SIGN_REQUIRE_TRUSTED_CHAIN: "1"\n' $'          SIGN_REQUIRE_TRUSTED_CHAIN: "1"\n          CODESIGN_CERT_FILE: ${{ runner.temp }}/signed/chain.pem\n' \
+		'the step env sets CODESIGN_CERT_FILE'
+	mutant 'the sidecar workflow env pointing the pin elsewhere (#871)' \
+		$'\nenv:\n' $'\nenv:\n  CODESIGN_CERT_FILE: /tmp/chain.pem\n' \
+		'the workflow env sets CODESIGN_CERT_FILE'
 	mutant 'the sidecar signature check relaxed to an untrusted chain (#817)' \
 		$'          SIGN_REQUIRE_TRUSTED_CHAIN: "1"\n        run: |\n          if [ -z "${SIGNING_PUBLISHER_CN}" ]' $'          SIGN_REQUIRE_TRUSTED_CHAIN: "0"\n        run: |\n          if [ -z "${SIGNING_PUBLISHER_CN}" ]'
 	MUTANT_FROM="$INSTALLER_WORKFLOW"
@@ -2680,6 +2702,27 @@ done
 		$'    needs: [resolve, sign-windows, verify-windows, build-macos]\n    if: needs.resolve.outputs.should_release == \'true\'' $'    needs: [resolve, sign-windows, verify-windows, build-macos]\n    if: always() && needs.resolve.outputs.should_release == \'true\''
 	mutant 'the installer digest check made skippable (#817)' \
 		$'      - name: Verify the signed installer digest\n' $'      - name: Verify the signed installer digest\n        if: false\n'
+	mutant 'the installer signature check pinned to another chain file (#871)' \
+		$'          SIGN_REQUIRE_TRUSTED_CHAIN: "1"\n' $'          SIGN_REQUIRE_TRUSTED_CHAIN: "1"\n          CODESIGN_CERT_FILE: ${{ runner.temp }}/signed/chain.pem\n' \
+		'the step env sets CODESIGN_CERT_FILE'
+	mutant 'the installer signature check job env pointing the pin elsewhere (#871)' \
+		$'  verify-windows:\n    needs: [resolve, sign-windows]\n' $'  verify-windows:\n    needs: [resolve, sign-windows]\n    env:\n      CODESIGN_CERT_FILE: /tmp/chain.pem\n' \
+		'the job env sets CODESIGN_CERT_FILE'
+	mutant 'the installer signature check pinning a chain it was handed in its script (#871)' \
+		'          scripts/sign-windows.sh --verify-only "${RUNNER_TEMP}/signed/Jarvis-Setup.exe"' '          CODESIGN_CERT_FILE="${RUNNER_TEMP}/signed/chain.pem" scripts/sign-windows.sh --verify-only "${RUNNER_TEMP}/signed/Jarvis-Setup.exe"' \
+		'sets CODESIGN_CERT_FILE in its script'
+	mutant 'the installer signature check told another chain through GITHUB_ENV (#871)' \
+		'      - name: Verify the Authenticode signature' $'      - run: echo "CODESIGN_CERT_FILE=/tmp/chain.pem" >> "$GITHUB_ENV"\n      - name: Verify the Authenticode signature' \
+		'a step before the signature check writes GITHUB_ENV'
+	mutant 'the installer signature check handed another PATH (#871 review)' \
+		'      - name: Verify the Authenticode signature' $'      - run: echo "/tmp/bin" >> "$GITHUB_PATH"\n      - name: Verify the Authenticode signature' \
+		'writes GITHUB_ENV or GITHUB_PATH'
+	mutant 'the installer signature check after an action that can export env (#871 review)' \
+		'      - name: Verify the Authenticode signature' $'      - uses: someone/setup-tools@0123456789012345678901234567890123456789\n      - name: Verify the Authenticode signature' \
+		'before the signature check (only checkout and download-artifact)'
+	mutant 'the installer signature check in a container (#871 review)' \
+		$'  verify-windows:\n    needs: [resolve, sign-windows]\n' $'  verify-windows:\n    needs: [resolve, sign-windows]\n    container: ubuntu:24.04\n' \
+		'runs in a container'
 	unset MUTANT_MODE MUTANT_FROM
 }
 # The two digest checks, executed verbatim.
