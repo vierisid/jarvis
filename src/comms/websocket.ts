@@ -465,7 +465,11 @@ export class WebSocketServer {
           const exactRoute = self.apiRoutes.get(pathname);
           if (exactRoute) {
             const handler = exactRoute[req.method];
-            if (handler) return handler(req);
+            if (handler) {
+              // Finishing onboarding prepares the OKR before the atomic dashboard handoff.
+              if (pathname === '/api/onboarding-next/v1/journey/transition' && req.method === 'POST') server.timeout(req, 120);
+              return handler(req);
+            }
             return new Response('Method Not Allowed', { status: 405 });
           }
 

@@ -21,7 +21,8 @@ import { createBuildJobsProvider, createSqliteBuildStore, initializeBuildJobStor
 import { createDraftResultProvider, createSqliteResultReader, createDraftCompletionGuard } from '../result';
 import type { Binder, Capability, Context, Scope, Provider } from './contract';
 import { RuntimeError } from './runtime';
-import { saveInitialInterviewGoal } from './initial-goal';
+import { getGoalApplication } from '../../goals/application-service';
+import { createInitialGoalPlanner, saveInitialInterviewGoal } from './initial-goal';
 import { getDb } from '../../vault/schema';
 
 export interface OnboardingAssemblyPorts {
@@ -34,6 +35,7 @@ export interface OnboardingAssemblyPorts {
   interviewer: InterviewerPort;
   intent(scope: Scope, context: Context): IntentServices | null;
   composer(): ComposeDeps;
+  planInitialGoal?(text: string): Promise<import('../../goals/proposal').GoalProposal>;
   resolveContext(intent: Intent, signal?: AbortSignal): Promise<Record<string, unknown>>;
   roomStatus(scope: Scope, step: TourStep): RoomStatus | Promise<RoomStatus>;
   /** Pure service readiness, never an external request. */
@@ -69,19 +71,24 @@ export function createOnboardingAssembly(ports: OnboardingAssemblyPorts) {
     if (!current() || scope.actorId !== owner.actorId || scope.projectId !== owner.projectId) throw new Error('Binding unavailable');
     return db;
   }, readLegacy: ports.readLegacy });
+  const prepareGoal = createInitialGoalPlanner(text => {
+    if (!ports.planInitialGoal) throw Error('Goal planner unavailable');
+    return ports.planInitialGoal(text);
+  });
   const persistence: typeof settingsPersistence = {
     transaction(scope, operation) {
-      return settingsPersistence.transaction(scope, tx => operation({ ...tx, write(record) {
+      return getGoalApplication().transaction(() => settingsPersistence.transaction(scope, tx => operation({ ...tx, write(record) {
         tx.write(record);
         // The goal and journey finish share the canonical SQLite transaction.
         if (record.snapshot.stepId === 'exited' && record.snapshot.interviewState === 'done') {
           if (getDb() !== db) throw new Error('Profile vault unavailable');
           saveInitialInterviewGoal(record.snapshot);
         }
-      } }));
+      } })));
     },
   };
-  const journey = (context: Context) => createJourneyProvider({ authorize: () => authorize(context), persistence, validateFinish: finish });
+  const journey = (context: Context) => createJourneyProvider({ authorize: () => authorize(context), persistence, validateFinish: finish,
+    prepareExit: async (_scope, snapshot) => prepareGoal(snapshot, () => { guard(context); if (getDb() !== db) throw Error('Vault changed'); }) });
   async function acknowledge(context: Context, command: Parameters<ReturnType<typeof createJourneyProvider>['acknowledge']>[0]['command']) {
     for (let attempt = 0; attempt < 4; attempt++) {
       guard(context);

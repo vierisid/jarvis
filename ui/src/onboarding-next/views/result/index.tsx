@@ -127,7 +127,7 @@ function ResultContent({ model, draft, Canvas, requestText, onReview, onContinue
       </aside>}
     </div>
     <footer className="on-result__footer">
-      <div className="on-result__feedback" role="status" aria-live="polite">{error ? 'We could not confirm that action. Check again before continuing.' : pending ? 'Waiting for confirmation…' : dirty ? 'Save or discard your canvas edits before leaving or refreshing.' : reviewing ? 'Select a step to open its inspector.' : ''}</div>
+      <div className="on-result__feedback" role="status" aria-live="polite">{error ? 'We could not confirm that action. Check again before continuing.' : pending?.action === 'finish' || pending?.action === 'open_workflow' ? 'Preparing your goal plan and opening your workspace…' : pending ? 'Waiting for confirmation…' : dirty ? 'Save or discard your canvas edits before leaving or refreshing.' : reviewing ? 'Select a step to open its inspector.' : ''}</div>
       <div className="on-result__actions">
         {onBack && <button type="button" disabled={locked || dirty} onClick={() => void invoke('back', onBack)}>Back to your request</button>}
         {onRefresh && <button type="button" disabled={dirty || pending?.action === 'refresh'} onClick={() => void invoke('refresh', onRefresh)}>Check again</button>}

@@ -142,7 +142,7 @@ export function createInterviewSession(options: { initialGoal?: boolean } = {}):
     messages: [
       { role: 'system', content: options.initialGoal ? INTERVIEWER_SYSTEM_PROMPT.replace(
         'A saved goal is context, not a configured goal object.',
-        'The onboarding host will save the latest stated goal as a draft objective when onboarding finishes. Explain this briefly when asking about their goal; never claim it is already created or active. If they skip or cannot name a goal, respect that and do not invent one.') : INTERVIEWER_SYSTEM_PROMPT },
+        'The onboarding host will build and activate the latest stated goal with key results and milestones when onboarding finishes. Explain this briefly when asking about their goal; never claim it is already created or active. If they skip or cannot name a goal, respect that and do not invent one.') : INTERVIEWER_SYSTEM_PROMPT },
     ],
     turnCount: 0,
     done: false,

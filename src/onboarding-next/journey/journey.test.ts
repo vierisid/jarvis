@@ -493,3 +493,31 @@ describe('acknowledgement boundaries and scoped tutorial replay', () => {
     expect(f.db.query('SELECT count(*) AS n FROM settings').get()).toEqual({ n: 4 });
   });
 });
+
+
+test('exit preparation runs outside SQLite, retries failures, and rechecks authorization/revision before handoff', async () => {
+  const f = fixture(); await activation(f.provider);
+  let authorized = true, fail = true, change = false, revoke = false, calls = 0;
+  const provider = createJourneyProvider({ authorize: () => authorized ? owner : null,
+    persistence: createSettingsJourneyPersistence({ databaseForScope: () => f.db, readLegacy: () => fresh }),
+    prepareExit: async () => {
+      calls++; expect(f.db.inTransaction).toBe(false);
+      if (fail) throw Error('private provider failure');
+      if (change) ready(await nav(f.provider, { type: 'navigate', stepId: 'tour' }));
+      if (revoke) authorized = false;
+    },
+  });
+  const initial = ready(await provider.read());
+  expect((await nav(provider, { type: 'explore' }, { ...initial, revision: initial.revision - 1 })).availability).toBe('unavailable'); expect(calls).toBe(0);
+  expect(await nav(provider, { type: 'explore' })).toMatchObject({ availability: 'unavailable', reason: 'goal_plan_unavailable' });
+  expect(ready(await provider.read()).stepId).toBe('activation');
+  fail = false; change = true;
+  expect(await nav(provider, { type: 'explore' })).toMatchObject({ availability: 'unavailable', reason: 'revision_conflict' });
+  change = false; await ack(f.provider, { type: 'tour_finished', state: 'done' }); revoke = true;
+  expect(await nav(provider, { type: 'explore' })).toMatchObject({ availability: 'unavailable', reason: 'unauthorized' });
+  expect(ready(await f.provider.read()).stepId).toBe('activation');
+  authorized = true; revoke = false;
+  const s = ready(await provider.read()), input = { journeyId: s.journeyId, expectedRevision: s.revision, requestId: 'finish-once', command: { type: 'explore' as const } };
+  expect(ready(await provider.transition(input)).stepId).toBe('exited'); const before = calls;
+  expect((await provider.transition(input)).availability).toBe('ready'); expect(calls).toBe(before);
+});

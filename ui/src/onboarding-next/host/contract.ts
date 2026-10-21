@@ -31,6 +31,7 @@ export interface Journey {
   completion: 'active' | 'completed' | 'explored' | 'legacy_completed';
   jobId: string | null; buildRequestId?: string | null;
   draft: { flowId: string; versionId: string } | null;
+  buildHistory?: Array<{ buildRequestId: string | null; jobId: string | null; outcome: 'failed' | 'cancelled' }>;
 }
 export interface CapabilityState { present: boolean; registered: boolean; supported: boolean; ready: boolean; reason: string }
 export interface Status {

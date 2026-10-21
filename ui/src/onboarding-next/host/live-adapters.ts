@@ -195,6 +195,15 @@ export function createLiveOnboardingAdapters(ports: LiveOnboardingPorts): Config
     tour: tourBinding, 'pebble-tour': tourBinding,
     activation: binding(() => ({ available: ports.available, async read(c) {
       check(c); suggestions = { suggestions: [] }; suggestionState = 'ready';
+      const data = store(c).read('activation');
+      const pending = data?.pendingRequest;
+      if (!c.journey.jobId && !c.journey.buildRequestId && object(pending) && object(pending.request)
+        && c.journey.buildHistory?.some(h => h.buildRequestId === pending.request.requestId)) {
+        // The server has fenced this attempt and confirmed there is no draft.
+        store(c).save('activation', { prompt: data!.prompt, contextRefs: data!.contextRefs, answers: data!.answers });
+        activationFeedback = { message: 'The workflow wasn’t created. Edit your request and try again, or explore Jarvis first.' };
+        activationRevision++;
+      }
       if (c.journey.interviewState === 'done' && ports.readInterviewFacts) {
         try {
           const facts = await ports.readInterviewFacts(c.signal); check(c);

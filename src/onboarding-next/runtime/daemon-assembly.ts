@@ -1,5 +1,6 @@
 /** Canonical daemon services for the optional onboarding host. Provision once
  * per vault; no credentials, model configuration or scope come from the client. */
+import { NLGoalBuilder } from '../../goals/nl-builder';
 import { createHash } from 'node:crypto';
 import type { ApiContext } from '../../daemon/api-routes';
 import type { ComposeDeps } from '../../actions/tools/workflow-composer';
@@ -138,6 +139,7 @@ export function createDaemonOnboardingAssembly(ctx: ApiContext, modules: readonl
       const resolved = catalog().resolve(selected); if (resolved.issues.length) throw new Error('Context changed');
       return { ingredients: resolved.ingredients };
     },
+    planInitialGoal: text => { valid(owner); return new NLGoalBuilder(ctx.agentService.getLLMManager(), { timezone: ctx.config.timezone }).parseGoal(text); },
     roomStatus: options.roomStatus,
     ready: () => !!ctx.settingsReload && !!ctx.startPostSetupServices && !!ctx.onboardingServiceReadiness && !!options.composer(),
   });

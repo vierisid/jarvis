@@ -5,7 +5,7 @@ export function createHostTransport(send: typeof fetch = fetch, onUnauthorized: 
     const path = String(input);
     if (!path.startsWith('/api/') || path.startsWith('//') || lifetime.signal.aborted) throw new Error('Host unavailable');
     const response = await send(path, { ...init, credentials: 'same-origin', cache: 'no-store', redirect: 'error',
-      signal: AbortSignal.any([lifetime.signal, ...(init.signal ? [init.signal] : []), AbortSignal.timeout(45000)]) });
+      signal: AbortSignal.any([lifetime.signal, ...(init.signal ? [init.signal] : []), AbortSignal.timeout(path === '/api/onboarding-next/v1/journey/transition' && init.method === 'POST' ? 120000 : 45000)]) });
     if (response.status === 401) { onUnauthorized(); throw new Error('Authentication required'); }
     return response;
   }) as typeof fetch;

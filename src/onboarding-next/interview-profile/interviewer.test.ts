@@ -99,7 +99,7 @@ test('adversarial answer cannot add tools, change the prompt or create configure
     expect(options?.tools?.map(t => t.name)).toEqual(['record_profile_facts', 'wrap_interview']);
     const prompt = messages[0]?.content as string;
     expect(prompt).toBe(createInterviewSession({ initialGoal: true }).messages[0]!.content as string);
-    expect(prompt).toContain('save the latest stated goal as a draft objective when onboarding finishes');
+    expect(prompt).toContain('build and activate the latest stated goal with key results and milestones when onboarding finishes');
     expect(prompt).toContain('Approval preferences are profile context, not enforced approval rules');
     expect(messages.find(m => m.role === 'user')?.content).toBe(attack);
   });

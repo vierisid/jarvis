@@ -25,6 +25,9 @@ export function parseJourney(v: unknown): Journey {
     || !member(s.completion, ['active', 'completed', 'explored', 'legacy_completed'])
     || !(s.jobId === null || id(s.jobId)) || !(s.buildRequestId === undefined || s.buildRequestId === null || id(s.buildRequestId))
     || !(s.draft === null || (object(s.draft) && id(s.draft.flowId) && id(s.draft.versionId)))) throw new Unavailable();
+  if (s.buildHistory !== undefined && (!Array.isArray(s.buildHistory) || s.buildHistory.length > 2048
+    || s.buildHistory.some(h => !object(h) || !(h.buildRequestId === null || id(h.buildRequestId))
+      || !(h.jobId === null || id(h.jobId)) || !member(h.outcome, ['failed', 'cancelled'])))) throw new Unavailable();
   if (s.stepId === 'result' && (!s.draft || !id(s.jobId) || s.activationState !== 'draft_saved')) throw new Unavailable();
   if (s.completion === 'active' && s.stepId === 'exited') throw new Unavailable();
   return structuredClone(s) as unknown as Journey;

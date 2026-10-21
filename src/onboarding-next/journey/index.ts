@@ -226,6 +226,24 @@ export function createJourneyProvider(deps: JourneyDependencies) {
       const scope = await deps.authorize();
       if (!scope || !identity(scope.actorId) || !identity(scope.projectId)) throw new JourneyError('unauthorized');
       const request = lane === 'read' ? undefined : parseRequest(input, lane);
+      if (request && deps.prepareExit && ['explore', 'finish'].includes(request.command.type)) {
+        const candidate = deps.persistence.transaction(scope, tx => {
+          if (tx.current === null) throw new JourneyError('journey_not_initialized');
+          const record = parseStored(tx.current, scope), s = record.snapshot;
+          if (request.journeyId !== s.journeyId || request.expectedRevision !== s.revision
+            || record.receipts.some(r => r.requestId === request.requestId)) return null;
+          apply(s, request.command); // Check the transition before any model cost.
+          if (request.command.type === 'finish' && validateFinish?.(scope, structuredClone(s), tx.resource) !== true)
+            throw new JourneyError('result_unavailable');
+          return structuredClone(s);
+        });
+        if (candidate) {
+          try { await deps.prepareExit(scope, candidate); }
+          catch { throw new JourneyError('goal_plan_unavailable'); }
+          const current = await deps.authorize();
+          if (current?.actorId !== scope.actorId || current?.projectId !== scope.projectId) throw new JourneyError('unauthorized');
+        }
+      }
       return deps.persistence.transaction(scope, tx => {
         // Mutations must refer to an identity obtained from a successful read.
         if (tx.current === null && request) throw new JourneyError('journey_not_initialized');

@@ -78,7 +78,7 @@ export function createSession(config: Configuration) {
     const j = context().journey;
     const result = await bounded(config.transport.call('journey.transition', {
       journeyId: j.journeyId, expectedRevision: j.revision, requestId: uuid(), command,
-    }, abort.signal), abort.signal);
+    }, abort.signal), abort.signal, ['finish', 'explore'].includes(String(command.type)) ? 120000 : 5000);
     // A successful HTTP envelope may still contain a revision conflict.
     parseJourney(result);
   }
@@ -138,7 +138,7 @@ export function createSession(config: Configuration) {
       } else {
         const adapter = adapters[view as keyof Configuration['adapters']];
         if (!adapter) throw new Unavailable();
-        await bounded(adapter.command(context(), action, input), abort.signal);
+        await bounded(adapter.command(context(), action, input), abort.signal, ['finish', 'open_workflow', 'explore'].includes(action) ? 120000 : 5000);
       }
       await read();
     } catch { update({ blocked: true }); }

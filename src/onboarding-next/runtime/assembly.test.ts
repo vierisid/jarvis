@@ -57,6 +57,9 @@ beforeEach(() => {
       modelCalls++; return { text: JSON.stringify({ displayName: 'Weekly brief', trigger: { name: 'trigger', type: 'EMPTY',
         nextAction: { name: 'draft', type: 'PIECE', settings: { pieceName: 'jarvis-ask', actionName: 'ask', input: { prompt: 'Prepare a weekly brief.' } } } } }) };
     } } }),
+    planInitialGoal: async () => ({ objective: { title: 'Sales objective', description: 'Grow the brand', success_criteria: '50 orders a month', time_horizon: 'quarterly' },
+      key_results: [{ title: '50 monthly orders', description: 'Grow orders', success_criteria: '50 orders in a month' }, { title: 'Weekly sales review', description: 'Review sales', success_criteria: 'Weekly report in use' }],
+      milestones: [{ key_result_index: 0, title: 'Establish baseline', description: 'Read current orders' }, { key_result_index: 1, title: 'Prepare report', description: 'Use provided sales totals' }] }),
     resolveContext: async () => ({}), roomStatus: () => 'ready', ready: () => true, workerIntervalMs: 50,
   });
   assembly.start(); routes = createOnboardingRoutes(runtime());
@@ -238,7 +241,8 @@ test('a completed interview reaches the dashboard with Profile context and exact
   getWorkflowDb().exec('DROP TRIGGER reject_initial_goal');
   expect((await call('journey.transition', exit)).snapshot.stepId).toBe('exited');
   await call('journey.transition', exit);
-  expect(findGoals()).toHaveLength(1); expect(findGoals()[0]).toMatchObject({ title: summary, status: 'draft' });
+  expect(findGoals()).toHaveLength(5); expect(findGoals().find(g => g.level === 'objective')).toMatchObject({ title: summary, status: 'active' });
+  expect(findGoals().every(g => g.status === 'active')).toBe(true);
   expect((await journey()).completion).toBe('explored');
 });
 

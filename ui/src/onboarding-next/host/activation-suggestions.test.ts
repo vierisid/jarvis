@@ -42,7 +42,7 @@ function fixture() {
   } as any);
   const adapter = adapters.activation!.create();
   const context = { journey: { scopeId: 'owner', journeyId: 'journey', revision: 1, interviewState: 'done' }, signal: new AbortController().signal } as Context;
-  return { adapter, context, setFacts: (value: typeof facts) => { current = value; }, fail: () => { error = true; }, reads: () => reads };
+  return { adapter, context, values, setFacts: (value: typeof facts) => { current = value; }, fail: () => { error = true; }, reads: () => reads };
 }
 test('reload refreshes canonical suggestions without overwriting an edited or deliberately cleared draft', async () => {
   const f = fixture(); const first = await f.adapter.read(f.context);
@@ -59,4 +59,17 @@ test('skipped interview never reads another profile; failure does not show stale
   await f.adapter.read({ ...f.context, journey: { ...f.context.journey, interviewState: 'skipped' } }); expect(f.reads()).toBe(0);
   await f.adapter.read(f.context); f.fail();
   expect((await f.adapter.read(f.context)).model.interview).toEqual({ state: 'unavailable', suggestions: [] });
+});
+
+
+test('only confirmed failed build history releases an uncertain request for editing', async () => {
+  const f = fixture();
+  const data = { prompt: 'Keep my request', contextRefs: [], answers: {}, pendingRequest: { request: { requestId: 'failed-request' }, answers: {} } };
+  f.values.set('onboarding-next:draft:v1:["owner","journey","activation"]', JSON.stringify({ schemaVersion: 1, value: data }));
+  expect((await f.adapter.read(f.context)).model.pendingRequest).toEqual(data.pendingRequest);
+  const recovered = await f.adapter.read({ ...f.context, journey: { ...f.context.journey, jobId: null, buildRequestId: null,
+    buildHistory: [{ buildRequestId: 'failed-request', jobId: 'failed-job', outcome: 'failed' }] } });
+  expect(recovered.model.pendingRequest).toBeUndefined(); expect((recovered.model.draft as any).prompt).toBe(data.prompt);
+  expect(recovered.model.message).toContain('wasn’t created');
+  expect(f.adapter.setDraft!(f.context, { prompt: 'Edited request', contextRefs: [], answers: {} }).model.draft).toMatchObject({ prompt: 'Edited request' });
 });

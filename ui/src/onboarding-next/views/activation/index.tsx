@@ -72,6 +72,7 @@ function ActivationSession({ model, onDraftChange, onIntent, canResolveConnectio
   live.current.revision = model.revision;
   const lock = useRef<number | null>(null);
   const [pending, setPending] = useState<number | null>(null);
+  const pendingAction = useRef<string | null>(null);
   const [localError, setLocalError] = useState("");
   const uncertain = useRef<ActivationIntent & { action: "create" } | null>(null);
   const [retrying, setRetrying] = useState(false);
@@ -120,6 +121,7 @@ function ActivationSession({ model, onDraftChange, onIntent, canResolveConnectio
   const edit = (draft: ActivationDraft) => { if (!editable) return; setLocalError(""); onDraftChange(draft); };
   const dispatch = (intent: ActivationIntent) => {
     if (busy || lock.current === model.revision) return;
+    pendingAction.current = intent.action;
     lock.current = model.revision; setPending(model.revision); setLocalError("");
     const revision = model.revision;
     const fail = () => {
@@ -155,7 +157,7 @@ function ActivationSession({ model, onDraftChange, onIntent, canResolveConnectio
       ...(action === "back" ? { action: "back", to: "tour" } : { action: "explore", to: "exited" }) });
   };
   const notice = localError || model.message || (model.phase === "accepted" ? "Your request was accepted. Opening the build…"
-    : busy ? "Checking your request…" : !available ? "Workflow creation isn’t available yet. You can keep your request and explore Jarvis first." : "");
+    : busy ? pendingAction.current === "explore" ? "Preparing your goal plan and opening your workspace…" : "Checking your request…" : !available ? "Workflow creation isn’t available yet. You can keep your request and explore Jarvis first." : "");
   return <section className="on-activation" data-theme={model.theme} data-personalized={personalized || Boolean(model.interview?.goal)} aria-labelledby={`${id}-title`}>
     <div className="on-activation__content">
       {/* Official mark path from the D-line brand asset; geometry is unchanged. */}

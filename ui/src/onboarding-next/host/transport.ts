@@ -55,5 +55,5 @@ export function createTransport(fetcher: (url: string, init?: RequestInit) => Pr
     } catch { controller.abort(); throw new Unavailable(); }
     finally { clearTimeout(timer); signal.removeEventListener('abort', stop); }
   }
-  return { status: signal => request('/status', undefined, signal), call: (op, input, signal) => request(PATHS[op], input, signal, op === 'interview.command' ? Math.max(timeoutMs, 40000) : timeoutMs) };
+  return { status: signal => request('/status', undefined, signal), call: (op, input, signal) => request(PATHS[op], input, signal, op === 'journey.transition' && ['finish', 'explore'].includes((input.command as { type?: string } | undefined)?.type ?? '') ? Math.max(timeoutMs, 120000) : op === 'interview.command' ? Math.max(timeoutMs, 40000) : timeoutMs) };
 }
