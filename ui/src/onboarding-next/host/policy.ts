@@ -36,8 +36,12 @@ export function released(config: Configuration): boolean {
       && config.authorizeRelease?.(Object.freeze({ ...c })) === true;
   } catch { return false; }
 }
+export function configured(config: Configuration): boolean {
+  return released(config) || (config.enabled === true && config.integration === true);
+}
 export function closure(config: Configuration, status: Status): boolean {
-  if (!released(config) || !status.enabled || !status.released || !status.supported || !status.ready || status.installMode === 'unknown' || status.reason !== 'ready') return false;
+  const authorized = (released(config) && status.released) || (config.enabled === true && config.integration === true && status.integration === true);
+  if (!authorized || !status.enabled || !status.supported || !status.ready || status.installMode === 'unknown' || status.reason !== 'ready') return false;
   if (!PROVIDERS.every(key => { const c = status.capabilities[key]; return c?.present && c.registered && c.supported && c.ready && c.reason === 'ready'; })) return false;
   if (config.modules.length !== VIEWS.length || !VIEWS.every(spec => config.modules.filter(m => validManifest(m.manifest, spec)).length === 1)) return false;
   try {

@@ -544,10 +544,10 @@ export class WebSocketService implements Service {
   // dashboard clicks. See gateVoiceApprovalResolution + resolveLatestPendingByVoice.
   private auditTrail: AuditTrail | null = null;
 
-  constructor(port: number, agentService: AgentService, unixPath?: string) {
+  constructor(port: number, agentService: AgentService, unixPath?: string, hostname?: string) {
     this.port = port;
     this.agentService = agentService;
-    this.wsServer = new WebSocketServer(port, unixPath);
+    this.wsServer = new WebSocketServer(port, unixPath, hostname);
     this.streamRelay = new StreamRelay(this.wsServer, message => this.broadcastLegacyChat(message));
 
     // Wire delegation callback: when PA delegates to a specialist,

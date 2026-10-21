@@ -88,21 +88,27 @@ function RestoreLegacy({ href }: { href: string }) {
   return null;
 }
 
-function BriefHost({ route, rooms, navigation, conversation }: { route: BriefRoute; rooms: BriefRoomRegistry; navigation?: BriefNavigationBinding; conversation?: BriefConversationBinding }) {
+export function BriefHost({ route, rooms, navigation, conversation, guardShell, visibility, children }: {
+  route: BriefRoute; rooms: BriefRoomRegistry; navigation?: BriefNavigationBinding; conversation?: BriefConversationBinding;
+  children?: ReactNode;
+  guardShell?: (shell: BriefShellPort) => BriefShellPort; visibility?: { open: boolean; setOpen(value: boolean): void };
+}) {
   const [sidebar, setSidebar] = useState<"expanded" | "rail">("expanded");
-  const [chatOpen, setChatOpen] = useState(false);
+  const [localChatOpen, setLocalChatOpen] = useState(false);
+  const chatOpen = visibility?.open ?? localChatOpen, setChatOpen = visibility?.setOpen ?? setLocalChatOpen;
   const [theme, setTheme] = useTheme();
-  const shell: BriefShellPort = useMemo(() => ({
+  const baseShell: BriefShellPort = useMemo(() => ({
     mode: "live", route, sidebar, setSidebar, chatOpen, setChatOpen, theme, setTheme,
     navigate: (next) => { window.location.hash = briefHash(next); },
-  }), [route, sidebar, chatOpen, theme, setTheme]);
+  }), [route, sidebar, chatOpen, theme, setTheme, setChatOpen]);
+  const shell = guardShell ? guardShell(baseShell) : baseShell;
   const room = rooms[route.room];
   const Body = room?.Body;
   const activated = canMountNavigation(shell.mode, navigation);
   return (
     <div className={`brief-root${activated ? "" : " brief-foundation"}`} data-brief-room={route.room} data-brief-theme={theme}>
       <NavigationShell shell={shell} rooms={rooms} binding={navigation} conversation={conversation}>
-      {Body ? <Body key={route.room} shell={shell} /> : (
+      {children ?? (Body ? <Body key={route.room} shell={shell} /> : (
         <section className="brief-foundation__notice" aria-labelledby="brief-unavailable-title">
           <p className="brief-foundation__label">Brief preview</p>
           <h1 id="brief-unavailable-title">{room?.title ?? "This room"} is not available in Brief yet</h1>
@@ -111,7 +117,7 @@ function BriefHost({ route, rooms, navigation, conversation }: { route: BriefRou
             window.location.assign(legacyHref(window.location.href, room?.legacyRoom ? `#/_room_${room.legacyRoom}` : "#/"));
           }}>Open current dashboard</BriefButton>
         </section>
-      )}
+      ))}
       </NavigationShell>
     </div>
   );

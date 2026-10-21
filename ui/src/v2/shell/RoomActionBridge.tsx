@@ -18,16 +18,20 @@ export function RoomActionBridge({
   ack,
   forceIdle,
   wsRef,
+  beforeDispatch,
 }: {
   requests: readonly QueuedRoomActionRequest[];
   ack: (upToSeq: number) => void;
   forceIdle: () => void;
   wsRef: React.MutableRefObject<WebSocket | null>;
+  /** Connected workspaces may need to confirm unsaved edits before opening a room. */
+  beforeDispatch?: (request: QueuedRoomActionRequest) => Promise<boolean>;
 }) {
   const { dispatch } = useRoomActionDispatcher();
   // The last seq dispatched. A ref, so a re-render, or StrictMode running
   // the effect twice, never dispatches one again before the ack lands.
   const doneRef = useRef(0);
+  const pendingRef = useRef(Promise.resolve());
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const unseen = requests.filter((r) => r.seq > doneRef.current);
@@ -42,10 +46,18 @@ export function RoomActionBridge({
       // answers when its room mounts; after a reconnect the daemon ignores
       // that answer (it asked the old socket) and has already said it got
       // none.
-      dispatchDashboardRoomAction(request, dispatch, (text) => {
+      const deliver = () => dispatchDashboardRoomAction(request, dispatch, (text) => {
         const ws = wsRef.current;
         if (ws?.readyState === WebSocket.OPEN) ws.send(text);
       });
+      if (beforeDispatch) {
+        // Preserve queue order across asynchronous navigation. A request can
+        // expire or lose its socket while the user considers unsaved changes.
+        pendingRef.current = pendingRef.current.then(async () => {
+          if (!stillDeliverable(request, performance.now())) return;
+          if (await beforeDispatch(request) && stillDeliverable(request, performance.now())) deliver();
+        }).catch(() => { /* A failed navigation must not run or replay an action. */ });
+      } else deliver();
     }
     ack(doneRef.current);
     forceIdle();

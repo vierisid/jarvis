@@ -1,12 +1,17 @@
-import type { Transport } from './contract.ts';
+import type { Operation, Transport } from './contract.ts';
 const PREFIX = '/api/onboarding-next/v1';
-const PATHS = { 'journey.read': '/journey/read', 'journey.transition': '/journey/transition', 'setup.read': '/setup/read', 'setup.complete': '/setup/complete' } as const;
+const PATHS: Record<Operation, string> = {
+  'journey.read': '/journey/read', 'journey.transition': '/journey/transition', 'setup.read': '/setup/read', 'setup.complete': '/setup/complete',
+  'google.read': '/google/read', 'google.begin': '/google/begin', 'google.cancel': '/google/cancel', 'google.callback': '/google/callback',
+  'interview.command': '/interview/command', 'tour.command': '/tour/command', 'intent.validate': '/intent/validate',
+  'build.submit': '/build/submit', 'build.read': '/build/read', 'build.cancel': '/build/cancel', 'result.read': '/result/read',
+};
 export class Unavailable extends Error {
   constructor() { super('Onboarding is unavailable. Reconnect to restore your progress.'); }
 }
 /** Deadline also covers body decoding. Aborting a response never claims rollback. */
 export function createTransport(fetcher: (url: string, init?: RequestInit) => Promise<Response> = fetch, timeoutMs = 5000): Transport {
-  async function request(path: string, input: Record<string, unknown> | undefined, signal: AbortSignal) {
+  async function request(path: string, input: Record<string, unknown> | undefined, signal: AbortSignal, budgetMs = timeoutMs) {
     if (signal.aborted) throw new Unavailable();
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -14,7 +19,7 @@ export function createTransport(fetcher: (url: string, init?: RequestInit) => Pr
     const cancelled = new Promise<never>((_, reject) => {
       stop = () => { reject(new Unavailable()); controller.abort(); };
       signal.addEventListener('abort', stop, { once: true });
-      timer = setTimeout(stop, timeoutMs);
+      timer = setTimeout(stop, budgetMs);
       if (signal.aborted) stop();
     });
     try {
@@ -50,5 +55,5 @@ export function createTransport(fetcher: (url: string, init?: RequestInit) => Pr
     } catch { controller.abort(); throw new Unavailable(); }
     finally { clearTimeout(timer); signal.removeEventListener('abort', stop); }
   }
-  return { status: signal => request('/status', undefined, signal), call: (op, input, signal) => request(PATHS[op], input, signal) };
+  return { status: signal => request('/status', undefined, signal), call: (op, input, signal) => request(PATHS[op], input, signal, op === 'interview.command' ? Math.max(timeoutMs, 40000) : timeoutMs) };
 }

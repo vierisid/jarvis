@@ -8,6 +8,10 @@ import { HOSTED_PROVISIONED, STEPS, stepsFor, stepGatedOnProbe, resolveStepKey }
  * the platform already answers brain/hearing/speaking, and ASKING is not the
  * only cost — answering writes intent that pins the account off its own plan. */
 describe("stepsFor", () => {
+  test("host-owned setup contains only permissions and provider configuration", () => {
+    expect(stepsFor(false, true).map(([key]) => key)).toEqual(["perms", "brain", "hear", "speak"]);
+    expect(stepsFor(true, true).map(([key]) => key)).toEqual(["perms"]);
+  });
   test("self-hosted keeps every screen (configuring an LLM is mandatory there)", () => {
     expect(stepsFor(false)).toEqual(STEPS);
     expect(stepsFor(false).map(([k]) => k)).toContain("brain");

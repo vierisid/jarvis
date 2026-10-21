@@ -40,8 +40,9 @@ export const HOSTED_PROVISIONED: ReadonlySet<StepKey> = new Set<StepKey>(["brain
 
 /** The step list an install actually walks. Exported for tests: the
  * hosted/self-hosted split is the whole point of this screen set. */
-export function stepsFor(hosted: boolean): ReadonlyArray<[StepKey, string]> {
-  return hosted ? STEPS.filter(([k]) => !HOSTED_PROVISIONED.has(k)) : STEPS;
+export function stepsFor(hosted: boolean, setupOnly = false): ReadonlyArray<[StepKey, string]> {
+  const steps = hosted ? STEPS.filter(([k]) => !HOSTED_PROVISIONED.has(k)) : STEPS;
+  return setupOnly ? steps.filter(([k]) => ['perms', 'brain', 'hear', 'speak'].includes(k)) : steps;
 }
 
 export type HostedProbe = "unknown" | "hosted" | "self";
@@ -167,17 +168,21 @@ export function OnboardingWizard({
   status,
   onComplete,
   brief,
+  setupOnly = false,
 }: {
   status: OnboardingStatus | null;
   brief?: OnboardingDraft;
+  /** Host-owned onboarding resumes immediately after the existing setup writer. */
+  setupOnly?: boolean;
   onComplete: (prompt?: string) => void | Promise<void>;
 }) {
   const startKey = useMemo<StepKey>(() => {
+    if (setupOnly) return "perms";
     if (!status?.setup_completed) return "welcome";
     if (!status.profile_completed && !status.setup_skipped_profile) return "interview";
     if (!status.tutorial_completed && !status.tutorial_dismissed) return "tour";
     return "allset";
-  }, [status]);
+  }, [status, setupOnly]);
 
   // Position is tracked by KEY, not index. The step list shrinks when the
   // hosted probe resolves (three steps disappear), and an index captured
@@ -186,7 +191,7 @@ export function OnboardingWizard({
   // True when the wizard is running the setup steps in this session (fresh
   // start) — a resume at the interview/tour never touched brain/voice state,
   // so the recap must not print those defaults as if they were saved.
-  const configuredThisSession = startKey === "welcome";
+  const configuredThisSession = setupOnly || startKey === "welcome";
 
   // welcome
   const [theme, setTheme] = useState<"light" | "dark">(
@@ -240,8 +245,8 @@ export function OnboardingWizard({
   // Self-hosted keeps all nine: there, configuring an LLM is mandatory or
   // nothing works.
   const steps = useMemo(
-    () => stepsFor(hosted),
-    [hosted],
+    () => stepsFor(hosted, setupOnly),
+    [hosted, setupOnly],
   );
   // While the key is momentarily absent (the probe resolved under a hidden
   // screen, repaired below), resolve to Permissions DURING RENDER — the same
@@ -684,11 +689,11 @@ export function OnboardingWizard({
       // provider config as saved.
       const resBody = await r.json().catch(() => null) as { dropped?: string[] } | null;
       setDroppedSections(resBody?.dropped ?? []);
-      goKey("connect");
+      if (setupOnly) await onComplete(); else goKey("connect");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Setup failed.");
     } finally { setBusy(false); }
-  }, [hosted, hostedProbe, prov, provId, apiKey, baseUrl, customEndpoint, model, test, tts, edgeVoice, elevenKey, elevenVoice, elevenModel, stt, sttKey, sttEndpoint, sttServerType, localSTTLoaded]);
+  }, [hosted, hostedProbe, prov, provId, apiKey, baseUrl, customEndpoint, model, test, tts, edgeVoice, elevenKey, elevenVoice, elevenModel, stt, sttKey, sttEndpoint, sttServerType, localSTTLoaded, setupOnly, onComplete]);
 
   const skipAll = useCallback(async () => {
     setBusy(true);
@@ -967,7 +972,7 @@ export function OnboardingWizard({
               <button className={theme === "dark" ? "on" : ""} onClick={() => applyTheme("dark")}>Dark</button>
             </div>
             <button className="obw-btn obw-btn-pri" style={{ minWidth: 208, marginTop: 8 }} onClick={next}>Set up Jarvis</button>
-            <button className="obw-skip" disabled={busy} onClick={skipAll}>I’ll do this later</button>
+            {!setupOnly && <button className="obw-skip" disabled={busy} onClick={skipAll}>I’ll do this later</button>}
             {error && <div className="obw-hint" style={{ color: "var(--listen)" }}>{error}</div>}
           </div>
         </div></div>
@@ -1124,7 +1129,7 @@ export function OnboardingWizard({
               </>
             )}
             <div className="obw-btnrow">
-              <button className="obw-btn obw-btn-ghost" onClick={back}>Back</button>
+              <button className="obw-btn obw-btn-ghost" disabled={setupOnly} onClick={back}>Back</button>
               <span className="grow" />
               {/* Hosted skips brain/hearing/speaking, so this is the last
                   setup screen — the setup POST (which normally fires when

@@ -1,7 +1,7 @@
 {
   "name": "@usejarvis/brain",
   "version": "0.16.0",
-  "description": "J.A.R.V.I.S. — Just A Rather Very Intelligent System. An always-on autonomous AI daemon.",
+  "description": "J.A.R.V.I.S. \u2014 Just A Rather Very Intelligent System. An always-on autonomous AI daemon.",
   "module": "src/daemon/index.ts",
   "type": "module",
   "bin": {
@@ -34,7 +34,8 @@
   ],
   "scripts": {
     "start": "bun run src/daemon/index.ts",
-    "dev": "bun --hot run src/daemon/index.ts",
+    "dev": "bun --no-env-file run scripts/integration/dev.ts",
+    "dev:legacy": "bun --hot run src/daemon/index.ts",
     "copy:models": "mkdir -p ui/public/openwakeword/models ui/public/ort && cp node_modules/openwakeword-wasm-browser/models/melspectrogram.onnx node_modules/openwakeword-wasm-browser/models/embedding_model.onnx node_modules/openwakeword-wasm-browser/models/silero_vad.onnx node_modules/openwakeword-wasm-browser/models/hey_jarvis_v0.1.onnx ui/public/openwakeword/models/ && cp node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.wasm node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.mjs node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs ui/public/ort/",
     "prebuild:ui": "bun run copy:models",
     "build:ui": "bun build ui/index.html ui/pebble.html --outdir ui/dist",
@@ -59,7 +60,8 @@
     "generate:onboarding-runtime": "bun run scripts/onboarding-next-runtime-manifest.ts",
     "check:onboarding-runtime": "bun run scripts/onboarding-next-runtime-manifest.ts --check",
     "generate:onboarding-ui": "bun run scripts/onboarding-next-ui-manifest.ts",
-    "check:onboarding-ui": "bun run scripts/onboarding-next-ui-manifest.ts --check"
+    "check:onboarding-ui": "bun run scripts/onboarding-next-ui-manifest.ts --check",
+    "dev:local": "bun --no-env-file run scripts/integration/dev.ts"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",

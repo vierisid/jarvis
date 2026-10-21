@@ -36,7 +36,8 @@ import "./ui/primitives.css";
  * mount; any user-initiated reset (settings button, voice command)
  * goes through the same `resetOnboarding()` helper.
  */
-export function AppShellV2() {
+export function AppShellV2({ sharedRoomActions = false }: { sharedRoomActions?: boolean } = {}) {
+  const ActionBus = sharedRoomActions ? React.Fragment : RoomActionBusProvider;
   const route = useV2Route();
 
   useEffect(() => {
@@ -57,11 +58,11 @@ export function AppShellV2() {
     const Body = getRoomBody(route.key);
     return (
       <div className="jarvis-v2-root jarvis-v2-panel-mode">
-        <ConfirmHost />
-        <RoomActionBusProvider>
+        {!sharedRoomActions && <ConfirmHost />}
+        <ActionBus>
           <PanelRoomActionBridge />
           <Body mode="expanded" />
-        </RoomActionBusProvider>
+        </ActionBus>
       </div>
     );
   }
@@ -139,14 +140,14 @@ export function AppShellV2() {
               resolves (dispatches jarvis:boot-ready), then cross-fades away. */}
           <BootSplash />
           {/* Branded confirm dialogs (replaces native confirm()). */}
-          <ConfirmHost />
+          {!sharedRoomActions && <ConfirmHost />}
           <OnboardingGate>
-            <RoomActionBusProvider>
+            <ActionBus>
               {/* Phase 2 — room-centric shell. The AppShell renders the active
                   room inside its surface (persistent Index + top bar around it),
                   so rooms no longer overlay the home as a separate layer. */}
               <AppShell />
-            </RoomActionBusProvider>
+            </ActionBus>
           </OnboardingGate>
         </>
       )}

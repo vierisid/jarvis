@@ -440,7 +440,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
   return {
     ...createOpportunityRoutes(json),
-    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations, ctx.briefAttachments, ctx.briefWorkflowComposition, ctx.briefPreparedOpportunities, ctx.briefOpportunityActivation, ctx.briefDecisions, ctx.briefRecommendations, ctx.briefDecisionDocuments, ctx.briefGoalMeasurements, ctx.briefOutcomes, ctx.briefMemoryStream, ctx.briefMemoryUsage, ctx.briefMemoryForget, ctx.briefWorkflowRemoval, ctx.briefWorkflowContext, ctx.briefConnections, ctx.briefProfileSettings),
+    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations, ctx.briefAttachments, ctx.briefWorkflowComposition, ctx.briefPreparedOpportunities, ctx.briefOpportunityActivation, ctx.briefDecisions, ctx.briefRecommendations, ctx.briefDecisionDocuments, ctx.briefGoalMeasurements, ctx.briefOutcomes, ctx.briefMemoryStream, ctx.briefMemoryUsage, ctx.briefMemoryForget, ctx.briefWorkflowRemoval, ctx.briefWorkflowContext, ctx.briefConnections, ctx.briefProfileSettings, { generation: crypto.randomUUID(), installMode: () => isHostedInstall(ctx.config) ? 'hosted' : 'self' }),
     // --- Health ---
     '/api/health': {
       GET: () => json(ctx.healthMonitor.getHealth()),

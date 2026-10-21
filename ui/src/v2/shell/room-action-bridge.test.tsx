@@ -67,14 +67,15 @@ function TasksRoom({ tag = "", throws = false }: { tag?: string; throws?: boolea
   return null;
 }
 let live: ReturnType<typeof useWebSocket>;
-function Shell({ bridge = true, room = "plain" }: { bridge?: boolean; room?: "plain" | "none" | "other" | "throws" }) {
+type DispatchGuard = (request: import("../../hooks/useWebSocket").QueuedRoomActionRequest) => Promise<boolean>;
+function Shell({ bridge = true, room = "plain", beforeDispatch }: { bridge?: boolean; room?: "plain" | "none" | "other" | "throws"; beforeDispatch?: DispatchGuard }) {
   live = useWebSocket();
   return (
     <bus.RoomActionBusProvider>
       {room === "plain" && <TasksRoom />}
       {room === "other" && <TasksRoom key="other" tag="other:" />}
       {room === "throws" && <TasksRoom key="throws" throws />}
-      {bridge && <Bridge requests={live.roomActionRequests} ack={live.ackRoomActionRequests} forceIdle={() => {}} wsRef={live.wsRef} />}
+      {bridge && <Bridge requests={live.roomActionRequests} ack={live.ackRoomActionRequests} forceIdle={() => {}} wsRef={live.wsRef} beforeDispatch={beforeDispatch} />}
     </bus.RoomActionBusProvider>
   );
 }
@@ -84,9 +85,9 @@ const createTask = (id: string) => ({
 const answers = (socket: FakeSocket) =>
   socket.sent.filter((m) => m.type === "room_action_result").map((m) => `${String(m.payload.resultId)}:${String(m.payload.outcome)}`);
 
-async function mount(bridge = true): Promise<FakeSocket> {
+async function mount(bridge = true, beforeDispatch?: DispatchGuard): Promise<FakeSocket> {
   ran.length = 0;
-  await React.act(async () => root.render(<React.StrictMode><Shell bridge={bridge} /></React.StrictMode>));
+  await React.act(async () => root.render(<React.StrictMode><Shell bridge={bridge} beforeDispatch={beforeDispatch} /></React.StrictMode>));
   const socket = sockets.at(-1)!;
   await React.act(async () => { socket.open(); await Promise.resolve(); });
   return socket;
@@ -245,4 +246,50 @@ test("a handler that throws after its claim was granted answers that it did not 
     console.warn = warn;
   }
   expect(answers(socket)).toEqual(["broken:rejected"]);
+});
+
+
+test("guarded dashboard actions wait for navigation and keep same-timestamp requests in order", async () => {
+  const navigated: string[] = [];
+  let allowFirst!: (allowed: boolean) => void;
+  const gate = new Promise<boolean>(resolve => { allowFirst = resolve; });
+  const socket = await mount(true, async request => {
+    const id = String(request.args.title); navigated.push(id);
+    return id === "first" ? gate : true;
+  });
+  await React.act(async () => {
+    socket.receive(createTask("first"), 100);
+    socket.receive(createTask("second"), 100);
+  });
+  expect(navigated).toEqual(["first"]);
+  expect(ran).toEqual([]);
+  expect(live.roomActionRequests).toEqual([]);
+  await React.act(async () => allowFirst(true));
+  expect(navigated).toEqual(["first", "second"]);
+  expect(ran).toEqual(["create_task:first", "create_task:second"]);
+  expect(answers(socket)).toEqual(["first:accepted", "second:accepted"]);
+});
+
+test("a socket that closes during guarded navigation cannot run the queued action", async () => {
+  let allow!: (allowed: boolean) => void;
+  const gate = new Promise<boolean>(resolve => { allow = resolve; });
+  const socket = await mount(true, () => gate);
+  await React.act(async () => socket.receive(createTask("gone"), 100));
+  expect(ran).toEqual([]);
+  await React.act(async () => socket.close());
+  await React.act(async () => allow(true));
+  expect(ran).toEqual([]);
+  expect(answers(socket)).toEqual([]);
+});
+
+test("refused or failed navigation runs nothing and does not block later dashboard actions", async () => {
+  const socket = await mount(true, async request => {
+    if (request.args.title === "failed") throw new Error("navigation unavailable");
+    return request.args.title !== "refused";
+  });
+  await React.act(async () => {
+    for (const id of ["refused", "failed", "accepted"]) socket.receive(createTask(id), 100);
+  });
+  expect(ran).toEqual(["create_task:accepted"]);
+  expect(answers(socket)).toEqual(["accepted:accepted"]);
 });

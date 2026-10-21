@@ -687,7 +687,7 @@ describe('what else in .git is checked', () => {
   });
 
   test('a legacy branches/ file is refused, an empty branches/ is not', async () => {
-    mkdirSync(join(repo, '.git', 'branches'));
+    mkdirSync(join(repo, '.git', 'branches'), { recursive: true });
     const lint = new GitConfigLint();
     expect(await lint.inspect(repo)).toEqual({ ok: true });
     writeFileSync(join(repo, '.git', 'branches', 'origin'), 'https://example.invalid/r.git\n');

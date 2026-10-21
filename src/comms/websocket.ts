@@ -168,7 +168,7 @@ export class WebSocketServer {
   private corsOrigin: string | null = null;
   private proxyLimiter = new ProxyRateLimiter();
 
-  constructor(port: number = 3142, unixPath?: string) {
+  constructor(port: number = 3142, unixPath?: string, private readonly hostname?: string) {
     this.port = port;
     this.unixPath = unixPath ?? null;
     this.corsOrigin = `http://localhost:${port}`;
@@ -245,7 +245,7 @@ export class WebSocketServer {
     // a discriminated union). TypeScript can't narrow a conditional spread to
     // one variant, so the pair is cast to the port variant; at runtime Bun
     // receives exactly one of the two keys.
-    const listenOpts = (this.unixPath ? { unix: this.unixPath } : { port: this.port }) as { port: number };
+    const listenOpts = (this.unixPath ? { unix: this.unixPath } : { port: this.port, ...(this.hostname ? { hostname: this.hostname } : {}) }) as { port: number };
     this.server = Bun.serve<{ sidecar_id?: string; channel?: string; proxy_target?: string; panel_session?: string; _proxyUpstream?: WebSocket }>({
       ...listenOpts,
       idleTimeout: 30, // seconds — prevent timeout during heavy processing (OCR, PowerShell)

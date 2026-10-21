@@ -102,13 +102,13 @@ function OnboardingViewHost({ session, legacy, children }: { session: Session; l
     case 'tour': case 'pebble-tour': props = { ...props, onNavigate: intent }; break;
     case 'activation': props = { ...props, onDraftChange: draft, onIntent: intent }; break;
     case 'build': props = { ...props, model: { ...model, actions: { ...(base.actions as Record<string, unknown>), openResult: !state.busy && (base.actions as Record<string, unknown>)?.openResult === true } }, onIntent: intent }; break;
-    case 'result': props = { ...props, onReview: (value: unknown) => action('review', value), onContinue: (value: unknown) => action('finish', value) }; break;
+    case 'result': props = { ...props, onReview: (value: unknown) => action('review', value), onContinue: (value: unknown) => action('finish', value), onRefresh: (value: unknown) => action('refresh', value), onOpenWorkflow: (value: unknown) => action('open_workflow', value) }; break;
     case 'legacy-provider-setup': props = { ...props, onComplete: () => action('complete'), onBack: () => action('back') }; break;
   }
   const View = state.view === 'legacy-provider-setup' ? state.presentation?.ports?.View as ComponentType<Record<string, unknown>> : session.views()?.[state.view];
   return <div className="on-host" data-theme={theme} data-onboarding-step={state.view} ref={headingHost}>
     {state.blocked ? <Recovery retry={() => void session.refresh()} /> : <ViewBoundary key={`${state.journey.journeyId}:${state.view}`} recover={() => void session.refresh()}>
-      <div aria-busy={state.busy} inert={state.busy}>{View ? <View {...props} /> : <Recovery retry={() => void session.refresh()} />}</div>
+      <div className="on-host__view" aria-busy={state.busy} inert={state.busy}>{View ? <View {...props} /> : <Recovery retry={() => void session.refresh()} />}</div>
     </ViewBoundary>}
   </div>;
 }
