@@ -122,7 +122,7 @@ async function settleCaptureTool(proc: CaptureProcess, what: string, stdoutStrea
   // printed is not read any further, and is never returned.
   let stdoutOverflowed = false;
   // Both read alongside the run, so a chatty tool cannot fill a pipe and
-  // stall. On success stderr is left unread: nothing needs it.
+  // stall.
   // stderr keeps what has arrived (#902): a tool's error is written before it
   // exits, and a descendant still holding the pipe must not cost the reason.
   const stderrChunks: Uint8Array[] = [];
