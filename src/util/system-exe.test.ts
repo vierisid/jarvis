@@ -10,7 +10,7 @@ import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join, posix } from 'node:path';
 import {
-  LINUX_SYSTEM_DIRS, SystemExeNotFoundError, __setLinuxSystemDirsForTests, findLinuxSystemExe, linuxSystemExe, win32AbsolutePath, win32SystemExe,
+  LINUX_SYSTEM_DIRS, SystemExeNotFoundError, __setLinuxSystemDirsForTests, findLinuxSystemExe, linuxSystemDirs, linuxSystemExe, win32AbsolutePath, win32SystemExe,
   type ExeFs,
 } from './system-exe.ts';
 
@@ -60,7 +60,7 @@ const SYSTEM: Record<string, Entry> = {
 
 const UID = 1000;
 const look = (entries: Record<string, Entry>, name: Parameters<typeof findLinuxSystemExe>[0] = 'xclip') =>
-  findLinuxSystemExe(name, { fs: fakeFs({ ...SYSTEM, ...entries }) });
+  findLinuxSystemExe(name, { fs: fakeFs({ ...SYSTEM, ...entries }), user: null });
 
 afterEach(() => __setLinuxSystemDirsForTests(null));
 
@@ -70,6 +70,41 @@ describe('findLinuxSystemExe (#900)', () => {
     expect(look({ '/usr/bin/xclip': { kind: 'file' } })).toEqual({ path: '/usr/bin/xclip' });
     expect(look({ '/usr/bin/xclip': { kind: 'file' }, '/usr/local/bin/xclip': { kind: 'file' } }))
       .toEqual({ path: '/usr/local/bin/xclip' });
+  });
+
+  test('a missing tool is missing, not a refused copy, under a group-writable /usr/local (Debian root:staff 2775)', () => {
+    const debian: Record<string, Entry> = { '/usr/local': { kind: 'dir', mode: 0o42775 }, '/usr/local/bin': { kind: 'dir', mode: 0o42775 } };
+    expect(look(debian)).toEqual({ path: null, rejected: [] });
+    expect(look({ ...debian, '/usr/bin/xclip': { kind: 'file' } })).toEqual({ path: '/usr/bin/xclip' });
+    expect(look({ ...debian, '/usr/local/bin/xclip': { kind: 'file' } }))
+      .toEqual({ path: null, rejected: ['/usr/local/bin/xclip (/usr/local is writable by its group or by others)'] });
+    // A dangling link there is a copy that is not used, not nothing.
+    expect(look({ ...debian, '/usr/local/bin/xclip': { kind: 'link', target: '/nowhere' } }))
+      .toEqual({ path: null, rejected: ['/usr/local/bin/xclip (/usr/local is writable by its group or by others)'] });
+  });
+
+  test('the NixOS per-user profile is searched after the system directories, and only for a plain user name', () => {
+    expect(linuxSystemDirs('alice')).toEqual([...LINUX_SYSTEM_DIRS, '/etc/profiles/per-user/alice/bin']);
+    for (const bad of [null, '', '.', '..', 'a/b', 'a b', '../../tmp']) expect(linuxSystemDirs(bad)).toEqual([...LINUX_SYSTEM_DIRS]);
+    const perUser: Record<string, Entry> = {
+      '/etc/profiles': { kind: 'dir' }, '/etc/profiles/per-user': { kind: 'dir' },
+      '/etc/profiles/per-user/alice': { kind: 'link', target: '/nix/store/abc-user-environment' },
+      '/nix': { kind: 'dir' }, '/nix/store': { kind: 'dir', mode: 0o41775 },
+      '/nix/store/abc-user-environment': { kind: 'dir', mode: 0o40555 }, '/nix/store/abc-user-environment/bin': { kind: 'dir', mode: 0o40555 },
+      '/nix/store/abc-user-environment/bin/xclip': { kind: 'link', target: '/nix/store/def-xclip/bin/xclip' },
+      '/nix/store/def-xclip': { kind: 'dir', mode: 0o40555 }, '/nix/store/def-xclip/bin': { kind: 'dir', mode: 0o40555 },
+      '/nix/store/def-xclip/bin/xclip': { kind: 'file', mode: 0o100555 },
+    };
+    const fs = fakeFs({ ...SYSTEM, ...perUser });
+    expect(findLinuxSystemExe('xclip', { fs, user: 'alice' })).toEqual({ path: '/etc/profiles/per-user/alice/bin/xclip' });
+    expect(findLinuxSystemExe('xclip', { fs, user: 'bob' })).toEqual({ path: null, rejected: [] });
+    expect(findLinuxSystemExe('xclip', { fs, user: null })).toEqual({ path: null, rejected: [] });
+    // Still checked like any other: a per-user directory the user can write is refused.
+    expect(findLinuxSystemExe('xclip', { fs: fakeFs({ ...SYSTEM, ...perUser, '/etc/profiles/per-user': { kind: 'dir', uid: UID } }), user: 'alice' }))
+      .toEqual({ path: null, rejected: ['/etc/profiles/per-user/alice/bin/xclip (/etc/profiles/per-user is owned by uid 1000)'] });
+    // The error names the directory without the account's name.
+    expect(() => linuxSystemExe('xsel', { fs, user: 'alice' })).toThrow(
+      'xsel is not installed in a system directory (/usr/local/bin, /usr/bin, /bin, /run/current-system/sw/bin, /etc/profiles/per-user/$USER/bin)');
   });
 
   test('a copy outside the system directories is never found, whatever PATH says', () => {
@@ -232,14 +267,14 @@ describe('linuxSystemExe (#900)', () => {
     try {
       const fs = fakeFs({ ...SYSTEM, '/home/u/.local/bin/xclip': { kind: 'file', uid: UID }, '/usr/local/bin/xclip': { kind: 'file', uid: UID } });
       let error: unknown;
-      try { linuxSystemExe('xclip', { fs }); } catch (e) { error = e; }
+      try { linuxSystemExe('xclip', { fs, user: null }); } catch (e) { error = e; }
       expect(error).toBeInstanceOf(SystemExeNotFoundError);
       expect((error as SystemExeNotFoundError).tool).toBe('xclip');
       expect((error as Error).message).toBe(
         'xclip has no usable copy in a system directory (/usr/local/bin, /usr/bin, /bin, /run/current-system/sw/bin); ' +
         'not used: /usr/local/bin/xclip (/usr/local/bin/xclip is owned by uid 1000); ~/.local/bin/xclip (not a system directory)');
       // Nothing there at all: not installed.
-      expect(() => linuxSystemExe('xsel', { fs: fakeFs(SYSTEM) })).toThrow(
+      expect(() => linuxSystemExe('xsel', { fs: fakeFs(SYSTEM), user: null })).toThrow(
         'xsel is not installed in a system directory (/usr/local/bin, /usr/bin, /bin, /run/current-system/sw/bin)');
     } finally {
       process.env.PATH = saved;
@@ -248,7 +283,7 @@ describe('linuxSystemExe (#900)', () => {
   });
 
   test('returns the path when it is there', () => {
-    expect(linuxSystemExe('xdotool', { fs: fakeFs({ ...SYSTEM, '/usr/bin/xdotool': { kind: 'file' } }) })).toBe('/usr/bin/xdotool');
+    expect(linuxSystemExe('xdotool', { fs: fakeFs({ ...SYSTEM, '/usr/bin/xdotool': { kind: 'file' } }), user: null })).toBe('/usr/bin/xdotool');
   });
 });
 

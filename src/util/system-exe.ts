@@ -16,6 +16,7 @@
  * Windows directory through the mount table instead.
  */
 import { lstatSync, readlinkSync } from 'node:fs';
+import { userInfo } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, win32 } from 'node:path';
 
 /**
@@ -23,9 +24,30 @@ import { delimiter, dirname, isAbsolute, join, win32 } from 'node:path';
  * package manager or an administrator installs into, plus NixOS's system
  * profile (its /usr/bin holds only `env`). Each must also pass the ownership
  * checks in linuxSystemExe, so a /usr/local/bin handed to a user (a common
- * way to let `npm -g` work without sudo) is skipped, not trusted.
+ * way to let `npm -g` work without sudo) is skipped, not trusted. NixOS's
+ * per-user profile follows them: see linuxSystemDirs.
  */
 export const LINUX_SYSTEM_DIRS: readonly string[] = ['/usr/local/bin', '/usr/bin', '/bin', '/run/current-system/sw/bin'];
+
+/** NixOS's per-user profile, whose user name the error shows as $USER. */
+const PER_USER_PREFIX = '/etc/profiles/per-user/';
+
+/**
+ * LINUX_SYSTEM_DIRS, then NixOS's per-user profile for `user`
+ * (/etc/profiles/per-user/<user>/bin, which NixOS builds as root from the
+ * system configuration's per-user packages and links into the store). It is
+ * checked like the others, so it is used only where root owns every step.
+ * Left out unless `user` is a plain account name.
+ */
+export function linuxSystemDirs(user: string | null = currentUser()): readonly string[] {
+  if (user === null || !/^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(user)) return LINUX_SYSTEM_DIRS;
+  return [...LINUX_SYSTEM_DIRS, `${PER_USER_PREFIX}${user}/bin`];
+}
+
+/** This process's account name from the password database, not $USER, or null. */
+function currentUser(): string | null {
+  try { return userInfo().username || null; } catch { return null; }
+}
 
 /** The Linux programs the daemon runs. A closed set, so each new one is a reviewed addition. */
 export type LinuxSystemTool =
@@ -64,12 +86,14 @@ export type LinuxExeOptions = {
   fs?: ExeFs;
   /** Owners a directory or program may have. Root only, unless a test says otherwise. */
   owners?: readonly number[];
+  /** Whose NixOS per-user profile to search (see linuxSystemDirs); this process's user by default, null for none. */
+  user?: string | null;
 };
 
 let dirsForTests: readonly string[] | null = null;
 
 /**
- * @internal Test only: look in `dirs` instead of LINUX_SYSTEM_DIRS, and also
+ * @internal Test only: look in `dirs` instead of linuxSystemDirs(), and also
  * accept what this process's own user owns there (a test's fakes are not
  * root's). null restores both. Not reachable from the environment on purpose:
  * a variable that could move the lookup would be the PATH problem again.
@@ -78,11 +102,11 @@ export function __setLinuxSystemDirsForTests(dirs: readonly string[] | null): vo
   dirsForTests = dirs;
 }
 
-function defaults(opts: LinuxExeOptions): Required<LinuxExeOptions> {
+function defaults(opts: LinuxExeOptions): Required<Omit<LinuxExeOptions, 'user'>> {
   const testing = dirsForTests !== null && opts.dirs === undefined;
   const ownUid = typeof process.getuid === 'function' ? process.getuid() : 0;
   return {
-    dirs: opts.dirs ?? dirsForTests ?? LINUX_SYSTEM_DIRS,
+    dirs: opts.dirs ?? dirsForTests ?? (opts.user === undefined ? linuxSystemDirs() : linuxSystemDirs(opts.user)),
     fs: opts.fs ?? realFs,
     owners: opts.owners ?? (testing ? [0, ownUid] : [0]),
   };
@@ -173,6 +197,34 @@ function walkChecked(path: string, fs: ExeFs, owners: readonly number[], program
 }
 
 /**
+ * Whether anything, even a dangling link, is at `path`, found the way the
+ * kernel would find it but without judging who owns what.
+ */
+function present(path: string, fs: ExeFs): boolean {
+  let cur = '/';
+  const parts = path.split('/').filter(part => part !== '' && part !== '.');
+  for (let i = 0, links = 0; i < parts.length; i++) {
+    const part = parts[i]!;
+    if (part === '..') { cur = dirname(cur); continue; }
+    const entry = join(cur, part);
+    const stat = fs.lstat(entry);
+    if (stat === null) return false;
+    if (i === parts.length - 1) return true;
+    if (stat.isSymbolicLink) {
+      const target = fs.readlink(entry);
+      if (target === null || ++links > MAX_LINKS) return false;
+      parts.splice(0, i + 1, ...(isAbsolute(target) ? target : `${cur}/${target}`).split('/').filter(p => p !== '' && p !== '.'));
+      cur = '/';
+      i = -1;
+      continue;
+    }
+    if (!stat.isDirectory) return false;
+    cur = entry;
+  }
+  return false;
+}
+
+/**
  * Why the program at `candidate` cannot be trusted, null when it can, or
  * 'missing' when nothing is there. See walkChecked.
  */
@@ -201,6 +253,9 @@ export function findLinuxSystemExe(name: LinuxSystemTool, opts: LinuxExeOptions 
     const candidate = join(dir, name);
     const problem = checkChain(candidate, fs, owners);
     if (problem === null) return { path: candidate };
+    // Refused on the way to a name that is not there (a group-writable
+    // /usr/local/bin on Debian, root:staff 2775): nothing to report.
+    if (problem !== 'missing' && !present(candidate, fs)) continue;
     // /bin is /usr/bin on a merged-/usr system: name the same reason once.
     // Every directory is still looked in, since a link to one can be
     // untrusted where the directory itself is not.
@@ -247,9 +302,14 @@ export function linuxSystemExe(name: LinuxSystemTool, opts: LinuxExeOptions = {}
     ...copiesElsewhereOnPath(name, dirs, fs).map(p => `${p} (not a system directory)`),
   ];
   const where = found.rejected.length ? 'has no usable copy in a system directory' : 'is not installed in a system directory';
-  throw new SystemExeNotFoundError(name,
+  throw new SystemExeNotFoundError(name, userAsVariable(
     `${name} ${where} (${dirs.join(', ')})` +
-    (notUsed.length ? `; not used: ${notUsed.map(homeAsTilde).join('; ')}` : ''));
+    (notUsed.length ? `; not used: ${notUsed.map(homeAsTilde).join('; ')}` : '')));
+}
+
+/** The per-user profile's account name as `$USER`, for the reason homeAsTilde gives. */
+function userAsVariable(text: string): string {
+  return text.replace(/\/etc\/profiles\/per-user\/[^/]+\//g, `${PER_USER_PREFIX}$USER/`);
 }
 
 /**
