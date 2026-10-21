@@ -12,7 +12,7 @@ export const PROFILE_FIELD_MAPPING = [
   { id: 'working_style', label: 'How you like to work', owner: 'assistant_context', questionId: 'communication_preferences', state: 'editable', reason: null },
 ] as const;
 
-export interface EditableProfile { revision: string; answers: ProfileAnswers }
+export interface EditableProfile { revision: string; answers: ProfileAnswers; interviewFacts?: Array<{ theme: string; summary: string }> }
 export interface VoicePreference {
   revision: string;
   state: 'editable' | 'unavailable';

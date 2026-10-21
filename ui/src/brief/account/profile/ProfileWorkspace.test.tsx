@@ -417,3 +417,20 @@ test("live form requires the enabled F23 capability and loses its draft when tha
   expect(fixture.controller.snapshot().draft).toEqual({});
   expect(fixture.writes).toHaveLength(0);
 });
+
+
+test('saved interview context is visible in Profile alongside editable fields', async () => {
+  const read = fixture.port.read;
+  fixture.port.read = async signal => {
+    const result = await read(signal);
+    return result.state === "ready" ? { ...result, data: { ...result.data, interviewFacts: [
+      { theme: "work", summary: "Runs a Cornish surf apparel brand" },
+      { theme: "goals", summary: "Reach 50 orders per month" },
+    ] } } : result;
+  };
+  await render();
+  expect(host.textContent).toContain("From your interview");
+  expect(host.textContent).toContain("Runs a Cornish surf apparel brand");
+  expect(host.textContent).toContain("Reach 50 orders per month");
+  expect(field("Company").value).toBe("Northwind");
+});

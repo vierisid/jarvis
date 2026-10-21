@@ -35,11 +35,6 @@
 .on-interview h1 { max-inline-size: 40ch; margin: 24px 0 0; text-align: center; font-size: 18px; line-height: 26px; font-weight: 600; letter-spacing: -.015em; white-space: pre-wrap; }
 .on-interview[data-phase="done"] h1, .on-interview[data-phase="skipped"] h1 { margin-block-start: 12px; font-size: 24px; line-height: 32px; }
 .on-interview__help { margin: 24px 0 0; max-inline-size: 58ch; font-size: 14px; line-height: 22px; color: var(--oi-muted); text-align: center; white-space: pre-wrap; }
-.on-interview__history { display: flex; flex-direction: column; gap: 12px; inline-size: 100%; max-inline-size: 480px; margin-block-start: 24px; }
-.on-interview__history:empty { display: none; }
-.on-interview__message { margin: 0; max-inline-size: 90%; font-size: 14px; line-height: 22px; white-space: pre-wrap; padding: 12px 16px; border-radius: 12px 2px 12px 12px; }
-.on-interview__message--user { align-self: flex-end; background: var(--oi-ink); color: var(--oi-bg); }
-.on-interview__message--assistant { align-self: flex-start; background: var(--oi-panel); color: var(--oi-ink); }
 .on-interview__saved { margin-block: 24px 32px; text-align: center; }
 .on-interview .on-interview__control {
   display: inline-flex; justify-content: center; align-items: center; flex-shrink: 0;
@@ -85,6 +80,5 @@
   .on-interview__footer, .on-interview__navigation { padding-inline: 0; }
   .on-interview__composer { gap: 8px; }
   .on-interview .on-interview__send { inline-size: 72px; }
-  .on-interview__message { max-inline-size: 95%; }
 }
 @media (prefers-reduced-motion: reduce) { .on-interview *, .on-interview *::before { transition: none !important; animation: none !important; } }

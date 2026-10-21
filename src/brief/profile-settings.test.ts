@@ -158,3 +158,30 @@ test('direct mutations obey the default-off gate', async () => {
   expect(() => edit({ company: 'X' })).toThrow('unavailable');
   await expect(service.saveVoice('0'.repeat(64), 'nova')).rejects.toThrow('unavailable');
 });
+
+
+test('Profile exposes interview context without copying it over editable answers', () => {
+  appendUserProfileFact({ theme: 'work', summary: 'Runs a Cornish surf apparel brand' });
+  appendUserProfileFact({ theme: 'goals', summary: 'Reach 50 orders per month' });
+  expect(service.profile().interviewFacts).toEqual([
+    { theme: 'work', summary: 'Runs a Cornish surf apparel brand' },
+    { theme: 'goals', summary: 'Reach 50 orders per month' },
+  ]);
+  expect(service.profile().answers).toEqual({});
+  edit({ company: 'Cornish Surf' });
+  expect(service.profile().interviewFacts).toHaveLength(2);
+});
+
+
+test('Profile hides forgotten or superseded interview statements on refresh', () => {
+  appendUserProfileFact({ theme: 'work', summary: 'Runs the old business' });
+  const fact = findFacts({ predicate: 'shared about work' })[0]!;
+  correctFact(fact.id, 'Runs the new business', 'Updated by user');
+  expect(service.profile().interviewFacts).toEqual([]);
+  appendUserProfileFact({ theme: 'tools', summary: 'Uses Shopify' });
+  const tool = findFacts({ predicate: 'shared about tools' })[0]!;
+  const forget = new MemoryForget(getDb(), () => true); const read = forget.get(tool.id);
+  if (read.state !== 'ready') throw Error('missing tool');
+  forget.forget(tool.id, { requestId: 'forget-profile-context', expectedRevision: read.revision, confirmed: true });
+  expect(service.profile().interviewFacts).toEqual([]);
+});

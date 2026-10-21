@@ -68,16 +68,14 @@ function InterviewPanel({ model, onDraftChange, onSubmit, onRetry, onSkip, onCon
   const [sentKey, setSentKey] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState<string | null>(null);
   const [navKey, setNavKey] = useState<string | null>(null);
-  const reading = useRef(false);
-  const anchor = useRef<{ id: string; offset: number } | null>(null);
-  const [hasNewReply, setHasNewReply] = useState(false);
   const terminal = model.phase === "done" || model.phase === "skipped";
   const navigationKey = JSON.stringify([model.sessionId, model.navigation.revision]);
   const locked = model.navigation.kind === "pending" || navKey === navigationKey;
   const requestKey = JSON.stringify([model.sessionId, model.draft.clientRequestId]);
   const recoveryKey = JSON.stringify([model.sessionId, model.cursor, model.recovery]);
   const latest = model.messages.findLast(message => message.role === "assistant");
-  const history = model.messages.filter(message => message !== latest);
+  const sending = model.phase === "thinking" || (sentKey === requestKey && model.phase === "ready");
+  const visibleDraft = sending ? "" : model.draft.text;
   const confirmedCount = model.confirmedFactIds === null ? null
     : new Set(model.confirmedFactIds.filter(id => id.trim())).size;
   const factCopy = confirmedCount === null ? "Saved context unconfirmed"
@@ -93,41 +91,13 @@ function InterviewPanel({ model, onDraftChange, onSubmit, onRetry, onSkip, onCon
   // not every streaming fragment, cursor update or confirmed fact increment.
   const completed = model.messages.findLast(message => message.role === "assistant" && !message.streaming);
   const announcement = terminal ? (model.phase === "done" ? `Interview complete. ${factCopy}.` : `Interview skipped. ${factCopy}.`)
-    : model.phase === "thinking" || latest?.streaming ? "Jarvis is preparing your reply."
+    : sending || latest?.streaming ? "Jarvis is preparing your reply."
     : model.phase === "connecting" ? "Connecting to the interview."
     : model.phase === "ready" ? `${model.resumed ? "Interview resumed. " : ""}${completed?.text ?? "Ready for your answer."}` : "";
 
-  const captureAnchor = () => {
-    const box = stageRef.current;
-    if (!box) return;
-    reading.current = box.scrollTop > 24;
-    const top = box.getBoundingClientRect().top;
-    const node = Array.from(box.querySelectorAll<HTMLElement>("[data-reading-anchor]"))
-      .find(el => el.getBoundingClientRect().bottom > top + 1);
-    anchor.current = node ? { id: node.dataset.readingAnchor!, offset: node.getBoundingClientRect().top - top } : null;
-    if (!reading.current) setHasNewReply(false);
-  };
-  const restoreAnchor = () => {
-    const box = stageRef.current;
-    if (!box) return;
-    if (!reading.current) { box.scrollTop = 0; return; }
-    const previous = anchor.current;
-    if (!previous) return;
-    const node = Array.from(box.querySelectorAll<HTMLElement>("[data-reading-anchor]"))
-      .find(el => el.dataset.readingAnchor === previous.id);
-    if (node) box.scrollTop += node.getBoundingClientRect().top - box.getBoundingClientRect().top - previous.offset;
-  };
   useLayoutEffect(() => {
-    restoreAnchor();
-    if (reading.current) setHasNewReply(true);
-  }, [model.cursor, model.messages]);
-  useLayoutEffect(() => {
-    const box = stageRef.current;
-    if (!box || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(restoreAnchor);
-    observer.observe(box);
-    return () => observer.disconnect();
-  }, [terminal]);
+    if (stageRef.current) stageRef.current.scrollTop = 0;
+  }, [latest?.id, terminal]);
   const resizeComposer = () => {
     const input = inputRef.current;
     if (!input) return;
@@ -135,7 +105,7 @@ function InterviewPanel({ model, onDraftChange, onSubmit, onRetry, onSkip, onCon
     const border = input.offsetHeight - input.clientHeight;
     input.style.height = `${Math.max(44, Math.min(input.scrollHeight + border, 132))}px`;
   };
-  useLayoutEffect(resizeComposer, [model.draft.text, terminal]);
+  useLayoutEffect(resizeComposer, [visibleDraft, terminal]);
   useLayoutEffect(() => {
     const input = inputRef.current;
     if (!input || typeof ResizeObserver === "undefined") return;
@@ -186,7 +156,7 @@ function InterviewPanel({ model, onDraftChange, onSubmit, onRetry, onSkip, onCon
   };
 
   return (
-    <section className="on-interview" data-theme={model.theme} data-phase={model.phase} data-context={confirmedCount !== null && confirmedCount > 0} aria-labelledby={headingId}>
+    <section className="on-interview" data-theme={model.theme} data-phase={sending ? "thinking" : model.phase} data-context={confirmedCount !== null && confirmedCount > 0} aria-labelledby={headingId}>
       <div className="on-interview__layout">
         {!terminal && <header className="on-interview__header">
           <p>Jarvis · your work, in your words</p>
@@ -196,10 +166,10 @@ function InterviewPanel({ model, onDraftChange, onSubmit, onRetry, onSkip, onCon
             navigate(onSkip);
           }}>Skip</Button>
         </header>}
-        <div className="on-interview__stage" ref={stageRef} onScroll={captureAnchor} tabIndex={0} role="region" aria-label="Interview conversation">
+        <div className="on-interview__stage" ref={stageRef} tabIndex={0} role="region" aria-label="Current interview question">
           <div className="on-interview__stage-content">
             <div className="on-interview__pebble" aria-hidden="true"><span /></div>
-            {!terminal && <p className="on-interview__phase">{PHASE_LABEL[model.phase]}{model.resumed && <span> · Resumed</span>}</p>}
+            {!terminal && <p className="on-interview__phase">{sending ? "Preparing your next question" : PHASE_LABEL[model.phase]}{model.resumed && <span> · Resumed</span>}</p>}
             <h1 id={headingId} data-reading-anchor={latest ? `message:${latest.id}` : "question"}>
               {model.phase === "done" ? "Got it." : model.phase === "skipped" ? "Interview skipped."
                 : latest?.text || (model.phase === "connecting" ? "Getting ready to chat…" : "Your interview will appear here.")}
@@ -207,16 +177,11 @@ function InterviewPanel({ model, onDraftChange, onSubmit, onRetry, onSkip, onCon
             <p className="on-interview__help">{terminal
               ? model.phase === "skipped" ? "You can tell Jarvis more about your work anytime."
                 : model.farewell?.trim() || (confirmedCount ? "I have plenty to start with. Welcome to Jarvis." : "You’re ready to explore Jarvis.")
-              : "A few written answers about what you’re building, what repeats, and where you want help."}</p>
-            {terminal ? <>
+              : "Your answers build your profile and help set up your first goal."}</p>
+            {terminal && <>
               <p className="on-interview__facts on-interview__saved">{factCopy}</p>
               <div ref={continueRef}><Button variant="primary" className="on-interview__control on-interview__continue" aria-disabled={locked} onClick={() => navigate(onContinue)}>Continue</Button></div>
-            </> : <div className="on-interview__history">
-              {history.map(message => <p key={message.id} data-reading-anchor={`message:${message.id}`}
-                className={`on-interview__message on-interview__message--${message.role}`}>
-                <span className="on-interview__sr">{message.role === "user" ? "You: " : "Jarvis: "}</span>{message.text}
-              </p>)}
-            </div>}
+            </>}
           </div>
         </div>
         {!terminal && <div className="on-interview__footer">
@@ -228,15 +193,12 @@ function InterviewPanel({ model, onDraftChange, onSubmit, onRetry, onSkip, onCon
             {model.phase === "error" && recoveryValid && <Button className="on-interview__control on-interview__retry" aria-disabled={!canRetry} onClick={retry}>
               {model.recovery?.kind === "answer" ? "Retry answer" : "Reconnect"}
             </Button>}
-            {hasNewReply && <Button className="on-interview__control on-interview__latest" onClick={() => {
-              reading.current = false; anchor.current = null; setHasNewReply(false);
-              if (stageRef.current) stageRef.current.scrollTop = 0;
-            }}>Latest question</Button>}
+
           </div>
           <div className="on-interview__composer">
             <label className="on-interview__sr" htmlFor={inputId}>Your written answer</label>
-            <textarea id={inputId} ref={inputRef} rows={1} value={model.draft.text} placeholder="Type your answer"
-              readOnly={locked} aria-describedby={helpId} onChange={event => onDraftChange(event.target.value)}
+            <textarea id={inputId} ref={inputRef} rows={1} value={visibleDraft} placeholder={sending ? "Answer sent. Jarvis is thinking…" : "Type your answer"}
+              readOnly={locked || sending || model.phase === "connecting"} aria-describedby={helpId} onChange={event => onDraftChange(event.target.value)}
               onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
               onKeyDown={event => {
                 if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey

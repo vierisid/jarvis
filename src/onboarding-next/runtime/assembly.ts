@@ -21,6 +21,8 @@ import { createBuildJobsProvider, createSqliteBuildStore, initializeBuildJobStor
 import { createDraftResultProvider, createSqliteResultReader, createDraftCompletionGuard } from '../result';
 import type { Binder, Capability, Context, Scope, Provider } from './contract';
 import { RuntimeError } from './runtime';
+import { saveInitialInterviewGoal } from './initial-goal';
+import { getDb } from '../../vault/schema';
 
 export interface OnboardingAssemblyPorts {
   owner: Scope;
@@ -63,10 +65,22 @@ export function createOnboardingAssembly(ports: OnboardingAssemblyPorts) {
     if (!authorize(context)) throw new RuntimeError('unauthorized', 401);
     return owner;
   };
-  const persistence = createSettingsJourneyPersistence({ databaseForScope: scope => {
+  const settingsPersistence = createSettingsJourneyPersistence({ databaseForScope: scope => {
     if (!current() || scope.actorId !== owner.actorId || scope.projectId !== owner.projectId) throw new Error('Binding unavailable');
     return db;
   }, readLegacy: ports.readLegacy });
+  const persistence: typeof settingsPersistence = {
+    transaction(scope, operation) {
+      return settingsPersistence.transaction(scope, tx => operation({ ...tx, write(record) {
+        tx.write(record);
+        // The goal and journey finish share the canonical SQLite transaction.
+        if (record.snapshot.stepId === 'exited' && record.snapshot.interviewState === 'done') {
+          if (getDb() !== db) throw new Error('Profile vault unavailable');
+          saveInitialInterviewGoal(record.snapshot);
+        }
+      } }));
+    },
+  };
   const journey = (context: Context) => createJourneyProvider({ authorize: () => authorize(context), persistence, validateFinish: finish });
   async function acknowledge(context: Context, command: Parameters<ReturnType<typeof createJourneyProvider>['acknowledge']>[0]['command']) {
     for (let attempt = 0; attempt < 4; attempt++) {

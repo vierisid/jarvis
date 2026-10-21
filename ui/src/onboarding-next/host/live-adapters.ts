@@ -154,7 +154,7 @@ export function createLiveOnboardingAdapters(ports: LiveOnboardingPorts): Config
           draft = { text: '', clientRequestId: uuid() }; drafts.save('interview', draft);
         }
         return { model: { sessionId: snapshot?.sessionId ?? null, turnId: snapshot?.turnId ?? null, cursor: snapshot?.cursor ?? 0,
-          phase: error ? 'error' : snapshot?.phase ?? 'connecting', messages: snapshot?.messages ?? [], draft,
+          phase: error ? 'error' : pending && snapshot ? 'thinking' : snapshot?.phase ?? 'connecting', messages: snapshot?.messages ?? [], draft,
           confirmedFactIds: snapshot?.confirmedFactIds ?? null, farewell: snapshot?.farewell,
           recovery: snapshot?.pendingAnswer ? { kind: 'answer', answer: snapshot.pendingAnswer } : { kind: 'session' },
           navigation: { revision: c.journey.revision, kind: 'ready' } } };
@@ -162,7 +162,7 @@ export function createLiveOnboardingAdapters(ports: LiveOnboardingPorts): Config
       return { available: ports.available, ...poll,
         async read(c) {
           if (!snapshot && !pending && !error) drive(c, { type: 'start' });
-          else if (snapshot && !pending) accept(await call(c, 'interview.command', { type: 'read', sessionId: snapshot.sessionId }));
+          else if (snapshot && !pending && !error) accept(await call(c, 'interview.command', { type: 'read', sessionId: snapshot.sessionId }));
           poll.schedule(!!pending || snapshot?.phase === 'thinking'); return present(c);
         },
         setDraft(c, text) { if (typeof text !== 'string' || text.length > 16384 || pending) fail(); store(c).save('interview', { text, clientRequestId: uuid() }); return present(c); },
@@ -173,7 +173,17 @@ export function createLiveOnboardingAdapters(ports: LiveOnboardingPorts): Config
             if (!object(input) || !draft || input.sessionId !== snapshot?.sessionId || input.turnId !== snapshot?.turnId
               || input.clientRequestId !== draft.clientRequestId || input.text !== draft.text) fail();
             drive(c, { type: 'answer', sessionId: input.sessionId, turnId: input.turnId, clientRequestId: input.clientRequestId, text: input.text });
-          } else if (action === 'retry') drive(c, snapshot ? { type: 'retry', sessionId: snapshot.sessionId } : { type: 'start' });
+          } else if (action === 'retry') {
+            // Reconcile before retrying: a lost response may already have committed.
+            if (!snapshot) { error = false; drive(c, { type: 'start' }); return; }
+            accept(await call(c, 'interview.command', { type: 'read', sessionId: snapshot.sessionId }));
+            const draft = store(c).read('interview');
+            if (snapshot.phase === 'error') drive(c, { type: 'retry', sessionId: snapshot.sessionId });
+            else if (snapshot.phase === 'ready' && draft && !snapshot.messages.some(m => m.clientRequestId === draft.clientRequestId)) {
+              drive(c, { type: 'answer', sessionId: snapshot.sessionId, turnId: snapshot.turnId,
+                clientRequestId: draft.clientRequestId, text: draft.text });
+            }
+          }
           else fail();
         },
       };

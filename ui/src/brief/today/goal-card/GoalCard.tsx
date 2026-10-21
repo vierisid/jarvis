@@ -8,7 +8,7 @@ import type { GoalHandoff } from "./useGoalHandoff";
 import "../outcomes/outcomes.css";
 import "./goal-card.css";
 
-export function GoalCard({ handoff }: { handoff: GoalHandoff }) {
+export function GoalCard({ handoff, onReviewDraft }: { handoff: GoalHandoff; onReviewDraft?: () => void }) {
   const { binding, goal, rec, reduced } = handoff;
   const [openedKey, setOpenedKey] = useState<string | null>(null);
   const open = openedKey === handoff.key;
@@ -58,7 +58,7 @@ export function GoalCard({ handoff }: { handoff: GoalHandoff }) {
         <div className="brief-goal-drivers">{goal.drivers.map(driver => <div className="brief-goal-driver" key={driver.goalId}>
           <span>{driver.title}</span>{qualifiedProgress(driver.progress) ? <><GoalSegments value={driver.progress.value} target={driver.progress.target} label={`${driver.title}: ${formatNumber(driver.progress.value)} of ${formatNumber(driver.progress.target)}`} reducedMotion={reduced} /><span className="brief-secondary">{formatNumber(driver.progress.value)} / {formatNumber(driver.progress.target)}</span></> : <span className="brief-secondary">Not measured</span>}
         </div>)}</div>
-        <BriefButton ref={next} variant="text" className="brief-goal-next" onClick={() => changeView(handoff.key)} aria-expanded={false}>What’s next?<ArrowRight size={16} /></BriefButton>
+        <BriefButton ref={next} variant="text" className="brief-goal-next" onClick={onReviewDraft ?? (() => changeView(handoff.key))} aria-expanded={onReviewDraft ? undefined : false}>{onReviewDraft ? "Review goal" : "What’s next?"}<ArrowRight size={16} /></BriefButton>
       </>}
     </div>
   </section>;

@@ -9,9 +9,13 @@ import { createOnboardingRuntime } from './runtime';
 import { createOnboardingRoutes, OPERATION_PATHS } from './routes';
 import { runtimeModules } from './generated/catalog';
 import type { Operation } from './contract';
+import { findGoals } from '../../vault/goals';
+import { ProfileSettings } from '../../brief/profile-settings';
+import { DEFAULT_CONFIG } from '../../config/types';
 
 let assembly: ReturnType<typeof createOnboardingAssembly>;
 let routes: ReturnType<typeof createOnboardingRoutes>;
+let interviewReply: (() => Promise<any>) | undefined;
 let modelCalls = 0, connected = true, setupCompleted: number | null = null;
 const owner = { actorId: DEFAULT_IDS.user, projectId: DEFAULT_IDS.project };
 const authorize = (r: Request) => connected && r.headers.get('cookie') === 'local-test=owner' ? owner : null;
@@ -36,7 +40,7 @@ async function navigate(stepId: string) {
 }
 beforeEach(() => {
   closeWorkflowDb(); initWorkflowDb(':memory:');
-  modelCalls = 0; connected = true; setupCompleted = 42;
+  interviewReply = undefined; modelCalls = 0; connected = true; setupCompleted = 42;
   const catalog = sampleCatalog(); configureWorkflowReadiness({ pieces: catalog });
   assembly = createOnboardingAssembly({ owner, database: getWorkflowDb(), authorize,
     readLegacy: () => ({ setup_completed: false, setup_skipped_profile: false, profile_completed: false,
@@ -45,7 +49,7 @@ beforeEach(() => {
       completeHosted: () => setupCompleted ??= 42 }, services: { read: async () => 'running', start: async () => {} } },
     google: () => ({ id: 'isolated-google', owner, installMode: 'self', readGrant: async () => ({ state: 'absent' }) }),
     interviewer: createStagedInterviewer({ llmForScope: () => ({ hasConversationTier: () => false,
-      chatTier: async () => ({ content: 'What repeats each week?', model: 'isolated-model', usage: { input_tokens: 0, output_tokens: 0 }, finish_reason: 'stop', tool_calls: [] }),
+      chatTier: async () => interviewReply ? interviewReply() : ({ content: 'What repeats each week?', model: 'isolated-model', usage: { input_tokens: 0, output_tokens: 0 }, finish_reason: 'stop', tool_calls: [] }),
     } as unknown as LLMManager) }),
     intent: () => ({ id: 'isolated-intent', access: async () => 'ready', resolve: async () => ({ availability: 'unavailable' }),
       assess: async () => ({ schemaVersion: 1, issues: [] }) }),
@@ -122,13 +126,17 @@ import { createLiveOnboardingAdapters } from '../../../ui/src/onboarding-next/ho
 import { createTransport } from '../../../ui/src/onboarding-next/host/transport';
 import { createSession } from '../../../ui/src/onboarding-next/host/session';
 import { viewModules } from '../../../ui/src/onboarding-next/host/generated/catalog';
-function uiHost(options: { storage?: Map<string, string>; loseSubmit?: boolean } = {}) {
+function uiHost(options: { storage?: Map<string, string>; loseSubmit?: boolean; loseAnswer?: 'before' | 'after' } = {}) {
   const values = options.storage ?? new Map<string, string>();
   let loseSubmit = options.loseSubmit ?? false;
+  let loseAnswer = options.loseAnswer;
   const transport = createTransport(async (path, init) => {
     const handler = routes[path]?.[init?.method === 'POST' ? 'POST' : 'GET'];
     if (!handler) return new Response('not found', { status: 404 });
+    const answer = path.endsWith('/interview/command') && JSON.parse(String(init?.body ?? '{}')).input?.type === 'answer';
+    if (answer && loseAnswer === 'before') { loseAnswer = undefined; throw new Error('Connection lost before send'); }
     const response = await handler(new Request('http://localhost' + path, { ...init, headers: { ...init?.headers, cookie: 'local-test=owner' } }));
+    if (answer && loseAnswer === 'after') { loseAnswer = undefined; throw new Error('Response lost after answer'); }
     if (loseSubmit && path.endsWith('/build/submit')) { loseSubmit = false; throw new Error('Response lost after durable acceptance'); }
     return response;
   });
@@ -184,5 +192,57 @@ test('live UI adapters retain request identity after a lost submit response and 
     expect(host.state().mode).toBe('complete'); expect(modelCalls).toBe(1);
     expect(getWorkflowDb().query('SELECT id FROM flow').all()).toHaveLength(1);
     expect(getWorkflowDb().query('SELECT id FROM flow_run').all()).toHaveLength(0);
+  } finally { host.dispose(); }
+});
+
+
+test('a completed interview reaches the dashboard with Profile context and exactly one goal through real routes', async () => {
+  await navigate('explain'); await call('setup.complete', { action: 'complete_setup' });
+  await navigate('google'); await navigate('interview');
+  const start = await call('interview.command', { type: 'start' });
+  const summary = 'Grow the Cornish surf brand to 50 orders per month by December';
+  interviewReply = async () => ({ content: '', model: 'isolated-model', usage: { input_tokens: 0, output_tokens: 0 }, finish_reason: 'tool_calls', tool_calls: [
+    { id: 'facts', name: 'record_profile_facts', arguments: { facts: [
+      { theme: 'work', summary: 'Runs a Cornish surf apparel brand' },
+      { theme: 'goals', summary, raw_quote: 'I want 50 orders a month by December.' },
+    ] } },
+    { id: 'wrap', name: 'wrap_interview', arguments: { farewell: 'Your context is saved. Continue to the tour.' } },
+  ] });
+  const finished = await call('interview.command', { type: 'answer', sessionId: start.snapshot.sessionId,
+    turnId: start.snapshot.turnId, clientRequestId: 'answer-first', text: 'I run a Cornish surf brand. I want 50 orders a month by December. That is everything for now.' });
+  expect(finished.snapshot.phase).toBe('done');
+  expect(new ProfileSettings(DEFAULT_CONFIG).profile().interviewFacts).toHaveLength(2);
+  expect(findGoals()).toHaveLength(0);
+  await navigate('tour'); const tour = (await call('tour.command', { type: 'read' })).snapshot;
+  await call('tour.command', { type: 'navigate', sessionId: tour.sessionId, revision: tour.revision,
+    requestId: 'skip-tour', from: tour.stepId, action: 'skip' });
+  const j = await journey(); const exit = { journeyId: j.journeyId, expectedRevision: j.revision, requestId: 'explore', command: { type: 'explore' } };
+  getWorkflowDb().exec("CREATE TRIGGER reject_initial_goal BEFORE INSERT ON goals BEGIN SELECT RAISE(ABORT, 'goal write failed'); END");
+  expect((await call('journey.transition', exit)).availability).toBe('unavailable');
+  expect((await journey()).stepId).toBe('activation'); expect(findGoals()).toHaveLength(0);
+  getWorkflowDb().exec('DROP TRIGGER reject_initial_goal');
+  expect((await call('journey.transition', exit)).snapshot.stepId).toBe('exited');
+  await call('journey.transition', exit);
+  expect(findGoals()).toHaveLength(1); expect(findGoals()[0]).toMatchObject({ title: summary, status: 'draft' });
+  expect((await journey()).completion).toBe('explored');
+});
+
+
+test.each(['before', 'after'] as const)('live interview retry recovers a lost answer %s acceptance without duplicate turns', async loseAnswer => {
+  const host = uiHost({ loseAnswer });
+  try {
+    await host.start(); await host.act(host.key(), 'continue'); await host.act(host.key(), 'continue');
+    await host.act(host.key(), 'complete'); await host.act(host.key(), 'skip');
+    await settle(host, () => host.state().presentation?.model.phase === 'ready');
+    host.draft(host.key(), 'I run a Cornish surf brand.');
+    const m = host.state().presentation!.model as any;
+    await host.act(host.key(), 'answer', { sessionId: m.sessionId, turnId: m.turnId, ...m.draft });
+    await settle(host, () => host.state().presentation?.model.phase === 'error');
+    expect((host.state().presentation!.model.draft as any).text).toBe('I run a Cornish surf brand.');
+    await host.act(host.key(), 'retry', { kind: 'session' });
+    await settle(host, () => host.state().presentation?.model.phase === 'ready');
+    const recovered = host.state().presentation!.model as any;
+    expect(recovered.draft.text).toBe('');
+    expect(recovered.messages.filter((m: any) => m.role === 'user')).toHaveLength(1);
   } finally { host.dispose(); }
 });

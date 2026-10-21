@@ -7,7 +7,7 @@ import type { Scope } from './types.ts';
  * The host selects the model from authenticated scope; no registration here. */
 export function createStagedInterviewer(deps: { llmForScope(scope: Scope): LLMManager }) {
   return {
-    create: createInterviewSession,
+    create: () => createInterviewSession({ initialGoal: true }),
     async prepare(input: { scope: Scope; session: InterviewSession; answer: string | null; turnId: string; signal: AbortSignal }) {
       if (!validScope(input.scope)) throw new InterviewProfileError('invalid_input');
       input.signal.throwIfAborted();

@@ -6,6 +6,7 @@ import { injectSectionSecrets } from '../daemon/section-secrets';
 import { persistUserPatch } from '../daemon/user-settings';
 import { EDGE_VOICES, UJ_VOICES } from '../comms/voice-options';
 import { USER_PROFILE_QUESTIONS } from '../user/profile';
+import { interviewSourceWithheld } from '../vault/memory-suppression';
 import { getDb } from '../vault/schema';
 import { getSetting } from '../vault/settings';
 import { patchUserProfile, readEditableProfile } from '../vault/profile-edit';
@@ -23,7 +24,9 @@ export class ProfileSettings {
   private requireReady() { if (this.readiness() !== 'ready') throw new ProfileSettingsError('unavailable', 503); }
   profile(): EditableProfile {
     const { revision, profile } = readEditableProfile();
-    return { revision, answers: profile?.answers ?? {} };
+    return { revision, answers: profile?.answers ?? {}, interviewFacts: (profile?.interview_facts ?? [])
+      .filter(fact => !interviewSourceWithheld(getDb(), fact))
+      .map(({ theme, summary }) => ({ theme, summary })) };
   }
   read(): ProfileSettingsSnapshot {
     this.requireReady();

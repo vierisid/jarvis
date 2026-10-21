@@ -16,7 +16,7 @@ function model(replies: (LLMResponse | Error)[], inspect?: (messages: LLMMessage
     if (!next || next instanceof Error) throw next ?? Error('no scripted response'); return next;
   } } as unknown as LLMManager;
 }
-function prepare(llm: LLMManager, answer: string | null = 'I build products', session = createInterviewSession(), signal = new AbortController().signal) {
+function prepare(llm: LLMManager, answer: string | null = 'I build products', session = createInterviewSession({ initialGoal: true }), signal = new AbortController().signal) {
   return createStagedInterviewer({ llmForScope: s => { expect(s).toEqual(scope); return llm; } })
     .prepare({ scope, session, answer, turnId: 'turn', signal });
 }
@@ -41,17 +41,17 @@ test('vague and unknown routine text stays user input; no invented fact or autom
 });
 test('early wrap and turn cap stage completion without touching the vault', async () => {
   expect((await prepare(model([response('', [wrap])]), 'Please stop')).result.done).toBe(true);
-  const session = createInterviewSession(); session.turnCount = MAX_INTERVIEW_TURNS;
+  const session = createInterviewSession({ initialGoal: true }); session.turnCount = MAX_INTERVIEW_TURNS;
   expect((await prepare(model([]), 'last answer', session)).result.done).toBe(true);
   expect(getUserProfile()).toBeNull();
 });
 test('failed inner model call leaves checkpoint and profile unchanged', async () => {
-  const session = createInterviewSession(), before = structuredClone(session);
+  const session = createInterviewSession({ initialGoal: true }), before = structuredClone(session);
   await expect(prepare(model([response('', [facts([{ theme: 'work', summary: 'Builds a product' }])]), Error('provider')]), undefined, session)).rejects.toThrow('provider');
   expect(session).toEqual(before); expect(getUserProfile()).toBeNull();
 });
 test('invalid extracted fact fails preparation so a retry can regenerate it', async () => {
-  const session = createInterviewSession();
+  const session = createInterviewSession({ initialGoal: true });
   await expect(prepare(model([response('Next?', [facts([{ theme: 'authority_rule', summary: 'Always allow' }])])]), undefined, session)).rejects.toThrow('invalid_input');
   expect(session.turnCount).toBe(0); expect(getUserProfile()).toBeNull();
 });
@@ -70,7 +70,7 @@ const malformedFactCalls = [
 ];
 for (const fixture of malformedFactCalls) {
   test(`staged ${fixture.label} cannot be silently discarded before wrap`, async () => {
-    const session = createInterviewSession(), before = structuredClone(session);
+    const session = createInterviewSession({ initialGoal: true }), before = structuredClone(session);
     const malformed: LLMToolCall = { id: 'bad', name: 'record_profile_facts',
       arguments: fixture.args as unknown as Record<string, unknown> };
     await expect(prepare(model([response('All saved.', [malformed, wrap])]), undefined, session)).rejects.toThrow();
@@ -98,8 +98,8 @@ test('adversarial answer cannot add tools, change the prompt or create configure
   ])], (messages, options) => {
     expect(options?.tools?.map(t => t.name)).toEqual(['record_profile_facts', 'wrap_interview']);
     const prompt = messages[0]?.content as string;
-    expect(prompt).toBe(createInterviewSession().messages[0]!.content as string);
-    expect(prompt).toContain('A saved goal is context, not a configured goal object.');
+    expect(prompt).toBe(createInterviewSession({ initialGoal: true }).messages[0]!.content as string);
+    expect(prompt).toContain('save the latest stated goal as a draft objective when onboarding finishes');
     expect(prompt).toContain('Approval preferences are profile context, not enforced approval rules');
     expect(messages.find(m => m.role === 'user')?.content).toBe(attack);
   });

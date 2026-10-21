@@ -71,14 +71,15 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
   function Today({ shell }: { shell: BriefShellPort }) {
     const g = useBriefProjection(goalRead), d = useBriefProjection(decisionRead), o = useBriefProjection(opportunityRead), outcome = useBriefProjection(outcomes), rec = useBriefProjection(recommendations);
     const [operation, setOperation] = useState<DecisionOperation>();
-    const caps = host.capabilities(), goal = g.data?.find(row => row.goal.status === 'active');
-    const selectedRec = rec.data?.plan?.outcome === 'recommend' && rec.data.plan.action.goal?.goalId === goal?.goal.goalId ? rec.data : null;
+    const caps = host.capabilities(), goal = g.data?.find(row => row.goal.status === 'active')
+      ?? g.data?.find(row => row.goal.status === 'draft');
+    const selectedRec = goal?.goal.status === 'active' && rec.data?.plan?.outcome === 'recommend' && rec.data.plan.action.goal?.goalId === goal?.goal.goalId ? rec.data : null;
     const recModel: GoalRecommendation | null = selectedRec ? { recommendationId: selectedRec.recommendationId, revision: selectedRec.revision,
       goalId: selectedRec.plan.action.goal.goalId, goalRevision: selectedRec.plan.action.goal.revision, title: selectedRec.plan.action.title,
       rationale: selectedRec.plan.action.rationale.join(' '), evidence: selectedRec.plan.action.evidence, expiresAt: selectedRec.plan.expiresAt,
       state: selectedRec.state, ...(selectedRec.reason ? { reason: selectedRec.reason } : {}) } : null;
     const handoff = useGoalHandoff('live', { source: 'live', capabilities: caps,
-      state: goal ? view(g, () => ({ goalId: goal.goal.goalId, revision: goal.goal.revision, title: goal.goal.title, progress: goal.goal.measurement,
+      state: goal ? view(g, () => ({ goalId: goal.goal.goalId, revision: goal.goal.revision, title: goal.goal.title, periodLabel: goal.goal.status === 'draft' ? 'Draft goal · Ready to review' : undefined, progress: goal.goal.measurement,
         progressLabel: 'Reported progress', change: null, drivers: goal.stages.map(s => ({ goalId: s.goalId, title: s.title, progress: s.measurement })) })) : g.state === 'ready' || g.state === 'empty' ? { status: 'empty' } : view(g, () => { throw new Error('Goal unavailable'); }),
       recommendation: recModel ? view(rec, () => recModel) : rec.state === 'ready' || rec.state === 'empty' ? { status: 'empty' } : view(rec, () => { throw new Error('Recommendation unavailable'); }),
       queue: view(d, rows => rows.filter(row => row.paper.decision.workItemId).map(row => ({ decisionId: row.paper.decision.decisionId, workItemId: row.paper.decision.workItemId!, title: row.paper.title }))),
@@ -104,7 +105,7 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
             decisionRead.refresh(); void decisions.refresh();
           } catch { setOperation({ ...request, state: 'unknown', message: 'The decision is not confirmed. Open Needs you to check it.' }); }
         } }} slots={{
-        goal: <GoalCard handoff={handoff} />,
+        goal: <GoalCard handoff={handoff} onReviewDraft={goal?.goal.status === 'draft' ? () => shell.navigate({ room: 'goals', selection: { goalId: goal.goal.goalId } }) : undefined} />,
         queueNotice: d.data?.length ? <button onClick={() => shell.navigate({ room: 'needs-you', selection: {} })}>Review {d.data.length} pending {d.data.length === 1 ? 'decision' : 'decisions'}</button> : null,
         outcomes: <Outcomes mode="live" binding={{ source: 'live', capabilities: caps, state: view(outcome, data => ({ window: data.window,
           today: data.today, week: data.week, days: data.days.map(day => ({ ...day, label: day.id })),

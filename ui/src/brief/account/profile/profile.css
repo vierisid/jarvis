@@ -140,3 +140,8 @@
     justify-content: flex-end;
   }
 }
+
+.brief-root .brief-profile-interview-help { color: var(--brief-secondary); margin: 0 0 16px; }
+.brief-root .brief-profile-interview { margin: 0; display: grid; gap: 16px; }
+.brief-root .brief-profile-interview dt { text-transform: capitalize; font-weight: 500; margin-bottom: 4px; }
+.brief-root .brief-profile-interview dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }

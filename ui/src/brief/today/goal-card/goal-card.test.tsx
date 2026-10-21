@@ -244,3 +244,17 @@ test("callbacks from a replaced owner scope cannot overwrite a new request for t
     expect(feedback()).toBe("Added to Today");
   }
 });
+
+
+test("draft goal review opens Goals without offering an execution recommendation", async () => {
+  let reviewed = 0;
+  function Draft() {
+    const handoff = useGoalHandoff("preview", binding, true);
+    return <GoalCard handoff={handoff} onReviewDraft={() => reviewed++} />;
+  }
+  await React.act(async () => root.render(<Draft />));
+  expect(host.textContent).toContain("Review goal");
+  expect(host.textContent).not.toContain("What’s next?");
+  await click(".brief-goal-next"); expect(reviewed).toBe(1);
+  expect(host.querySelector(".brief-goal-accept")).toBeNull();
+});
