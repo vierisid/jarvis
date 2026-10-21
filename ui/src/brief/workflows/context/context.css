@@ -201,6 +201,10 @@
 .brief-root .brief-context-run-message:not(:empty) {
   padding: 0 32px 12px;
 }
+.brief-root .brief-context-run-check {
+  flex: none;
+  padding: 0 32px 12px;
+}
 @container brief-work (max-width: 850px) {
   .brief-root .brief-context-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -216,7 +220,8 @@
   .brief-root .brief-context-scroll {
     padding: 2px 18px 84px;
   }
-  .brief-root .brief-context-run-message:not(:empty) {
+  .brief-root .brief-context-run-message:not(:empty),
+  .brief-root .brief-context-run-check {
     padding-inline: 18px;
   }
   .brief-root .brief-context-card {

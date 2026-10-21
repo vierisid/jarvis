@@ -7,14 +7,14 @@ import { assertVersionReady } from '../workflows/db/repos/flow-readiness';
 import { getFlowRun } from '../workflows/db/repos/flow-run';
 import { runFailure } from '../workflows/runtime/run-failure';
 import { getRunRecovery } from '../workflows/runtime/recovery';
-import { runConnectionBindingViews } from '../workflows/db/repos/binding-pins';
+import { bindingDrift, runConnectionBindingViews, type BindingDrift } from '../workflows/db/repos/binding-pins';
 import { boundedJson, canonicalManualPayload, inspectionId, inspectionValue, INSPECTION_LIMITS as LIMIT,
   object, opaque, WorkflowInspectionError } from './inspection-values';
 import type { ContextGroup, InspectionContext, InspectionContextEntry, InspectionRunDetail,
   InspectionRunStatus, InspectionRunSummary, InspectionSelection, InspectionState, ManualInspectionRunResult } from './workflow-context-contracts';
 
 interface RunRow {
-  id: string; flow_id: string; flow_version_id: string; project_id: string; status: string;
+  id: string; flow_id: string; flow_version_id: string; project_id: string; status: string; environment: string;
   created: number; start_time: number | null; finish_time: number | null; updated: number;
 }
 interface Version { id: string; flow_id: string; state: string; trigger: string; connection_ids: string; updated: number }
@@ -23,7 +23,17 @@ const missing = (reason: string): InspectionState<never> => ({ status: 'unavaila
 const states: Record<string, InspectionRunStatus> = { QUEUED: 'queued', RUNNING: 'running', PAUSED: 'paused',
   SUCCEEDED: 'succeeded', STOPPED: 'cancelled' };
 const status = (v: string): InspectionRunStatus => Object.hasOwn(states, v) ? states[v]! : (['FAILED','TIMEOUT','INTERNAL_ERROR','QUOTA_EXCEEDED','MEMORY_LIMIT_EXCEEDED','SCHEDULE_FAILURE'].includes(v) ? 'failed' : 'uncertain');
-const runColumns = 'id, flow_id, flow_version_id, project_id, status, created, start_time, finish_time, updated';
+const runColumns = 'id, flow_id, flow_version_id, project_id, status, environment, created, start_time, finish_time, updated';
+/** One short label for Runs, Context and the start receipt (#1100). The full ID
+ * stays in `runId`, which the views show as the label's title and in inspection. */
+const runLabel = (r: Pick<RunRow, 'id' | 'environment'>) => `${r.environment === 'TESTING' ? 'Test run' : 'Run'} ${r.id.slice(-6)}`;
+/** A stored receipt, labelled as today. Receipts written before #1100 carry the
+ * long `Run <full id>`; a Brief manual start is always a production run. */
+function receipt(stored: string): ManualInspectionRunResult {
+  const result = JSON.parse(stored) as ManualInspectionRunResult;
+  if (typeof result?.run?.runId === 'string') result.run.label = runLabel({ id: result.run.runId, environment: 'PRODUCTION' });
+  return result;
+}
 const groups: ContextGroup[] = ['goal', 'memory', 'bindings', 'target', 'rules'];
 const kinds = { goal: 'Goal', memory: 'Memory', bindings: 'Connection', target: 'Device', rules: 'Rule' } as const;
 const referenceId = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_:.-]{1,200}$/.test(v);
@@ -62,7 +72,7 @@ export class WorkflowContext {
     const uncertain = this.db.query("SELECT 1 FROM workflow_effect WHERE run_id=? AND status IN ('unknown','dispatching') LIMIT 1").get(r.id)
       || (r.status === 'STOPPED' && this.db.query('SELECT 1 FROM workflow_run_cancellation WHERE run_id=? AND in_flight_may_have_completed=1').get(r.id));
     return { scopeId: this.projectId, flowId: r.flow_id, versionId: r.flow_version_id, runId: r.id,
-      label: `Run ${r.id}`, status: uncertain ? 'uncertain' : status(r.status), createdAt: r.created, startedAt: r.start_time };
+      label: runLabel(r), status: uncertain ? 'uncertain' : status(r.status), createdAt: r.created, startedAt: r.start_time };
   }
   private version(flowId: string, versionId: string): Version | null {
     if (!inspectionId(versionId)) throw new WorkflowInspectionError('invalid_identity');
@@ -180,8 +190,14 @@ export class WorkflowContext {
       }
     }
     if (!r && nodes) {
+      // Q-05 pin drift: what enabling or publishing this version again would
+      // accept that differs from what a person last accepted. Kinds and IDs
+      // only; never the credential, its grant, or a computer's name. Drift that
+      // cannot be read is not claimed, and never fails the inspection.
+      let drift: BindingDrift = { connections: new Map(), machine: null };
+      try { drift = bindingDrift(flowId, versionId, { tolerateInventoryFailure: true }); } catch { /* unknown drift is not shown */ }
       const connections = boundedJson(v!.connection_ids);
-      if (Array.isArray(connections)) for (const id of this.boundedRows(connections)) this.connection(add, id);
+      if (Array.isArray(connections)) for (const id of this.boundedRows(connections)) this.connection(add, id, drift);
       for (const n of nodes) {
         const settings = object(n.settings) ? n.settings : {}, input = object(settings.input) ? settings.input : {};
         if (n.type === 'ROUTER' || n.type === 'CODE') add('rules', 'step', n.name,
@@ -195,10 +211,13 @@ export class WorkflowContext {
         if (typeof auth === 'string') {
           const match = /^\{\{connections\.([A-Za-z0-9_:.-]{1,200})\}\}$/.exec(auth)
             ?? /^\{\{connections\['([A-Za-z0-9_:.-]{1,200})'\]\}\}$/.exec(auth);
-          if (match) this.connection(add, match[1]);
+          if (match) this.connection(add, match[1], drift);
           else rows.bindings.push({ id: `restricted-${n.name}`, label: 'Restricted source', value: 'Redacted', availability: 'redacted', source: null });
         }
       }
+      // After explicit targets, so an explicit entry for the same computer stays authoritative.
+      if (drift.machine?.determined) add('target', 'device', drift.machine.pinned.sidecarId ?? 'local-host',
+        'Pinned computer no longer matches what enabling this version would choose; enabling or publishing it again accepts the change.', 'stale');
     }
     if (r) {
       const binding = this.db.query<{ record: string }, [string]>('SELECT substr(record,1,4000001) AS record FROM workflow_run_machine_binding WHERE run_id=?').get(r.id);
@@ -230,17 +249,19 @@ export class WorkflowContext {
         : !nodes ? 'Immutable configured context is unavailable.' : 'No explicit configured reference is available.');
     }
     return { scopeId: this.projectId, flowId, versionId, basis: r ? 'recorded' : 'configured', runId: r?.id ?? null,
-      runLabel: r ? `Run ${r.id}` : null, asOf: r?.updated ?? v?.updated ?? null, groups: projected };
+      runLabel: r ? runLabel(r) : null, asOf: r?.updated ?? v?.updated ?? null, groups: projected };
   }
   private factAvailability(id: string): InspectionContextEntry['availability'] {
     if (this.db.query('SELECT 1 FROM memory_forget_receipts WHERE fact_id=?').get(id)) return 'removed';
     return this.db.query('SELECT id FROM facts WHERE id=?').get(id) ? 'available' : 'missing';
   }
-  private connection(add: (g: ContextGroup, k: 'connection', id: unknown, text: string, availability?: InspectionContextEntry['availability']) => void, id: unknown) {
+  private connection(add: (g: ContextGroup, k: 'connection', id: unknown, text: string, availability?: InspectionContextEntry['availability']) => void, id: unknown, drift: BindingDrift) {
     if (!referenceId(id)) return;
-    if (['jarvis:google', 'jarvis:telegram'].includes(id)) { add('bindings', 'connection', id, 'Configured native service reference; credential availability is not asserted.', 'stale'); return; }
-    const row = this.db.query<{ id: string }, [string, string, string]>('SELECT id FROM app_connection WHERE project_id=? AND (id=? OR external_id=?) LIMIT 1').get(this.projectId, id, id);
-    add('bindings', 'connection', row?.id ?? id, row ? 'Configured connection reference; no credentials included.' : 'Connection is missing or inaccessible.', row ? 'available' : 'missing');
+    const changed = 'Connection changed since this workflow was enabled; enabling or publishing it again accepts the change. No credentials included.';
+    if (['jarvis:google', 'jarvis:telegram'].includes(id)) { add('bindings', 'connection', id, drift.connections.has(id) ? changed : 'Configured native service reference; credential availability is not asserted.', 'stale'); return; }
+    const row = this.db.query<{ id: string; external_id: string }, [string, string, string]>('SELECT id, external_id FROM app_connection WHERE project_id=? AND (id=? OR external_id=?) LIMIT 1').get(this.projectId, id, id);
+    if (row && drift.connections.has(row.external_id)) add('bindings', 'connection', row.id, changed, 'stale');
+    else add('bindings', 'connection', row?.id ?? id, row ? 'Configured connection reference; no credentials included.' : 'Connection is missing or inaccessible.', row ? 'available' : 'missing');
   }
   private effects(r: RunRow): Record<string, unknown>[] {
     const budget = this.db.query<{ n: number; bytes: number }, [string]>('SELECT count(*) AS n, coalesce(sum(length(CAST(record AS BLOB))),0) AS bytes FROM workflow_effect WHERE run_id=?').get(r.id)!;
@@ -317,7 +338,7 @@ export class WorkflowContext {
     const row = this.db.query<{ result: string }, [string, string, string]>(
       'SELECT result FROM brief_manual_run_requests WHERE project_id=? AND request_id=? AND flow_id=?').get(this.projectId, requestId, flowId);
     if (!row) throw new WorkflowInspectionError('not_found', 404);
-    return JSON.parse(row.result);
+    return receipt(row.result);
   }
   start(flowId: string, raw: unknown): ManualInspectionRunResult {
     this.flow(flowId);
@@ -333,7 +354,7 @@ export class WorkflowContext {
         'SELECT digest,result FROM brief_manual_run_requests WHERE project_id=? AND request_id=?').get(this.projectId, requestId);
       if (prior) {
         if (prior.digest !== digest) throw new WorkflowInspectionError('request_conflict', 409);
-        return JSON.parse(prior.result) as ManualInspectionRunResult;
+        return receipt(prior.result);
       }
       const count = this.db.query<{ n: number }, []>('SELECT count(*) AS n FROM brief_manual_run_requests').get()!.n;
       if (count >= LIMIT.requests) throw new WorkflowInspectionError('request_capacity', 503);

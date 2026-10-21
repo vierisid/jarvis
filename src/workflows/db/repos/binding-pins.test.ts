@@ -11,7 +11,7 @@ import { publishFlowVersion } from './flow-publication';
 import { assertFlowReady, assertVersionReady, configureWorkflowReadiness, versionReadiness, WorkflowReadinessError } from './flow-readiness';
 import { deleteConnection, getConnection, upsertConnection } from './app-connection';
 import { createFlowRun, getFlowRun } from './flow-run';
-import { enforceRunConnectionBinding, listRunConnectionBindings, pinUnpinnedEnabledFlows, readBindingPins } from './binding-pins';
+import { connectionBindings, enforceRunConnectionBinding, listRunConnectionBindings, pinUnpinnedEnabledFlows, readBindingPins } from './binding-pins';
 import { createWorkflowRoutes } from '../../api/routes';
 import { PieceCatalog } from '../../runtime/piece-catalog';
 import { CredentialResolver, type JarvisConnectionSource } from '../../credentials/adapter';
@@ -445,3 +445,10 @@ describe('a run hands out the connection identity it started with', () => {
     expect(enforceRunConnectionBinding('trigger-poll', flow.project_id, 'account')).toBeNull();
   });
 });
+
+test('collecting references stays linear in the number of matches inside one string', () => {
+  // Measured before the fix: 40k references took 1.5 s and 100k took 31 s
+  // (each match copied the list); after it, 100k take about 16 ms.
+  const trigger = { name: 'trigger', type: 'EMPTY', settings: { input: { body: '{{connections.a}}'.repeat(100_000) } } };
+  expect(connectionBindings(trigger).get('a')).toHaveLength(100_000);
+}, 5_000);

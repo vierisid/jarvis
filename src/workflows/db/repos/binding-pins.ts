@@ -91,7 +91,11 @@ export function connectionBindings(trigger: unknown): Map<string, ConnectionRefe
         for (const [, expression] of value.matchAll(/\{\{(.*?)\}\}/g)) {
           const reference = CONNECTION_SOURCE.exec(expression!);
           const externalId = reference?.[1] ?? reference?.[2];
-          if (externalId) bindings.set(externalId, [...bindings.get(externalId) ?? [], { node: node.name, path }]);
+          if (!externalId) continue;
+          // Append in place: copying the list per match made one long string quadratic.
+          const references = bindings.get(externalId);
+          if (references) references.push({ node: node.name, path });
+          else bindings.set(externalId, [{ node: node.name, path }]);
         }
       } else if (value && typeof value === 'object') {
         for (const [key, child] of Object.entries(value)) pending.push([child, `${path}.${key}`]);
@@ -331,28 +335,59 @@ export function bindingPinIssues(flowId: string, versionId: string, trigger: unk
 
 /**
  * What enabling or publishing `versionId` now would accept that differs from
- * what a person last accepted: each pinned connection that resolves to another
- * identity, and the computer when the choice would change. Empty when nothing
- * was accepted yet. manage_workflow shows these to a person, who approves
- * before the assistant enables or publishes; the dashboard is the person.
+ * what a person last accepted, by kind: each pinned connection the version
+ * names that resolves to another identity (keyed by external ID), and the
+ * computer when the choice would change. `machine.determined` is true only when
+ * the computer inventory could be read and this version has a computer step that
+ * picks a fixed computer; otherwise the next choice is a guess, not a fact.
+ * Empty when nothing was accepted yet.
  */
-export function bindingChangesToAccept(flowId: string, versionId: string): string[] {
+export interface BindingDrift {
+  connections: Map<string, string>;
+  machine: { pinned: MachinePin; next: MachinePin | null; determined: boolean } | null;
+}
+/**
+ * `tolerateInventoryFailure` is for read-only views: a computer inventory that
+ * throws leaves the computer undetermined (`machine: null`) while connection
+ * drift still shows. The approval gate never passes it, so there a failure
+ * still stops the action rather than hiding a computer change from a person.
+ */
+export function bindingDrift(flowId: string, versionId: string, { tolerateInventoryFailure = false } = {}): BindingDrift {
+  const drift: BindingDrift = { connections: new Map(), machine: null };
   const pins = readBindingPins(flowId);
   const projectId = flowProject(flowId);
-  if (!pins || !projectId) return [];
+  if (!pins || !projectId) return drift;
   const trigger = versionTrigger(versionId);
-  const changes: string[] = [];
   for (const externalId of connectionBindings(trigger).keys()) {
     const pinned = pins.connections[externalId];
     const current = pinned ? currentConnectionIdentity(projectId, externalId) : null;
     const change = pinned && current && 'identity' in current ? describeConnectionChange(externalId, pinned, current.identity) : null;
-    if (change) changes.push(`${change}; it may now act as a different account.`);
+    if (change) drift.connections.set(externalId, change);
   }
   if (pins.machine) {
-    const next = computeMachinePin(trigger, false);
-    if (!next || next.sidecarId !== pins.machine.sidecarId) {
-      changes.push(`The computer it runs on changes from ${pins.machine.name} to ${next?.name ?? 'whichever computer each run picks'}.`);
+    try {
+      const next = computeMachinePin(trigger, false);
+      if (!next || next.sidecarId !== pins.machine.sidecarId) {
+        const needs = machineNeeds(trigger);
+        drift.machine = { pinned: pins.machine, next,
+          determined: !!workflowReadinessServices()?.machines?.() && !!needs.capability && !needs.dynamic };
+      }
+    } catch (error) {
+      if (!tolerateInventoryFailure) throw error;
     }
+  }
+  return drift;
+}
+
+/**
+ * `bindingDrift` as sentences. manage_workflow shows these to a person, who
+ * approves before the assistant enables or publishes; the dashboard is the person.
+ */
+export function bindingChangesToAccept(flowId: string, versionId: string): string[] {
+  const drift = bindingDrift(flowId, versionId);
+  const changes = [...drift.connections.values()].map(change => `${change}; it may now act as a different account.`);
+  if (drift.machine) {
+    changes.push(`The computer it runs on changes from ${drift.machine.pinned.name} to ${drift.machine.next?.name ?? 'whichever computer each run picks'}.`);
   }
   return changes;
 }

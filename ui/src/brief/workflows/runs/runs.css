@@ -13,6 +13,10 @@
   min-width: 0;
   color: var(--brief-ink);
 }
+.brief-root .brief-runs-check {
+  padding: 0 32px 8px;
+  flex: none;
+}
 .brief-root .brief-runs-feedback {
   min-height: 28px;
   padding: 4px 32px;
@@ -333,7 +337,8 @@
     gap: 14px;
     grid-template-columns: minmax(120px, 0.62fr) minmax(0, 1.4fr);
   }
-  .brief-root .brief-runs-feedback {
+  .brief-root .brief-runs-feedback,
+  .brief-root .brief-runs-check {
     padding-inline: 18px;
   }
   .brief-root .brief-run-step-title {
