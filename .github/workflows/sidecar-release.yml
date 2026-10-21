@@ -323,9 +323,10 @@ jobs:
           OUT: ${{ env.SIDECAR_BIN }}
           # The self-updater verifies the payloads it installs exactly as
           # Jarvis-Setup does (internal/update), so it carries the same pins:
-          # the Developer ID team on macOS. Empty means chain-only + a
-          # warning in sidecar.log.
+          # the Developer ID team on macOS. Empty fails a real run unless
+          # ALLOW_UNPINNED_MACOS is exactly true; a dry run warns (#922).
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          ALLOW_UNPINNED_MACOS: ${{ vars.ALLOW_UNPINNED_MACOS }}
         run: ../.github/scripts/build-sidecar.sh
 
       # ─── macOS: assemble Jarvis.app, sign, notarize ────────────────
@@ -572,9 +573,10 @@ jobs:
           OUT: ${{ env.SIDECAR_BIN }}.exe
           # The self-updater verifies the payloads it installs exactly as
           # Jarvis-Setup does (internal/update), so it carries the same pin:
-          # the Authenticode publisher. Empty means chain-only + a warning in
-          # sidecar.log.
+          # the Authenticode publisher. Empty fails a real run unless
+          # ALLOW_UNPINNED_WINDOWS is exactly true; a dry run warns (#922).
           SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
+          ALLOW_UNPINNED_WINDOWS: ${{ vars.ALLOW_UNPINNED_WINDOWS }}
         run: ../.github/scripts/build-sidecar.sh
 
       - name: Digest
@@ -601,6 +603,48 @@ jobs:
   # ALLOW_UNSIGNED_WINDOWS set, and otherwise not at all (#869: see the
   # readiness step). The post-sign check runs in verify-sidecar-windows
   # (#817).
+  #
+  # Who can sign (#819). The token this job mints is exchanged for the KMS
+  # signing identity only if the Workload Identity provider behind
+  # vars.GCP_WORKLOAD_IDENTITY_PROVIDER accepts it, and that provider, not
+  # this file, decides who signs. Its attribute condition lives in GCP, where
+  # no review or test here can see it; as set on 2026-10-09 it is:
+  #   assertion.repository=='vierisid/jarvis' && (
+  #     assertion.job_workflow_ref.startsWith('vierisid/jarvis/.github/workflows/sidecar-release.yml@refs/tags/v')
+  #     || assertion.job_workflow_ref.startsWith('vierisid/jarvis/.github/workflows/sidecar-release.yml@refs/heads/main')
+  #     || assertion.job_workflow_ref.startsWith('vierisid/jarvis/.github/workflows/installer-release.yml@refs/tags/installer-v')
+  #     || assertion.job_workflow_ref.startsWith('vierisid/jarvis/.github/workflows/installer-release.yml@refs/heads/main'))
+  # It admits this file when run from main or a v* tag (and the other signing
+  # workflow likewise; see there). By its text it refuses a dispatch from a
+  # branch such as throwaway, and another repository calling the public
+  # reusable sidecar-release.yml (assertion.repository is the caller). It does
+  # NOT close every branch path, so do not rely on it for that:
+  #   * the main clauses are startsWith prefix matches, so a branch whose
+  #     name starts with main (main-x, maint) passes them;
+  #   * a workflow on any branch of this repository can call
+  #     vierisid/jarvis/.github/workflows/sidecar-release.yml@main; the ref
+  #     then reads @refs/heads/main, while every checkout here (no ref:)
+  #     takes the caller commit, so the branch code is built and signed.
+  #     release-exec.yml calls this file by local path, so for it the ref
+  #     is the ref of its own run.
+  # Both need write access, like the tag path below. Exact equality for main
+  # in the condition would close the first; an environment gate keyed on
+  # github.ref, on BOTH signing jobs, would close both. Only the allow side
+  # has been exercised (every dry run); the deny side has not, and a test of
+  # it should try a main-prefixed branch and a remote-ref call as well as a
+  # plain branch. Renaming this file, moving this job or changing the tag
+  # prefix needs the condition changed with it, or signing fails (403).
+  #
+  # Deliberately NOT gated (owner decision on #819): this job has no
+  # environment:, and a dry run signs for real, because the dry run is the
+  # only proof before a release that signing works, and main is reviewed.
+  # Accepted while the only write collaborators are the two owners: the two
+  # branch paths above, and that a write collaborator can create a v* tag on
+  # any commit (tag creation is left open for release.yml, #679) and sign from
+  # it. When a third collaborator gets write, put both signing jobs behind the
+  # release environment, keyed on github.ref and not on dry_run: a dry
+  # dispatch on a fresh tag would otherwise land in release-dry-run, which has
+  # no rules, and sign.
   sign-sidecar-windows:
     needs: [resolve, build-sidecar-windows]
     # build, not should_release (#952): on a publish_only call this job,
@@ -821,17 +865,19 @@ jobs:
         working-directory: sidecar
         env:
           # The binary must carry OUR publisher, the same identity the
-          # installer pins at runtime.
+          # installer pins at runtime. Empty fails a real run unless
+          # ALLOW_UNPINNED_WINDOWS is true (#922); the signer leaf is pinned
+          # either way, from the committed chain (#871).
           SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
+          ALLOW_UNPINNED_WINDOWS: ${{ vars.ALLOW_UNPINNED_WINDOWS }}
           # Sectigo's roots are publicly trusted, so demand the FULL
           # verification (osslsigncode exit 0), and a check that runs at all.
           # This is the script's default too; stated here so the release
           # posture is visible at the workflow.
           SIGN_REQUIRE_TRUSTED_CHAIN: "1"
         run: |
-          if [ -z "${SIGNING_PUBLISHER_CN}" ]; then
-            echo "::warning::SIGNING_PUBLISHER_CN repo variable is unset -- the signature's publisher will not be asserted."
-          fi
+          set -euo pipefail
+          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS "${SIDECAR_BIN}.exe"
           scripts/sign-windows.sh --verify-only "${RUNNER_TEMP}/signed/${SIDECAR_BIN}.exe"
 
   # ─── Publish sidecar packages to npm ───────────────────────────

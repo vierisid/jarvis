@@ -819,6 +819,22 @@ if (mode === "postsign") {
       if (ver["continue-on-error"] !== undefined) out.push(T.verify + ": the signature check is allowed to fail");
       if (String(ver.env?.SIGN_REQUIRE_TRUSTED_CHAIN) !== "1") out.push(T.verify + ": SIGN_REQUIRE_TRUSTED_CHAIN is " + JSON.stringify(ver.env?.SIGN_REQUIRE_TRUSTED_CHAIN) + ", not \"1\"");
       if (ver.env?.SIGNING_PUBLISHER_CN !== "${{ vars.SIGNING_PUBLISHER_CN }}") out.push(T.verify + ": the publisher is not taken from vars.SIGNING_PUBLISHER_CN");
+      // #871: the signer is pinned to the leaf of the committed chain, which
+      // the script reads from the checkout by default. Pointed at any other
+      // file, the pin is whatever that file says, so nothing may point it.
+      for (const [lvl, e] of [["workflow", doc.env], ["job", v.env], ["step", ver.env]])
+        if (e && typeof e === "object" && "CODESIGN_CERT_FILE" in e) out.push(T.verify + ": the " + lvl + " env sets CODESIGN_CERT_FILE, so the signer is pinned to a certificate other than the committed leaf");
+      if (/CODESIGN_CERT_FILE/.test(ver.run)) out.push(T.verify + ": the signature check sets CODESIGN_CERT_FILE in its script, so the signer is pinned to a certificate other than the committed leaf");
+      // Nor change the PATH that finds openssl and osslsigncode, which the
+      // pin trusts (#871 review): no GITHUB_ENV or GITHUB_PATH write, no
+      // container, and before the check only checkout and download-artifact
+      // among actions, since an action can export either without saying so.
+      for (const st of steps.slice(0, at)) {
+        if (/GITHUB_(?:ENV|PATH)/.test(String(st.run ?? "") + JSON.stringify(st.with ?? {}))) out.push(T.verify + ": a step before the signature check writes GITHUB_ENV or GITHUB_PATH, which can change the certificate it pins or the tools it trusts");
+        const u = String(st.uses ?? "").toLowerCase();
+        if (u && !u.startsWith("actions/checkout@") && !u.startsWith("actions/download-artifact@")) out.push(T.verify + ": runs " + st.uses + " before the signature check (only checkout and download-artifact), which can change its env or PATH");
+      }
+      if (v.container !== undefined) out.push(T.verify + ": runs in a container, whose env and tools the signature check would trust");
       const inst = steps.findIndex((st) => typeof st.run === "string" && /\bapt-get\s+install\b[^\n]*\bosslsigncode\b/.test(st.run));
       if (inst < 0 || inst > at || steps[inst].if !== SIGNED) out.push(T.verify + ": does not install osslsigncode, under the same condition, before the check");
     }
@@ -859,6 +875,101 @@ if (mode === "postsign") {
       out.push(T.publish + ": runs under " + JSON.stringify(jobs[T.publish]?.if) + ", not exactly " + PUBLISH_IF);
   } else if (/\b(?:always|failure|cancelled)\s*\(/.test(String(jobs[T.publish]?.if ?? "")))
     out.push(T.publish + ": can run after a failed dependency (if: " + jobs[T.publish].if + ")");
+  if (out.length) console.log(out.join("\n"));
+  process.exit(0);
+}
+if (mode === "pins") {
+  // #922: every step that links a signer pin into a client, and every
+  // post-sign check that asserts one, runs require-signing-pin.sh, which
+  // fails a real run with an empty pin unless its escape hatch is exactly
+  // true. The script is executed against every case below; this pins that
+  // each site runs it, before the work it guards, with the pin and the
+  // hatch read from their repository variables and DRY_RUN from the one
+  // workflow-level decision (#685), and that nothing can switch it off.
+  const out = [];
+  const file = require("node:path").basename(process.env.WORKFLOW);
+  const W = ["SIGNING_PUBLISHER_CN", "ALLOW_UNPINNED_WINDOWS"];
+  const M = ["APPLE_TEAM_ID", "ALLOW_UNPINNED_MACOS"];
+  const LEG = "Build sidecar (${{ matrix.goos }}/${{ matrix.goarch }})";
+  // [job, step name, pin and hatch, how: gate (the step runs the gate, then work) or script (the step is build-sidecar.sh, which runs it), work]
+  const sites = file === "installer-release.yml" ? [
+    ["build-windows", "Build installer", W, "gate", /\bgo\s+build\b/],
+    ["verify-windows", "Verify the Authenticode signature", W, "gate", /\bsign-windows\.sh\s+--verify-only\b/],
+    ["build-macos", "Build universal installer app", M, "gate", /\bgo\s+build\b/],
+  ] : file === "sidecar-release.yml" ? [
+    ["build-sidecar-windows", "Build sidecar (windows/amd64)", W, "script"],
+    ["build-sidecar-darwin-arm64", LEG, M, "script"],
+    ["build-sidecar-darwin-x64", LEG, M, "script"],
+    ["verify-sidecar-windows", "Verify the Authenticode signature", W, "gate", /\bsign-windows\.sh\s+--verify-only\b/],
+  ] : null;
+  // Every step that links a pin, runs build-sidecar.sh or verifies a
+  // Windows signature must be a listed site, in these two workflows and in
+  // every other one (#922 review): a new job, such as the macOS split
+  // #870 plans, cannot link a pin past the gate unnoticed.
+  const PINNED = /expectedPublisherCN=|expectedTeamID=|build-sidecar\.sh|sign-windows\.sh\s+--verify-only/;
+  const listed = new Set((sites ?? []).map(([j, n]) => j + "\u0000" + n));
+  // The linux legs share the build step and link no pin; build-sidecar.sh
+  // gates by SETUP, so they are known only while their setup is linux.
+  if (file === "sidecar-release.yml")
+    for (const j of ["build-sidecar-linux-x64", "build-sidecar-linux-arm64"]) {
+      const setups = (jobs[j]?.strategy?.matrix?.include ?? []).map((m) => m.setup);
+      if (setups.length === 1 && setups[0] === "linux") listed.add(j + "\u0000" + LEG);
+    }
+  for (const [j, job] of Object.entries(jobs))
+    for (const st of job.steps ?? [])
+      if (typeof st.run === "string" && PINNED.test(st.run) && !listed.has(j + "\u0000" + st.name))
+        out.push(file + ": " + j + ": step " + JSON.stringify(st.name ?? st.id ?? "") + " links a signer pin or checks a signature but is not a pin gate site this rule knows");
+  if (!sites) { if (out.length) console.log(out.join("\n")); process.exit(0); }
+  if (doc.env?.DRY_RUN !== "${{ inputs.dry_run == true }}") out.push("the workflow env DRY_RUN is " + JSON.stringify(doc.env?.DRY_RUN) + ", not the one dry-run decision the pin gate reads");
+  for (const [j, name, pair, how, work] of sites) {
+    const job = jobs[j];
+    if (!job) { out.push("no " + j + " job"); continue; }
+    const steps = job.steps ?? [];
+    const at = steps.findIndex((st) => st.name === name);
+    const st = steps[at];
+    if (!st || typeof st.run !== "string") { out.push(j + ": no run step " + JSON.stringify(name)); continue; }
+    const label = j + ": step " + JSON.stringify(name);
+    for (const k of pair)
+      if (st.env?.[k] !== "${{ vars." + k + " }}") out.push(label + " does not take " + k + " from vars." + k + " (got " + JSON.stringify(st.env?.[k]) + ")");
+    for (const k of [...pair, "DRY_RUN"]) {
+      if (k === "DRY_RUN" && st.env && k in st.env) out.push(label + " sets DRY_RUN in its env, which the pin gate reads");
+      if (job.env && typeof job.env === "object" && k in job.env) out.push(j + ": the job env sets " + k + ", which the pin gate reads");
+    }
+    if (st["continue-on-error"] !== undefined || job["continue-on-error"] !== undefined) out.push(label + " or its job has continue-on-error, so an empty pin would not stop the run");
+    if (st.shell !== undefined && st.shell !== "bash") out.push(label + " runs under shell " + JSON.stringify(st.shell) + ", not bash");
+    for (const prev of steps.slice(0, at))
+      if (/GITHUB_ENV/.test(String(prev.run ?? "") + JSON.stringify(prev.with ?? {}))) out.push(j + ": a step before " + JSON.stringify(name) + " writes GITHUB_ENV, which can change what the pin gate reads");
+    if (how === "script") {
+      if (st.run.trim() !== "../.github/scripts/build-sidecar.sh") out.push(label + " is not exactly ../.github/scripts/build-sidecar.sh, which runs the pin gate");
+      // build-sidecar.sh gates and pins by SETUP, so the leg must say which
+      // target it is: a darwin leg told linux would skip both (#922 review).
+      const wantSetup = pair === W ? "windows-cross" : "darwin";
+      const setups = j.startsWith("build-sidecar-darwin") ? (job.strategy?.matrix?.include ?? []).map((m) => m.setup) : [st.env?.SETUP];
+      if (setups.length !== 1 || setups[0] !== wantSetup) out.push(j + ": builds with SETUP " + JSON.stringify(setups) + ", not exactly " + wantSetup + ", so build-sidecar.sh would not gate or link its pin");
+      if (st.if !== undefined) out.push(label + " runs under " + JSON.stringify(st.if) + ", so the build and its pin gate can be skipped");
+      continue;
+    }
+    // A build step runs whenever its job does; the verify step keeps the
+    // condition the post-sign rule pins.
+    if (j.startsWith("build-") && st.if !== undefined) out.push(label + " runs under " + JSON.stringify(st.if) + ", so the build and its pin gate can be skipped");
+    const lines = st.run.split("\n").map((l) => l.trim());
+    const want = "../.github/scripts/require-signing-pin.sh " + pair[0] + " " + pair[1] + " ";
+    const gi = lines.findIndex((l) => l.startsWith(want) && !/[|&;\\]/.test(l.slice(want.length).replace(/"\$\{SIDECAR_BIN\}\.exe"/, "")));
+    const wi = lines.findIndex((l) => work.test(l));
+    if (gi < 0) out.push(label + " does not run require-signing-pin.sh " + pair.join(" ") + " as a command of its own");
+    else {
+      if (lines[0] !== "set -euo pipefail") out.push(label + " does not start with set -euo pipefail, so a failed pin gate need not stop it");
+      // Right after it, so nothing can run in between (#922 review).
+      if (gi !== 1) out.push(label + " runs the pin gate at line " + (gi + 1) + ", not straight after set -euo pipefail");
+      if (wi >= 0 && wi < gi) out.push(label + " does its work before the pin gate");
+    }
+    // Nor anything later that undoes errexit or rewrites what the gate reads.
+    for (const l of lines) {
+      if (/^set\s+\+[a-z]*[eo]/.test(l) || /\bset\s+\+o\b/.test(l)) out.push(label + " turns errexit off: " + l);
+      if (/(?:^|[\s;&|(])(?:export\s+|declare\s+(?:-\w+\s+)*)?(?:DRY_RUN|ALLOW_UNPINNED_\w+|SIGNING_PUBLISHER_CN|APPLE_TEAM_ID)\+?=/.test(l)) out.push(label + " assigns what the pin gate reads: " + l);
+    }
+    if (wi < 0) out.push(label + " no longer does the work the pin gate guards");
+  }
   if (out.length) console.log(out.join("\n"));
   process.exit(0);
 }
@@ -2658,8 +2769,14 @@ done
 		'publish-sidecar: runs under'
 	mutant 'the sidecar signature check job run under a condition of its own (#817 review)' \
 		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: needs.resolve.outputs.build == \'true\'\n' $'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: always()\n'
+	mutant 'the sidecar signature check pinned to another chain file (#871)' \
+		$'          SIGN_REQUIRE_TRUSTED_CHAIN: "1"\n' $'          SIGN_REQUIRE_TRUSTED_CHAIN: "1"\n          CODESIGN_CERT_FILE: ${{ runner.temp }}/signed/chain.pem\n' \
+		'the step env sets CODESIGN_CERT_FILE'
+	mutant 'the sidecar workflow env pointing the pin elsewhere (#871)' \
+		$'\nenv:\n' $'\nenv:\n  CODESIGN_CERT_FILE: /tmp/chain.pem\n' \
+		'the workflow env sets CODESIGN_CERT_FILE'
 	mutant 'the sidecar signature check relaxed to an untrusted chain (#817)' \
-		$'          SIGN_REQUIRE_TRUSTED_CHAIN: "1"\n        run: |\n          if [ -z "${SIGNING_PUBLISHER_CN}" ]' $'          SIGN_REQUIRE_TRUSTED_CHAIN: "0"\n        run: |\n          if [ -z "${SIGNING_PUBLISHER_CN}" ]'
+		$'          SIGN_REQUIRE_TRUSTED_CHAIN: "1"\n        run: |\n          set -euo pipefail\n          ../.github/scripts/require-signing-pin.sh' $'          SIGN_REQUIRE_TRUSTED_CHAIN: "0"\n        run: |\n          set -euo pipefail\n          ../.github/scripts/require-signing-pin.sh'
 	MUTANT_FROM="$INSTALLER_WORKFLOW"
 	mutant 'the installer publish not waiting for the signature check (#817)' \
 		'    needs: [resolve, sign-windows, verify-windows, build-macos]' '    needs: [resolve, sign-windows, build-macos]'
@@ -2673,13 +2790,34 @@ done
 		$'  verify-windows:\n    needs: [resolve, sign-windows]\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
 		$'  verify-windows:\n    needs: [resolve, sign-windows]\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: write\n'
 	mutant 'the installer signature check run without its publisher pin (#817)' \
-		$'          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}\n          # Sectigo' $'          # Sectigo'
+		$'          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}\n          ALLOW_UNPINNED_WINDOWS: ${{ vars.ALLOW_UNPINNED_WINDOWS }}\n          # Sectigo' $'          ALLOW_UNPINNED_WINDOWS: ${{ vars.ALLOW_UNPINNED_WINDOWS }}\n          # Sectigo'
 	mutant 'the installer signer allowed to fail as a whole (#817 review)' \
 		$'  sign-windows:\n    needs: [resolve, build-windows]\n' $'  sign-windows:\n    needs: [resolve, build-windows]\n    continue-on-error: true\n'
 	mutant 'the installer publish running after a failure (#817 review)' \
 		$'    needs: [resolve, sign-windows, verify-windows, build-macos]\n    if: needs.resolve.outputs.should_release == \'true\'' $'    needs: [resolve, sign-windows, verify-windows, build-macos]\n    if: always() && needs.resolve.outputs.should_release == \'true\''
 	mutant 'the installer digest check made skippable (#817)' \
 		$'      - name: Verify the signed installer digest\n' $'      - name: Verify the signed installer digest\n        if: false\n'
+	mutant 'the installer signature check pinned to another chain file (#871)' \
+		$'          SIGN_REQUIRE_TRUSTED_CHAIN: "1"\n' $'          SIGN_REQUIRE_TRUSTED_CHAIN: "1"\n          CODESIGN_CERT_FILE: ${{ runner.temp }}/signed/chain.pem\n' \
+		'the step env sets CODESIGN_CERT_FILE'
+	mutant 'the installer signature check job env pointing the pin elsewhere (#871)' \
+		$'  verify-windows:\n    needs: [resolve, sign-windows]\n' $'  verify-windows:\n    needs: [resolve, sign-windows]\n    env:\n      CODESIGN_CERT_FILE: /tmp/chain.pem\n' \
+		'the job env sets CODESIGN_CERT_FILE'
+	mutant 'the installer signature check pinning a chain it was handed in its script (#871)' \
+		'          scripts/sign-windows.sh --verify-only "${RUNNER_TEMP}/signed/Jarvis-Setup.exe"' '          CODESIGN_CERT_FILE="${RUNNER_TEMP}/signed/chain.pem" scripts/sign-windows.sh --verify-only "${RUNNER_TEMP}/signed/Jarvis-Setup.exe"' \
+		'sets CODESIGN_CERT_FILE in its script'
+	mutant 'the installer signature check told another chain through GITHUB_ENV (#871)' \
+		'      - name: Verify the Authenticode signature' $'      - run: echo "CODESIGN_CERT_FILE=/tmp/chain.pem" >> "$GITHUB_ENV"\n      - name: Verify the Authenticode signature' \
+		'a step before the signature check writes GITHUB_ENV'
+	mutant 'the installer signature check handed another PATH (#871 review)' \
+		'      - name: Verify the Authenticode signature' $'      - run: echo "/tmp/bin" >> "$GITHUB_PATH"\n      - name: Verify the Authenticode signature' \
+		'writes GITHUB_ENV or GITHUB_PATH'
+	mutant 'the installer signature check after an action that can export env (#871 review)' \
+		'      - name: Verify the Authenticode signature' $'      - uses: someone/setup-tools@0123456789012345678901234567890123456789\n      - name: Verify the Authenticode signature' \
+		'before the signature check (only checkout and download-artifact)'
+	mutant 'the installer signature check in a container (#871 review)' \
+		$'  verify-windows:\n    needs: [resolve, sign-windows]\n' $'  verify-windows:\n    needs: [resolve, sign-windows]\n    container: ubuntu:24.04\n' \
+		'runs in a container'
 	unset MUTANT_MODE MUTANT_FROM
 }
 # The two digest checks, executed verbatim.
@@ -2826,6 +2964,204 @@ else
 		refuse_case "$job" "$script" 1 false false TRUE "refuses the hatch spelled TRUE"
 	done
 fi
+
+echo
+echo "an empty signer pin fails a real run, at every build and check that uses it (#922)"
+pin_files=("$SIDECAR_WORKFLOW" "$INSTALLER_WORKFLOW")
+for f in "${HERE}"/../workflows/*.yml; do
+	case "$(basename "$f")" in sidecar-release.yml | installer-release.yml) ;; *) pin_files+=("$f") ;; esac
+done
+[ "${#pin_files[@]}" -ge 5 ] || no "found the other workflows to scan for signer pins" "${pin_files[*]}"
+for f in "${pin_files[@]}"; do
+	found="$(YQ_FILE="$f" yq pins)" || {
+		no "$(basename "$f"): pin gate check ran" "the bun helper failed"
+		continue
+	}
+	if [ -z "$found" ]; then
+		ok "$(basename "$f"): every pinned build and post-sign check runs the pin gate first, from the repository variables"
+	else
+		no "$(basename "$f"): pin gate sites" "$found"
+	fi
+done
+# shellcheck disable=SC2016 # every mutant is literal workflow text.
+{
+	MUTANT_MODE=pins
+	MUTANT_FROM="$INSTALLER_WORKFLOW"
+	mutant 'the installer Windows build back to warning on an empty pin (#922)' \
+		$'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          export CC=' $'          [ -n "${SIGNING_PUBLISHER_CN}" ] || echo "::warning::unpinned"\n          export CC=' \
+		'build-windows: step "Build installer" does not run require-signing-pin.sh'
+	mutant 'the installer Windows build pin gate told to carry on (#922)' \
+		$'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          export CC=' $'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe || true\n          export CC=' \
+		'build-windows: step "Build installer" does not run require-signing-pin.sh'
+	mutant 'the installer Windows build escape hatch fixed to true (#922)' \
+		$'          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}\n          ALLOW_UNPINNED_WINDOWS: ${{ vars.ALLOW_UNPINNED_WINDOWS }}\n        run: |\n          set -euo pipefail\n          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          export' $'          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}\n          ALLOW_UNPINNED_WINDOWS: "true"\n        run: |\n          set -euo pipefail\n          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          export' \
+		'does not take ALLOW_UNPINNED_WINDOWS from vars.ALLOW_UNPINNED_WINDOWS'
+	mutant 'the installer Windows build told it is a dry run (#922)' \
+		$'  build-windows:\n' $'  build-windows:\n    env:\n      DRY_RUN: "true"\n' \
+		'build-windows: the job env sets DRY_RUN'
+	mutant 'the installer macOS build pin gate dropped (#922)' \
+		$'          ../.github/scripts/require-signing-pin.sh APPLE_TEAM_ID ALLOW_UNPINNED_MACOS "Install Jarvis.app"\n' '' \
+		'build-macos: step "Build universal installer app" does not run require-signing-pin.sh'
+	mutant 'the installer signature check verifying before the pin gate (#922)' \
+		$'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          scripts/sign-windows.sh --verify-only "${RUNNER_TEMP}/signed/Jarvis-Setup.exe"' $'          scripts/sign-windows.sh --verify-only "${RUNNER_TEMP}/signed/Jarvis-Setup.exe"\n          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe' \
+		'verify-windows: step "Verify the Authenticode signature" does its work before the pin gate'
+	mutant 'the installer macOS build gated on the Windows hatch (#922)' \
+		'../.github/scripts/require-signing-pin.sh APPLE_TEAM_ID ALLOW_UNPINNED_MACOS' '../.github/scripts/require-signing-pin.sh APPLE_TEAM_ID ALLOW_UNPINNED_WINDOWS' \
+		'build-macos: step "Build universal installer app" does not run require-signing-pin.sh APPLE_TEAM_ID ALLOW_UNPINNED_MACOS'
+	mutant 'the installer signature check back to warning on an empty CN (#922)' \
+		$'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          scripts/sign-windows.sh' $'          scripts/sign-windows.sh' \
+		'verify-windows: step "Verify the Authenticode signature" does not run require-signing-pin.sh'
+	mutant 'the installer Windows build with errexit turned off before the gate (#922 review)' \
+		$'          set -euo pipefail\n          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          export CC=' $'          set -euo pipefail\n          set +e\n          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          export CC=' \
+		'not straight after set -euo pipefail'
+	mutant 'the installer Windows build gate continued onto an || true line (#922 review)' \
+		$'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          export CC=' $'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe \\\n            || true\n          export CC=' \
+		'build-windows: step "Build installer" does not run require-signing-pin.sh'
+	mutant 'the installer macOS build exporting the hatch in its script (#922 review)' \
+		$'          ../.github/scripts/require-signing-pin.sh APPLE_TEAM_ID ALLOW_UNPINNED_MACOS "Install Jarvis.app"\n' $'          ../.github/scripts/require-signing-pin.sh APPLE_TEAM_ID ALLOW_UNPINNED_MACOS "Install Jarvis.app"\n          export DRY_RUN=true\n' \
+		'assigns what the pin gate reads'
+	mutant 'the installer signature check turning errexit off after the gate (#922 review)' \
+		$'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          scripts/sign-windows.sh' $'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          set +o errexit\n          scripts/sign-windows.sh' \
+		'turns errexit off'
+	mutant 'the installer signature check without set -e (#922)' \
+		$'        run: |\n          set -euo pipefail\n          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          scripts/sign-windows.sh' $'        run: |\n          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          scripts/sign-windows.sh' \
+		'does not start with set -euo pipefail'
+	MUTANT_FROM="$SIDECAR_WORKFLOW"
+	mutant 'the sidecar macOS legs without their escape hatch variable (#922)' \
+		$'          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}\n          ALLOW_UNPINNED_MACOS: ${{ vars.ALLOW_UNPINNED_MACOS }}\n' $'          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}\n          ALLOW_UNPINNED_MACOS: "true"\n' \
+		'build-sidecar-darwin-arm64: step "Build sidecar (${{ matrix.goos }}/${{ matrix.goarch }})" does not take ALLOW_UNPINNED_MACOS'
+	mutant 'the sidecar macOS legs given a team id from somewhere else (#922)' \
+		'          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}' '          APPLE_TEAM_ID: ${{ inputs.team }}' \
+		'does not take APPLE_TEAM_ID from vars.APPLE_TEAM_ID'
+	mutant 'the sidecar Windows build hatch dropped (#922)' \
+		$'          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}\n          ALLOW_UNPINNED_WINDOWS: ${{ vars.ALLOW_UNPINNED_WINDOWS }}\n        run: ../.github/scripts/build-sidecar.sh' $'          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}\n        run: ../.github/scripts/build-sidecar.sh' \
+		'build-sidecar-windows: step "Build sidecar (windows/amd64)" does not take ALLOW_UNPINNED_WINDOWS'
+	mutant 'the sidecar Windows build told to carry on past its pin gate (#922)' \
+		$'          ALLOW_UNPINNED_WINDOWS: ${{ vars.ALLOW_UNPINNED_WINDOWS }}\n        run: ../.github/scripts/build-sidecar.sh\n' $'          ALLOW_UNPINNED_WINDOWS: ${{ vars.ALLOW_UNPINNED_WINDOWS }}\n        run: ../.github/scripts/build-sidecar.sh || true\n' \
+		'build-sidecar-windows: step "Build sidecar (windows/amd64)" is not exactly ../.github/scripts/build-sidecar.sh'
+	mutant 'the sidecar signature check pin gate dropped (#922)' \
+		$'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS "${SIDECAR_BIN}.exe"\n' '' \
+		'verify-sidecar-windows: step "Verify the Authenticode signature" does not run require-signing-pin.sh'
+	mutant 'the sidecar macOS leg told it is a linux build (#922 review)' \
+		$'            npm_pkg: darwin-arm64\n            runner: macos-latest\n            setup: darwin\n' $'            npm_pkg: darwin-arm64\n            runner: macos-latest\n            setup: linux\n' \
+		'build-sidecar-darwin-arm64: builds with SETUP'
+	mutant 'a new sidecar job linking a pin outside the gate (#922 review)' \
+		$'  # --- Windows: cross-compile (no OIDC) ---\n' $'  sneaky:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Build\n        run: go build -ldflags "-X x.expectedTeamID=" .\n  # --- Windows: cross-compile (no OIDC) ---\n' \
+		'sneaky: step "Build" links a signer pin'
+	mutant 'the sidecar signature check told it is a dry run (#922)' \
+		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n' $'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    env:\n      DRY_RUN: "true"\n' \
+		'verify-sidecar-windows: the job env sets DRY_RUN'
+	unset MUTANT_MODE MUTANT_FROM
+}
+# The gate itself, executed against every case.
+PIN_GATE="${HERE}/require-signing-pin.sh"
+# pin_case <want rc> <label> <text the log must carry> <args...> -- [VAR=value ...]
+pin_case() {
+	local want="$1" label="$2" text="$3"
+	shift 3
+	local args=()
+	while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+		args+=("$1")
+		shift
+	done
+	[ "${1:-}" = "--" ] && shift
+	env -i PATH="$PATH" "$@" bash "$PIN_GATE" ${args[@]+"${args[@]}"} >"${WORK}/pin.log" 2>&1
+	local rc=$?
+	if [ "$rc" != "$want" ]; then
+		no "pin gate: $label" "exit ${rc}, wanted ${want}: $(cat "${WORK}/pin.log")"
+	elif [ -n "$text" ] && ! grep -qF -- "$text" "${WORK}/pin.log"; then
+		no "pin gate: $label, saying '${text}'" "$(cat "${WORK}/pin.log")"
+	elif [ "$want" = 1 ] && [ "$(grep -c '^::error::' "${WORK}/pin.log")" -ne 1 ]; then
+		no "pin gate: $label, with exactly one ::error::" "$(cat "${WORK}/pin.log")"
+	elif [ "$want" = 0 ] && grep -q '^::error::' "${WORK}/pin.log"; then
+		no "pin gate: $label, with no ::error::" "$(cat "${WORK}/pin.log")"
+	else
+		ok "pin gate: $label"
+	fi
+}
+for pair in "SIGNING_PUBLISHER_CN:ALLOW_UNPINNED_WINDOWS:Usejarvis Inc." "APPLE_TEAM_ID:ALLOW_UNPINNED_MACOS:ABCDE12345"; do
+	P="${pair%%:*}"
+	rest="${pair#*:}"
+	H="${rest%%:*}"
+	V="${rest#*:}"
+	pin_case 0 "$P set passes a real run" "" "$P" "$H" thing -- "$P=$V" DRY_RUN=false
+	pin_case 0 "$P set with $H also set says the hatch changed nothing" "::warning::${H} is set but ${P} is configured" "$P" "$H" thing -- "$P=$V" "$H=true" DRY_RUN=false
+	pin_case 1 "$P empty fails a real run" "::error::${P} is empty" "$P" "$H" thing -- "$P=" DRY_RUN=false
+	pin_case 1 "$P empty fails a real run and names the hatch" "set the repository variable ${H} to true" "$P" "$H" thing -- "$P=" DRY_RUN=false
+	pin_case 1 "$P unset fails a run that does not say it is a dry run" "::error::${P} is empty" "$P" "$H" thing --
+	# Only "" is empty to a client; anything else is linked as it stands, so
+	# a malformed pin fails every run, the hatch and a dry run included.
+	for bad in "   " " ${V}" "${V} " "${V}\"x" "${V}'x" "${V}\\x" $'A\tB' $'\u00a0'"${V}" "${V}"$'\u200b'; do
+		for extra in DRY_RUN=false DRY_RUN=true "$H=true"; do
+			pin_case 1 "$P $(printf '%q' "$bad") is refused as malformed ($extra)" "::error::${P} is set but malformed" "$P" "$H" thing -- "$P=$bad" "$extra"
+		done
+	done
+	pin_case 0 "$P empty lets a dry run continue" "a real release would stop here unless ${H} is true" "$P" "$H" thing -- "$P=" DRY_RUN=true
+	pin_case 0 "$P empty ships unpinned on purpose with $H=true" "Shipping it unpinned because ${H} is true" "$P" "$H" thing -- "$P=" "$H=true" DRY_RUN=false
+	for h in TRUE True 1 yes " true" "true " false; do
+		pin_case 1 "$P empty refuses $H spelled $(printf '%q' "$h")" "::error::" "$P" "$H" thing -- "$P=" "$H=$h" DRY_RUN=false
+	done
+	for d in TRUE 1 yes " true"; do
+		pin_case 1 "$P empty refuses DRY_RUN spelled $(printf '%q' "$d")" "::error::" "$P" "$H" thing -- "$P=" "DRY_RUN=$d"
+	done
+done
+for bad in abcde12345 ABCDE1234 ABCDE123456 ABCDE-1234; do
+	pin_case 1 "APPLE_TEAM_ID $bad is not a team id" "ten upper-case letters and digits" APPLE_TEAM_ID ALLOW_UNPINNED_MACOS thing -- "APPLE_TEAM_ID=$bad" DRY_RUN=true
+done
+# A non-ASCII capital, under a locale whose [A-Z] would match it.
+pin_case 1 "APPLE_TEAM_ID with a non-ASCII capital is not a team id, in a UTF-8 locale" "::error::APPLE_TEAM_ID is set but malformed" APPLE_TEAM_ID ALLOW_UNPINNED_MACOS thing -- $'APPLE_TEAM_ID=\u00c4BCDE1234X' LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 DRY_RUN=true
+pin_case 1 "the Windows hatch does not unpin macOS" "::error::APPLE_TEAM_ID is empty" APPLE_TEAM_ID ALLOW_UNPINNED_MACOS thing -- APPLE_TEAM_ID= ALLOW_UNPINNED_WINDOWS=true DRY_RUN=false
+pin_case 2 "refuses a crossed pair" "does not know the pair" SIGNING_PUBLISHER_CN ALLOW_UNPINNED_MACOS thing -- SIGNING_PUBLISHER_CN= ALLOW_UNPINNED_MACOS=true DRY_RUN=false
+pin_case 2 "refuses some other variable named as the hatch" "does not know the pair" SIGNING_PUBLISHER_CN DRY_RUN thing -- SIGNING_PUBLISHER_CN= DRY_RUN=true
+pin_case 2 "refuses a call without what it guards" "usage" SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS -- SIGNING_PUBLISHER_CN=x
+
+# build-sidecar.sh runs the gate before it compiles, for each pinned target.
+# Stubs for go (writes the -ldflags into the output, so the pin check after
+# the build sees it) and strings (prints the file), in a sidecar/ of its own.
+mkdir -p "${WORK}/bs/bin" "${WORK}/bs/sidecar"
+printf '1.2.3\n' >"${WORK}/bs/sidecar/VERSION"
+cat >"${WORK}/bs/bin/go" <<'EOF'
+#!/usr/bin/env bash
+out="" ld=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in -o) out="$2"; shift 2 ;; -ldflags) ld="$2"; shift 2 ;; *) shift ;; esac
+done
+printf 'built\n' >>"$GO_LOG"
+printf '%s\n' "$ld" >"$out"
+EOF
+cat >"${WORK}/bs/bin/strings" <<'EOF'
+#!/usr/bin/env bash
+cat "$1"
+EOF
+chmod +x "${WORK}/bs/bin/go" "${WORK}/bs/bin/strings"
+# bs_case <want 0|1> <built yes|no> <label> [VAR=value ...]
+bs_case() {
+	local want="$1" built="$2" label="$3"
+	shift 3
+	rm -f "${WORK}/bs/go.log" "${WORK}/bs/sidecar/out"
+	(cd "${WORK}/bs/sidecar" && env -i PATH="${WORK}/bs/bin:$PATH" GO_LOG="${WORK}/bs/go.log" GOARCH=amd64 OUT=out "$@" \
+		bash "${HERE}/build-sidecar.sh") >"${WORK}/bs/log" 2>&1
+	local rc=$?
+	local did=no
+	[ -s "${WORK}/bs/go.log" ] && did=yes
+	if { [ "$want" = 0 ] && [ "$rc" -ne 0 ]; } || { [ "$want" != 0 ] && [ "$rc" -eq 0 ]; }; then
+		no "build-sidecar.sh: $label" "exit ${rc}: $(cat "${WORK}/bs/log")"
+	elif [ "$did" != "$built" ]; then
+		no "build-sidecar.sh: $label" "go build ran: ${did}, wanted ${built}: $(cat "${WORK}/bs/log")"
+	else
+		ok "build-sidecar.sh: $label"
+	fi
+}
+bs_case 1 no "refuses a real Windows build with no publisher pin, before compiling" GOOS=windows SETUP=windows-cross SIGNING_PUBLISHER_CN= DRY_RUN=false
+bs_case 0 yes "builds Windows unpinned on a dry run" GOOS=windows SETUP=windows-cross SIGNING_PUBLISHER_CN= DRY_RUN=true
+bs_case 0 yes "builds Windows unpinned with ALLOW_UNPINNED_WINDOWS=true" GOOS=windows SETUP=windows-cross SIGNING_PUBLISHER_CN= ALLOW_UNPINNED_WINDOWS=true DRY_RUN=false
+bs_case 0 yes "builds Windows with the publisher pin" GOOS=windows SETUP=windows-cross "SIGNING_PUBLISHER_CN=Usejarvis Inc." DRY_RUN=false
+if grep -qF "expectedPublisherCN=Usejarvis Inc." "${WORK}/bs/sidecar/out" 2>/dev/null; then ok "build-sidecar.sh: links the publisher pin"; else no "build-sidecar.sh: links the publisher pin" "$(cat "${WORK}/bs/sidecar/out" 2>/dev/null)"; fi
+bs_case 1 no "refuses a real macOS build with no team pin, before compiling" GOOS=darwin SETUP=darwin APPLE_TEAM_ID= DRY_RUN=false
+bs_case 1 no "refuses a real macOS build with only the Windows hatch set" GOOS=darwin SETUP=darwin APPLE_TEAM_ID= ALLOW_UNPINNED_WINDOWS=true DRY_RUN=false
+bs_case 0 yes "builds macOS unpinned with ALLOW_UNPINNED_MACOS=true" GOOS=darwin SETUP=darwin APPLE_TEAM_ID= ALLOW_UNPINNED_MACOS=true DRY_RUN=false
+bs_case 0 yes "builds macOS with the team pin" GOOS=darwin SETUP=darwin APPLE_TEAM_ID=ABCDE12345 DRY_RUN=false
+bs_case 0 yes "builds Linux, which has no pin, on a real run" GOOS=linux SETUP=linux DRY_RUN=false
 
 echo
 echo "sink executed without the gate in front of it"
