@@ -5,7 +5,7 @@ import { uuid } from '../../lib/uuid';
 import type { WebSocketChatAdapter, WSMessage } from '../../hooks/useWebSocket';
 import type { ConversationTabs } from '../../../../src/vault/conversation-lifecycle';
 import { ChatApiError, conversationApi, isMessagePage, type ConversationApi } from './api';
-import { ConversationStore, type ChatSnapshot } from './store';
+import { ConversationStore, type ChatSnapshot, type StoragePort } from './store';
 
 export interface ChatClientState {
   attachmentsEnabled: boolean;
@@ -36,7 +36,7 @@ export class BriefConversationClient {
   private outbox = new Map<string, BriefSendTurn>();
   private queue: Promise<unknown> = Promise.resolve();
   readonly adapter: WebSocketChatAdapter;
-  constructor(private readonly api: ConversationApi = conversationApi(), storage?: Pick<Storage, 'getItem' | 'setItem'>, files: AttachmentApi = attachmentApi()) {
+  constructor(private readonly api: ConversationApi = conversationApi(), storage?: StoragePort, files: AttachmentApi = attachmentApi()) {
     this.store = new ConversationStore(storage);
     this.attachments = new DraftAttachments(this.store, files, () => this.state.mode === 'scoped' && this.state.attachmentsEnabled,
       id => [...this.outbox.values()].some(input => input.attachmentIds?.includes(id)));
