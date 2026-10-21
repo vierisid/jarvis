@@ -205,6 +205,45 @@ jobs:
   # not configured, unsigned on a dry run or with ALLOW_UNSIGNED_WINDOWS set,
   # and otherwise not at all (#869: see the readiness step). The post-sign
   # check runs in verify-windows (#817).
+  #
+  # Who can sign (#819). The token this job mints is exchanged for the KMS
+  # signing identity only if the Workload Identity provider behind
+  # vars.GCP_WORKLOAD_IDENTITY_PROVIDER accepts it, and that provider, not
+  # this file, decides who signs. Its attribute condition lives in GCP, where
+  # no review or test here can see it; as set on 2026-10-09 it is:
+  #   assertion.repository=='vierisid/jarvis' && (
+  #     assertion.job_workflow_ref.startsWith('vierisid/jarvis/.github/workflows/sidecar-release.yml@refs/tags/v')
+  #     || assertion.job_workflow_ref.startsWith('vierisid/jarvis/.github/workflows/sidecar-release.yml@refs/heads/main')
+  #     || assertion.job_workflow_ref.startsWith('vierisid/jarvis/.github/workflows/installer-release.yml@refs/tags/installer-v')
+  #     || assertion.job_workflow_ref.startsWith('vierisid/jarvis/.github/workflows/installer-release.yml@refs/heads/main'))
+  # It admits this file when run from main or an installer-v* tag (and the
+  # other signing workflow likewise; see there). By its text it refuses a
+  # dispatch from a branch such as throwaway, and another repository calling
+  # the public reusable sidecar-release.yml (assertion.repository is the
+  # caller). It does NOT close every branch path, so do not rely on it for
+  # that:
+  #   * the main clauses are startsWith prefix matches, so a branch whose
+  #     name starts with main (main-x, maint) passes them;
+  #   * a branch workflow calling sidecar-release.yml@main federates as
+  #     the signer too (see that file).
+  # Both need write access, like the tag path below. Exact equality for main
+  # in the condition would close the first; an environment gate keyed on
+  # github.ref, on BOTH signing jobs, would close both. Only the allow side
+  # has been exercised (every dry run); the deny side has not, and a test of
+  # it should try a main-prefixed branch and a remote-ref call as well as a
+  # plain branch. Renaming this file, moving this job or changing the tag
+  # prefix needs the condition changed with it, or signing fails (403).
+  #
+  # Deliberately NOT gated (owner decision on #819): this job has no
+  # environment:, and a dry run signs for real, because the dry run is the
+  # only proof before a release that signing works, and main is reviewed.
+  # Accepted while the only write collaborators are the two owners: the two
+  # branch paths above, and that a write collaborator can create an
+  # installer-v* tag on any commit (tag creation is left open for release.yml,
+  # #679) and sign from it. When a third collaborator gets write, put both
+  # signing jobs behind the release environment, keyed on github.ref and not
+  # on dry_run: a dry dispatch on a fresh tag would otherwise land in release-
+  # dry-run, which has no rules, and sign.
   sign-windows:
     needs: [resolve, build-windows]
     if: needs.resolve.outputs.should_release == 'true'
