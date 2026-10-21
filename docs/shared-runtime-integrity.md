@@ -78,6 +78,19 @@ lockfile and marker match; its contents are not re-verified. A piece from an
 earlier build that wrote there would be compiled into the next engine, and
 pinned correctly. The same holds for the Bun install cache.
 
+### The license gate and the notices (#971)
+
+The license gate (step 3b in the script) scans `<out>/pieces` after `bun
+install` and before any piece runs, so it judges the tree npm delivered. The
+pieces then run at the builder's uid and can write into that tree, so the
+gate does not vouch for the tree as it stands after extraction; a piece that
+wanted to could add or rewrite packages. The notices are rendered in memory
+before step 4 and written afterwards with an exclusive create (`wx`), after
+checking `<out>/pieces` is still a real directory: a file or link a piece
+planted at `THIRD_PARTY_NOTICES.md` fails the build instead of being followed
+(for example onto `main.js`). Like the summary, the notices file is not a
+source for anything the host pins.
+
 ## What install-version must do (hosting repo, not this one)
 
 The host already runs the builder as `jarvis-build`, quiesces that account,

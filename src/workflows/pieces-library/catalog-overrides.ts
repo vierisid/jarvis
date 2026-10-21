@@ -13,6 +13,9 @@
  *   - `EXCLUDED`         Pieces we never want to ship -- deprecated upstream,
  *                        known to crash on import, license issues, etc.
  *                        These are dropped from the final CATALOG entirely.
+ *   - `SHARED_BUILD_EXCLUDED` Pieces left out of the hosted shared tree only,
+ *                        because the license policy denies something they
+ *                        install (#971).
  *   - `VERSION_PIN`      Hold-back pins for pieces whose latest release is
  *                        broken. Overrides the generated versionRange +
  *                        vettedVersion. Drop the entry once the next upstream
@@ -90,6 +93,22 @@ export const VERIFIED_METADATA: Record<string, { vettedAt: string }> = {
 export const EXCLUDED: ReadonlySet<string> = new Set<string>([
   // (empty -- add ids with a comment explaining why)
 ]);
+
+/**
+ * Pieces left out of the HOSTED shared tree only, as id -> reason (#971).
+ * scripts/build-shared-runtime.ts fails on any package the license policy
+ * denies, because that tree is what we run for every tenant. A piece listed
+ * here is not installed there and not offered in a host-managed Library; a
+ * self-managed user can still install it, from npm, onto their own machine.
+ * Each reason names the packages and the chain that put it here, so a later
+ * catalog sync can tell when it no longer holds.
+ */
+export const SHARED_BUILD_EXCLUDED: Readonly<Record<string, string>> = {
+  actualbudget:
+    "@activepieces/piece-actualbudget@0.1.9 > @actual-app/api@26.5.2 > @actual-app/core@26.5.2 " +
+    "pulls hyperformula@3.5.0 (GPL-3.0-only) and ua-parser-js@2.0.10 (AGPL-3.0-or-later), " +
+    "measured on the full catalog install 2026-10-21",
+};
 
 /**
  * Verified upgrades a person has read and signed off, as id -> version.

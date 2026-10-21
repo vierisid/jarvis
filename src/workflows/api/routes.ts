@@ -109,7 +109,7 @@ import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers
 import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
 import type { PieceLookup } from "../runtime/piece-catalog";
 import { isCommunityPiece } from "../runtime/step-admission";
-import { CATALOG, findCatalogEntry } from "../pieces-library/catalog";
+import { CATALOG, findCatalogEntry, sharedBuildCatalog } from "../pieces-library/catalog";
 import { piecesManagedByHost } from "../pieces-library/shared";
 import {
   installPiece,
@@ -986,10 +986,12 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // hidden by the client, so that no client can render them: not a
           // stale cached bundle, not a future one that forgets to check
           // `managed`, not curl.
+          // Only what the host's shared build installed: it leaves out the
+          // pieces whose dependencies the license policy denies (#971).
           if (managed) {
             return ok({
               managed: true,
-              entries: CATALOG.map((entry) => ({
+              entries: sharedBuildCatalog().map((entry) => ({
                 id: entry.id,
                 // Kept because the Library's search matches on it -- users
                 // type "activepieces" or a package name as readily as a

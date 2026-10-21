@@ -26,6 +26,7 @@ import { GENERATED, type GeneratedCatalogEntry } from "./catalog-generated";
 import {
   DESCRIPTION_OVERRIDE,
   EXCLUDED,
+  SHARED_BUILD_EXCLUDED,
   SIZE_OVERRIDE,
   VERIFIED,
   VERIFIED_METADATA,
@@ -159,4 +160,14 @@ let catalogByIdCache: Map<string, CatalogEntry> | null = null;
 export function catalogById(): Map<string, CatalogEntry> {
   catalogByIdCache ??= new Map(CATALOG.map((entry) => [entry.id, entry]));
   return catalogByIdCache;
+}
+
+/**
+ * The pieces a host-managed install has: the catalog minus
+ * SHARED_BUILD_EXCLUDED (#971). scripts/build-shared-runtime.ts installs
+ * exactly these into the shared tree, and the managed Library lists exactly
+ * these, so a tenant is never offered a piece the host did not install.
+ */
+export function sharedBuildCatalog(): CatalogEntry[] {
+  return CATALOG.filter((entry) => !Object.hasOwn(SHARED_BUILD_EXCLUDED, entry.id));
 }

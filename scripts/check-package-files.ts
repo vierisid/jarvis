@@ -73,6 +73,10 @@ export const REQUIRED: Requirement[] = [
     why: "bundleHash() and every engine build read it by path (#836); without it no installed daemon can name or build its engine bundle",
   },
   {
+    path: "src/workflows/activepieces/LICENSE.activepieces",
+    why: "the shared build's license gate reads it by path and reproduces it in the hosted pieces notices (#971); without it scripts/build-shared-runtime.ts fails after installing the catalog",
+  },
+  {
     path: "src/workflows/runner/engine-runtime/engine-bunfig.toml",
     why: "spawnEngine reads it by path and refuses to start any engine without it (#863)",
   },

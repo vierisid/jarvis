@@ -2182,8 +2182,9 @@ describe("workflow API: pieces library on a MANAGED install", () => {
     }
   }
 
-  test("GET offers the WHOLE catalog, with no install state and no detail", async () => {
+  test("GET offers the WHOLE shared-build catalog, with no install state and no detail", async () => {
     const { CATALOG } = await import("../pieces-library/catalog");
+    const { SHARED_BUILD_EXCLUDED } = await import("../pieces-library/catalog-overrides");
     await withTempPiecesDir(async () => {
       const r = createWorkflowRoutes({ sharedPiecesDir: MANAGED_DIR });
       const get = r["/api/workflows/pieces/library"]?.GET;
@@ -2193,8 +2194,13 @@ describe("workflow API: pieces library on a MANAGED install", () => {
       );
       expect(status).toBe(200);
       expect(body.managed).toBe(true);
-      // The whole catalog is available -- not the subset a user installed.
-      expect(body.entries.length).toBe(CATALOG.length);
+      // The whole catalog the host installed is available -- not the subset a
+      // user installed. That is the catalog minus the pieces the shared build
+      // leaves out for their licenses (#971), which a tenant could not run.
+      const left = Object.keys(SHARED_BUILD_EXCLUDED);
+      const ids = new Set(body.entries.map((e: { id: string }) => e.id));
+      for (const id of left) expect(ids.has(id)).toBe(false);
+      expect(ids).toEqual(new Set(CATALOG.map((e) => e.id).filter((id) => !left.includes(id))));
       for (const entry of body.entries) {
         // What the UI still binds to.
         expect(typeof entry.id).toBe("string");

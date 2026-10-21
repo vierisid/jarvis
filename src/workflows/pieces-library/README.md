@@ -24,6 +24,9 @@ The CATALOG export in `catalog.ts` is a merge of two inputs:
    - `VERIFIED` -- the set of ids that get the verified tier
    - `VERIFIED_METADATA` -- per-id audit dates
    - `EXCLUDED` -- ids we never want to ship (deprecated, broken, license)
+   - `SHARED_BUILD_EXCLUDED` -- ids left out of the hosted shared tree only,
+     with the reason, because the license policy denies something they
+     install (see "Licenses of what bun installs" below)
    - `VERSION_PIN` -- hold-back pins for known-broken upstream releases
    - `SIZE_OVERRIDE` -- hand-measured disk-after-install sizes
    - `DESCRIPTION_OVERRIDE` -- better descriptions where upstream's is poor
@@ -96,7 +99,8 @@ exist here?", and that setting IS the deployment's answer.
 When it is set:
 
 - `GET /api/workflows/pieces/library` returns `managed: true` and the whole
-  catalog as plain entries — id, package, name, description, tier. No install
+  shared-build catalog (`sharedBuildCatalog()`: the catalog minus
+  `SHARED_BUILD_EXCLUDED`) as plain entries -- id, package, name, description, tier. No install
   state (everything is installed, so the badge would be noise on every row)
   and none of the install-decision detail: version, vetted date, size,
   license, source. Those are dropped from the PAYLOAD, not hidden by the
@@ -332,6 +336,44 @@ crashes):
 - Pin tighter immediately: switch `^` to `~`, or pin exact. Document the
   reason in a comment next to the entry.
 - A future Jarvis release widens it back once upstream fixes.
+
+## Licenses of what bun installs (#971)
+
+The catalog test checks each piece's source at the pinned upstream SHA. What
+bun installs can differ: a caret range resolves to a newer release, and every
+piece pulls its own dependency tree. `license-policy.ts` decides each
+installed package from the `package.json` on disk, and `license-scan.ts`
+walks a whole `node_modules` tree (hoisted, nested, or bun's isolated store):
+
+- Allowed: permissive licenses, plus LGPL and MPL used unmodified (listed on
+  their own in the generated notices).
+- A package with no usable declaration is denied unless its exact
+  `name@version` is in `REVIEWED_LICENSES`, with the declaration it overrides,
+  the license a person found, and why. That license must pass the policy too,
+  and a license the policy knows and denies (GPL, AGPL, SSPL, ...), parsed or
+  named in free text, cannot be reviewed into an allowed one.
+- Catalog pieces and `@activepieces/{shared,pieces-framework,pieces-common}`
+  are published without a license field; they take the monorepo MIT, as the
+  catalog test asserts for each piece. Only when the field is absent, and
+  only for a package installed under that name and resolved to it in
+  `bun.lock`: a package's identity comes from where bun put it, not from
+  what its package.json claims.
+- A `node_modules` a package ships inside its own tarball (protobufjs ships
+  one under `cli/`) is scanned too; bun.lock does not list those, and they
+  never get the upstream presumption.
+
+`scripts/build-shared-runtime.ts` runs the scan on the hosted tree right
+after `bun install` and before any piece runs, refuses the build on any
+violation (printing each package and the chain that installed it), and
+writes `THIRD_PARTY_NOTICES.md` into the tree when it passes. The weekly
+`sync-pieces-catalog` run does the same install and scan on the regenerated
+catalog (`scripts/check-piece-licenses.ts --install <dir>`) and fails first.
+When it does: fix or pin the dependency, add a reviewed entry if the package
+simply lacks a declaration, or leave the piece out of the hosted tree with
+`SHARED_BUILD_EXCLUDED` and a reason.
+
+A self-managed install fetches pieces from npm onto the user's own machine
+and is not gated.
 
 ## Removing a piece
 
