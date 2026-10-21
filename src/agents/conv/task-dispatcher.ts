@@ -121,7 +121,14 @@ export class TaskDispatcher {
    * subscribers see each transition so the conv orchestrator can surface
    * UI events.
    */
-  async dispatch(request: TaskRequest, turn: TurnContext): Promise<TaskResultEnvelope> {
+  async dispatch(
+    request: TaskRequest,
+    turn: TurnContext,
+    // Told the record's id as soon as it exists, before it starts running, so
+    // a caller can tell its own task from every other one in the shared
+    // registry (#915). The id cannot be known any earlier.
+    onCreated?: (record: TaskRecord) => void,
+  ): Promise<TaskResultEnvelope> {
     turn.signal?.throwIfAborted();
     const subsystem = `task_${request.template}`;
     // A scoped task must run on the USER's words. The fallback below
@@ -146,6 +153,7 @@ export class TaskDispatcher {
       };
     }
     const record = this.registry.create(request, subsystem, turn.contextKey);
+    onCreated?.(record);
     const abort = new AbortController();
     this.registry.setAbortController(record.id, abort);
     this.registry.transition(record.id, 'running');
