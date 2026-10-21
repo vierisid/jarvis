@@ -34,6 +34,7 @@ import { getToolFilterPolicy } from '../actions/tools/tool-relevance/policy.ts';
 import { isInvariantTrigger } from '../actions/tools/tool-relevance/authority-classes.ts';
 import { toolDefToLLMTool, BUILTIN_TOOLS } from '../actions/tools/builtin.ts';
 import { withTemplateDeliveryScope } from '../actions/tools/template-delivery-scope.ts';
+import { forgetSnapshotReader } from '../actions/tools/sidecar-route.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import type { AuthorityEngine, AuthorityProfile } from '../authority/engine.ts';
 import type { AuditTrail } from '../authority/audit.ts';
@@ -666,8 +667,9 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
    * second would leave exactly the bug this closes, on the path nobody looks
    * at -- an approved sub-agent call recording its delivery against the chat.
    */
+  const deliveryScopeId = `sub-agent:${agentId}`;
   const inDeliveryScope = <T>(fn: () => Promise<T>): Promise<T> =>
-    withTemplateDeliveryScope(`sub-agent:${agentId}`, fn);
+    withTemplateDeliveryScope(deliveryScopeId, fn);
   /**
    * Run one tool dispatch as this agent's call (#1014), so a spawn or stop it
    * reaches is judged as this agent, and a child it starts is capped by it and
@@ -1001,6 +1003,9 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
   } finally {
     stopListening?.();
     agent.idle();
+    // The remote snapshot generations this spawn recorded (#879): the scope id
+    // is per spawn, so no later call of this run will read them.
+    forgetSnapshotReader(deliveryScopeId);
   }
 }
 

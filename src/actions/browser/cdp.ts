@@ -128,6 +128,13 @@ export class CDPClient {
   async close(): Promise<void> {
     this.ws?.close();
     this.ws = null;
+    // Fail every call still waiting for its answer. A caller holding the
+    // snapshot lock releases it in a finally that only runs once its call
+    // settles, and the close event cannot be relied on to do this: Bun 1.3
+    // fires onclose inside ws.close(), Bun 1.4 fires it later.
+    for (const { reject } of this.pending.values()) {
+      reject(new Error('CDP connection closed'));
+    }
     this.pending.clear();
     this.eventHandlers.clear();
   }
