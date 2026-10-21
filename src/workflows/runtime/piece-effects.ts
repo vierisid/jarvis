@@ -57,11 +57,37 @@ export const PIECE_AUTH_PROPERTY = 'auth';
 /** `toolCategory` recorded for every governed piece effect. */
 export const PIECE_TOOL_CATEGORY = 'workflow-piece';
 
-/** Q-07's bounded completion-receipt protocol. These actions never park themselves. */
+/**
+ * Gmail actions that send mail and return once sent. Every Gmail `send_email`
+ * action but `request_approval_in_mail`, which sends and then parks the flow:
+ * its step re-runs on resume to read the decision, so a stored completion
+ * would hand back the first run's result instead (`governed-pieces.test.ts`
+ * pins this list against the adapter table).
+ */
+const GMAIL_TRACKED_SENDS: ReadonlySet<unknown> = new Set(['send_email', 'gmail_send_email', 'reply_to_email',
+  'gmail_reply_to_thread', 'gmail_send_draft', 'gmail_forward_message']);
+
+/**
+ * Q-07's bounded completion-receipt protocol. These actions never park
+ * themselves. Every Gmail send that returns once sent is tracked, so an engine
+ * retry of a send whose outcome is unknown is refused instead of sending again
+ * (#953 made these reachable at the default level).
+ */
 export function tracksPieceCompletion(piece: unknown, action: unknown): boolean {
-  return (piece === '@activepieces/piece-gmail' && (action === 'send_email' || action === 'gmail_send_email'))
+  return (piece === '@activepieces/piece-gmail' && GMAIL_TRACKED_SENDS.has(action))
     || (piece === '@activepieces/piece-slack' && (action === 'send_channel_message' || action === 'slack_post_message'));
 }
+
+/**
+ * #953 (owner decision): a verified piece action whose category is above the
+ * workflow's level asks for approval instead of being denied, but only for
+ * these categories and only while the owner governs them, and only when the
+ * workflow clears this floor on its own. Deletes, settings changes and
+ * installs stay denied by level; an override, a context rule or a profile
+ * deny still denies, since only a pure level shortfall is ever substituted.
+ */
+export const PIECE_ABOVE_LEVEL_ASKS: readonly ActionCategory[] = ['send_email', 'send_message', 'make_payment'];
+export const PIECE_ABOVE_LEVEL_FLOOR: ActionCategory = 'write_data';
 
 export interface GovernedPieceAdapter {
   /** Catalog id, as in `pieces-library/catalog-overrides.ts` `VERIFIED`. */

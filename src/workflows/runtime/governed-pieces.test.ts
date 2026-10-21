@@ -18,12 +18,15 @@ import { AuthorityEngine } from '../../authority/engine';
 import { AuditTrail } from '../../authority/audit';
 import { EmergencyController } from '../../authority/emergency';
 import { ApprovalManager } from '../../authority/approval';
-import { listWorkflowEffects } from '../db/repos/workflow-effect';
+import { listWorkflowEffects, saveWorkflowEffect } from '../db/repos/workflow-effect';
+import { workflowEffectId } from './effect-boundary';
 import { resumeResolvedWorkflowEffects } from './effect-approval-scheduler';
 import { CredentialResolver } from '../credentials/adapter';
 import { WorkflowEventBuffer } from './event-buffer';
 import { buildSandboxServiceBackends, type BuildServiceBackendsOptions } from './service-backends';
 import { AUTHORITY_REQUIREMENTS, type ActionCategory } from '../../roles/authority';
+import { DEFAULT_CONFIG } from '../../config/types';
+import { ABOVE_LEVEL_SUBSTITUTION } from '../../authority/tool-action-map';
 import { GOVERNED_PIECE_ADAPTERS, governedPieceTarget, governedPieceToolDefinition, governedPieceToolName, RESERVED_TARGET_KEYS, isWellFormedPieceActionName, PIECE_ACTION_NAME_MAX_CHARS, reprojectPieceInput,
   resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { defangPieceProjection } from './piece-effect-receipt';
@@ -31,6 +34,7 @@ import { digest } from './effect-context';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN, wrapUntrusted } from '../../roles/untrusted';
 import { authorizePieceDispatch, CODE_STEP_PIECE, pieceInputDigest } from './piece-effect-guard';
 import { getWaitpoint } from '../db/repos/waitpoint';
+import { isCommunityPiece } from './step-admission';
 import { WebSocketService } from '../../daemon/ws-service';
 import { SandboxApi } from '../sandbox-api/server';
 import { EngineTokenSigner } from '../sandbox-api/engine-token';
@@ -1254,5 +1258,191 @@ describe('the admission route (Q-08)', () => {
     const whole = 'a'.repeat(64);
     expect((await call(run.id, deps, { piece: GMAIL, action: 'send_email', input: {}, inputDigest: whole })).status).toBe(200);
     expect(seen).toEqual([{ piece: GMAIL, action: 'send_email', input: {}, inputDigest: whole }]);
+  });
+});
+
+describe('#953: a verified piece action above the level asks only when its category is governed', () => {
+  // The shipped Authority defaults: level 3, send_email/send_message/make_payment governed.
+  const shipped = (action: string) => {
+    const f = fixture(GMAIL, action, DEFAULT_CONFIG.authority.default_level);
+    f.authority.setGovernedCategories([...DEFAULT_CONFIG.authority.governed_categories] as ActionCategory[]);
+    return f;
+  };
+  const approvalOf = (reply: unknown) => (reply as { approval: { approvalId: string } }).approval.approvalId;
+
+  test('at the shipped defaults a Gmail send raises a card, then authorizes exactly once after approval', async () => {
+    expect(DEFAULT_CONFIG.authority.default_level).toBe(3);
+    expect(DEFAULT_CONFIG.authority.governed_categories).toContain('send_email');
+    const f = shipped('send_email');
+    const pending = await f.authorize(SEND_INPUT);
+    expect(pending).toMatchObject({ governed: true, dispatch: 'approval_required' });
+    const approvalId = approvalOf(pending);
+    expect(f.deliveredApprovals).toEqual([approvalId]);
+    const request = f.approvals.getRequest(approvalId)!;
+    expect(request.action_category).toBe('send_email');
+    // The substituted reason, so the approval learner never learns from it.
+    expect(request.reason).toContain(ABOVE_LEVEL_SUBSTITUTION);
+    expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ decision: 'approval_required', status: 'pending' });
+
+    f.approvals.approve(approvalId, 'dashboard');
+    const dispatched = await f.authorize(SEND_INPUT) as { effectId: string };
+    expect(dispatched).toMatchObject({ governed: true, dispatch: 'authorized' });
+    await expect(f.authorize(SEND_INPUT)).rejects.toThrow(/replay is blocked/);
+    expect(listWorkflowEffects(f.run.id)).toHaveLength(1);
+  });
+
+  test('a send whose category is not governed stays denied by level', async () => {
+    const f = shipped('send_email');
+    f.authority.setGovernedCategories(['send_message', 'make_payment']);
+    await expect(f.authorize(SEND_INPUT)).rejects.toThrow(/Authority level 3 is below required 7 for send_email/);
+    expect(f.approvals.getPending()).toHaveLength(0);
+  });
+
+  test('deletes and settings changes stay denied by level, even when governed', async () => {
+    for (const [action, category] of [['gmail_trash_message', 'delete_data'], ['gmail_stop_watch', 'modify_settings'],
+      ['custom_api_call', 'delete_data']] as const) {
+      const f = shipped(action);
+      f.authority.setGovernedCategories([...DEFAULT_CONFIG.authority.governed_categories as ActionCategory[], 'delete_data', 'modify_settings']);
+      await expect(f.authorize({ message_id: 'm1' })).rejects.toThrow(new RegExp(`Authority level 3 is below required 9 for ${category}`));
+      expect(f.approvals.getPending()).toHaveLength(0);
+      closeWorkflowDb(); initWorkflowDb(':memory:');
+    }
+  });
+
+  test('an override or a context rule that denies still denies', async () => {
+    const overridden = shipped('send_email');
+    overridden.authority.addOverride({ action: 'send_email', allowed: false });
+    await expect(overridden.authorize(SEND_INPUT)).rejects.toThrow(/Explicitly denied by override/);
+    expect(overridden.approvals.getPending()).toHaveLength(0);
+    closeWorkflowDb(); initWorkflowDb(':memory:');
+    const ruled = shipped('send_email');
+    ruled.authority.addContextRule({ id: 'no-mail', action: 'send_email', condition: 'always', params: {}, effect: 'deny', description: 'No mail from workflows' });
+    await expect(ruled.authorize(SEND_INPUT)).rejects.toThrow(/No mail from workflows/);
+    expect(ruled.approvals.getPending()).toHaveLength(0);
+  });
+
+  test('below the write_data floor a governed send is denied, not asked', async () => {
+    const f = fixture(GMAIL, 'send_email', 2);
+    f.authority.setGovernedCategories(['send_email']);
+    await expect(f.authorize(SEND_INPUT)).rejects.toThrow(/Authority level 2 is below required 7 for send_email/);
+    expect(f.approvals.getPending()).toHaveLength(0);
+  });
+
+  test('an approved card is refused at dispatch once the category stops being governed, or after Kill', async () => {
+    const ungoverned = shipped('send_email');
+    ungoverned.approvals.approve(approvalOf(await ungoverned.authorize(SEND_INPUT)), 'dashboard');
+    ungoverned.authority.setGovernedCategories([]);
+    await expect(ungoverned.authorize(SEND_INPUT)).rejects.toThrow(/below required 7/);
+    closeWorkflowDb(); initWorkflowDb(':memory:');
+    const killed = shipped('send_email');
+    killed.approvals.approve(approvalOf(await killed.authorize(SEND_INPUT)), 'dashboard');
+    (killed.options.emergencyController as EmergencyController).kill();
+    await expect(killed.authorize(SEND_INPUT)).rejects.toThrow(/system killed/);
+    expect(listWorkflowEffects(killed.run.id)[0]).toMatchObject({ status: 'blocked' });
+  });
+});
+
+describe('Q-07 after #953: no Gmail send is replayed by an engine retry', () => {
+  const REPLY_INPUT = { message_id: 'm1', reply_type: 'reply', body: 'Thanks, received.' };
+  const approvalOf = (reply: unknown) => (reply as { approval: { approvalId: string } }).approval.approvalId;
+  const shippedLevel = (action: string) => {
+    const f = fixture(GMAIL, action, DEFAULT_CONFIG.authority.default_level);
+    f.authority.setGovernedCategories([...DEFAULT_CONFIG.authority.governed_categories] as ActionCategory[]);
+    return f;
+  };
+
+  test('every Gmail send action except the one that parks itself is tracked', () => {
+    const sends = GOVERNED_PIECE_ADAPTERS.find((a) => a.catalogId === 'gmail')!.categories.send_email!;
+    expect(sends.filter((action) => !tracksPieceCompletion(GMAIL, action))).toEqual(['request_approval_in_mail']);
+  });
+
+  for (const action of ['reply_to_email', 'gmail_reply_to_thread', 'gmail_send_draft', 'gmail_forward_message']) {
+    test(`${action} at level 3: card, approve, one dispatch, and an engine retry is not resent`, async () => {
+      const f = shippedLevel(action);
+      const pending = await f.authorize(REPLY_INPUT);
+      expect(pending).toMatchObject({ governed: true, dispatch: 'approval_required' });
+      f.approvals.approve(approvalOf(pending), 'dashboard');
+      expect(await f.authorize(REPLY_INPUT)).toMatchObject({ governed: true, dispatch: 'authorized', effectId: expect.any(String) });
+      // The engine's "Retry on failure" asks again with no completion receipt: refused, not resent.
+      await expect(f.authorize(REPLY_INPUT)).rejects.toThrow(/replay is blocked/);
+    });
+  }
+
+  test('a recorded authorization is not handed out again once Authority denies it', async () => {
+    const f = fixture(GMAIL, 'gmail_create_draft');
+    expect(await f.authorize(SEND_INPUT)).toEqual({ governed: true, dispatch: 'authorized' });
+    expect(await f.authorize(SEND_INPUT)).toEqual({ governed: true, dispatch: 'authorized' });
+    f.authority.addOverride({ action: 'write_data', allowed: false });
+    await expect(f.authorize(SEND_INPUT)).rejects.toThrow(/Explicitly denied by override/);
+    expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'succeeded', replayRefusal: { outcome: { code: 'AUTHORITY_DENIED' } } });
+    // The refused retry is in the trail, not only on the record.
+    expect((f.options.auditTrail as AuditTrail).query({ agentId: `workflow:${f.run.id}` })
+      .filter((row) => row.authority_decision === 'denied' && row.tool_name === 'piece:gmail/gmail_create_draft')).toHaveLength(1);
+  });
+
+  test('a recorded authorization is not handed out again once Authority wants an approval it never got', async () => {
+    const f = fixture(GMAIL, 'gmail_create_draft');
+    expect(await f.authorize(SEND_INPUT)).toEqual({ governed: true, dispatch: 'authorized' });
+    f.authority.setGovernedCategories(['write_data']);
+    await expect(f.authorize(SEND_INPUT)).rejects.toThrow(/now requires approval/);
+  });
+
+  test('a tracked send whose receipt is recorded hands back its result even after Authority changes', async () => {
+    const f = shippedLevel('reply_to_email');
+    f.approvals.approve(approvalOf(await f.authorize(REPLY_INPUT)), 'dashboard');
+    const dispatched = await f.authorize(REPLY_INPUT) as { effectId: string };
+    f.backends.pieceReceipt!(f.context, dispatched.effectId, { id: 'a1b2' });
+    f.authority.addOverride({ action: 'send_email', allowed: false });
+    // Nothing is sent again, so nothing is asked again: the stored result comes back.
+    expect(await f.authorize(REPLY_INPUT)).toEqual({ governed: true, dispatch: 'completed', result: { id: 'a1b2' } });
+  });
+
+  for (const decided of [false, true]) {
+    test(`a send recorded untracked before the upgrade and never sent ends typed, its card ${decided ? 'closed' : 'denied'}`, async () => {
+      const f = shippedLevel('reply_to_email');
+      const pending = await f.authorize(REPLY_INPUT);
+      const approvalId = approvalOf(pending);
+      // What an older daemon recorded: the same step under the untracked route.
+      const tracked = listWorkflowEffects(f.run.id)[0]!;
+      const legacyId = workflowEffectId(f.run.id, 'action', [], 'piece');
+      saveWorkflowEffect({ ...tracked, id: legacyId, route: 'piece' });
+      if (decided) f.approvals.approve(approvalId, 'dashboard');
+      await expect(f.authorize(REPLY_INPUT)).rejects.toThrow(/before an upgrade changed how sends are tracked/);
+      expect(listWorkflowEffects(f.run.id).find((e) => e.id === legacyId)).toMatchObject({ status: 'blocked',
+        outcome: { code: 'WORKFLOW_UPGRADED', effect: 'not_started' } });
+      expect(f.approvals.getRequest(approvalId)).toMatchObject(decided
+        ? { status: 'executed', execution_outcome: 'blocked' } : { status: 'denied' });
+      // An engine retry of the same step repeats the typed outcome; it does not claim a send may have happened.
+      await expect(f.authorize(REPLY_INPUT)).rejects.toThrow(/before an upgrade changed how sends are tracked/);
+    });
+  }
+
+  test('the approval request mail resumes through its recorded authorization', async () => {
+    const f = shippedLevel('request_approval_in_mail');
+    const input = { receiver: 'boss@example.test', subject: 'OK?', body: 'Approve the spend?' };
+    f.approvals.approve(approvalOf(await f.authorize(input)), 'dashboard');
+    expect(await f.authorize(input)).toEqual({ governed: true, dispatch: 'authorized' });
+    // The piece parks itself after sending; on resume the engine re-runs the step.
+    expect(await f.authorize(input)).toEqual({ governed: true, dispatch: 'authorized' });
+  });
+});
+
+describe('#955: the editor badge and the admission agree on which steps skip approval', () => {
+  test('a step is audited as a community piece exactly when isCommunityPiece says so', async () => {
+    const pieces = [COMMUNITY_PIECE, '@activepieces/piece-mcp', GMAIL, '@jarvispieces/piece-jarvis-notify',
+      '@activepieces/piece-http', '@activepieces/piece-webhook', '@activepieces/piece-delay'];
+    for (const piece of pieces) {
+      // The admission reads the request's piece, not the step's settings; a
+      // governed piece is checked against the pinned graph, so it gets its own.
+      const f = fixture(piece === GMAIL ? GMAIL : COMMUNITY_PIECE, 'send_email');
+      const reply = await f.backends.pieceAuthorize!({ piece, action: 'send_email', input: {}, inputDigest: await pieceInputDigest({}) }, f.context);
+      // Every ungoverned piece was let through by the admission; the verified one went to Authority.
+      expect(reply).toMatchObject({ governed: piece === GMAIL });
+      const audited = (f.options.auditTrail as AuditTrail).query({ limit: 5 })
+        .some((row) => row.tool_name === `community piece ${piece}/send_email`);
+      expect(`${piece}: ${audited}`).toBe(`${piece}: ${isCommunityPiece(piece)}`);
+      closeWorkflowDb(); initWorkflowDb(':memory:');
+    }
+    expect(pieces.filter(isCommunityPiece)).toEqual([COMMUNITY_PIECE, '@activepieces/piece-mcp']);
   });
 });

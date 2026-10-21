@@ -82,6 +82,16 @@ Practical consequences:
 - Community pieces are unaffected by the gate: they run in the engine and never
   reach the daemon's tool surface. See `Governed pieces` below for the verified
   ten, and `src/workflows/pieces-library/README.md` for the curation path.
+  Their actions run without approval, but not unseen: each dispatch leaves an
+  audit row and obeys Pause and Kill. The dashboard says so (#955) in the
+  Library's Community section (both modes), under governed categories in the
+  Authority room, and with a "Not approval-gated" badge on each community
+  action step in the flow editor. The built-in steps (HTTP request, webhook,
+  store, delay and the rest vendored with the engine) also run without
+  approval and leave no row of their own; the Authority room note says so, and
+  #961 covers governing them. Which pieces count is
+  `src/workflows/runtime/step-admission.ts`, which both the admission and
+  `/api/workflows/pieces` (`notApprovalGated`) read.
 
 ### A step's tool result is NOT framed as untrusted content
 
@@ -562,6 +572,24 @@ Categories are per action, not per piece: `gmail_search_mail` is `read_data`,
 `gmail_delete_draft` is `delete_data`. An action the table does not name --
 one added by a later upstream release, or `custom_api_call`, which can reach any
 endpoint of that API -- takes the piece's worst-case category, never `read_data`.
+
+Above the authority level (#953). At the default level 3 a send (`send_email`
+needs 7) would fail on the level check before the governed check is reached.
+A verified Gmail send therefore raises an approval card instead of failing,
+but only while `send_email` is governed (the default) and only when the
+workflow clears `write_data` on its own. The same rule names `send_message`
+and `make_payment`, but it changes nothing for them today: `send_message`
+needs level 3, the same as the floor, and no verified piece maps to
+`make_payment`. Deletes, settings changes and installs stay denied by level
+until the slider is raised; an override, a context rule or a profile that
+denies the category still denies. Authority is asked again at dispatch and on
+every engine retry, so un-governing the category or adding a deny after the
+card was approved stops the send. That includes the resume of
+`request_approval_in_mail`, which re-runs its step to read the decision. A
+tracked send whose receipt is recorded is not asked again: its retry hands back
+the stored result and sends nothing. Every Gmail send that returns once sent is
+also tracked (Q-07), so a retry of a send whose outcome is unknown is refused
+rather than sent again.
 
 What this does NOT do:
 
