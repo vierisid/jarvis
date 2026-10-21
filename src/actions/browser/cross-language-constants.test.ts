@@ -49,6 +49,17 @@ describe('constants duplicated across the two browser halves', () => {
     expect(await goSource('browser_snapshot.go')).toContain('domSentinelTimeout = 4 * time.Second');
   });
 
+  test('the snapshot lock wait and its superseded refusal match on both sides (#875)', async () => {
+    const session = await Bun.file(join(import.meta.dir, 'session.ts')).text();
+    const go = await goSource('browser_snapshot.go');
+    expect(session).toContain('const SNAPSHOT_LOCK_TIMEOUT_MS = 10_000;');
+    expect(go).toContain('var snapshotLockTimeout = 10 * time.Second');
+    expect(session).toContain('another browser snapshot or typed input is still running on this browser, \'');
+    expect(go).toContain('"another browser snapshot or typed input is still running on this browser, so nothing "');
+    expect(session).toContain('was reviewed against a browser snapshot that has since been replaced or dropped, so nothing was done: the id may now name a different element.');
+    expect(go).toContain('"element [%d] was reviewed against a browser snapshot that has since been replaced or dropped, so "');
+  });
+
   test('the retired-ids notice is one sentence in both languages', async () => {
     const session = await Bun.file(join(import.meta.dir, 'session.ts')).text();
     const sentence = 'Element ids from the previous snapshot no longer apply '

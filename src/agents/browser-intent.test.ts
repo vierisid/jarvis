@@ -157,6 +157,9 @@ describe('UI approval execution stays bound to its origin', () => {
       replaceSession: () => { session++; },
       disconnect: () => { connected = false; },
       click: async (id: number) => { clicks.push(id); return 'clicked'; },
+      // The element-map generation the guard binds for the action to compare
+      // under the controller's snapshot lock (#875).
+      snapshotGeneration: () => 0,
       captureApprovalGuard: () => {
         const captured = session;
         return () => connected && session === captured;

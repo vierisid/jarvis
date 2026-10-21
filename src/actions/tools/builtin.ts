@@ -1263,6 +1263,12 @@ function browserCallGuard(
     const machineCurrent = captureMachineApprovalGuard(params.target, 'browser', tool);
     const mayConnectLazily = !opts.bindDocument;
     const local = reviewedRoute ? null : browser.captureApprovalGuard(mayConnectLazily, opts);
+    // The local map's generation, read in the same synchronous step as the
+    // guard above, for the element action to compare again under the
+    // controller's snapshot lock (#875). The guard's own comparison runs
+    // before the action takes that lock, so a snapshot finishing in between
+    // passes it.
+    const localSnapshotGen = local && opts.bindDocument ? browser.snapshotGeneration() : undefined;
     // What the remote call will be held to (#676), captured NOW -- the newest
     // generation is re-recorded on every snapshot, so reading it at execution
     // would name a snapshot the person never saw. Only for the element-
@@ -1278,7 +1284,8 @@ function browserCallGuard(
     // default-scope caller took, and an approved navigate records into it.
     const readLog = reviewedRoute ? currentSnapshotReadLog() : undefined;
     const reader = { reader: currentSnapshotReader(), ...(readLog ? { readLog } : {}) };
-    const reviewed: ReviewedExecution | undefined = !reviewedRoute ? undefined
+    const reviewed: ReviewedExecution | undefined = !reviewedRoute
+      ? (localSnapshotGen !== undefined ? { localSnapshotGen } : undefined)
       : opts.bindDocument
         ? { remoteBrowserSnapshot: reviewedRemoteSnapshot(reviewedRoute), ...reader }
         : reader;
@@ -1307,6 +1314,26 @@ function browserCallGuard(
     return reviewed ? Object.assign(guard, { reviewed }) : guard;
   };
 }
+
+/**
+ * What a LOCAL element action was reviewed against, for the controller to
+ * compare under its snapshot lock (#875). Empty outside an approved execution:
+ * an ungated call is held to nothing but the map and the refs agreeing, which
+ * the lock alone gives it.
+ */
+function localReview(): { reviewedGen?: number } | null {
+  const reviewed = currentReviewedExecution();
+  if (!reviewed) return {};
+  // APPROVED, but with no local generation bound: a guard that bound none.
+  // Refused rather than run as if ungated, the way the remote half refuses an
+  // approved element action with no snapshot in its scope -- otherwise a
+  // registry whose guard forgot to bind one fails open without a sound.
+  return reviewed.localSnapshotGen === undefined ? null : { reviewedGen: reviewed.localSnapshotGen };
+}
+
+/** What an approved local element action with no bound generation returns (#875). */
+const LOCAL_REVIEW_UNBOUND = 'Error: This approved browser action carries no record of the snapshot it was reviewed '
+  + 'against, so nothing was done. Run browser_snapshot and review the action again.';
 
 /**
  * The remote snapshot a reviewed element action is being approved against:
@@ -1497,10 +1524,12 @@ export const browserClickTool: ToolDefinition = {
     if (isLocalBrowserDisabled()) return browserActionFailure(LOCAL_BROWSER_DISABLED_MSG);
     if (isNoLocalTools()) return browserActionFailure(LOCAL_DISABLED_MSG);
     try {
+      const review = localReview();
+      if (!review) return browserActionFailure(LOCAL_REVIEW_UNBOUND);
       return await browser.click(params.element_id as number, {
         button: params.button === 'right' ? 'right' : 'left',
         double: (params.double as boolean) ?? false,
-      });
+      }, review);
     } catch (err) {
       return browserActionError(err);
     }
@@ -1533,7 +1562,9 @@ export const browserHoverTool: ToolDefinition = {
     if (isLocalBrowserDisabled()) return browserActionFailure(LOCAL_BROWSER_DISABLED_MSG);
     if (isNoLocalTools()) return browserActionFailure(LOCAL_DISABLED_MSG);
     try {
-      return await browser.hover(params.element_id as number);
+      const review = localReview();
+      if (!review) return browserActionFailure(LOCAL_REVIEW_UNBOUND);
+      return await browser.hover(params.element_id as number, review);
     } catch (err) {
       return browserActionError(err);
     }
@@ -1617,11 +1648,14 @@ export const browserTypeTool: ToolDefinition = {
     if (isLocalBrowserDisabled()) return browserActionFailure(LOCAL_BROWSER_DISABLED_MSG);
     if (isNoLocalTools()) return browserActionFailure(LOCAL_DISABLED_MSG);
     try {
+      const review = localReview();
+      if (!review) return browserActionFailure(LOCAL_REVIEW_UNBOUND);
       return await browser.type(
         params.element_id as number,
         params.text as string,
         (params.submit as boolean) ?? false,
         (params.append as boolean) ?? false,
+        review,
       );
     } catch (err) {
       return browserActionError(err);
@@ -1944,10 +1978,12 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
       parameters: browserClickTool.parameters,
       execute: async (params) => {
         try {
+          const review = localReview();
+          if (!review) return browserActionFailure(LOCAL_REVIEW_UNBOUND);
           return await ctrl.click(params.element_id as number, {
             button: params.button === 'right' ? 'right' : 'left',
             double: (params.double as boolean) ?? false,
-          });
+          }, review);
         } catch (err) {
           return browserActionError(err);
         }
@@ -1960,11 +1996,14 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
       parameters: browserTypeTool.parameters,
       execute: async (params) => {
         try {
+          const review = localReview();
+          if (!review) return browserActionFailure(LOCAL_REVIEW_UNBOUND);
           return await ctrl.type(
             params.element_id as number,
             params.text as string,
             (params.submit as boolean) ?? false,
             (params.append as boolean) ?? false,
+            review,
           );
         } catch (err) {
           return browserActionError(err);
@@ -1978,7 +2017,9 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
       parameters: browserHoverTool.parameters,
       execute: async (params) => {
         try {
-          return await ctrl.hover(params.element_id as number);
+          const review = localReview();
+          if (!review) return browserActionFailure(LOCAL_REVIEW_UNBOUND);
+          return await ctrl.hover(params.element_id as number, review);
         } catch (err) {
           return browserActionError(err);
         }
@@ -2060,7 +2101,16 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
     // Same rule as the main registry: everything that connects lazily may be
     // reviewed against a cold browser, and only the element-addressed tools
     // genuinely require the snapshot that minted their ids.
-    tool.captureApprovalGuard = () => ctrl.captureApprovalGuard(!bindDocument, { bindDocument });
+    //
+    // And the element-addressed three carry the generation they bound, for the
+    // action to compare again under the controller's snapshot lock (#875): the
+    // guard's own comparison runs before the action waits on that lock.
+    tool.captureApprovalGuard = () => {
+      const guard = ctrl.captureApprovalGuard(!bindDocument, { bindDocument });
+      if (!bindDocument) return guard;
+      const reviewed: ReviewedExecution = { localSnapshotGen: ctrl.snapshotGeneration() };
+      return Object.assign(guard, { reviewed });
+    };
   }
   return tools;
 }
