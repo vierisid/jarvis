@@ -11,11 +11,33 @@ if (process.platform === 'win32') {
   process.exit(1);
 }
 
+// Oldest supported Bun; equal to MIN_BUN_VERSION in src/util/bun-minimum.ts and package.json engines.bun (src/cli/doctor.test.ts pins it).
+const MIN_BUN = '1.3.11';
+
+function versionAtLeast(version, min) {
+  const parse = (v) => v.split(/[-+]/)[0].split('.').map((n) => Number.parseInt(n, 10) || 0);
+  const a = parse(version);
+  const b = parse(min);
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
+  }
+  return true;
+}
+
+let bunVersion = null;
 try {
-  execSync('bun --version', { stdio: 'ignore' });
+  bunVersion = execSync('bun --version', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 } catch {
   console.log('Bun runtime not found. Installing...');
   execSync('curl -fsSL https://bun.sh/install | bash', { stdio: 'inherit' });
+}
+
+// Warn rather than fail: an install that is already running on an older Bun
+// should still finish, and `jarvis doctor` reports the same thing as a failure.
+if (bunVersion && !versionAtLeast(bunVersion, MIN_BUN)) {
+  console.warn(`Warning: Bun ${bunVersion} is older than ${MIN_BUN}, which Jarvis needs.`);
+  console.warn('HTTPS from workflow HTTP steps and connection refresh cannot verify certificates on it.');
+  console.warn('Run: bun upgrade');
 }
 
 // ── Stamp install-method marker for global installs ─────────────────
