@@ -189,6 +189,12 @@ describe('GPT-6 official Responses transport', () => {
     for await (const event of new OpenAIProvider('k').stream([], { model: 'gpt-6-luna' })) events.push(event);
     expect(events).toEqual([{ type: 'error', code: 'network', error: 'OpenAI stream ended before completion' }]);
   });
+  it('reports a malformed stream frame as a typed server error without echoing the frame', async () => {
+    globalThis.fetch = (async () => new Response('data: '+JSON.stringify({ type: 'response.output_text.delta', delta: 'Hi' })+'\n\ndata: {"type":"response.output_text.delta","delta":"secret partial\n\n')) as unknown as typeof fetch;
+    const events = [];
+    for await (const event of new OpenAIProvider('k').stream([], { model: 'gpt-6-luna' })) events.push(event);
+    expect(events).toEqual([{ type: 'text', text: 'Hi' }, { type: 'error', code: 'server', error: 'OpenAI Responses stream sent malformed JSON' }]);
+  });
   it('preserves typed rate-limit errors and checks cancellation before dispatch', async () => {
     let calls = 0;
     globalThis.fetch = (async () => { calls++; return new Response('', { status: 429, headers: { 'Retry-After': '4' } }); }) as unknown as typeof fetch;
