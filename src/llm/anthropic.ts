@@ -485,7 +485,8 @@ export class AnthropicProvider implements LLMProvider {
   }
 
   async listModels(): Promise<string[]> {
-    const knownModels = CHAT_MODEL_SUGGESTIONS.anthropic;
+    // A copy: callers may sort or extend the list, and the catalog is shared.
+    const knownModels = [...CHAT_MODEL_SUGGESTIONS.anthropic];
     if (!this.bearerAuth) return knownModels;
 
     try {
