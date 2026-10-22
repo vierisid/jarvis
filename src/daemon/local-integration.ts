@@ -11,7 +11,7 @@ export function localIntegrationEnabled(config: JarvisConfig, env: Record<string
   if (!home || !data || !isAbsolute(home) || !isAbsolute(data)
     || basename(home) !== 'home' || basename(data) !== 'data' || dirname(resolve(home)) !== dirname(resolve(data))
     || resolve(config.daemon.data_dir) !== resolve(data) || resolve(config.daemon.db_path) !== join(resolve(data), 'jarvis.db')) {
-    throw Error('Local integration requires the isolated home/data layout from bun run dev');
+    throw Error('Local integration requires the isolated home/data layout from bun run dev:local');
   }
   const origin = new URL(config.daemon.public_url ?? 'invalid:');
   if (isHostedInstall(config) || config.auth?.insecure_open_access === true || config.daemon.listen

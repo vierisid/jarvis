@@ -16,3 +16,11 @@ test('local mode refuses a normal HOME, different vault and hosted/public/open a
   }
 });
 test('model-directed children cannot inherit local integration authorization', () => { expect(stripDaemonSecrets(env).JARVIS_LOCAL_INTEGRATION).toBeUndefined(); });
+test('bun run dev stays the hot-reload daemon; only dev:local starts the local integration', async () => {
+  const root = new URL('../../', import.meta.url);
+  const { scripts } = await Bun.file(new URL('package.json', root)).json();
+  expect(scripts.dev).toBe('bun --hot run src/daemon/index.ts');
+  expect(scripts['dev:local']).toBe('bun --no-env-file run scripts/integration/dev.ts');
+  expect(Object.values(scripts).filter(command => String(command).includes('scripts/integration/dev.ts'))).toHaveLength(1);
+  expect(await Bun.file(new URL('README.md', root)).text()).toContain('bun run dev             # Hot-reload daemon');
+});

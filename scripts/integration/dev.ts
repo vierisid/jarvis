@@ -5,11 +5,11 @@ import { resolve, join } from 'node:path';
 
 const args = process.argv.slice(2);
 if (args.includes('--help')) {
-  console.log('bun run dev [--data-dir PATH] [--port 3143] [--enroll DEVICE_NAME]\nDefaults to ~/.jarvis-local-acceptance. Reuse its directory to resume; choose a new one for a fresh onboarding.');
+  console.log('bun run dev:local [--data-dir PATH] [--port 3143] [--enroll DEVICE_NAME]\nDefaults to ~/.jarvis-local-acceptance. Reuse its directory to resume; choose a new one for a fresh onboarding.');
   process.exit(0);
 }
 for (let i = 0; i < args.length; i += 2) {
-  if (!['--data-dir', '--port', '--enroll'].includes(args[i]!) || !args[i + 1] || args[i + 1]!.startsWith('--')) throw Error('Invalid arguments. Run bun run dev --help');
+  if (!['--data-dir', '--port', '--enroll'].includes(args[i]!) || !args[i + 1] || args[i + 1]!.startsWith('--')) throw Error('Invalid arguments. Run bun run dev:local --help');
   if (args.indexOf(args[i]!) !== i) throw Error('Duplicate option: ' + args[i]);
 }
 function option(name: string, fallback: string) { const i = args.indexOf(name); return i < 0 ? fallback : args[i + 1]!; }
