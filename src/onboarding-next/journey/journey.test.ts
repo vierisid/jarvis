@@ -495,23 +495,37 @@ describe('acknowledgement boundaries and scoped tutorial replay', () => {
 });
 
 
-test('exit preparation runs outside SQLite, retries failures, and rechecks authorization/revision before handoff', async () => {
+test('a failed goal plan never keeps the user in onboarding, but authorization still gates the exit', async () => {
   const f = fixture(); await activation(f.provider);
-  let authorized = true, fail = true, change = false, revoke = false, calls = 0;
+  let authorized = true, calls = 0;
+  const provider = createJourneyProvider({ authorize: () => authorized ? owner : null,
+    persistence: createSettingsJourneyPersistence({ databaseForScope: () => f.db, readLegacy: () => fresh }),
+    prepareExit: async () => { calls++; if (calls === 1) authorized = false; throw Error('private provider failure'); },
+  });
+  // Revoked while planning: the swallowed plan failure cannot carry the exit.
+  expect(await nav(provider, { type: 'explore' })).toMatchObject({ availability: 'unavailable', reason: 'unauthorized' });
+  expect(ready(await f.provider.read()).stepId).toBe('activation');
+  authorized = true;
+  const exited = await nav(provider, { type: 'explore' });
+  expect(exited).toMatchObject({ availability: 'ready' });
+  expect(ready(exited).stepId).toBe('exited'); expect(ready(exited).completion).toBe('explored');
+  expect(calls).toBe(2);
+});
+
+test('exit preparation runs outside SQLite and rechecks authorization/revision before handoff', async () => {
+  const f = fixture(); await activation(f.provider);
+  let authorized = true, change = false, revoke = false, calls = 0;
   const provider = createJourneyProvider({ authorize: () => authorized ? owner : null,
     persistence: createSettingsJourneyPersistence({ databaseForScope: () => f.db, readLegacy: () => fresh }),
     prepareExit: async () => {
       calls++; expect(f.db.inTransaction).toBe(false);
-      if (fail) throw Error('private provider failure');
       if (change) ready(await nav(f.provider, { type: 'navigate', stepId: 'tour' }));
       if (revoke) authorized = false;
     },
   });
   const initial = ready(await provider.read());
   expect((await nav(provider, { type: 'explore' }, { ...initial, revision: initial.revision - 1 })).availability).toBe('unavailable'); expect(calls).toBe(0);
-  expect(await nav(provider, { type: 'explore' })).toMatchObject({ availability: 'unavailable', reason: 'goal_plan_unavailable' });
-  expect(ready(await provider.read()).stepId).toBe('activation');
-  fail = false; change = true;
+  change = true;
   expect(await nav(provider, { type: 'explore' })).toMatchObject({ availability: 'unavailable', reason: 'revision_conflict' });
   change = false; await ack(f.provider, { type: 'tour_finished', state: 'done' }); revoke = true;
   expect(await nav(provider, { type: 'explore' })).toMatchObject({ availability: 'unavailable', reason: 'unauthorized' });

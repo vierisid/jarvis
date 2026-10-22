@@ -238,8 +238,11 @@ export function createJourneyProvider(deps: JourneyDependencies) {
           return structuredClone(s);
         });
         if (candidate) {
+          // A goal that cannot be planned now never keeps the user in onboarding:
+          // the exit commits without one and the dashboard offers to plan it.
+          // Authorization and revision are still rechecked below.
           try { await deps.prepareExit(scope, candidate); }
-          catch { throw new JourneyError('goal_plan_unavailable'); }
+          catch { /* Fail open on the plan only, never on authority. */ }
           const current = await deps.authorize();
           if (current?.actorId !== scope.actorId || current?.projectId !== scope.projectId) throw new JourneyError('unauthorized');
         }

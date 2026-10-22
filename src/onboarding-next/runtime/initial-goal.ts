@@ -69,10 +69,13 @@ export function saveInitialInterviewGoal(snapshot: JourneySnapshot): void {
     const existing = findGoals({ limit: 1 })[0];
     const captured = source();
     if (existing || !captured.goal) { setSetting(key, JSON.stringify({ goalId: existing?.id ?? null })); return; }
+    // No plan for the interview as it stands now (the planner failed, or the
+    // interview changed after planning): finish without a goal rather than trap
+    // the user in onboarding. The receipt stops a later write from creating one
+    // silently; the dashboard's empty goal card and setup action offer planning.
     const raw = getSetting(planKey(snapshot));
-    if (!raw) throw Error('Initial OKR is not prepared');
-    const saved = JSON.parse(raw);
-    if (saved.digest !== captured.digest) throw Error('Interview changed before goal creation');
+    const saved = raw ? JSON.parse(raw) : null;
+    if (saved?.digest !== captured.digest) { setSetting(key, JSON.stringify({ goalId: null, plan: 'unavailable' })); return; }
     const proposal = checked(saved.proposal, captured.goal.summary);
     const goals = app.createFromProposal(proposal);
     for (const goal of goals) {

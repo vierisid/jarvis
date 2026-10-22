@@ -7,6 +7,7 @@ import { MemoryForget } from '../../brief/memory-forget';
 import { createInitialGoalPlanner, saveInitialInterviewGoal } from './initial-goal';
 import type { JourneySnapshot } from '../journey/types';
 import type { GoalProposal } from '../../goals/proposal';
+import { getSetting } from '../../vault/settings';
 beforeEach(() => initDatabase(':memory:', { quiet: true }));
 afterEach(closeDb);
 const snapshot = (patch = {}) => ({ scopeId: 'owner', journeyId: 'first-run', stepId: 'exited', completion: 'completed', interviewState: 'done', ...patch }) as JourneySnapshot;
@@ -78,13 +79,25 @@ test.each([
   getDb().exec('DROP TRIGGER reject_write');
   await planner(snapshot(), () => {}); saveInitialInterviewGoal(snapshot()); expect(findGoals()).toHaveLength(5); expect(calls).toBe(1);
 });
-test('invalid/partial plans never degrade to a lone objective; generation can retry', async () => {
+test('invalid/partial plans never degrade to a lone objective; generation can retry before exit', async () => {
   appendUserProfileFact(goal);
-  for (const invalid of [{ ...proposal(), key_results: [] }, { ...proposal(), milestones: [] }, { ...proposal(), clarifying_questions: ['What target?'] }]) {
+  for (const invalid of [{ ...proposal(), key_results: [] }, { ...proposal(), milestones: [] }, { ...proposal(), clarifying_questions: ['What target?'] }])
     await expect(createInitialGoalPlanner(async () => invalid)(snapshot(), () => {})).rejects.toThrow();
-    expect(() => saveInitialInterviewGoal(snapshot())).toThrow('not prepared'); expect(findGoals()).toHaveLength(0);
-  }
+  expect(findGoals()).toHaveLength(0);
   await ready(); saveInitialInterviewGoal(snapshot()); expect(findGoals()).toHaveLength(5);
+});
+test('an exit without a prepared plan finishes without a goal and never creates one later', async () => {
+  appendUserProfileFact(goal);
+  await expect(createInitialGoalPlanner(async () => { throw Error('model down'); })(snapshot(), () => {})).rejects.toThrow('model down');
+  expect(() => saveInitialInterviewGoal(snapshot())).not.toThrow(); expect(findGoals()).toHaveLength(0);
+  expect(JSON.parse(getSetting('onboarding-next.initial-goal.v1.owner.first-run')!)).toEqual({ goalId: null, plan: 'unavailable' });
+  // A plan that lands after the exit is never turned into a goal silently.
+  await ready(); saveInitialInterviewGoal(snapshot()); expect(findGoals()).toHaveLength(0);
+});
+test('a plan for an earlier version of the interview finishes without a goal', async () => {
+  appendUserProfileFact(goal); await ready();
+  appendUserProfileFact({ theme: 'scope', summary: 'Review everything first' });
+  expect(() => saveInitialInterviewGoal(snapshot())).not.toThrow(); expect(findGoals()).toHaveLength(0);
 });
 test('concurrent preparation shares the model call; a revoked caller cannot save a plan', async () => {
   appendUserProfileFact(goal); let calls = 0;
@@ -93,5 +106,6 @@ test('concurrent preparation shares the model call; a revoked caller cannot save
   const revoke = createInitialGoalPlanner(async () => { return proposal(); });
   let checks = 0;
   await expect(revoke(snapshot({ journeyId: 'revoked' }), () => { if (++checks > 1) throw Error('revoked'); })).rejects.toThrow('revoked');
-  expect(() => saveInitialInterviewGoal(snapshot({ journeyId: 'revoked' }))).toThrow('not prepared');
+  saveInitialInterviewGoal(snapshot({ journeyId: 'revoked' })); expect(findGoals()).toHaveLength(0);
+  expect(JSON.parse(getSetting('onboarding-next.initial-goal.v1.owner.revoked')!)).toEqual({ goalId: null, plan: 'unavailable' });
 });
