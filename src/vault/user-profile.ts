@@ -184,7 +184,8 @@ export function syncInterviewProfileKnowledge(profile = getUserProfile()): void 
 export function syncInterviewProfileKnowledgeAtStartup(log: (message: string) => void = console.warn): boolean {
   try { syncInterviewProfileKnowledge(); return true; }
   catch (error) {
-    log(`[Vault] Interview profile facts were not projected into Memory; continuing startup: ${error instanceof Error ? error.message : String(error)}`);
+    // The error kind only: a message could one day carry profile text.
+    log(`[Vault] Interview profile facts were not projected into Memory; continuing startup (${error instanceof Error ? error.name : 'Error'})`);
     return false;
   }
 }

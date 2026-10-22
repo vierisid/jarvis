@@ -76,7 +76,7 @@ test('a failed startup projection is logged and never stops startup', () => {
   getDb().exec("CREATE TRIGGER reject_fact BEFORE INSERT ON facts BEGIN SELECT RAISE(ABORT, 'disk full'); END");
   const logged: string[] = [];
   expect(syncInterviewProfileKnowledgeAtStartup(message => logged.push(message))).toBe(false);
-  expect(logged).toHaveLength(1); expect(logged[0]).toContain('continuing startup'); expect(logged[0]).toContain('disk full');
+  expect(logged).toHaveLength(1); expect(logged[0]).toContain('continuing startup'); expect(logged[0]).not.toContain('disk full'); expect(logged[0]).not.toContain(fact.summary);
   expect(findFacts({ predicate: 'shared about rhythm' })).toHaveLength(0);
   // The next start retries the repair once the cause is gone.
   getDb().exec('DROP TRIGGER reject_fact');
