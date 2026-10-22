@@ -37,10 +37,10 @@ The default port is 3143. Wait for `JARVIS daemon running on port 3143`, then en
 bun run dev --data-dir "$HOME/.jarvis-local-acceptance-20261020" --enroll "local-acceptance"
 ```
 
-Copy the printed enrollment token into a sidecar built from this checkout. On Windows, quit any existing Jarvis instance from its tray menu first. Prepare a bundle in a normal user folder, such as `C:\Users\vieri\JarvisLocalAcceptance-20261020`, with `bin/jarvis.exe` and a copy of `scripts/integration/start-sidecar.cmd` at its root. Then run:
+Copy the printed enrollment token into a sidecar built from this checkout. On Windows, quit any existing Jarvis instance from its tray menu first. Prepare a bundle in a normal user folder, such as `C:\Users\<you>\JarvisLocalAcceptance`, with `bin/jarvis.exe` and a copy of `scripts/integration/start-sidecar.cmd` at its root. Then run:
 
 ```powershell
-& 'C:\Users\vieri\JarvisLocalAcceptance-20261020\start-sidecar.cmd'
+& 'C:\Users\<you>\JarvisLocalAcceptance\start-sidecar.cmd'
 ```
 
 On the first launch, paste the enrollment token when prompted. Later launches reuse the saved enrollment without prompting. The helper gives only its child process a separate `profile/` directory and sets an explicit working directory. Add `--check` to verify the executable without starting onboarding. The batch helper works with the existing PowerShell execution policy and makes no policy changes.
