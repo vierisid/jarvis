@@ -25,6 +25,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { accessSync, constants as fsConstants, lstatSync, readdirSync, readFileSync, realpathSync, utimesSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { isSecretEnvName } from "../../../util/subprocess-env";
+import { EGRESS_POLICY_ENV, type EgressPolicy } from "../../runtime/http-egress";
 import { assertBundleUnchanged } from "./bundle-integrity";
 import {
   ENGINE_BUNDLE_ENV,
@@ -83,6 +84,12 @@ export interface SpawnEngineOptions {
   executionMode?: "SANDBOX_PROCESS" | "UNSANDBOXED";
   pausedFlowTimeoutDays?: number;
   networkMode?: "STRICT";
+  /**
+   * Where the HTTP step may connect (#961, `runtime/http-egress.ts`). The
+   * daemon passes `private-allowed` for a self-hosted install; unset, the
+   * engine applies the hosted rule (public addresses only).
+   */
+  egressPolicy?: EgressPolicy;
   customPiecesPaths?: string[];
   devPieces?: string[];
   /**
@@ -243,6 +250,7 @@ export function engineEnv(opts: Omit<SpawnEngineOptions, "expectedDigest">): Rec
   env["AP_BASE_CODE_DIRECTORY"] = opts.baseCodeDir;
   env["AP_PAUSED_FLOW_TIMEOUT_DAYS"] = String(opts.pausedFlowTimeoutDays ?? 30);
   if (opts.networkMode) env["AP_NETWORK_MODE"] = opts.networkMode;
+  if (opts.egressPolicy) env[EGRESS_POLICY_ENV] = opts.egressPolicy;
   if (opts.customPiecesPaths?.length) {
     env["AP_CUSTOM_PIECES_PATHS"] = opts.customPiecesPaths.join(":");
   }

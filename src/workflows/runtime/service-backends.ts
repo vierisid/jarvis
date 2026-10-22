@@ -793,14 +793,15 @@ export function buildSandboxServiceBackends(
 
   /**
    * A step with no Jarvis adapter: a community piece the owner installed from
-   * the Library, a CODE step in a workflow granted them, a built-in step
-   * (delay, store, HTTP, ...) or one of Jarvis's own pieces. It stays outside
-   * Authority by those opt-ins, but it obeys Pause and Kill (Q-08). A
-   * community piece or a CODE step leaves an audit row when it is let run:
-   * like a governed piece's, the row records the dispatch, not its outcome.
-   * Jarvis's own pieces leave none here, since each of their effects passes
-   * the boundary and is audited there; built-in steps leave none either. Its
-   * input is never sent here.
+   * the Library, a CODE step in a workflow granted them, an in-run core step
+   * (delay, store, file helper, ...; `IN_RUN_STEP_PIECES`) or one of Jarvis's
+   * own pieces. It stays outside Authority by those opt-ins, but it obeys Pause
+   * and Kill (Q-08). A community piece or a CODE step leaves an audit row when
+   * it is let run: like a governed piece's, the row records the dispatch, not
+   * its outcome. Jarvis's own pieces leave none here, since each of their
+   * effects passes the boundary and is audited there; in-run core steps leave
+   * none either, having no effect outside Jarvis. The HTTP request is not one
+   * of these: it is governed since #961. Its input is never sent here.
    */
   const admitUngovernedStep = (req: PieceAuthorizeRequest, ctx: WorkflowEffectContext): PieceAuthorizeResponse => {
     const run = getFlowRun(ctx.runId);
@@ -848,19 +849,19 @@ export function buildSandboxServiceBackends(
    * retry after a recorded receipt gets the stored result back.
    */
   const pieceAuthorize: PieceAuthorizeFn = async (req, ctx) => {
-    const resolved = resolveGovernedPieceAction(req.piece, req.action);
-    if (!resolved) return admitUngovernedStep(req, ctx);
+    const named = resolveGovernedPieceAction(req.piece, req.action);
+    if (!named) return admitUngovernedStep(req, ctx);
     // The action becomes `tool_name`: the audit row, the effect record, the
     // approval row and the card's `Action:` line (#651). Refused, not reported
     // ungoverned -- `governed: false` would let the engine run the piece with
     // no gate at all -- and refused before anything durable exists, under a
     // label that carries none of the name. Why validate rather than rewrite,
     // and why this invalidates nothing in flight: `isWellFormedPieceActionName`.
-    if (!isWellFormedPieceActionName(resolved.action)) {
+    if (!isWellFormedPieceActionName(named.action)) {
       effects.auditRefusal({ context: ctx,
-        toolName: governedPieceToolName(resolved.adapter.catalogId, '[malformed action name]'),
-        category: resolved.category });
-      throw new Error(`Governed piece ${resolved.adapter.catalogId} was asked to run a malformed action name; dispatch refused`);
+        toolName: governedPieceToolName(named.adapter.catalogId, '[malformed action name]'),
+        category: named.category });
+      throw new Error(`Governed piece ${named.adapter.catalogId} was asked to run a malformed action name; dispatch refused`);
     }
     // The connection is stripped on the engine side before the input is sent;
     // stripping it again here means neither path can put a credential into the
@@ -883,7 +884,11 @@ export function buildSandboxServiceBackends(
     // is the read-only input whenever the document path is not taken.
     const whole = req.documentProtocol === 1 ? documentInput(req.piece, req.action, req.input) : null;
     if (req.documentProtocol === 1 && !whole) throw new Error('Unsupported document protocol input');
-    const projected = defangPieceProjection(reprojectPieceInput(whole ? sanitizePieceInput(req.input) : req.input));
+    const projected = defangPieceProjection(reprojectPieceInput(whole ? sanitizePieceInput(req.input, req.piece) : req.input, req.piece));
+    // #961: an action whose category depends on its input (an HTTP request's
+    // method) is judged on the projection the card and the record carry; the
+    // engine's digest of the whole input binds that projection to what runs.
+    const resolved = resolveGovernedPieceAction(req.piece, req.action, projected)!;
     // Q-05: an action that sends to or addresses someone memory knows keeps
     // the facts the address matched, and stops if they stop holding.
     const addressing = ['send_email', 'send_message', 'write_data', 'modify_settings'].includes(resolved.category);
@@ -895,7 +900,7 @@ export function buildSandboxServiceBackends(
         throw error;
       }
     })();
-    const tracked = tracksPieceCompletion(req.piece, req.action);
+    const tracked = tracksPieceCompletion(req.piece, req.action, projected);
     const route = tracked ? 'piece-dispatch' : 'piece';
     if (tracked && !req.inputDigest) throw new Error('A tracked send requires the complete input digest');
     const legacy = tracked ? getWorkflowEffect(workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], 'piece')) : null;

@@ -284,6 +284,12 @@ export type AwarenessConfig = {
   struggle_cooldown_ms: number;       // min gap between struggle detections
   suggestion_rate_limit_ms: number;
   overlay_autolaunch: boolean;        // auto-open floating overlay widget on start
+  /**
+   * When the user last chose `enabled` themselves (persistAwarenessChoice).
+   * Absent on rows stamped from defaults by older builds, so only a marked
+   * `true` counts as consent (#1070).
+   */
+  enabled_chosen_at?: number;
   retention: {
     full_hours: number;
     key_moment_hours: number;

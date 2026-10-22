@@ -15,6 +15,9 @@ const settings = (settingsTab: SettingsTab) => ({ ...room("settings"), settingsT
 export const DESTINATIONS = {
   authority: { label: "Authority", owner: "D-28 / AuthorityRoom", room: "authority", legacy: room("authority") },
   connections: { label: "Connected workspace", owner: "D-27 / F-22", room: "connected-workspace", legacy: room("tools") },
+  profile: { label: "Profile", owner: "D-29 / ProfileTab", room: "profile", legacy: settings("profile") },
+  // The subscription page. LEGACY_ROOMS billing -> usage (release-route.ts) only reverses the usage alias for rollback.
+  billing: { label: "Billing", owner: "D-31 / BillingTab", room: "billing", legacy: settings("billing") },
   "advanced-settings": { label: "Advanced settings and support", owner: "F-25 / SettingsRoom", legacy: settings("general") },
   "advanced-authority": { label: "Authority overrides and history", owner: "AuthorityRoom", legacy: room("authority") },
   "emergency-controls": { label: "Emergency pause and stop", owner: "AuthorityRoom", legacy: room("authority") },

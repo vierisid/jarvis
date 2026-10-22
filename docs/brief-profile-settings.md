@@ -1,8 +1,9 @@
 # Brief Profile and Settings (F-23)
 
 Optional `profileSettings` provider, enabled only by `JARVIS_BRIEF_PROFILE_SETTINGS=1`
-and explicit registration/activation in F-01. Default off. F-23 supplies a contract
-and headless editor; D-29 owns the visible Profile/Settings rooms. F-24 remains
+and explicit registration/activation in F-01. Default off. F-23 supplies the contract
+and routes; D-29 and D-30 own the visible Profile and Settings rooms and their live
+adapters. F-24 remains
 the separate hosting compatibility card. No provider calls, billing changes,
 credential enrollment or automatic onboarding activation occur on read/save.
 
@@ -66,9 +67,12 @@ Existing profile records above 256,000 characters fail closed for this editor.
 Profile revision hashes the canonical row and memory field revisions, not a
 second store or wall-clock timestamp. Compare and write run in one immediate
 transaction; `409 revision_conflict` never overwrites a concurrent writer. No
-automatic mutation retries. The headless `ProfileEditor` retains drafts through
-polling, out-of-order reads, conflicts, and typing during a pending save. Explicit
-discard/reload is the consumer's choice after showing any unsaved-edit warning.
+automatic mutation retries. The Brief Profile and Settings rooms reach these
+routes through `createProfilePort` (`ui/src/brief/account/profile/adapter.ts`) and
+`createSettingsPort` (`ui/src/brief/account/settings/adapter.ts`); their
+controllers retain drafts through polling, out-of-order reads, conflicts, and
+typing during a pending save. Explicit discard/reload is the consumer's choice
+after showing any unsaved-edit warning.
 
 The existing `/api/user-profile` GET adds `revision`. Its current Settings form
 captures that revision with the edit draft and POSTs it back. A successful POST
@@ -80,7 +84,12 @@ legacy saves patch only named answers. When F-23 is enabled, missing revisions
 receive HTTP 428 and require a reload; disabled F-23 retains the old unversioned
 POST behavior for clients that send no revision. The Settings form always sends
 the revision it read, so its saves are conflict-checked (409) whether or not the
-flag is on; an empty form with a current revision is a no-op. Explicit Clear and onboarding replay retain their existing
+flag is on; an empty form with a current revision is a no-op. After a 409 the form
+reloads the newer profile, keeps the edited answers on top of it (answers the
+user did not touch take the newer values) and asks for an explicit second Save,
+which is itself conflict-checked against the newer revision. Answers changed on
+both sides are named, with their newer value, and the form opens the step that
+holds the first of them. Explicit Clear and onboarding replay retain their existing
 destructive semantics. Company is additive, but an older binary does not expose
 it and can drop it when rewriting the canonical record: back up before rollback.
 
@@ -126,7 +135,9 @@ Fixture-only tests use temporary SQLite databases, a temporary keychain director
 fake reload appliers, and a real authenticated HTTP server over a temporary Unix
 socket. No production daemon, real voice call, email, OAuth, payment or deployment
 is used. Focused tests: `bun test src/brief/profile-settings.test.ts
-src/daemon/api-brief-profile-settings.test.ts ui/src/brief/profile-settings`.
+src/daemon/api-brief-profile-settings.test.ts ui/src/brief/profile-settings
+ui/src/brief/account/profile ui/src/brief/account/settings
+ui/src/v2/rooms/settings/tabs/ProfileTab.conflict.test.tsx`.
 
 Quick verification: in an isolated fixture enable the flag, read capabilities and
 the snapshot, patch Company with its revision, and restart/read it. Reuse the old

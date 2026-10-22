@@ -1,7 +1,7 @@
 import type { RoleDefinition } from '../roles/types.ts';
 import type { SystemPromptParts } from '../roles/prompt-builder.ts';
 import type { LLMMessage, LLMResponse, LLMStreamEvent, LLMToolCall, LLMTool, ContentBlock } from '../llm/provider.ts';
-import { guardImageSize } from '../llm/provider.ts';
+import { capTextBlocks, guardImageSize } from '../llm/provider.ts';
 import { LLMManager } from '../llm/manager.ts';
 import type { Tier } from '../llm/tiers.ts';
 import { AgentInstance, canSpawnChildren } from './agent.ts';
@@ -2113,13 +2113,14 @@ export class AgentOrchestrator {
             this.noteTaint(toolCall.name, tool?.category);
             return markUntrustedToolFailure(toolCall.name, tool?.category, receipt.result, MAX_TOOL_RESULT_CHARS, true);
           }
-          // A picture (#709): the blocks, sized and framed exactly as the
-          // ungated path below hands them over, rather than the receipt's text
+          // A picture (#709): the blocks, sized, capped (#876) and framed exactly
+          // as the ungated path below hands them over, rather than the receipt's text
           // form, which names the image and does not carry it. An approved
           // screenshot is often the very thing the person approved acting on.
           if (receipt.content) {
             this.noteTaint(toolCall.name, tool?.category);
-            return markUntrustedToolBlocks(toolCall.name, tool?.category, receipt.content.map(guardImageSize));
+            return markUntrustedToolBlocks(toolCall.name, tool?.category,
+              capTextBlocks(receipt.content, MAX_TOOL_RESULT_CHARS).map(guardImageSize));
           }
           // A trusted trailer (#708): the tool's own repo-authored sentence,
           // placed AFTER the block the way the ungated path below places it,
@@ -2132,7 +2133,8 @@ export class AgentOrchestrator {
             return frame(capToolResult(receipt.outside ?? '')) + receipt.trailer;
           }
           // Capped BEFORE it is framed, as the ungated path caps a plain
-          // result (#828; content blocks are uncapped text on both paths). Uncapped, an approved `browser_navigate` or
+          // result (#828; content blocks are capped the same way since #876).
+          // Uncapped, an approved `browser_navigate` or
           // `desktop_snapshot` -- page- and screen-sized results, and exactly
           // the tools that take a card -- reached the model whole; and the
           // order matters as much as the cap, because a cut made after the
@@ -2240,7 +2242,9 @@ export class AgentOrchestrator {
 
       // Multi-modal result (e.g. screenshot with image data)
       if (isToolResult(raw)) {
-        return markUntrustedToolBlocks(toolCall.name, category, raw.content.map(guardImageSize));
+        // Text capped before it is framed, as a plain result is below (#876).
+        return markUntrustedToolBlocks(toolCall.name, category,
+          capTextBlocks(raw.content, MAX_TOOL_RESULT_CHARS).map(guardImageSize));
       }
 
       // Plain text result, plus any repo-authored trailer the tool handed over
@@ -2457,7 +2461,10 @@ export class AgentOrchestrator {
       this.noteTaint(name, category);
       if (isToolResult(raw)) {
         // Realtime function output is text; flatten non-text blocks to a tag.
-        const flat = raw.content.map((c) => (c.type === 'text' ? c.text : `[${c.type}]`)).join('\n');
+        // The text is capped before flattening and framing, like the block
+        // paths above (#876), so the [image] tags do not count against it.
+        const flat = capTextBlocks(raw.content, MAX_TOOL_RESULT_CHARS)
+          .map((c) => (c.type === 'text' ? c.text : `[${c.type}]`)).join('\n');
         return markUntrustedToolResult(name, category, flat);
       }
       const { outside, trailer } = splitToolReturn(raw);

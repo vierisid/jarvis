@@ -12,8 +12,9 @@ import { registerProfileSettings } from '../brief/registrations/profile-settings
 import { WebSocketServer } from '../comms/websocket';
 import { PanelSessionStore } from '../sidecar/panel-sessions';
 import type { SidecarManager } from '../sidecar/manager';
-import { createProfileSettingsClient } from '../../ui/src/brief/profile-settings/client';
-import { ProfileEditor } from '../../ui/src/brief/profile-settings/editor';
+import { createProfilePort } from '../../ui/src/brief/account/profile/adapter';
+import { ProfileController } from '../../ui/src/brief/account/profile/controller';
+import { createSettingsPort } from '../../ui/src/brief/account/settings/adapter';
 
 let service: ProfileSettings, config: typeof DEFAULT_CONFIG, flag: string | undefined;
 const path = '/api/brief/profile-settings';
@@ -84,25 +85,55 @@ test('flag off: legacy saves without a revision still work; Settings full-form a
   expect(bad.status).toBe(400);
   expect(JSON.stringify(await bad.json())).not.toContain('invalid_patch');
 });
-test('authenticated HTTP feeds the real editor; anonymous reads and mutations fail', async () => {
+test('authenticated HTTP feeds the live Brief Profile and Settings ports; anonymous reads and mutations fail', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'f23-http-')), socket = join(dir, 'api.sock');
+  const secrets = process.env.JARVIS_SECRETS_DIR; process.env.JARVIS_SECRETS_DIR = join(dir, 'secrets');
   const server = new WebSocketServer(0, socket), sessions = new PanelSessionStore();
   server.setSidecarManager({ openPanelSession: async (token: string) => token === 'fixture' ? sessions.create('device') : null, resolvePanelSession: (s: string) => sessions.get(s) } as SidecarManager);
   server.setApiRoutes(routes());
   const send = (url: string, init: RequestInit = {}) => fetch('http://localhost'+url, { ...init, unix: socket });
+  const signal = () => new AbortController().signal;
   try {
     server.start(); expect((await send(path)).status).toBe(401);
     expect((await send(path+'/profile', { method: 'PATCH', body: '{}' })).status).toBe(401);
     const bootstrap = await send(path+'?token=fixture', { redirect: 'manual' });
     const Cookie = bootstrap.headers.get('set-cookie')!.split(';')[0]!;
-    const client = createProfileSettingsClient(((url: string, init: RequestInit = {}) => send(url, { ...init, headers: { ...init.headers, Cookie } })) as typeof fetch);
-    const editor = new ProfileEditor(client); await editor.refresh(); editor.edit('company', 'Example');
-    await editor.save(); expect(editor.current().profile?.answers.company).toBe('Example');
+    const request = (url: string, init: RequestInit) => send(url, { ...init, headers: { ...init.headers as Record<string, string>, Cookie } });
     expect((await send(path, { headers: { Cookie } })).headers.get('Cache-Control')).toBe('no-store');
-    const stale = editor.current().profile!.revision;
-    service.saveProfile(stale, { company: 'Memory correction' }); editor.edit('company', 'Unsaved draft');
-    await expect(editor.save()).rejects.toMatchObject({ code: 'revision_conflict', status: 409 });
-    expect(editor.current().draft.company).toBe('Unsaved draft');
-    expect(getUserProfile()?.answers.company).toBe('Memory correction');
-  } finally { server.stop(); rmSync(dir, { recursive: true, force: true }); }
+
+    // D-29 Profile: the real F-23 snapshot passes the strict mapping check and a save is confirmed by readback.
+    const profile = createProfilePort('live-profile', { request, canWrite: true });
+    const read = await profile.read(signal());
+    if (read.state !== 'ready') throw new Error('profile read ' + read.state);
+    const saved = await profile.save(read.data.revision, { company: 'Example' }, signal());
+    expect(saved).toMatchObject({ state: 'confirmed', data: { answers: { company: 'Example' } } });
+    expect(getUserProfile()?.answers.company).toBe('Example');
+    // A save elsewhere wins: the stale revision is a conflict, the controller keeps the draft, nothing is overwritten.
+    const controller = new ProfileController(profile);
+    try {
+      controller.setAccess(true);
+      for (let i = 0; i < 2000 && (controller.snapshot().reading || !controller.snapshot().base); i++) await Bun.sleep(5);
+      expect(controller.snapshot().base?.answers.company).toBe('Example');
+      service.saveProfile(service.profile().revision, { company: 'Memory correction' });
+      controller.edit('company', 'Unsaved draft');
+      await controller.save();
+      expect(controller.snapshot().phase).toBe('conflict');
+      expect(controller.value('company')).toBe('Unsaved draft');
+      expect(getUserProfile()?.answers.company).toBe('Memory correction');
+    } finally { controller.retire(); }
+
+    // D-30 Settings: voice is revision-bound through the real route.
+    const settings = createSettingsPort('live-settings', { request, canWrite: true, destinations: {} });
+    const current = await settings.read(signal());
+    if (current.state !== 'ready') throw new Error('settings read ' + current.state);
+    const next = current.data.voice.choices.find(c => c.id !== current.data.voice.voice)!.id;
+    expect(await settings.saveVoice(current.data.voice.revision, next, signal())).toMatchObject({ state: 'confirmed', data: { voice: { voice: next } } });
+    expect(await settings.saveVoice(current.data.voice.revision, next, signal())).toEqual({ state: 'conflict' });
+    expect(service.voice().voice).toBe(next);
+    // Anonymous transport is refused, not read as an empty profile.
+    expect(await createProfilePort('anon', { request: send, canWrite: true }).read(signal())).toEqual({ state: 'unavailable' });
+  } finally {
+    server.stop(); rmSync(dir, { recursive: true, force: true });
+    if (secrets === undefined) delete process.env.JARVIS_SECRETS_DIR; else process.env.JARVIS_SECRETS_DIR = secrets;
+  }
 });

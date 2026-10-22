@@ -60,7 +60,12 @@
 #      and (#820) by no other route: not gh run download, the artifacts REST
 #      API, the runtime artifact service (ACTIONS_RESULTS_URL and
 #      ACTIONS_RUNTIME_TOKEN) or any other action named for artifacts,
-#      downloads or the runtime.
+#      downloads or the runtime. (#870) A job on the release path that reads
+#      a secret other than GITHUB_TOKEN (the Apple signing secrets) is held
+#      the same way: it runs no Go, cgo, compiler, make, xcrun tool but
+#      notarytool and stapler, package manager, repository script or action
+#      but checkout and artifact transfer, and takes artifacts by digest
+#      (sha256sum, or shasum -a 256 on a macOS runner).
 #   7. (#687) "Authority" also counts any use of the `secrets` context other
 #      than secrets.GITHUB_TOKEN (including toJSON(secrets)), and `secrets:
 #      inherit`; and every rule that reads steps descends into local
@@ -153,8 +158,13 @@ trap 'rm -rf "$WORK"' EXIT
 #          | mutable | narrow | pushcache | opens-pr | catalog-pr | npmpin
 #          | runs | persist | images
 check() {
-	# shellcheck disable=SC2016 # JavaScript source, not shell: nothing should expand.
-	RULE="$1" FILE="$2" REPO="${REPO_DIR:-${HERE}/../..}" bun -e '
+	# Written to a file once and run from there, not handed to bun -e: the
+	# source outgrew the 128 KiB Linux allows a single argument
+	# (MAX_ARG_STRLEN; 131770 bytes in the #870 review, when execve refused
+	# it and every rule failed). printf is a builtin, so no exec limit applies.
+	if [ ! -s "${WORK}/check.mjs" ]; then
+		# shellcheck disable=SC2016 # JavaScript source, not shell: nothing should expand.
+		printf '%s' '
 const doc = Bun.YAML.parse(await Bun.file(process.env.FILE).text());
 const jobs = doc.jobs ?? {};
 const out = [];
@@ -392,6 +402,11 @@ const shRead = (src) => {
   return { cmds, funcs, arrays, fors, unread };
 };
 if (rule === "runs") {
+  // #870 review: and so are those of the two macOS signers, which hold the
+  // long-lived Apple signing secrets (sign-sidecar-darwin, sign-macos). A
+  // job that reads them has to have a list here, like one holding id-token,
+  // and may also write by redirection to the files named in its writes.
+  //
   // #1029: the commands the two npm publishing jobs run are listed, not the
   // ones they must not run, and (security review of #1029) so are those of
   // every other job holding id-token: today the two Windows signers, which
@@ -686,6 +701,228 @@ if (rule === "runs") {
         "missing=\"Windows signing is not configured (GCP_KMS_KEYRING unset)\"",
       ],
     },
+    "sign-sidecar-darwin": {
+      free: ["[", "echo", "exit", "mkdir", "printf", "read", "test", "true", "umask"],
+      pinned: {
+        "/usr/bin/tar": [
+          "/usr/bin/tar --no-mac-metadata -C \"${RUNNER_TEMP}/work/${leg}\" -czf \"${RUNNER_TEMP}/out/${leg}/jarvis-app.tar.gz\" Jarvis.app",
+          "/usr/bin/tar -tvzf \"$tgz\"",
+          "/usr/bin/tar -tzf \"$tgz\"",
+          "/usr/bin/tar -xzf \"$tgz\" -C \"$dest\"",
+        ],
+        awk: [
+          "awk -F\x27\"\x27 \x27/Developer ID Application/ {print $2; exit}\x27",
+        ],
+        base64: [
+          "base64 -d",
+        ],
+        codesign: [
+          "codesign --force --options runtime --timestamp --entitlements packaging/macos/entitlements.plist --sign \"$IDENTITY\" \"$app\"",
+          "codesign --force --options runtime --timestamp --sign \"$IDENTITY\" \"${app}/Contents/MacOS/ocr-helper\"",
+          "codesign --verify --strict --verbose=2 \"$app\"",
+        ],
+        ditto: [
+          "ditto -c -k --keepParent \"$app\" \"$zip\"",
+        ],
+        export: [
+          "export COPYFILE_DISABLE=1",
+          "export LC_ALL=C",
+        ],
+        find: [
+          "find \"$dest\" -mindepth 1 -maxdepth 1 -print",
+          "find \"$dest\" -mindepth 1 -not -type d -not -type f -print",
+          "find \"$dest\" -type f -links +1 -print",
+          "find \"$in\" -mindepth 1 -not -type d -not -type f -print",
+          "find \"$in\" -mindepth 1 -print",
+        ],
+        jq: [
+          "jq -r \x27.id // empty\x27",
+          "jq -r \x27.status // empty\x27",
+        ],
+        openssl: [
+          "openssl rand -hex 24",
+        ],
+        rm: [
+          "rm -f \"$cert\"",
+        ],
+        security: [
+          "security create-keychain -p \"$KEYCHAIN_PASSWORD\" \"$kc\"",
+          "security find-identity -v -p codesigning \"$kc\"",
+          "security import \"$cert\" -k \"$kc\" -P \"$APPLE_CERT_PASSWORD\" -T /usr/bin/codesign",
+          "security list-keychains -d user -s \"$kc\" login.keychain",
+          "security set-key-partition-list -S apple-tool:,apple: -s -k \"$KEYCHAIN_PASSWORD\" \"$kc\"",
+          "security set-keychain-settings -lut 3600 \"$kc\"",
+          "security unlock-keychain -p \"$KEYCHAIN_PASSWORD\" \"$kc\"",
+        ],
+        set: [
+          "set -euo pipefail",
+        ],
+        shasum: [
+          "shasum -a 256 \"${RUNNER_TEMP}/out/${leg}/jarvis-app.tar.gz\"",
+          "shasum -a 256 -c -",
+        ],
+        sort: [
+          "sort",
+        ],
+        spctl: [
+          "spctl --assess --type execute -vv \"$app\"",
+        ],
+        trap: [
+          "trap \x27rm -f \"$cert\" \"$key\"; security list-keychains -d user -s login.keychain || true; security delete-keychain \"$kc\" || true\x27 EXIT",
+        ],
+        unset: [
+          "unset APPLE_CERT_P12 APPLE_CERT_PASSWORD ASC_API_KEY_P8",
+        ],
+        xcrun: [
+          "xcrun notarytool log \"$SUBMISSION_ID\" --key \"$key\" --key-id \"$ASC_KEY_ID\" --issuer \"$ASC_ISSUER_ID\"",
+          "xcrun notarytool submit \"$zip\" --key \"$key\" --key-id \"$ASC_KEY_ID\" --issuer \"$ASC_ISSUER_ID\" --wait --timeout 30m --output-format json",
+          "xcrun stapler staple \"$app\"",
+        ],
+      },
+      funcs: [],
+      arrays: [],
+      fors: ["leg in darwin-arm64 darwin-x64"],
+      calls: [],
+      assigns: [
+        "absent=\"\"",
+        "absent=\"${absent:+${absent}, }APPLE_CERT_P12\"",
+        "absent=\"${absent:+${absent}, }APPLE_CERT_PASSWORD\"",
+        "absent=\"${absent:+${absent}, }ASC_KEY_ID\"",
+        "absent=\"${absent:+${absent}, }ASC_ISSUER_ID\"",
+        "absent=\"${absent:+${absent}, }ASC_API_KEY_P8\"",
+        "IDENTITY=\"$(security find-identity -v -p codesigning \"$kc\" | awk -F\x27\"\x27 \x27/Developer ID Application/ {print $2; exit}\x27)\"",
+        "KEYCHAIN_PASSWORD=\"$(openssl rand -hex 24)\"",
+        "NOTARY_STATUS=\"$(echo \"$SUBMIT_JSON\" | jq -r \x27.status // empty\x27)\"",
+        "SUBMISSION_ID=\"$(echo \"$SUBMIT_JSON\" | jq -r \x27.id // empty\x27)\"",
+        "SUBMIT_JSON=\"$(xcrun notarytool submit \"$zip\" \\\n    --key \"$key\" --key-id \"$ASC_KEY_ID\" --issuer \"$ASC_ISSUER_ID\" \\\n    --wait --timeout 30m --output-format json)\"",
+        "app=\"${RUNNER_TEMP}/work/${leg}/Jarvis.app\"",
+        "cert=\"${RUNNER_TEMP}/cert.p12\"",
+        "dest=\"${RUNNER_TEMP}/work/${leg}\"",
+        "in=\"${RUNNER_TEMP}/unsigned\"",
+        "kc=\"${RUNNER_TEMP}/sign.keychain-db\"",
+        "key=\"${RUNNER_TEMP}/asc_key.p8\"",
+        "names=\"$(/usr/bin/tar -tzf \"$tgz\")\"",
+        "sum=\"$(shasum -a 256 \"${RUNNER_TEMP}/out/${leg}/jarvis-app.tar.gz\")\"",
+        "sum=\"${sum%% *}\"",
+        "tgz=\"${RUNNER_TEMP}/unsigned/${leg}/jarvis-app.tar.gz\"",
+        "want=\"$(printf \x27%s\\n\x27 \"${in}/darwin-arm64\" \"${in}/darwin-arm64/jarvis-app.tar.gz\" \"${in}/darwin-x64\" \"${in}/darwin-x64/jarvis-app.tar.gz\")\"",
+        "zip=\"${RUNNER_TEMP}/Jarvis-${leg}.zip\"",
+      ],
+      writes: ["\"$cert\"", "\"$key\""],
+    },
+    "sign-macos": {
+      free: ["[", "echo", "exit", "mkdir", "printf", "read", "test", "true", "umask"],
+      pinned: {
+        "/usr/bin/tar": [
+          "/usr/bin/tar -tvzf \"$tgz\"",
+          "/usr/bin/tar -tzf \"$tgz\"",
+          "/usr/bin/tar -xzf \"$tgz\" -C \"$dest\"",
+        ],
+        awk: [
+          "awk -F\x27\"\x27 \x27/Developer ID Application/ {print $2; exit}\x27",
+        ],
+        base64: [
+          "base64 -d",
+        ],
+        codesign: [
+          "codesign --force --options runtime --timestamp --sign \"$IDENTITY\" \"$APP\"",
+          "codesign --force --timestamp --sign \"$IDENTITY\" \"$DMG\"",
+          "codesign --verify --strict --verbose=2 \"$APP\"",
+        ],
+        ditto: [
+          "ditto -c -k --keepParent \"$APP\" \"${RUNNER_TEMP}/InstallJarvis.zip\"",
+        ],
+        export: [
+          "export LC_ALL=C",
+        ],
+        find: [
+          "find \"$dest\" -mindepth 1 -maxdepth 1 -print",
+          "find \"$dest\" -mindepth 1 -not -type d -not -type f -print",
+          "find \"$dest\" -type f -links +1 -print",
+          "find \"$in\" -mindepth 1 -print",
+        ],
+        hdiutil: [
+          "hdiutil create -volname \"Install Jarvis\" -srcfolder \"$APP\" -format UDZO -ov \"$DMG\"",
+          "hdiutil create -volname \"Install Jarvis\" -srcfolder \"${RUNNER_TEMP}/work/Install Jarvis.app\" -format UDZO -ov \"${RUNNER_TEMP}/out/Install-Jarvis.dmg\"",
+        ],
+        jq: [
+          "jq -r \x27.id // empty\x27 \"${RUNNER_TEMP}/notary-app.json\"",
+          "jq -r \x27.id // empty\x27 \"${RUNNER_TEMP}/notary-dmg.json\"",
+          "jq -r \x27.status // empty\x27 \"${RUNNER_TEMP}/notary-app.json\"",
+          "jq -r \x27.status // empty\x27 \"${RUNNER_TEMP}/notary-dmg.json\"",
+        ],
+        openssl: [
+          "openssl rand -hex 24",
+        ],
+        rm: [
+          "rm -f \"$cert\"",
+        ],
+        security: [
+          "security create-keychain -p \"$KEYCHAIN_PASSWORD\" \"$kc\"",
+          "security find-identity -v -p codesigning \"$kc\"",
+          "security import \"$cert\" -k \"$kc\" -P \"$APPLE_CERT_PASSWORD\" -T /usr/bin/codesign",
+          "security list-keychains -d user -s \"$kc\" login.keychain",
+          "security set-key-partition-list -S apple-tool:,apple: -s -k \"$KEYCHAIN_PASSWORD\" \"$kc\"",
+          "security set-keychain-settings -lut 3600 \"$kc\"",
+          "security unlock-keychain -p \"$KEYCHAIN_PASSWORD\" \"$kc\"",
+        ],
+        set: [
+          "set -euo pipefail",
+        ],
+        shasum: [
+          "shasum -a 256 \"${RUNNER_TEMP}/out/Install-Jarvis.dmg\"",
+          "shasum -a 256 -c -",
+        ],
+        spctl: [
+          "spctl --assess --type open --context context:primary-signature -vv \"$DMG\"",
+        ],
+        tee: [
+          "tee \"${RUNNER_TEMP}/notary-app.json\"",
+          "tee \"${RUNNER_TEMP}/notary-dmg.json\"",
+        ],
+        trap: [
+          "trap \x27rm -f \"$cert\" \"$key\"; security list-keychains -d user -s login.keychain || true; security delete-keychain \"$kc\" || true\x27 EXIT",
+        ],
+        unset: [
+          "unset APPLE_CERT_P12 APPLE_CERT_PASSWORD ASC_API_KEY_P8",
+        ],
+        xcrun: [
+          "xcrun notarytool log \"$APP_ID\" --key \"$key\" --key-id \"$ASC_KEY_ID\" --issuer \"$ASC_ISSUER_ID\"",
+          "xcrun notarytool log \"$DMG_ID\" --key \"$key\" --key-id \"$ASC_KEY_ID\" --issuer \"$ASC_ISSUER_ID\"",
+          "xcrun notarytool submit \"$DMG\" --key \"$key\" --key-id \"$ASC_KEY_ID\" --issuer \"$ASC_ISSUER_ID\" --wait --timeout 30m --output-format json",
+          "xcrun notarytool submit \"${RUNNER_TEMP}/InstallJarvis.zip\" --key \"$key\" --key-id \"$ASC_KEY_ID\" --issuer \"$ASC_ISSUER_ID\" --wait --timeout 30m --output-format json",
+          "xcrun stapler staple \"$APP\"",
+          "xcrun stapler staple \"$DMG\"",
+        ],
+      },
+      funcs: [],
+      arrays: [],
+      fors: [],
+      calls: [],
+      assigns: [
+        "absent=\"\"",
+        "absent=\"${absent:+${absent}, }APPLE_CERT_P12\"",
+        "absent=\"${absent:+${absent}, }APPLE_CERT_PASSWORD\"",
+        "absent=\"${absent:+${absent}, }ASC_KEY_ID\"",
+        "absent=\"${absent:+${absent}, }ASC_ISSUER_ID\"",
+        "absent=\"${absent:+${absent}, }ASC_API_KEY_P8\"",
+        "APP=\"${RUNNER_TEMP}/work/Install Jarvis.app\"",
+        "APP_ID=\"$(jq -r \x27.id // empty\x27 \"${RUNNER_TEMP}/notary-app.json\")\"",
+        "DMG=\"${RUNNER_TEMP}/out/Install-Jarvis.dmg\"",
+        "DMG_ID=\"$(jq -r \x27.id // empty\x27 \"${RUNNER_TEMP}/notary-dmg.json\")\"",
+        "IDENTITY=\"$(security find-identity -v -p codesigning \"$kc\" | awk -F\x27\"\x27 \x27/Developer ID Application/ {print $2; exit}\x27)\"",
+        "KEYCHAIN_PASSWORD=\"$(openssl rand -hex 24)\"",
+        "cert=\"${RUNNER_TEMP}/cert.p12\"",
+        "dest=\"${RUNNER_TEMP}/work\"",
+        "in=\"${RUNNER_TEMP}/unsigned\"",
+        "kc=\"${RUNNER_TEMP}/sign.keychain-db\"",
+        "key=\"${RUNNER_TEMP}/asc_key.p8\"",
+        "names=\"$(/usr/bin/tar -tzf \"$tgz\")\"",
+        "sum=\"$(shasum -a 256 \"${RUNNER_TEMP}/out/Install-Jarvis.dmg\")\"",
+        "tgz=\"${RUNNER_TEMP}/unsigned/install-jarvis-app.tar.gz\"",
+      ],
+      writes: ["\"$cert\"", "\"$key\""],
+    },
   };
   const writesOidc = (perm) => perm === "write-all" || (perm && typeof perm === "object" && perm["id-token"] === "write");
   const outOps = new Set([">", ">>", ">|", "&>", "&>>", "<>"]);
@@ -697,15 +934,22 @@ if (rule === "runs") {
     // Every job holding id-token has a list, whatever it runs: one that
     // only had to when it ran npm publish let an added job, or a signer,
     // download and run anything (security review of #1029).
+    // #870 review: a job that reads the Apple or App Store Connect secrets
+    // is held to a list too. narrow refuses toolchains by name, and a deny
+    // list is never complete (bash x, osascript x, arch -arm64 x, env -S x
+    // all passed it), so here every command it runs is listed instead.
+    const appleSecrets = /\bsecrets\s*(?:\.\s*|\[\s*\\?[\x27"])(?:APPLE_|ASC_)/i.test(JSON.stringify({ env: doc.env, job }));
     if (!allow) {
       if (writesOidc(job.permissions ?? doc.permissions))
         out.push(name + ": holds id-token and has no list of the commands it may run (#1029): add one to runAllow");
+      if (appleSecrets)
+        out.push(name + ": reads the Apple signing secrets and has no list of the commands it may run (#870): add one to runAllow");
       continue;
     }
     if (process.env.RUNS_REPORT) out.push("checked " + name);
     const listed = new Set([...allow.free, ...Object.keys(allow.pinned)]);
     for (const f of allow.funcs) if (listed.has(f)) out.push(name + ": runAllow lists " + f + " as a function and as a command");
-    const used = { free: new Set(), forms: new Set(), funcs: new Set(), arrays: new Set(), fors: new Set(), calls: new Set(), assigns: new Set() };
+    const used = { free: new Set(), forms: new Set(), funcs: new Set(), arrays: new Set(), fors: new Set(), calls: new Set(), assigns: new Set(), writes: new Set() };
     const plainShell = ["bash", "bash -e {0}", "bash --noprofile --norc -eo pipefail {0}"];
     for (const [i, { st, via }] of steps.entries()) {
       if (typeof st.run !== "string") continue;
@@ -732,7 +976,8 @@ if (rule === "runs") {
       }
       for (const c of r.cmds) {
         for (const rd of c.redirs)
-          if ((outOps.has(rd.op) && rd.target !== "/dev/null" && rd.target !== "\"$GITHUB_OUTPUT\"") ||
+          if (outOps.has(rd.op) && (allow.writes ?? []).includes(rd.target)) used.writes.add(rd.target);
+          else if ((outOps.has(rd.op) && rd.target !== "/dev/null" && rd.target !== "\"$GITHUB_OUTPUT\"") ||
               ((rd.op === ">&" || rd.op === "<&") && !/^(?:[0-9]+|-)$/.test(rd.target)))
             out.push(label + " writes to " + rd.target + " (only /dev/null, $GITHUB_OUTPUT or another descriptor) (#1029)");
         if (c.name === null) {
@@ -743,7 +988,8 @@ if (rule === "runs") {
           }
           continue;
         }
-        for (const a of c.assigns) if (a !== "LC_ALL=C") out.push(label + " runs " + c.name + " with " + a + " in front, where only LC_ALL=C may go (#1029)");
+        // IFS= in front of read changes only how that read splits its line.
+        for (const a of c.assigns) if (a !== "LC_ALL=C" && !(a === "IFS=" && c.name === "read")) out.push(label + " runs " + c.name + " with " + a + " in front, where only LC_ALL=C may go (#1029)");
         if (!Object.hasOwn(allow.pinned, c.name) && !/^(?:[A-Za-z_][A-Za-z0-9_.-]*|\[)$/.test(c.name)) {
           out.push(label + " runs " + c.name + ", which is not a plain command name this rule can check (a path or an expansion) (#1029)");
           continue;
@@ -773,6 +1019,7 @@ if (rule === "runs") {
     for (const x of allow.fors) if (!used.fors.has(x)) stale("for list", x);
     for (const x of allow.calls) if (!used.calls.has(x)) stale("call", x);
     for (const x of allow.assigns) if (!used.assigns.has(x)) stale("assignment", x);
+    for (const x of allow.writes ?? []) if (!used.writes.has(x)) stale("write target", x);
   }
 }
 if (rule === "scoped" && doc.permissions === undefined)
@@ -1544,12 +1791,98 @@ if (rule === "narrow") {
         if (String(st.uses ?? "").startsWith("./"))
           out.push(name + ": runs local action " + st.uses + " in a job holding id-token");
     }
+    // #870: the same for a job that reads a secret other than GITHUB_TOKEN.
+    // The Apple signing certificate, its password and the App Store Connect
+    // key are long-lived: unlike a federated token they do not expire with
+    // the job, and the signer imports them into a keychain and a file. So a
+    // compiler, a Go module, cgo, a Makefile, a package manager or a
+    // repository script run in that job could read them out. The build
+    // happens in a job without them (build-sidecar-darwin-*, build-macos),
+    // and the result crosses to the signer with its digest. Only checkout
+    // and the artifact actions run there, and a secret at the workflow level
+    // reaches every job, so it counts for all of them.
+    const secretHeld = [...JSON.stringify({ env: doc.env, job }).matchAll(/\$\{\{([\s\S]*?)\}\}/g)]
+      .some((m) => /\bsecrets\b(?!\s*\.\s*GITHUB_TOKEN\b)/i.test(m[1]));
+    // The Apple and App Store Connect secrets are held to this in EVERY
+    // workflow, release path or not (#870 review): a new workflow handed
+    // them (a nightly notarization test, say) must not escape the rule.
+    const appleHeld = /\bsecrets\s*(?:\.\s*|\[\s*\\?[\x27"])(?:APPLE_|ASC_)/i.test(JSON.stringify({ env: doc.env, job }));
+    if ((release && secretHeld || appleHeld) && typeof job.uses !== "string") {
+      // Every shell plain, as in a job holding id-token: shell: node {0} or
+      // python {0} runs the script in an interpreter this rule cannot read.
+      const plainShellS = ["bash", "sh", "bash -e {0}", "sh -e {0}", "bash --noprofile --norc -eo pipefail {0}"];
+      for (const st of steps) {
+        const sh = st.shell ?? job.defaults?.run?.shell ?? doc.defaults?.run?.shell;
+        if (sh !== undefined && !plainShellS.includes(String(sh).trim()))
+          out.push(name + ": step " + JSON.stringify(st.name ?? st.id ?? st.uses ?? "") + " runs in shell: " + sh + " in a job holding a signing secret (#870 review)");
+      }
+      // No env that names code to run first or changes what the tools load
+      // (the id-token list, plus the dynamic loader on macOS), and nothing
+      // written to GITHUB_ENV or GITHUB_PATH for later steps.
+      // CODESIGN_ALLOCATE names the helper codesign runs; DEVELOPER_DIR,
+      // TOOLCHAINS, SDKROOT and xcrun_* choose what xcrun runs; PERL5OPT and
+      // friends load code into shasum, a Perl script on macOS (#870 review).
+      const poisonS = /^(?:BASH_ENV|ENV|PATH|NODE_OPTIONS|LD_[A-Z0-9_]+|DYLD_[A-Z0-9_]+|CODESIGN_ALLOCATE|DEVELOPER_DIR|TOOLCHAINS|SDKROOT|xcrun_[A-Za-z0-9_]+|PERL5OPT|PERL5LIB|PERLLIB|PERL5DB|PERL_[A-Z0-9_]+|BASH_FUNC_.+|SHELLOPTS|BASHOPTS|PS4|(?:HTTPS?|ALL|NO|FTP)_PROXY|SSL_CERT_(?:FILE|DIR)|CURL_CA_BUNDLE|HOME|TMPDIR|CDPATH|OPENSSL_(?:CONF|MODULES|ENGINES)|GITHUB_.+|RUNNER_.+|ACTIONS_.+)$/i;
+      for (const [lvl, e] of [["workflow", doc.env], ["job", job.env], ...steps.map((st) => ["step " + JSON.stringify(st.name ?? st.id ?? st.uses ?? ""), st.env])])
+        for (const k of Object.keys(e && typeof e === "object" ? e : {}))
+          if (poisonS.test(k)) out.push(name + ": " + lvl + " env sets " + k + " in a job holding a signing secret (#870 review)");
+      for (const st of steps) {
+        const text = [typeof st.run === "string" ? st.run : "", ...Object.values(st.env && typeof st.env === "object" ? st.env : {}).map(String)].join("\n");
+        if (/GITHUB_(?:ENV|PATH)\b|_runner_file_commands/i.test(text))
+          out.push(name + ": step " + JSON.stringify(st.name ?? st.id ?? st.uses ?? "") + " writes GITHUB_ENV or GITHUB_PATH in a job holding a signing secret (#870 review)");
+        const run = (typeof st.run === "string" ? st.run : "").replace(/\\\n/g, " ").split("\n").map(stripComment).join("\n");
+        for (const m of run.matchAll(/(?:^|[\s;&|(`])(?:(?:export|declare|typeset|local|readonly|env)\s+(?:-\w+\s+)*)?([A-Za-z_][A-Za-z0-9_]*)\+?=/gm))
+          if (poisonS.test(m[1])) out.push(name + ": step " + JSON.stringify(st.name ?? st.id ?? "") + " sets " + m[1] + " in its script, in a job holding a signing secret (#870 review)");
+      }
+      for (const line of lines) {
+        // Code the build job made, or the checkout carries, run as a
+        // program: a program named by a variable, one inside a bundle, open,
+        // or a path into the checkout (an extensionless script too).
+        // Read with its own command-position rule: the cmd() prefix takes
+        // any directory in front of a program, which here would read every
+        // "${RUNNER_TEMP}/x" argument as a program.
+        if (new RegExp("(?:^\\(?\\s*|[;&|`{]\\s*|!\\s+|\\$\\(\\s*|\\b(?:then|do|else|if|elif|while|until|exec|command|env|sudo|nohup|time|xargs)\\s+)" +
+            "(?:open(?=$|[\\s;&|)])|\"?\\$\\{?[A-Za-z_]|[^\\s;&|\"]*\\.app/|\"?(?:\\./|\\.\\./|sidecar/|packaging/|scripts/|\\.github/))").test(line))
+          out.push(name + ": runs a program from a variable, a bundle or the checkout in a job holding a signing secret (#870 review): " + line);
+        // ...or has another program run one for it (#870 review).
+        if (/(?:^|[\s;&|(])find\b[^;&|]*\s-(?:exec|execdir|ok|okdir)\b/.test(line) || /\bawk\b.*(?:\bsystem\s*\(|\|\s*getline\b|\bprint\b[^\n]*\|\s*["\x27$])/.test(line) || cmd("xargs(?=$|\\s)").test(line))
+          out.push(name + ": runs programs through find -exec, xargs or awk system() in a job holding a signing secret (#870 review): " + line);
+        if (cmd("go(?:\\s|$)").test(line) || /build-sidecar\.sh/.test(line) ||
+            cmd("(?:bun|bunx|npx|yarn|pnpm|node|make|gmake|swiftc|swift|xcodebuild|clang|gcc|cc|ld|cargo|cmake|python3?|perl|ruby)(?=$|[\\s;&|)])").test(line) ||
+            npmRuns.test(line))
+          out.push(name + ": builds or runs build tooling in a job holding a signing secret (#870): " + line);
+        // xcrun runs any developer tool by name (clang, swiftc, make): only
+        // the two the signer needs.
+        if (cmd("xcrun(?=$|\\s)").test(line) && !cmd("xcrun\\s+(?:notarytool|stapler)\\s").test(line))
+          out.push(name + ": runs xcrun other than notarytool or stapler, which can run build tooling, in a job holding a signing secret (#870): " + line);
+        if (cmd("(?:apt-get|apt|dpkg|snap|brew|port|yum|dnf|apk|pip3?|pipx|uv|conda|nix|nix-env|gem|cargo|choco|winget|softwareupdate|installer)(?=$|[\\s;&|)])").test(line))
+          out.push(name + ": installs packages in a job holding a signing secret (#870): " + line);
+        if (cmd("(?:(?:ba|z|da)?sh\\s+-\\S*c|eval|source|\\.)(?:\\s|$)").test(line))
+          out.push(name + ": runs shell text or sources a file in a job holding a signing secret, which this rule cannot see into (#870): " + line);
+        // A repository script is code this rule does not read: the signer
+        // runs only what its own steps say (packaging/macos/make-icns.sh and
+        // the Makefile stay in the build job).
+        if (cmd("[\\w.-]+\\.(?:sh|bash|py|rb|pl|js|mjs|cjs|ts)(?=$|[\\s;&|)])").test(line))
+          out.push(name + ": runs a repository script in a job holding a signing secret (#870): " + line);
+      }
+      for (const [lvl, e] of [["workflow", doc.env], ["job", job.env], ...steps.map((st) => ["step " + (st.name ?? st.id ?? st.uses ?? ""), st.env])])
+        for (const k of Object.keys(e && typeof e === "object" ? e : {}))
+          if (/^(?:CGO_[A-Z_]+|CC|CXX|GOFLAGS|GOOS|GOARCH)$/i.test(k)) out.push(name + ": " + lvl + " env sets " + k + " (a Go or C build) in a job holding a signing secret (#870)");
+      const okSecretUses = ["actions/checkout@", "actions/download-artifact@", "actions/upload-artifact@"];
+      for (const st of steps) {
+        const u = String(st.uses ?? "");
+        if (u && !okSecretUses.some((a) => u.toLowerCase().startsWith(a)))
+          out.push(name + ": uses " + u + " in a job holding a signing secret (only checkout and artifact transfer) (#870)");
+      }
+      if (job.container !== undefined || job.services !== undefined) out.push(name + ": runs a container or services in a job holding a signing secret (#870)");
+    }
     // Artifacts are writable by every job in the run, so on the release path
     // a job holding id-token or a write scope takes one only by digest
     // (#781): the step right after each download runs `sha256sum -c` on a
     // digest that arrives as a job output (`needs.<job>.outputs`, which only
-    // that job can set), under the same condition as the download.
-    const privileged = oidc || perm === "write-all" || (perm && typeof perm === "object" && Object.values(perm).some((v) => v === "write"));
+    // that job can set), under the same condition as the download. A job
+    // holding a signing secret too (#870): what it signs is what it ships.
+    const privileged = oidc || secretHeld || perm === "write-all" || (perm && typeof perm === "object" && Object.values(perm).some((v) => v === "write"));
     if (release && privileged) {
       // Action names are case-insensitive to GitHub.
       const isDownload = (st) => String(st.uses ?? "").toLowerCase().startsWith("actions/download-artifact@");
@@ -1578,7 +1911,10 @@ if (rule === "narrow") {
         const label = name + ": download " + JSON.stringify(st.with?.name ?? st.with?.pattern ?? "(all)");
         // The check, on a line that is not a comment, not excused by || true.
         const code = typeof next?.run === "string" ? next.run.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n") : "";
-        const checkLine = code.split("\n").find((l) => /\bsha256sum\b[^\n]*\s-c\b/.test(l));
+        // sha256sum, or on a macOS runner (#870), which has shasum and not
+        // always sha256sum, shasum -a 256: the same check, the same hex.
+        const SUM = "(?:sha256sum|shasum\\s+-a\\s*256)";
+        const checkLine = code.split("\n").find((l) => new RegExp("\\b" + SUM + "\\b[^\\n]*\\s-c\\b").test(l));
         // The env vars that carry a job-output digest; the script must read
         // one of them, not merely have it in scope.
         const carriers = Object.entries(next?.env ?? {})
@@ -1589,6 +1925,19 @@ if (rule === "narrow") {
           out.push(label + " is checked against no needs.<job>.outputs digest");
         else if (!carriers.some((k) => new RegExp("\\$\\{?" + k + "\\b").test(code)))
           out.push(label + " has a needs.<job>.outputs digest in env that its check never reads");
+        // shasum picks the algorithm in check mode from the length of the
+        // digest and ignores -a (#870 review: a 40-hex SHA-1 line passes
+        // shasum -a 256 -c), so where it checks, every digest it reads must
+        // be held to 64 hex first, in the same step: by name, or by ${!v}
+        // over a for list that names it.
+        else if (!/\bsha256sum\b/.test(checkLine) && !carriers.every((k) =>
+            new RegExp("\\[\\[\\s*\"\\$\\{?" + k + "\\}?\"\\s*=~\\s*\\^\\[0-9a-f\\]\\{64\\}\\$\\s*\\]\\]").test(code.slice(0, code.indexOf(checkLine))) ||
+            (/\[\[\s*"\$\{!v\}"\s*=~\s*\^\[0-9a-f\]\{64\}\$\s*\]\]/.test(code.slice(0, code.indexOf(checkLine))) && new RegExp("\\bfor\\s+v\\s+in\\b[^;\\n]*\\b" + k + "\\b").test(code.slice(0, code.indexOf(checkLine))))))
+          out.push(label + " is checked with shasum, which takes the algorithm from the digest length, without first holding every digest to 64 hex");
+        // ...and a failed hold stops the step (#870 review: || : passed).
+        else if (!/\bsha256sum\b/.test(checkLine) && code.slice(0, code.indexOf(checkLine)).split("\n").filter((l) => /=~\s*\^\[0-9a-f\]\{64\}\$/.test(l))
+            .some((l) => !/\]\]\s*\|\|\s*(?:\{\s*(?:[^;]*;\s*)*exit\s+[1-9][0-9]*\s*;?\s*\}|exit\s+[1-9][0-9]*)\s*;?\s*$/.test(l.trim())))
+          out.push(label + " is checked with shasum after a 64-hex hold whose failure does not stop the step");
         // Its failure must end the step: no || after it (on its line or
         // continued onto the next), no if or ! around it, no set +e, and no
         // shell other than the default bash -e.
@@ -1596,7 +1945,7 @@ if (rule === "narrow") {
         // (GitHub default shell is bash -e, without pipefail), a trailing &,
         // or a $( ) or backtick around it would each take its exit status.
         else if (/\|\|/.test(checkLine) || /^\s*(?:if|elif|while|until)\b|^\s*!/.test(checkLine) ||
-                 !/\bsha256sum\b[^|;&)`]*\s-c\b[^|;&)`]*$/.test(checkLine) || /\$\(|`/.test(checkLine.split(/\bsha256sum\b/).slice(-2, -1)[0] ?? "") ||
+                 !new RegExp("\\b" + SUM + "\\b[^|;&)`]*\\s-c\\b[^|;&)`]*$").test(checkLine) || /\$\(|`/.test(checkLine.split(new RegExp("\\b" + SUM + "\\b")).slice(-2, -1)[0] ?? "") ||
                  /(?:^|[;&|]\s*)set\s+\+o\s+pipefail\b/m.test(code) ||
                  /(?:^|[;&|]\s*)set\s+\+[a-z]*e/m.test(code) || /(?:^|[;&|]\s*)set\s+\+o\s+errexit/m.test(code) ||
                  (next.shell !== undefined && !/^bash\s+-e\b|^bash$/.test(String(next.shell))))
@@ -1975,7 +2324,9 @@ if (rule === "pinned") {
       out.push(name + ": uses " + u + " (not a full commit SHA)");
 }
 if (out.length) console.log(out.join("\n"));
-'
+' >"${WORK}/check.mjs"
+	fi
+	RULE="$1" FILE="$2" REPO="${REPO_DIR:-${HERE}/../..}" bun "${WORK}/check.mjs"
 }
 
 # expect_clean <label> <rule> <file>
@@ -3189,6 +3540,117 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 	expect_caught 'Go modules and build output restored from the Actions cache' mutable "$WORKFLOWS/sidecar-release.yml" \
 		$'          cache: false\n' ''
 }
+# #870: a job holding a signing secret builds nothing, installs nothing,
+# runs no repository script and takes its input only by digest.
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	R870='in a job holding a signing secret'
+	expect_caught 'go build in the sidecar macOS signing job (#870)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n' $'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n          go build -o x .\n' \
+		"sign-sidecar-darwin: builds or runs build tooling ${R870} (#870): go build"
+	expect_caught 'make dmg-installer back in the installer signing job (#870)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          hdiutil create -volname "Install Jarvis" -srcfolder "$APP" -format UDZO -ov "$DMG"' '          make dmg-installer' \
+		"sign-macos: builds or runs build tooling ${R870} (#870): make dmg-installer"
+	expect_caught 'clang run through xcrun in the installer signing job (#870)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          xcrun stapler staple "$APP"' $'          xcrun stapler staple "$APP"\n          xcrun --sdk macosx clang -o x x.c' \
+		"sign-macos: runs xcrun other than notarytool or stapler, which can run build tooling, ${R870} (#870): xcrun --sdk macosx clang"
+	expect_caught 'swiftc in the sidecar macOS signing job (#870)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'            app="${RUNNER_TEMP}/work/${leg}/Jarvis.app"\n            if' $'            app="${RUNNER_TEMP}/work/${leg}/Jarvis.app"\n            swiftc -O -o x helpers/ocr-helper.swift\n            if' \
+		"sign-sidecar-darwin: builds or runs build tooling ${R870} (#870): swiftc"
+	expect_caught 'a brew install in the sidecar macOS signing job (#870)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n' $'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n          brew install coreutils\n' \
+		"sign-sidecar-darwin: installs packages ${R870} (#870): brew install coreutils"
+	expect_caught 'a repository script in the sidecar macOS signing job (#870)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n' $'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n          packaging/macos/make-icns.sh\n' \
+		"sign-sidecar-darwin: runs a repository script ${R870} (#870): packaging/macos/make-icns.sh"
+	expect_caught 'shell text in the installer signing job (#870)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          xcrun stapler staple "$APP"' $'          xcrun stapler staple "$APP"\n          bash -c "$X"' \
+		"sign-macos: runs shell text or sources a file ${R870}"
+	expect_caught 'setup-go in the installer signing job (#870)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'      - name: Verify the installer app\n' $'      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n        with:\n          cache: false\n      - name: Verify the installer app\n' \
+		"sign-macos: uses actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e ${R870}"
+	expect_caught 'a local action in the sidecar macOS signing job (#870)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Unpack the bundles\n' $'      - uses: ./.github/actions/bun-setup\n      - name: Unpack the bundles\n' \
+		"sign-sidecar-darwin: uses ./.github/actions/bun-setup ${R870}"
+	expect_caught 'cgo switched on in the sidecar macOS signing job (#870)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      signed: ${{ steps.applesign.outputs.ready }}\n    steps:\n      # For packaging/macos/entitlements.plist.' $'      signed: ${{ steps.applesign.outputs.ready }}\n    env:\n      CGO_ENABLED: "1"\n    steps:\n      # For packaging/macos/entitlements.plist.' \
+		"sign-sidecar-darwin: job env sets CGO_ENABLED (a Go or C build) ${R870}"
+	expect_caught 'the Apple secret back in the installer macOS build (#870)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'  build-macos:\n    needs: resolve\n' $'  build-macos:\n    env:\n      HAVE_APPLE_SIGNING: ${{ secrets.APPLE_CERT_P12 != \'\' }}\n    needs: resolve\n' \
+		"build-macos: builds or runs build tooling ${R870} (#870): GOOS=darwin GOARCH=arm64 go build"
+	expect_caught 'the Apple secret back in a sidecar darwin build leg (#870)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'  build-sidecar-darwin-arm64:\n    needs: resolve\n' $'  build-sidecar-darwin-arm64:\n    env:\n      HAVE_APPLE_SIGNING: ${{ secrets.APPLE_CERT_P12 != \'\' }}\n    needs: resolve\n' \
+		"build-sidecar-darwin-arm64: builds or runs build tooling ${R870} (#870): ../.github/scripts/build-sidecar.sh"
+	expect_caught 'an Apple secret in the workflow env, reaching every build leg (#870)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'env:\n  # No GO_VERSION' $'env:\n  APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}\n  # No GO_VERSION' \
+		"build-sidecar-linux-x64: builds or runs build tooling ${R870} (#870): ../.github/scripts/build-sidecar.sh"
+	expect_caught 'the macOS signer taking the unsigned app without its digest check (#870)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          echo "${SHA256}  ${in}/install-jarvis-app.tar.gz" | shasum -a 256 -c -' '          echo "${SHA256}  ${in}/install-jarvis-app.tar.gz" | cat' \
+		'sign-macos: download "unsigned-installer-darwin" is not followed at once by a sha256sum -c'
+	expect_caught 'the macOS signer checking a SHA-1 instead (#870)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          echo "${SHA256}  ${in}/install-jarvis-app.tar.gz" | shasum -a 256 -c -' '          echo "${SHA256}  ${in}/install-jarvis-app.tar.gz" | shasum -a 1 -c -' \
+		'sign-macos: download "unsigned-installer-darwin" is not followed at once by a sha256sum -c'
+	expect_caught 'the macOS signer excusing a failed digest check (#870)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          echo "${SHA256}  ${in}/install-jarvis-app.tar.gz" | shasum -a 256 -c -' '          echo "${SHA256}  ${in}/install-jarvis-app.tar.gz" | shasum -a 256 -c - || true' \
+		'sign-macos: download "unsigned-installer-darwin" is checked with a failure excused'
+	expect_caught 'a signing step run by node instead of bash (#870 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Unpack the bundles\n        run: |\n' $'      - name: Unpack the bundles\n        shell: node {0}\n        run: |\n' \
+		"sign-sidecar-darwin: step \"Unpack the bundles\" runs in shell: node {0} ${R870}"
+	expect_caught 'BASH_ENV sourcing a file before a signing step (#870 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'      - name: Unpack the installer app\n        run: |\n' $'      - name: Unpack the installer app\n        env:\n          BASH_ENV: x\n        run: |\n' \
+		"sign-macos: step \"Unpack the installer app\" env sets BASH_ENV ${R870}"
+	expect_caught 'the dynamic loader poisoned for later signing steps through GITHUB_ENV (#870 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n' $'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n          echo "DYLD_INSERT_LIBRARIES=/tmp/x.dylib" >> "$GITHUB_ENV"\n' \
+		"sign-sidecar-darwin: step \"Unpack the bundles\" writes GITHUB_ENV or GITHUB_PATH ${R870}"
+	expect_caught 'an extensionless repository program in the signing job (#870 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          xcrun stapler staple "$APP"' $'          xcrun stapler staple "$APP"\n          sidecar/packaging/macos/sign-helper "$APP"' \
+		"sign-macos: runs a program from a variable, a bundle or the checkout ${R870}"
+	expect_caught 'the unsigned bundle binary run as a smoke test in the signing job (#870 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'            app="${RUNNER_TEMP}/work/${leg}/Jarvis.app"\n            if' $'            app="${RUNNER_TEMP}/work/${leg}/Jarvis.app"\n            "${app}/Contents/MacOS/jarvis" --version\n            if' \
+		"sign-sidecar-darwin: runs a program from a variable, a bundle or the checkout ${R870}"
+	expect_caught 'the bundle opened in the signing job (#870 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          xcrun stapler staple "$APP"' $'          xcrun stapler staple "$APP"\n          open "$APP"' \
+		"sign-macos: runs a program from a variable, a bundle or the checkout ${R870}"
+	expect_caught 'an Apple secret handed to a workflow off the release path (#870 review)' narrow "$WORKFLOWS/test.yml" \
+		'      - run: .github/scripts/release-exec.test.sh' $'      - run: .github/scripts/release-exec.test.sh\n        env:\n          K: ${{ secrets.ASC_API_KEY_P8 }}' \
+		"runs a program from a variable, a bundle or the checkout ${R870}"
+	expect_caught 'the macOS signer checking with shasum a digest it never held to 64 hex (#870 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-macos reported no digest"; exit 1; }\n' '' \
+		'is checked with shasum, which takes the algorithm from the digest length, without first holding every digest to 64 hex'
+	expect_caught 'the sidecar macOS signer holding only one leg digest to 64 hex (#870 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'          [[ "$SHA_DARWIN_X64" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::no digest was reported for DARWIN_X64"; exit 1; }\n' '' \
+		'is checked with shasum, which takes the algorithm from the digest length, without first holding every digest to 64 hex'
+	expect_caught 'codesign pointed at another allocate helper (#870 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}' $'          CODESIGN_ALLOCATE: x\n          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}' \
+		"sign-sidecar-darwin: step \"Sign and notarize (Developer ID)\" env sets CODESIGN_ALLOCATE ${R870}"
+	expect_caught 'xcrun pointed at another developer directory in the script (#870 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          xcrun stapler staple "$APP"' $'          export DEVELOPER_DIR="${RUNNER_TEMP}/work"\n          xcrun stapler staple "$APP"' \
+		"sign-macos: step \"Sign, notarize and staple\" sets DEVELOPER_DIR in its script, ${R870}"
+	expect_caught 'bundle files run through find -exec in the signing job (#870 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n' $'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n          find "${RUNNER_TEMP}/work" -name hook -exec {} \;\n' \
+		"sign-sidecar-darwin: runs programs through find -exec, xargs or awk system() ${R870}"
+	expect_caught 'a 64-hex hold excused with || : before shasum (#870 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-macos reported no digest"; exit 1; }' '          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || :' \
+		'is checked with shasum after a 64-hex hold whose failure does not stop the step'
+	expect_caught 'an Apple secret by index syntax in a workflow off the release path (#870 review)' narrow "$WORKFLOWS/test.yml" \
+		'      - run: .github/scripts/release-exec.test.sh' $'      - run: .github/scripts/release-exec.test.sh\n        env:\n          K: ${{ secrets[\'APPLE_CERT_P12\'] }}' \
+		"runs a program from a variable, a bundle or the checkout ${R870}"
+	expect_caught 'awk running a command after a semicolon in its program (#870 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          xcrun stapler staple "$APP"' $'          xcrun stapler staple "$APP"\n          ls | awk \'{ n++; system($0) }\'' \
+		"sign-macos: runs programs through find -exec, xargs or awk system() ${R870}"
+	expect_caught 'awk piping into a command (#870 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          xcrun stapler staple "$APP"' $'          xcrun stapler staple "$APP"\n          ls | awk \'{ print | "sh" }\'' \
+		"sign-macos: runs programs through find -exec, xargs or awk system() ${R870}"
+	expect_caught 'PERL5OPT loading code into shasum in a signing job (#870 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'          SHA_DARWIN_ARM64: ${{ needs.build-sidecar-darwin-arm64.outputs.sha256 }}\n' $'          PERL5OPT: -Mx\n          SHA_DARWIN_ARM64: ${{ needs.build-sidecar-darwin-arm64.outputs.sha256 }}\n' \
+		"sign-sidecar-darwin: step \"Verify the bundles\" env sets PERL5OPT ${R870}"
+	expect_caught 'a 64-hex hold whose brace only echoes the word exit (#870 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-macos reported no digest"; exit 1; }' '          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo exit 1; }' \
+		'is checked with shasum after a 64-hex hold whose failure does not stop the step'
+	expect_caught 'a 64-hex hold whose exit sits behind true || (#870 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-macos reported no digest"; exit 1; }' '          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { true || exit 1; }' \
+		'is checked with shasum after a 64-hex hold whose failure does not stop the step'
+}
 # shellcheck disable=SC2016 # literal workflow text, not shell.
 {
 	expect_caught 'secrets: inherit back on the sidecar call' narrow "$WORKFLOWS/release-exec.yml" \
@@ -3196,7 +3658,7 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 	expect_caught 'a declared signing secret the caller does not pass (signing would silently skip)' narrow "$WORKFLOWS/release-exec.yml" \
 		$'      ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}\n' ''
 	expect_caught 'id-token back on a sidecar build leg' narrow "$WORKFLOWS/sidecar-release.yml" \
-		$'      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    env: &build-sidecar-leg-env' $'      contents: read\n      id-token: write\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    env: &build-sidecar-leg-env' \
+		$'      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    # One leg.' $'      contents: read\n      id-token: write\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    # One leg.' \
 		'a matrix job holding id-token'
 	expect_caught 'the brain build back in the job that holds id-token' narrow "$WORKFLOWS/release-exec.yml" \
 		'      - name: Verify the tarball' $'      - run: bun run prepublishOnly\n      - name: Verify the tarball' \
@@ -3698,12 +4160,12 @@ echo "no env in the job that installs npm and packs the brain tarball names code
 }
 
 echo
-echo "the npm publishing jobs, and every job holding id-token, run only the commands listed for them (#1029)"
+echo "the npm publishing jobs, every job holding id-token, and the macOS signers run only the commands listed for them (#1029, #870)"
 for f in "$WORKFLOWS"/*.yml; do
 	expect_clean "$(basename "$f"): every job holding id-token runs only its listed commands" runs "$f"
 done
 # Both jobs were read, or the list matched nothing and passed for that.
-for spec in "release-exec.yml publish-brain" "sidecar-release.yml publish-sidecar" "sidecar-release.yml sign-sidecar-windows" "installer-release.yml sign-windows"; do
+for spec in "release-exec.yml publish-brain" "sidecar-release.yml publish-sidecar" "sidecar-release.yml sign-sidecar-windows" "installer-release.yml sign-windows" "sidecar-release.yml sign-sidecar-darwin" "installer-release.yml sign-macos"; do
 	read -r f j <<<"$spec"
 	if RUNS_REPORT=1 check runs "$WORKFLOWS/$f" | grep -qxF "checked $j"; then
 		ok "the run allowlist read ${j} in ${f} (#1029)"
@@ -3844,6 +4306,33 @@ done
 	expect_caught 'another publishing job, npm quoted (review of #1029)' runs "$WORKFLOWS/release-exec.yml" \
 		$'\njobs:\n' $'\njobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions:\n      id-token: write\n    steps:\n      - run: \x27"npm" publish x.tgz\x27\n' \
 		'sneak: holds id-token and has no list of the commands it may run'
+	# #870 review: the macOS signers run only their listed commands; each of
+	# these passed the narrow deny list.
+	SDU=$'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n'
+	expect_caught 'bash running a repository file in the macOS signer (#870 review)' runs "$WORKFLOWS/sidecar-release.yml" \
+		"$SDU" "${SDU}          bash packaging/macos/x"$'\n' \
+		'sign-sidecar-darwin: step Unpack the bundles runs bash, which is not on the sign-sidecar-darwin list'
+	expect_caught 'zsh -f running a repository file in the macOS signer (#870 review)' runs "$WORKFLOWS/sidecar-release.yml" \
+		"$SDU" "${SDU}          zsh -f packaging/macos/x"$'\n' \
+		'sign-sidecar-darwin: step Unpack the bundles runs zsh, which is not on the sign-sidecar-darwin list'
+	expect_caught 'osascript running a repository script in the macOS signer (#870 review)' runs "$WORKFLOWS/sidecar-release.yml" \
+		"$SDU" "${SDU}          osascript packaging/macos/x.applescript"$'\n' \
+		'sign-sidecar-darwin: step Unpack the bundles runs osascript, which is not on the sign-sidecar-darwin list'
+	expect_caught 'arch running a repository file in the macOS signer (#870 review)' runs "$WORKFLOWS/sidecar-release.yml" \
+		"$SDU" "${SDU}          arch -arm64 packaging/macos/x"$'\n' \
+		'sign-sidecar-darwin: step Unpack the bundles runs arch, which is not on the sign-sidecar-darwin list'
+	expect_caught 'env -S running a repository file in the macOS signer (#870 review)' runs "$WORKFLOWS/sidecar-release.yml" \
+		"$SDU" "${SDU}          /usr/bin/env -S packaging/macos/x"$'\n' \
+		'sign-sidecar-darwin: step Unpack the bundles runs /usr/bin/env, which is not a plain command name this rule can check'
+	expect_caught 'xattr writing to the bundle in the macOS signer (#870 review)' runs "$WORKFLOWS/sidecar-release.yml" \
+		"$SDU" "${SDU}          xattr -w com.example.x y \"\${RUNNER_TEMP}/work\""$'\n' \
+		'sign-sidecar-darwin: step Unpack the bundles runs xattr, which is not on the sign-sidecar-darwin list'
+	expect_caught 'codesign run in a form not listed in the installer signer (#870 review)' runs "$WORKFLOWS/installer-release.yml" \
+		'          codesign --verify --strict --verbose=2 "$APP"' '          codesign --verify --strict --verbose=2 "$APP" --entitlements /tmp/x' \
+		'which is not one of the forms listed for codesign'
+	expect_caught 'another job handed the Apple secrets with no list of its own (#870 review)' runs "$WORKFLOWS/installer-release.yml" \
+		$'\njobs:\n' $'\njobs:\n  sneak:\n    runs-on: macos-latest\n    permissions:\n      contents: read\n    steps:\n      - run: echo x\n        env:\n          K: ${{ secrets.ASC_API_KEY_P8 }}\n' \
+		'sneak: reads the Apple signing secrets and has no list of the commands it may run'
 }
 
 echo

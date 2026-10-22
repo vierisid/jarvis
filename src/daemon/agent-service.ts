@@ -84,6 +84,7 @@ import { TaskDispatcher } from '../agents/conv/task-dispatcher.ts';
 import { DialogueCompactor } from '../agents/conv/dialogue-compactor.ts';
 import type { ConvTaskEvent } from '../agents/conv/conv-orchestrator.ts';
 import { getRecentConversation, getMessages } from '../vault/conversations.ts';
+import { PEBBLE_CHANNEL, PEBBLE_DIALOGUE_WINDOW_MS, recordPebbleExchange } from './pebble-dialogue.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import type { ScopedChatInput } from '../brief/chat-transport.ts';
 
@@ -427,6 +428,9 @@ export class AgentService implements Service, IAgentService {
           ...(contextKey ? { contextKey } : {}),
           ...(siteContext ? { siteContext } : {}),
           ...(conversation ? { signal: conversation.signal } : {}),
+          // The router's own "execute, don't ask" (#927); the panel context
+          // above goes to the task tier only.
+          ...(channel === PEBBLE_CHANNEL ? { pebbleVoice: true } : {}),
         }, taskListener)) {
           if (event.type === 'text') {
             // Insert a separator so the acknowledgment text doesn't blur into
@@ -713,6 +717,17 @@ export class AgentService implements Service, IAgentService {
   }
 
   /**
+   * Store a finished Pebble exchange as dialogue (#927), only when this agent
+   * runs the conversation tier: that tier is the only reader of it (see
+   * loadRecentDialogue), and classic mode would keep transcripts in the vault
+   * for nothing. Returns whether it was stored; never throws.
+   */
+  recordPebbleExchange(userText: string, reply: string): boolean {
+    if (!this.convOrchestrator) return false;
+    return recordPebbleExchange(userText, reply);
+  }
+
+  /**
    * Pull recent messages from the persistent conversation for the conv LLM.
    * When the conversation is long, the DialogueCompactor condenses old turns
    * into a summary system message and keeps the most-recent N verbatim. This
@@ -723,6 +738,9 @@ export class AgentService implements Service, IAgentService {
     try {
       const recent = getRecentConversation(channel);
       if (!recent) return [];
+      // A Pebble turn continues only a recent exchange (#927).
+      if (channel === PEBBLE_CHANNEL
+        && Date.now() - recent.conversation.last_message_at > PEBBLE_DIALOGUE_WINDOW_MS) return [];
       conversationId = recent.conversation.id;
     } catch (err) {
       console.warn('[AgentService] Failed to load recent dialogue:', err);

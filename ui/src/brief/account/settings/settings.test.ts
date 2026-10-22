@@ -4,6 +4,7 @@ import {
   settingsEnvelope,
   type SettingsExample,
 } from "./fixtures";
+import { createSettingsPort } from "./adapter";
 import {
   readSettings,
   readVoice,
@@ -28,6 +29,14 @@ function deferred<T>() {
 }
 const next = "en-US-GuyNeural",
   third = "en-GB-SoniaNeural";
+test("missing host is unsupported and never fabricates preferences", async () => {
+  const p = createSettingsPort("scope");
+  expect(await p.read(signal())).toEqual({ state: "unsupported" });
+  expect(await p.saveVoice("a".repeat(64), next, signal())).toEqual({
+    state: "unsupported",
+  });
+  expect(await p.replayTutorial()).toEqual({ state: "unavailable" });
+});
 test("strict F23 settings parsing rejects malformed or invented choices", () => {
   const f = makeSettingsFixture(),
     data = settingsEnvelope(f.current()).data;
@@ -305,26 +314,26 @@ test("all explicit destinations use the host compatibility owner", async () => {
   expect(f.writes).toHaveLength(0);
   f.controller.retire();
 });
-test("confirmed saves that do not match the selection never claim success", async () => {
-  for (const data of [
-    (f: ReturnType<typeof makeSettingsFixture>) => f.current(),
-    (f: ReturnType<typeof makeSettingsFixture>) => ({
-      ...f.current(),
-      voice: { ...f.current().voice, voice: next, provider: "different" },
+test("bad save receipts/readbacks never claim success", async () => {
+  const f = makeSettingsFixture();
+  for (const response of [
+    Response.json({
+      saved: true,
+      voice: { ...f.current().voice, voice: next },
+      application: "guessed",
+    }),
+    Response.json({
+      saved: true,
+      voice: f.current().voice,
+      application: "applied",
     }),
   ]) {
-    const f = await fixture(),
-      c = f.controller;
-    f.port.saveVoice = async () => ({
-      state: "confirmed",
-      data: data(f),
-      application: "applied",
-    });
-    await c.selectVoice(next);
-    expect(c.snapshot().phase).toBe("unknown");
-    expect(c.snapshot().message).not.toContain("saved and applied");
-    c.retire();
+    f.host.request = async () => response;
+    expect(
+      await f.port.saveVoice(f.current().voice.revision, next, signal()),
+    ).toEqual({ state: "unknown" });
   }
+  f.controller.retire();
 });
 test("restart notice survives failed and recovered polling without resubmission", async () => {
   const f = await fixture("restart-required"),

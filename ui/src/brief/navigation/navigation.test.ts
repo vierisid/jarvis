@@ -48,6 +48,22 @@ test("every retained destination has an owner and an exact released room/setting
   }
 });
 
+test("Profile and Billing destinations open their Brief rooms, else the exact Settings tab (#1102)", () => {
+  expect(destination("profile", room => room === "profile").target).toEqual({ kind: "brief", route: { room: "profile", selection: {} } });
+  expect(destination("billing", room => room === "billing").target).toEqual({ kind: "brief", route: { room: "billing", selection: {} } });
+  expect(destination("profile", () => false).target).toEqual({ kind: "legacy", hash: "#/_room_settings", settingsTab: "profile" });
+  expect(destination("billing", () => false).target).toEqual({ kind: "legacy", hash: "#/_room_settings", settingsTab: "billing" });
+  // Every Brief account-menu room has a destination, so no Brief room is reachable only as a legacy tab.
+  const rooms: string[] = Object.values(DESTINATIONS).flatMap(d => "room" in d ? [d.room] : []);
+  for (const room of ["authority", "connected-workspace", "profile", "billing"]) expect(rooms).toContain(room);
+});
+
+test("owner decision (#1102): voice \"open settings\" lands in the Brief Settings room; advanced settings keeps its own destination", () => {
+  expect(roomIntent("settings", () => true, false).target).toEqual({ kind: "brief", route: { room: "settings", selection: {} } });
+  expect(roomIntent("settings", () => false, false).target).toEqual({ kind: "legacy", hash: "#/_room_settings" });
+  expect(destination("advanced-settings", () => true).target).toEqual({ kind: "legacy", hash: "#/_room_settings", settingsTab: "general" });
+});
+
 test("all room, native panel, standalone and opaque object links retain exact legacy owners", () => {
   for (const key of ROOM_KEYS) for (const prefix of ["room", "panel"]) {
     const hash = `#/_${prefix}_${key}`;

@@ -836,6 +836,23 @@ export class WebSocketService implements Service {
    * and external channels.
    */
   broadcastHeartbeat(text: string): void {
+    this.broadcastHeartbeatToDashboard(text);
+
+    // Also push to external channels
+    if (this.channelService) {
+      this.channelService.broadcastToAll(text).catch(err =>
+        console.error('[WSService] Channel heartbeat broadcast error:', err)
+      );
+    }
+  }
+
+  /**
+   * The same heartbeat, to dashboard clients only (#1026). For the pebble's
+   * fast-path confirmations ("Closed Settings.", "Hid the amber background
+   * agent."): they acknowledge something done on this screen, so by the
+   * owner's decision they never go to Telegram or Discord.
+   */
+  broadcastHeartbeatToDashboard(text: string): void {
     const message: WSMessage = {
       type: 'chat',
       payload: {
@@ -846,13 +863,6 @@ export class WebSocketService implements Service {
       timestamp: Date.now(),
     };
     this.wsServer.broadcast(message);
-
-    // Also push to external channels
-    if (this.channelService) {
-      this.channelService.broadcastToAll(text).catch(err =>
-        console.error('[WSService] Channel heartbeat broadcast error:', err)
-      );
-    }
   }
 
   /**
@@ -3457,7 +3467,11 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * `unreached` at once when no socket took the frame (nobody connected who
    * could answer, #1011).
    *
-   * Without `client` the native panels answer (the pebble's tab switch). With
+   * Without `client` the native panels answer (the pebble's tab switch), and
+   * only a socket of `sidecar`, the sidecar that asked, is listened to
+   * (#1026): the resultId goes to every client, and any local /ws client
+   * could otherwise answer first and decide what the pebble says. Without
+   * either, nobody could be listened to, and the action is refused. With
    * `client`, only that dashboard gets the resultId, is asked to answer
    * (`resultFrom: 'dashboard'`), and is listened to (#965): a dashboard voice
    * turn asks the dashboard the user spoke to.
@@ -3473,7 +3487,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   requestRoomAction(
     action: { room: string; action: string; args?: Record<string, unknown> },
     timeoutMs: number = ROOM_ACTION_QUEUE_TTL_MS,
-    opts?: { client?: ServerWebSocket<unknown>; onLate?: LateRoomAnswer },
+    opts?: { client?: ServerWebSocket<unknown>; sidecar?: string; onLate?: LateRoomAnswer },
   ): Promise<RoomActionOutcome> {
     // Backstop for every caller (#969): an action no room handler carries out
     // is never broadcast, whoever asked for it.
@@ -3490,7 +3504,13 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       console.warn(`[WSService] refused room action ${action.room}/${action.action}: it changes more than the screen, and no dashboard was named to run it`);
       return Promise.resolve('rejected');
     }
-    const { id, outcome } = this.roomActionResults.open(timeoutMs, client, opts?.onLate);
+    const sidecar = opts?.sidecar;
+    if (!client && !sidecar) {
+      console.warn(`[WSService] refused room action ${action.room}/${action.action}: nobody was named whose answer counts`);
+      return Promise.resolve('rejected');
+    }
+    const accepts = client || !sidecar ? undefined : (from: unknown) => this.wsServer.socketSpeaksForSidecar(from, sidecar);
+    const { id, outcome } = this.roomActionResults.open(timeoutMs, client, opts?.onLate, accepts);
     const payload = {
       source: 'room_action',
       room: action.room,
@@ -3527,6 +3547,11 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         payload: { ...payload, ...waited },
         timestamp: Date.now(),
       }) > 0;
+      // Every panel still gets it, to stay in step (#974), but it reached
+      // someone who could answer only if a socket of the asking sidecar is
+      // connected (#1026). Otherwise say so now, not as no answer after the
+      // full wait (#1011).
+      if (reached && accepts) reached = [...this.wsServer.getClients()].some(accepts);
     }
     // Nobody took the frame: say so now rather than after the timeout, and
     // not as "sent but no answer" (#1011). That includes a dashboard whose

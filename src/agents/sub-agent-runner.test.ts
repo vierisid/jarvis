@@ -414,6 +414,23 @@ describe('a tool that returns an image (#709)', () => {
     expect(blocks.find((b) => b.type === 'text')?.text).toContain('Desktop screenshot captured.');
   });
 
+  test('a page-sized text block beside the picture is capped before it is framed (#876)', async () => {
+    const r = new ToolRegistry();
+    r.register({ name: 'desktop_screenshot', category: 'desktop', description: 'synthetic', parameters: {}, execute: async () => ({
+      content: [
+        { type: 'text' as const, text: 'p'.repeat(50_000) },
+        { type: 'image' as const, source: { type: 'base64' as const, media_type: 'image/png', data: PIXELS } },
+      ],
+    }) });
+    const model = recordingLlm([[shot('c1')]]);
+    await runSubAgent({ agent: agent(), task: 'look', context: '', llmManager: model.manager, toolRegistry: r, maxIterations: 3 });
+    const blocks = toolMsg(model.sent[1] as Sent, 'c1')!.content as Array<{ type: string; text?: string; source?: { data: string } }>;
+    expect(blocks.find((b) => b.type === 'image')?.source?.data).toBe(PIXELS);
+    // desktop_screenshot taints but is not framed by name, so the text is the
+    // capped payload exactly: the same cut and note a plain string gets.
+    expect(blocks.find((b) => b.type === 'text')!.text).toBe('p'.repeat(6000) + '\n... (truncated, was 50000 chars)');
+  });
+
   test('once the model has seen it, the image leaves the transcript, the checkpoints and the result', async () => {
     const model = recordingLlm([[shot('c1')], [read('c2')]]);
     const turns: SubAgentCheckpoint[] = [];

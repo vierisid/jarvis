@@ -42,6 +42,17 @@
 #   missing inputs.
 #   Plus (#817) post-sign verification in a job without id-token, on the
 #   digest that ships, gating the publish.
+#   Plus (#870) the macOS split: the darwin legs and build-macos build an
+#   unsigned bundle and upload it under unsigned-*, and sign-sidecar-darwin
+#   and sign-macos take it by that digest, unpack only the bundle, sign, and
+#   hand on their own digest. The digest checks and unpack steps executed
+#   verbatim against tampered, extra, missing, linked and escaping fixtures.
+#   Plus (#921) macOS signing fails closed: each signer decides in a
+#   readiness step (executed verbatim against every combination of secrets,
+#   dry run and escape hatch), a job holding no secret refuses an unsigned
+#   answer on a real run and checks the team that signed what ships with
+#   verify-macos-signature.sh (executed against codesign, stapler, spctl and
+#   hdiutil stand-ins), and the publish waits for it.
 #   Plus (#684, #818) the version gates of sidecar-release.yml and
 #   installer-release.yml, executed verbatim against hostile VERSION files,
 #   and no ${{ }} inside any run: of either workflow, nor (#998) of
@@ -260,17 +271,20 @@ if (mode === "sidecar-digests") {
     return keys.length === 1 && keys[0] === "include" && Array.isArray(m.include) ? m.include.length : Infinity;
   };
   // The digest is taken of the finished file: after it, the job only uploads.
-  const digestLast = (name) => {
+  // want: the artifact names uploaded after it, as a regex; outs: the
+  // outputs that must be exactly the digest step outputs of the same name.
+  const digestLast = (name, want = /^sidecar-/, outs = ["sha256"]) => {
     const steps = jobs[name]?.steps ?? [];
     const at = steps.findIndex((st) => st.id === "digest");
     if (at < 0) { out.push(name + ": no step with id digest"); return; }
     if (!steps.slice(at + 1).length || !steps.slice(at + 1).every(isUpload))
       out.push(name + ": steps other than uploads run after the digest is taken, so it may not describe what is uploaded");
-    if (!steps.slice(at + 1).some((st) => /^sidecar-/.test(String(st.with?.name ?? ""))))
-      out.push(name + ": does not upload a sidecar-* artifact after the digest");
+    if (!steps.slice(at + 1).some((st) => want.test(String(st.with?.name ?? ""))))
+      out.push(name + ": does not upload a " + want.source + " artifact after the digest");
     if (steps[at]["continue-on-error"] !== undefined) out.push(name + ": the digest step has continue-on-error");
-    if (jobs[name]?.outputs?.sha256 !== "${{ steps.digest.outputs.sha256 }}")
-      out.push(name + ": output sha256 must be ${{ steps.digest.outputs.sha256 }} (got " + JSON.stringify(jobs[name]?.outputs?.sha256) + ")");
+    for (const o of outs)
+      if (jobs[name]?.outputs?.[o] !== "${{ steps.digest.outputs." + o + " }}")
+        out.push(name + ": output " + o + " must be ${{ steps.digest.outputs." + o + " }} (got " + JSON.stringify(jobs[name]?.outputs?.[o]) + ")");
   };
   // A matrix shares ONE outputs block across its legs, so any leg can write
   // a name another leg owns. Whatever uploads a sidecar-* artifact is
@@ -279,18 +293,58 @@ if (mode === "sidecar-digests") {
   for (const [name, job] of Object.entries(jobs))
     if ((job.steps ?? []).some((st) => isUpload(st) && /^sidecar-/.test(String(st.with?.name ?? ""))) && legsOf(name) > 1)
       out.push(name + ": uploads a sidecar-* artifact from a matrix of " + legsOf(name) + " legs, any of which can set the digest output");
-  // Each leg job: one leg, the npm package its name says.
+  // Each leg job: one leg, the npm package its name says. The linux legs
+  // upload what ships; the darwin legs upload their unsigned bundle under
+  // unsigned-<leg>, and only sign-sidecar-darwin uploads sidecar-darwin-*
+  // (#870), with the digest of each as an output of its own.
   const expectEnv = {};
   for (const leg of ["linux-x64", "linux-arm64", "darwin-arm64", "darwin-x64"]) {
     const j = "build-sidecar-" + leg;
     if (!jobs[j]) { out.push("no " + j + " job"); continue; }
     const inc = jobs[j].strategy?.matrix?.include ?? [];
     if (legsOf(j) !== 1 || inc[0]?.npm_pkg !== leg) out.push(j + ": must build exactly the " + leg + " leg (got " + JSON.stringify(inc.map((l) => l.npm_pkg)) + ")");
-    digestLast(j);
-    expectEnv[leg] = "needs." + j + ".outputs.sha256";
+    if (leg.startsWith("darwin")) {
+      digestLast(j, /^unsigned-/);
+      // Whatever the build leg uploads, it is not what ships.
+      for (const st of jobs[j].steps ?? [])
+        if (isUpload(st) && /^sidecar-/.test(String(st.with?.name ?? "")) && (st.if === undefined || /darwin/.test(String(st.if)) && !/!=/.test(String(st.if))))
+          out.push(j + ": uploads " + JSON.stringify(st.with?.name) + " itself; the darwin bundle that ships is the one sign-sidecar-darwin uploads (#870)");
+      expectEnv[leg] = "needs.sign-sidecar-darwin.outputs.sha256_" + leg.replace(/-/g, "_");
+    } else {
+      digestLast(j);
+      expectEnv[leg] = "needs." + j + ".outputs.sha256";
+    }
   }
   digestLast("sign-sidecar-windows");
   expectEnv["win32-x64"] = "needs.sign-sidecar-windows.outputs.sha256";
+  // #870: the darwin signer takes each unsigned bundle by the digest of the
+  // build leg that made it, in the step right after its downloads, bound by
+  // name so the two legs cannot cross over, and uploads both signed bundles
+  // after its digest step, one output each. One job, no matrix.
+  const SD = "sign-sidecar-darwin";
+  if (!jobs[SD]) out.push("no " + SD + " job");
+  else {
+    if (legsOf(SD) !== 1) out.push(SD + ": has a matrix, whose legs would share one outputs block");
+    digestLast(SD, /^sidecar-darwin-(?:arm64|x64)$/, ["sha256_darwin_arm64", "sha256_darwin_x64"]);
+    const steps = jobs[SD].steps ?? [];
+    const isDl = (st) => String(st.uses ?? "").toLowerCase().startsWith("actions/download-artifact@");
+    const ups = steps.filter(isUpload).map((st) => [st.with?.name, st.with?.path]);
+    if (JSON.stringify(ups) !== JSON.stringify([["sidecar-darwin-arm64", "${{ runner.temp }}/out/darwin-arm64/jarvis-app.tar.gz"], ["sidecar-darwin-x64", "${{ runner.temp }}/out/darwin-x64/jarvis-app.tar.gz"]]))
+      out.push(SD + ": uploads " + JSON.stringify(ups) + ", not sidecar-darwin-arm64 and sidecar-darwin-x64 from the paths its digest step hashes");
+    const dls = steps.map((st, i) => [st, i]).filter(([st]) => isDl(st));
+    if (JSON.stringify(dls.map(([st]) => [st.with?.name, st.with?.path])) !== JSON.stringify([["unsigned-darwin-arm64", "${{ runner.temp }}/unsigned/darwin-arm64"], ["unsigned-darwin-x64", "${{ runner.temp }}/unsigned/darwin-x64"]]) ||
+        dls.length !== 2 || dls[1][1] !== dls[0][1] + 1)
+      out.push(SD + ": must download exactly unsigned-darwin-arm64 and unsigned-darwin-x64, in two consecutive steps, each into runner.temp/unsigned/<leg>");
+    const chk = dls.length ? steps[dls[dls.length - 1][1] + 1] : undefined;
+    const CENV = { SHA_DARWIN_ARM64: "${{ needs.build-sidecar-darwin-arm64.outputs.sha256 }}", SHA_DARWIN_X64: "${{ needs.build-sidecar-darwin-x64.outputs.sha256 }}" };
+    if (!chk || typeof chk.run !== "string" || !/\bshasum\s+-a\s+256\s+-c\b/.test(chk.run) ||
+        JSON.stringify(Object.entries(chk.env ?? {}).sort()) !== JSON.stringify(Object.entries(CENV).sort()))
+      out.push(SD + ": the step right after its downloads is not a shasum -a 256 -c with env exactly " + JSON.stringify(CENV));
+    else if (chk.if !== undefined || chk["continue-on-error"] !== undefined || dls.some(([st]) => st.if !== undefined || st["continue-on-error"] !== undefined))
+      out.push(SD + ": its downloads or digest check can be skipped or allowed to fail");
+    for (const n of ["build-sidecar-darwin-arm64", "build-sidecar-darwin-x64"])
+      if (!needsOf(SD).includes(n)) out.push(SD + ": does not list " + n + " in needs, so its outputs read as empty");
+  }
   const pub = jobs["publish-sidecar"];
   if (!pub) out.push("no publish-sidecar job");
   else {
@@ -355,7 +409,7 @@ if (mode === "sidecar-digests") {
   // that job built, so the parse back by label cannot cross two legs over.
   // It is empty exactly when this call built nothing, which is how the
   // publish_only call learns there is nothing to publish.
-  const DIGESTS_OUT = "${{ jobs.resolve.outputs.build == \x27true\x27 && format(\x27linux-x64={0} linux-arm64={1} darwin-arm64={2} darwin-x64={3} win32-x64={4}\x27, jobs.build-sidecar-linux-x64.outputs.sha256, jobs.build-sidecar-linux-arm64.outputs.sha256, jobs.build-sidecar-darwin-arm64.outputs.sha256, jobs.build-sidecar-darwin-x64.outputs.sha256, jobs.sign-sidecar-windows.outputs.sha256) || \x27\x27 }}";
+  const DIGESTS_OUT = "${{ jobs.resolve.outputs.build == \x27true\x27 && format(\x27linux-x64={0} linux-arm64={1} darwin-arm64={2} darwin-x64={3} win32-x64={4}\x27, jobs.build-sidecar-linux-x64.outputs.sha256, jobs.build-sidecar-linux-arm64.outputs.sha256, jobs.sign-sidecar-darwin.outputs.sha256_darwin_arm64, jobs.sign-sidecar-darwin.outputs.sha256_darwin_x64, jobs.sign-sidecar-windows.outputs.sha256) || \x27\x27 }}";
   const wc = (doc.on ?? doc[true] ?? {}).workflow_call ?? {};
   if (wc.outputs?.digests?.value !== DIGESTS_OUT)
     out.push("the digests output must be exactly " + DIGESTS_OUT + " (got " + JSON.stringify(wc.outputs?.digests?.value) + ")");
@@ -418,12 +472,13 @@ if (mode === "sidecar-digests") {
 }
 if (mode === "installer-digests") {
   // #779: the installer crosses build-windows -> sign-windows -> publish, and
-  // build-macos -> publish, each by a digest that is a job output of the job
-  // that produced the bytes, checked in the step right after the download.
+  // (#870) build-macos -> sign-macos -> publish, each by a digest that is a
+  // job output of the job that produced the bytes, checked in the step right
+  // after the download.
   const out = [];
   const isUpload = (st) => String(st.uses ?? "").toLowerCase().startsWith("actions/upload-artifact@");
   const isDownload = (st) => String(st.uses ?? "").toLowerCase().startsWith("actions/download-artifact@");
-  for (const name of ["build-windows", "sign-windows", "build-macos"]) {
+  for (const name of ["build-windows", "sign-windows", "build-macos", "sign-macos"]) {
     const job = jobs[name];
     if (!job) { out.push("no " + name + " job"); continue; }
     // None of the three needs a matrix; with one, its legs would share one
@@ -446,7 +501,8 @@ if (mode === "installer-digests") {
     const steps = jobs[job]?.steps ?? [];
     const dl = steps.findIndex(isDownload);
     const v = steps[dl + 1];
-    if (dl < 0 || !v || typeof v.run !== "string" || !/\bsha256sum\b[^\n]*\s-c\b/.test(v.run)) {
+    // shasum -a 256 on macOS, which has it and not always sha256sum (#870).
+    if (dl < 0 || !v || typeof v.run !== "string" || !/\b(?:sha256sum|shasum\s+-a\s+256)\b[^\n]*\s-c\b/.test(v.run)) {
       out.push(job + ": the step right after its download is not a sha256sum -c");
       return;
     }
@@ -459,8 +515,17 @@ if (mode === "installer-digests") {
     }
   };
   check("sign-windows", { SHA256: "needs.build-windows.outputs.sha256" });
-  // The SIGNED installer: its digest comes from the signer, not the build.
-  check("publish", { SHA_WIN32_X64: "needs.sign-windows.outputs.sha256", SHA_DARWIN: "needs.build-macos.outputs.sha256" });
+  check("sign-macos", { SHA256: "needs.build-macos.outputs.sha256" });
+  // The SIGNED installers: their digests come from the signers, not the builds.
+  check("publish", { SHA_WIN32_X64: "needs.sign-windows.outputs.sha256", SHA_DARWIN: "needs.sign-macos.outputs.sha256" });
+  // #870: build-macos uploads only the unsigned app, under a name publish
+  // never downloads; the DMG that ships is the one sign-macos uploads.
+  for (const st of jobs["build-macos"]?.steps ?? [])
+    if (isUpload(st) && String(st.with?.name ?? "") !== "unsigned-installer-darwin")
+      out.push("build-macos: uploads " + JSON.stringify(st.with?.name) + ", not only unsigned-installer-darwin");
+  const smUps = (jobs["sign-macos"]?.steps ?? []).filter(isUpload).map((st) => st.with?.name);
+  if (JSON.stringify(smUps) !== JSON.stringify(["installer-darwin"]))
+    out.push("sign-macos: uploads " + JSON.stringify(smUps) + ", not installer-darwin alone");
   if (out.length) console.log(out.join("\n"));
   process.exit(0);
 }
@@ -819,6 +884,22 @@ if (mode === "postsign") {
       if (ver["continue-on-error"] !== undefined) out.push(T.verify + ": the signature check is allowed to fail");
       if (String(ver.env?.SIGN_REQUIRE_TRUSTED_CHAIN) !== "1") out.push(T.verify + ": SIGN_REQUIRE_TRUSTED_CHAIN is " + JSON.stringify(ver.env?.SIGN_REQUIRE_TRUSTED_CHAIN) + ", not \"1\"");
       if (ver.env?.SIGNING_PUBLISHER_CN !== "${{ vars.SIGNING_PUBLISHER_CN }}") out.push(T.verify + ": the publisher is not taken from vars.SIGNING_PUBLISHER_CN");
+      // #871: the signer is pinned to the leaf of the committed chain, which
+      // the script reads from the checkout by default. Pointed at any other
+      // file, the pin is whatever that file says, so nothing may point it.
+      for (const [lvl, e] of [["workflow", doc.env], ["job", v.env], ["step", ver.env]])
+        if (e && typeof e === "object" && "CODESIGN_CERT_FILE" in e) out.push(T.verify + ": the " + lvl + " env sets CODESIGN_CERT_FILE, so the signer is pinned to a certificate other than the committed leaf");
+      if (/CODESIGN_CERT_FILE/.test(ver.run)) out.push(T.verify + ": the signature check sets CODESIGN_CERT_FILE in its script, so the signer is pinned to a certificate other than the committed leaf");
+      // Nor change the PATH that finds openssl and osslsigncode, which the
+      // pin trusts (#871 review): no GITHUB_ENV or GITHUB_PATH write, no
+      // container, and before the check only checkout and download-artifact
+      // among actions, since an action can export either without saying so.
+      for (const st of steps.slice(0, at)) {
+        if (/GITHUB_(?:ENV|PATH)/.test(String(st.run ?? "") + JSON.stringify(st.with ?? {}))) out.push(T.verify + ": a step before the signature check writes GITHUB_ENV or GITHUB_PATH, which can change the certificate it pins or the tools it trusts");
+        const u = String(st.uses ?? "").toLowerCase();
+        if (u && !u.startsWith("actions/checkout@") && !u.startsWith("actions/download-artifact@")) out.push(T.verify + ": runs " + st.uses + " before the signature check (only checkout and download-artifact), which can change its env or PATH");
+      }
+      if (v.container !== undefined) out.push(T.verify + ": runs in a container, whose env and tools the signature check would trust");
       const inst = steps.findIndex((st) => typeof st.run === "string" && /\bapt-get\s+install\b[^\n]*\bosslsigncode\b/.test(st.run));
       if (inst < 0 || inst > at || steps[inst].if !== SIGNED) out.push(T.verify + ": does not install osslsigncode, under the same condition, before the check");
     }
@@ -859,6 +940,219 @@ if (mode === "postsign") {
       out.push(T.publish + ": runs under " + JSON.stringify(jobs[T.publish]?.if) + ", not exactly " + PUBLISH_IF);
   } else if (/\b(?:always|failure|cancelled)\s*\(/.test(String(jobs[T.publish]?.if ?? "")))
     out.push(T.publish + ": can run after a failed dependency (if: " + jobs[T.publish].if + ")");
+  if (out.length) console.log(out.join("\n"));
+  process.exit(0);
+}
+if (mode === "macsign") {
+  // #921: macOS signing fails closed on a real run, as #869 made Windows.
+  // The signer decides once, in its readiness step (executed verbatim
+  // below), and reports it as its signed output; a job that holds no secret
+  // and no id-token refuses an unsigned answer on a real run without
+  // ALLOW_UNSIGNED_MACOS, then checks the signature that ships, team and
+  // all; and the publisher waits for it.
+  const out = [];
+  const file = require("node:path").basename(process.env.WORKFLOW);
+  const T = file === "sidecar-release.yml"
+    ? { sign: "sign-sidecar-darwin", verify: "verify-sidecar-darwin", publish: "publish-sidecar", should: "needs.resolve.outputs.build == \x27true\x27",
+        artifacts: ["sidecar-darwin-arm64", "sidecar-darwin-x64"],
+        sums: { SHA_DARWIN_ARM64: "${{ needs.sign-sidecar-darwin.outputs.sha256_darwin_arm64 }}", SHA_DARWIN_X64: "${{ needs.sign-sidecar-darwin.outputs.sha256_darwin_x64 }}" } }
+    : file === "installer-release.yml"
+      ? { sign: "sign-macos", verify: "verify-macos", publish: "publish", should: "needs.resolve.outputs.should_release == \x27true\x27",
+          artifacts: ["installer-darwin"], sums: { SHA256: "${{ needs.sign-macos.outputs.sha256 }}" } }
+      : null;
+  if (!T) { console.log("no macOS signing is known for " + file); process.exit(0); }
+  const SECRETS = ["APPLE_CERT_P12", "APPLE_CERT_PASSWORD", "ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_API_KEY_P8"];
+  const READY = "steps.applesign.outputs.ready == \x27true\x27";
+  const SIGNED = "needs." + T.sign + ".outputs.signed == \x27true\x27";
+  const readsSecret = (x) => /\bsecrets\b/i.test(JSON.stringify(x ?? null));
+  const s = jobs[T.sign];
+  if (!s) out.push("no " + T.sign + " job");
+  else {
+    const steps = s.steps ?? [];
+    const ri = steps.findIndex((st) => st.id === "applesign");
+    const r = steps[ri];
+    const READY_ENV = { ALLOW_UNSIGNED_MACOS: "${{ vars.ALLOW_UNSIGNED_MACOS }}" };
+    for (const k of SECRETS) READY_ENV["HAVE_" + k] = "${{ secrets." + k + " != \x27\x27 }}";
+    if (!r || typeof r.run !== "string") out.push(T.sign + ": no readiness run step with id applesign");
+    else {
+      if (r.if !== undefined) out.push(T.sign + ": the readiness step runs under " + JSON.stringify(r.if) + ", so it can be skipped");
+      if (r["continue-on-error"] !== undefined) out.push(T.sign + ": the readiness step has continue-on-error, so a real run missing its signing config would continue unsigned");
+      if (r.shell !== undefined && r.shell !== "bash") out.push(T.sign + ": the readiness step runs under shell " + JSON.stringify(r.shell) + ", not bash");
+      if (JSON.stringify(Object.entries(r.env ?? {}).sort()) !== JSON.stringify(Object.entries(READY_ENV).sort()))
+        out.push(T.sign + ": the readiness step env must be exactly " + JSON.stringify(READY_ENV) + " (got " + JSON.stringify(r.env) + ")");
+      for (const st of steps.slice(0, ri))
+        if (/GITHUB_ENV/.test(String(st.run ?? "") + JSON.stringify(st.with ?? {})))
+          out.push(T.sign + ": a step before readiness writes GITHUB_ENV, which can change what the readiness step reads");
+    }
+    // What the readiness step reads besides its own env: DRY_RUN, from the
+    // workflow; nothing at the job level may tell it otherwise (#869 review).
+    for (const k of ["DRY_RUN", "ALLOW_UNSIGNED_MACOS", ...SECRETS.map((k) => "HAVE_" + k), "HAVE_APPLE_SIGNING"])
+      if (s.env && typeof s.env === "object" && k in s.env) out.push(T.sign + ": the job env sets " + k + ", which decides whether it signs");
+    if (s.outputs?.signed !== "${{ steps.applesign.outputs.ready }}")
+      out.push(T.sign + ": output signed must be ${{ steps.applesign.outputs.ready }} (got " + JSON.stringify(s.outputs?.signed) + "), or the check can be told there is nothing to verify");
+    // Every step that holds a secret value signs, and does so exactly when
+    // readiness said so, after it.
+    const signing = steps.map((st, i) => [st, i]).filter(([st, i]) => i !== ri && readsSecret(st));
+    if (!signing.length) out.push(T.sign + ": no step reads the signing secrets");
+    for (const [st, i] of signing) {
+      if (st.if !== READY) out.push(T.sign + ": step " + JSON.stringify(st.name ?? i) + " holds the signing secrets under " + JSON.stringify(st.if) + ", not exactly " + READY);
+      if (i < ri) out.push(T.sign + ": step " + JSON.stringify(st.name ?? i) + " signs before the readiness step decides");
+      if (st["continue-on-error"] !== undefined) out.push(T.sign + ": step " + JSON.stringify(st.name ?? i) + " may fail without failing the job");
+    }
+    if (s.if !== T.should) out.push(T.sign + ": runs under " + JSON.stringify(s.if) + ", not exactly " + T.should);
+  }
+  const v = jobs[T.verify];
+  if (!v) out.push("no " + T.verify + " job");
+  else {
+    const perm = v.permissions ?? doc.permissions;
+    if (perm === "write-all" || (perm && typeof perm === "object" && Object.values(perm).some((x) => x === "write")))
+      out.push(T.verify + ": holds a write scope or id-token (" + JSON.stringify(perm) + "); it needs neither");
+    if (readsSecret({ env: doc.env, job: v })) out.push(T.verify + ": reads a secret; the check that the signer did its job holds none of its credentials");
+    if (v.if !== T.should) out.push(T.verify + ": runs under " + JSON.stringify(v.if) + ", not exactly " + T.should);
+    if (!needsOf(T.verify).includes(T.sign)) out.push(T.verify + ": does not list " + T.sign + " in needs, so its outputs read as empty");
+    if (v.container !== undefined) out.push(T.verify + ": runs in a container, whose env and tools the check would trust");
+    if (v.env && typeof v.env === "object") for (const k of ["DRY_RUN", "ALLOW_UNSIGNED_MACOS", "APPLE_TEAM_ID", "ALLOW_UNPINNED_MACOS", "PATH"]) if (k in v.env) out.push(T.verify + ": the job env sets " + k + ", which its checks read");
+    const steps = v.steps ?? [];
+    const isDl = (st) => String(st.uses ?? "").toLowerCase().startsWith("actions/download-artifact@");
+    const dls = steps.map((st, i) => [st, i]).filter(([st]) => isDl(st));
+    if (JSON.stringify(dls.map(([st]) => st.with?.name)) !== JSON.stringify(T.artifacts) || dls.some(([st]) => !/^\$\{\{ runner\.temp \}\}\/signed(?:\/|$)/.test(String(st.with?.path ?? ""))))
+      out.push(T.verify + ": must download exactly " + JSON.stringify(T.artifacts) + ", what ships, into runner.temp/signed");
+    const last = dls.length ? dls[dls.length - 1][1] : -1;
+    const chk = steps[last + 1];
+    if (last < 0 || !chk || typeof chk.run !== "string" || !/\bshasum\s+-a\s+256\b[^\n]*\s-c\b/.test(chk.run) ||
+        JSON.stringify(Object.entries(chk.env ?? {}).sort()) !== JSON.stringify(Object.entries(T.sums).sort()))
+      out.push(T.verify + ": the step right after its downloads is not a shasum -a 256 -c against exactly " + JSON.stringify(T.sums) + ", the digest of what ships");
+    else if (chk.if !== undefined || chk["continue-on-error"] !== undefined || dls.some(([st]) => st.if !== undefined || st["continue-on-error"] !== undefined))
+      out.push(T.verify + ": its downloads or digest check can be skipped or allowed to fail");
+    const ref = steps.find((st) => st.name === "Refuse an unsigned bundle on a real run");
+    const REF_ENV = { SIGNED: "${{ needs." + T.sign + ".outputs.signed }}", ALLOW_UNSIGNED_MACOS: "${{ vars.ALLOW_UNSIGNED_MACOS }}" };
+    if (!ref || typeof ref.run !== "string") out.push(T.verify + ": no step refusing an unsigned bundle on a real run");
+    else {
+      if (ref.if !== undefined || ref["continue-on-error"] !== undefined) out.push(T.verify + ": the unsigned-bundle refusal can be skipped or allowed to fail");
+      if (JSON.stringify(Object.entries(ref.env ?? {}).sort()) !== JSON.stringify(Object.entries(REF_ENV).sort()))
+        out.push(T.verify + ": the unsigned-bundle refusal env must be exactly " + JSON.stringify(REF_ENV) + " (got " + JSON.stringify(ref.env) + ")");
+    }
+    const at = steps.findIndex((st) => typeof st.run === "string" && /verify-macos-signature\.sh/.test(st.run));
+    const ver = steps[at];
+    const VER_ENV = { APPLE_TEAM_ID: "${{ vars.APPLE_TEAM_ID }}", ALLOW_UNPINNED_MACOS: "${{ vars.ALLOW_UNPINNED_MACOS }}" };
+    if (at < 0) out.push(T.verify + ": never runs verify-macos-signature.sh, so nothing checks the team that signed");
+    else {
+      if (at <= last + 1) out.push(T.verify + ": checks the signature before the digest check");
+      if (ver.if !== SIGNED) out.push(T.verify + ": checks the signature under " + JSON.stringify(ver.if) + ", not exactly " + SIGNED);
+      if (ver["continue-on-error"] !== undefined) out.push(T.verify + ": the signature check is allowed to fail");
+      if (JSON.stringify(Object.entries(ver.env ?? {}).sort()) !== JSON.stringify(Object.entries(VER_ENV).sort()))
+        out.push(T.verify + ": the signature check env must be exactly " + JSON.stringify(VER_ENV) + " (got " + JSON.stringify(ver.env) + ")");
+      // Nor change the PATH that finds codesign, spctl, xcrun and hdiutil,
+      // which the check trusts (#871 review): no GITHUB_ENV or GITHUB_PATH
+      // write, and before it only checkout and download-artifact.
+      for (const st of steps.slice(0, at)) {
+        if (/GITHUB_(?:ENV|PATH)/.test(String(st.run ?? "") + JSON.stringify(st.with ?? {}))) out.push(T.verify + ": a step before the signature check writes GITHUB_ENV or GITHUB_PATH, which can change the team it checks or the tools it trusts");
+        const u = String(st.uses ?? "").toLowerCase();
+        if (u && !u.startsWith("actions/checkout@") && !u.startsWith("actions/download-artifact@")) out.push(T.verify + ": runs " + st.uses + " before the signature check (only checkout and download-artifact), which can change its env or PATH");
+      }
+    }
+  }
+  if (!needsOf(T.publish).includes(T.verify)) out.push(T.publish + ": does not wait for " + T.verify + ", so it can publish a macOS signature nobody checked");
+  for (const j of [T.sign, T.verify])
+    if (jobs[j]?.["continue-on-error"] !== undefined) out.push(j + ": continue-on-error on the job, so a failure there does not stop the publish");
+  if (out.length) console.log(out.join("\n"));
+  process.exit(0);
+}
+if (mode === "pins") {
+  // #922: every step that links a signer pin into a client, and every
+  // post-sign check that asserts one, runs require-signing-pin.sh, which
+  // fails a real run with an empty pin unless its escape hatch is exactly
+  // true. The script is executed against every case below; this pins that
+  // each site runs it, before the work it guards, with the pin and the
+  // hatch read from their repository variables and DRY_RUN from the one
+  // workflow-level decision (#685), and that nothing can switch it off.
+  const out = [];
+  const file = require("node:path").basename(process.env.WORKFLOW);
+  const W = ["SIGNING_PUBLISHER_CN", "ALLOW_UNPINNED_WINDOWS"];
+  const M = ["APPLE_TEAM_ID", "ALLOW_UNPINNED_MACOS"];
+  const LEG = "Build sidecar (${{ matrix.goos }}/${{ matrix.goarch }})";
+  // [job, step name, pin and hatch, how: gate (the step runs the gate, then work) or script (the step is build-sidecar.sh, which runs it), work]
+  const sites = file === "installer-release.yml" ? [
+    ["build-windows", "Build installer", W, "gate", /\bgo\s+build\b/],
+    ["verify-windows", "Verify the Authenticode signature", W, "gate", /\bsign-windows\.sh\s+--verify-only\b/],
+    ["build-macos", "Build universal installer app", M, "gate", /\bgo\s+build\b/],
+    // #921: the post-sign team check asserts the macOS pin.
+    ["verify-macos", "Verify the Developer ID signature and team", M, "gate", /\bverify-macos-signature\.sh\b/],
+  ] : file === "sidecar-release.yml" ? [
+    ["build-sidecar-windows", "Build sidecar (windows/amd64)", W, "script"],
+    ["build-sidecar-darwin-arm64", LEG, M, "script"],
+    ["build-sidecar-darwin-x64", LEG, M, "script"],
+    ["verify-sidecar-windows", "Verify the Authenticode signature", W, "gate", /\bsign-windows\.sh\s+--verify-only\b/],
+    ["verify-sidecar-darwin", "Verify the Developer ID signature and team", M, "gate", /\bverify-macos-signature\.sh\b/],
+  ] : null;
+  // Every step that links a pin, runs build-sidecar.sh or verifies a
+  // Windows signature must be a listed site, in these two workflows and in
+  // every other one (#922 review): a new job, such as the macOS split
+  // #870 plans, cannot link a pin past the gate unnoticed.
+  const PINNED = /expectedPublisherCN=|expectedTeamID=|build-sidecar\.sh|sign-windows\.sh\s+--verify-only|verify-macos-signature\.sh|subject\.OU/;
+  const listed = new Set((sites ?? []).map(([j, n]) => j + "\u0000" + n));
+  // The linux legs share the build step and link no pin; build-sidecar.sh
+  // gates by SETUP, so they are known only while their setup is linux.
+  if (file === "sidecar-release.yml")
+    for (const j of ["build-sidecar-linux-x64", "build-sidecar-linux-arm64"]) {
+      const setups = (jobs[j]?.strategy?.matrix?.include ?? []).map((m) => m.setup);
+      if (setups.length === 1 && setups[0] === "linux") listed.add(j + "\u0000" + LEG);
+    }
+  for (const [j, job] of Object.entries(jobs))
+    for (const st of job.steps ?? [])
+      if (typeof st.run === "string" && PINNED.test(st.run) && !listed.has(j + "\u0000" + st.name))
+        out.push(file + ": " + j + ": step " + JSON.stringify(st.name ?? st.id ?? "") + " links a signer pin or checks a signature but is not a pin gate site this rule knows");
+  if (!sites) { if (out.length) console.log(out.join("\n")); process.exit(0); }
+  if (doc.env?.DRY_RUN !== "${{ inputs.dry_run == true }}") out.push("the workflow env DRY_RUN is " + JSON.stringify(doc.env?.DRY_RUN) + ", not the one dry-run decision the pin gate reads");
+  for (const [j, name, pair, how, work] of sites) {
+    const job = jobs[j];
+    if (!job) { out.push("no " + j + " job"); continue; }
+    const steps = job.steps ?? [];
+    const at = steps.findIndex((st) => st.name === name);
+    const st = steps[at];
+    if (!st || typeof st.run !== "string") { out.push(j + ": no run step " + JSON.stringify(name)); continue; }
+    const label = j + ": step " + JSON.stringify(name);
+    for (const k of pair)
+      if (st.env?.[k] !== "${{ vars." + k + " }}") out.push(label + " does not take " + k + " from vars." + k + " (got " + JSON.stringify(st.env?.[k]) + ")");
+    for (const k of [...pair, "DRY_RUN"]) {
+      if (k === "DRY_RUN" && st.env && k in st.env) out.push(label + " sets DRY_RUN in its env, which the pin gate reads");
+      if (job.env && typeof job.env === "object" && k in job.env) out.push(j + ": the job env sets " + k + ", which the pin gate reads");
+    }
+    if (st["continue-on-error"] !== undefined || job["continue-on-error"] !== undefined) out.push(label + " or its job has continue-on-error, so an empty pin would not stop the run");
+    if (st.shell !== undefined && st.shell !== "bash") out.push(label + " runs under shell " + JSON.stringify(st.shell) + ", not bash");
+    for (const prev of steps.slice(0, at))
+      if (/GITHUB_ENV/.test(String(prev.run ?? "") + JSON.stringify(prev.with ?? {}))) out.push(j + ": a step before " + JSON.stringify(name) + " writes GITHUB_ENV, which can change what the pin gate reads");
+    if (how === "script") {
+      if (st.run.trim() !== "../.github/scripts/build-sidecar.sh") out.push(label + " is not exactly ../.github/scripts/build-sidecar.sh, which runs the pin gate");
+      // build-sidecar.sh gates and pins by SETUP, so the leg must say which
+      // target it is: a darwin leg told linux would skip both (#922 review).
+      const wantSetup = pair === W ? "windows-cross" : "darwin";
+      const setups = j.startsWith("build-sidecar-darwin") ? (job.strategy?.matrix?.include ?? []).map((m) => m.setup) : [st.env?.SETUP];
+      if (setups.length !== 1 || setups[0] !== wantSetup) out.push(j + ": builds with SETUP " + JSON.stringify(setups) + ", not exactly " + wantSetup + ", so build-sidecar.sh would not gate or link its pin");
+      if (st.if !== undefined) out.push(label + " runs under " + JSON.stringify(st.if) + ", so the build and its pin gate can be skipped");
+      continue;
+    }
+    // A build step runs whenever its job does; the verify step keeps the
+    // condition the post-sign rule pins.
+    if (j.startsWith("build-") && st.if !== undefined) out.push(label + " runs under " + JSON.stringify(st.if) + ", so the build and its pin gate can be skipped");
+    const lines = st.run.split("\n").map((l) => l.trim());
+    const want = "../.github/scripts/require-signing-pin.sh " + pair[0] + " " + pair[1] + " ";
+    const gi = lines.findIndex((l) => l.startsWith(want) && !/[|&;\\]/.test(l.slice(want.length).replace(/"\$\{SIDECAR_BIN\}\.exe"/, "")));
+    const wi = lines.findIndex((l) => work.test(l));
+    if (gi < 0) out.push(label + " does not run require-signing-pin.sh " + pair.join(" ") + " as a command of its own");
+    else {
+      if (lines[0] !== "set -euo pipefail") out.push(label + " does not start with set -euo pipefail, so a failed pin gate need not stop it");
+      // Right after it, so nothing can run in between (#922 review).
+      if (gi !== 1) out.push(label + " runs the pin gate at line " + (gi + 1) + ", not straight after set -euo pipefail");
+      if (wi >= 0 && wi < gi) out.push(label + " does its work before the pin gate");
+    }
+    // Nor anything later that undoes errexit or rewrites what the gate reads.
+    for (const l of lines) {
+      if (/^set\s+\+[a-z]*[eo]/.test(l) || /\bset\s+\+o\b/.test(l)) out.push(label + " turns errexit off: " + l);
+      if (/(?:^|[\s;&|(])(?:export\s+|declare\s+(?:-\w+\s+)*)?(?:DRY_RUN|ALLOW_UNPINNED_\w+|SIGNING_PUBLISHER_CN|APPLE_TEAM_ID)\+?=/.test(l)) out.push(label + " assigns what the pin gate reads: " + l);
+    }
+    if (wi < 0) out.push(label + " no longer does the work the pin gate guards");
+  }
   if (out.length) console.log(out.join("\n"));
   process.exit(0);
 }
@@ -2147,7 +2441,27 @@ fi
 		$'  build-sidecar-linux-arm64:\n    needs: resolve\n    if: needs.resolve.outputs.build == \'true\'\n    runs-on: ${{ matrix.runner }}\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}' \
 		$'  build-sidecar-linux-arm64:\n    needs: resolve\n    if: needs.resolve.outputs.build == \'true\'\n    runs-on: ${{ matrix.runner }}\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.other.outputs.sha256 }}'
 	mutant 'publish-sidecar not waiting for one leg, so its digest reads empty (#781)' \
-		' build-sidecar-darwin-x64, sign-sidecar-windows]' ' sign-sidecar-windows]'
+		' sign-sidecar-darwin, sign-sidecar-windows]' ' sign-sidecar-windows]'
+	mutant 'publish-sidecar checking a darwin bundle against the unsigned build digest (#870)' \
+		$'          SHA_DARWIN_ARM64: ${{ needs.sign-sidecar-darwin.outputs.sha256_darwin_arm64 }}\n          SHA_DARWIN_X64: ${{ needs.sign-sidecar-darwin.outputs.sha256_darwin_x64 }}\n          SHA_WIN32_X64' $'          SHA_DARWIN_ARM64: ${{ needs.build-sidecar-darwin-arm64.outputs.sha256 }}\n          SHA_DARWIN_X64: ${{ needs.sign-sidecar-darwin.outputs.sha256_darwin_x64 }}\n          SHA_WIN32_X64'
+	mutant 'the digests output carrying an unsigned darwin digest (#870)' \
+		'jobs.sign-sidecar-darwin.outputs.sha256_darwin_x64, jobs.sign-sidecar-windows' 'jobs.build-sidecar-darwin-x64.outputs.sha256, jobs.sign-sidecar-windows'
+	mutant 'a darwin build leg uploading under the name that ships (#870)' \
+		'          name: unsigned-${{ matrix.npm_pkg }}' '          name: sidecar-${{ matrix.npm_pkg }}'
+	mutant 'the darwin signer with its two legs crossed over (#870)' \
+		'          SHA_DARWIN_ARM64: ${{ needs.build-sidecar-darwin-arm64.outputs.sha256 }}' '          SHA_DARWIN_ARM64: ${{ needs.build-sidecar-darwin-x64.outputs.sha256 }}'
+	mutant 'the darwin signer checking a digest no build job reported (#870)' \
+		'          SHA_DARWIN_X64: ${{ needs.build-sidecar-darwin-x64.outputs.sha256 }}' '          SHA_DARWIN_X64: ${{ env.SHA_X }}'
+	mutant 'the darwin signer digest taken before it signs (#870)' \
+		'      - name: Sign and notarize (Developer ID)' $'      - id: digest\n        run: "true"\n      - name: Sign and notarize (Developer ID)'
+	mutant 'the darwin signer uploading a file its digest step never hashed (#870)' \
+		'          path: ${{ runner.temp }}/out/darwin-x64/jarvis-app.tar.gz' '          path: ${{ runner.temp }}/work/darwin-x64/jarvis-app.tar.gz'
+	mutant 'the darwin signer downloading a third artifact (#870)' \
+		$'          name: unsigned-darwin-x64\n          path: ${{ runner.temp }}/unsigned/darwin-x64\n' $'          name: unsigned-darwin-x64\n          path: ${{ runner.temp }}/unsigned/darwin-x64\n\n      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: extra\n          path: ${{ runner.temp }}/unsigned/extra\n'
+	mutant 'the darwin signer digest check allowed to fail (#870)' \
+		$'      - name: Verify the bundles\n' $'      - name: Verify the bundles\n        continue-on-error: true\n'
+	mutant 'the darwin signer output not its digest step (#870)' \
+		'      sha256_darwin_x64: ${{ steps.digest.outputs.sha256_darwin_x64 }}' '      sha256_darwin_x64: ${{ steps.other.outputs.sha256_darwin_x64 }}'
 	mutant 'the digest taken before the bundle is packaged (#781)' \
 		'      # tar the bundle before upload' $'      - id: digest\n        run: "true"\n      # tar the bundle before upload'
 	mutant 'the signer digest dropped, so the signed binary has none (#781)' \
@@ -2516,7 +2830,7 @@ found="$(YQ_FILE="$INSTALLER_WORKFLOW" yq installer-digests)" || {
 	found=""
 }
 if [ -z "$found" ]; then
-	ok "build-windows, sign-windows and build-macos output a digest taken last, and each consumer checks the right one first"
+	ok "build-windows, sign-windows, build-macos and sign-macos output a digest taken last, and each consumer checks the right one first"
 else
 	no "installer artifact digests" "$found"
 fi
@@ -2527,14 +2841,24 @@ fi
 	mutant 'publish checking the Windows installer against the UNSIGNED build digest (#779)' \
 		'          SHA_WIN32_X64: ${{ needs.sign-windows.outputs.sha256 }}' '          SHA_WIN32_X64: ${{ needs.build-windows.outputs.sha256 }}'
 	mutant 'publish not waiting for the signer, so its digest reads empty (#779)' \
-		'    needs: [resolve, sign-windows, verify-windows, build-macos]' '    needs: [resolve, build-windows, verify-windows, build-macos]'
-	mutant 'the DMG digest dropped from build-macos (#779)' \
+		'    needs: [resolve, sign-windows, verify-windows, sign-macos, verify-macos]' '    needs: [resolve, build-windows, verify-windows, sign-macos, verify-macos]'
+	mutant 'publish checking the DMG against the unsigned app build digest (#870)' \
+		'          SHA_DARWIN: ${{ needs.sign-macos.outputs.sha256 }}' '          SHA_DARWIN: ${{ needs.build-macos.outputs.sha256 }}'
+	mutant 'the macOS signer checking the app against no build digest (#870)' \
+		'          SHA256: ${{ needs.build-macos.outputs.sha256 }}' '          SHA256: ${{ needs.resolve.outputs.version }}'
+	mutant 'build-macos uploading the DMG that ships itself (#870)' \
+		$'          name: unsigned-installer-darwin\n          path: sidecar/install-jarvis-app.tar.gz' $'          name: installer-darwin\n          path: sidecar/install-jarvis-app.tar.gz'
+	mutant 'the DMG digest taken before the DMG is signed (#870)' \
+		'      - name: Sign, notarize and staple' $'      - id: digest\n        run: "true"\n      - name: Sign, notarize and staple'
+	mutant 'a matrix on the macOS signer, sharing its digest output (#870)' \
+		$'  sign-macos:\n    needs: [resolve, build-macos]\n' $'  sign-macos:\n    strategy:\n      matrix:\n        shard: [a, b]\n    needs: [resolve, build-macos]\n'
+	mutant 'the app digest dropped from build-macos (#779, #870)' \
 		$'    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n        with:\n          # The Actions cache is writable by any run on main, and Go reuses\n          # cached modules and build output without re-verifying them (#681).\n          cache: false\n          go-version-file: sidecar/go.mod\n          cache-dependency-path: sidecar/go.sum\n\n      - name: Build universal' \
 		$'    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n        with:\n          # The Actions cache is writable by any run on main, and Go reuses\n          # cached modules and build output without re-verifying them (#681).\n          cache: false\n          go-version-file: sidecar/go.mod\n          cache-dependency-path: sidecar/go.sum\n\n      - name: Build universal'
 	mutant 'the signed digest taken before signing (#779)' \
 		'      - name: Sign installer (Cloud KMS)' $'      - id: digest\n        run: "true"\n      - name: Sign installer (Cloud KMS)'
 	mutant 'a matrix on the macOS installer build, sharing its digest output (#779 re-review)' \
-		$'    runs-on: macos-latest\n    env:\n      HAVE_APPLE_SIGNING' $'    runs-on: macos-latest\n    strategy:\n      matrix:\n        include:\n          - arch: universal\n        shard: [a, b]\n    env:\n      HAVE_APPLE_SIGNING'
+		$'    runs-on: macos-latest\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    steps:\n      - uses: actions/checkout' $'    runs-on: macos-latest\n    strategy:\n      matrix:\n        include:\n          - arch: universal\n        shard: [a, b]\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    steps:\n      - uses: actions/checkout'
 	mutant 'the signed digest step allowed to fail (#779 re-review)' \
 		$'      # The SIGNED installer\'s digest: signing changes the bytes, and publish\n      # takes the artifact only by this.\n      - name: Digest\n        id: digest\n' $'      # The SIGNED installer\'s digest: signing changes the bytes, and publish\n      # takes the artifact only by this.\n      - name: Digest\n        id: digest\n        continue-on-error: true\n'
 	mutant 'the publish check switched off on its own (#779)' \
@@ -2598,6 +2922,100 @@ else
 	pub_refused "the two digests crossed over" "FAILED"
 fi
 
+# #870: the macOS signers take the unsigned bundles by digest, then unpack
+# only a bundle and nothing beside it. Executed verbatim, shasum included
+# (what a macOS runner has).
+MACCHECK="$(YQ_FILE="$INSTALLER_WORKFLOW" yq step sign-macos 'Verify the installer app')" || MACCHECK=""
+MACUNPACK="$(YQ_FILE="$INSTALLER_WORKFLOW" yq step sign-macos 'Unpack the installer app')" || MACUNPACK=""
+SDCHECK="$(YQ_FILE="$SIDECAR_WORKFLOW" yq step sign-sidecar-darwin 'Verify the bundles')" || SDCHECK=""
+SDUNPACK="$(YQ_FILE="$SIDECAR_WORKFLOW" yq step sign-sidecar-darwin 'Unpack the bundles')" || SDUNPACK=""
+if ! command -v shasum >/dev/null; then
+	no "shasum is on PATH, for the macOS signer digest checks (#870)"
+elif [ -z "$MACCHECK" ] || [ -z "$MACUNPACK" ] || [ -z "$SDCHECK" ] || [ -z "$SDUNPACK" ]; then
+	no "found the macOS signer digest checks and unpack steps (sign-macos, sign-sidecar-darwin) (#870)"
+else
+	inbox_suite sign-macos "$MACCHECK" unsigned install-jarvis-app.tar.gz no
+	# sign-sidecar-darwin: two bundles, each bound to its own leg digest.
+	sd="${WORK}/sd"
+	sd_fixture() {
+		rm -rf "$sd" && mkdir -p "$sd/rt/unsigned/darwin-arm64" "$sd/rt/unsigned/darwin-x64" "$sd/cwd"
+		printf 'arm64 bundle\n' >"$sd/rt/unsigned/darwin-arm64/jarvis-app.tar.gz"
+		printf 'x64 bundle\n' >"$sd/rt/unsigned/darwin-x64/jarvis-app.tar.gz"
+		SD_ARM="$(sha256sum "$sd/rt/unsigned/darwin-arm64/jarvis-app.tar.gz" | cut -d' ' -f1)"
+		SD_X64="$(sha256sum "$sd/rt/unsigned/darwin-x64/jarvis-app.tar.gz" | cut -d' ' -f1)"
+	}
+	sd_case() { verbatim_case "sign-sidecar-darwin $1" "$2" "$sd/cwd" "$SDCHECK" SHA_DARWIN_ARM64="$SD_ARM" SHA_DARWIN_X64="$SD_X64" RUNNER_TEMP="$sd/rt"; }
+	sd_fixture
+	sd_case "accepts the two bundles their legs hashed" 0
+	sd_fixture
+	printf 'swapped\n' >"$sd/rt/unsigned/darwin-x64/jarvis-app.tar.gz"
+	sd_case "refuses a bundle replaced after its leg hashed it" 1
+	sd_fixture
+	tmp="$SD_ARM"; SD_ARM="$SD_X64"; SD_X64="$tmp"
+	sd_case "refuses the two leg digests crossed over" 1
+	sd_fixture
+	SD_ARM=""
+	sd_case "refuses an empty leg digest" 1
+	sd_fixture
+	printf 'evil\n' >"$sd/rt/unsigned/darwin-arm64/entitlements.plist"
+	sd_case "refuses an artifact that carries a second file" 1
+	sd_fixture
+	rm "$sd/rt/unsigned/darwin-x64/jarvis-app.tar.gz"
+	sd_case "refuses a missing bundle" 1
+	sd_fixture
+	mv "$sd/rt/unsigned/darwin-arm64/jarvis-app.tar.gz" "$sd/real" && ln -s "$sd/real" "$sd/rt/unsigned/darwin-arm64/jarvis-app.tar.gz"
+	sd_case "refuses a link in place of a bundle" 1
+
+	# The unpack steps: Jarvis.app (or Install Jarvis.app) alone, of plain
+	# files and directories, and nothing written outside the work directory.
+	mk_tgz() { # mk_tgz <out> <dir to archive from> <member...>
+		local out="$1" from="$2"
+		shift 2
+		mkdir -p "$(dirname "$out")" && tar -C "$from" -czf "$out" "$@"
+	}
+	up="${WORK}/up"
+	up_reset() { rm -rf "$up" && mkdir -p "$up/src/Jarvis.app/Contents/MacOS" "$up/src/Install Jarvis.app/Contents/MacOS" "$up/cwd" && printf 'bin\n' >"$up/src/Jarvis.app/Contents/MacOS/jarvis" && printf 'bin\n' >"$up/src/Install Jarvis.app/Contents/MacOS/install-jarvis"; }
+	sd_tgz() { mk_tgz "$up/rt/unsigned/darwin-arm64/jarvis-app.tar.gz" "$up/src" "$@" && mk_tgz "$up/rt/unsigned/darwin-x64/jarvis-app.tar.gz" "$up/src" Jarvis.app; }
+	up_reset; sd_tgz Jarvis.app
+	verbatim_case "sign-sidecar-darwin unpacks a bundle that is Jarvis.app alone" 0 "$up/cwd" "$SDUNPACK" RUNNER_TEMP="$up/rt"
+	if [ -f "$up/rt/work/darwin-arm64/Jarvis.app/Contents/MacOS/jarvis" ] && [ -f "$up/rt/work/darwin-x64/Jarvis.app/Contents/MacOS/jarvis" ]; then ok "sign-sidecar-darwin unpacks each leg into its own work directory"; else no "sign-sidecar-darwin unpacks each leg into its own work directory"; fi
+	up_reset; printf 'x\n' >"$up/src/evil.sh"; sd_tgz Jarvis.app evil.sh
+	verbatim_case "sign-sidecar-darwin refuses a bundle archive with a member beside Jarvis.app" 1 "$up/cwd" "$SDUNPACK" RUNNER_TEMP="$up/rt"
+	if [ -e "$up/rt/work/darwin-arm64/evil.sh" ]; then no "sign-sidecar-darwin unpacks nothing it refuses"; else ok "sign-sidecar-darwin unpacks nothing it refuses"; fi
+	up_reset; ln -s /etc/passwd "$up/src/Jarvis.app/Contents/MacOS/link"; sd_tgz Jarvis.app
+	verbatim_case "sign-sidecar-darwin refuses a link inside Jarvis.app" 1 "$up/cwd" "$SDUNPACK" RUNNER_TEMP="$up/rt"
+	up_reset; mkdir -p "$up/src/Jarvis.appx" && printf 'x\n' >"$up/src/Jarvis.appx/y"; sd_tgz Jarvis.app Jarvis.appx
+	verbatim_case "sign-sidecar-darwin refuses a member whose name only starts with Jarvis.app" 1 "$up/cwd" "$SDUNPACK" RUNNER_TEMP="$up/rt"
+	up_reset; mkdir -p "$up/rt/unsigned/darwin-arm64" && tar -C "$up/src" -czf "$up/rt/unsigned/darwin-arm64/jarvis-app.tar.gz" --transform 's|^Jarvis.app/Contents/MacOS/jarvis$|Jarvis.app/../../../escaped|' Jarvis.app && mk_tgz "$up/rt/unsigned/darwin-x64/jarvis-app.tar.gz" "$up/src" Jarvis.app
+	# tar itself refuses this member too, so this pins the outcome; the
+	# name check is what "unpacks nothing it refuses" pins (#870 review).
+	verbatim_case "sign-sidecar-darwin refuses a member that climbs out with .." 1 "$up/cwd" "$SDUNPACK" RUNNER_TEMP="$up/rt"
+	if [ -e "$up/escaped" ] || [ -e "$up/rt/escaped" ]; then no "sign-sidecar-darwin writes nothing outside its work directory"; else ok "sign-sidecar-darwin writes nothing outside its work directory"; fi
+	# A hard link passes both the name check and a type check of what lands
+	# (it is a regular file), so the archive listing decides (#870 review).
+	up_reset; ln "$up/src/Jarvis.app/Contents/MacOS/jarvis" "$up/src/Jarvis.app/Contents/MacOS/hard"; sd_tgz Jarvis.app
+	verbatim_case "sign-sidecar-darwin refuses a hard link inside Jarvis.app" 1 "$up/cwd" "$SDUNPACK" RUNNER_TEMP="$up/rt"
+	if grep -qF "not a plain file or directory" "${WORK}/v.log"; then ok "sign-sidecar-darwin names the hard link as what it refuses"; else no "sign-sidecar-darwin names the hard link as what it refuses" "$(cat "${WORK}/v.log")"; fi
+	in_tgz() { mk_tgz "$up/rt/unsigned/install-jarvis-app.tar.gz" "$up/src" "$@"; }
+	up_reset; in_tgz "Install Jarvis.app"
+	verbatim_case "sign-macos unpacks an archive that is Install Jarvis.app alone" 0 "$up/cwd" "$MACUNPACK" RUNNER_TEMP="$up/rt"
+	if [ -f "$up/rt/work/Install Jarvis.app/Contents/MacOS/install-jarvis" ]; then ok "sign-macos unpacks the app into its work directory"; else no "sign-macos unpacks the app into its work directory"; fi
+	up_reset; in_tgz "Install Jarvis.app" Jarvis.app
+	verbatim_case "sign-macos refuses an archive with a second app" 1 "$up/cwd" "$MACUNPACK" RUNNER_TEMP="$up/rt"
+	up_reset; ln -s /etc "$up/src/Install Jarvis.app/Contents/etc"; in_tgz "Install Jarvis.app"
+	verbatim_case "sign-macos refuses a link inside the app" 1 "$up/cwd" "$MACUNPACK" RUNNER_TEMP="$up/rt"
+	up_reset; ln "$up/src/Install Jarvis.app/Contents/MacOS/install-jarvis" "$up/src/Install Jarvis.app/Contents/h"; in_tgz "Install Jarvis.app"
+	verbatim_case "sign-macos refuses a hard link inside the app" 1 "$up/cwd" "$MACUNPACK" RUNNER_TEMP="$up/rt"
+	# shasum takes the algorithm from the digest length in check mode, so a
+	# SHA-1 must be refused before it gets there (#870 review).
+	sha1="$(sha1sum "$up/src/Install Jarvis.app/Contents/MacOS/install-jarvis" | cut -d' ' -f1)"
+	rm -rf "${WORK}/s1" && mkdir -p "${WORK}/s1/rt/unsigned" "${WORK}/s1/cwd" && cp "$up/src/Install Jarvis.app/Contents/MacOS/install-jarvis" "${WORK}/s1/rt/unsigned/install-jarvis-app.tar.gz"
+	verbatim_case "sign-macos refuses a SHA-1 digest of the right file" 1 "${WORK}/s1/cwd" "$MACCHECK" SHA256="$sha1" RUNNER_TEMP="${WORK}/s1/rt"
+	sd_fixture
+	SD_ARM="$(sha1sum "$sd/rt/unsigned/darwin-arm64/jarvis-app.tar.gz" | cut -d' ' -f1)"
+	sd_case "refuses a SHA-1 digest of the right bundle" 1
+fi
+
 echo
 echo "post-sign verification runs without id-token, on what ships, before publishing (#817)"
 for f in "$SIDECAR_WORKFLOW" "$INSTALLER_WORKFLOW"; do
@@ -2619,7 +3037,7 @@ done
 		$'    # later adds a status function that would carry it past its skipped need.\n    if: needs.resolve.outputs.build == \'true\'' $'    # later adds a status function that would carry it past its skipped need.\n    if: needs.resolve.outputs.should_release == \'true\'' \
 		'sign-sidecar-windows: runs under'
 	mutant 'publish-sidecar not waiting for the signature check (#817)' \
-		'    needs: [resolve, verify-sidecar-windows, build-sidecar-linux-x64,' '    needs: [resolve, build-sidecar-linux-x64,'
+		'    needs: [resolve, verify-sidecar-windows, verify-sidecar-darwin, build-sidecar-linux-x64,' '    needs: [resolve, verify-sidecar-darwin, build-sidecar-linux-x64,'
 	mutant 'the sidecar signer verifying in place again, in the job holding id-token (#817)' \
 		'scripts/sign-windows.sh --defer-verify "${SIDECAR_BIN}.exe"' 'scripts/sign-windows.sh "${SIDECAR_BIN}.exe"'
 	mutant 'the sidecar signature check given id-token (#817)' \
@@ -2658,11 +3076,17 @@ done
 		'publish-sidecar: runs under'
 	mutant 'the sidecar signature check job run under a condition of its own (#817 review)' \
 		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: needs.resolve.outputs.build == \'true\'\n' $'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: always()\n'
+	mutant 'the sidecar signature check pinned to another chain file (#871)' \
+		$'          SIGN_REQUIRE_TRUSTED_CHAIN: "1"\n' $'          SIGN_REQUIRE_TRUSTED_CHAIN: "1"\n          CODESIGN_CERT_FILE: ${{ runner.temp }}/signed/chain.pem\n' \
+		'the step env sets CODESIGN_CERT_FILE'
+	mutant 'the sidecar workflow env pointing the pin elsewhere (#871)' \
+		$'\nenv:\n' $'\nenv:\n  CODESIGN_CERT_FILE: /tmp/chain.pem\n' \
+		'the workflow env sets CODESIGN_CERT_FILE'
 	mutant 'the sidecar signature check relaxed to an untrusted chain (#817)' \
-		$'          SIGN_REQUIRE_TRUSTED_CHAIN: "1"\n        run: |\n          if [ -z "${SIGNING_PUBLISHER_CN}" ]' $'          SIGN_REQUIRE_TRUSTED_CHAIN: "0"\n        run: |\n          if [ -z "${SIGNING_PUBLISHER_CN}" ]'
+		$'          SIGN_REQUIRE_TRUSTED_CHAIN: "1"\n        run: |\n          set -euo pipefail\n          ../.github/scripts/require-signing-pin.sh' $'          SIGN_REQUIRE_TRUSTED_CHAIN: "0"\n        run: |\n          set -euo pipefail\n          ../.github/scripts/require-signing-pin.sh'
 	MUTANT_FROM="$INSTALLER_WORKFLOW"
 	mutant 'the installer publish not waiting for the signature check (#817)' \
-		'    needs: [resolve, sign-windows, verify-windows, build-macos]' '    needs: [resolve, sign-windows, build-macos]'
+		'    needs: [resolve, sign-windows, verify-windows, sign-macos, verify-macos]' '    needs: [resolve, sign-windows, sign-macos, verify-macos]'
 	mutant 'the installer signature check against the UNSIGNED build digest (#817)' \
 		'          SHA256: ${{ needs.sign-windows.outputs.sha256 }}' '          SHA256: ${{ needs.build-windows.outputs.sha256 }}'
 	mutant 'the installer signature check switched off on its own (#817)' \
@@ -2673,13 +3097,34 @@ done
 		$'  verify-windows:\n    needs: [resolve, sign-windows]\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
 		$'  verify-windows:\n    needs: [resolve, sign-windows]\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: write\n'
 	mutant 'the installer signature check run without its publisher pin (#817)' \
-		$'          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}\n          # Sectigo' $'          # Sectigo'
+		$'          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}\n          ALLOW_UNPINNED_WINDOWS: ${{ vars.ALLOW_UNPINNED_WINDOWS }}\n          # Sectigo' $'          ALLOW_UNPINNED_WINDOWS: ${{ vars.ALLOW_UNPINNED_WINDOWS }}\n          # Sectigo'
 	mutant 'the installer signer allowed to fail as a whole (#817 review)' \
 		$'  sign-windows:\n    needs: [resolve, build-windows]\n' $'  sign-windows:\n    needs: [resolve, build-windows]\n    continue-on-error: true\n'
 	mutant 'the installer publish running after a failure (#817 review)' \
-		$'    needs: [resolve, sign-windows, verify-windows, build-macos]\n    if: needs.resolve.outputs.should_release == \'true\'' $'    needs: [resolve, sign-windows, verify-windows, build-macos]\n    if: always() && needs.resolve.outputs.should_release == \'true\''
+		$'    needs: [resolve, sign-windows, verify-windows, sign-macos, verify-macos]\n    if: needs.resolve.outputs.should_release == \'true\'' $'    needs: [resolve, sign-windows, verify-windows, sign-macos, verify-macos]\n    if: always() && needs.resolve.outputs.should_release == \'true\''
 	mutant 'the installer digest check made skippable (#817)' \
 		$'      - name: Verify the signed installer digest\n' $'      - name: Verify the signed installer digest\n        if: false\n'
+	mutant 'the installer signature check pinned to another chain file (#871)' \
+		$'          SIGN_REQUIRE_TRUSTED_CHAIN: "1"\n' $'          SIGN_REQUIRE_TRUSTED_CHAIN: "1"\n          CODESIGN_CERT_FILE: ${{ runner.temp }}/signed/chain.pem\n' \
+		'the step env sets CODESIGN_CERT_FILE'
+	mutant 'the installer signature check job env pointing the pin elsewhere (#871)' \
+		$'  verify-windows:\n    needs: [resolve, sign-windows]\n' $'  verify-windows:\n    needs: [resolve, sign-windows]\n    env:\n      CODESIGN_CERT_FILE: /tmp/chain.pem\n' \
+		'the job env sets CODESIGN_CERT_FILE'
+	mutant 'the installer signature check pinning a chain it was handed in its script (#871)' \
+		'          scripts/sign-windows.sh --verify-only "${RUNNER_TEMP}/signed/Jarvis-Setup.exe"' '          CODESIGN_CERT_FILE="${RUNNER_TEMP}/signed/chain.pem" scripts/sign-windows.sh --verify-only "${RUNNER_TEMP}/signed/Jarvis-Setup.exe"' \
+		'sets CODESIGN_CERT_FILE in its script'
+	mutant 'the installer signature check told another chain through GITHUB_ENV (#871)' \
+		'      - name: Verify the Authenticode signature' $'      - run: echo "CODESIGN_CERT_FILE=/tmp/chain.pem" >> "$GITHUB_ENV"\n      - name: Verify the Authenticode signature' \
+		'a step before the signature check writes GITHUB_ENV'
+	mutant 'the installer signature check handed another PATH (#871 review)' \
+		'      - name: Verify the Authenticode signature' $'      - run: echo "/tmp/bin" >> "$GITHUB_PATH"\n      - name: Verify the Authenticode signature' \
+		'writes GITHUB_ENV or GITHUB_PATH'
+	mutant 'the installer signature check after an action that can export env (#871 review)' \
+		'      - name: Verify the Authenticode signature' $'      - uses: someone/setup-tools@0123456789012345678901234567890123456789\n      - name: Verify the Authenticode signature' \
+		'before the signature check (only checkout and download-artifact)'
+	mutant 'the installer signature check in a container (#871 review)' \
+		$'  verify-windows:\n    needs: [resolve, sign-windows]\n' $'  verify-windows:\n    needs: [resolve, sign-windows]\n    container: ubuntu:24.04\n' \
+		'runs in a container'
 	unset MUTANT_MODE MUTANT_FROM
 }
 # The two digest checks, executed verbatim.
@@ -2825,6 +3270,528 @@ else
 		refuse_case "$job" "$script" 0 false false true "passes an unsigned binary under ALLOW_UNSIGNED_WINDOWS=true"
 		refuse_case "$job" "$script" 1 false false TRUE "refuses the hatch spelled TRUE"
 	done
+fi
+
+echo
+echo "an empty signer pin fails a real run, at every build and check that uses it (#922)"
+pin_files=("$SIDECAR_WORKFLOW" "$INSTALLER_WORKFLOW")
+for f in "${HERE}"/../workflows/*.yml; do
+	case "$(basename "$f")" in sidecar-release.yml | installer-release.yml) ;; *) pin_files+=("$f") ;; esac
+done
+[ "${#pin_files[@]}" -ge 5 ] || no "found the other workflows to scan for signer pins" "${pin_files[*]}"
+for f in "${pin_files[@]}"; do
+	found="$(YQ_FILE="$f" yq pins)" || {
+		no "$(basename "$f"): pin gate check ran" "the bun helper failed"
+		continue
+	}
+	if [ -z "$found" ]; then
+		ok "$(basename "$f"): every pinned build and post-sign check runs the pin gate first, from the repository variables"
+	else
+		no "$(basename "$f"): pin gate sites" "$found"
+	fi
+done
+# shellcheck disable=SC2016 # every mutant is literal workflow text.
+{
+	MUTANT_MODE=pins
+	MUTANT_FROM="$INSTALLER_WORKFLOW"
+	mutant 'the installer Windows build back to warning on an empty pin (#922)' \
+		$'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          export CC=' $'          [ -n "${SIGNING_PUBLISHER_CN}" ] || echo "::warning::unpinned"\n          export CC=' \
+		'build-windows: step "Build installer" does not run require-signing-pin.sh'
+	mutant 'the installer Windows build pin gate told to carry on (#922)' \
+		$'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          export CC=' $'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe || true\n          export CC=' \
+		'build-windows: step "Build installer" does not run require-signing-pin.sh'
+	mutant 'the installer Windows build escape hatch fixed to true (#922)' \
+		$'          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}\n          ALLOW_UNPINNED_WINDOWS: ${{ vars.ALLOW_UNPINNED_WINDOWS }}\n        run: |\n          set -euo pipefail\n          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          export' $'          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}\n          ALLOW_UNPINNED_WINDOWS: "true"\n        run: |\n          set -euo pipefail\n          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          export' \
+		'does not take ALLOW_UNPINNED_WINDOWS from vars.ALLOW_UNPINNED_WINDOWS'
+	mutant 'the installer Windows build told it is a dry run (#922)' \
+		$'  build-windows:\n' $'  build-windows:\n    env:\n      DRY_RUN: "true"\n' \
+		'build-windows: the job env sets DRY_RUN'
+	mutant 'the installer macOS build pin gate dropped (#922)' \
+		$'          ../.github/scripts/require-signing-pin.sh APPLE_TEAM_ID ALLOW_UNPINNED_MACOS "Install Jarvis.app"\n' '' \
+		'build-macos: step "Build universal installer app" does not run require-signing-pin.sh'
+	mutant 'the installer signature check verifying before the pin gate (#922)' \
+		$'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          scripts/sign-windows.sh --verify-only "${RUNNER_TEMP}/signed/Jarvis-Setup.exe"' $'          scripts/sign-windows.sh --verify-only "${RUNNER_TEMP}/signed/Jarvis-Setup.exe"\n          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe' \
+		'verify-windows: step "Verify the Authenticode signature" does its work before the pin gate'
+	mutant 'the installer macOS build gated on the Windows hatch (#922)' \
+		'../.github/scripts/require-signing-pin.sh APPLE_TEAM_ID ALLOW_UNPINNED_MACOS "Install Jarvis.app"' '../.github/scripts/require-signing-pin.sh APPLE_TEAM_ID ALLOW_UNPINNED_WINDOWS "Install Jarvis.app"' \
+		'build-macos: step "Build universal installer app" does not run require-signing-pin.sh APPLE_TEAM_ID ALLOW_UNPINNED_MACOS'
+	mutant 'the installer signature check back to warning on an empty CN (#922)' \
+		$'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          scripts/sign-windows.sh' $'          scripts/sign-windows.sh' \
+		'verify-windows: step "Verify the Authenticode signature" does not run require-signing-pin.sh'
+	mutant 'the installer Windows build with errexit turned off before the gate (#922 review)' \
+		$'          set -euo pipefail\n          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          export CC=' $'          set -euo pipefail\n          set +e\n          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          export CC=' \
+		'not straight after set -euo pipefail'
+	mutant 'the installer Windows build gate continued onto an || true line (#922 review)' \
+		$'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          export CC=' $'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe \\\n            || true\n          export CC=' \
+		'build-windows: step "Build installer" does not run require-signing-pin.sh'
+	mutant 'the installer macOS build exporting the hatch in its script (#922 review)' \
+		$'          ../.github/scripts/require-signing-pin.sh APPLE_TEAM_ID ALLOW_UNPINNED_MACOS "Install Jarvis.app"\n' $'          ../.github/scripts/require-signing-pin.sh APPLE_TEAM_ID ALLOW_UNPINNED_MACOS "Install Jarvis.app"\n          export DRY_RUN=true\n' \
+		'assigns what the pin gate reads'
+	mutant 'the installer signature check turning errexit off after the gate (#922 review)' \
+		$'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          scripts/sign-windows.sh' $'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          set +o errexit\n          scripts/sign-windows.sh' \
+		'turns errexit off'
+	mutant 'the installer signature check without set -e (#922)' \
+		$'        run: |\n          set -euo pipefail\n          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          scripts/sign-windows.sh' $'        run: |\n          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          scripts/sign-windows.sh' \
+		'does not start with set -euo pipefail'
+	MUTANT_FROM="$SIDECAR_WORKFLOW"
+	mutant 'the sidecar macOS legs without their escape hatch variable (#922)' \
+		$'          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}\n          ALLOW_UNPINNED_MACOS: ${{ vars.ALLOW_UNPINNED_MACOS }}\n        run: ../.github/scripts/build-sidecar.sh' $'          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}\n          ALLOW_UNPINNED_MACOS: "true"\n        run: ../.github/scripts/build-sidecar.sh' \
+		'build-sidecar-darwin-arm64: step "Build sidecar (${{ matrix.goos }}/${{ matrix.goarch }})" does not take ALLOW_UNPINNED_MACOS'
+	mutant 'the sidecar macOS legs given a team id from somewhere else (#922)' \
+		$'          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}\n          ALLOW_UNPINNED_MACOS: ${{ vars.ALLOW_UNPINNED_MACOS }}\n        run: ../.github/scripts/build-sidecar.sh' $'          APPLE_TEAM_ID: ${{ inputs.team }}\n          ALLOW_UNPINNED_MACOS: ${{ vars.ALLOW_UNPINNED_MACOS }}\n        run: ../.github/scripts/build-sidecar.sh' \
+		'does not take APPLE_TEAM_ID from vars.APPLE_TEAM_ID'
+	mutant 'the sidecar Windows build hatch dropped (#922)' \
+		$'          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}\n          ALLOW_UNPINNED_WINDOWS: ${{ vars.ALLOW_UNPINNED_WINDOWS }}\n        run: ../.github/scripts/build-sidecar.sh' $'          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}\n        run: ../.github/scripts/build-sidecar.sh' \
+		'build-sidecar-windows: step "Build sidecar (windows/amd64)" does not take ALLOW_UNPINNED_WINDOWS'
+	mutant 'the sidecar Windows build told to carry on past its pin gate (#922)' \
+		$'          ALLOW_UNPINNED_WINDOWS: ${{ vars.ALLOW_UNPINNED_WINDOWS }}\n        run: ../.github/scripts/build-sidecar.sh\n' $'          ALLOW_UNPINNED_WINDOWS: ${{ vars.ALLOW_UNPINNED_WINDOWS }}\n        run: ../.github/scripts/build-sidecar.sh || true\n' \
+		'build-sidecar-windows: step "Build sidecar (windows/amd64)" is not exactly ../.github/scripts/build-sidecar.sh'
+	mutant 'the sidecar signature check pin gate dropped (#922)' \
+		$'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS "${SIDECAR_BIN}.exe"\n' '' \
+		'verify-sidecar-windows: step "Verify the Authenticode signature" does not run require-signing-pin.sh'
+	mutant 'the sidecar macOS leg told it is a linux build (#922 review)' \
+		$'            npm_pkg: darwin-arm64\n            runner: macos-latest\n            setup: darwin\n' $'            npm_pkg: darwin-arm64\n            runner: macos-latest\n            setup: linux\n' \
+		'build-sidecar-darwin-arm64: builds with SETUP'
+	mutant 'a new sidecar job linking a pin outside the gate (#922 review)' \
+		$'  # --- Windows: cross-compile (no OIDC) ---\n' $'  sneaky:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Build\n        run: go build -ldflags "-X x.expectedTeamID=" .\n  # --- Windows: cross-compile (no OIDC) ---\n' \
+		'sneaky: step "Build" links a signer pin'
+	mutant 'the sidecar signature check told it is a dry run (#922)' \
+		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n' $'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    env:\n      DRY_RUN: "true"\n' \
+		'verify-sidecar-windows: the job env sets DRY_RUN'
+	unset MUTANT_MODE MUTANT_FROM
+}
+# The gate itself, executed against every case.
+PIN_GATE="${HERE}/require-signing-pin.sh"
+# pin_case <want rc> <label> <text the log must carry> <args...> -- [VAR=value ...]
+pin_case() {
+	local want="$1" label="$2" text="$3"
+	shift 3
+	local args=()
+	while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+		args+=("$1")
+		shift
+	done
+	[ "${1:-}" = "--" ] && shift
+	env -i PATH="$PATH" "$@" bash "$PIN_GATE" ${args[@]+"${args[@]}"} >"${WORK}/pin.log" 2>&1
+	local rc=$?
+	if [ "$rc" != "$want" ]; then
+		no "pin gate: $label" "exit ${rc}, wanted ${want}: $(cat "${WORK}/pin.log")"
+	elif [ -n "$text" ] && ! grep -qF -- "$text" "${WORK}/pin.log"; then
+		no "pin gate: $label, saying '${text}'" "$(cat "${WORK}/pin.log")"
+	elif [ "$want" = 1 ] && [ "$(grep -c '^::error::' "${WORK}/pin.log")" -ne 1 ]; then
+		no "pin gate: $label, with exactly one ::error::" "$(cat "${WORK}/pin.log")"
+	elif [ "$want" = 0 ] && grep -q '^::error::' "${WORK}/pin.log"; then
+		no "pin gate: $label, with no ::error::" "$(cat "${WORK}/pin.log")"
+	else
+		ok "pin gate: $label"
+	fi
+}
+for pair in "SIGNING_PUBLISHER_CN:ALLOW_UNPINNED_WINDOWS:Usejarvis Inc." "APPLE_TEAM_ID:ALLOW_UNPINNED_MACOS:ABCDE12345"; do
+	P="${pair%%:*}"
+	rest="${pair#*:}"
+	H="${rest%%:*}"
+	V="${rest#*:}"
+	pin_case 0 "$P set passes a real run" "" "$P" "$H" thing -- "$P=$V" DRY_RUN=false
+	pin_case 0 "$P set with $H also set says the hatch changed nothing" "::warning::${H} is set but ${P} is configured" "$P" "$H" thing -- "$P=$V" "$H=true" DRY_RUN=false
+	pin_case 1 "$P empty fails a real run" "::error::${P} is empty" "$P" "$H" thing -- "$P=" DRY_RUN=false
+	pin_case 1 "$P empty fails a real run and names the hatch" "set the repository variable ${H} to true" "$P" "$H" thing -- "$P=" DRY_RUN=false
+	pin_case 1 "$P unset fails a run that does not say it is a dry run" "::error::${P} is empty" "$P" "$H" thing --
+	# Only "" is empty to a client; anything else is linked as it stands, so
+	# a malformed pin fails every run, the hatch and a dry run included.
+	for bad in "   " " ${V}" "${V} " "${V}\"x" "${V}'x" "${V}\\x" $'A\tB' $'\u00a0'"${V}" "${V}"$'\u200b'; do
+		for extra in DRY_RUN=false DRY_RUN=true "$H=true"; do
+			pin_case 1 "$P $(printf '%q' "$bad") is refused as malformed ($extra)" "::error::${P} is set but malformed" "$P" "$H" thing -- "$P=$bad" "$extra"
+		done
+	done
+	pin_case 0 "$P empty lets a dry run continue" "a real release would stop here unless ${H} is true" "$P" "$H" thing -- "$P=" DRY_RUN=true
+	pin_case 0 "$P empty ships unpinned on purpose with $H=true" "Shipping it unpinned because ${H} is true" "$P" "$H" thing -- "$P=" "$H=true" DRY_RUN=false
+	for h in TRUE True 1 yes " true" "true " false; do
+		pin_case 1 "$P empty refuses $H spelled $(printf '%q' "$h")" "::error::" "$P" "$H" thing -- "$P=" "$H=$h" DRY_RUN=false
+	done
+	for d in TRUE 1 yes " true"; do
+		pin_case 1 "$P empty refuses DRY_RUN spelled $(printf '%q' "$d")" "::error::" "$P" "$H" thing -- "$P=" "DRY_RUN=$d"
+	done
+done
+for bad in abcde12345 ABCDE1234 ABCDE123456 ABCDE-1234; do
+	pin_case 1 "APPLE_TEAM_ID $bad is not a team id" "ten upper-case letters and digits" APPLE_TEAM_ID ALLOW_UNPINNED_MACOS thing -- "APPLE_TEAM_ID=$bad" DRY_RUN=true
+done
+# A non-ASCII capital, under a locale whose [A-Z] would match it.
+pin_case 1 "APPLE_TEAM_ID with a non-ASCII capital is not a team id, in a UTF-8 locale" "::error::APPLE_TEAM_ID is set but malformed" APPLE_TEAM_ID ALLOW_UNPINNED_MACOS thing -- $'APPLE_TEAM_ID=\u00c4BCDE1234X' LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 DRY_RUN=true
+pin_case 1 "the Windows hatch does not unpin macOS" "::error::APPLE_TEAM_ID is empty" APPLE_TEAM_ID ALLOW_UNPINNED_MACOS thing -- APPLE_TEAM_ID= ALLOW_UNPINNED_WINDOWS=true DRY_RUN=false
+pin_case 2 "refuses a crossed pair" "does not know the pair" SIGNING_PUBLISHER_CN ALLOW_UNPINNED_MACOS thing -- SIGNING_PUBLISHER_CN= ALLOW_UNPINNED_MACOS=true DRY_RUN=false
+pin_case 2 "refuses some other variable named as the hatch" "does not know the pair" SIGNING_PUBLISHER_CN DRY_RUN thing -- SIGNING_PUBLISHER_CN= DRY_RUN=true
+pin_case 2 "refuses a call without what it guards" "usage" SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS -- SIGNING_PUBLISHER_CN=x
+
+# build-sidecar.sh runs the gate before it compiles, for each pinned target.
+# Stubs for go (writes the -ldflags into the output, so the pin check after
+# the build sees it) and strings (prints the file), in a sidecar/ of its own.
+mkdir -p "${WORK}/bs/bin" "${WORK}/bs/sidecar"
+printf '1.2.3\n' >"${WORK}/bs/sidecar/VERSION"
+cat >"${WORK}/bs/bin/go" <<'EOF'
+#!/usr/bin/env bash
+out="" ld=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in -o) out="$2"; shift 2 ;; -ldflags) ld="$2"; shift 2 ;; *) shift ;; esac
+done
+printf 'built\n' >>"$GO_LOG"
+printf '%s\n' "$ld" >"$out"
+EOF
+cat >"${WORK}/bs/bin/strings" <<'EOF'
+#!/usr/bin/env bash
+cat "$1"
+EOF
+chmod +x "${WORK}/bs/bin/go" "${WORK}/bs/bin/strings"
+# bs_case <want 0|1> <built yes|no> <label> [VAR=value ...]
+bs_case() {
+	local want="$1" built="$2" label="$3"
+	shift 3
+	rm -f "${WORK}/bs/go.log" "${WORK}/bs/sidecar/out"
+	(cd "${WORK}/bs/sidecar" && env -i PATH="${WORK}/bs/bin:$PATH" GO_LOG="${WORK}/bs/go.log" GOARCH=amd64 OUT=out "$@" \
+		bash "${HERE}/build-sidecar.sh") >"${WORK}/bs/log" 2>&1
+	local rc=$?
+	local did=no
+	[ -s "${WORK}/bs/go.log" ] && did=yes
+	if { [ "$want" = 0 ] && [ "$rc" -ne 0 ]; } || { [ "$want" != 0 ] && [ "$rc" -eq 0 ]; }; then
+		no "build-sidecar.sh: $label" "exit ${rc}: $(cat "${WORK}/bs/log")"
+	elif [ "$did" != "$built" ]; then
+		no "build-sidecar.sh: $label" "go build ran: ${did}, wanted ${built}: $(cat "${WORK}/bs/log")"
+	else
+		ok "build-sidecar.sh: $label"
+	fi
+}
+bs_case 1 no "refuses a real Windows build with no publisher pin, before compiling" GOOS=windows SETUP=windows-cross SIGNING_PUBLISHER_CN= DRY_RUN=false
+bs_case 0 yes "builds Windows unpinned on a dry run" GOOS=windows SETUP=windows-cross SIGNING_PUBLISHER_CN= DRY_RUN=true
+bs_case 0 yes "builds Windows unpinned with ALLOW_UNPINNED_WINDOWS=true" GOOS=windows SETUP=windows-cross SIGNING_PUBLISHER_CN= ALLOW_UNPINNED_WINDOWS=true DRY_RUN=false
+bs_case 0 yes "builds Windows with the publisher pin" GOOS=windows SETUP=windows-cross "SIGNING_PUBLISHER_CN=Usejarvis Inc." DRY_RUN=false
+if grep -qF "expectedPublisherCN=Usejarvis Inc." "${WORK}/bs/sidecar/out" 2>/dev/null; then ok "build-sidecar.sh: links the publisher pin"; else no "build-sidecar.sh: links the publisher pin" "$(cat "${WORK}/bs/sidecar/out" 2>/dev/null)"; fi
+bs_case 1 no "refuses a real macOS build with no team pin, before compiling" GOOS=darwin SETUP=darwin APPLE_TEAM_ID= DRY_RUN=false
+bs_case 1 no "refuses a real macOS build with only the Windows hatch set" GOOS=darwin SETUP=darwin APPLE_TEAM_ID= ALLOW_UNPINNED_WINDOWS=true DRY_RUN=false
+bs_case 0 yes "builds macOS unpinned with ALLOW_UNPINNED_MACOS=true" GOOS=darwin SETUP=darwin APPLE_TEAM_ID= ALLOW_UNPINNED_MACOS=true DRY_RUN=false
+bs_case 0 yes "builds macOS with the team pin" GOOS=darwin SETUP=darwin APPLE_TEAM_ID=ABCDE12345 DRY_RUN=false
+bs_case 0 yes "builds Linux, which has no pin, on a real run" GOOS=linux SETUP=linux DRY_RUN=false
+
+echo
+echo "macOS signing fails closed on a real run, and the team that signed is checked (#921)"
+# Both macOS signers decide in a readiness step whether to sign, and a
+# token-less, secret-less job refuses an unsigned answer on a real run and
+# checks the team that signed what ships. The structure is checked here;
+# the readiness, the refusal and the team check are executed verbatim below.
+for f in "$SIDECAR_WORKFLOW" "$INSTALLER_WORKFLOW"; do
+	found="$(YQ_FILE="$f" yq macsign)" || {
+		no "$(basename "$f"): macOS signing structure check ran" "the bun helper failed"
+		continue
+	}
+	if [ -z "$found" ]; then
+		ok "$(basename "$f"): the signer decides once, a job holding no secret refuses an unsigned bundle and checks the team, and the publish waits for it"
+	else
+		no "$(basename "$f"): macOS signing fails closed" "$found"
+	fi
+done
+# shellcheck disable=SC2016 # every mutant is literal workflow text.
+{
+	MUTANT_MODE=macsign
+	MUTANT_FROM="$SIDECAR_WORKFLOW"
+	mutant 'the sidecar macOS readiness step allowed to fail (#921)' \
+		$'      - name: macOS signing readiness\n        id: applesign\n' $'      - name: macOS signing readiness\n        id: applesign\n        continue-on-error: true\n' \
+		'the readiness step has continue-on-error'
+	mutant 'the sidecar macOS readiness step skipped on a real run (#921)' \
+		$'      - name: macOS signing readiness\n        id: applesign\n' $'      - name: macOS signing readiness\n        id: applesign\n        if: env.DRY_RUN == \'true\'\n' \
+		'the readiness step runs under'
+	mutant 'the sidecar macOS escape hatch read from a literal (#921)' \
+		$'          HAVE_ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 != \'\' }}\n          ALLOW_UNSIGNED_MACOS: ${{ vars.ALLOW_UNSIGNED_MACOS }}\n        run: |\n          set -euo pipefail\n          absent=""' $'          HAVE_ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 != \'\' }}\n          ALLOW_UNSIGNED_MACOS: "true"\n        run: |\n          set -euo pipefail\n          absent=""' \
+		'the readiness step env must be exactly'
+	mutant 'the sidecar macOS readiness told the certificate is there whatever it is (#921)' \
+		$'          HAVE_APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 != \'\' }}\n          HAVE_APPLE_CERT_PASSWORD' $'          HAVE_APPLE_CERT_P12: "true"\n          HAVE_APPLE_CERT_PASSWORD' \
+		'the readiness step env must be exactly'
+	mutant 'the sidecar macOS readiness handed a secret value (#921)' \
+		$'          ALLOW_UNSIGNED_MACOS: ${{ vars.ALLOW_UNSIGNED_MACOS }}\n        run: |\n          set -euo pipefail\n          absent=""' $'          ALLOW_UNSIGNED_MACOS: ${{ vars.ALLOW_UNSIGNED_MACOS }}\n          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}\n        run: |\n          set -euo pipefail\n          absent=""' \
+		'the readiness step env must be exactly'
+	mutant 'the sidecar macOS signer told it is a rehearsal through GITHUB_ENV (#921)' \
+		'      - name: macOS signing readiness' $'      - run: echo "DRY_RUN=true" >> "$GITHUB_ENV"\n      - name: macOS signing readiness' \
+		'a step before readiness writes GITHUB_ENV'
+	mutant 'the sidecar macOS signer job env setting the escape hatch (#921)' \
+		$'  sign-sidecar-darwin:\n    needs: [resolve, build-sidecar-darwin-arm64, build-sidecar-darwin-x64]\n' $'  sign-sidecar-darwin:\n    needs: [resolve, build-sidecar-darwin-arm64, build-sidecar-darwin-x64]\n    env:\n      ALLOW_UNSIGNED_MACOS: "true"\n' \
+		'the job env sets ALLOW_UNSIGNED_MACOS'
+	mutant 'the sidecar macOS signer gated on the old presence flag again (#921)' \
+		$'      - name: Sign and notarize (Developer ID)\n        if: steps.applesign.outputs.ready == \'true\'' $'      - name: Sign and notarize (Developer ID)\n        if: env.HAVE_APPLE_SIGNING == \'true\'' \
+		'holds the signing secrets under'
+	mutant 'the sidecar macOS signer reporting signed whatever happened (#921)' \
+		'      signed: ${{ steps.applesign.outputs.ready }}' '      signed: "true"' \
+		'output signed must be'
+	mutant 'the sidecar unsigned-bundle refusal switched off (#921)' \
+		$'      - name: Refuse an unsigned bundle on a real run\n' $'      - name: Refuse an unsigned bundle on a real run\n        if: needs.sign-sidecar-darwin.outputs.signed == \'true\'\n' \
+		'the unsigned-bundle refusal can be skipped'
+	mutant 'the sidecar unsigned-bundle refusal told the signer always signed (#921)' \
+		'          SIGNED: ${{ needs.sign-sidecar-darwin.outputs.signed }}' '          SIGNED: "true"' \
+		'the unsigned-bundle refusal env must be exactly'
+	mutant 'the sidecar team check removed (#921)' \
+		'            ../.github/scripts/verify-macos-signature.sh app "${dest}/Jarvis.app"' '            codesign --verify --strict "${dest}/Jarvis.app"' \
+		'never runs verify-macos-signature.sh'
+	mutant 'the sidecar team check skipped when signing worked (#921)' \
+		$'      - name: Verify the Developer ID signature and team\n        if: needs.sign-sidecar-darwin.outputs.signed == \'true\'' $'      - name: Verify the Developer ID signature and team\n        if: needs.sign-sidecar-darwin.outputs.signed != \'true\'' \
+		'checks the signature under'
+	mutant 'the sidecar team check told another team (#921)' \
+		$'          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}\n          ALLOW_UNPINNED_MACOS: ${{ vars.ALLOW_UNPINNED_MACOS }}\n        run: |\n          set -euo pipefail\n          ../.github/scripts/require-signing-pin.sh APPLE_TEAM_ID ALLOW_UNPINNED_MACOS "Jarvis.app"' $'          APPLE_TEAM_ID: ABCDE12345\n          ALLOW_UNPINNED_MACOS: ${{ vars.ALLOW_UNPINNED_MACOS }}\n        run: |\n          set -euo pipefail\n          ../.github/scripts/require-signing-pin.sh APPLE_TEAM_ID ALLOW_UNPINNED_MACOS "Jarvis.app"' \
+		'the signature check env must be exactly'
+	mutant 'the sidecar team check given a secret (#921)' \
+		$'    if: needs.resolve.outputs.build == \'true\'\n    runs-on: macos-latest\n    permissions:\n      contents: read\n    steps:\n      # For require-signing-pin.sh and verify-macos-signature.sh.' $'    if: needs.resolve.outputs.build == \'true\'\n    runs-on: macos-latest\n    permissions:\n      contents: read\n    env:\n      X: ${{ secrets.ASC_KEY_ID }}\n    steps:\n      # For require-signing-pin.sh and verify-macos-signature.sh.' \
+		'verify-sidecar-darwin: reads a secret'
+	mutant 'the sidecar team check run on the unsigned bundles (#921)' \
+		$'          name: sidecar-darwin-x64\n          path: ${{ runner.temp }}/signed/darwin-x64' $'          name: unsigned-darwin-x64\n          path: ${{ runner.temp }}/signed/darwin-x64' \
+		'what ships, into runner.temp/signed'
+	mutant 'publish-sidecar not waiting for the macOS check (#921)' \
+		' verify-sidecar-windows, verify-sidecar-darwin, build-sidecar-linux-x64' ' verify-sidecar-windows, build-sidecar-linux-x64' \
+		'publish-sidecar: does not wait for verify-sidecar-darwin'
+	MUTANT_FROM="$INSTALLER_WORKFLOW"
+	mutant 'the installer macOS readiness step allowed to fail (#921)' \
+		$'      - name: macOS signing readiness\n        id: applesign\n' $'      - name: macOS signing readiness\n        id: applesign\n        continue-on-error: true\n' \
+		'the readiness step has continue-on-error'
+	mutant 'the installer macOS signer gated on something else (#921)' \
+		$'      - name: Sign, notarize and staple\n        if: steps.applesign.outputs.ready == \'true\'' $'      - name: Sign, notarize and staple\n        if: always()' \
+		'holds the signing secrets under'
+	mutant 'the installer macOS signer job allowed to fail (#921)' \
+		$'  sign-macos:\n    needs: [resolve, build-macos]\n' $'  sign-macos:\n    needs: [resolve, build-macos]\n    continue-on-error: true\n' \
+		'sign-macos: continue-on-error on the job'
+	mutant 'the installer unsigned-bundle refusal removed (#921)' \
+		$'      # #921, checked again in a job that holds no secret: an empty answer\n      # (the signer did not say) is a refusal too.\n      - name: Refuse an unsigned bundle on a real run' $'      - name: Something else' \
+		'no step refusing an unsigned bundle on a real run'
+	mutant 'the installer team check run before the digest check (#921)' \
+		$'      - name: Verify the signed DMG digest\n' $'      - run: ../.github/scripts/verify-macos-signature.sh dmg x\n        if: needs.sign-macos.outputs.signed == \'true\'\n        env:\n          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}\n          ALLOW_UNPINNED_MACOS: ${{ vars.ALLOW_UNPINNED_MACOS }}\n      - name: Verify the signed DMG digest\n' \
+		'is not a shasum -a 256 -c'
+	mutant 'the installer team check after an action that can export env (#921)' \
+		$'      - name: Verify the signed DMG digest\n' $'      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0\n      - name: Verify the signed DMG digest\n' \
+		'before the signature check (only checkout and download-artifact)'
+	mutant 'publish not waiting for the macOS check (#921)' \
+		'    needs: [resolve, sign-windows, verify-windows, sign-macos, verify-macos]' '    needs: [resolve, sign-windows, verify-windows, sign-macos]' \
+		'publish: does not wait for verify-macos'
+	unset MUTANT_MODE MUTANT_FROM
+}
+SDREADY="$(YQ_FILE="$SIDECAR_WORKFLOW" yq step sign-sidecar-darwin applesign)" || SDREADY=""
+IMREADY="$(YQ_FILE="$INSTALLER_WORKFLOW" yq step sign-macos applesign)" || IMREADY=""
+if [ -z "$SDREADY" ] || [ -z "$IMREADY" ]; then
+	no "found both macOS signing readiness steps (sign-sidecar-darwin, sign-macos)"
+else
+	# mready_case <job> <script> <want rc 0|1> <want output> <secrets set, five 0/1 for P12 PASSWORD KEY_ID ISSUER_ID P8> <dry run> <hatch> <label> [text the log must carry]
+	mready_case() {
+		local job="$1" script="$2" want="$3" wantout="$4" have="$5" dry="$6" hatch="$7" label="$8" text="${9:-}"
+		local d="${WORK}/mready" names=(APPLE_CERT_P12 APPLE_CERT_PASSWORD ASC_KEY_ID ASC_ISSUER_ID ASC_API_KEY_P8) envs=() i
+		for i in 0 1 2 3 4; do
+			if [ "${have:$i:1}" = 1 ]; then envs+=("HAVE_${names[$i]}=true"); else envs+=("HAVE_${names[$i]}=false"); fi
+		done
+		rm -rf "$d" && mkdir -p "$d" && : >"$d/out"
+		(cd "$d" && env -i PATH="$PATH" GITHUB_OUTPUT="$d/out" DRY_RUN="$dry" ALLOW_UNSIGNED_MACOS="$hatch" "${envs[@]}" bash -e -c "$script") >"$d/log" 2>&1
+		local rc=$? got
+		got="$(cat "$d/out")"
+		if { [ "$want" = 0 ] && [ "$rc" -ne 0 ]; } || { [ "$want" != 0 ] && [ "$rc" -eq 0 ]; }; then
+			no "$job: $label" "exit ${rc}, wanted $([ "$want" = 0 ] && echo 0 || echo non-zero): $(cat "$d/log")"
+		elif [ "$got" != "$wantout" ]; then
+			no "$job: $label" "GITHUB_OUTPUT was '${got}', wanted '${wantout}'; log: $(cat "$d/log")"
+		elif [ -n "$text" ] && ! grep -qF -- "$text" "$d/log"; then
+			no "$job: $label, saying '${text}'" "$(cat "$d/log")"
+		elif [ "$want" != 0 ] && [ "$(grep -c '^::error::' "$d/log")" -ne 1 ]; then
+			no "$job: $label, with exactly one ::error::" "$(cat "$d/log")"
+		else
+			ok "$job: $label"
+		fi
+	}
+	for pair in "sign-sidecar-darwin:SDREADY" "sign-macos:IMREADY"; do
+		job="${pair%%:*}"
+		var="${pair#*:}"
+		script="${!var}"
+		mready_case "$job" "$script" 0 "ready=true" 11111 false "" "signs a real run with all five secrets"
+		mready_case "$job" "$script" 0 "ready=true" 11111 true "" "signs a dry run with all five secrets"
+		# The real-run refusal this issue is about: no secrets, no hatch.
+		mready_case "$job" "$script" 1 "" 00000 false "" "refuses a real run with no Apple secrets" "::error::macOS signing is not configured (APPLE_CERT_P12, APPLE_CERT_PASSWORD, ASC_KEY_ID, ASC_ISSUER_ID, ASC_API_KEY_P8 unset)"
+		mready_case "$job" "$script" 1 "" 00000 false "" "names the escape hatch when it refuses" "ALLOW_UNSIGNED_MACOS to true"
+		mready_case "$job" "$script" 1 "" 01111 false "" "refuses a real run with only the certificate missing" "(APPLE_CERT_P12 unset)"
+		mready_case "$job" "$script" 1 "" 00000 "" "" "refuses when DRY_RUN is empty, which is not a dry run" "::error::macOS signing is not configured"
+		# A broken configuration fails every run, as it did before.
+		mready_case "$job" "$script" 1 "" 11101 false "" "refuses a real run with the certificate but no issuer id" "::error::APPLE_CERT_P12 is set but ASC_ISSUER_ID is not"
+		mready_case "$job" "$script" 1 "" 10000 true "" "refuses a dry run with the certificate and nothing else" "::error::APPLE_CERT_P12 is set but APPLE_CERT_PASSWORD, ASC_KEY_ID, ASC_ISSUER_ID, ASC_API_KEY_P8 is not"
+		mready_case "$job" "$script" 1 "" 11110 false true "refuses a broken configuration even with the hatch set" "::error::APPLE_CERT_P12 is set but ASC_API_KEY_P8 is not"
+		# A rehearsal needs no signing configuration: it warns, as before.
+		mready_case "$job" "$script" 0 "ready=false" 00000 true "" "lets a dry run continue unsigned with no Apple secrets" "::warning::macOS signing is not configured"
+		mready_case "$job" "$script" 0 "ready=false" 00000 true "" "tells a dry run that a real release would stop there" "a real release would stop here"
+		# The escape hatch: exactly the string true, recorded as a warning.
+		mready_case "$job" "$script" 0 "ready=false" 00000 false true "ships unsigned on purpose with ALLOW_UNSIGNED_MACOS=true" "because ALLOW_UNSIGNED_MACOS is true"
+		for h in TRUE True 1 yes " true" "true " false; do
+			mready_case "$job" "$script" 1 "" 00000 false "$h" "refuses the escape hatch spelled $(printf '%q' "$h")" "::error::"
+		done
+		mready_case "$job" "$script" 0 "ready=true" 11111 false true "still signs when the hatch is set but signing is configured" "::warning::ALLOW_UNSIGNED_MACOS is set but signing is configured"
+		mready_case "$job" "$script" 0 "ready=false" 00000 true true "takes the dry-run branch when a dry run also has the hatch set" "This dry run continues"
+	done
+	# A presence flag missing altogether (an env renamed) fails closed.
+	d="${WORK}/mready" && rm -rf "$d" && mkdir -p "$d" && : >"$d/out"
+	(cd "$d" && env -i PATH="$PATH" GITHUB_OUTPUT="$d/out" DRY_RUN=false ALLOW_UNSIGNED_MACOS= HAVE_APPLE_CERT_P12=true bash -e -c "$SDREADY") >"$d/log" 2>&1
+	if [ $? -ne 0 ] && [ ! -s "$d/out" ]; then ok "sign-sidecar-darwin: fails closed when a presence flag is not in its env at all"; else no "sign-sidecar-darwin: fails closed when a presence flag is not in its env at all" "$(cat "$d/log")"; fi
+fi
+# The verify jobs take what ships by the signer digest, held to 64 hex
+# first, since shasum would take a 40-hex SHA-1 line as SHA-1 (#921 review).
+SDVDIG="$(YQ_FILE="$SIDECAR_WORKFLOW" yq step verify-sidecar-darwin 'Verify the signed bundle digests')" || SDVDIG=""
+IMVDIG="$(YQ_FILE="$INSTALLER_WORKFLOW" yq step verify-macos 'Verify the signed DMG digest')" || IMVDIG=""
+if [ -z "$SDVDIG" ] || [ -z "$IMVDIG" ]; then
+	no "found both verify-job digest checks (verify-sidecar-darwin, verify-macos)"
+else
+	inbox_suite verify-macos "$IMVDIG" signed Install-Jarvis.dmg no
+	d="${WORK}/vd1" && rm -rf "$d" && mkdir -p "$d/rt/signed" "$d/cwd" && printf 'dmg\n' >"$d/rt/signed/Install-Jarvis.dmg"
+	verbatim_case "verify-macos refuses a SHA-1 digest of the right DMG" 1 "$d/cwd" "$IMVDIG" SHA256="$(sha1sum "$d/rt/signed/Install-Jarvis.dmg" | cut -d' ' -f1)" RUNNER_TEMP="$d/rt"
+	d="${WORK}/vd2" && rm -rf "$d" && mkdir -p "$d/rt/signed/darwin-arm64" "$d/rt/signed/darwin-x64" "$d/cwd"
+	printf 'a\n' >"$d/rt/signed/darwin-arm64/jarvis-app.tar.gz" && printf 'x\n' >"$d/rt/signed/darwin-x64/jarvis-app.tar.gz"
+	va="$(sha256sum "$d/rt/signed/darwin-arm64/jarvis-app.tar.gz" | cut -d' ' -f1)"
+	vx="$(sha256sum "$d/rt/signed/darwin-x64/jarvis-app.tar.gz" | cut -d' ' -f1)"
+	verbatim_case "verify-sidecar-darwin accepts the two bundles the signer hashed" 0 "$d/cwd" "$SDVDIG" SHA_DARWIN_ARM64="$va" SHA_DARWIN_X64="$vx" RUNNER_TEMP="$d/rt"
+	verbatim_case "verify-sidecar-darwin refuses the two digests crossed over" 1 "$d/cwd" "$SDVDIG" SHA_DARWIN_ARM64="$vx" SHA_DARWIN_X64="$va" RUNNER_TEMP="$d/rt"
+	verbatim_case "verify-sidecar-darwin refuses a SHA-1 digest of the right bundle" 1 "$d/cwd" "$SDVDIG" SHA_DARWIN_ARM64="$(sha1sum "$d/rt/signed/darwin-arm64/jarvis-app.tar.gz" | cut -d' ' -f1)" SHA_DARWIN_X64="$vx" RUNNER_TEMP="$d/rt"
+fi
+SDREFUSE="$(YQ_FILE="$SIDECAR_WORKFLOW" yq step verify-sidecar-darwin 'Refuse an unsigned bundle on a real run')" || SDREFUSE=""
+IMREFUSE="$(YQ_FILE="$INSTALLER_WORKFLOW" yq step verify-macos 'Refuse an unsigned bundle on a real run')" || IMREFUSE=""
+if [ -z "$SDREFUSE" ] || [ -z "$IMREFUSE" ]; then
+	no "found both unsigned-bundle refusals (verify-sidecar-darwin, verify-macos)"
+else
+	# mrefuse_case <job> <script> <want 0|1> <signed> <dry run> <hatch> <label>
+	mrefuse_case() {
+		verbatim_case "$1: $7" "$3" "$WORK" "$2" SIGNED="$4" DRY_RUN="$5" ALLOW_UNSIGNED_MACOS="$6"
+		if [ "$3" != 0 ] && ! grep -qF "::error::" "${WORK}/v.log"; then no "$1: $7, with an ::error::" "$(cat "${WORK}/v.log")"; fi
+	}
+	for pair in "verify-sidecar-darwin:SDREFUSE" "verify-macos:IMREFUSE"; do
+		job="${pair%%:*}"
+		var="${pair#*:}"
+		script="${!var}"
+		mrefuse_case "$job" "$script" 0 true false "" "passes a signed bundle on a real run"
+		mrefuse_case "$job" "$script" 1 false false "" "refuses an unsigned bundle on a real run"
+		mrefuse_case "$job" "$script" 1 "" false "" "refuses when the signer reported nothing"
+		mrefuse_case "$job" "$script" 0 false true "" "passes an unsigned bundle on a dry run"
+		mrefuse_case "$job" "$script" 0 false false true "passes an unsigned bundle under ALLOW_UNSIGNED_MACOS=true"
+		mrefuse_case "$job" "$script" 1 false false TRUE "refuses the hatch spelled TRUE"
+	done
+fi
+# The team check, executed against stand-ins for the macOS tools: codesign
+# answers with the team it is told (per path, so the app inside a DMG can
+# differ from the DMG) and honours a -R requirement on the team the way
+# codesign does, stapler and spctl pass or fail on request, and hdiutil
+# mounts a volume holding the app.
+VMS="${HERE}/verify-macos-signature.sh"
+SDTEAM="$(YQ_FILE="$SIDECAR_WORKFLOW" yq step verify-sidecar-darwin 'Verify the Developer ID signature and team')" || SDTEAM=""
+IMTEAM="$(YQ_FILE="$INSTALLER_WORKFLOW" yq step verify-macos 'Verify the Developer ID signature and team')" || IMTEAM=""
+if [ ! -x "$VMS" ] || [ -z "$SDTEAM" ] || [ -z "$IMTEAM" ]; then
+	no "found verify-macos-signature.sh and both team check steps (verify-sidecar-darwin, verify-macos)"
+else
+	stub="${WORK}/macstub"
+	rm -rf "$stub" && mkdir -p "$stub/bin"
+	cat >"$stub/bin/codesign" <<'STUB'
+#!/usr/bin/env bash
+# Team for a path: STUB_TEAM_APP for an .app, STUB_TEAM for anything else.
+path="${*: -1}"
+team="$STUB_TEAM"
+case "$path" in *.app) team="${STUB_TEAM_APP-$STUB_TEAM}" ;; esac
+printf '%s\n' "$*" >>"$STUB_LOG"
+if [ "$1" = "-dv" ]; then
+	echo "Executable=${path}" >&2
+	if [ -n "$team" ]; then echo "TeamIdentifier=${team}" >&2; else echo "TeamIdentifier=not set" >&2; fi
+	exit 0
+fi
+[ "${STUB_VERIFY_RC:-0}" = 0 ] || exit "$STUB_VERIFY_RC"
+for a in "$@"; do
+	case "$a" in
+	-R=*)
+		# STUB_REQ_TEAM: the team the requirement sees, when a test needs it
+		# to differ from what -dv reports.
+		want="anchor apple generic and certificate leaf[subject.OU] = \"${STUB_REQ_TEAM-$team}\""
+		[ "${a#-R=}" = "$want" ] || { echo "test-requirement: code failed to satisfy specified code requirement(s)" >&2; exit 3; }
+		;;
+	esac
+done
+exit 0
+STUB
+	cat >"$stub/bin/xcrun" <<'STUB'
+#!/usr/bin/env bash
+printf 'xcrun %s\n' "$*" >>"$STUB_LOG"
+[ "$1 $2" = "stapler validate" ] || exit 9
+exit "${STUB_STAPLE_RC:-0}"
+STUB
+	cat >"$stub/bin/spctl" <<'STUB'
+#!/usr/bin/env bash
+printf 'spctl %s\n' "$*" >>"$STUB_LOG"
+# What spctl -vv prints: accepted, then where the trust comes from.
+echo "${*: -1}: accepted"
+if [ "${STUB_SPCTL_DISABLED:-}" = 1 ]; then echo "override=security disabled"; else echo "source=Notarized Developer ID"; fi
+exit "${STUB_SPCTL_RC:-0}"
+STUB
+	cat >"$stub/bin/hdiutil" <<'STUB'
+#!/usr/bin/env bash
+printf 'hdiutil %s\n' "$*" >>"$STUB_LOG"
+if [ "$1" = attach ]; then
+	mp=""
+	while [ "$#" -gt 0 ]; do [ "$1" = -mountpoint ] && mp="$2"; shift; done
+	[ "${STUB_NO_APP:-}" = 1 ] || mkdir -p "${mp}/Install Jarvis.app/Contents"
+fi
+exit 0
+STUB
+	chmod +x "$stub/bin/"*
+	vrun() { # vrun <want 0|1> <label> <kind> <target> [VAR=value ...]
+		local want="$1" label="$2" kind="$3" target="$4"
+		shift 4
+		: >"$stub/log"
+		env -i PATH="$stub/bin:$PATH" STUB_LOG="$stub/log" STUB_TEAM=ABCDE12345 APPLE_TEAM_ID=ABCDE12345 "$@" "$VMS" "$kind" "$target" >"$stub/out" 2>&1
+		local rc=$?
+		if { [ "$want" = 0 ] && [ "$rc" -eq 0 ]; } || { [ "$want" != 0 ] && [ "$rc" -ne 0 ]; }; then ok "verify-macos-signature.sh $label"; else no "verify-macos-signature.sh $label" "exit ${rc}: $(cat "$stub/out")"; fi
+	}
+	mkdir -p "$stub/Jarvis.app/Contents" && printf 'dmg\n' >"$stub/Install-Jarvis.dmg"
+	vrun 0 "passes an app signed by our team, stapled and accepted" app "$stub/Jarvis.app"
+	if grep -qF -- '-R=anchor apple generic and certificate leaf[subject.OU] = "ABCDE12345"' "$stub/log" && grep -qF -- '--deep' "$stub/log" && grep -qF 'xcrun stapler validate' "$stub/log" && grep -qF 'spctl --assess --type execute' "$stub/log"; then
+		ok "verify-macos-signature.sh asks codesign for the team requirement the self-updater pins, with --deep, and checks staple and Gatekeeper"
+	else
+		no "verify-macos-signature.sh asks codesign for the team requirement the self-updater pins, with --deep, and checks staple and Gatekeeper" "$(cat "$stub/log")"
+	fi
+	vrun 1 "refuses an app signed by another team" app "$stub/Jarvis.app" STUB_TEAM=ZZZZZ99999
+	vrun 1 "refuses an app whose team passes the requirement but differs from the pin" app "$stub/Jarvis.app" STUB_TEAM=ZZZZZ99999 STUB_REQ_TEAM=ABCDE12345
+	if grep -qF "is signed by team" "$stub/out"; then ok "verify-macos-signature.sh refuses that app at the team comparison, not the requirement"; else no "verify-macos-signature.sh refuses that app at the team comparison, not the requirement" "$(cat "$stub/out")"; fi
+	vrun 1 "refuses an app when Gatekeeper assessments are turned off (spctl exits 0 and says override)" app "$stub/Jarvis.app" STUB_SPCTL_DISABLED=1
+	vrun 1 "refuses a DMG when Gatekeeper assessments are turned off" dmg "$stub/Install-Jarvis.dmg" STUB_SPCTL_DISABLED=1
+	vrun 1 "refuses an ad hoc or unsigned app" app "$stub/Jarvis.app" STUB_TEAM= APPLE_TEAM_ID=
+	vrun 1 "refuses an app whose seal does not verify" app "$stub/Jarvis.app" STUB_VERIFY_RC=1
+	vrun 1 "refuses an app with no stapled ticket" app "$stub/Jarvis.app" STUB_STAPLE_RC=65
+	vrun 1 "refuses an app Gatekeeper rejects" app "$stub/Jarvis.app" STUB_SPCTL_RC=3
+	vrun 1 "refuses a malformed team pin" app "$stub/Jarvis.app" APPLE_TEAM_ID='ABCDE12345" or true or "'
+	vrun 1 "refuses a missing app" app "$stub/Nope.app"
+	vrun 0 "passes any Developer ID team when the pin is empty (the pin gate decided that first)" app "$stub/Jarvis.app" STUB_TEAM=ZZZZZ99999 APPLE_TEAM_ID=
+	vrun 0 "passes a DMG and the app in it signed by our team" dmg "$stub/Install-Jarvis.dmg"
+	if grep -qF 'spctl --assess --type open --context context:primary-signature' "$stub/log" && grep -qF 'hdiutil attach -readonly' "$stub/log" && grep -qF 'hdiutil detach' "$stub/log" && grep -qF 'Install Jarvis.app' "$stub/log"; then
+		ok "verify-macos-signature.sh checks the DMG as a disk image, then mounts it read-only, checks the app inside, and detaches"
+	else
+		no "verify-macos-signature.sh checks the DMG as a disk image, then mounts it read-only, checks the app inside, and detaches" "$(cat "$stub/log")"
+	fi
+	vrun 1 "refuses a DMG signed by another team" dmg "$stub/Install-Jarvis.dmg" STUB_TEAM=ZZZZZ99999 STUB_TEAM_APP=ABCDE12345
+	vrun 1 "refuses a DMG of ours holding an app signed by another team" dmg "$stub/Install-Jarvis.dmg" STUB_TEAM_APP=ZZZZZ99999
+	vrun 1 "refuses a DMG with no Install Jarvis.app at its root" dmg "$stub/Install-Jarvis.dmg" STUB_NO_APP=1
+	vrun 1 "refuses a DMG with no stapled ticket" dmg "$stub/Install-Jarvis.dmg" STUB_STAPLE_RC=65
+	# The steps as the runner runs them: the pin gate first, then the check.
+	tstep() { # tstep <want 0|1> <label> <script> <RUNNER_TEMP> [VAR=value ...]
+		local want="$1" label="$2" script="$3" rt="$4"
+		shift 4
+		: >"$stub/log"
+		(cd "${HERE}/../../sidecar" && env -i PATH="$stub/bin:$PATH" STUB_LOG="$stub/log" STUB_TEAM=ABCDE12345 RUNNER_TEMP="$rt" ALLOW_UNPINNED_MACOS= "$@" bash -e -c "$script") >"$stub/out" 2>&1
+		local rc=$?
+		if { [ "$want" = 0 ] && [ "$rc" -eq 0 ]; } || { [ "$want" != 0 ] && [ "$rc" -ne 0 ]; }; then ok "$label"; else no "$label" "exit ${rc}: $(cat "$stub/out")"; fi
+	}
+	srt="${WORK}/sdrt" && rm -rf "$srt" && mkdir -p "$srt/src/Jarvis.app/Contents" "$srt/signed/darwin-arm64" "$srt/signed/darwin-x64"
+	tar -C "$srt/src" -czf "$srt/signed/darwin-arm64/jarvis-app.tar.gz" Jarvis.app && cp "$srt/signed/darwin-arm64/jarvis-app.tar.gz" "$srt/signed/darwin-x64/"
+	tstep 0 "verify-sidecar-darwin: passes both bundles signed by our team" "$SDTEAM" "$srt" APPLE_TEAM_ID=ABCDE12345 DRY_RUN=false
+	if [ "$(grep -c '^--verify' "$stub/log")" -eq 2 ]; then ok "verify-sidecar-darwin: checks both legs"; else no "verify-sidecar-darwin: checks both legs" "$(cat "$stub/log")"; fi
+	tstep 1 "verify-sidecar-darwin: refuses bundles signed by another team" "$SDTEAM" "$srt" APPLE_TEAM_ID=ZZZZZ99999 DRY_RUN=false
+	# Its own unpack checks, not the signer ones (#921 review).
+	srt2="${WORK}/sdrt2" && rm -rf "$srt2" && mkdir -p "$srt2/src/Jarvis.app/Contents" "$srt2/signed/darwin-arm64" "$srt2/signed/darwin-x64"
+	printf 'x\n' >"$srt2/src/Jarvis.app/Contents/a" && ln "$srt2/src/Jarvis.app/Contents/a" "$srt2/src/Jarvis.app/Contents/b"
+	tar -C "$srt2/src" -czf "$srt2/signed/darwin-arm64/jarvis-app.tar.gz" Jarvis.app && cp "$srt/signed/darwin-x64/jarvis-app.tar.gz" "$srt2/signed/darwin-x64/"
+	tstep 1 "verify-sidecar-darwin: refuses a signed archive with a hard link" "$SDTEAM" "$srt2" APPLE_TEAM_ID=ABCDE12345 DRY_RUN=false
+	rm -f "$srt2/src/Jarvis.app/Contents/b" && printf 'x\n' >"$srt2/src/extra" && tar -C "$srt2/src" -czf "$srt2/signed/darwin-arm64/jarvis-app.tar.gz" Jarvis.app extra
+	tstep 1 "verify-sidecar-darwin: refuses a signed archive with a member beside Jarvis.app" "$SDTEAM" "$srt2" APPLE_TEAM_ID=ABCDE12345 DRY_RUN=false
+	tstep 1 "verify-sidecar-darwin: refuses a real run with no team pin" "$SDTEAM" "$srt" APPLE_TEAM_ID= DRY_RUN=false
+	tstep 0 "verify-sidecar-darwin: lets a dry run with no team pin check the signature alone" "$SDTEAM" "$srt" APPLE_TEAM_ID= DRY_RUN=true
+	irt="${WORK}/imrt" && rm -rf "$irt" && mkdir -p "$irt/signed" && printf 'dmg\n' >"$irt/signed/Install-Jarvis.dmg"
+	tstep 0 "verify-macos: passes a DMG signed by our team" "$IMTEAM" "$irt" APPLE_TEAM_ID=ABCDE12345 DRY_RUN=false
+	tstep 1 "verify-macos: refuses a DMG signed by another team" "$IMTEAM" "$irt" APPLE_TEAM_ID=ZZZZZ99999 DRY_RUN=false
+	tstep 1 "verify-macos: refuses a real run with no team pin" "$IMTEAM" "$irt" APPLE_TEAM_ID= DRY_RUN=false
 fi
 
 echo

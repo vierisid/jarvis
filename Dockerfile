@@ -288,11 +288,14 @@ RUN bun run build:workflows
 # `[ -d ]` is not redundant: an unmatched glob stays literal in POSIX sh, so
 # without it the loop would run once on a path that does not exist and the
 # "built nothing" message below could never print.
+# The loaded vendored core pieces (#961) are checked the same way. This list
+# must equal LOADED_CORE_PIECES in build-pieces.ts (core-pieces.test.ts pins it).
 RUN set -eu; \
     pieces=/app/src/workflows/activepieces/packages/pieces/jarvis; \
+    core=/app/src/workflows/activepieces/packages/pieces/core; \
     n=0; \
-    for dir in "$pieces"/*/; do \
-      [ -d "$dir" ] || continue; \
+    for dir in "$pieces"/*/ "$core/approval/" "$core/delay/" "$core/http/" "$core/schedule/"; do \
+      [ -d "$dir" ] || { case "$dir" in "$core"/*) echo "core piece directory missing: $dir" >&2; exit 1;; esac; continue; }; \
       for artifact in dist/package.json dist/src/index.js dist/.source-hash; do \
         [ -f "$dir$artifact" ] || { \
           echo "prebuild incomplete: $(basename "$dir") is missing $artifact" >&2; \
@@ -315,12 +318,17 @@ RUN set -eu; \
 # stay literal and a `$#`-style count would pass with zero matches.
 RUN set -eu; \
     pieces=/app/src/workflows/activepieces/packages/pieces/jarvis; \
-    mkdir -p /out/pieces; \
+    core=/app/src/workflows/activepieces/packages/pieces/core; \
+    mkdir -p /out/pieces /out/core-pieces; \
     for dir in "$pieces"/*/; do \
       [ -d "$dir" ] || continue; \
       name=$(basename "$dir"); \
       mkdir -p "/out/pieces/$name"; \
       cp -a "${dir}dist" "/out/pieces/$name/dist"; \
+    done; \
+    for name in approval delay http schedule; do \
+      mkdir -p "/out/core-pieces/$name"; \
+      cp -a "$core/$name/dist" "/out/core-pieces/$name/dist"; \
     done; \
     engine="$HOME/.jarvis/cache/engine"; \
     count=$(find "$engine" -mindepth 1 -maxdepth 1 -type d | wc -l); \
@@ -362,6 +370,7 @@ COPY tsconfig.json ./
 # on the .dockerignore rule keeping any locally built dist/ out of the
 # context, or a leftover file in a destination dist/ could survive.
 COPY --from=workflows /out/pieces/ ./src/workflows/activepieces/packages/pieces/jarvis/
+COPY --from=workflows /out/core-pieces/ ./src/workflows/activepieces/packages/pieces/core/
 
 # Prebuilt engine bundle, read-only and root-owned. Shipping it keeps first
 # boot offline and fast: the fallback path would `bun install` ~47 MB of

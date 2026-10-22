@@ -20,7 +20,7 @@ import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from
 import { cancellableWorkflowService } from "../../runtime/cancellation";
 import { workflowEffectContext } from './effect-context';
 import type { WorkflowEffectContext } from '../../runtime/effect-context';
-import type { PieceAuthorizeRequest, PieceAuthorizeResponse } from '../../runtime/piece-effect-guard';
+import { PIECE_RECEIPT_MAX_BYTES, type PieceAuthorizeRequest, type PieceAuthorizeResponse } from '../../runtime/piece-effect-guard';
 import { resolveGovernedPieceAction } from '../../runtime/piece-effects';
 
 export type PieceAuthorizeFn = (
@@ -80,7 +80,7 @@ export function createJarvisPieceReceiptRoute(deps: JarvisPiecesRouteDeps): Rout
     while (true) {
       const part = await reader.read(); if (part.done) break;
       size += part.value.byteLength;
-      if (size > 262_144) { await reader.cancel(); return err('Completion receipt exceeds 262144 bytes; dispatch remains uncertain', 413); }
+      if (size > PIECE_RECEIPT_MAX_BYTES) { await reader.cancel(); return err(`Completion receipt exceeds ${PIECE_RECEIPT_MAX_BYTES} bytes; dispatch remains uncertain`, 413); }
       chunks.push(part.value);
     }
     let raw: Record<string, unknown>;

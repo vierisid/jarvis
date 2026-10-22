@@ -1,5 +1,6 @@
 /**
- * What the dashboard says about steps that run without approval (#955).
+ * What the dashboard says about steps that run without approval (#955), and,
+ * since #961, that HTTP request steps are governed by their method.
  *
  * Only verified pieces and Jarvis's own steps go through Authority. A
  * community piece's actions run without asking, whatever the governed
@@ -24,7 +25,7 @@ export const COMMUNITY_APPROVAL_NOTE =
   "Actions from community pieces run without approval: governed categories such as sending email do not apply to them. Each time one runs it is recorded in the audit log, and it is held while Jarvis is paused and refused after Kill. Verified pieces ask before governed actions.";
 
 export const AUTHORITY_SCOPE_NOTE =
-  "Governed categories apply to chat, agents, Jarvis's own workflow pieces and verified workflow pieces. Community pieces and CODE steps in workflows run without approval: each time one runs it is recorded in the audit log, and it is held while Jarvis is paused and refused after Kill. Built-in steps such as HTTP requests and webhooks also run without approval, and are not recorded one by one.";
+  "Governed categories apply to chat, agents, Jarvis's own workflow pieces, verified workflow pieces and HTTP request steps. An HTTP request is judged by its method: a GET reads, a POST, PUT or PATCH sends a message, and a DELETE deletes. Community pieces and CODE steps in workflows run without approval: each time one runs it is recorded in the audit log, and it is held while Jarvis is paused and refused after Kill. Built-in steps that act only inside the workflow, such as Delay, also run without approval and are not recorded one by one.";
 
 /** An action step whose piece the daemon reports as not approval-gated. Triggers are not covered. */
 export function stepNotApprovalGated(step: FlowStepNode, catalog: readonly PieceCatalogEntry[]): boolean {

@@ -168,6 +168,8 @@ import {
   SUB_PEBBLE_COLORS, PEBBLE_ROOMS, exactRoomKey, findRoomKey, type PanelLookups, type SubPebbleCand,
 } from "./pebble-intents.ts";
 import { makeSpeakConfirmation } from "./pebble-confirmation.ts";
+import { runRoomPanelIntent, type RoomPanelDeps } from "./pebble-room-panel.ts";
+import { PEBBLE_CHANNEL } from "./pebble-dialogue.ts";
 import { makePalettePick, makePebbleNavTool } from "./pebble-nav-tool.ts";
 import { fetchPebbleForegroundApp, fetchPebbleScreenshot, pebbleActionDirectives, type PebbleDesktopDispatch } from "./pebble-desktop-context.ts";
 import { skipGenericSidecarEvent } from "./sidecar-event-routing.ts";
@@ -2015,14 +2017,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       sidecarManager.onEvent(async (sidecarId, event) => {
         if (event.event_type !== 'pebble.blind_toggle') return;
         try {
-          const { persistPlainUserPatch } = await import('./user-settings.ts');
+          const { persistAwarenessChoice } = await import('./user-settings.ts');
           const wasEnabled = jarvisConfig.awareness?.enabled ?? true;
           const nextEnabled = !wasEnabled;
           (jarvisConfig.awareness as { enabled?: boolean }).enabled = nextEnabled;
           // Persist only the key that changed. Writing the whole in-memory
           // section would stamp every DEFAULT_CONFIG fill into the row, pinning
           // this install to today's capture interval and cooldowns forever.
-          persistPlainUserPatch('awareness', { enabled: nextEnabled });
+          // The long-press is the user's own choice, so it is marked as one.
+          persistAwarenessChoice(nextEnabled);
           // Toggle live awareness service if it exists.
           if (awarenessService) awarenessService.toggle(nextEnabled);
           // Push visual: blinded = !enabled.
@@ -2294,11 +2297,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // but can run to the bus's queue TTL, so show it is working, and
           // drop the reply if the turn was cancelled meanwhile.
           await setState(sidecarId, 'thinking', '');
+          // Only this sidecar's panels may say whether it switched (#1026).
           const outcome = await wsService.requestRoomAction({
             room: target.key,
             action: 'switch_tab',
             args: { tab },
-          });
+          }, undefined, { sidecar: sidecarId });
           console.log(`[ambient-ui] in-panel action: switch_tab tab="${tab}" on ${target.title}: ${outcome}`);
           if (ctrl.cancelled) return true;
           await speakConfirmation(sidecarId, tabSwitchReply(target.title, tabRaw, outcome), ctrl);
@@ -2687,9 +2691,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
       // The one confirmation every fast path speaks; a cancelled turn leaves
       // the pebble to whoever cancelled it (#964). See pebble-confirmation.ts.
+      // Its mirror goes to the dashboard only, never to Telegram or Discord:
+      // it acknowledges something done on this screen (#1026).
       const speakConfirmation = makeSpeakConfirmation({
         setState,
-        heartbeat: (text) => wsService.broadcastHeartbeat(text),
+        heartbeat: (text) => wsService.broadcastHeartbeatToDashboard(text),
         synthesizer: () => {
           const tts = pebbleTTS;
           return tts ? (text) => tts.synthesize(text) : null;
@@ -2933,6 +2939,29 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         return true;
       };
 
+      // What the open/close <room> fast path may do. See pebble-room-panel.ts.
+      const roomPanelDeps: RoomPanelDeps = {
+        setState,
+        speak: speakConfirmation,
+        openPanel: (sidecarId, key) => {
+          const meta = ROOMS[key]!;
+          return sidecarManager.dispatchRPC(sidecarId, 'panel.spawn', {
+            url: dashboardURL(key),
+            title: meta.title,
+            bounds: boundsForRoom(key, meta.w, meta.h),
+            resizable: true,
+            always_on_top: meta.alwaysOnTop ?? false,
+            multi_instance: false,
+          });
+        },
+        closePanel: async (sidecarId, id) => { await sidecarManager.dispatchRPC(sidecarId, 'panel.close', { id }); },
+        findPanel: (sidecarId, key) => findPanel(sidecarId, key),
+        trackPanel,
+        untrackPanel,
+        log: (message) => console.log(message),
+        warn: (message, err) => console.warn(message, err),
+      };
+
       // tryHandlePanelIntent looks for "open|show|launch <room>" or
       // "close|hide|dismiss <room>" anywhere in the user text. On match
       // it dispatches the right panel RPC, speaks a short confirmation
@@ -3012,61 +3041,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (!key) return false;
 
         const meta = ROOMS[key]!;
-        const confirm = roomAction === 'open' ? `Opening ${meta.title}.` : `Closing ${meta.title}.`;
         console.log(`[ambient-ui] panel intent: ${roomAction} ${key} (matched "${m[0]}")`);
-
-        // Speak the confirmation through the queue-based TTS path so the
-        // user hears feedback even before the window finishes spawning. A turn
-        // already cancelled is left to whoever cancelled it (#964).
-        if (ctrl.cancelled) return true;
-        await setState(sidecarId, 'thinking', '');
-        try { wsService.broadcastHeartbeat(confirm); } catch { /* ignore */ }
-
-        if (roomAction === 'open') {
-          try {
-            const result = await sidecarManager.dispatchRPC(sidecarId, 'panel.spawn', {
-              url: dashboardURL(key),
-              title: meta.title,
-              bounds: boundsForRoom(key, meta.w, meta.h),
-              resizable: true,
-              always_on_top: meta.alwaysOnTop ?? false,
-              multi_instance: false,
-            });
-            // panel.spawn returns { id: "<panel-id>" } — track it so
-            // window-management commands ("expand it", "close the
-            // workflows window") can resolve a target.
-            const id = (result && typeof result === 'object' && 'id' in (result as object))
-              ? String((result as { id?: unknown }).id ?? '')
-              : '';
-            if (id) {
-              trackPanel(sidecarId, { id, key, title: meta.title });
-            }
-          } catch (err) {
-            console.warn(`[ambient-ui] panel.spawn(${key}) failed:`, err);
-          }
-        } else {
-          // panel.close — resolve the target by room key against our
-          // tracker. If multiple panels match (e.g. several workflow
-          // windows), close the most recent.
-          try {
-            const target = findPanel(sidecarId, key);
-            if (target) {
-              await sidecarManager.dispatchRPC(sidecarId, 'panel.close', { id: target.id });
-              untrackPanel(sidecarId, target.id);
-            } else {
-              console.log(`[ambient-ui] no tracked panel for key "${key}" — close is a no-op`);
-            }
-          } catch (err) {
-            console.warn(`[ambient-ui] panel.close(${key}) failed:`, err);
-          }
-        }
-
-        // Speak the confirmation (single sentence, fits in one TTS clip). This
-        // was its own copy, which set `speaking` after the clip was synthesized
-        // without looking at the flag again, so a turn cancelled meanwhile was
-        // left in `speaking` (#964). The confirm was already broadcast above, so
-        // no second heartbeat.
-        await speakConfirmation(sidecarId, confirm, ctrl, { heartbeat: false });
+        await runRoomPanelIntent(roomPanelDeps, sidecarId, { action: roomAction, key, title: meta.title }, ctrl);
         return true;
       };
 
@@ -3353,13 +3329,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         sidecarId: string,
         userText: string,
         ctrl: { cancelled: boolean },
-        opts?: { image?: { base64: string; mediaType: string } },
+        // `historyText` is what the exchange is stored as when the prompt
+        // carries more than the user said (the region path appends framing
+        // about an image the stored history will not have).
+        opts?: { image?: { base64: string; mediaType: string }; historyText?: string },
       ): Promise<void> => runWithOrigin('user', () => runResponseCycleTurn(sidecarId, userText, ctrl, opts));
       const runResponseCycleTurn = async (
         sidecarId: string,
         userText: string,
         ctrl: { cancelled: boolean },
-        opts?: { image?: { base64: string; mediaType: string } },
+        opts?: { image?: { base64: string; mediaType: string }; historyText?: string },
       ): Promise<void> => {
         const cycleStart = Date.now();
         // Mark this machine as the one in use so any background task launched
@@ -3487,6 +3466,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         let fullText = '';
         const llmStart = Date.now();
         let llmDone = false;
+        // Set on a stream error, so the fallback line is never stored as a
+        // reply (see pebble-dialogue.ts recordPebbleExchange).
+        let streamFailed = false;
         try {
           // T9 — auto-screenshot for spatial queries. If the user is
           // asking "where is X" / "show me Y" / "how to open Z" and no
@@ -3558,12 +3540,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                 userText,
                 imageInput.base64,
                 imageInput.mediaType,
-                'pebble',
+                PEBBLE_CHANNEL,
                 panelCtx || undefined,
               )
             : agentService.streamMessage(
                 userText,
-                'pebble',
+                PEBBLE_CHANNEL,
                 panelCtx || undefined,
               );
           const { stream, onComplete } = handle;
@@ -3814,6 +3796,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               break;
             } else if (event.type === 'error') {
               console.warn('[ambient-ui] stream error:', event.error);
+              streamFailed = true;
               if (!fullText) fullText = "I had trouble with that — say it again?";
               llmDone = true;
               break;
@@ -3833,6 +3816,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           const tail = unsynth.trim();
           if (tail) enqueueSentence(tail);
           unsynth = '';
+
+          // The finished exchange, so the next Pebble turn has history to
+          // resolve "do that" against (#927). A dismissed turn returned above.
+          if (!streamFailed && !ctrl.cancelled) agentService.recordPebbleExchange(opts?.historyText ?? userText, fullText);
 
           // Fire-and-forget extraction + learning.
           void onComplete(fullText);
@@ -4203,6 +4190,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         try {
           await runResponseCycle(sidecarId, promptText, ctrl, {
             image: { base64: imageBase64, mediaType: mimeType },
+            // Stored as what the user said, without the image framing (#927).
+            historyText: userText,
           });
         } catch (err) {
           console.warn('[ambient-ui] region voice cycle error:', err);
@@ -5024,6 +5013,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     }
     try {
       engineBoot = await bootstrapWorkflowEngine({
+        // #961: a self-hosted install's HTTP steps may reach its own private
+        // network; a hosted one's reach public addresses only.
+        egressPolicy: isHostedInstall(jarvisConfig) ? 'public-only' : 'private-allowed',
         services: {
           credentialResolver,
           // eventsPoll is the only backend safely wireable up front (no
