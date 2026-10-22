@@ -52,6 +52,17 @@ const STRIPPED_REQUEST_HEADERS = [
   'x-forwarded-access-token',
   'x-forwarded-user',
   'x-forwarded-email',
+  'x-forwarded-groups',
+  'x-forwarded-preferred-username',
+  // Authelia, Tailscale Serve and Grafana-style auth proxies.
+  'remote-user',
+  'remote-groups',
+  'remote-email',
+  'remote-name',
+  'tailscale-user-login',
+  'tailscale-user-name',
+  'tailscale-user-profile-pic',
+  'x-webauth-user',
 ];
 
 /**

@@ -68,6 +68,11 @@ describe('SiteProxy request headers', () => {
     'x-authentik-jwt': 'gateway-jwt',
     'x-forwarded-user': 'me',
     'x-forwarded-email': 'me@example.com',
+    'x-forwarded-groups': 'admins',
+    'remote-user': 'me',
+    'remote-email': 'me@example.com',
+    'tailscale-user-login': 'me@example.com',
+    'x-webauth-user': 'me',
     accept: 'text/html',
   };
 

@@ -371,6 +371,7 @@ test('WebSocketServer - every service worker script fetch gets the self-unregist
       expect([p, resp.status]).toEqual([p, 200]);
       expect(resp.headers.get('content-type')).toStartWith('text/javascript');
       expect(resp.headers.get('service-worker-allowed')).toBe('/');
+      expect(resp.headers.get('vary')).toBe('Service-Worker');
       expect(await resp.text()).toContain('self.registration.unregister()');
     }
     // Without the header nothing changes: the gate still answers.

@@ -39,6 +39,8 @@ export function serviceWorkerKillSwitch(): Response {
     headers: {
       'Content-Type': 'text/javascript; charset=utf-8',
       'Cache-Control': 'no-store',
+      // A cache that ignores no-store must not serve this under a normal asset URL.
+      'Vary': 'Service-Worker',
       'Service-Worker-Allowed': '/',
       'X-Content-Type-Options': 'nosniff',
     },
