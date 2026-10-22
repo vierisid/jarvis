@@ -190,10 +190,18 @@ describe('GPT-6 official Responses transport', () => {
     expect(events).toEqual([{ type: 'error', code: 'network', error: 'OpenAI stream ended before completion' }]);
   });
   it('reports a malformed stream frame as a typed server error without echoing the frame', async () => {
-    globalThis.fetch = (async () => new Response('data: '+JSON.stringify({ type: 'response.output_text.delta', delta: 'Hi' })+'\n\ndata: {"type":"response.output_text.delta","delta":"secret partial\n\n')) as unknown as typeof fetch;
+    for (const frame of ['{"type":"response.output_text.delta","delta":"secret partial', 'null', '7']) {
+      globalThis.fetch = (async () => new Response('data: '+JSON.stringify({ type: 'response.output_text.delta', delta: 'Hi' })+'\n\ndata: '+frame+'\n\n')) as unknown as typeof fetch;
+      const events = [];
+      for await (const event of new OpenAIProvider('k').stream([], { model: 'gpt-6-luna' })) events.push(event);
+      expect(events).toEqual([{ type: 'text', text: 'Hi' }, { type: 'error', code: 'server', error: 'OpenAI Responses stream sent malformed JSON' }]);
+    }
+  });
+  it('reports a frame cut off by the end of the stream as a dropped connection', async () => {
+    globalThis.fetch = (async () => new Response('data: {"type":"response.output_text.delta","delta":"cut')) as unknown as typeof fetch;
     const events = [];
     for await (const event of new OpenAIProvider('k').stream([], { model: 'gpt-6-luna' })) events.push(event);
-    expect(events).toEqual([{ type: 'text', text: 'Hi' }, { type: 'error', code: 'server', error: 'OpenAI Responses stream sent malformed JSON' }]);
+    expect(events).toEqual([{ type: 'error', code: 'network', error: 'OpenAI stream ended before completion' }]);
   });
   it('preserves typed rate-limit errors and checks cancellation before dispatch', async () => {
     let calls = 0;

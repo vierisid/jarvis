@@ -114,7 +114,12 @@ export async function* streamResponses(response: Response): AsyncIterable<LLMStr
         let event: { type: string; delta?: string; response?: ResponseData; message?: string };
         // A garbled frame is the provider's fault, not the connection's. The raw
         // frame may carry model output, so it never goes into the message.
-        try { event = JSON.parse(raw); } catch { throw new LLMProviderError('OpenAI Responses stream sent malformed JSON', 'server'); }
+        try { event = JSON.parse(raw); } catch {
+          // A leftover partial frame at end of stream is a dropped connection.
+          if (done) throw new LLMProviderError('OpenAI stream ended before completion', 'network');
+          throw new LLMProviderError('OpenAI Responses stream sent malformed JSON', 'server');
+        }
+        if (!event || typeof event !== 'object') throw new LLMProviderError('OpenAI Responses stream sent malformed JSON', 'server');
         if (event.type === 'response.output_text.delta' || event.type === 'response.refusal.delta') {
           if (event.delta) yield { type: 'text', text: event.delta };
         } else if (event.type === 'response.completed' || event.type === 'response.incomplete') {
