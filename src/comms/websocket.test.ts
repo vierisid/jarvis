@@ -360,6 +360,27 @@ test('WebSocketServer - JWT-only by DEFAULT: unauthenticated requests are blocke
   }
 });
 
+test('WebSocketServer - every service worker script fetch gets the self-unregistering script, before auth', async () => {
+  // Auth gate on and no session: a worker a site preview registered on this
+  // origin must still be evicted on its next update check.
+  const swServer = new WebSocketServer(3159);
+  swServer.start();
+  try {
+    for (const p of ['/sw.js', '/dev-sw.js?dev-sw', '/api/content/files/x/evil.js', '/api/sites/p/proxy/sw.js']) {
+      const resp = await fetch(`http://localhost:3159${p}`, { headers: { 'Service-Worker': 'script' } });
+      expect([p, resp.status]).toEqual([p, 200]);
+      expect(resp.headers.get('content-type')).toStartWith('text/javascript');
+      expect(resp.headers.get('service-worker-allowed')).toBe('/');
+      expect(await resp.text()).toContain('self.registration.unregister()');
+    }
+    // Without the header nothing changes: the gate still answers.
+    const plain = await fetch('http://localhost:3159/sw.js');
+    expect(plain.status).toBe(401);
+  } finally {
+    swServer.stop();
+  }
+});
+
 test('WebSocketServer - ?token= is exchanged for a panel session, and the session is what the cookie carries', async () => {
   const authServer = new WebSocketServer(3151);
   authServer.setSidecarManager(fakeSidecarManager('valid-access-token'));
