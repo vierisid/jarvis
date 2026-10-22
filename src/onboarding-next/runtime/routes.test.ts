@@ -1,4 +1,5 @@
-import { expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
+import { OPERATIONS, type Provider } from './contract.ts';
 import { createOnboardingRoutes, OPERATION_PATHS } from './routes.ts';
 import { createOnboardingRuntime } from './runtime.ts';
 import { fixtureOptions, request } from './test-fixture.ts';
@@ -81,4 +82,48 @@ test('exceptions never echo credentials or provider details', async () => {
   const o = fixtureOptions(); o.authorize = () => { throw new Error('Bearer SECRET credential'); };
   const response = await createOnboardingRoutes(createOnboardingRuntime(o))[path]!.POST!(post(payload()));
   expect(await response.text()).not.toContain('SECRET');
+});
+
+describe('Google OAuth return page', () => {
+  const returnPath = '/api/onboarding-next/v1/google/return';
+  function harness(result: unknown = { connection: { state: 'connected' } }) {
+    const o = fixtureOptions(), inputs: unknown[] = [];
+    const cap = OPERATIONS['google.callback'], bind = o.bindings![cap]!;
+    o.bindings![cap] = (...args) => {
+      const bound = bind(...args) as Provider;
+      return { ...bound, operations: { ...bound.operations, 'google.callback': async (input: unknown) => { inputs.push(input); return result; } } };
+    };
+    const handler = createOnboardingRoutes(createOnboardingRuntime(o))[returnPath]!.GET!;
+    return { o, inputs, open: (query: string) => handler(new Request(`http://localhost${returnPath}${query}`)) };
+  }
+  test('passes exactly one state and code to the authenticated callback and says the connection is ready', async () => {
+    const h = harness(), response = await h.open('?state=s1&code=c1');
+    expect(response.status).toBe(200);
+    expect(h.inputs).toEqual([{ state: 's1', code: 'c1' }]);
+    expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(response.headers.get('content-security-policy')).toBe("default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
+    expect(await response.text()).toContain('<h1>Google connected</h1>');
+  });
+  test('a provider error is forwarded and the page asks for attention without echoing the query', async () => {
+    const h = harness({ connection: { state: 'error' } });
+    const response = await h.open('?state=s1&error=%3Cscript%3Ealert(1)%3C%2Fscript%3E');
+    expect(h.inputs).toEqual([{ state: 's1', error: '<script>alert(1)</script>' }]);
+    const html = await response.text();
+    expect(html).toContain('<h1>Google connection needs attention</h1>');
+    expect(html).not.toContain('<script'); expect(html).not.toContain('s1');
+  });
+  test('a missing, empty or repeated parameter is refused before the callback runs', async () => {
+    for (const query of ['', '?code=c1', '?state=&code=c1', '?state=a&state=b&code=c1', '?state=a&code=c1&code=c2', '?state=a&error=x&error=y']) {
+      const h = harness(), response = await h.open(query);
+      expect(response.status).toBe(400); expect(h.inputs).toEqual([]);
+      expect((await response.json()).error).toBe('invalid_request');
+    }
+  });
+  test('an unauthenticated return never reaches the callback', async () => {
+    const h = harness(); h.o.authorize = () => null;
+    const response = await createOnboardingRoutes(createOnboardingRuntime(h.o))[returnPath]!.GET!(new Request(`http://localhost${returnPath}?state=s1&code=c1`));
+    expect(response.status).toBe(401); expect(h.inputs).toEqual([]);
+  });
 });
