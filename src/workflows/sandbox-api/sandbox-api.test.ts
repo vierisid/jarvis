@@ -19,6 +19,10 @@ import { createFlow, setPublishedVersion, updateFlowStatus } from "../db/repos/f
 import { createDraftVersion, lockVersion } from "../db/repos/flow-version";
 import { createFlowRun } from "../db/repos/flow-run";
 import { getWaitpoint } from "../db/repos/waitpoint";
+import { workflowFileDir } from "./routes/files";
+import { triggerHookRunId } from "../runner/triggers/hook-run-id";
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 
 const sampleIdentity = () => ({
   sandboxId: SandboxRegistry.newSandboxId(),
@@ -481,9 +485,10 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
   let signer: EngineTokenSigner;
   let registry: SandboxRegistry;
   let testRunId: string;
+  let testFlowId: string;
 
-  async function authedFetchForRun(path: string, init: RequestInit = {}): Promise<Response> {
-    const id = { ...sampleIdentity(), runId: testRunId };
+  async function authedFetchForRun(path: string, init: RequestInit = {}, runId = testRunId): Promise<Response> {
+    const id = { ...sampleIdentity(), runId };
     const { token } = await signer.mint(id);
     registry.register({
       ...id,
@@ -516,6 +521,7 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
     const flow = createFlow({ projectId: DEFAULT_IDS.project });
     const v = createDraftVersion({ flowId: flow.id, displayName: "f" });
     lockVersion(v.id);
+    testFlowId = flow.id;
     const { createFlowRun } = await import("../db/repos/flow-run");
     testRunId = createFlowRun({
       flowId: flow.id,
@@ -533,7 +539,7 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
   test("POST /v1/step-files stores blob and returns a /v1/step-files/<id> URL", async () => {
     const form = new FormData();
     form.set("stepName", "step_1");
-    form.set("flowId", "flow_xx");
+    form.set("flowId", testFlowId);
     form.set("fileName", "hello.txt");
     form.set("file", new Blob(["hello world"], { type: "text/plain" }), "hello.txt");
     const r = await authedFetchForRun("/v1/step-files", { method: "POST", body: form });
@@ -556,7 +562,7 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
 
     const form = new FormData();
     form.set("stepName", "step_bin");
-    form.set("flowId", "flow_bin");
+    form.set("flowId", testFlowId);
     form.set("fileName", "fixture.bin");
     form.set("file", new Blob([original], { type: "application/octet-stream" }), "fixture.bin");
     const upload = await authedFetchForRun("/v1/step-files", { method: "POST", body: form });
@@ -583,7 +589,7 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
   test("POST /v1/step-files rejects a missing file blob with 400", async () => {
     const form = new FormData();
     form.set("stepName", "step_a");
-    form.set("flowId", "flow_x");
+    form.set("flowId", testFlowId);
     // No `file` field.
     const r = await authedFetchForRun("/v1/step-files", { method: "POST", body: form });
     expect(r.status).toBe(400);
@@ -595,7 +601,7 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
     // Upload as the test's default identity (project default).
     const upForm = new FormData();
     upForm.set("stepName", "step_x");
-    upForm.set("flowId", "flow_x");
+    upForm.set("flowId", testFlowId);
     upForm.set("file", new Blob([new Uint8Array([1, 2, 3])]), "x.bin");
     const upload = await authedFetchForRun("/v1/step-files", { method: "POST", body: upForm });
     expect(upload.status).toBe(200);
@@ -622,6 +628,67 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
     expect(r.status).toBe(404);
     const body = (await r.json()) as { error?: string };
     expect(body.error).toMatch(/file not found/);
+  });
+
+  function stepFileForm(flowId: string, stepName: string): FormData {
+    const form = new FormData();
+    form.set("stepName", stepName);
+    form.set("flowId", flowId);
+    form.set("fileName", "x.bin");
+    form.set("file", new Blob([new Uint8Array([7])]), "x.bin");
+    return form;
+  }
+
+  test("POST /v1/step-files writes under <base>/<run's flow>/<step>", async () => {
+    const r = await authedFetchForRun("/v1/step-files", { method: "POST", body: stepFileForm(testFlowId, "step_disk") });
+    expect(r.status).toBe(200);
+    expect(readdirSync(workflowFileDir(testFlowId, "step_disk"))).toHaveLength(1);
+  });
+
+  test("POST /v1/step-files refuses a stepName that climbs out of the flow dir", async () => {
+    const root = process.env.JARVIS_WORKFLOW_DATA_DIR!;
+    for (const stepName of ["../../escaped", "..", ".", ".hidden", "a/b", "a\\b", "step 1", "a.b", "x".repeat(129)]) {
+      const r = await authedFetchForRun("/v1/step-files", { method: "POST", body: stepFileForm(testFlowId, stepName) });
+      expect(r.status).toBe(400);
+    }
+    // The first one would have landed at <root>/escaped, outside workflow-files.
+    expect(existsSync(join(root, "escaped"))).toBe(false);
+  });
+
+  test("POST /v1/step-files refuses a flowId the token's run does not belong to", async () => {
+    // A real flow in the same project: without the binding a sandbox could
+    // write into any flow's step files.
+    const other = createFlow({ projectId: DEFAULT_IDS.project });
+    const r = await authedFetchForRun("/v1/step-files", { method: "POST", body: stepFileForm(other.id, "step_1") });
+    expect(r.status).toBe(403);
+    expect(existsSync(workflowFileDir(other.id, "step_1"))).toBe(false);
+
+    const climb = await authedFetchForRun("/v1/step-files", { method: "POST", body: stepFileForm("../../escaped_flow", "step_1") });
+    expect(climb.status).toBe(403);
+    expect(existsSync(workflowFileDir("../../escaped_flow", "step_1"))).toBe(false);
+  });
+
+  test("POST /v1/step-files refuses a token whose run belongs to no flow", async () => {
+    const r = await authedFetchForRun("/v1/step-files", { method: "POST", body: stepFileForm(testFlowId, "step_1") }, "run_without_row");
+    expect(r.status).toBe(403);
+  });
+
+  test("POST /v1/step-files binds a trigger hook run to the flow its run id names", async () => {
+    // Poll triggers (e.g. a mail trigger saving attachments) write step files
+    // from a hook sandbox that has no flow_run row.
+    const hookRunId = triggerHookRunId("poll", testFlowId);
+    const ok = await authedFetchForRun("/v1/step-files", { method: "POST", body: stepFileForm(testFlowId, "trigger") }, hookRunId);
+    expect(ok.status).toBe(200);
+    // Hooks upload under the piece's trigger name, which is often hyphenated.
+    const hyphen = await authedFetchForRun("/v1/step-files", { method: "POST", body: stepFileForm(testFlowId, "google-sheets-new-or-updated-row") }, hookRunId);
+    expect(hyphen.status).toBe(200);
+    const other = createFlow({ projectId: DEFAULT_IDS.project });
+    const wrong = await authedFetchForRun("/v1/step-files", { method: "POST", body: stepFileForm(other.id, "trigger") }, hookRunId);
+    expect(wrong.status).toBe(403);
+    // A hook run id naming a flow in another project binds to nothing.
+    const foreign = createFlow({ projectId: "proj_foreign_hook" });
+    const cross = await authedFetchForRun("/v1/step-files", { method: "POST", body: stepFileForm(foreign.id, "trigger") }, triggerHookRunId("poll", foreign.id));
+    expect(cross.status).toBe(403);
   });
 
   test("POST /v1/step-files rejects non-multipart bodies", async () => {

@@ -18,10 +18,16 @@
  *
  * `GET /v1/step-files/:id` is hosted here too so that other steps in the same
  * sandbox can fetch the file with the same engineToken.
+ *
+ * `flowId` and `stepName` arrive as form fields from the sandbox, which runs
+ * user and community code holding the engine token. Neither is trusted: the
+ * flow must be the one the token's run belongs to (the flow_run row, or the
+ * flow a trigger hook's run id names), the step name must be one safe path
+ * segment, and the resolved directory must stay under the files base.
  */
 
 import { mkdirSync, existsSync, writeFileSync, readFileSync, statSync } from "node:fs";
-import { resolve, basename, join } from "node:path";
+import { resolve, basename, join, relative, isAbsolute, sep } from "node:path";
 import { homedir } from "node:os";
 import { workflowFileBase } from "../config";
 import { json, err, type RouteContext, type RouteHandler } from "./shared";
@@ -29,6 +35,34 @@ import {
   createWorkflowFile,
   getWorkflowFile,
 } from "../../db/repos/workflow-file";
+import { getFlowRunInProject } from "../../db/repos/flow-run";
+import { getFlowInProject } from "../../db/repos/flow";
+import { flowIdOfTriggerHookRunId } from "../../runner/triggers/hook-run-id";
+import type { EngineTokenClaims } from "../types";
+
+/**
+ * One safe path segment. Not the readiness rule for flow step names
+ * (workflow-readiness.ts, ^[a-zA-Z_][a-zA-Z0-9_]*$): a trigger hook uploads
+ * under the PIECE's trigger name, which readiness never checks, and 114 of
+ * 1325 upstream community trigger names are hyphenated (new-spreadsheet,
+ * google-sheets-new-or-updated-row). No dot, slash or backslash, so neither
+ * "." nor ".." nor a separator can get through.
+ */
+const STEP_NAME = /^[A-Za-z0-9_$][A-Za-z0-9_$-]{0,127}$/;
+
+/** The flow this token's run belongs to, or null when it serves none. */
+function flowOfClaims(claims: EngineTokenClaims): string | null {
+  const run = getFlowRunInProject(claims.projectId, claims.runId);
+  if (run) return run.flowId;
+  const hookFlowId = flowIdOfTriggerHookRunId(claims.runId);
+  if (hookFlowId && getFlowInProject(claims.projectId, hookFlowId)) return hookFlowId;
+  return null;
+}
+
+function isStrictlyWithin(child: string, parent: string): boolean {
+  const rel = relative(parent, child);
+  return rel !== "" && !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`);
+}
 
 function safeBasename(name: string): string {
   const b = basename(name).replace(/[^A-Za-z0-9._-]/g, "_");
@@ -47,12 +81,19 @@ export const stepFilesUploadRoute: RouteHandler = async (ctx: RouteContext) => {
   const file = form.get("file");
   if (!stepName) return err("missing stepName", 400);
   if (!flowId) return err("missing flowId", 400);
+  if (!STEP_NAME.test(stepName)) return err("invalid stepName", 400);
+  const runFlowId = flowOfClaims(ctx.claims);
+  if (runFlowId === null) return err("this sandbox's run belongs to no flow", 403);
+  if (flowId !== runFlowId) return err("flowId does not match this sandbox's run", 403);
+  const base = workflowFileBase();
+  const dir = resolve(base, runFlowId, stepName);
+  if (!isStrictlyWithin(dir, base)) return err("invalid file location", 400);
   if (!(file instanceof Blob)) return err("missing file blob", 400);
   const buf = Buffer.from(await file.arrayBuffer());
 
   const fileRow = createWorkflowFile({
     projectId: ctx.claims.projectId,
-    flowId,
+    flowId: runFlowId,
     type: "FLOW_STEP_FILE",
     fileName,
     size: buf.byteLength,
@@ -64,7 +105,6 @@ export const stepFilesUploadRoute: RouteHandler = async (ctx: RouteContext) => {
   // buffer-via-DB. The DB blob is the source of truth; the disk copy is a
   // convenience for local-process file URLs.
   const safeName = `${fileRow.id}__${safeBasename(fileName)}`;
-  const dir = resolve(workflowFileBase(), flowId, stepName);
   mkdirSync(dir, { recursive: true });
   writeFileSync(resolve(dir, safeName), buf);
 
