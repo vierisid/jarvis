@@ -166,8 +166,14 @@ export interface TriggerManagerDeps {
    * event-bus subscription.
    */
   engineRuntime?: EngineRuntime;
-  /** Startup/refresh refusal: notify the owner after its failed run is durable. */
-  onRegistrationBlocked?: (notice: { flowId: string; runId: string; message: string }) => void;
+  /**
+   * A readiness refusal, at registration (startup, refresh) or when a live
+   * delivery is refused (#1080): notify the owner after its failed run is
+   * durable. Once per new refusal, never once per fire. Return false when
+   * nobody could be told (no computer connected): the same refusal is then
+   * told at its next fire or retry instead of never.
+   */
+  onRegistrationBlocked?: (notice: { flowId: string; runId: string; message: string }) => boolean | void;
   /** Optional logger; defaults to console. */
   log?: (line: string) => void;
   /**
@@ -219,6 +225,8 @@ export class TriggerManager {
    * one failed run plus a counted blocked row, not a failed run per minute.
    */
   private readonly liveRefusals = new Map<string, string>();
+  /** A refusal whose notice reached nobody, by flow, to tell at its next repeat. */
+  private readonly untold = new Map<string, { signature: string; notice: { flowId: string; runId: string; message: string } }>();
   /** Daily prune of the delivery ledger, for a daemon that runs for weeks. */
   private pruneTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -456,6 +464,7 @@ export class TriggerManager {
     this.clearEnableRetry(flowId);
     this.registrationFailures.delete(flowId);
     this.liveRefusals.delete(flowId);
+    this.untold.delete(flowId);
     const sub = this.subs.get(flowId);
     if (!sub) return;
     try {
@@ -784,6 +793,21 @@ export class TriggerManager {
     })();
   }
 
+  /** Tell the owner about a readiness refusal; keep it to tell again if it reached nobody. */
+  private tell(signature: string, notice: { flowId: string; runId: string; message: string }): void {
+    let delivered: boolean | void = undefined;
+    try { delivered = this.onRegistrationBlocked?.(notice); }
+    catch (notifyError) { this.log(`flow ${notice.flowId}: readiness notification failed: ${String(notifyError)}`); }
+    if (delivered === false) this.untold.set(notice.flowId, { signature, notice });
+    else this.untold.delete(notice.flowId);
+  }
+
+  /** A repeat of a refusal: told only if its first notice reached nobody. */
+  private tellUntold(flowId: string, signature: string): void {
+    const pending = this.untold.get(flowId);
+    if (pending && pending.signature === signature) this.tell(signature, pending.notice);
+  }
+
   /** Registration-time readiness: one refusal per broken version, a notice, and a retry. */
   private checkReadiness(flowId: string, versionId: string, kind: 'registration'): boolean {
     try { assertVersionReady(flowId, versionId); return true; }
@@ -793,9 +817,8 @@ export class TriggerManager {
       if (this.registrationFailures.get(flowId) !== signature) {
         const run = this.refusalRun(flowId, versionId, kind, error);
         this.registrationFailures.set(flowId, signature);
-        try { this.onRegistrationBlocked?.({ flowId, runId: run.id, message: error.message }); }
-        catch (notifyError) { this.log(`flow ${flowId}: readiness notification failed: ${String(notifyError)}`); }
-      }
+        this.tell(signature, { flowId, runId: run.id, message: error.message });
+      } else this.tellUntold(flowId, signature);
       this.log(`flow ${flowId}: readiness refused ${kind}: ${error.message}`);
       this.scheduleEnableRetry(flowId, error.message, 'readiness');
       return false;
@@ -832,11 +855,17 @@ export class TriggerManager {
     const signature = JSON.stringify([versionId, error.readiness]);
     const carriesInput = opts.payload !== undefined && source !== "schedule";
     let runId: string | undefined;
-    if (carriesInput || this.liveRefusals.get(flowId) !== signature) {
+    const fresh = this.liveRefusals.get(flowId) !== signature;
+    if (carriesInput || fresh) {
       runId = this.refusalRun(flowId, versionId, opts.kind, error,
         carriesInput ? { payload: opts.payload ?? {}, executeTrigger: opts.executeTrigger ?? false } : undefined).id;
       this.liveRefusals.set(flowId, signature);
     }
+    // A new refusal is told once, like one at registration (#1080). A repeat
+    // of the same one (the next tick, the next webhook) is not, unless the
+    // first notice reached nobody.
+    if (fresh && runId) this.tell(signature, { flowId, runId, message: error.message });
+    else this.tellUntold(flowId, signature);
     const detail = { reason: error.message, code: error.code };
     const fire = carriesInput
       ? recordFire({ flowId, flowVersionId: versionId, source, dedupeKey: opts.dedupeKey, scheduledFor: opts.scheduledFor,
@@ -896,6 +925,7 @@ export class TriggerManager {
       return this.refuseLive(opts, error);
     }
     this.liveRefusals.delete(flowId);
+    this.untold.delete(flowId);
     const claimed = claimFire({ flowId, flowVersionId: versionId, source: opts.source, dedupeKey: opts.dedupeKey,
       duplicateSince: opts.duplicateSince, scheduledFor: opts.scheduledFor, lateMs: opts.lateMs, detail: opts.detail }, () => {
       const run = createFlowRun({ flowId, flowVersionId: versionId,

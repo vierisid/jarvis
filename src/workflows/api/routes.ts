@@ -91,6 +91,7 @@ import { fireForRun, pageFlowFires } from "../db/repos/trigger-fire";
 import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
 import { assertFlowDeletable } from "../db/repos/workflow-removal-state";
 import { claimContinuation } from "../runtime/continuation";
+import { flowBindingBlock } from "../runtime/binding-refusals";
 import { emergencyHold, KILLED_REASON, manualStartRefusal } from "../runtime/emergency-hold";
 import {
   deleteConnectionInProject,
@@ -1530,7 +1531,14 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             opts.status = status;
           }
           const flows = listFlows(callerProject(req), opts);
-          return ok(flows.map(serializeFlow));
+          // #1080: why an enabled workflow is not doing its work, from its
+          // latest finished run, so the list can say so. One unreadable run
+          // costs its flow the badge, never the whole list.
+          const blockedOf = (flow: Parameters<typeof flowBindingBlock>[0]) => {
+            try { return flowBindingBlock(flow); }
+            catch (error) { console.error(`[workflows] blocked state of ${flow.id} unreadable:`, error); return null; }
+          };
+          return ok(flows.map((flow) => ({ ...serializeFlow(flow), blocked: blockedOf(flow) })));
         }),
       POST: (req) =>
         trapErrors(async () => {

@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { cancelFlowRun } from '../../db/repos/run-cancellation';
 import { setEncryptionKey } from '../../db/encryption';
 import { listRuns } from '../../db/repos/flow-run';
 import { upsertConnection, deleteConnection } from '../../db/repos/app-connection';
@@ -957,11 +958,103 @@ describe('review: durable readiness refusals', () => {
     } finally { await manager.stop(); }
   });
 
+  test('a live refusal tells the owner once per new refusal, never once per fire (#1080)', async () => {
+    const { flowId, connection, save } = authenticatedFlow();
+    const cron = new FakeCronScheduler();
+    const notices: Array<{ flowId: string; runId: string; message: string }> = [];
+    const manager = new TriggerManager({ eventBus: new WorkflowEventBus(), cronScheduler: cron as any, log: silent,
+      onRegistrationBlocked: notice => { notices.push(notice); } });
+    try {
+      await manager.start();
+      expect(notices).toEqual([]);
+      deleteConnection(connection.id);
+      cron.fire(`flow:${flowId}`);
+      cron.fire(`flow:${flowId}`);
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toMatchObject({ flowId, runId: listRuns({ flowId })[0]!.id });
+      expect(notices[0]!.message).toContain('Connection is missing');
+      // Q-05's BINDING_STALE: the connection came back as a new account. A
+      // different refusal, so told once more, then not again.
+      const again = save();
+      cron.fire(`flow:${flowId}`);
+      cron.fire(`flow:${flowId}`);
+      expect(notices).toHaveLength(2);
+      expect(notices[1]!.message).toContain('Connection account was deleted and created again');
+      // Enabled again, it runs; a refusal after that is a new one.
+      updateFlowStatus(flowId, 'ENABLED');
+      cron.fire(`flow:${flowId}`);
+      expect(queueStats().queued).toBe(1);
+      // That run finished, so the next tick is not skipped as overlapping.
+      cancelFlowRun(listRuns({ flowId }).find(run => run.status === 'QUEUED')!.id);
+      deleteConnection(again.id);
+      cron.fire(`flow:${flowId}`);
+      expect(notices).toHaveLength(3);
+    } finally { await manager.stop(); }
+  });
+
+  test('a live refusal notice that reached nobody is told at the next fire, then not again (#1080)', async () => {
+    const { flowId, connection } = authenticatedFlow();
+    const cron = new FakeCronScheduler();
+    let connected = false;
+    const seen: string[] = [];
+    const manager = new TriggerManager({ eventBus: new WorkflowEventBus(), cronScheduler: cron as any, log: silent,
+      onRegistrationBlocked: notice => { if (connected) seen.push(notice.runId); return connected; } });
+    try {
+      await manager.start();
+      deleteConnection(connection.id);
+      cron.fire(`flow:${flowId}`);
+      expect(seen).toEqual([]);
+      connected = true;
+      cron.fire(`flow:${flowId}`);
+      cron.fire(`flow:${flowId}`);
+      // Told once, naming the refusal's own failed run (the repeat fires add none).
+      expect(seen).toEqual([listRuns({ flowId })[0]!.id]);
+      expect(listRuns({ flowId })).toHaveLength(1);
+    } finally { await manager.stop(); }
+  });
+
+  test('webhook deliveries refused the same way each keep a failed run but tell the owner once (#1080)', async () => {
+    const { flowId, connection } = authenticatedFlow('webhook');
+    const notices: unknown[] = [];
+    const manager = new TriggerManager({ eventBus: new WorkflowEventBus(), log: silent, onRegistrationBlocked: notice => { notices.push(notice); } });
+    try {
+      await manager.start();
+      expect(manager.list()).toEqual([{ flowId, kind: 'webhook' }]);
+      deleteConnection(connection.id);
+      for (const id of ['one', 'two', 'three']) {
+        await manager.webhookManager().handleRequest(flowId, new Request('http://x/webhook', {
+          method: 'POST', body: JSON.stringify({ id }), headers: { 'Content-Type': 'application/json' } }));
+      }
+      await new Promise((r) => setImmediate(r));
+      // Each delivery's input is kept on its own failed run, for a person to decide on.
+      expect(listRuns({ flowId }).filter(run => run.status === 'FAILED')).toHaveLength(3);
+      expect(notices).toHaveLength(1);
+    } finally { await manager.stop(); }
+  });
+
+  test('a registration refusal whose notice reached nobody is told at the next retry, then not again (#1080)', async () => {
+    const { flowId, connection } = authenticatedFlow();
+    deleteConnection(connection.id);
+    let connected = false;
+    const seen: string[] = [];
+    const manager = new TriggerManager({ eventBus: new WorkflowEventBus(), log: silent, enableRetryDelaysMs: [],
+      onRegistrationBlocked: notice => { if (connected) seen.push(notice.runId); return connected; } });
+    try {
+      await manager.start();
+      expect(seen).toEqual([]);
+      connected = true;
+      await manager.refresh(flowId);
+      await manager.refresh(flowId);
+      expect(listRuns({ flowId })).toHaveLength(1);
+      expect(seen).toEqual([listRuns({ flowId })[0]!.id]);
+    } finally { await manager.stop(); }
+  });
+
   test('startup refuses visibly once and can register after the binding is repaired', async () => {
     const { flowId, connection, save } = authenticatedFlow();
     deleteConnection(connection.id);
     const notices: unknown[] = [];
-    const manager = new TriggerManager({ eventBus: new WorkflowEventBus(), log: silent, enableRetryDelaysMs: [], onRegistrationBlocked: notice => notices.push(notice) });
+    const manager = new TriggerManager({ eventBus: new WorkflowEventBus(), log: silent, enableRetryDelaysMs: [], onRegistrationBlocked: notice => { notices.push(notice); } });
     try {
       await manager.start();
       await manager.refresh(flowId);

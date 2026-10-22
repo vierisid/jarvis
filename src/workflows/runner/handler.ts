@@ -144,6 +144,11 @@ export interface CreateRunFlowHandlerOptions {
   executor: FlowExecutor;
   /** Override for tests. Defaults to Date.now. */
   now?: () => number;
+  /**
+   * Called once a run this handler executed has ended, whatever the outcome,
+   * after its final state is written (#1080). A throw is logged, never the run's.
+   */
+  onRunEnded?: (runId: string) => void;
 }
 
 /**
@@ -344,10 +349,13 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
       // Never in place of the run's own error: a throw here is only logged.
       try {
         const ended = getFlowRun(runId);
-        // A run that finished on its own releases the background tasks it
-        // started (#1018); a stopped one already cancelled them.
-        if (ended && !["QUEUED", "RUNNING", "PAUSED", "STOPPED"].includes(ended.status)) signalRunEnded(runId);
-      } catch (hookError) { console.error(`[run-flow ${runId}] run-ended signal failed:`, hookError); }
+        if (ended && !["QUEUED", "RUNNING", "PAUSED"].includes(ended.status)) {
+          // A run that finished on its own releases the background tasks it
+          // started (#1018); a stopped one already cancelled them.
+          if (ended.status !== "STOPPED") signalRunEnded(runId);
+          opts.onRunEnded?.(runId);
+        }
+      } catch (hookError) { console.error(`[run-flow ${runId}] run-ended hook failed:`, hookError); }
     }
   };
 }

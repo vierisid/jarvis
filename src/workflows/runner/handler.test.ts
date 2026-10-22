@@ -355,6 +355,30 @@ describe("RUN_FLOW handler with custom executor", () => {
   // state isn't reachable. The handler keeps a defensive check anyway.
 });
 
+describe("RUN_FLOW handler run-ended hook (#1080)", () => {
+  const run = async (execute: FlowExecutor["execute"], onRunEnded: (runId: string) => void) => {
+    const { runId } = setupRun();
+    const worker = new Worker({ log: silent, handlers: { [RUN_FLOW]: createRunFlowHandler({ executor: { execute }, onRunEnded }) } });
+    await worker.drain();
+    return runId;
+  };
+
+  test("hears each run that ended, after its final state is written, and not one that paused", async () => {
+    const heard: Array<[string, string | undefined]> = [];
+    const hook = (runId: string) => { heard.push([runId, getFlowRun(runId)?.status]); };
+    const succeeded = await run(async () => ({ steps: {}, stepsCount: 0 }), hook);
+    const failed = await run(async () => { throw new FlowExecutionError("refused", { name: "send", displayName: "Send" }); }, hook);
+    await run(async () => ({ status: "PAUSED", steps: {}, stepsCount: 0 }), hook);
+    expect(heard).toEqual([[succeeded, "SUCCEEDED"], [failed, "FAILED"]]);
+  });
+
+  test("a hook that throws changes nothing about the run", async () => {
+    const runId = await run(async () => ({ steps: {}, stepsCount: 0 }), () => { throw new Error("notify failed"); });
+    expect(getFlowRun(runId)?.status).toBe("SUCCEEDED");
+    expect(queueStats()).toMatchObject({ succeeded: 1, failed: 0 });
+  });
+});
+
 describe("RUN_FLOW handler run-ended signal (#1018)", () => {
   test("a run that ended on its own signals it; a paused one does not", async () => {
     const { onRunEnded } = await import("../runtime/cancellation-signals");
