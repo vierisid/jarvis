@@ -1,4 +1,5 @@
 import { ConnectedWorkspace } from '../brief/connected-workspace';
+import { MIN_BUN_VERSION, versionAtLeast } from '../util/bun-minimum.ts';
 import { connectedGoogle } from '../brief/connected-workspace-runtime';
 import { registerConnections } from '../brief/registrations/connections';
 import { WorkflowContext } from '../brief/workflow-context';
@@ -568,6 +569,11 @@ function printBanner(config: DaemonConfig): void {
 
 Just A Rather Very Intelligent System
   `);
+  // Warn, not refuse: an older Bun still runs everything but HTTPS through the
+  // workflow egress guard, and `jarvis doctor` reports it as a failure.
+  if (!versionAtLeast(Bun.version, MIN_BUN_VERSION)) {
+    console.warn(`[Daemon] Bun ${Bun.version} is older than ${MIN_BUN_VERSION}, which Jarvis needs: HTTPS from workflow HTTP steps and connection refresh cannot verify certificates. Run: bun upgrade`);
+  }
   console.log('[Daemon] Configuration:');
   console.log(`  Port:      ${config.port}`);
   console.log(`  Data Dir:  ${config.dataDir}`);
