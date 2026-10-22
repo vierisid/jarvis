@@ -5483,7 +5483,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // status flips ENABLED via the v2 API gets reconciled by the route
     // hooks calling `triggerManager.refresh(flowId)`.
     await triggerManager.start();
-    briefWorkflowRemoval.start(triggerManager);
+    // A purge (#1096) drops the cards of the runs it stopped from the dashboard.
+    briefWorkflowRemoval.start(triggerManager, { onCardClosed: (approvalId) => {
+      const request = approvalManager.getRequest(approvalId);
+      if (request) wsService.broadcastApprovalUpdate(request);
+    } });
     if (process.env.JARVIS_BRIEF_OPPORTUNITY_ACTIVATION === '1' && process.env.JARVIS_BRIEF_PREPARED_OPPORTUNITIES === '1') {
       briefOpportunityActivation?.configure(briefPreparedOpportunities!, triggerManager);
       briefOpportunityActivation?.start();

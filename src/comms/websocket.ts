@@ -1,4 +1,5 @@
 import type { Server, ServerWebSocket } from 'bun';
+import { markPanelSession } from './panel-session-marker.ts';
 import { debugRpcGate } from '../daemon/debug-rpc-gate.ts';
 import { timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
@@ -328,6 +329,7 @@ export class WebSocketServer {
             // Remembered for the /ws upgrade below, which binds the socket to
             // the session so an open panel counts as live (panel-sessions.ts).
             panelSessionId = session.id;
+            markPanelSession(req, session.sid);
           }
           if (!session) {
             // No session yet (a freshly spawned panel) or a dead one. Bootstrap

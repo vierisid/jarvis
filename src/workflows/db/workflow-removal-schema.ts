@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite';
 
-/** Additive state: removal never deletes a flow, version, run or effect. */
+/** Additive state: removal never deletes a flow, version, run or effect; only a person's purge (#1096) does. */
 export function ensureWorkflowRemovalSchema(db: Database): void {
   db.transaction(() => {
     db.run(`CREATE TABLE IF NOT EXISTS brief_workflow_slots (
@@ -73,5 +73,44 @@ export function ensureWorkflowRemovalSchema(db: Database): void {
     db.run(`CREATE TRIGGER IF NOT EXISTS brief_removed_version_purge BEFORE DELETE ON flow_version
       WHEN EXISTS(SELECT 1 FROM brief_workflow_removals WHERE flow_id = OLD.flow_id)
       BEGIN SELECT RAISE(ABORT, 'workflow_history_retained'); END`);
+    // #1096: a person may purge a restored workflow, or a removed one whose
+    // Undo has expired. The receipt outlives the flow (no foreign key) and
+    // records what went. `completed_at IS NULL` is an accepted purge whose
+    // delete has not committed yet; recovery finishes it.
+    db.run(`CREATE TABLE IF NOT EXISTS brief_workflow_purges (
+      purge_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL, project_id TEXT NOT NULL, request_id TEXT NOT NULL,
+      generation INTEGER NOT NULL, actor TEXT NOT NULL, accepted_at INTEGER NOT NULL, completed_at INTEGER, counts TEXT,
+      granted INTEGER NOT NULL DEFAULT 0, files_pending TEXT
+    )`);
+    db.run('CREATE INDEX IF NOT EXISTS idx_brief_workflow_purges_flow ON brief_workflow_purges(flow_id)');
+    db.run('CREATE INDEX IF NOT EXISTS idx_brief_workflow_purges_pending ON brief_workflow_purges(project_id, accepted_at) WHERE completed_at IS NULL');
+    db.run('CREATE INDEX IF NOT EXISTS idx_brief_workflow_purges_files ON brief_workflow_purges(project_id) WHERE files_pending IS NOT NULL');
+    // A purge receipt is the audit record of what went; nothing deletes it.
+    db.run(`CREATE TRIGGER IF NOT EXISTS brief_purge_receipt_retained BEFORE DELETE ON brief_workflow_purges
+      BEGIN SELECT RAISE(ABORT, 'workflow_history_retained'); END`);
+    // A completed receipt is fixed; only its leftover-file list is cleared once the files are gone.
+    db.run(`CREATE TRIGGER IF NOT EXISTS brief_purge_receipt_fixed BEFORE UPDATE OF
+      purge_id, flow_id, project_id, request_id, generation, actor, accepted_at, completed_at, counts, granted ON brief_workflow_purges
+      WHEN OLD.completed_at IS NOT NULL
+      BEGIN SELECT RAISE(ABORT, 'workflow_history_retained'); END`);
+    // The flow and version fences above key on the removal receipts, and the
+    // receipts' foreign key forces them to go before the flow does. So the
+    // receipts are the fence that matters: only a purge deletes them, and its
+    // grant is set and cleared inside its own delete transaction.
+    // RAISE only: no trigger here writes a row (F-12).
+    db.run(`CREATE TRIGGER IF NOT EXISTS brief_removed_receipt_purge BEFORE DELETE ON brief_workflow_removals
+      WHEN NOT EXISTS(SELECT 1 FROM brief_workflow_purges WHERE flow_id = OLD.flow_id AND granted = 1)
+      BEGIN SELECT RAISE(ABORT, 'workflow_history_retained'); END`);
+    // Moving a receipt to another flow would open both flow fences just as deleting it would.
+    // Undo still writes restored_at.
+    db.run(`CREATE TRIGGER IF NOT EXISTS brief_removed_receipt_identity BEFORE UPDATE OF receipt_id, flow_id, project_id ON brief_workflow_removals
+      BEGIN SELECT RAISE(ABORT, 'workflow_history_retained'); END`);
+    // Nothing new starts or is turned on between a purge's acceptance and its delete.
+    db.run(`CREATE TRIGGER IF NOT EXISTS brief_purge_pending_run BEFORE INSERT ON flow_run
+      WHEN EXISTS(SELECT 1 FROM brief_workflow_purges WHERE flow_id = NEW.flow_id AND completed_at IS NULL)
+      BEGIN SELECT RAISE(ABORT, 'workflow_purging'); END`);
+    db.run(`CREATE TRIGGER IF NOT EXISTS brief_purge_pending_enable BEFORE UPDATE OF status ON flow
+      WHEN NEW.status = 'ENABLED' AND EXISTS(SELECT 1 FROM brief_workflow_purges WHERE flow_id = NEW.id AND completed_at IS NULL)
+      BEGIN SELECT RAISE(ABORT, 'workflow_purging'); END`);
   }).immediate();
 }

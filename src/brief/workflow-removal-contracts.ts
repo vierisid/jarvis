@@ -16,3 +16,12 @@ export type WorkflowManageResult = Pick<WorkflowManageCommand, 'scopeId' | 'flow
   { status: 'accepted'; item?: ManagedWorkflow; receipt?: RemovalReceipt }
   | { status: 'rejected'; message: string; code: string }
 );
+/** #1096: a person's purge of a restored workflow, or of a removed one whose Undo expired. */
+export interface WorkflowPurgeCommand {
+  scopeId: string; flowId: string; versionId: string | null; expectedRevision: string; requestId: string;
+}
+export interface PurgeReceipt { purgeId: string; flowId: string; generation: number; acceptedAt: number }
+export type WorkflowPurgeResult = Pick<WorkflowPurgeCommand, 'scopeId' | 'flowId' | 'requestId'> & { action: 'purge' } & (
+  { status: 'accepted'; purge: PurgeReceipt }
+  | { status: 'rejected'; message: string; code: string }
+);

@@ -24,7 +24,7 @@ const tables = [
   'brief_chat_approvals', 'brief_chat_attachments', 'brief_chat_events', 'brief_chat_sequences', 'brief_chat_turns',
   'brief_conversation_workspace', 'brief_decision_document', 'brief_decision_document_receipt', 'brief_decision_document_revision',
   'brief_decision_placement', 'brief_decision_queue_clock', 'brief_manual_run_requests', 'brief_recommendation',
-  'brief_workflow_commands', 'brief_workflow_composition_jobs', 'brief_workflow_removals', 'brief_workflow_slots',
+  'brief_workflow_commands', 'brief_workflow_composition_jobs', 'brief_workflow_purges', 'brief_workflow_removals', 'brief_workflow_slots',
   'conversation_tabs', 'conversation_workspace_state', 'goal_measurement', 'goal_measurement_receipt',
   'memory_forget_receipts', 'memory_forget_state', 'memory_forget_suppressions', 'memory_profile_revisions',
   'memory_use_events', 'memory_use_state', 'opportunity_composition_owners', 'outcome_time_record',
@@ -86,6 +86,8 @@ function seedBrief(db: Database) {
   db.run('INSERT INTO brief_workflow_commands VALUES (?, ?, ?, ?, ?, ?)', [flow.project_id, 'remove-request', flow.id, 'digest', '{}', 1]);
   db.run('INSERT INTO brief_workflow_removals VALUES (?, ?, ?, ?, ?, ?, ?, ?)', ['receipt', flow.id, flow.project_id, version.id, 'revision', 1, 2, null]);
   db.run('UPDATE brief_workflow_slots SET receipt_id=? WHERE flow_id=?', ['receipt', flow.id]);
+  // #1096: a completed purge of an earlier workflow; its receipt outlives the flow.
+  db.run('INSERT INTO brief_workflow_purges VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', ['purge', 'purged-flow', flow.project_id, 'purge-request', 1, 'dashboard', 1, 2, '{}', 0, null]);
   return { flowId: flow.id, versionId: version.id, runId: run.id };
 }
 
@@ -130,6 +132,8 @@ test.each(['fresh', 'pre-brief', 'main'] as const)('%s schema preserves old and 
   try {
     expect(() => legacy.run("UPDATE flow SET status='ENABLED' WHERE id=?", [ids.flowId])).toThrow('workflow_removed');
     expect(() => legacy.run('DELETE FROM flow WHERE id=?', [ids.flowId])).toThrow('workflow_history_retained');
+    // #1096: nor by deleting the receipts the flow fence keys on.
+    expect(() => legacy.run('DELETE FROM brief_workflow_removals WHERE flow_id=?', [ids.flowId])).toThrow('workflow_history_retained');
   } finally { legacy.close(); }
   expect(db.query('PRAGMA foreign_key_check').all()).toEqual([]);
   expect(db.query('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' });
