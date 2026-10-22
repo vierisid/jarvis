@@ -38,10 +38,32 @@ export interface Flow {
     grantedBy: "user" | "upgrade" | null;
     grantedAt: number | null;
   };
+  /**
+   * #1080: why this enabled workflow is not doing its work, from its latest
+   * finished run: a readiness refusal (a pinned connection or computer that
+   * changed, Q-05), or a run refused because its computer was offline or a
+   * recipient is no longer current. Null when nothing blocks it.
+   */
+  blocked?: FlowBlock | null;
   created: number;
   updated: number;
   /** Filled in by the hook from /workflows/:id (latestDraft.displayName). */
   displayName?: string;
+}
+
+/** `GET /api/workflows` `blocked`: the refusal and the run that shows it. */
+export interface FlowBlock {
+  code: string;
+  /**
+   * `readiness`: it cannot run until it is enabled or published again.
+   * `runtime`: its latest run was refused (an offline computer, a stale
+   * recipient), which may already have cleared.
+   */
+  kind: "readiness" | "runtime";
+  /** One sentence: what happened (the Q-19 headline). */
+  message: string;
+  runId: string;
+  at: number;
 }
 
 export interface FlowRun {

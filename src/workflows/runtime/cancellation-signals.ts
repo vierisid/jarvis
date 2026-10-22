@@ -15,3 +15,22 @@ export function onRunCanceled(runId: string, listener: () => void): () => void {
 export function signalRunCanceled(runId: string): void {
   for (const listener of listeners.get(runId) ?? []) listener();
 }
+
+// #1018: a run that ended on its own (not stopped). A task the run started
+// is released from it then: it keeps running, and what it starts later is
+// its own, not the finished run's.
+const endedListeners = new Map<string, Set<() => void>>();
+
+export function onRunEnded(runId: string, listener: () => void): () => void {
+  let set = endedListeners.get(runId);
+  if (!set) endedListeners.set(runId, set = new Set());
+  set.add(listener);
+  return () => {
+    set.delete(listener);
+    if (!set.size) endedListeners.delete(runId);
+  };
+}
+
+export function signalRunEnded(runId: string): void {
+  for (const listener of [...(endedListeners.get(runId) ?? [])]) listener();
+}

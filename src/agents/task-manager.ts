@@ -12,6 +12,7 @@ import type { LLMManager } from '../llm/manager.ts';
 import type { ToolRegistry } from '../actions/tools/registry.ts';
 import { outsideApprovalScope } from '../authority/approved-action-scope.ts';
 import { outsideExecutionScope } from '../actions/execution-scope.ts';
+import { currentRunOwner, withRunOwner, type RunOwner } from '../actions/run-owner-scope.ts';
 import { outsideActingAgent } from './acting-agent.ts';
 import { outsideBriefTurn } from '../brief/chat-context.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
@@ -42,6 +43,11 @@ export type AsyncTask = {
    * cannot be interrupted), then becomes `cancelled`.
    */
   cancelRequested?: string;
+  /**
+   * The workflow run the task was started for, when one started it (#1018).
+   * Stopping that run cancels the task.
+   */
+  workflowRunId?: string;
 };
 
 export type LaunchOptions = {
@@ -77,6 +83,17 @@ export class TaskCapacityError extends Error {
     this.name = 'TaskCapacityError';
   }
 }
+
+/** launch() refused because the workflow run it was started for was stopped, removed or turned off (#1018). */
+export class TaskRunStoppedError extends Error {
+  constructor(readonly runId: string) {
+    super(`The workflow run ${runId} that started this task was stopped, removed or turned off, so the task was not started.`);
+    this.name = 'TaskRunStoppedError';
+  }
+}
+
+/** What a cancelled task says when its workflow run was stopped. */
+export const RUN_STOPPED_REASON = 'the workflow run that started it was stopped';
 
 /** launch() refused because the emergency controller has paused or killed the system. */
 export class TaskHaltedError extends Error {
@@ -149,6 +166,13 @@ export class AgentTaskManager {
     // tools would be refused, so it must not start at all (#932).
     const emergency = authority?.emergencyController;
     if (emergency && !emergency.canExecute()) throw new TaskHaltedError(emergency.getState());
+    // A task started for a workflow run belongs to it (#1018): one whose run
+    // is already stopped does not start. Started from a task whose run has
+    // since ended on its own (released), or after the run ended, it is not
+    // the run's: it starts as its own.
+    const scoped = currentRunOwner();
+    const owner = scoped && !scoped.released && !scoped.ended() ? scoped : undefined;
+    if (owner?.stopped()) throw new TaskRunStoppedError(owner.runId);
 
     const taskId = crypto.randomUUID();
     const asyncTask: AsyncTask = {
@@ -162,12 +186,27 @@ export class AgentTaskManager {
       completedAt: null,
       result: null,
       summary: null,
+      ...(owner ? { workflowRunId: owner.runId } : {}),
     };
 
     this.tasks.set(taskId, asyncTask);
     const abort = new AbortController();
     this.aborts.set(taskId, abort);
     if (emergency) this.watchEmergency(emergency, taskId);
+    // Stopping the run cancels the task, as Kill does. Subscribed in the same
+    // synchronous stretch as the check above, so no stop can fall between.
+    const unsubscribe = owner?.onStopped(() => {
+      try { this.cancel(taskId, RUN_STOPPED_REASON); }
+      catch (err) { console.error(`[TaskManager] stopping run ${owner.runId} could not cancel task ${taskId}:`, err instanceof Error ? err.message : err); }
+    });
+    // The task's own view of its run: what it starts is the run's until the
+    // run ends on its own, and its own after that.
+    const taskOwner: RunOwner | undefined = owner ? { runId: owner.runId, stopped: () => owner.stopped(), ended: () => owner.ended(),
+      onStopped: (listener) => owner.onStopped(listener), onEnded: (listener) => owner.onEnded(listener) } : undefined;
+    const unsubscribeEnded = owner?.onEnded(() => { taskOwner!.released = true; leaveRun(); });
+    // Once: a completion handler that throws reaches the catch below too.
+    let left = false;
+    const leaveRun = () => { if (!left) { left = true; unsubscribe?.(); unsubscribeEnded?.(); } };
     // Detached work has its own task lifecycle. Only the handoff belongs to the
     // calling turn; keeping its progress observer would mark a still-running
     // agent failed when that answer ends.
@@ -181,18 +220,22 @@ export class AgentTaskManager {
     // (#988): started from an approved workflow-delegated call, the task
     // inherited that effect's fence, which refuses once the effect has
     // settled, so the task died at its first model call. Its own abort signal
-    // and emergency watch are what stop it, so it no longer stops with the
-    // workflow run that started it. It does still inherit that run's machine
-    // binding and the call's template-delivery suppression: both fail closed
-    // (a sidecar call stays on the run's machine), and whether a task started
-    // from a run should keep any of the run's state is not settled here.
+    // and emergency watch are what stop it, and its run's stop: a task
+    // started from a workflow run belongs to that run (owner, #1018). It is
+    // cancelled when the run is stopped through `cancelFlowRun` (`leaveRun`
+    // above) and keeps the run's machine binding and the call's
+    // template-delivery suppression, both of which fail closed (a sidecar call
+    // stays on the run's machine). A run that finishes on its own, or keeps
+    // executing after its workflow is turned off (Q-06), does not stop it;
+    // the latter starts no new task (`actions/run-owner-scope.ts`).
     // Outside the acting sub-agent that started it (#1014): the task's own
     // loop names its own agent on every dispatch, and its restrictions were
     // fixed into `authority.profile` by the caller.
     // Outside the Brief chat turn that started it: the task outlives that turn,
     // so its progress and approval cards must reach the dashboard as any other
     // background task's do, not be filed under a turn that may already be over.
-    outsideBriefTurn(() => outsideActingAgent(() => outsideExecutionScope(() => outsideApprovalScope(() => this.runSubAgentFn({
+    const inRun = <T>(execute: () => T): T => taskOwner ? withRunOwner(taskOwner, execute) : execute();
+    inRun(() => outsideBriefTurn(() => outsideActingAgent(() => outsideExecutionScope(() => outsideApprovalScope(() => this.runSubAgentFn({
       agent,
       task,
       context,
@@ -203,6 +246,7 @@ export class AgentTaskManager {
       ...(authority ?? {}),
       signal: abort.signal,
     }).then((result) => {
+      leaveRun();
       this.aborts.delete(taskId);
       this.haltedBy.delete(taskId);
       asyncTask.completedAt = Date.now();
@@ -223,6 +267,7 @@ export class AgentTaskManager {
       this.emit('complete', asyncTask);
       onComplete?.(asyncTask);
     }).catch((err) => {
+      leaveRun();
       this.aborts.delete(taskId);
       this.haltedBy.delete(taskId);
       asyncTask.status = asyncTask.cancelRequested !== undefined ? 'cancelled' : 'failed';
@@ -238,7 +283,7 @@ export class AgentTaskManager {
       console.error(`[TaskManager] Task ${taskId} failed (${asyncTask.agentName}):`, err);
       this.emit(asyncTask.status === 'cancelled' ? 'cancel' : 'fail', asyncTask);
       onComplete?.(asyncTask);
-    })))));
+    }))))));
     });
 
     return taskId;
