@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { initDatabase, closeDb, getDb } from './schema';
-import { appendUserProfileFact, getUserProfile, getUserProfileForPrompt, saveUserProfile, syncInterviewProfileKnowledge } from './user-profile';
+import { appendUserProfileFact, getUserProfile, getUserProfileForPrompt, saveUserProfile, syncInterviewProfileKnowledge, syncInterviewProfileKnowledgeAtStartup } from './user-profile';
 import { correctFact, findFacts } from './facts';
 import { MemoryStream } from '../brief/memory-stream';
 import { MemoryForget } from '../brief/memory-forget';
@@ -68,4 +68,24 @@ test('profile acknowledgement and memory projection roll back together on a writ
   expect(() => appendUserProfileFact(fact)).toThrow('test failure');
   expect(getUserProfile()).toBeNull();
   expect(findFacts({})).toHaveLength(0);
+});
+
+test('a failed startup projection is logged and never stops startup', () => {
+  setSetting('user.profile.v1', JSON.stringify({ version: 1, answers: {},
+    interview_facts: [{ ...fact, recorded_at: 1 }], created_at: 1, updated_at: 1, completed_at: 1 }));
+  getDb().exec("CREATE TRIGGER reject_fact BEFORE INSERT ON facts BEGIN SELECT RAISE(ABORT, 'disk full'); END");
+  const logged: string[] = [];
+  expect(syncInterviewProfileKnowledgeAtStartup(message => logged.push(message))).toBe(false);
+  expect(logged).toHaveLength(1); expect(logged[0]).toContain('continuing startup'); expect(logged[0]).toContain('disk full');
+  expect(findFacts({ predicate: 'shared about rhythm' })).toHaveLength(0);
+  // The next start retries the repair once the cause is gone.
+  getDb().exec('DROP TRIGGER reject_fact');
+  expect(syncInterviewProfileKnowledgeAtStartup(message => logged.push(message))).toBe(true);
+  expect(findFacts({ predicate: 'shared about rhythm' })).toHaveLength(1); expect(logged).toHaveLength(1);
+});
+
+test('the daemon runs the startup projection only through the non-fatal wrapper', async () => {
+  const daemon = await Bun.file(new URL('../daemon/index.ts', import.meta.url)).text();
+  expect(daemon).toContain('syncInterviewProfileKnowledgeAtStartup(');
+  expect(daemon).not.toMatch(/\bsyncInterviewProfileKnowledge\s*\(/);
 });

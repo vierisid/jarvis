@@ -733,8 +733,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 2. Initialize database
     logWithTimestamp(`Initializing database at ${config.dbPath}`);
     initDatabase(config.dbPath);
-    const { syncInterviewProfileKnowledge } = await import('../vault/user-profile.ts');
-    syncInterviewProfileKnowledge();
+    const { syncInterviewProfileKnowledgeAtStartup } = await import('../vault/user-profile.ts');
+    syncInterviewProfileKnowledgeAtStartup((message) => logWithTimestamp(message));
     logWithTimestamp('Database initialized successfully');
 
     // 2.0. Wire LLM usage tracking to the vault DB so every chatTier/streamTier
