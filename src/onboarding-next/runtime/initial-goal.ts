@@ -69,10 +69,11 @@ export function saveInitialInterviewGoal(snapshot: JourneySnapshot): void {
     const existing = findGoals({ limit: 1 })[0];
     const captured = source();
     if (existing || !captured.goal) { setSetting(key, JSON.stringify({ goalId: existing?.id ?? null })); return; }
-    // No plan for the interview as it stands now (the planner failed, or the
-    // interview changed after planning): finish without a goal rather than trap
-    // the user in onboarding. The receipt stops a later write from creating one
-    // silently; the dashboard's empty goal card and setup action offer planning.
+    // No plan for the interview as it stands now: the planner failed, or the
+    // interview changed between planning and this commit (a stale plan is dropped
+    // too, never applied). Finish without a goal rather than trap the user in
+    // onboarding. The receipt stops a later write from creating one silently; the
+    // dashboard shows "No active goal" and the user plans one from Goals.
     const raw = getSetting(planKey(snapshot));
     const saved = raw ? JSON.parse(raw) : null;
     if (saved?.digest !== captured.digest) { setSetting(key, JSON.stringify({ goalId: null, plan: 'unavailable' })); return; }

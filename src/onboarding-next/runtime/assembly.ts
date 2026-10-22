@@ -92,7 +92,7 @@ export function createOnboardingAssembly(ports: OnboardingAssemblyPorts) {
       try { await prepareGoal(snapshot, () => { guard(context); if (getDb() !== db) throw Error('Vault changed'); }); }
       catch (error) {
         // The journey exits without a goal; say so without the model's or the profile's text.
-        console.warn('[onboarding-next] Initial goal plan unavailable; finishing onboarding without a goal:', error instanceof Error ? error.name : 'Error');
+        console.warn('[onboarding-next] Initial goal plan unavailable; an authorized exit continues without a goal:', error instanceof Error ? error.name : 'Error');
         throw error;
       }
     } });
