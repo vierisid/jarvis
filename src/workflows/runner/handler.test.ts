@@ -354,3 +354,21 @@ describe("RUN_FLOW handler with custom executor", () => {
   // an FK from flow_run.flow_version_id to flow_version(id), so the corrupt
   // state isn't reachable. The handler keeps a defensive check anyway.
 });
+
+describe("RUN_FLOW handler run-ended signal (#1018)", () => {
+  test("a run that ended on its own signals it; a paused one does not", async () => {
+    const { onRunEnded } = await import("../runtime/cancellation-signals");
+    const heard: string[] = [];
+    const run = async (execute: FlowExecutor["execute"]) => {
+      const { runId } = setupRun();
+      const off = onRunEnded(runId, () => heard.push(getFlowRun(runId)!.status));
+      const worker = new Worker({ log: silent, handlers: { [RUN_FLOW]: createRunFlowHandler({ executor: { execute } }) } });
+      await worker.drain();
+      off();
+    };
+    await run(async () => ({ steps: {}, stepsCount: 0 }));
+    await run(async () => { throw new FlowExecutionError("refused", { name: "send", displayName: "Send" }); });
+    await run(async () => ({ status: "PAUSED", steps: {}, stepsCount: 0 }));
+    expect(heard).toEqual(["SUCCEEDED", "FAILED"]);
+  });
+});
