@@ -15,7 +15,10 @@ import { afterAll, afterEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { __setNativeExecMaxOutputForTests, __setNativeExecTimeoutForTests, defaultExec, runNative } from './native-exec.ts';
+import { MacAppController } from './macos.ts';
+import { __setNativeExecMaxOutputForTests, __setNativeExecTimeoutForTests, defaultExec, runNative, type NativeExec } from './native-exec.ts';
+import { TYPE_MS_PER_CHAR, typingAllowanceMs } from './typing-allowance.ts';
+import { WindowsAppController } from './windows.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'jarvis-native-exec-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -88,6 +91,14 @@ describe.skipIf(process.platform === 'win32')('defaultExec (#893)', () => {
       .toBe(`desktop.ps1 capture-screen was stopped: output passed ${64 * 1024} bytes`);
   });
 
+  test('a script that exited 0 keeps its answer when a leftover child then floods stderr past the cap (#904 review)', async () => {
+    // The child writes nothing to stdout, and starts its flood after the script has exited.
+    const HEAD = Bun.which('head') ?? '/usr/bin/head';
+    const done = script('done.sh', `echo ok; (sleep 0.2; '${HEAD}' -c 200000 /dev/zero >&2; sleep 1) >/dev/null & exit 0`);
+    __setNativeExecMaxOutputForTests(64 * 1024);
+    expect(await settle(runNative(defaultExec, [done], '', 'osascript'), 5000)).toBe('resolved: ok\n');
+  });
+
   test('a failure keeps its stderr even when a leftover child holds the pipe (#893 review)', async () => {
     const held = script('held.sh', 'echo "boom" >&2; (sleep 3) & exit 2');
     expect(await settle(runNative(defaultExec, [held], '', 'desktop.ps1 x'), 6000)).toBe('desktop.ps1 x exited with code 2: boom');
@@ -104,5 +115,49 @@ describe.skipIf(process.platform === 'win32')('defaultExec (#893)', () => {
     expect(await settle(runNative(defaultExec, [leaky], '', 'osascript'), 6000))
       .toBe('osascript exited with code 0 but its output never closed or could not be read');
     expect(performance.now() - started).toBeLessThan(3000);
+  });
+});
+
+/**
+ * #903: macOS type-text and Windows send-keys ran under the flat bound, so a
+ * long text was stopped part-typed; #895 gave only Linux's xdotool type more
+ * time per character. Each controller here runs the real seam against a
+ * script that "types" for 1.5 s, under a 300 ms bound: 100 characters get
+ * 300 + 100 x 26 ms and must finish; one character gets 326 ms and is
+ * stopped, and so is a key chord, which gets no allowance.
+ */
+describe.skipIf(process.platform === 'win32')('typing gets more time per character on macOS and Windows too (#903)', () => {
+  for (const [name, make] of [
+    ['MacAppController', (exec: NativeExec) => new MacAppController({ exec })],
+    ['WindowsAppController', (exec: NativeExec) => new WindowsAppController({ exec })],
+  ] as const) {
+    test(`${name}: a long text is not cut off at the base bound, a short one and a key chord are`, async () => {
+      const typer = script(`typer-${name}.sh`, 'cat >/dev/null; exec sleep 1.5');
+      // The controller's own command line, run as the fake typer instead.
+      const exec: NativeExec = (_cmd, input, opts) => defaultExec([typer], input, opts);
+      const ctrl = make(exec);
+      __setNativeExecTimeoutForTests(300);
+      // powershell.exe's path comes from %SystemRoot% (#907), which a POSIX
+      // test environment lacks; the fake exec never runs it anyway.
+      const savedRoot = process.env.SystemRoot;
+      process.env.SystemRoot = 'D:\\Win';
+      try {
+        const outcome = (p: Promise<void>) => settle(p.then(() => ''), 8000);
+        expect(await outcome(ctrl.typeText('x'.repeat(100)))).toBe('resolved: ');
+        expect(await outcome(ctrl.typeText('x'))).toMatch(/did not finish within 0\.326s and was stopped$/);
+        expect(await outcome(ctrl.pressKeys(['ctrl', 's']))).toMatch(/did not finish within 0\.3s and was stopped$/);
+      } finally {
+        if (savedRoot === undefined) delete process.env.SystemRoot;
+        else process.env.SystemRoot = savedRoot;
+      }
+    }, 20_000);
+  }
+
+  test('the allowance counts characters, not UTF-16 units, and is Linux\'s measured rate', () => {
+    expect(typingAllowanceMs('')).toBe(0);
+    expect(typingAllowanceMs('abc')).toBe(3 * TYPE_MS_PER_CHAR);
+    // One emoji is one character typed, two UTF-16 units.
+    expect(typingAllowanceMs('\u{1F600}')).toBe(TYPE_MS_PER_CHAR);
+    expect(TYPE_MS_PER_CHAR).toBe(26);
   });
 });

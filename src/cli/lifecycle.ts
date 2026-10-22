@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import YAML from 'yaml';
 import { readLockedPort, isProcessAlive } from '../daemon/pid.ts';
 import { readPortSetting, type PortSetting } from '../config/port.ts';
+import { win32SystemExe } from '../util/system-exe.ts';
 
 export const DEFAULT_DAEMON_PORT = 3142;
 
@@ -46,7 +47,7 @@ async function captureOutput(command: string[], quiet = true): Promise<string> {
 async function findListeningPids(port: number, currentPid: number): Promise<number[]> {
   if (os.platform() === 'win32') {
     const output = await captureOutput([
-      'powershell.exe',
+      win32SystemExe('powershell.exe'),
       '-NoProfile',
       '-Command',
       `(Get-NetTCPConnection -State Listen -LocalPort ${port} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess) -join "\\n"`,

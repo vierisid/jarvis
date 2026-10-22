@@ -125,19 +125,26 @@ describe.skipIf(process.platform !== 'linux')('clipboard tools are bounded and a
 });
 
 /**
- * The X clipboard path, in a child whose PATH holds only fake xclip and xsel:
- * an env-less spawn resolves against the PATH the process started with, so
- * an in-process PATH swap would not reach it.
+ * The X clipboard path, in a child whose PATH holds only fake xclip and xsel,
+ * and whose system-directory lookup (#900) is pointed at `systemDirs`, by
+ * default that same directory. A child, so that nothing it finds by name can
+ * reach the real tools of the machine running the tests.
  */
 describe.skipIf(process.platform !== 'linux')('X clipboard fallback and its bound (#894)', () => {
   const BUILTIN_TS = new URL('./builtin.ts', import.meta.url).href;
   const WSL_TS = new URL('../terminal/wsl-bridge.ts', import.meta.url).href;
   const CAPTURE_TS = new URL('../app-control/capture-file.ts', import.meta.url).href;
 
-  async function readIn(binDir: string, write?: string): Promise<string> {
+  const SYSTEM_EXE_TS = new URL('../../util/system-exe.ts', import.meta.url).href;
+
+  async function readIn(binDir: string, write?: string, systemDirs: string[] = [binDir], capBytes?: number): Promise<string> {
     const code = `
       import { WSLBridge } from ${JSON.stringify(WSL_TS)};
-      import { __setCaptureTimeoutForTests } from ${JSON.stringify(CAPTURE_TS)};
+      import * as captureFile from ${JSON.stringify(CAPTURE_TS)};
+      const { __setCaptureTimeoutForTests } = captureFile;
+      ${capBytes === undefined ? '' : `captureFile.__setCaptureMaxOutputForTests?.(${capBytes});`}
+      import { __setLinuxSystemDirsForTests } from ${JSON.stringify(SYSTEM_EXE_TS)};
+      __setLinuxSystemDirsForTests(${JSON.stringify(systemDirs)});
       WSLBridge.isWSL = () => false;
       __setCaptureTimeoutForTests(500);
       const { getClipboardTool, setClipboardTool } = await import(${JSON.stringify(BUILTIN_TS)});
@@ -174,6 +181,13 @@ describe.skipIf(process.platform !== 'linux')('X clipboard fallback and its boun
     expect(existsSync(join(d, 'xsel.ran'))).toBe(false);
   }, 40_000);
 
+  test('#904 review: an xclip that prints past the cap is refused, and xsel, which reads the same selection, is not tried', async () => {
+    // By absolute path: the child's PATH is only the fakes' directory.
+    const d = bin(`'${Bun.which('head') ?? '/usr/bin/head'}' -c 200000 /dev/zero`);
+    expect(await readIn(d, undefined, [d], 64 * 1024)).toBe(`Error reading clipboard: xclip was stopped: output passed ${64 * 1024} bytes`);
+    expect(existsSync(join(d, 'xsel.ran'))).toBe(false);
+  }, 40_000);
+
   test('writing: an xclip that hangs is stopped and xsel is not tried; one that fails falls back', async () => {
     const hung = bin(`exec '${SLEEP}' 10`);
     expect(await readIn(hung, 'x')).toBe('Error writing clipboard: xclip did not finish within 0.5s and was stopped');
@@ -181,6 +195,36 @@ describe.skipIf(process.platform !== 'linux')('X clipboard fallback and its boun
     const failing = bin('exit 1');
     expect(await readIn(failing, 'x')).toBe('Clipboard updated.');
     expect(existsSync(join(failing, 'xsel.ran'))).toBe(true);
+  }, 40_000);
+
+  test('#900: the system directory\'s xclip reads and writes, not the one first on PATH', async () => {
+    const planted = mkdtempSync(join(root, 'planted-'));
+    fake(join(planted, 'xclip'), `: > '${planted}/xclip.ran'\nprintf 'from the planted xclip'`);
+    const system = mkdtempSync(join(root, 'system-'));
+    fake(join(system, 'xclip'), `[ "$3" = -o ] && printf 'from the system xclip'; exit 0`);
+    expect(await readIn(planted, undefined, [system])).toBe('from the system xclip');
+    expect(await readIn(planted, 'x', [system])).toBe('Clipboard updated.');
+    expect(existsSync(join(planted, 'xclip.ran'))).toBe(false);
+  }, 40_000);
+
+  test('#900: with neither tool in a system directory, both are named and the PATH copies are not run', async () => {
+    const planted = bin(`: > '${root}/planted-xclip.ran'`);
+    const empty = mkdtempSync(join(root, 'empty-'));
+    for (const write of [undefined, 'x']) {
+      const result = await readIn(planted, write, [empty]);
+      // The child's HOME is the planted directory, so the copies are shown under ~.
+      expect(result).toContain(`no clipboard tool: xclip is not installed in a system directory (${empty}); not used: ~/xclip (not a system directory)`);
+      expect(result).toContain(`; xsel is not installed in a system directory (${empty}); not used: ~/xsel (not a system directory)`);
+    }
+    expect(existsSync(join(root, 'planted-xclip.ran'))).toBe(false);
+    expect(existsSync(join(planted, 'xsel.ran'))).toBe(false);
+  }, 40_000);
+
+  test('#900 review: an xclip that ran and failed is the error when xsel is not installed', async () => {
+    const d = mkdtempSync(join(root, 'xclip-only-'));
+    fake(join(d, 'xclip'), "echo 'Error: target STRING not available' >&2; exit 1");
+    expect(await readIn(d)).toBe('Error reading clipboard: xclip exited with code 1: Error: target STRING not available');
+    expect(await readIn(d, 'x')).toBe('Error writing clipboard: xclip exited with code 1: Error: target STRING not available');
   }, 40_000);
 
   test('writing: xclip leaving a child that owns the selection, and holds stderr, still returns at once', async () => {

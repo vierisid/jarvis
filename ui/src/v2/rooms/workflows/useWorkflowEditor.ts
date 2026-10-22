@@ -211,6 +211,8 @@ export interface PieceCatalogEntry {
   actions: PieceCatalogActionOrTrigger[];
   triggers: PieceCatalogActionOrTrigger[];
   auth?: PieceCatalogAuth;
+  /** Set by the daemon on a community piece: its actions run without approval (#955). */
+  notApprovalGated?: boolean;
 }
 
 interface ActionResult {

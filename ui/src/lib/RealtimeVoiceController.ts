@@ -13,6 +13,7 @@
 
 import { floatTo16BitPCM, pcm16ToFloat32, resampleFloat32 } from "./pcm.ts";
 import { uuid } from "./uuid.ts";
+import { dashboardTimeZone } from "./timeZone.ts";
 
 const REALTIME_SAMPLE_RATE = 24000; // OpenAI realtime minimum.
 const CAPTURE_WORKLET_URL = "/audio/pcm-capture-processor.js";
@@ -112,7 +113,8 @@ export class RealtimeVoiceController {
       ws.send(
         JSON.stringify({
           type: "voice_start",
-          payload: { requestId: this.requestId, currentRoom: this.opts.getCurrentRoom?.() ?? "home", mode: "pcm" },
+          // The zone a time the session names is read in (#1022).
+          payload: { requestId: this.requestId, currentRoom: this.opts.getCurrentRoom?.() ?? "home", mode: "pcm", timeZone: dashboardTimeZone() ?? "" },
           timestamp: Date.now(),
         }),
       );

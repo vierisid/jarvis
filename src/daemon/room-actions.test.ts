@@ -18,8 +18,8 @@ import {
 import type { ActionCategory } from '../roles/authority.ts';
 import {
   collapseRoomActionAliases, matchByTitle, matchEntityByName, matchProjectByName, pickRoomActionTarget, ROOM_ACTION_ALIASES,
-  ROOM_ACTION_ARGS, ROOM_ACTION_DEFAULTS, ROOM_ACTION_ENTITY_TARGETS, ROOM_ACTION_TARGETS, roomActionArgs, roomActionEntityArg,
-  withoutEntityPin, withRoomActionDefaults,
+  ROOM_ACTION_ARGS, ROOM_ACTION_DEFAULTS, ROOM_ACTION_ENTITY_TARGETS, ROOM_ACTION_TARGETS, ROOM_ACTION_TIMES, roomActionArgs, roomActionEntityArg,
+  roomActionTimeArg, SETTLED_TIME_ARG, withoutEntityPin, withRoomActionDefaults,
 } from './room-action-targets.ts';
 
 // Every category the table can name is a real authority category.
@@ -1050,3 +1050,37 @@ describe('a remembered fact lands on the entity settled before its card (#1023)'
     expect(roomActionEntityArg('memory', 'constructor')).toBeNull();
   });
 });
+
+describe('a room action takes the time the daemon settled, and reads no words as one (#1022)', () => {
+  test('the actions that take a settled time are exactly those in ROOM_ACTION_TIMES, and each case reads it and its words', () => {
+    const entries = tableEntries(ROOM_ACTION_TIMES);
+    expect(entries).toEqual(['calendar/schedule_event', 'content/schedule', 'tasks/create_task']);
+    const takesSettled = Object.entries(ROOM_ACTION_ARGS).flatMap(([room, actions]) =>
+      Object.entries(actions).filter(([, args]) => Object.prototype.hasOwnProperty.call(args, SETTLED_TIME_ARG)).map(([action]) => `${room}/${action}`)).sort();
+    expect(takesSettled).toEqual(entries);
+    const code = handlerCode();
+    for (const entry of entries) {
+      const [room, action] = entry.split('/') as [string, string];
+      expect([entry, isPresentationRoomAction(room, action), isRoomAction(room, action)]).toEqual([entry, false, true]);
+      const { arg } = roomActionTimeArg(room, action)!;
+      expect(ROOM_ACTION_ARGS[room]![action]![SETTLED_TIME_ARG]).toEqual(['number']);
+      expect(ROOM_ACTION_ARGS[room]![action]![arg]).toEqual(['string']);
+      const { nodes, args } = code[room]![action]!;
+      expect([entry, argReads(nodes, args)]).toEqual([entry, expect.arrayContaining([arg, SETTLED_TIME_ARG])]);
+    }
+    expect(roomActionTimeArg('tasks', 'complete_task')).toBeNull();
+    expect(roomActionTimeArg('__proto__', 'toString')).toBeNull();
+    expect(roomActionTimeArg('tasks', 'constructor')).toBeNull();
+  });
+
+  test('no room handler parses a time itself', () => {
+    const parsing: string[] = [];
+    for (const [room, actions] of Object.entries(handlerCode())) {
+      for (const [action, { nodes }] of Object.entries(actions)) {
+        if (nodes.some((n) => /\bparseRelativeDate\s*\(/.test(n.getText()))) parsing.push(`${room}/${action}`);
+      }
+    }
+    expect(parsing).toEqual([]);
+  });
+});
+

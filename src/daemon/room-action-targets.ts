@@ -153,8 +153,8 @@ const PICK = { id: S, name: S } as const;
  * including those read through pickRoomActionTarget (id, name) and
  * withRoomActionDefaults (the action's defaults, and whatever is read off
  * what it returns). The arguments the daemon pins into a held action (an
- * item's id; the memory entity, #1023) are arguments the handler reads, so
- * they are listed too.
+ * item's id; the memory entity, #1023; the time a `when` names, #1022) are
+ * arguments the handler reads, so they are listed too.
  */
 export const ROOM_ACTION_ARGS: Record<string, Record<string, Record<string, readonly RoomActionArgType[]>>> = {
   settings: {
@@ -203,7 +203,7 @@ export const ROOM_ACTION_ARGS: Record<string, Record<string, Record<string, read
     search: { query: S },
     set_filter: { field: S, value: S },
     select: { name: S },
-    create_task: { title: S, when: S, priority: S, assigned_to: S },
+    create_task: { title: S, when: S, when_ts: N, priority: S, assigned_to: S },
     complete_task: PICK,
     update_priority: { ...PICK, level: S },
     reassign: { ...PICK, agent: S },
@@ -225,7 +225,7 @@ export const ROOM_ACTION_ARGS: Record<string, Record<string, Record<string, read
     create_content: { title: S, type: S },
     advance: PICK,
     regress: PICK,
-    schedule: { ...PICK, when: S },
+    schedule: { ...PICK, when: S, when_ts: N },
   },
   tools: { set_filter: { filter: S }, search: { query: S }, select: { name: S } },
   logs: { toggle_source: { source: S }, set_time_window: { window: S }, toggle_live_tail: {}, refresh: {} },
@@ -233,7 +233,7 @@ export const ROOM_ACTION_ARGS: Record<string, Record<string, Record<string, read
     switch_view: { view: S },
     search: { query: S },
     select_event: { title: S },
-    schedule_event: { title: S, when: S, priority: S, with: S },
+    schedule_event: { title: S, when: S, when_ts: N, priority: S, with: S },
   },
   workflows: { create_from_nl: { prompt: S } },
 };
@@ -261,6 +261,35 @@ export function roomActionArgs(room: string, action: string, args: Record<string
     if ((types as readonly string[]).includes(typeof v) && !(typeof v === 'number' && !Number.isFinite(v))) out[name] = v;
   }
   return out;
+}
+
+/** The argument a settled time is pinned in (#1022): Unix ms. */
+export const SETTLED_TIME_ARG = 'when_ts';
+
+/**
+ * room -> action -> the argument naming the time it is for, as it was said
+ * ("tomorrow at 9"), and whether the action needs one (#1022).
+ *
+ * The rooms used to read that phrase when the action ran: after the yes, on
+ * the dashboard's clock and in its zone, while the card showed only the
+ * phrase. So the person approved words, and "tomorrow" said before midnight
+ * and confirmed after it was a day later than meant. Now the daemon settles
+ * the phrase to an instant before anything is shown or sent, in the zone of
+ * the dashboard that asked, pins it in SETTLED_TIME_ARG, and the card shows
+ * it; the room takes that instant as given and never reads the phrase as a
+ * time again.
+ */
+export const ROOM_ACTION_TIMES: Record<string, Record<string, { arg: string; required: boolean }>> = {
+  tasks: { create_task: { arg: 'when', required: false } },
+  calendar: { schedule_event: { arg: 'when', required: false } },
+  content: { schedule: { arg: 'when', required: true } },
+};
+
+/** The time argument of `room`'s `action`, or null when it takes none. */
+export function roomActionTimeArg(room: string, action: string): { arg: string; required: boolean } | null {
+  if (!own(ROOM_ACTION_TIMES, room)) return null;
+  const actions = ROOM_ACTION_TIMES[room]!;
+  return own(actions, action) ? actions[action]! : null;
 }
 
 export type RoomActionTargetKind = 'project' | 'content' | 'task';

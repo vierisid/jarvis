@@ -342,6 +342,91 @@ function scrollsThePage(key: string): boolean {
 }
 
 /**
+ * How long a snapshot or an element action waits for the snapshot lock before
+ * refusing (#875). The sidecar's `snapshotLockTimeout` (sidecar/browser_snapshot.go),
+ * for the same reason: a holder normally keeps the lock for one snapshot, one
+ * click or hover, or one type (a few round trips plus a 200ms settle, and 100ms
+ * more before a submit Enter), and the bound exists only for a
+ * renderer that stopped answering, which keeps the holder inside a 30-second CDP
+ * send -- without it every later caller would queue behind that send.
+ */
+const SNAPSHOT_LOCK_TIMEOUT_MS = 10_000;
+let snapshotLockTimeoutMs = SNAPSHOT_LOCK_TIMEOUT_MS;
+
+/** Test seam: shorten the snapshot lock's wait; null restores the default. */
+export function setSnapshotLockTimeoutForTests(ms: number | null): void {
+  snapshotLockTimeoutMs = ms ?? SNAPSHOT_LOCK_TIMEOUT_MS;
+}
+
+/** The key events one Enter is made of: rawKeyDown, char, keyUp. */
+const ENTER_KEY_EVENTS = 3;
+
+/** An element action whose connection was replaced while it held the snapshot lock (#875). */
+function reconnectedRefusal(elementId: number): string {
+  return `Error: The browser connection was re-established while element [${elementId}] was being acted on, so nothing more was done. Take a browser_snapshot and check the page.`;
+}
+
+const SNAPSHOT_LOCK_BUSY = 'Error: another browser snapshot or typed input is still running on this browser, '
+  + 'so nothing was done. Try again in a moment.';
+
+/**
+ * The same lock timeout met by `navigate`'s closing snapshot. The navigation was
+ * sent by then (it may have landed on an error page or still be loading), so
+ * "nothing was done" would be false.
+ */
+const NAVIGATED_SNAPSHOT_LOCK_BUSY = 'The navigation was started, but the page could not be read because another '
+  + 'browser snapshot or typed input was still running on this browser. Take a browser_snapshot.';
+
+/**
+ * A FIFO mutex with a bounded wait (#875). The local twin of the sidecar's
+ * `snapMu` + `lockSnapshots`.
+ *
+ * `acquire` resolves to a release function, or to null once the wait has run
+ * out. The release is idempotent so a caller can release early on one path and
+ * still keep a `finally` as the backstop.
+ */
+class SnapshotLock {
+  private held = false;
+  private waiters: Array<(granted: boolean) => void> = [];
+
+  acquire(timeoutMs: number): Promise<(() => void) | null> {
+    if (!this.held) {
+      this.held = true;
+      return Promise.resolve(this.releaser());
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      const waiter = (granted: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(granted ? this.releaser() : null);
+      };
+      const timer = setTimeout(() => {
+        const i = this.waiters.indexOf(waiter);
+        if (i >= 0) this.waiters.splice(i, 1);
+        waiter(false);
+      }, timeoutMs);
+      // A waiter must not keep a short-lived process alive.
+      (timer as { unref?: () => void }).unref?.();
+      this.waiters.push(waiter);
+    });
+  }
+
+  private releaser(): () => void {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const next = this.waiters.shift();
+      // Handed straight to the next waiter, so nothing can slip in between.
+      if (next) next(true);
+      else this.held = false;
+    };
+  }
+}
+
+/**
  * A digest of every frame's loaderId in a `Page.getFrameTree` reply (#592).
  *
  * One string rather than a set, because the only question asked of it is "did
@@ -435,6 +520,31 @@ export class BrowserController {
    * counter but cannot ask the browser anything.
    */
   private snapshotGen = 0;
+
+  /**
+   * Held by `snapshot()` from its first read of the frame tree through the fill,
+   * and by `type()` from its generation check through its last focus verify and
+   * any submit Enter (#875) -- the sidecar's `snapMu` (#826), on this browser.
+   *
+   * The snapshot script ARMS the isolated world's refs when the renderer runs
+   * it, and the fill that moves `snapshotGen` happens one round trip later. The
+   * controller is one process-global object the chat and every sub-agent drive,
+   * so without this a sub-agent's snapshot could sit in that window while an
+   * approved chat `browser_type` ran: the approval guard compares the generation,
+   * which had not moved yet, and the focus went through the NEW reading's ref at
+   * the reviewed index -- a different element, reported as success. Measured
+   * with a FIFO fake renderer (snapshot-serialisation.test.ts), which is the
+   * order one CDP session delivers in. `click` and `hover` hold it from their
+   * check through their mouse events: the moved/replaced sentinel reads the
+   * world too, and against a re-armed world it judges the new element against
+   * the new point and says 'ok' for a coordinate the reviewed element has left.
+   *
+   * NEVER taken by `forgetSnapshotElements`, which `snapshot()`'s own cleanup
+   * calls while holding it. Nor, deliberately, by the pebble readers
+   * (`viewportScreenOrigin` and `snapshotElementPoint`), matching the sidecar,
+   * where the element-point handler does not take snapMu either.
+   */
+  private snapshotLock = new SnapshotLock();
 
   /**
    * The isolated world the snapshot's element refs live in, retired with its
@@ -644,7 +754,7 @@ export class BrowserController {
 
     await this.waitForSettled();
 
-    return this.snapshot();
+    return this.takeSnapshot(NAVIGATED_SNAPSHOT_LOCK_BUSY);
   }
 
   /**
@@ -1038,6 +1148,46 @@ export class BrowserController {
   }
 
   /**
+   * The generation of the element map right now (#875). Captured by the
+   * approval guard at review, and handed back to `type`, `click` and `hover` as
+   * `reviewedGen`, which compare it again UNDER the snapshot lock: the guard's
+   * own check runs before the action takes the lock, so a snapshot that
+   * finishes in between would otherwise pass it to an element nobody reviewed.
+   */
+  snapshotGeneration(): number {
+    return this.snapshotGen;
+  }
+
+  /**
+   * Take the snapshot lock, then refuse if the map is no longer the reviewed
+   * one. Null release means the lock was not taken and `refusal` says why.
+   */
+  private async lockForElementAction(
+    elementId: number,
+    reviewedGen: number | undefined,
+  ): Promise<{ release: () => void; sameSession: () => boolean; refusal: null } | { release: null; refusal: string }> {
+    const release = await this.snapshotLock.acquire(snapshotLockTimeoutMs);
+    if (!release) return { release: null, refusal: browserActionFailure(SNAPSHOT_LOCK_BUSY) };
+    // The connection the check below runs on. `ensureConnected` runs OUTSIDE
+    // the lock (in a snapshot's caller, say), so a stale-connection reconnect
+    // can land while this action holds it -- and a reconnect may adopt another
+    // tab, where an execution-context id from the old session names nothing
+    // reviewed. `connect()` bumps the epoch, so the action asks before every
+    // dispatch whether it is still on the session it checked.
+    const epoch = this.approvalEpoch;
+    const sameSession = () => this.approvalEpoch === epoch && this._connected;
+    if (reviewedGen !== undefined && reviewedGen !== this.snapshotGen) {
+      release();
+      // The sidecar's browserSnapshotSuperseded, same words.
+      return {
+        release: null,
+        refusal: browserActionFailure(`Error: Element [${elementId}] was reviewed against a browser snapshot that has since been replaced or dropped, so nothing was done: the id may now name a different element. Run browser_snapshot and review the action again.`),
+      };
+    }
+    return { release, sameSession, refusal: null };
+  }
+
+  /**
    * The last URL Chrome reported, for a synchronous approval gate. Null when
    * nothing has been reported yet. May be stale: a page that navigated itself
    * since the last navigate or snapshot is not reflected, which is why the
@@ -1051,7 +1201,24 @@ export class BrowserController {
    * Get a snapshot of the current page: text content + numbered interactive elements.
    */
   async snapshot(): Promise<PageSnapshot> {
+    return this.takeSnapshot(SNAPSHOT_LOCK_BUSY.replace(/^Error: /, ''));
+  }
+
+  /** `snapshot`, throwing `busyMessage` when the snapshot lock's wait runs out. */
+  private async takeSnapshot(busyMessage: string): Promise<PageSnapshot> {
     await this.ensureConnected();
+    // From the first frame-tree read through the fill (#875). Taken first, so
+    // the cleanup that forgets a half-armed reading also runs under it.
+    const release = await this.snapshotLock.acquire(snapshotLockTimeoutMs);
+    if (!release) throw new Error(busyMessage);
+    try {
+      return await this.snapshotLocked();
+    } finally {
+      release();
+    }
+  }
+
+  private async snapshotLocked(): Promise<PageSnapshot> {
     // Refresh the browser-reported URL while we are here: a snapshot is what the
     // model takes after clicking through a site, so this is where an approval
     // card's idea of the current origin comes from -- and, since #572, where the
@@ -1452,6 +1619,56 @@ export class BrowserController {
   }
 
   /**
+   * Run `dispatch` at the coordinate `click` and `hover` press at, checked and
+   * dispatched with snapshots and other element actions excluded (#875). The
+   * sidecar's `refuseStaleCoordinate`, held a little longer.
+   *
+   * The lock makes the reviewed generation, the map and the sentinel's reading
+   * of the world describe one snapshot at the moment of the check, and holding
+   * it through the mouse events keeps another caller's click, hover or type
+   * from moving focus or the page between the check and the press. Released
+   * before the caller's settle sleep, which touches nothing.
+   */
+  private async withCheckedCoordinate(
+    elementId: number,
+    reviewedGen: number | undefined,
+    dispatch: (coords: { x: number; y: number }, send: (method: string, params: Record<string, unknown>) => Promise<unknown>) => Promise<void>,
+  ): Promise<string | null> {
+    const lock = await this.lockForElementAction(elementId, reviewedGen);
+    if (!lock.release) return lock.refusal;
+    try {
+      const coords = this.elementCoords.get(elementId);
+      if (!coords) {
+        return browserActionFailure(`Error: Element [${elementId}] not found. Run browser_snapshot first.`);
+      }
+      // The coordinates are only the action's input while the document they
+      // were measured in is still the one on screen (#592) and the page has not
+      // scrolled under them (#603) -- hence `usesCoordinates`.
+      const moved = await this.refuseIfDocumentMoved(elementId, true);
+      if (moved) return moved;
+      // Every event asks first, the first one included: a reconnect may
+      // complete between two of them, and the client then carries the next one
+      // to whatever tab it adopted.
+      let sent = 0;
+      let reconnected = false;
+      await dispatch({ x: coords.x, y: coords.y }, async (method, params) => {
+        if (reconnected || !lock.sameSession()) {
+          reconnected = true;
+          return undefined;
+        }
+        sent++;
+        return this.cdp.send(method, params);
+      });
+      if (reconnected) {
+        return browserActionFailure(reconnectedRefusal(elementId), sent > 0 ? 'may_have_occurred' : 'not_started');
+      }
+      return null;
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
    * Click an element by its snapshot ID.
    * options.button: 'left' (default) or 'right' (context menu).
    * options.double: double-click instead of single click.
@@ -1459,46 +1676,39 @@ export class BrowserController {
   async click(
     elementId: number,
     options: { button?: 'left' | 'right'; double?: boolean } = {},
+    review: { reviewedGen?: number } = {},
   ): Promise<string> {
     await this.ensureConnected();
 
-    const coords = this.elementCoords.get(elementId);
-    if (!coords) {
-      return browserActionFailure(`Error: Element [${elementId}] not found. Run browser_snapshot first.`);
-    }
-    // The coordinates are only the click's input while the document they were
-    // measured in is still the one on screen (#592) and the page has not
-    // scrolled under them (#603) -- hence `usesCoordinates`.
-    const moved = await this.refuseIfDocumentMoved(elementId, true);
-    if (moved) return moved;
-
     const button = options.button === 'right' ? 'right' : 'left';
+    const refused = await this.withCheckedCoordinate(elementId, review.reviewedGen, async (coords, send) => {
+      // Move the pointer onto the element first -- hover-sensitive UIs
+      // (menus, message toolbars) expect mouseover before the press.
+      await send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: coords.x,
+        y: coords.y,
+      });
 
-    // Move the pointer onto the element first — hover-sensitive UIs
-    // (menus, message toolbars) expect mouseover before the press.
-    await this.cdp.send('Input.dispatchMouseEvent', {
-      type: 'mouseMoved',
-      x: coords.x,
-      y: coords.y,
+      const clicks = options.double ? 2 : 1;
+      for (let count = 1; count <= clicks; count++) {
+        await send('Input.dispatchMouseEvent', {
+          type: 'mousePressed',
+          x: coords.x,
+          y: coords.y,
+          button,
+          clickCount: count,
+        });
+        await send('Input.dispatchMouseEvent', {
+          type: 'mouseReleased',
+          x: coords.x,
+          y: coords.y,
+          button,
+          clickCount: count,
+        });
+      }
     });
-
-    const clicks = options.double ? 2 : 1;
-    for (let count = 1; count <= clicks; count++) {
-      await this.cdp.send('Input.dispatchMouseEvent', {
-        type: 'mousePressed',
-        x: coords.x,
-        y: coords.y,
-        button,
-        clickCount: count,
-      });
-      await this.cdp.send('Input.dispatchMouseEvent', {
-        type: 'mouseReleased',
-        x: coords.x,
-        y: coords.y,
-        button,
-        clickCount: count,
-      });
-    }
+    if (refused !== null) return refused;
 
     // Wait for navigation/changes
     await Bun.sleep(1000);
@@ -1516,29 +1726,25 @@ export class BrowserController {
    * move). Reveals hover-only UI like message action toolbars. The revealed
    * elements only show up in a NEW snapshot taken after this call.
    */
-  async hover(elementId: number): Promise<string> {
+  async hover(elementId: number, review: { reviewedGen?: number } = {}): Promise<string> {
     await this.ensureConnected();
 
-    const coords = this.elementCoords.get(elementId);
-    if (!coords) {
-      return browserActionFailure(`Error: Element [${elementId}] not found. Run browser_snapshot first.`);
-    }
     // Hover dispatches at the stored coordinate too.
-    const moved = await this.refuseIfDocumentMoved(elementId, true);
-    if (moved) return moved;
-
-    // Approach from a nearby point so mouseenter/mouseover always fire,
-    // even if the pointer already sat on the target coordinates.
-    await this.cdp.send('Input.dispatchMouseEvent', {
-      type: 'mouseMoved',
-      x: Math.max(0, coords.x - 10),
-      y: Math.max(0, coords.y - 10),
+    const refused = await this.withCheckedCoordinate(elementId, review.reviewedGen, async (coords, send) => {
+      // Approach from a nearby point so mouseenter/mouseover always fire,
+      // even if the pointer already sat on the target coordinates.
+      await send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: Math.max(0, coords.x - 10),
+        y: Math.max(0, coords.y - 10),
+      });
+      await send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: coords.x,
+        y: coords.y,
+      });
     });
-    await this.cdp.send('Input.dispatchMouseEvent', {
-      type: 'mouseMoved',
-      x: coords.x,
-      y: coords.y,
-    });
+    if (refused !== null) return refused;
 
     // Give the app time to render hover-triggered UI
     await Bun.sleep(600);
@@ -1612,9 +1818,36 @@ export class BrowserController {
     text: string,
     submit: boolean = false,
     append: boolean = false,
+    review: { reviewedGen?: number } = {},
   ): Promise<string> {
     await this.ensureConnected();
 
+    // No snapshot may run from the generation check until the last focus
+    // verify after the insert (#875; the sidecar's browser_type, #826). The
+    // check proves the world's refs are the reviewed snapshot's at THAT
+    // instant, and this call then acts through them three more times; a
+    // snapshot whose script ran in between would re-arm them under it.
+    // Held through the optional Enter too: the Enter goes to whatever has
+    // focus, and another caller's type taking the lock in between would move
+    // focus to its own element, so the approved Enter would submit that form.
+    // Released before the post-submit settle, which touches nothing.
+    const lock = await this.lockForElementAction(elementId, review.reviewedGen);
+    if (!lock.release) return lock.refusal;
+    try {
+      return await this.typeLocked(elementId, text, submit, append, lock.release, lock.sameSession);
+    } finally {
+      lock.release();
+    }
+  }
+
+  private async typeLocked(
+    elementId: number,
+    text: string,
+    submit: boolean,
+    append: boolean,
+    releaseLock: () => void,
+    sameSession: () => boolean,
+  ): Promise<string> {
     const coords = this.elementCoords.get(elementId);
     if (!coords) {
       return browserActionFailure(`Error: Element [${elementId}] not found. Run browser_snapshot first.`);
@@ -1688,6 +1921,9 @@ export class BrowserController {
     // contenteditable in a 1x1 clipped iframe -- the Google Docs pattern this
     // suite and sidecar/browser_parity_test.go both assert on -- all pass, and
     // typing still reaches that editor.
+    // Not on the session the check ran on any more: nothing has been touched
+    // yet, so refuse outright.
+    if (!sameSession()) return browserActionFailure(reconnectedRefusal(elementId));
     const focusResult = await this.cdp.send('Runtime.evaluate', {
       contextId,
       expression: `(() => {
@@ -1805,6 +2041,7 @@ export class BrowserController {
     // Insert text (like paste — much more reliable than char-by-char).
     // Reached only with focus verified on the reviewed element, in the reviewed
     // document, immediately beforehand.
+    if (!sameSession()) return browserActionFailure(reconnectedRefusal(elementId), 'may_have_occurred');
     await this.cdp.send('Input.insertText', { text });
 
     const heldFocus = await this.verifyFocus(elementId, contextId);
@@ -1819,7 +2056,24 @@ export class BrowserController {
 
     if (submit) {
       await Bun.sleep(100);
-      await this.pressEnter();
+      // The Enter goes to whatever holds focus, so it goes only while that is
+      // still the reviewed element on the reviewed session. The text is in;
+      // say so, and that the form was not submitted.
+      if (!sameSession()) {
+        return browserActionFailure(`Error: ${result}, but the browser connection was re-established before Enter, so Enter was not pressed. Take a browser_snapshot and check the page.`, 'may_have_occurred');
+      }
+      if (await this.verifyFocus(elementId, contextId) !== 'ok') {
+        return browserActionFailure(`Error: ${result}, but element [${elementId}] no longer had focus, so Enter was not pressed. Take a browser_snapshot and check the page.`, 'may_have_occurred');
+      }
+      const keys = await this.pressEnter(sameSession);
+      if (keys === 0) {
+        // The reconnect landed during the focus check above: no key went out.
+        return browserActionFailure(`Error: ${result}, but the browser connection was re-established before Enter, so Enter was not pressed. Take a browser_snapshot and check the page.`, 'may_have_occurred');
+      }
+      if (keys < ENTER_KEY_EVENTS) {
+        return browserActionFailure(`Error: ${result}, but the browser connection was re-established while Enter was being pressed, so the form may or may not have been submitted. Take a browser_snapshot and check the page.`, 'may_have_occurred');
+      }
+      releaseLock();
       // Wait for page load after submit
       await Bun.sleep(2000);
       await this.noteCurrentPage();
@@ -1832,28 +2086,24 @@ export class BrowserController {
   /**
    * Press Enter key.
    */
-  async pressEnter(): Promise<void> {
-    await this.cdp.send('Input.dispatchKeyEvent', {
-      type: 'rawKeyDown',
-      key: 'Enter',
-      code: 'Enter',
-      windowsVirtualKeyCode: 13,
-      nativeVirtualKeyCode: 13,
-    });
-    await this.cdp.send('Input.dispatchKeyEvent', {
-      type: 'char',
-      key: 'Enter',
-      code: 'Enter',
-      windowsVirtualKeyCode: 13,
-      nativeVirtualKeyCode: 13,
-    });
-    await this.cdp.send('Input.dispatchKeyEvent', {
-      type: 'keyUp',
-      key: 'Enter',
-      code: 'Enter',
-      windowsVirtualKeyCode: 13,
-      nativeVirtualKeyCode: 13,
-    });
+  async pressEnter(sameSession: () => boolean = () => true): Promise<number> {
+    // `sameSession` is asked before each event (#875): a reconnect between two
+    // of them would carry the rest to whatever tab it adopted. Returns how many
+    // of the ENTER_KEY_EVENTS went out, so a caller can tell "not pressed"
+    // from "stopped part-way".
+    let sent = 0;
+    for (const type of ['rawKeyDown', 'char', 'keyUp'] as const) {
+      if (!sameSession()) return sent;
+      await this.cdp.send('Input.dispatchKeyEvent', {
+        type,
+        key: 'Enter',
+        code: 'Enter',
+        windowsVirtualKeyCode: 13,
+        nativeVirtualKeyCode: 13,
+      });
+      sent++;
+    }
+    return sent;
   }
 
   /**

@@ -459,6 +459,12 @@ describe("socket drop and reconnect", () => {
 });
 
 describe("session scope", () => {
+  test("a realtime session says which zone this browser is in (#1022)", async () => {
+    await mount();
+    await beginRealtime();
+    expect(pcmStarts()[0]!.payload.timeZone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  });
+
   test("a live session carries the next recording even after the poll says realtime is off", async () => {
     await mount();
     await beginRealtime();
@@ -628,5 +634,38 @@ describe("the approval a spoken answer is about", () => {
     await act(async () => { recognizer!.onresult?.({ resultIndex: 0, results: [final] }); });
     await act(async () => { voice.stopRecording(); });
     expect(payloadOf("voice_text")).toMatchObject({ text: "yes", shownApprovalId: "approval-a" });
+  });
+
+  test("every utterance says which zone this browser is in, so a time it names is read there (#1022)", async () => {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    expect(zone).toBeTruthy();
+    await mount();
+    await recordAndStop({ current: null }, null);
+    expect(payloadOf("voice_start")).toMatchObject({ mode: "wav", timeZone: zone });
+    let recognizer: { onresult: ((e: unknown) => void) | null } | null = null;
+    globals.SpeechRecognition = class {
+      onresult: ((e: unknown) => void) | null = null;
+      constructor() { recognizer = this; }
+      start() {}
+      stop() {}
+    };
+    await mount();
+    await act(async () => { voice.startRecording(); });
+    const final = Object.assign([{ transcript: "remind me tomorrow at 9am" }], { isFinal: true });
+    await act(async () => { recognizer!.onresult?.({ resultIndex: 0, results: [final] }); });
+    await act(async () => { voice.stopRecording(); });
+    expect(payloadOf("voice_text")).toMatchObject({ timeZone: zone });
+  });
+
+  test("a browser that cannot say its zone sends an empty one, not none (#1022 review)", async () => {
+    const original = Intl.DateTimeFormat;
+    (Intl as { DateTimeFormat: unknown }).DateTimeFormat = function () { throw new Error("no Intl"); };
+    try {
+      await mount();
+      await recordAndStop({ current: null }, null);
+      expect(payloadOf("voice_start")).toMatchObject({ mode: "wav", timeZone: "" });
+    } finally {
+      (Intl as { DateTimeFormat: unknown }).DateTimeFormat = original;
+    }
   });
 });

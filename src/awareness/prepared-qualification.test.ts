@@ -410,6 +410,14 @@ describe('prepared proposal qualification', () => {
       message: 'send_followup: Authority decides send_email by the time of day' }]);
   });
 
+  test('a time rule on the write_data floor times only a piece send the floor can turn into a card (#953)', () => {
+    authority = new AuthorityEngine(authorityConfig({ default_level: 3, governed_categories: ['send_email'], context_rules: [{ id: 'writes',
+      action: 'write_data', condition: 'time_range', params: { start_hour: 0, end_hour: 24 }, effect: 'require_approval', description: 'Ask' }] }));
+    const steps = stepsOf(chain(step('look', GMAIL, 'gmail_search_mail', { from: 'a@b.test' }), step('mail', GMAIL, 'send_email', SEND)));
+    expect(steps.look!.unreviewable).toEqual([]);
+    expect(steps.mail!.unreviewable).toContain('Authority decides send_email by the time of day');
+  });
+
   test('a tool that is missing or chosen at run time is reported as such, not as an Authority refusal', () => {
     const missing = stepsOf(chain(step('lost', JARVIS + 'tool', 'invoke', { toolName: 'no_such_tool', params: {} }))).lost!;
     expect([missing.decision, missing.reason]).toEqual(['unavailable', 'tool no_such_tool is not installed']);
@@ -481,6 +489,10 @@ describe('Authority predictions match the effect boundary', () => {
       gate: { actionCategory: 'execute_command', confirm: 'above_level', intent: 'Run this as a command' } },
     'tool with mandatory review': { ...writeFile, gate: { actionCategory: 'write_data', confirm: 'always', intent: 'Review this write' } },
     'tool above its level': { ...writeFile, gate: { actionCategory: 'execute_command', confirm: 'above_level', intent: 'Run this as a command' } },
+    // #953: a delete is never substituted, even where a send is.
+    'gmail trash': { piece: GMAIL, action: 'gmail_trash_message', input: { auth: '{{connections.billing-gmail}}', message_id: 'm1' },
+      call: async (b: any, ctx: any) => b.pieceAuthorize({ piece: GMAIL, action: 'gmail_trash_message', input: { message_id: 'm1' },
+        inputDigest: await pieceInputDigest({ message_id: 'm1' }) }, ctx) },
     gmail: { piece: GMAIL, action: 'send_email', input: { auth: '{{connections.billing-gmail}}', ...SEND_INPUT },
       call: async (b: any, ctx: any) => b.pieceAuthorize({ piece: GMAIL, action: 'send_email', input: SEND_INPUT, inputDigest: await pieceInputDigest(SEND_INPUT) }, ctx) },
   };
@@ -490,6 +502,9 @@ describe('Authority predictions match the effect boundary', () => {
     ['sends governed', {}, ['auto', 'approval']],
     ['level too low for email or files', { default_level: 1, governed_categories: [] }, ['auto', 'denied']],
     ['level allows files but not commands', { default_level: 3, governed_categories: [] }, ['auto', 'approval', 'denied']],
+    // #953: the shipped defaults, where a governed send above the level asks.
+    ['shipped defaults', { default_level: 3, governed_categories: ['send_email', 'send_message', 'make_payment'] }, ['auto', 'approval', 'denied']],
+    ['governed send below the floor', { default_level: 2, governed_categories: ['send_email', 'delete_data'] }, ['auto', 'denied']],
     ['override denies messages', { default_level: 10, governed_categories: [], overrides: [{ action: 'send_message', allowed: false }] }, ['auto', 'denied']],
     ['rule asks before every read', { default_level: 10, governed_categories: [],
       context_rules: [{ id: 'reads', action: 'read_data', condition: 'always', params: {}, effect: 'require_approval', description: 'Ask before reads' }] },

@@ -427,6 +427,23 @@ describe("workflow API: piece catalog", () => {
   });
 });
 
+describe("workflow API: piece catalog says which pieces skip approval (#955)", () => {
+  test("only a community piece is marked not approval-gated", async () => {
+    const piece = (name: string) => ({ name, displayName: name, description: "", actions: {}, triggers: {} });
+    const reg = new (await import("../runtime/piece-catalog")).PieceCatalog([
+      piece("@activepieces/piece-activecampaign"), piece("@activepieces/piece-gmail"),
+      piece("@jarvispieces/piece-jarvis-notify"), piece("@activepieces/piece-http"), piece("@activepieces/piece-delay"),
+    ]);
+    const get = createWorkflowRoutes({ pieceRegistry: reg })["/api/workflows/pieces"]?.GET;
+    const { body } = await callJson(get, plainReq("GET", "http://x/api/workflows/pieces"));
+    const flagged = Object.fromEntries((body as Array<{ name: string; notApprovalGated?: boolean }>).map((p) => [p.name, p.notApprovalGated ?? false]));
+    expect(flagged).toEqual({
+      "@activepieces/piece-activecampaign": true, "@activepieces/piece-gmail": false,
+      "@jarvispieces/piece-jarvis-notify": false, "@activepieces/piece-http": false, "@activepieces/piece-delay": false,
+    });
+  });
+});
+
 describe("workflow API: flows", () => {
   test("POST /api/workflows creates a flow + initial draft version", async () => {
     const post = routes["/api/workflows"]?.POST;

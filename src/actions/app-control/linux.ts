@@ -1,7 +1,8 @@
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
 import { ActionOutcomeError } from '../action-outcome.ts';
 import { awaitCaptureTool, awaitCaptureToolOutput, CaptureTimeoutError, captureViaPrivateFileAsync } from './capture-file.ts';
-import { $ } from 'bun';
+import { typingAllowanceMs } from './typing-allowance.ts';
+import { findLinuxSystemExe, linuxSystemExe, type LinuxSystemTool } from '../../util/system-exe.ts';
 import { modelExecEnv } from '../../util/model-exec-env.ts';
 
 /**
@@ -162,7 +163,7 @@ export function toXdotoolKeySequence(keys: string[]): string {
  * 3.4 (max 207), `search --name .` 3.7, `xprop -root` 1.8 -- so the bound
  * leaves ample room and only ever cuts off a call that is not coming back.
  * The exception is `xdotool type`, whose time grows with the text: see
- * TYPE_MS_PER_CHAR.
+ * typing-allowance.ts.
  *
  * CAPTURE_TOOL discards stdout (awaitCaptureTool); LOOKUP_TOOL returns it
  * (awaitCaptureToolOutput).
@@ -171,18 +172,14 @@ const CAPTURE_TOOL = { stdin: 'ignore', stdout: 'ignore', stderr: 'pipe' } as co
 const LOOKUP_TOOL = { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' } as const;
 
 /**
- * How much longer `xdotool type` may run per character, on top of the bound.
- * xdotool types with a 12 ms delay between keys by default; measured here as
- * 12.8 ms per character, linear (50, 200 and 800 characters: 643, 2559 and
- * 10220 ms median of 3 each). A flat 30 s would stop a text of about 2300
- * characters part-way through; twice the measured rate keeps a slower machine
- * clear of that too. Characters outside the keymap, which xdotool types by
- * remapping a spare keycode for each, cost barely more (#895 review; 100
- * characters, median of 3: e-acute 13.2 ms each, a CJK ideograph 13.3, an
- * emoji 13.3, against 12.9 for "x"). Not measured: a remote X server, where
- * each remap is a network round trip.
+ * The only window properties read here (extractXpropValue), asked for by name
+ * (#904). A bare `xprop -id` prints every property the window has, the icon
+ * included, once per window: measured with xprop 1.2.8 against one window
+ * with a seven-size _NET_WM_ICON, 31 KB against 89 bytes for these three. A
+ * property the window lacks prints as "NAME:  not found.", which reads as
+ * missing, as before.
  */
-const TYPE_MS_PER_CHAR = 26;
+const XPROP_FIELDS = ['WM_NAME', 'WM_CLASS', '_NET_WM_PID'] as const;
 
 /**
  * Added to a typing or key-press timeout. The kill can land between a key's
@@ -194,19 +191,27 @@ const TYPE_MS_PER_CHAR = 26;
 const KILLED_MID_INPUT = '. Some of the input may already have been sent, and a key may still be held down.';
 
 export class LinuxAppController implements AppController {
-  private async checkTool(tool: string): Promise<boolean> {
-    try {
-      await $`which ${tool}`.quiet();
-      return true;
-    } catch {
-      return false;
+  /**
+   * Whether `tool` is installed in a system directory (#900). Looked up, not
+   * spawned: this used to run `which`, and the tool itself was then run by
+   * bare name, so the first copy on PATH -- ~/.local/bin and ~/.bun/bin come
+   * ahead of /usr/bin on a stock setup -- was the one that ran.
+   */
+  private checkTool(tool: LinuxSystemTool): boolean {
+    const found = findLinuxSystemExe(tool);
+    if (found.path === null && found.rejected.length) {
+      // Installed but refused: say why, or it just looks absent.
+      console.warn(`[LinuxAppController] ${tool} not used: ${found.rejected.join('; ')}`);
     }
+    return found.path !== null;
   }
 
-  private async ensureTool(tool: string): Promise<void> {
-    if (!(await this.checkTool(tool))) {
+  private ensureTool(tool: LinuxSystemTool): void {
+    try {
+      linuxSystemExe(tool);
+    } catch (err) {
       throw new Error(
-        `Required tool '${tool}' not found. Please install it:\n` +
+        `Required tool '${tool}' is not available: ${err instanceof Error ? err.message : String(err)}. Please install it:\n` +
         `  Ubuntu/Debian: sudo apt install ${tool}\n` +
         `  Fedora: sudo dnf install ${tool}\n` +
         `  Arch: sudo pacman -S ${tool}`
@@ -215,11 +220,11 @@ export class LinuxAppController implements AppController {
   }
 
   async getActiveWindow(): Promise<WindowInfo> {
-    await this.ensureTool('xdotool');
-    await this.ensureTool('xprop');
+    this.ensureTool('xdotool');
+    this.ensureTool('xprop');
 
     try {
-      const windowId = (await awaitCaptureToolOutput(Bun.spawn(['xdotool', 'getactivewindow'], LOOKUP_TOOL), 'xdotool getactivewindow')).trim();
+      const windowId = (await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xdotool'), 'getactivewindow'], LOOKUP_TOOL), 'xdotool getactivewindow')).trim();
       // Never pass an empty id below. Under Bun `$`, which these calls used
       // to go through, an empty argument was dropped (see typeText), so
       // `xdotool getwindowgeometry` ran with no window operand at all; argv
@@ -233,12 +238,12 @@ export class LinuxAppController implements AppController {
         throw new Error('xdotool getactivewindow reported no window id');
       }
 
-      const xpropOutput = await awaitCaptureToolOutput(Bun.spawn(['xprop', '-id', windowId], LOOKUP_TOOL), 'xprop');
+      const xpropOutput = await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xprop'), '-id', windowId, ...XPROP_FIELDS], LOOKUP_TOOL), 'xprop');
 
       const title = this.extractXpropValue(xpropOutput, 'WM_NAME') || 'Unknown';
       const className = this.extractXpropValue(xpropOutput, 'WM_CLASS') || 'Unknown';
 
-      const geometryOutput = await awaitCaptureToolOutput(Bun.spawn(['xdotool', 'getwindowgeometry', windowId], LOOKUP_TOOL), 'xdotool getwindowgeometry');
+      const geometryOutput = await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xdotool'), 'getwindowgeometry', windowId], LOOKUP_TOOL), 'xdotool getwindowgeometry');
       const bounds = this.parseGeometry(geometryOutput);
 
       const pid = parseInt(this.extractXpropValue(xpropOutput, '_NET_WM_PID') || '0', 10);
@@ -263,16 +268,16 @@ export class LinuxAppController implements AppController {
   }
 
   async listWindows(): Promise<WindowInfo[]> {
-    await this.ensureTool('xdotool');
-    await this.ensureTool('xprop');
+    this.ensureTool('xdotool');
+    this.ensureTool('xprop');
 
     try {
-      const hasWmctrl = await this.checkTool('wmctrl');
+      const hasWmctrl = this.checkTool('wmctrl');
 
       let windowIds: string[];
 
       if (hasWmctrl) {
-        const wmctrlOutput = await awaitCaptureToolOutput(Bun.spawn(['wmctrl', '-l', '-p'], LOOKUP_TOOL), 'wmctrl');
+        const wmctrlOutput = await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('wmctrl'), '-l', '-p'], LOOKUP_TOOL), 'wmctrl');
         windowIds = wmctrlOutput
           .split('\n')
           .filter(line => line.trim())
@@ -282,18 +287,18 @@ export class LinuxAppController implements AppController {
       }
 
       const windows: WindowInfo[] = [];
-      const activeWindowId = (await awaitCaptureToolOutput(Bun.spawn(['xdotool', 'getactivewindow'], LOOKUP_TOOL), 'xdotool getactivewindow')).trim();
+      const activeWindowId = (await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xdotool'), 'getactivewindow'], LOOKUP_TOOL), 'xdotool getactivewindow')).trim();
 
       for (const windowId of windowIds) {
         if (!windowId) continue;
 
         try {
-          const xpropOutput = await awaitCaptureToolOutput(Bun.spawn(['xprop', '-id', windowId], LOOKUP_TOOL), 'xprop');
+          const xpropOutput = await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xprop'), '-id', windowId, ...XPROP_FIELDS], LOOKUP_TOOL), 'xprop');
           const title = this.extractXpropValue(xpropOutput, 'WM_NAME') || 'Unknown';
           const className = this.extractXpropValue(xpropOutput, 'WM_CLASS') || 'Unknown';
           const pid = parseInt(this.extractXpropValue(xpropOutput, '_NET_WM_PID') || '0', 10);
 
-          const geometryOutput = await awaitCaptureToolOutput(Bun.spawn(['xdotool', 'getwindowgeometry', windowId], LOOKUP_TOOL), 'xdotool getwindowgeometry');
+          const geometryOutput = await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xdotool'), 'getwindowgeometry', windowId], LOOKUP_TOOL), 'xdotool getwindowgeometry');
           const bounds = this.parseGeometry(geometryOutput);
 
           windows.push({
@@ -318,7 +323,7 @@ export class LinuxAppController implements AppController {
   }
 
   async clickElement(element: UIElement): Promise<void> {
-    await this.ensureTool('xdotool');
+    this.ensureTool('xdotool');
 
     try {
       const action = typeof element.properties.action === 'string' ? element.properties.action : 'click';
@@ -335,16 +340,16 @@ export class LinuxAppController implements AppController {
       const centerX = element.bounds.x + element.bounds.width / 2;
       const centerY = element.bounds.y + element.bounds.height / 2;
 
-      await awaitCaptureTool(Bun.spawn(['xdotool', 'mousemove', String(Math.round(centerX)), String(Math.round(centerY))], CAPTURE_TOOL), 'xdotool mousemove');
+      await awaitCaptureTool(Bun.spawn([linuxSystemExe('xdotool'), 'mousemove', String(Math.round(centerX)), String(Math.round(centerY))], CAPTURE_TOOL), 'xdotool mousemove');
       if (action === 'double_click') {
-        await awaitCaptureTool(Bun.spawn(['xdotool', 'click', '--repeat', '2', '1'], CAPTURE_TOOL), 'xdotool click');
+        await awaitCaptureTool(Bun.spawn([linuxSystemExe('xdotool'), 'click', '--repeat', '2', '1'], CAPTURE_TOOL), 'xdotool click');
         return;
       }
       if (action === 'right_click') {
-        await awaitCaptureTool(Bun.spawn(['xdotool', 'click', '3'], CAPTURE_TOOL), 'xdotool click');
+        await awaitCaptureTool(Bun.spawn([linuxSystemExe('xdotool'), 'click', '3'], CAPTURE_TOOL), 'xdotool click');
         return;
       }
-      await awaitCaptureTool(Bun.spawn(['xdotool', 'click', '1'], CAPTURE_TOOL), 'xdotool click');
+      await awaitCaptureTool(Bun.spawn([linuxSystemExe('xdotool'), 'click', '1'], CAPTURE_TOOL), 'xdotool click');
     } catch (error) {
       throw new Error(`Failed to click element: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -354,7 +359,7 @@ export class LinuxAppController implements AppController {
     // ensureTool first, so "xdotool is not installed" is still reported for an
     // empty string rather than silently succeeding on a machine where typing
     // anything real would fail.
-    await this.ensureTool('xdotool');
+    this.ensureTool('xdotool');
 
     // Nothing to type. Under Bun `$` (which this used before #895) an empty
     // interpolated argument was DROPPED rather than passed as "" (Bun
@@ -380,9 +385,9 @@ export class LinuxAppController implements AppController {
       // `--` ends xdotool's option parsing, so text such as "-h" or
       // "--file=/home/me/.ssh/id_ed25519" is typed literally instead of
       // being read as an option (--file would type out the named file).
-      // The bound grows with the text: see TYPE_MS_PER_CHAR.
-      await awaitCaptureTool(Bun.spawn(['xdotool', 'type', '--clearmodifiers', '--', text], CAPTURE_TOOL), 'xdotool type',
-        [...text].length * TYPE_MS_PER_CHAR);
+      // The bound grows with the text: see typing-allowance.ts.
+      await awaitCaptureTool(Bun.spawn([linuxSystemExe('xdotool'), 'type', '--clearmodifiers', '--', text], CAPTURE_TOOL), 'xdotool type',
+        typingAllowanceMs(text));
     } catch (error) {
       throw new Error(`Failed to type text: ${error instanceof Error ? error.message : String(error)}${error instanceof CaptureTimeoutError ? KILLED_MID_INPUT : ''}`);
     }
@@ -391,21 +396,21 @@ export class LinuxAppController implements AppController {
   async pressKeys(keys: string[]): Promise<void> {
     // Outside the try below, so a refusal stays a not-started outcome.
     const keyString = toXdotoolKeySequence(keys);
-    await this.ensureTool('xdotool');
+    this.ensureTool('xdotool');
 
     try {
       // The trailing "+" is an empty last key, which libxdo skips. It keeps
       // the argument from equalling any xdotool command name, so `xdotool key`
       // cannot chain into a command, whatever commands a later xdotool adds.
-      await awaitCaptureTool(Bun.spawn(['xdotool', 'key', '--clearmodifiers', '--', `${keyString}+`], CAPTURE_TOOL), 'xdotool key');
+      await awaitCaptureTool(Bun.spawn([linuxSystemExe('xdotool'), 'key', '--clearmodifiers', '--', `${keyString}+`], CAPTURE_TOOL), 'xdotool key');
     } catch (error) {
       throw new Error(`Failed to press keys: ${error instanceof Error ? error.message : String(error)}${error instanceof CaptureTimeoutError ? KILLED_MID_INPUT : ''}`);
     }
   }
 
   async captureScreen(): Promise<Buffer> {
-    const hasImport = await this.checkTool('import');
-    const hasScrot = await this.checkTool('scrot');
+    const hasImport = this.checkTool('import');
+    const hasScrot = this.checkTool('scrot');
 
     if (!hasImport && !hasScrot) {
       throw new Error(
@@ -421,9 +426,9 @@ export class LinuxAppController implements AppController {
       // scrot never settled (#802). See CAPTURE_TIMEOUT_MS.
       return await captureViaPrivateFileAsync(async (file) => {
         if (hasImport) {
-          await awaitCaptureTool(Bun.spawn(['import', '-window', 'root', file], CAPTURE_TOOL), 'import');
+          await awaitCaptureTool(Bun.spawn([linuxSystemExe('import'), '-window', 'root', file], CAPTURE_TOOL), 'import');
         } else {
-          await awaitCaptureTool(Bun.spawn(['scrot', file], CAPTURE_TOOL), 'scrot');
+          await awaitCaptureTool(Bun.spawn([linuxSystemExe('scrot'), file], CAPTURE_TOOL), 'scrot');
         }
       });
     } catch (error) {
@@ -432,8 +437,8 @@ export class LinuxAppController implements AppController {
   }
 
   async captureWindow(pid: number): Promise<Buffer> {
-    await this.ensureTool('xdotool');
-    const hasImport = await this.checkTool('import');
+    this.ensureTool('xdotool');
+    const hasImport = this.checkTool('import');
 
     if (!hasImport) {
       throw new Error(
@@ -446,7 +451,7 @@ export class LinuxAppController implements AppController {
       const windowId = await this.findWindowByPid(pid);
 
       return await captureViaPrivateFileAsync(async (file) => {
-        await awaitCaptureTool(Bun.spawn(['import', '-window', windowId, file], CAPTURE_TOOL), 'import');
+        await awaitCaptureTool(Bun.spawn([linuxSystemExe('import'), '-window', windowId, file], CAPTURE_TOOL), 'import');
       });
     } catch (error) {
       throw new Error(`Failed to capture window: ${error instanceof Error ? error.message : String(error)}`);
@@ -454,11 +459,11 @@ export class LinuxAppController implements AppController {
   }
 
   async focusWindow(pid: number): Promise<void> {
-    await this.ensureTool('xdotool');
+    this.ensureTool('xdotool');
 
     try {
       const windowId = await this.findWindowByPid(pid);
-      await awaitCaptureTool(Bun.spawn(['xdotool', 'windowactivate', windowId], CAPTURE_TOOL), 'xdotool windowactivate');
+      await awaitCaptureTool(Bun.spawn([linuxSystemExe('xdotool'), 'windowactivate', windowId], CAPTURE_TOOL), 'xdotool windowactivate');
     } catch (error) {
       throw new Error(`Failed to focus window: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -505,7 +510,7 @@ export class LinuxAppController implements AppController {
   private async searchWindowIds(): Promise<string[]> {
     // Bounded like a capture (#802 review): it talks to the X server, so it
     // hangs when a capture would, and captureWindow runs it first.
-    return (await awaitCaptureToolOutput(Bun.spawn(['xdotool', 'search', '--name', '.'], LOOKUP_TOOL), 'xdotool search'))
+    return (await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xdotool'), 'search', '--name', '.'], LOOKUP_TOOL), 'xdotool search'))
       .split('\n')
       .map(id => id.trim())
       .filter(Boolean);
@@ -516,7 +521,7 @@ export class LinuxAppController implements AppController {
 
     for (const windowId of windowIds) {
       try {
-        const xpropOutput = await awaitCaptureToolOutput(Bun.spawn(['xprop', '-id', windowId], LOOKUP_TOOL), 'xprop');
+        const xpropOutput = await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xprop'), '-id', windowId, ...XPROP_FIELDS], LOOKUP_TOOL), 'xprop');
         const windowPid = parseInt(this.extractXpropValue(xpropOutput, '_NET_WM_PID') || '0', 10);
 
         if (windowPid === pid) {

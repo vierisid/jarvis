@@ -1,4 +1,7 @@
 import { expect, test } from 'bun:test';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { WebSocketServer, type WSMessage } from '../comms/websocket.ts';
 import type { Suggestion } from '../awareness/types.ts';
 import { deliverOpportunityNotification } from './opportunity-notification.ts';
@@ -96,14 +99,29 @@ test('WebSocket receipts exclude dropped frames and include queued frames', () =
 
 test.each([0, 1])('native sender exit %i determines its receipt', async code => {
   // Separate process isolates notification detection and Bun mocks from other suites.
-  const script = `
-    import { sendDesktopNotificationWithReceipt } from ${JSON.stringify(new URL('../comms/desktop-notify.ts', import.meta.url).href)};
-    Bun.spawnSync = () => ({ exitCode: 0 });
-    Bun.spawn = () => ({ exited: Promise.resolve(${code}), kill() {} });
-    console.log('RESULT:' + await sendDesktopNotificationWithReceipt('Title', 'Body'));
-  `;
-  const child = Bun.spawn([process.execPath, '--eval', script], { stdout: 'pipe', stderr: 'pipe' });
-  const [output, errors, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  expect({ exit, errors }).toEqual({ exit: 0, errors: '' });
-  expect(output.trim().split('RESULT:')[1]).toBe(String(code === 0));
+  // notify-send is found in a system directory without spawning anything
+  // (#900), so the lookup is pointed at one holding a notify-send, and the
+  // process is told it is not WSL so the PowerShell toast is never the choice.
+  const sys = mkdtempSync(join(tmpdir(), 'jarvis-notify-sys-'));
+  try {
+    writeFileSync(join(sys, 'notify-send'), '#!/bin/sh\n', { mode: 0o755 });
+    chmodSync(join(sys, 'notify-send'), 0o755);
+    const script = `
+      import { sendDesktopNotificationWithReceipt } from ${JSON.stringify(new URL('../comms/desktop-notify.ts', import.meta.url).href)};
+      import { WSLBridge } from ${JSON.stringify(new URL('../actions/terminal/wsl-bridge.ts', import.meta.url).href)};
+      import { __setLinuxSystemDirsForTests } from ${JSON.stringify(new URL('../util/system-exe.ts', import.meta.url).href)};
+      WSLBridge.isWSL = () => false;
+      __setLinuxSystemDirsForTests(${JSON.stringify([sys])});
+      let spawned = 0;
+      Bun.spawn = () => { spawned++; return { exited: Promise.resolve(${code}), kill() {} }; };
+      console.log('RESULT:' + await sendDesktopNotificationWithReceipt('Title', 'Body') + ':' + spawned);
+    `;
+    const child = Bun.spawn([process.execPath, '--eval', script], { stdout: 'pipe', stderr: 'pipe' });
+    const [output, errors, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect({ exit, errors }).toEqual({ exit: 0, errors: '' });
+    // One sender spawned: the exit-1 case cannot pass by finding no sender at all.
+    expect(output.trim().split('RESULT:')[1]).toBe(`${code === 0}:1`);
+  } finally {
+    rmSync(sys, { recursive: true, force: true });
+  }
 });

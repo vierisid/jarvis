@@ -2,6 +2,7 @@ import type { CommandResult } from './executor.ts';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { sanitizedEnv, type ExtraEnv } from '../../util/subprocess-env.ts';
+import { linuxSystemExe } from '../../util/system-exe.ts';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -304,7 +305,9 @@ async function runWslpath(flag: '-w' | '-u', path: string): Promise<string> {
     throw new Error(`refusing a path that starts with "-", which wslpath would read as an option: ${JSON.stringify(path)}`);
   }
 
-  const result = await runArgv(['wslpath', flag, path]);
+  // From a system directory, not PATH (#900): WSL's PATH puts the user's own
+  // bin directories first.
+  const result = await runArgv([linuxSystemExe('wslpath'), flag, path]);
 
   if (result.exitCode !== 0) {
     throw new Error(`wslpath exited with code ${result.exitCode}${result.stderr.trim() ? `: ${result.stderr.trim()}` : ''}`);
