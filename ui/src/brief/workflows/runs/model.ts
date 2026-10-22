@@ -81,6 +81,10 @@ export type ManualRunResult =
   | { status: "not_submitted"; requestId: string }
   | { status: "rejected"; requestId: string; message: string }
   | { status: "uncertain"; requestId: string };
+/** The durable outcome of one manual Run request, read back by its ID (#1093). */
+export type ManualRunCheck =
+  | { status: "accepted"; requestId: string; run: RunSummary }
+  | { status: "not_recorded"; requestId: string };
 export interface WorkflowRunsPort {
   list(
     cursor: string | null,
@@ -93,7 +97,13 @@ export interface WorkflowRunsPort {
   /** Collect/validate explicit bounded input and persist request identity before
    * dispatch. Resolve not_submitted ONLY when no command was sent. No retries. */
   start?: (request: ManualRunRequest) => Promise<ManualRunResult>;
-  reconcile?: (request: ManualRunRequest) => Promise<ManualRunResult>;
+  /** Read the durable outcome of this exact request (F-21's receipt). Never submit
+   * or replay it. Resolve not_recorded ONLY when the server answers that it holds no
+   * receipt for this ID; any other failure must reject, so the request stays uncertain. */
+  reconcile?: (
+    request: ManualRunRequest,
+    signal: AbortSignal,
+  ) => Promise<ManualRunCheck>;
 }
 export const STATUS: Record<
   RunStatus | "not_run",

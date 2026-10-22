@@ -77,7 +77,7 @@ function stale(run: FlowRun, waitpoint: Waitpoint): boolean {
   return waitpoint.type !== "WEBHOOK" && stepIsPaused(run.steps, waitpoint.stepName) === false;
 }
 
-export type ContinuationKind = "timer" | "approval" | "webhook" | "hold";
+export type ContinuationKind = "timer" | "approval" | "webhook" | "hold" | "deferred";
 export type ContinuationOutcome =
   /** The waitpoint was consumed and the RESUME job queued. */
   | "resumed"

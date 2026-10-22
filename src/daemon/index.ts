@@ -4970,8 +4970,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // sources (Google OAuth file, etc.) before pieces start asking for
     // connections. Each `jarvis:<source>` external id dispatches to the
     // matching source; non-prefixed ids fall through to the `app_connection`
-    // repo (encrypted at rest).
-    const credentialResolver = new CredentialResolver();
+    // repo (encrypted at rest). A pasted OAuth2 row's token refresh (#954)
+    // connects under the same egress rule as the workflow HTTP step (#961).
+    const credentialResolver = new CredentialResolver({
+      egressPolicy: isHostedInstall(jarvisConfig) ? 'public-only' : 'private-allowed',
+    });
     {
       // Registered unconditionally with a getter reading the live
       // `googleAuth` binding: the settings hot-reload google applier
@@ -5502,7 +5505,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       workflowWorker.start();
 
       // Resume TIMER waitpoints whose delay has elapsed (incl. during downtime).
-      timerScheduler = new TimerWaitpointScheduler();
+      // A card the sweep closes for a run that ended before it parked is
+      // dropped from the dashboard, as an expired one is (#1039). A card
+      // already sent to a channel stays there; a reply to it is refused.
+      timerScheduler = new TimerWaitpointScheduler(undefined, (approvalId) => {
+        const request = approvalManager.getRequest(approvalId);
+        if (request) wsService.broadcastApprovalUpdate(request);
+      });
       timerScheduler.start();
     } else {
       console.warn("[Daemon] Workflow worker not started -- engine unavailable; queued RUN_FLOW jobs will pile up");

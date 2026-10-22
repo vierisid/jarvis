@@ -856,6 +856,47 @@ you want.
 Limits per expression: 16,384 source characters, 2,048 tokens, depth 64, 10,000
 evaluation visits, and 1,048,576 accumulated output characters.
 
+### Pasted OAuth2 connections are refreshed only when they can be (#954)
+
+An OAuth2 connection added in Workflows -> Connections is stored as pasted.
+Jarvis refreshes it in the daemon, before the engine gets it, when the value
+holds what a refresh needs, in upstream's own stored shape: `refresh_token`,
+`client_id`, `client_secret` and an https `token_url` (authorization-code
+grant only; `authorization_method: "HEADER"` sends the client credentials as
+Basic auth). With an expiry (`expires_in`, dated when saved as `claimed_at`,
+or `expiry_date` in ms) it refreshes 15 minutes before it (upstream's
+threshold); without one, including rows saved before #954, on first use.
+
+- One refresh at a time per connection, through the same egress rule as the
+  HTTP step (public addresses only on hosted), with a 20 s deadline for the
+  whole exchange (upstream's timeout). It is stored without advancing
+  `credential_generation`, so it does not pause workflows pinned to the
+  connection; a credential a person saved meanwhile wins, keeping a refresh
+  token the provider rotated if theirs still held the retired one.
+- A refresh the provider refuses is not retried until the stored value
+  changes. An unreachable endpoint is retried once per 15-minute window while
+  the stored token may still work (it is handed out meanwhile), and at every
+  fetch once the token is known to have expired. A fetch that waited for
+  another refresh re-reads the row first, so a refresh token the provider
+  rotated meanwhile is never sent again.
+- A token known to have expired that cannot be refreshed is not handed out:
+  the engine gets status `ERROR` and fails the step with "connection expired,
+  reconnect again". An unreachable token endpoint fails the fetch. The run's
+  connection binding records the typed reason (`CONNECTION_EXPIRED`,
+  `CONNECTION_REFRESH_UNREACHABLE`, `CONNECTION_CHANGED`) and whether the run
+  had already handed the credential out; the run's failure reads both, so a
+  step that may have acted before (a retry, a loop round) never reads as
+  "nothing was done".
+- A token with neither an expiry nor refresh details is handed out as pasted;
+  its provider's 401 is then the only sign it expired. The panel labels each
+  row "Refreshed by Jarvis", "Not refreshed", "Not refreshed; expires ..." or
+  "Expired".
+- `jarvis:*` connections are not refreshed here: their own source does that
+  (`GoogleAuth`, through the control plane on hosted).
+- Bun 1.3.8-1.3.10 cannot verify the token endpoint's certificate for its host
+  name through the guarded lookup, so there every refresh fails closed. 1.3.11 and
+  later, and the 1.4.2 that CI and the release image run, verify it.
+
 ### A run is pinned to one computer and one connection
 
 A workflow run used to pick a machine per step. If the chosen computer dropped
@@ -1121,6 +1162,7 @@ src/workflows/
                                 Jarvis's existing OAuth/state into pieces
     adapter.ts                  Registry of sources by `jarvis:*` external id
     google-source.ts            jarvis:google -> existing Google OAuth tokens
+    pasted-oauth2.ts            Refreshes pasted OAuth2 rows on resolve (#954)
     telegram-source.ts          jarvis:telegram -> daemon's bot token
 
   adapters/                     Daemon-side service shims invoked by /v1/jarvis

@@ -117,6 +117,10 @@ const NAMED_REFUSALS: Record<string, { category: FailureCategory; why: string; s
   WORKFLOW_FACT_AMBIGUOUS: { category: 'missing_binding', why: 'memory holds conflicting values for a recipient it sends to', step: 'update_recipient' },
   SIDECAR_TOO_OLD_FOR_REVIEWED_ACTION: { category: 'missing_binding', why: 'the Jarvis app on that computer is too old for this approved action', step: 'update_desktop_app' },
   SIDECAR_TOO_OLD_FOR_BROWSER_OUTCOMES: { category: 'missing_binding', why: 'the Jarvis app on that computer is too old for this approved browser action', step: 'update_desktop_app' },
+  // #954: a stored OAuth2 connection whose token expired; its credential was not handed out.
+  CONNECTION_EXPIRED: { category: 'missing_binding', why: 'a connection it uses has expired and Jarvis could not refresh it', step: 'connect' },
+  CONNECTION_REFRESH_UNREACHABLE: { category: 'target_offline', why: 'a connection it uses has expired and Jarvis could not reach the provider to refresh it', step: 'run_again' },
+  CONNECTION_CHANGED: { category: 'missing_binding', why: 'a connection it uses was replaced while Jarvis refreshed it', step: 'run_again' },
 };
 /** Action codes whose meaning is invalid input or an invalid definition. */
 const INPUT_CODES = new Set(['DESKTOP_INVALID_KEYS', 'SKILL_BAD_PARAMS', 'SKILL_INVALID', 'INVALID_JSON_OUTPUT', 'OUTPUT_SCHEMA_MISMATCH',

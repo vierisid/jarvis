@@ -535,7 +535,9 @@ async function executeTool(
       tool_name: toolCall.name,
       action_category: actionCategory,
       authority_decision: authorityDecision,
-      approval_id: approvalId ?? null,
+      // A step held with no card (Pause, or its flow's card budget, #1039)
+      // answers with an empty approval id: no card, so none is recorded.
+      approval_id: approvalId || null,
       executed,
     });
 

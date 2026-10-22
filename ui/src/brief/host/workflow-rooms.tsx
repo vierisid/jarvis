@@ -14,6 +14,8 @@ import { WorkflowManagementController } from '../workflows/manage-list/controlle
 import { WorkflowManagementRoom } from '../workflows/manage-list/WorkflowManagementRoom';
 import { WorkflowRunsController } from '../workflows/runs/controller';
 import { WorkflowRunsRoom } from '../workflows/runs/WorkflowRunsRoom';
+import { briefRunsPort } from '../workflows/runs/read';
+import type { ManualRunRequest, ManualRunResult } from '../workflows/runs/model';
 import { WorkflowContextController } from '../workflows/context/controller';
 import { WorkflowContextRoom } from '../workflows/context/WorkflowContextRoom';
 import { WorkflowViewHeader } from '../workflows/runs/WorkflowViewHeader';
@@ -51,32 +53,32 @@ export function createWorkflowRooms(host: WorkflowHost) {
     const base = `/api/brief/workflows/${encodeURIComponent(flowId)}`;
     const scope = { scopeId, flowId, versionId };
     const journal = `brief:manual-run:pending:v1:${scopeId}:${flowId}:${versionId}`;
-    let pending: import('../workflows/runs/model').ManualRunRequest | undefined;
+    let pending: ManualRunRequest | undefined;
     try { const stored = JSON.parse(host.storage.getItem(journal) ?? 'null');
       if (stored?.scopeId === scopeId && stored.flowId === flowId && stored.versionId === versionId && typeof stored.requestId === 'string') pending = stored;
     } catch { /* Invalid local state cannot supply an execution identity. */ }
-    const reconcile = async (request: import('../workflows/runs/model').ManualRunRequest) => {
-      const receipt = await transport.json(base + `/run-requests/${encodeURIComponent(request.requestId)}`);
-      if (receipt.status === 'accepted' && receipt.requestId === request.requestId) host.storage.setItem(journal, 'null');
-      return receipt;
-    };
+    const clear = () => { try { host.storage.setItem(journal, 'null'); } catch { /* The lock stays until a check answers. */ } };
+    // F-21's keyset reader owns run history (#1100); this host adds only the explicit
+    // Run start and a reload-safe journal of an unconfirmed request.
+    const read = briefRunsPort(scope, transport.request);
     const runs = new WorkflowRunsController(scope, {
-      list: (cursor, signal) => transport.json(base + '/runs' + (cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''), { signal }),
-      detail: (runId, signal) => transport.json(base + `/runs/${encodeURIComponent(runId)}`, { signal }),
-      ...(!editable ? { start: async (request: import('../workflows/runs/model').ManualRunRequest) => {
+      list: read.list, detail: read.detail,
+      ...(!editable ? { start: async (request: ManualRunRequest): Promise<ManualRunResult> => {
         const payload = await host.runInput();
-        if (payload === null || transport.signal.aborted || !isBriefCapabilityEnabled(host.capabilities(), 'workflowContext')) return { status: 'not_submitted' as const, requestId: request.requestId };
+        if (payload === null || transport.signal.aborted || !isBriefCapabilityEnabled(host.capabilities(), 'workflowContext')) return { status: 'not_submitted', requestId: request.requestId };
         host.storage.setItem(journal, JSON.stringify(request));
-        try {
-          const response = await transport.request(`/api/workflows/${encodeURIComponent(flowId)}/run`, post({ brief: { scopeId, versionId, requestId: request.requestId }, payload }));
-          if (response.ok) { const result = await response.json(); if (result.status === 'accepted' && result.requestId === request.requestId) host.storage.setItem(journal, 'null'); return result; }
-          if ([400, 403, 404, 409, 422].includes(response.status)) {
-            host.storage.setItem(journal, 'null');
-            return { status: 'rejected' as const, requestId: request.requestId, message: 'No run started. Review workflow readiness and Authority, then try again.' };
-          }
-          return await reconcile(request);
-        } catch { return await reconcile(request); }
-      }, reconcile } : {}),
+        const response = await transport.request(`/api/workflows/${encodeURIComponent(flowId)}/run`, post({ brief: { scopeId, versionId, requestId: request.requestId }, payload }));
+        if (response.ok) { const result = await response.json(); if (result.status === 'accepted' && result.requestId === request.requestId) clear(); return result; }
+        if ([400, 403, 404, 409, 422].includes(response.status)) {
+          clear();
+          return { status: 'rejected', requestId: request.requestId, message: 'No run started. Review workflow readiness and Authority, then try again.' };
+        }
+        // Anything else is uncertain: the controller locks Run until an explicit check.
+        return { status: 'uncertain', requestId: request.requestId };
+      }, reconcile: async (request: ManualRunRequest, signal: AbortSignal) => {
+        const result = await read.reconcile(request, signal);
+        clear(); return result;
+      } } : {}),
     }, pending);
     const context = new WorkflowContextController(scope, { read: async (_scope, query, signal) => {
       const params = new URLSearchParams({ versionId });

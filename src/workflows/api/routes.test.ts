@@ -810,6 +810,8 @@ describe("workflow API: runs", () => {
     expect(status).toBe(200);
     expect(body.jobCanceled).toBe(true);
     expect(queueStats().canceled).toBe(1);
+    // The cards a stop closed are the daemon's to broadcast, not part of this answer (#1039).
+    expect(Object.keys(body).sort()).toEqual(["accepted", "cancellation", "jobCanceled", "ok"]);
   });
 
   test("GET /api/workflow-runs/:runId returns the run", async () => {

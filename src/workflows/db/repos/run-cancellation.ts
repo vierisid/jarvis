@@ -22,9 +22,14 @@ export function getRunCancellation(runId: string): RunCancellation | null {
   } : null;
 }
 
-/** Caller holds the transaction and has established that the run cannot continue. */
-function retireRunWaits(runId: string, ts: number, canceled: boolean): void {
+/**
+ * Caller holds the transaction and has established that the run cannot
+ * continue. Returns the ids of the cards it closed, so a caller that can reach
+ * the approval surfaces can drop them there too.
+ */
+function retireRunWaits(runId: string, ts: number, canceled: boolean): string[] {
   const db = getWorkflowDb();
+  const closed: string[] = [];
   // Pending effects provably never dispatched. Leave in-flight and final
   // effects alone: cleanup cannot certify rollback or replace their receipts.
   for (const effect of listWorkflowEffects(runId)) {
@@ -35,23 +40,28 @@ function retireRunWaits(runId: string, ts: number, canceled: boolean): void {
       message: effect.error, effect: 'not_started' };
     saveWorkflowEffect(effect);
     if (effect.approvalId) {
-      db.run(`UPDATE approval_requests SET status='denied', decided_at=?, decided_by=?
+      const denied = db.run(`UPDATE approval_requests SET status='denied', decided_at=?, decided_by=?
         WHERE id=? AND execution_mode='workflow' AND status='pending'`,
       [ts, canceled ? 'workflow-cancellation' : 'workflow-completion', effect.approvalId]);
-      db.run(`UPDATE approval_requests SET status='executed', executed_at=?, execution_result=?, execution_outcome='blocked'
+      const receipted = db.run(`UPDATE approval_requests SET status='executed', executed_at=?, execution_result=?, execution_outcome='blocked'
         WHERE id=? AND execution_mode='workflow' AND status='approved'`, [ts, effect.error, effect.approvalId]);
+      if (denied.changes > 0 || receipted.changes > 0) closed.push(effect.approvalId);
     }
   }
   db.run('UPDATE waitpoint SET resumed_at=? WHERE flow_run_id=? AND resumed_at IS NULL', [ts, runId]);
+  return closed;
 }
 
-/** Retire abandoned waits without changing a terminal run's status or failure evidence. */
-export function retireTerminalRunWaits(runId: string): void {
+/**
+ * Retire abandoned waits without changing a terminal run's status or failure
+ * evidence. Returns the ids of the cards it closed.
+ */
+export function retireTerminalRunWaits(runId: string): string[] {
   const db = getWorkflowDb();
-  db.transaction(() => {
+  return db.transaction((): string[] => {
     const run = db.query<{ status: string }, [string]>('SELECT status FROM flow_run WHERE id=?').get(runId);
-    if (!run || ['QUEUED', 'RUNNING', 'PAUSED'].includes(run.status)) return;
-    retireRunWaits(runId, Date.now(), false);
+    if (!run || ['QUEUED', 'RUNNING', 'PAUSED'].includes(run.status)) return [];
+    return retireRunWaits(runId, Date.now(), false);
   }).immediate();
 }
 
@@ -64,9 +74,12 @@ export function retireTerminalRunWaits(runId: string): void {
  */
 export function cancelFlowRun(runId: string, opts: { reason?: string; reasonLabel?: string } = {}): {
   accepted: boolean; jobCanceled: boolean; cancellation: RunCancellation | null;
+  /** The cards this stop closed, the run's and its stopped descendants', for a caller that can drop them from the surfaces. */
+  closedApprovalIds: string[];
 } {
   const db = getWorkflowDb();
   const stopped: string[] = [];
+  const closedApprovalIds: string[] = [];
   const stop = (id: string) => {
     const run = db.query<{ status: string; start_time: number | null }, [string]>(
       "SELECT status, start_time FROM flow_run WHERE id = ?",
@@ -74,7 +87,7 @@ export function cancelFlowRun(runId: string, opts: { reason?: string; reasonLabe
     if (!run) throw new Error(`run not found: ${id}`);
     let cancellation = getRunCancellation(id);
     if (!cancellation && !["QUEUED", "RUNNING", "PAUSED"].includes(run.status)) {
-      return { accepted: false, jobCanceled: false, cancellation: null };
+      return { accepted: false, jobCanceled: false, cancellation: null, closedApprovalIds };
     }
     const ts = Date.now();
     if (!cancellation) {
@@ -88,7 +101,7 @@ export function cancelFlowRun(runId: string, opts: { reason?: string; reasonLabe
         AND (flow_run_id = ? OR (flow_run_id IS NULL AND CASE WHEN json_valid(payload) THEN json_extract(payload, '$.runId') END = ?))`, [ts, id, id]);
     db.run("UPDATE flow_run SET status = 'STOPPED', finish_time = ?, updated = ? WHERE id = ?",
       [cancellation.acknowledgedAt, ts, id]);
-    retireRunWaits(id, ts, true);
+    closedApprovalIds.push(...retireRunWaits(id, ts, true));
     stopped.push(id);
     if (opts.reason && id === runId) {
       db.run("UPDATE flow_run SET failed_step = ? WHERE id = ?", [JSON.stringify({
@@ -96,7 +109,7 @@ export function cancelFlowRun(runId: string, opts: { reason?: string; reasonLabe
     }
     // A stopped run never resumes a delegated conversation; drop its log.
     deleteDelegations(id);
-    return { accepted: true, jobCanceled: jobs.changes > 0, cancellation };
+    return { accepted: true, jobCanceled: jobs.changes > 0, cancellation, closedApprovalIds };
   };
   const result = db.transaction(() => {
     const result = stop(runId);

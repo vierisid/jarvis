@@ -131,7 +131,8 @@ export interface M7AgentDelegatorOptions {
 }
 
 const DEFAULT_ROLE_ID = "workflow-default";
-const DEFAULT_MAX_ITERATIONS = 50;
+/** Iterations a delegation may take when its step sets none; a workflow delegation's card states it (#1040). */
+export const DEFAULT_MAX_ITERATIONS = 50;
 const DEFAULT_TRACE_RESULT_MAX_CHARS = 1000;
 
 /**

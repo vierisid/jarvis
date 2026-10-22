@@ -115,8 +115,15 @@ test("configured and used-by-run views show their own goal and exact version", a
       .querySelector("[data-context-version]")
       ?.getAttribute("data-context-version"),
   ).toBe("meeting-v2");
+  // The run's short label keeps its full ID in the title (#1100).
+  expect(
+    host.querySelector(".brief-context-version")?.getAttribute("title"),
+  ).toBe("meeting-run-001");
   expect(text()).toContain("Source removed");
   await basis("configured");
+  expect(
+    host.querySelector(".brief-context-version")?.hasAttribute("title"),
+  ).toBe(false);
   expect(text()).toContain("Win 10 design partners");
 });
 test("all eight shell states and remount preserve mode and recorded identity", async () => {
@@ -252,6 +259,12 @@ test("Run shares the Runs owner and selects its receipt; uncertainty stays locke
   await React.act(async () => root.render(null));
   await render();
   expect(button("Run workflow").disabled).toBe(true);
+  // #1093: reading the receipt back opens the accepted run and unlocks Run.
+  await React.act(async () => button("Check result").click());
+  expect(shell.route.room).toBe("workflow-runs");
+  expect(shell.route.selection.runId).toBe("meeting-run-014");
+  await render();
+  expect(button("Run workflow").disabled).toBe(false);
 });
 test("a wrong-scope command owner is disabled", async () => {
   const other = makeContextFixture();

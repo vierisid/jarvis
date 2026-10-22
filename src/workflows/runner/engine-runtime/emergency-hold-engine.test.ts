@@ -38,6 +38,7 @@ import { ApprovalManager } from "../../../authority/approval";
 import { AuditTrail } from "../../../authority/audit";
 import { AuthorityEngine } from "../../../authority/engine";
 import { EmergencyController, setActiveEmergencyController } from "../../../authority/emergency";
+import { maxWaitingWorkflowCards } from "../../runtime/deferred-cards";
 
 const buildOptIn = process.env.JARVIS_TEST_ENGINE_BUILD === "1";
 const initialCached = findCachedBundle();
@@ -235,4 +236,106 @@ describe("Pause against the real engine: a held step runs as it was about to (Q-
       rmSync(probeDir, { recursive: true, force: true });
     }
   }, 90_000);
+});
+
+/**
+ * #1039 against the real engine: a step whose card would go past its flow's
+ * budget parks on a DEFER waitpoint, the same way a held step parks on a
+ * HOLD, and the timer releases it when a place frees. Only the real engine
+ * shows that the released step runs again and raises its card, rather than
+ * reading the deferral back as its output.
+ */
+describe("A step past its flow's card budget waits, then asks, against the real engine (#1039)", () => {
+  let api: SandboxApi | undefined;
+  let runtime: EngineRuntime | undefined;
+  let tempDir: string | undefined;
+  let approvals: ApprovalManager;
+  const runIds: string[] = [];
+  const NOTIFY_PIECE = { pieceName: "@jarvispieces/piece-jarvis-notify", pieceVersion: "0.0.1" };
+  const notifyBuilt = existsSync(resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "pieces/jarvis/notify/dist/src/index.js"));
+  const skipDefer = skip || (!buildOptIn && !notifyBuilt);
+
+  beforeAll(async () => {
+    if (skipDefer) return;
+    const bundle = findCachedBundle() ?? await buildEngineBundle();
+    if (buildOptIn) await buildPiece(resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "pieces/jarvis/notify"));
+    tempDir = mkdtempSync(resolve(tmpdir(), "jarvis-deferred-card-"));
+    initWorkflowDb(resolve(tempDir, "workflows.sqlite"));
+    approvals = new ApprovalManager();
+    const backends = buildSandboxServiceBackends({
+      credentialResolver: new CredentialResolver(),
+      llmManager: { chat: async () => ({ content: "" }) } as never,
+      // A notify step is governed, as it is by default.
+      authorityEngine: new AuthorityEngine({ default_level: 10, governed_categories: ["send_message"], overrides: [], context_rules: [],
+        learning: { enabled: false, suggest_threshold: 10 }, emergency_state: "normal" }),
+      emergencyController: new EmergencyController(),
+      auditTrail: new AuditTrail(),
+      eventBuffer: new WorkflowEventBuffer(),
+      approvalManager: approvals,
+      channelService: { getChannelStatus: () => ({}), tryBroadcastToChannels: async () => ({ delivered: [], failed: [] }) } as never,
+      wsService: { broadcastNotificationToDashboard: () => {} } as never,
+    });
+    api = new SandboxApi({ services: backends });
+    await api.start({ port: 0 });
+    runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest, devPieces: ["jarvis-test", "jarvis-notify"] });
+  }, 120_000);
+
+  afterAll(async () => {
+    if (skipDefer) return;
+    await runtime?.shutdown();
+    await api?.stop();
+    closeWorkflowDb();
+    for (const runId of runIds) rmSync(resolve(workflowLogsBase(), `${runId}.bin`), { force: true });
+    if (tempDir) rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  test.skipIf(skipDefer)("the step past the budget waits on a DEFER, and asks once a card is decided", async () => {
+    const flow = createFlow();
+    const trigger: FlowTriggerNode = {
+      name: "trigger", type: "PIECE_TRIGGER", displayName: "Manual",
+      settings: { ...TEST_PIECE, triggerName: "manual", input: {} },
+      nextAction: {
+        name: "notify", type: "PIECE", displayName: "Notify",
+        settings: { ...NOTIFY_PIECE, actionName: "notify", input: { message: "hi", channels: ["dashboard"], priority: "normal" } },
+      },
+    };
+    const version = createDraftVersion({ flowId: flow.id, displayName: "busy notifier", trigger });
+    updateDraftVersion(version.id, { trigger, valid: true });
+    lockVersion(version.id);
+    const executions: string[] = [];
+    const drain = async () => {
+      const handler = createRunFlowHandler({ executor: new EngineFlowExecutor(runtime!) });
+      await new Worker({ handlers: { [RUN_FLOW]: async (job) => {
+        executions.push(`${(job.payload as { executionType?: string }).executionType ?? "BEGIN"}:${job.flowRunId}`);
+        await handler(job);
+      } } }).drain();
+    };
+    const cap = maxWaitingWorkflowCards();
+    const runs = Array.from({ length: cap + 1 }, () => {
+      const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, environment: "PRODUCTION" });
+      runIds.push(run.id);
+      enqueue({ jobType: RUN_FLOW, flowRunId: run.id, maxAttempts: 1, payload: { runId: run.id } });
+      return run.id;
+    });
+    await drain();
+    const open = (runId: string) => listWaitpointsByFlowRun(runId, false).map((wp) => [wp.type, wp.stepName]);
+    for (const runId of runs.slice(0, cap)) expect([getFlowRun(runId)?.status, open(runId)]).toEqual(["PAUSED", [["MANUAL", "notify"]]]);
+    const last = runs[cap]!;
+    // Waiting, not failed: no card for it.
+    expect([getFlowRun(last)?.status, open(last)]).toEqual(["PAUSED", [["DEFER", "notify"]]]);
+    const cards = () => approvals.getPending().filter((r) => r.execution_mode === "workflow");
+    expect(cards()).toHaveLength(cap);
+    expect(cards().some((r) => r.agent_id === `workflow:${last}`)).toBe(false);
+
+    // A card is denied: its place goes to the waiting step, which runs again and asks.
+    approvals.deny(cards().find((r) => r.agent_id === `workflow:${runs[0]}`)!.id, "dashboard");
+    new TimerWaitpointScheduler().tick();
+    await drain();
+    expect(executions).toContain(`RESUME:${last}`);
+    expect([getFlowRun(last)?.status, open(last)]).toEqual(["PAUSED", [["MANUAL", "notify"]]]);
+    expect(cards().filter((r) => r.agent_id === `workflow:${last}`)).toHaveLength(1);
+    expect(cards()).toHaveLength(cap);
+    // The run whose card was denied failed on that decision.
+    expect(getFlowRun(runs[0]!)?.status).toBe("FAILED");
+  }, 120_000);
 });
