@@ -69,14 +69,20 @@ export function createWorkflowRooms(host: WorkflowHost) {
       ...(!editable ? { start: async (request: ManualRunRequest): Promise<ManualRunResult> => {
         const payload = await host.runInput();
         if (payload === null || transport.signal.aborted || !isBriefCapabilityEnabled(host.capabilities(), 'workflowContext')) return { status: 'not_submitted', requestId: request.requestId };
-        // Persist the identity before dispatch, or do not dispatch at all.
+        // Persist the identity before dispatch, or do not dispatch at all. One
+        // outstanding request per version: never overwrite another window's.
+        try {
+          if (typeof JSON.parse(host.storage.getItem(journal) ?? 'null')?.requestId === 'string')
+            return { status: 'rejected', requestId: request.requestId, message: 'No run started: another window has a run request waiting. Reload to check it first.' };
+        } catch { /* An unreadable slot holds no request identity. */ }
         try { host.storage.setItem(journal, JSON.stringify(request)); }
         catch { return { status: 'rejected', requestId: request.requestId, message: 'No run started: this device could not record the request. Try again.' }; }
         const response = await transport.request(`/api/workflows/${encodeURIComponent(flowId)}/run`, post({ brief: { scopeId, versionId, requestId: request.requestId }, payload }));
         if (response.ok) return await response.json();
-        const code = await response.clone().json().then((body: { code?: unknown } | null) => body?.code, () => undefined);
+        // null when the body cannot be read: fail closed, it might have said request_conflict.
+        const code = await response.json().then((body: { code?: unknown } | null) => body?.code, () => null);
         // request_conflict means a run was already accepted under this ID: never "no run".
-        if ([400, 403, 404, 409, 422].includes(response.status) && code !== 'request_conflict')
+        if ([400, 403, 404, 409, 422].includes(response.status) && code !== 'request_conflict' && code !== null)
           return { status: 'rejected', requestId: request.requestId, message: 'No run started. Review workflow readiness and Authority, then try again.' };
         // Anything else is uncertain: the controller locks Run until an explicit check.
         return { status: 'uncertain', requestId: request.requestId };

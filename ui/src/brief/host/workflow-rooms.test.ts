@@ -46,6 +46,30 @@ test('an unconfirmed run stays locked across a reload until an explicit check an
   expect(stored(store)).toBeNull();
 });
 
+test('a check that cannot answer keeps the journal and the lock', async () => {
+  const store = storage(); store.map.set(journal, JSON.stringify({ scopeId, flowId, versionId, requestId: 'pending' }));
+  const r = rooms(store, () => new Response('', { status: 503 }));
+  await r.runs.check();
+  expect(r.runs.getSnapshot().submission).toBe('uncertain'); expect(r.runs.canRun).toBe(false);
+  expect(stored(store)?.requestId).toBe('pending');
+});
+
+test('a refusal whose body cannot be read is not taken as "no run started"', async () => {
+  const store = storage();
+  const r = rooms(store, () => new Response('{"code":', { status: 409 }));
+  await r.runs.start();
+  expect(r.runs.getSnapshot().submission).toBe('uncertain'); expect(stored(store)).not.toBeNull();
+});
+
+test('a window never overwrites another window\'s waiting request', async () => {
+  const store = storage();
+  const r = rooms(store, () => { throw Error('must not send'); });
+  store.map.set(journal, JSON.stringify({ scopeId, flowId, versionId, requestId: 'other-window' }));
+  await r.runs.start();
+  expect(r.posts).toEqual([]); expect(r.runs.getSnapshot().submission).toBe('idle');
+  expect(stored(store)?.requestId).toBe('other-window');
+});
+
 test('a refusal that started nothing clears the journal; a request conflict does not', async () => {
   const held = storage();
   const paused = rooms(held, () => Response.json({ error: 'Paused' }, { status: 409 }));
