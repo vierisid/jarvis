@@ -57,7 +57,10 @@ export function createWorkflowRooms(host: WorkflowHost) {
     try { const stored = JSON.parse(host.storage.getItem(journal) ?? 'null');
       if (stored?.scopeId === scopeId && stored.flowId === flowId && stored.versionId === versionId && typeof stored.requestId === 'string') pending = stored;
     } catch { /* Invalid local state cannot supply an execution identity. */ }
-    const clear = () => { try { host.storage.setItem(journal, 'null'); } catch { /* The lock stays until a check answers. */ } };
+    // Clear only this request's own entry; another window may have journaled a newer one.
+    const clear = (requestId: string) => { try {
+      if (JSON.parse(host.storage.getItem(journal) ?? 'null')?.requestId === requestId) host.storage.setItem(journal, 'null');
+    } catch { /* The lock stays until a check answers. */ } };
     // F-21's keyset reader owns run history (#1100); this host adds only the explicit
     // Run start and a reload-safe journal of an unconfirmed request.
     const read = briefRunsPort(scope, transport.request);
@@ -66,20 +69,28 @@ export function createWorkflowRooms(host: WorkflowHost) {
       ...(!editable ? { start: async (request: ManualRunRequest): Promise<ManualRunResult> => {
         const payload = await host.runInput();
         if (payload === null || transport.signal.aborted || !isBriefCapabilityEnabled(host.capabilities(), 'workflowContext')) return { status: 'not_submitted', requestId: request.requestId };
-        host.storage.setItem(journal, JSON.stringify(request));
+        // Persist the identity before dispatch, or do not dispatch at all.
+        try { host.storage.setItem(journal, JSON.stringify(request)); }
+        catch { return { status: 'rejected', requestId: request.requestId, message: 'No run started: this device could not record the request. Try again.' }; }
         const response = await transport.request(`/api/workflows/${encodeURIComponent(flowId)}/run`, post({ brief: { scopeId, versionId, requestId: request.requestId }, payload }));
-        if (response.ok) { const result = await response.json(); if (result.status === 'accepted' && result.requestId === request.requestId) clear(); return result; }
-        if ([400, 403, 404, 409, 422].includes(response.status)) {
-          clear();
+        if (response.ok) return await response.json();
+        const code = await response.clone().json().then((body: { code?: unknown } | null) => body?.code, () => undefined);
+        // request_conflict means a run was already accepted under this ID: never "no run".
+        if ([400, 403, 404, 409, 422].includes(response.status) && code !== 'request_conflict')
           return { status: 'rejected', requestId: request.requestId, message: 'No run started. Review workflow readiness and Authority, then try again.' };
-        }
         // Anything else is uncertain: the controller locks Run until an explicit check.
         return { status: 'uncertain', requestId: request.requestId };
-      }, reconcile: async (request: ManualRunRequest, signal: AbortSignal) => {
-        const result = await read.reconcile(request, signal);
-        clear(); return result;
-      } } : {}),
-    }, pending);
+      }, reconcile: read.reconcile } : {}),
+    }, editable ? undefined : pending);
+    // The journal is cleared only when this controller settles its own request: a
+    // validated acceptance, a definite refusal, or a check that found no record.
+    // Ordinary emits never clear it, so another window's pending journal survives.
+    let held = runs.getSnapshot();
+    runs.subscribe(() => {
+      const state = runs.getSnapshot(), was = held; held = state;
+      if (was.request && ['pending', 'uncertain', 'checking'].includes(was.submission)
+        && (state.submission === 'accepted' || (state.submission === 'idle' && state.request === null))) clear(was.request.requestId);
+    });
     const context = new WorkflowContextController(scope, { read: async (_scope, query, signal) => {
       const params = new URLSearchParams({ versionId });
       if (query.basis === 'recorded') params.set('runId', query.runId);
@@ -162,6 +173,6 @@ export function createWorkflowRooms(host: WorkflowHost) {
     workflows: { ...BRIEF_ROOMS.workflows, Body: Creation }, 'all-workflows': { ...BRIEF_ROOMS['all-workflows'], Body: Management },
     ...Object.fromEntries(['workflow', 'workflow-preview', 'workflow-draft', 'workflow-runs', 'workflow-context'].map(id => [id, { ...BRIEF_ROOMS[id as keyof typeof BRIEF_ROOMS], Body: Selected }])),
   };
-  return { rooms, creation, management, refresh() { void management.refresh(); for (const value of selections.values()) void value.runs.refresh(); },
+  return { rooms, creation, management, controllers, refresh() { void management.refresh(); for (const value of selections.values()) void value.runs.refresh(); },
     retire() { creation.dispose(); management.retire(); for (const value of selections.values()) { value.runs.retire(); value.context.retire(); } selections.clear(); } };
 }
