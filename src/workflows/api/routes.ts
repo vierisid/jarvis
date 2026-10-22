@@ -94,6 +94,7 @@ import { claimContinuation } from "../runtime/continuation";
 import { emergencyHold, KILLED_REASON, manualStartRefusal } from "../runtime/emergency-hold";
 import {
   deleteConnectionInProject,
+  getConnectionByExternalId,
   getConnectionInProject,
   listConnections,
   updateConnectionById,
@@ -102,6 +103,7 @@ import {
   type AppConnectionType,
 } from "../db/repos/app-connection";
 import type { CredentialResolver } from "../credentials/adapter";
+import { pastedOAuth2Status, stampOAuth2Claim } from "../credentials/pasted-oauth2";
 import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers/manager";
 import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
 import type { PieceLookup } from "../runtime/piece-catalog";
@@ -1154,7 +1156,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflows/connections": {
       GET: (req) =>
         trapErrors(() => {
-          const list = listConnections(callerProject(req)).map((c) => ({
+          const list = listConnections(callerProject(req)).map((c) => ({ c, oauth2: pastedOAuth2Status(c.type, c.value) })).map(({ c, oauth2 }) => ({
             id: c.id,
             externalId: c.externalId,
             displayName: c.displayName,
@@ -1167,7 +1169,10 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             preSelectForNewProjects: c.preSelectForNewProjects,
             created: c.created,
             updated: c.updated,
-            // value intentionally omitted -- secrets stay server-side.
+            // value intentionally omitted -- secrets stay server-side. For an
+            // OAuth2 row only whether Jarvis refreshes it and when its token
+            // expires, so the panel can say so (#954).
+            ...(oauth2 ? { oauth2 } : {}),
           }));
           const sources = (opts.credentialResolver?.list() ?? []).map((s) => ({
             id: s.id,
@@ -1220,6 +1225,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // later fail with a confusing "auth missing" at run time).
           const schemaError = validateConnectionValueShape(body.type, body.value);
           if (schemaError) return err(schemaError);
+          // An OAuth2 token with `expires_in` is dated now, as upstream dates
+          // the tokens it stores, so Jarvis knows when to refresh it (#954).
+          const previous = getConnectionByExternalId(callerProject(req), body.pieceName, body.externalId);
           const conn = upsertConnection({
             projectId: callerProject(req),
             externalId: body.externalId,
@@ -1227,7 +1235,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             type: body.type,
             pieceName: body.pieceName,
             pieceVersion: body.pieceVersion ?? "0.0.0",
-            value: body.value,
+            value: stampOAuth2Claim(body.type, body.value, previous?.value),
           });
           return ok(
             {
@@ -1320,7 +1328,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // `updateConnectionById` for the race this also closes.
           const merged = updateConnectionById(callerProject(req), id, {
             ...(body.displayName !== undefined ? { displayName: body.displayName } : {}),
-            ...(body.value !== undefined ? { value: body.value } : {}),
+            ...(body.value !== undefined ? { value: stampOAuth2Claim(current.type, body.value, current.value) } : {}),
             ...(status ? { status } : {}),
           });
           if (!merged) return err("connection not found", 404);

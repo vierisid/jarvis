@@ -122,7 +122,7 @@ function rowToConnection(row: AppConnectionRow): AppConnection {
 }
 
 /** The same credential, whatever order its keys were sent in. */
-function sameCredential(a: unknown, b: unknown): boolean {
+export function sameCredential(a: unknown, b: unknown): boolean {
   const canonical = (value: unknown) => JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item)
     ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
   return canonical(a) === canonical(b);
@@ -293,6 +293,51 @@ export function updateConnectionById(
     if (result.changes !== 1) throw new Error(`updateConnectionById: expected one row, changed ${result.changes}`);
     return getConnectionInProject(projectId, id);
   })();
+}
+
+/**
+ * Store the value Jarvis obtained by refreshing this row's OAuth2 token (#954),
+ * only if the row still holds `previous`, the value the refresh started from:
+ * "stored". When the row is gone: "gone". When a person saved another value
+ * meanwhile, theirs stands ("changed"), with one exception: if theirs still
+ * carries the refresh token the refresh started from and the provider
+ * rotated it, that token is now dead, so the rotated one replaces it in their
+ * value and nothing else of theirs changes ("kept-rotation").
+ *
+ * Unlike a person's update this does NOT advance `credential_generation`. The
+ * refresh used the row's own refresh grant at the same provider, so it is the
+ * same account; counting it as a replacement would pause every workflow
+ * pinned to the connection (Q-05) about once an hour.
+ */
+export function replaceRefreshedConnectionValue(
+  projectId: string,
+  id: string,
+  previous: Record<string, unknown>,
+  next: Record<string, unknown>,
+): "stored" | "kept-rotation" | "changed" | "gone" {
+  return db().transaction((): "stored" | "kept-rotation" | "changed" | "gone" => {
+    const row = db()
+      .query<AppConnectionRow, [string, string]>(`SELECT * FROM app_connection WHERE id = ? AND project_id = ?`)
+      .get(id, projectId);
+    if (!row) return "gone";
+    const current = decryptBoundJson(row.value, bindingFor(row), `app_connection ${row.id}`) as Record<string, unknown>;
+    let write: Record<string, unknown>;
+    let outcome: "stored" | "kept-rotation";
+    if (sameCredential(current, previous)) {
+      write = next; outcome = "stored";
+    } else if (next.refresh_token !== previous.refresh_token && current.refresh_token === previous.refresh_token) {
+      write = { ...current, refresh_token: next.refresh_token }; outcome = "kept-rotation";
+    } else {
+      return "changed";
+    }
+    // Resolve encryption before the write. A key failure must never save JSON.
+    const sealed = encryptBoundJson(write, bindingFor(row));
+    const result = db().run(`UPDATE app_connection SET value = ?, updated = ? WHERE id = ? AND project_id = ? AND value = ?`, [
+      sealed, now(), id, projectId, row.value,
+    ]);
+    if (result.changes !== 1) throw new Error(`replaceRefreshedConnectionValue: expected one row, changed ${result.changes}`);
+    return outcome;
+  }).immediate();
 }
 
 /**
