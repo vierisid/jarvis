@@ -8,6 +8,7 @@ import type { SidecarManager } from '../sidecar/manager.ts';
 import { PANEL_SESSION_COOKIE } from '../sidecar/panel-sessions.ts';
 import { getCookie } from '../util/cookie.ts';
 import { rejectsCrossSiteWrite } from './cross-site-guard.ts';
+import { isServiceWorkerScriptRequest, serviceWorkerKillSwitch } from './service-worker-kill-switch.ts';
 
 /** Constant-time string comparison to prevent timing attacks */
 export type WSMessage = {
@@ -257,6 +258,11 @@ export class WebSocketServer {
         /** Set by the auth block when this request carried a live panel
          *  session; read by the /ws upgrade to bind the socket to it. */
         let panelSessionId: string | null = null;
+
+        // Before auth and routing: no route on this origin may serve a service
+        // worker, and a worker a site preview registered here before the proxy
+        // refused them is evicted on its next update check, session or not.
+        if (isServiceWorkerScriptRequest(req)) return serviceWorkerKillSwitch();
 
         // 0. Sidecar WebSocket upgrade (has its own JWT auth)
         if (pathname === '/sidecar/connect' && self.sidecarManager) {

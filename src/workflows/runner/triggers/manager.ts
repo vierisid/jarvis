@@ -64,6 +64,7 @@ import type { EngineRuntime } from "../engine-runtime/engine-runtime";
 import { toUpstreamFlowVersion } from "../engine-runtime/flow-version-adapter";
 import { graphDigest } from "../../runtime/continuation";
 import { emergencyHold, PAUSED_REASON } from "../../runtime/emergency-hold";
+import { triggerHookRunId } from "./hook-run-id";
 
 interface TriggerNode {
   type: string;
@@ -582,7 +583,7 @@ export class TriggerManager {
     if (!schedule && !listeners) {
       try {
         const handle = await engine.acquire({
-          runId: `enable-${flow.id}-${Date.now().toString(36)}`,
+          runId: triggerHookRunId('enable', flow.id),
           projectId: flow.project_id,
         });
         try {
@@ -750,7 +751,7 @@ export class TriggerManager {
     if (!version) return;
     try {
       const handle = await this.engineRuntime.acquire({
-        runId: `disable-${flowId}-${Date.now().toString(36)}`,
+        runId: triggerHookRunId('disable', flowId),
         projectId: flow?.project_id ?? DEFAULT_IDS.project,
       });
       try {
@@ -1103,7 +1104,7 @@ export class TriggerManager {
     let items: unknown[];
     try {
       const handle = await engine.acquire({
-        runId: `poll-${flowId}-${Date.now().toString(36)}`,
+        runId: triggerHookRunId('poll', flowId),
         projectId: getFlow(flowId)?.project_id ?? DEFAULT_IDS.project,
       });
       try {
