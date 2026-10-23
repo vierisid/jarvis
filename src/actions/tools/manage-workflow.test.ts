@@ -442,6 +442,35 @@ describe("manage_workflow tool", () => {
 describe("manage_workflow: compose", () => {
   const makeReg = () => sampleCatalog();
 
+  test("incomplete submission processing returns actionable blockers without saving a notification scaffold", async () => {
+    const registry = sampleCatalog();
+    let turn = 0;
+    const llm: ComposerLlmClient = {
+      chat: async () => { throw new Error("Unexpected fallback"); },
+      chatTools: async () => ({ content: "", tool_calls: ++turn === 1
+        ? [{ id: "submit", name: "submit_flow", arguments: {
+          displayName: "Incomplete form processor",
+          blockers: ["Submission normalization, validation and atomic deduplication are not implemented"],
+          trigger: { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "webhook", input: {} },
+            nextAction: { name: "diagnostic", type: "PIECE", settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: "Configuration blockers", channels: ["dashboard"] } } } },
+        } }]
+        : [{ id: "blocked", name: "report_blocked", arguments: {
+          reason: "Cannot guarantee one row per submission with the discovered actions.",
+          configurationQuestions: ["Provide a sample submission and identify the ID and email fields.", "Choose the Google account, spreadsheet, tab and columns."],
+          capabilityGaps: ["Run-scoped receipts do not deduplicate separate webhook runs."],
+        } }], }),
+    };
+    const t = createManageWorkflowTool({ llm, pieceRegistry: registry });
+    const result = await callFrom(t, "compose", { name: "Form processor", description: "Validate submissions and append once per submission ID." }) as any;
+    expect(result.ok).toBe(false);
+    expect(result.blocked).toBe(true);
+    expect(result.configurationQuestions).toHaveLength(2);
+    expect(result.capabilityGaps).toEqual(["Run-scoped receipts do not deduplicate separate webhook runs."]);
+    expect(result.flow).toBeUndefined();
+    expect((await callFrom(t, "list") as any).flows).toHaveLength(0);
+    expect(getWorkflowComposition(result.compositionRecordId)?.state).toBe("FAILED");
+  });
+
   test("chat installs a missing connector and saves a disabled draft blocked on account binding", async () => {
     const registry = sampleCatalog();
     configureWorkflowReadiness({ pieces: registry });

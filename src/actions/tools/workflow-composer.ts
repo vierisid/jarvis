@@ -190,6 +190,9 @@ export interface ComposerLibraryEntry {
 export interface ComposeFail {
   /** Explicit report_blocked decision, distinct from provider/validation failure. */
   blocked?: boolean;
+  /** Missing user configuration, separate from platform capability gaps. Never credentials. */
+  configurationQuestions?: string[];
+  capabilityGaps?: string[];
   ok: false;
   compositionRecordId?: string;
   /** One or more reasons the compose attempt failed. */
@@ -779,6 +782,13 @@ function safeStringify(v: unknown): string {
   }
 }
 
+/** Bounded model-authored diagnostics, never execution authority. */
+function diagnosticItems(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && !!item.trim())
+    .slice(0, 20).map(item => item.trim().slice(0, 1000));
+}
+
 /** Build the ComposeFail for a report_blocked call, resolving library labels. */
 function blockedResult(
   args: Record<string, unknown>,
@@ -809,6 +819,10 @@ function blockedResult(
   logAttempt(1, "tool-loop-blocked", reason);
   const fail: ComposeFail = { ok: false, blocked: true, errors: [reason], rawResponse: lastRaw };
   if (suggestedInstalls.length > 0) fail.suggestedInstalls = suggestedInstalls;
+  const questions = diagnosticItems(args.configurationQuestions);
+  const gaps = diagnosticItems(args.capabilityGaps);
+  if (questions.length) fail.configurationQuestions = questions;
+  if (gaps.length) fail.capabilityGaps = gaps;
   return fail;
 }
 
@@ -845,11 +859,14 @@ function buildComposerToolDefs(hasToolSpecs: boolean, hasLibrary: boolean, canIn
       description:
         "Submit the finished workflow for validation. Arguments are the flow object itself: " +
         '{ "displayName": "...", "trigger": { ... } } in the exact shape from the system prompt. ' +
-        "If validation fails you get the error list back -- fix every error and submit again.",
+        "If validation fails you get the error list back -- fix every error and submit again. " +
+        "Do not submit a diagnostic notification instead of the requested processing. If any requested behavior is missing, use report_blocked. " +
+        "Declare remaining unimplemented requirements in blockers; a nonempty list rejects the candidate without saving it.",
       parameters: {
         type: "object",
         properties: {
           displayName: { type: "string", description: "Short human title for the workflow." },
+          blockers: { type: "array", items: { type: "string" }, description: "Unimplemented requirements. Must be empty to submit a complete graph. Missing account authentication alone can remain a runtime readiness issue." },
           trigger: {
             type: "object",
             description: "The trigger node with the full nextAction chain, per the flow JSON shape.",
@@ -870,6 +887,8 @@ function buildComposerToolDefs(hasToolSpecs: boolean, hasLibrary: boolean, canIn
       parameters: {
         type: "object",
         properties: {
+          configurationQuestions: { type: "array", items: { type: "string" }, description: "Concrete questions needed to configure the workflow, such as sample payload, ID/email mapping and destination. Never request secrets in chat." },
+          capabilityGaps: { type: "array", items: { type: "string" }, description: "Unsupported requirements and discovery evidence, including actions inspected and their precise limits. Separate these from missing user configuration." },
           reason: {
             type: "string",
             description: "One or two sentences: what the request needs and why it isn't available.",
@@ -1191,6 +1210,9 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
     "    safe choice is `{{step}}` (the whole output) and let downstream steps drill in.",
     "",
     "## Hard rules",
+    "  - Preserve the original request. A disabled draft still needs the requested processing graph. Do not replace missing normalization, validation, writes or deduplication with a notification explaining their absence. If those cannot be built, report_blocked with concrete configurationQuestions and evidence-backed capabilityGaps. Do not weaken the request to save a scaffold.",
+    "  - Build deterministic transformations and validation with inspected actions where available. Missing destination/account configuration does not prove transformations are unsupported. A partial candidate can remain in composition diagnostics; it must not be presented as a completed workflow.",
+    "  - Duplicate prevention must match the requested scope. Jarvis effect receipts are keyed by run and step; they do NOT deduplicate a submission ID across separate webhook runs. Inspect connector guarantees and persistent/atomic capabilities. A lookup followed by append, an AI instruction or a browser step does not establish concurrency-safe deduplication. Consider uncertain append outcomes and retries, not just simultaneous requests. Cite the inspected capability and exact gap; never claim runtime receipt replay provides cross-run idempotency.",
     "  - Every required input field MUST be present.",
     "  - The composed flow is created DISABLED. Do NOT claim the flow is running; the user reviews and publishes it explicitly.",
     "  - Installing a connector does not connect an account. Never invent credentials or connection IDs. If no real connection binding was supplied, leave auth unset in the disabled draft and explain that connecting the account is required before execution. Never execute actions to validate a draft.",
@@ -1489,6 +1511,10 @@ function renderPieceBlockLines(
   }
   for (const action of Object.values(piece.actions)) {
     lines.push(`    action  ${action.name}: ${action.description}`);
+    if (action.aiMetadata) {
+      if (action.aiMetadata.description) lines.push(`      author guidance: ${action.aiMetadata.description}`);
+      if (typeof action.aiMetadata.idempotent === 'boolean') lines.push(`      author-declared idempotent: ${action.aiMetadata.idempotent} (action-level claim, not proof of cross-run deduplication)`);
+    }
     lines.push(...renderSchemaLines(action.inputSchema, 6));
     lines.push(...renderOutputLines((action as { outputSample?: unknown }).outputSample, 6));
   }
@@ -1651,6 +1677,15 @@ function validateComposedFlow(
     return { ok: false, errors: ["expected an object at the top level"] };
   }
   const root = raw as Record<string, unknown>;
+  if (root.blockers !== undefined) {
+    if (!Array.isArray(root.blockers) || root.blockers.some(item => typeof item !== 'string')) {
+      return { ok: false, errors: ['blockers must be an array of unimplemented requirement descriptions'] };
+    }
+    if (root.blockers.length) return { ok: false, errors: [
+      'The candidate has unimplemented requirements. Build those steps or use report_blocked with configurationQuestions and capabilityGaps. Do not replace processing with a blocker notification.',
+      ...diagnosticItems(root.blockers),
+    ] };
+  }
   const displayName = typeof root.displayName === "string" && root.displayName.trim() ? root.displayName.trim() : fallbackName;
   const triggerRaw = root.trigger;
   if (typeof triggerRaw !== "object" || triggerRaw === null) {

@@ -1183,6 +1183,9 @@ async function actCompose(
     return {
       ok: false,
       errors: result.errors,
+      ...(result.blocked ? { blocked: true } : {}),
+      ...(result.configurationQuestions?.length ? { configurationQuestions: result.configurationQuestions } : {}),
+      ...(result.capabilityGaps?.length ? { capabilityGaps: result.capabilityGaps } : {}),
       ...(result.errorCode ? { errorCode: result.errorCode } : {}),
       rawResponse: capRawResponse(result.rawResponse),
       compositionRecordId: result.compositionRecordId,

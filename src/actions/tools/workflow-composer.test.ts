@@ -1555,6 +1555,56 @@ describe("tool-loop composer", () => {
     expect(llm.toolTurns[1]!.messages.at(-1)!.content).toContain("limit reached");
   });
 
+  test("discovery surfaces connector append retry risks in both composer paths", async () => {
+    const registry = makeRegistry();
+    registry.upsert({ name: "google-sheets", displayName: "Sheets", description: "Fixture", actions: {
+      append: { name: "append", displayName: "Append", description: "Append row", aiMetadata: { description: "Retries duplicate rows", idempotent: false } },
+    } });
+    const llm = new StubToolLlm([
+      { tool_calls: [tc("details", "get_piece_details", { pieceName: "google-sheets" })] },
+      { tool_calls: [tc("blocked", "report_blocked", { reason: "Append lacks deduplication" })] },
+    ]);
+    await composeFlow({ llm, pieceRegistry: registry }, { name: "Forms", description: "Append once" });
+    expect(llm.toolTurns[1]!.messages.at(-1)!.content).toContain("author-declared idempotent: false");
+    expect(llm.toolTurns[1]!.messages.at(-1)!.content).toContain("Retries duplicate rows");
+    const single = new StubLlm(JSON.stringify(validFlowArgs()));
+    await composeFlow({ llm: single, pieceRegistry: registry }, { name: "Notify", description: "Notify" });
+    expect(single.calls[0]!.system).toContain("author-declared idempotent: false");
+  });
+
+  test("a webhook notification scaffold cannot replace a contracted Sheets output", async () => {
+    const registry = makeRegistry();
+    registry.upsert({ name: "@activepieces/piece-google-sheets", displayName: "Google Sheets", description: "Fixture",
+      actions: { append: { name: "append", displayName: "Append row", description: "Fixture" } } });
+    const flow = validFlowArgs();
+    Object.assign(flow.trigger, { type: "PIECE_TRIGGER", settings: { pieceName: "webhook", input: {} } });
+    flow.trigger.nextAction.settings.input.message = "INCOMPLETE DRAFT: no spreadsheet writes are wired";
+    const llm = new StubToolLlm([
+      { tool_calls: [tc("s", "submit_flow", flow)] },
+      { tool_calls: [tc("b", "report_blocked", { reason: "Destination and deduplication unresolved",
+        configurationQuestions: ["Which payload fields and sheet columns?"], capabilityGaps: ["Append has no cross-run idempotency key"] })] },
+    ]);
+    const result = await composeFlow({ llm, pieceRegistry: registry }, { name: "Forms", description: "Append valid submissions once to Sheets",
+      contract: { trigger: { kind: "webhook" }, outputs: [{ piece: "google-sheets", action: "append" }] } });
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ blocked: true, configurationQuestions: ["Which payload fields and sheet columns?"], capabilityGaps: ["Append has no cross-run idempotency key"] });
+    expect(llm.toolTurns[1]!.messages.at(-1)!.content).toContain("job contract: no step produces google-sheets append");
+  });
+
+  test("blocked diagnostics are bounded and do not invent catalog entries", async () => {
+    const llm = new StubToolLlm([{ tool_calls: [tc("b", "report_blocked", {
+      reason: "Missing setup", configurationQuestions: [null, "", ...Array(30).fill("x".repeat(2000))],
+      capabilityGaps: "not an array", suggestedPieces: [{ id: "invented" }],
+    })] }]);
+    const result = await composeFlow({ llm, pieceRegistry: makeRegistry(), library }, { name: "Forms", description: "Forms" });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected blocked");
+    expect(result.configurationQuestions).toHaveLength(20);
+    expect(result.configurationQuestions![0]).toHaveLength(1000);
+    expect(result.capabilityGaps).toBeUndefined();
+    expect(result.suggestedInstalls).toBeUndefined();
+  });
+
   test("rejects a schedule-only draft with invented readiness prose instead of real actions", async () => {
     const empty = { displayName: "Incomplete calendar", trigger: { name: "trigger", type: "PIECE_TRIGGER",
       settings: { pieceName: "schedule", input: { cron_expression: "0 8 * * 1-5", timezone: "Europe/Rome" } },

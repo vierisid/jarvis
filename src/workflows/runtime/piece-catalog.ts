@@ -51,6 +51,8 @@ export const JARVIS_ON_EVENT_TRIGGER = {
 } as const;
 
 export interface PieceCatalogAction {
+  /** Author-declared guidance, not a runtime guarantee or authority grant. */
+  aiMetadata?: { description?: string; idempotent?: boolean };
   name: string;
   displayName: string;
   description: string;
@@ -313,7 +315,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "8"; // v8: retain ARRAY row contracts for readiness
+export const CATALOG_SCHEMA_VERSION = "9"; // v9: retain reliability metadata and auth alternatives
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -797,14 +799,17 @@ export interface RawPieceMetadata {
    * CUSTOM_AUTH variants; we read it loosely here and project only the
    * fields the editor needs (`type`, `displayName`, `description`).
    */
-  auth?: {
-    type?: string;
-    displayName?: string;
-    description?: string;
-  } | null;
+  auth?: RawPieceAuth | RawPieceAuth[] | null;
+}
+
+export interface RawPieceAuth {
+  type?: string;
+  displayName?: string;
+  description?: string;
 }
 
 export interface RawActionOrTrigger {
+  aiMetadata?: { description?: unknown; idempotent?: unknown };
   requireAuth?: boolean;
   name?: string;
   displayName?: string;
@@ -853,21 +858,20 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
   // projection above piece-agnostic and gives the next "Jarvis tweak"
   // a single named home.
   enrichJarvisCatalogEntry(out);
-  // Project piece.auth into the catalog's auth shape. We only forward
-  // it when the upstream type is one of AppConnectionType's variants;
-  // anything else (NO_AUTH, malformed) is treated as "no auth needed."
-  // The piece's auth.type comes from upstream's PropertyType -- map it
-  // to our AppConnectionType vocabulary so the editor + connection
-  // listing share one name space.
-  if (m.auth && typeof m.auth === "object" && typeof m.auth.type === "string") {
-    const projected = projectAuthType(m.auth.type);
-    if (projected) {
-      out.auth = {
-        type: projected,
-        ...(typeof m.auth.displayName === "string" ? { displayName: m.auth.displayName } : {}),
-        ...(typeof m.auth.description === "string" ? { description: m.auth.description } : {}),
-      };
-    }
+  // Newer community pieces declare alternative authentication methods as an
+  // array. Keep the first supported method as the connection picker's default;
+  // an array must never erase the requirement for a real account binding.
+  const authChoices = Array.isArray(m.auth) ? m.auth : [m.auth];
+  for (const auth of authChoices) {
+    if (!auth || typeof auth !== 'object' || typeof auth.type !== 'string') continue;
+    const projected = projectAuthType(auth.type);
+    if (!projected) continue;
+    out.auth = {
+      type: projected,
+      ...(typeof auth.displayName === 'string' ? { displayName: auth.displayName } : {}),
+      ...(typeof auth.description === 'string' ? { description: auth.description } : {}),
+    };
+    break;
   }
   return out;
 }
@@ -1011,6 +1015,12 @@ function rawActionToCatalogAction(
     description: typeof raw.description === "string" ? raw.description : "",
   };
   if (typeof raw.requireAuth === 'boolean') out.requireAuth = raw.requireAuth;
+  if (raw.aiMetadata && typeof raw.aiMetadata === 'object') {
+    const metadata: NonNullable<PieceCatalogAction['aiMetadata']> = {};
+    if (typeof raw.aiMetadata.description === 'string') metadata.description = raw.aiMetadata.description.slice(0, 4000);
+    if (typeof raw.aiMetadata.idempotent === 'boolean') metadata.idempotent = raw.aiMetadata.idempotent;
+    if (Object.keys(metadata).length) out.aiMetadata = metadata;
+  }
   if (raw.props) {
     out.inputSchema = propsToInputSchema(raw.props);
   }
