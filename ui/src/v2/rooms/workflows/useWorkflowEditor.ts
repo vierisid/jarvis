@@ -56,6 +56,7 @@ export interface FlowStepNode {
   displayName?: string;
   settings?: {
     pieceName?: string;
+    propertySettings?: Record<string, {schema?: unknown}>;
     triggerName?: string;
     actionName?: string;
     input?: Record<string, unknown>;
