@@ -137,7 +137,7 @@ describe("composeFlow", () => {
     }
   });
 
-  test("flags missing required input fields", async () => {
+  test("retains missing required input fields for disabled draft setup", async () => {
     const reply = JSON.stringify({
       displayName: "X",
       trigger: {
@@ -154,10 +154,8 @@ describe("composeFlow", () => {
       { llm: new StubLlm(reply), pieceRegistry: makeRegistry() },
       { name: "X", description: "anything" },
     );
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.errors.some((e) => /missing required input "prompt"/.test(e))).toBe(true);
-    }
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.flow.trigger.nextAction?.settings?.input).toEqual({});
   });
 
   test("schedule and webhook are accepted as built-in trigger primitives", async () => {

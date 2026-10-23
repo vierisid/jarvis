@@ -600,10 +600,10 @@ test('built-in schedule validates an explicit timezone without requiring one on 
 });
 
 
-test('form webhook mapping must be complete and safe before composition or activation', () => {
+test('form webhook mapping can be incomplete in drafts but must be safe and complete for activation', () => {
   for (const phase of ['composition', 'activation'] as const) {
     for (const input of [{ submission_id_field: 'id' }, { submission_id_field: 'id', submission_email_field: '' }, { submission_id_field: '__proto__.id', submission_email_field: 'email' }]) {
-      expect(compileWorkflow({ name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'webhook', input } }, { pieces, phase }).ready).toBe(false);
+      expect(compileWorkflow({ name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'webhook', input } }, { pieces, phase }).ready).toBe(phase === 'composition' && input.submission_id_field !== '__proto__.id');
     }
     expect(compileWorkflow({ name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'webhook', input: { submission_id_field: 'id', submission_email_field: 'email' } } }, { pieces, phase }).ready).toBe(true);
   }

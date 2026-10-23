@@ -4,7 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS } from '../../workflows/db';
 import { getWorkflowComposition } from '../../workflows/db/repos/workflow-composition';
-import { configureWorkflowReadiness } from '../../workflows/db/repos/flow-readiness';
+import { assertVersionReady, versionReadiness, configureWorkflowReadiness } from '../../workflows/db/repos/flow-readiness';
+import { updateDraftVersion, getFlowVersion } from '../../workflows/db/repos/flow-version';
+import { setEncryptionKey } from '../../workflows/db/encryption';
+import { upsertConnection } from '../../workflows/db/repos/app-connection';
+import { compileWorkflow } from '../../workflows/runtime/workflow-readiness';
 import { PieceCatalog } from '../../workflows/runtime/piece-catalog';
 import { createManageWorkflowTool } from './manage-workflow';
 import type { ComposerLlmClient } from './workflow-composer';
@@ -26,8 +30,8 @@ const blocked = (suggest = false) => ({ id: 'setup', name: 'report_blocked', arg
   configurationQuestions: [question, 'Which spreadsheet, worksheet and columns should receive the submissions?'],
   ...(suggest ? { suggestedPieces: [{ id: 'google-sheets', reason: 'Required destination' }] } : {}),
 } });
-beforeEach(() => initWorkflowDb(':memory:'));
-afterEach(() => closeWorkflowDb());
+beforeEach(() => { initWorkflowDb(':memory:'); setEncryptionKey(Buffer.alloc(32, 0x71)); });
+afterEach(() => { closeWorkflowDb(); setEncryptionKey(null); });
 async function call(tool: ReturnType<typeof createManageWorkflowTool>, params: Record<string, unknown>) {
   const raw = await tool.execute(params) as string;
   return JSON.parse(raw.split('\n').slice(2, -1).join('\n'));
@@ -52,7 +56,7 @@ test('ordinary compose installs the missing connector before guiding the first s
   expect(f.tool.authorityGate?.({ action: 'compose', name: 'Submission processor' })).toMatchObject({ actionCategory: 'install_software' });
   const result = await call(f.tool, { action: 'compose', name: 'Submission processor', description: 'Original job: trim and validate form submissions, append once, never activate.' });
   expect(f.installed).toEqual(['google-sheets']);
-  expect(f.turns()).toBe(2);
+  expect(f.turns()).toBe(3);
   expect(f.prompts[1]).toContain('sheets_append_values');
   expect(result.setup).toMatchObject({ status: 'needs_input', nextQuestion: question,
     continueWith: { action: 'continue_setup', composition_id: result.compositionRecordId } });
@@ -142,5 +146,111 @@ test('setup answers and the original request survive database restart', async ()
     expect(saved.flow.status).toBe('DISABLED');
     expect(f.prompts.at(-1)).toContain('fixture-after-restart');
     expect(getWorkflowComposition(saved.compositionRecordId)?.specification.description).toBe('Keep the original disabled form processor request');
+  } finally { closeWorkflowDb(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+
+test('unconfigured processor saves disabled and becomes ready only after setup', async () => {
+  const registry = new PieceCatalog([piece]);
+  configureWorkflowReadiness({ pieces: registry });
+  const pending = structuredClone(graph);
+  pending.trigger.settings.input = { submission_id_field: '', submission_email_field: '' };
+  pending.trigger.nextAction.settings.input = { spreadsheet_id: '', values: null as any };
+  const tool = createManageWorkflowTool({ pieceRegistry: registry, llm: {
+    chat: async () => ({ text: JSON.stringify(pending) }),
+  } });
+  const saved = await call(tool, { action: 'compose', name: 'Submission processor', description: 'Save disabled with setup required; normalize webhook submissions and append once to Sheets. Payload and destination are unknown.' });
+  expect(saved.ok).toBe(true);
+  expect(saved.flow.status).toBe('DISABLED');
+  expect(saved.validation).toEqual({ structureValid: true, readyToRun: false });
+  expect(saved.setup.status).toBe('needs_configuration');
+  expect(saved.setup.fields.map((f: any) => f.path)).toEqual(expect.arrayContaining([
+    'settings.input.submission_id_field', 'settings.input.submission_email_field',
+    'settings.input.spreadsheet_id', 'settings.input.values', 'settings.input.auth',
+  ]));
+  const stored = getFlowVersion(saved.versionId)!;
+  expect(stored.trigger.nextAction?.settings?.actionName).toBe('sheets_append_values');
+  expect(stored.valid).toBe(false);
+  for (const action of ['run', 'enable', 'publish']) {
+    await expect(tool.execute({ action, flow: saved.flow.id })).rejects.toThrow('Submission ID field');
+  }
+  expect(() => assertVersionReady(saved.flow.id, saved.versionId)).toThrow();
+  expect((await call(tool, { action: 'continue_setup', composition_id: saved.compositionRecordId })).flow.id).toBe(saved.flow.id);
+  expect(await call(tool, { action: 'list_runs', flow: saved.flow.id })).toEqual([]);
+  // Use the same repository write as the editor, without running or connecting an account.
+  updateDraftVersion(saved.versionId, { trigger: graph.trigger });
+  expect(versionReadiness(saved.flow.id, saved.versionId).issues.every(i => i.code === 'CONNECTION_BINDING')).toBe(true);
+  // Local connection metadata fixture only; no credentials or external provider call.
+  upsertConnection({ externalId: 'fixture-account', displayName: 'Fixture account', type: 'OAUTH2', pieceName: name, pieceVersion: '0.18.2', value: {} });
+  const complete = structuredClone(graph.trigger);
+  (complete.nextAction.settings.input as Record<string, unknown>).auth = '{{connections.fixture-account}}';
+  updateDraftVersion(saved.versionId, { trigger: complete });
+  expect(versionReadiness(saved.flow.id, saved.versionId).ready).toBe(true);
+  expect((await call(tool, { action: 'continue_setup', composition_id: saved.compositionRecordId })).setup).toBeUndefined();
+  expect((await call(tool, { action: 'list' })).flows).toHaveLength(1);
+  expect(await call(tool, { action: 'list_runs', flow: saved.flow.id })).toEqual([]);
+});
+
+test('draft composition defers missing values but refuses invalid mappings, types, references and actions', () => {
+  const registry = new PieceCatalog([piece]);
+  const trigger = structuredClone(graph.trigger);
+  trigger.settings.input = { submission_id_field: '', submission_email_field: '' };
+  trigger.nextAction.settings.input = { spreadsheet_id: '', values: null as any };
+  const deferred = compileWorkflow(trigger, { pieces: registry, phase: 'composition' });
+  expect(deferred.ready).toBe(true);
+  expect(deferred.setupIssues?.length).toBeGreaterThanOrEqual(4);
+  trigger.settings.input.submission_id_field = '__proto__.id';
+  expect(compileWorkflow(trigger, { pieces: registry, phase: 'composition' }).ready).toBe(false);
+  trigger.settings.input.submission_id_field = '';
+  for (const input of [{ spreadsheet_id: {}, values: [] }, { spreadsheet_id: '{{missing.id}}', values: [] }]) {
+    trigger.nextAction.settings.input = input as any;
+    expect(compileWorkflow(trigger, { pieces: registry, phase: 'composition' }).ready).toBe(false);
+  }
+  trigger.nextAction.settings.actionName = 'invented';
+  expect(compileWorkflow(trigger, { pieces: registry, phase: 'composition' }).ready).toBe(false);
+});
+
+
+test('configuration-only blocker is repaired into a saved draft without asking the user first', async () => {
+  const registry = new PieceCatalog([piece]);
+  configureWorkflowReadiness({ pieces: registry });
+  const pending = structuredClone(graph);
+  pending.trigger.settings.input = { submission_id_field: '', submission_email_field: '' };
+  pending.trigger.nextAction.settings.input = { spreadsheet_id: '', values: null as any };
+  let turns = 0;
+  const tool = createManageWorkflowTool({ pieceRegistry: registry, llm: {
+    chat: async () => { throw Error('Must use tools'); },
+    chatTools: async (messages) => {
+      if (++turns === 1) return { content: '', tool_calls: [blocked()] };
+      expect(JSON.stringify(messages)).toContain('Missing configuration does not block a disabled draft');
+      return { content: '', tool_calls: [{ id: 'draft', name: 'submit_flow', arguments: pending }] };
+    },
+  } });
+  const result = await call(tool, { action: 'compose', name: 'Forms to Sheets', description: 'Create a disabled form processor draft, leave unknown configuration for later.' });
+  expect(turns).toBe(2);
+  expect(result.ok).toBe(true);
+  expect(result.setup.label).toBe('Setup required');
+  expect(result.readiness.ready).toBe(false);
+  expect(result.flow.status).toBe('DISABLED');
+});
+
+test('unconfigured saved draft retains its graph and setup status across database restart', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'jarvis-pending-draft-'));
+  closeWorkflowDb(); initWorkflowDb(join(directory, 'fixture.db'));
+  try {
+    const registry = new PieceCatalog([piece]);
+    configureWorkflowReadiness({ pieces: registry });
+    const pending = structuredClone(graph);
+    pending.trigger.settings.input = { submission_id_field: '', submission_email_field: '' };
+    pending.trigger.nextAction.settings.input = { spreadsheet_id: '', values: null as any };
+    const tool = createManageWorkflowTool({ pieceRegistry: registry, llm: { chat: async () => ({ text: JSON.stringify(pending) }) } });
+    const saved = await call(tool, { action: 'compose', name: 'Forms to Sheets', description: 'Disabled, configure later' });
+    closeWorkflowDb(); initWorkflowDb(join(directory, 'fixture.db')); configureWorkflowReadiness({ pieces: registry });
+    expect(getFlowVersion(saved.versionId)?.trigger).toEqual(pending.trigger);
+    const reopened = await call(tool, { action: 'continue_setup', composition_id: saved.compositionRecordId });
+    expect(reopened.flow.id).toBe(saved.flow.id);
+    expect(reopened.setup.fields).toEqual(saved.setup.fields);
+    expect(reopened.flow.status).toBe('DISABLED');
+    expect(await call(tool, { action: 'list_runs', flow: saved.flow.id })).toEqual([]);
   } finally { closeWorkflowDb(); rmSync(directory, { recursive: true, force: true }); }
 });

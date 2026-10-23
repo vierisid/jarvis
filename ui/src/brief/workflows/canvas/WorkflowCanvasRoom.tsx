@@ -124,6 +124,7 @@ function CanvasHeader({
   saving,
   discard,
   arrange,
+  selectSetupStep,
   message,
   shell,
   binding,
@@ -142,6 +143,10 @@ function CanvasHeader({
     catch { setRunMessage('The version change could not be confirmed. Reopen this workflow to check before trying again.'); }
     finally { setChanging(false); busy.current = false; }
   }
+  const setupSteps = [...new Set(editor.validationGaps.map(gap => gap.stepName))].map(name => ({
+    name, gaps: editor.validationGaps.filter(gap => gap.stepName === name),
+  }));
+  const needsSetup = setupSteps.length > 0;
   const versionMatches = editor.version?.id === binding.versionId;
   async function run() {
     if (busy.current || !binding.run || editor.dirty || !versionMatches) return;
@@ -184,7 +189,7 @@ function CanvasHeader({
         <BriefButton
           variant="primary"
           disabled={
-            !binding.run ||
+            !binding.run || needsSetup ||
             running ||
             editor.dirty ||
             !versionMatches ||
@@ -192,7 +197,7 @@ function CanvasHeader({
           }
           onClick={() => void run()}
           title={
-            editor.dirty
+            needsSetup ? "Complete setup before running" : editor.dirty
               ? "Save your changes before running"
               : !binding.run
                 ? binding.publish ? "Publish this saved draft before running" : "Run is not available"
@@ -204,7 +209,7 @@ function CanvasHeader({
       }
     >
       <div className="brief-canvas-tools" aria-label="Draft tools">
-        {binding.publish && <BriefButton size="sm" disabled={changing || saving || editor.dirty || !versionMatches} onClick={() => void change(binding.publish!)}>Publish version</BriefButton>}
+        {binding.publish && <BriefButton size="sm" disabled={needsSetup || changing || saving || editor.dirty || !versionMatches} onClick={() => void change(binding.publish!)}>Publish version</BriefButton>}
         {binding.edit && <BriefButton size="sm" disabled={changing} onClick={() => void change(binding.edit!)}>Edit a new draft</BriefButton>}
         <BriefButton
           size="sm"
@@ -259,9 +264,17 @@ function CanvasHeader({
                     ? "Unsaved changes"
                     : editor.version?.state === "LOCKED"
                       ? "Published version"
-                      : "Saved draft")}
+                      : needsSetup ? "Saved draft · Setup required" : "Saved draft")}
         </span>
       </div>
+      {needsSetup && <details className="brief-canvas-setup" open>
+        <summary>Setup required</summary>
+        <p>Fill in these details when you’re ready. Save your progress at any time. Running and publishing stay unavailable until setup is complete.</p>
+        <ul>{setupSteps.map(({ name, gaps }) => <li key={name}>
+          <BriefButton size="sm" onClick={() => selectSetupStep(name)}>{gaps[0]!.stepDisplayName}</BriefButton>
+          <span>{gaps.map(gap => gap.fieldLabel).join(', ')}</span>
+        </li>)}</ul>
+      </details>}
     </WorkflowViewHeader>
   );
 }

@@ -270,7 +270,8 @@ export function buildToolGuide({ hasSidecars, piecesManaged, machines }: ToolGui
     lines.push('Required Library connectors are installed by compose by default under software-install Authority. Do not stop to ask for a separate install instruction. Set install_missing:false only if the user forbids installation.');
     lines.push('If installation fails, suggestedInstalls and the actual failure identify the remaining dependency; do not repeatedly retry it.');
   }
-  lines.push('When setup is returned, ask its nextQuestion directly and keep the compositionRecordId. On the answer call continue_setup { composition_id, answers }. It retains the original job and earlier answers; never ask the user to repeat the workflow prompt or tell you to continue.');
+  lines.push('Save the full disabled processing graph even when payload paths, destination, column mapping or account are unknown. Leave inputs empty/null for Setup required in the editor; configuration alone must not block saving. Never invent values or substitute diagnostic steps.');
+  lines.push('When setup is returned without a saved draft, ask its nextQuestion directly and keep the compositionRecordId. On the answer call continue_setup { composition_id, answers }. It retains the original job and earlier answers; never ask the user to repeat the workflow prompt or tell you to continue.');
   lines.push('Guide account connection through secure Connected workspace setup and selection in the workflow. Never request credentials in chat. Recheck with continue_setup after setup; keep the workflow disabled and do not run external actions while drafting.');
   lines.push('Do not surface raw error JSON to the user, translate it. After a successful compose, summarize what was');
   lines.push('built and confirm with the user before calling `publish` (which locks the draft and enables it).');

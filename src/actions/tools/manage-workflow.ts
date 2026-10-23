@@ -61,6 +61,8 @@ import {
   type FlowTriggerNode,
 } from "../../workflows/db/repos/flow-version.ts";
 import { publishFlowVersion } from "../../workflows/db/repos/flow-publication.ts";
+import { compileWorkflow } from '../../workflows/runtime/workflow-readiness';
+import { workflowReadinessServices } from '../../workflows/db/repos/readiness-services';
 import { assertVersionReady, versionReadiness } from '../../workflows/db/repos/flow-readiness';
 import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow } from '../../workflows/db/repos/flow-turn-off';
 import { assertFlowDeletable } from '../../workflows/db/repos/workflow-removal-state';
@@ -1242,8 +1244,10 @@ const ACCOUNT_SETUP_GUIDANCE = "Use Connected workspace for secure connector acc
 
 function setupReadiness(flowId: string, versionId: string, compositionId: string) {
   const readiness = versionReadiness(flowId, versionId);
-  return { readiness, ...(!readiness.ready ? { setup: {
-    status: "needs_configuration", nextQuestion: readiness.issues.some(i => i.code === "CONNECTION_BINDING")
+  const structureValid = compileWorkflow(getFlowVersion(versionId)?.trigger, { pieces: workflowReadinessServices()?.pieces, phase: 'composition' }).ready;
+  return { validation: { structureValid, readyToRun: readiness.ready }, readiness, ...(!readiness.ready ? { setup: {
+    status: "needs_configuration", label: "Setup required", fields: readiness.issues,
+    editor: { flowId, versionId }, nextQuestion: readiness.issues.some(i => i.code === "CONNECTION_BINDING")
       ? ACCOUNT_SETUP_GUIDANCE : readiness.issues[0]?.message,
     accountSetup: ACCOUNT_SETUP_GUIDANCE,
     continueWith: { action: "continue_setup", composition_id: compositionId },

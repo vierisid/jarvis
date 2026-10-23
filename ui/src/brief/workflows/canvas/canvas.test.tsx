@@ -366,3 +366,45 @@ test("the canvas room mounts the real editor over the fixture without a render e
   expect(fixture.requests.some((r) => r.path.includes("/runs?"))).toBe(true);
   expect(fixture.requests.every((r) => r.method === "GET")).toBe(true);
 });
+
+
+test('setup notice opens mapped fields and partial saves remain editable without confirmation', async () => {
+  const { WorkflowCanvasRoom } = await import('./WorkflowCanvasRoom');
+  const { CANVAS_CATALOG } = await import('./fixtures');
+  const saved = fixture.snapshot().version;
+  saved.trigger = { name: 'trigger', displayName: 'Receive form submissions', type: 'PIECE_TRIGGER',
+    settings: { pieceName: 'webhook', input: { submission_id_field: '', submission_email_field: '' } },
+    nextAction: { name: 'append', displayName: 'Append to Sheets', type: 'PIECE',
+      settings: { pieceName: 'fixture-tools', actionName: 'prepare', input: {} } },
+  };
+  await fixture.request(`/api/workflows/meeting/versions/${fixture.versionId}`, { method: 'PATCH', body: JSON.stringify({ ...saved, uiMeta: fixture.snapshot().uiMeta }) });
+  fixture.requests.length = 0;
+  const request: WorkflowCanvasBinding['request'] = async (input, init) => String(input) === '/api/workflows/pieces'
+    ? Response.json(CANVAS_CATALOG.map(p => ({ ...p, auth: { type: 'OAUTH2' } }))) : fixture.request(input, init);
+  const shell = { mode: 'preview', route: { room: 'workflow', selection: { flowId: 'meeting' } }, navigate() {} } as unknown as BriefShellPort;
+  let runs = 0, publishes = 0;
+  await React.act(async () => root.render(<div className="brief-root"><WorkflowCanvasRoom shell={shell} binding={{
+    source: 'fixture', scopeId: 'setup-test', flowId: 'meeting', versionId: fixture.versionId, capabilities: caps, request,
+    run: async () => { runs++; return { ok: true, message: '' }; }, publish: async () => { publishes++; },
+  }} /></div>));
+  const button = (name: string) => [...host.querySelectorAll('button')].find(b => b.querySelector('.brief-button__label')?.textContent === name)!;
+  expect(host.querySelector('.brief-canvas-setup')?.textContent).toContain('Submission ID field, Email field');
+  expect(host.querySelector('.brief-canvas-setup')?.textContent).toContain('Account, Instructions');
+  expect(button('Run workflow').disabled).toBe(true);
+  expect(button('Publish version').disabled).toBe(true);
+  await React.act(async () => button('Receive form submissions').click());
+  expect(host.querySelector('[aria-label="Step settings"]')?.getAttribute('data-open')).toBe('true');
+  expect(host.querySelector('[aria-label="Step settings"]')?.hasAttribute('inert')).toBe(false);
+  const field = [...host.querySelectorAll('label')].find(e => e.textContent?.startsWith('Submission ID field'))!.querySelector('[contenteditable]')!;
+  await React.act(async () => {
+    field.textContent = 'form.id';
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  expect(button('Save changes').disabled).toBe(false);
+  await React.act(async () => button('Save changes').click());
+  expect(fixture.snapshot().version.trigger.settings?.input).toEqual({ submission_id_field: 'form.id', submission_email_field: '' });
+  expect(host.querySelector('[role="alertdialog"]')).toBeNull();
+  expect(host.querySelector('.brief-canvas-setup')?.textContent).toContain('Email field');
+  expect(fixture.requests.filter(r => r.method !== 'GET').map(r => r.method)).toEqual(['PATCH']);
+  expect(runs).toBe(0); expect(publishes).toBe(0);
+});

@@ -2,7 +2,8 @@
 import { createHash } from 'node:crypto';
 export interface SubmissionConfig { idField: string; emailField: string }
 const reserved = new Set(['__proto__', 'prototype', 'constructor', '_webhook']);
-export function submissionConfig(value: unknown): SubmissionConfig | undefined {
+/** allowIncomplete is for draft structural checks only; ingress always uses the strict default. */
+export function submissionConfig(value: unknown, allowIncomplete = false): SubmissionConfig | undefined {
   if (value === undefined) return undefined;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('Webhook input must be an object');
   const input = value as Record<string, unknown>;
@@ -10,10 +11,12 @@ export function submissionConfig(value: unknown): SubmissionConfig | undefined {
   const raw: Record<string, unknown> = { idField: input.submission_id_field, emailField: input.submission_email_field };
   for (const key of ['idField', 'emailField']) {
     const path = raw[key];
+    if (allowIncomplete && (path == null || path === '')) continue;
     if (typeof path !== 'string' || path.length > 200 || !path.split('.').every(p => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(p) && !reserved.has(p))) {
       throw Error(`Form submission ${key} requires an explicit payload field path`);
     }
   }
+  if (allowIncomplete && (!raw.idField || !raw.emailField)) return undefined;
   const idField = raw.idField as string, emailField = raw.emailField as string;
   if (idField === emailField || idField.startsWith(emailField + '.') || emailField.startsWith(idField + '.')) throw Error('Submission ID and email must be distinct fields');
   return { idField, emailField };
