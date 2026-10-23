@@ -705,6 +705,8 @@ export type JarvisConfig = {
    * a READ of the owner's billing summary and nothing else; every change goes
    * through `page_url`, opened in the system browser.
    */
+  /** Public account link supplied by hosting; file-authoritative, never a secret. */
+  usejarvis_integrations?: { page_url?: string };
   usejarvis_billing?: {
     /** POST endpoint on the control plane (https). */
     url?: string;
