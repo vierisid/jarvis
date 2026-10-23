@@ -25,6 +25,52 @@ const detail = (fixture: ReturnType<typeof makeRunsFixture>, n = 12) =>
   );
 const ready = <T>(data: T): BriefReadState<T> => ({ status: "ready", data });
 
+test('a journaled request stays locked across reload until an explicit check confirms it', async () => {
+  const f = makeRunsFixture(), request = { ...RUN_SCOPE, requestId: 'pending-run' };
+  let submits = 0, reads = 0;
+  const run = { ...detail(f), ...RUN_SCOPE };
+  const s = new WorkflowRunsController(RUN_SCOPE, { ...f.port,
+    start: async () => { submits++; throw Error('Must not replay'); },
+    reconcile: async () => { reads++; return { status: 'accepted', requestId: request.requestId, run }; },
+  }, request);
+  expect(s.canRun).toBe(false); expect(s.canCheck).toBe(true);
+  await s.start();
+  await s.load();
+  // Loading never reads the receipt on its own (#1100): only check() does.
+  expect(submits).toBe(0); expect(reads).toBe(0);
+  expect(s.getSnapshot().submission).toBe('uncertain');
+  await s.check();
+  expect(submits).toBe(0); expect(reads).toBe(1);
+  expect(s.getSnapshot().submission).toBe('accepted');
+  expect(s.getSnapshot().selectedId).toBe(run.runId);
+  s.retire();
+});
+
+test('a failed check keeps a journaled request blocked', async () => {
+  const f = makeRunsFixture();
+  const s = new WorkflowRunsController(RUN_SCOPE, { ...f.port, reconcile: async () => { throw Error(); } }, { ...RUN_SCOPE, requestId: 'pending' });
+  await s.load();
+  await s.check();
+  expect(s.canRun).toBe(false); expect(s.getSnapshot().submission).toBe('uncertain');
+  s.retire();
+});
+
+test('a journaled request for another version is ignored', () => {
+  const f = makeRunsFixture();
+  const s = new WorkflowRunsController(RUN_SCOPE, f.port, { ...RUN_SCOPE, versionId: 'other', requestId: 'pending' });
+  expect(s.getSnapshot().submission).toBe('idle'); expect(s.getSnapshot().request).toBeNull();
+  s.retire();
+});
+
+test('definitive preflight rejection permits a corrected manual request', async () => {
+  const f = makeRunsFixture();
+  const s = new WorkflowRunsController(RUN_SCOPE, { ...f.port, start: async request => ({ status: 'rejected', requestId: request.requestId, message: 'Review readiness' }) });
+  await s.start();
+  expect(s.canRun).toBe(true); expect(s.getSnapshot().request).toBeNull();
+  expect(s.getSnapshot().message).toBe('Review readiness');
+  s.retire();
+});
+
 test("all seven states and historical versions retain immutable identities", async () => {
   const f = makeRunsFixture();
   await f.controller.load();

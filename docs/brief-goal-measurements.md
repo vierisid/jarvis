@@ -36,6 +36,8 @@ Exact request replay returns its original receipt, including after restart or a 
 
 All routes use the daemon's existing authentication, return `Cache-Control: no-store`, and require the exact registered, ready, enabled provider.
 
+- `GET /api/brief/goals`: every goal with its measured projection, from one database snapshot, for Today and both goal rooms. No query string.
+- `GET /api/brief/initial-goal`: `{ state: "unplanned" }` when onboarding finished without the interview goal because the planner failed and no goal exists yet, otherwise `{ state: "none" }`. Creating any goal clears it. Today's empty goal card then says so and offers Goals. No query string.
 - `GET /api/brief/goals/:id`: a BriefReadResult. Missing goal is empty; disabled/unavailable and unsupported are distinct. Ready data includes the F01 BriefGoal plus additive measurement definition/revision and progress.
 - `POST /api/brief/goals/:id/measurement`: bounded 8 KiB JSON command. Returns the immutable measurement receipt. Invalid input is 400; concurrency/evidence conflicts are 409. Recover by request ID after an uncertain network response.
 - `GET /api/brief/goals/:id/measurement?requestId=...`: returns `{ receipt }`, null if that request never committed.

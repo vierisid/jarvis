@@ -172,6 +172,9 @@ export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
   'JARVIS_TELEMETRY', 'JARVIS_TELEMETRY_DEBUG', 'JARVIS_TOOL_FILTER',
   'JARVIS_WAKE_ENGINE', 'JARVIS_REALTIME_VOICE', 'JARVIS_AMBIENT_UI',
   // Preserve the owner's Brief lifecycle opt-in when the CLI restarts the daemon.
+  'JARVIS_BRIEF_NAVIGATION_COMPATIBILITY',
+  'JARVIS_BRIEF_RECONCILIATION',
+  'JARVIS_BRIEF_ONBOARDING',
   'JARVIS_BRIEF_CONVERSATIONS',
   'JARVIS_BRIEF_CHAT_TRANSPORT',
   'JARVIS_BRIEF_CHAT_STATE',
@@ -229,6 +232,7 @@ export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
  * one. Listed so the classification test knows them.
  */
 export const JARVIS_INTERNAL_ENV_NAMES: readonly string[] = Object.freeze([
+  'JARVIS_LOCAL_INTEGRATION', // Set by the explicit local launcher, never inherited by model children.
   'JARVIS_ENGINE_MARKER', 'JARVIS_ENGINE_OWNER_PID', 'JARVIS_ENGINE_OWNER_START',
   'JARVIS_ENGINE_BUNDLE', 'JARVIS_ENGINE_STARTED_AT',
   'JARVIS_UPDATE_UNIT', 'JARVIS_UPDATE_RUN',

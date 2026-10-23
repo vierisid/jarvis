@@ -27,12 +27,13 @@ export interface NavigationShellProps {
   binding?: BriefNavigationBinding;
   conversation?: BriefConversationBinding;
   reducedMotion?: boolean;
+  illustrative?: boolean;
   children: React.ReactNode;
 }
 
 /** D-01 owns routing and state; this shell only lays out those persistent children.
  * F-25 activation and a live view are required before replacing released navigation. */
-export function NavigationShell({ shell, rooms, binding, conversation, reducedMotion, children }: NavigationShellProps) {
+export function NavigationShell({ shell, rooms, binding, conversation, reducedMotion, illustrative = false, children }: NavigationShellProps) {
   const id = useId();
   const content = useRef<HTMLElement>(null);
   const active = canMountNavigation(shell.mode, binding);
@@ -53,9 +54,9 @@ export function NavigationShell({ shell, rooms, binding, conversation, reducedMo
     {active && <a className="brief-skip" href={`#${id}-content`} onClick={event => {
       event.preventDefault(); content.current?.focus();
     }}>Skip to content</a>}
-    {active && <Sidebar shell={shell} data={data} rail={rail} narrow={narrow} id={id} />}
+    {active && <Sidebar shell={shell} data={data} rail={rail} narrow={narrow} id={id} illustrative={illustrative} />}
     <div className="brief-workspace">
-      {active && <header className="brief-workspace-header">
+      {active && <header className="brief-workspace-header" inert={illustrative}>
         <nav className="brief-breadcrumb" aria-label="Breadcrumb">
           <span className="brief-workspace-name" title={data.workspaceName || "Your workspace"}>{data.workspaceName || "Your workspace"}</span>
           <span aria-hidden="true">/</span>
@@ -78,8 +79,8 @@ export function NavigationShell({ shell, rooms, binding, conversation, reducedMo
   </div>;
 }
 
-function Sidebar({ shell, data, rail, narrow, id }: {
-  shell: BriefShellPort; data: BriefNavigationData; rail: boolean; narrow: boolean; id: string;
+function Sidebar({ shell, data, rail, narrow, id, illustrative }: {
+  shell: BriefShellPort; data: BriefNavigationData; rail: boolean; narrow: boolean; id: string; illustrative: boolean;
 }) {
   const selected = parentRoom(shell.route.room);
   const sidebarRef = useBriefMotion<HTMLElement>({ width: rail ? 72 : 232 }, { kind: "reflow", active: rail });
@@ -101,7 +102,7 @@ function Sidebar({ shell, data, rail, narrow, id }: {
       </button>
     </BriefTooltip>;
   };
-  return <aside className="brief-sidebar" ref={sidebarRef} aria-label="Workspace navigation">
+  return <aside className="brief-sidebar" ref={sidebarRef} aria-label="Workspace navigation" inert={illustrative}>
       <div className="brief-sidebar-brand" role="img" aria-label="usejarvis">
         <span className="brief-sidebar-brand__mark" aria-hidden="true"><BriefBrand /></span>
         <span className="brief-sidebar-brand__word" ref={wordRef} aria-hidden="true"><BriefBrand /></span>

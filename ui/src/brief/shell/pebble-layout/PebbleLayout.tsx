@@ -44,7 +44,9 @@ export function PebbleLayout({ shell, enabled, conversation, children, reducedMo
   const open = available && shell.chatOpen;
   const geometry = pebbleGeometry(size.width, size.height);
   const { single, inset, panelWidth, reservedWidth } = geometry;
-  const panelHeight = Math.max(0, geometry.panelHeight - (companionPresent ? (companionHeight || 152) + 24 + 32 - inset : 0));
+  // Short windows must leave room for the composer and its close control.
+  const showCompanion = companionPresent && (!open || size.height >= 640);
+  const panelHeight = Math.max(0, geometry.panelHeight - (showCompanion ? (companionHeight || 152) + 24 + 32 - inset : 0));
   // Resizing the enclosing workspace follows that boundary directly. Only an
   // explicit open/close animates these surfaces, avoiding compounded sidebar lag.
   const previous = useRef({ open, ...size });
@@ -126,7 +128,7 @@ export function PebbleLayout({ shell, enabled, conversation, children, reducedMo
         {children}
       </div>
       <div className="brief-pebble-reserve" ref={reserve} aria-hidden="true" />
-      <div className="brief-pebble-companion-viewport">
+      <div className="brief-pebble-companion-viewport" inert={!showCompanion} aria-hidden={!showCompanion} style={{ visibility: showCompanion ? 'visible' : 'hidden' }}>
         <div ref={setCompanion} role={companionPresent ? "complementary" : undefined} className="brief-pebble-companion" aria-label={companionPresent ? "Main goal" : undefined} data-compact={open || single} hidden={!companionPresent}
           style={{ width: open || single ? panelWidth : 306 }} />
       </div>

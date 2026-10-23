@@ -8,6 +8,7 @@ import { formatNumber, qualified } from "../today/outcomes/model";
 /** BriefGoal plus owner-written titles. `progress` is F-15's canonical projection, required here. */
 export interface GoalDatum extends BriefGoal {
   title: string;
+  parentId?: string | null;
   pathLabel?: string;
   compactTitle?: string;
   caption?: string;

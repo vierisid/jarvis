@@ -253,7 +253,7 @@
 .brief-root .brief-status--running { background:var(--brief-running-surface); color:var(--brief-running-text); }
 .brief-root .brief-status--error { background:var(--brief-error-surface); color:var(--brief-error-text); }
 
-.brief-root .brief-brand { display:inline-grid; width:144px; max-width:100%; vertical-align:middle; }
+.brief-root .brief-brand { display:inline-grid; width:148.55px; max-width:100%; vertical-align:middle; }
 .brief-root .brief-brand img { grid-area:1/1; display:block; width:100%; height:auto; }
 .brief-root .brief-brand__dark { visibility:hidden; }
 :root[data-theme="dark"] .brief-root .brief-brand__light { visibility:hidden; }

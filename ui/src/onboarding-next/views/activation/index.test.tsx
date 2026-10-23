@@ -191,3 +191,23 @@ test("width changes resize outside observer delivery, ignore height-only changes
     globalThis.ResizeObserver = originalObserver; globalThis.requestAnimationFrame = originalFrame; globalThis.cancelAnimationFrame = originalCancel;
   }
 });
+
+
+test("interview goal replaces generic examples and selection submits all visible context", async () => {
+  const suggestion = { id: 'routine', label: 'Prepare the Friday sales report', prompt: 'Prepare the Friday sales report. Goal: 50 orders a month. Use Shopify. Ask me to review.' };
+  await mount({ interview: { state: 'ready', goal: '50 orders a month', suggestions: [suggestion] } });
+  expect(host.textContent).toContain('Your goal: 50 orders a month');
+  expect(host.textContent).not.toContain('Competitor brief');
+  expect(host.textContent).not.toContain('Weekly update');
+  await click(suggestion.label); expect(input().value).toBe(suggestion.prompt);
+  expect(input().readOnly).toBe(false); expect(document.activeElement).toBe(input());
+  await click('Create my workflow');
+  const intent = intents[0]!; expect(intent.action === 'create' && intent.request.prompt).toBe(suggestion.prompt);
+});
+test("profile failure is explicit and allows writing a request without irrelevant suggestions", async () => {
+  await mount({ interview: { state: 'unavailable', suggestions: [] } });
+  expect(host.textContent).toContain('We couldn’t load your interview');
+  expect(host.textContent).not.toContain('Competitor brief');
+  expect(input().readOnly).toBe(false);
+  await click('Create my workflow'); expect(intents[0]!.action).toBe('create');
+});

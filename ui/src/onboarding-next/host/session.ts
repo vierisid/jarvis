@@ -1,6 +1,6 @@
 import { uuid } from '../../lib/uuid.ts';
 import type { Configuration, Context, FeatureAdapter, Journey, LoadedViews, Status, ViewId } from './contract.ts';
-import { bounded, closure, loadViews, parseJourney, parseStatus, released, viewFor } from './policy.ts';
+import { bounded, closure, loadViews, parseJourney, parseStatus, configured, viewFor } from './policy.ts';
 import { Unavailable } from './transport.ts';
 
 type Presentation = Awaited<ReturnType<FeatureAdapter['read']>>;
@@ -78,7 +78,7 @@ export function createSession(config: Configuration) {
     const j = context().journey;
     const result = await bounded(config.transport.call('journey.transition', {
       journeyId: j.journeyId, expectedRevision: j.revision, requestId: uuid(), command,
-    }, abort.signal), abort.signal);
+    }, abort.signal), abort.signal, ['finish', 'explore'].includes(String(command.type)) ? 120000 : 5000);
     // A successful HTTP envelope may still contain a revision conflict.
     parseJourney(result);
   }
@@ -138,7 +138,7 @@ export function createSession(config: Configuration) {
       } else {
         const adapter = adapters[view as keyof Configuration['adapters']];
         if (!adapter) throw new Unavailable();
-        await bounded(adapter.command(context(), action, input), abort.signal);
+        await bounded(adapter.command(context(), action, input), abort.signal, ['finish', 'open_workflow', 'explore'].includes(action) ? 120000 : 5000);
       }
       await read();
     } catch { update({ blocked: true }); }
@@ -153,7 +153,7 @@ export function createSession(config: Configuration) {
     async start() {
       if (started || disposed) return;
       started = true;
-      if (!released(config)) { update({ mode: 'legacy' }); return; }
+      if (!configured(config)) { update({ mode: 'legacy' }); return; }
       inFlight = true;
       try {
         await check();
@@ -175,7 +175,7 @@ export function createSession(config: Configuration) {
           if (adapter?.subscribe) unsubscribes.push(adapter.subscribe(() => { if (!editing) void refresh(); }));
         }
         await read();
-      } catch { if (state.mode === 'checking') update({ mode: 'legacy' }); else update({ blocked: true }); }
+      } catch (error) { if (config.integration) console.warn('Local onboarding startup failed', error); if (state.mode === 'checking') update({ mode: 'legacy' }); else update({ blocked: true }); }
       finally { finishFlight(); }
     },
     refresh, act,

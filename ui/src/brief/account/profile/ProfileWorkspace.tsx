@@ -169,6 +169,15 @@ function ProfileBody({ controller }: { controller: ProfileController }) {
             void controller.save();
           }}
         >
+          {!!state.base.interviewFacts?.length && <section aria-labelledby={`${id}-interview`}>
+            <h2 id={`${id}-interview`}>From your interview</h2>
+            <p className="brief-profile-interview-help">Saved during onboarding. You can correct or forget these details in Memory.</p>
+            <dl className="brief-profile-interview">
+              {state.base.interviewFacts.map((fact, index) => <div key={`${fact.theme}:${index}`}>
+                <dt>{fact.theme}</dt><dd>{fact.summary}</dd>
+              </div>)}
+            </dl>
+          </section>}
           <section aria-labelledby={`${id}-about`}>
             <h2 id={`${id}-about`}>About you</h2>
             <div className="brief-profile-fields">

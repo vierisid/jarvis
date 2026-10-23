@@ -1,7 +1,7 @@
 .brief-root.brief-motion { min-height: 100vh; padding: 28px 48px 56px; background: var(--brief-canvas); color: var(--brief-ink); font: 400 1rem/1.5 var(--brief-sans); }
 .brief-root.brief-motion * { box-sizing: border-box; }
 .brief-root .brief-motion__header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding-bottom: 26px; border-bottom: 1px solid var(--brief-card-edge); }
-.brief-root .brief-motion__header .brief-brand { width: 142px; }
+.brief-root .brief-motion__header .brief-brand { width: 146.49px; }
 .brief-root .brief-motion__header > span:last-child, .brief-root .brief-motion__eyebrow { font: 400 .75rem/1.6 var(--brief-mono); color: var(--brief-secondary); }
 .brief-root .brief-motion__intro { display: flex; gap: 24px; justify-content: space-between; align-items: center; padding: 38px 0 26px; }
 .brief-root.brief-motion h1 { font-size: 2.5rem; line-height: 1.15; letter-spacing: -.04em; font-weight: 600; margin: 8px 0 12px; }

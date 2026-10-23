@@ -56,7 +56,7 @@ The room subtree is inert, hidden from the accessibility tree and pointer
 interaction, with click/submit capture as an additional guard. This prevents
 ordinary DOM actions, not arbitrary JavaScript or out-of-tree portals. The
 isolation declaration is a trusted-host contract, not a security sandbox.
-An always-visible Tutorial sandbox label identifies all displayed sample data.
+An always-visible Guided tour label identifies all displayed content as a sample preview.
 Renderer throws fail closed and show a bounded unavailable state.
 
 On wide screens, keep the highlighted subject above/outside the card's

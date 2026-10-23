@@ -38,6 +38,10 @@ export function createProfileSettingsRoutes(capabilities: BriefCapabilities, jso
     return value;
   };
   return {
+    '/api/brief/getting-started': {
+      GET: wrap(() => provider!.gettingStarted()),
+      PATCH: wrap(async req => { const value = await body(req, ['revision', 'change']); return provider!.saveGettingStarted(value.revision, value.change); }),
+    },
     '/api/brief/profile-settings': { GET: wrap(() => ({ status: 'ready', data: provider!.read() })) },
     '/api/brief/profile-settings/profile': { PATCH: wrap(async req => {
       const value = await body(req, ['revision', 'answers']);

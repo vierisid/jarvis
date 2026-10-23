@@ -89,7 +89,10 @@ function Thread({ binding, panelId, labelledBy, reducedMotion, memory }: {
                   onApprove={decide && (() => void decide(approvalId, "approve"))} onCancel={decide && (() => void decide(approvalId, "deny"))}/>
               </div> : null;
             })}
-            {!activities.length && running(turn) && !item.awaitingApproval && <p className="brief-message-notice" role="status">{binding.connected ? "Preparing your response…" : "Reconnecting…"}</p>}
+            {!activities.length && running(turn) && !item.awaitingApproval && <div className="brief-response-working" role="status" data-reduced={reduced}>
+            <span className="brief-activity-marker" data-current={binding.connected} aria-hidden="true"/>
+            <span>{binding.connected ? (turn?.state === "queued" ? "Waiting to respond…" : "Preparing your response…") : "Reconnecting…"}</span>
+          </div>}
             {message?.content && <ReplyMarkdown text={message.content}/>}
             {(failed || cancelled) && <p className="brief-message-notice" data-error={failed} data-reading-anchor="terminal" role="status">
               {failed ? "This response could not finish." : "Response stopped."}{message?.content ? " The partial answer is kept above." : ""}</p>}

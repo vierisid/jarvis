@@ -150,6 +150,23 @@ async function toBrain() {
 }
 
 describe("#1066 provider switch never carries a typed key", () => {
+  test('voice preview failure releases Preview and leaves setup navigable', async () => {
+    await toBrain(); await pick('LiteLLM'); await type(urlInput(), 'http://localhost:4000/v1');
+    await click(/^Test connection$/); await click(/^Continue$/); await click(/^Continue$/);
+    const prior = globalThis.fetch;
+    let previewSignal: AbortSignal | undefined;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/tts/preview') { previewSignal = init?.signal ?? undefined; return new Response('', { status: 503 }); }
+      return prior(input, init);
+    }) as typeof fetch;
+    await click(/^Preview$/);
+    expect(previewSignal).toBeDefined();
+    expect(host!.textContent).toContain('Voice preview is unavailable');
+    expect(button(/^Preview$/).disabled).toBe(false);
+    await click(/^Continue$/);
+    expect(sent.some(s => s.url === '/api/onboarding/setup')).toBe(true);
+  });
+
   test("an OpenAI key is not sent by OmniRoute's catalog read or its Test", async () => {
     await toBrain();
     await pick("OpenAI");

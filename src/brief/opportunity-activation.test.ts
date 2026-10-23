@@ -287,7 +287,7 @@ test.skipIf(process.env.JARVIS_TEST_PREPARED_Q13 !== '1')('actual Q13 qualificat
   const catalog = new PieceCatalog(sampleCatalog().list().map(e => ({ ...e, name: '@jarvispieces/piece-' + e.name })));
   configureWorkflowReadiness({ pieces: catalog });
   const quality = await loadPreparedQualityGate({ authority: new AuthorityEngine({ default_level: 7, governed_categories: ['send_email','send_message'],
-    overrides: [], context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' }), tool: () => null, targets: () => [] }, bundle.bundlePath);
+    overrides: [], context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' }), tool: () => null, targets: () => [] }, bundle.bundlePath, bundle.digest);
   expect(quality).not.toBeNull();
   const previous = process.env.JARVIS_WORKFLOW_DATA_DIR; process.env.JARVIS_WORKFLOW_DATA_DIR = dir;
   try {
@@ -393,4 +393,20 @@ test('F10 review R1: existing receipt schema upgrades without losing decisions o
   expect(upgraded.submit(view.proposalId, view.revision, 'before-upgrade', 'approve')).toMatchObject({ created: false, receipt: { receiptId: receipt.receiptId } });
   expect(getDb().query('SELECT observed_pending FROM brief_opportunity_actions').get()).toEqual({ observed_pending: 0 });
   expect(getDb().query('SELECT id FROM flow').all()).toHaveLength(1); noRuns();
+});
+
+// The GET recovery contract is the receipt itself, while POST wraps it.
+test('dashboard recovery consumes the canonical activation GET receipt', async () => {
+  const { createDomainPorts } = await import('../../ui/src/brief/host/domain-ports');
+  const { createHostTransport } = await import('../../ui/src/brief/host/http');
+  const { p, view } = await fixture('dashboard-recovery');
+  const a = activation(p, fakeTriggers());
+  a.submit(view.proposalId, view.revision, 'recover-local', 'approve'); await a.idle();
+  const caps = new BriefCapabilities([...registerPreparedOpportunities(p), ...registerOpportunityActivation(a)], ['preparedOpportunities', 'opportunityActivation']);
+  const routes = createOpportunityActivationRoutes(caps, (value, status = 200) => Response.json(value, { status }), a);
+  const http = createHostTransport((async (url: string) => routes['/api/brief/opportunity-actions/:id'].GET(Object.assign(new Request('http://localhost' + url), { params: { id: view.proposalId } }))) as unknown as typeof fetch);
+  const ports = createDomainPorts('local-test', http, { setItem() {} });
+  const receipt = await ports.opportunities.recover!({ proposalId: view.proposalId, revision: view.revision, idempotencyKey: 'recover-local', decision: 'approve' });
+  expect(receipt).toMatchObject({ proposalId: view.proposalId, currentActivation: 'enabled', registration: { state: 'registered' } });
+  noRuns(); http.stop();
 });

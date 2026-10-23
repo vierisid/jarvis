@@ -17,6 +17,8 @@ export interface PebbleTourIntent {
   to: "billing" | "first-workflow";
 }
 export interface PebbleTourSurfaceProps {
+  theme?: "light" | "dark";
+  sidebar?: "expanded" | "rail";
   open: boolean;
   onOpenChange: (open: boolean) => void;
   reducedMotion?: boolean;
@@ -101,7 +103,7 @@ function PebbleTourSession({ model, adapter, reducedMotion, onNavigate }: Pebble
   return <section className="on-pebble-tour" data-theme={model.theme} data-sidebar={model.sidebar}
     data-open={open} data-reduced-motion={reducedMotion || undefined} aria-label="Pebble tutorial">
     <div className="on-pebble-tour__stage">
-      {Surface ? <Surface open={Boolean(open)} onOpenChange={changeOpen} reducedMotion={reducedMotion} />
+      {Surface ? <Surface theme={model.theme} sidebar={model.sidebar} open={Boolean(open)} onOpenChange={changeOpen} reducedMotion={reducedMotion} />
         : <div className="on-pebble-tour__unavailable" role="status">The workspace preview is unavailable.</div>}
     </div>
     <div className="on-pebble-tour__dock">

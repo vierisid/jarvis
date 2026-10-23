@@ -1,6 +1,6 @@
-import { captureProfileSources } from './memory-use-context';
+import { captureProfileSources, captureInterviewSources } from './memory-use-context';
 import { predicateKey, valueKey } from './fact-policy';
-import { FactSuppressedError, profileSourceForgotten, profileSourceSuperseded, profileSourceRef } from './memory-suppression';
+import { FactSuppressedError, profileSourceForgotten, profileSourceSuperseded, profileSourceRef, interviewSourceRef, interviewSourceWithheld } from './memory-suppression';
 import { deleteSetting, getSetting, setSetting } from './settings.ts';
 import { createEntity, updateEntity } from './entities.ts';
 import { createFact, findFacts, type Fact } from './facts.ts';
@@ -52,7 +52,9 @@ export function getUserProfileForPrompt(): UserProfileRecord | null {
     if (answer && (profileSourceForgotten(getDb(), question.id, answer) || profileSourceSuperseded(getDb(), question.id, answer))) delete answers[question.id];
   }
   captureProfileSources(answers);
-  return { ...profile, answers };
+  const interview_facts = profile.interview_facts?.filter(fact => !interviewSourceWithheld(getDb(), fact));
+  captureInterviewSources(interview_facts ?? []);
+  return { ...profile, answers, interview_facts };
 }
 
 export function saveUserProfile(input: Record<string, unknown>): UserProfileRecord {
@@ -121,6 +123,10 @@ export function appendUserProfileFact(
   fact: Omit<UserProfileFact, 'recorded_at'>,
   options: { deferCompletion?: boolean } = {},
 ): UserProfileRecord {
+  return getDb().transaction(() => appendInterviewFact(fact, options)).immediate();
+}
+
+function appendInterviewFact(fact: Omit<UserProfileFact, 'recorded_at'>, options: { deferCompletion?: boolean }): UserProfileRecord {
   const existing = getUserProfile() ?? createEmptyUserProfile();
   const now = Date.now();
   const facts = [...(existing.interview_facts ?? [])];
@@ -143,9 +149,45 @@ export function appendUserProfileFact(
     completed_at: existing.completed_at ?? (options.deferCompletion ? null : now),
   };
   setSetting(USER_PROFILE_SETTING_KEY, JSON.stringify(profile));
-  // Don't re-sync to vault entities — interview facts are summary-level,
-  // not per-question; the wizard sync covers the structured side.
+  syncInterviewProfileKnowledge(profile);
   return profile;
+}
+
+/** Project confirmed interview summaries through the same canonical fact writer
+ * as profile answers. Existing correction and Forget own their lifecycle. Safe
+ * to call at startup for interviews saved before the dashboard was connected. */
+export function syncInterviewProfileKnowledge(profile = getUserProfile()): void {
+  const facts = profile?.interview_facts ?? [];
+  if (!facts.length) return;
+  getDb().transaction(() => {
+    const db = getDb();
+    const row = db.query<{ id: string }, []>("SELECT id FROM entities WHERE source = 'user_profile' ORDER BY updated_at DESC LIMIT 1").get();
+    const id = row?.id ?? createEntity('person', profile?.answers.preferred_name?.trim() || 'User',
+      { is_current_user: true }, USER_PROFILE_VAULT_SOURCE).id;
+    for (const fact of facts) {
+      const sourceRef = interviewSourceRef(fact);
+      // Keep revisions and source timestamps stable on restart/replay.
+      if (db.query('SELECT 1 FROM fact_evidence WHERE source = ? AND source_ref = ? LIMIT 1')
+        .get(USER_PROFILE_VAULT_SOURCE, sourceRef)) continue;
+      try {
+        createFact(id, `shared about ${fact.theme}`, fact.summary, {
+          source: USER_PROFILE_VAULT_SOURCE, sourceRef, quote: fact.summary, basis: 'reported', confidence: 1,
+        });
+      } catch (error) { if (!(error instanceof FactSuppressedError)) throw error; }
+    }
+  }).immediate();
+}
+
+/** Startup projection of interviews saved before Memory was connected. It is a
+ * best-effort repair: a failure is logged and the next interview write or start
+ * retries it, so it can never stop the daemon from starting. */
+export function syncInterviewProfileKnowledgeAtStartup(log: (message: string) => void = console.warn): boolean {
+  try { syncInterviewProfileKnowledge(); return true; }
+  catch (error) {
+    // The error kind only: a message could one day carry profile text.
+    log(`[Vault] Interview profile facts were not projected into Memory; continuing startup (${error instanceof Error ? error.name : 'Error'})`);
+    return false;
+  }
 }
 
 /**
@@ -172,7 +214,7 @@ export function clearUserProfile(): void {
 }
 
 function syncUserProfileKnowledge(profile: UserProfileRecord): void {
-  if (countAnsweredUserProfileQuestions(profile) === 0) {
+  if (countAnsweredUserProfileQuestions(profile) === 0 && !profile.interview_facts?.length) {
     clearUserProfileKnowledge();
     return;
   }
@@ -200,6 +242,7 @@ function syncUserProfileKnowledge(profile: UserProfileRecord): void {
   db.transaction(() => {
     const previous = findFacts({ subject_id: entity.id }).filter(f => hasProfileEvidence(f)
       && !f.scope && f.valid_from === null && f.valid_to === null
+      && !f.evidence.some(e => e.source_ref?.startsWith('profile:interview:'))
       && (profileQuestionForPredicate(f.predicate_key) || f.verified_at === null));
     const desired = USER_PROFILE_QUESTIONS.flatMap<ProfileKnowledgeFact>(question => {
       const answer = profile.answers[question.id]?.trim();

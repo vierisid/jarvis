@@ -3,6 +3,7 @@ import type { ComponentType, ReactNode } from 'react';
 import { artifactKey, savedResult, unavailableMessage } from './model';
 import type { ResultModel, SavedResult } from './model';
 import './result.css';
+import '../../../brief/workflows/runs/header.css';
 export type { ResultModel, SavedResult, DraftReference, Continuation } from './model';
 
 /** Supplied D18 canvas/inspector adapter. Keep this component type stable across layout changes. */
@@ -16,9 +17,11 @@ export interface ResultAction {
   action: 'review' | 'finish' | 'refresh' | 'open_workflow' | 'back';
   scopeId: string; journeyId: string; jobId: string; requestId: string; revision: number;
   commandId: string; draft: SavedResult | null;
+  view?: 'workflow-draft' | 'workflow-runs' | 'workflow-context';
 }
 export interface ResultViewProps {
   model: ResultModel; Canvas?: ComponentType<ResultCanvasProps>;
+  requestText?: string;
   onReview?: (action: ResultAction) => void | Promise<void>;
   onContinue?: (action: ResultAction) => void | Promise<void>;
   onRefresh?: (action: ResultAction) => void | Promise<void>;
@@ -42,7 +45,7 @@ function ResultSession(props: ResultViewProps) {
   const draft = savedResult(model);
   return <ResultContent key={draft ? artifactKey(draft) : 'unavailable'} {...props} model={model} draft={draft} />;
 }
-function ResultContent({ model, draft, Canvas, onReview, onContinue, onRefresh, onOpenWorkflow, onBack }: ResultViewProps & { draft: SavedResult | null }) {
+function ResultContent({ model, draft, Canvas, requestText, onReview, onContinue, onRefresh, onOpenWorkflow, onBack }: ResultViewProps & { draft: SavedResult | null }) {
   const [reviewing, setReviewing] = useState(false), [dirty, setDirty] = useState(false);
   const [revoked, setRevoked] = useState<number | null>(null);
   const [pending, setPending] = useState<ResultAction | null>(null), [error, setError] = useState(false);
@@ -60,14 +63,14 @@ function ResultContent({ model, draft, Canvas, onReview, onContinue, onRefresh, 
     setRevoked(previous => previous === null ? model.revision : Math.max(previous, model.revision));
     setDirty(false); heading.current?.focus();
   };
-  async function invoke(action: ResultAction['action'], callback: ResultViewProps['onContinue']) {
+  async function invoke(action: ResultAction['action'], callback: ResultViewProps['onContinue'], view?: ResultAction['view']) {
     if (!callback || (active.current && action !== 'refresh')) return;
     if (action !== 'refresh' && error) return;
     if ((action === 'finish' || action === 'open_workflow' || action === 'back' || action === 'refresh') && dirty) return;
     if (action === 'finish' && (!valid || !draft?.continuation)) return;
     if ((action === 'review' && !canvasReady) || (action === 'open_workflow' && !valid)) return;
     const command: ResultAction = { action, scopeId: model.scopeId, journeyId: model.journeyId, jobId: model.jobId,
-      requestId: model.requestId, revision: model.revision, commandId: crypto.randomUUID(), draft: valid ? draft : null };
+      requestId: model.requestId, revision: model.revision, commandId: crypto.randomUUID(), draft: valid ? draft : null, ...(view ? { view } : {}) };
     // Reconcile an uncertain command instead of repeating finish/navigation.
     if (action === 'refresh' && active.current?.action === 'refresh') return;
     active.current = command; setPending(command); setError(false);
@@ -95,6 +98,13 @@ function ResultContent({ model, draft, Canvas, onReview, onContinue, onRefresh, 
       <div><p className="on-result__eyebrow">Your first workflow</p><h1 ref={heading} tabIndex={-1} id={`${id}-title`}>{valid ? draft!.title : 'Let’s find your draft.'}</h1></div>
       {valid && <div className="on-result__header-actions">{reviewing && <button type="button" onClick={() => setReviewing(false)}>View draft summary</button>}<span className="on-result__badge">Draft · Not enabled</span><button type="button" onClick={review} disabled={!canvasReady || locked}>Review steps</button></div>}
     </header>
+    {valid && onOpenWorkflow && <nav className="brief-workflow-view-tabs on-result__tabs" aria-label="Workflow views" data-active="canvas">
+      <button type="button" aria-current="page">Canvas</button>
+      <button type="button" disabled={locked || dirty} onClick={() => void invoke('open_workflow', onOpenWorkflow, 'workflow-runs')}>Runs</button>
+      <button type="button" disabled={locked || dirty} onClick={() => void invoke('open_workflow', onOpenWorkflow, 'workflow-context')}>Context &amp; rules</button>
+      <span className="brief-workflow-view-underline" aria-hidden="true" />
+    </nav>}
+    {requestText && <details className="on-result__request"><summary>View your request</summary><p>{requestText}</p></details>}
     <div className="on-result__body">
       <div className="on-result__canvas" ref={canvas} tabIndex={-1} role="region" aria-label="Workflow canvas">
         {/* Reset only for an invalidation, including when recovery arrives in the same batch. */}
@@ -117,7 +127,7 @@ function ResultContent({ model, draft, Canvas, onReview, onContinue, onRefresh, 
       </aside>}
     </div>
     <footer className="on-result__footer">
-      <div className="on-result__feedback" role="status" aria-live="polite">{error ? 'We could not confirm that action. Check again before continuing.' : pending ? 'Waiting for confirmation…' : dirty ? 'Save or discard your canvas edits before leaving or refreshing.' : reviewing ? 'Select a step to open its inspector.' : ''}</div>
+      <div className="on-result__feedback" role="status" aria-live="polite">{error ? 'We could not confirm that action. Check again before continuing.' : pending?.action === 'finish' || pending?.action === 'open_workflow' ? 'Preparing your goal plan and opening your workspace…' : pending ? 'Waiting for confirmation…' : dirty ? 'Save or discard your canvas edits before leaving or refreshing.' : reviewing ? 'Select a step to open its inspector.' : ''}</div>
       <div className="on-result__actions">
         {onBack && <button type="button" disabled={locked || dirty} onClick={() => void invoke('back', onBack)}>Back to your request</button>}
         {onRefresh && <button type="button" disabled={dirty || pending?.action === 'refresh'} onClick={() => void invoke('refresh', onRefresh)}>Check again</button>}

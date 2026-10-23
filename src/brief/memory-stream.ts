@@ -52,7 +52,7 @@ export function memoryStreamQuery(input: MemoryStreamQuery): Required<Pick<Memor
 export class MemoryStream {
   private readonly snapshots = new Map<string, Snapshot>();
   private readonly secret = randomBytes(32);
-  constructor(private readonly db: Database, readonly usage?: MemoryUsageReader, readonly forget?: MemoryForget) {}
+  constructor(private readonly db: Database, readonly usage?: MemoryUsageReader, readonly forget?: MemoryForget, private readonly correctionAvailable: () => boolean = () => false) {}
   readiness(): 'ready' | 'unavailable' {
     try {
       if (getDb() !== this.db) return 'unavailable';
@@ -121,7 +121,7 @@ export class MemoryStream {
         revision, ...(usageCoverage ? { usageCoverage } : {}), subjectId: row.subject_id, scope: row.scope, updatedAt, basis, status: row.status,
         validity: { from: row.valid_from, to: row.valid_to }, sourceSummary: { labels, evidenceCount: ev.length },
         provenance: ev.map(e => ({ kind: 'source', id: e.id, revision: digest(e) })), uses: factUses,
-        permissions: { canRead: true, canCorrect: false, canForget: this.forget?.readiness() === 'ready' },
+        permissions: { canRead: true, canCorrect: row.status !== 'superseded' && this.correctionAvailable(), canForget: this.forget?.readiness() === 'ready' },
         detailHref: href, historyHref: `${href}/history`, supersededBy: row.superseded_by });
     }
     return { items, usedIn, ...(usageCoverage ? { usageCoverage } : {}) };

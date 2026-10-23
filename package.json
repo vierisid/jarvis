@@ -59,7 +59,8 @@
     "generate:onboarding-runtime": "bun run scripts/onboarding-next-runtime-manifest.ts",
     "check:onboarding-runtime": "bun run scripts/onboarding-next-runtime-manifest.ts --check",
     "generate:onboarding-ui": "bun run scripts/onboarding-next-ui-manifest.ts",
-    "check:onboarding-ui": "bun run scripts/onboarding-next-ui-manifest.ts --check"
+    "check:onboarding-ui": "bun run scripts/onboarding-next-ui-manifest.ts --check",
+    "dev:local": "bun --no-env-file run scripts/integration/dev.ts"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",

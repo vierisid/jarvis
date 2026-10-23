@@ -31,15 +31,20 @@ export interface Journey {
   completion: 'active' | 'completed' | 'explored' | 'legacy_completed';
   jobId: string | null; buildRequestId?: string | null;
   draft: { flowId: string; versionId: string } | null;
+  buildHistory?: Array<{ buildRequestId: string | null; jobId: string | null; outcome: 'failed' | 'cancelled' }>;
 }
 export interface CapabilityState { present: boolean; registered: boolean; supported: boolean; ready: boolean; reason: string }
 export interface Status {
   schemaVersion: 1; installMode: InstallMode; supported: boolean; ready: boolean; enabled: boolean; released: boolean; reason: string;
+  integration?: true;
   capabilities: Record<string, CapabilityState>;
 }
+export type Operation = 'journey.read' | 'journey.transition' | 'setup.read' | 'setup.complete'
+  | 'google.read' | 'google.begin' | 'google.cancel' | 'google.callback' | 'interview.command' | 'tour.command'
+  | 'intent.validate' | 'build.submit' | 'build.read' | 'build.cancel' | 'result.read';
 export interface Transport {
   status(signal: AbortSignal): Promise<unknown>;
-  call(operation: 'journey.read' | 'journey.transition' | 'setup.read' | 'setup.complete', input: Record<string, unknown>, signal: AbortSignal): Promise<unknown>;
+  call(operation: Operation, input: Record<string, unknown>, signal: AbortSignal): Promise<unknown>;
 }
 export interface Context { journey: Readonly<Journey>; installMode: 'hosted' | 'self'; signal: AbortSignal }
 /** Trusted adapters validate provider responses and own scoped drafts, idempotency,
@@ -56,6 +61,8 @@ export interface FeatureAdapter {
 }
 export interface Configuration {
   enabled: boolean;
+  /** Only the separate isolated integration entry supplies this trusted prop. */
+  integration?: true;
   modules: readonly ViewModule[];
   transport: Transport;
   /** Exact compiled candidate selected by the release owner, never URL/storage. */

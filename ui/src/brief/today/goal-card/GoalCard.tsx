@@ -3,12 +3,15 @@ import { ArrowRight } from "lucide-react";
 import { BriefButton } from "../../components/controls";
 import { BRIEF_EASE_OUT, useBriefMotion } from "../../motion";
 import { GoalSegments, OutcomeNumber } from "../outcomes/Values";
-import { formatNumber, qualified, qualifiedProgress } from "../outcomes/model";
+import { formatNumber, qualified } from "../outcomes/model";
+import { cardProgress } from "./model";
 import type { GoalHandoff } from "./useGoalHandoff";
 import "../outcomes/outcomes.css";
 import "./goal-card.css";
 
-export function GoalCard({ handoff }: { handoff: GoalHandoff }) {
+/** `onPlanUnplanned` is set when onboarding finished without the interview goal
+ * because it could not be planned; the empty card then says so and opens Goals. */
+export function GoalCard({ handoff, onReviewDraft, onPlanUnplanned }: { handoff: GoalHandoff; onReviewDraft?: () => void; onPlanUnplanned?: () => void }) {
   const { binding, goal, rec, reduced } = handoff;
   const [openedKey, setOpenedKey] = useState<string | null>(null);
   const open = openedKey === handoff.key;
@@ -33,17 +36,18 @@ export function GoalCard({ handoff }: { handoff: GoalHandoff }) {
   }, [open, reduced]);
   if (!goal) return <section className="brief-goal-card brief-surface" aria-label="Main goal" data-state={binding.state.status} aria-busy={binding.state.status === "loading" || undefined}>
     <h2 className="brief-type-body-emphasis">{binding.state.status === "loading" ? "Loading your goal" : binding.state.status === "empty" ? "No active goal" : "Goal unavailable"}</h2>
-    <p className="brief-type-body brief-secondary">{binding.state.status === "empty" ? "Choose a goal to give the next step direction." : "reason" in binding.state ? binding.state.reason : ""}</p>
+    {binding.state.status === "empty" && onPlanUnplanned ? <>
+      <p className="brief-type-body brief-secondary">The goal from your interview could not be planned. You can plan it from Goals.</p>
+      <BriefButton size="sm" variant="text" className="brief-goal-plan" onClick={onPlanUnplanned}>Plan a goal<ArrowRight size={16} /></BriefButton>
+    </> : <p className="brief-type-body brief-secondary">{binding.state.status === "empty" ? "Choose a goal to give the next step direction." : "reason" in binding.state ? binding.state.reason : ""}</p>}
   </section>;
-  const progress = goal.progress;
+  const progress = cardProgress(goal.progress, goal.fraction);
   return <section className="brief-goal-card brief-surface" aria-labelledby={`${id}-title`} data-goal-id={goal.goalId} data-view={open ? "recommendation" : "overview"} data-reduced={reduced}>
     <h2 id={`${id}-title`} className="brief-type-body-emphasis">{goal.title}</h2>
     {goal.periodLabel && <p className="brief-goal-period brief-type-utility brief-secondary">{goal.periodLabel}</p>}
-    {qualifiedProgress(progress) ? <>
-      <div className="brief-goal-value"><strong style={{ minInlineSize: `${formatNumber(progress.target).length}ch` }}><OutcomeNumber value={progress.value} reducedMotion={reduced} /></strong><span>/ {formatNumber(progress.target)}</span><small>{goal.progressLabel}</small>
-        {qualified(goal.change) && <small className={goal.change.value > 0 ? "brief-positive" : "brief-secondary"}>{goal.change.value > 0 ? "+" : ""}{formatNumber(goal.change.value)} this week</small>}</div>
-      <GoalSegments value={progress.value} target={progress.target} label={`${formatNumber(progress.value)} of ${formatNumber(progress.target)} ${goal.progressLabel}`} reducedMotion={reduced} />
-    </> : <p className="brief-goal-missing brief-type-body brief-secondary">Progress not measured yet</p>}
+    <div className="brief-goal-value"><strong><OutcomeNumber value={progress.value} reducedMotion={reduced} /></strong><span>{progress.percent ? "%" : `/ ${formatNumber(progress.target)}`}</span><small>{progress.percent ? "progress" : goal.progressLabel}</small>
+      {!progress.percent && qualified(goal.change) && <small className={`brief-goal-change ${goal.change.value > 0 ? "brief-positive" : "brief-secondary"}`}>{goal.change.value > 0 ? "+" : ""}{formatNumber(goal.change.value)} this week</small>}</div>
+    <GoalSegments value={progress.value} target={progress.target} label={progress.percent ? `${formatNumber(progress.value)}% progress` : `${formatNumber(progress.value)} of ${formatNumber(progress.target)} ${goal.progressLabel}`} reducedMotion={reduced} />
     {binding.state.status === "stale" && <p className="brief-type-utility brief-secondary">{binding.state.reason}</p>}
     <div ref={body} className="brief-goal-body" onFocusCapture={e => { lastBodyFocus.current = e.target as HTMLElement; }} onKeyDown={e => { if (e.key === "Escape" && open) { e.preventDefault(); e.stopPropagation(); changeView(null); } }}>
       {open ? <>
@@ -55,10 +59,16 @@ export function GoalCard({ handoff }: { handoff: GoalHandoff }) {
         <div className={`brief-goal-feedback brief-type-utility${handoff.accepted || handoff.pending ? " brief-sr-only" : ""}`} role="status" aria-live="polite">{handoff.message}</div>
         {handoff.locked && !handoff.accepted && !handoff.pending && binding.refresh && <BriefButton size="sm" variant="text" onClick={binding.refresh}>Refresh recommendation</BriefButton>}
       </> : <>
-        <div className="brief-goal-drivers">{goal.drivers.map(driver => <div className="brief-goal-driver" key={driver.goalId}>
-          <span>{driver.title}</span>{qualifiedProgress(driver.progress) ? <><GoalSegments value={driver.progress.value} target={driver.progress.target} label={`${driver.title}: ${formatNumber(driver.progress.value)} of ${formatNumber(driver.progress.target)}`} reducedMotion={reduced} /><span className="brief-secondary">{formatNumber(driver.progress.value)} / {formatNumber(driver.progress.target)}</span></> : <span className="brief-secondary">Not measured</span>}
-        </div>)}</div>
-        <BriefButton ref={next} variant="text" className="brief-goal-next" onClick={() => changeView(handoff.key)} aria-expanded={false}>What’s next?<ArrowRight size={16} /></BriefButton>
+        <div className="brief-goal-drivers">{goal.drivers.map(driver => {
+          const value = cardProgress(driver.progress, driver.fraction);
+          const label = value.percent ? `${formatNumber(value.value)}%` : `${formatNumber(value.value)} / ${formatNumber(value.target)}`;
+          return <div className="brief-goal-driver" key={driver.goalId}>
+            <span className="brief-goal-driver-title" title={driver.title}>{driver.title}</span>
+            <div className="brief-goal-driver-track" role="img" aria-label={`${driver.title}: ${label}`}><i style={{ transform: `scaleX(${Math.max(0, Math.min(1, value.value / value.target))})` }} /></div>
+            <span className="brief-secondary">{label}</span>
+          </div>;
+        })}</div>
+        <BriefButton ref={next} variant="text" className="brief-goal-next" onClick={onReviewDraft ?? (() => changeView(handoff.key))} aria-expanded={onReviewDraft ? undefined : false}>{onReviewDraft ? "Review goal" : "What’s next?"}<ArrowRight size={16} /></BriefButton>
       </>}
     </div>
   </section>;

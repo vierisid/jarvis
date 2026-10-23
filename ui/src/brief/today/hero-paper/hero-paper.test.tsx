@@ -19,6 +19,7 @@ let binding: DecisionBinding;
 let actions: Array<{ id: string; revision: string; action: string }>;
 let goalMounts = 0;
 let showToday = true;
+let showChecklist = false;
 const realRect = HTMLElement.prototype.getBoundingClientRect;
 beforeAll(async () => {
   React = await import("react"); ({ createRoot } = await import("react-dom/client"));
@@ -31,7 +32,7 @@ beforeAll(async () => {
   };
 });
 beforeEach(() => {
-  host = document.createElement("div"); document.body.append(host); root = createRoot(host); goalMounts = 0; showToday = true; actions = [];
+  host = document.createElement("div"); document.body.append(host); root = createRoot(host); goalMounts = 0; showToday = true; showChecklist = false; actions = [];
   shell = { mode: "preview", route: { room: "today", selection: { approvalId: "fixture-approval-jordan" } }, sidebar: "expanded", theme: "light", chatOpen: false,
     setSidebar: sidebar => { shell = { ...shell, sidebar }; }, setChatOpen: chatOpen => { shell = { ...shell, chatOpen }; },
     setTheme: theme => { shell = { ...shell, theme }; }, navigate: route => { shell = { ...shell, route }; } };
@@ -49,7 +50,7 @@ async function render() {
       binding={{ capabilities: null, view: { source: "fixture", state: { status: "ready", data: UNKNOWN_NAVIGATION } } }}
       conversation={{ source: "fixture", content: <textarea aria-label="Retained conversation" data-pebble-focus defaultValue="Draft" /> }}>
       {showToday ? <TodayLayout shell={shell} greeting="Good morning, Alex." dateLabel="Thursday, 17 September" decision={binding} reducedMotion
-        slots={{ goal: <Goal />, outcomes: <section>Outcomes</section>, activity: <section>Recent activity</section>, opportunities: <div>Prepared opportunity</div> }} /> : <h1>Another room</h1>}
+        slots={{ gettingStarted: showChecklist ? <section>Workspace checklist</section> : undefined, goal: <Goal />, outcomes: <section>Outcomes</section>, activity: <section>Recent activity</section>, opportunities: <div>Prepared opportunity</div> }} /> : <h1>Another room</h1>}
     </NavigationShell>
   </div>));
 }
@@ -214,4 +215,13 @@ test("leaving Today clears its companion reservation without replacing the conve
   await render(); const chat = host.querySelector("textarea"); expect(host.querySelector("[data-pebble-companion]")?.getAttribute("data-pebble-companion")).toBe("true");
   showToday = false; await render(); expect(host.querySelector("[data-pebble-companion]")?.getAttribute("data-pebble-companion")).toBe("false");
   expect(host.querySelector('[aria-label="Retained goal view"]')).toBeNull(); expect(host.querySelector("textarea")).toBe(chat);
+});
+
+
+test("setup checklist replaces only a confirmed empty hero; real decisions and failures stay visible", async () => {
+  showChecklist = true; const ready = binding;
+  binding = {...binding,state:{status:'empty'}};await render();
+  expect(host.textContent).toContain('Workspace checklist');expect(host.textContent).not.toContain('No decisions waiting.');
+  binding=ready;await render();expect(host.querySelector('.brief-today-review-trigger')).not.toBeNull();expect(host.textContent).toContain('Workspace checklist');
+  binding={...binding,state:{status:'unavailable',reason:'Connection lost'}};await render();expect(host.textContent).toContain('Connection lost');
 });

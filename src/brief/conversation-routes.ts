@@ -60,7 +60,9 @@ export function createConversationRoutes(capabilities: BriefCapabilities, json: 
     '/api/brief/conversations': {
       GET: gated((req, repo) => response(repo.list(page(req, true)))),
       POST: gated(async (req, repo) => {
-        const data = await body(req, ['title']);
+        const data = await body(req, ['title', 'ensureActive']);
+        if (data.ensureActive !== undefined && (data.ensureActive !== true || data.title !== undefined)) throw new ConversationRequestError('Invalid initial conversation request');
+        if (data.ensureActive === true) return response(repo.ensureActive());
         if (data.title !== undefined && typeof data.title !== 'string') throw new ConversationRequestError('Invalid title');
         return response(repo.create({ title: data.title }), 201);
       }),

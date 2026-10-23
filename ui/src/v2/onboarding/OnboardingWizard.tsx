@@ -1,3 +1,4 @@
+import { CHAT_MODEL_SUGGESTIONS } from "../../../../src/llm/model-catalog";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { openExternal, openedOrHandedOff } from "./external-open";
 import { useInterviewSession } from "./useInterviewSession";
@@ -40,8 +41,9 @@ export const HOSTED_PROVISIONED: ReadonlySet<StepKey> = new Set<StepKey>(["brain
 
 /** The step list an install actually walks. Exported for tests: the
  * hosted/self-hosted split is the whole point of this screen set. */
-export function stepsFor(hosted: boolean): ReadonlyArray<[StepKey, string]> {
-  return hosted ? STEPS.filter(([k]) => !HOSTED_PROVISIONED.has(k)) : STEPS;
+export function stepsFor(hosted: boolean, setupOnly = false): ReadonlyArray<[StepKey, string]> {
+  const steps = hosted ? STEPS.filter(([k]) => !HOSTED_PROVISIONED.has(k)) : STEPS;
+  return setupOnly ? steps.filter(([k]) => ['perms', 'brain', 'hear', 'speak'].includes(k)) : steps;
 }
 
 export type HostedProbe = "unknown" | "hosted" | "self";
@@ -92,21 +94,21 @@ const Glyph = ({ k }: { k: string }) => <span dangerouslySetInnerHTML={{ __html:
 
 /* — providers (backend kind ids); model lists per the design — */
 type Provider = {
-  id: string; name: string; abbr: string; kind: string; reco?: boolean; soon?: boolean;
+  id: string; name: string; abbr: string; kind: string; reco?: boolean; paidOnly?: boolean;
   noConfig?: boolean; needsKey?: boolean; keyOptional?: boolean; needsBaseUrl?: boolean; optionalBaseUrl?: boolean; freeModel?: boolean;
   keyLabel?: string; urlLabel?: string; urlPh?: string; models?: string[]; hint?: string;
 };
 const OMNIROUTE_DEFAULT_URL = "http://localhost:20128/v1";
 const PROVIDERS: Provider[] = [
-  // Hosted brain. `soon: true` is the self-hosted default; the wizard flips
+  // Hosted brain. `paidOnly: true` is the self-hosted default; the wizard flips
   // it off when GET /api/config/llm reports hosted_llm (see provList below).
-  { id: "jarvis", name: "Jarvis AI", abbr: "JA", kind: "included", soon: true, noConfig: true },
-  { id: "anthropic", name: "Anthropic", abbr: "A", kind: "API key", needsKey: true, optionalBaseUrl: true, keyLabel: "API key", urlLabel: "Custom endpoint URL", urlPh: "https://gateway.example.com", models: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5-20251001"], hint: "Enable the custom endpoint option to use ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN-style authentication." },
-  { id: "openai", name: "OpenAI", abbr: "O", kind: "API key", needsKey: true, models: ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5-mini", "o4-mini"] },
-  { id: "groq", name: "Groq", abbr: "G", kind: "API key", needsKey: true, models: ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.6-27b"], hint: "Loads the current model catalog from Groq so decommissioned models are never suggested." },
-  { id: "gemini", name: "Gemini", abbr: "Ge", kind: "API key", needsKey: true, models: ["gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro"] },
-  { id: "ollama", name: "Ollama", abbr: "Ol", kind: "local", needsBaseUrl: true, urlLabel: "Ollama base URL", urlPh: "http://localhost:11434", models: ["llama3.1", "llama3.2", "mistral", "qwen2.5"] },
-  { id: "openrouter", name: "OpenRouter", abbr: "OR", kind: "API key", needsKey: true, models: ["anthropic/claude-opus-4", "openai/gpt-5.4", "google/gemini-2.5-pro"] },
+  { id: "jarvis", name: "Jarvis AI", abbr: "JA", kind: "included", paidOnly: true, noConfig: true },
+  { id: "anthropic", name: "Anthropic", abbr: "A", kind: "API key", needsKey: true, optionalBaseUrl: true, keyLabel: "API key", urlLabel: "Custom endpoint URL", urlPh: "https://gateway.example.com", models: CHAT_MODEL_SUGGESTIONS.anthropic, hint: "Enable the custom endpoint option to use ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN-style authentication." },
+  { id: "openai", name: "OpenAI", abbr: "O", kind: "API key", needsKey: true, models: CHAT_MODEL_SUGGESTIONS.openai },
+  { id: "groq", name: "Groq", abbr: "G", kind: "API key", needsKey: true, models: CHAT_MODEL_SUGGESTIONS.groq, hint: "Loads the current model catalog from Groq so decommissioned models are never suggested." },
+  { id: "gemini", name: "Gemini", abbr: "Ge", kind: "API key", needsKey: true, models: CHAT_MODEL_SUGGESTIONS.gemini },
+  { id: "ollama", name: "Ollama", abbr: "Ol", kind: "local", needsBaseUrl: true, urlLabel: "Ollama base URL", urlPh: "http://localhost:11434", models: CHAT_MODEL_SUGGESTIONS.ollama },
+  { id: "openrouter", name: "OpenRouter", abbr: "OR", kind: "API key", needsKey: true, models: CHAT_MODEL_SUGGESTIONS.openrouter },
   { id: "nvidia", name: "NVIDIA NIM", abbr: "N", kind: "API key", needsKey: true, models: [...NVIDIA_FALLBACK_MODELS], hint: "The catalog includes chat, embedding and vision models. Test connection confirms the selected model supports chat." },
   { id: "openai_compatible", name: "OpenAI-compatible", abbr: "C", kind: "self-hosted", needsKey: true, keyOptional: true, needsBaseUrl: true, freeModel: true, urlLabel: "Base URL", urlPh: "http://localhost:8080/v1", hint: "Any server that speaks /v1/chat/completions: llama.cpp, vLLM, LM Studio, TGI. Include the /v1 suffix." },
   { id: "litellm", name: "LiteLLM", abbr: "L", kind: "proxy", needsKey: true, keyOptional: true, needsBaseUrl: true, freeModel: true, urlLabel: "LiteLLM proxy URL", urlPh: "http://localhost:4000/v1", hint: "The model below must match an alias defined on your proxy." },
@@ -150,7 +152,8 @@ async function playPreviewAudio(res: Response): Promise<void> {
   const url = URL.createObjectURL(new Blob([buf], { type: "audio/mpeg" }));
   const a = new Audio(url);
   a.onended = () => URL.revokeObjectURL(url);
-  await a.play().catch(() => URL.revokeObjectURL(url));
+  a.onerror = () => URL.revokeObjectURL(url);
+  try { await a.play(); } catch (error) { URL.revokeObjectURL(url); throw error; }
 }
 
 const TOUR = [
@@ -167,17 +170,21 @@ export function OnboardingWizard({
   status,
   onComplete,
   brief,
+  setupOnly = false,
 }: {
   status: OnboardingStatus | null;
   brief?: OnboardingDraft;
+  /** Host-owned onboarding resumes immediately after the existing setup writer. */
+  setupOnly?: boolean;
   onComplete: (prompt?: string) => void | Promise<void>;
 }) {
   const startKey = useMemo<StepKey>(() => {
+    if (setupOnly) return "perms";
     if (!status?.setup_completed) return "welcome";
     if (!status.profile_completed && !status.setup_skipped_profile) return "interview";
     if (!status.tutorial_completed && !status.tutorial_dismissed) return "tour";
     return "allset";
-  }, [status]);
+  }, [status, setupOnly]);
 
   // Position is tracked by KEY, not index. The step list shrinks when the
   // hosted probe resolves (three steps disappear), and an index captured
@@ -186,7 +193,7 @@ export function OnboardingWizard({
   // True when the wizard is running the setup steps in this session (fresh
   // start) — a resume at the interview/tour never touched brain/voice state,
   // so the recap must not print those defaults as if they were saved.
-  const configuredThisSession = startKey === "welcome";
+  const configuredThisSession = setupOnly || startKey === "welcome";
 
   // welcome
   const [theme, setTheme] = useState<"light" | "dark">(
@@ -229,7 +236,7 @@ export function OnboardingWizard({
   // request — the recap must not print them as saved.
   const [droppedSections, setDroppedSections] = useState<string[]>([]);
   const provList = useMemo(
-    () => PROVIDERS.map((p) => (p.id === "jarvis" ? { ...p, soon: !hosted } : p)),
+    () => PROVIDERS.map((p) => (p.id === "jarvis" ? { ...p, paidOnly: !hosted } : p)),
     [hosted],
   );
 
@@ -240,8 +247,8 @@ export function OnboardingWizard({
   // Self-hosted keeps all nine: there, configuring an LLM is mandatory or
   // nothing works.
   const steps = useMemo(
-    () => stepsFor(hosted),
-    [hosted],
+    () => stepsFor(hosted, setupOnly),
+    [hosted, setupOnly],
   );
   // While the key is momentarily absent (the probe resolved under a hidden
   // screen, repaired below), resolve to Permissions DURING RENDER — the same
@@ -313,6 +320,11 @@ export function OnboardingWizard({
   const [elevenModel, setElevenModel] = useState("eleven_flash_v2_5");
   const [ttsTest, setTtsTest] = useState<TestState>({ status: "idle" });
   const [previewing, setPreviewing] = useState(false);
+  const previewRequest = useRef<AbortController | null>(null);
+  useEffect(() => {
+    setPreviewing(false);
+    return () => { previewRequest.current?.abort(); previewRequest.current = null; };
+  }, [key, tts]);
   // connect
   const [connected, setConnected] = useState<Set<string>>(new Set());
   const [googleState, setGoogleState] = useState<"idle" | "pending" | "connected">("idle");
@@ -596,7 +608,7 @@ export function OnboardingWizard({
     }
   }, [provId, model, apiKey, baseUrl, customEndpoint, discoveredModels, prov]);
 
-  const brainReady = !prov.soon && (prov.noConfig || test.status === "ok");
+  const brainReady = !prov.paidOnly && (prov.noConfig || test.status === "ok");
 
   /* — the setup POST: fires when leaving Speaking (llm + stt + tts) — */
   const saveSetup = useCallback(async () => {
@@ -684,11 +696,11 @@ export function OnboardingWizard({
       // provider config as saved.
       const resBody = await r.json().catch(() => null) as { dropped?: string[] } | null;
       setDroppedSections(resBody?.dropped ?? []);
-      goKey("connect");
+      if (setupOnly) await onComplete(); else goKey("connect");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Setup failed.");
     } finally { setBusy(false); }
-  }, [hosted, hostedProbe, prov, provId, apiKey, baseUrl, customEndpoint, model, test, tts, edgeVoice, elevenKey, elevenVoice, elevenModel, stt, sttKey, sttEndpoint, sttServerType, localSTTLoaded]);
+  }, [hosted, hostedProbe, prov, provId, apiKey, baseUrl, customEndpoint, model, test, tts, edgeVoice, elevenKey, elevenVoice, elevenModel, stt, sttKey, sttEndpoint, sttServerType, localSTTLoaded, setupOnly, onComplete]);
 
   const skipAll = useCallback(async () => {
     setBusy(true);
@@ -870,15 +882,17 @@ export function OnboardingWizard({
   // dashboard (no config round-trip, no Pebble dependency).
   const preview = useCallback(async () => {
     if (previewing) return;
-    setPreviewing(true);
+    const controller = new AbortController(); previewRequest.current = controller;
+    setPreviewing(true); setError(null);
     try {
       const body: Record<string, unknown> = { provider: tts === "elevenlabs" ? "elevenlabs" : "edge" };
       if (tts === "elevenlabs") { body.api_key = elevenKey.trim(); body.voice_id = elevenVoice; body.model = elevenModel; }
       else body.voice = edgeVoice;
-      const r = await fetch("/api/tts/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      if (r.ok) await playPreviewAudio(r);
-    } catch { /* best-effort */ }
-    window.setTimeout(() => setPreviewing(false), 2000);
+      const r = await fetch("/api/tts/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]) });
+      if (!r.ok) throw new Error('Preview unavailable');
+      await playPreviewAudio(r);
+    } catch { if (!controller.signal.aborted) setError('Voice preview is unavailable. Try again, choose another voice, or continue with No voice.'); }
+    finally { if (previewRequest.current === controller) { previewRequest.current = null; setPreviewing(false); } }
   }, [previewing, tts, edgeVoice, elevenKey, elevenVoice, elevenModel]);
 
   const speakReady = tts !== "elevenlabs" || ttsTest.status === "ok";
@@ -967,7 +981,7 @@ export function OnboardingWizard({
               <button className={theme === "dark" ? "on" : ""} onClick={() => applyTheme("dark")}>Dark</button>
             </div>
             <button className="obw-btn obw-btn-pri" style={{ minWidth: 208, marginTop: 8 }} onClick={next}>Set up Jarvis</button>
-            <button className="obw-skip" disabled={busy} onClick={skipAll}>I’ll do this later</button>
+            {!setupOnly && <button className="obw-skip" disabled={busy} onClick={skipAll}>I’ll do this later</button>}
             {error && <div className="obw-hint" style={{ color: "var(--listen)" }}>{error}</div>}
           </div>
         </div></div>
@@ -1124,7 +1138,7 @@ export function OnboardingWizard({
               </>
             )}
             <div className="obw-btnrow">
-              <button className="obw-btn obw-btn-ghost" onClick={back}>Back</button>
+              <button className="obw-btn obw-btn-ghost" disabled={setupOnly} onClick={back}>Back</button>
               <span className="grow" />
               {/* Hosted skips brain/hearing/speaking, so this is the last
                   setup screen — the setup POST (which normally fires when
@@ -1168,21 +1182,21 @@ export function OnboardingWizard({
             Use AI to help design workflows and handle the steps that need judgment.{" "}
             {hosted
               ? "Jarvis AI is included with your plan — nothing to configure. Prefer your own? Ollama runs locally with no key, or add an API key for Anthropic, OpenAI, and more. Change it anytime in Settings."
-              : "Bring your own: Ollama runs locally with no key, or add an API key for Anthropic, OpenAI, and more. Jarvis AI, our hosted brain, is coming soon. Change it anytime in Settings."}
+              : "Bring your own: Ollama runs locally with no key, or add an API key for Anthropic, OpenAI, and more. Jarvis AI is available on paid plans. Change it anytime in Settings."}
           </div>
           <div className="obw-provgrid" style={{ marginTop: 14 }}>
             {provList.map((p) => (
               <button
                 key={p.id}
-                className={`obw-prov ${p.reco ? "reco" : ""} ${p.soon ? "soon" : ""} ${provId === p.id ? "on" : ""}`}
-                disabled={p.soon}
-                aria-disabled={p.soon}
-                onClick={() => { if (!p.soon) setProvId(p.id); }}
+                className={`obw-prov ${p.reco ? "reco" : ""} ${p.paidOnly ? "soon" : ""} ${provId === p.id ? "on" : ""}`}
+                disabled={p.paidOnly}
+                aria-disabled={p.paidOnly}
+                onClick={() => { if (!p.paidOnly) setProvId(p.id); }}
               >
                 <span className="pd">{p.abbr}</span>
                 <div>
-                  <div className="pn">{p.name}{p.soon && <span className="obw-soon">Soon</span>}</div>
-                  <div className="pk">{p.soon ? "coming soon" : p.kind}</div>
+                  <div className="pn">{p.name}{p.paidOnly && <span className="obw-soon">Paid</span>}</div>
+                  <div className="pk">{p.paidOnly ? "Available on paid plans" : p.kind}</div>
                 </div>
               </button>
             ))}
@@ -1481,7 +1495,7 @@ export function OnboardingWizard({
                 </select>
               </div>}
         {provId === "ollama" && ollamaLoading && <div className="obw-hint">Reading installed models from Ollama…</div>}
-        {provId === "ollama" && !ollamaLoading && ollamaModels?.length === 0 && <div className="obw-hint">Could not reach Ollama at this URL — showing suggestions instead. Make sure Ollama is running (models must include their tag, e.g. llama3.1:8b).</div>}
+        {provId === "ollama" && !ollamaLoading && ollamaModels?.length === 0 && <div className="obw-hint">Could not reach Ollama at this URL — showing suggestions instead. Make sure Ollama is running (models must include their tag, e.g. qwen3.5:9b).</div>}
         {provId === "omniroute" && omniRouteLoading && <div className="obw-hint">Loading every OmniRoute model and combo…</div>}
         {provId === "omniroute" && !omniRouteLoading && omniRouteModels?.length === 0 && <div className="obw-hint">Could not read this OmniRoute catalog. Check the URL and API key; you can still test the auto route.</div>}
         {provId === "groq" && groqLoading && <div className="obw-hint">Loading currently supported Groq models…</div>}

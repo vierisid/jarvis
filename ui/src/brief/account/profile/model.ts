@@ -31,6 +31,7 @@ export type ProfileDraft = Partial<Record<ProfileField, string>>;
 export interface ProfileValue {
   revision: string;
   answers: Record<string, string>;
+  interviewFacts?: Array<{ theme: string; summary: string }>;
 }
 export type ProfileRead =
   | { state: "ready"; data: ProfileValue }
@@ -73,7 +74,12 @@ export function readProfile(value: unknown): ProfileValue | null {
     JSON.stringify(value.answers).length > 256000
   )
     return null;
+  if (value.interviewFacts !== undefined && (!Array.isArray(value.interviewFacts)
+    || value.interviewFacts.length > 1000 || value.interviewFacts.some(f => !record(f)
+      || typeof f.theme !== "string" || typeof f.summary !== "string"
+      || f.theme.length > 100 || f.summary.length > 4000))) return null;
   return {
+    ...(value.interviewFacts ? { interviewFacts: (value.interviewFacts as Array<{ theme: string; summary: string }>).map(f => ({ ...f })) } : {}),
     revision: value.revision,
     answers: { ...value.answers } as Record<string, string>,
   };

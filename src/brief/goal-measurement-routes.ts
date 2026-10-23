@@ -46,6 +46,22 @@ export function createGoalMeasurementRoutes(capabilities: BriefCapabilities, jso
   };
   const base = '/api/brief/goals/:id';
   return {
+    '/api/brief/goals': { GET: async (req: Request) => {
+      let response: Response;
+      if (!provider || !capabilities.hasProvider('goalMeasurements', provider)) response = json({ state: 'unsupported' }, 501);
+      else if (!capabilities.snapshot().capabilities.goalMeasurements.enabled) response = json({ state: 'unavailable' }, 503);
+      else if (new URL(req.url).search) response = json({ state: 'unavailable', code: 'invalid_query' }, 400);
+      else { try { response = json(provider.list()); } catch { response = json({ state: 'unavailable' }, 503); } }
+      response.headers.set('Cache-Control', 'no-store'); return response;
+    } },
+    '/api/brief/initial-goal': { GET: async (req: Request) => {
+      let response: Response;
+      if (!provider || !capabilities.hasProvider('goalMeasurements', provider)) response = json({ state: 'unsupported' }, 501);
+      else if (!capabilities.snapshot().capabilities.goalMeasurements.enabled) response = json({ state: 'unavailable' }, 503);
+      else if (new URL(req.url).search) response = json({ state: 'unavailable', code: 'invalid_query' }, 400);
+      else { try { response = json(provider.initialGoal()); } catch { response = json({ state: 'unavailable' }, 503); } }
+      response.headers.set('Cache-Control', 'no-store'); return response;
+    } },
     [base]: { GET: wrap((req, id) => {
       if (new URL(req.url).search) throw new GoalValidationError('query', 'is not supported');
       return provider!.read({ goalId: id });

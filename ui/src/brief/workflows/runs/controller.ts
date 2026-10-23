@@ -56,8 +56,13 @@ export class WorkflowRunsController {
   constructor(
     scope: RunScope,
     readonly port: WorkflowRunsPort,
+    pending?: ManualRunRequest,
   ) {
     this.scope = { ...scope };
+    // A request journaled before a reload stays uncertain and locked until an
+    // explicit check reads its outcome back. Nothing is read or re-sent here.
+    if (pending && pending.scopeId === scope.scopeId && pending.flowId === scope.flowId && pending.versionId === scope.versionId && pending.requestId)
+      this.state = { ...this.state, submission: 'uncertain', request: pending, message: 'A previous run request was not confirmed. Check its result before starting another run.' };
   }
   getSnapshot = () => this.state;
   subscribe = (fn: () => void) => {
@@ -383,6 +388,10 @@ export class WorkflowRunsController {
           request: null,
           message: "Run was not submitted.",
         });
+        return;
+      }
+      if (result.status === 'rejected') {
+        this.emit({ submission: 'idle', request: null, message: result.message });
         return;
       }
       this.acknowledge(result);

@@ -277,3 +277,16 @@ test('a rejected result adapter blocks completion without falling back to a synt
   try { await s.start(); await s.act(s.key(), 'finish'); expect(s.state().blocked).toBe(true); expect(f.calls).not.toContain('journey.transition'); }
   finally { s.dispose(); }
 });
+
+
+test('dashboard handoff waits for goal planning beyond the normal five-second read budget', async () => {
+  const f = fixture(); f.setJourney({ stepId: 'activation', interviewState: 'done', tourState: 'done' });
+  const call = f.config.transport.call;
+  f.config.transport.call = async (op, input, signal) => {
+    if (op === 'journey.transition' && (input.command as any)?.type === 'explore') await Bun.sleep(5100);
+    return call(op, input, signal);
+  };
+  const s = createSession(f.config); await s.start();
+  await s.act(s.key(), 'explore', { draft: { prompt: 'Keep this request' } });
+  expect(s.state().blocked).toBe(false); expect(s.state().mode).toBe('complete'); s.dispose();
+}, 10000);

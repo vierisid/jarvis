@@ -138,3 +138,27 @@ test('fresh onboarding does not mount the live workspace before setup', async ()
   try { await React.act(async () => root!.render(<ViewHost session={session} legacy={null}><Workspace /></ViewHost>)); expect(mounts).toBe(0); }
   finally { session.dispose(); }
 });
+
+test('saved result mounts inside the workspace and completion preserves that workspace instance', async () => {
+  const { fixture: sessionFixture } = await import('./test-fixture.ts');
+  const { createSession } = await import('./session.ts'); const { ViewHost } = await import('./ViewHost.tsx');
+  const f = sessionFixture(), session = createSession(f.config); await session.start();
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host); let mounts = 0;
+  function Workspace({ children }: { children: React.ReactNode }) { React.useEffect(() => { mounts++; }, []); return <main data-workspace><textarea defaultValue="Unsent chat" />{children}</main>; }
+  try {
+    await React.act(async () => root!.render(<ViewHost session={session} legacy={null} renderWorkspace={result => <Workspace>{result}</Workspace>} />));
+    expect(mounts).toBe(0);
+    f.setJourney({ stepId: 'result', setupState: 'completed', interviewState: 'done', tourState: 'done', activationState: 'draft_saved', revision: 1, jobId: 'job', draft: { flowId: 'flow', versionId: 'v1' } });
+    await React.act(async () => session.refresh());
+    const workspace = host.querySelector('[data-workspace]')!, draft = workspace.querySelector('textarea')!;
+    expect(workspace.querySelector('[data-onboarding-step="result"]')).not.toBeNull();
+    expect(f.journey().completion).toBe('active'); expect(mounts).toBe(1);
+    draft.value = 'Keep this conversation';
+    await React.act(async () => session.refresh());
+    expect(f.journey().completion).toBe('active');
+    f.setJourney({ stepId: 'exited', completion: 'completed', revision: 2 });
+    await React.act(async () => session.refresh());
+    expect(host.querySelector('[data-workspace]')).toBe(workspace);
+    expect(draft.value).toBe('Keep this conversation'); expect(mounts).toBe(1);
+  } finally { session.dispose(); }
+});

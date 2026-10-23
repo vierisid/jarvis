@@ -6,8 +6,10 @@ import { injectSectionSecrets } from '../daemon/section-secrets';
 import { persistUserPatch } from '../daemon/user-settings';
 import { EDGE_VOICES, UJ_VOICES } from '../comms/voice-options';
 import { USER_PROFILE_QUESTIONS } from '../user/profile';
+import { interviewSourceWithheld } from '../vault/memory-suppression';
 import { getDb } from '../vault/schema';
-import { getSetting } from '../vault/settings';
+import { GETTING_STARTED_IDS, isGettingStartedState, type GettingStartedState } from './getting-started-contract';
+import { getSetting, setSetting } from '../vault/settings';
 import { patchUserProfile, readEditableProfile } from '../vault/profile-edit';
 import { PROFILE_FIELD_MAPPING, type EditableProfile, type ProfileSettingsSnapshot, type VoicePreference, type VoiceSaveResult } from './profile-settings-contracts';
 
@@ -23,7 +25,10 @@ export class ProfileSettings {
   private requireReady() { if (this.readiness() !== 'ready') throw new ProfileSettingsError('unavailable', 503); }
   profile(): EditableProfile {
     const { revision, profile } = readEditableProfile();
-    return { revision, answers: profile?.answers ?? {} };
+    return { revision, answers: profile?.answers ?? {}, interviewFacts: (profile?.interview_facts ?? [])
+      .filter(fact => !interviewSourceWithheld(getDb(), fact))
+      .sort((a, b) => a.recorded_at - b.recorded_at)
+      .map(({ theme, summary }) => ({ theme, summary })) };
   }
   read(): ProfileSettingsSnapshot {
     this.requireReady();
@@ -39,6 +44,32 @@ export class ProfileSettings {
     this.requireReady();
     patchUserProfile(revision, answers);
     return this.profile();
+  }
+  gettingStarted(): GettingStartedState {
+    this.requireReady();
+    const raw = getSetting('brief.getting-started.v1');
+    if (raw === null) return { revision: 0, completed: [], hidden: false };
+    let value: unknown;
+    try { value = JSON.parse(raw); } catch { throw new ProfileSettingsError('checklist_unreadable', 503); }
+    if (!isGettingStartedState(value)) throw new ProfileSettingsError('checklist_unreadable', 503);
+    return value;
+  }
+  saveGettingStarted(revision: unknown, change: unknown): GettingStartedState {
+    this.requireReady();
+    if (!Number.isSafeInteger(revision) || Number(revision) < 0 || !change || typeof change !== 'object' || Array.isArray(change)) throw new ProfileSettingsError('invalid_patch');
+    const patch = change as Record<string, unknown>, keys = Object.keys(patch);
+    const visibility = keys.length === 1 && typeof patch.hidden === 'boolean';
+    const step = keys.length === 2 && typeof patch.done === 'boolean' && GETTING_STARTED_IDS.some(id => id === patch.item);
+    if (!visibility && !step) throw new ProfileSettingsError('invalid_patch');
+    return getDb().transaction(() => {
+      const current = this.gettingStarted();
+      if (revision !== current.revision) throw new ProfileSettingsError('revision_conflict', 409);
+      const next: GettingStartedState = { ...current, revision: current.revision + 1,
+        completed: visibility ? current.completed : GETTING_STARTED_IDS.filter(id => id === patch.item ? patch.done : current.completed.includes(id)),
+        hidden: visibility ? patch.hidden as boolean : current.hidden };
+      setSetting('brief.getting-started.v1', JSON.stringify(next));
+      return next;
+    }).immediate();
   }
   voice(): VoicePreference {
     const raw = getSetting('cfg.tts');

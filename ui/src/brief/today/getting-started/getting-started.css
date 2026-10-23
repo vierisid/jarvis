@@ -1,0 +1,17 @@
+.brief-root .brief-setup-sequence { min-width:0; }
+.brief-root .brief-setup-hero { overflow:visible; }
+.brief-root .brief-setup-hero .brief-today-paper-face { min-height:100%; height:auto; }
+.brief-root .brief-setup-hero .brief-today-paper-actions { margin-top:auto; }
+.brief-root .brief-setup-controls { display:flex; align-items:center; flex-wrap:wrap; gap:4px 16px; margin-top:8px; }
+.brief-root .brief-setup-controls > span { margin-right:auto; }
+.brief-root .brief-setup-resume { padding:8px 0; }
+.brief-root .brief-setup-error { margin-top:12px; }
+.brief-root .brief-setup-destination { display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:16px 20px; margin-bottom:24px; }
+.brief-root .brief-setup-destination > div:first-child { flex:1 1 240px; }
+.brief-root .brief-setup-destination p { margin:6px 0 0; }
+.brief-root .brief-setup-destination .brief-setup-error { flex-basis:100%; }
+.brief-root .brief-today-primary > .brief-decision-stack + .brief-setup-sequence,
+.brief-root .brief-today-primary > .brief-decision-stack + .brief-setup-resume { margin-top:20px; }
+@container brief-decision (max-width:580px) {
+  .brief-root .brief-setup-hero .brief-today-paper-stage { min-height:280px; }
+}

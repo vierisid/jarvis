@@ -1,3 +1,6 @@
+import { registerNavigationCompatibility } from '../brief/registrations/navigation-compatibility';
+import { registerReconciliation } from '../brief/registrations/reconciliation';
+import { registerOnboarding } from '../brief/registrations/onboarding';
 import { ConnectedWorkspace } from '../brief/connected-workspace';
 import { MIN_BUN_VERSION, versionAtLeast } from '../util/bun-minimum.ts';
 import { connectedGoogle } from '../brief/connected-workspace-runtime';
@@ -82,7 +85,7 @@ import { CommitmentExecutor } from "./commitment-executor.ts";
 import { classifyEvent } from "./event-classifier.ts";
 import { createApiRoutes, setCorsOrigin } from "./api-routes.ts";
 import { createPostSetupServices } from "./post-setup-services.ts";
-import { createDaemonOnboardingRuntime } from "../onboarding-next/runtime/daemon.ts";
+import { createDaemonOnboardingAssembly } from "../onboarding-next/runtime/daemon-assembly.ts";
 import { runtimeModules } from "../onboarding-next/runtime/generated/catalog.ts";
 import { createBriefCapabilities } from '../brief/registrations/index.ts';
 import { registerConversations } from '../brief/registrations/conversations.ts';
@@ -116,6 +119,7 @@ import { sendDesktopNotification, sendDesktopNotificationReceipt } from "../comm
 import { channelLabel, failureText, projectFailure } from "../failures/projection.ts";
 import { bindingRefusalNotifier, workflowRunNotice } from "../workflows/runtime/binding-refusals.ts";
 import { ensureUiBuilt } from "./ui-autobuild.ts";
+import { localIntegrationEnabled, buildLocalIntegrationUi } from "./local-integration.ts";
 import { SidecarManager, buildEnrollmentUrls } from "../sidecar/manager.ts";
 import {
   beginDashboardIntro,
@@ -209,6 +213,8 @@ let suggestionComposer: SuggestionComposer | null = null;
 let briefOpportunityActivation: OpportunityActivation | null = null;
 let briefPreparedOpportunities: PreparedOpportunities | null = null;
 let briefWorkflowComposition: BriefCompositionProvider | null = null;
+let onboardingAssembly: ReturnType<typeof createDaemonOnboardingAssembly> | null = null;
+let onboardingComposer: (() => import('../actions/tools/workflow-composer').ComposeDeps) | null = null;
 let registry: ServiceRegistry | null = null;
 let healthMonitor: HealthMonitor | null = null;
 let commitmentExecutor: CommitmentExecutor | null = null;
@@ -397,6 +403,9 @@ async function handleShutdown(signal: ShutdownReason): Promise<void> {
   briefPreparedOpportunities = null;
   suggestionComposer?.stop();
   suggestionComposer = null;
+  onboardingAssembly?.stop();
+  await onboardingAssembly?.idle();
+  onboardingAssembly = null; onboardingComposer = null;
   briefWorkflowComposition?.stop();
   briefWorkflowComposition = null;
   console.log(`\n[Daemon] Received ${signal}, draining gracefully (deadline ${budgetMs}ms)...`);
@@ -600,6 +609,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     process.exit(1);
   }
 
+  const localIntegration = localIntegrationEnabled(jarvisConfig);
+  if (localIntegration) console.log("[Daemon] Local development: connected dashboard, real providers, persistent local data");
+
   // Resolve the bench debug gate once, before any service starts: it refuses a
   // hosted install and deletes JARVIS_DEBUG_RPC from process.env so explicit
   // `{ ...process.env }` spawns stop copying it (defense in depth only, see
@@ -688,6 +700,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     noLocalTools: userConfig?.noLocalTools ?? false,
   };
 
+  if (localIntegration && (dataDir !== jarvisConfig.daemon.data_dir || dbPath !== jarvisConfig.daemon.db_path || port !== jarvisConfig.daemon.port)) {
+    throw new Error("Local integration cannot override its isolated vault or port through daemon arguments");
+  }
+
   // Resolve the listen spec ONCE, before anything is persisted: a malformed
   // `daemon.listen` must fail fast here, not after the lockfile write (a
   // stale TCP lockfile from a mid-boot crash would mislead `jarvis stop`).
@@ -723,6 +739,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 2. Initialize database
     logWithTimestamp(`Initializing database at ${config.dbPath}`);
     initDatabase(config.dbPath);
+    const { syncInterviewProfileKnowledgeAtStartup } = await import('../vault/user-profile.ts');
+    syncInterviewProfileKnowledgeAtStartup((message) => logWithTimestamp(message));
     logWithTimestamp('Database initialized successfully');
 
     // 2.0. Wire LLM usage tracking to the vault DB so every chatTier/streamTier
@@ -913,6 +931,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       config.port,
       agentService,
       listen.kind === 'unix' ? listen.path : undefined,
+      localIntegration ? '127.0.0.1' : undefined,
     );
 
     // 5b. Create channel service for external comms (Telegram, Discord)
@@ -4716,8 +4735,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 9. Ensure UI is built (auto-build if ui/dist is missing or empty)
     const repoRoot = path.join(import.meta.dir, '../..');
-    const uiDistDir = path.join(repoRoot, 'ui', 'dist');
-    ensureUiBuilt(repoRoot, logWithTimestamp);
+    const uiDistDir = localIntegration ? buildLocalIntegrationUi(repoRoot) : path.join(repoRoot, 'ui', 'dist');
+    if (!localIntegration) ensureUiBuilt(repoRoot, logWithTimestamp);
 
     // 9b. Set up API routes + dashboard static files
     const briefGoalMeasurements = new GoalMeasurements(getDb());
@@ -4741,7 +4760,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       pieces: () => connectedPieces,
       hosted: () => isHostedInstall(jarvisConfig),
     });
-    const briefMemoryStream = new MemoryStream(getDb(), briefMemoryUsage, briefMemoryForget);
+    const briefMemoryStream = new MemoryStream(getDb(), briefMemoryUsage, briefMemoryForget, () => true);
     const briefDecisions = new DecisionQueue(getDb(), { approvalManager, deferredExecutor, wsService, auditTrail });
     const briefDecisionDocuments = new DecisionDocuments(getDb(), briefDecisions,
       { approvalManager, deferredExecutor, wsService, auditTrail }, documentFactBindings());
@@ -4767,6 +4786,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       eventBus: { publish: (type, payload) => sharedEventBus.publish(type, payload) },
     }, process.env.JARVIS_BRIEF_QUIET_AWARENESS);
     const briefEnabled: BriefCapabilityId[] = [];
+    if (process.env.JARVIS_BRIEF_NAVIGATION_COMPATIBILITY === '1') briefEnabled.push('navigationCompatibility');
+    if (process.env.JARVIS_BRIEF_RECONCILIATION === '1') briefEnabled.push('reconciliation');
+    if (process.env.JARVIS_BRIEF_ONBOARDING === '1') briefEnabled.push('onboarding');
     if (process.env.JARVIS_BRIEF_GOAL_MEASUREMENTS === '1') briefEnabled.push('goalMeasurements');
     if (process.env.JARVIS_BRIEF_MEMORY_STREAM === '1') briefEnabled.push('memoryStream');
     if (process.env.JARVIS_BRIEF_MEMORY_USAGE === '1') briefEnabled.push('memoryUsage');
@@ -4811,6 +4833,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ...registerConnections(briefConnections),
       ...registerProfileSettings(briefProfileSettings),
       ...registerCompositionIngredients(briefWorkflowComposition),
+      // DashboardRoot is the matching compiled host. Keep activation explicit;
+      // live dependencies still withdraw readiness during shutdown/replacement.
+      ...registerNavigationCompatibility(() => ({ destinations: !!settingsReload,
+        guardedNavigation: !!settingsReload, roomIntents: !!wsService.getServer(), notificationsOutsideChat: !!wsService.getServer() })),
+      ...registerReconciliation(() => ({ snapshots: briefConversations.readiness() === 'ready',
+        sharedSocket: !!wsService.getServer(), identityLifecycle: briefConversations.readiness() === 'ready' })),
+      ...registerOnboarding(() => ({ targets: briefWorkflowContext.readiness() === 'ready',
+        progress: briefConversations.readiness() === 'ready', draftHandoff: briefWorkflowComposition?.readiness() === 'ready' })),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
     const apiContext: import('./api-routes.ts').ApiContext & Record<string, unknown> = {
@@ -5112,7 +5142,21 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ? createPieceLibraryChangeHandler(workflowPieceCatalog, workflowEngineRuntime)
       : undefined;
 
-    apiContext.onboardingNext = createDaemonOnboardingRuntime(apiContext, runtimeModules);
+    onboardingAssembly = createDaemonOnboardingAssembly(apiContext, runtimeModules, {
+      origin: externalOrigin.httpOrigin, composer: () => onboardingComposer?.() ?? null,
+      localIntegration,
+      roomStatus: (_scope, step) => {
+        const required: Partial<Record<typeof step, BriefCapabilityId[]>> = {
+          today: ['decisions', 'outcomes', 'goalMeasurements'], workflows: ['workflowComposition'],
+          opportunities: ['preparedOpportunities', 'opportunityActivation'], 'needs-you': ['decisions', 'decisionEdits'],
+          goals: ['goalMeasurements'], memory: ['memoryStream', 'memoryUsage'], 'connected-workspace': ['connections'],
+          profile: ['profileSettings'], settings: ['profileSettings'], pebble: ['conversations', 'chatTransport'],
+        };
+        const snapshot = briefCapabilities.snapshot();
+        return (required[step] ?? []).every(id => snapshot.capabilities[id].enabled) ? 'ready' : 'unavailable';
+      },
+    });
+    apiContext.onboardingNext = onboardingAssembly.runtime;
 
     const apiRoutes = {
       ...createApiRoutes(apiContext),
@@ -5365,6 +5409,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           })),
           library: composerLibrary, executionTargets: collectExecutionTargets(),
         });
+        onboardingComposer = compositionDependencies;
         briefWorkflowComposition?.configure(compositionDependencies);
         if (process.env.JARVIS_BRIEF_PREPARED_OPPORTUNITIES === '1') {
           const quality = await loadPreparedQualityGate({ authority: authorityEngine,

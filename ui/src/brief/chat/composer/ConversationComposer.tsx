@@ -20,6 +20,7 @@ interface Props {
   /** Shared writing controls can also prepare a workflow without a chat turn. */
   sendingLabel?: string;
   suggestionsLabel?: string;
+  sendUnavailableReason?: string;
 }
 export function ConversationComposer(props: Props) {
   const availability = composerAvailability(props.mode, props.binding);
@@ -30,7 +31,7 @@ export function ConversationComposer(props: Props) {
   return <ScopedComposer key={JSON.stringify([props.binding!.scopeId, props.binding!.conversationId])} {...props} binding={props.binding!} />;
 }
 
-function ScopedComposer({ binding, suggestions = [], label = "Message Jarvis", placeholder = "Ask Jarvis…", reducedMotion, attachmentControl, ingredients, sendingLabel = "Sending…", suggestionsLabel = "Message suggestions" }: Props & { binding: ComposerBinding }) {
+function ScopedComposer({ binding, suggestions = [], label = "Message Jarvis", placeholder = "Ask Jarvis…", reducedMotion, attachmentControl, ingredients, sendingLabel = "Sending…", suggestionsLabel = "Message suggestions", sendUnavailableReason }: Props & { binding: ComposerBinding }) {
   const id = useId(), input = useRef<HTMLTextAreaElement>(null);
   const composing = useRef(false), compositionEnded = useRef(-Infinity);
   const lock = useRef(false), mounted = useRef(true);
@@ -49,8 +50,8 @@ function ScopedComposer({ binding, suggestions = [], label = "Message Jarvis", p
   // Mirrors client.send: text or attachments, and every attachment ready.
   const files = binding.attachments ?? { count: 0, ready: true };
   const notReady = !working && files.count > 0 && !files.ready;
-  const disabled = !binding.connected || binding.metadataPending || !!pending || (!working && ((!binding.draft.trim() && !files.count) || !!invalid || notReady));
-  const status = error || invalid || (!binding.connected ? "Reconnecting… Your draft is kept." : stopping ? "Stopping response…"
+  const disabled = !!sendUnavailableReason || !binding.connected || binding.metadataPending || !!pending || (!working && ((!binding.draft.trim() && !files.count) || !!invalid || notReady));
+  const status = sendUnavailableReason || error || invalid || (!binding.connected ? "Reconnecting… Your draft is kept." : stopping ? "Stopping response…"
     : pending === "send" || binding.pendingAcceptance ? sendingLabel : binding.error
     ?? (notReady ? "Attachments must finish before sending." : null));
 

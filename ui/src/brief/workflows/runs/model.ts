@@ -79,6 +79,7 @@ export interface ManualRunRequest extends RunScope {
 export type ManualRunResult =
   | { status: "accepted"; requestId: string; run: RunSummary }
   | { status: "not_submitted"; requestId: string }
+  | { status: "rejected"; requestId: string; message: string }
   | { status: "uncertain"; requestId: string };
 /** The durable outcome of one manual Run request, read back by its ID (#1093). */
 export type ManualRunCheck =

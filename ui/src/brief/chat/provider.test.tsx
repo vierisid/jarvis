@@ -305,3 +305,24 @@ test('a scoped conversation still shows approvals, clarifiers, repeat-backs and 
   expect(observed.approvals).toEqual([]);
   expect(requests.filter(path => path.startsWith('/api/authority/approvals')).length).toBe(fetched);
 });
+
+
+test('only opening the Pebble creates its first chat, once under StrictMode, with explicit failure retry', async () => {
+  const { client, api } = clientFixture();
+  let created = 0, active = false, fail = false;
+  api.tabs = async () => ({ workspaceId: 'workspace', revision: '1', activeConversationId: active ? tab.conversationId : null, tabs: active ? [tab] : [] });
+  api.ensureActive = async () => { created++; if (fail) throw Error('Offline'); active = true; return tab; };
+  await render(client, 'today', 'dark', true, false); await open(sockets[0]!);
+  expect(created).toBe(0);
+  await render(client, 'today', 'dark', true, true);
+  expect(created).toBe(1); expect(observed.state.activeId).toBe(tab.conversationId);
+  await render(client, 'goals', 'light', true, true); expect(created).toBe(1);
+  await render(client, 'today', 'dark', true, false); await render(client, 'today', 'dark', true, true);
+  expect(created).toBe(1);
+  active = false; fail = true;
+  await React.act(async () => client.store.restoreTabs(await api.tabs(new AbortController().signal)));
+  expect(created).toBe(2); expect(observed.status.error).not.toBeNull();
+  await render(client, 'today', 'dark', true, true); expect(created).toBe(2);
+  fail = false; await React.act(async () => { await client.ensureActive(); });
+  expect(created).toBe(3); expect(observed.state.activeId).toBe(tab.conversationId);
+});

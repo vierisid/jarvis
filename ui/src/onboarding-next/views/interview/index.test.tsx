@@ -49,10 +49,10 @@ async function key(options: KeyboardEventInit = {}) {
 const answer: AnswerIntent = { sessionId: "session-1", turnId: "question-1", clientRequestId: "request-1", text: "I am building a SaaS product." };
 
 describe("ON-U-04 written interview", () => {
-  test("renders only provider questions and emits a request without optimistic clearing or service effects", async () => {
+  test("renders provider questions and clears sent text without service effects", async () => {
     await mount(); input().focus(); const field = input(); await click("Send");
     expect(submitted).toEqual([answer]); expect(input()).toBe(field); expect(document.activeElement).toBe(field);
-    expect(input().value).toBe(answer.text); expect(host.querySelector("h1")?.textContent).toBe("What are you working on right now?");
+    expect(input().value).toBe(""); expect(host.querySelector("h1")?.textContent).toBe("What are you working on right now?");
     expect(effects).toBe(0); expect(host.textContent).not.toContain("microphone"); expect(host.querySelector("audio")).toBeNull();
   });
   test("rapid click/Enter/repeat before provider acknowledgement emits one answer", async () => {
@@ -66,7 +66,7 @@ describe("ON-U-04 written interview", () => {
     await click("Send"); expect(submitted.length).toBe(2); expect(submitted[1]?.turnId).toBe("question-2");
   });
   test.each(["connecting", "thinking", "error"] as const)("%s cannot send but keeps the unsent draft", async phase => {
-    await mount({ phase }); await click("Send"); await key(); expect(submitted).toEqual([]); expect(input().value).toBe(answer.text);
+    await mount({ phase }); await click("Send"); await key(); expect(submitted).toEqual([]); expect(input().value).toBe(phase === "thinking" ? "" : answer.text);
   });
   test.each([{ isComposing: true }, { keyCode: 229 }, { repeat: true }])("IME and held Enter do not send: %j", async options => {
     await mount(); await key(options); expect(submitted).toEqual([]);
@@ -160,31 +160,26 @@ describe("ON-U-04 written interview", () => {
   });
   test("a new session resets local guards without reusing previous input", async () => {
     await mount(); await click("Send"); await render({ sessionId: "session-2", draft: { text: "Other work", clientRequestId: "request-1" } });
-    await click("Send"); expect(submitted.length).toBe(2); expect(submitted[1]?.sessionId).toBe("session-2"); expect(input().value).toBe("Other work");
+    await click("Send"); expect(submitted.length).toBe(2); expect(submitted[1]?.sessionId).toBe("session-2"); expect(input().value).toBe("");
   });
-  test("a reader's anchor survives content growth and Latest question returns explicitly", async () => {
-    await mount({ messages: [{ id: "user", role: "user", text: "Earlier answer" }, { id: "a", role: "assistant", text: "Question" }] });
+  test("shows only the latest question and returns to its top on a new turn", async () => {
+    await mount({ messages: [{ id: "u", role: "user", text: "Earlier answer" }, { id: "a", role: "assistant", text: "Question" }] });
     const stage = host.querySelector<HTMLElement>(".on-interview__stage")!;
-    const row = host.querySelector<HTMLElement>('[data-reading-anchor="message:user"]')!;
-    const heading = host.querySelector<HTMLElement>("h1")!;
-    let rowY = 20;
-    stage.getBoundingClientRect = () => ({ top: 0, bottom: 200 } as DOMRect);
-    row.getBoundingClientRect = () => ({ top: rowY, bottom: rowY + 80 } as DOMRect);
-    heading.getBoundingClientRect = () => ({ top: -200, bottom: -100 } as DOMRect);
     stage.scrollTop = 400;
-    await act(async () => stage.dispatchEvent(new Event("scroll", { bubbles: true })));
-    rowY = 65; await render({ cursor: 2, messages: [...props.model.messages] });
-    expect(stage.scrollTop).toBe(445); expect(button("Latest question")).toBeDefined();
-    await click("Latest question"); expect(stage.scrollTop).toBe(0); expect(button("Latest question")).toBeUndefined();
+    await render({ cursor: 2, messages: [...props.model.messages, { id: "new", role: "assistant", text: "What outcome matters?" }] });
+    expect(stage.scrollTop).toBe(0);
+    expect(host.querySelector("h1")?.textContent).toBe("What outcome matters?");
+    expect(host.querySelector(".on-interview__history")).toBeNull();
+    expect(host.textContent).not.toContain("Earlier answer");
   });
-  test("a question retains its reading identity when it moves into history", async () => {
-    await mount();
-    const identity = host.querySelector("h1")!.getAttribute("data-reading-anchor");
-    await render({ cursor: 2, turnId: "question-2", messages: [...props.model.messages, { id: "question-2", role: "assistant", text: "What repeats?" }] });
-    const previous = Array.from(host.querySelectorAll("[data-reading-anchor]")).find(node => node.getAttribute("data-reading-anchor") === identity);
-    expect(previous?.textContent).toContain("What are you working on right now?");
-    expect(previous?.tagName).toBe("P");
-    expect(host.querySelector("h1")!.getAttribute("data-reading-anchor")).not.toBe(identity);
+  test("clears immediately on send, shows pending feedback, and restores a failed answer", async () => {
+    await mount(); input().focus(); await click("Send");
+    expect(input().value).toBe(""); expect(input().readOnly).toBe(true);
+    expect(host.textContent).toContain("Preparing your next question");
+    expect(props.model.draft.text).toBe(answer.text);
+    await render({ phase: "error", error: "Not confirmed", recovery: { kind: "answer", answer } });
+    expect(input().value).toBe(answer.text);
+    await click("Retry answer"); expect(retries).toEqual([{ kind: "answer", answer }]);
   });
   test("resizing an unchanged draft grows the composer without a height-observer loop", async () => {
     const original = globalThis.ResizeObserver;
