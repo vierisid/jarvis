@@ -21,11 +21,13 @@
  * Imported BY THE ENGINE BUNDLE: keep it pure. `fetch` only, no node built-ins.
  */
 
-import { isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
+import { HTTP_PIECE, isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { documentInput, applyDocument, documentFields, type DecisionDocument } from './decision-document';
 
 export const PIECE_AUTHORIZE_PATH = '/v1/jarvis/pieces/authorize';
 export const PIECE_RECEIPT_PATH = '/v1/jarvis/pieces/receipt';
+/** Largest receipt body the daemon's receipt route reads; past it the dispatch stays uncertain. */
+export const PIECE_RECEIPT_MAX_BYTES = 262_144;
 
 /** The name a CODE step is admitted under: it has no piece of its own. */
 export const CODE_STEP_PIECE = '@jarvis/code-step';
@@ -64,8 +66,9 @@ export interface PieceAuthorizePending {
   effectId: string;
   approvalId: string;
   waitpointId: string;
-  /** Set when the step is held because Jarvis is paused (Q-08); no approval is involved. */
+  /** Set when the step is held with no approval: Jarvis is paused (Q-08), or, with `code`, its flow's cards are at the budget (#1039). */
   hold?: string;
+  code?: 'APPROVALS_WAITING';
 }
 
 export type PieceAuthorizeResponse =
@@ -101,7 +104,7 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
     piece: typeof params.piece === 'string' && params.piece ? params.piece : 'unknown',
     action: typeof params.action === 'string' && params.action ? params.action : 'unknown',
     // Only a governed piece's input is reviewed; nothing else's leaves the subprocess.
-    input: governed ? editable ?? sanitizePieceInput(params.input) : {},
+    input: governed ? editable ?? sanitizePieceInput(params.input, params.piece) : {},
     ...(governed ? { inputDigest: await pieceInputDigest(params.input) } : {}),
     // F-14: a supported document travels whole, so a reviewer can revise it.
     ...(governed && editable ? { documentProtocol: 1 as const } : {}),
@@ -111,7 +114,11 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
   const refused = governed
     ? `Governed piece ${body.piece}/${body.action} was not authorized`
     : body.piece === CODE_STEP_PIECE ? 'CODE step was not admitted' : `Piece step ${body.piece}/${body.action} was not admitted`;
-  if (tracksPieceCompletion(params.piece, params.action)) {
+  // Read from what the daemon will read: the projection it is sent. A wide
+  // input can lose a prop to the projection's 40-key cut, and both sides
+  // must then take the same worst case.
+  const tracked = tracksPieceCompletion(params.piece, params.action, governed ? body.input : params.input);
+  if (tracked) {
     const auth = (params.input as { auth?: { access_token?: unknown; type?: unknown } } | null)?.auth;
     const token = auth?.access_token;
     if (auth?.type !== 'CUSTOM_AUTH' && typeof token === 'string') {
@@ -143,7 +150,7 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
     throw new Error(`${refused}: malformed authorization reply`);
   }
   if (reply.governed === false) {
-    if (tracksPieceCompletion(params.piece, params.action)) throw new Error('Completion receipt protocol unavailable; send refused');
+    if (tracked) throw new Error('Completion receipt protocol unavailable; send refused');
     if ('dispatch' in reply && reply.dispatch === 'held') {
       if (reply.approval?.waitpointId) return reply;
       throw new Error(`${refused}: malformed hold reply`);
@@ -153,9 +160,9 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
     return { governed: false };
   }
   if (reply.dispatch === 'approval_required' && reply.approval?.waitpointId) return reply;
-  if (reply.dispatch === 'completed' && tracksPieceCompletion(params.piece, params.action)) return reply;
+  if (reply.dispatch === 'completed' && tracked) return reply;
   if (reply.dispatch === 'authorized') {
-    if (tracksPieceCompletion(params.piece, params.action) && !reply.effectId) throw new Error('Completion receipt protocol unavailable; send refused');
+    if (tracked && !reply.effectId) throw new Error('Completion receipt protocol unavailable; send refused');
     if (reply.document !== undefined) {
       if (!editable) throw new Error('Document authorization requires a compatible engine input');
       // The caller runs the action AFTER this await, on this same input object.
@@ -178,7 +185,7 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   // Keep its data envelope for expressions, but never persist request headers
   // (which can contain the OAuth bearer) as a completion receipt or step output.
   const response = raw as { data?: unknown; status?: unknown; statusText?: unknown } | null;
-  const result = tracksPieceCompletion(params.piece, params.action) && params.piece === '@activepieces/piece-gmail' && response?.data !== undefined
+  const result = tracksPieceCompletion(params.piece, params.action, params.input) && params.piece === '@activepieces/piece-gmail' && response?.data !== undefined
     ? { data: response.data, ...(typeof response.status === 'number' ? { status: response.status } : {}),
       ...(typeof response.statusText === 'string' ? { statusText: response.statusText } : {}) }
     : raw;
@@ -186,9 +193,37 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
     const response = await (params.fetchImpl ?? fetch)(`${params.apiUrl.replace(/\/+$/u, '')}${PIECE_RECEIPT_PATH}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${params.engineToken}`,
         'X-Jarvis-Step-Name': params.stepName, 'X-Jarvis-Execution-Path': JSON.stringify(params.executionPath) },
-      body: JSON.stringify({ effectId: governance.effectId, result: result ?? null }), signal: AbortSignal.timeout(10_000),
+      body: receiptBody(params.piece, governance.effectId, result), signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) throw new Error(`Provider completion could not be recorded (${response.status}); automatic replay is blocked`);
   }
   return result;
+}
+
+/**
+ * The receipt the daemon stores for a tracked send. An HTTP response is
+ * whatever the server returned, and one past the route's cap would leave a
+ * request that WAS sent recorded as uncertain and fail its step (#961). So an
+ * HTTP receipt that does not fit keeps the status and headers and says how
+ * large the body was; the step still returns the whole response to the flow.
+ * Only a retry of a step whose receipt is recorded reads the stored copy.
+ */
+export function receiptBody(piece: unknown, effectId: string, result: unknown): string {
+  if (piece !== HTTP_PIECE) return JSON.stringify({ effectId, result: result ?? null });
+  const response = result !== null && typeof result === 'object' ? result as { status?: unknown; headers?: unknown; body?: unknown } : {};
+  // A session cookie the server set is a credential, and the receipt is durable.
+  const stored = result !== null && typeof result === 'object' && !Array.isArray(result) && 'headers' in result
+    ? { ...(result as Record<string, unknown>), headers: withoutCookies(response.headers) } : result;
+  const whole = JSON.stringify({ effectId, result: stored ?? null });
+  if (new TextEncoder().encode(whole).byteLength <= PIECE_RECEIPT_MAX_BYTES) return whole;
+  const bodyBytes = new TextEncoder().encode(JSON.stringify(response.body ?? null)).byteLength;
+  const reduced = JSON.stringify({ effectId, result: { status: response.status ?? null, headers: withoutCookies(response.headers), body: null, receiptOmittedBodyBytes: bodyBytes } });
+  if (new TextEncoder().encode(reduced).byteLength <= PIECE_RECEIPT_MAX_BYTES) return reduced;
+  return JSON.stringify({ effectId, result: { status: response.status ?? null, headers: null, body: null, receiptOmittedBodyBytes: bodyBytes } });
+}
+
+/** Response headers without `set-cookie`, in any letter case. */
+function withoutCookies(headers: unknown): unknown {
+  if (headers === null || typeof headers !== 'object' || Array.isArray(headers)) return headers ?? null;
+  return Object.fromEntries(Object.entries(headers as Record<string, unknown>).filter(([name]) => name.toLowerCase() !== 'set-cookie'));
 }

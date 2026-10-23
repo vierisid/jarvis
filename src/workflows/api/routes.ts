@@ -94,6 +94,7 @@ import { claimContinuation } from "../runtime/continuation";
 import { emergencyHold, KILLED_REASON, manualStartRefusal } from "../runtime/emergency-hold";
 import {
   deleteConnectionInProject,
+  getConnectionByExternalId,
   getConnectionInProject,
   listConnections,
   updateConnectionById,
@@ -102,9 +103,11 @@ import {
   type AppConnectionType,
 } from "../db/repos/app-connection";
 import type { CredentialResolver } from "../credentials/adapter";
+import { pastedOAuth2Status, stampOAuth2Claim } from "../credentials/pasted-oauth2";
 import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers/manager";
 import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
 import type { PieceLookup } from "../runtime/piece-catalog";
+import { isCommunityPiece } from "../runtime/step-admission";
 import { CATALOG, findCatalogEntry } from "../pieces-library/catalog";
 import { piecesManagedByHost } from "../pieces-library/shared";
 import {
@@ -908,6 +911,10 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             // renders a connection picker so the user picks an
             // existing connection instead of re-entering credentials.
             ...(p.auth ? { auth: p.auth } : {}),
+            // #955: a community piece's actions run without approval, and the
+            // editor badges its steps. The daemon decides, so the badge and
+            // the gate in `pieceAuthorize` cannot disagree.
+            ...(isCommunityPiece(p.name) ? { notApprovalGated: true } : {}),
             actions: Object.values(p.actions).map((a) => ({
               name: a.name,
               displayName: a.displayName,
@@ -1149,7 +1156,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflows/connections": {
       GET: (req) =>
         trapErrors(() => {
-          const list = listConnections(callerProject(req)).map((c) => ({
+          const list = listConnections(callerProject(req)).map((c) => ({ c, oauth2: pastedOAuth2Status(c.type, c.value) })).map(({ c, oauth2 }) => ({
             id: c.id,
             externalId: c.externalId,
             displayName: c.displayName,
@@ -1162,7 +1169,10 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             preSelectForNewProjects: c.preSelectForNewProjects,
             created: c.created,
             updated: c.updated,
-            // value intentionally omitted -- secrets stay server-side.
+            // value intentionally omitted -- secrets stay server-side. For an
+            // OAuth2 row only whether Jarvis refreshes it and when its token
+            // expires, so the panel can say so (#954).
+            ...(oauth2 ? { oauth2 } : {}),
           }));
           const sources = (opts.credentialResolver?.list() ?? []).map((s) => ({
             id: s.id,
@@ -1215,6 +1225,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // later fail with a confusing "auth missing" at run time).
           const schemaError = validateConnectionValueShape(body.type, body.value);
           if (schemaError) return err(schemaError);
+          // An OAuth2 token with `expires_in` is dated now, as upstream dates
+          // the tokens it stores, so Jarvis knows when to refresh it (#954).
+          const previous = getConnectionByExternalId(callerProject(req), body.pieceName, body.externalId);
           const conn = upsertConnection({
             projectId: callerProject(req),
             externalId: body.externalId,
@@ -1222,7 +1235,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             type: body.type,
             pieceName: body.pieceName,
             pieceVersion: body.pieceVersion ?? "0.0.0",
-            value: body.value,
+            value: stampOAuth2Claim(body.type, body.value, previous?.value),
           });
           return ok(
             {
@@ -1315,7 +1328,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // `updateConnectionById` for the race this also closes.
           const merged = updateConnectionById(callerProject(req), id, {
             ...(body.displayName !== undefined ? { displayName: body.displayName } : {}),
-            ...(body.value !== undefined ? { value: body.value } : {}),
+            ...(body.value !== undefined ? { value: stampOAuth2Claim(current.type, body.value, current.value) } : {}),
             ...(status ? { status } : {}),
           });
           if (!merged) return err("connection not found", 404);
@@ -1406,6 +1419,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // A step parked while Jarvis was paused is released by Jarvis on
           // Resume, never by a URL (Q-08).
           if (wp.type === "HOLD") return err("This waitpoint holds a step while Jarvis is paused; Jarvis releases it when resumed", 403);
+          // A step waiting for a place in its flow's card budget is released
+          // by Jarvis when one frees, never by a URL (#1039).
+          if (wp.type === "DEFER") return err("This waitpoint holds a step until its workflow has room for another approval card; Jarvis releases it", 403);
           if (wp.resumedAt !== null) return err("waitpoint already resumed", 410);
           const run = getFlowRun(wp.flowRunId);
           if (!run) return err("waitpoint references a missing run", 410);
@@ -2273,7 +2289,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           if (!run) return err("run not found", 404);
           // Acknowledgement closes the durable dispatch fence. It does not
           // claim that an already-dispatched remote effect was rolled back.
-          return ok({ ok: true, ...cancelFlowRun(run.id) });
+          // The ids of the cards it closed are for the daemon's surfaces, not this answer.
+          const { closedApprovalIds: _closed, ...result } = cancelFlowRun(run.id);
+          return ok({ ok: true, ...result });
         }),
     },
 
@@ -2295,8 +2313,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             created: wp.created,
             ...(children.some(child => child.waitpointId === wp.id)
               ? { child: children.find(child => child.waitpointId === wp.id) }
-              // A HOLD is released by Jarvis on Resume, never by a URL (Q-08).
-              : { resumeUrl: wp.type === "HOLD" ? null : `/api/webhooks/waitpoints/${wp.id}` }),
+              // A HOLD is released by Jarvis on Resume, a DEFER when its flow
+              // has room for its card; never by a URL (Q-08, #1039).
+              : { resumeUrl: wp.type === "HOLD" || wp.type === "DEFER" ? null : `/api/webhooks/waitpoints/${wp.id}` }),
           }));
           return ok({ runId, waitpoints });
         }),

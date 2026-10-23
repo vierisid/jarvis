@@ -2,6 +2,7 @@ import { registerNavigationCompatibility } from '../brief/registrations/navigati
 import { registerReconciliation } from '../brief/registrations/reconciliation';
 import { registerOnboarding } from '../brief/registrations/onboarding';
 import { ConnectedWorkspace } from '../brief/connected-workspace';
+import { MIN_BUN_VERSION, versionAtLeast } from '../util/bun-minimum.ts';
 import { connectedGoogle } from '../brief/connected-workspace-runtime';
 import { registerConnections } from '../brief/registrations/connections';
 import { WorkflowContext } from '../brief/workflow-context';
@@ -68,7 +69,7 @@ import { initDebugRpcGate, MIN_SECRET_LENGTH } from "./debug-rpc-gate.ts";
 import { hardenProcessInspection } from "./process-hardening.ts";
 import { modelExecDaemonWarning } from "../util/model-exec-marker.ts";
 import { getRecorder, parseInteractionEvent } from "../skills/recorder.ts";
-import { onRecordingStopped } from "../actions/tools/skills.ts";
+import { endRecordingForDesktopOff, onRecordingStopped } from "../actions/tools/skills.ts";
 import { createObservation } from "../vault/observations.ts";
 import { ObserverService, mapEventType } from "./observer-service.ts";
 import { WebSocketService } from "./ws-service.ts";
@@ -168,7 +169,12 @@ import {
   SUB_PEBBLE_COLORS, PEBBLE_ROOMS, exactRoomKey, findRoomKey, type PanelLookups, type SubPebbleCand,
 } from "./pebble-intents.ts";
 import { makeSpeakConfirmation } from "./pebble-confirmation.ts";
+import { runRoomPanelIntent, type RoomPanelDeps } from "./pebble-room-panel.ts";
+import { PEBBLE_CHANNEL } from "./pebble-dialogue.ts";
 import { makePalettePick, makePebbleNavTool } from "./pebble-nav-tool.ts";
+import { fetchPebbleForegroundApp, fetchPebbleScreenshot, pebbleActionDirectives, type PebbleDesktopDispatch } from "./pebble-desktop-context.ts";
+import { skipGenericSidecarEvent } from "./sidecar-event-routing.ts";
+import { bindDesktopSwitch, desktopEnabledFromSection, desktopValueNeedsWarning, isDesktopEnabled } from "../actions/tools/desktop-guard.ts";
 import { osFamily } from "../util/execution-environment.ts";
 import { isLocalBrowserDisabled, isNoLocalTools } from "../actions/tools/local-tools-guard.ts";
 
@@ -572,6 +578,11 @@ function printBanner(config: DaemonConfig): void {
 
 Just A Rather Very Intelligent System
   `);
+  // Warn, not refuse: an older Bun still runs everything but HTTPS through the
+  // workflow egress guard, and `jarvis doctor` reports it as a failure.
+  if (!versionAtLeast(Bun.version, MIN_BUN_VERSION)) {
+    console.warn(`[Daemon] Bun ${Bun.version} is older than ${MIN_BUN_VERSION}, which Jarvis needs: HTTPS from workflow HTTP steps and connection refresh cannot verify certificates. Run: bun upgrade`);
+  }
   console.log('[Daemon] Configuration:');
   console.log(`  Port:      ${config.port}`);
   console.log(`  Data Dir:  ${config.dataDir}`);
@@ -728,8 +739,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 2. Initialize database
     logWithTimestamp(`Initializing database at ${config.dbPath}`);
     initDatabase(config.dbPath);
-    const { syncInterviewProfileKnowledge } = await import('../vault/user-profile.ts');
-    syncInterviewProfileKnowledge();
+    const { syncInterviewProfileKnowledgeAtStartup } = await import('../vault/user-profile.ts');
+    syncInterviewProfileKnowledgeAtStartup((message) => logWithTimestamp(message));
     logWithTimestamp('Database initialized successfully');
 
     // 2.0. Wire LLM usage tracking to the vault DB so every chatTier/streamTier
@@ -1602,7 +1613,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           );
           // W6 — push initial blinded state so the eye-strike glyph
           // matches awareness.enabled across daemon restarts.
-          const awarenessEnabled = (jarvisConfig.awareness as { enabled?: boolean })?.enabled ?? true;
+          // Blinded too while desktop.enabled is off: awareness ignores captures then (#905).
+          const awarenessEnabled = ((jarvisConfig.awareness as { enabled?: boolean })?.enabled ?? true) && isDesktopEnabled();
           sidecarManager.dispatchRPC(sidecar.id, 'pebble.set_blinded', { blinded: !awarenessEnabled })
             .catch(() => { /* sidecar might not have the cap yet */ });
           // Deliberately last: the pebble comes up first, then the dashboard
@@ -2011,22 +2023,28 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       sidecarManager.onEvent(async (sidecarId, event) => {
         if (event.event_type !== 'pebble.blind_toggle') return;
         try {
-          const { persistPlainUserPatch } = await import('./user-settings.ts');
+          const { persistAwarenessChoice } = await import('./user-settings.ts');
           const wasEnabled = jarvisConfig.awareness?.enabled ?? true;
           const nextEnabled = !wasEnabled;
           (jarvisConfig.awareness as { enabled?: boolean }).enabled = nextEnabled;
           // Persist only the key that changed. Writing the whole in-memory
           // section would stamp every DEFAULT_CONFIG fill into the row, pinning
           // this install to today's capture interval and cooldowns forever.
-          persistPlainUserPatch('awareness', { enabled: nextEnabled });
+          // The long-press is the user's own choice, so it is marked as one.
+          persistAwarenessChoice(nextEnabled);
           // Toggle live awareness service if it exists.
           if (awarenessService) awarenessService.toggle(nextEnabled);
           // Push visual: blinded = !enabled.
-          await sidecarManager.dispatchRPC(sidecarId, 'pebble.set_blinded', { blinded: !nextEnabled })
+          // Awareness drops every capture while desktop.enabled is off (#905),
+          // so turning it on then still leaves the pebble blind, and says so.
+          const seeing = nextEnabled && isDesktopEnabled();
+          await sidecarManager.dispatchRPC(sidecarId, 'pebble.set_blinded', { blinded: !seeing })
             .catch(() => { /* sidecar may have detached */ });
-          const ack = nextEnabled
+          const ack = seeing
             ? "Awareness back on. I can see your screen again."
-            : "Awareness off. I can't see anything until you toggle it back.";
+            : nextEnabled
+              ? "Awareness is on, but desktop control is off, so I still can't see your screen."
+              : "Awareness off. I can't see anything until you toggle it back.";
           await speakConfirmation(sidecarId, ack, { cancelled: false });
           console.log(`[ambient-ui] blind toggle → awareness.enabled=${nextEnabled}`);
         } catch (err) {
@@ -2050,6 +2068,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (event.event_type !== 'ui_interaction') return;
         const rec = getRecorder();
         if (!rec.isRecording()) return;
+        // desktop.enabled was turned off mid-recording (#905): stop it and
+        // keep nothing it captured.
+        if (!isDesktopEnabled()) {
+          endRecordingForDesktopOff();
+          return;
+        }
         const interaction = parseInteractionEvent(event.payload);
         if (!interaction) {
           console.warn('[Daemon] Dropped malformed ui_interaction event from the sidecar');
@@ -2066,6 +2090,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       const eyeTimers = new Map<string, ReturnType<typeof setTimeout>>();
       sidecarManager.onEvent((sidecarId, event) => {
         if (event.event_type !== 'screen_capture') return;
+        // Awareness ignores captures while desktop.enabled is off (#905), so
+        // the eye must not say it is looking.
+        if (!isDesktopEnabled()) return;
         // Fire-and-forget; cap concurrency on the wire.
         sidecarManager.dispatchRPC(sidecarId, 'pebble.set_eye', { active: true })
           .catch(() => { /* sidecar may not have pebble cap */ });
@@ -2220,6 +2247,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // don't false-positive on conversational sentences.
         const re = /\b(help|look|explain|what'?s?|what is|describe|tell me about|analy[sz]e)\b[^.?!]*\b(this|that|here|the screen|on (?:my )?screen|the area|the region)\b/;
         if (!re.test(t)) return false;
+        // No region capture while desktop.enabled is off (#905): the turn goes
+        // on without one, and the pebble's directives say why.
+        if (!isDesktopEnabled()) return false;
 
         // The runResponseCycle caller already claimed the pendingSummons
         // slot for this turn (summon hotkey → listening → audio.session_end
@@ -2273,11 +2303,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // but can run to the bus's queue TTL, so show it is working, and
           // drop the reply if the turn was cancelled meanwhile.
           await setState(sidecarId, 'thinking', '');
+          // Only this sidecar's panels may say whether it switched (#1026).
           const outcome = await wsService.requestRoomAction({
             room: target.key,
             action: 'switch_tab',
             args: { tab },
-          });
+          }, undefined, { sidecar: sidecarId });
           console.log(`[ambient-ui] in-panel action: switch_tab tab="${tab}" on ${target.title}: ${outcome}`);
           if (ctrl.cancelled) return true;
           await speakConfirmation(sidecarId, tabSwitchReply(target.title, tabRaw, outcome), ctrl);
@@ -2578,88 +2609,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // it, it can pick the actual pixel location of the button. Returns
       // null on timeout/failure (best-effort).
       const NEEDS_SCREENSHOT = /\b(where|show me|show where|point (?:to|at)|guide (?:me )?to|find (?:me )?(?:the )?|highlight|locate|tell me where|how (?:do I|to)\s+(?:open|get to|find|see|access|click|reach|use|run|do|start|enable|disable|turn on|turn off)|what'?s? (?:on|on my) (?:my )?screen|what (?:am I|are we) looking at|what (?:do you|can you) see|what'?s? (?:this|happening here)|describe (?:my |the )?screen|read (?:my |the )?screen)\b/i;
-      type ScreenshotInfo = {
-        base64: string;
-        mediaType: string;
-        // Scale factors: capture-native pixels per sent-image pixel. The
-        // model picks coordinates in the (downscaled) image; we multiply by
-        // these before dispatching pebble.point_at. =1 when the image was not
-        // resized.
-        //
-        // CAPTURE-NATIVE, not "real-screen" (#604): orig_* is the pixel size
-        // of whatever `platformCaptureScreen` wrote, read off that image's own
-        // header, so it is backing pixels on a Retina Mac and primary-monitor
-        // pixels on Windows. That is not the space the pebble eases in. The
-        // multiply site has the per-platform detail and the reason no
-        // conversion is applied.
-        scaleX: number;
-        scaleY: number;
-        origWidth: number;
-        origHeight: number;
-        sentWidth: number;
-        sentHeight: number;
-      };
-      const fetchScreenshot = async (sidecarId: string): Promise<ScreenshotInfo | null> => {
-        try {
-          const result = await Promise.race<unknown>([
-            // compact: true → sidecar downscales to ≤1600 wide and
-            // re-encodes as JPEG (q=80). Keeps the round-trip well under
-            // the 16 MB WS limit and within vision-LLM-friendly sizes
-            // while still resolving button text legibly.
-            sidecarManager.dispatchRPC(sidecarId, 'capture_screen', { compact: true, max_width: 1600, jpeg_quality: 80 }),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000)),
-          ]);
-          const obj = result as Record<string, unknown> | undefined;
-          const binary = obj?._binary as { data?: string; mime_type?: string } | undefined;
-          if (!binary?.data) return null;
-          const sentWidth = Number(obj?.width ?? 0) || 0;
-          const sentHeight = Number(obj?.height ?? 0) || 0;
-          const origWidth = Number(obj?.orig_width ?? 0) || sentWidth;
-          const origHeight = Number(obj?.orig_height ?? 0) || sentHeight;
-          const scaleX = sentWidth > 0 ? origWidth / sentWidth : 1;
-          const scaleY = sentHeight > 0 ? origHeight / sentHeight : 1;
-          return {
-            base64: binary.data,
-            mediaType: binary.mime_type || 'image/jpeg',
-            scaleX,
-            scaleY,
-            origWidth,
-            origHeight,
-            sentWidth,
-            sentHeight,
-          };
-        } catch (err) {
-          console.warn('[ambient-ui] capture_screen failed:', err);
-          return null;
-        }
-      };
-
-      // T20b — query the sidecar for the currently focused OS window
-      // (Chrome tab, VSCode, CapCut, etc.) so the LLM can answer
-      // "where do I click for X?" without the user having to specify
-      // the app. Returns null on any failure — best-effort context.
-      const fetchForegroundApp = async (sidecarId: string): Promise<{ title: string; processName?: string } | null> => {
-        try {
-          const result = await Promise.race<unknown>([
-            sidecarManager.dispatchRPC(sidecarId, 'list_windows', {}),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 800)),
-          ]);
-          const arr = Array.isArray(result) ? result : (result as { windows?: unknown }).windows;
-          if (!Array.isArray(arr)) return null;
-          for (const w of arr) {
-            const ww = w as Record<string, unknown>;
-            if (ww.is_foreground) {
-              const title = String(ww.title ?? '').trim();
-              const processName = ww.process_name ? String(ww.process_name) : undefined;
-              if (!title && !processName) return null;
-              return { title, processName };
-            }
-          }
-          return null;
-        } catch {
-          return null;
-        }
-      };
+      // Both reads are switched off with desktop.enabled (#905): pebble-desktop-context.ts.
+      const pebbleDispatch: PebbleDesktopDispatch = (sidecarId, method, params) => sidecarManager.dispatchRPC(sidecarId, method, params);
+      const fetchScreenshot = (sidecarId: string) => fetchPebbleScreenshot(pebbleDispatch, sidecarId);
+      const fetchForegroundApp = (sidecarId: string) => fetchPebbleForegroundApp(pebbleDispatch, sidecarId);
 
       const buildPanelContext = async (sidecarId: string): Promise<string> => {
         const list = panelsBySidecar.get(sidecarId);
@@ -2675,34 +2628,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // when there are some.
         const sections: string[] = [];
 
-        // Action-execution directives. Every cycle through here is a
-        // voice command — the user already authorized whatever they
-        // asked for by saying it out loud. The model has been observed
-        // adding extra "may I?" rounds and giving up halfway through
-        // multi-step desktop actions; these directives short-circuit
-        // both failure modes.
-        sections.push(
-          '# Acting on the user\'s machine — execute, don\'t ask',
-          '',
-          'A spoken request IS the authorization. When the user says "click X", "open Y", "send Z", "type ...", just DO it. Do not reply with "I need your permission first" / "shall I go ahead?" / "do you want me to ...?" — the user already said yes by speaking the request. The only exception is genuinely irreversible operations (deleting files, sending money, posting publicly to recipients) — for those, ask once. Clicking icons, opening apps, focusing windows, switching tabs, taking screenshots, navigating URLs are NOT in that category.',
-          '',
-          '**Prefer the efficient automation path — never click via the OS cursor when there\'s a structured alternative.**',
-          '',
-          '  - **Web apps** (Gmail, Notion, GitHub, the JARVIS dashboard, anything in a browser): use `browser_navigate` / `browser_snapshot` / `browser_click` / `browser_type`. These dispatch DOM events through CDP — no OS cursor involved, very reliable, very fast. The user can keep using their mouse for other things while you operate the page.',
-          '',
-          '  - **Native Windows apps** (Notepad, File Explorer, settings, dialogs, menus): `desktop_snapshot` to enumerate UI elements, then `desktop_click({element_id})`. Win32 UIA invokes the element directly via COM patterns where possible — no cursor move when the widget supports the Invoke pattern.',
-          '',
-          '  - **Open an app**: `desktop_launch_app({name: "Chrome"})` is faster and more reliable than clicking a desktop icon. Only fall back to clicking icons if launch_app doesn\'t resolve the app.',
-          '',
-          'The pebble is a *visual narrator only* — it flies to the action target so the user can see what JARVIS is doing, but it does NOT control the user\'s cursor. The user keeps full mouse freedom while you operate apps through the structured paths above.',
-          '',
-          'When the user asks for something that genuinely requires a click on a non-UIA surface (desktop icon, system tray, popup), prefer asking them to do it themselves rather than wrestling with coordinate clicks — coordinate clicks move the OS cursor and steal control from the user.',
-          '',
-          '**Sidecar is primary.** The Go sidecar is connected and exposes desktop / browser / filesystem / clipboard / system_info / screenshot capabilities. Tools auto-route to it — you never need to specify a `target` parameter unless you want to override. If a tool returns "Local desktop control is not available", that\'s the local-only path leaking through; mention it in your reply but try the same call again — the auto-route should pick up the connected sidecar on the second attempt.',
-          '',
-          'When you finish a multi-step task, give a short verbal confirmation ("Done — Chrome is up.") rather than re-narrating each step. The pebble already showed each step visually.',
-          '',
-        );
+        // Action-execution directives; without the desktop half while
+        // desktop.enabled is off (#905). See pebble-desktop-context.ts.
+        sections.push(...pebbleActionDirectives());
 
         if (foreground) {
           sections.push(
@@ -2769,9 +2697,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
       // The one confirmation every fast path speaks; a cancelled turn leaves
       // the pebble to whoever cancelled it (#964). See pebble-confirmation.ts.
+      // Its mirror goes to the dashboard only, never to Telegram or Discord:
+      // it acknowledges something done on this screen (#1026).
       const speakConfirmation = makeSpeakConfirmation({
         setState,
-        heartbeat: (text) => wsService.broadcastHeartbeat(text),
+        heartbeat: (text) => wsService.broadcastHeartbeatToDashboard(text),
         synthesizer: () => {
           const tts = pebbleTTS;
           return tts ? (text) => tts.synthesize(text) : null;
@@ -3015,6 +2945,29 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         return true;
       };
 
+      // What the open/close <room> fast path may do. See pebble-room-panel.ts.
+      const roomPanelDeps: RoomPanelDeps = {
+        setState,
+        speak: speakConfirmation,
+        openPanel: (sidecarId, key) => {
+          const meta = ROOMS[key]!;
+          return sidecarManager.dispatchRPC(sidecarId, 'panel.spawn', {
+            url: dashboardURL(key),
+            title: meta.title,
+            bounds: boundsForRoom(key, meta.w, meta.h),
+            resizable: true,
+            always_on_top: meta.alwaysOnTop ?? false,
+            multi_instance: false,
+          });
+        },
+        closePanel: async (sidecarId, id) => { await sidecarManager.dispatchRPC(sidecarId, 'panel.close', { id }); },
+        findPanel: (sidecarId, key) => findPanel(sidecarId, key),
+        trackPanel,
+        untrackPanel,
+        log: (message) => console.log(message),
+        warn: (message, err) => console.warn(message, err),
+      };
+
       // tryHandlePanelIntent looks for "open|show|launch <room>" or
       // "close|hide|dismiss <room>" anywhere in the user text. On match
       // it dispatches the right panel RPC, speaks a short confirmation
@@ -3094,61 +3047,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (!key) return false;
 
         const meta = ROOMS[key]!;
-        const confirm = roomAction === 'open' ? `Opening ${meta.title}.` : `Closing ${meta.title}.`;
         console.log(`[ambient-ui] panel intent: ${roomAction} ${key} (matched "${m[0]}")`);
-
-        // Speak the confirmation through the queue-based TTS path so the
-        // user hears feedback even before the window finishes spawning. A turn
-        // already cancelled is left to whoever cancelled it (#964).
-        if (ctrl.cancelled) return true;
-        await setState(sidecarId, 'thinking', '');
-        try { wsService.broadcastHeartbeat(confirm); } catch { /* ignore */ }
-
-        if (roomAction === 'open') {
-          try {
-            const result = await sidecarManager.dispatchRPC(sidecarId, 'panel.spawn', {
-              url: dashboardURL(key),
-              title: meta.title,
-              bounds: boundsForRoom(key, meta.w, meta.h),
-              resizable: true,
-              always_on_top: meta.alwaysOnTop ?? false,
-              multi_instance: false,
-            });
-            // panel.spawn returns { id: "<panel-id>" } — track it so
-            // window-management commands ("expand it", "close the
-            // workflows window") can resolve a target.
-            const id = (result && typeof result === 'object' && 'id' in (result as object))
-              ? String((result as { id?: unknown }).id ?? '')
-              : '';
-            if (id) {
-              trackPanel(sidecarId, { id, key, title: meta.title });
-            }
-          } catch (err) {
-            console.warn(`[ambient-ui] panel.spawn(${key}) failed:`, err);
-          }
-        } else {
-          // panel.close — resolve the target by room key against our
-          // tracker. If multiple panels match (e.g. several workflow
-          // windows), close the most recent.
-          try {
-            const target = findPanel(sidecarId, key);
-            if (target) {
-              await sidecarManager.dispatchRPC(sidecarId, 'panel.close', { id: target.id });
-              untrackPanel(sidecarId, target.id);
-            } else {
-              console.log(`[ambient-ui] no tracked panel for key "${key}" — close is a no-op`);
-            }
-          } catch (err) {
-            console.warn(`[ambient-ui] panel.close(${key}) failed:`, err);
-          }
-        }
-
-        // Speak the confirmation (single sentence, fits in one TTS clip). This
-        // was its own copy, which set `speaking` after the clip was synthesized
-        // without looking at the flag again, so a turn cancelled meanwhile was
-        // left in `speaking` (#964). The confirm was already broadcast above, so
-        // no second heartbeat.
-        await speakConfirmation(sidecarId, confirm, ctrl, { heartbeat: false });
+        await runRoomPanelIntent(roomPanelDeps, sidecarId, { action: roomAction, key, title: meta.title }, ctrl);
         return true;
       };
 
@@ -3435,13 +3335,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         sidecarId: string,
         userText: string,
         ctrl: { cancelled: boolean },
-        opts?: { image?: { base64: string; mediaType: string } },
+        // `historyText` is what the exchange is stored as when the prompt
+        // carries more than the user said (the region path appends framing
+        // about an image the stored history will not have).
+        opts?: { image?: { base64: string; mediaType: string }; historyText?: string },
       ): Promise<void> => runWithOrigin('user', () => runResponseCycleTurn(sidecarId, userText, ctrl, opts));
       const runResponseCycleTurn = async (
         sidecarId: string,
         userText: string,
         ctrl: { cancelled: boolean },
-        opts?: { image?: { base64: string; mediaType: string } },
+        opts?: { image?: { base64: string; mediaType: string }; historyText?: string },
       ): Promise<void> => {
         const cycleStart = Date.now();
         // Mark this machine as the one in use so any background task launched
@@ -3569,6 +3472,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         let fullText = '';
         const llmStart = Date.now();
         let llmDone = false;
+        // Set on a stream error, so the fallback line is never stored as a
+        // reply (see pebble-dialogue.ts recordPebbleExchange).
+        let streamFailed = false;
         try {
           // T9 — auto-screenshot for spatial queries. If the user is
           // asking "where is X" / "show me Y" / "how to open Z" and no
@@ -3640,12 +3546,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                 userText,
                 imageInput.base64,
                 imageInput.mediaType,
-                'pebble',
+                PEBBLE_CHANNEL,
                 panelCtx || undefined,
               )
             : agentService.streamMessage(
                 userText,
-                'pebble',
+                PEBBLE_CHANNEL,
                 panelCtx || undefined,
               );
           const { stream, onComplete } = handle;
@@ -3896,6 +3802,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               break;
             } else if (event.type === 'error') {
               console.warn('[ambient-ui] stream error:', event.error);
+              streamFailed = true;
               if (!fullText) fullText = "I had trouble with that — say it again?";
               llmDone = true;
               break;
@@ -3915,6 +3822,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           const tail = unsynth.trim();
           if (tail) enqueueSentence(tail);
           unsynth = '';
+
+          // The finished exchange, so the next Pebble turn has history to
+          // resolve "do that" against (#927). A dismissed turn returned above.
+          if (!streamFailed && !ctrl.cancelled) agentService.recordPebbleExchange(opts?.historyText ?? userText, fullText);
 
           // Fire-and-forget extraction + learning.
           void onComplete(fullText);
@@ -4232,6 +4143,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // "stuck in working" cases are handled by keeping pendingRegion alive
         // for the whole cycle (below) and by the disconnect cleanup handler.
         if (!pending) return;
+        // The switch was turned off while the overlay was up (#905): the image
+        // is dropped unread and the flow ends as a cancel would.
+        if (!isDesktopEnabled()) {
+          pendingRegionByPebble.delete(sidecarId);
+          pending.ctrl.cancelled = true;
+          await setState(sidecarId, 'idle', '');
+          clearSummon(sidecarId, pending.ctrl);
+          return;
+        }
         // A response cycle is already running for this region. Because onEvent
         // listeners aren't awaited serially, a duplicate `region.captured` can
         // land mid-cycle; ignore it rather than tearing down the live cycle.
@@ -4276,6 +4196,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         try {
           await runResponseCycle(sidecarId, promptText, ctrl, {
             image: { base64: imageBase64, mediaType: mimeType },
+            // Stored as what the user said, without the image framing (#927).
+            historyText: userText,
           });
         } catch (err) {
           console.warn('[ambient-ui] region voice cycle error:', err);
@@ -4521,6 +4443,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // enabled flag is the one knob with a live setter today.
     settingsReload.registerApplier('awareness', async (cfg) => {
       awarenessService?.toggle(cfg.awareness?.enabled !== false);
+    });
+    // desktop (#905): nothing writes the stored desktop section at run time
+    // today, so this does not fire yet (a change takes a restart). It is here
+    // so that a future writer plus a reload also stops the one thing already
+    // running: a skill recording's input hooks on the sidecar.
+    settingsReload.registerApplier('desktop', async () => {
+      if (!isDesktopEnabled() && endRecordingForDesktopOff()) {
+        console.log('[Tools] desktop.enabled turned off: the running skill recording was stopped and discarded.');
+      }
     });
     // voice: resolveRealtimeVoice reads live config per call, so the dashboard
     // needs no applier, but a connected pebble keeps the realtime verdict it
@@ -5045,8 +4976,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // sources (Google OAuth file, etc.) before pieces start asking for
     // connections. Each `jarvis:<source>` external id dispatches to the
     // matching source; non-prefixed ids fall through to the `app_connection`
-    // repo (encrypted at rest).
-    const credentialResolver = new CredentialResolver();
+    // repo (encrypted at rest). A pasted OAuth2 row's token refresh (#954)
+    // connects under the same egress rule as the workflow HTTP step (#961).
+    const credentialResolver = new CredentialResolver({
+      egressPolicy: isHostedInstall(jarvisConfig) ? 'public-only' : 'private-allowed',
+    });
     {
       // Registered unconditionally with a getter reading the live
       // `googleAuth` binding: the settings hot-reload google applier
@@ -5088,6 +5022,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     }
     try {
       engineBoot = await bootstrapWorkflowEngine({
+        // #961: a self-hosted install's HTTP steps may reach its own private
+        // network; a hosted one's reach public addresses only.
+        egressPolicy: isHostedInstall(jarvisConfig) ? 'public-only' : 'private-allowed',
         services: {
           credentialResolver,
           // eventsPoll is the only backend safely wireable up front (no
@@ -5278,6 +5215,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     if (config.noLocalTools) {
       const { setNoLocalTools } = await import('../actions/tools/builtin.ts');
       setNoLocalTools(true);
+    }
+
+    // 9b-ter. desktop.enabled (#905). Bound to the live config object, but a
+    // change takes a restart today: see desktop-guard.ts.
+    bindDesktopSwitch(jarvisConfig);
+    {
+      const stored: unknown = jarvisConfig.desktop;
+      if (desktopValueNeedsWarning(stored)) {
+        console.warn(`[Tools] desktop is ${JSON.stringify(stored)}, not { enabled: true | false }; reading it as ${desktopEnabledFromSection(stored) ? 'ON' : 'OFF'}.`);
+      }
+      if (!desktopEnabledFromSection(stored)) {
+        console.log('[Tools] Desktop control is off (desktop.enabled: false). Desktop tools, screen capture, desktop UI reads and awareness captures are refused.');
+      }
     }
 
     // 9b-bis. What the generic file tools must know about this install
@@ -5561,7 +5511,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       workflowWorker.start();
 
       // Resume TIMER waitpoints whose delay has elapsed (incl. during downtime).
-      timerScheduler = new TimerWaitpointScheduler();
+      // A card the sweep closes for a run that ended before it parked is
+      // dropped from the dashboard, as an expired one is (#1039). A card
+      // already sent to a channel stays there; a reply to it is refused.
+      timerScheduler = new TimerWaitpointScheduler(undefined, (approvalId) => {
+        const request = approvalManager.getRequest(approvalId);
+        if (request) wsService.broadcastApprovalUpdate(request);
+      });
       timerScheduler.start();
     } else {
       console.warn("[Daemon] Workflow worker not started -- engine unavailable; queued RUN_FLOW jobs will pile up");
@@ -5935,8 +5891,6 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 10h. Wire sidecar events into the event pipeline (skip awareness events —
     // already handled by the awareness service).
-    const awarenessEventTypes = ['screen_capture', 'context_changed', 'idle_detected'];
-
     // Host-sensing observers (clipboard, file watch, process monitor,
     // notifications) now run in the SIDECAR — the agent that actually lives on
     // the user's machine — instead of the brain. Map each sidecar event_type
@@ -5961,8 +5915,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const internalSidecarEventTypes = ['update_progress'];
 
     sidecarManager.onEvent((sidecarId, event) => {
-      // Skip events already routed to awareness service to avoid double processing
-      if (awarenessService && awarenessEventTypes.includes(event.event_type)) return;
+      // Skip events already routed to awareness service to avoid double
+      // processing, and screen events altogether while desktop.enabled is off
+      // (#905): sidecar-event-routing.ts.
+      if (skipGenericSidecarEvent(event.event_type, !!awarenessService)) return;
       if (recorderEventTypes.includes(event.event_type)) return;
       if (internalSidecarEventTypes.includes(event.event_type)) return;
 

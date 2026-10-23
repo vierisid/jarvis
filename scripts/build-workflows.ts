@@ -20,14 +20,14 @@
  */
 
 import { statSync } from "node:fs";
-import { buildAllJarvisPieces } from "../src/workflows/runner/engine-runtime/build-pieces";
+import { buildAllVendoredPieces } from "../src/workflows/runner/engine-runtime/build-pieces";
 import { buildEngineBundle } from "../src/workflows/runner/engine-runtime/build";
 
 const force = process.argv.includes("--force");
 
 console.log("Building Jarvis pieces...");
 const piecesStart = Date.now();
-const pieces = await buildAllJarvisPieces({ force });
+const pieces = await buildAllVendoredPieces({ force });
 const piecesElapsed = Date.now() - piecesStart;
 if (pieces.length === 0) {
   console.log("  (no Jarvis pieces found)");

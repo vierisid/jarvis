@@ -19,7 +19,7 @@
 import type { AgentInstance } from './agent.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import type { ContentBlock, LLMMessage, LLMResponse, LLMToolCall, LLMTool } from '../llm/provider.ts';
-import { guardImageSize } from '../llm/provider.ts';
+import { capTextBlocks, guardImageSize } from '../llm/provider.ts';
 import { ToolRegistry, isToolResult, type ToolDefinition } from '../actions/tools/registry.ts';
 import { checkpointExecution } from '../actions/execution-scope.ts';
 import { beginExecutionActivity } from '../actions/progress-context.ts';
@@ -34,11 +34,13 @@ import { getToolFilterPolicy } from '../actions/tools/tool-relevance/policy.ts';
 import { isInvariantTrigger } from '../actions/tools/tool-relevance/authority-classes.ts';
 import { toolDefToLLMTool, BUILTIN_TOOLS } from '../actions/tools/builtin.ts';
 import { withTemplateDeliveryScope } from '../actions/tools/template-delivery-scope.ts';
+import { forgetSnapshotReader } from '../actions/tools/sidecar-route.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import type { AuthorityEngine, AuthorityProfile } from '../authority/engine.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import { freezeToolArguments, getActionForTool, resolveToolGate, substituteAboveLevel } from '../authority/tool-action-map.ts';
+import { desktopRefusal, withoutDisabledDesktopTools } from '../actions/tools/desktop-guard.ts';
 import { combineDecisions } from '../authority/engine.ts';
 import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFailure, isTaintSourceTool, splitToolReturn } from '../roles/untrusted.ts';
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
@@ -480,6 +482,19 @@ async function executeTool(
     }
 
     const tool = registry.get(toolCall.name);
+    // desktop.enabled: false (#905), answered before the gate as on the main path.
+    const desktopOff = desktopRefusal(tool, toolCall.arguments);
+    if (desktopOff) {
+      authorityCtx?.auditTrail?.log({
+        agent_id: authorityCtx.agent.id,
+        agent_name: authorityCtx.agent.agent.role.name,
+        tool_name: `desktop_disabled(${toolCall.name})`,
+        action_category: getActionForTool(toolCall.name, tool?.category ?? 'unknown'),
+        authority_decision: 'denied',
+        executed: false,
+      });
+      return { text: desktopOff, failed: true };
+    }
     const toolCategory = tool?.category ?? 'unknown';
     const gate = resolveToolGate(tool, toolCall.name, toolCall.arguments);
     const actionCategory = gate.actionCategory;
@@ -520,7 +535,9 @@ async function executeTool(
       tool_name: toolCall.name,
       action_category: actionCategory,
       authority_decision: authorityDecision,
-      approval_id: approvalId ?? null,
+      // A step held with no card (Pause, or its flow's card budget, #1039)
+      // answers with an empty approval id: no card, so none is recorded.
+      approval_id: approvalId || null,
       executed,
     });
 
@@ -563,12 +580,13 @@ async function executeTool(
     const category = registry.get(toolCall.name)?.category;
     if (authorityCtx && isTaintSourceTool(toolCall.name, category)) authorityCtx.taint.add(toolCall.name);
     audit?.('allowed', true);
-    // A picture (#709), sized and framed the way the orchestrator's direct
+    // A picture (#709), sized, capped (#876) and framed the way the orchestrator's direct
     // path does it. `boundedResult` would JSON-stringify the ToolResult and
     // cap it, so the model got a 6000-character prefix of base64 instead of
     // an image.
     if (isToolResult(raw)) {
-      const blocks = markUntrustedToolBlocks(toolCall.name, category, raw.content.map(guardImageSize));
+      const blocks = markUntrustedToolBlocks(toolCall.name, category,
+        capTextBlocks(raw.content, MAX_TOOL_RESULT_CHARS).map(guardImageSize));
       return { text: blocks.map((b) => (b.type === 'text' ? b.text : `[${b.type}]`)).join('\n'), blocks };
     }
     const bounded = boundedResult(raw);
@@ -666,8 +684,9 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
    * second would leave exactly the bug this closes, on the path nobody looks
    * at -- an approved sub-agent call recording its delivery against the chat.
    */
+  const deliveryScopeId = `sub-agent:${agentId}`;
   const inDeliveryScope = <T>(fn: () => Promise<T>): Promise<T> =>
-    withTemplateDeliveryScope(`sub-agent:${agentId}`, fn);
+    withTemplateDeliveryScope(deliveryScopeId, fn);
   /**
    * Run one tool dispatch as this agent's call (#1014), so a spawn or stop it
    * reaches is judged as this agent, and a child it starts is capped by it and
@@ -799,7 +818,9 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       fence();
       // Filter off: nothing to intercept, and nothing is built for it.
       const discoveryCtx: DiscoveryContext | null = !getToolFilterPolicy().enabled ? null : {
-        all: toolRegistry.list(),
+        // Without the desktop tools while desktop.enabled is off (#905), as
+        // on the main path: nothing may list or admit what would be refused.
+        all: withoutDisabledDesktopTools(toolRegistry.list()),
         ledger: exposure,
         exposed: offered,
         filterEnabled: true,
@@ -1001,6 +1022,9 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
   } finally {
     stopListening?.();
     agent.idle();
+    // The remote snapshot generations this spawn recorded (#879): the scope id
+    // is per spawn, so no later call of this run will read them.
+    forgetSnapshotReader(deliveryScopeId);
   }
 }
 

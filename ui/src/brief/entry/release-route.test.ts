@@ -76,3 +76,22 @@ test("malformed URLs never become foreground aliases or rollback targets", () =>
   }
   expect(resolveReleaseEntry(legacyHref("http://test/?brief=1#/brief/today"), "released").kind).toBe("legacy");
 });
+test("owner decision (#1106): an approved release explains a well-formed unknown room; malformed URLs keep the dashboard", () => {
+  for (const hash of ["#/brief/inbox", "#/brief/old-room", "#/brief/inbox?flowId=f1", "#/brief/room2"]) {
+    expect(resolveReleaseEntry(`http://test/?brief=1${hash}`, "cohort")).toEqual({ kind: "moved" });
+    expect(resolveReleaseEntry(`http://test/?brief=1${hash}`, "released")).toEqual({ kind: "moved" });
+    expect(resolveReleaseEntry(`http://test/${hash}`, "released")).toEqual({ kind: "moved" });
+    // The same opt-in, opt-out and switch rules as a known room.
+    expect(resolveReleaseEntry(`http://test/${hash}`, "cohort").kind).toBe("legacy");
+    expect(resolveReleaseEntry(`http://test/?brief=1${hash}`, "off").kind).toBe("legacy");
+    expect(resolveReleaseEntry(`http://test/?brief=0${hash}`, "released").kind).toBe("legacy");
+    expect(resolveReleaseEntry(`http://test/?brief=1&brief=1${hash}`, "released").kind).toBe("legacy");
+    expect(resolveReleaseEntry(`http://test/?briefMaintenance=1&brief=1${hash}`, "released").kind).toBe("legacy");
+    expect(rollbackHref(`http://test/?brief=1${hash}`)).toBeNull();
+  }
+  for (const hash of ["#/brief/", "#/brief/__proto__", "#/brief/today/extra", "#/brief/today%3F", "#/brief/Inbox",
+    "#/brief/-x", "#/brief/a b", "#/brief/" + "a".repeat(65), "#/brief//today", "#/brief?x"]) {
+    expect(resolveReleaseEntry(`http://test/?brief=1${hash}`, "released").kind).toBe("legacy");
+    expect(resolveReleaseEntry(`http://test/?brief=1${hash}`, "cohort").kind).toBe("legacy");
+  }
+});

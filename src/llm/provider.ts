@@ -235,3 +235,38 @@ export function guardImageSize(block: ContentBlock): ContentBlock {
   }
   return block;
 }
+
+/**
+ * The text blocks of a multi-modal tool result cut to `maxChars` IN TOTAL, the
+ * budget the plain-string path gives one result (#876). Applied to the payload
+ * BEFORE it is framed, never to framed text, so a cut never drops a closing
+ * line. Under the budget the same array comes back untouched. Over it, the text
+ * block that crosses the budget keeps its head plus a note giving the total
+ * (or, when the budget ran out exactly before it, the last kept text block
+ * carries the note), later text blocks are dropped, and every non-text block is kept;
+ * images are bounded separately by `guardImageSize`.
+ */
+export function capTextBlocks(blocks: ContentBlock[], maxChars: number): ContentBlock[] {
+  let total = 0;
+  for (const b of blocks) if (b.type === 'text') total += b.text.length;
+  if (total <= maxChars) return blocks;
+  let budget = maxChars;
+  let cut = false;
+  const out: ContentBlock[] = [];
+  for (const b of blocks) {
+    if (b.type !== 'text') { out.push(b); continue; }
+    if (cut) continue;
+    if (b.text.length <= budget) { budget -= b.text.length; out.push(b); continue; }
+    cut = true;
+    const note = `\n... (truncated, was ${total} chars)`;
+    // Budget spent exactly by the blocks before: put the note on the last text
+    // block kept rather than send a block that holds nothing but the note.
+    const lastText = budget === 0 ? out.findLastIndex((k) => k.type === 'text') : -1;
+    if (lastText >= 0) {
+      out[lastText] = { type: 'text', text: (out[lastText] as { text: string }).text + note };
+      continue;
+    }
+    out.push({ type: 'text', text: b.text.slice(0, budget) + note });
+  }
+  return out;
+}

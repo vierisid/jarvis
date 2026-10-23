@@ -294,6 +294,11 @@ describe('checking a graph against the contract', () => {
     // A governed piece's raw API call reaches anything its connection allows.
     avoid('uses @activepieces/piece-gmail custom_api_call, whose effect depends on the call',
       manual(step(GMAIL, 'custom_api_call', { url: '/messages/send', method: 'POST' })), effects, 'send_email');
+    // #961: an HTTP request's category is its method, which a contract cannot see.
+    avoid('uses @activepieces/piece-http send_request, whose effect depends on the call',
+      manual(step('@activepieces/piece-http', 'send_request', { method: 'GET', url: 'https://ops.example.test' })), { effects: ['send_message'] }, 'send_message');
+    // Its pure action is bounded.
+    expect(check(manual(step('@activepieces/piece-http', 'parse_url', { url: 'https://x.test' })), { forbidden: { effects: ['send_message'] } }).violations).toEqual([]);
     // Not only effects: an agent can call a forbidden tool, and another workflow can use a forbidden piece or an agent.
     avoid('delegates to an agent, which chooses its own tools when it runs', manual(agent()), { tools: ['write_file'] }, 'tool write_file');
     avoid('starts another workflow, whose steps this check does not see', manual(step(WORKFLOW, 'run_workflow', { flow: 'flow_1' })),

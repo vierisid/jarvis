@@ -129,7 +129,7 @@ describe('buildNotifySendArgs', () => {
 
   test('urgency and expiry defaults are unchanged', () => {
     expect(buildNotifySendArgs('T', 'B')).toEqual([
-      'notify-send', '--urgency=normal', '--expire-time=5000', '--app-name=JARVIS', '--', 'T', 'B',
+      '--urgency=normal', '--expire-time=5000', '--app-name=JARVIS', '--', 'T', 'B',
     ]);
     expect(buildNotifySendArgs('T', 'B', { urgency: 'critical' })).toContain('--expire-time=10000');
   });

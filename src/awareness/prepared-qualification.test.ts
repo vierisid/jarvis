@@ -31,6 +31,7 @@ import {
 } from './prepared-qualification.ts';
 
 const GMAIL = '@activepieces/piece-gmail';
+const HTTP = '@activepieces/piece-http';
 const CALENDAR = '@activepieces/piece-google-calendar';
 const JARVIS = '@jarvispieces/piece-jarvis-';
 const field = (name: string, type: string, required = true, sourceType?: string) =>
@@ -42,7 +43,9 @@ const catalog = new PieceCatalog([
     actions: { send_email: action('send_email', mail), gmail_create_draft: action('gmail_create_draft', mail) } },
   { name: CALENDAR, displayName: 'Google Calendar', description: '', auth: { type: 'OAUTH2' },
     actions: { create_google_calendar_event: action('create_google_calendar_event', [field('attendees', 'json', false, 'ARRAY')]) } },
-  { name: '@activepieces/piece-http', displayName: 'HTTP', description: '', actions: { send_request: action('send_request', [field('url', 'string')]) } },
+  { name: '@activepieces/piece-http', displayName: 'HTTP', description: '', actions: { send_request: action('send_request', [field('url', 'string'), field('method', 'string', false)]) } },
+  { name: '@activepieces/piece-delay', displayName: 'Delay', description: '', actions: { delayFor: action('delayFor', [field('delayFor', 'number'), field('unit', 'string')]) } },
+  { name: '@activepieces/piece-activecampaign', displayName: 'ActiveCampaign', description: '', actions: { create_contact: action('create_contact', [field('email', 'string')]) } },
   { name: JARVIS + 'context', displayName: '', description: '', actions: {
     commitments_list: action('commitments_list', []), vault_search: action('vault_search', [field('query', 'string')]) } },
   { name: JARVIS + 'ask', displayName: '', description: '', actions: { ask: action('ask', [field('prompt', 'long_text')]) } },
@@ -355,11 +358,24 @@ describe('prepared proposal qualification', () => {
     expect(unverified.verdict).toBe('review_needed');
     expect(briefReadiness(unverified).state).toBe('blocked');
 
-    // An ungoverned community piece cannot ask first.
-    const http = prepare(schedule(step('post', '@activepieces/piece-http', 'send_request', { url: 'https://hooks.oak.test/invoices' })));
+    // An ungoverned community piece cannot ask first. (This used the core HTTP
+    // piece until #961 governed it; a catalogue community piece stands in.)
+    const http = prepare(schedule(step('post', '@activepieces/piece-activecampaign', 'create_contact', { email: 'ana@cedar.test' })));
     const httpPreview = saveEffects('post', 'runs_automatically');
     expect(codes(proposal(http, { constraints: [], preview: httpPreview }))).toEqual(['effect_ungoverned']);
     expect(codes(proposal(http, { preview: httpPreview }))).toEqual(['effect_ungoverned', 'constraint_violated']);
+    // The HTTP piece is judged by Authority now, by its method: with none set it is the worst case.
+    const core = prepare(schedule(step('post', '@activepieces/piece-http', 'send_request', { url: 'https://hooks.oak.test/invoices' })));
+    expect(codes(proposal(core, { constraints: [], preview: saveEffects('post', 'runs_automatically') }))).toEqual(['authority_denied']);
+    // A method computed at run time is said to be, and is judged at its worst case.
+    const computed = prepare(schedule(step('post', '@activepieces/piece-http', 'send_request', { method: '{{trigger.method}}', url: 'https://hooks.oak.test/invoices' })));
+    expect(stepsOf(computed.version.trigger).post).toMatchObject({ category: 'delete_data', decision: 'denied',
+      unreviewable: ["send_request's Authority decision depends on values known only at run time"] });
+    const fixed = prepare(schedule(step('post', '@activepieces/piece-http', 'send_request', { method: 'GET', url: '{{trigger.url}}' })));
+    expect(stepsOf(fixed.version.trigger).post).toMatchObject({ category: 'read_data', decision: 'auto', unreviewable: [] });
+    // An in-run core step acts on nothing outside the run, so it is not an effect to judge.
+    const wait = prepare(schedule(step('wait', '@activepieces/piece-delay', 'delayFor', { delayFor: 1, unit: 'minutes' })));
+    expect(stepsOf(wait.version.trigger).wait).toBeUndefined();
 
     // forbid reaches every category a step touches, not only its worst.
     registry.get('write_file')!.authorityGate = writeFileTool.authorityGate;
@@ -408,6 +424,14 @@ describe('prepared proposal qualification', () => {
     expect(result.verdict).toBe('review_needed');
     expect(result.reasons).toEqual([{ code: 'effect_unreviewable', severity: 'review_needed', step: 'send_followup',
       message: 'send_followup: Authority decides send_email by the time of day' }]);
+  });
+
+  test('a time rule on the write_data floor times only a piece send the floor can turn into a card (#953)', () => {
+    authority = new AuthorityEngine(authorityConfig({ default_level: 3, governed_categories: ['send_email'], context_rules: [{ id: 'writes',
+      action: 'write_data', condition: 'time_range', params: { start_hour: 0, end_hour: 24 }, effect: 'require_approval', description: 'Ask' }] }));
+    const steps = stepsOf(chain(step('look', GMAIL, 'gmail_search_mail', { from: 'a@b.test' }), step('mail', GMAIL, 'send_email', SEND)));
+    expect(steps.look!.unreviewable).toEqual([]);
+    expect(steps.mail!.unreviewable).toContain('Authority decides send_email by the time of day');
   });
 
   test('a tool that is missing or chosen at run time is reported as such, not as an Authority refusal', () => {
@@ -481,6 +505,15 @@ describe('Authority predictions match the effect boundary', () => {
       gate: { actionCategory: 'execute_command', confirm: 'above_level', intent: 'Run this as a command' } },
     'tool with mandatory review': { ...writeFile, gate: { actionCategory: 'write_data', confirm: 'always', intent: 'Review this write' } },
     'tool above its level': { ...writeFile, gate: { actionCategory: 'execute_command', confirm: 'above_level', intent: 'Run this as a command' } },
+    // #953: a delete is never substituted, even where a send is.
+    'gmail trash': { piece: GMAIL, action: 'gmail_trash_message', input: { auth: '{{connections.billing-gmail}}', message_id: 'm1' },
+      call: async (b: any, ctx: any) => b.pieceAuthorize({ piece: GMAIL, action: 'gmail_trash_message', input: { message_id: 'm1' },
+        inputDigest: await pieceInputDigest({ message_id: 'm1' }) }, ctx) },
+    // #961: the core HTTP piece's category is its method, predicted from the configured input.
+    ...Object.fromEntries((['GET', 'POST', 'DELETE'] as const).map(method => [`http ${method}`, { piece: HTTP, action: 'send_request',
+      input: { method, url: 'https://ops.example.test/logs', headers: {}, queryParams: {} },
+      call: async (b: any, ctx: any) => b.pieceAuthorize({ piece: HTTP, action: 'send_request', input: { method, url: 'https://ops.example.test/logs', headers: {}, queryParams: {} },
+        inputDigest: await pieceInputDigest({ method, url: 'https://ops.example.test/logs', headers: {}, queryParams: {} }) }, ctx) }])),
     gmail: { piece: GMAIL, action: 'send_email', input: { auth: '{{connections.billing-gmail}}', ...SEND_INPUT },
       call: async (b: any, ctx: any) => b.pieceAuthorize({ piece: GMAIL, action: 'send_email', input: SEND_INPUT, inputDigest: await pieceInputDigest(SEND_INPUT) }, ctx) },
   };
@@ -490,6 +523,9 @@ describe('Authority predictions match the effect boundary', () => {
     ['sends governed', {}, ['auto', 'approval']],
     ['level too low for email or files', { default_level: 1, governed_categories: [] }, ['auto', 'denied']],
     ['level allows files but not commands', { default_level: 3, governed_categories: [] }, ['auto', 'approval', 'denied']],
+    // #953: the shipped defaults, where a governed send above the level asks.
+    ['shipped defaults', { default_level: 3, governed_categories: ['send_email', 'send_message', 'make_payment'] }, ['auto', 'approval', 'denied']],
+    ['governed send below the floor', { default_level: 2, governed_categories: ['send_email', 'delete_data'] }, ['auto', 'denied']],
     ['override denies messages', { default_level: 10, governed_categories: [], overrides: [{ action: 'send_message', allowed: false }] }, ['auto', 'denied']],
     ['rule asks before every read', { default_level: 10, governed_categories: [],
       context_rules: [{ id: 'reads', action: 'read_data', condition: 'always', params: {}, effect: 'require_approval', description: 'Ask before reads' }] },

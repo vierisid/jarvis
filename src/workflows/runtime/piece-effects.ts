@@ -57,14 +57,92 @@ export const PIECE_AUTH_PROPERTY = 'auth';
 /** `toolCategory` recorded for every governed piece effect. */
 export const PIECE_TOOL_CATEGORY = 'workflow-piece';
 
-/** Q-07's bounded completion-receipt protocol. These actions never park themselves. */
-export function tracksPieceCompletion(piece: unknown, action: unknown): boolean {
-  return (piece === '@activepieces/piece-gmail' && (action === 'send_email' || action === 'gmail_send_email'))
-    || (piece === '@activepieces/piece-slack' && (action === 'send_channel_message' || action === 'slack_post_message'));
+/**
+ * Gmail actions that send mail and return once sent. Every Gmail `send_email`
+ * action but `request_approval_in_mail`, which sends and then parks the flow:
+ * its step re-runs on resume to read the decision, so a stored completion
+ * would hand back the first run's result instead (`governed-pieces.test.ts`
+ * pins this list against the adapter table).
+ */
+const GMAIL_TRACKED_SENDS: ReadonlySet<unknown> = new Set(['send_email', 'gmail_send_email', 'reply_to_email',
+  'gmail_reply_to_thread', 'gmail_send_draft', 'gmail_forward_message']);
+
+/**
+ * Q-07's bounded completion-receipt protocol. These actions never park
+ * themselves. Every Gmail send that returns once sent is tracked, so an engine
+ * retry of a send whose outcome is unknown is refused instead of sending again
+ * (#953 made these reachable at the default level).
+ */
+export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
+  return (piece === '@activepieces/piece-gmail' && GMAIL_TRACKED_SENDS.has(action))
+    || (piece === '@activepieces/piece-slack' && (action === 'send_channel_message' || action === 'slack_post_message'))
+    // #961: an HTTP request that is not a read is a send whose outcome the
+    // server alone knows, so a retry after a lost or failed request is
+    // refused rather than repeated. Without the input it is assumed a send.
+    || (piece === HTTP_PIECE && action === 'send_request' && !httpRequestIsRead(inputObject(input) ?? {}));
+}
+
+/** The vendored core HTTP piece (#961). */
+export const HTTP_PIECE = '@activepieces/piece-http';
+
+/**
+ * True for an HTTP method that only reads: GET and HEAD, in any letter case
+ * (axios upper-cases the method it sends). Anything else, including a method
+ * with surrounding space or one that is not a string, is not a read. A request
+ * is a read only when `httpRequestIsRead` also finds no body; the category,
+ * the completion tracking, the in-piece retry and the redirect rule all ask
+ * that one function, so they cannot disagree about a request.
+ */
+export function httpMethodIsRead(method: unknown): boolean {
+  return typeof method === 'string' && /^(get|head)$/iu.test(method);
+}
+
+/**
+ * True for an HTTP request that only reads: a GET or HEAD that carries no
+ * body. The piece sends `body.data` whatever the method (axios puts a body on
+ * a GET too, measured), so a GET with one is content leaving for the host,
+ * not a read (#961 security review). A projection that cut the body still has
+ * a non-empty value there, so it never reads as body-less.
+ */
+export function httpRequestIsRead(input: Record<string, unknown>): boolean {
+  // On a projection cut at 40 keys, `body` sorts before `method`: a body lost
+  // to the cut takes the method with it, and a request with no method is
+  // never a read. So a cut can never make a request with a body read as one.
+  if (!httpMethodIsRead(input.method)) return false;
+  const body = input.body;
+  if (body === undefined || body === null || body === '') return true;
+  const data = inputObject(body) ? (body as Record<string, unknown>).data : body;
+  return data === undefined || data === null || data === '';
+}
+
+function inputObject(input: unknown): Record<string, unknown> | null {
+  return input !== null && typeof input === 'object' && !Array.isArray(input) ? input as Record<string, unknown> : null;
+}
+
+/**
+ * #953 (owner decision): a verified piece action whose category is above the
+ * workflow's level asks for approval instead of being denied, but only for
+ * these categories and only while the owner governs them, and only when the
+ * workflow clears this floor on its own. Deletes, settings changes and
+ * installs stay denied by level; an override, a context rule or a profile
+ * deny still denies, since only a pure level shortfall is ever substituted.
+ */
+export const PIECE_ABOVE_LEVEL_ASKS: readonly ActionCategory[] = ['send_email', 'send_message', 'make_payment'];
+export const PIECE_ABOVE_LEVEL_FLOOR: ActionCategory = 'write_data';
+
+/** How an action's category is read from its input (`categoryFromInput`). */
+export interface InputCategoryRule {
+  /** The input props the rule reads, so a reviewer can tell whether they are fixed. */
+  props: readonly string[];
+  category: (input: Record<string, unknown>) => ActionCategory;
 }
 
 export interface GovernedPieceAdapter {
-  /** Catalog id, as in `pieces-library/catalog-overrides.ts` `VERIFIED`. */
+  /**
+   * Catalog id, as in `pieces-library/catalog-overrides.ts` `VERIFIED`. For a
+   * vendored core piece (`CORE_PIECE_ADAPTERS`) it is the vendored directory
+   * name under `packages/pieces/core`.
+   */
   catalogId: string;
   /** npm package name, as it appears in a `FlowVersion` step's `pieceName`. */
   pieceName: string;
@@ -86,6 +164,21 @@ export interface GovernedPieceAdapter {
    * input; absent props are omitted.
    */
   targetProps: readonly string[];
+  /**
+   * Actions whose category is decided by an input value (#961): an HTTP
+   * request's method. `categories` names each such action at the worst case
+   * its input can reach, which is what a caller that cannot see the input (a
+   * job contract, a stored provenance) is told. The rule may only narrow that
+   * (`governed-pieces.test.ts` pins it), and it reads the projected input,
+   * whose whole original the engine's `inputDigest` binds.
+   */
+  categoryFromInput?: Readonly<Record<string, InputCategoryRule>>;
+  /**
+   * Hide inline credentials a piece takes as ordinary props before the input
+   * is bounded for the card and the effect record. Must be deterministic and
+   * idempotent: the daemon applies it again to what the engine sent.
+   */
+  redactInput?: (input: Record<string, unknown>) => Record<string, unknown>;
 }
 
 /**
@@ -356,17 +449,157 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
   },
 ];
 
+/**
+ * The vendored core pieces that act outside Jarvis (#961). They ship with the
+ * engine (`scripts/sync-activepieces.ts`), not from the catalog, so they are
+ * not "verified" catalog entries; they pass the same boundary as those do.
+ * A core piece that acts only inside the run is listed in
+ * `step-admission.ts` (`IN_RUN_STEP_PIECES`) instead, and every vendored core
+ * piece is in exactly one of the two (`core-pieces.test.ts`).
+ */
+export const CORE_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
+  {
+    catalogId: 'http',
+    pieceName: HTTP_PIECE,
+    // An action this table does not name could send anywhere with any method.
+    unknownActionCategory: 'delete_data',
+    // Where the request goes, as the approval card shows it.
+    targetProps: ['method', 'url'],
+    categories: {
+      // Pure string parsing; it never touches the network.
+      read_data: ['parse_url'],
+      // The worst case of `httpRequestCategory`, for a caller with no input.
+      delete_data: ['send_request'],
+    },
+    categoryFromInput: { send_request: { props: ['method', 'body'], category: httpRequestCategory } },
+    redactInput: redactHttpInput,
+  },
+];
+
+/**
+ * An HTTP request's category, by method (owner decision on #961). A GET or a
+ * HEAD with no body reads; with a body it sends, as a POST does. POST, PUT and PATCH carry content to an endpoint the flow names,
+ * which need not be the user's own account: under the category rules above
+ * that is delivering content to someone else, the reason `github_create_gist`
+ * is `send_message`, so it asks first while `send_message` is governed (the
+ * default). DELETE destroys. Any other value -- an unknown method, a method
+ * computed into something unexpected -- is gated as the worst case.
+ */
+export function httpRequestCategory(input: Record<string, unknown>): ActionCategory {
+  const method = input.method;
+  if (httpRequestIsRead(input)) return 'read_data';
+  // A GET or HEAD that carries a body sends it, as a POST does.
+  if (typeof method === 'string' && /^(get|head|post|put|patch)$/iu.test(method)) return 'send_message';
+  return 'delete_data';
+}
+
+/** Header, query and field names that carry a credential rather than content. */
+/**
+ * A word in the name that marks a credential. Matched as a whole word, after
+ * splitting camelCase, so `X-Api-Key`, `access_token` and `clientSecret`
+ * match while `author`, `oauth_callback_url` and `sessionize` do not.
+ */
+const SECRET_WORD = /(^|[^a-z0-9])(auth|authorization|bearer|token|secret|passwd|password|passphrase|pwd|apikey|cookie|session[-_]?id|sessid|signature|sig|credentials?|key)([^a-z0-9]|$)/iu;
+/** Run-together compounds a word match misses (`authtoken`, `PHPSESSID`, `clientsecret`). */
+const SECRET_COMPOUND = /token|secret|passw|apikey|privatekey|sessid/iu;
+export function isSecretName(name: string): boolean {
+  return SECRET_WORD.test(name.replace(/([a-z0-9])([A-Z])/gu, '$1_$2')) || SECRET_COMPOUND.test(name);
+}
+export const REDACTED = '[redacted]';
+/** The note `bound()` appends to a string it cut. */
+const CUT_NOTE = /\.\.\. \[\d+ more characters\]$/u;
+
+/**
+ * The redacted form of a credential value. A value that is already the marker,
+ * or the start of it cut by the engine's bound (`[reda... [N more characters]`),
+ * is kept as it is, so a second pass changes nothing and the cut note survives.
+ */
+function redactValue(value: string): string {
+  const note = CUT_NOTE.exec(value)?.[0] ?? '';
+  const head = value.slice(0, value.length - note.length);
+  // Empty head with a note: the engine's cut fell right after the `=`, so
+  // nothing of the value was kept and there is nothing left to hide.
+  if (REDACTED.startsWith(head) && (head !== '' || note !== '')) return value;
+  return `${REDACTED}${note}`;
+}
+
+/** Credential-named fields, at any depth `bound()` keeps, inside objects and arrays. */
+function redactNamed(value: unknown, depth = 0): unknown {
+  if (depth > 6) return value;
+  if (Array.isArray(value)) return value.map((item) => redactNamed(item, depth + 1));
+  const fields = inputObject(value);
+  if (!fields) return value;
+  return Object.fromEntries(Object.entries(fields).map(([key, item]) =>
+    [key, isSecretName(key) && item !== null && item !== undefined && item !== ''
+      ? (typeof item === 'string' ? redactValue(item) : REDACTED) : redactNamed(item, depth + 1)]));
+}
+
+/** A JSON body's credential-named fields, and form fields named like one. */
+function redactBody(body: unknown): unknown {
+  const fields = inputObject(body);
+  if (!fields || !('data' in fields)) return body;
+  const data = fields.data;
+  if (Array.isArray(data)) {
+    return { ...fields, data: data.map((row) => {
+      const field = inputObject(row);
+      return field && typeof field.fieldName === 'string' && isSecretName(field.fieldName) && 'textFieldValue' in field
+        && field.textFieldValue !== '' && field.textFieldValue !== null && field.textFieldValue !== undefined
+        ? { ...field, textFieldValue: typeof field.textFieldValue === 'string' ? redactValue(field.textFieldValue) : REDACTED } : row;
+    }) };
+  }
+  return { ...fields, data: redactNamed(data) };
+}
+
+/**
+ * The HTTP piece takes credentials as plain props: Basic or Bearer fields, a
+ * proxy password, an `Authorization` header, an `api_key` query parameter, a
+ * `password` field in a JSON or form body, or `user:password@` in the URL. None of them may reach the approval card or the
+ * effect record (#961). The values are replaced, not dropped, so a reviewer
+ * still sees that the request is authenticated. String edits only, never a
+ * `URL` re-serialisation, so a value the engine already cut still reads the
+ * same and a second pass changes nothing.
+ */
+export function redactHttpInput(input: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...input };
+  if (inputObject(out.headers)) out.headers = redactNamed(out.headers);
+  if (inputObject(out.queryParams)) out.queryParams = redactNamed(out.queryParams);
+  if ('body' in out) out.body = redactBody(out.body);
+  const auth = inputObject(out.authFields);
+  if (auth) out.authFields = { ...auth, ...('password' in auth ? { password: REDACTED } : {}), ...('token' in auth ? { token: REDACTED } : {}) };
+  const proxy = inputObject(out.proxy_settings);
+  if (proxy && 'proxy_password' in proxy) out.proxy_settings = { ...proxy, proxy_password: REDACTED };
+  if (typeof out.url === 'string') {
+    out.url = out.url
+      // Userinfo runs to the LAST @ before the path, so a password holding an @ goes whole.
+      .replace(/^(\s*[a-z][a-z0-9+.-]*:[\\/]*)[^/\\?#]*@/iu, `$1${REDACTED}@`)
+      .replace(/([?&;][^=&#;]*=)([^&#;]*)/gu, (whole, name: string, value: string) =>
+        isSecretName(name.slice(1, -1)) && value !== '' ? `${name}${redactValue(value)}` : whole);
+  }
+  return out;
+}
+
 interface ResolvedPieceAction {
   adapter: GovernedPieceAdapter;
   action: string;
   category: ActionCategory;
   /** False when the action is not in the table and took the worst-case fallback. */
   known: boolean;
+  /**
+   * True when the action's category depends on its input (`categoryFromInput`).
+   * Resolved without an input it is the table's worst case, and a caller that
+   * cannot see the input must treat the step as open.
+   */
+  byInput: boolean;
+  /** The input props the category was read from, when `byInput`. */
+  categoryProps?: readonly string[];
 }
+
+/** Every adapter: the verified catalog pieces, then the vendored core pieces. */
+export const ALL_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [...GOVERNED_PIECE_ADAPTERS, ...CORE_PIECE_ADAPTERS];
 
 const BY_PIECE_NAME = new Map<string, GovernedPieceAdapter>();
 const ACTION_CATEGORY = new Map<string, Map<string, ActionCategory>>();
-for (const adapter of GOVERNED_PIECE_ADAPTERS) {
+for (const adapter of ALL_PIECE_ADAPTERS) {
   if (BY_PIECE_NAME.has(adapter.pieceName)) {
     throw new Error(`Duplicate governed piece adapter: ${adapter.pieceName}`);
   }
@@ -391,13 +624,27 @@ export function isGovernedPiece(pieceName: unknown): boolean {
   return typeof pieceName === 'string' && BY_PIECE_NAME.has(pieceName);
 }
 
-/** The adapter decision for one step, or null when the piece is ungoverned. */
-export function resolveGovernedPieceAction(pieceName: unknown, actionName: unknown): ResolvedPieceAction | null {
+/**
+ * The adapter decision for one step, or null when the piece is ungoverned.
+ * `input` is the step's projected input; an action whose category depends on
+ * it (`categoryFromInput`) is resolved from it, and without it gets the
+ * table's worst case.
+ */
+export function resolveGovernedPieceAction(pieceName: unknown, actionName: unknown, input?: unknown): ResolvedPieceAction | null {
   if (typeof pieceName !== 'string' || typeof actionName !== 'string') return null;
   const adapter = BY_PIECE_NAME.get(pieceName);
   if (!adapter) return null;
   const mapped = ACTION_CATEGORY.get(pieceName)!.get(actionName);
-  return { adapter, action: actionName, category: mapped ?? adapter.unknownActionCategory, known: mapped !== undefined };
+  const rule = mapped !== undefined && Object.hasOwn(adapter.categoryFromInput ?? {}, actionName) ? adapter.categoryFromInput![actionName] : undefined;
+  const fields = inputObject(input);
+  const category = rule && fields ? rule.category(fields) : mapped ?? adapter.unknownActionCategory;
+  return { adapter, action: actionName, category, known: mapped !== undefined, byInput: rule !== undefined,
+    ...(rule ? { categoryProps: rule.props } : {}) };
+}
+
+/** The adapter for a piece, verified or core, or null. */
+export function governedPieceAdapter(pieceName: unknown): GovernedPieceAdapter | null {
+  return typeof pieceName === 'string' ? BY_PIECE_NAME.get(pieceName) ?? null : null;
 }
 
 /** Stable identity for the audit row and the approval card. Cannot collide
@@ -607,9 +854,15 @@ const MAX_PROJECTED_STRING = MAX_STRING + moreCharacters(2 ** 31).length;
  * resolved input, before it leaves the subprocess -- so a credential cannot
  * reach the authorize route.
  */
-export function sanitizePieceInput(input: unknown): Record<string, unknown> {
+export function sanitizePieceInput(input: unknown, piece?: unknown): Record<string, unknown> {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) return {};
-  return bound(input, 0) as Record<string, unknown>;
+  return bound(redactFor(piece, input as Record<string, unknown>), 0) as Record<string, unknown>;
+}
+
+/** The piece's own credential redaction (`redactInput`), or the input as it is. */
+function redactFor(piece: unknown, input: Record<string, unknown>): Record<string, unknown> {
+  const redact = governedPieceAdapter(piece)?.redactInput;
+  return redact ? redact(input) : input;
 }
 
 /**
@@ -640,9 +893,9 @@ export function sanitizePieceInput(input: unknown): Record<string, unknown> {
  * first: a string exactly 24 characters over, an array of exactly 26 items, a
  * 41-key object whose `omittedFields` sorts last and is 1. Those stay valid.)
  */
-export function reprojectPieceInput(input: unknown): Record<string, unknown> {
+export function reprojectPieceInput(input: unknown, piece?: unknown): Record<string, unknown> {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) return {};
-  return bound(input, 0, true) as Record<string, unknown>;
+  return bound(redactFor(piece, input as Record<string, unknown>), 0, true) as Record<string, unknown>;
 }
 
 /**

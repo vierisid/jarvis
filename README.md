@@ -138,7 +138,7 @@ Visit [opencove.host](https://opencove.host) to get started.
 
 ## 📋 Requirements
 
-- **Bun** >= 1.0 (installed automatically if missing)
+- **Bun** >= 1.3.11 (the install script installs it if missing and upgrades an older one; for `bun install -g`, run `bun upgrade` first)
 - **OS (native daemon install)**: macOS, Linux, or WSL
 - **Windows**: native Windows is not supported for the daemon - use WSL2 for the Bun install, or Docker for the daemon
 - **LLM API key** — at least one of: Anthropic, OpenAI, Google Gemini, or a local Ollama instance

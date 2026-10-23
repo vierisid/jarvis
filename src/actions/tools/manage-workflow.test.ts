@@ -151,6 +151,19 @@ describe("manage_workflow tool", () => {
     expect(byId.id).toBe(created.id);
   });
 
+  test("get never shows the model the Webhook trigger's signing secret (#961)", async () => {
+    const { updateDraftVersion } = await import("../../workflows/db/repos/flow-version.ts");
+    const created = (await call("create", { name: "hooked", empty: true })) as { id: string };
+    updateDraftVersion(getLatestDraft(created.id)!.id, {
+      trigger: { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "webhook", input: { secret: "whsec-s3cret-value" } } } as never,
+    });
+    const got = await call("get", { flow: "hooked" }) as { latestDraft: { trigger: { settings: { input: { secret: string } } } } };
+    expect(JSON.stringify(got)).not.toContain("whsec-s3cret-value");
+    expect(got.latestDraft.trigger.settings.input.secret).toBe("[redacted]");
+    // The stored version keeps it: the ingress still checks against it.
+    expect((getLatestDraft(created.id)!.trigger as unknown as { settings: { input: { secret: string } } }).settings.input.secret).toBe("whsec-s3cret-value");
+  });
+
   test("run enqueues a RUN_FLOW job and returns run_id", async () => {
     const created = (await call("create", { name: "runme", empty: true })) as { id: string };
     const out = (await call("run", { flow: "runme", payload: { foo: "bar" } })) as { run_id: string; status: string };

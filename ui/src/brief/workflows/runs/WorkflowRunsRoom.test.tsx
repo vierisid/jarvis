@@ -174,3 +174,37 @@ test("queued history does not present creation time as a start time", async () =
     "Not started",
   );
 });
+
+test("a short run label carries the full run ID in its title and in the inspection (#1100)", async () => {
+  await render();
+  await React.act(async () => button("Open Run 006").click());
+  await render();
+  expect(button("Open Run 006").getAttribute("title")).toBe("meeting-run-006");
+  const heading = host.querySelector("[data-run-id] h2");
+  expect(heading?.textContent).toBe("Run 006");
+  expect(heading?.getAttribute("title")).toBe("meeting-run-006");
+  const metadata = Array.from(host.querySelectorAll(".brief-run-metadata dt"));
+  expect(metadata.find((dt) => dt.textContent === "Run ID")?.nextElementSibling?.textContent).toBe("meeting-run-006");
+});
+
+test("Check result reads an unconfirmed Run's receipt, opens its run and unlocks Run (#1093)", async () => {
+  fixture.setMode("uncertain-command");
+  await render();
+  expect(button("Check result")).toBeUndefined();
+  await React.act(async () => {
+    button("Run workflow").click();
+    // Wait on the request settling, not on a fixed delay.
+    for (let i = 0; i < 400 && fixture.controller.getSnapshot().submission === "pending"; i++)
+      await new Promise((r) => setTimeout(r, 10));
+  });
+  await render();
+  expect(fixture.controller.getSnapshot().submission).toBe("uncertain");
+  expect(button("Run workflow").disabled).toBe(true);
+  expect(button("Check result").disabled).toBe(false);
+  await React.act(async () => button("Check result").click());
+  await render();
+  expect(shell.route.selection.runId).toBe("meeting-run-013");
+  expect(button("Run workflow").disabled).toBe(false);
+  expect(button("Check result")).toBeUndefined();
+  expect(fixture.stats().requests).toBe(1);
+});

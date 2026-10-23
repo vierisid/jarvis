@@ -9,13 +9,16 @@
  * answer opens an entry here, sends its `resultId` with the action, and the
  * panel that ran it replies with `room_action_result`.
  *
- * The first answer settles the entry. For the pebble's requests only native
- * panels answer (a dashboard answers only a request addressed to it, and then
- * only its answer counts: see `answerer`, #965). The action is broadcast, so
- * every open panel of that room answers: a second panel of it on this
- * sidecar, or one on another sidecar. They run the same check and agree, except that Settings shows its
- * billing tab per client. Addressing the action to the one panel the pebble
- * meant would need the panel to know its native id, which it does not.
+ * The first answer that counts settles the entry. For the pebble's requests
+ * only native panels answer (a dashboard answers only a request addressed to
+ * it, and then only its answer counts: see `answerer`, #965). That is the
+ * client's own rule, so it binds nobody: any /ws client could answer first.
+ * The daemon therefore counts only answers from sockets of the sidecar that
+ * asked (`accepts`, #1026). The action is broadcast, so every open panel of
+ * that room on that sidecar may answer; they run the same check and agree,
+ * except that Settings shows its billing tab per client. Addressing the
+ * action to the one panel the pebble meant would need the panel to know its
+ * native id, which it does not.
  *
  * NO IMPORTS: the UI bundles this file for ROOM_ACTION_QUEUE_TTL_MS.
  */
@@ -110,7 +113,7 @@ export type LateRoomAnswer = (answer: RoomAnswer | 'disconnected', reported: 'st
  */
 export const LATE_ANSWER_LIMIT = 256;
 
-type Pending = { settle: (o: RoomActionOutcome) => void; answerer?: unknown; started?: boolean; claimed?: boolean; onLate?: LateRoomAnswer };
+type Pending = { settle: (o: RoomActionOutcome) => void; answerer?: unknown; accepts?: (from: unknown) => boolean; started?: boolean; claimed?: boolean; onLate?: LateRoomAnswer };
 
 export class RoomActionResults {
   private pending = new Map<string, Pending>();
@@ -132,8 +135,18 @@ export class RoomActionResults {
    * With `onLate` too, that client's answer after the wait ran out is passed
    * to it rather than dropped (#1034): the outcome said `started` or
    * `no_answer`, and the room's real answer is still worth recording.
+   *
+   * Without `answerer`, `accepts` says whose answer counts (#1026): the
+   * pebble's tab switch is broadcast to every panel, and only a panel of the
+   * sidecar that asked may say whether it switched. Without either, any
+   * client's answer counts; no daemon caller opens one like that.
    */
-  open(timeoutMs: number, answerer?: unknown, onLate?: LateRoomAnswer): { id: string; outcome: Promise<RoomActionOutcome> } {
+  open(
+    timeoutMs: number,
+    answerer?: unknown,
+    onLate?: LateRoomAnswer,
+    accepts?: (from: unknown) => boolean,
+  ): { id: string; outcome: Promise<RoomActionOutcome> } {
     const id = this.newId();
     const outcome = new Promise<RoomActionOutcome>((resolve) => {
       const timer = setTimeout(() => {
@@ -151,6 +164,7 @@ export class RoomActionResults {
           resolve(o);
         },
         answerer,
+        accepts,
         onLate,
       });
     });
@@ -171,7 +185,7 @@ export class RoomActionResults {
       this.answerLate(id, answer, from);
       return;
     }
-    if (entry.answerer !== undefined && entry.answerer !== from) return;
+    if (!this.counts(entry, from)) return;
     this.finish(id, answer);
   }
 
@@ -197,8 +211,14 @@ export class RoomActionResults {
   started(id: unknown, from?: unknown): void {
     if (typeof id !== 'string') return;
     const entry = this.pending.get(id);
-    if (!entry || (entry.answerer !== undefined && entry.answerer !== from)) return;
+    if (!entry || !this.counts(entry, from)) return;
     entry.started = true;
+  }
+
+  /** Whether `from` may answer this entry: the client asked, or one `accepts` allows. */
+  private counts(entry: Pending, from: unknown): boolean {
+    if (entry.answerer !== undefined) return entry.answerer === from;
+    return entry.accepts ? entry.accepts(from) : true;
   }
 
   /**

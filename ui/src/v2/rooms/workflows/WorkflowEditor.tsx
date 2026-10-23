@@ -61,6 +61,7 @@ import type { FlowRun, FlowRunStatus } from "./useWorkflowsData";
 import { CANCELED_EFFECT_WARNING } from "./useWorkflowsData";
 import "./WorkflowEditor.css";
 import { modKey } from "../../ui/platform";
+import { NOT_APPROVAL_GATED_LABEL, NOT_APPROVAL_GATED_TOOLTIP, stepNotApprovalGated } from "./approval-gate";
 
 // Horizontal flow layout. Each step in the flattened chain advances the
 // cursor rightward by NODE_X_STEP; nested branches (loop body / router
@@ -3063,7 +3064,7 @@ function buildGraph(
   return { nodes, edges };
 }
 
-function StepNode({ data }: NodeProps): React.ReactElement {
+export function StepNode({ data }: NodeProps): React.ReactElement {
   const { workspace } = useContext(WorkflowEditorEnvironment);
   const {
     step,
@@ -3091,6 +3092,7 @@ function StepNode({ data }: NodeProps): React.ReactElement {
         : piece.actions.find((a) => a.name === subAction)?.displayName) ?? subAction
     : subAction;
   const isUnconfigured = step.type === "PIECE" && (!step.settings?.pieceName || !step.settings.actionName);
+  const notApprovalGated = stepNotApprovalGated(step, catalog);
 
   const routerKind = step.settings?.routerKind;
   let kindLabel: string;
@@ -3232,6 +3234,15 @@ function StepNode({ data }: NodeProps): React.ReactElement {
           />
         ) : null}
       </div>
+      {/* Its own row, so the step's name keeps the head row (#955). The
+          explanation is part of the note's text for screen readers, not only
+          the mouse-only title. */}
+      {notApprovalGated ? (
+        <div className="wf-node__ungated" role="note" title={NOT_APPROVAL_GATED_TOOLTIP}>
+          <Chip tone="warn" dot={false}>{NOT_APPROVAL_GATED_LABEL}</Chip>
+          <span className="wf-node__ungated-desc">{NOT_APPROVAL_GATED_TOOLTIP}</span>
+        </div>
+      ) : null}
       <div className="wf-node__body">
         {isLoop ? (
           <span className="wf-node__piece">over <code>{String(step.settings?.items ?? "?")}</code></span>
@@ -3466,7 +3477,12 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
               configurable block for a piece (the inputs themselves) plus
               the sample-output editor below, so a section header would
               just be visual noise. */}
-          {schema ? (
+          {isTriggerStep && detectedTriggerKind === "webhook" ? (
+            <WebhookTriggerFields
+              secret={step.settings?.input?.["secret"]}
+              onSetSecret={(value) => (value ? onSetInput("secret", value) : onRemoveInputKey("secret"))}
+            />
+          ) : schema ? (
             <SchemaInputs
               schema={schema}
               input={(step.settings?.input ?? {}) as Record<string, unknown>}
@@ -4117,6 +4133,40 @@ export function SampleDataSection({
         </Button>
       </div>
     </section>
+  );
+}
+
+/**
+ * The Webhook trigger's one setting (#961): an optional signing secret. The
+ * daemon's ingress (`runner/triggers/webhook.ts`) already refuses a request to
+ * a flow with a secret unless `X-Jarvis-Signature` carries the hex
+ * HMAC-SHA256 of the raw body; until now the editor offered no field for it.
+ */
+export const WEBHOOK_SECRET_HINT =
+  "When set, each request must carry an X-Jarvis-Signature header holding the hex HMAC-SHA256 of the raw request body, keyed with this secret; other requests are refused. Without one, anyone who has this workflow's webhook URL can start it. Either way, what a request sends reaches the workflow as untrusted input.";
+
+export function WebhookTriggerFields({ secret, onSetSecret }: {
+  secret: unknown;
+  onSetSecret: (value: string) => void;
+}): React.ReactElement {
+  const [shown, setShown] = useState(false);
+  return (
+    <>
+      <Field label="Signing secret (optional)">
+        <input
+          type={shown ? "text" : "password"}
+          autoComplete="off"
+          spellCheck={false}
+          value={typeof secret === "string" ? secret : ""}
+          onChange={(e) => onSetSecret(e.target.value)}
+          placeholder="No secret: unsigned requests are accepted"
+        />
+      </Field>
+      <Button variant="ghost" size="sm" onClick={() => setShown((v) => !v)}>
+        {shown ? "Hide secret" : "Show secret"}
+      </Button>
+      <p className="wf-props__hint">{WEBHOOK_SECRET_HINT}</p>
+    </>
   );
 }
 

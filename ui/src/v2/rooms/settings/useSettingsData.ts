@@ -434,6 +434,17 @@ export type ActionResult =
 
 export type ProviderTestResult = ActionResult & { models?: string[] };
 
+/** A profile save refused with 409. `latest` is the newer profile the form should rebase
+ * its draft onto; it is absent when that profile could not be loaded. */
+export type ProfileSaveResult =
+  | ActionResult
+  | { ok: false; message: string; conflict: true; latest?: { revision: string; answers: Record<string, string> } };
+
+/** Non-2xx answer from postJson; carries the HTTP status so callers can tell a 409 apart. */
+class HttpError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+
 async function getJson<T>(url: string): Promise<T | null> {
   try {
     const r = await fetch(url);
@@ -468,7 +479,7 @@ async function postJson<T>(
     } catch {
       // Not JSON. The body is the message.
     }
-    throw new Error(message || `HTTP ${r.status}`);
+    throw new HttpError(message || `HTTP ${r.status}`, r.status);
   }
   return (await r.json()) as T;
 }
@@ -809,7 +820,7 @@ export function useSettingsData() {
       enabled?: boolean;
       bot_token?: string;
       allowed_users?: string[];
-      guild_id?: string;
+      guild_id?: string | null;
     }): Promise<ActionResult> => {
       try {
         const r = await postJson<{ ok: boolean; message: string }>(
@@ -989,9 +1000,9 @@ export function useSettingsData() {
   }, []);
 
   const saveProfile = useCallback(
-    async (answers: Record<string, string>, revision?: string): Promise<ActionResult> => {
+    async (answers: Record<string, string>, revision?: string): Promise<ProfileSaveResult> => {
+      const mutation = ++profileGenerationRef.current;
       try {
-        const mutation = ++profileGenerationRef.current;
         const r = await postJson<UserProfileResponse & { message: string }>("/api/user-profile", {
           answers, revision,
         });
@@ -1001,7 +1012,17 @@ export function useSettingsData() {
           : "Another profile action started. Refresh before editing again." };
         return { ok: true, message: r.message || "Profile saved." };
       } catch (err) {
-        return { ok: false, message: err instanceof Error ? err.message : "Failed" };
+        const message = err instanceof Error ? err.message : "Failed";
+        if (!(err instanceof HttpError) || err.status !== 409) return { ok: false, message };
+        // Someone else saved first (#1101). Load the newer profile so the form can
+        // rebase its draft and the next explicit Save carries the newer revision.
+        const latest = await getJson<UserProfileResponse>("/api/user-profile");
+        const usable = latest && typeof latest.revision === "string" && Array.isArray(latest.questions) ? latest : undefined;
+        const publication = usable ? await publishProfile(mutation, usable) : 'unavailable';
+        if (publication === 'superseded') return { ok: false, message: "Another profile action started. Refresh before editing again." };
+        if (!usable || publication !== 'published') return { ok: false, conflict: true, message };
+        return { ok: false, conflict: true, message,
+          latest: { revision: usable.revision!, answers: { ...(usable.profile?.answers ?? {}) } } };
       }
     },
     [publishProfile],

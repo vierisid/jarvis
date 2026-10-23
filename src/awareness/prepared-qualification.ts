@@ -14,7 +14,7 @@ import type { BriefBinding, BriefEvidenceRef, BriefRevision, BriefTimestamp } fr
 import { projectLegacyGoal } from '../brief/adapters.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import { combineDecisions, type AuthorityEngine } from '../authority/engine.ts';
-import { resolveToolGate, substituteAboveLevel } from '../authority/tool-action-map.ts';
+import { aboveLevelMayAsk, governedCategoriesFor, resolveToolGate, substituteAboveLevel } from '../authority/tool-action-map.ts';
 import type { ToolDefinition } from '../actions/tools/registry.ts';
 import type { ExecutionTarget } from '../util/execution-environment.ts';
 import { getGoal } from '../vault/goals.ts';
@@ -29,7 +29,8 @@ import { listWorkflowEffects } from '../workflows/db/repos/workflow-effect.ts';
 import type { CredentialResolver } from '../workflows/credentials/adapter.ts';
 import { digest } from '../workflows/runtime/effect-context.ts';
 import { BOUNDED_TOOL_NAMES, GATED_TOOL_NAMES, boundedToolCapability, toolEffectCapability } from '../workflows/runtime/effect-capabilities.ts';
-import { governedPieceToolDefinition, PIECE_TOOL_CATEGORY, resolveGovernedPieceAction } from '../workflows/runtime/piece-effects.ts';
+import { governedPieceToolDefinition, PIECE_ABOVE_LEVEL_ASKS, PIECE_ABOVE_LEVEL_FLOOR, PIECE_TOOL_CATEGORY, resolveGovernedPieceAction } from '../workflows/runtime/piece-effects.ts';
+import { IN_RUN_STEP_PIECES } from '../workflows/runtime/step-admission.ts';
 import type { WorkflowReadiness } from '../workflows/runtime/workflow-readiness.ts';
 import type { JobKind } from './opportunity-types.ts';
 
@@ -399,18 +400,24 @@ type Judged = { decision: 'auto' | 'approval' | 'denied'; reason: string; timed:
 /** The effect boundary's own fold (`effect-boundary.ts` policy()), without its run, emergency or cancellation fences. */
 function decide(authority: AuthorityEngine | null, effect: {
   toolName: string; toolCategory: string; category: ActionCategory; categories?: ActionCategory[];
-  aboveLevelFloor?: ActionCategory; confirmation?: boolean;
+  aboveLevelFloor?: ActionCategory; aboveLevelGovernedOnly?: readonly ActionCategory[]; confirmation?: boolean;
 }): Judged {
   if (!authority) return { decision: 'denied', reason: 'Workflow Authority is unavailable; execution denied', timed: false };
   const categories = effect.categories?.length ? effect.categories : [effect.category];
   const check = (actionCategory: ActionCategory) => authority.checkAuthority({ agentId: 'workflow:qualification',
     agentRoleId: 'workflow-default', agentAuthorityLevel: 0, toolName: effect.toolName, toolCategory: effect.toolCategory,
     actionCategory, temporaryGrants: new Map(), profile: null });
-  const folded = combineDecisions(categories.map(check));
-  const decision = effect.aboveLevelFloor
+  const decisions = categories.map(check);
+  const folded = combineDecisions(decisions);
+  // The boundary's principal here has no profile, so neither does this one.
+  const mayAsk = aboveLevelMayAsk(decisions, effect.aboveLevelGovernedOnly, governedCategoriesFor(authority.getConfig().governed_categories, null));
+  const decision = effect.aboveLevelFloor && mayAsk
     ? substituteAboveLevel(folded, { confirm: 'above_level', floorCategory: effect.aboveLevelFloor }, check) : folded;
-  // A time-window rule decides by the hour of dispatch, not the hour of qualification.
-  const judged = [...categories, ...(effect.aboveLevelFloor ? [effect.aboveLevelFloor] : [])];
+  // A time-window rule decides by the hour of dispatch, not the hour of
+  // qualification. The floor is judged only where a substitution can happen;
+  // a governed-only floor is never consulted for a step the level clears.
+  const floorJudged = effect.aboveLevelFloor && (!effect.aboveLevelGovernedOnly || (folded.deniedByLevel && mayAsk));
+  const judged = [...categories, ...(floorJudged ? [effect.aboveLevelFloor!] : [])];
   const timed = authority.getConfig().context_rules.some(rule => rule.condition === 'time_range' && judged.includes(rule.action));
   if (!decision.allowed) return { decision: 'denied', reason: decision.reason, timed };
   if (effect.confirmation || decision.requiresApproval) return { decision: 'approval', reason: decision.reason, timed };
@@ -477,13 +484,18 @@ function judgeStep(node: FlowTriggerNode, services: Pick<QualificationServices, 
     if (capability.categories.some(c => DELIVERY.has(c))) judged.unreviewable.push(`Who ${toolName} reaches is not modeled`);
     return judged;
   }
-  const resolved = resolveGovernedPieceAction(piece, action);
+  if (IN_RUN_STEP_PIECES.has(piece)) return null;
+  const resolved = resolveGovernedPieceAction(piece, action, input);
   if (!resolved) return unjudged('ungoverned', `${piece} is not a governed piece; its actions run without Authority`);
   const tool = governedPieceToolDefinition(resolved);
   let category: ActionCategory;
   try { category = toolEffectCapability(tool).category; }
   catch (error) { return unjudged('unavailable', (error as Error).message); }
-  const judged = fact([category], decide(services.authority, { toolName: tool.name, toolCategory: PIECE_TOOL_CATEGORY, category }));
+  const judged = fact([category], decide(services.authority, { toolName: tool.name, toolCategory: PIECE_TOOL_CATEGORY, category,
+    aboveLevelFloor: PIECE_ABOVE_LEVEL_FLOOR, aboveLevelGovernedOnly: PIECE_ABOVE_LEVEL_ASKS }));
+  // #961: the category was read from the configured input (an HTTP method);
+  // one computed when the step runs can land anywhere up to the worst case.
+  if (resolved.byInput && (resolved.categoryProps ?? []).some(prop => hasExpression(input[prop]))) judged.unreviewable.push(`${action}'s Authority decision depends on values known only at run time`);
   const service = resolved.adapter.catalogId, key = `${service}:${action}`;
   if (DELIVERY.has(category)) {
     const delivery = DELIVERIES[key];

@@ -22,6 +22,8 @@
 import { createHash } from "node:crypto";
 import type { AppConnectionStatus, AppConnectionType } from "../db/repos/app-connection";
 import { getConnectionByExternalId, getUniqueConnectionByExternalId } from "../db/repos/app-connection";
+import type { EgressPolicy } from "../runtime/http-egress";
+import { guardedTokenTransport, PastedOAuth2Refresher, type TokenTransport } from "./pasted-oauth2";
 
 /** Prefix that marks a connection as "managed by Jarvis itself". */
 export const JARVIS_PREFIX = "jarvis:";
@@ -33,6 +35,8 @@ export interface ResolvedConnection {
   /** Native identity/status; managed sources may omit these. */
   pieceName?: string;
   status?: AppConnectionStatus;
+  /** Set only for a row of the `app_connection` table: which row, so `fresh` can refresh it. */
+  stored?: { id: string; projectId: string; externalId: string; generation: number };
 }
 
 /**
@@ -72,9 +76,27 @@ export interface ResolveInput {
   externalId: string;
 }
 
+export interface CredentialResolverOptions {
+  /**
+   * Where a pasted OAuth2 row's token refresh may connect (#954, #961). The
+   * daemon passes the install's policy; anything else gets the hosted rule.
+   */
+  egressPolicy?: EgressPolicy;
+  /** Test seam: the token POST itself. */
+  tokenTransport?: TokenTransport;
+  /** Test seam: the clock the refresher reads. */
+  now?: () => number;
+}
+
 /** Composite resolver: Jarvis sources first, then the workflow DB. */
 export class CredentialResolver {
   private sources: JarvisConnectionSource[] = [];
+  private readonly oauth2: PastedOAuth2Refresher;
+
+  constructor(opts: CredentialResolverOptions = {}) {
+    this.oauth2 = new PastedOAuth2Refresher(opts.tokenTransport ?? guardedTokenTransport(opts.egressPolicy ?? "public-only"),
+      opts.now ? { now: opts.now } : {});
+  }
 
   register(source: JarvisConnectionSource): void {
     this.sources.push(source);
@@ -107,7 +129,22 @@ export class CredentialResolver {
       ? getUniqueConnectionByExternalId(input.projectId, input.externalId)
       : getConnectionByExternalId(input.projectId, input.pieceName, input.externalId);
     if (!conn) return null;
-    return { type: conn.type, value: conn.value, pieceName: conn.pieceName, status: conn.status };
+    return { type: conn.type, value: conn.value, pieceName: conn.pieceName, status: conn.status,
+      stored: { id: conn.id, projectId: conn.projectId, externalId: conn.externalId, generation: conn.credentialGeneration } };
+  }
+
+  /**
+   * The credential to hand out for what `resolve` found: a stored OAuth2 row
+   * whose token is about to expire is refreshed first (#954). Call it only
+   * after the run's binding check passed, so a connection a run may not use is
+   * never refreshed on its behalf. Throws `ConnectionCredentialError` when the
+   * token has expired and no fresh one could be had. A Jarvis-managed
+   * connection is returned unchanged: its own source refreshes it.
+   */
+  async fresh(resolved: ResolvedConnection): Promise<ResolvedConnection> {
+    if (!resolved.stored) return resolved;
+    const value = await this.oauth2.fresh({ ...resolved.stored, type: resolved.type, value: resolved.value });
+    return value === resolved.value ? resolved : { ...resolved, value };
   }
 }
 

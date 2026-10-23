@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { __setCaptureTimeoutForTests, awaitCaptureTool, awaitCaptureToolOutput, CaptureTimeoutError, captureViaPrivateFileAsync } from './capture-file.ts';
 import { encodePng } from './fixtures/png.ts';
+import { WSL_NO_LOCAL_DESKTOP } from './interface.ts';
 import { MacAppController } from './macos.ts';
 import { __setNativeExecTimeoutForTests, defaultExec, runNative, type NativeExec } from './native-exec.ts';
 
@@ -80,10 +81,11 @@ describe('local captures do not use a predictable path (#746)', () => {
     }
   });
 
-  // Linux: the capture tools are faked on PATH, in a child process, because
-  // Bun's execSync and $ inherit the environment the process started with,
-  // not process.env as edited since. The child also pins Date.now before the
-  // code under test is loaded.
+  // Linux: the capture tools are faked in a directory the child's
+  // system-directory lookup (#900) is pointed at, and on its PATH as before;
+  // a child process, because a spawn without an env resolves against the
+  // environment the process started with, not process.env as edited since.
+  // The child also pins Date.now before the code under test is loaded.
   function runChild(fakes: Record<string, string>, body: string): { exitCode: number | null; stdout: string; stderr: string; argsLog: string } {
     const bin = mkdtempSync(join(tmpdir(), 'jarvis-746-bin-'));
     try {
@@ -91,7 +93,14 @@ describe('local captures do not use a predictable path (#746)', () => {
       for (const [name, script] of Object.entries(fakes)) {
         writeFileSync(join(bin, name), `#!/bin/sh\necho "${name} $*" >> '${argsLog}'\n${script}\n`, { mode: 0o755 });
       }
-      const script = `Date.now = () => ${PINNED_MS};\n${body}`;
+      const systemExe = join(import.meta.dir, '..', '..', 'util', 'system-exe.ts');
+      // Plain Linux, even on a WSL machine running the tests: under WSL
+      // capture_screen refuses before any tool runs (#901), and the test
+      // for that sets it back.
+      const wsl = join(import.meta.dir, '..', 'terminal', 'wsl-bridge.ts');
+      const script = `Date.now = () => ${PINNED_MS};\n` +
+        `(await import(${JSON.stringify(wsl)})).WSLBridge.isWSL = () => false;\n` +
+        `(await import(${JSON.stringify(systemExe)})).__setLinuxSystemDirsForTests(${JSON.stringify([bin])});\n${body}`;
       const child = Bun.spawnSync([process.execPath, '-e', script], {
         env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
         cwd: import.meta.dir,
@@ -121,6 +130,56 @@ describe('local captures do not use a predictable path (#746)', () => {
       expect(Buffer.from(result.content[1]!.source!.data, 'base64').toString()).toBe('what the tool wrote');
     } finally {
       cleanup();
+    }
+  });
+
+  // #901: under WSL, scrot and import capture WSLg's X display, which holds
+  // none of the Windows desktop, and capture_screen reported that as the
+  // user's screen. It refuses now, as the desktop tools do (#899), before any
+  // tool runs or any capture directory is made.
+  test.skipIf(process.platform !== 'linux')('#901 capture_screen under WSL refuses as LOCAL_DESKTOP_UNAVAILABLE and runs no capture tool', () => {
+    const builtin = join(import.meta.dir, '..', 'tools', 'builtin.ts');
+    const wsl = join(import.meta.dir, '..', 'terminal', 'wsl-bridge.ts');
+    const out = runChild({ scrot: WRITE_LAST_ARG, import: WRITE_LAST_ARG }, `
+      (await import(${JSON.stringify(wsl)})).WSLBridge.isWSL = () => true;
+      const { captureScreenTool } = await import(${JSON.stringify(builtin)});
+      const outcome = await captureScreenTool.execute({}).then(
+        (r) => ({ returned: typeof r === 'string' ? r : 'an image' }),
+        (e) => ({ threw: e?.constructor?.name, outcome: e?.outcome }));
+      process.stdout.write(JSON.stringify(outcome));`);
+    expect({ exitCode: out.exitCode, stderr: out.stderr }).toMatchObject({ exitCode: 0 });
+    expect(JSON.parse(out.stdout)).toEqual({ threw: 'ActionOutcomeError', outcome: {
+      status: 'blocked', code: 'LOCAL_DESKTOP_UNAVAILABLE', effect: 'not_started', message: `Error: ${WSL_NO_LOCAL_DESKTOP}`,
+    } });
+    expect(out.argsLog).toBe('');
+  });
+
+  // #900: scrot and import were run by bare name, so the first on PATH ran.
+  test.skipIf(process.platform !== 'linux')('capture_screen: the system directory\'s scrot runs, not the one on PATH; with neither tool there it says so (#900)', () => {
+    const system = mkdtempSync(join(tmpdir(), 'jarvis-900-system-'));
+    const empty = mkdtempSync(join(tmpdir(), 'jarvis-900-empty-'));
+    try {
+      writeFileSync(join(system, 'scrot'), '#!/bin/sh\nfor last; do :; done\nprintf "from the system scrot" > "$last"\n', { mode: 0o755 });
+      const builtin = join(import.meta.dir, '..', 'tools', 'builtin.ts');
+      const systemExe = join(import.meta.dir, '..', '..', 'util', 'system-exe.ts');
+      const out = runChild({ scrot: 'printf "planted" > "$(for last; do :; done; echo "$last")"', import: 'exit 0' }, `
+        const { __setLinuxSystemDirsForTests } = await import(${JSON.stringify(systemExe)});
+        const { captureScreenTool } = await import(${JSON.stringify(builtin)});
+        __setLinuxSystemDirsForTests(${JSON.stringify([system])});
+        const a = await captureScreenTool.execute({});
+        __setLinuxSystemDirsForTests(${JSON.stringify([empty])});
+        const b = await captureScreenTool.execute({});
+        process.stdout.write(JSON.stringify([a, b]));`);
+      expect({ exitCode: out.exitCode, stderr: out.stderr }).toMatchObject({ exitCode: 0 });
+      const [a, b] = JSON.parse(out.stdout) as [{ content: Array<{ source?: { data: string } }> }, string];
+      expect(Buffer.from(a.content[1]!.source!.data, 'base64').toString()).toBe('from the system scrot');
+      expect(b).toStartWith(`Error capturing screen: no screenshot tool: scrot is not installed in a system directory (${empty}); not used: `);
+      expect(b).toContain(`; import is not installed in a system directory (${empty}); not used: `);
+      // Neither planted tool ran.
+      expect(out.argsLog).toBe('');
+    } finally {
+      rmSync(system, { recursive: true, force: true });
+      rmSync(empty, { recursive: true, force: true });
     }
   });
 
@@ -313,6 +372,180 @@ describe('capture tool bounds (#802)', () => {
   test('a capture tool that fails is reported with its exit code and stderr', async () => {
     const proc = Bun.spawn(['sh', '-c', 'echo "cannot open display" >&2; exit 3'], { stdout: 'ignore', stderr: 'pipe' });
     await expect(awaitCaptureTool(proc, 'scrot')).rejects.toThrow('scrot exited with code 3: cannot open display');
+  });
+
+  // #902: stderr was read with Response.text(), which has nothing until EOF,
+  // and given up on after a short drain; a tool that wrote its error and left
+  // a child holding the pipe was reported with no reason at all.
+  for (const [what, run] of [
+    ['awaitCaptureTool', (p: Bun.Subprocess<'ignore', 'pipe', 'pipe'>) => awaitCaptureTool(p, 'scrot')],
+    ['awaitCaptureToolOutput', (p: Bun.Subprocess<'ignore', 'pipe', 'pipe'>) => awaitCaptureToolOutput(p, 'scrot')],
+  ] as const) {
+    test(`#902 ${what}: a failing tool whose stderr a leftover child holds open is still reported with its reason`, async () => {
+      // sh exits at once with 3; the backgrounded sleep keeps stderr open for 2 s.
+      const proc = Bun.spawn(['sh', '-c', 'echo "cannot open display" >&2; sleep 2 & exit 3'], { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' });
+      const started = performance.now();
+      const outcome = await Promise.race([
+        run(proc).then(() => 'resolved', (e: Error) => e.message),
+        Bun.sleep(4000).then(() => 'still waiting'),
+      ]);
+      expect(outcome).toBe('scrot exited with code 3: cannot open display');
+      // The 250 ms drain, not the 2 s the leftover child holds the pipe.
+      expect(performance.now() - started).toBeLessThan(1500);
+    });
+  }
+
+  // #904: both pipes were read in full with no cap. Each fake writes 200 000
+  // bytes, past a cap lowered to 64 KiB, then holds on for 5 s: a reader that
+  // stops at the cap kills it there; one that does not returns 5 s later with
+  // everything it read.
+  for (const stream of ['stdout', 'stderr'] as const) {
+    test(`#904 a tool whose ${stream} passes the cap is stopped there, and nothing it printed is returned`, async () => {
+      const cf = await import('./capture-file.ts') as Record<string, unknown>;
+      const setCap = cf.__setCaptureMaxOutputForTests as ((n: number | null) => void) | undefined;
+      setCap?.(64 * 1024);
+      const redirect = stream === 'stderr' ? ' >&2' : '';
+      const proc = Bun.spawn(['sh', '-c', `head -c 200000 /dev/zero${redirect}; exec sleep 5`], { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' });
+      try {
+        const started = performance.now();
+        const outcome = await Promise.race([
+          awaitCaptureToolOutput(proc, 'xprop').then((out) => `resolved with ${out.length} bytes`, (e: Error) => e.message),
+          Bun.sleep(4000).then(() => 'still waiting'),
+        ]);
+        expect(outcome).toBe(`xprop was stopped: output passed ${64 * 1024} bytes`);
+        expect(performance.now() - started).toBeLessThan(2500);
+        // Killed, not left running: SIGKILL, the bound's own signal.
+        expect(await Promise.race([proc.exited.then(() => proc.signalCode), Bun.sleep(2000).then(() => 'still running')])).toBe('SIGKILL');
+      } finally {
+        proc.kill('SIGKILL');
+        setCap?.(null);
+      }
+    });
+  }
+
+  test('#904 a lookup that exits before its reader reaches the cap is refused for its size, not as a hang', async () => {
+    // The ordering a real child gives only sometimes: the exit is already in
+    // when the reader passes the cap. Reported as a hang, listWindows would
+    // give up on every window instead of skipping this one.
+    const cf = await import('./capture-file.ts') as Record<string, unknown>;
+    const setCap = cf.__setCaptureMaxOutputForTests as ((n: number | null) => void) | undefined;
+    setCap?.(64 * 1024);
+    try {
+      const proc = {
+        exited: Promise.resolve(0), exitCode: 0, signalCode: null, kill: () => {},
+        stderr: new ReadableStream<Uint8Array>({ start(c) { c.close(); } }),
+        stdout: new ReadableStream<Uint8Array>({ async pull(c) { await Bun.sleep(20); c.enqueue(new Uint8Array(200_000)); c.close(); } }),
+      };
+      const outcome = await awaitCaptureToolOutput(proc, 'xprop').then((out) => `resolved with ${out.length} bytes`, (e: Error) => e);
+      expect(outcome).toBeInstanceOf(Error);
+      expect(outcome).not.toBeInstanceOf(CaptureTimeoutError);
+      expect((outcome as Error).message).toBe(`xprop was stopped: output passed ${64 * 1024} bytes`);
+    } finally {
+      setCap?.(null);
+    }
+  });
+
+  // #904 review: stand-in processes, so the order of exit, overflow and bound
+  // is the test's, not the scheduler's.
+  const stream = (afterMs: number, bytes: number) => new ReadableStream<Uint8Array>({
+    async pull(c) { await Bun.sleep(afterMs); if (bytes) c.enqueue(new Uint8Array(bytes)); c.close(); },
+  });
+
+  test('#904 review: a tool that passes the cap just before the bound, and is not reaped yet, is reported for its size, not as a hang', async () => {
+    const cf = await import('./capture-file.ts') as Record<string, unknown>;
+    const setCap = cf.__setCaptureMaxOutputForTests as ((n: number | null) => void) | undefined;
+    setCap?.(64 * 1024);
+    __setCaptureTimeoutForTests(150);
+    try {
+      // Overflows at 50 ms; the SIGKILL is not reaped (exitCode stays null),
+      // so the bound passes during the kill grace.
+      const proc = { exited: new Promise<number>(() => {}), exitCode: null, signalCode: null, kill: () => {},
+        stderr: stream(0, 0), stdout: stream(50, 200_000) };
+      const outcome = await awaitCaptureToolOutput(proc, 'xprop').then(() => 'resolved', (e: Error) => e);
+      expect(outcome).not.toBeInstanceOf(CaptureTimeoutError);
+      expect(outcome).toMatchObject({ message: `xprop was stopped: output passed ${64 * 1024} bytes`, code: 'ENOBUFS' });
+    } finally {
+      setCap?.(null);
+      __setCaptureTimeoutForTests(null);
+    }
+  });
+
+  test('#904 review: a tool that exited 0 with its whole answer succeeds, whatever a descendant then writes to stderr', async () => {
+    const cf = await import('./capture-file.ts') as Record<string, unknown>;
+    const setCap = cf.__setCaptureMaxOutputForTests as ((n: number | null) => void) | undefined;
+    setCap?.(64 * 1024);
+    try {
+      // stderr passes the cap at 10 ms, while the tool still runs; the kill
+      // does not take, and it exits 0 at 30 ms with its whole answer.
+      let exited = false;
+      const answer = new ReadableStream<Uint8Array>({
+        async pull(c) { await Bun.sleep(40); c.enqueue(new TextEncoder().encode('77\n')); c.close(); },
+      });
+      const proc = { exited: Bun.sleep(30).then(() => { exited = true; return 0; }),
+        get exitCode() { return exited ? 0 : null; }, signalCode: null, kill: () => {},
+        stderr: stream(10, 200_000), stdout: answer };
+      expect(await awaitCaptureToolOutput(proc, 'xdotool search').then((out) => out, (e: Error) => e.message)).toBe('77\n');
+    } finally {
+      setCap?.(null);
+    }
+  });
+
+  test('#904 review: a tool that already failed keeps its own exit and stderr when a leftover child floods the pipe after', async () => {
+    const cf = await import('./capture-file.ts') as Record<string, unknown>;
+    const setCap = cf.__setCaptureMaxOutputForTests as ((n: number | null) => void) | undefined;
+    setCap?.(64 * 1024);
+    try {
+      // Exited 1 already; the exit is observed at 30 ms, after the flood at 10 ms.
+      const stderr = new ReadableStream<Uint8Array>({
+        start(c) { c.enqueue(new TextEncoder().encode('cannot open display')); },
+        async pull(c) { await Bun.sleep(10); c.enqueue(new Uint8Array(200_000)); c.close(); },
+      });
+      const proc = { exited: Bun.sleep(30).then(() => 1), exitCode: 1, signalCode: null, kill: () => {},
+        stderr, stdout: stream(0, 0) };
+      expect(await awaitCaptureToolOutput(proc, 'scrot').then(() => 'resolved', (e: Error) => e.message))
+        .toBe('scrot exited with code 1: cannot open display');
+    } finally {
+      setCap?.(null);
+    }
+  });
+
+  test('#904 review: a tool that fails on its own while a leftover child floods stderr is reported for its failure', async () => {
+    const cf = await import('./capture-file.ts') as Record<string, unknown>;
+    const setCap = cf.__setCaptureMaxOutputForTests as ((n: number | null) => void) | undefined;
+    setCap?.(64 * 1024);
+    try {
+      // Still running (exitCode null) when the flood passes the cap at 10 ms;
+      // the kill does not land, and it exits 1 by itself at 30 ms.
+      let exited = false;
+      const stderr = new ReadableStream<Uint8Array>({
+        start(c) { c.enqueue(new TextEncoder().encode('cannot open display')); },
+        async pull(c) { await Bun.sleep(10); c.enqueue(new Uint8Array(200_000)); c.close(); },
+      });
+      const proc = { exited: Bun.sleep(30).then(() => { exited = true; return 1; }),
+        get exitCode() { return exited ? 1 : null; }, signalCode: null, kill: () => {}, stderr, stdout: stream(0, 0) };
+      expect(await awaitCaptureToolOutput(proc, 'scrot').then(() => 'resolved', (e: Error) => e.message))
+        .toBe('scrot exited with code 1: cannot open display');
+    } finally {
+      setCap?.(null);
+    }
+  });
+
+  test('#904 review: past the cap the pipe is cancelled, not left open with nobody reading it', async () => {
+    const { readCapped } = await import('./read-capped.ts');
+    let cancelled = false;
+    const s = new ReadableStream<Uint8Array>({
+      pull(c) { c.enqueue(new Uint8Array(1024)); },
+      cancel() { cancelled = true; },
+    });
+    let overflowed = false;
+    await expect(readCapped(s, 4096, () => { overflowed = true; })).rejects.toMatchObject({ code: 'ENOBUFS' });
+    expect({ overflowed, cancelled }).toEqual({ overflowed: true, cancelled: true });
+  });
+
+  test('#904 the cap is native-exec\'s, so the two seams that run desktop tools agree', async () => {
+    const cf = await import('./capture-file.ts') as Record<string, unknown>;
+    const { NATIVE_EXEC_MAX_OUTPUT } = await import('./native-exec.ts');
+    expect(cf.CAPTURE_MAX_OUTPUT).toBe(NATIVE_EXEC_MAX_OUTPUT);
   });
 
   test('macOS/Windows seam: a script that ignores SIGTERM is still stopped at the bound', async () => {

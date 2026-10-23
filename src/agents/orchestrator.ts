@@ -1,7 +1,7 @@
 import type { RoleDefinition } from '../roles/types.ts';
 import type { SystemPromptParts } from '../roles/prompt-builder.ts';
 import type { LLMMessage, LLMResponse, LLMStreamEvent, LLMToolCall, LLMTool, ContentBlock } from '../llm/provider.ts';
-import { guardImageSize } from '../llm/provider.ts';
+import { capTextBlocks, guardImageSize } from '../llm/provider.ts';
 import { LLMManager } from '../llm/manager.ts';
 import type { Tier } from '../llm/tiers.ts';
 import { AgentInstance, canSpawnChildren } from './agent.ts';
@@ -50,6 +50,7 @@ import {
 } from '../actions/tools/tool-relevance/discover.ts';
 import { getToolFilterPolicy } from '../actions/tools/tool-relevance/policy.ts';
 import { toolsInScope, toolInScope, outOfScopeMessage, type TurnToolScope } from '../actions/tools/tool-scope.ts';
+import { desktopRefusal } from '../actions/tools/desktop-guard.ts';
 import { withTurnScopeId } from '../actions/tools/turn-scope-store.ts';
 import { newSnapshotReadLog, withSnapshotReadLog } from '../actions/tools/snapshot-read-log.ts';
 import type { LLMProviderEntry } from '../config/types.ts';
@@ -1731,6 +1732,28 @@ export class AgentOrchestrator {
     return interceptOffList(tc.name, this.discoveryContext(exposed, ledger, scope));
   }
 
+  /**
+   * One denied row for a call refused because desktop.enabled is off (#905),
+   * named like out_of_scope(...) so it never reads as a gate decision on the
+   * tool itself. An audit failure must not take the turn down.
+   */
+  private auditDesktopOff(name: string, channel?: 'voice'): void {
+    try {
+      const agent = this.getPrimary();
+      this.auditTrail?.log({
+        agent_id: agent?.id ?? 'unknown',
+        agent_name: this.auditAgentName(agent?.agent.role.name ?? 'unknown'),
+        tool_name: `desktop_disabled(${name})`,
+        action_category: getActionForTool(name, this.toolRegistry?.get(name)?.category ?? 'unknown'),
+        authority_decision: 'denied',
+        executed: false,
+        ...(channel ? { channel } : {}),
+      });
+    } catch (err) {
+      console.warn('[Orchestrator] could not audit a desktop-off refusal:', err instanceof Error ? err.message : err);
+    }
+  }
+
   /** What both interceptors need: the gate, the emergency check, the audit hook. */
   private discoveryContext(
     exposed: ReadonlySet<string>,
@@ -1946,6 +1969,16 @@ export class AgentOrchestrator {
         : `Error: no tool named "${toolCall.name}" is available.`;
     }
 
+    // desktop.enabled: false (#905). Before the gate for the same reason as the
+    // scope check above: a switched-off surface is not a governance decision,
+    // and raising an approval card for a call that would then be refused only
+    // asks the person to approve nothing. The registry refuses it again.
+    const desktopOff = desktopRefusal(this.toolRegistry.get(toolCall.name), toolCall.arguments);
+    if (desktopOff) {
+      this.auditDesktopOff(toolCall.name);
+      return desktopOff;
+    }
+
     // Pin what the tool would otherwise resolve at run time (a relative file
     // path against the site chat's cwd), so the gate, an approval card and a
     // run after that card is clicked all mean the same file (#522).
@@ -2080,13 +2113,14 @@ export class AgentOrchestrator {
             this.noteTaint(toolCall.name, tool?.category);
             return markUntrustedToolFailure(toolCall.name, tool?.category, receipt.result, MAX_TOOL_RESULT_CHARS, true);
           }
-          // A picture (#709): the blocks, sized and framed exactly as the
-          // ungated path below hands them over, rather than the receipt's text
+          // A picture (#709): the blocks, sized, capped (#876) and framed exactly
+          // as the ungated path below hands them over, rather than the receipt's text
           // form, which names the image and does not carry it. An approved
           // screenshot is often the very thing the person approved acting on.
           if (receipt.content) {
             this.noteTaint(toolCall.name, tool?.category);
-            return markUntrustedToolBlocks(toolCall.name, tool?.category, receipt.content.map(guardImageSize));
+            return markUntrustedToolBlocks(toolCall.name, tool?.category,
+              capTextBlocks(receipt.content, MAX_TOOL_RESULT_CHARS).map(guardImageSize));
           }
           // A trusted trailer (#708): the tool's own repo-authored sentence,
           // placed AFTER the block the way the ungated path below places it,
@@ -2099,7 +2133,8 @@ export class AgentOrchestrator {
             return frame(capToolResult(receipt.outside ?? '')) + receipt.trailer;
           }
           // Capped BEFORE it is framed, as the ungated path caps a plain
-          // result (#828; content blocks are uncapped text on both paths). Uncapped, an approved `browser_navigate` or
+          // result (#828; content blocks are capped the same way since #876).
+          // Uncapped, an approved `browser_navigate` or
           // `desktop_snapshot` -- page- and screen-sized results, and exactly
           // the tools that take a card -- reached the model whole; and the
           // order matters as much as the cap, because a cut made after the
@@ -2207,7 +2242,9 @@ export class AgentOrchestrator {
 
       // Multi-modal result (e.g. screenshot with image data)
       if (isToolResult(raw)) {
-        return markUntrustedToolBlocks(toolCall.name, category, raw.content.map(guardImageSize));
+        // Text capped before it is framed, as a plain result is below (#876).
+        return markUntrustedToolBlocks(toolCall.name, category,
+          capTextBlocks(raw.content, MAX_TOOL_RESULT_CHARS).map(guardImageSize));
       }
 
       // Plain text result, plus any repo-authored trailer the tool handed over
@@ -2300,6 +2337,12 @@ export class AgentOrchestrator {
     // announcement about a tool that does not exist.
     if (!this.toolRegistry.has(name)) {
       return `Error: no tool named "${name}" is available.`;
+    }
+    // As on the task path: a switched-off desktop is answered before the gate (#905).
+    const desktopOff = desktopRefusal(this.toolRegistry.get(name), args);
+    if (desktopOff) {
+      this.auditDesktopOff(name, 'voice');
+      return desktopOff;
     }
 
     const primary = this.getPrimary();
@@ -2418,7 +2461,10 @@ export class AgentOrchestrator {
       this.noteTaint(name, category);
       if (isToolResult(raw)) {
         // Realtime function output is text; flatten non-text blocks to a tag.
-        const flat = raw.content.map((c) => (c.type === 'text' ? c.text : `[${c.type}]`)).join('\n');
+        // The text is capped before flattening and framing, like the block
+        // paths above (#876), so the [image] tags do not count against it.
+        const flat = capTextBlocks(raw.content, MAX_TOOL_RESULT_CHARS)
+          .map((c) => (c.type === 'text' ? c.text : `[${c.type}]`)).join('\n');
         return markUntrustedToolResult(name, category, flat);
       }
       const { outside, trailer } = splitToolReturn(raw);

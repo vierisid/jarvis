@@ -5,12 +5,14 @@
  * but never start()ed; broadcast() reaches the fake client registered here.
  */
 
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { describeRoomAction, isVoiceAffirmative, roomActionReply, WebSocketService } from './ws-service.ts';
 import { TOOL_RESULT_GRACE_MS } from '../comms/realtime.ts';
 import { ROOM_ACTION_QUEUE_TTL_MS } from './room-action-results.ts';
 import { createApiRoutes, type ApiContext } from './api-routes.ts';
 import type { RoomActionTargetLists } from './voice-room-action-gate.ts';
+import { getCronTimezone, setCronTimezone } from '../lib/cron-scheduler.ts';
 import { closeDb, initDatabase } from '../vault/schema.ts';
 import { createCommitment } from '../vault/commitments.ts';
 import { createContent } from '../vault/content-pipeline.ts';
@@ -21,6 +23,19 @@ import { buildTaintGating } from '../authority/taint-gating.ts';
 import { EmergencyController } from '../authority/emergency.ts';
 import type { Intent } from '../voice/intent.ts';
 
+// Panel sessions as the sidecar manager resolves them: session id -> the
+// sidecar whose token opened it. A session missing here is revoked or unknown.
+const PEBBLE = 'sc-pebble';
+const PEBBLE_SESSION = 'sess-pebble';
+const OTHER_SESSION = 'sess-other';
+const sessionSids = new Map<string, string>([[PEBBLE_SESSION, PEBBLE], [OTHER_SESSION, 'sc-other']]);
+const sessions = {
+  resolvePanelSession: (id: string) => {
+    const sid = sessionSids.get(id);
+    return sid ? { id, sid } : null;
+  },
+};
+
 const makeService = (orchestrator: AgentOrchestrator = new AgentOrchestrator()) => {
   const fakeAgent = {
     setDelegationCallback: () => {},
@@ -29,11 +44,18 @@ const makeService = (orchestrator: AgentOrchestrator = new AgentOrchestrator()) 
   } as never;
   const svc = new WebSocketService(0, fakeAgent);
   const sent: Array<{ type: string; payload: Record<string, unknown> }> = [];
-  const ws = { send: (raw: string) => { sent.push(JSON.parse(raw)); }, sendBinary: () => {} } as never;
+  // A native panel of the pebble's sidecar: its socket carries the panel
+  // session that sidecar's token opened (#1026).
+  const ws = { send: (raw: string) => { sent.push(JSON.parse(raw)); }, sendBinary: () => {}, data: { panel_session: PEBBLE_SESSION } } as never;
   const internals = svc as unknown as {
-    wsServer: { getClients: () => Set<unknown> };
+    wsServer: {
+      getClients: () => Set<unknown>;
+      setSidecarManager: (m: unknown) => void;
+      setInsecureOpenAccess: (on: boolean) => void;
+    };
     routeMessage: (msg: unknown, ws: unknown) => Promise<unknown>;
   };
+  internals.wsServer.setSidecarManager(sessions);
   internals.wsServer.getClients().add(ws);
   const broadcastResultId = (): string => {
     const note = sent.find((m) => m.type === 'notification' && m.payload.source === 'room_action');
@@ -47,7 +69,7 @@ describe('requestRoomAction', () => {
   test('broadcasts the action with a resultId and resolves on the panel answer', async () => {
     for (const [accepted, outcome] of [[true, 'accepted'], [false, 'rejected']] as const) {
       const { svc, ws, sent, internals, broadcastResultId } = makeService();
-      const pending = svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 1000);
+      const pending = svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 1000, { sidecar: PEBBLE });
       expect(sent[0]!.payload).toMatchObject({ source: 'room_action', room: 'settings', action: 'switch_tab', args: { tab: 'voice' } });
       const resultId = broadcastResultId();
       expect(typeof resultId).toBe('string');
@@ -63,7 +85,7 @@ describe('requestRoomAction', () => {
   test('with no answer it says so instead of assuming success', async () => {
     const { svc } = makeService();
     // A real action (#969 refuses workflows/switch_tab, which no handler runs).
-    expect(await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 10))
+    expect(await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 10, { sidecar: PEBBLE }))
       .toBe('no_answer');
   });
 
@@ -72,16 +94,104 @@ describe('requestRoomAction', () => {
     internals.wsServer.getClients().clear();
     const t0 = Date.now();
     // Nothing was sent, so not "sent but no answer" (#1011).
-    expect(await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 60_000))
+    expect(await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 60_000, { sidecar: PEBBLE }))
       .toBe('unreached');
     expect(Date.now() - t0).toBeLessThan(1000);
   });
 
   test('an answer naming another request does not settle this one', async () => {
     const { svc, ws, internals } = makeService();
-    const pending = svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 30);
+    const pending = svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 30, { sidecar: PEBBLE });
     await internals.routeMessage({ type: 'room_action_result', payload: { resultId: 'someone-else', accepted: true } }, ws);
     expect(await pending).toBe('no_answer');
+  });
+});
+
+// #1026: the pebble's tab switch is broadcast with its resultId to every /ws
+// client, and the first answer used to win, so any local client could make
+// the pebble say a switch did or did not happen. Only a socket whose panel
+// session belongs to the asking sidecar is listened to now.
+describe("the pebble's tab switch hears only its own sidecar's panels (#1026)", () => {
+  type Sent = { type: string; payload: Record<string, unknown> };
+  const socket = (session?: string) => {
+    const sent: Sent[] = [];
+    const ws = {
+      send: (raw: string) => { sent.push(JSON.parse(raw)); return raw.length; },
+      sendBinary: () => {},
+      ...(session ? { data: { panel_session: session } } : { data: {} }),
+    };
+    return { ws, sent };
+  };
+  const setup = () => {
+    const base = makeService();
+    base.internals.wsServer.getClients().clear();
+    const own = socket(PEBBLE_SESSION);
+    const foreign = socket(OTHER_SESSION);
+    const anonymous = socket();
+    const revoked = socket('sess-revoked');
+    for (const c of [own, foreign, anonymous, revoked]) base.internals.wsServer.getClients().add(c.ws);
+    const answer = (from: { ws: unknown }, resultId: unknown, accepted: boolean) =>
+      base.internals.routeMessage({ type: 'room_action_result', payload: { resultId, accepted }, timestamp: Date.now() }, from.ws);
+    const started = (from: { ws: unknown }, resultId: unknown) =>
+      base.internals.routeMessage({ type: 'room_action_result', payload: { resultId, started: true }, timestamp: Date.now() }, from.ws);
+    const idSentTo = (c: { sent: Sent[] }) => c.sent.find((m) => m.payload?.source === 'room_action')!.payload.resultId;
+    return { svc: base.svc, internals: base.internals, own, foreign, anonymous, revoked, answer, started, idSentTo };
+  };
+  const switchTab = { room: 'settings', action: 'switch_tab', args: { tab: 'voice' } };
+
+  test('another sidecar, an unbound socket or a revoked session cannot answer it', async () => {
+    const { svc, own, foreign, anonymous, revoked, answer, idSentTo } = setup();
+    const pending = svc.requestRoomAction(switchTab, 1000, { sidecar: PEBBLE });
+    // The action and its resultId still reach everyone: a tab switch keeps
+    // every panel in step (#974).
+    const id = idSentTo(own);
+    for (const c of [foreign, anonymous, revoked]) expect(idSentTo(c)).toBe(id);
+    // The bug: the first of these settled the wait as "Switched".
+    for (const c of [foreign, anonymous, revoked]) await answer(c, id, true);
+    await answer(own, id, false);
+    expect(await pending).toBe('rejected');
+  });
+
+  test('only the own panel can say it started', async () => {
+    const { svc, own, foreign, started, idSentTo } = setup();
+    const foreignOnly = svc.requestRoomAction(switchTab, 20, { sidecar: PEBBLE });
+    await started(foreign, idSentTo(foreign));
+    expect(await foreignOnly).toBe('no_answer');
+    const { svc: svc2, own: own2, started: started2, idSentTo: idSentTo2 } = setup();
+    const ownStarted = svc2.requestRoomAction(switchTab, 20, { sidecar: PEBBLE });
+    await started2(own2, idSentTo2(own2));
+    expect(await ownStarted).toBe('started');
+    void own;
+  });
+
+  test('with no socket of the asking sidecar connected it is unreached at once, though the others still get it', async () => {
+    const { svc, internals, foreign, anonymous, idSentTo } = setup();
+    for (const c of [...internals.wsServer.getClients()]) {
+      if (c !== foreign.ws && c !== anonymous.ws) internals.wsServer.getClients().delete(c);
+    }
+    const t0 = Date.now();
+    expect(await svc.requestRoomAction(switchTab, 60_000, { sidecar: PEBBLE })).toBe('unreached');
+    expect(Date.now() - t0).toBeLessThan(1000);
+    for (const c of [foreign, anonymous]) expect(typeof idSentTo(c)).toBe('string');
+  });
+
+  test('under insecure_open_access no socket has an identity, so any may answer', async () => {
+    const { svc, internals, anonymous, answer, idSentTo } = setup();
+    internals.wsServer.setInsecureOpenAccess(true);
+    const pending = svc.requestRoomAction(switchTab, 1000, { sidecar: PEBBLE });
+    await answer(anonymous, idSentTo(anonymous), true);
+    expect(await pending).toBe('accepted');
+  });
+
+  test('the pebble names its sidecar when it asks', () => {
+    const src = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+    const start = src.indexOf('const tryHandleInPanelAction = async (');
+    const end = src.indexOf('tabSwitchReply(target.title, tabRaw, outcome)', start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const body = src.slice(start, end);
+    const call = body.slice(body.indexOf('await wsService.requestRoomAction({'));
+    expect(call.slice(0, call.indexOf(');') + 2)).toContain('}, undefined, { sidecar: sidecarId });');
   });
 });
 
@@ -332,7 +442,7 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
   test('the panels are told too; a dashboard not asked is not', async () => {
     const { svc, speaker, other, actionTo } = setup();
     // The pebble's request: every panel may answer, so every one is told.
-    await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 20);
+    await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 20, { sidecar: PEBBLE });
     for (const c of [speaker, other]) expect(actionTo(c)!.payload).toMatchObject({ expiresInMs: 20 });
     // Nobody is named to claim the pebble's request (#1025): any panel may run it.
     for (const c of [speaker, other]) expect(actionTo(c)!.payload.claim).toBeUndefined();
@@ -585,8 +695,12 @@ describe('a side-effecting room action runs on one dashboard only (#974)', () =>
     };
     const speaker = mk();
     const other = mk();
+    // A native panel of the pebble's sidecar (#1026).
     const panel = mk();
+    (panel.ws as { data?: unknown }).data = { panel_session: PEBBLE_SESSION };
     for (const c of [speaker, other, panel]) base.internals.wsServer.getClients().add(c.ws);
+    // A current dashboard says its zone (#1022).
+    (base.svc as unknown as { dashboardTimeZones: WeakMap<object, unknown> }).dashboardTimeZones.set(speaker.ws, { zone: 'UTC' });
     const internals = base.svc as unknown as {
       executeRealtimeNavTool: (name: string, args: Record<string, unknown>, ws: unknown) => Promise<string | null>;
       handleVoiceRoomAction: (ra: unknown, requestId: string, ws: unknown) => Promise<void>;
@@ -639,8 +753,13 @@ describe('a side-effecting room action runs on one dashboard only (#974)', () =>
     const { svc, speaker, other, panel, frames } = setup();
     expect(await svc.requestRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x' } }, 20)).toBe('rejected');
     for (const c of [speaker, other, panel]) expect(frames(c)).toEqual([]);
-    // A presentation action with nobody named still goes to the panels.
-    expect(await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 20)).toBe('no_answer');
+    // A presentation action from the pebble, named by its sidecar, still goes
+    // to the panels.
+    expect(await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 20, { sidecar: PEBBLE })).toBe('no_answer');
+    for (const c of [speaker, other, panel]) expect(frames(c)).toEqual(['room_action:switch_tab']);
+    // With neither a dashboard nor a sidecar named, nobody's answer could
+    // count (#1026), so it goes nowhere.
+    expect(await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 20)).toBe('rejected');
     for (const c of [speaker, other, panel]) expect(frames(c)).toEqual(['room_action:switch_tab']);
   });
 });
@@ -652,7 +771,7 @@ describe('a side-effecting room action runs on one dashboard only (#974)', () =>
 // check and grades its own reading, so it repeats a governed action back.
 describe('voice room actions are held to what their handlers do (#973)', () => {
   type Sent = { type: string; payload: Record<string, unknown> };
-  const setup = (opts: { tainted?: boolean; gating?: Parameters<typeof buildTaintGating>[0] } = {}) => {
+  const setup = (opts: { tainted?: boolean; gating?: Parameters<typeof buildTaintGating>[0]; zone?: string | null } = {}) => {
     const orchestrator = new AgentOrchestrator();
     orchestrator.setTaintGating(buildTaintGating(opts.gating));
     if (opts.tainted) {
@@ -669,11 +788,14 @@ describe('voice room actions are held to what their handlers do (#973)', () => {
     const speaker = mk();
     const other = mk();
     for (const c of [speaker, other]) base.internals.wsServer.getClients().add(c.ws);
+    // A current dashboard says its zone (#1022); a stale tab is set up without one.
+    if (opts.zone !== null) (base.svc as unknown as { dashboardTimeZones: WeakMap<object, unknown> }).dashboardTimeZones.set(speaker.ws, { zone: opts.zone ?? 'UTC' });
     const internals = base.svc as unknown as {
       executeRealtimeNavTool: (name: string, args: Record<string, unknown>, ws: unknown, opts?: { blockedCategories?: string[] }) => Promise<string | null>;
       routeClassifiedVoiceIntent: (intent: Intent, trimmed: string, requestId: string, ws: unknown) => Promise<void>;
       resolveVoiceConfirmation: (id: string, decision: 'confirm' | 'cancel') => Promise<{ ok: boolean }>;
       pendingVoiceConfirmations: Map<string, unknown>;
+      routeMessage: (msg: unknown, ws: unknown) => Promise<unknown>;
     };
     const real = base.svc.requestRoomAction.bind(base.svc);
     (base.svc as unknown as { requestRoomAction: typeof real }).requestRoomAction = (a, _t, o) => real(a, 20, o);
@@ -785,11 +907,16 @@ describe('voice room actions are held to what their handlers do (#973)', () => {
   });
 
   test('the classifier repeats a high-impact action back however sure it says it is, and runs nothing', async () => {
+    // The time a task or event is for is read now, in the speaker's zone,
+    // and the card shows that instant (#1022).
+    setSystemTime(new Date('2026-10-20T15:00:00Z'));
     // The card shows the action as it will run (#1008): the handler's
     // defaults filled in, and the project found and pinned by id. It used to
     // show only what the classifier wrote, so "replay onboarding" hid the
     // scope "all" that clears the profile.
     const shown: Record<string, Record<string, unknown>> = {
+      'tasks/create_task': { title: 'Pay rent', when: 'tomorrow', when_ts: Date.parse('2026-10-21T13:00:00Z') },
+      'calendar/schedule_event': { title: 'Call', when: 'in 5 minutes', when_ts: Date.parse('2026-10-20T15:05:00Z') },
       'workspaces/start_server': { name: 'demo', id: 'proj-demo' },
       'workspaces/select_project': { name: 'demo', id: 'proj-demo' },
       'workspaces/create_project': { name: 'demo', template: 'vite-react' },
@@ -799,15 +926,171 @@ describe('voice room actions are held to what their handlers do (#973)', () => {
     };
     for (const [room, action, args] of governed) {
       const { internals, speaker, other, frames } = setup();
+      await internals.routeMessage({ type: 'voice_text', payload: { requestId: 'r', text: '', timeZone: 'America/New_York' }, timestamp: 0 }, speaker.ws);
       await internals.routeClassifiedVoiceIntent(intent(room, action, args), 'do it', 'req', speaker.ws);
       expect(frames()).toEqual([]);
       const card = other.sent.find((m) => m.payload?.source === 'repeat_back_request');
-      const runs = { room, action, args: shown[`${room}/${action}`] ?? args };
+      const timed = room === 'tasks' || room === 'calendar';
+      const runs = { room, action, args: shown[`${room}/${action}`] ?? args, ...(timed ? { timeZone: 'America/New_York' } : {}) };
       expect(card?.payload).toMatchObject({ id: `i-${room}-${action}`, transcript: 'do it', action: describeRoomAction(runs) });
       expect(internals.pendingVoiceConfirmations.size).toBe(1);
     }
     expect(describeRoomAction({ room: 'settings', action: 'replay_onboarding', args: { scope: 'all' } }))
       .toBe('Settings: replay onboarding {"scope": "all"} (deletes data; changes settings)');
+    expect(describeRoomAction({ room: 'tasks', action: 'create_task', args: shown['tasks/create_task'], timeZone: 'America/New_York' }))
+      .toBe('Tasks: create task {"title": "Pay rent", "when": "tomorrow"} at Wed, Oct 21, 2026, 09:00 EDT (America/New_York) (saves data)');
+    setSystemTime();
+  });
+
+  describe('a time is settled before the card, in the speaker\'s zone, and the yes runs that instant (#1022)', () => {
+    afterEach(() => { setSystemTime(); });
+    const zone = (internals: { routeMessage: (m: unknown, ws: unknown) => Promise<unknown> }, ws: unknown, timeZone: unknown, type = 'voice_text') =>
+      internals.routeMessage({ type, payload: type === 'voice_text' ? { requestId: 'r', text: '', timeZone } : { requestId: 'r', mode: 'wav', timeZone }, timestamp: 0 }, ws);
+    const sentArgs = (sent: Sent[]) => sent.find((m) => m.payload?.source === 'room_action')?.payload.args;
+
+    test('"tomorrow" said before midnight and confirmed after it is still the day on the card', async () => {
+      const { internals, speaker, other } = setup();
+      await zone(internals, speaker.ws, 'America/New_York');
+      // 23:50 on the 20th in New York.
+      setSystemTime(new Date('2026-10-21T03:50:00Z'));
+      await internals.routeClassifiedVoiceIntent(intent('tasks', 'create_task', { title: 'Pay rent', when: 'tomorrow at 9am' }), 'pay rent tomorrow at 9', 'req', speaker.ws);
+      expect(other.sent.find((m) => m.payload?.source === 'repeat_back_request')!.payload.action)
+        .toBe('Tasks: create task {"title": "Pay rent", "when": "tomorrow at 9am"} at Wed, Oct 21, 2026, 09:00 EDT (America/New_York) (saves data)');
+      // The yes comes twenty minutes later, on the 21st.
+      setSystemTime(new Date('2026-10-21T04:10:00Z'));
+      expect(await internals.resolveVoiceConfirmation('i-tasks-create_task', 'confirm')).toEqual({ ok: true });
+      expect(sentArgs(speaker.sent)).toEqual({ title: 'Pay rent', when: 'tomorrow at 9am', when_ts: Date.parse('2026-10-21T13:00:00Z') });
+    });
+
+    test('the zone is the speaker\'s, from voice_start too; another dashboard\'s does not count', async () => {
+      setSystemTime(new Date('2026-10-20T15:00:00Z'));
+      const { internals, speaker, other } = setup();
+      await zone(internals, other.ws, 'America/New_York');
+      await zone(internals, speaker.ws, 'Asia/Tokyo', 'voice_start');
+      await internals.routeClassifiedVoiceIntent(intent('calendar', 'schedule_event', { title: 'Call', when: 'tomorrow at 9am' }), 'call', 'req', speaker.ws);
+      expect(await internals.resolveVoiceConfirmation('i-calendar-schedule_event', 'confirm')).toEqual({ ok: true });
+      // 15:00 UTC on the 20th is already midnight on the 21st in Tokyo.
+      expect(sentArgs(speaker.sent)).toMatchObject({ when_ts: Date.parse('2026-10-22T00:00:00Z') });
+    });
+
+    test('a tab that never said its zone is told to reload, and no time is guessed for it', async () => {
+      setSystemTime(new Date('2026-10-20T15:00:00Z'));
+      const reload = 'I haven\'t done "Tasks: create task": the dashboard tab you spoke to did not say its time zone. Reload the dashboard to set times by voice.';
+      // Realtime: refused, nothing sent.
+      const rt = setup({ zone: null });
+      expect(await rt.realtime('tasks', 'create_task', { title: 'x', when: 'tomorrow at 9am' })).toBe(reload);
+      expect(rt.frames()).toEqual([]);
+      // A payload with no timeZone, or a null one, leaves it so.
+      await rt.internals.routeMessage({ type: 'voice_text', payload: { requestId: 'r', text: '' }, timestamp: 0 }, rt.speaker.ws);
+      await zone(rt.internals, rt.speaker.ws, null);
+      expect(await rt.realtime('tasks', 'create_task', { title: 'x', when: 'tomorrow at 9am' })).toBe(reload);
+      // Held: no card.
+      const held = setup({ zone: null });
+      await held.internals.routeClassifiedVoiceIntent(intent('tasks', 'create_task', { title: 'x', when: 'tomorrow at 9am' }), 'x', 'req', held.speaker.ws);
+      expect(held.internals.pendingVoiceConfirmations.size).toBe(0);
+      expect(held.speaker.sent.map((m) => m.payload?.text).filter(Boolean)).toContain(reload);
+      // The classifier acting on its own reading.
+      const cl = setup({ zone: null, gating: { governed_categories: ['send_message'] } as never });
+      await cl.internals.routeClassifiedVoiceIntent(intent('tasks', 'create_task', { title: 'x', when: 'tomorrow at 9am' }), 'x', 'req', cl.speaker.ws);
+      expect(cl.frames()).toEqual([]);
+      expect(cl.speaker.sent.map((m) => m.payload?.text).filter(Boolean)).toContain(reload);
+      // With no time asked for, it goes as before; once the tab says its zone, so does a time.
+      const ok = setup({ zone: null });
+      expect(await ok.realtime('tasks', 'create_task', { title: 'x' })).not.toBe(reload);
+      expect(sentArgs(ok.speaker.sent)).toEqual({ title: 'x' });
+      const later = setup({ zone: null });
+      await zone(later.internals, later.speaker.ws, 'Asia/Kolkata');
+      await later.realtime('tasks', 'create_task', { title: 'x', when: 'tomorrow at 9am' });
+      expect(sentArgs(later.speaker.sent)).toMatchObject({ when_ts: Date.parse('2026-10-21T03:30:00Z') });
+    });
+
+    test('a zone the browser named that this daemon does not know: the configured zone, else why, not "reload" (#1022 review)', async () => {
+      setSystemTime(new Date('2026-10-20T15:00:00Z'));
+      const before = getCronTimezone();
+      try {
+        setCronTimezone(null);
+        const a = setup({ zone: null });
+        await zone(a.internals, a.speaker.ws, 'Etc/Unknown');
+        expect(await a.realtime('tasks', 'create_task', { title: 'x', when: 'tomorrow at 9am' })).toBe(
+          'I haven\'t done "Tasks: create task": your browser reported a time zone I don\'t recognise ("Etc/Unknown"), and no time zone is set in the Jarvis config. '
+          + 'Set "timezone" in config.yaml and restart Jarvis, or set the time from the room.');
+        expect(a.frames()).toEqual([]);
+        // With a zone configured, it stands in.
+        setCronTimezone('Asia/Kolkata');
+        await a.realtime('tasks', 'create_task', { title: 'x', when: 'tomorrow at 9am' });
+        expect(sentArgs(a.speaker.sent)).toMatchObject({ when_ts: Date.parse('2026-10-21T03:30:00Z') });
+        // A browser that could not say sends "", and a non-string is the same: told so, not "reload".
+        setCronTimezone(null);
+        for (const said of ['', 5]) {
+          const c = setup({ zone: null });
+          await zone(c.internals, c.speaker.ws, said);
+          expect(await c.realtime('tasks', 'create_task', { title: 'x', when: 'tomorrow at 9am' })).toContain('your browser did not report a time zone');
+        }
+        // An offset zone is one, where the runtime takes it.
+        setCronTimezone(null);
+        const b = setup({ zone: null });
+        await zone(b.internals, b.speaker.ws, '+05:30');
+        await b.realtime('tasks', 'create_task', { title: 'x', when: 'tomorrow at 9am' });
+        expect(sentArgs(b.speaker.sent)).toMatchObject({ when_ts: Date.parse('2026-10-21T03:30:00Z') });
+      } finally {
+        setCronTimezone(before);
+      }
+    });
+
+    test('a time already gone is refused, not moved (#1022 review)', async () => {
+      const { internals, speaker, realtime, frames } = setup();
+      await zone(internals, speaker.ws, 'America/New_York');
+      // 22:30 on Tuesday Oct 20 in New York.
+      setSystemTime(new Date('2026-10-21T02:30:00Z'));
+      expect(await realtime('tasks', 'create_task', { title: 'x', when: 'tonight' }))
+        .toBe('I haven\'t done "Tasks: create task": "tonight" is Tue, Oct 20, 21:00 EDT, which has passed. Say a later time.');
+      for (const when of ['this afternoon', 'this morning', 'tuesday at 9am', 'oct 20 at 3pm', 'yesterday', '2026-10-19 09:00', 'today at 9am']) {
+        expect([when, await realtime('tasks', 'create_task', { title: 'x', when })]).toEqual([when, expect.stringContaining('which has passed. Say a later time.')]);
+      }
+      expect(frames()).toEqual([]);
+      // Held: no card either.
+      await internals.routeClassifiedVoiceIntent(intent('tasks', 'create_task', { title: 'x', when: 'tonight' }), 'x', 'req', speaker.ws);
+      expect(internals.pendingVoiceConfirmations.size).toBe(0);
+      // A time a few seconds gone, as said, still goes; "today" alone is later.
+      expect(await realtime('tasks', 'create_task', { title: 'x', when: 'today' })).not.toContain('passed');
+    });
+
+    test('the realtime model\'s call is settled the same way, and told the instant; an instant it wrote is replaced', async () => {
+      setSystemTime(new Date('2026-10-20T15:00:00Z'));
+      const { internals, speaker, realtime } = setup();
+      await zone(internals, speaker.ws, 'America/New_York');
+      const reply = realtime('tasks', 'create_task', { title: 'Pay rent', when: 'tomorrow at 9am', when_ts: 1 });
+      const sent = await (async () => { for (let i = 0; i < 50 && !sentArgs(speaker.sent); i++) await Bun.sleep(1); return speaker.sent.find((m) => m.payload?.source === 'room_action')!; })();
+      expect(sent.payload.args).toEqual({ title: 'Pay rent', when: 'tomorrow at 9am', when_ts: Date.parse('2026-10-21T13:00:00Z') });
+      await internals.routeMessage({ type: 'room_action_result', payload: { resultId: sent.payload.resultId, accepted: true } }, speaker.ws);
+      expect(await reply).toBe('Creating task "Pay rent" for Wed, Oct 21, 2026, 09:00 EDT (America/New_York). (Tasks says it is done.)');
+    });
+
+    test('words that are not a time are refused on every path, and nothing is sent', async () => {
+      const rt = setup();
+      expect(await rt.realtime('calendar', 'schedule_event', { title: 'Call', when: 'later today' }))
+        .toBe('I haven\'t done "Calendar: schedule event": I couldn\'t tell what time "later today" means. Say a day and a time with am or pm, like "tomorrow at 3pm" or "friday at 10am".');
+      expect(rt.frames()).toEqual([]);
+      // Held for a card: no card.
+      const held = setup();
+      await held.internals.routeClassifiedVoiceIntent(intent('tasks', 'create_task', { title: 'x', when: 'tuesday at 3' }), 'x', 'req', held.speaker.ws);
+      expect(held.other.sent.filter((m) => m.payload?.source === 'repeat_back_request')).toEqual([]);
+      expect(held.internals.pendingVoiceConfirmations.size).toBe(0);
+      // The classifier acting on its own reading (write_data not governed here).
+      const cl = setup({ gating: { governed_categories: ['send_message'] } as never });
+      await cl.internals.routeClassifiedVoiceIntent(intent('tasks', 'create_task', { title: 'x', when: 'tuesday at 3' }), 'x', 'req', cl.speaker.ws);
+      expect(cl.frames()).toEqual([]);
+      expect(cl.speaker.sent.map((m) => m.payload?.text).filter(Boolean)).toContain(
+        'I haven\'t done "Tasks: create task": I couldn\'t tell what time "tuesday at 3" means. Say a day and a time with am or pm, like "tomorrow at 3pm" or "friday at 10am".');
+    });
+
+    test('the classifier acting on its own reading settles the time too', async () => {
+      setSystemTime(new Date('2026-10-20T15:00:00Z'));
+      const cl = setup({ gating: { governed_categories: ['send_message'] } as never });
+      await zone(cl.internals, cl.speaker.ws, 'Asia/Tokyo');
+      await cl.internals.routeClassifiedVoiceIntent(intent('content', 'schedule', { name: 'launch', when: 'tomorrow at 9am', when_ts: 3 }), 'x', 'req', cl.speaker.ws);
+      expect(sentArgs(cl.speaker.sent)).toEqual({ name: 'launch', when: 'tomorrow at 9am', when_ts: Date.parse('2026-10-22T00:00:00Z') });
+    });
   });
 
   test('confirming runs what the card showed, whatever the selection or the list did meanwhile (#1008)', async () => {
@@ -1062,6 +1345,11 @@ describe('describeRoomAction shows every argument the classifier filled in (#973
     const shown = describeRoomAction({ room: 'tasks', action: 'create_task', args: { title: `Pay ${rlo}rent${zwsp}`, [`x${lsep}`]: 1 } });
     expect(shown).toBe('Tasks: create task {"title": "Pay \\u202erent\\u200b", "x\\u2028": 1} (saves data)');
     expect([...shown].filter((ch) => [0x202e, 0x200b, 0x2028].includes(ch.codePointAt(0)!))).toEqual([]);
+  });
+
+  test('an instant with no zone is not shown as settled: only the daemon settles one, always with its zone (#1022 review)', () => {
+    expect(describeRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x', when: 'tomorrow', when_ts: 1 } }))
+      .toBe('Tasks: create task {"title": "x", "when": "tomorrow"} (saves data)');
   });
 
   test('a pinned item is shown by its name, without the id it is pinned by (#1008)', () => {

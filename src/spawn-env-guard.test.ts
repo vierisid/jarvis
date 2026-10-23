@@ -121,12 +121,14 @@ const EXEMPT: Record<string, Exemption> = {
   },
   'comms/desktop-notify.ts': {
     reason:
-      'notify-send and `which`; need the session env (DBUS_SESSION_BUS_ADDRESS). NOT a fixed command ' +
+      'notify-send; needs the session env (DBUS_SESSION_BUS_ADDRESS). NOT a fixed command ' +
       'line: the title and body can be workflow- or model-authored, and reach notify-send as positional ' +
       'argv after `--` (#515). The PowerShell toast is in MODEL_EXEC.',
     // detectMethod was 2: its second `which` looked for powershell.exe on
     // PATH, and #896 replaced it with a System32 lookup that spawns nothing.
-    calls: { detectMethod: 1, sendViaNotifySend: 1 },
+    // #900 did the same for the first, `which notify-send`: detectMethod
+    // spawns nothing now, so it has no entry.
+    calls: { sendViaNotifySend: 1 },
   },
   'actions/app-control/native-exec.ts': {
     reason: '`runNative` is the injected exec seam, a name match rather than a real spawn. The real one, defaultExec, is in MODEL_EXEC.',
@@ -134,7 +136,7 @@ const EXEMPT: Record<string, Exemption> = {
   },
   'actions/app-control/linux.ts': {
     reason:
-      'xdotool/wmctrl/xprop/import/scrot via Bun.spawn (for a timeout, #802 and #895), and `which` via Bun `$`: ' + DESKTOP_SESSION + ' Model text reaches xdotool only as ' +
+      'xdotool/wmctrl/xprop/import/scrot via Bun.spawn (for a timeout, #802 and #895), each by its absolute path in a system directory (#900): ' + DESKTOP_SESSION + ' Model text reaches xdotool only as ' +
       'argv, with no shell, placed after `--`, which ends xdotool\'s own option ' +
       'parsing; key chords are checked against keysym names first (#518). ' +
       'launchApp, the model-chosen executable, is in MODEL_EXEC.',
@@ -147,9 +149,10 @@ const EXEMPT: Record<string, Exemption> = {
       // #895 did the same for every remaining `$` but checkTool's `which`
       // (getActiveWindow, listWindows, clickElement, typeText, pressKeys,
       // focusWindow), one for one, env inherited as before: counts unchanged.
+      // #900 replaced checkTool's `which` with a lookup in the system
+      // directories that spawns nothing, so checkTool has no entry.
       'LinuxAppController.captureScreen/<anonymous>': 2,
       'LinuxAppController.captureWindow/<anonymous>': 1,
-      'LinuxAppController.checkTool': 1,
       'LinuxAppController.clickElement': 4,
       'LinuxAppController.findWindowByPid': 1,
       'LinuxAppController.focusWindow': 1,

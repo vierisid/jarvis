@@ -1,5 +1,6 @@
 import { describe, expect, it, afterEach } from 'bun:test';
 import { AnthropicProvider, anthropicMessagesUrl } from './anthropic.ts';
+import { CHAT_MODEL_SUGGESTIONS } from './model-catalog.ts';
 import type { LLMMessage, LLMStreamEvent } from './provider.ts';
 
 const originalFetch = globalThis.fetch;
@@ -127,6 +128,15 @@ describe('AnthropicProvider custom endpoint', () => {
 
     expect(requestHeaders.get('x-api-key')).toBe('sk-ant-test');
     expect(requestHeaders.get('authorization')).toBeNull();
+  });
+
+  it('returns a copy of the shared model suggestions without a gateway', async () => {
+    const provider = new AnthropicProvider('sk-ant-test');
+    const models = await provider.listModels();
+    expect(models).toEqual([...CHAT_MODEL_SUGGESTIONS.anthropic]);
+    models.push('mutated-by-caller');
+    expect(CHAT_MODEL_SUGGESTIONS.anthropic).not.toContain('mutated-by-caller');
+    expect(await provider.listModels()).toEqual(await new AnthropicProvider('sk-ant-other').listModels());
   });
 
   it('discovers models from a custom endpoint', async () => {

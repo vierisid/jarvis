@@ -1,5 +1,6 @@
 import { spawn, type Subprocess } from 'bun';
 import { modelExecEnv } from '../../util/model-exec-env.ts';
+import { win32AbsolutePath, win32EnvValue, win32SystemExe } from '../../util/system-exe.ts';
 
 export type CommandResult = {
   stdout: string;
@@ -15,12 +16,20 @@ export type ExecuteOptions = {
 };
 
 export class TerminalExecutor {
-  private shell: string;
+  private configuredShell: string | null;
   private defaultTimeout: number;
 
   constructor(opts?: { shell?: string; timeout?: number }) {
-    this.shell = opts?.shell ?? TerminalExecutor.detectShell();
+    // Resolved at first use, not here: builtin.ts builds one at module load,
+    // and on Windows detectShell can refuse (#907), which must fail a
+    // command, not the import.
+    this.configuredShell = opts?.shell ?? null;
     this.defaultTimeout = opts?.timeout ?? 30000;
+  }
+
+  private get shell(): string {
+    this.configuredShell ??= TerminalExecutor.detectShell();
+    return this.configuredShell;
   }
 
   async execute(command: string, opts?: ExecuteOptions): Promise<CommandResult> {
@@ -105,15 +114,19 @@ export class TerminalExecutor {
     }
   }
 
-  static detectShell(): string {
-    const platform = process.platform;
-
+  static detectShell(platform: NodeJS.Platform = process.platform, env: Record<string, string | undefined> = process.env): string {
     if (platform === 'win32') {
-      return process.env.COMSPEC ?? 'powershell.exe';
+      // Never a bare name (#907; see win32SystemExe): COMSPEC when it is a
+      // plain drive-absolute path; cmd.exe from System32 when COMSPEC is set
+      // but is not one (it names cmd, so the dialect stays cmd's); powershell
+      // from System32 when COMSPEC is unset, as before.
+      const comspec = win32EnvValue(env, 'COMSPEC');
+      if (comspec) return win32AbsolutePath(comspec) ?? win32SystemExe('cmd.exe', { env, isFile: null });
+      return win32SystemExe('powershell.exe', { env, isFile: null });
     }
 
-    if (process.env.SHELL) {
-      return process.env.SHELL;
+    if (env.SHELL) {
+      return env.SHELL;
     }
 
     return '/bin/bash';

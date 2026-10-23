@@ -8,7 +8,7 @@ function mockFetchResponse(payload: unknown): void {
     new Response(JSON.stringify(payload), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
-    })) as unknown as unknown as typeof fetch;
+    })) as unknown as typeof fetch;
 }
 
 function completionPayload(usage: Record<string, unknown>) {
@@ -40,7 +40,7 @@ describe('OpenAIProvider HTTP failures', () => {
     });
 
   it('chat throws a typed error carrying a numeric Retry-After', async () => {
-    globalThis.fetch = (async () => errorResponse(429, { 'Retry-After': '7' })) as unknown as unknown as typeof fetch;
+    globalThis.fetch = (async () => errorResponse(429, { 'Retry-After': '7' })) as unknown as typeof fetch;
     await expect(new OpenAIProvider('k').chat([{ role: 'user', content: 'hi' }])).rejects.toMatchObject({
       name: 'LLMProviderError',
       code: 'rate_limit',
@@ -50,13 +50,13 @@ describe('OpenAIProvider HTTP failures', () => {
 
   it('chat reads an HTTP-date Retry-After, and no header means no hint', async () => {
     const at = new Date(Date.now() + 30_000).toUTCString();
-    globalThis.fetch = (async () => errorResponse(503, { 'Retry-After': at })) as unknown as unknown as typeof fetch;
+    globalThis.fetch = (async () => errorResponse(503, { 'Retry-After': at })) as unknown as typeof fetch;
     const dated = await new OpenAIProvider('k').chat([{ role: 'user', content: 'hi' }]).catch((e) => e);
     expect(dated.code).toBe('network');
     expect(dated.retryAfterMs).toBeGreaterThan(25_000);
     expect(dated.retryAfterMs).toBeLessThanOrEqual(30_000);
 
-    globalThis.fetch = (async () => errorResponse(429)) as unknown as unknown as typeof fetch;
+    globalThis.fetch = (async () => errorResponse(429)) as unknown as typeof fetch;
     const bare = await new OpenAIProvider('k').chat([{ role: 'user', content: 'hi' }]).catch((e) => e);
     expect(bare.retryAfterMs).toBeUndefined();
   });
@@ -68,9 +68,9 @@ describe('OpenAIProvider HTTP failures', () => {
       }
       return null;
     };
-    globalThis.fetch = (async () => errorResponse(429, { 'Retry-After': '60' })) as unknown as unknown as typeof fetch;
+    globalThis.fetch = (async () => errorResponse(429, { 'Retry-After': '60' })) as unknown as typeof fetch;
     expect(await firstError()).toMatchObject({ code: 'rate_limit', retry_after_ms: 60_000 });
-    globalThis.fetch = (async () => errorResponse(429)) as unknown as unknown as typeof fetch;
+    globalThis.fetch = (async () => errorResponse(429)) as unknown as typeof fetch;
     expect(await firstError()).not.toHaveProperty('retry_after_ms');
   });
 
@@ -82,7 +82,7 @@ describe('OpenAIProvider HTTP failures', () => {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
-    }) as unknown as unknown as typeof fetch;
+    }) as unknown as typeof fetch;
     const controller = new AbortController();
     await new OpenAIProvider('k').chat([{ role: 'user', content: 'hi' }], { signal: controller.signal });
     expect(received).toBe(controller.signal);
@@ -185,6 +185,20 @@ describe('GPT-6 official Responses transport', () => {
   });
   it('reports interrupted streams as failures, never completion', async () => {
     globalThis.fetch = (async () => new Response('data: {"type":"response.created"}\n\n')) as unknown as typeof fetch;
+    const events = [];
+    for await (const event of new OpenAIProvider('k').stream([], { model: 'gpt-6-luna' })) events.push(event);
+    expect(events).toEqual([{ type: 'error', code: 'network', error: 'OpenAI stream ended before completion' }]);
+  });
+  it('reports a malformed stream frame as a typed server error without echoing the frame', async () => {
+    for (const frame of ['{"type":"response.output_text.delta","delta":"secret partial', 'null', '7']) {
+      globalThis.fetch = (async () => new Response('data: '+JSON.stringify({ type: 'response.output_text.delta', delta: 'Hi' })+'\n\ndata: '+frame+'\n\n')) as unknown as typeof fetch;
+      const events = [];
+      for await (const event of new OpenAIProvider('k').stream([], { model: 'gpt-6-luna' })) events.push(event);
+      expect(events).toEqual([{ type: 'text', text: 'Hi' }, { type: 'error', code: 'server', error: 'OpenAI Responses stream sent malformed JSON' }]);
+    }
+  });
+  it('reports a frame cut off by the end of the stream as a dropped connection', async () => {
+    globalThis.fetch = (async () => new Response('data: {"type":"response.output_text.delta","delta":"cut')) as unknown as typeof fetch;
     const events = [];
     for await (const event of new OpenAIProvider('k').stream([], { model: 'gpt-6-luna' })) events.push(event);
     expect(events).toEqual([{ type: 'error', code: 'network', error: 'OpenAI stream ended before completion' }]);

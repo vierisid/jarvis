@@ -10,6 +10,7 @@ import { VoiceRail, type VoiceState } from "./VoiceRail";
 import { useVoice } from "../../hooks/useVoice";
 import { mapVoiceState } from "../voice/stateMapper";
 import { shownApprovalId } from "../voice/shownApproval";
+import { currentVisibility } from "../voice/panelReveal";
 import { useLLMSuggestions, useSuggestions } from "../voice/useSuggestions";
 import { CommandPalette } from "../palette/CommandPalette";
 import type { PaletteNavEntry, PaletteResult, PaletteResultType } from "../palette/types";
@@ -141,13 +142,14 @@ function AppShellLive() {
     return m ? m[1]! : "home";
   }, []);
   // #809: the approval a spoken "yes" answers is the one on top of the rail
-  // (RailConfirmationStack sorts newest first), while the page is on screen.
+  // (RailConfirmationStack sorts newest first), while the page is on screen
+  // (#886: a Windows panel still hidden during its first load is not).
   // Read through a ref so the getter keeps a stable identity, like
   // getCurrentRoom.
   const approvalsRef = useRef(live.approvals);
   approvalsRef.current = live.approvals;
   const getShownApprovalId = useCallback(
-    (): string | null => shownApprovalId(approvalsRef.current, document.visibilityState),
+    (): string | null => shownApprovalId(approvalsRef.current, currentVisibility()),
     [],
   );
   const voice = useVoice({

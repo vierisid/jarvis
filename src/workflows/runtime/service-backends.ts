@@ -26,7 +26,7 @@ import { JarvisToolRegistryAdapter } from "../adapters/tool-registry";
 import { JarvisNotifierAdapter, type NotifierDeps } from "../adapters/notifier";
 import { JarvisContextProviderAdapter } from "../adapters/context-provider";
 import { LlmOnlyAgentDelegator } from "../adapters/agent-delegator";
-import { M7AgentDelegator, type DelegationContinuation } from "../adapters/m7-agent-delegator";
+import { DEFAULT_MAX_ITERATIONS, M7AgentDelegator, type DelegationContinuation } from "../adapters/m7-agent-delegator";
 import { getChildRun } from '../db/repos/child-run';
 import { getDelegation, saveDelegation } from "../db/repos/delegation";
 import { JarvisWorkflowRunnerAdapter } from "../adapters/workflow-runner";
@@ -46,10 +46,11 @@ import { cancellableWorkflowService } from "./cancellation";
 import { closeEffectApproval, WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
 import { getWorkflowEffect, saveWorkflowEffect, listWorkflowEffects, type WorkflowEffect } from '../db/repos/workflow-effect';
 import { resolveToolGate, severityRank } from '../../authority/tool-action-map';
+import { assertDesktopAllowed } from '../../actions/tools/desktop-guard.ts';
 import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, surfaceBoundRefusal, toolEffectCapability } from './effect-capabilities';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceActionName, reprojectPieceInput,
-  resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
+  resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion, PIECE_ABOVE_LEVEL_ASKS, PIECE_ABOVE_LEVEL_FLOOR } from './piece-effects';
 import { assertRecipientFactsCurrent, recipientAddresses, recipientFactPins, type FactPin } from './fact-bindings';
 import { captureProviderBinding } from './provider-reconciliation';
 import { recordPieceCompletion } from './piece-completion';
@@ -57,6 +58,7 @@ import { defangPieceProjection } from './piece-effect-receipt';
 import { getFlowInProject } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
 import { digest, resolveEffectContext, type WorkflowEffectContext } from './effect-context';
+import { isCommunityPiece } from './step-admission';
 import { CODE_STEP_PIECE, type PieceAuthorizeRequest, type PieceAuthorizeResponse } from './piece-effect-guard';
 import { holdStep, KILLED_REASON, PAUSED_REASON } from './emergency-hold';
 import { getFlowRun } from '../db/repos/flow-run';
@@ -71,6 +73,9 @@ import { outsideApprovalScope, runAsApproved } from '../../authority/approved-ac
 import type { ActionCategory } from '../../roles/authority';
 import { sendMayHaveArrived } from '../../comms/delivery.ts';
 import { providerOutcome } from '../../failures/evidence.ts';
+import { escapedLiteralForCard, forCard, withoutCardInvisibles } from '../../util/card-text.ts';
+import { AGENT_TASK_MAX_CHARS, checkSpecialistId, SPECIALIST_ID_MAX_CHARS } from '../../actions/tools/agents.ts';
+import { boundedApprovalLabel } from '../../authority/approval-delivery';
 
 export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependencies {
   /** F-14 enrollment is explicitly enabled only with the F-12 queue. */
@@ -135,14 +140,75 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
   buildJarvisSystemPrompt?: (userMessage: string) => SystemPromptParts;
 }
 
-/** Jarvis's own pieces: each of their effects passes the boundary and is audited there. */
-const JARVIS_PIECE_PREFIX = '@jarvispieces/';
+/**
+ * The role a workflow delegation runs when its step names none. Passed to the
+ * delegator explicitly for a delegation whose card named it, so the card and
+ * `M7AgentDelegator`'s own default cannot drift apart.
+ */
+const WORKFLOW_DEFAULT_ROLE = 'workflow-default';
+/** A flow name on a card: the 512 the HTTP routes cap a `displayName` at, as `effect-boundary.ts` labels one. */
+const START_CARD_NAME_MAX_CHARS = 512;
 
-/** The built-in steps vendored with the engine (`scripts/sync-activepieces.ts`); never audited as steps. */
-const BUILT_IN_STEP_PIECES: ReadonlySet<string> = new Set([
-  '@activepieces/piece-approval', '@activepieces/piece-delay', '@activepieces/piece-file-helper',
-  '@activepieces/piece-http', '@activepieces/piece-schedule', '@activepieces/piece-store', '@activepieces/piece-webhook',
-]);
+/**
+ * The card sentence for a workflow delegation (#1040): which specialist, and
+ * the goal it will be given. Before, the card read only "Workflow delegate",
+ * although the role and the goal can be wired from trigger data, so a person
+ * approved without seeing either. `delegateTaskGate`'s wording and budgets:
+ * the role short, in the middle; the goal quoted with its quotes escaped and
+ * last, so nothing after it can be forged. `workflowDelegateCardRefusal`
+ * keeps any value this would cut or could not display off a card.
+ */
+export function workflowDelegateIntent(args: Record<string, unknown>): string {
+  const role = typeof args.role === 'string' ? args.role : WORKFLOW_DEFAULT_ROLE;
+  // A step may ask for up to 200 iterations, each an LLM call: a cost the
+  // person approving should see, stated whether the step set it or the
+  // delegator's default applies. The route holds it to a positive integer.
+  const n = typeof args.maxIterations === 'number' ? args.maxIterations : DEFAULT_MAX_ITERATIONS;
+  const steps = `, for at most ${n} iteration${n === 1 ? '' : 's'},`;
+  return `Delegate to a ${forCard(role, SPECIALIST_ID_MAX_CHARS) || 'specialist'} specialist${steps} the goal ${JSON.stringify(forCard(args.goal, AGENT_TASK_MAX_CHARS))}`;
+}
+
+/**
+ * Why a delegation's card could not show it as it would run (#1040), the
+ * bounds `delegate_task` holds its own card to: a role that is not a
+ * specialist (a card naming one would start nothing, and trigger data could
+ * use the role to write words into the sentence), a role id the card cannot
+ * show exactly (#1019), or a goal longer than the card shows in full once the
+ * characters a card cannot display are gone (they are dropped from the goal
+ * an approved delegation runs, below). Asked only when a card is needed, so a
+ * delegation nobody has to approve runs as it did.
+ */
+function workflowDelegateCardRefusal(args: Record<string, unknown>, specialists: ReadonlyMap<string, unknown>): string | null {
+  const role = typeof args.role === 'string' ? args.role : WORKFLOW_DEFAULT_ROLE;
+  if (!specialists.has(role)) {
+    return `Unknown specialist ${escapedLiteralForCard(role.slice(0, SPECIALIST_ID_MAX_CHARS + 20))}, so no card is raised for it. Available: ${[...specialists.keys()].join(', ')}`;
+  }
+  try { checkSpecialistId(role); }
+  catch (error) { return error instanceof Error ? error.message : String(error); }
+  const goal = withoutCardInvisibles(String(args.goal ?? ''));
+  if (goal.length > AGENT_TASK_MAX_CHARS) {
+    return `The goal is ${goal.length} characters; the limit is ${AGENT_TASK_MAX_CHARS}, so the approval card can show all of it. Shorten it.`;
+  }
+  return null;
+}
+
+/**
+ * The card sentence for a step that starts a workflow (#1040): the target's
+ * id and its name, the name one line, bounded, quoted and last. Before, the
+ * card read only "Workflow start". The id is the flow's own (the lookup that
+ * pinned the version found it in the caller's project); the name is the
+ * pinned version's.
+ */
+function workflowStartIntent(flowId: string, name: string, waitForCompletion: boolean): string {
+  return `${waitForCompletion ? 'Start and wait for' : 'Start'} the workflow ${forCard(flowId, 128)} named ${JSON.stringify(boundedApprovalLabel(name, START_CARD_NAME_MAX_CHARS))}`;
+}
+
+/** A start card's sentence from its frozen arguments: the flow and the version it pinned. */
+export function workflowStartIntentOf(args: Record<string, unknown>): string {
+  const pinned = args.pinned as { versionId?: unknown } | undefined;
+  const name = typeof pinned?.versionId === 'string' ? getFlowVersion(pinned.versionId)?.displayName ?? '' : '';
+  return workflowStartIntent(String(args.flowId ?? ''), name, args.waitForCompletion === true);
+}
 
 export function buildSandboxServiceBackends(
   opts: BuildServiceBackendsOptions,
@@ -235,6 +301,14 @@ export function buildSandboxServiceBackends(
           throw new Error(`tool not found: ${req.toolName}`);
         }
         const tool = opts.toolRegistry!.get(req.toolName)!;
+        // desktop.enabled: false (#905). Typed and not started, before any
+        // effect record or approval card exists for the step; audited like a
+        // capability refusal.
+        try { assertDesktopAllowed(tool, req.params); }
+        catch (error) {
+          effects.auditRefusal({ context: ctx, toolName: `desktop_disabled(${tool.name})`, category: refusedEffectCategory(tool) });
+          throw error;
+        }
         const capability = (() => {
           try { return toolEffectCapability(tool, req.params); }
           catch (error) {
@@ -417,6 +491,10 @@ export function buildSandboxServiceBackends(
         orchestrator: opts.agentOrchestrator!,
         llmManager: opts.llmManager,
         specialists: opts.agentSpecialists!,
+        // The bound a delegation card states when the step sets none
+        // (`workflowDelegateIntent`), passed explicitly so the card and the
+        // run cannot drift (#1040).
+        defaultMaxIterations: DEFAULT_MAX_ITERATIONS,
         ...(opts.authorityEngine ? { authorityEngine: opts.authorityEngine } : {}),
         ...(opts.auditTrail ? { auditTrail: opts.auditTrail } : {}),
         ...(opts.emergencyController ? { emergencyController: opts.emergencyController } : {}),
@@ -435,7 +513,21 @@ export function buildSandboxServiceBackends(
     // the conversation instead of asking to delegate a second time.
     const reply = await effects.invoke({ context: ctx, piece: AGENT_PIECE, action: 'delegate',
       route: 'agent', toolName: 'workflow_delegate', category: 'spawn_agent', toolCategory: 'delegation',
-      request: { ...effectRequest }, prepare: () => ({ arguments: { ...effectRequest }, target: { role: req.role ?? 'workflow-default' } }),
+      request: { ...effectRequest },
+      prepare: () => ({ arguments: { ...effectRequest },
+        target: { role: req.role ?? WORKFLOW_DEFAULT_ROLE, intent: workflowDelegateIntent(effectRequest) } }),
+      intentFor: workflowDelegateIntent,
+      cardRefusal: (args) => workflowDelegateCardRefusal(args, opts.agentSpecialists!),
+      // What runs is what the card showed (#1040), the rule the delegated
+      // calls below follow: the sentence recomputed from the frozen request
+      // must still be the one approved. A record from before cards carried
+      // one has nothing to hold.
+      validateTarget: (args, target) => {
+        if (typeof target.intent === 'string' && workflowDelegateIntent(args) !== target.intent) {
+          throw new ActionOutcomeError({ status: 'blocked', code: 'EFFECT_CHANGED_AFTER_REVIEW', effect: 'not_started',
+            message: `What this delegation would do changed after approval (approved: ${JSON.stringify(target.intent)}); dispatch blocked` });
+        }
+      },
       execute: async (_args, checkpoint) => { checkpoint(); return { dispatch: 'authorized' }; },
     });
     if (reply.approval) return { finalMessage: '', toolCalls: [], status: 'approval_required', approval: reply.approval };
@@ -722,10 +814,18 @@ export function buildSandboxServiceBackends(
     // judges, so an authorisation that was never an approval cannot answer an
     // approval the sink asks for. Spent by that one spawn.
     const delegation = getWorkflowEffect(workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, 'agent'));
+    // A delegation approved on a card that named its goal runs that goal
+    // without the characters the card could not display (#1040), as
+    // `delegate_task` does: tag characters spell hidden ASCII. One whose card
+    // named nothing (raised before cards did) runs exactly what it ran
+    // before, so a paused conversation resumes on the goal it began with.
+    // The role the card named is the role run, passed explicitly.
+    const shown = delegation?.approvalId && typeof delegation.target.intent === 'string'
+      ? { ...req, role: req.role ?? WORKFLOW_DEFAULT_ROLE, goal: withoutCardInvisibles(req.goal) } : req;
     const result = delegation?.approvalId
       ? await runAsApproved({ categories: ['spawn_agent'], approvalId: delegation.approvalId, source: 'workflow_effect' },
-        () => m7.delegate(req, continuation))
-      : await m7.delegate(req, continuation);
+        () => m7.delegate(shown, continuation))
+      : await m7.delegate(shown, continuation);
     const uncertain = listWorkflowEffects(ctx.runId).find(effect => effect.stepName === resolved.stepName
       && digest(effect.executionPath) === digest(resolved.executionPath) && effect.route.startsWith('agent-tool:')
       && (effect.status === 'unknown' || effect.status === 'dispatching'));
@@ -775,8 +875,12 @@ export function buildSandboxServiceBackends(
       route: 'workflow', toolName: 'workflow_start', category: 'spawn_agent', toolCategory: 'delegation',
       request: { ...req }, prepare: () => {
         const pinned = childVersion(req.flowId, ctx.projectId);
-        return { arguments: { ...req, pinned }, target: { flowId: req.flowId, ...pinned } };
+        // Named on the card (#1040). The name is kept out of `pinned`, whose
+        // digest a paused run's execute compares against what it froze.
+        const args = { ...req, pinned };
+        return { arguments: args, target: { flowId: req.flowId, ...pinned, intent: workflowStartIntentOf(args) } };
       },
+      intentFor: workflowStartIntentOf,
       execute: async (args, checkpoint) => {
         checkpoint();
         if (digest(childVersion(args.flowId as string, ctx.projectId)) !== digest(args.pinned)) throw new Error('Target workflow changed after approval; start a new run');
@@ -792,14 +896,15 @@ export function buildSandboxServiceBackends(
 
   /**
    * A step with no Jarvis adapter: a community piece the owner installed from
-   * the Library, a CODE step in a workflow granted them, a built-in step
-   * (delay, store, HTTP, ...) or one of Jarvis's own pieces. It stays outside
-   * Authority by those opt-ins, but it obeys Pause and Kill (Q-08). A
-   * community piece or a CODE step leaves an audit row when it is let run:
-   * like a governed piece's, the row records the dispatch, not its outcome.
-   * Jarvis's own pieces leave none here, since each of their effects passes
-   * the boundary and is audited there; built-in steps leave none either. Its
-   * input is never sent here.
+   * the Library, a CODE step in a workflow granted them, an in-run core step
+   * (delay, store, file helper, ...; `IN_RUN_STEP_PIECES`) or one of Jarvis's
+   * own pieces. It stays outside Authority by those opt-ins, but it obeys Pause
+   * and Kill (Q-08). A community piece or a CODE step leaves an audit row when
+   * it is let run: like a governed piece's, the row records the dispatch, not
+   * its outcome. Jarvis's own pieces leave none here, since each of their
+   * effects passes the boundary and is audited there; in-run core steps leave
+   * none either, having no effect outside Jarvis. The HTTP request is not one
+   * of these: it is governed since #961. Its input is never sent here.
    */
   const admitUngovernedStep = (req: PieceAuthorizeRequest, ctx: WorkflowEffectContext): PieceAuthorizeResponse => {
     const run = getFlowRun(ctx.runId);
@@ -812,7 +917,8 @@ export function buildSandboxServiceBackends(
       const hold = holdStep({ runId: run.id, projectId: run.projectId, stepName: ctx.stepName ?? 'unknown step' });
       return { governed: false, dispatch: 'held', approval: { effectId: '', approvalId: '', waitpointId: hold.id, hold: PAUSED_REASON } };
     }
-    if (!req.piece.startsWith(JARVIS_PIECE_PREFIX) && !BUILT_IN_STEP_PIECES.has(req.piece)) {
+    // `isCommunityPiece` is also what the editor's "Not approval-gated" badge reads (#955).
+    if (req.piece === CODE_STEP_PIECE || isCommunityPiece(req.piece)) {
       try {
         opts.auditTrail?.log({ agent_id: `workflow:${run.id}`, agent_name: `Workflow ${run.id} / ${stepName}`,
           tool_name: req.piece === CODE_STEP_PIECE ? 'code step' : `community piece ${boundedReceiptText(`${req.piece}/${req.action}`, 160)}`,
@@ -846,19 +952,19 @@ export function buildSandboxServiceBackends(
    * retry after a recorded receipt gets the stored result back.
    */
   const pieceAuthorize: PieceAuthorizeFn = async (req, ctx) => {
-    const resolved = resolveGovernedPieceAction(req.piece, req.action);
-    if (!resolved) return admitUngovernedStep(req, ctx);
+    const named = resolveGovernedPieceAction(req.piece, req.action);
+    if (!named) return admitUngovernedStep(req, ctx);
     // The action becomes `tool_name`: the audit row, the effect record, the
     // approval row and the card's `Action:` line (#651). Refused, not reported
     // ungoverned -- `governed: false` would let the engine run the piece with
     // no gate at all -- and refused before anything durable exists, under a
     // label that carries none of the name. Why validate rather than rewrite,
     // and why this invalidates nothing in flight: `isWellFormedPieceActionName`.
-    if (!isWellFormedPieceActionName(resolved.action)) {
+    if (!isWellFormedPieceActionName(named.action)) {
       effects.auditRefusal({ context: ctx,
-        toolName: governedPieceToolName(resolved.adapter.catalogId, '[malformed action name]'),
-        category: resolved.category });
-      throw new Error(`Governed piece ${resolved.adapter.catalogId} was asked to run a malformed action name; dispatch refused`);
+        toolName: governedPieceToolName(named.adapter.catalogId, '[malformed action name]'),
+        category: named.category });
+      throw new Error(`Governed piece ${named.adapter.catalogId} was asked to run a malformed action name; dispatch refused`);
     }
     // The connection is stripped on the engine side before the input is sent;
     // stripping it again here means neither path can put a credential into the
@@ -881,7 +987,11 @@ export function buildSandboxServiceBackends(
     // is the read-only input whenever the document path is not taken.
     const whole = req.documentProtocol === 1 ? documentInput(req.piece, req.action, req.input) : null;
     if (req.documentProtocol === 1 && !whole) throw new Error('Unsupported document protocol input');
-    const projected = defangPieceProjection(reprojectPieceInput(whole ? sanitizePieceInput(req.input) : req.input));
+    const projected = defangPieceProjection(reprojectPieceInput(whole ? sanitizePieceInput(req.input, req.piece) : req.input, req.piece));
+    // #961: an action whose category depends on its input (an HTTP request's
+    // method) is judged on the projection the card and the record carry; the
+    // engine's digest of the whole input binds that projection to what runs.
+    const resolved = resolveGovernedPieceAction(req.piece, req.action, projected)!;
     // Q-05: an action that sends to or addresses someone memory knows keeps
     // the facts the address matched, and stops if they stop holding.
     const addressing = ['send_email', 'send_message', 'write_data', 'modify_settings'].includes(resolved.category);
@@ -893,10 +1003,27 @@ export function buildSandboxServiceBackends(
         throw error;
       }
     })();
-    const tracked = tracksPieceCompletion(req.piece, req.action);
+    const tracked = tracksPieceCompletion(req.piece, req.action, projected);
     const route = tracked ? 'piece-dispatch' : 'piece';
     if (tracked && !req.inputDigest) throw new Error('A tracked send requires the complete input digest');
-    if (tracked && getWorkflowEffect(workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], 'piece'))) {
+    const legacy = tracked ? getWorkflowEffect(workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], 'piece')) : null;
+    if (legacy?.status === 'pending' && !legacy.outcome) {
+      // Recorded under the untracked route before an upgrade tracked this
+      // send, and never dispatched. It cannot move to the tracked identity,
+      // so it ends here, typed, and its card cannot be approved for nothing.
+      const message = 'This send was recorded before an upgrade changed how sends are tracked and was not sent; start a new run';
+      legacy.status = 'blocked'; legacy.decision = 'denied'; legacy.error = message; legacy.reason = message;
+      legacy.outcome = { status: 'blocked', code: 'WORKFLOW_UPGRADED', message, effect: 'not_started' };
+      legacy.finishedAt = Date.now(); saveWorkflowEffect(legacy);
+      const card = legacy.approvalId ? opts.approvalManager?.getRequest(legacy.approvalId) : null;
+      if (card?.status === 'pending') opts.approvalManager?.deny(card.id, 'workflow-upgrade');
+      else closeEffectApproval(opts.approvalManager, legacy, 'blocked');
+      throw new ActionOutcomeError(legacy.outcome);
+    }
+    // Already ended above (or otherwise settled without sending): repeat its
+    // typed outcome instead of claiming it may have dispatched.
+    if (legacy?.outcome && legacy.outcome.status !== 'succeeded' && legacy.outcome.effect === 'not_started') throw new ActionOutcomeError(legacy.outcome);
+    if (legacy) {
       throw new Error('Legacy piece authorization may already have dispatched; inspect it and start a new intentional run');
     }
     const run = getFlowRun(ctx.runId);
@@ -918,6 +1045,10 @@ export function buildSandboxServiceBackends(
       stepName: ctx.stepName!, piece: req.piece, credentialDigest: req.credentialDigest }) : undefined;
     const reply = await effects.invoke({ context: ctx, piece: req.piece, action: req.action,
       externalDispatch: tracked, providerBinding,
+      // #953: a governed send or payment over the workflow's level asks
+      // instead of failing the step, as a gated tool does; deletes and
+      // settings changes stay denied by level.
+      aboveLevelFloor: PIECE_ABOVE_LEVEL_FLOOR, aboveLevelGovernedOnly: PIECE_ABOVE_LEVEL_ASKS,
       route, toolName: tool.name, category: capability.category, toolCategory: tool.category,
       // Digested over the projection AND the engine's digest of the whole
       // resolved input, so a change to any prop -- including the part of a

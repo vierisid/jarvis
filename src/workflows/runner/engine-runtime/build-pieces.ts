@@ -1,6 +1,7 @@
 /**
- * Bundle each Jarvis-authored piece (under `packages/pieces/jarvis/*`) into
- * the on-disk layout the engine's piece-loader expects:
+ * Bundle each Jarvis-authored piece (under `packages/pieces/jarvis/*`), and
+ * the loaded vendored core pieces (`LOADED_CORE_PIECES`, #961), into the
+ * on-disk layout the engine's piece-loader expects:
  *
  *   .../piece-dir/dist/package.json     (with the canonical `name` + `version`)
  *   .../piece-dir/dist/src/index.js     (single CJS bundle)
@@ -55,6 +56,32 @@ const STAGING_NODE_MODULES = resolve(
   "node_modules",
 );
 
+/** The repo's `src/`, which `PIECE_JARVIS_SOURCES` is relative to. */
+const SRC_ROOT = resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "../../..");
+
+/** Jarvis modules a vendored piece imports by relative path, relative to `src/`. */
+export const PIECE_JARVIS_SOURCES: readonly string[] = [
+  "actions/action-outcome.ts",
+  "workflows/runtime/http-egress.ts",
+  "workflows/runtime/piece-effects.ts",
+];
+
+/**
+ * The vendored core pieces (`packages/pieces/core`) Jarvis builds and loads
+ * (#961). Each is governed (`CORE_PIECE_ADAPTERS`) or acts only inside the run
+ * (`IN_RUN_STEP_PIECES`). Left out, and why:
+ *   - webhook: the editor's Webhook trigger is Jarvis's own ingress
+ *     (`/api/webhooks/<flowId>`, with an optional signing secret); the core
+ *     piece's trigger would never fire through the engine, and its two
+ *     "return response" actions answer a synchronous webhook Jarvis does not
+ *     hold open.
+ *   - store, file-helper: they need `deep-equal` and `@zip.js/zip.js`, which
+ *     the engine's committed staging install does not carry yet; adding them
+ *     changes the staging lockfile and so every engine bundle, which is its
+ *     own change.
+ */
+export const LOADED_CORE_PIECES: readonly string[] = ["approval", "delay", "http", "schedule"];
+
 export interface BuildPieceResult {
   pieceDir: string;
   bundlePath: string;
@@ -87,9 +114,13 @@ export interface BuildPieceOptions {
 function pieceHash(pieceDir: string): string {
   const hasher = createHash("sha256");
   hasher.update(bundleHash()).update("\0");
-  // Jarvis pieces import the daemon's pure action-outcome wire contract.
-  // Include it so contract edits cannot leave an old assertion in dist/.
-  hasher.update(readFileSync(resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, '../../../actions/action-outcome.ts'))).update('\0');
+  // Vendored pieces import a few pure Jarvis modules (the action-outcome wire
+  // contract; the HTTP piece's egress guard). Include them so an edit to one
+  // cannot leave an old copy compiled into dist/ (`core-pieces.test.ts` pins
+  // that this list covers every such import).
+  for (const rel of PIECE_JARVIS_SOURCES) {
+    hasher.update(rel).update('\0').update(readFileSync(resolve(SRC_ROOT, rel))).update('\0');
+  }
   const pkgPath = resolve(pieceDir, "package.json");
   if (existsSync(pkgPath)) {
     hasher.update(readFileSync(pkgPath)).update("\0");
@@ -293,6 +324,23 @@ export async function buildAllJarvisPieces(
     out.push(await buildPiece(pieceDir, opts));
   }
   return out;
+}
+
+/** The directories of the loaded core pieces, in `LOADED_CORE_PIECES` order. */
+export function loadedCorePieceDirs(): string[] {
+  return LOADED_CORE_PIECES.map((name) => resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "pieces/core", name));
+}
+
+/** Build every loaded core piece (`LOADED_CORE_PIECES`), cache-aware like the Jarvis pieces. */
+export async function buildAllCorePieces(opts: BuildPieceOptions = {}): Promise<BuildPieceResult[]> {
+  const out: BuildPieceResult[] = [];
+  for (const pieceDir of loadedCorePieceDirs()) out.push(await buildPiece(pieceDir, opts));
+  return out;
+}
+
+/** Every vendored piece Jarvis loads: its own pieces, then the loaded core pieces. */
+export async function buildAllVendoredPieces(opts: BuildPieceOptions = {}): Promise<BuildPieceResult[]> {
+  return [...await buildAllJarvisPieces(opts), ...await buildAllCorePieces(opts)];
 }
 
 export const PIECE_BUILD_PATHS = {

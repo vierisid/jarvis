@@ -29,6 +29,11 @@ export interface ConnectionMeta {
   preSelectForNewProjects: boolean;
   created: number;
   updated: number;
+  /**
+   * OAuth2 rows only (#954): whether Jarvis refreshes the token and when it
+   * expires (ms, null when the saved value does not say). No secret.
+   */
+  oauth2?: { expiresAt: number | null; refreshable: boolean };
 }
 
 export interface JarvisSourceMeta {

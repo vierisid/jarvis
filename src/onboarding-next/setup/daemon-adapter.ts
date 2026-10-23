@@ -2,7 +2,7 @@ import type { JarvisConfig } from '../../config/types.ts';
 import { mergeTTSConfig } from '../../daemon/config-merge.ts';
 import { saveLLMSettings } from '../../daemon/llm-settings.ts';
 import { hasUsejarvisAi, isHostedInstall } from '../../daemon/usejarvis-ai.ts';
-import { loadUserSectionStrict, persistUserPatch, saveUserSection } from '../../daemon/user-settings.ts';
+import { loadUserSectionStrict, persistPlainUserPatch, persistUserPatch, saveUserSection, storedAwarenessChoice } from '../../daemon/user-settings.ts';
 import { readSystemPermissions, requestSystemPermission, resolvePermissionsHost, type PermissionsSidecarHost } from '../../daemon/system-permissions.ts';
 import type { SetupPermissions, SetupScope, SetupStore } from './types.ts';
 
@@ -62,15 +62,19 @@ export function createDaemonSetupStore(options: {
       const voice = storedObject('tts');
       const awareness = storedObject('awareness');
       if (voice?.enabled !== undefined && typeof voice.enabled !== 'boolean') throw new Error('Unreadable voice choice');
+      const awarenessChoice = storedAwarenessChoice(awareness);
       const now = options.now?.() ?? Date.now();
       if (!Number.isFinite(now) || now <= 0) throw new Error('Invalid setup time');
 
       // Legacy startup includes Awareness. Persist off BEFORE the setup flag,
       // so even a crash and daemon reboot cannot start observation by default.
-      // This path never enables it. Later explicit settings actions own opt-in.
-      const disabledAwareness = { ...config.awareness, ...awareness, enabled: false } as JarvisConfig['awareness'];
-      saveUserSection('awareness', disabledAwareness);
-      config.awareness = disabledAwareness;
+      // This path never enables it. Later explicit settings actions own opt-in,
+      // so a choice the user made (setup re-run after a reset) is kept (#1070).
+      // Only the stored row counts, and an unmarked `true` is a stamped default,
+      // not a choice. Persist just `enabled`, never the in-memory defaults.
+      const enabled = awarenessChoice ?? false;
+      persistPlainUserPatch('awareness', { enabled });
+      config.awareness = { ...config.awareness, enabled } as JarvisConfig['awareness'];
 
       // Reuse canonical settings services and the legacy hosted carve-outs.
       // No provider/key/model/default/STT patch can enter this adapter.

@@ -19,14 +19,22 @@
  *     The refusal is recorded on the run, because the engine reports any 409
  *     as a bare loading error.
  *
+ *   - 503 when a stored OAuth2 token has expired and its refresh could not
+ *     reach the provider, or the connection changed during the refresh (#954).
+ *   - 200 with status ERROR and an empty value when a stored OAuth2 token has
+ *     expired and cannot be refreshed: the engine's own answer to that status
+ *     is "connection (id) expired, reconnect again". Either way the run's
+ *     binding records the typed reason (Q-19), and no credential is sent.
+ *
  * Per CredentialResolver contract for Jarvis-managed Google connections, the
  * resolved value's `refresh_token` is intentionally empty; pieces that need a
  * fresh access token must call back into this endpoint to request one.
  */
 
-import type { CredentialResolver } from "../../credentials/adapter";
+import type { CredentialResolver, ResolvedConnection } from "../../credentials/adapter";
 import { AmbiguousConnectionError } from "../../db/repos/app-connection";
-import { enforceRunConnectionBinding } from "../../db/repos/binding-pins";
+import { enforceRunConnectionBinding, recordRunCredentialOutcome } from "../../db/repos/binding-pins";
+import { ConnectionCredentialError, OAUTH2_TYPES } from "../../credentials/pasted-oauth2";
 import type { EngineTokenClaims } from "../types";
 import { json, err, type RouteContext, type RouteHandler } from "./shared";
 
@@ -64,7 +72,7 @@ export function createConnectionsRoute(deps: ConnectionsRouteDeps): RouteHandler
     const pieceName = url.searchParams.get("pieceName") ?? undefined;
     if (pieceName !== undefined && !pieceName.trim()) return err("pieceName must not be empty", 400);
 
-    let resolved;
+    let resolved: ResolvedConnection | null;
     try {
       resolved = await deps.credentialResolver.resolve({ projectId, pieceName, externalId });
     } catch (error) {
@@ -77,6 +85,20 @@ export function createConnectionsRoute(deps: ConnectionsRouteDeps): RouteHandler
     // against. Never another account that now answers to the same name.
     const refusal = enforceRunConnectionBinding(ctx.claims.runId, projectId, externalId, deps.credentialResolver);
     if (refusal) return err(refusal, 409);
+    // A stored OAuth2 token about to expire is refreshed here (#954), only
+    // once the run is known to be allowed this connection.
+    try {
+      resolved = await deps.credentialResolver.fresh(resolved);
+    } catch (error) {
+      if (!(error instanceof ConnectionCredentialError)) throw error;
+      recordRunCredentialOutcome(ctx.claims.runId, externalId, { code: error.code, message: error.message });
+      if (error.code !== "CONNECTION_EXPIRED") return err(error.message, 503);
+      resolved = { type: resolved.type, value: {}, pieceName: resolved.pieceName, status: "ERROR" };
+    }
+    // Only a stored OAuth2 row can fail this way, so only its hand-outs are worth recording.
+    if (resolved.stored && OAUTH2_TYPES.has(resolved.type) && resolved.status !== "ERROR") {
+      recordRunCredentialOutcome(ctx.claims.runId, externalId, null);
+    }
 
     // Ensure value.type is set so the engine's switch() in
     // makeConnectionValueCompatibleWithContextV0 sees the discriminator.

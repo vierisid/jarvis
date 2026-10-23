@@ -6,7 +6,7 @@ import { DEFAULT_CONFIG } from '../../config/types.ts';
 import { closeDb, initDatabase } from '../../vault/schema.ts';
 import { getDb } from '../../vault/schema.ts';
 import { getSetting, setSetting } from '../../vault/settings.ts';
-import { loadUserSection, saveUserSection, persistUserPatch } from '../../daemon/user-settings.ts';
+import { loadUserSection, saveUserSection, persistUserPatch, persistAwarenessChoice, importLegacyUserSettings } from '../../daemon/user-settings.ts';
 import { effectiveLlmForBinding, effectiveTtsForBinding } from '../../daemon/usejarvis-ai.ts';
 import { createDaemonSetupStore } from './daemon-adapter.ts';
 import { createSetupProvider } from './provider.ts';
@@ -27,7 +27,7 @@ afterEach(() => {
   else process.env.JARVIS_SECRETS_DIR = oldSecrets;
   rmSync(secretsDir, { recursive: true, force: true });
 });
-function fixture() {
+function fixture(awarenessAtStart = false) {
   const config = structuredClone(DEFAULT_CONFIG);
   config.usejarvis_ai = { base_url: 'https://fixture.invalid', api_key: 'fixture-not-real' };
   let loaded = true;
@@ -38,8 +38,8 @@ function fixture() {
     start: async () => {
       // Exercise the legacy starter's exact Awareness guard without starting
       // a daemon, background agent, capture loop or external provider.
-      expect(config.awareness?.enabled).toBe(false);
-      expect((loadUserSection('awareness') as { enabled: boolean }).enabled).toBe(false);
+      expect(config.awareness?.enabled).toBe(awarenessAtStart);
+      expect((loadUserSection('awareness') as { enabled: boolean }).enabled).toBe(awarenessAtStart);
       starts++;
     },
   } });
@@ -74,6 +74,36 @@ describe('existing vault/settings setup adapter', () => {
     const reloaded = createDaemonSetupStore({ owner, config: f.config, isConfigLoaded: () => true, isSelfConfigured: () => false, now: () => 99999 });
     expect(await reloaded.completeHosted(owner)).toBe(12345);
     expect((loadUserSection('awareness') as { enabled: boolean }).enabled).toBe(true);
+  });
+  test.each([true, false])('re-running setup after a setup reset keeps an explicit Awareness=%p choice (#1070)', async choice => {
+    const f = fixture(choice); await f.provider.complete(null, command);
+    // The user's later choice in Settings, then /api/onboarding/reset with scope setup.
+    setSetting('cfg.awareness', JSON.stringify({ capture_interval_ms: 1234 })); persistAwarenessChoice(choice, 777); f.config.awareness = { ...f.config.awareness!, enabled: choice };
+    saveUserSection('onboarding', { ...f.config.onboarding!, setup_completed_at: null }); f.config.onboarding = { ...f.config.onboarding!, setup_completed_at: null };
+    const rerun = createDaemonSetupStore({ owner, config: f.config, isConfigLoaded: () => true, isSelfConfigured: () => false, now: () => 99999 });
+    expect(rerun.completeHosted(owner)).toBe(99999);
+    expect(loadUserSection('awareness')).toEqual({ enabled: choice, enabled_chosen_at: 777, capture_interval_ms: 1234 });
+    expect(f.config.awareness?.enabled).toBe(choice);
+  });
+  test('an unmarked Awareness=true, as older builds stamped from defaults into config.yaml, is not a choice (#1070)', async () => {
+    const f = fixture();
+    // Builds before #262 saved the whole merged config, so config.yaml carried DEFAULT_CONFIG's enabled: true.
+    expect(importLegacyUserSettings({ awareness: structuredClone(DEFAULT_CONFIG.awareness) })).toContain('awareness');
+    expect((loadUserSection('awareness') as { enabled: boolean }).enabled).toBe(true);
+    expect(await f.provider.complete(null, command)).toMatchObject({ ready: true });
+    expect((loadUserSection('awareness') as { enabled: boolean }).enabled).toBe(false); expect(f.config.awareness?.enabled).toBe(false);
+  });
+  test('first setup stores only the Awareness off switch, not every in-memory default (#1070)', async () => {
+    const f = fixture(); await f.provider.complete(null, command);
+    expect(loadUserSection('awareness')).toEqual({ enabled: false });
+  });
+  test('an Awareness section saved without an enabled choice still starts off; a malformed one blocks setup (#1070)', async () => {
+    const f = fixture(); setSetting('cfg.awareness', JSON.stringify({ capture_interval_ms: 1234 }));
+    expect(await f.provider.complete(null, command)).toMatchObject({ ready: true });
+    expect(loadUserSection('awareness')).toMatchObject({ enabled: false, capture_interval_ms: 1234 });
+    const g = fixture(); setSetting('cfg.awareness', JSON.stringify({ enabled: 'yes' })); setSetting('cfg.onboarding', JSON.stringify({ setup_completed_at: null }));
+    expect(await g.provider.complete(null, command)).toMatchObject({ reason: 'setup_save_failed', ready: false });
+    expect(getSetting('cfg.awareness')).toBe(JSON.stringify({ enabled: 'yes' })); expect(g.starts()).toBe(0);
   });
   test('explicit voice decline, existing provider settings and onboarding fields survive', async () => {
     const f = fixture();

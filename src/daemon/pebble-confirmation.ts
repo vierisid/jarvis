@@ -24,7 +24,7 @@ export type ConfirmationCtrl = { readonly cancelled: boolean };
 
 export interface SpeakConfirmationDeps {
   setState: (sidecarId: string, state: string, text?: string) => Promise<void>;
-  /** Mirror the text to the dashboard. Errors are swallowed. */
+  /** Mirror the text to the dashboard, and only there (#1026). Errors are swallowed. */
   heartbeat: (text: string) => void;
   /** The current TTS synthesizer, or null when TTS is off. Read per call: settings can swap it. */
   synthesizer: () => ((text: string) => Promise<Buffer>) | null;

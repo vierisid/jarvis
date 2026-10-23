@@ -178,6 +178,18 @@ export function syncInterviewProfileKnowledge(profile = getUserProfile()): void 
   }).immediate();
 }
 
+/** Startup projection of interviews saved before Memory was connected. It is a
+ * best-effort repair: a failure is logged and the next interview write or start
+ * retries it, so it can never stop the daemon from starting. */
+export function syncInterviewProfileKnowledgeAtStartup(log: (message: string) => void = console.warn): boolean {
+  try { syncInterviewProfileKnowledge(); return true; }
+  catch (error) {
+    // The error kind only: a message could one day carry profile text.
+    log(`[Vault] Interview profile facts were not projected into Memory; continuing startup (${error instanceof Error ? error.name : 'Error'})`);
+    return false;
+  }
+}
+
 /**
  * Mark the Phase B interview as complete (or as skipped). Idempotent —
  * calling twice doesn't bump `completed_at`. Used by both the

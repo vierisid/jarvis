@@ -16,6 +16,8 @@ set -euo pipefail
 
 REPO_URL="https://github.com/vierisid/jarvis.git"
 INSTALL_DIR="$HOME/.jarvis/daemon"
+# Oldest supported Bun; equal to MIN_BUN_VERSION in src/util/bun-minimum.ts and package.json engines.bun (src/cli/doctor.test.ts pins it).
+MIN_BUN="1.3.11"
 
 CYAN='\033[0;36m'
 GREEN='\033[0;32m'
@@ -24,6 +26,20 @@ RED='\033[0;31m'
 DIM='\033[2m'
 BOLD='\033[1m'
 RESET='\033[0m'
+
+# version_at_least <version> <minimum>: numeric x.y.z compare, suffix ignored.
+version_at_least() {
+  local IFS=.
+  local -a have want
+  read -r -a have <<< "${1%%[-+]*}"
+  read -r -a want <<< "$2"
+  local i
+  for i in 0 1 2; do
+    local h=$((10#${have[i]:-0})) w=$((10#${want[i]:-0}))
+    if (( h != w )); then (( h > w )); return; fi
+  done
+  return 0
+}
 
 print_banner() {
   echo -e "${CYAN}"
@@ -240,6 +256,16 @@ main() {
 
   if command -v bun &> /dev/null; then
     BUN_VERSION=$(bun --version)
+    if ! version_at_least "$BUN_VERSION" "$MIN_BUN"; then
+      info "Bun v${BUN_VERSION} is older than v${MIN_BUN}, which Jarvis needs. Upgrading..."
+      bun upgrade || true
+      BUN_VERSION=$(bun --version)
+      if ! version_at_least "$BUN_VERSION" "$MIN_BUN"; then
+        err "Bun v${BUN_VERSION} is still older than v${MIN_BUN}."
+        err "Upgrade it (bun upgrade, or your package manager) and re-run the installer."
+        exit 1
+      fi
+    fi
     ok "Bun v${BUN_VERSION} is installed"
   else
     # Bun's installer requires unzip — ensure it's available
@@ -260,7 +286,7 @@ main() {
     export BUN_INSTALL="$HOME/.bun"
     export PATH="$BUN_INSTALL/bin:$PATH"
 
-    if command -v bun &> /dev/null; then
+    if command -v bun &> /dev/null && version_at_least "$(bun --version)" "$MIN_BUN"; then
       ok "Bun installed successfully (v$(bun --version))"
     else
       err "Failed to install Bun. Please install manually: https://bun.sh"

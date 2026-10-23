@@ -173,8 +173,11 @@ mounted live yet; a composition root wires it after the rooms it targets are rea
   open waits for the shared dirty-draft guard, then resolves the target, so a cancel, an abort, a
   lost capability or a newer open never navigates.
 - `destinations.ts` lists every retained destination with its owner and the exact released room or
-  Settings tab. Opening a destination never runs its action. Room commands that carry an action keep
-  their canonical handler.
+  Settings tab. Profile and Billing open the D-29 and D-31 rooms when they are mounted, otherwise
+  Settings > Profile and Settings > Billing. Opening a destination never runs its action. Room
+  commands that carry an action keep their canonical handler. A voice "open settings" opens the
+  Brief Settings room when it is mounted (owner decision on #1102); Advanced settings and support
+  keeps its own destination.
 - `notifications.ts` and `AttentionRoutes.tsx` route approvals, failures and updates from the existing
   notification owner's rows, outside the conversation. A row is marked read only after its
   destination opened, by `source` plus `id`.
@@ -184,8 +187,13 @@ mounted live yet; a composition root wires it after the rooms it targets are rea
   accepts only `ROOM_TABS.settings` names on the Settings hashes, and the room keeps the query in step
   with the selected tab. `briefMaintenance=1` adds the support links to General.
 - An unknown `?brief=1#/brief/<room>` shows a notice with those links and a link to the current
-  dashboard, instead of silently opening the current dashboard With the release switch off this applies
-  to the developer-setting path; an ordinary document stays on `AppShellV2` (see Entry points).
+  dashboard, instead of silently opening the current dashboard. With the release switch off this
+  applies to the developer-setting path; an ordinary document stays on `AppShellV2` (see Entry
+  points). Under an approved release (owner decision on #1106) the notice shows only when `<room>`
+  is shaped like a room id (lower-case letters and digits in hyphen-separated words, at most 64
+  characters) and the URL passes the same opt-in rules as a known room; anything else under
+  `#/brief/` is malformed and opens the current dashboard. The developer-setting path still shows
+  the notice for any unknown `#/brief/` hash, malformed or not.
 
 `?brief=preview&specimen=navigation-compatibility#/_brief_preview` opens these parts over fixture
 notifications. It starts no API read, socket, voice or Settings write.
@@ -516,13 +524,20 @@ ingredients (ready, loading, unavailable). It sends no request.
   across room, chat and sidebar changes and calls `retire()` only when the owner or workflow changes.
 - Run is the optional `port.start`: single-flight, and a lost or mismatched acknowledgement leaves it
   `uncertain` and locked for that controller. Nothing is retried or re-sent; `not_submitted` is only for
-  a request that was never sent.
-- `readRunHistory(scope, request)` is the `list` half of the port over `GET /api/workflows/:id/runs`
-  (`{ items, nextOffset }`, the offset as the cursor). It copies identity, status and time only, maps a
-  stop whose in-flight call may have completed to `uncertain`, and treats a 404 as unavailable. The
-  `detail` half is F-21's: it must build the redacted projection (step fields, effect receipts with
-  `unknown` kept distinct, waitpoints without resume URLs, Q-19 failure wording) before binding. The
-  card renders strings as text and shows `Redacted` for fields marked so; it is not a redaction layer.
+  a request that was never sent. `Check result` (`check()`, #1093) reads that same request back through
+  the optional `port.reconcile`, F-21's `GET /api/brief/workflows/:flowId/run-requests/:requestId`: an
+  accepted receipt shows and selects its run and unlocks Run; F-21's `not_found` (no run has been
+  accepted under that ID yet) unlocks Run for a new, explicit request and says that one still in
+  transit could yet start; any other answer leaves it uncertain.
+- `briefRunsPort(scope, request)` is the read half of the port, over F-21 (#1100): F-21's keyset reader
+  owns Brief run history, so `list` reads `GET /api/brief/workflows/:flowId/runs[?cursor=]` (newest
+  first, 50 a page, opaque cursor) and `detail` reads `GET /api/brief/workflows/:flowId/runs/:runId`, the
+  redacted inspection (step fields, effect receipts with `unknown` kept distinct, waitpoints without
+  resume URLs, Q-19 failure wording). The offset reader over `GET /api/workflows/:id/runs` is retired
+  for Brief. A 404 is unavailable, never an empty history. Labels are F-21's short `Run <last 6>`
+  (`Test run` for a test run); the full run ID is the label's title and a `Run ID` row in the
+  inspection. The card renders strings as text and shows `Redacted` for fields marked so; it is not a
+  redaction layer.
 - Opt-in `workflowRunsRegistration(useBinding)`, not in the production registry. `runsAvailable`
   requires a non-empty scope, flow, version and title, a `source` matching the shell mode, the routed
   flow/version, a controller bound to the same scope and the `workflowContext` capability.
@@ -807,10 +822,15 @@ actions only change local fixture state.
   aliased to an assistant answer. The other five edit F-23 canonical answers (`preferred_name`,
   `company`, `work_role`, `current_projects`, `communication_preferences`), up to 4,000 characters
   each; a blank field clears its answer. Unrelated answers and interview facts are never written.
-- It reads and writes only through `ProfilePort`. F-23 (#945) serves `/api/brief/profile-settings`
-  (default off), but no live port adapts it yet: the form runs over in-memory fixtures only, and the live
-  room needs both a port and the `profileSettings` capability (`profileAvailable`). It does not
-  touch `/api/user-profile`, the onboarding profile writes or the vault's user-profile source.
+- It reads and writes only through `ProfilePort`. `createProfilePort(scopeId, host)`
+  (`account/profile/adapter.ts`) is the live port over F-23's `GET /api/brief/profile-settings` and
+  `PATCH /api/brief/profile-settings/profile` (default off, `JARVIS_BRIEF_PROFILE_SETTINGS`). It
+  rejects a snapshot whose six field mappings are not explicit, maps 401/403 to unavailable,
+  404/501 to unsupported and 409 to conflict, and confirms a save only from a matching receipt
+  and a matching fresh read. Without a host it is unsupported. The live room still needs the
+  `profileSettings` capability (`profileAvailable`). It does not touch `/api/user-profile`, the
+  onboarding profile writes or the vault's user-profile source. The preview fixtures drive the
+  same adapter through an in-memory host.
 - Edits stay a draft until an explicit Save, survive polls, chat/sidebar changes and remounts, and
   are dropped only by a confirmed Cancel or leave. Saves are revision-bound partial patches; Saved
   is shown only when the confirmed profile matches what was submitted. A failed or lost save keeps
@@ -837,12 +857,16 @@ actions only change local fixture state.
   overwriting a change made elsewhere. Realtime voice, Authority, Connected workspace and Advanced
   settings only navigate through host callbacks. Check-in frequency and active hours are shown as
   unavailable. Hosted installs never expose provider setup.
-- It reads and writes only through `SettingsPort`. F-23 (#945) serves `/api/brief/profile-settings`
-  and `/api/brief/profile-settings/voice` (default off), but no live port adapts them yet: the room runs
-  over in-memory fixtures only, and the live room needs a port, the `profileSettings` and
-  `navigationCompatibility` capabilities and all four destination callbacks (`settingsAvailable`).
-  The original HTTP adapter is at 93a04bcf (`ui/src/brief/account/settings/adapter.ts`); restoring it
-  is follow-up work now that F-23 is on main.
+- It reads and writes only through `SettingsPort`. `createSettingsPort(scopeId, host)`
+  (`account/settings/adapter.ts`) is the live port over F-23's `GET /api/brief/profile-settings`
+  and `PATCH /api/brief/profile-settings/voice` (default off). No production host builds this
+  port or the Profile port yet (the rooms stay opt-in). A host supplies destinations, for example
+  F-25's `destinationPort(navigation).callback(id)`, and a replay that delegates only the existing
+  `tutorial` reset scope (`replayProfileSettings` in `profile-settings/actions.ts`, whose result
+  the host maps to `{ state }`). The live room needs
+  the `profileSettings` and `navigationCompatibility` capabilities and all four destination
+  callbacks (`settingsAvailable`). The preview fixtures drive the same adapter through an
+  in-memory host.
 - Replay the tutorial asks first, rechecks eligibility before it runs, and delegates only the
   existing `tutorial` reset scope (`replayExistingTutorial` -> `POST /api/onboarding/reset`). An
   unconfirmed result is not retried automatically.

@@ -5,7 +5,6 @@ import { Icon } from "../../ui";
 import { Tabs, StatusChip, Select, EmptyState, Toast, Skeleton, type Tone } from "../../ui/roomkit";
 import { RoomShell } from "../RoomShell";
 import { useRoomActions } from "../useRoomActionBus";
-import { parseRelativeDate } from "../../../../../src/voice/parse-date";
 import { pickRoomActionTarget } from "../../../../../src/daemon/room-action-targets";
 import {
   useContentData, type ContentItem, type ContentStage, type ContentType, type ContentStageNote, type ContentAttachment,
@@ -84,10 +83,14 @@ export function ContentRoomBody({ mode }: { mode: RoomBodyMode }) {
       }
       case "schedule": {
         const it = pickRoomActionTarget(data.items, args, data.findByName, selected); if (!it) return false;
-        const parsed = typeof args.when === "string" ? parseRelativeDate(args.when) : null;
+        // The time the daemon settled and showed on the card, as given (#1022):
+        // the words are not read as a time here, in this browser's zone and
+        // after the yes.
+        const when = typeof args.when === "string" ? args.when.trim() : "";
+        const at = typeof args.when_ts === "number" && Number.isFinite(args.when_ts) ? args.when_ts : undefined;
         // Not scheduled, so not a yes (#1015).
-        if (!parsed) { setToast({ text: "Couldn't parse that date.", tone: "warn" }); return false; }
-        return data.schedule(it.id, parsed.ts).then(answered);
+        if (at === undefined) { setToast({ text: when ? `No settled time came with "${when}", so nothing was scheduled.` : "No time was given, so nothing was scheduled.", tone: "warn" }); return false; }
+        return data.schedule(it.id, at).then(answered);
       }
       default: return false;
     }

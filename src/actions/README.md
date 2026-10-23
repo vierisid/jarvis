@@ -64,7 +64,7 @@ Uses X11 tools (xdotool, xprop, wmctrl, ImageMagick):
 - ✅ Linux: Fully implemented (X11 tools)
 - ✅ Windows: PowerShell/Win32 for windows, input, screenshots
 - ✅ macOS: AppleScript/screencapture for windows, input, screenshots
-- ❌ WSL: no local controller; the Windows desktop is reached through the Go sidecar running on Windows (`getAppController()` throws `LOCAL_DESKTOP_UNAVAILABLE`)
+- ❌ WSL: no local controller; the Windows desktop is reached through the Go sidecar running on Windows (`getAppController()` throws `LOCAL_DESKTOP_UNAVAILABLE`, and so does a local `capture_screen`, #901)
 - ⏳ UI element trees (getWindowTree) come from the Go sidecar on Windows/macOS; desktop tools route there whenever one with the `desktop` capability is connected
 
 ### Browser Control

@@ -469,6 +469,8 @@
 .wf-conn__form textarea { font-family: monospace; font-size: 0.78rem; }
 .wf-conn__form-value { display: flex; flex-direction: column; gap: 4px; }
 .wf-conn__form-err { color: var(--accent-1, #f87171); font-size: 0.72rem; }
+.wf-conn__form-help { color: var(--ink-3); font-size: 0.72rem; }
+.wf-conn__form-warn { color: var(--warn, #f59e0b); font-size: 0.72rem; }
 .wf-conn__form-actions { display: flex; justify-content: flex-end; }
 
 /* Library panel: curated activepieces community pieces, install/uninstall. */

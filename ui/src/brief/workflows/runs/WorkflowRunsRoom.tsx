@@ -128,6 +128,13 @@ function BoundRuns({
       if (mounted.current) select(latest.selectedId);
     }
   }
+  /** Read an unconfirmed request's outcome back by its ID; never re-send it (#1093). */
+  async function check() {
+    await store.check();
+    const latest = store.getSnapshot();
+    if (latest.submission === "accepted" && latest.selectedId && mounted.current)
+      select(latest.selectedId);
+  }
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -156,6 +163,17 @@ function BoundRuns({
       <div className="brief-runs-feedback" role="status">
         {state.message}
       </div>
+      {(store.canCheck || state.submission === "checking") && (
+        <div className="brief-runs-check">
+          <BriefButton
+            size="sm"
+            onClick={() => void check()}
+            disabled={!store.canCheck}
+          >
+            {state.submission === "checking" ? "Checking..." : "Check result"}
+          </BriefButton>
+        </div>
+      )}
       <div className="brief-runs-columns">
         <section className="brief-runs-history" aria-label="Run history">
           <div className="brief-runs-history-heading">
@@ -196,6 +214,7 @@ function BoundRuns({
                   state.selectedId === run.runId ? "true" : undefined
                 }
                 aria-label={`Open ${run.label}`}
+                title={run.runId}
                 onClick={() => select(run.runId)}
               >
                 <strong>{run.label}</strong>
@@ -292,7 +311,7 @@ function RunDocument({ run }: { run: RunDetail }) {
   return (
     <div className="brief-run-document" data-run-id={run.runId}>
       <div className="brief-run-document-heading">
-        <h2>{run.label}</h2>
+        <h2 title={run.runId}>{run.label}</h2>
         <Status status={run.status} />
       </div>
       <h3 className="brief-run-summary">
@@ -303,6 +322,8 @@ function RunDocument({ run }: { run: RunDetail }) {
         <dd>{run.trigger ?? "Not recorded"}</dd>
         <dt>Started</dt>
         <dd>{date(run.startedAt)}</dd>
+        <dt>Run ID</dt>
+        <dd>{run.runId}</dd>
         <dt>Version</dt>
         <dd>{run.versionId}</dd>
       </dl>

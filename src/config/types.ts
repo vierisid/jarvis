@@ -255,6 +255,18 @@ export type PebbleConfig = {
  * unknown keys, and nothing reads them.
  */
 export type DesktopConfig = {
+  /**
+   * The desktop off switch (#905). `false` stops Jarvis from asking for or
+   * acting on any machine's desktop: the desktop_* tools, capture_screen,
+   * ui_snapshot / ui_act / run_skill on a desktop surface, record_skill, and
+   * the pebble's own screenshot and foreground-window reads. Screen events a
+   * sidecar sends are dropped unread by awareness and the generic event
+   * pipeline; the sidecar's own observer still captures and OCRs the screen.
+   * Browser tools are unaffected. Takes effect on restart (set in
+   * config.yaml). A value or a section in the wrong shape fails closed; an
+   * empty one is the default (desktop-guard.ts desktopEnabledFromSection).
+   * Default true.
+   */
   enabled: boolean;
 };
 
@@ -272,6 +284,12 @@ export type AwarenessConfig = {
   struggle_cooldown_ms: number;       // min gap between struggle detections
   suggestion_rate_limit_ms: number;
   overlay_autolaunch: boolean;        // auto-open floating overlay widget on start
+  /**
+   * When the user last chose `enabled` themselves (persistAwarenessChoice).
+   * Absent on rows stamped from defaults by older builds, so only a marked
+   * `true` counts as consent (#1070).
+   */
+  enabled_chosen_at?: number;
   retention: {
     full_hours: number;
     key_moment_hours: number;

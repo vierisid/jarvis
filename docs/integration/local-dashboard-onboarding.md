@@ -25,22 +25,22 @@ Hosting compatibility, production activation, paid real-model evaluation and ext
 
 ## Run the real daemon with a fresh sidecar
 
-Use `bun run dev` for the connected app with real providers and a native sidecar. It uses persistent local data and does not seed sample workflows or substitute models. From this checkout with Bun on PATH:
+Use `bun run dev:local` for the connected app with real providers and a native sidecar. It uses persistent local data and does not seed sample workflows or substitute models. From this checkout with Bun on PATH:
 
 ```sh
-bun run dev --data-dir "$HOME/.jarvis-local-acceptance-20261020"
+bun run dev:local --data-dir "$HOME/.jarvis-local-acceptance"
 ```
 
 The default port is 3143. Wait for `JARVIS daemon running on port 3143`, then enroll from a second terminal in the same checkout:
 
 ```sh
-bun run dev --data-dir "$HOME/.jarvis-local-acceptance-20261020" --enroll "local-acceptance"
+bun run dev:local --data-dir "$HOME/.jarvis-local-acceptance" --enroll "local-acceptance"
 ```
 
-Copy the printed enrollment token into a sidecar built from this checkout. On Windows, quit any existing Jarvis instance from its tray menu first. Prepare a bundle in a normal user folder, such as `C:\Users\vieri\JarvisLocalAcceptance-20261020`, with `bin/jarvis.exe` and a copy of `scripts/integration/start-sidecar.cmd` at its root. Then run:
+Copy the printed enrollment token into a sidecar built from this checkout. On Windows, quit any existing Jarvis instance from its tray menu first. Prepare a bundle in a normal user folder, such as `C:\Users\<you>\JarvisLocalAcceptance`, with `bin/jarvis.exe` and a copy of `scripts/integration/start-sidecar.cmd` at its root. Then run:
 
 ```powershell
-& 'C:\Users\vieri\JarvisLocalAcceptance-20261020\start-sidecar.cmd'
+& 'C:\Users\<you>\JarvisLocalAcceptance\start-sidecar.cmd'
 ```
 
 On the first launch, paste the enrollment token when prompted. Later launches reuse the saved enrollment without prompting. The helper gives only its child process a separate `profile/` directory and sets an explicit working directory. Add `--check` to verify the executable without starting onboarding. The batch helper works with the existing PowerShell execution policy and makes no policy changes.
@@ -51,7 +51,7 @@ The sidecar opens its authenticated onboarding window. Complete permissions, con
 
 The launcher creates separate `home/`, `data/` and `tmp/` directories and does not inherit your normal configuration, credentials or `.env`. Reuse the directory to resume; choose a new name to start over. The default is `~/.jarvis-local-acceptance`; symlinked data roots are resolved before starting the engine. Use the same `--port` on both commands if changing it. The daemon binds to loopback, preserves authentication and uses the normal daemon lock. Ctrl-C stops it. Restart after source edits: this launcher deliberately uses a foreground process without Bun hot reload, which failed the engine handshake in local verification.
 
-This mode builds its own UI into `ui/dist-local-integration/`, explicitly authorizes the optional dashboard/onboarding integration and continues to report `released: false`. `bun run dev` now starts this connected local app; `dev:local` is an alias. `dev:legacy` retains the previous hot-reload command for the released UI. Production builds retain their release gates. Its data and native profile are separate from the deterministic harness below.
+This mode builds its own UI into `ui/dist-local-integration/`, explicitly authorizes the optional dashboard/onboarding integration and continues to report `released: false`. `bun run dev` stays the hot-reload daemon for the released UI; only `bun run dev:local` starts this connected local app. Production builds retain their release gates. Its data and native profile are separate from the deterministic harness below.
 
 Windows sidecar cross-build from WSL, using the repository's existing release build script and installed Go/mingw toolchain:
 

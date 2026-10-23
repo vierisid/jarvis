@@ -25,9 +25,19 @@ vaults, route through existing authenticated tenancy before selecting the adapte
 - Hosted setup preserves system AI/STT/TTS credentials and providers. It records
   the existing multi-tier mode and enables included voice only for a user with no
   explicit enabled/disabled choice. An explicit voice decline stays off. It
-  persists Awareness **off before completion**, guarding the legacy service
-  starter and daemon restart. After setup, later explicit Awareness settings
-  remain untouched by retries. Setup is not Awareness consent.
+  persists Awareness **off before completion** (only the `enabled` key, never
+  the in-memory defaults) unless the stored row proves a user choice, guarding
+  the legacy service starter and daemon restart. A stored `false` is kept; a
+  stored `true` is kept only with the `enabled_chosen_at` marker that
+  `persistAwarenessChoice` (the pebble long-press) writes, because builds before
+  #262 stamped the default `true` into config.yaml and the legacy import copied
+  it. So a choice survives setup running again after `/api/onboarding/reset`
+  with scope `setup` (#1070); a malformed one blocks setup before any write.
+  A hand-edited `awareness.enabled: true` in config.yaml carries no marker, so
+  setup turns it off; the user re-enables it with a long-press. A long-press
+  made before this change (#390 persisted it unmarked) is unmarked too, so it
+  is also turned off once and needs one long-press again. Setup is not
+  Awareness consent.
 - Self-hosted results return `next: 'legacy_setup'` until the existing setup path
   has persisted completion **and** the injected existing LLM check confirms
   configuration. A skip marker alone is insufficient. This module accepts no

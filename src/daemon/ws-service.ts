@@ -64,13 +64,14 @@ import { ROOM_ACTION_QUEUE_TTL_MS, RoomActionResults, type LateRoomAnswer, type 
 import { PEBBLE_ROOMS, tabSwitchReply } from './pebble-intents.ts';
 import { isPresentationRoomAction, isRoomAction, roomActionCategories, type RoomActionCategory } from './room-actions.ts';
 import {
-  classifierMustConfirmRoomAction, realtimeRoomActionDecision, resolveHeldRoomAction, roomActionAuditRow,
-  roomActionExecuted, type RoomActionAuditReason, type RoomActionOrigin,
-  type RealtimeRoomActionContext, type RoomActionTargetLists,
+  classifierMustConfirmRoomAction, daemonTimeZone, describeSettledTime, realtimeRoomActionDecision, resolveHeldRoomAction,
+  roomActionAuditRow, roomActionExecuted, settleRoomActionTime, unrecognisedTimeZone, voiceTimeZone, type HeldRoomAction, type RoomActionAuditReason,
+  type RoomActionOrigin, type RealtimeRoomActionContext, type RoomActionTargetLists, type VoiceClock, type VoiceClockUnavailable,
 } from './voice-room-action-gate.ts';
+import { getCronTimezone } from '../lib/cron-scheduler.ts';
 import { findContent } from '../vault/content-pipeline.ts';
 import { findEntities } from '../vault/entities.ts';
-import { roomActionArgs, roomActionEntityArg, roomActionTargetKind, withoutEntityPin } from './room-action-targets.ts';
+import { roomActionArgs, roomActionEntityArg, roomActionTargetKind, roomActionTimeArg, SETTLED_TIME_ARG, withoutEntityPin } from './room-action-targets.ts';
 import type { BriefCapabilities } from '../brief/capabilities.ts';
 import { safeChatIdentity, type BriefChatTransport } from '../brief/chat-transport.ts';
 import { currentBriefTurn } from '../brief/chat-context.ts';
@@ -310,7 +311,7 @@ type PendingVoiceConfirmation = {
    * (#973). Confirming runs this action rather than handing the transcript
    * to chat.
    */
-  roomAction?: { room: string; action: string; args?: Record<string, unknown> };
+  roomAction?: HeldRoomAction;
 };
 
 /**
@@ -500,6 +501,11 @@ export class WebSocketService implements Service {
    *  wire are dropped quietly instead of logging one warning each. Cleared by
    *  the next voice_start. */
   private quietVoiceFrames = new WeakSet<ServerWebSocket<unknown>>();
+  /**
+   * The IANA zone each dashboard last said it is in, on voice_start or
+   * voice_text (#1022): a time a voice action names is settled in it.
+   */
+  private dashboardTimeZones = new WeakMap<ServerWebSocket<unknown>, { zone: string } | { unusable: string }>();
   /**
    * Mic frames that arrive while a realtime start is mid-gate (the plan-gate
    * catalog fetch is the only await before a session exists). Without this
@@ -830,6 +836,23 @@ export class WebSocketService implements Service {
    * and external channels.
    */
   broadcastHeartbeat(text: string): void {
+    this.broadcastHeartbeatToDashboard(text);
+
+    // Also push to external channels
+    if (this.channelService) {
+      this.channelService.broadcastToAll(text).catch(err =>
+        console.error('[WSService] Channel heartbeat broadcast error:', err)
+      );
+    }
+  }
+
+  /**
+   * The same heartbeat, to dashboard clients only (#1026). For the pebble's
+   * fast-path confirmations ("Closed Settings.", "Hid the amber background
+   * agent."): they acknowledge something done on this screen, so by the
+   * owner's decision they never go to Telegram or Discord.
+   */
+  broadcastHeartbeatToDashboard(text: string): void {
     const message: WSMessage = {
       type: 'chat',
       payload: {
@@ -840,13 +863,6 @@ export class WebSocketService implements Service {
       timestamp: Date.now(),
     };
     this.wsServer.broadcast(message);
-
-    // Also push to external channels
-    if (this.channelService) {
-      this.channelService.broadcastToAll(text).catch(err =>
-        console.error('[WSService] Channel heartbeat broadcast error:', err)
-      );
-    }
   }
 
   /**
@@ -1323,6 +1339,7 @@ export class WebSocketService implements Service {
           requestId: string; currentRoom?: string; mode?: 'pcm' | 'wav';
         };
         this.quietVoiceFrames.delete(ws);
+        this.noteDashboardTimeZone(ws, msg.payload);
         // A WAV-mode client is uploading a finished recording — realtime is
         // never the right consumer for it (the session would treat the WAV
         // container bytes as raw PCM frames). Skip the realtime starter and
@@ -1386,6 +1403,7 @@ export class WebSocketService implements Service {
         const requestId = payload?.requestId ?? msg.id ?? crypto.randomUUID();
         const text = (payload?.text ?? '').trim();
         const currentRoom = payload?.currentRoom;
+        this.noteDashboardTimeZone(ws, payload);
         // If we have an in-flight audio session (parallel paths), drop it so
         // we don't double-process the same utterance.
         this.voiceSessions.delete(ws);
@@ -2234,9 +2252,39 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     };
   }
 
-  /** `ra` with its defaults and its item settled before its card (#1008). */
-  private settleHeldRoomAction(ra: { room: string; action: string; args?: Record<string, unknown> }) {
-    return resolveHeldRoomAction(ra, this.roomActionTargetLists(), `${roomTitle(ra.room)}: ${ra.action.replace(/_/g, ' ')}`);
+  /** `ra` with its defaults, its item and its time settled before its card (#1008, #1022). */
+  private settleHeldRoomAction(ra: HeldRoomAction, ws: ServerWebSocket<unknown>) {
+    return resolveHeldRoomAction(ra, this.roomActionTargetLists(), roomActionWhat(ra), this.voiceClock(ws));
+  }
+
+  /** Remember the zone a dashboard says it is in, when it names a real one (#1022). */
+  private noteDashboardTimeZone(ws: ServerWebSocket<unknown>, payload: unknown): void {
+    // A payload with no timeZone at all is from a tab that predates #1022,
+    // or one that does not set times: what this socket said before stands.
+    if (!payload || typeof payload !== 'object' || !Object.hasOwn(payload, 'timeZone')) return;
+    const reported = (payload as { timeZone?: unknown }).timeZone;
+    if (reported === undefined || reported === null) return;
+    const zone = voiceTimeZone(reported);
+    // A zone the browser named that this runtime does not know (#1022 review).
+    // An empty string is a browser that could not say (#1022 review).
+    this.dashboardTimeZones.set(ws, zone ? { zone } : { unusable: typeof reported === 'string' ? reported : '' });
+  }
+
+  /**
+   * Now, and the zone a time `ws` asks for is read in (#1022): the zone that
+   * dashboard last said it is in, whose clock the person reads the result
+   * by. Null for a tab that never said one: it predates #1022, and would read
+   * the words again itself, so a time it asks for is refused, not guessed in
+   * this machine's zone (a hosted brain runs on UTC). A tab whose browser
+   * named a zone this runtime does not know is up to date: the configured
+   * user zone stands in for it when one is set, else it is told why.
+   */
+  private voiceClock(ws: ServerWebSocket<unknown>): VoiceClock | VoiceClockUnavailable | null {
+    const said = this.dashboardTimeZones.get(ws);
+    if (!said) return null;
+    if ('zone' in said) return { now: Date.now(), timeZone: said.zone };
+    const configured = getCronTimezone();
+    return configured ? { now: Date.now(), timeZone: configured } : { unavailable: unrecognisedTimeZone(said.unusable) };
   }
 
   /**
@@ -2322,11 +2370,19 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
           this.auditRoomAction({ room, action }, 'realtime', 'denied', false, { reason: held.reason });
           return held.message;
         }
+        // The time it is for is settled here, as for a card (#1022), in this
+        // dashboard's zone: the room takes the instant as given, and the
+        // reply names it, since nobody sees a card for this.
+        const timed = settleRoomActionTime({ room, action, args: innerArgs }, this.voiceClock(ws), roomActionWhat({ room, action }));
+        if (!timed.ok) {
+          this.auditRoomAction({ room, action }, 'realtime', 'denied', false, { reason: 'unsettled' });
+          return timed.message;
+        }
         // Auto-open the room first (no-op if already open), then dispatch,
         // mirroring the classifier path so the qualifier isn't dropped. The
         // dashboard this session runs on says whether the room ran it, and
         // the model is told that, not "Done" (#965).
-        const ra = { room, action, args: innerArgs };
+        const ra = timed.ra;
         this.navigateForRoomAction(ra, ws, reqId);
         // Shorter than the realtime session's wait for sibling tool results,
         // so a slow room cannot leave this result to be voiced on its own
@@ -2829,7 +2885,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       // The card shows what confirming runs, so whatever the handler would
       // decide later (a default, the item a name matches, the selection) is
       // decided now and pinned into the hold (#1008).
-      const settled = await this.settleHeldRoomAction(intent.room_action);
+      const settled = await this.settleHeldRoomAction(intent.room_action, ws);
       if (!settled.ok) {
         this.auditRoomAction(intent.room_action, 'classifier', 'denied', false, { approvalId: intent.id, reason: 'unsettled' });
         this.broadcastAssistantAck(settled.message, requestId);
@@ -2923,7 +2979,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         ? { ...intent.room_action, args: roomActionArgs(intent.room_action.room, intent.room_action.action, intent.room_action.args) } : undefined;
       // A side-effecting one is settled before its card, as above (#1008).
       if (roomAction && !isPresentationRoomAction(roomAction.room, roomAction.action)) {
-        const settled = await this.settleHeldRoomAction(roomAction);
+        const settled = await this.settleHeldRoomAction(roomAction, ws);
         if (!settled.ok) {
           this.auditRoomAction(roomAction, 'classifier', 'denied', false, { approvalId: intent.id, reason: 'unsettled' });
           this.broadcastAssistantAck(settled.message, requestId);
@@ -3411,7 +3467,11 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * `unreached` at once when no socket took the frame (nobody connected who
    * could answer, #1011).
    *
-   * Without `client` the native panels answer (the pebble's tab switch). With
+   * Without `client` the native panels answer (the pebble's tab switch), and
+   * only a socket of `sidecar`, the sidecar that asked, is listened to
+   * (#1026): the resultId goes to every client, and any local /ws client
+   * could otherwise answer first and decide what the pebble says. Without
+   * either, nobody could be listened to, and the action is refused. With
    * `client`, only that dashboard gets the resultId, is asked to answer
    * (`resultFrom: 'dashboard'`), and is listened to (#965): a dashboard voice
    * turn asks the dashboard the user spoke to.
@@ -3427,7 +3487,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   requestRoomAction(
     action: { room: string; action: string; args?: Record<string, unknown> },
     timeoutMs: number = ROOM_ACTION_QUEUE_TTL_MS,
-    opts?: { client?: ServerWebSocket<unknown>; onLate?: LateRoomAnswer },
+    opts?: { client?: ServerWebSocket<unknown>; sidecar?: string; onLate?: LateRoomAnswer },
   ): Promise<RoomActionOutcome> {
     // Backstop for every caller (#969): an action no room handler carries out
     // is never broadcast, whoever asked for it.
@@ -3444,7 +3504,13 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       console.warn(`[WSService] refused room action ${action.room}/${action.action}: it changes more than the screen, and no dashboard was named to run it`);
       return Promise.resolve('rejected');
     }
-    const { id, outcome } = this.roomActionResults.open(timeoutMs, client, opts?.onLate);
+    const sidecar = opts?.sidecar;
+    if (!client && !sidecar) {
+      console.warn(`[WSService] refused room action ${action.room}/${action.action}: nobody was named whose answer counts`);
+      return Promise.resolve('rejected');
+    }
+    const accepts = client || !sidecar ? undefined : (from: unknown) => this.wsServer.socketSpeaksForSidecar(from, sidecar);
+    const { id, outcome } = this.roomActionResults.open(timeoutMs, client, opts?.onLate, accepts);
     const payload = {
       source: 'room_action',
       room: action.room,
@@ -3481,6 +3547,11 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         payload: { ...payload, ...waited },
         timestamp: Date.now(),
       }) > 0;
+      // Every panel still gets it, to stay in step (#974), but it reached
+      // someone who could answer only if a socket of the asking sidecar is
+      // connected (#1026). Otherwise say so now, not as no answer after the
+      // full wait (#1011).
+      if (reached && accepts) reached = [...this.wsServer.getClients()].some(accepts);
     }
     // Nobody took the frame: say so now rather than after the timeout, and
     // not as "sent but no answer" (#1011). That includes a dashboard whose
@@ -3497,7 +3568,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * happened (#965). It used to acknowledge before any room had seen it.
    */
   private async handleVoiceRoomAction(
-    ra: { room: string; action: string; args?: Record<string, unknown> },
+    ra: HeldRoomAction,
     requestId: string,
     ws: ServerWebSocket<unknown>,
     // Who sent it, for its audit row (#1009): the classifier on its own
@@ -3529,6 +3600,17 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       this.auditRoomAction(ra, audit.origin, 'denied', false, { ...auditOpts, reason: state === 'killed' ? 'killed' : 'paused' });
       this.broadcastAssistantAck(`I didn't do that: actions are suspended while the system is ${state}. Ask again once it is resumed.`, requestId);
       return;
+    }
+    // A confirmed hold runs the time its card showed (#1022). Anything else
+    // has its time settled now, as a card would have it.
+    if (audit.origin !== 'confirm') {
+      const timed = settleRoomActionTime(ra, this.voiceClock(ws), roomActionWhat(ra));
+      if (!timed.ok) {
+        this.auditRoomAction(ra, audit.origin, 'denied', false, { ...auditOpts, reason: 'unsettled' });
+        this.broadcastAssistantAck(timed.message, requestId);
+        return;
+      }
+      ra = timed.ra;
     }
     let outcome: RoomActionOutcome;
     try {
@@ -3880,19 +3962,32 @@ function navigateRoomNotice(key: string, requestId?: string): WSMessage {
  * entity it was pinned to, named in full, or on a new one, in words rather
  * than as the `id` or `new_entity` it is pinned by.
  */
-export function describeRoomAction(ra: { room: string; action: string; args?: Record<string, unknown> }): string {
+export function describeRoomAction(ra: HeldRoomAction): string {
   const entityArg = roomActionEntityArg(ra.room, ra.action);
   const pinned = roomActionTargetKind(ra.room, ra.action) !== null || entityArg !== null;
+  const timed = roomActionTimeArg(ra.room, ra.action) !== null;
   const args = Object.entries(ra.args ?? {})
-    .filter(([k]) => !(pinned && (k === 'id' || (entityArg !== null && k === 'new_entity'))))
+    .filter(([k]) => !(pinned && (k === 'id' || (entityArg !== null && k === 'new_entity'))) && !(timed && k === SETTLED_TIME_ARG))
     .map(([k, v]) => `${visible(JSON.stringify(k))}: ${visible(JSON.stringify(v) ?? String(v))}`);
   const head = `${roomTitle(ra.room)}: ${ra.action.replace(/_/g, ' ')}`;
   const entityName = entityArg !== null && typeof ra.args?.[entityArg] === 'string' ? visible(JSON.stringify(ra.args[entityArg])) : null;
   const lands = entityName === null ? []
     : typeof ra.args?.id === 'string' && ra.args.id ? [`to the memory entity ${entityName}`]
       : ra.args?.new_entity === true ? [`to a new memory entity ${entityName} (a concept)`] : [];
+  // The instant it runs at, settled before the card (#1022).
+  const settledAt = timed ? settledTime(ra) : null;
+  const at = settledAt === null ? [] : [`at ${visible(settledAt)}`];
   const effects = roomActionCategories(ra.room, ra.action).map((c) => ROOM_ACTION_EFFECT[c]);
-  return [args.length > 0 ? `${head} {${args.join(', ')}}` : head, ...lands, ...(effects.length > 0 ? [`(${effects.join('; ')})`] : [])].join(' ');
+  return [args.length > 0 ? `${head} {${args.join(', ')}}` : head, ...lands, ...at, ...(effects.length > 0 ? [`(${effects.join('; ')})`] : [])].join(' ');
+}
+
+/** The time `ra` was settled to (#1022), as the card names it, or null when it carries none. */
+function settledTime(ra: HeldRoomAction): string | null {
+  const ts = ra.args?.[SETTLED_TIME_ARG];
+  // Only the daemon settles a time, and always with its zone: one without a
+  // zone was not settled here, and is not shown as if it were.
+  if (typeof ts !== 'number' || !Number.isFinite(ts) || !ra.timeZone) return null;
+  return describeSettledTime(ts, ra.timeZone);
 }
 
 /**
@@ -3924,7 +4019,7 @@ const ROOM_ACTION_EFFECT: Record<RoomActionCategory, string> = {
  * the pebble's (tabSwitchReply).
  */
 export function roomActionReply(
-  ra: { room: string; action: string; args?: Record<string, unknown> },
+  ra: HeldRoomAction,
   outcome: RoomActionOutcome,
 ): string {
   const title = roomTitle(ra.room);
@@ -3968,6 +4063,11 @@ export function roomActionRefusal(
   return `${roomTitle(ra.room)} has no "${ra.action}" action, so I did not send it.`;
 }
 
+/** How a refusal names a room action: "Tasks: create task". */
+function roomActionWhat(ra: { room: string; action: string }): string {
+  return `${roomTitle(ra.room)}: ${ra.action.replace(/_/g, ' ')}`;
+}
+
 function roomTitle(room: string): string {
   return Object.hasOwn(PEBBLE_ROOMS, room) ? PEBBLE_ROOMS[room]!.title : room;
 }
@@ -3981,8 +4081,11 @@ function roomTitle(room: string): string {
  * a generic acknowledgement, so future Room action vocabularies need no code
  * here.
  */
-function ackForRoomAction(ra: { room: string; action: string; args?: Record<string, unknown> }, title: string): string {
+function ackForRoomAction(ra: HeldRoomAction, title: string): string {
   const a = ra.args ?? {};
+  // The time it was settled to, else the words it was asked for in (#1022).
+  const settledAt = roomActionTimeArg(ra.room, ra.action) !== null ? settledTime(ra) : null;
+  const when = settledAt ?? (a.when ? String(a.when) : null);
   switch (ra.action) {
     case 'open_spawn_dialog':
       return `Opening the spawn dialog.`;
@@ -4031,8 +4134,7 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
       return a.title ? `Opening ${String(a.title)}.` : `Opening that event.`;
     case 'schedule_event': {
       const title = a.title ? String(a.title) : 'event';
-      const when = a.when ? ` for ${String(a.when)}` : '';
-      return `Scheduling ${title}${when}.`;
+      return `Scheduling ${title}${when ? ` for ${when}` : ''}.`;
     }
     case 'create_goal': {
       const title = a.title ? String(a.title) : 'goal';
@@ -4041,8 +4143,7 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
     }
     case 'create_task': {
       const title = a.title ? String(a.title) : 'task';
-      const when = a.when ? ` for ${String(a.when)}` : '';
-      return `Creating task "${title}"${when}.`;
+      return `Creating task "${title}"${when ? ` for ${when}` : ''}.`;
     }
     case 'complete_task':
       return a.name ? `Marking "${String(a.name)}" complete.` : `Marking task complete.`;
@@ -4064,8 +4165,8 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
     case 'regress':
       return a.name ? `Moving "${String(a.name)}" back.` : `Moving back.`;
     case 'schedule':
-      return a.name && a.when
-        ? `Scheduling "${String(a.name)}" for ${String(a.when)}.`
+      return a.name && when
+        ? `Scheduling "${String(a.name)}" for ${when}.`
         : `Scheduling.`;
     case 'select_project':
       return a.name ? `Opening "${String(a.name)}".` : `Opening that project.`;

@@ -9,8 +9,14 @@ export type WorkflowEffectContext = {
 };
 export type WorkflowApprovalPending = {
   effectId: string; approvalId: string; waitpointId: string;
-  /** Set when the step is held because Jarvis is paused (Q-08): no approval is involved, and Resume releases it. */
+  /**
+   * Set when the step is held with no card: because Jarvis is paused (Q-08),
+   * and Resume releases it; or, with `code`, because its flow's card budget is
+   * full (#1039), and a place freeing releases it. Says why, for the run.
+   */
   hold?: string;
+  /** Why the step waits when it is not a pause: its flow's cards are at the budget (#1039). Never a failure. */
+  code?: 'APPROVALS_WAITING';
 };
 
 /** Stable JSON identity, independent of object key insertion order. */

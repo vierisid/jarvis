@@ -769,8 +769,9 @@ describe('a routed screenshot delivers an image (#658)', () => {
   });
 
   // The LOCAL branch had the same defect: it returned a JSON string of an
-  // inline descriptor. Driven through a fake `scrot` on PATH (the first thing
-  // localCaptureScreen tries on Linux), so no screen is captured. In a child
+  // inline descriptor. Driven through a fake `scrot` (the first thing
+  // localCaptureScreen tries on Linux) in a directory the child's
+  // system-directory lookup is pointed at (#900), so no screen is captured. In a child
   // process, because Bun's execSync without an explicit env inherits the
   // environment the process STARTED with, not process.env as edited since.
   test.skipIf(process.platform !== 'linux')('capture_screen without a sidecar returns an image block too', async () => {
@@ -783,7 +784,12 @@ describe('a routed screenshot delivers an image (#658)', () => {
       writeFileSync(png, Buffer.from(PIXELS, 'base64'));
       writeFileSync(join(dir, 'scrot'), `#!/bin/sh\nexec /bin/cp '${png}' "$1"\n`, { mode: 0o755 });
       const builtin = new URL('./builtin.ts', import.meta.url).pathname;
-      const script = `const { captureScreenTool } = await import(${JSON.stringify(builtin)});\n`
+      const systemExe = new URL('../../util/system-exe.ts', import.meta.url).pathname;
+      // Plain Linux even on a WSL machine: there local capture refuses (#901).
+      const wsl = new URL('../terminal/wsl-bridge.ts', import.meta.url).pathname;
+      const script = `(await import(${JSON.stringify(wsl)})).WSLBridge.isWSL = () => false;\n`
+        + `(await import(${JSON.stringify(systemExe)})).__setLinuxSystemDirsForTests(${JSON.stringify([dir])});\n`
+        + `const { captureScreenTool } = await import(${JSON.stringify(builtin)});\n`
         + `process.stdout.write(JSON.stringify(await captureScreenTool.execute({})));`;
       const child = Bun.spawnSync(['bun', '-e', script], {
         env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
@@ -817,7 +823,12 @@ describe('a routed screenshot delivers an image (#658)', () => {
       writeFileSync(png, bytes);
       writeFileSync(join(dir, 'scrot'), `#!/bin/sh\nexec /bin/cp '${png}' "$1"\n`, { mode: 0o755 });
       const builtin = new URL('./builtin.ts', import.meta.url).pathname;
-      const script = `const { captureScreenTool } = await import(${JSON.stringify(builtin)});\n`
+      const systemExe = new URL('../../util/system-exe.ts', import.meta.url).pathname;
+      // Plain Linux even on a WSL machine: there local capture refuses (#901).
+      const wsl = new URL('../terminal/wsl-bridge.ts', import.meta.url).pathname;
+      const script = `(await import(${JSON.stringify(wsl)})).WSLBridge.isWSL = () => false;\n`
+        + `(await import(${JSON.stringify(systemExe)})).__setLinuxSystemDirsForTests(${JSON.stringify([dir])});\n`
+        + `const { captureScreenTool } = await import(${JSON.stringify(builtin)});\n`
         + `process.stdout.write(JSON.stringify(await captureScreenTool.execute({})));`;
       const child = Bun.spawnSync(['bun', '-e', script], {
         env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },

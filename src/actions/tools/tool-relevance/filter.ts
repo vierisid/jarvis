@@ -32,6 +32,7 @@ import { isTierEligible } from './model-class.ts';
 import { getToolFilterPolicy, type ToolFilterPolicy } from './policy.ts';
 import { conversationText, selectForConversation, selectRelevantNames } from './selection.ts';
 import { isScopePinned, toolsInScope, type TurnToolScope } from '../tool-scope.ts';
+import { withoutDisabledDesktopTools } from '../desktop-guard.ts';
 
 export type FilterContext = {
   /** The tool list the call site would otherwise send. Registry tools only. */
@@ -273,6 +274,9 @@ export function decideTools(ctx: FilterContext): FilterDecision {
  * simply being forgotten the way it was in #475.
  */
 export function realtimeToolDecision(all: readonly ToolDefinition[]): FilterDecision {
-  return unfiltered(all, 'realtime sessions have a fixed tool list: no per-turn refilter, no working escape hatch');
+  // Not a relevance filter: with desktop.enabled off the always-desktop tools
+  // are not this install's to offer at all (#905). A session started before
+  // the switch flips keeps its list; ToolRegistry.execute refuses those calls.
+  return unfiltered(withoutDisabledDesktopTools(all), 'realtime sessions have a fixed tool list: no per-turn refilter, no working escape hatch');
 }
 

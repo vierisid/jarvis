@@ -42,6 +42,27 @@ test('memory correction compares the displayed revision in the same canonical wr
   const stale = await route(request(fact.id, { kind: 'correct', revision: before.data.revision, object: 'Water', reason: 'Late edit', confirmed: true }));
   expect(stale.status).toBe(409); expect(getFact(receipt.factId)?.object).toBe('Coffee');
 });
+test('memory correction is refused while correction is not available, and for a superseded fact', async () => {
+  const db = getWorkflowDb(), entity = createEntity('person', 'Local owner'), fact = createFact(entity.id, 'likes', 'Tea', { source: 'dashboard' });
+  let available = false;
+  const usage = new MemoryUsageLedger(db, () => true); usage.start();
+  const stream = new MemoryStream(db, usage, undefined, () => available);
+  const gated = new BriefCapabilities([{ id: 'memoryStream', provider: stream }, { id: 'memoryUsage', provider: usage }], ['memoryStream', 'memoryUsage']);
+  const route = createMemoryDecisionRoutes(gated, json, stream)['/api/brief/memory/:id/decision'].POST;
+  const revision = () => { const d = stream.detail(fact.id); if (d.state !== 'ready' || !('revision' in d.data)) throw Error('No fact'); return d.data; };
+  expect(revision().permissions.canCorrect).toBe(false);
+  expect(new MemoryStream(db).detail(fact.id)).toMatchObject({ data: { permissions: { canCorrect: false } } });
+  for (const kind of ['correct', 'confirm'])
+    expect((await route(request(fact.id, { kind, revision: revision().revision, object: 'Coffee', reason: 'Changed', confirmed: true }))).status).toBe(403);
+  expect(getFact(fact.id)).toMatchObject({ object: 'Tea', status: 'active' });
+  available = true;
+  expect(revision().permissions.canCorrect).toBe(true);
+  const saved = await route(request(fact.id, { kind: 'correct', revision: revision().revision, object: 'Coffee', reason: 'Changed', confirmed: true }));
+  expect(saved.status).toBe(200);
+  // The original is now superseded: it can never be corrected a second time.
+  expect(revision().permissions.canCorrect).toBe(false);
+  expect((await route(request(fact.id, { kind: 'correct', revision: revision().revision, object: 'Water', reason: 'Again', confirmed: true }))).status).toBe(403);
+});
 test('unconfirmed and oversized memory writes have no effect', async () => {
   const entity = createEntity('person', 'Local owner'), fact = createFact(entity.id, 'likes', 'Tea', { source: 'dashboard' });
   const route = createMemoryDecisionRoutes(caps, json, memory)['/api/brief/memory/:id/decision'].POST;

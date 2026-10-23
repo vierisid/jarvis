@@ -192,3 +192,19 @@ describe('the heartbeat actions are not offered (#1033)', () => {
     }
   });
 });
+
+describe('the realtime nav tool says how to give a time (#1022 review)', () => {
+  test('its hint is in the tool, and every example in it reads', async () => {
+    const { parseRelativeDate } = await import('../voice/parse-date.ts');
+    const tool = REALTIME_NAV_TOOLS.find((t) => t.name === 'dashboard_room_action')!;
+    const hint = tool.description.split('\n').find((l) => l.startsWith('A "when" is'));
+    expect(hint).toBeDefined();
+    const examples = [...hint!.matchAll(/'([^']+)'/g)].map((m) => m[1]!);
+    expect(examples).toEqual(['tomorrow at 3pm', 'friday at 10am', 'friday', 'in an hour']);
+    const now = Date.parse('2026-10-20T15:00:00Z');
+    for (const e of examples) expect([e, parseRelativeDate(e, now, 'UTC') !== null]).toEqual([e, true]);
+    // And what it says is refused is.
+    expect(parseRelativeDate('at 3', now, 'UTC')).toBeNull();
+  });
+});
+

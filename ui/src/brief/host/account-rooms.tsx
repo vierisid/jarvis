@@ -4,10 +4,11 @@ import { BRIEF_ROOMS } from '../rooms/registry';
 import { ProfileController } from '../account/profile/controller';
 import { ProfileWorkspace } from '../account/profile/ProfileWorkspace';
 import { guardProfileNavigation } from '../account/profile/navigation';
-import { readProfile } from '../account/profile/model';
+import { createProfilePort } from '../account/profile/adapter';
 import { SettingsController } from '../account/settings/controller';
 import { SettingsWorkspace } from '../account/settings/SettingsWorkspace';
-import { readSettings } from '../account/settings/model';
+import { createSettingsPort } from '../account/settings/adapter';
+import { DESTINATIONS, type SettingsDestination } from '../account/settings/model';
 import { AuthorityController } from '../authority/controller';
 import { AuthorityWorkspace } from '../authority/AuthorityWorkspace';
 import { createAuthorityPort } from '../authority/adapter';
@@ -30,35 +31,13 @@ export interface AccountHost {
 }
 export function createAccountRooms(host: AccountHost) {
   const { scopeId, transport } = host;
-  const read = (signal: AbortSignal) => transport.json('/api/brief/profile-settings', { signal }).then(value => {
-    if (value.status !== 'ready' || value.data?.contractVersion !== 1) throw new Error('Settings unavailable'); return value.data;
-  });
-  const profile = new ProfileController({ source: 'live', scopeId, canWrite: true,
-    read: async signal => { const data = readProfile((await read(signal)).profile); return data ? { state: 'ready', data } : { state: 'error' }; },
-    save: async (revision, answers, signal) => {
-      try {
-        const response = await transport.request('/api/brief/profile-settings/profile', { method: 'PATCH', signal,
-          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ revision, answers }) });
-        if (response.status === 409) return { state: 'conflict' };
-        if (!response.ok) return { state: 'unknown' };
-        const data = readProfile((await response.json()).profile); return data ? { state: 'confirmed', data } : { state: 'unknown' };
-      } catch { return { state: 'unknown' }; }
-    },
-  });
-  const settings = new SettingsController({ source: 'live', scopeId, canWrite: true,
-    destinations: { authority: true, connections: true, 'voice-settings': true, 'advanced-settings': true }, canReplayTutorial: true,
-    read: async signal => { const data = readSettings(await read(signal)); return data ? { state: 'ready', data } : { state: 'error' }; },
-    saveVoice: async (revision, voice, signal) => {
-      try {
-        const response = await transport.request('/api/brief/profile-settings/voice', { method: 'PATCH', signal,
-          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ revision, voice }) });
-        if (response.status === 409) return { state: 'conflict' }; if (!response.ok) return { state: 'unknown' };
-        const receipt = await response.json(); if (receipt.saved !== true || !['applied', 'restart_required', 'failed'].includes(receipt.application)) return { state: 'unknown' };
-        const data = readSettings(await read(signal));
-        return data ? { state: 'confirmed', data, application: receipt.application } : { state: 'unknown' };
-      } catch { return { state: 'unknown' }; }
-    }, navigate: host.navigate, replayTutorial: host.replayTutorial,
-  });
+  // #1136's F-23 adapters own the Profile and Settings wire contract.
+  const destination = (id: SettingsDestination) => async () => {
+    if ((await host.navigate(id)).state !== 'opened') throw new Error('Destination unavailable');
+  };
+  const profile = new ProfileController(createProfilePort(scopeId, { request: transport.request, canWrite: true }));
+  const settings = new SettingsController(createSettingsPort(scopeId, { request: transport.request, canWrite: true,
+    destinations: Object.fromEntries(DESTINATIONS.map(id => [id, destination(id)])), replayTutorial: host.replayTutorial }));
   const authority = new AuthorityController(createAuthorityPort(scopeId, { request: transport.request, canWrite: true,
     destinations: { 'advanced-authority': true, 'emergency-controls': true }, navigate: host.navigate }));
   const connections = new ConnectionsController(createF22ConnectionsPort(scopeId, {

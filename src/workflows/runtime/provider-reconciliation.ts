@@ -38,7 +38,7 @@ function object(value: unknown): Record<string, unknown> | null {
 
 /** Typed completion evidence is broader than the modes supported by readback. */
 export function pieceCompletionReceipt(effect: WorkflowEffect): { provider: 'gmail' | 'slack'; id: string; channel?: string } | null {
-  if (effect.route !== 'piece-dispatch' || !tracksPieceCompletion(effect.provenance.piece, effect.provenance.action)) return null;
+  if (effect.route !== 'piece-dispatch' || !tracksPieceCompletion(effect.provenance.piece, effect.provenance.action, effect.arguments)) return null;
   const raw = object(effect.result);
   const result = effect.provenance.piece === '@activepieces/piece-gmail' ? object(raw?.data) ?? raw : raw;
   if (!result) return null;
@@ -46,6 +46,8 @@ export function pieceCompletionReceipt(effect: WorkflowEffect): { provider: 'gma
     if (effect.arguments.draft === true || typeof result.id !== 'string' || !/^[a-f0-9]{1,128}$/i.test(result.id)) return null;
     return { provider: 'gmail', id: result.id };
   }
+  // Only Gmail and Slack have a readback; any other tracked send (an HTTP request) has none.
+  if (effect.provenance.piece !== '@activepieces/piece-slack') return null;
   if (result.ok !== true || typeof result.ts !== 'string' || !/^\d{1,20}\.\d{1,10}$/.test(result.ts)
     || typeof result.channel !== 'string' || !/^[A-Z0-9]{1,80}$/.test(result.channel)) return null;
   return { provider: 'slack', id: result.ts, channel: result.channel };

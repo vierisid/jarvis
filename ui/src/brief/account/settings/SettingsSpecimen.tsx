@@ -133,10 +133,10 @@ export function SettingsSpecimen() {
                 status: "ready",
                 data: {
                   ...UNKNOWN_NAVIGATION,
-                  workspaceName: "Northwind workspace",
+                  workspaceName: "Preview workspace",
                   connection: "connected",
                   account: {
-                    name: "Alex Morgan",
+                    name: "Preview owner",
                     plan: { status: "ready", data: "Preview" },
                   },
                 },

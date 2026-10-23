@@ -88,7 +88,14 @@ export function createOnboardingAssembly(ports: OnboardingAssemblyPorts) {
     },
   };
   const journey = (context: Context) => createJourneyProvider({ authorize: () => authorize(context), persistence, validateFinish: finish,
-    prepareExit: async (_scope, snapshot) => prepareGoal(snapshot, () => { guard(context); if (getDb() !== db) throw Error('Vault changed'); }) });
+    prepareExit: async (_scope, snapshot) => {
+      try { await prepareGoal(snapshot, () => { guard(context); if (getDb() !== db) throw Error('Vault changed'); }); }
+      catch (error) {
+        // The journey exits without a goal; say so without the model's or the profile's text.
+        console.warn('[onboarding-next] Initial goal plan unavailable; an authorized exit continues without a goal:', error instanceof Error ? error.name : 'Error');
+        throw error;
+      }
+    } });
   async function acknowledge(context: Context, command: Parameters<ReturnType<typeof createJourneyProvider>['acknowledge']>[0]['command']) {
     for (let attempt = 0; attempt < 4; attempt++) {
       guard(context);

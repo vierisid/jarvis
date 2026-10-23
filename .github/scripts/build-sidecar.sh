@@ -11,8 +11,12 @@
 #   OUT                   output file name (jarvis or jarvis.exe)
 #   SIGNING_PUBLISHER_CN  Authenticode publisher pin (windows-cross)
 #   APPLE_TEAM_ID         Developer ID team pin (darwin)
+#   ALLOW_UNPINNED_WINDOWS, ALLOW_UNPINNED_MACOS, DRY_RUN
+#                         read by require-signing-pin.sh: an empty pin fails
+#                         a real run unless its hatch is exactly true (#922)
 set -euo pipefail
 : "${GOOS:?}" "${GOARCH:?}" "${SETUP:?}" "${OUT:?}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export CGO_ENABLED=1
 LDFLAGS="-s -w -X main.sidecarVersion=$(cat VERSION)"
 PIN=""
@@ -24,6 +28,7 @@ case "$SETUP" in
 		export CGO_CFLAGS CGO_CXXFLAGS
 		# GUI subsystem: no console window when the .exe is launched.
 		LDFLAGS="$LDFLAGS -H windowsgui"
+		"${HERE}/require-signing-pin.sh" SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS "the ${GOOS} sidecar"
 		PIN="${SIGNING_PUBLISHER_CN:-}"
 		# The go tool splits -ldflags on whitespace, so the CN (a company
 		# name, always with spaces) carries its own quotes to the linker.
@@ -32,6 +37,7 @@ case "$SETUP" in
 	darwin)
 		if [ "$GOARCH" = "amd64" ]; then TARGET=x86_64-apple-macos11; else TARGET=arm64-apple-macos11; fi
 		export CC="clang -target $TARGET" CXX="clang++ -target $TARGET"
+		"${HERE}/require-signing-pin.sh" APPLE_TEAM_ID ALLOW_UNPINNED_MACOS "the ${GOOS}/${GOARCH} sidecar"
 		PIN="${APPLE_TEAM_ID:-}"
 		LDFLAGS="$LDFLAGS -X 'github.com/jarvis/sidecar/internal/update.expectedTeamID=${PIN}'"
 		;;
@@ -41,9 +47,6 @@ case "$SETUP" in
 		exit 1
 		;;
 esac
-if [ "$SETUP" != "linux" ] && [ -z "${PIN}" ]; then
-	echo "::warning::no signing pin for ${GOOS}; self-updates from this build will accept any validly signed payload."
-fi
 # -trimpath keeps -ldflags out of the embedded build info: without it
 # the pin text is in the binary even when the -X target is wrong
 # (a renamed variable), and the check below could never fail.

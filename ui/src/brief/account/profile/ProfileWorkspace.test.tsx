@@ -432,5 +432,5 @@ test('saved interview context is visible in Profile alongside editable fields', 
   expect(host.textContent).toContain("From your interview");
   expect(host.textContent).toContain("Runs a Cornish surf apparel brand");
   expect(host.textContent).toContain("Reach 50 orders per month");
-  expect(field("Company").value).toBe("Northwind");
+  expect(field("Company").value).toBe("Example studio");
 });

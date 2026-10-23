@@ -40,6 +40,7 @@ import { generateId } from '../vault/schema.ts';
 import { pruneOpportunityObservations } from '../vault/opportunity-observations.ts';
 import { OpportunityDelivery, type DeliverOpportunity } from './opportunity-delivery.ts';
 import { screenIssueKey } from '../failures/interruptions.ts';
+import { isDesktopEnabled } from '../actions/tools/desktop-guard.ts';
 export class AwarenessService implements Service {
   name = 'awareness';
   private _status: ServiceStatus = 'stopped';
@@ -256,6 +257,9 @@ export class AwarenessService implements Service {
 
   async handleSidecarEvent(sidecarId: string, event: SidecarEvent): Promise<void> {
     if (!this.runRequested || this._status !== 'running') return;
+    // desktop.enabled: false covers the desktop observers too (#905): what
+    // the sidecar captures is dropped unread, as with awareness off.
+    if (!isDesktopEnabled()) return;
 
     try {
       switch (event.event_type) {

@@ -10,6 +10,7 @@
 
 import { modelExecEnv } from '../util/model-exec-env.ts';
 import { WSLBridge, windowsSystemExe } from '../actions/terminal/wsl-bridge.ts';
+import { findLinuxSystemExe, linuxSystemExe } from '../util/system-exe.ts';
 
 type NotifyMethod = 'notify-send' | 'powershell' | null;
 
@@ -18,15 +19,19 @@ let method: NotifyMethod | undefined;
 function detectMethod(): NotifyMethod {
   if (method !== undefined) return method;
 
-  // Try notify-send first (native Linux/WSLg)
-  try {
-    const result = Bun.spawnSync(['which', 'notify-send']);
-    if (result.exitCode === 0) {
-      method = 'notify-send';
-      console.log('[DesktopNotify] Using notify-send');
-      return method;
-    }
-  } catch { /* continue */ }
+  // Try notify-send first (native Linux/WSLg): from a system directory only,
+  // looked up without spawning anything. It was `which notify-send` and then
+  // a bare `notify-send`, so the first one on PATH ran -- and a stock PATH
+  // puts ~/.local/bin and ~/.bun/bin ahead of /usr/bin (#900).
+  const notifySend = findLinuxSystemExe('notify-send');
+  if (notifySend.path !== null) {
+    method = 'notify-send';
+    console.log('[DesktopNotify] Using notify-send');
+    return method;
+  }
+  if (notifySend.rejected.length) {
+    console.log(`[DesktopNotify] notify-send not used: ${notifySend.rejected.join('; ')}`);
+  }
 
   // Try PowerShell (WSL2 → Windows toast): the System32 one, under WSL only.
   // It used to be `which powershell.exe`, then a bare `powershell.exe`, so
@@ -122,11 +127,12 @@ function sendViaNotifySend(
   body: string,
   options?: { urgency?: string; expireMs?: number }
 ): Bun.Subprocess<'ignore', 'ignore', 'ignore'> {
-  return Bun.spawn(buildNotifySendArgs(title, body, options), { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' });
+  return Bun.spawn([linuxSystemExe('notify-send'), ...buildNotifySendArgs(title, body, options)], { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' });
 }
 
 /**
- * The title and body are argv, so no shell sees them, but libnotify's
+ * notify-send's arguments; the program itself is resolved at the spawn
+ * (#900). The title and body are argv, so no shell sees them, but libnotify's
  * notify-send parses its argv with GLib: a title or body starting with `-`
  * would be read as an option (`-u x` fails the send, `-i` picks the icon file,
  * `-w` blocks until dismissed). `--` ends option parsing, so both are always
@@ -142,7 +148,6 @@ export function buildNotifySendArgs(
   const expireMs = options?.expireMs ?? (urgency === 'critical' ? 10000 : 5000);
 
   return [
-    'notify-send',
     `--urgency=${urgency}`,
     `--expire-time=${expireMs}`,
     '--app-name=JARVIS',

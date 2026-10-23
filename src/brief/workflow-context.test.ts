@@ -21,6 +21,8 @@ import { Worker } from '../workflows/queue/worker';
 import { createRunFlowHandler, RUN_FLOW } from '../workflows/runner/handler';
 import { createWaitpoint } from '../workflows/db/repos/waitpoint';
 import { cancelFlowRun } from '../workflows/db/repos/run-cancellation';
+import { bindingChangesToAccept, pinFlowBindings } from '../workflows/db/repos/binding-pins';
+import type { SidecarInfo } from '../sidecar/types';
 import { createSchema } from '../workflows/db/schema';
 import { WorkflowContext } from './workflow-context';
 import { WorkflowRemoval } from './workflow-removal';
@@ -422,4 +424,82 @@ test('untrusted prototype status names remain uncertain and non-finite input is 
   expect(service.detail(flowId, r.id).steps[0]?.status).toBe('uncertain');
   expect(() => service.start(flowId, command('non-finite', JSON.parse('{"count":1e999}')))).toThrow('invalid_input_number');
   expect(db.query('SELECT id FROM workflow_job').all()).toHaveLength(0);
+});
+test('runs carry one short label for history, detail, context and the start receipt; the full ID stays in runId (#1100)', () => {
+  const accepted = service.start(flowId, command());
+  const id = accepted.run.runId, short = `Run ${id.slice(-6)}`;
+  expect(id.length).toBeGreaterThan(6);
+  expect(accepted.run.label).toBe(short);
+  const page = service.list(flowId); if (page.status !== 'ready') throw Error('history not ready');
+  expect(page.data.items.map(r => [r.runId, r.label])).toEqual([[id, short]]);
+  expect(service.detail(flowId, id).label).toBe(short);
+  expect(service.selection(flowId, versionId, id).context).toMatchObject({ runId: id, runLabel: short });
+  const test = createFlowRun({ flowId, flowVersionId: versionId, environment: 'TESTING' });
+  expect(service.detail(flowId, test.id).label).toBe(`Test run ${test.id.slice(-6)}`);
+});
+test('configured context shows Q-05 pin drift for a connection and the computer, by identity only (#1100)', () => {
+  const TOOL = '@jarvispieces/piece-jarvis-tool';
+  const machine = (id: string): SidecarInfo => ({ id, name: `private-computer-name-${id}`, enrolled_at: '2026-10-01', last_seen_at: null,
+    status: 'enrolled', connected: true, capabilities: ['filesystem', 'desktop'] } as SidecarInfo);
+  let machines: SidecarInfo[] = [machine('laptop')];
+  const tool = (name: string) => name === 'read_file' ? { params: [{ name: 'path', type: 'string', required: true }] } : null;
+  configureWorkflowReadiness({ tool,
+    machines: () => machines, localTools: () => true });
+  setEncryptionKey(Buffer.alloc(32, 0x21));
+  const connect = (secret: string) => upsertConnection({ externalId: 'fixture-account', displayName: 'private-connection-label', type: 'SECRET_TEXT', pieceName: 'fixture-piece', pieceVersion: '1', value: { secret } });
+  const connection = connect('private-fixture-credential');
+  const draft = createDraftVersion({ flowId, displayName: 'Pinned', trigger: { name: 'trigger', type: 'EMPTY', settings: { input: { auth: '{{connections.fixture-account}}' } },
+    nextAction: { name: 'read', type: 'PIECE', settings: { pieceName: TOOL, actionName: 'invoke', input: { toolName: 'read_file', params: { path: '/tmp/report.csv' } } } } } });
+  // Inspection needs no executable provider: lock and publish the fixture graph directly.
+  db.run("UPDATE flow_version SET state='LOCKED' WHERE id=?", [draft.id]);
+  db.run('UPDATE flow SET published_version_id=? WHERE id=?', [draft.id, flowId]);
+  expect(pinFlowBindings(flowId)).toMatchObject({ machine: { sidecarId: 'laptop' } });
+  const entries = () => {
+    const groups = service.selection(flowId, draft.id).context.groups;
+    if (groups.bindings.status !== 'ready') throw Error('bindings not ready');
+    const target = groups.target.status === 'ready' ? groups.target.data : [];
+    return { bindings: groups.bindings.data.map(e => [e.source?.id, e.availability, e.value]), target: target.map(e => [e.source?.id, e.availability]), raw: JSON.stringify(groups) };
+  };
+  const before = entries();
+  expect(before.bindings).toEqual([[connection.id, 'available', 'Configured connection reference; no credentials included.']]);
+  expect(before.target).toEqual([]);
+  connect('private-replaced-credential');
+  machines = [];
+  expect(bindingChangesToAccept(flowId, draft.id)).toHaveLength(2);
+  const after = entries();
+  expect(after.bindings).toEqual([[connection.id, 'stale', 'Connection changed since this workflow was enabled; enabling or publishing it again accepts the change. No credentials included.']]);
+  expect(after.target).toEqual([['laptop', 'stale']]);
+  for (const secret of ['private-fixture-credential', 'private-replaced-credential', 'private-connection-label', 'private-computer-name', 'fixture-account was'])
+    expect(after.raw).not.toContain(secret);
+  // A run's recorded context is its own evidence; drift belongs to the configured view only.
+  const r = createFlowRun({ flowId, flowVersionId: draft.id });
+  expect(service.selection(flowId, draft.id, r.id).context.groups.bindings.status).toBe('unavailable');
+  // A version with no computer step does not claim the pinned computer drifted.
+  const plain = createDraftVersion({ flowId, displayName: 'No computer', trigger: { name: 'trigger', type: 'EMPTY', settings: { input: { auth: '{{connections.fixture-account}}' } } } });
+  db.run("UPDATE flow_version SET state='LOCKED' WHERE id=?", [plain.id]);
+  expect(service.selection(flowId, plain.id).context.groups.target.status).toBe('unavailable');
+  // An explicit target naming the pinned computer stays authoritative over the drift entry.
+  const named = createDraftVersion({ flowId, displayName: 'Named', trigger: { name: 'trigger', type: 'EMPTY', settings: { input: { sidecarId: 'laptop' } },
+    nextAction: { name: 'read', type: 'PIECE', settings: { pieceName: TOOL, actionName: 'invoke', input: { toolName: 'read_file', params: { path: '/tmp/report.csv' } } } } } });
+  db.run("UPDATE flow_version SET state='LOCKED' WHERE id=?", [named.id]);
+  const namedTarget = service.selection(flowId, named.id).context.groups.target;
+  expect(namedTarget.status === 'ready' && namedTarget.data.map(e => [e.source, e.availability])).toEqual([[null, 'missing']]);
+  // An inventory that cannot be read hides computer drift and never fails the inspection.
+  configureWorkflowReadiness({ tool, machines: () => { throw Error('inventory down'); }, localTools: () => true });
+  const inventoryDown = entries();
+  expect(inventoryDown.target).toEqual([]);
+  // Connection drift still shows; only the computer is unknown.
+  expect(inventoryDown.bindings.map(([, availability]) => availability)).toEqual(['stale']);
+  // The approval gate does not hide a computer change it cannot read: it still stops.
+  expect(() => bindingChangesToAccept(flowId, draft.id)).toThrow('inventory down');
+  // Without a computer inventory the next choice is unknown, so no computer drift is claimed.
+  configureWorkflowReadiness({ tool });
+  expect(entries().target).toEqual([]);
+});
+test('a receipt stored before the short label reads back with it, by recovery and by replay', () => {
+  const accepted = service.start(flowId, command());
+  const id = accepted.run.runId;
+  db.run('UPDATE brief_manual_run_requests SET result=? WHERE request_id=?', [JSON.stringify({ ...accepted, run: { ...accepted.run, label: `Run ${id}` } }), 'fixture-request']);
+  expect(service.request(flowId, 'fixture-request').run.label).toBe(`Run ${id.slice(-6)}`);
+  expect(service.start(flowId, command()).run).toEqual(accepted.run);
 });
