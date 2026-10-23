@@ -12,4 +12,5 @@
 /* Keep the optional ClickUp connection visible on the shared setup screen. */
 .on-host__connections { --on-setup-height: auto; height: auto; min-height: 100%; background: var(--bg, #fafbfc); }
 .on-host__connections > .on-google { overflow: visible; padding-bottom: 20px; }
-.on-host__clickup { --ink: var(--og-ink); --ink2: var(--og-muted); --rule: var(--og-rule); --raise: var(--og-paper); --panel: var(--og-panel); font: 14px/1.5 var(--sans, system-ui); margin-bottom: 20px; }
+.on-host__connections .on-google__connection-feedback { min-block-size: 20px; }
+.on-host__clickup { margin-bottom: 36px; }

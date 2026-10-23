@@ -12,3 +12,9 @@
 .clickup-location :is(input,select) { width: 100%; box-sizing: border-box; font: inherit; color: var(--ink); background: var(--raise); border: 1px solid var(--rule); padding: 8px; }
 .clickup-location button { justify-self: start; font: inherit; color: var(--ink2); background: none; border: 0; text-decoration: underline; cursor: pointer; }
 .clickup-location :is(input,select,button):focus-visible { outline: 2px solid var(--ink2); outline-offset: 2px; }
+
+/* Onboarding deliberately shares Google's service-card layout and theme. */
+.clickup-onboarding .on-google__service { margin-block-start: 0; }
+.clickup-onboarding__link { text-decoration: none; }
+.clickup-onboarding__link:hover { background: var(--og-panel); }
+.clickup-onboarding__feedback .on-google__control { padding-inline: 0; }
