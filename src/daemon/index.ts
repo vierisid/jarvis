@@ -1121,19 +1121,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // can drive the desktop UI just like the one-shot path ("open settings").
         tools: () => [...agentService.getOrchestrator().getRealtimeTools(), ...REALTIME_NAV_TOOLS],
         instructions: () => agentService.buildRealtimeVoiceInstructions(),
-        executeToolCall: async (sidecarId, name, args, blockedCategories) => {
+        executeToolCall: async (sidecarId, name, args, blockedCategories, taint) => {
           // Nav tools open a native panel on the pebble's machine (the realtime
           // model otherwise had no way to honor "open workflows / settings").
           const nav = await executePebbleNavTool(sidecarId, name, args);
           if (nav !== null) return nav;
-          return agentService.getOrchestrator().executeRealtimeToolCall(name, args, { blockedCategories });
+          // Judged against this pebble session's own taint (#928), which the
+          // voice session clears at its own turn boundary.
+          return agentService.getOrchestrator().executeRealtimeToolCall(name, args, { blockedCategories, taint });
         },
-        // Voice has no turn objects: the user starting to speak is the taint
-        // gating boundary, and on this surface nothing else clears it. Without
-        // it one `capture_screen` (or any page read) left every later
-        // machine-changing action refused as taint-gated for the rest of the
-        // daemon's life, at any authority level.
-        onUserTurnStart: () => { agentService.getOrchestrator().resetRealtimeTaint(); },
         onState: (sidecarId, state, text) => { void setState(sidecarId, state, text); },
         onStatus: (sidecarId, status, detail) => {
           console.log(`[pebble-realtime] ${sidecarId} ${status}${detail ? `: ${detail}` : ''}`);

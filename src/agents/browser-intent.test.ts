@@ -20,6 +20,7 @@ import { applyApprovalDecision, applyExecutionResolution } from '../daemon/appro
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { RealtimeTaint } from './realtime-taint.ts';
 
 const role = { id: 'personal-assistant', name: 'PA', description: 't', responsibilities: [],
   tools: ['browser', 'desktop', 'ui'], authority_level: 10 } as unknown as RoleDefinition;
@@ -123,7 +124,7 @@ describe('ambiguous UI effects require review at real agent gates', () => {
 
   test('voice auto-approval and sub-agents cannot bypass human review', async () => {
     const f = fixture([browserClickTool]);
-    expect(await f.orch.executeRealtimeToolCall('browser_click', { element_id: 1 })).toContain('[BLOCKED]');
+    expect(await f.orch.executeRealtimeToolCall('browser_click', { element_id: 1 }, { taint: new RealtimeTaint() })).toContain('[BLOCKED]');
     let turn = 0;
     await runSubAgent({ agent: new AgentInstance(role), task: 'click', context: '',
       toolRegistry: f.registry, authorityEngine: f.engine, auditTrail: f.audit,

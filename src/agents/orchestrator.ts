@@ -14,6 +14,7 @@ import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFail
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { taintProfile, mergeProfiles, TAINT_PROFILE_LABEL, type TaintGating } from '../authority/taint-gating.ts';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import type { RealtimeTaint } from './realtime-taint.ts';
 
 /**
  * Whether a resumed task buffer holds a browser read whose element ids the
@@ -226,8 +227,6 @@ export class AgentOrchestrator {
    * read the parent turn's taint through getEffectiveProfile().
    */
   private taintStore = new AsyncLocalStorage<Set<string>>();
-  /** Realtime voice has no turn objects; its taint lives per session here. */
-  private realtimeTaint: Set<string> = new Set();
   /** Logged once: tools ran with no authority engine wired (tests, embedded use). */
   private warnedNoAuthority = false;
   /**
@@ -367,14 +366,28 @@ export class AgentOrchestrator {
     this.taintGating = gating;
   }
 
-  /** The taint set of the turn currently executing, or the realtime session's. */
+  /**
+   * The taint set of the turn or realtime voice session currently executing.
+   * Outside both there is no taint to read and nowhere to keep it: a fresh
+   * empty set, so a background or workflow path neither inherits marks a voice
+   * session read nor leaves its own for one to find (#928).
+   */
   private currentTaint(): Set<string> {
-    return this.taintStore.getStore() ?? this.realtimeTaint;
+    return this.taintStore.getStore() ?? new Set<string>();
   }
 
   /** Sources of outside content read so far in the calling turn (or voice session). */
   getTurnTaint(): ReadonlySet<string> {
     return new Set([...this.currentTaint()].filter((mark) => !mark.startsWith(DECLINED_INTENT)));
+  }
+
+  /**
+   * Sources of outside content a realtime voice session has read, for a check
+   * made outside its tool calls (a dashboard room action the session asked
+   * for, #973).
+   */
+  getRealtimeSessionTaint(session: RealtimeTaint): ReadonlySet<string> {
+    return new Set([...session.marks].filter((mark) => !mark.startsWith(DECLINED_INTENT)));
   }
 
   /**
@@ -388,11 +401,6 @@ export class AgentOrchestrator {
     // Trimmed as request_approval trims it, so the card and the rule agree.
     const trimmed = typeof category === 'string' ? category.trim() : category;
     if (isActionCategory(trimmed)) this.currentTaint().add(`${DECLINED_INTENT}${trimmed}`);
-  }
-
-  /** Voice sessions have no turn objects: the WS layer calls this on each final user transcript. */
-  resetRealtimeTaint(): void {
-    this.realtimeTaint.clear();
   }
 
   private noteTaint(toolName: string, category: string | undefined): void {
@@ -2313,16 +2321,20 @@ export class AgentOrchestrator {
   async executeRealtimeToolCall(
     name: string,
     args: Record<string, unknown>,
-    opts: { blockedCategories?: string[] } = {},
+    opts: { blockedCategories?: readonly string[]; taint: RealtimeTaint },
   ): Promise<string> {
-    // A realtime voice session is the person talking (src/llm/origin.ts).
-    return runWithOrigin('user', () => this.executeRealtimeToolCallInner(name, args, opts));
+    // A realtime voice session is the person talking (src/llm/origin.ts). The
+    // call runs inside the session's own taint (#928), as a text turn's tool
+    // runs inside the turn's: what it reads taints this session only, and a
+    // sub-agent it starts inherits this session's marks, not another's.
+    return runWithOrigin('user', () =>
+      this.taintStore.run(opts.taint.marks, () => this.executeRealtimeToolCallInner(name, args, opts)));
   }
 
   private async executeRealtimeToolCallInner(
     name: string,
     args: Record<string, unknown>,
-    opts: { blockedCategories?: string[] },
+    opts: { blockedCategories?: readonly string[] },
   ): Promise<string> {
     if (!this.toolRegistry) return 'Error: No tool registry configured';
 
@@ -2440,7 +2452,7 @@ export class AgentOrchestrator {
       // the user. Refuse, and let the model say so out loud.
       if (decision.requiresApproval && decision.profileLabel?.includes(TAINT_PROFILE_LABEL)) {
         logAudit('denied', false);
-        return `[BLOCKED] ${name} (${actionCategory}) was not run: this session read outside content (${[...this.realtimeTaint].join(', ')}) and voice cannot approve it. ` +
+        return `[BLOCKED] ${name} (${actionCategory}) was not run: this session read outside content (${[...this.getTurnTaint()].join(', ')}) and voice cannot approve it. ` +
                `Tell the user what you wanted to do and ask them to say it again as a fresh request.`;
       }
 

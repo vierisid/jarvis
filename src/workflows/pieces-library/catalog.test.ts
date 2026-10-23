@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { CATALOG, catalogById, findCatalogEntry } from "./catalog";
+import { buildCatalog, CATALOG, catalogById, excludedReason, findCatalogEntry, sharedBuildCatalog } from "./catalog";
 import { GENERATED, GENERATED_FROM_SHA, type GeneratedCatalogEntry } from "./catalog-generated";
 import { EXCLUDED, VERIFIED, VERIFIED_METADATA } from "./catalog-overrides";
 import { UPSTREAM_PIN_SHA } from "../activepieces/upstream-pin";
@@ -85,7 +85,7 @@ describe("CATALOG invariants", () => {
 
   test("excluded ids are absent from the final catalog", () => {
     const ids = new Set(CATALOG.map((e) => e.id));
-    for (const id of EXCLUDED) {
+    for (const id of Object.keys(EXCLUDED)) {
       expect(ids.has(id)).toBe(false);
     }
   });
@@ -167,8 +167,8 @@ const ALLOWED_LICENSES: ReadonlySet<string> = new Set(["", "MIT"]);
 const COMMUNITY_TREE = `https://github.com/activepieces/activepieces/tree/${GENERATED_FROM_SHA}/packages/pieces/community/`;
 
 /** Why `g` may not ship, or null. Excluded ids never reach CATALOG, so they are skipped. */
-function licenseViolation(g: GeneratedCatalogEntry, excluded: ReadonlySet<string>): string | null {
-  if (excluded.has(g.id)) return null;
+function licenseViolation(g: GeneratedCatalogEntry, excluded: Readonly<Record<string, string>>): string | null {
+  if (Object.hasOwn(excluded, g.id)) return null;
   if (!ALLOWED_LICENSES.has(g.licenseSpdx)) return `${g.id}: license "${g.licenseSpdx}" is not MIT`;
   // Before the tree check, so an Enterprise source is named as one rather
   // than as merely being somewhere unexpected.
@@ -224,7 +224,7 @@ describe("CATALOG license", () => {
       id: "acme", npmPackage: "@activepieces/piece-acme", versionRange: "^1.0.0", latestVersion: "1.0.0",
       displayName: "Acme", description: "", sourceUrl: `${COMMUNITY_TREE}acme`, licenseSpdx: "",
     };
-    const none = new Set<string>();
+    const none: Readonly<Record<string, string>> = {};
     const tree = "https://github.com/activepieces/activepieces/tree/";
 
     test("an empty or MIT license in the community tree passes", () => {
@@ -237,7 +237,7 @@ describe("CATALOG license", () => {
     });
 
     test("a non-MIT piece passes once it is excluded", () => {
-      expect(licenseViolation({ ...ok, licenseSpdx: "GPL-3.0" }, new Set(["acme"]))).toBeNull();
+      expect(licenseViolation({ ...ok, licenseSpdx: "GPL-3.0" }, { acme: "test exclusion" })).toBeNull();
     });
 
     test.each([
@@ -262,5 +262,48 @@ describe("CATALOG license", () => {
     test("a package outside @activepieces/piece-* fails", () => {
       expect(licenseViolation({ ...ok, npmPackage: "@someone/piece-acme" }, none)).toContain("not an upstream piece package");
     });
+  });
+});
+
+describe("#971: Actual Budget is excluded everywhere, not only from the hosted tree", () => {
+  test("it is EXCLUDED, with the licenses that put it there as the reason", () => {
+    expect(excludedReason("actualbudget")).toMatch(/GPL-3\.0-only.*AGPL-3\.0-or-later/s);
+    expect(excludedReason("gmail")).toBeNull();
+  });
+
+  test("no catalog listing has it: the merged catalog, the id lookups, the hosted build's", () => {
+    expect(CATALOG.some((e) => e.id === "actualbudget")).toBe(false);
+    expect(catalogById().has("actualbudget")).toBe(false);
+    expect(findCatalogEntry("actualbudget")).toBeNull();
+    expect(sharedBuildCatalog().some((e) => e.id === "actualbudget")).toBe(false);
+  });
+
+  test("the generated list still has it, so the merge is what drops it (and a sync cannot undo that)", () => {
+    // catalog-generated.ts is the upstream list the weekly sync rewrites. It
+    // keeps the piece; the hand-edited EXCLUDED drops it on every merge.
+    const g = GENERATED.find((e) => e.id === "actualbudget");
+    expect(g?.npmPackage).toBe("@activepieces/piece-actualbudget");
+    // A later sync that bumps it to a new release, or moves it in the list,
+    // still yields a catalog without it.
+    const synced = [{ ...g!, latestVersion: "9.9.9", versionRange: "^9.9.9" }, ...GENERATED.filter((e) => e.id !== "actualbudget")];
+    const merged = buildCatalog(synced);
+    expect(merged.some((e) => e.id === "actualbudget")).toBe(false);
+    expect(merged.length).toBe(CATALOG.length);
+  });
+
+  test("the sync writes only the generated files and its reports, never the overrides", () => {
+    const sync = readFileSync(new URL("../../../scripts/sync-pieces-catalog.ts", import.meta.url), "utf8");
+    const writes = [...sync.matchAll(/writeFileSync\(\s*([A-Za-z_]+)/g)].map((m) => m[1]).sort();
+    expect(writes).toEqual(["MANIFEST_FILE", "MANIFEST_FILE", "OUT_FILE", "heldPath", "reportPath"]);
+    expect(sync).toContain('const OUT_FILE = resolve(import.meta.dir, "../src/workflows/pieces-library/catalog-generated.ts");');
+    expect(sync).toContain('const MANIFEST_FILE = resolve(import.meta.dir, "../src/workflows/pieces-library/verified-manifests-generated.ts");');
+    expect(sync).not.toMatch(/resolve\([^)]*catalog-overrides/);
+  });
+
+  test("no piece is both verified and excluded, and every exclusion says why", () => {
+    for (const [id, reason] of Object.entries(EXCLUDED)) {
+      expect({ id, verified: VERIFIED.has(id) }).toEqual({ id, verified: false });
+      expect(reason.trim().length).toBeGreaterThan(20);
+    }
   });
 });

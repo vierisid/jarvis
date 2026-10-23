@@ -1135,7 +1135,7 @@ if (rule === "untrusted") {
     "\\s+(?:install|i|add|update|dlx|exec)|yarn|bunx|npx)\\b");
   const bunInstall = new RegExp("\\bbun" + flags + "\\s+(?:install|i)\\b");
   const frozen = /--frozen-lockfile(?![=\w-])/;
-  const thirdParty = /\bscripts\/(sync-pieces-catalog|inspect-verified-pieces)\.ts\b/;
+  const thirdParty = /\bscripts\/(sync-pieces-catalog|inspect-verified-pieces|check-piece-licenses)\.ts\b/;
   // #983: a Go build, vet or test compiles and runs module code (the webview
   // bump links fresh upstream code into the sidecar tests), and a script of
   // this repository (scripts/vendor-webview.sh fetches that upstream code)
@@ -2312,6 +2312,48 @@ if (rule === "persist") {
         out.push(name + (via ? " (via " + via.slice(0, -3) + ")" : "") + ": checkout leaves the token in .git/config (persist-credentials is not false)");
     }
   }
+}
+if (rule === "license-scan") {
+  // (#971) The weekly catalog sync license-checks what the hosted shared
+  // build would install, every run: one step runs exactly the scan with
+  // --install and nothing else on its line (no || or ; to swallow it),
+  // nothing lets it fail quietly (continue-on-error or an if, on the job, the
+  // scan, or the steps that fetch and place the regenerated catalog), and
+  // the regenerated catalog is put in place BEFORE the scan.
+  const exact = /^bun run scripts\/check-piece-licenses\.ts --install "\$RUNNER_TEMP\/license-scan" --summary-md "\$GITHUB_STEP_SUMMARY"$/;
+  const found = [];
+  for (const [name, job] of Object.entries(jobs)) {
+    const steps = flatSteps(job.steps).map(({ st }) => st);
+    const scanAt = steps.findIndex((st) => typeof st.run === "string" && /\bscripts\/check-piece-licenses\.ts\b/.test(st.run));
+    if (scanAt < 0) continue;
+    found.push(name);
+    const scan = steps[scanAt];
+    if (!/\bbun run scripts\/check-piece-licenses\.ts --install\b/.test(scan.run))
+      out.push(name + ": the license scan does not install the catalog (--install)");
+    if (!exact.test(scan.run.trim()))
+      out.push(name + ": the license scan step runs something besides the scan, which could swallow its failure");
+    const loud = (st, what) => {
+      if (st["continue-on-error"]) out.push(name + ": " + what + " may fail without failing the run (continue-on-error)");
+      if (st.if !== undefined) out.push(name + ": " + what + " is conditional, so some weekly runs skip it");
+    };
+    loud(job, "the license scan job");
+    loud(scan, "the license scan");
+    const needs = [].concat(job.needs ?? []);
+    if (!needs.includes("generate"))
+      out.push(name + ": the license scan does not run after generate, so it checks the old catalog");
+    const copyAt = steps.findIndex((st) => typeof st.run === "string" &&
+      /catalog-sync\/catalog-generated\.ts"?\s+src\/workflows\/pieces-library\/catalog-generated\.ts/.test(st.run));
+    if (copyAt < 0 || copyAt > scanAt) out.push(name + ": the license scan does not put the regenerated catalog in place first");
+    else {
+      loud(steps[copyAt], "putting the regenerated catalog in place");
+      if (steps[copyAt].run.trim() !== "cp \"$RUNNER_TEMP/catalog-sync/catalog-generated.ts\" src/workflows/pieces-library/catalog-generated.ts")
+        out.push(name + ": the step that puts the regenerated catalog in place runs something besides the copy");
+    }
+    const getAt = steps.findIndex((st) => String(st.uses ?? "").startsWith("actions/download-artifact@") && st.with?.name === "catalog-sync");
+    if (getAt < 0 || getAt > copyAt) out.push(name + ": the license scan does not download the generated catalog first");
+    else loud(steps[getAt], "downloading the generated catalog");
+  }
+  if (found.length !== 1) out.push("expected exactly one license scan step (scripts/check-piece-licenses.ts), found " + found.length);
 }
 if (rule === "pinned") {
   const uses = [];
@@ -3914,6 +3956,61 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 	expect_caught 'a registry login on a dry run' narrow "$WORKFLOWS/release-exec.yml" \
 		$'        if: env.DRY_RUN != \'true\'\n        uses: docker/login-action@' $'        uses: docker/login-action@'
 }
+echo
+echo "the catalog sync license-checks what the shared build would install, every week (#971)"
+expect_clean "sync-pieces-catalog.yml: one unconditional license scan of the regenerated catalog" \
+	license-scan "$WORKFLOWS/sync-pieces-catalog.yml"
+expect_caught 'the license scan removed' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'        run: bun run scripts/check-piece-licenses.ts --install' '        run: echo skipped scripts/check-piece-licenses --install' \
+	'expected exactly one license scan step'
+expect_caught 'the license scan allowed to fail' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'      - name: License-check the shared pieces tree' $'      - name: License-check the shared pieces tree\n        continue-on-error: true' \
+	'may fail without failing the run'
+expect_caught 'the license scan job allowed to fail' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'  licenses:\n    needs: generate\n' $'  licenses:\n    needs: generate\n    continue-on-error: true\n' \
+	'may fail without failing the run'
+expect_caught 'the license scan only when the catalog changed' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'  licenses:\n    needs: generate\n' $'  licenses:\n    needs: generate\n    if: needs.generate.outputs.has_changes == \x27true\x27\n' \
+	'is conditional'
+expect_caught 'the license scan failure swallowed' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'--summary-md "$GITHUB_STEP_SUMMARY"' '--summary-md "$GITHUB_STEP_SUMMARY" || true' \
+	'runs something besides the scan'
+expect_caught 'the license scan on the committed catalog' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'        run: cp "$RUNNER_TEMP/catalog-sync/catalog-generated.ts" src/workflows/pieces-library/catalog-generated.ts' '        run: ls "$RUNNER_TEMP/catalog-sync"' \
+	'does not put the regenerated catalog in place'
+expect_caught 'the license scan failure swallowed with an echo' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'--summary-md "$GITHUB_STEP_SUMMARY"' '--summary-md "$GITHUB_STEP_SUMMARY" || echo failed' \
+	'runs something besides the scan'
+expect_caught 'the license scan behind an earlier command that ends the step' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'        run: bun run scripts/check-piece-licenses.ts --install' '        run: true || bun run scripts/check-piece-licenses.ts --install' \
+	'runs something besides the scan'
+expect_caught 'the regenerated catalog put in place only sometimes' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'      - name: Use the regenerated catalog' $'      - name: Use the regenerated catalog\n        if: false' \
+	'putting the regenerated catalog in place is conditional'
+expect_caught 'the regenerated catalog put in place allowed to fail' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'      - name: Use the regenerated catalog' $'      - name: Use the regenerated catalog\n        continue-on-error: true' \
+	'putting the regenerated catalog in place may fail'
+expect_caught 'the regenerated catalog copy with its failure swallowed' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'src/workflows/pieces-library/catalog-generated.ts
+
+      # Installs' 'src/workflows/pieces-library/catalog-generated.ts || true
+
+      # Installs' \
+	'runs something besides the copy'
+expect_caught 'the regenerated catalog put in place after the scan' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'      - name: Use the regenerated catalog\n        run: cp "$RUNNER_TEMP/catalog-sync/catalog-generated.ts" src/workflows/pieces-library/catalog-generated.ts\n\n      # Installs into a fresh directory, the way scripts/build-shared-runtime.ts\n      # installs the hosted tree, then applies the same gate. Exit 1 names\n      # every denied package and the chain that installed it.\n      - name: License-check the shared pieces tree\n        run: bun run scripts/check-piece-licenses.ts --install "$RUNNER_TEMP/license-scan" --summary-md "$GITHUB_STEP_SUMMARY"\n' \
+	$'      - name: License-check the shared pieces tree\n        run: bun run scripts/check-piece-licenses.ts --install "$RUNNER_TEMP/license-scan" --summary-md "$GITHUB_STEP_SUMMARY"\n      - name: Use the regenerated catalog\n        run: cp "$RUNNER_TEMP/catalog-sync/catalog-generated.ts" src/workflows/pieces-library/catalog-generated.ts\n' \
+	'does not put the regenerated catalog in place first'
+expect_caught 'the generated catalog downloaded only sometimes' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: catalog-sync\n          path: ${{ runner.temp }}/catalog-sync\n\n      - name: Use the regenerated catalog' \
+	$'      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        if: false\n        with:\n          name: catalog-sync\n          path: ${{ runner.temp }}/catalog-sync\n\n      - name: Use the regenerated catalog' \
+	'downloading the generated catalog is conditional'
+expect_caught 'the license scan scanning without installing' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'check-piece-licenses.ts --install' 'check-piece-licenses.ts --dir' \
+	'does not install the catalog'
+expect_caught 'the license scan run from the write job' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'      - name: Update or close the review issue' $'      - run: echo go; scripts/check-piece-licenses.ts --dir x\n      - name: Update or close the review issue' \
+	'processes third-party data in a job holding'
 expect_caught 'an unfrozen install in the catalog sync' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \
 	'run: bun install --frozen-lockfile' 'run: bun install'
 expect_caught 'a write scope on the job that runs the catalog generator' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \

@@ -52,6 +52,7 @@ import { createFlowRun } from '../../workflows/db/repos/flow-run.ts';
 import { AuthorityEngine } from '../../authority/engine.ts';
 import { EmergencyController } from '../../authority/emergency.ts';
 import { sanitizedEnv } from '../../util/subprocess-env.ts';
+import { RealtimeTaint } from '../../agents/realtime-taint.ts';
 
 const DOT_GIT = '.git';
 const GIT_CONFIG = '[core]\n\trepositoryformatversion = 0\n';
@@ -821,7 +822,7 @@ describe('the chat gate pins the path before it asks', () => {
     orch.setAuditTrail(new AuditTrail());
     orch.createPrimary({ id: 'personal-assistant', name: 'PA', description: 't', responsibilities: [], tools: ['file-ops'],
       authority_level: 10 } as never);
-    await orch.executeRealtimeToolCall('write_file', { path: 'x' }, {});
+    await orch.executeRealtimeToolCall('write_file', { path: 'x' }, { taint: new RealtimeTaint() });
     expect(seen).toEqual([{ gated: true }, { ran: true }]);
   });
 

@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     # Above the release-executor watch bound (WATCH_TIMEOUT_SECONDS below,
     # 300 minutes), so the watch fails with a message first; see that step.
-    timeout-minutes: 330
+    timeout-minutes: 355
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -212,15 +212,17 @@ jobs:
           # checkout and merge) fails fast because retrying cannot fix it.
           #
           # The other is the required check (#929). main has required `test`
-          # since 2026-10-05, it takes about 11 minutes (measured 10m49s, run
-          # 37949458219), and a merely PENDING required check refuses the merge
+          # since 2026-10-05. It took about 11 minutes then (10m49s, run
+          # 37949458219) and about 25 now (24m31s on #1112, 2026-10-23, which
+          # is why the v0.17.0 cut timed out at 20). A merely PENDING required
+          # check refuses the merge
           # exactly as a missing one does. This loop used to allow 10 tries at
           # 5s -- 50 seconds -- which no required check could ever have
           # satisfied; it went unnoticed because no release has run since.
           #
-          # Bounded at 20 minutes: this job has 330 and the release watch below
-          # takes 300, leaving 30 for everything before it.
-          DEADLINE=$(( $(date +%s) + 1200 ))
+          # Bounded at 45 minutes: this job has 355 and the release watch below
+          # takes 300, leaving 55 for everything before it.
+          DEADLINE=$(( $(date +%s) + 2700 ))
           MERGED=0
           while [ "$(date +%s)" -lt "$DEADLINE" ]; do
             STATUS=$(gh pr view "$PR_URL" --json mergeable --jq .mergeable || true)
@@ -237,7 +239,7 @@ jobs:
             sleep 20
           done
           if [ "$MERGED" != 1 ]; then
-            echo "Could not merge release PR ${PR_URL} within 20 minutes."
+            echo "Could not merge release PR ${PR_URL} within 45 minutes."
             echo "If its checks never started, it was opened without RELEASE_PR_TOKEN (#929)."
             gh pr checks "$PR_URL" || true
             exit 1
@@ -289,7 +291,7 @@ jobs:
       # (v0.7.0). It also covers the `release` environment approvals, which
       # wait for a person, and the release-exec concurrency queue, so the
       # bound is 5 hours: under the 6 a hosted job may run, with the job
-      # timeout at 330 minutes leaving 30 for the steps before this one.
+      # timeout at 355 minutes leaving 55 for the steps before this one.
       # Hitting it does not stop the release; it only stops this job waiting.
       #
       # This job now holds the `release` concurrency group until the release

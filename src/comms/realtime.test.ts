@@ -45,6 +45,9 @@ describe('buildSessionUpdate', () => {
     expect('model' in msg.session).toBe(false);
     expect(msg.session.reasoning).toEqual({ effort: 'medium' });
     expect(msg.session.audio.input.format).toEqual({ type: 'audio/pcm', rate: 24000 });
+    // The user's transcript is what clears a voice session's taint (#1007);
+    // without this the server never sends it.
+    expect(msg.session.audio.input.transcription).toEqual({ model: 'gpt-4o-mini-transcribe' });
     expect(msg.session.audio.output.format).toEqual({ type: 'audio/pcm', rate: 24000 });
     expect(msg.session.audio.output.voice).toBe('marin');
     expect(msg.session.tools).toHaveLength(1);
@@ -213,6 +216,32 @@ describe('RealtimeSession lifecycle', () => {
     expect(got).toEqual([
       { role: 'user', text: 'hello', final: true },
       { role: 'assistant', text: 'hi there', final: true },
+    ]);
+  });
+
+  // #1007: input transcription is billed apart from the response tokens.
+  test('an input transcription\'s usage is emitted, tokens or duration, even with no words', async () => {
+    const { socket, session } = makeSession();
+    const got: unknown[] = [];
+    session.onTranscriptionUsage((u) => got.push(u));
+    await session.connect();
+    socket.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'i1', transcript: 'hello',
+      usage: { type: 'tokens', input_tokens: 120, output_tokens: 4, total_tokens: 124, input_token_details: { audio_tokens: 120, text_tokens: 0 } } });
+    socket.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'i2', transcript: '',
+      usage: { type: 'tokens', input_tokens: 30, output_tokens: 0, total_tokens: 30 } });
+    socket.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'i3', transcript: 'hi',
+      usage: { type: 'duration', seconds: 2.5 } });
+    socket.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'i4', transcript: 'no usage' });
+    socket.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'i5', transcript: 'junk',
+      usage: { type: 'tokens', input_tokens: 'many', output_tokens: -3 } });
+    // Mixed: the valid count is kept, the negative one clamped to 0.
+    socket.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'i6', transcript: 'mixed',
+      usage: { type: 'tokens', input_tokens: 100, output_tokens: -3 } });
+    expect(got).toEqual([
+      { input_tokens: 120, output_tokens: 4 },
+      { input_tokens: 30, output_tokens: 0 },
+      { input_tokens: 0, output_tokens: 0, seconds: 2.5 },
+      { input_tokens: 100, output_tokens: 0 },
     ]);
   });
 
@@ -462,6 +491,28 @@ describe('RealtimeSession lifecycle', () => {
     socket.emit({ type: 'response.created' });
     socket.emit({ type: 'response.output_audio.delta', delta: Buffer.from([5, 6]).toString('base64') });
     expect(sentAudio).toHaveLength(2);
+  });
+
+  test('barge-in drops the cancelled response\'s trailing transcript fragments, not its final', async () => {
+    const { socket, session } = makeSession();
+    const got: Array<{ role: string; text: string; final: boolean; interrupted?: boolean }> = [];
+    session.onTranscript((t) => got.push(t));
+    await session.connect();
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.output_audio_transcript.delta', delta: 'Here is' });
+    socket.emit({ type: 'input_audio_buffer.speech_started' });
+    // Unheard words from the cancelled reply.
+    socket.emit({ type: 'response.output_audio_transcript.delta', delta: ' the rest' });
+    socket.emit({ type: 'response.output_audio_transcript.done', transcript: 'Here is the rest' });
+    // The final still reaches the dashboard, which shows only finals.
+    expect(got).toEqual([
+      { role: 'assistant', text: 'Here is', final: false },
+      { role: 'assistant', text: 'Here is the rest', final: true, interrupted: true },
+    ]);
+    // The next reply is shown again.
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.output_audio_transcript.done', transcript: 'Okay.' });
+    expect(got.at(-1)).toEqual({ role: 'assistant', text: 'Okay.', final: true });
   });
 
   test('response.done emits a usage event with token totals and latency', async () => {
