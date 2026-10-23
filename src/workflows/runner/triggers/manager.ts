@@ -1,3 +1,4 @@
+import { gmailAttachmentKey, isGmailAttachmentTrigger } from '../../runtime/gmail-attachment';
 import { prepareEmailEvent } from '../../runtime/event-types';
 import { submissionConfig } from '../../runtime/form-submission';
 import { workflowRemovalState, workflowTriggerCurrent } from '../../db/repos/workflow-removal-state';
@@ -1144,7 +1145,8 @@ export class TriggerManager {
       try {
         const result = this.startRun({
           flowId, versionId, generation, kind: "engine", source: fireSource, payload, executeTrigger: false,
-          dedupeKey: pureSchedule ? occurrence?.key : eventItemKey(payload),
+          dedupeKey: pureSchedule ? occurrence?.key : isGmailAttachmentTrigger(version.trigger.settings)
+            ? gmailAttachmentKey(payload, flowId, getFlow(flowId)!.project_id) : eventItemKey(payload),
           // The poll moved the source's cursor past it (Pause may have come mid-poll).
           ...(pureSchedule ? {} : { takenFromSource: true }),
           ...(pureSchedule ? { scheduledFor: occurrence?.at, lateMs: occurrence?.lateMs, ...shiftedDetail(occurrence) } : {}),

@@ -1,6 +1,7 @@
 import { prepareSubmission, submissionConfig } from '../runtime/form-submission';
 import { prepareEmailEvent } from '../runtime/event-types';
-import { claimEmailRun, claimSubmissionRun } from '../db/repos/trigger-fire';
+import { gmailAttachmentKey, isGmailAttachmentTrigger } from '../runtime/gmail-attachment';
+import { claimAttachmentRun, claimEmailRun, claimSubmissionRun } from '../db/repos/trigger-fire';
 /**
  * RUN_FLOW worker handler. Bridges the queue to flow execution:
  *   1. Claim a RUN_FLOW job (the worker has already done that for us).
@@ -300,6 +301,12 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
           claimEmailRun(run.flowId, version.id, prepared.key, run.id);
           payload = prepared.data;
         } catch (error) { throw new FlowExecutionError((error as Error).message, { name: 'trigger', displayName: 'Check Gmail message identity' }); }
+      }
+      if (!resuming && isGmailAttachmentTrigger(triggerSettings)) {
+        try {
+          if (typed.payload.stepNameToTest || typed.payload.executeTrigger) throw Error('Test the complete attachment workflow with an emitted attachment payload; isolated step previews and trigger reexecution bypass attachment admission.');
+          claimAttachmentRun(run.flowId, version.id, gmailAttachmentKey(payload, run.flowId, run.projectId), run.id);
+        } catch (error) { throw new FlowExecutionError((error as Error).message, { name: 'trigger', displayName: 'Check attachment identity' }); }
       }
       const result = await withRunCancellation(runId, () => opts.executor.execute({
         run,

@@ -252,6 +252,12 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         validateCronTimezone(input.timezone);
       } catch (error) { issue(node, 'settings.input.cronExpression', 'CRON', (error as Error).message); }
     }
+    // Explicit null keeps an intentionally deferred scope visible. Omission still
+    // means the connector's documented default (all labels / root folder).
+    if (input?.label === null && root && pieceName === '@activepieces/piece-gmail' && settings.triggerName === 'new_attachment')
+      needsSetup(node, 'settings.input.label', 'Select the Gmail label before processing attachments');
+    if (input?.parentFolder === null && pieceName === '@activepieces/piece-google-drive' && settings.actionName === 'upload_gdrive_file')
+      needsSetup(node, 'settings.input.parentFolder', 'Select the destination Drive folder');
     if (type === 'PIECE' || type === 'PIECE_TRIGGER') {
       if (root && pieceName === 'schedule') {
         const cron = input?.cron_expression || input?.cronExpression || input?.expression;

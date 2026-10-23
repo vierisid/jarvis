@@ -90,8 +90,8 @@ export interface FireInput {
 }
 
 /** Email identities are shared only between their two event delivery paths. */
-function emailIdentity(input: Pick<FireInput, 'source' | 'dedupeKey'>): boolean {
-  return (input.source === 'event' || input.source === 'poll') && input.dedupeKey?.startsWith('event:email:') === true;
+function retainedIdentity(input: Pick<FireInput, 'source' | 'dedupeKey'>): boolean {
+  return (input.source === 'event' || input.source === 'poll') && (input.dedupeKey?.startsWith('event:email:') === true || /^attachment:v1:[a-f0-9]{64}$/.test(input.dedupeKey ?? ''));
 }
 
 /**
@@ -147,7 +147,7 @@ export function repeatOf(input: { flowId: string; source: FireSource; dedupeKey:
   return db().transaction((): TriggerFire | null => {
     const existing = db().query<FireRow, [string, string, number, string, number]>(
       `SELECT * FROM workflow_trigger_fire WHERE flow_id = ? AND (source = ? OR (? = 1 AND source IN ('event', 'poll'))) AND dedupe_key = ? AND observed_at >= ?`,
-    ).get(input.flowId, input.source, Number(emailIdentity(input)), input.dedupeKey, emailIdentity(input) ? 0 : input.duplicateSince ?? 0);
+    ).get(input.flowId, input.source, Number(retainedIdentity(input)), input.dedupeKey, retainedIdentity(input) ? 0 : input.duplicateSince ?? 0);
     if (!existing) return null;
     db().run(`UPDATE workflow_trigger_fire SET repeats = repeats + 1, last_repeat_at = ? WHERE id = ?`, [Date.now(), existing.id]);
     return getFire(existing.id);
@@ -174,7 +174,7 @@ export function claimFire(input: FireInput & { duplicateSince?: number }, start:
     if (input.dedupeKey) {
       const existing = db().query<FireRow, [string, string, number, string, number]>(
         `SELECT * FROM workflow_trigger_fire WHERE flow_id = ? AND (source = ? OR (? = 1 AND source IN ('event', 'poll'))) AND dedupe_key = ? AND observed_at >= ?`,
-      ).get(input.flowId, input.source, Number(emailIdentity(input)), input.dedupeKey, emailIdentity(input) ? 0 : input.duplicateSince ?? 0);
+      ).get(input.flowId, input.source, Number(retainedIdentity(input)), input.dedupeKey, retainedIdentity(input) ? 0 : input.duplicateSince ?? 0);
       if (existing) {
         db().run(`UPDATE workflow_trigger_fire SET repeats = repeats + 1, last_repeat_at = ? WHERE id = ?`, [now, existing.id]);
         return { outcome: "duplicate", fire: getFire(existing.id)! };
@@ -182,7 +182,7 @@ export function claimFire(input: FireInput & { duplicateSince?: number }, start:
     }
     const id = apId();
     // A key older than the duplicate window is released before it is reused.
-    if (input.dedupeKey && input.duplicateSince && !emailIdentity(input)) {
+    if (input.dedupeKey && input.duplicateSince && !retainedIdentity(input)) {
       db().run(`UPDATE workflow_trigger_fire SET dedupe_key = NULL WHERE flow_id = ? AND source = ? AND dedupe_key = ?`,
         [input.flowId, input.source, input.dedupeKey]);
     }
@@ -298,7 +298,7 @@ export function fireLabel(fire: TriggerFire, runStatus: string | null, now = Dat
 
 /** Prune ordinary history. Keep accepted form and email identities for the lifetime of the workflow. */
 export function pruneFires(now = Date.now()): number {
-  return db().run(`DELETE FROM workflow_trigger_fire WHERE observed_at < ? AND (NOT ((source = 'webhook' AND dedupe_key LIKE 'submission:v1:%') OR (source IN ('event', 'poll') AND dedupe_key LIKE 'event:email:%')) OR dedupe_key IS NULL OR NOT EXISTS (SELECT 1 FROM flow WHERE flow.id = workflow_trigger_fire.flow_id))`, [now - FIRE_RETENTION_MS]).changes;
+  return db().run(`DELETE FROM workflow_trigger_fire WHERE observed_at < ? AND (NOT ((source = 'webhook' AND dedupe_key LIKE 'submission:v1:%') OR (source IN ('event', 'poll') AND (dedupe_key LIKE 'event:email:%' OR dedupe_key LIKE 'attachment:v1:%'))) OR dedupe_key IS NULL OR NOT EXISTS (SELECT 1 FROM flow WHERE flow.id = workflow_trigger_fire.flow_id))`, [now - FIRE_RETENTION_MS]).changes;
 }
 
 export interface ScheduleWatch { flowId: string; expression: string; watchedSince: number }
@@ -345,5 +345,18 @@ export function claimEmailRun(flowId: string, versionId: string, key: string, ru
     if (previous) throw Error('This Gmail message was already accepted by this workflow. No new classification, label or notification was attempted. Inspect the original run to reconcile an uncertain outcome.');
     claimFire({ flowId, flowVersionId: versionId, source: 'event', dedupeKey: key,
       detail: { delivery: 'Gmail message ID' } }, () => ({ runId }));
+  }).immediate();
+}
+
+/** The attachment content belongs to one run for the lifetime of this workflow. */
+export function claimAttachmentRun(flowId: string, versionId: string, key: string, runId: string): void {
+  if (!/^attachment:v1:[a-f0-9]{64}$/.test(key)) throw Error('Invalid attachment identity');
+  db().transaction(() => {
+    const previous = db().query<{ run_id: string | null }, [string, string]>(
+      "SELECT run_id FROM workflow_trigger_fire WHERE flow_id = ? AND source IN ('event', 'poll') AND dedupe_key = ?").get(flowId, key);
+    if (previous?.run_id === runId) return;
+    if (previous) throw Error('This attachment was already accepted by this workflow. Inspect the original run and its Drive/Sheets receipts; a fresh run cannot repeat an uncertain write.');
+    claimFire({ flowId, flowVersionId: versionId, source: 'poll', dedupeKey: key,
+      detail: { delivery: 'Gmail attachment content' } }, () => ({ runId }));
   }).immediate();
 }

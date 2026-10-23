@@ -167,12 +167,10 @@ function pieceKind(pieceName: string, actionName: string | undefined): Kind | nu
   if (samePiece(pieceName, AGENT)) return { effect: 'spawn_agent', open: 'delegates to an agent, which chooses its own tools when it runs', agent: true };
   if (samePiece(pieceName, WORKFLOW)) return { effect: 'spawn_agent', open: 'starts another workflow, whose steps this check does not see' };
   const adapter = ALL_PIECE_ADAPTERS.find(a => samePiece(pieceName, a.pieceName));
-  if (adapter) {
-    if (!actionName) return null;
-    const governed = resolveGovernedPieceAction(adapter.pieceName, actionName);
-    if (!governed) return null;
-    // An action decided by its input (an HTTP request's method, #961) is open
-    // here: a contract names the step, not the value, so only the worst case bounds it.
+  const canonicalPiece = adapter?.pieceName ?? (samePiece(pieceName, '@activepieces/piece-google-sheets') ? '@activepieces/piece-google-sheets' : pieceName);
+  const governed = actionName ? resolveGovernedPieceAction(canonicalPiece, actionName) : null;
+  if (governed && actionName) {
+    // Input-dependent categories, including HTTP methods, remain open contracts.
     return OPEN_ACTIONS.has(actionName) || !governed.known || governed.byInput
       ? { effect: governed.category, open: `uses ${pieceName} ${actionName}, whose effect depends on the call`, serviceOnly: true }
       : { effect: governed.category };

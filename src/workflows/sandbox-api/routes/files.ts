@@ -124,6 +124,7 @@ export const stepFilesDownloadRoute: RouteHandler = async (ctx: RouteContext) =>
     headers: {
       "Content-Type": "application/octet-stream",
       "Content-Length": String(row.size),
+      "Content-Disposition": `attachment; filename="${safeBasename(row.fileName ?? "file")}"`,
     },
   });
 };
