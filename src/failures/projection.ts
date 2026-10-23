@@ -112,6 +112,7 @@ const OFFLINE_CODES = new Set(['WORKFLOW_MACHINE_OFFLINE', 'WORKFLOW_MACHINE_UNA
  * too old for a reviewed action (Q-09). Each refused before anything ran.
  */
 const NAMED_REFUSALS: Record<string, { category: FailureCategory; why: string; step: RecoveryStep }> = {
+  WORKFLOW_BROWSER_REVIEW_STALE: { category: 'missing_binding', why: 'the reviewed browser session changed or Jarvis restarted', step: 'ask_again' },
   WORKFLOW_MACHINE_REPLACED: { category: 'missing_binding', why: 'the computer it was enabled for is no longer enrolled', step: 'accept_binding_change' },
   WORKFLOW_FACT_STALE: { category: 'missing_binding', why: 'a recipient it sends to is no longer current in memory', step: 'update_recipient' },
   WORKFLOW_FACT_AMBIGUOUS: { category: 'missing_binding', why: 'memory holds conflicting values for a recipient it sends to', step: 'update_recipient' },
@@ -231,6 +232,12 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
   switch (evidence.source) {
     case 'action': {
       const o = evidence.outcome, code = o.code || null, detail = `${o.status} ${o.code}: ${o.message}`;
+      if (code === 'REQUIRED_TOOL_NOT_COMPLETED') {
+        const uncertain = o.effect === 'may_have_occurred' || o.status === 'unknown';
+        return build(uncertain ? 'uncertain_effect' : 'not_started', uncertain ? 'unknown' : 'none',
+          `${s} could not complete the tools required for its task.`, uncertain ? MAYBE : NOTHING,
+          ['review_authority', 'open_details'], links, code, detail);
+      }
       // Whatever the code, an outcome that may have occurred is uncertain: never "nothing happened".
       if (o.status === 'unknown' || o.effect === 'may_have_occurred') {
         return build('uncertain_effect', 'unknown', `${s} may or may not have taken effect.`, MAYBE,

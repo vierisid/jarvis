@@ -1,3 +1,5 @@
+import { getDelegation } from '../db/repos/delegation';
+import { digest } from './effect-context';
 /**
  * Q-19: a failed run as the person reads it, one projection that Runs and
  * Today both show. Derived on read from the run row and its effect records and
@@ -152,11 +154,15 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
   const label = `The step "${step.displayName}"`;
   const own = records.filter(effect => effect.stepName === step.name).sort((a, b) => a.createdAt - b.createdAt);
   const record = own.findLast(effect => failure(effect) !== null);
-  const outcome = record ? failure(record) : null;
+  const checkpoint = getDelegation('wfd_' + digest([run.id, step.name, []]));
+  const delegated = checkpoint?.runId === run.id && checkpoint.stepName === step.name
+    && checkpoint.versionDigest === digest(getFlowVersion(run.flowVersionId)?.trigger)
+    ? checkpoint.result?.outcome : undefined;
+  const outcome = (record ? failure(record) : null) ?? (delegated && delegated.status !== 'succeeded' ? delegated : null);
   let evidence: FailureEvidence;
   let sideEffects = true;
   const node = graph.find(n => n.name === step.name);
-  const binding = !(record && outcome) && node ? credentialFailureFor(run, node) : null;
+  const binding = !outcome && node ? credentialFailureFor(run, node) : null;
   if (binding?.credentialFailure) {
     // A typed reason recorded by the connection fetch: that fetch handed nothing out.
     const { code, message } = binding.credentialFailure;
@@ -171,9 +177,9 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
       : typed;
     return withOtherSteps(reading, otherSteps(run, records, graph, step.name), 'Steps before it');
   }
-  if (record && outcome) {
-    Object.assign(links, { effectId: record.id, ...(record.approvalId ? { approvalId: record.approvalId } : {}) });
-    const provider = record.route === 'llm' ? providerCode(outcome.code) : null;
+  if (outcome) {
+    if (record) Object.assign(links, { effectId: record.id, ...(record.approvalId ? { approvalId: record.approvalId } : {}) });
+    const provider = record?.route === 'llm' ? providerCode(outcome.code) : null;
     if (provider) {
       // An AI call changes nothing outside Jarvis; what failed is the provider.
       evidence = { source: 'provider', code: provider, message: outcome.message };

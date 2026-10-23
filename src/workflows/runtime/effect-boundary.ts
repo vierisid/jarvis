@@ -1,3 +1,4 @@
+import type { ToolRegistry } from '../../actions/tools/registry';
 import { collectActionVerification } from '../../actions/action-verification';
 import type { ActionOutcome } from '../../actions/action-outcome';
 import { projectDocument } from './decision-document';
@@ -62,6 +63,8 @@ export interface EffectInvocation {
   documentReview?: boolean;
   /** A reviewed UI capability cannot be auto-allowed by category overrides. */
   confirmation?: { confirm: 'always'; intent: string };
+  /** Process-bound browser review; never reconstructed after restart. */
+  reviewRegistry?: ToolRegistry;
   prepare: () => { arguments: Record<string, unknown>; target: Record<string, unknown>; bindings?: Record<string, unknown> };
   validateTarget?: (args: Record<string, unknown>, target: Record<string, unknown>) => void;
   /**
@@ -511,7 +514,8 @@ export class WorkflowEffectBoundary {
               // the decision: `approvalNeedsClick` reads it, so voice and
               // auto-approval cannot satisfy this card.
               ...(input.confirmation ? { confirm: input.confirmation.confirm } : {}),
-              ...(intent ? { intent } : {}) }), executionMode: 'workflow' });
+              ...(intent ? { intent } : {}) }), executionMode: 'workflow',
+            ...(input.reviewRegistry ? { toolRegistry: input.reviewRegistry } : {}) });
           record.approvalId = request.id;
           delete record.deferral;
           record.waitpointId = createWaitpoint({ flowRunId: record.runId, projectId: record.projectId,

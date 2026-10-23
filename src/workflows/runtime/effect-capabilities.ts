@@ -49,7 +49,10 @@ export const OPAQUE_TOOL_NAMES: ReadonlySet<string> = OPAQUE_TOOLS;
 export const GATED_TOOL_NAMES: ReadonlySet<string> = GATED_TOOLS;
 
 /**
- * Why this call cannot be approved through the boundary at all, or null.
+ * Why this call has no durable approval adapter, or null.
+ * The delegated browser path may instead use ApprovalManager's process-bound
+ * live guard. That path refuses stale/restarted sessions and never persists a
+ * substitute surface identity; direct tool steps still use this refusal.
  *
  * #638, and DEFENCE IN DEPTH rather than a plugged hole -- stated plainly
  * because the issue reads as the latter and the distinction is the whole value

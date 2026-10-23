@@ -298,9 +298,9 @@ export class WorkflowContext {
         }
       }
     }
-    const effects = this.effects(r).map((e, i) => ({ id: safeName(e.id, `receipt-${i}`), label: `Effect receipt ${i + 1}`,
+    const effects = this.effects(r).map((e, i) => ({ id: safeName(e.id, `receipt-${i}`), label: e.route === 'agent' ? 'Agent dispatch authorization' : `Effect receipt ${i + 1}`,
       status: ['pending','dispatching','succeeded','failed','blocked','unknown'].includes(String(e.status)) ? e.status as InspectionRunDetail['effects'][number]['status'] : 'unknown' as const,
-      description: 'Recorded effect status. Arguments, results and free text use conservative redaction.',
+      description: e.route === 'agent' ? 'This records permission to start the agent, not whether its task succeeded.' : 'Recorded effect status. Arguments, results and free text use conservative redaction.',
       fields: [inspectionValue('Arguments', e.arguments), inspectionValue('Result', e.result), inspectionValue('Outcome', e.outcome)] }));
     const waits = this.boundedRows(this.db.query<{ rowid: number; step_name: string; type: string; resumed_at: number | null }, [string, string]>(
       'SELECT rowid,step_name,type,resumed_at FROM waitpoint WHERE flow_run_id=? AND project_id=? ORDER BY rowid LIMIT 201').all(r.id, this.projectId))
@@ -324,7 +324,8 @@ export class WorkflowContext {
         canReplay: false as const, newRunRequired: true as const } : null,
       trigger: null, finishedAt: r.finish_time,
       steps: entries.map(([name, raw, path]) => { const s = object(raw) ? raw : {};
-        return { id: `step-${path}`, title: `Step ${name}`, description: 'Recorded step input and output.',
+        return { id: `step-${path}`, title: `Step ${name}`, description: failure && name === run.failedStep?.name
+          ? [failure.headline, failure.outcome, ...failure.next.map(n => n.label)].join(' ') : 'Recorded step input and output.',
           status: typeof s.status === 'string' ? status(s.status) : 'uncertain',
           fields: [inspectionValue('Input', s.input), inspectionValue('Output', s.output)] }; }),
       effects, waits, context: used,

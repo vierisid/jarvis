@@ -503,3 +503,18 @@ test('a receipt stored before the short label reads back with it, by recovery an
   expect(service.request(flowId, 'fixture-request').run.label).toBe(`Run ${id.slice(-6)}`);
   expect(service.start(flowId, command()).run).toEqual(accepted.run);
 });
+
+
+test('failed step explains the safe failure and distinguishes spawn permission from task success', () => {
+  const r = run();
+  saveWorkflowEffect({ ...effect(r.id, 'blocked'), route: 'agent-tool:1', outcome: { status: 'blocked',
+    code: 'WORKFLOW_BROWSER_REVIEW_STALE', effect: 'not_started', message: 'private browser detail' } });
+  saveWorkflowEffect({ ...effect(r.id, 'succeeded'), id: 'spawn-auth', route: 'agent', result: { dispatch: 'authorized' } });
+  updateRun(r.id, { status: 'FAILED', failedStep: { name: 'trigger', displayName: 'Read Calendar' },
+    steps: { trigger: { status: 'FAILED', input: {}, errorMessage: 'private browser detail' } } });
+  const detail = service.detail(flowId, r.id);
+  expect(detail.steps[0]!.description).toContain('reviewed browser session changed');
+  expect(detail.effects.find(e => e.id === 'spawn-auth')).toMatchObject({ label: 'Agent dispatch authorization',
+    description: 'This records permission to start the agent, not whether its task succeeded.' });
+  expect(JSON.stringify(detail)).not.toContain('private browser detail');
+});

@@ -1,3 +1,4 @@
+import { currentReviewedExecution } from '../../actions/tools/reviewed-call-scope';
 import { stopUnfinishedRunsForKill } from './emergency-hold';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -80,6 +81,7 @@ type Options = {
   childLevel?: number;
   /** Behaviour of the synthetic tools. */
   writeThrows?: boolean;
+  browserGuard?: () => boolean;
   writeUnknown?: boolean;
   /** The write pauses the system and hits the boundary's fence while it runs. */
   writeInterrupts?: boolean;
@@ -143,6 +145,14 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
     authorityGate: () => ({ actionCategory: 'control_app', intent: 'tap a widget' }),
     captureApprovalGuard: () => () => true,
     execute: async () => { effects++; return 'tapped'; } });
+  for (const name of ['browser_navigate', 'browser_click', 'browser_scroll']) registry.register({ name, category: 'browser', description: 'Synthetic browser navigation', parameters: {},
+    captureApprovalGuard: () => Object.assign(() => opts.browserGuard?.() ?? true, { reviewed: { remoteBrowserSnapshot: { sidecarId: 'test-computer', elemGen: 'reviewed-generation' } } }),
+    execute: async () => {
+      expect(currentReviewedExecution()?.remoteBrowserSnapshot).toEqual({ sidecarId: 'test-computer', elemGen: 'reviewed-generation' });
+      effects++; return 'Calendar page';
+    } });
+  registry.register({ name: 'browser_snapshot', category: 'browser', description: 'Synthetic bounded browser read', parameters: {},
+    execute: async () => { effects++; return 'Calendar snapshot'; } });
   const authority = new AuthorityEngine({ default_level: opts.authority?.default_level ?? 10,
     governed_categories: (opts.authority?.governed_categories ?? ['write_data']) as any, overrides: (opts.authority?.overrides ?? []) as any,
     context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' });
@@ -1311,3 +1321,94 @@ test.skipIf(engineSkip)('parent failure retires a required child approval on the
     expect(f.effects()).toBe(0);
   } finally { await f.stop(); }
 }, 60_000);
+
+
+describe('workflow browser review', () => {
+  const options = { authority: { governed_categories: [] }, script: [{ call: 'browser_navigate', args: { url: 'https://calendar.example/', target: 'test-computer' } }, 'finish'] as Turn[] };
+  test('requires a dashboard click even with permissive Authority and dispatches only once', async () => {
+    const ids = createRun(); const f = backends(ids, options);
+    const parked = await f.delegate({ requiredTools: ['browser_navigate'] });
+    expect(parked.status).toBe('approval_required'); expect(f.effects()).toBe(0);
+    const card = f.approvals.getRequest(parked.approval!.approvalId)!;
+    expect(JSON.parse(card.context)).toMatchObject({ confirm: 'always' });
+    expect(JSON.parse(card.tool_arguments)).toEqual(options.script[0] && (options.script[0] as any).args);
+    f.approvals.approve(card.id, 'dashboard');
+    const done = await f.delegate({ requiredTools: ['browser_navigate'] });
+    expect(done.outcome).toEqual({ status: 'succeeded' }); expect(f.effects()).toBe(1);
+    await f.delegate({ requiredTools: ['browser_navigate'] }); expect(f.effects()).toBe(1);
+  });
+  test('stale browser guard blocks approved execution', async () => {
+    let current = true; const ids = createRun();
+    const f = backends(ids, { ...options, browserGuard: () => current });
+    const parked = await f.delegate(); f.approvals.approve(parked.approval!.approvalId, 'dashboard'); current = false;
+    await f.delegate(); expect(f.effects()).toBe(0);
+    expect(listWorkflowEffects(ids.run.id).at(-1)?.outcome).toMatchObject({ code: 'WORKFLOW_BROWSER_REVIEW_STALE', effect: 'not_started' });
+  });
+  test('restart cannot reconstruct an approved live browser binding', async () => {
+    const ids = createRun(); const f = backends(ids, options); const parked = await f.delegate();
+    f.approvals.approve(parked.approval!.approvalId, 'dashboard');
+    const resumed = backends(ids, options); await resumed.delegate(); expect(resumed.effects()).toBe(0);
+    expect(listWorkflowEffects(ids.run.id).at(-1)?.outcome).toMatchObject({ code: 'WORKFLOW_BROWSER_REVIEW_STALE' });
+  });
+  test('denying browser review never navigates', async () => {
+    const ids = createRun(); const f = backends(ids, options); const parked = await f.delegate();
+    f.approvals.deny(parked.approval!.approvalId, 'dashboard'); await f.delegate(); expect(f.effects()).toBe(0);
+  });
+});
+
+
+test.skipIf(engineSkip)('browser delegation pauses the real engine, then resumes once after dashboard approval', async () => {
+  const ids = createRun({ requiredTools: 'browser_navigate,browser_snapshot', requireSuccess: true });
+  updateRun(ids.run.id, { status: 'QUEUED' });
+  const f = await boot(ids, { childLevel: 3, authority: { default_level: 3, governed_categories: [] },
+    script: [{ call: 'browser_navigate', args: { url: 'https://calendar.example/', target: 'test-computer' } }, { call: 'browser_snapshot', args: { target: 'test-computer' } }, 'finish'] });
+  try {
+    enqueue({ jobType: 'RUN_FLOW', flowRunId: ids.run.id, maxAttempts: 1, payload: { runId: ids.run.id } });
+    await f.worker.drain();
+    expect(getFlowRun(ids.run.id)!.status).toBe('PAUSED'); expect(f.effects()).toBe(0);
+    f.approvals.approve(f.approvals.getPending()[0]!.id, 'dashboard');
+    expect(resumeResolvedWorkflowEffects()).toBe(1);
+    await f.worker.drain();
+    expect(getFlowRun(ids.run.id)!.status).toBe('PAUSED'); expect(f.effects()).toBe(1);
+    expect(f.approvals.getPending()[0]!.tool_name).toBe('browser_snapshot');
+    f.approvals.approve(f.approvals.getPending()[0]!.id, 'dashboard');
+    expect(resumeResolvedWorkflowEffects()).toBe(1); await f.worker.drain();
+    expect(getFlowRun(ids.run.id)!.status).toBe('SUCCEEDED'); expect(f.effects()).toBe(2);
+    expect(resumeResolvedWorkflowEffects()).toBe(0);
+  } finally { await f.stop(); }
+}, 60_000);
+
+
+test('each browser action pauses independently, including after outside content', async () => {
+  const ids = createRun();
+  const names = ['browser_navigate', 'browser_click', 'browser_scroll'];
+  const f = backends(ids, { taintGating: true, distinctChildren: true, authority: { governed_categories: [] },
+    script: [...names.map(call => ({ call, args: { target: 'test-computer' } })), 'finish'] });
+  for (let i = 0; i < names.length; i++) {
+    const paused = await f.delegate({ requiredTools: names });
+    expect(paused.status).toBe('approval_required'); expect(f.effects()).toBe(i);
+    expect(f.approvals.getRequest(paused.approval!.approvalId)!.tool_name).toBe(names[i]!);
+    f.approvals.approve(paused.approval!.approvalId, 'dashboard');
+  }
+  expect((await f.delegate({ requiredTools: names })).outcome).toEqual({ status: 'succeeded' });
+  expect(f.effects()).toBe(3);
+});
+
+
+test('browser review never lifts an explicit Authority denial', async () => {
+  const ids = createRun();
+  const f = backends(ids, { childLevel: 3, authority: { default_level: 3, overrides: [{ scope: 'action', target: 'control_app', policy: 'deny' }] },
+    profileFor: () => ({ denied_categories: ['control_app'] }),
+    script: [{ call: 'browser_navigate' }, 'finish'] });
+  await f.delegate(); expect(f.effects()).toBe(0); expect(f.approvals.getPending()).toHaveLength(0);
+});
+
+
+test('browser approval rechecks both browser access and UI control after the card waits', async () => {
+  const ids = createRun(); let profile: import('../../authority/engine').AuthorityProfile | null = null;
+  const f = backends(ids, { profileFor: () => profile, script: [{ call: 'browser_navigate' }, 'finish'] });
+  const parked = await f.delegate(); expect(parked.status).toBe('approval_required');
+  profile = { denied_categories: ['access_browser'] };
+  f.approvals.approve(parked.approval!.approvalId, 'dashboard');
+  await f.delegate(); expect(f.effects()).toBe(0);
+});
