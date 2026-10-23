@@ -16,7 +16,7 @@
  * No-op when the manifest is empty.
  */
 
-import { existsSync, mkdirSync, promises as fs } from "node:fs";
+import { existsSync, mkdirSync, promises as fs, readFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import {
   piecesBaseDir,
@@ -27,7 +27,7 @@ import {
   type InstalledManifest,
   type InstalledPiece,
 } from "./installer";
-import { catalogById } from "./catalog";
+import { catalogById, withdrawnPiece } from "./catalog";
 
 export interface ReconcileResult {
   /** True when the manifest had at least one piece (otherwise we skipped install). */
@@ -70,16 +70,44 @@ export async function reconcilePiecesLibrary(
   // they were installed with.
   const byId = catalogById();
   const repinnedIds = new Set<string>();
+  let verifiedRepins = 0;
+  let withdrawnRepins = 0;
   for (const piece of manifest.pieces) {
     const entry = byId.get(piece.id);
     if (entry && entry.tier === "verified" && entry.versionRange !== piece.versionRange) {
       piece.versionRange = entry.versionRange;
       repinnedIds.add(piece.id);
+      verifiedRepins++;
     }
+    // A withdrawn piece (no longer in the catalog) is held at the version it
+    // has: nothing offers it an update, so a restored manifest on a fresh
+    // container must not float its range to a newer upstream release. The
+    // version on disk wins over the recorded one, so an install that already
+    // floated is held where its flows run now rather than moved back.
+    if (!entry) {
+      const held = onDiskVersion(base, piece.npmPackage) ?? piece.resolvedVersion;
+      if (!EXACT_VERSION.test(held)) {
+        log(`reconcile: ${piece.id} is withdrawn but has no exact version to hold it at ("${held}"), so it keeps its range ${piece.versionRange}`);
+      } else if (piece.versionRange !== held) {
+        piece.versionRange = held;
+        repinnedIds.add(piece.id);
+        withdrawnRepins++;
+      }
+    }
+  }
+  // A piece the catalog no longer lists (EXCLUDED everywhere, or dropped
+  // upstream) stays installed: removing someone's piece at boot would break
+  // their flows without asking. It is still installed below like any other,
+  // and said here every boot, so the log says why the Library shows it as
+  // withdrawn.
+  for (const piece of manifest.pieces) {
+    if (byId.has(piece.id)) continue;
+    log(`reconcile: ${piece.id} stays installed but is withdrawn from the catalog; uninstall it from the Library. ${withdrawnPiece(piece.id).reason}`);
   }
   if (repinnedIds.size > 0) {
     await writeManifest(manifest, base);
-    log(`reconcile: re-pinned ${repinnedIds.size} verified piece(s) to the catalog version`);
+    if (verifiedRepins > 0) log(`reconcile: re-pinned ${verifiedRepins} verified piece(s) to the catalog version`);
+    if (withdrawnRepins > 0) log(`reconcile: held ${withdrawnRepins} withdrawn piece(s) at the version they have`);
   }
 
   // Always rewrite package.json so it matches the manifest (defensive: if
@@ -137,6 +165,18 @@ export async function reconcilePiecesLibrary(
     missing,
     drifted,
   };
+}
+
+/** An exact npm version, prerelease included: as a range it matches only itself. */
+const EXACT_VERSION = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
+
+function onDiskVersion(base: string, npmPackage: string): string | null {
+  try {
+    const pkg = JSON.parse(readFileSync(join(base, "node_modules", npmPackage, "package.json"), "utf8")) as { version?: unknown };
+    return typeof pkg.version === "string" ? pkg.version : null;
+  } catch {
+    return null;
+  }
 }
 
 function defaultRunBunInstall(cwd: string): Promise<void> {

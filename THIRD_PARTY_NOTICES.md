@@ -9,6 +9,8 @@ This file covers **third-party source vendored into this repository** -- code th
 - **npm runtime dependencies** (e.g. `socket.io`, `nanoid`, `bun:sqlite`). These are listed in `package.json` and resolved into `node_modules` at install time; their licenses live next to the published packages and are not reproduced in this file.
 - **Community Activepieces pieces** installed at runtime into `~/.jarvis/pieces/` from the curated catalog. Each piece carries its own license metadata; the catalog (`src/workflows/pieces-library/catalog.ts`) only lists semver pins, not vendored source.
 
+**Hosted shared pieces tree.** On hosted installs we build the community catalog once per version and run it for every tenant, so that tree is covered by its own generated file: `scripts/build-shared-runtime.ts` writes `<out>/pieces/THIRD_PARTY_NOTICES.md` next to it, listing every installed package with its license and reproducing the license and notice files each package ships. LGPL and MPL packages, used unmodified, are listed in their own section. The build refuses the tree when the license policy (`src/workflows/pieces-library/license-policy.ts`) denies any package in it: only permissive licenses, LGPL and MPL are allowed, and a package with no usable license declaration needs a reviewed entry. Pieces left out for that reason are listed, with the reason, in `src/workflows/pieces-library/catalog-overrides.ts`: `EXCLUDED` for pieces not offered anywhere (today Actual Budget, whose `@actual-app/core` dependency pulls GPL-3.0-only `hyperformula` and AGPL-3.0-or-later `ua-parser-js`), and `SHARED_BUILD_EXCLUDED` for pieces left out of the hosted tree only. The weekly catalog sync runs the same check first.
+
 ---
 
 ## Activepieces

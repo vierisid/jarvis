@@ -20,7 +20,7 @@ import {
   uninstallPiece,
   writeManifest,
 } from "./installer";
-import { findCatalogEntry } from "./catalog";
+import { excludedReason, findCatalogEntry, PieceExcludedError } from "./catalog";
 
 let base: string;
 
@@ -249,5 +249,41 @@ describe("uninstallPiece", () => {
     expect(m.pieces).toEqual([]);
     // package.json should not have been touched.
     expect(existsSync(resolve(base, "package.json"))).toBe(false);
+  });
+});
+
+describe("#971: installPiece refuses an excluded piece, with its reason", () => {
+  test("a fresh install of actualbudget is refused before the manifest or bun is touched", async () => {
+    const calls: string[] = [];
+    const err = await installPiece("actualbudget", { base, runBunInstall: async () => { calls.push("bun"); } }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(PieceExcludedError);
+    expect((err as PieceExcludedError).code).toBe("PIECE_EXCLUDED");
+    expect((err as PieceExcludedError).pieceId).toBe("actualbudget");
+    expect((err as PieceExcludedError).reason).toBe(excludedReason("actualbudget")!);
+    expect((err as Error).message).toMatch(/cannot be installed: .*GPL-3\.0-only.*AGPL-3\.0-or-later/s);
+    expect(calls).toEqual([]);
+    expect(existsSync(join(base, "installed.json"))).toBe(false);
+    expect(existsSync(join(base, "package.json"))).toBe(false);
+  });
+
+  test("an update of one installed before the exclusion is refused too, and leaves the install as it was", async () => {
+    const before = {
+      version: 1 as const,
+      pieces: [{
+        id: "actualbudget",
+        npmPackage: "@activepieces/piece-actualbudget",
+        versionRange: "^0.1.9",
+        resolvedVersion: "0.1.9",
+        installedAt: 7,
+      }],
+    };
+    await writeManifest(before, base);
+    const calls: string[] = [];
+    await expect(installPiece("actualbudget", { base, runBunInstall: async () => { calls.push("bun"); } })).rejects.toBeInstanceOf(PieceExcludedError);
+    expect(calls).toEqual([]);
+    expect(await readManifest(base)).toEqual(before);
   });
 });
