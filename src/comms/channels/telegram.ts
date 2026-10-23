@@ -304,7 +304,7 @@ export class TelegramAdapter implements ChannelAdapter {
   /** Told where a new adapter for this bot would pick up, whenever that changes (#882, #910). */
   private onResumePoint: ((point: TelegramResumePoint) => void) | null = null;
   /** Whether a typed message is an approval decision, which gets its own lane (#910). */
-  private isDecision: ((text: string) => boolean) | null = null;
+  private isDecision: ((text: string, userId: number) => boolean) | null = null;
   private baseUrl: string;
   private pollingInterval: number = 1000;
   private sttProvider: STTProvider | null = null;
@@ -320,14 +320,15 @@ export class TelegramAdapter implements ChannelAdapter {
    * adapter last reported through `onResumePoint`.
    *
    * `isDecision` (#910): typed text it is true for runs in its chat's decision
-   * lane rather than behind that chat's turn in progress.
+   * lane rather than behind that chat's turn in progress. It is given the
+   * sender too, so only someone who may decide can use that lane (#916).
    */
   constructor(token: string, opts?: {
     sttProvider?: STTProvider;
     allowedUsers?: unknown;
     resume?: TelegramResumePoint;
     onResumePoint?: (point: TelegramResumePoint) => void;
-    isDecision?: (text: string) => boolean;
+    isDecision?: (text: string, userId: number) => boolean;
     waitFor?: Map<string, Promise<void>>;
     now?: () => number;
   }) {
@@ -711,7 +712,7 @@ export class TelegramAdapter implements ChannelAdapter {
     // Typed text only: a voice note is not known to be a decision until it is
     // transcribed, which happens in its turn.
     const text = work.message.text;
-    const decision = !!text && this.isDecision?.(text) === true;
+    const decision = !!text && this.isDecision?.(text, work.from.id) === true;
     if ((decision ? this.waitingDecisions : this.waitingChat) >= TELEGRAM_UPDATES_LIMIT) {
       console.warn(`[TelegramAdapter] ${TELEGRAM_UPDATES_LIMIT} messages already wait for an answer; not reading update ${update.update_id}`);
       const now = this.now();

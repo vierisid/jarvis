@@ -52,7 +52,7 @@ import { getDb } from '../vault/schema.ts';
 import { findCommitments, getUpcoming, createCommitment, getCommitment, patchCommitment, reorderCommitments } from '../vault/commitments.ts';
 import { COMMITMENT_CREATE_MAX_BODY_BYTES, readBoundedJson, validateCommitmentCreate, validateCommitmentPatch } from './commitment-patch.ts';
 import { getOrCreateConversation, getMessages, getRecentConversation } from '../vault/conversations.ts';
-import { telegramAllowList, discordAllowList } from '../comms/channels/allow-list.ts';
+import { telegramAllowList, discordAllowList, channelOwnerId } from '../comms/channels/allow-list.ts';
 import { getRecentObservations, summarizeObservation } from '../vault/observations.ts';
 import { listAgentActivity, countAgentActivity } from '../vault/agent-activity.ts';
 import { getPersonality } from '../personality/model.ts';
@@ -2765,6 +2765,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             allowed_users: tgList.ids,
             allowed_users_rejected: tgList.rejected,
             allowed_users_problems: tgList.problems,
+            allowed_users_entries: tgList.entries,
+            // The first entry, when it is a valid id (#916): see channelOwnerId.
+            owner_id: channelOwnerId('telegram', cfg?.telegram?.allowed_users),
           },
           discord: {
             enabled: cfg?.discord?.enabled ?? false,
@@ -2772,6 +2775,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             allowed_users: dcList.ids,
             allowed_users_rejected: dcList.rejected,
             allowed_users_problems: dcList.problems,
+            allowed_users_entries: dcList.entries,
+            owner_id: channelOwnerId('discord', cfg?.discord?.allowed_users),
             guild_id: cfg?.discord?.guild_id ?? null,
           },
         });
