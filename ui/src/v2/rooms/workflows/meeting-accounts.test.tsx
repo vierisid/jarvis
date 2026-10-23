@@ -16,3 +16,14 @@ test('meeting setup selects saved accounts by provider, stores only reference an
   expect(writes).toEqual([['gmailConnection','saved-1']]);expect(JSON.stringify(writes)).not.toContain('{{connections');
  }finally{await React.act(async()=>root.unmount());host.remove();}
 });
+
+test('sales setup reuses saved-account controls for HubSpot and Gmail only',async()=>{
+ const host=document.createElement('div');document.body.append(host);const root=createRoot(host),writes:Array<[string,string]>=[];
+ const connections=['hubspot','gmail','google-calendar'].map((name,i)=>({id:String(i),externalId:'saved-'+i,pieceName:'@activepieces/piece-'+name,displayName:'Account '+i,status:'ACTIVE'})) as any;
+ await React.act(async()=>root.render(<Pickers fields={[["hubspotConnection","@activepieces/piece-hubspot","HubSpot"],["gmailConnection","@activepieces/piece-gmail","Gmail"]]} connections={connections} input={{gmailConnection:'saved-1'}} onSetInput={(k,v)=>writes.push([k,v])}/>));
+ try{
+  const selects=host.querySelectorAll('select');expect(selects.length).toBe(2);expect(selects[1]!.value).toBe('saved-1');expect(host.textContent).not.toContain('Account 2');
+  await React.act(async()=>{selects[0]!.value='saved-0';selects[0]!.dispatchEvent(new Event('change',{bubbles:true}));});
+  expect(writes).toEqual([['hubspotConnection','saved-0']]);
+ }finally{await React.act(async()=>root.unmount());host.remove();}
+});

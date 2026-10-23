@@ -8,6 +8,11 @@ export function workflowSafeguards(trigger: unknown) {
     const s = node.settings ?? {};
     const input = s.input && typeof s.input === 'object' && !Array.isArray(s.input) ? s.input : {};
     const add=(kind:string,coverage:string,limits:string)=>safeguards.push({node:node.name,kind,coverage,limits});
+    if (String(s.pieceName).endsWith('jarvis-sales') && s.actionName === 'draft_followups') {
+      add('sales-draft-only','Fixed HubSpot GET and Gmail GET/draft-create endpoints; no send, browser, model tools or CRM mutations. Pipeline/inactivity property and Gmail owner checked. Complete bounded cursor pagination; limits fail explicitly.', 'HubSpot is the supported CRM and must be selected in setup. Inactivity means elapsed 24-hour days. Personalization uses contact, company, deal and sender names in an unsent draft; multiple associated contacts require review.');
+      add('sales-daily-identity','Durable atomic per-workflow/Gmail account/normalized-contact/local-date claims and draft receipts; concurrent deliveries, retries, versions and restarts cannot re-dispatch a claimed contact that day.', 'Failures and uncertain writes remain consumed for that day, without automatic retry or eventual-delivery guarantees. Different dates are new daily processing identities.');
+      add('sales-results','Exact recent inbound sender/date checks across paginated threads, fresh deal/contact recheck, per-deal failure isolation and complete result aggregation for a single downstream summary.', 'Requires explicit reply window and one associated contact. Source changes after the final recheck are not atomic with draft creation. Governance/cancellation and batch discovery failures stop the run.');
+    }
     if (s.pieceName === 'webhook' && 'submission_id_field' in input && 'submission_email_field' in input)
       add('submission-admission','Persistent atomic admission by submission ID per workflow; whitespace/email normalization and validation.', 'Requires configured payload paths. Distinct submission IDs are distinct submissions. Failed accepted submissions require review.');
     if (s.pieceName === '@activepieces/piece-gmail' && s.triggerName === 'new_attachment')

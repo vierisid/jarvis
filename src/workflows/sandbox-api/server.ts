@@ -34,6 +34,7 @@ import { DefaultWorkerHandlers } from "./worker-handlers";
 import { DEFAULT_IDS } from "../db/schema";
 import { createConnectionsRoute } from "./routes/connections";
 import { createMeetingBriefsRoute, type MeetingBriefsFn } from './routes/jarvis-meetings';
+import { createSalesFollowupsRoute, type SalesFollowupsFn } from './routes/jarvis-sales';
 import {
   deleteStoreEntryRoute,
   getStoreEntryRoute,
@@ -88,6 +89,7 @@ import { runWithOrigin } from "../../llm/origin.ts";
 
 export interface SandboxApiServices {
   meetingBriefs?: MeetingBriefsFn;
+  salesFollowups?: SalesFollowupsFn;
   credentialResolver: CredentialResolver;
   /**
    * URL prefix used to mint resumeUrl values for waitpoints. Engine pieces
@@ -283,6 +285,7 @@ export class SandboxApi {
         handler: createJarvisNotifyRoute(this.services),
       },
       { path: '/v1/jarvis/context/meeting-briefs', method: 'POST', handler: createMeetingBriefsRoute(this.services) },
+      { path: '/v1/jarvis/sales/followups', method: 'POST', handler: createSalesFollowupsRoute(this.services) },
       {
         path: "/v1/jarvis/context/vault-search",
         method: "POST",

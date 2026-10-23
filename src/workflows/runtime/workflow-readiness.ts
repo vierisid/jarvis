@@ -1,4 +1,5 @@
 import { MEETING_ACCOUNTS, meetingSetup } from './meeting-briefs';
+import { SALES_ACCOUNTS, SALES_REQUIRED, SALES_ACTION, salesSetup } from './sales-followups';
 import { parseOutputSchema } from './llm-output-contract';
 import { submissionConfig } from './form-submission';
 import { validateCronExpression, validateCronTimezone } from '../../lib/cron-scheduler';
@@ -216,6 +217,20 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     // Only input values are templated; source code and labels are not expressions.
     expressions(input, node, 'settings.input', scope, pieceName);
     const isPiece = (short: string) => pieceName === short || pieceName === `@jarvispieces/piece-${short}`;
+    if (!root && isPiece('jarvis-sales') && settings.actionName === SALES_ACTION && object(input)) {
+      for (const [field, provider] of Object.entries(SALES_ACCOUNTS)) {
+        const id = input[field];
+        if (!emptyInput(id)) {
+          if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node,`settings.input.${field}`,'CONNECTION_BINDING','Select a saved account reference');
+          else if (context.phase !== 'composition') {
+            const reason=context.connection?.(id,provider) ?? (context.connection ? null : 'Connection inventory unavailable');
+            if (reason) issue(node,`settings.input.${field}`,'CONNECTION_BINDING',reason);
+            else runtime(node,`settings.input.${field}`,'connection','Recheck pinned sales account before each provider call');
+          }
+        }
+      }
+      if (SALES_REQUIRED.every(k=>!emptyInput(input[k]))) try { salesSetup(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
+    }
     if (!root && isPiece('jarvis-context') && settings.actionName === 'meeting_briefs' && object(input)) {
       for (const [field, provider] of Object.entries(MEETING_ACCOUNTS)) {
         const id = input[field];
@@ -271,7 +286,8 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
       if (!role.known || typeof role.value !== 'string' || !context.roles?.().has(role.value)) issue(node, 'settings.input.role', 'ROLE_BINDING', 'Select an existing specialist role before activation');
     }
     if (root && pieceName === '@activepieces/piece-schedule' && settings.triggerName === 'cron_expression') {
-      try {
+      if (emptyInput(input?.cronExpression)) needsSetup(node,'settings.input.cronExpression','Choose the schedule execution time before publishing or running');
+      else try {
         if (typeof input?.cronExpression !== 'string') throw new Error('Schedule requires a static cron expression');
         validateCronExpression(input.cronExpression);
         validateCronTimezone(input.timezone);
@@ -290,7 +306,8 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     if (type === 'PIECE' || type === 'PIECE_TRIGGER') {
       if (root && pieceName === 'schedule') {
         const cron = input?.cron_expression || input?.cronExpression || input?.expression;
-        try {
+        if (emptyInput(cron)) needsSetup(node,'settings.input.cron_expression','Choose the schedule execution time before publishing or running');
+        else try {
           if (typeof cron !== 'string') throw new Error('Schedule requires a static cron expression');
           validateCronExpression(cron);
         } catch (error) { issue(node, 'settings.input.cron_expression', 'CRON', (error as Error).message); }

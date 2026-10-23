@@ -3359,10 +3359,15 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const selectedSubAction: PieceCatalogActionOrTrigger | undefined = subList.find((s) => s.name === subName);
   const formInput = step.settings?.input ?? {};
   const meetingAccounts = piece?.name === '@jarvispieces/piece-jarvis-context' && subName === 'meeting_briefs'
-    ? [['calendarConnection','@activepieces/piece-google-calendar','Google Calendar'],['gmailConnection','@activepieces/piece-gmail','Gmail'],['hubspotConnection','@activepieces/piece-hubspot','HubSpot']] as const : [];
+    ? [['calendarConnection','@activepieces/piece-google-calendar','Google Calendar'],['gmailConnection','@activepieces/piece-gmail','Gmail'],['hubspotConnection','@activepieces/piece-hubspot','HubSpot']] as const
+    : piece?.name === '@jarvispieces/piece-jarvis-sales' && subName === 'draft_followups'
+      ? [['hubspotConnection','@activepieces/piece-hubspot','HubSpot'],['gmailConnection','@activepieces/piece-gmail','Gmail']] as const : [];
 
   const formWebhook = detectedTriggerKind === 'webhook' && ('submission_id_field' in formInput || 'submission_email_field' in formInput);
-  const schema = formWebhook ? { fields: [
+  const schema = detectedTriggerKind === 'schedule' && step.settings?.pieceName === 'schedule' ? {fields:[
+    {name:'cron_expression',label:'Schedule (cron)',type:'string' as const,required:true,description:'Choose the execution time before running. For weekdays, use minute hour * * 1-5.'},
+    {name:'timezone',label:'Timezone',type:'string' as const,required:true},
+  ]} : formWebhook ? { fields: [
     { name: 'submission_id_field', label: 'Submission ID field', type: 'string' as const, required: true, description: 'The field path containing the unique submission ID, for example form.id.' },
     { name: 'submission_email_field', label: 'Email field', type: 'string' as const, required: true, description: 'The field path containing the email address, for example form.email.' },
     ...Object.keys(formInput).filter(key => !['submission_id_field', 'submission_email_field', 'secret'].includes(key)).map(key => ({ name: key, label: key, type: 'string' as const, required: false })),
@@ -3473,7 +3478,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         />
       ) : null}
 
-      {meetingAccounts.length ? <MeetingAccountPickers connections={connections} input={formInput} onSetInput={onSetInput} /> : null}
+      {meetingAccounts.length ? <MeetingAccountPickers fields={meetingAccounts} connections={connections} input={formInput} onSetInput={onSetInput} /> : null}
 
       {!isLoop && !isRouter ? (
         <div className="wf-props__inputs">
@@ -3681,8 +3686,8 @@ function AdvancedSettings(props: {
  * here would duplicate the OAuth redirect handling already in that
  * panel and isn't worth the complexity.
  */
-export function MeetingAccountPickers({connections,input,onSetInput}: {connections:ConnectionMeta[];input:Record<string,unknown>;onSetInput:(field:string,value:string)=>void}) {
-  return <>{([['calendarConnection','@activepieces/piece-google-calendar','Google Calendar'],['gmailConnection','@activepieces/piece-gmail','Gmail'],['hubspotConnection','@activepieces/piece-hubspot','HubSpot']] as const).map(([field,provider,label]) =>
+export function MeetingAccountPickers({connections,input,onSetInput,fields=[['calendarConnection','@activepieces/piece-google-calendar','Google Calendar'],['gmailConnection','@activepieces/piece-gmail','Gmail'],['hubspotConnection','@activepieces/piece-hubspot','HubSpot']]}: {connections:ConnectionMeta[];input:Record<string,unknown>;onSetInput:(field:string,value:string)=>void;fields?:ReadonlyArray<readonly [string,string,string]>}) {
+  return <>{fields.map(([field,provider,label]) =>
     <ConnectionPicker key={field} pieceName={provider} pieceDisplayName={label} authDisplayName={`${label} account`} authType="OAUTH2"
       connections={connections} currentValue={input[field] ? `{{connections.${input[field]}}}` : ''}
       onPick={template=>onSetInput(field,template ? template.slice(14,-2) : '')} />)}</>;
