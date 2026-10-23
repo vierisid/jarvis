@@ -65,3 +65,50 @@ test('canonical maintenance rooms retain the owner, while native panels and rese
   expect(maintenanceRoom('http://localhost/?briefMaintenance=1&onboarding=reset#/_room_settings')).toBeNull();
   expect(maintenanceRoom('http://localhost/#/_room_settings')).toBeNull();
 });
+
+
+test('host Run skips empty scheduled input, retains webhook cancellation and sends one version-bound request', async () => {
+  const { createWorkflowRooms } = await import('./workflow-rooms');
+  const { makeRunsFixture, RUN_SCOPE, RUN_CAPABILITY } = await import('../workflows/runs/fixtures');
+  for (const kind of ['schedule', 'webhook']) {
+    const fixture = makeRunsFixture(), payloads: any[] = []; let prompts = 0;
+    const { scopeId, flowId, versionId } = RUN_SCOPE;
+    const version = { id: versionId, flowId, state: 'LOCKED', displayName: 'Calendar digest',
+      trigger: { name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: kind, input: { cron_expression: '0 8 * * 1-5', timezone: 'Europe/Rome' } },
+        nextAction: { name: 'read', type: 'PIECE', settings: { input: { goal: 'Read today’s calendar' } } } } };
+    const transport = createHostTransport((async (input: any, init: any = {}) => {
+      const path = String(input), signal = new AbortController().signal;
+      if (init.method === 'POST') {
+        const body = JSON.parse(init.body); payloads.push(body);
+        return Response.json(await fixture.port.start!( { ...RUN_SCOPE, requestId: body.brief.requestId } ));
+      }
+      if (path.endsWith('/versions/' + versionId)) return Response.json(version);
+      if (path.includes('/inspection?')) return Response.json({ status: 'ready', data: { ...RUN_SCOPE } });
+      if (path.endsWith('/runs')) return Response.json(await fixture.port.list(null, signal));
+      if (path.includes('/runs/')) return Response.json(await fixture.port.detail(path.split('/').at(-1)!, signal));
+      if (path === '/api/workflows/' + flowId) return Response.json({ flow: { id: flowId }, published: version });
+      throw Error('Unexpected fixture path ' + path);
+    }) as typeof fetch);
+    const stored = new Map<string, string>();
+    const workflows = createWorkflowRooms({ scopeId, transport, capabilities: () => RUN_CAPABILITY,
+      storage: { getItem: k => stored.get(k) ?? null, setItem: (k, v) => { stored.set(k, v); } }, dirty() {},
+      runInput: async () => { prompts++; return null; } });
+    const shell = { mode: 'live', route: { room: 'workflow-runs', selection: { flowId, versionId } },
+      theme: 'dark', sidebar: 'expanded', chatOpen: false, navigate() {}, setTheme() {}, setSidebar() {}, setChatOpen() {} } as any;
+    const Room = workflows.rooms['workflow-runs']!.Body!;
+    try {
+      await React.act(async () => root.render(<Room shell={shell} />));
+      await React.act(async () => { button('Run workflow').click(); await new Promise(r => setTimeout(r, 400)); });
+      expect(prompts).toBe(kind === 'schedule' ? 0 : 1);
+      expect(payloads).toHaveLength(kind === 'schedule' ? 1 : 0);
+      if (kind === 'schedule') {
+        expect(payloads[0].payload).toEqual({});
+        expect(payloads[0].brief).toMatchObject({ scopeId, versionId });
+        expect(fixture.stats().requests).toBe(1);
+      }
+    } finally {
+      await React.act(async () => root.render(null));
+      workflows.retire(); fixture.controller.retire(); transport.stop();
+    }
+  }
+});
