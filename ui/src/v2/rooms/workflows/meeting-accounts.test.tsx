@@ -27,3 +27,12 @@ test('sales setup reuses saved-account controls for HubSpot and Gmail only',asyn
   expect(writes).toEqual([['hubspotConnection','saved-0']]);
  }finally{await React.act(async()=>root.unmount());host.remove();}
 });
+
+test('weekly report selects saved Stripe, HubSpot and Google Docs references separately',async()=>{
+ const host=document.createElement('div');document.body.append(host);const root=createRoot(host),writes:Array<[string,string]>=[];
+ const connections=['stripe','hubspot','google-docs','gmail'].map((name,i)=>({id:String(i),externalId:'saved-'+i,pieceName:'@activepieces/piece-'+name,displayName:'Account '+i,status:'ACTIVE'})) as any;
+ await React.act(async()=>root.render(<Pickers fields={[["stripeConnection","@activepieces/piece-stripe","Stripe"],["hubspotConnection","@activepieces/piece-hubspot","HubSpot"],["googleConnection","@activepieces/piece-google-docs","Google Docs"]]} connections={connections} input={{googleConnection:'saved-2'}} onSetInput={(k,v)=>writes.push([k,v])}/>));
+ try{const selects=host.querySelectorAll('select');expect(selects.length).toBe(3);expect(selects[2]!.value).toBe('saved-2');expect(host.textContent).not.toContain('Account 3');expect(host.textContent).toContain('SECRET_TEXT');
+  await React.act(async()=>{selects[0]!.value='saved-0';selects[0]!.dispatchEvent(new Event('change',{bubbles:true}));});expect(writes).toEqual([['stripeConnection','saved-0']]);
+ }finally{await React.act(async()=>root.unmount());host.remove();}
+});

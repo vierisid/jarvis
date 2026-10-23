@@ -1,5 +1,6 @@
 import { MEETING_ACCOUNTS, meetingSetup, parseMeetingGuard, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, type MeetingSetup } from './meeting-briefs';
 import { createSalesFollowupsService } from './sales-service';
+import { createWeeklyReportService } from './report-service';
 import { connectionBindings, enforceRunConnectionBinding } from '../db/repos/binding-pins';
 import { walkFlowNodes } from '../db/flow-graph';
 import { hubspotContactInput, isHubspotContact, upsertHubspotContact } from './hubspot-contact';
@@ -91,6 +92,8 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
   hubspotFetch?: typeof fetch;
   meetingFetch?: typeof fetch;
   meetingNow?: () => number;
+  reportFetch?: typeof fetch;
+  reportNow?: () => number;
   salesFetch?: typeof fetch;
   salesNow?: () => number;
   /** F-14 enrollment is explicitly enabled only with the F-12 queue. */
@@ -1142,6 +1145,7 @@ export function buildSandboxServiceBackends(
   const services: SandboxApiServices = {
     credentialResolver: opts.credentialResolver,
     meetingBriefs: cancellableWorkflowService(meetingBriefs),
+    weeklyReport: cancellableWorkflowService(createWeeklyReportService({effects,credentials:opts.credentialResolver,fetchImpl:opts.reportFetch,now:opts.reportNow})),
     salesFollowups: cancellableWorkflowService(createSalesFollowupsService({effects,credentials:opts.credentialResolver,fetchImpl:opts.salesFetch,now:opts.salesNow})),
     pieceAuthorize: cancellableWorkflowService(pieceAuthorize),
     pieceReceipt: (ctx, id, result) => recordPieceCompletion(ctx, id, result, opts),

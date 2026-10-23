@@ -34,6 +34,7 @@ import { DefaultWorkerHandlers } from "./worker-handlers";
 import { DEFAULT_IDS } from "../db/schema";
 import { createConnectionsRoute } from "./routes/connections";
 import { createMeetingBriefsRoute, type MeetingBriefsFn } from './routes/jarvis-meetings';
+import { createWeeklyReportRoute, type WeeklyReportFn } from './routes/jarvis-report';
 import { createSalesFollowupsRoute, type SalesFollowupsFn } from './routes/jarvis-sales';
 import {
   deleteStoreEntryRoute,
@@ -89,6 +90,7 @@ import { runWithOrigin } from "../../llm/origin.ts";
 
 export interface SandboxApiServices {
   meetingBriefs?: MeetingBriefsFn;
+  weeklyReport?: WeeklyReportFn;
   salesFollowups?: SalesFollowupsFn;
   credentialResolver: CredentialResolver;
   /**
@@ -285,6 +287,7 @@ export class SandboxApi {
         handler: createJarvisNotifyRoute(this.services),
       },
       { path: '/v1/jarvis/context/meeting-briefs', method: 'POST', handler: createMeetingBriefsRoute(this.services) },
+      { path: '/v1/jarvis/reports/weekly', method: 'POST', handler: createWeeklyReportRoute(this.services) },
       { path: '/v1/jarvis/sales/followups', method: 'POST', handler: createSalesFollowupsRoute(this.services) },
       {
         path: "/v1/jarvis/context/vault-search",

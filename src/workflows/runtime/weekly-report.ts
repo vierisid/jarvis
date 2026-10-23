@@ -1,0 +1,170 @@
+/** Deterministic weekly reporting. Provider data is never interpreted as instructions. */
+export const REPORT_PIECE = '@jarvispieces/piece-jarvis-report';
+export const REPORT_ACTION = 'weekly_operating_report';
+export const REPORT_ACCOUNTS = {stripeConnection:'@activepieces/piece-stripe',hubspotConnection:'@activepieces/piece-hubspot',googleConnection:'@activepieces/piece-google-docs'} as const;
+export const REPORT_REQUIRED = [...Object.keys(REPORT_ACCOUNTS),'stripeAccountId','stripeMode','stripeDateBasis','hubspotPortalId','dealDateProperty','dealStageIds','googleEmail','folderId'] as const;
+type Obj = Record<string,any>;
+export interface ReportSetup {stripeConnection:string;hubspotConnection:string;googleConnection:string;stripeAccountId:string;stripeMode:'live'|'test';stripeDateBasis:'balance_posted';hubspotPortalId:string;dealDateProperty:string;dealStageIds:string[];googleEmail:string;folderId:string;timezone:string}
+export type ReportProvider = 'stripe'|'hubspot'|'google';
+export type ReportRequest = (provider:ReportProvider,path:string,body?:Obj)=>Promise<Obj>;
+const required=(v:unknown,name:string,pattern:RegExp)=>{if(typeof v!=='string'||v.length>300||!pattern.test(v))throw Error(`Configure ${name}`);return v;};
+export function reportSetup(v:Obj):ReportSetup {
+  const accounts=Object.fromEntries(Object.keys(REPORT_ACCOUNTS).map(k=>[k,required(v[k],k,/^[\w:-]+$/)]));
+  if(!['live','test'].includes(v.stripeMode))throw Error('Select Stripe live or test mode');
+  if(v.stripeDateBasis!=='balance_posted')throw Error('Select Stripe balance-posted reporting basis; capture/PaymentIntent dates are not substituted');
+  const stages=typeof v.dealStageIds==='string'?v.dealStageIds.split(',').map((s:string)=>s.trim()):v.dealStageIds;
+  if(!Array.isArray(stages)||!stages.length||stages.length>100)throw Error('Select deal stages explicitly');
+  if(v.timezone!=='Europe/Rome')throw Error('This report uses Europe/Rome calendar weeks');
+  return {...accounts,stripeAccountId:required(v.stripeAccountId,'Stripe account ID',/^acct_[a-zA-Z0-9]+$/),stripeMode:v.stripeMode,stripeDateBasis:v.stripeDateBasis,
+    hubspotPortalId:required(v.hubspotPortalId,'HubSpot portal ID',/^\d+$/),dealDateProperty:required(v.dealDateProperty,'deal date property',/^[a-zA-Z][a-zA-Z0-9_]*$/),dealStageIds:[...new Set(stages.map(s=>required(s,'deal stage',/^\w+$/)))],
+    googleEmail:required(v.googleEmail,'Google account email',/^[^\s@]+@[^\s@]+\.[^\s@]+$/).toLowerCase(),folderId:required(v.folderId,'destination folder ID',/^[a-zA-Z0-9_-]+$/),timezone:v.timezone} as ReportSetup;
+}
+function parts(t:number){return Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Rome',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(t).map(p=>[p.type,p.value]));}
+function midnight(civil:number):number {
+  let t=civil;
+  for(let i=0;i<4;i++){const p=parts(t),shown=Date.UTC(+p.year!,+p.month!-1,+p.day!,+p.hour!,+p.minute!,+p.second!);if(shown===civil)return t;t+=civil-shown;}
+  throw Error('Cannot resolve Rome midnight');
+}
+export function reportWeeks(now:number){
+  const p=parts(now),day=Date.UTC(+p.year!,+p.month!-1,+p.day!),monday=day-((new Date(day).getUTCDay()+6)%7)*86400_000;
+  return [1,2].map(n=>({name:n===1?'current':'prior',start:midnight(monday-n*7*86400_000),end:midnight(monday-(n-1)*7*86400_000),localStart:new Date(monday-n*7*86400_000).toISOString().slice(0,10),localEnd:new Date(monday-(n-1)*7*86400_000).toISOString().slice(0,10)}));
+}
+const query=(v:Record<string,string>)=>new URLSearchParams(v).toString();
+export interface Coverage {source:string;period:string;status:'Complete'|'Unavailable';pages:number;unique:number;reason?:string;terminal:boolean;url:string}
+export interface Dataset {coverage:Coverage;totals:Record<string,{count:number;amount:string}>}
+const errText=(e:unknown)=>String((e as Error).message).replace(/[\x00-\x1f]/g,' ').slice(0,250);
+const SCALE=1000000n;
+export function decimal(v:unknown):bigint {
+  if(typeof v!=='string'||! /^-?\d{1,18}(?:\.\d{1,6})?$/.test(v))throw Error('Missing or invalid exact decimal amount');
+  const [whole,fraction='']=v.replace('-','').split('.');const n=BigInt(whole!)*SCALE+BigInt(fraction.padEnd(6,'0'));return v.startsWith('-')?-n:n;
+}
+export function formatAmount(v:bigint){const n=v<0n?-v:v;return (v<0n?'-':'')+(n/SCALE)+((n%SCALE)?'.'+String(n%SCALE).padStart(6,'0').replace(/0+$/,''):'');}
+export function comparison(current:bigint,prior:bigint){
+  const delta=formatAmount(current-prior);
+  if(prior===0n)return {delta,percentage:null,label:current===0n?'No change; both zero':'New activity; percentage not defined'};
+  if(prior<0n)return {delta,percentage:null,label:'Percentage N/A: negative prior baseline'};
+  const bps=(current-prior)*10000n/prior;
+  return {delta,percentage:formatAmount(bps*10000n),label:'Percentage rounded toward zero to two decimals'};
+}
+function currency(v:unknown):string {if(typeof v!=='string'||! /^[a-zA-Z]{3}$/.test(v))throw Error('Missing currency');return v.toUpperCase();}
+function stripeAmount(v:unknown,c:string):bigint {
+  if(!Number.isSafeInteger(v))throw Error('Invalid Stripe minor-unit integer');
+  // Stripe charge accounting units differ from ISO for ISK and UGX. Never infer an FX conversion.
+  const zero=new Set('BIF CLP DJF GNF JPY KMF KRW MGA PYG RWF VND VUV XAF XOF XPF'.split(' '));
+  const three=new Set('BHD JOD KWD OMR TND'.split(' '));
+  if(!(Intl.supportedValuesOf('currency') as string[]).includes(c))throw Error('Unknown currency exponent');
+  const exponent=zero.has(c)?0:three.has(c)?3:2;return BigInt(v as number)*10n**BigInt(6-exponent);
+}
+function add(t:Dataset['totals'],c:string,amount:bigint){const old=t[c]??{count:0,amount:'0'};t[c]={count:old.count+1,amount:formatAmount(decimal(old.amount)+amount)};}
+async function pages(request:ReportRequest,provider:'stripe'|'hubspot',path:string,coverage:Coverage):Promise<Obj[]> {
+  const rows=new Map<string,Obj>(),cursors=new Set<string>(),previousUnique=coverage.unique;let cursor:string|undefined;
+  for(let page=0;page<200;page++){
+    const data=await request(provider,path+(cursor?'&'+query({[provider==='stripe'?'starting_after':'after']:cursor}):''));coverage.pages++;
+    const batch=data[provider==='stripe'?'data':'results'];if(!Array.isArray(batch))throw Error('Malformed result page');
+    for(const r of batch){if(!r||typeof r.id!=='string'||!r.id)throw Error('Missing stable record ID');const old=rows.get(r.id);if(old&&JSON.stringify(old)!==JSON.stringify(r))throw Error('Record changed during pagination');rows.set(r.id,r);}
+    coverage.unique=previousUnique+rows.size;if(rows.size>20000)throw Error('Row limit reached; partial totals discarded');
+    if(provider==='stripe'&&typeof data.has_more!=='boolean')throw Error('Stripe terminal-page evidence missing');
+    const next=provider==='stripe'?(data.has_more?batch.at(-1)?.id:undefined):data.paging?.next?.after;
+    if(provider==='hubspot'&&data.paging?.next!=null&&next==null)throw Error('HubSpot continuation cursor missing');
+    if(provider==='stripe'&&data.has_more&&!next)throw Error('Empty continuation page');
+    if(next==null){coverage.terminal=true;return [...rows.values()];}
+    if(!['string','number'].includes(typeof next)||!String(next)||cursors.has(String(next)))throw Error('Repeated or invalid cursor');
+    cursor=String(next);cursors.add(cursor);
+  }
+  throw Error('Page limit reached; partial totals discarded');
+}
+function unavailable(d:Dataset,e:unknown){d.coverage.status='Unavailable';d.coverage.reason=errText(e);d.coverage.terminal=false;d.totals={};}
+export async function collectWeeklyReport(s:ReportSetup,request:ReportRequest,now:number,checkpoint:()=>void=()=>{}){
+  const weeks=reportWeeks(now),datasets:Dataset[]=[];
+  const wrap=async(source:string,week:typeof weeks[number],url:string,fn:(d:Dataset)=>Promise<void>)=>{
+    const d:Dataset={coverage:{source,period:week.name,status:'Complete',pages:0,unique:0,terminal:false,url},totals:{}};
+    try{checkpoint();await fn(d);}catch(e){checkpoint();unavailable(d,e);}datasets.push(d);
+  };
+  let stripeError:unknown,hubspotError:unknown;
+  try{const a=await request('stripe','/v1/account'),b=await request('stripe','/v1/balance');if(a.id!==s.stripeAccountId||b.livemode!==(s.stripeMode==='live'))throw Error('Stripe account or live/test mode mismatch');}catch(e){checkpoint();stripeError=e;}
+  try{
+    const account=await request('hubspot','/account-info/v3/details');if(String(account.portalId)!==s.hubspotPortalId)throw Error('HubSpot portal mismatch');
+    const property=await request('hubspot',`/crm/v3/properties/deals/${s.dealDateProperty}`);if(property.name!==s.dealDateProperty||property.type!=='datetime')throw Error('Select a HubSpot datetime date property');
+    const pipelines=await request('hubspot','/crm/v3/pipelines/deals');const stages=pipelines.results?.flatMap((p:Obj)=>p.stages??[]);
+    if(!Array.isArray(stages)||s.dealStageIds.some(id=>!stages.some((p:Obj)=>p.id===id)))throw Error('Selected deal stages unavailable');
+  }catch(e){checkpoint();hubspotError=e;}
+  for(const week of weeks){
+    for(const source of ['payments','refunds'] as const)await wrap('stripe-'+source,week,`https://dashboard.stripe.com/${s.stripeMode==='test'?'test/':''}balance`,async d=>{
+      if(stripeError)throw stripeError;
+      for(const type of source==='payments'?['charge','payment']:['refund','payment_refund']){
+        const rows=await pages(request,'stripe','/v1/balance_transactions?'+query({type,limit:'100','created[gte]':String(week.start/1000),'created[lt]':String(week.end/1000),'expand[]':'data.source'}),d.coverage);
+        for(const r of rows){
+          if(r.type!==type||!Number.isSafeInteger(r.created)||r.created*1000<week.start||r.created*1000>=week.end)throw Error('Unexpected Stripe transaction type or date');
+          const src=r.source;
+          if(!src||typeof src!=='object'||typeof src.id!=='string')throw Error('Expanded payment/refund evidence unavailable');
+          if(source==='payments'&&(src.object!=='charge'||src.paid!==true||src.captured!==true||src.status!=='succeeded'))throw Error('Successful captured payment cannot be confirmed');
+          if(source==='refunds'&&(src.object!=='refund'||src.status!=='succeeded'))throw Error('Successful refund cannot be confirmed');
+          const c=currency(r.currency),n=stripeAmount(r.amount,c);if((source==='payments'&&n<0n)||(source==='refunds'&&n>0n))throw Error('Unexpected transaction sign');add(d.totals,c,source==='refunds'?-n:n);
+        }
+      }
+    });
+    await wrap('hubspot-deals',week,`https://app.hubspot.com/contacts/${s.hubspotPortalId}/objects/0-3/views/all/list`,async d=>{
+      if(hubspotError)throw hubspotError;
+      const rows=await pages(request,'hubspot','/crm/v3/objects/deals?'+query({limit:'100',archived:'false',properties:['dealstage','amount','deal_currency_code',s.dealDateProperty].join(',')}),d.coverage);
+      for(const r of rows){if(r.archived)continue;const p=r.properties;if(!p||typeof p.dealstage!=='string')throw Error('Deal stage missing');if(!s.dealStageIds.includes(p.dealstage))continue;
+        const raw=p[s.dealDateProperty],t=typeof raw==='string'&&/^\d{13}$/.test(raw)?Number(raw):typeof raw==='string'&&/T.*(?:Z|[+-]\d\d:\d\d)$/.test(raw)?Date.parse(raw):NaN;
+        if(!Number.isFinite(t))throw Error('Selected deal date missing or ambiguous');if(t<week.start||t>=week.end)continue;
+        add(d.totals,currency(p.deal_currency_code),decimal(p.amount));
+      }
+    });
+  }
+  const comparisons:Obj[]=[];
+  for(const source of ['stripe-payments','stripe-refunds','hubspot-deals']){
+    const current=datasets.find(d=>d.coverage.source===source&&d.coverage.period==='current')!,prior=datasets.find(d=>d.coverage.source===source&&d.coverage.period==='prior')!;
+    if([current,prior].some(d=>d.coverage.status==='Unavailable')){comparisons.push({source,status:'Unavailable',reason:'At least one period unavailable; comparison N/A'});continue;}
+    const currencies=[...new Set([...Object.keys(current.totals),...Object.keys(prior.totals)])].sort();
+    if(!currencies.length)comparisons.push({source,status:'Complete',countCurrent:0,countPrior:0,note:'No activity in either complete period; no currency inferred'});
+    for(const c of currencies){const a=current.totals[c]??{count:0,amount:'0'},b=prior.totals[c]??{count:0,amount:'0'};comparisons.push({source,currency:c,current:a,prior:b,amountChange:comparison(decimal(a.amount),decimal(b.amount)),countChange:comparison(BigInt(a.count)*SCALE,BigInt(b.count)*SCALE)});}
+  }
+  const title=`Weekly Stripe and HubSpot report | ${weeks[0]!.localStart} to ${weeks[0]!.localEnd} (end exclusive)`;
+  const content=[title,`Observed at: ${new Date(now).toISOString()}`,'Reporting timezone: Europe/Rome. Weeks are Monday 00:00 to next Monday 00:00 (exclusive).',
+    ...weeks.map(w=>`${w.name}: ${w.localStart} to ${w.localEnd}; UTC [${new Date(w.start).toISOString()}, ${new Date(w.end).toISOString()})`),
+    `Stripe account ${s.stripeAccountId}, mode ${s.stripeMode}. Basis: balance transaction posting date, NOT PaymentIntent creation, capture timestamp or payout availability. Successful captured charge/payment and succeeded refund/payment_refund ledger entries only; gross before Stripe fees, in Stripe BALANCE currency. Conversion may already have occurred in Stripe. Disputes, transfers, fees, refund reversals and other ledger types excluded.`,
+    `HubSpot portal ${s.hubspotPortalId}: current nonarchived deals in selected stages ${s.dealStageIds.join(',')}, dated by ${s.dealDateProperty}. This is current record state, not a historical pipeline snapshot. Amounts use original deal_currency_code.`,
+    'No FX or cross-source totals. Currency amounts are decimal strings, computed with exact scaled integers. Missing data is never zero. Complete empty datasets establish zero activity. Percentage N/A for zero/negative baselines as labelled.',
+    '\nSOURCE COVERAGE',...datasets.map(({coverage:c})=>`${c.source} | ${c.period} | ${c.status}${c.reason?': '+c.reason:''} | pages ${c.pages}, unique records ${c.unique}, end confirmed ${c.terminal}. Source: ${c.url}`),
+    '\nTOTALS BY SOURCE, PERIOD AND CURRENCY',...datasets.flatMap(d=>d.coverage.status==='Unavailable'?[`${d.coverage.source} | ${d.coverage.period} | Unavailable: ${d.coverage.reason}`]:Object.keys(d.totals).length?Object.entries(d.totals).map(([c,t])=>`${d.coverage.source} | ${d.coverage.period} | ${c} | count ${t.count} | amount ${t.amount}`):[`${d.coverage.source} | ${d.coverage.period} | 0 records; no currency inferred`]),
+    '\nWEEK-OVER-WEEK COMPARISONS',...comparisons.map(c=>c.reason?`${c.source}: ${c.reason}`:c.note?`${c.source}: ${c.note}`:`${c.source} | ${c.currency} | current ${c.current.amount} (${c.current.count} records) | prior ${c.prior.amount} (${c.prior.count} records) | amount delta ${c.amountChange.delta} | ${c.amountChange.percentage===null?c.amountChange.label:c.amountChange.percentage+'%'} | count delta ${c.countChange.delta} | ${c.countChange.percentage===null?c.countChange.label:c.countChange.percentage+'%'}`)].join('\n');
+  if(content.length>150000)throw Error('Report exceeds document limit');
+  return {title,content,weeks,datasets,comparisons,partial:datasets.some(d=>d.coverage.status==='Unavailable')};
+}
+export interface ReportReceipt {claim(key:string):{state:'new'|'pending'|'complete';result?:Obj};created(key:string,id:string):void;finish(key:string,result:Obj):void}
+export async function saveWeeklyReport(s:ReportSetup,report:Awaited<ReturnType<typeof collectWeeklyReport>>,request:ReportRequest,receipt:ReportReceipt,key:string){
+  const profile=await request('google','/drive/v3/about?fields=user(emailAddress)');if(profile.user?.emailAddress?.toLowerCase()!==s.googleEmail)throw Error('Selected Google account does not match configured email');
+  const folder=await request('google',`/drive/v3/files/${s.folderId}?fields=id,mimeType,trashed,capabilities(canAddChildren)&supportsAllDrives=true`);
+  if(folder.id!==s.folderId||folder.trashed||folder.mimeType!=='application/vnd.google-apps.folder'||folder.capabilities?.canAddChildren!==true)throw Error('Selected report folder is unavailable or not writable');
+  const claim=receipt.claim(key);if(claim.state==='complete')return claim.result!;if(claim.state==='pending')throw Error('Report creation is unresolved. Review the recorded attempt; no duplicate document was created.');
+  const file=await request('google','/drive/v3/files?fields=id,name,mimeType,parents&supportsAllDrives=true',{name:report.title,mimeType:'application/vnd.google-apps.document',parents:[s.folderId],appProperties:{jarvisReport:key}});
+  if(typeof file.id!=='string'||! /^[\w-]+$/.test(file.id))throw Error('Document creation did not confirm its ID');receipt.created(key,file.id);
+  await request('google',`/v1/documents/${file.id}:batchUpdate`,{requests:[{insertText:{location:{index:1},text:report.content}}]});
+  const doc=await request('google',`/v1/documents/${file.id}`),meta=await request('google',`/drive/v3/files/${file.id}?fields=id,name,mimeType,parents,trashed&supportsAllDrives=true`);
+  const text=(doc.body?.content??[]).flatMap((p:Obj)=>p.paragraph?.elements??[]).map((e:Obj)=>e.textRun?.content??'').join('');
+  if(doc.documentId!==file.id||doc.title!==report.title||meta.name!==report.title||meta.trashed||meta.mimeType!=='application/vnd.google-apps.document'||!meta.parents?.includes(s.folderId)||(text!==report.content&&text!==report.content+'\n'))throw Error('Saved Google Doc content/title/destination could not be verified');
+  const result={complete:true,documentId:file.id,documentUrl:`https://docs.google.com/document/d/${file.id}/edit`,folderId:s.folderId,...report};receipt.finish(key,result);return result;
+}
+
+/** The report can read only declared sources, create a Doc, then insert text into that newly created ID. */
+export function reportTransport(tokens:Record<ReportProvider,string>,checkpoint:()=>void,fetchImpl:typeof fetch=fetch):ReportRequest {
+  const created=new Set<string>(),written=new Set<string>();
+  return async(provider,path,body)=>{
+    const u=new URL('https://placeholder.invalid'+path);if(!path.startsWith('/')||path.startsWith('//')||u.hash)throw Error('Invalid report endpoint');
+    const read=provider==='stripe'?['/v1/account','/v1/balance','/v1/balance_transactions'].includes(u.pathname):provider==='hubspot'?u.pathname==='/account-info/v3/details'||u.pathname==='/crm/v3/objects/deals'||u.pathname==='/crm/v3/pipelines/deals'||/^\/crm\/v3\/properties\/deals\/\w+$/.test(u.pathname):u.pathname==='/drive/v3/about'||/^\/drive\/v3\/files\/[\w-]+$/.test(u.pathname)||/^\/v1\/documents\/[\w-]+$/.test(u.pathname);
+    const create=provider==='google'&&u.pathname==='/drive/v3/files'&&body&&Object.keys(body).sort().join()==='appProperties,mimeType,name,parents'&&body.mimeType==='application/vnd.google-apps.document'&&typeof body.name==='string'&&Array.isArray(body.parents)&&body.parents.length===1;
+    const update=/^\/v1\/documents\/([\w-]+):batchUpdate$/.exec(u.pathname),id=update?.[1];
+    const insert=provider==='google'&&id&&created.has(id)&&!written.has(id)&&body&&Object.keys(body).join()==='requests'&&body.requests?.length===1&&Object.keys(body.requests[0]).join()==='insertText'&&Object.keys(body.requests[0].insertText).sort().join()==='location,text'&&JSON.stringify(body.requests[0].insertText.location)==='{"index":1}'&&typeof body.requests[0].insertText.text==='string';
+    if(!(read&&!body)&&!create&&!insert)throw Error('Report operation is outside the read/create-new-document scope');
+    checkpoint();if(insert)written.add(id!);
+    const host=provider==='stripe'?'https://api.stripe.com':provider==='hubspot'?'https://api.hubapi.com':u.pathname.startsWith('/v1/documents')?'https://docs.googleapis.com':'https://www.googleapis.com';
+    const response=await fetchImpl(host+path,{method:body?'POST':'GET',headers:{Authorization:`Bearer ${tokens[provider]}`,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),redirect:'error',signal:AbortSignal.timeout(20000)});
+    if(!response.ok){await response.body?.cancel();throw Error(`${provider} request failed (HTTP ${response.status})`);}
+    const reader=response.body?.getReader();if(!reader)throw Error('Empty source response');let size=0;const chunks:Uint8Array[]=[];
+    for(;;){const n=await reader.read();if(n.done)break;size+=n.value.length;if(size>4_000_000){await reader.cancel();throw Error('Source response exceeds completeness limit');}chunks.push(n.value);}
+    checkpoint();const data=JSON.parse(Buffer.concat(chunks).toString('utf8'));if(!data||typeof data!=='object'||Array.isArray(data)||data.error)throw Error('Malformed provider response');
+    if(create&&typeof data.id==='string')created.add(data.id);return data;
+  };
+}

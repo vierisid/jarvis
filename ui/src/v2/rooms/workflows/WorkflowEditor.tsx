@@ -3361,7 +3361,9 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const meetingAccounts = piece?.name === '@jarvispieces/piece-jarvis-context' && subName === 'meeting_briefs'
     ? [['calendarConnection','@activepieces/piece-google-calendar','Google Calendar'],['gmailConnection','@activepieces/piece-gmail','Gmail'],['hubspotConnection','@activepieces/piece-hubspot','HubSpot']] as const
     : piece?.name === '@jarvispieces/piece-jarvis-sales' && subName === 'draft_followups'
-      ? [['hubspotConnection','@activepieces/piece-hubspot','HubSpot'],['gmailConnection','@activepieces/piece-gmail','Gmail']] as const : [];
+      ? [['hubspotConnection','@activepieces/piece-hubspot','HubSpot'],['gmailConnection','@activepieces/piece-gmail','Gmail']] as const
+      : piece?.name === '@jarvispieces/piece-jarvis-report' && subName === 'weekly_operating_report'
+        ? [['stripeConnection','@activepieces/piece-stripe','Stripe'],['hubspotConnection','@activepieces/piece-hubspot','HubSpot'],['googleConnection','@activepieces/piece-google-docs','Google Docs']] as const : [];
 
   const formWebhook = detectedTriggerKind === 'webhook' && ('submission_id_field' in formInput || 'submission_email_field' in formInput);
   const schema = detectedTriggerKind === 'schedule' && step.settings?.pieceName === 'schedule' ? {fields:[
@@ -3688,7 +3690,7 @@ function AdvancedSettings(props: {
  */
 export function MeetingAccountPickers({connections,input,onSetInput,fields=[['calendarConnection','@activepieces/piece-google-calendar','Google Calendar'],['gmailConnection','@activepieces/piece-gmail','Gmail'],['hubspotConnection','@activepieces/piece-hubspot','HubSpot']]}: {connections:ConnectionMeta[];input:Record<string,unknown>;onSetInput:(field:string,value:string)=>void;fields?:ReadonlyArray<readonly [string,string,string]>}) {
   return <>{fields.map(([field,provider,label]) =>
-    <ConnectionPicker key={field} pieceName={provider} pieceDisplayName={label} authDisplayName={`${label} account`} authType="OAUTH2"
+    <ConnectionPicker key={field} pieceName={provider} pieceDisplayName={label} authDisplayName={`${label} account`} authType={provider === '@activepieces/piece-stripe' ? 'SECRET_TEXT' : 'OAUTH2'}
       connections={connections} currentValue={input[field] ? `{{connections.${input[field]}}}` : ''}
       onPick={template=>onSetInput(field,template ? template.slice(14,-2) : '')} />)}</>;
 }
