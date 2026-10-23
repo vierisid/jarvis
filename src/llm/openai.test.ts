@@ -1,5 +1,7 @@
-import { describe, expect, it, afterEach } from 'bun:test';
+import { describe, expect, it, afterEach, test } from 'bun:test';
 import { OpenAIProvider } from './openai.ts';
+import { usesResponses } from './openai-responses.ts';
+import { CHAT_MODEL_SUGGESTIONS } from './model-catalog.ts';
 
 const originalFetch = globalThis.fetch;
 
@@ -211,4 +213,16 @@ describe('GPT-6 official Responses transport', () => {
     await expect(new OpenAIProvider('k').chat([], { model: 'gpt-6-luna', signal: controller.signal })).rejects.toThrow();
     expect(calls).toBe(1);
   });
+});
+
+test('every suggested OpenAI model routes tool calls through Responses on the official API only', () => {
+  // gpt-6.1-sol supports tools only on Responses; gpt-6-luna on Chat Completions
+  // only without reasoning (developers.openai.com/api/docs/models/<id>, 2026-10-23).
+  expect(CHAT_MODEL_SUGGESTIONS.openai.length).toBeGreaterThan(0);
+  for (const model of CHAT_MODEL_SUGGESTIONS.openai) {
+    expect(usesResponses('https://api.openai.com/v1', model)).toBe(true);
+    expect(usesResponses('https://api.openai.com/v1/', model)).toBe(true);
+    expect(usesResponses('https://openrouter.ai/api/v1', model)).toBe(false);
+  }
+  expect(usesResponses('https://api.openai.com/v1', 'gpt-5.5')).toBe(false);
 });
