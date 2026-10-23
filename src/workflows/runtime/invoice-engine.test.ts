@@ -1,4 +1,5 @@
 /** Production engine, real PDF decoding, local Google fixtures and deterministic model output. */
+import savedInvoiceGraph from './fixtures/invoice-generated-test5.json';
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { dirname, join } from 'node:path';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -91,6 +92,12 @@ beforeAll(async () => {
       const append = createAction({ name: 'insert_row', displayName: 'Append', description: 'Inspected Sheets single-row input shape', auth,
         props: { spreadsheetId: text('Spreadsheet'), sheetId: text('Sheet'), values: json('Values'), first_row_headers: Property.Checkbox({ displayName: 'Headers', required: false }), as_string: Property.Checkbox({ displayName: 'Raw', required: false }) },
         async run(c) { return send('sheets', c.propsValue); } });
+      const uploadAlias = createAction({ name: 'drive_upload_file', displayName: 'Upload', description: 'Registered Drive alias', auth,
+        props: { file_name: text('File name'), file: Property.File({ displayName: 'File', required: true }), parent_folder_id: text('Folder', false) },
+        async run(c) { return send('drive', { ...c.propsValue, file: { bytes: c.propsValue.file.data.toString('base64') } }); } });
+      const appendAlias = createAction({ name: 'sheets_append_values', displayName: 'Append', description: 'Registered Sheets alias', auth,
+        props: { spreadsheet_id: text('Spreadsheet'), worksheet_title: text('Worksheet'), range: text('Range'), values: json('Values'), value_input_option: text('Input option', false) },
+        async run(c) { return send('sheets', c.propsValue); } });
       const trigger = createTrigger({ name: 'new_attachment', displayName: 'New attachment', description: 'One stored file per attachment, matching installed Gmail', auth,
         type: TriggerStrategy.POLLING, props: { label: Property.Json({ displayName: 'Label', required: false }), filenameExtension: text('Extension', false) },
         async onEnable() {}, async onDisable() {}, async test() { return []; },
@@ -98,7 +105,7 @@ beforeAll(async () => {
           return Promise.all(items.map(async i => ({ message: { id: i.id }, attachment: { fileName: i.fileName, mimeType: i.mimeType, size: Buffer.from(i.data, 'base64').length, data: await c.files.write({ fileName: i.fileName, data: Buffer.from(i.data, 'base64') }) } }))); }
       });
       export const fixture = createPiece({ displayName: '${kind}', description: 'Local fixture', auth, minimumSupportedRelease: '0.82.0', logoUrl: '', authors: [],
-        actions: ${kind === 'gmail' ? '[label]' : kind === 'drive' ? '[upload]' : '[append]'}, triggers: ${kind === 'gmail' ? '[trigger]' : '[]'} });
+        actions: ${kind === 'gmail' ? '[label]' : kind === 'drive' ? '[upload,uploadAlias]' : '[append,appendAlias]'}, triggers: ${kind === 'gmail' ? '[trigger]' : '[]'} });
     `;
     writeFileSync(join(path, 'src/index.ts'), source); await buildPiece(path);
     const installed = join(dir, 'node_modules', piece); mkdirSync(dirname(installed), { recursive: true }); symlinkSync(join(path, 'dist'), installed, 'dir');
@@ -145,9 +152,9 @@ function graph(configured = true): any {
   upload.nextAction=extraction;
   return {name:'trigger',type:'PIECE_TRIGGER',settings:{pieceName:GMAIL,pieceVersion:versions[GMAIL],triggerName:'new_attachment',input:{...auth('gmail'),label:configured?{id:'fixture-invoice',name:'Invoice'}:null,filenameExtension:'pdf'}},nextAction:route('only_pdf',[[eq('{{trigger.attachment.mimeType}}','application/pdf')]],upload)};
 }
-async function fixture() {
+async function fixture(trigger = graph()) {
   loseDrive=loseSheets=false;reply=extracted();incoming=[];
-  const flow=createFlow();const version=createDraftVersion({flowId:flow.id,displayName:'Invoice fixture',trigger:graph()});
+  const flow=createFlow();const version=createDraftVersion({flowId:flow.id,displayName:'Invoice fixture',trigger});
   expect(versionReadiness(flow.id,version.id).issues).toEqual([]);
   expect(checkJobContract(version.trigger,{forbidden:{effects:['make_payment']}}).violations).toEqual([]);
   lockVersion(version.id);setPublishedVersion(flow.id,version.id);updateFlowStatus(flow.id,'ENABLED');await manager.refresh(flow.id);
@@ -259,3 +266,114 @@ test('explicit pending label/folder stay setup-required after account bindings a
   const flow = createFlow(); const version = createDraftVersion({ flowId: flow.id, displayName: 'Needs scope', trigger });
   expect(versionReadiness(flow.id, version.id).ready).toBe(false);
 });
+
+
+// Captured verbatim from Test 5 draft lVW9vxukrUnQvwv4fXpxu. Only complete
+// deferred connections/destinations/columns; preserve every condition, schema,
+// prompt, action and edge. No user credentials or live provider calls.
+function generatedGraph(configured = true): any {
+  const g: any = structuredClone(savedInvoiceGraph);
+  function visit(node: any) {
+    if (!node) return;
+    const s = node.settings, input = s?.input;
+    if (s?.pieceName) {
+      s.pieceVersion = versions[s.pieceName];
+      if (configured) {
+        const kind = s.pieceName===GMAIL?'gmail':s.pieceName===DRIVE?'drive':s.pieceName===SHEETS?'sheets':null;
+        if (kind) input.auth = '{{connections.fixture-'+kind+'}}';
+        if (s.pieceName===GMAIL) input.label = {id:node.name==='trigger'?'fixture-invoice':'fixture-review'};
+        if (s.pieceName===DRIVE) input.parent_folder_id = 'fixture-folder';
+        if (s.pieceName===SHEETS) {
+          const hasFields = node.name!=='step_10';
+          Object.assign(input, {spreadsheet_id:'fixture-sheet',worksheet_title:'Invoices',range:'Invoices!A:K',values:[[
+            '{{trigger.message.id}}','{{step_2.id}}',
+            ...['supplier','invoiceNumber','issueDate','dueDate','currency','total'].map(f=>hasFields?'{{step_3.parsed.'+f+'}}':''),
+            node.name==='step_6'?'Ready':'Needs review',
+            hasFields?'{{step_3.parsed.reviewReasons}}':'{{step_3.outcome.code}}',
+          ]]});
+        }
+      }
+    }
+    visit(node.nextAction); node.children?.forEach(visit);
+  }
+  visit(g); return g;
+}
+const generatedReply = (extra: object = {}) => JSON.stringify({supplier:'Fixture Supplier',invoiceNumber:'INV-GENERATED',issueDate:'2026-10-01',dueDate:'2026-10-31',currency:'EUR',total:120,uncertain:false,reviewReasons:[],...extra});
+
+for (const [name,response,status,binary] of [
+  ['complete',generatedReply(),'Ready'],
+  ['zero total',generatedReply({total:0}),'Ready'],
+  ['unknown total',generatedReply({total:null}),'Needs review'],
+  ['negative total',generatedReply({total:-1}),'Needs review'],
+  ['text total',generatedReply({total:'120'}),'Needs review'],
+  ['missing total',generatedReply({total:undefined}),'Needs review'],
+  ['missing supplier',generatedReply({supplier:''}),'Needs review'],
+  ['uncertain',generatedReply({uncertain:true}),'Needs review'],
+  ['explicit reasons',generatedReply({reviewReasons:['Date is uncertain']}),'Needs review'],
+  ['malformed JSON','not JSON','Needs review'],
+  ['unreadable PDF',generatedReply(),'Needs review',Buffer.from('%PDF-broken').toString('base64')],
+] as const) test('actual generated graph: '+name,async()=>{
+  const f=await fixture(generatedGraph()),before=stats();reply=response;incoming=[{...item(),...(binary?{data:binary}:{})}];
+  const run=(await f.poll())[0]!;
+  expect({status:run.status,failedStep:run.failedStep}).toEqual({status:'SUCCEEDED',failedStep:null});
+  expect(stats().map((n,i)=>n-before[i]!)).toEqual([1,1,status==='Ready'?0:1,binary?0:1]);
+  const row=rows.at(-1).values[0];expect(row[8]).toBe(status);expect(row[0]).toBe('message-1');expect(row[1]).toMatch(/^file-/);
+  if(name==='zero total')expect(row[7]).toBe(0);
+  if(name==='unknown total') {
+    // The engine renders a null reference as an empty cell, never a fake zero.
+    expect((run.steps?.step_3 as any).output.output.parsed.total).toBeNull();
+    expect((run.steps?.step_3 as any).output.output.outcome.status).toBe('succeeded');
+    expect(row[7]).toBe('');
+  }
+  if(status==='Needs review')expect(labels.at(-1).label.id).toBe('fixture-review');
+  // A second delivery, including after successful review, creates no extra effects.
+  const after=stats();await f.poll();expect(stats()).toEqual(after);await f.stop();
+},60000);
+
+test('actual generated graph: only PDFs; repeated and resent content produces one file and row',async()=>{
+  const f=await fixture(generatedGraph()),before=stats();reply=generatedReply();
+  incoming=[item(),item(),item('Invoice INV-1 EUR 120.00','resent','renamed.pdf'),{...item('text file','txt','a.txt'),mimeType:'text/plain'}];
+  await f.poll();expect(stats().map((n,i)=>n-before[i]!)).toEqual([1,1,0,1]);await f.stop();
+},60000);
+for(const failure of ['drive','sheets']) test('actual generated graph: uncertain '+failure+' write never repeats',async()=>{
+  const f=await fixture(generatedGraph());reply=generatedReply();loseDrive=failure==='drive';loseSheets=failure==='sheets';incoming=[item()];
+  const run=(await f.poll())[0]!;expect(run.status).toBe('FAILED');
+  const after=stats();await f.poll();expect(stats()).toEqual(after);
+  const effect=listWorkflowEffects(run.id).find(e=>e.status==='dispatching')!;expect(effect).toBeDefined();
+  updateRun(run.id,{status:'RUNNING'});
+  await expect(services.pieceAuthorize!({piece:String(effect.provenance.piece),action:String(effect.provenance.action),input:effect.arguments,inputDigest:'same-input'}, {runId:run.id,projectId:DEFAULT_IDS.project,stepName:effect.stepName!,executionPath:[]})).rejects.toThrow();
+  updateRun(run.id,{status:'FAILED'});expect(stats()).toEqual(after);await f.stop();
+},60000);
+
+test('actual generated draft: composer repairs invalid schema and returns complete paged validation',async()=>{
+  let turn=0;const before=stats();
+  const bad=generatedGraph(false);bad.nextAction.children[0].nextAction.settings.input.outputSchema=JSON.stringify({type:'object',properties:{total:{type:'number',format:'currency'}}});
+  const tool=createManageWorkflowTool({pieceRegistry:catalog,llm:{chat:async()=>{throw Error('Use submit_flow')},chatTools:async req=>{
+    const attempt=turn++;
+    if(attempt>0)expect(JSON.stringify(req)).toContain('unsupported schema keyword');
+    return {content:'',tool_calls:[{id:'save-'+attempt,name:'submit_flow',arguments:{displayName:'Generated invoice regression',trigger:attempt===0?bad:generatedGraph(false)}}]};
+  }}});
+  const unframe=(raw:unknown)=>JSON.parse(String(raw).split('\n').slice(2,-1).join('\n'));
+  const result=unframe(await tool.execute({action:'compose',name:'Generated invoice regression',description:'Disabled invoice draft, do not pay.',contract:{forbidden:{effects:['make_payment']}}}));
+  expect(turn).toBe(2);expect(result.ok).toBe(true);expect(result.validation).toMatchObject({structureValid:true,readyToRun:false,functionalTesting:'not_performed'});
+  const flow=getFlow(result.flow.id)!;expect(flow.status).toBe('DISABLED');expect(flow.published_version_id).toBeNull();
+  let cursor: string | null=null, text='';
+  do {const page=unframe(await tool.execute({...result.validationReport,...(cursor?{cursor}:{})}));text+=page.content;cursor=page.nextCursor;}while(cursor);
+  const report=JSON.parse(text);expect(report.structure.ready).toBe(true);expect(report.readiness.ready).toBe(false);
+  expect(report.readiness.issues.some((i:any)=>i.path==='settings.input.parent_folder_id')).toBe(true);
+  expect(listRuns({flowId:flow.id})).toHaveLength(0);expect(stats()).toEqual(before);
+},60000);
+
+
+test('actual generated graph: concurrent delivery and restart retain attachment admission',async()=>{
+  const f=await fixture(generatedGraph()),before=stats();reply=generatedReply();incoming=[item()];
+  await Promise.all([f.poll(),f.poll()]);
+  const runs=listRuns({flowId:f.flow.id});expect(runs).toHaveLength(1);expect(runs[0]!.status).toBe('SUCCEEDED');
+  expect(stats().map((n,i)=>n-before[i]!)).toEqual([1,1,0,1]);
+  const after=stats();
+  await manager.stop();closeWorkflowDb();initWorkflowDb(join(dir,'fixture.db'));configureWorkflowReadiness({pieces:catalog});
+  manager=new TriggerManager({eventBus:new WorkflowEventBus(),engineRuntime:runtime,log:()=>{}});await manager.start();
+  await f.poll();expect(stats()).toEqual(after);
+  const payload=(runs[0]!.steps?.trigger as any).output.output;
+  expect((await f.manual(payload)).status).toBe('FAILED');expect(stats()).toEqual(after);await f.stop();
+},60000);

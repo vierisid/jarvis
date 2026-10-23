@@ -12,7 +12,7 @@ import { Worker } from "../../workflows/queue/worker.ts";
 import { createRunFlowHandler, FlowExecutionError, RUN_FLOW } from "../../workflows/runner/handler.ts";
 import { asLimit, createManageWorkflowTool } from "./manage-workflow.ts";
 import type { ToolDefinition } from "./registry.ts";
-import { createDraftVersion, getFlowVersion, getLatestDraft, setSampleDataEntry } from "../../workflows/db/repos/flow-version.ts";
+import { createDraftVersion, getFlowVersion, getLatestDraft, setSampleDataEntry, updateDraftVersion } from "../../workflows/db/repos/flow-version.ts";
 import { updateRun } from "../../workflows/db/repos/flow-run.ts";
 import {
   UNTRUSTED_CLOSE,
@@ -820,15 +820,16 @@ describe("#582: captured step output is framed where it reaches the model", () =
     const flow = (await call("get", { flow: "framed" })) as { id: string };
     setSampleDataEntry(getLatestDraft(flow.id)!.id, "grab", { output: huge });
 
-    for (const block of [
-      await raw("get_run", { run_id: runId }),
-      await raw("list_runs", { flow: "framed" }),
-      await raw("get", { flow: "framed" }),
-    ]) {
+    for (const [action, block] of [
+      ["get_run", await raw("get_run", { run_id: runId })],
+      ["list_runs", await raw("list_runs", { flow: "framed" })],
+      ["get", await raw("get", { flow: "framed" })],
+    ] as const) {
       expect(block.length).toBeLessThanOrEqual(cap);
       const { nonce } = unframe(block);
       expect(block.endsWith(untrustedClose(nonce))).toBe(true);
-      expect(block).toContain("... (truncated, was ");
+      if (action === 'get') expect(JSON.parse(unframe(block).payload).detailPaged).toBe(true);
+      else expect(block).toContain("... (truncated, was ");
     }
   });
 });
@@ -1393,4 +1394,36 @@ test('get recomputes saved draft readiness without publishing, enabling or runni
   const unavailable = await call('get', { flow: flow.id }) as any;
   expect(unavailable.latestDraft.valid).toBe(false);
   expect(unavailable.latestDraft.readiness.issues).toContainEqual(expect.objectContaining({ code: 'PIECE' }));
+});
+
+
+test('large workflow readback is complete, bounded, paged and version scoped', async () => {
+  const flow = createFlow();
+  const trigger: any = { name: 'trigger', type: 'EMPTY' };
+  let node = trigger;
+  for (let i=0; i<20; i++) node = node.nextAction = { name: 'step_'+i, type: 'PIECE', settings: { pieceName: 'unknown', actionName: 'extract', input: { prompt: ('"\n\t📄').repeat(100) } } };
+  const version = createDraftVersion({ flowId: flow.id, displayName: 'Large invoice graph', trigger });
+  const summary: any = await call('get', { flow: flow.id });
+  expect(summary.detailPaged).toBe(true);
+  expect(summary.validation.structureValid).toBe(false);
+  for (const view of ['definition', 'validation']) {
+    let cursor: string | undefined, text = '', pages = 0;
+    do {
+      const raw = await rawFrom(tool, 'get', { flow: flow.id, version_id: version.id, view, ...(cursor ? {cursor} : {}) });
+      const payload = unframe(raw).payload;
+      expect(payload.length).toBeLessThanOrEqual(4000);
+      const page = JSON.parse(payload);
+      expect(page.offset).toBe(text.length);
+      text += page.content; cursor = page.nextCursor; pages++;
+      expect(pages).toBeLessThan(100);
+    } while(cursor);
+    const document = JSON.parse(text);
+    if (view==='definition') expect(document).toEqual(getFlowVersion(version.id));
+    else { expect(document.readiness.issues.length).toBe(20); expect(document.validation.functionalTesting).toBe('not_performed'); }
+  }
+  const first: any = await call('get', { flow: flow.id, version_id: version.id, view: 'definition' });
+  updateDraftVersion(version.id, { displayName: 'Edited graph' });
+  await expect(call('get', { flow: flow.id, version_id: version.id, view: 'definition', cursor: first.nextCursor })).rejects.toThrow('restart');
+  const other = createFlow();
+  await expect(call('get', { flow: other.id, version_id: version.id, view: 'definition' })).rejects.toThrow('Version not found');
 });

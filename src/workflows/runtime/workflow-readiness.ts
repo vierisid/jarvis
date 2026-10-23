@@ -1,3 +1,4 @@
+import { parseOutputSchema } from './llm-output-contract';
 import { submissionConfig } from './form-submission';
 import { validateCronExpression, validateCronTimezone } from '../../lib/cron-scheduler';
 import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from './piece-catalog';
@@ -214,6 +215,14 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     // Only input values are templated; source code and labels are not expressions.
     expressions(input, node, 'settings.input', scope, pieceName);
     const isPiece = (short: string) => pieceName === short || pieceName === `@jarvispieces/piece-${short}`;
+    if (!root && isPiece('jarvis-ask') && settings.actionName === 'ask' && !emptyInput(input?.outputSchema)) {
+      const declared = staticInput(input.outputSchema);
+      if (!declared.known) runtime(node, 'settings.input.outputSchema', 'piece-input', 'Validate the resolved output schema before model dispatch');
+      else {
+        try { parseOutputSchema(typeof declared.value === 'string' ? JSON.parse(declared.value) : declared.value); }
+        catch (error) { issue(node, 'settings.input.outputSchema', 'OUTPUT_SCHEMA', (error as Error).message); }
+      }
+    }
     if (!root && isPiece('jarvis-tool') && settings.actionName === 'invoke' && object(input) && context.phase !== 'composition') {
       const name = staticInput(input.toolName);
       if (!name.known && context.tool) runtime(node, 'settings.input', 'tool-input', 'Resolve the tool identity and validate its parameters at governed tool dispatch');
@@ -256,8 +265,10 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     // means the connector's documented default (all labels / root folder).
     if (input?.label === null && root && pieceName === '@activepieces/piece-gmail' && settings.triggerName === 'new_attachment')
       needsSetup(node, 'settings.input.label', 'Select the Gmail label before processing attachments');
-    if (input?.parentFolder === null && pieceName === '@activepieces/piece-google-drive' && settings.actionName === 'upload_gdrive_file')
-      needsSetup(node, 'settings.input.parentFolder', 'Select the destination Drive folder');
+    if (pieceName === '@activepieces/piece-google-drive') {
+      const folder = settings.actionName === 'upload_gdrive_file' ? 'parentFolder' : settings.actionName === 'drive_upload_file' ? 'parent_folder_id' : null;
+      if (folder && input?.[folder] === null) needsSetup(node, `settings.input.${folder}`, 'Select the destination Drive folder');
+    }
     if (type === 'PIECE' || type === 'PIECE_TRIGGER') {
       if (root && pieceName === 'schedule') {
         const cron = input?.cron_expression || input?.cronExpression || input?.expression;

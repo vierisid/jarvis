@@ -136,3 +136,18 @@ Evidence:
 - Covered distinct attachments, repeat and renamed/resend deliveries, concurrent claims, fresh manual replay, pruning/reopen, successful upload receipts surviving restart before an uncertain Sheets write, malformed/missing/uncertain extraction, non-PDF filtering, zero totals, no-payment graph checks and disabled draft readback with no runs.
 
 Live model composition and real Google account behavior remain for Vieri's walkthrough. This pass does not change the upstream Gmail connector's retrieval/pagination behavior. Normal commit checks and retained-data restart are recorded in the project changelog after completion.
+
+
+## Generated invoice draft: schema and readback regression (2026-10-23)
+
+The live Test 5 draft `RUxC9k1Ju1BwQKzxhJmMX`, version `lVW9vxukrUnQvwv4fXpxu`, saved a nullable total schema that the runtime rejected. Prior fixture coverage used a different, well-formed graph and missed this mismatch.
+
+- Captured that exact saved trigger tree in `src/workflows/runtime/fixtures/invoice-generated-test5.json`. The original graph has no credentials or selected destinations. Tests complete only its deferred accounts, label/folder, spreadsheet/columns and piece-version bindings. Its prompts, nullable schema, action names, conditions and edges remain unchanged.
+- The shared output parser now supports a nullable pair of one supported type and null, in either order. Bounds, enums and nested constraints still apply to non-null values; other unions and unsupported keywords still fail. Unknown totals stay null in extracted output and render as blank spreadsheet cells, never invented zeroes.
+- Composition, saved-draft readiness, publication and manual execution now check static Ask schemas with the runtime parser. Unsupported schemas feed a precise step/path error back into composition for repair. Dynamic schemas retain their runtime validation before model dispatch.
+- Large `get` responses return a compact summary and explicit paged definition/validation calls. Each serialized page fits the existing framing budget, remains untrusted data, is scoped to the selected workflow/version, and carries a cursor tied to the exact document. Concatenating page content reconstructs the full JSON. Changed documents reject stale cursors. Long composition setup reports expose issue/check counts and readback calls rather than truncating the graph/report. Structural checks explicitly do not claim fixture execution.
+- Deferred `parent_folder_id` on the generated Drive upload alias is now an explicit setup item, consistent with the other Drive upload shape.
+
+Evidence: the nullable-schema and preflight regressions failed before the fix. The actual generated graph passed production-engine fixtures for complete/zero/unknown/negative/text/missing totals, missing supplier, uncertainty/review reasons, malformed JSON, unreadable PDF, PDF-only filtering, duplicates/resends, concurrent delivery, restart/manual replay, and uncertain Drive/Sheets writes. Composer fixtures reject an unsupported schema, repair it, save a disabled/unpublished draft with zero runs, and retrieve the complete validation report. No real Google calls or payments occur; providers and model output are fixtures.
+
+Verification: 472 regression tests across 12 files passed, followed by 166 focused engine/readiness/sandbox tests across three files (overlapping coverage). TypeScript passed. Final hooks and preserved-data restart are recorded in the project changelog. Live model behavior, actual Google account access, and user-selected column mappings remain for the walkthrough; existing durable receipt and PDF extraction limits still apply.

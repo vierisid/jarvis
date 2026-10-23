@@ -21,6 +21,7 @@
  * Runs are referenced strictly by id.
  */
 
+import { createHash } from "node:crypto";
 import type { ToolDefinition } from "./registry.ts";
 import type { TriggerManager } from "../../workflows/runner/triggers/manager.ts";
 import type { PieceLookup } from "../../workflows/runtime/piece-catalog.ts";
@@ -188,6 +189,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       "Composed flows are DISABLED. Publish only with user confirmation; publish enables the flow. Draft-only restrictions are not bans on future workflow actions.",
       "create requires empty: true for an explicitly blank canvas; otherwise compose.",
       "CODE steps: publish, enable and run are REFUSED until the user permits code for that flow; no tool action grants permission. Never bypass this refusal.",
+      "Read all get pages to nextCursor:null. Structural checks are not fixture tests.",
       ...(hasLibrary ? [deps.installLibraryPiece ? "Install required Library connectors by default under software-install Authority; false opts out. Account connection is separate." : "Relay suggestedInstalls from the Library page; retry after installation, never unchanged."] : []),
     ].join("\n"),
     category: "automation",
@@ -245,6 +247,9 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
         description: "Name or ID; required for get/run/enable/disable/publish/delete; optional list_runs filter.",
         required: false,
       },
+      view: { type: "string", enum: ["definition", "validation"], description: "get: definition or validation pages; concatenate content through nextCursor:null, then parse JSON.", required: false },
+      version_id: { type: "string", description: "get: pin version while paging.", required: false },
+      cursor: { type: "string", description: "get: exact nextCursor; omit to start. Edits invalidate it.", required: false },
       name: {
         type: "string",
         description: "Display name for compose/create.",
@@ -374,7 +379,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           return framedForModel(actList(project), "the workflow list and its stored metadata");
         case "get":
           return framedForModel(
-            actGet(requireFlowParam(params)),
+            actGet(requireFlowParam(params), params),
             "a workflow definition and its captured sample data",
           );
         case "run":
@@ -969,11 +974,13 @@ function checkedVersion(flowId: string, version: ReturnType<typeof getFlowVersio
 
 }
 
-function actGet(flow: FlowRow): Record<string, unknown> {
+function actGet(flow: FlowRow, params: Record<string, unknown> = {}): Record<string, unknown> {
+  if (params.view !== undefined) return workflowDocumentPage(flow, params);
+  if (params.cursor !== undefined || params.version_id !== undefined) throw new Error("get: view is required when using cursor or version_id");
   const summary = summarizeFlow(flow);
   const draft = getLatestDraft(flow.id);
   const published = flow.published_version_id ? getFlowVersion(flow.published_version_id) : null;
-  return {
+  const result = {
     ...summary,
     latestDraft: versionForModel(checkedVersion(flow.id, draft)),
     published: versionForModel(checkedVersion(flow.id, published)),
@@ -990,6 +997,55 @@ function actGet(flow: FlowRow): Record<string, unknown> {
       ...(typeof fire.detail?.reason === "string" ? { reason: fire.detail.reason } : {}),
     })),
   };
+  if (JSON.stringify(result).length <= FRAMED_PAYLOAD_MAX_CHARS) return result;
+  const version = draft ?? published;
+  return {
+    ...summary, detailPaged: true,
+    latestDraft: draft ? { id: draft.id, state: draft.state } : null,
+    published: published ? { id: published.id, state: published.state } : null,
+    ...(version ? { ...validationSummary(flow.id, version.id),
+      definition: { action: "get", flow: flow.id, version_id: version.id, view: "definition" },
+      validationReport: { action: "get", flow: flow.id, version_id: version.id, view: "validation" },
+    } : {}),
+    note: "Full definition and validation are paged. Read content pages until nextCursor is null; concatenate and parse JSON. No steps or checks are silently discarded.",
+  };
+}
+
+/** Pages measure the serialized envelope, including escaped text, before framing. */
+function workflowDocumentPage(flow: FlowRow, params: Record<string, unknown>): Record<string, unknown> {
+  if (params.view !== 'definition' && params.view !== 'validation') throw new Error('get: unknown view');
+  const version = typeof params.version_id === 'string' ? getFlowVersion(params.version_id) : getLatestDraft(flow.id) ?? (flow.published_version_id ? getFlowVersion(flow.published_version_id) : null);
+  if (!version || version.flowId !== flow.id) throw new Error('Version not found in this workflow');
+  const document = params.view === 'definition' ? version : {
+    ...validationSummary(flow.id, version.id),
+    structure: compileWorkflow(version.trigger, { pieces: workflowReadinessServices()?.pieces, phase: 'composition' }),
+    readiness: versionReadiness(flow.id, version.id),
+  };
+  const text = JSON.stringify(document);
+  const hash = createHash('sha256').update(flow.id + version.id + params.view + text).digest('hex');
+  let offset = 0;
+  if (params.cursor !== undefined) {
+    const match = typeof params.cursor === 'string' && /^([a-f0-9]{64}):(\d+)$/.exec(params.cursor);
+    if (!match || match[1] !== hash) throw new Error('Readback changed or cursor is invalid; restart this view without a cursor');
+    offset = Number(match[2]);
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset >= text.length) throw new Error('get: cursor offset is out of range');
+  }
+  let end = Math.min(offset + 2000, text.length);
+  for (;;) {
+    const result = { flowId: flow.id, versionId: version.id, view: params.view, totalChars: text.length,
+      offset, nextCursor: end < text.length ? hash + ':' + end : null, content: text.slice(offset, end) };
+    if (JSON.stringify(result).length <= FRAMED_PAYLOAD_MAX_CHARS) return result;
+    if (--end <= offset) throw new Error('Readback envelope exceeds its size budget');
+  }
+}
+
+function validationSummary(flowId: string, versionId: string) {
+  const readiness = versionReadiness(flowId, versionId);
+  const structure = compileWorkflow(getFlowVersion(versionId)?.trigger, { pieces: workflowReadinessServices()?.pieces, phase: 'composition' });
+  return { validation: { structureValid: structure.ready, readyToRun: readiness.ready,
+    structureIssueCount: structure.issues.length, setupIssueCount: structure.setupIssues?.length ?? 0,
+    readinessIssueCount: readiness.issues.length, runtimeCheckCount: readiness.runtimeChecks.length,
+    functionalTesting: "not_performed" } };
 }
 
 function actRun(flow: FlowRow, payload?: Record<string, unknown>): Record<string, unknown> {
@@ -1245,13 +1301,21 @@ const ACCOUNT_SETUP_GUIDANCE = "Use Connected workspace for secure connector acc
 function setupReadiness(flowId: string, versionId: string, compositionId: string) {
   const readiness = versionReadiness(flowId, versionId);
   const structureValid = compileWorkflow(getFlowVersion(versionId)?.trigger, { pieces: workflowReadinessServices()?.pieces, phase: 'composition' }).ready;
-  return { validation: { structureValid, readyToRun: readiness.ready }, readiness, ...(!readiness.ready ? { setup: {
-    status: "needs_configuration", label: "Setup required", fields: readiness.issues,
+  const full = { validation: { structureValid, readyToRun: readiness.ready }, readiness, ...(!readiness.ready ? { setup: {
+    status: structureValid ? "needs_configuration" : "needs_repair", label: structureValid ? "Setup required" : "Validation failed", fields: readiness.issues,
     editor: { flowId, versionId }, nextQuestion: readiness.issues.some(i => i.code === "CONNECTION_BINDING")
       ? ACCOUNT_SETUP_GUIDANCE : readiness.issues[0]?.message,
     accountSetup: ACCOUNT_SETUP_GUIDANCE,
     continueWith: { action: "continue_setup", composition_id: compositionId },
   } } : {}) };
+  if (JSON.stringify(full).length <= 1800) return full;
+  return { ...validationSummary(flowId, versionId),
+    validationReport: { action: "get", flow: flowId, version_id: versionId, view: "validation" },
+    definition: { action: "get", flow: flowId, version_id: versionId, view: "definition" },
+    ...(!readiness.ready ? { setup: { status: structureValid ? "needs_configuration" : "needs_repair", label: structureValid ? "Setup required" : "Validation failed",
+      issueCount: readiness.issues.length, editor: { flowId, versionId }, accountSetup: ACCOUNT_SETUP_GUIDANCE,
+      continueWith: { action: "continue_setup", composition_id: compositionId },
+    } } : {}) };
 }
 
 async function actContinueSetup(compositionId: string, rawAnswers: unknown, installOption: unknown, deps: ManageWorkflowDeps, project: string): Promise<Record<string, unknown>> {

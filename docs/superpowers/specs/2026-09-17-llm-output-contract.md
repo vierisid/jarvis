@@ -90,7 +90,12 @@ that failed. A handled step routes on `{{step.outcome.status}}` and
 - It does not unwrap code fences or extract JSON from prose. A fenced reply is
   `INVALID_JSON_OUTPUT`, and the message says the fence is the likely cause.
 - It is not a JSON Schema implementation. No `pattern`, `format`, `oneOf`,
-  `anyOf`, `$ref`, `patternProperties`, type unions, `nullable` or defaults.
+  `anyOf`, `$ref`, `patternProperties`, general type unions, `nullable` or defaults.
+  A two-element type array containing one supported type and `"null"` is supported
+  for nullable extraction fields; constraints still apply to non-null values.
+- Static Ask output schemas are checked during composition and readiness using
+  the same runtime parser. Invalid declarations cannot pass structural validation.
+  Dynamic declarations retain a runtime check before model dispatch.
 - Only `jarvis-ask` gains the contract. Community pieces, CODE steps and the
   delegated-agent path are untouched; agent outcomes remain A3.
 - The receipt records what the model answered and whether it met the

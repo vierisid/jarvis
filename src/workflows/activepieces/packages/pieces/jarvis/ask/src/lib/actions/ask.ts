@@ -67,7 +67,7 @@ export const askAction = createAction({
     outputSchema: Property.LongText({
       displayName: "Output schema (JSON)",
       description:
-        "Optional JSON Schema the parsed reply must match. Supported keywords: type, properties, required, additionalProperties, items, enum, minItems, maxItems, minLength, maxLength, minimum, maximum. Any other keyword is refused before the prompt is sent. Implies Parse JSON. Describe the shape in the prompt as well: the schema checks the reply, it does not steer the model.",
+        "Optional JSON Schema the parsed reply must match. Supported keywords: type, properties, required, additionalProperties, items, enum, minItems, maxItems, minLength, maxLength, minimum, maximum. Type accepts a single type or a two-element array containing one type and null (for example, a nullable number). Other unions and unsupported keywords are refused before the prompt is sent. Implies Parse JSON. Describe the shape in the prompt as well: the schema checks the reply, it does not steer the model.",
       required: false,
     }),
     requireSuccess: Property.Checkbox({
