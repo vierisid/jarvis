@@ -130,6 +130,14 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
       source = approval;
       item.kind = 'permission';
       item.title = (approvalIntentFromContext(approval) ?? approval.reason ?? approval.tool_name).slice(0, 1000);
+      item.review = { toolName: approval.tool_name, reason: approval.reason };
+      if (approval.tool_name.startsWith('browser_')) {
+        try {
+          const args = JSON.parse(approval.tool_arguments);
+          if (typeof args.target === 'string') item.review.target = args.target.slice(0, 160);
+          if (typeof args.url === 'string') { const url = new URL(args.url); if (['http:', 'https:'].includes(url.protocol)) item.review.origin = url.origin; }
+        } catch { /* Details remain available from the permission reason. */ }
+      }
       item.approval = { approvalId: sourceId, status: approval.status, executionMode: approval.execution_mode,
         executionOutcome: approval.execution_outcome ?? null };
       // A legacy executed row without a receipt is not proof of a committed effect.

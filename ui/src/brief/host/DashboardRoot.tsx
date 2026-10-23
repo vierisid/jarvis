@@ -162,7 +162,7 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
     if (owner.roomNavRequest && !owner.roomActionRequests.some(request => request.ts === owner.roomNavRequest?.ts))
       void host.navigation.intent(owner.roomNavRequest.key, false);
   }, [owner.roomNavRequest?.ts]);
-  const attention = <><AttentionRoutes snapshot={owner.isConnected ? { status: 'ready', items: fromNotificationCenter(notices.items) } : { status: 'unavailable' }}
+  const attention = <><AttentionRoutes snapshot={owner.isConnected ? { status: 'ready', items: fromNotificationCenter(notices.items.filter(item => !['approval', 'clarifier', 'repeat-back'].includes(item.kind))) } : { status: 'unavailable' }}
     navigation={host.navigation} roomAvailable={host.available} markRead={identity => notices.markRead(identity.id)} />
     <section aria-label="Voice confirmations">{owner.clarifiers.map(item => <ClarifierCard key={item.id} {...item}
       onConfirm={() => void resolveAttention('clarifier', item.id, 'confirm')} onCancel={() => void resolveAttention('clarifier', item.id, 'cancel')} />)}
@@ -173,7 +173,7 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
   // Stable wrapper type retains the selected decision while attention changes.
   const latest = useRef(attention); latest.current = attention;
   const rooms = useMemo(() => { const Body = host.rooms['needs-you']!.Body!;
-    return { ...host.rooms, 'needs-you': { ...host.rooms['needs-you']!, Body: ({ shell }: { shell: BriefShellPort }) => <>{latest.current}<Body shell={shell} /></> } };
+    return { ...host.rooms, 'needs-you': { ...host.rooms['needs-you']!, Body: ({ shell }: { shell: BriefShellPort }) => <><Body shell={shell} />{latest.current}</> } };
   }, [host]);
   const RetainedBody = retained ? getRoomBody(retained) : null;
   return <><RoomActionBridge requests={owner.roomActionRequests} ack={owner.ackRoomActionRequests}
@@ -200,5 +200,11 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
         </section>
       </LiveDataProvider>)}
     </BriefHost>
+    {route.room !== 'needs-you' && notices.items.find(item => item.kind === 'system' && item.unread) && (() => {
+      const notice = notices.items.find(item => item.kind === 'system' && item.unread)!;
+      return <aside className="brief-root brief-host-toast" role="status" aria-label="New Jarvis notification"><strong>{notice.title}</strong><p>{notice.text}</p>
+        <button onClick={() => void host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'needs-you', selection: {} } }, message: null }))}>View notifications</button>
+        <button onClick={() => notices.markRead(notice.id)}>Dismiss</button></aside>;
+    })()}
   </>;
 }

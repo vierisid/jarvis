@@ -63,11 +63,14 @@ type Turn = { call: string; args?: Record<string, unknown> } | 'finish';
 const WRITE_THEN_FINISH: Turn[] = [{ call: 'write_file', args: ARGS }, 'finish'];
 
 /** The run and version live in the database; everything in memory can be rebuilt on the same ids. */
-function createRun(input: Record<string, unknown> = {}, loop = false) {
+function createRun(input: Record<string, unknown> = {}, loop = false, notify = false) {
   const flow = createFlow({});
   const delegate: FlowTriggerNode = { name: 'delegate', type: 'PIECE', displayName: 'delegate', settings: { pieceName: PIECE,
     pieceVersion: '0.0.1', actionName: 'delegate', input: { goal: 'Save the note', maxIterations: 4, role: ROLE.id, ...input } } };
-  const version = createDraftVersion({ flowId: flow.id, displayName: 'Delegated routine', trigger: { name: 'trigger', type: 'EMPTY',
+  if (notify) delegate.nextAction = { name: 'notify', type: 'PIECE', displayName: 'Send agenda', settings: {
+    pieceName: '@jarvispieces/piece-jarvis-notify', pieceVersion: '0.0.1', actionName: 'notify',
+    input: { message: '{{delegate.finalMessage}}', channels: ['dashboard'], priority: 'normal' } } };
+  const version = createDraftVersion({ flowId: flow.id, displayName: 'Delegated routine' , trigger: { name: 'trigger', type: 'EMPTY',
     nextAction: loop ? { name: 'loop', type: 'LOOP_ON_ITEMS', settings: { items: '{{trigger.items}}' }, firstLoopAction: delegate } : delegate } });
   const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' });
   return { flow, version, run };
@@ -77,6 +80,7 @@ const delegationId = (runId: string, path: Array<[string, number]> = []) => 'wfd
 type Options = {
   /** What the model asks for, turn by turn; it finishes once every scripted call has a result. */
   script?: Turn[];
+  finalReport?: string;
   authority?: Partial<{ default_level: number; governed_categories: string[]; overrides: unknown[] }>;
   childLevel?: number;
   /** Behaviour of the synthetic tools. */
@@ -106,6 +110,7 @@ type Options = {
 function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
   const script = opts.script ?? WRITE_THEN_FINISH;
   let effects = 0, llmCalls = 0;
+  const notifications: string[] = [];
   const writes: Array<Record<string, unknown>> = [];
   const registry = new ToolRegistry();
   registry.register({ name: 'write_file', category: 'file-ops', description: 'Synthetic write', parameters: {},
@@ -178,11 +183,11 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
       // The next scripted turn is the one after as many answered tool calls as the log holds.
       const answered = messages.filter(m => m.role === 'tool').length;
       const turn = script[answered];
-      if (!turn || turn === 'finish') return { content: 'Saved the note', finish_reason: 'end_turn', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 } };
+      if (!turn || turn === 'finish') return { content: opts.finalReport ?? (script.some(t => t !== 'finish' && t.call.startsWith('browser_')) ? JSON.stringify({ taskStatus: 'completed', finalMessage: 'Saved the note' }) : 'Saved the note'), finish_reason: 'end_turn', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 } };
       return { content: '', finish_reason: 'tool_use', tool_calls: [{ id: `call-${answered + 1}`, name: turn.call, arguments: turn.args ?? {} }],
         usage: { input_tokens: 1, output_tokens: 1 } };
     } } as any,
-    channelService: {} as any, wsService: {} as any });
+    channelService: {} as any, wsService: { broadcastNotificationToDashboard: (text: string) => { notifications.push(text); return 1; } } as any });
   const context = (path: Array<[string, number]> = []) => ({ runId: ids.run.id, projectId: DEFAULT_IDS.project, stepName: 'delegate', executionPath: path });
   const delegate = (extra: Record<string, unknown> = {}, path: Array<[string, number]> = []) =>
     services.agentDelegate!({ goal: 'Save the note', maxIterations: 4, role: ROLE.id, ...extra }, context(path));
@@ -191,7 +196,7 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
       headers: { 'X-Jarvis-Step-Name': 'delegate', 'X-Jarvis-Execution-Path': '[]' },
       body: JSON.stringify({ goal: 'Save the note', maxIterations: 4, role: ROLE.id, ...body }) }),
     claims: { runId: ids.run.id, projectId: DEFAULT_IDS.project, sandboxId: 'test' } as any, params: {} });
-  return { services, approvals, emergency, authority, auditTrail, delegate, route, effects: () => effects, llmCalls: () => llmCalls,
+  return { notifications, services, approvals, emergency, authority, auditTrail, delegate, route, effects: () => effects, llmCalls: () => llmCalls,
     writes };
 }
 
@@ -1412,3 +1417,39 @@ test('browser approval rechecks both browser access and UI control after the car
   f.approvals.approve(parked.approval!.approvalId, 'dashboard');
   await f.delegate(); expect(f.effects()).toBe(0);
 });
+
+
+test.skipIf(engineSkip)('a signed-out browser fails the real run and never reaches its notification step', async () => {
+  const ids = createRun({ requiredTools: 'browser_snapshot', requireSuccess: true }, false, true);
+  updateRun(ids.run.id, { status: 'QUEUED' });
+  const f = await boot(ids, { script: [{ call: 'browser_snapshot' }, 'finish'],
+    finalReport: JSON.stringify({ taskStatus: 'blocked', reason: 'sign_in_required', finalMessage: 'Sign in in the Jarvis browser.' }) });
+  try {
+    enqueue({ jobType: 'RUN_FLOW', flowRunId: ids.run.id, maxAttempts: 1, payload: { runId: ids.run.id } });
+    await f.worker.drain();
+    const run = getFlowRun(ids.run.id)!;
+    expect(run.status).toBe('FAILED');
+    expect(run.steps?.notify).toBeUndefined();
+    expect(f.notifications).toEqual([]);
+    expect(listWorkflowEffects(ids.run.id).some(e => e.route === 'notify')).toBe(false);
+    expect(getDelegation(delegationId(ids.run.id))?.result?.outcome).toMatchObject({ status: 'blocked', code: 'BROWSER_SIGN_IN_REQUIRED' });
+  } finally { await f.stop(); }
+}, 60_000);
+
+
+test.skipIf(engineSkip)('a completed browser agenda reaches the real notification piece once', async () => {
+  const ids = createRun({ requiredTools: 'browser_snapshot', requireSuccess: true }, false, true);
+  updateRun(ids.run.id, { status: 'QUEUED' });
+  const f = await boot(ids, { script: [{ call: 'browser_snapshot' }, 'finish'],
+    finalReport: JSON.stringify({ taskStatus: 'completed', finalMessage: 'No meetings today' }) });
+  try {
+    enqueue({ jobType: 'RUN_FLOW', flowRunId: ids.run.id, maxAttempts: 1, payload: { runId: ids.run.id } });
+    await f.worker.drain();
+    expect(getFlowRun(ids.run.id)!.status).toBe('SUCCEEDED');
+    const notify = listWorkflowEffects(ids.run.id).find(e => e.route === 'notify');
+    expect(notify?.status).toBe('succeeded');
+    expect(notify?.result).toMatchObject({ delivered: ['dashboard'], failed: [] });
+    expect(f.notifications).toEqual(['No meetings today']);
+    await f.worker.drain(); expect(f.notifications).toEqual(['No meetings today']);
+  } finally { await f.stop(); }
+}, 60_000);

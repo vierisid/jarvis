@@ -153,7 +153,7 @@ export function useNotificationCenter({
         text: n.text,
         // SystemNotice has no timestamp; treat as "right now" so it sorts
         // to the top until the user reads it.
-        timestamp: Date.now(),
+        timestamp: n.timestamp ?? Date.now(),
         tone: n.level === "warning" ? "warn" : "neutral",
         unread: !readSet.has(n.id),
       });

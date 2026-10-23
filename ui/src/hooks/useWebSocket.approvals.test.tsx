@@ -246,3 +246,12 @@ describe("approval rehydrate on socket open merges with live events (#1087)", ()
     expect(ids()).toEqual(["b"]);
   });
 });
+
+
+test("proactive dashboard notifications enter the visible notice feed with stable identity", async () => {
+  const socket = sockets[0]!;
+  const event = { data: JSON.stringify({ id: "agenda-fixture", type: "chat", payload: { source: "proactive", text: "No meetings today" }, priority: "normal", timestamp: 123 }) };
+  await deliver(socket, event); await deliver(socket, event);
+  expect(state.notices.filter(n => n.id === "agenda-fixture")).toHaveLength(1);
+  expect(state.notices.find(n => n.id === "agenda-fixture")).toMatchObject({ title: "Jarvis notification", text: "No meetings today", timestamp: 123, level: "info" });
+});

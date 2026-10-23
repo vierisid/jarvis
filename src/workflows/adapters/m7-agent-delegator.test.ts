@@ -488,3 +488,36 @@ describe("extractToolCallsTrace", () => {
     expect(trace[0]?.error).toBeUndefined();
   });
 });
+
+
+describe("browser task completion", () => {
+  const trace: LLMMessage[] = [
+    { role: "assistant", content: "", tool_calls: [{ id: "b1", name: "browser_snapshot", arguments: {} }] },
+    { role: "tool", tool_call_id: "b1", content: "Page: Calendar sign in" },
+  ];
+  async function run(response: string) {
+    const { orchestrator } = makeOrchestratorStub({ primary: { id: "primary", canSpawn: true } });
+    return new M7AgentDelegator({ orchestrator: orchestrator as any, llmManager: {} as any,
+      specialists: new Map([["research-analyst", makeRole("research-analyst")]]),
+      defaultRoleId: "research-analyst", runSubAgentFn: makeSuccessRunner(trace, response) })
+      .delegate({ goal: "Retrieve the agenda. Do not notify if sign-in is needed.", requiredTools: ["browser_snapshot"] });
+  }
+  test("a completed browser read does not prove the requested task succeeded", async () => {
+    const out = await run("Failure: Google Calendar opened a public sign-in page. No agenda was retrieved.");
+    expect(out.outcome?.status).not.toBe("succeeded");
+  });
+  test("sign-in is an explicit blocked outcome, with no downstream agenda", async () => {
+    const out = await run(JSON.stringify({ taskStatus: "blocked", reason: "sign_in_required", finalMessage: "Sign in to Calendar in the Jarvis browser." }));
+    expect(out.outcome).toMatchObject({ status: "blocked", code: "BROWSER_SIGN_IN_REQUIRED" });
+    expect(out.finalMessage).toBe("");
+  });
+  test("a declared complete agenda unwraps the output for the following step", async () => {
+    const out = await run(JSON.stringify({ taskStatus: "completed", finalMessage: "No meetings today" }));
+    expect(out.outcome).toEqual({ status: "succeeded" });
+    expect(out.finalMessage).toBe("No meetings today");
+  });
+  test("incomplete and malformed reports cannot become success", async () => {
+    for (const report of ['{}', '{bad', JSON.stringify({ taskStatus: "failed", finalMessage: "Could not inspect all events" }), JSON.stringify({ taskStatus: "completed", finalMessage: "" })])
+      expect((await run(report)).outcome?.status).not.toBe("succeeded");
+  });
+});

@@ -112,3 +112,26 @@ test('host Run skips empty scheduled input, retains webhook cancellation and sen
     }
   }
 });
+
+
+test('permission cards preserve selection and settle only the selected request once', async () => {
+  let rows: any[] = ['one', 'two'].map(id => ({ decisionId: 'approval:' + id, revision: 'revision-' + id, kind: 'permission',
+    title: 'Review browser_navigate. This action needs review.', state: 'pending', review: { toolName: 'browser_navigate', reason: 'Approval required', origin: 'https://calendar.example' },
+    supportedActions: ['approve_permission', 'reject_permission', 'inspect'] }));
+  const writes: any[] = [];
+  const transport = createHostTransport((async (path, init) => {
+    const body = JSON.parse(String(init?.body)); writes.push({ path, body });
+    const id = decodeURIComponent(String(path).split('/').at(-2)!);
+    rows = rows.filter(row => row.decisionId !== id);
+    return Response.json({ decisionId: id, revision: 'settled', state: 'approved' });
+  }) as typeof fetch);
+  await React.act(async () => root.render(<Commands.PendingDecisions http={transport} read={async () => rows} enabled changed={() => {}} selection="two" />));
+  expect(host.querySelectorAll('.brief-decision-choice')).toHaveLength(2);
+  expect(host.querySelector('article.brief-decision-paper')).not.toBeNull();
+  await click('Grant permission');
+  expect(writes).toHaveLength(1); expect(writes[0].path).toContain('approval%3Atwo');
+  expect(writes[0].body).toMatchObject({ revision: 'revision-two', action: 'approve_permission' });
+  expect(host.querySelectorAll('.brief-decision-choice')).toHaveLength(1);
+  await click('Deny permission'); expect(writes[1].body.action).toBe('reject_permission');
+  transport.stop();
+});

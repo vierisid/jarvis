@@ -111,6 +111,14 @@ const OFFLINE_CODES = new Set(['WORKFLOW_MACHINE_OFFLINE', 'WORKFLOW_MACHINE_UNA
  * when the workflow was enabled that no longer holds (Q-05), or a desktop app
  * too old for a reviewed action (Q-09). Each refused before anything ran.
  */
+// Task failures can follow successful browser navigation. Preserve that uncertainty
+// while still naming the account/setup action the user needs to take.
+const BROWSER_TASK_FAILURES: Record<string, { category: FailureCategory; why: string; step: RecoveryStep }> = {
+  BROWSER_SIGN_IN_REQUIRED: { category: 'missing_binding', why: 'sign-in is required in the Jarvis browser. Sign in there, confirm the intended account, then start a new run', step: 'ask_again' },
+  BROWSER_SETUP_REQUIRED: { category: 'missing_binding', why: 'the browser account or requested scope needs setup. Confirm the account and scope before starting a new run', step: 'ask_again' },
+  BROWSER_TASK_UNCONFIRMED: { category: 'missing_binding', why: 'the browser task did not confirm completion. Inspect the browser and run details before trying again', step: 'open_details' },
+  BROWSER_TASK_INCOMPLETE: { category: 'missing_binding', why: 'the browser task could not complete the requested work. Inspect the run details before trying again', step: 'open_details' },
+};
 const NAMED_REFUSALS: Record<string, { category: FailureCategory; why: string; step: RecoveryStep }> = {
   WORKFLOW_BROWSER_REVIEW_STALE: { category: 'missing_binding', why: 'the reviewed browser session changed or Jarvis restarted', step: 'ask_again' },
   WORKFLOW_MACHINE_REPLACED: { category: 'missing_binding', why: 'the computer it was enabled for is no longer enrolled', step: 'accept_binding_change' },
@@ -238,6 +246,11 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
           `${s} could not complete the tools required for its task.`, uncertain ? MAYBE : NOTHING,
           ['review_authority', 'open_details'], links, code, detail);
       }
+      const browserTask = code ? BROWSER_TASK_FAILURES[code] : undefined;
+      if (browserTask) return build(browserTask.category, o.effect === 'not_started' ? 'none' : 'unknown',
+        `${s} did not complete because ${browserTask.why}.`,
+        o.effect === 'not_started' ? NOTHING : 'The requested task was not completed. Browser actions may already have occurred.',
+        [browserTask.step, 'open_details'], links, code, detail);
       // Whatever the code, an outcome that may have occurred is uncertain: never "nothing happened".
       if (o.status === 'unknown' || o.effect === 'may_have_occurred') {
         return build('uncertain_effect', 'unknown', `${s} may or may not have taken effect.`, MAYBE,

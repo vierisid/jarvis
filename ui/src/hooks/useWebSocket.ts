@@ -331,7 +331,8 @@ export type SystemNotice = {
   id: string;
   title: string;
   text: string;
-  level: "warning";
+  level: "warning" | "info";
+  timestamp?: number;
 };
 
 export type ApprovalImpact = "read" | "write" | "destructive" | "external";
@@ -932,6 +933,11 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
 
   const handleMessage = useCallback((msg: WSMessage) => {
     if (msg.type === "chat" && msg.payload?.source) {
+      if (msg.payload.source === "proactive" && typeof msg.payload.text === "string" && msg.payload.text.trim()) {
+        const notice: SystemNotice = { id: msg.id || uuid(), title: "Jarvis notification", text: msg.payload.text,
+          level: msg.priority === "urgent" ? "warning" : "info", timestamp: msg.timestamp };
+        setNotices(prev => [notice, ...prev.filter(n => n.id !== notice.id)].slice(0, 100));
+      }
       // Proactive message (heartbeat or reactor notification)
       setMessages((prev) => [
         ...prev,
