@@ -119,7 +119,7 @@ export const REVIEWED_LICENSES: Readonly<Record<string, ReviewedLicense>> = {
   },
   // absurd-sql@0.0.54 would need one too, as MIT (no license field, ships
   // the MIT text in LICENSE), but only @actual-app/core pulls it and
-  // actualbudget is SHARED_BUILD_EXCLUDED, so it is not in the shared tree.
+  // actualbudget is EXCLUDED, so it is not in the shared tree (or any catalog).
 };
 
 /** How a package's license was decided. */

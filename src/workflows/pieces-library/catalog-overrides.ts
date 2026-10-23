@@ -10,12 +10,15 @@
  *                        "third-party code" preamble in the UI. Each id added
  *                        here should have had a hands-on smoke test + an
  *                        engine end-to-end check first; see README step 5.
- *   - `EXCLUDED`         Pieces we never want to ship -- deprecated upstream,
- *                        known to crash on import, license issues, etc.
- *                        These are dropped from the final CATALOG entirely.
+ *   - `EXCLUDED`         Pieces we never ship, as id -> reason -- deprecated
+ *                        upstream, known to crash on import, license issues,
+ *                        etc. Dropped from the final CATALOG entirely, so no
+ *                        Library offers them and installPiece refuses them,
+ *                        hosted or self-managed.
  *   - `SHARED_BUILD_EXCLUDED` Pieces left out of the hosted shared tree only,
  *                        because the license policy denies something they
- *                        install (#971).
+ *                        install (#971). Self-managed users can still install
+ *                        them.
  *   - `VERSION_PIN`      Hold-back pins for pieces whose latest release is
  *                        broken. Overrides the generated versionRange +
  *                        vettedVersion. Drop the entry once the next upstream
@@ -87,12 +90,27 @@ export const VERIFIED_METADATA: Record<string, { vettedAt: string }> = {
 };
 
 /**
- * Pieces we explicitly DON'T ship. Reasons documented inline so future
- * reviewers know whether the exclusion is still warranted.
+ * Pieces we explicitly DON'T ship, anywhere, as id -> reason. The reason is
+ * what installPiece refuses with and what a self-managed Library shows on a
+ * row someone installed before the exclusion, so write it for that person.
+ *
+ * An excluded id stays in catalog-generated.ts: that file is the upstream
+ * list, rewritten by the weekly sync, and the merge in catalog.ts drops these
+ * ids from it every time. The sync never edits this file, so it cannot bring
+ * one back.
+ *
+ * An install that already has one keeps it (the reconciler still installs
+ * what the manifest declares and flows that use it keep running); the
+ * Library lists it as withdrawn with this reason and offers only Uninstall.
  */
-export const EXCLUDED: ReadonlySet<string> = new Set<string>([
-  // (empty -- add ids with a comment explaining why)
-]);
+export const EXCLUDED: Readonly<Record<string, string>> = {
+  // Owner decision 2026-10-23: out everywhere, not only from the hosted
+  // shared tree (#971). Measured on the full catalog install 2026-10-21.
+  actualbudget:
+    "Actual Budget is no longer offered: @activepieces/piece-actualbudget@0.1.9 > @actual-app/api@26.5.2 > " +
+    "@actual-app/core@26.5.2 pulls hyperformula@3.5.0 (GPL-3.0-only) and ua-parser-js@2.0.10 " +
+    "(AGPL-3.0-or-later), which the Jarvis license policy does not allow (#971).",
+};
 
 /**
  * Pieces left out of the HOSTED shared tree only, as id -> reason (#971).
@@ -101,13 +119,12 @@ export const EXCLUDED: ReadonlySet<string> = new Set<string>([
  * here is not installed there and not offered in a host-managed Library; a
  * self-managed user can still install it, from npm, onto their own machine.
  * Each reason names the packages and the chain that put it here, so a later
- * catalog sync can tell when it no longer holds.
+ * catalog sync can tell when it no longer holds. A piece that should not be
+ * offered anywhere belongs in EXCLUDED instead, which the shared build also
+ * leaves out (and reports).
  */
 export const SHARED_BUILD_EXCLUDED: Readonly<Record<string, string>> = {
-  actualbudget:
-    "@activepieces/piece-actualbudget@0.1.9 > @actual-app/api@26.5.2 > @actual-app/core@26.5.2 " +
-    "pulls hyperformula@3.5.0 (GPL-3.0-only) and ua-parser-js@2.0.10 (AGPL-3.0-or-later), " +
-    "measured on the full catalog install 2026-10-21",
+  // (empty -- add ids with the measured dependency chain as the reason)
 };
 
 /**

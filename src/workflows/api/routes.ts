@@ -109,7 +109,7 @@ import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers
 import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
 import type { PieceLookup } from "../runtime/piece-catalog";
 import { isCommunityPiece } from "../runtime/step-admission";
-import { CATALOG, findCatalogEntry, sharedBuildCatalog } from "../pieces-library/catalog";
+import { CATALOG, excludedReason, findCatalogEntry, sharedBuildCatalog, withdrawnPiece } from "../pieces-library/catalog";
 import { piecesManagedByHost } from "../pieces-library/shared";
 import {
   installPiece,
@@ -1024,8 +1024,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               iconUrl: entry.iconUrl ?? null,
               vettedVersion: entry.vettedVersion,
               vettedAt: entry.vettedAt ?? null,
-              sourceUrl: entry.sourceUrl,
-              licenseSpdx: entry.licenseSpdx,
+              sourceUrl: entry.sourceUrl as string | null,
+              licenseSpdx: entry.licenseSpdx as string | null,
               estimatedSizeMb: entry.estimatedSizeMb ?? null,
               tier: entry.tier,
               installed: installed
@@ -1035,8 +1035,38 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
                     source: "user" as const,
                   }
                 : null,
+              withdrawn: null as { reason: string } | null,
             };
           });
+          // A piece this install has but the catalog no longer lists (an
+          // EXCLUDED one, or one upstream dropped) stays installed and keeps
+          // running. Without a row it would vanish from the Library with no
+          // word on why and no Uninstall button, so it gets one: installed,
+          // withdrawn with the reason, nothing to install or update.
+          for (const piece of manifest.pieces) {
+            if (findCatalogEntry(piece.id)) continue;
+            const gone = withdrawnPiece(piece.id);
+            entries.push({
+              id: piece.id,
+              npmPackage: piece.npmPackage,
+              versionRange: piece.versionRange,
+              displayName: gone.displayName,
+              description: gone.description,
+              iconUrl: null,
+              vettedVersion: piece.resolvedVersion,
+              vettedAt: null,
+              sourceUrl: gone.sourceUrl,
+              licenseSpdx: gone.licenseSpdx,
+              estimatedSizeMb: null,
+              tier: "community" as const,
+              installed: {
+                resolvedVersion: piece.resolvedVersion,
+                installedAt: piece.installedAt,
+                source: "user" as const,
+              },
+              withdrawn: { reason: gone.reason },
+            });
+          }
           return ok({ managed: false, entries });
         }),
     },
@@ -1046,6 +1076,10 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         trapErrors(async () => {
           if (managed) return err(MANAGED_MESSAGE, 403);
           const { id } = (req as RequestWithParams<{ id: string }>).params;
+          // Excluded everywhere: say why rather than "unknown", for a fresh
+          // install and for an Update of one installed before the exclusion.
+          const excluded = excludedReason(id);
+          if (excluded !== null) return err(excluded, 410);
           const entry = findCatalogEntry(id);
           if (!entry) return err(`unknown piece id "${id}"`, 404);
           const result = await withLibraryLock(() => installPiece(id));

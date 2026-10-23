@@ -41,8 +41,8 @@
  * when the build itself cannot complete, and when the license policy denies
  * any package the install put in the shared tree (#971): that tree is what
  * we run for every tenant, so it fails whole rather than shipping without a
- * piece nobody chose to drop. Pieces left out on purpose are
- * SHARED_BUILD_EXCLUDED in catalog-overrides.ts.
+ * piece nobody chose to drop. Pieces left out on purpose are EXCLUDED
+ * (everywhere) or SHARED_BUILD_EXCLUDED (hosted only) in catalog-overrides.ts.
  */
 
 import { spawnSync } from "node:child_process";
@@ -54,8 +54,7 @@ import { EngineRuntime } from "../src/workflows/runner/engine-runtime/engine-run
 import { handOutDigestToFd, publishSharedEngine } from "../src/workflows/runner/engine-runtime/shared-engine-publish";
 import { SandboxApi } from "../src/workflows/sandbox-api/server";
 import { CredentialResolver } from "../src/workflows/credentials/adapter";
-import { sharedBuildCatalog } from "../src/workflows/pieces-library/catalog";
-import { SHARED_BUILD_EXCLUDED } from "../src/workflows/pieces-library/catalog-overrides";
+import { sharedBuildCatalog, sharedBuildExclusions } from "../src/workflows/pieces-library/catalog";
 import { checkSharedTreeLicenses, sharedPiecesPackageJson } from "../src/workflows/pieces-library/shared-build";
 import {
   buildPieceCatalog,
@@ -133,7 +132,7 @@ const { result: extraction, engineDigest } = await publishSharedEngine(bundle, e
   // shape the per-user installer writes, just spanning the whole catalog; the
   // versionRange already carries any VERSION_PIN override. The shared build's
   // catalog leaves out SHARED_BUILD_EXCLUDED, the pieces whose dependencies
-  // the license policy denies (#971).
+  // the license policy denies (#971); the catalog never has EXCLUDED pieces.
   const fullCatalog = sharedBuildCatalog();
   const catalog = piecesLimit !== null ? fullCatalog.slice(0, piecesLimit) : fullCatalog;
   const piecesDir = resolve(out, "pieces");
@@ -171,12 +170,12 @@ const { result: extraction, engineDigest } = await publishSharedEngine(bundle, e
   if (!licenses.ok) {
     log(`REFUSING to build: the license check found ${licenses.problems.length} problem(s) in the shared tree (#971):`);
     for (const line of licenses.problems) log(`  ${line}`);
-    log("Fix the dependency, record a reviewed license in license-policy.ts, or leave the piece out with SHARED_BUILD_EXCLUDED.");
+    log("Fix the dependency, record a reviewed license in license-policy.ts, or leave the piece out: SHARED_BUILD_EXCLUDED for the hosted tree only, EXCLUDED for everywhere.");
     process.exit(1);
   }
   log(`licenses: ${licenses.packages} package(s) allowed`);
   // Say what the hosted tree leaves out, every build, so it is never silent.
-  for (const [id, why] of Object.entries(SHARED_BUILD_EXCLUDED)) log(`licenses: left out of the shared tree: ${id} (${why})`);
+  for (const [id, why] of Object.entries(sharedBuildExclusions())) log(`licenses: left out of the shared tree: ${id} (${why})`);
   for (const k of licenses.unusedReviewed) log(`licenses: reviewed entry ${k} matched nothing in this tree`);
 
   // 4. Metadata extraction for the WHOLE tree (vendored + shared catalog),
@@ -260,8 +259,9 @@ const summary =
       packages: licenses.packages,
       weakCopyleft: licenses.weakCopyleft,
       reviewed: licenses.reviewed,
-      // Pieces this hosted tree leaves out on purpose, and why (#971).
-      excluded: SHARED_BUILD_EXCLUDED,
+      // Pieces this hosted tree leaves out on purpose, and why (#971): the
+      // ones excluded everywhere and the ones excluded from it alone.
+      excluded: sharedBuildExclusions(),
       notices: noticesPath,
     },
     elapsedMs: Date.now() - t0,

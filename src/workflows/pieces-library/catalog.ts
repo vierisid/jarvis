@@ -79,10 +79,12 @@ export interface CatalogEntry {
  * Build the final catalog by applying overrides to the generated list.
  * Computed once at module load -- the inputs are static.
  */
-function buildCatalog(): CatalogEntry[] {
+export function buildCatalog(generated: readonly GeneratedCatalogEntry[] = GENERATED): CatalogEntry[] {
   const out: CatalogEntry[] = [];
-  for (const g of GENERATED) {
-    if (EXCLUDED.has(g.id)) continue;
+  for (const g of generated) {
+    // Every run, against whatever the sync last wrote: the generated list is
+    // the upstream one and keeps listing an excluded piece.
+    if (Object.hasOwn(EXCLUDED, g.id)) continue;
     out.push(mergeEntry(g));
   }
   // Stable sort: verified first (so they appear at the top of the UI),
@@ -170,4 +172,56 @@ export function catalogById(): Map<string, CatalogEntry> {
  */
 export function sharedBuildCatalog(): CatalogEntry[] {
   return CATALOG.filter((entry) => !Object.hasOwn(SHARED_BUILD_EXCLUDED, entry.id));
+}
+
+/**
+ * Everything the hosted shared tree leaves out, as id -> reason: the pieces
+ * excluded everywhere (EXCLUDED, never in CATALOG) and the ones excluded from
+ * the shared tree only. scripts/build-shared-runtime.ts logs and records
+ * these, so a hosted build never drops a piece silently.
+ */
+export function sharedBuildExclusions(): Readonly<Record<string, string>> {
+  return { ...EXCLUDED, ...SHARED_BUILD_EXCLUDED };
+}
+
+/** Why a piece is excluded everywhere, or null when it is not. */
+export function excludedReason(id: string): string | null {
+  return Object.hasOwn(EXCLUDED, id) ? EXCLUDED[id]! : null;
+}
+
+/** A piece the installer refuses because the catalog excludes it everywhere. */
+export class PieceExcludedError extends Error {
+  readonly code = "PIECE_EXCLUDED" as const;
+  constructor(
+    readonly pieceId: string,
+    readonly reason: string,
+  ) {
+    super(`piece "${pieceId}" cannot be installed: ${reason}`);
+    this.name = "PieceExcludedError";
+  }
+}
+
+/**
+ * What a self-managed Library shows for a piece the manifest has installed
+ * but the catalog no longer lists: an EXCLUDED one, or one upstream dropped.
+ * Names come from the generated list when it still has the piece. The row
+ * offers only Uninstall; the reason says why there is no Install or Update.
+ */
+export function withdrawnPiece(id: string): {
+  displayName: string;
+  description: string;
+  sourceUrl: string | null;
+  licenseSpdx: string | null;
+  reason: string;
+} {
+  const g = GENERATED.find((entry) => entry.id === id);
+  return {
+    displayName: g?.displayName ?? id,
+    description: g?.description ?? "",
+    sourceUrl: g?.sourceUrl ?? null,
+    licenseSpdx: g?.licenseSpdx ?? null,
+    reason:
+      excludedReason(id) ??
+      "This piece is no longer in the Jarvis catalog, so it can no longer be installed or updated here.",
+  };
 }

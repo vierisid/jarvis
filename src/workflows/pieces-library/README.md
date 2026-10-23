@@ -23,10 +23,16 @@ The CATALOG export in `catalog.ts` is a merge of two inputs:
 2. **`catalog-overrides.ts`** -- hand-edited. Holds:
    - `VERIFIED` -- the set of ids that get the verified tier
    - `VERIFIED_METADATA` -- per-id audit dates
-   - `EXCLUDED` -- ids we never want to ship (deprecated, broken, license)
+   - `EXCLUDED` -- ids we never ship anywhere (deprecated, broken, license),
+     with the reason. No Library lists them, the installer refuses them (the
+     install route answers 410 with the reason), and the hosted build reports
+     them as left out. They stay in `catalog-generated.ts`, which the weekly
+     sync rewrites from upstream; the merge drops them every time and the
+     sync never touches the overrides, so it cannot bring one back.
+     Today: `actualbudget` (see "Licenses of what bun installs" below).
    - `SHARED_BUILD_EXCLUDED` -- ids left out of the hosted shared tree only,
      with the reason, because the license policy denies something they
-     install (see "Licenses of what bun installs" below)
+     install while a self-managed install may still offer them. Empty today.
    - `VERSION_PIN` -- hold-back pins for known-broken upstream releases
    - `SIZE_OVERRIDE` -- hand-measured disk-after-install sizes
    - `DESCRIPTION_OVERRIDE` -- better descriptions where upstream's is poor
@@ -99,8 +105,8 @@ exist here?", and that setting IS the deployment's answer.
 When it is set:
 
 - `GET /api/workflows/pieces/library` returns `managed: true` and the whole
-  shared-build catalog (`sharedBuildCatalog()`: the catalog minus
-  `SHARED_BUILD_EXCLUDED`) as plain entries -- id, package, name, description, tier. No install
+  shared-build catalog (`sharedBuildCatalog()`: the catalog, which never has
+  `EXCLUDED` ids, minus `SHARED_BUILD_EXCLUDED`) as plain entries -- id, package, name, description, tier. No install
   state (everything is installed, so the badge would be noise on every row)
   and none of the install-decision detail: version, vetted date, size,
   license, source. Those are dropped from the PAYLOAD, not hidden by the
@@ -369,11 +375,20 @@ writes `THIRD_PARTY_NOTICES.md` into the tree when it passes. The weekly
 `sync-pieces-catalog` run does the same install and scan on the regenerated
 catalog (`scripts/check-piece-licenses.ts --install <dir>`) and fails first.
 When it does: fix or pin the dependency, add a reviewed entry if the package
-simply lacks a declaration, or leave the piece out of the hosted tree with
-`SHARED_BUILD_EXCLUDED` and a reason.
+simply lacks a declaration, or leave the piece out: of everything with
+`EXCLUDED`, or of the hosted tree only with `SHARED_BUILD_EXCLUDED`, with a
+reason either way. The build logs every id it leaves out from both lists and
+records them, with reasons, as `licenses.excluded` in its summary.
 
 A self-managed install fetches pieces from npm onto the user's own machine
-and is not gated.
+and is not scanned, but it only offers what the catalog lists, so an
+`EXCLUDED` piece is not offered there either.
+
+Actual Budget (`actualbudget`) is `EXCLUDED` for this reason (owner decision
+2026-10-23: everywhere, not only hosted). `@activepieces/piece-actualbudget@0.1.9`
+depends on `@actual-app/api@26.5.2`, which pulls `@actual-app/core@26.5.2`,
+which pulls `hyperformula@3.5.0` (GPL-3.0-only) and `ua-parser-js@2.0.10`
+(AGPL-3.0-or-later), measured on the full catalog install 2026-10-21.
 
 ## Removing a piece
 
@@ -385,11 +400,32 @@ A piece comes out of the catalog when:
 - We discover it pulls EE-licensed code transitively.
 - Maintenance burden outweighs value (rare; document the call).
 
+To remove one on purpose, add it to `EXCLUDED` with a reason written for the
+person who has it installed; that text is what they see.
+
 Removal from the catalog does NOT uninstall the piece from existing user
-installs. The reconciler keeps respecting `installed.json` and surfaces a
-warning when an installed piece is no longer in the catalog. Users can
-uninstall explicitly via the Library UI; future Jarvis releases can ship a
-forced migration path if the situation warrants it.
+installs. On a self-managed install:
+
+- The reconciler keeps respecting `installed.json`: it still installs the
+  piece at boot (also on a fresh container that restores the manifest), held
+  at the exact version it has (the one on disk, else the one recorded at
+  install; a piece with neither keeps its range and the log says so). If it
+  ever returns to the catalog, that exact pin stays until the person presses
+  Update. The engine still loads it, and flows
+  that use it keep running. The editor still offers its actions, since they
+  come from what is installed, not from the catalog. Each boot logs
+  `reconcile: <id> stays installed but is withdrawn from the catalog`, with
+  the reason.
+- The Library lists it as installed and **Withdrawn**, with the reason, and
+  offers only Uninstall. Install and Update are refused (`EXCLUDED`: 410 with
+  the reason; dropped upstream: 404), so it never moves to another version.
+- Uninstall works as for any piece (the route checks the manifest before the
+  catalog), and after it the piece is gone for good from that install.
+
+On a hosted install the shared tree is rebuilt per version without it, so a
+flow that used it fails at run time once the tenant is on that version,
+because the piece is no longer installed there. Future Jarvis releases can ship a forced
+migration path if the situation warrants it.
 
 ## Trust model
 

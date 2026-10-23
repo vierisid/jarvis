@@ -8,8 +8,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { CATALOG, sharedBuildCatalog, type CatalogEntry } from "./catalog";
-import { SHARED_BUILD_EXCLUDED } from "./catalog-overrides";
+import { CATALOG, sharedBuildCatalog, sharedBuildExclusions, type CatalogEntry } from "./catalog";
+import { EXCLUDED, SHARED_BUILD_EXCLUDED } from "./catalog-overrides";
 import { checkSharedTreeLicenses, sharedPiecesPackageJson } from "./shared-build";
 
 const made: string[] = [];
@@ -184,10 +184,30 @@ describe("the shared-build catalog", () => {
     expect(sharedBuildCatalog()).toEqual(CATALOG.filter((e) => !Object.hasOwn(SHARED_BUILD_EXCLUDED, e.id)));
   });
 
-  test("actualbudget is left out: its @actual-app/core pulls GPL-3.0 hyperformula and AGPL-3.0 ua-parser-js", () => {
-    expect(Object.hasOwn(SHARED_BUILD_EXCLUDED, "actualbudget")).toBe(true);
+  test("actualbudget is left out, and reported: its @actual-app/core pulls GPL-3.0 hyperformula and AGPL-3.0 ua-parser-js", () => {
+    // Excluded everywhere now (owner decision 2026-10-23), so it is in
+    // neither catalog, and the shared build still names it as left out.
+    expect(Object.hasOwn(EXCLUDED, "actualbudget")).toBe(true);
     expect(sharedBuildCatalog().some((e) => e.id === "actualbudget")).toBe(false);
-    expect(CATALOG.some((e) => e.id === "actualbudget")).toBe(true);
+    expect(CATALOG.some((e) => e.id === "actualbudget")).toBe(false);
+    expect(sharedBuildExclusions()["actualbudget"]).toBe(EXCLUDED["actualbudget"]!);
+    expect(EXCLUDED["actualbudget"]).toMatch(/hyperformula@3\.5\.0 \(GPL-3\.0-only\).*ua-parser-js@2\.0\.10\s+\(AGPL-3\.0-or-later\)/s);
+  });
+
+  test("the reported exclusions are exactly both lists, so the hosted-only one still reports", () => {
+    // The hosted-only list is empty today; a stand-in shows it still lands in
+    // the report alongside the everywhere list, through the same function.
+    expect(Object.keys(sharedBuildExclusions()).sort()).toEqual(
+      [...new Set([...Object.keys(EXCLUDED), ...Object.keys(SHARED_BUILD_EXCLUDED)])].sort(),
+    );
+    const hostedOnly = SHARED_BUILD_EXCLUDED as Record<string, string>;
+    hostedOnly["stand-in"] = "a hosted-only reason for this test";
+    try {
+      expect(sharedBuildExclusions()["stand-in"]).toBe("a hosted-only reason for this test");
+      expect(sharedBuildExclusions()["actualbudget"]).toBe(EXCLUDED["actualbudget"]!);
+    } finally {
+      delete hostedOnly["stand-in"];
+    }
   });
 });
 
@@ -227,8 +247,8 @@ describe("scripts/build-shared-runtime.ts", () => {
   });
 
   test("the summary and the log name what the hosted tree leaves out", () => {
-    expect(script).toMatch(/\n {6}excluded: SHARED_BUILD_EXCLUDED,\n/);
-    expect(script).toContain("for (const [id, why] of Object.entries(SHARED_BUILD_EXCLUDED)) log(`licenses: left out of the shared tree: ${id} (${why})`);");
+    expect(script).toMatch(/\n {6}excluded: sharedBuildExclusions\(\),\n/);
+    expect(script).toContain("for (const [id, why] of Object.entries(sharedBuildExclusions())) log(`licenses: left out of the shared tree: ${id} (${why})`);");
   });
 
   test("the scan the weekly sync runs installs the same tree the same way", () => {

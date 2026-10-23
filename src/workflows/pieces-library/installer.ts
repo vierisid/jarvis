@@ -19,7 +19,7 @@ import { promises as fs, existsSync, mkdirSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
-import { catalogById, type CatalogEntry } from "./catalog";
+import { catalogById, excludedReason, PieceExcludedError, type CatalogEntry } from "./catalog";
 import { sanitizedEnv } from "../../util/subprocess-env";
 import { BUN_INSTALL_ARGS, SANITIZED_INSTALL_HINT } from "../../util/sanitized-install";
 
@@ -179,6 +179,10 @@ export async function installPiece(
   opts: InstallOptions = {},
 ): Promise<InstallResult> {
   const base = opts.base ?? piecesBaseDir();
+  // Before the manifest is touched: an excluded piece is refused for a fresh
+  // install and for an update of one installed before the exclusion alike.
+  const excluded = excludedReason(id);
+  if (excluded !== null) throw new PieceExcludedError(id, excluded);
   const entry = catalogById().get(id);
   if (!entry) {
     throw new Error(`unknown piece id "${id}" -- not in the catalog`);

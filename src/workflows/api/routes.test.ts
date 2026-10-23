@@ -3575,3 +3575,105 @@ describe("#1080: the workflows list says why an enabled workflow is blocked", ()
     expect((body as Array<{ id: string; blocked: unknown }>).find((f) => f.id === flow.id)?.blocked).toBeNull();
   });
 });
+
+describe("#971: Actual Budget is excluded from both Libraries and refused at install", () => {
+  const MANAGED = { sharedPiecesDir: "/opt/jarvis-pieces/1.2.3" } as const;
+  async function withTempPiecesDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "jarvis-lib-excluded-"));
+    const prev = process.env.JARVIS_PIECES_DIR;
+    process.env.JARVIS_PIECES_DIR = dir;
+    try {
+      return await fn(dir);
+    } finally {
+      if (prev === undefined) delete process.env.JARVIS_PIECES_DIR;
+      else process.env.JARVIS_PIECES_DIR = prev;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  const actualbudget = {
+    id: "actualbudget",
+    npmPackage: "@activepieces/piece-actualbudget",
+    versionRange: "^0.1.9",
+    resolvedVersion: "0.1.9",
+    installedAt: 11,
+  };
+  const libraryOf = async (opts: { sharedPiecesDir: string | null }) => {
+    const r = createWorkflowRoutes(opts);
+    const { status, body } = await callJson(r["/api/workflows/pieces/library"]?.GET, plainReq("GET", "http://x/api/workflows/pieces/library"));
+    expect(status).toBe(200);
+    return body as { managed: boolean; entries: Array<Record<string, any>> };
+  };
+
+  test("neither the managed nor the self-managed Library lists it", async () => {
+    await withTempPiecesDir(async () => {
+      for (const opts of [MANAGED, SELF_MANAGED]) {
+        const body = await libraryOf(opts);
+        expect(body.entries.length).toBeGreaterThan(100);
+        expect(body.entries.some((e) => e.id === "actualbudget")).toBe(false);
+      }
+    });
+  });
+
+  test("install answers 410 with the reason, and installs nothing", async () => {
+    const { excludedReason } = await import("../pieces-library/catalog");
+    await withTempPiecesDir(async (dir) => {
+      const { existsSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const r = createWorkflowRoutes(SELF_MANAGED);
+      const { status, body } = await callJson(
+        r["/api/workflows/pieces/library/:id/install"]?.POST,
+        reqWithParams("POST", "http://x/api/workflows/pieces/library/actualbudget/install", { id: "actualbudget" }),
+      );
+      expect(status).toBe(410);
+      expect(body.error).toBe(excludedReason("actualbudget"));
+      expect(body.error).toMatch(/GPL-3\.0-only.*AGPL-3\.0-or-later/s);
+      expect(existsSync(join(dir, "installed.json"))).toBe(false);
+    });
+  });
+
+  test("a self-managed install that already has it sees it as installed and withdrawn, with the reason", async () => {
+    const { excludedReason } = await import("../pieces-library/catalog");
+    await withTempPiecesDir(async (dir) => {
+      const { writeManifest } = await import("../pieces-library/installer");
+      await writeManifest({ version: 1, pieces: [actualbudget] }, dir);
+      const body = await libraryOf(SELF_MANAGED);
+      const rows = body.entries.filter((e) => e.id === "actualbudget");
+      expect(rows.length).toBe(1);
+      expect(rows[0]).toMatchObject({
+        npmPackage: "@activepieces/piece-actualbudget",
+        displayName: "Actualbudget",
+        sourceUrl: expect.stringContaining("/packages/pieces/community/actualbudget"),
+        tier: "community",
+        installed: { resolvedVersion: "0.1.9", installedAt: 11, source: "user" },
+        withdrawn: { reason: excludedReason("actualbudget") },
+      });
+      // Every catalog row says it is not withdrawn, so the UI never guesses.
+      expect(body.entries.filter((e) => e.withdrawn !== null).map((e) => e.id)).toEqual(["actualbudget"]);
+    });
+  });
+
+  test("a piece upstream dropped gets a withdrawn row too, with a generic reason", async () => {
+    await withTempPiecesDir(async (dir) => {
+      const { writeManifest } = await import("../pieces-library/installer");
+      await writeManifest({ version: 1, pieces: [{ ...actualbudget, id: "yanked-piece", npmPackage: "@activepieces/piece-yanked" }] }, dir);
+      const body = await libraryOf(SELF_MANAGED);
+      const row = body.entries.find((e) => e.id === "yanked-piece");
+      expect(row?.displayName).toBe("yanked-piece");
+      expect(row?.sourceUrl).toBeNull();
+      expect(row?.withdrawn?.reason).toMatch(/no longer in the Jarvis catalog/);
+    });
+  });
+
+  test("the managed Library does not list it even when the tenant's own dir has it", async () => {
+    await withTempPiecesDir(async (dir) => {
+      const { writeManifest } = await import("../pieces-library/installer");
+      await writeManifest({ version: 1, pieces: [actualbudget] }, dir);
+      const body = await libraryOf(MANAGED);
+      expect(body.managed).toBe(true);
+      expect(body.entries.some((e) => e.id === "actualbudget")).toBe(false);
+    });
+  });
+});
