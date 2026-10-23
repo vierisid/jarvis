@@ -62,7 +62,7 @@ const tool = createManageWorkflowTool();
  */
 const FRAMED_ACTIONS = new Set([
   "get", "list_runs", "get_run",
-  "list", "create", "enable", "disable", "publish", "compose",
+  "list", "create", "enable", "disable", "publish", "compose", "continue_setup",
 ]);
 
 /**
@@ -493,8 +493,10 @@ describe("manage_workflow: compose", () => {
       }); },
     });
     expect(t.authorityGate?.({ action: 'compose', name: 'Calendar fixture', install_missing: true })).toMatchObject({ actionCategory: 'install_software' });
-    expect(t.authorityGate?.({ action: 'create', name: 'Calendar fixture', install_missing: true })).toMatchObject({ actionCategory: 'install_software' });
-    expect(t.authorityGate?.({ action: 'compose', name: 'Calendar fixture' })).toBeNull();
+    expect(t.authorityGate?.({ action: 'create', name: 'Calendar fixture', description: 'Build a calendar draft', install_missing: true })).toMatchObject({ actionCategory: 'install_software' });
+    expect(t.authorityGate?.({ action: 'compose', name: 'Calendar fixture' })).toMatchObject({ actionCategory: 'install_software' });
+    expect(t.authorityGate?.({ action: 'compose', install_missing: false })).toBeNull();
+    expect(t.authorityGate?.({ action: 'create', empty: true })).toBeNull();
     const saved = await callFrom(t, "compose", { name: "Calendar fixture", description: "Save a disabled calendar draft", install_missing: true }) as {
       ok: boolean; flow: { id: string; status: string }; versionId: string; compositionRecordId: string; readiness: { ready: boolean; issues: { code: string }[] };
     };

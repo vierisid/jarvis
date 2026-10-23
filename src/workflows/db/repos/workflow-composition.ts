@@ -53,3 +53,20 @@ export function getWorkflowComposition(id: string, projectId: string = DEFAULT_I
     errors: JSON.parse(row.errors), created: row.created, updated: row.updated,
   } : null;
 }
+
+
+/** Latest attempt in a setup chain, scoped to the caller's project. */
+export function latestSetupComposition(rootId: string, projectId: string): WorkflowCompositionRecord | null {
+  const row = getWorkflowDb().query<{ id: string }, [string, string]>(
+    `SELECT id FROM workflow_composition WHERE project_id = ?
+      AND json_extract(specification, '$.context.workflowSetup.rootCompositionId') = ?
+      ORDER BY created DESC, rowid DESC LIMIT 1`).get(projectId, rootId);
+  return getWorkflowComposition(row?.id ?? rootId, projectId);
+}
+
+/** Repeated setup completion returns its existing draft, never creates another. */
+export function composedFlowId(compositionId: string, projectId: string): string | null {
+  return getWorkflowDb().query<{ id: string }, [string, string]>(
+    `SELECT id FROM flow WHERE project_id = ? AND json_valid(metadata)
+      AND json_extract(metadata, '$.compositionRecordId') = ? LIMIT 1`).get(projectId, compositionId)?.id ?? null;
+}

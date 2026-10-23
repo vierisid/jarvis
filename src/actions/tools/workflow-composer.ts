@@ -161,8 +161,8 @@ export interface ComposeOk {
 
 /**
  * A community-library piece the composer thinks would satisfy the request if
- * it were installed. Surfaced on `ComposeFail` so the calling agent can offer
- * the install to the user; the composer itself never installs anything.
+ * it were installed. When installation capability is available, the composer
+ * resolves these dependencies before returning questions to the caller.
  */
 export interface SuggestedInstall {
   /** Library catalog id (e.g. "discord"). */
@@ -606,6 +606,7 @@ async function composeWithTools(
   const rolesText = renderSpecialistRoles(deps.specialistRoles);
   const hasLibrary = (deps.library?.length ?? 0) > 0;
   const canInstall = hasLibrary && !!deps.installLibraryPiece;
+  const installationErrors: string[] = [];
   const installAttempts = new Set<string>();
   const toolDefs = buildComposerToolDefs(toolSpecs !== null, hasLibrary, canInstall);
   const envText = composerExecutionEnvironment(deps.executionTargets ?? []);
@@ -715,6 +716,7 @@ async function composeWithTools(
       if (call.name === "install_library_piece") {
         const result = await installComposerPiece(call.arguments, deps, installAttempts, req.signal);
         req.signal?.throwIfAborted();
+        if (result.startsWith("Error:")) installationErrors.push(result);
         messages.push(toolResult(call, wrapUntrusted(result, "workflow library installation")));
         continue;
       }
@@ -740,7 +742,32 @@ async function composeWithTools(
         continue;
       }
       if (call.name === "report_blocked") {
-        return blockedResult(call.arguments, deps.library, lastRaw);
+        const failure = blockedResult(call.arguments, deps.library, lastRaw);
+        // Do available setup work before asking the user for information. The
+        // outer tool's Authority gate grants installation capability; this
+        // path never grants it or bypasses an explicit no-install request.
+        const pending = canInstall ? [...new Set((failure.suggestedInstalls ?? []).map(s => s.id))]
+          .filter(id => !installAttempts.has(id) && !deps.pieceRegistry.get(deps.library!.find(e => e.id === id)!.npmPackage))
+          .slice(0, Math.max(0, 3 - installAttempts.size)) : [];
+        if (pending.length) {
+          const discoveries: string[] = [];
+          for (const id of pending) {
+            const result = await installComposerPiece({ id }, deps, installAttempts, req.signal);
+            req.signal?.throwIfAborted();
+            if (result.startsWith("Error:")) installationErrors.push(result);
+            discoveries.push(result);
+            const piece = deps.pieceRegistry.get(deps.library!.find(e => e.id === id)!.npmPackage);
+            if (piece) discoveries.push(renderPieceDetails(piece));
+          }
+          messages.push(toolResult(call, wrapUntrusted(discoveries.join("\n\n"), "workflow setup discovery")));
+          messages.push({ role: "user", content: "Required connector setup was attempted under the existing installation authority. Reassess using these actual schemas. If configuration is missing, report concrete questions for only what the user must supply; do not ask them to install a connector that is now available. Preserve the original request and do not run any workflow actions." });
+          continue;
+        }
+        if (installationErrors.length) {
+          failure.errors.push(...installationErrors);
+          failure.capabilityGaps = [...(failure.capabilityGaps ?? []), ...installationErrors];
+        }
+        return failure;
       }
       // Piece metadata/output samples and library descriptions are outside data.
       // This is a prompt message, not a tool-registry return: no later cap may
@@ -1380,7 +1407,7 @@ function buildToolLoopSystemPrompt(
         ? "  4. If no installed piece or Jarvis tool covers the request, search_library, install the matching entry with install_library_piece, then inspect its actual schema and continue building. Respect any user restriction against installation. If installation fails, explain the exact failure; do not claim the connector is available."
         : "  4. If no installed piece or Jarvis tool covers the request, call search_library for an installable piece,\n     then evaluate the permitted browser fallback described below. If neither route covers the request, call report_blocked suggesting the best match. Never force a wrong piece to fit.")
       : "  4. If no native piece or tool covers the request, evaluate the permitted browser fallback described below before report_blocked.\n     Never force a wrong piece to fit.",
-    "  5. Before report_blocked, distinguish connector setup from platform capability. An installed connector can still be unusable (missing account/calendar or undocumented pagination). Inspect a permitted browser-agent route in that case; do not stop at native setup alone. If it can cover the job, save that disabled draft with explicit runtime access/completeness checks. Otherwise explain why that alternative is unavailable or prohibited too. Never relax the user's constraints or a supplied job contract to make a graph pass.",
+    "  5. If an installable connector is missing and install_library_piece is available, install it and inspect the refreshed schema before asking the user anything. Never ask the user for a separate install instruction. For missing payload mappings or destinations, return focused configurationQuestions in the order needed, one question per item. Do not ask for secrets; account binding uses secure Connected workspace setup. Before report_blocked, distinguish connector setup from platform capability. An installed connector can still be unusable (missing account/calendar or undocumented pagination). Inspect a permitted browser-agent route in that case; do not stop at native setup alone. If it can cover the job, save that disabled draft with explicit runtime access/completeness checks. Otherwise explain why that alternative is unavailable or prohibited too. Never relax the user's constraints or a supplied job contract to make a graph pass.",
     "  Keep detail lookups targeted -- fetch the pieces you shortlisted, not the whole catalog.",
     "",
     envText,

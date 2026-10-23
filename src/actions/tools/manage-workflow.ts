@@ -27,7 +27,7 @@ import type { PieceLookup } from "../../workflows/runtime/piece-catalog.ts";
 import type { ComposerLlmClient } from "./workflow-composer.ts";
 import { composePersistedFlow } from "./persisted-workflow-composer.ts";
 import { recheckJobContract, type JobContract } from "./job-contract.ts";
-import { getWorkflowComposition } from "../../workflows/db/repos/workflow-composition.ts";
+import { getWorkflowComposition, latestSetupComposition, composedFlowId } from "../../workflows/db/repos/workflow-composition.ts";
 
 /**
  * Minimal tool-registry shape the composer surfaces in its planner prompt.
@@ -115,7 +115,7 @@ export interface ManageWorkflowDeps {
   /**
    * Optional. Compact index of the community piece library. When provided,
    * the composer's tool loop can search it and suggest installs (surfaced as
-   * `suggestedInstalls` on a failed compose) instead of forcing a request
+   * `suggestedInstalls` when setup remains unavailable) instead of forcing a request
    * through the wrong piece when the right one just isn't installed yet.
    *
    * OMIT on a host-managed install: the whole catalog is already present, so
@@ -181,11 +181,12 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
     description: [
       "Create, run, and manage the user's Jarvis workflows (automations).",
       "compose { name, description } builds the requested graph. Preserve every requirement; never substitute a diagnostic-only scaffold.",
+      "Save supported graphs with missing settings as Setup required. Continue setup via composition_id and non-secret answers; accounts belong in Connected workspace.",
       "Inspect real schemas; never invent credentials or IDs. Native notifications use dashboard. Check an authorized browser alternative when native actions cannot cover the job; verify tools, computer and permissions, never assume login.",
       "Composed flows are DISABLED. Publish only with user confirmation; publish enables the flow. Draft-only restrictions are not bans on future workflow actions.",
       "create requires empty: true for an explicitly blank canvas; otherwise compose.",
       "CODE steps: publish, enable and run are REFUSED until the user permits code for that flow; no tool action grants permission. Never bypass this refusal.",
-      ...(hasLibrary ? [deps.installLibraryPiece ? "When authorized, install_missing:true installs required Library connectors under software-install Authority. Account connection is separate." : "Relay suggestedInstalls from the Library page; retry after installation, never unchanged."] : []),
+      ...(hasLibrary ? [deps.installLibraryPiece ? "Install required Library connectors by default under software-install Authority; false opts out. Account connection is separate." : "Relay suggestedInstalls from the Library page; retry after installation, never unchanged."] : []),
     ].join("\n"),
     category: "automation",
     /**
@@ -234,7 +235,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       action: {
         type: "string",
         description: "What to do.",
-        enum: ["compose", "create", "list", "get", "run", "enable", "disable", "publish", "delete", "list_runs", "get_run"],
+        enum: ["compose", "continue_setup", "create", "list", "get", "run", "enable", "disable", "publish", "delete", "list_runs", "get_run"],
         required: true,
       },
       flow: {
@@ -263,9 +264,15 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           "compose: the user's complete request, including trigger, outputs and restrictions.",
         required: false,
       },
+      composition_id: {
+        type: "string", description: "continue_setup: prior compositionRecordId.", required: false,
+      },
+      answers: {
+        type: "object", description: "continue_setup: new non-secret setup answers; retains prior answers.", required: false,
+      },
       install_missing: {
         type: "boolean",
-        description: "Allow required Library installation (default false); software-install Authority applies. No account connection or execution.",
+        description: "Install needed Library connectors (default true); software-install Authority applies. No account connection or execution.",
         required: false,
       },
       contract: {
@@ -287,7 +294,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       },
     },
     /**
-     * Per-action Authority, because one category cannot be honest for eleven
+     * Per-action Authority, because one category cannot be honest for all
      * actions.
      *
      * The TOOL_ACTION_MAP entry is the FLOOR (write_data) and covers the
@@ -314,8 +321,9 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       const action = String(params.action ?? "");
       switch (action) {
         case "compose":
+        case "continue_setup":
         case "create":
-          return params.install_missing === true && deps.installLibraryPiece
+          return (action !== "create" || typeof params.description === "string" && !!params.description.trim()) && params.install_missing !== false && deps.installLibraryPiece && hasLibrary
             ? { actionCategory: "install_software", confirm: "above_level", intent: `Install required Library connectors while composing workflow: ${forCard(params.name)}` }
             : null;
         case "enable":
@@ -384,7 +392,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           const name = requireString(params, "name");
           const description = typeof params["description"] === "string" ? params["description"].trim() : "";
           if (description.length > 0) {
-            const composed = await actCompose(name, description, deps, project, params["contract"], params["install_missing"] === true);
+            const composed = await actCompose(name, description, deps, project, params["contract"], params["install_missing"] !== false);
             // ACCEPTED COST of one block per action: `note` is repo-authored
             // guidance to the model, and framing the whole return puts it under
             // a preamble that says not to follow instructions inside the block.
@@ -444,9 +452,14 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
             actGetRun(project, requireString(params, "run_id")),
             "a workflow run's captured step output",
           );
+        case "continue_setup":
+          return framedForModel(
+            await actContinueSetup(requireString(params, "composition_id"), params.answers, params.install_missing, deps, project),
+            "workflow setup and the composer's text",
+          );
         case "compose":
           return framedForModel(
-            await actCompose(requireString(params, "name"), requireString(params, "description"), deps, project, params["contract"], params["install_missing"] === true),
+            await actCompose(requireString(params, "name"), requireString(params, "description"), deps, project, params["contract"], params["install_missing"] !== false),
             "a composed workflow and the composer's text",
           );
         default:
@@ -1128,7 +1141,8 @@ async function actCompose(
   deps: ManageWorkflowDeps,
   project: string,
   contract?: unknown,
-  installMissing = false,
+  installMissing = true,
+  context?: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   if (!deps.llm) {
     throw new Error("compose: an LLM client is not configured for this build");
@@ -1177,7 +1191,8 @@ async function actCompose(
   // The composer validates the contract and checks every candidate against it.
   // A null contract, as some models send for an unused optional parameter, is none.
   const stated = contract ?? undefined;
-  const result = await composePersistedFlow(composeDeps, { name, description, ...(stated !== undefined ? { contract: stated as JobContract } : {}) }, project);
+  const setupContext = installMissing ? context : { ...context, workflowSetup: { ...(context?.workflowSetup as Record<string, unknown> ?? {}), installMissing: false } };
+  const result = await composePersistedFlow(composeDeps, { name, description, ...(setupContext ? { context: setupContext } : {}), ...(stated !== undefined ? { contract: stated as JobContract } : {}) }, project);
 
   if (!result.ok) {
     return {
@@ -1187,6 +1202,12 @@ async function actCompose(
       ...(result.configurationQuestions?.length ? { configurationQuestions: result.configurationQuestions } : {}),
       ...(result.capabilityGaps?.length ? { capabilityGaps: result.capabilityGaps } : {}),
       ...(result.errorCode ? { errorCode: result.errorCode } : {}),
+      ...(result.configurationQuestions?.length ? { setup: {
+        status: result.capabilityGaps?.length ? "blocked" : result.suggestedInstalls?.length ? "needs_installation" : "needs_input",
+        nextQuestion: result.configurationQuestions[0], questions: result.configurationQuestions,
+        continueWith: { action: "continue_setup", composition_id: result.compositionRecordId, ...(installMissing ? {} : { install_missing: false }) },
+        accountSetup: ACCOUNT_SETUP_GUIDANCE,
+      } } : {}),
       rawResponse: capRawResponse(result.rawResponse),
       compositionRecordId: result.compositionRecordId,
       ...(result.suggestedInstalls && result.suggestedInstalls.length > 0
@@ -1211,9 +1232,48 @@ async function actCompose(
     ...(result.contractReport ? { contractReport: result.contractReport } : {}),
     flow: summarizeFlow(getFlow(flow.id) ?? flow),
     versionId: version.id,
-    readiness: versionReadiness(flow.id, version.id),
+    ...setupReadiness(flow.id, version.id, result.compositionRecordId),
     compositionRecordId: result.compositionRecordId,
   };
+}
+
+
+const ACCOUNT_SETUP_GUIDANCE = "Use Connected workspace for secure connector account setup, then select that saved account in the workflow step. Follow the connector's actual setup requirements. Never paste passwords, API keys or OAuth tokens into chat.";
+
+function setupReadiness(flowId: string, versionId: string, compositionId: string) {
+  const readiness = versionReadiness(flowId, versionId);
+  return { readiness, ...(!readiness.ready ? { setup: {
+    status: "needs_configuration", nextQuestion: readiness.issues.some(i => i.code === "CONNECTION_BINDING")
+      ? ACCOUNT_SETUP_GUIDANCE : readiness.issues[0]?.message,
+    accountSetup: ACCOUNT_SETUP_GUIDANCE,
+    continueWith: { action: "continue_setup", composition_id: compositionId },
+  } } : {}) };
+}
+
+async function actContinueSetup(compositionId: string, rawAnswers: unknown, installOption: unknown, deps: ManageWorkflowDeps, project: string): Promise<Record<string, unknown>> {
+  const requested = getWorkflowComposition(compositionId, project);
+  if (!requested) throw new Error("Workflow setup not found in this project");
+  const root = (requested.specification.context?.workflowSetup as Record<string, unknown> | undefined)?.rootCompositionId;
+  const rootId = typeof root === "string" ? root : requested.id;
+  if (!getWorkflowComposition(rootId, project)) throw new Error("Workflow setup not found in this project");
+  const current = latestSetupComposition(rootId, project)!;
+  if (current.state === "COMPOSING") throw new Error("This workflow setup is already being prepared; wait for its current result");
+  const existingId = composedFlowId(current.id, project);
+  if (existingId) {
+    const flow = getFlowInProject(project, existingId)!;
+    const version = getLatestDraft(flow.id) ?? (flow.published_version_id ? getFlowVersion(flow.published_version_id) : null);
+    if (!version) throw new Error("The saved workflow no longer has a version");
+    return { ok: true, flow: summarizeFlow(flow), versionId: version.id, compositionRecordId: current.id,
+      ...setupReadiness(flow.id, version.id, current.id) };
+  }
+  if (current.state === "VALIDATED") throw new Error("This setup already completed but its draft is unavailable; inspect the workflow list before starting another");
+  if (rawAnswers !== undefined && (!rawAnswers || typeof rawAnswers !== "object" || Array.isArray(rawAnswers))) throw new Error("Setup answers must be a JSON object containing non-secret configuration");
+  const prior = current.specification.context?.workflowSetup as Record<string, unknown> | undefined;
+  const answers = { ...(prior?.answers as Record<string, unknown> ?? {}), ...(rawAnswers as Record<string, unknown> ?? {}) };
+  if (JSON.stringify(answers).length > 16000) throw new Error("Setup answers exceed 16,000 characters; provide a small redacted sample");
+  const install = installOption === undefined ? prior?.installMissing !== false : installOption !== false;
+  return actCompose(current.specification.name, current.specification.description, deps, project, current.specification.contract, install,
+    { ...current.specification.context, workflowSetup: { rootCompositionId: rootId, previousCompositionId: current.id, answers, installMissing: install } });
 }
 
 function findFlowByDisplayName(project: string, name: string): FlowRow | null {

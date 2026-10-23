@@ -78,7 +78,10 @@ describe("tool guide: install advice follows who owns the pieces catalog", () =>
   it("self-managed keeps the install remedy", () => {
     const g = buildToolGuide({ hasSidecars: false, piecesManaged: false });
     expect(g).toContain("suggestedInstalls");
-    expect(g).toContain("Library page");
+    expect(g).toContain("installed by compose by default");
+    expect(g).toContain("continue_setup");
+    expect(g).toContain("never ask the user to repeat");
+    expect(g).not.toContain("installs happen from the dashboard");
   });
 
   it("host-managed drops it, keeping the rest of the workflow guide", () => {
