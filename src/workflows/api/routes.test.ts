@@ -3525,3 +3525,47 @@ describe("#649: /run, /publish and /code-steps bound their bodies and keep the e
     expect(empty.body.error).toMatch(/body must be valid JSON/);
   });
 });
+
+describe("#1080: the workflows list says why an enabled workflow is blocked", () => {
+  test("a live readiness refusal shows on its flow, and nothing on a flow that is fine", async () => {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const { createFlowRun, updateRun } = await import("../db/repos/flow-run");
+    const { getWorkflowDb } = await import("../db/index");
+    const make = () => {
+      const flow = createFlow();
+      const version = createDraftVersion({ flowId: flow.id, displayName: "listed" });
+      getWorkflowDb().run("UPDATE flow SET status = 'ENABLED' WHERE id = ?", [flow.id]);
+      return { flow, version };
+    };
+    const blocked = make();
+    const fine = make();
+    const run = createFlowRun({ flowId: blocked.flow.id, flowVersionId: blocked.version.id, status: "FAILED", startTime: Date.now() });
+    updateRun(run.id, { finishTime: Date.now(), failedStep: { name: "<readiness>", displayName: "Workflow readiness", errorMessage: "stale" },
+      steps: { "<readiness>": { status: "FAILED", output: { readiness: { ready: false, issues: [
+        { node: "send", path: "auth", code: "BINDING_STALE", message: "Connection account was deleted and created again" }] } } } } });
+    createFlowRun({ flowId: fine.flow.id, flowVersionId: fine.version.id, status: "SUCCEEDED" });
+    const { status, body } = await callJson(routes["/api/workflows"]?.GET, plainReq("GET", "http://x/api/workflows"));
+    expect(status).toBe(200);
+    const byId = new Map((body as Array<{ id: string; blocked: unknown }>).map((flow) => [flow.id, flow.blocked]));
+    expect(byId.get(blocked.flow.id)).toMatchObject({ code: "BINDING_STALE", runId: run.id, message: expect.stringContaining("did not run") });
+    expect(byId.get(fine.flow.id)).toBeNull();
+  });
+
+  test("a run that cannot be read costs its flow the badge, not the whole list", async () => {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const { createFlowRun } = await import("../db/repos/flow-run");
+    const { getWorkflowDb } = await import("../db/index");
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: "listed" });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
+    // A readiness refusal whose step record is not JSON: reading the run throws.
+    getWorkflowDb().run(`UPDATE flow SET status = 'ENABLED' WHERE id = ?`, [flow.id]);
+    getWorkflowDb().run(`UPDATE flow_run SET status = 'FAILED', finish_time = ?, steps = '{', failed_step = ? WHERE id = ?`,
+      [Date.now(), JSON.stringify({ name: "<readiness>", displayName: "Workflow readiness" }), run.id]);
+    const { status, body } = await callJson(routes["/api/workflows"]?.GET, plainReq("GET", "http://x/api/workflows"));
+    expect(status).toBe(200);
+    expect((body as Array<{ id: string; blocked: unknown }>).find((f) => f.id === flow.id)?.blocked).toBeNull();
+  });
+});

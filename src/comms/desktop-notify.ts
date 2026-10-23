@@ -11,6 +11,7 @@
 import { modelExecEnv } from '../util/model-exec-env.ts';
 import { WSLBridge, windowsSystemExe } from '../actions/terminal/wsl-bridge.ts';
 import { findLinuxSystemExe, linuxSystemExe } from '../util/system-exe.ts';
+import { TOAST_BODY_MAX, TOAST_TITLE_MAX } from './toast-limits.ts';
 
 type NotifyMethod = 'notify-send' | 'powershell' | null;
 
@@ -170,9 +171,8 @@ function sendViaPowerShell(title: string, body: string): Bun.Subprocess<'ignore'
   });
 }
 
-/** Longest title and body the toast shows, in code points. */
-export const TOAST_TITLE_MAX = 100;
-export const TOAST_BODY_MAX = 200;
+/** Longest title and body the toast shows, in code points (kept in a leaf module, so writers can read them). */
+export { TOAST_BODY_MAX, TOAST_TITLE_MAX };
 
 /**
  * The `-Command` script for a Windows toast. The title and body can be

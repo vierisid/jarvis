@@ -91,6 +91,7 @@ import { fireForRun, pageFlowFires } from "../db/repos/trigger-fire";
 import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
 import { assertFlowDeletable } from "../db/repos/workflow-removal-state";
 import { claimContinuation } from "../runtime/continuation";
+import { flowBindingBlock } from "../runtime/binding-refusals";
 import { emergencyHold, KILLED_REASON, manualStartRefusal } from "../runtime/emergency-hold";
 import {
   deleteConnectionInProject,
@@ -651,7 +652,7 @@ const trapErrors = async (fn: () => Promise<Response> | Response): Promise<Respo
     // is well-formed and the caller is told exactly which grant is missing.
     if (e instanceof CodeStepsRefusedError) return err(e.message, e.status);
     const msg = e instanceof Error ? e.message : String(e);
-    if (['workflow_removed', 'workflow_history_retained'].includes(msg)) return ok({ error: msg, code: msg }, 409);
+    if (['workflow_removed', 'workflow_history_retained', 'workflow_purging'].includes(msg)) return ok({ error: msg, code: msg }, 409);
     if (/not found/i.test(msg)) return err(msg, 404);
     return err(msg, 500);
   }
@@ -1530,7 +1531,14 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             opts.status = status;
           }
           const flows = listFlows(callerProject(req), opts);
-          return ok(flows.map(serializeFlow));
+          // #1080: why an enabled workflow is not doing its work, from its
+          // latest finished run, so the list can say so. One unreadable run
+          // costs its flow the badge, never the whole list.
+          const blockedOf = (flow: Parameters<typeof flowBindingBlock>[0]) => {
+            try { return flowBindingBlock(flow); }
+            catch (error) { console.error(`[workflows] blocked state of ${flow.id} unreadable:`, error); return null; }
+          };
+          return ok(flows.map((flow) => ({ ...serializeFlow(flow), blocked: blockedOf(flow) })));
         }),
       POST: (req) =>
         trapErrors(async () => {
@@ -2026,7 +2034,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             } catch (e) {
               if (e instanceof WorkflowInspectionError) response = ok({ code: e.code }, e.status);
               else if (e instanceof WorkflowReadinessError || e instanceof CodeStepsRefusedError) response = ok({ code: 'not_ready' }, 409);
-              else if (e instanceof Error && e.message === 'workflow_removed') response = ok({ code: 'workflow_removed' }, 409);
+              else if (e instanceof Error && (e.message === 'workflow_removed' || e.message === 'workflow_purging')) response = ok({ code: e.message }, 409);
               else response = ok({ code: 'unavailable' }, 503);
             }
             response.headers.set('Cache-Control', 'no-store');

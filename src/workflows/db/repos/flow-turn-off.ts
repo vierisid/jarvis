@@ -55,7 +55,7 @@ export const DELETED_REASON = "The workflow was deleted, so this run was stopped
  * engine mid-run is told to stop now rather than at its next daemon call, and
  * leave a record that outlives the runs the delete removes.
  */
-export function stopRunsOfDeletedFlow(flowId: string): number {
+export function stopRunsOfDeletedFlow(flowId: string, onCardClosed?: (approvalId: string) => void): number {
   clearScheduleWatch(flowId);
   const rows = getWorkflowDb().query<{ id: string }, [string]>(
     `SELECT id FROM flow_run WHERE flow_id = ? AND status IN ('QUEUED', 'RUNNING', 'PAUSED')`,
@@ -63,6 +63,7 @@ export function stopRunsOfDeletedFlow(flowId: string): number {
   let stopped = 0;
   for (const { id } of rows) {
     const result = cancelFlowRun(id, { reason: DELETED_REASON, reasonLabel: "Workflow deleted" });
+    if (onCardClosed) result.closedApprovalIds.forEach(onCardClosed);
     if (!result.accepted) continue;
     recordFire({ flowId, source: "lifecycle", outcome: "stopped", runId: id, detail: { reason: DELETED_REASON } });
     stopped++;

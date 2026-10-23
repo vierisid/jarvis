@@ -13,14 +13,17 @@ import { WebSocketServer } from '../comms/websocket';
 import { PanelSessionStore } from '../sidecar/panel-sessions';
 import type { SidecarManager } from '../sidecar/manager';
 
-let service: WorkflowRemoval, flowId: string, saved: string | undefined;
+let service: WorkflowRemoval, flowId: string, saved: string | undefined, savedData: string | undefined, dataDir: string;
 beforeEach(() => {
+  // A purge removes run files: keep them under a temporary directory, never ~/.jarvis.
+  savedData = process.env.JARVIS_WORKFLOW_DATA_DIR; dataDir = mkdtempSync(join(tmpdir(), 'jarvis-f20-data-')); process.env.JARVIS_WORKFLOW_DATA_DIR = dataDir;
   saved = process.env.JARVIS_BRIEF_WORKFLOW_REMOVAL; process.env.JARVIS_BRIEF_WORKFLOW_REMOVAL = '1'; initWorkflowDb(':memory:');
   service = new WorkflowRemoval(getWorkflowDb()); service.start({ refresh: async () => {} });
   flowId = createFlow({ metadata: { privateFixture: 'not a projection field' } }).id;
   createDraftVersion({ flowId, displayName: 'Fixture workflow', trigger: { name: 'trigger', type: 'EMPTY', settings: {} } });
 });
-afterEach(() => { service.stop(); closeWorkflowDb(); if (saved === undefined) delete process.env.JARVIS_BRIEF_WORKFLOW_REMOVAL; else process.env.JARVIS_BRIEF_WORKFLOW_REMOVAL = saved; });
+afterEach(() => { service.stop(); closeWorkflowDb(); rmSync(dataDir, { recursive: true, force: true });
+  if (savedData === undefined) delete process.env.JARVIS_WORKFLOW_DATA_DIR; else process.env.JARVIS_WORKFLOW_DATA_DIR = savedData; if (saved === undefined) delete process.env.JARVIS_BRIEF_WORKFLOW_REMOVAL; else process.env.JARVIS_BRIEF_WORKFLOW_REMOVAL = saved; });
 function table(enabled = true, registered = service) {
   return createApiRoutes({ briefWorkflowRemoval: service,
     briefCapabilities: new BriefCapabilities(registerWorkflowRemoval(registered), enabled ? ['workflowRemoval'] : []) } as ApiContext) as Record<string, any>;
@@ -89,4 +92,50 @@ test('all three routes enforce real panel authentication over a Unix socket', as
     expect(recovered.headers.get('Cache-Control')).toBe('no-store'); expect((await recovered.json() as any).receipt.flowId).toBe(flowId);
     expect((await send(listPath, { headers })).status).toBe(200);
   } finally { server.stop(); rmSync(directory, { recursive: true, force: true }); }
+});
+test('#1096: the purge route takes a live dashboard session, the capability and a well-formed JSON command', async () => {
+  const purgePath = listPath + '/purges', c = command(), removed = await call(commandPath, c);
+  expect((await call(commandPath, { ...c, requestId: 'restore', action: 'restore', receiptId: removed.body.receipt.receiptId })).body.status).toBe('accepted');
+  const item = service.read().data.items[0]!;
+  const purge = { scopeId: service.projectId, flowId, versionId: item.versionId, expectedRevision: item.revision, requestId: 'purge-request' };
+  // Reached without the HTTP auth block (or under insecure_open_access) no session was resolved.
+  expect(await call(purgePath, purge)).toEqual({ status: 403, body: { code: 'session_required' } });
+  expect((await call(purgePath, purge, '', table(false))).status).toBe(503);
+  expect((await call(purgePath, purge, '', createApiRoutes({} as ApiContext))).status).toBe(501);
+  // The /commands route never purges.
+  expect((await call(commandPath, { ...purge, action: 'purge' })).status).toBe(400);
+  expect(getFlow(flowId)).not.toBeNull();
+  const directory = mkdtempSync(join(tmpdir(), 'jarvis-purge-http-')), socket = join(directory, 'api.sock'), openSocket = join(directory, 'open.sock');
+  const server = new WebSocketServer(0, socket), open = new WebSocketServer(0, openSocket), sessions = new PanelSessionStore();
+  server.setSidecarManager({ openPanelSession: async (token: string) => token === 'fixture-access' ? sessions.create('fixture-device') : null,
+    resolvePanelSession: (value: string) => sessions.get(value) } as SidecarManager);
+  server.setApiRoutes(table()); open.setInsecureOpenAccess(true); open.setApiRoutes(table());
+  const send = (path: string, init: RequestInit = {}, unix = socket) => fetch('http://localhost' + path, { ...init, unix });
+  const json = { 'Content-Type': 'application/json' };
+  try {
+    server.start(); open.start();
+    // Open access serves the list but never the purge.
+    expect((await send(listPath, {}, openSocket)).status).toBe(200);
+    expect((await send(purgePath, { method: 'POST', headers: json, body: JSON.stringify(purge) }, openSocket)).status).toBe(403);
+    // No session or a forged cookie: refused before the route runs.
+    expect((await send(purgePath, { method: 'POST', headers: json, body: JSON.stringify(purge) })).status).toBe(401);
+    expect((await send(purgePath, { method: 'POST', headers: { ...json, Cookie: 'panel_session=forged' }, body: JSON.stringify(purge) })).status).toBe(401);
+    const bootstrap = await send(listPath + '?token=fixture-access', { redirect: 'manual' });
+    const headers = { ...json, Cookie: bootstrap.headers.get('set-cookie')!.split(';')[0]! };
+    const post = (body: unknown, extra: Record<string, string> = {}, suffix = '') => send(purgePath + suffix, { method: 'POST', headers: { ...headers, ...extra },
+      body: body instanceof Uint8Array ? Buffer.from(body) : typeof body === 'string' ? body : JSON.stringify(body) });
+    expect((await post(purge, { 'Sec-Fetch-Site': 'cross-site' })).status).toBe(403);
+    expect((await post(purge, { 'Content-Type': 'text/plain' })).status).toBe(415);
+    for (const value of [{}, { ...purge, action: 'purge' }, '{', new Uint8Array([0xff])]) expect((await post(value)).status).toBe(400);
+    expect((await post('x'.repeat(4097))).status).toBe(413);
+    expect((await post(purge, {}, '?force=true')).status).toBe(400);
+    expect(getFlow(flowId)).not.toBeNull();
+    const response = await post(purge);
+    expect(response.status).toBe(200); expect(response.headers.get('Cache-Control')).toBe('no-store');
+    const body = await response.json() as any; expect(body).toMatchObject({ status: 'accepted', action: 'purge', flowId });
+    expect(getFlow(flowId)).toBeNull();
+    expect(getWorkflowDb().query('SELECT actor FROM brief_workflow_purges WHERE flow_id = ?').get(flowId)).toEqual({ actor: 'dashboard:fixture-device' });
+    const recovered = await send(requestPath.replace(':requestId', purge.requestId), { headers });
+    expect(await recovered.json()).toEqual(body);
+  } finally { server.stop(); open.stop(); rmSync(directory, { recursive: true, force: true }); }
 });

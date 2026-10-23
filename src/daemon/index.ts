@@ -117,7 +117,7 @@ import { buildTaintGating } from "../authority/taint-gating.ts";
 import { channelApprovalReply, notificationApprovalDecision, notificationDecisionNote } from "./approval-decision.ts";
 import { sendDesktopNotification, sendDesktopNotificationReceipt } from "../comms/desktop-notify.ts";
 import { channelLabel, failureText, projectFailure } from "../failures/projection.ts";
-import { runFailureNotice } from "../workflows/runtime/run-failure.ts";
+import { bindingRefusalNotifier, workflowRunNotice } from "../workflows/runtime/binding-refusals.ts";
 import { ensureUiBuilt } from "./ui-autobuild.ts";
 import { localIntegrationEnabled, buildLocalIntegrationUi } from "./local-integration.ts";
 import { SidecarManager, buildEnrollmentUrls } from "../sidecar/manager.ts";
@@ -4538,10 +4538,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // All four reasons are wired: approval, done (an approved action finished),
     // sidecar-offline, and update (a connecting sidecar that is behind and
     // cannot update itself; see the onSidecarConnected handler below).
-    const notifyAll = (payload: Record<string, unknown>): void => {
-      for (const sc of sidecarManager.getConnectedSidecars()) {
+    // Returns whether any computer was connected to show it: a caller that
+    // tells something only once must not count a notice nobody saw (#1080).
+    const notifyAll = (payload: Record<string, unknown>): boolean => {
+      const connected = sidecarManager.getConnectedSidecars();
+      for (const sc of connected) {
         void sidecarManager.dispatchRPC(sc.id, 'notify.show', payload).catch(() => {});
       }
+      return connected.length > 0;
     };
 
     // Whole, readable requests can be approved from a notification. On-screen
@@ -5119,15 +5123,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // to direct event-bus subscription.
     triggerManager = new TriggerManager({
       eventBus: sharedEventBus,
-      onRegistrationBlocked: ({ runId, message }) => {
+      onRegistrationBlocked: ({ runId, message }) =>
         // Q-19: the sentence Runs and Today show for this run.
         notifyAll({
           id: `workflow-readiness:${runId}`, kind: 'workflow',
-          title: 'Workflow needs attention',
-          body: runFailureNotice(runId) ?? `A workflow could not start: ${message}. See its failed run for details.`,
+          // #1080: names the workflow; the body is the run's Q-19 sentence.
+          ...workflowRunNotice(runId, `A workflow could not start: ${message}. See its failed run for details.`),
           actions: [{ id: 'review', label: 'Open Jarvis', primary: true }, { id: 'dismiss', label: 'Dismiss' }],
-        });
-      },
+        }),
       ...(workflowEngineRuntime ? { engineRuntime: workflowEngineRuntime } : {}),
     });
 
@@ -5506,7 +5509,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
       const flowExecutor = new EngineFlowExecutor(workflowEngineRuntime);
       workflowWorker = new WorkflowWorker({
-        handlers: { [RUN_FLOW]: createRunFlowHandler({ executor: flowExecutor }) },
+        handlers: { [RUN_FLOW]: createRunFlowHandler({ executor: flowExecutor,
+          // #1080: a run refused for what it is bound to (its computer, a
+          // recipient) tells the owner once per workflow and reason.
+          onRunEnded: bindingRefusalNotifier((notice) => notifyAll(notice)) }) },
       });
       workflowWorker.start();
 
@@ -5528,7 +5534,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // status flips ENABLED via the v2 API gets reconciled by the route
     // hooks calling `triggerManager.refresh(flowId)`.
     await triggerManager.start();
-    briefWorkflowRemoval.start(triggerManager);
+    // A purge (#1096) drops the cards of the runs it stopped from the dashboard.
+    briefWorkflowRemoval.start(triggerManager, { onCardClosed: (approvalId) => {
+      const request = approvalManager.getRequest(approvalId);
+      if (request) wsService.broadcastApprovalUpdate(request);
+    } });
     if (process.env.JARVIS_BRIEF_OPPORTUNITY_ACTIVATION === '1' && process.env.JARVIS_BRIEF_PREPARED_OPPORTUNITIES === '1') {
       briefOpportunityActivation?.configure(briefPreparedOpportunities!, triggerManager);
       briefOpportunityActivation?.start();

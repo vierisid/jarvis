@@ -31,7 +31,7 @@ import { budgetCap, budgetOf, deferredAhead, deferredAheadLimit, waitingWorkflow
  */
 const WORKFLOW_NAME_LABEL_MAX_CHARS = 512;
 /** A step name on a card or an audit row: the 120 `auditRefusal` already uses. */
-const WORKFLOW_STEP_LABEL_MAX_CHARS = 120;
+export const WORKFLOW_STEP_LABEL_MAX_CHARS = 120;
 import { holdStep, PAUSED_REASON } from './emergency-hold';
 
 export interface WorkflowAuthorityDependencies {
