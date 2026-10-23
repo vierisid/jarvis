@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { initWorkflowDb, closeWorkflowDb, getWorkflowDb, DEFAULT_IDS } from '../workflows/db';
 import { createGoal } from '../vault/goals';
+import { markInitialGoalUnplanned } from '../goals/initial-goal-notice';
 import { createEntity } from '../vault/entities';
 import { createFact, getFact, correctFact } from '../vault/facts';
 import { GoalMeasurements } from './goal-measurements';
@@ -80,4 +81,19 @@ test('authorization loss retires transport, but an ordinary action refusal does 
   expect((await transport.request('/api/brief/test')).status).toBe(403); expect(revoked).toBe(0);
   status = 401; await expect(transport.request('/api/brief/test')).rejects.toThrow(); expect(revoked).toBe(1);
   transport.stop(); await expect(transport.request('/api/brief/test')).rejects.toThrow();
+});
+test('the dashboard learns the interview goal was not planned until any goal exists', async () => {
+  const route = createGoalMeasurementRoutes(caps, json, goals)['/api/brief/initial-goal'].GET;
+  const read = async () => { const r = await route(new Request('http://localhost/api/brief/initial-goal')); expect(r.headers.get('cache-control')).toBe('no-store'); return [r.status, await r.json()]; };
+  expect(await read()).toEqual([200, { state: 'none' }]);
+  markInitialGoalUnplanned();
+  expect(await read()).toEqual([200, { state: 'unplanned' }]);
+  expect((await route(new Request('http://localhost/api/brief/initial-goal?x=1'))).status).toBe(400);
+  const off = new BriefCapabilities([{ id: 'goalMeasurements', provider: goals }], []);
+  expect((await createGoalMeasurementRoutes(off, json, goals)['/api/brief/initial-goal'].GET(new Request('http://localhost/api/brief/initial-goal'))).status).toBe(503);
+  createGoal('Planned from Goals', 'objective');
+  expect(await read()).toEqual([200, { state: 'none' }]);
+  // A stale notice beside an existing goal is never shown.
+  markInitialGoalUnplanned();
+  expect(await read()).toEqual([200, { state: 'none' }]);
 });

@@ -35,7 +35,7 @@ export interface OnboardingAssemblyPorts {
   interviewer: InterviewerPort;
   intent(scope: Scope, context: Context): IntentServices | null;
   composer(): ComposeDeps;
-  planInitialGoal?(text: string): Promise<import('../../goals/proposal').GoalProposal>;
+  planInitialGoal?(text: string, signal: AbortSignal): Promise<import('../../goals/proposal').GoalProposal>;
   resolveContext(intent: Intent, signal?: AbortSignal): Promise<Record<string, unknown>>;
   roomStatus(scope: Scope, step: TourStep): RoomStatus | Promise<RoomStatus>;
   /** Pure service readiness, never an external request. */
@@ -71,9 +71,9 @@ export function createOnboardingAssembly(ports: OnboardingAssemblyPorts) {
     if (!current() || scope.actorId !== owner.actorId || scope.projectId !== owner.projectId) throw new Error('Binding unavailable');
     return db;
   }, readLegacy: ports.readLegacy });
-  const prepareGoal = createInitialGoalPlanner(text => {
+  const prepareGoal = createInitialGoalPlanner((text, signal) => {
     if (!ports.planInitialGoal) throw Error('Goal planner unavailable');
-    return ports.planInitialGoal(text);
+    return ports.planInitialGoal(text, signal);
   });
   const persistence: typeof settingsPersistence = {
     transaction(scope, operation) {
@@ -89,7 +89,7 @@ export function createOnboardingAssembly(ports: OnboardingAssemblyPorts) {
   };
   const journey = (context: Context) => createJourneyProvider({ authorize: () => authorize(context), persistence, validateFinish: finish,
     prepareExit: async (_scope, snapshot) => {
-      try { await prepareGoal(snapshot, () => { guard(context); if (getDb() !== db) throw Error('Vault changed'); }); }
+      try { await prepareGoal(snapshot, () => { guard(context); if (getDb() !== db) throw Error('Vault changed'); }, context.signal); }
       catch (error) {
         // The journey exits without a goal; say so without the model's or the profile's text.
         console.warn('[onboarding-next] Initial goal plan unavailable; an authorized exit continues without a goal:', error instanceof Error ? error.name : 'Error');

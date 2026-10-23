@@ -17,6 +17,7 @@ let assembly: ReturnType<typeof createOnboardingAssembly>;
 let routes: ReturnType<typeof createOnboardingRoutes>;
 let interviewReply: (() => Promise<any>) | undefined;
 let modelCalls = 0, connected = true, setupCompleted: number | null = null;
+let planSignals: AbortSignal[] = [], planHang = false;
 const owner = { actorId: DEFAULT_IDS.user, projectId: DEFAULT_IDS.project };
 const authorize = (r: Request) => connected && r.headers.get('cookie') === 'local-test=owner' ? owner : null;
 const request = (path: string, body?: unknown, signal?: AbortSignal) => new Request('http://localhost' + path,
@@ -38,7 +39,7 @@ async function navigate(stepId: string) {
     requestId: crypto.randomUUID(), command: { type: 'navigate', stepId } });
   expect(r.availability).toBe('ready');
 }
-beforeEach(() => {
+beforeEach(() => { planSignals = []; planHang = false;
   closeWorkflowDb(); initWorkflowDb(':memory:');
   interviewReply = undefined; modelCalls = 0; connected = true; setupCompleted = 42;
   const catalog = sampleCatalog(); configureWorkflowReadiness({ pieces: catalog });
@@ -57,9 +58,12 @@ beforeEach(() => {
       modelCalls++; return { text: JSON.stringify({ displayName: 'Weekly brief', trigger: { name: 'trigger', type: 'EMPTY',
         nextAction: { name: 'draft', type: 'PIECE', settings: { pieceName: 'jarvis-ask', actionName: 'ask', input: { prompt: 'Prepare a weekly brief.' } } } } }) };
     } } }),
-    planInitialGoal: async () => ({ objective: { title: 'Sales objective', description: 'Grow the brand', success_criteria: '50 orders a month', time_horizon: 'quarterly' },
+    planInitialGoal: async (_text, signal) => { planSignals.push(signal);
+      // Like chatTier, a hanging model call ends when its signal aborts.
+      if (planHang) await new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+      return { objective: { title: 'Sales objective', description: 'Grow the brand', success_criteria: '50 orders a month', time_horizon: 'quarterly' },
       key_results: [{ title: '50 monthly orders', description: 'Grow orders', success_criteria: '50 orders in a month' }, { title: 'Weekly sales review', description: 'Review sales', success_criteria: 'Weekly report in use' }],
-      milestones: [{ key_result_index: 0, title: 'Establish baseline', description: 'Read current orders' }, { key_result_index: 1, title: 'Prepare report', description: 'Use provided sales totals' }] }),
+      milestones: [{ key_result_index: 0, title: 'Establish baseline', description: 'Read current orders' }, { key_result_index: 1, title: 'Prepare report', description: 'Use provided sales totals' }] }; },
     resolveContext: async () => ({}), roomStatus: () => 'ready', ready: () => true, workerIntervalMs: 50,
   });
   assembly.start(); routes = createOnboardingRoutes(runtime());
@@ -235,12 +239,25 @@ test('a completed interview reaches the dashboard with Profile context and exact
     expect(assessed.state).toBe('ready'); expect(assessed.intent.request.prompt).toBe(prompt);
   } finally { host.dispose(); }
   const j = await journey(); const exit = { journeyId: j.journeyId, expectedRevision: j.revision, requestId: 'explore', command: { type: 'explore' } };
+  // A client that leaves mid-plan cancels the model call in flight and commits nothing.
+  planHang = true; const leave = new AbortController();
+  const path = '/api/onboarding-next/v1' + OPERATION_PATHS['journey.transition'];
+  const abandoned = routes[path]!.POST!(request(path, { schemaVersion: 1, input: { ...exit, requestId: 'explore-abandoned' } }, leave.signal));
+  for (let i = 0; i < 200 && planSignals.length === 0; i++) await new Promise(r => setTimeout(r, 0));
+  expect(planSignals).toHaveLength(1); expect(planSignals[0]!.aborted).toBe(false);
+  leave.abort();
+  expect(planSignals[0]!.aborted).toBe(true);
+  expect((await abandoned).status).not.toBe(200);
+  expect((await journey()).stepId).toBe('activation'); expect(findGoals()).toHaveLength(0);
+  planHang = false; planSignals = [];
   getWorkflowDb().exec("CREATE TRIGGER reject_initial_goal BEFORE INSERT ON goals BEGIN SELECT RAISE(ABORT, 'goal write failed'); END");
   expect((await call('journey.transition', exit)).availability).toBe('unavailable');
   expect((await journey()).stepId).toBe('activation'); expect(findGoals()).toHaveLength(0);
   getWorkflowDb().exec('DROP TRIGGER reject_initial_goal');
   expect((await call('journey.transition', exit)).snapshot.stepId).toBe('exited');
   await call('journey.transition', exit);
+  // The planner receives the bounded deadline signal, still live after the plan returned.
+  expect(planSignals.length).toBe(1); expect(planSignals[0]).toBeInstanceOf(AbortSignal); expect(planSignals[0]!.aborted).toBe(false);
   expect(findGoals()).toHaveLength(5); expect(findGoals().find(g => g.level === 'objective')).toMatchObject({ title: summary, status: 'active' });
   expect(findGoals().every(g => g.status === 'active')).toBe(true);
   expect((await journey()).completion).toBe('explored');

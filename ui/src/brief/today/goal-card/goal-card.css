@@ -25,6 +25,9 @@
 .brief-root .brief-goal-next .brief-button__labels { flex:1; }
 .brief-root .brief-goal-next :is(.brief-button__label,.brief-button__reserve) { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .brief-root .brief-goal-next svg { flex:none; }
+.brief-root .brief-goal-plan { margin-top:8px; padding-inline:0; }
+.brief-root .brief-goal-plan :is(.brief-button__label,.brief-button__reserve) { display:inline-flex; align-items:center; gap:8px; }
+.brief-root .brief-goal-plan svg { flex:none; }
 .brief-root .brief-goal-actions { display:flex; flex-wrap:wrap; gap:8px; }
 .brief-root .brief-goal-accept { min-width:132px; }
 .brief-root .brief-goal-feedback { color:var(--brief-secondary); margin-top:10px; overflow-wrap:anywhere; }

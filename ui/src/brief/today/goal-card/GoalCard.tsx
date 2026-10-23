@@ -9,7 +9,9 @@ import type { GoalHandoff } from "./useGoalHandoff";
 import "../outcomes/outcomes.css";
 import "./goal-card.css";
 
-export function GoalCard({ handoff, onReviewDraft }: { handoff: GoalHandoff; onReviewDraft?: () => void }) {
+/** `onPlanUnplanned` is set when onboarding finished without the interview goal
+ * because it could not be planned; the empty card then says so and opens Goals. */
+export function GoalCard({ handoff, onReviewDraft, onPlanUnplanned }: { handoff: GoalHandoff; onReviewDraft?: () => void; onPlanUnplanned?: () => void }) {
   const { binding, goal, rec, reduced } = handoff;
   const [openedKey, setOpenedKey] = useState<string | null>(null);
   const open = openedKey === handoff.key;
@@ -34,7 +36,10 @@ export function GoalCard({ handoff, onReviewDraft }: { handoff: GoalHandoff; onR
   }, [open, reduced]);
   if (!goal) return <section className="brief-goal-card brief-surface" aria-label="Main goal" data-state={binding.state.status} aria-busy={binding.state.status === "loading" || undefined}>
     <h2 className="brief-type-body-emphasis">{binding.state.status === "loading" ? "Loading your goal" : binding.state.status === "empty" ? "No active goal" : "Goal unavailable"}</h2>
-    <p className="brief-type-body brief-secondary">{binding.state.status === "empty" ? "Choose a goal to give the next step direction." : "reason" in binding.state ? binding.state.reason : ""}</p>
+    {binding.state.status === "empty" && onPlanUnplanned ? <>
+      <p className="brief-type-body brief-secondary">The goal from your interview could not be planned. You can plan it from Goals.</p>
+      <BriefButton size="sm" variant="text" className="brief-goal-plan" onClick={onPlanUnplanned}>Plan a goal<ArrowRight size={16} /></BriefButton>
+    </> : <p className="brief-type-body brief-secondary">{binding.state.status === "empty" ? "Choose a goal to give the next step direction." : "reason" in binding.state ? binding.state.reason : ""}</p>}
   </section>;
   const progress = cardProgress(goal.progress, goal.fraction);
   return <section className="brief-goal-card brief-surface" aria-labelledby={`${id}-title`} data-goal-id={goal.goalId} data-view={open ? "recommendation" : "overview"} data-reduced={reduced}>

@@ -2,6 +2,7 @@ import type { Database } from 'bun:sqlite';
 import { getDb } from '../vault/schema';
 import { getGoal } from '../vault/goals';
 import { getGoalApplication } from '../goals/application-service';
+import { initialGoalUnplanned } from '../goals/initial-goal-notice';
 import { measurementProgress, readMeasurementReceipt } from '../goals/measurements';
 import { listObservations, readObservationReceipt } from '../goals/observations';
 import type { Goal } from '../goals/types';
@@ -51,6 +52,11 @@ export class GoalMeasurements {
       });
       return { state: data.length ? 'ready' as const : 'empty' as const, data, asOf: Date.now() };
     })();
+  }
+  /** Whether onboarding finished without the interview goal because it could not be planned. */
+  initialGoal(): { state: 'unplanned' | 'none' } {
+    this.available();
+    return this.db.transaction(() => ({ state: initialGoalUnplanned() && !this.db.query('SELECT 1 FROM goals LIMIT 1').get() ? 'unplanned' as const : 'none' as const }))();
   }
   async read(query: { goalId: string }): Promise<BriefReadResult<BriefGoal>> {
     this.available(); const goal = getGoal(query.goalId);

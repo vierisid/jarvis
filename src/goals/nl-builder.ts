@@ -27,7 +27,7 @@ export class NLGoalBuilder {
   /**
    * Parse a natural language goal description into a structured OKR proposal.
    */
-  async parseGoal(text: string, parentId?: string): Promise<GoalProposal> {
+  async parseGoal(text: string, parentId?: string, options: { signal?: AbortSignal } = {}): Promise<GoalProposal> {
     goalText(text, 'text');
     const parent = this.resolveParent(parentId);
     if (parent && !nextGoalLevel(parent.level)) invalid('parent_id', 'a daily_action cannot have children');
@@ -48,6 +48,7 @@ export class NLGoalBuilder {
     const response = await this.llmManager.chatTier('medium', 'nl_goal_builder', prompt, {
       temperature: 0.3,
       max_tokens: 4000,
+      ...(options.signal ? { signal: options.signal } : {}),
     });
 
     return this.parseResponse(response.content, parent, reference);

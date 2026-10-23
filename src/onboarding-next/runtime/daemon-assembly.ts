@@ -139,7 +139,7 @@ export function createDaemonOnboardingAssembly(ctx: ApiContext, modules: readonl
       const resolved = catalog().resolve(selected); if (resolved.issues.length) throw new Error('Context changed');
       return { ingredients: resolved.ingredients };
     },
-    planInitialGoal: text => { valid(owner); return new NLGoalBuilder(ctx.agentService.getLLMManager(), { timezone: ctx.config.timezone }).parseGoal(text); },
+    planInitialGoal: (text, signal) => { valid(owner); return new NLGoalBuilder(ctx.agentService.getLLMManager(), { timezone: ctx.config.timezone }).parseGoal(text, undefined, { signal }); },
     roomStatus: options.roomStatus,
     ready: () => !!ctx.settingsReload && !!ctx.startPostSetupServices && !!ctx.onboardingServiceReadiness && !!options.composer(),
   });

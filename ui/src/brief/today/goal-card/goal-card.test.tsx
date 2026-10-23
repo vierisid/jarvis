@@ -288,3 +288,19 @@ test("measured counts remain counts, while a decreasing target uses canonical pr
   const data = goalCardData({goal, pathTitle:goal.title, stages: []});
   expect(cardProgress(data.progress, data.fraction)).toEqual({value: 50, target: 100, percent: true});
 });
+
+test("an empty card says when the interview goal could not be planned and opens Goals", async () => {
+  let planned = 0;
+  function Empty({ unplanned }: { unplanned: boolean }) {
+    const handoff = useGoalHandoff("preview", { ...binding, state: { status: "empty" } }, true);
+    return <GoalCard handoff={handoff} onPlanUnplanned={unplanned ? () => planned++ : undefined} />;
+  }
+  await React.act(async () => root.render(<Empty unplanned={false} />));
+  expect(host.textContent).toContain("No active goal"); expect(host.textContent).toContain("Choose a goal");
+  expect(host.querySelector(".brief-goal-plan")).toBeNull();
+  await React.act(async () => root.render(<Empty unplanned />));
+  expect(host.textContent).toContain("No active goal");
+  expect(host.textContent).toContain("The goal from your interview could not be planned.");
+  expect(host.textContent).not.toContain("Choose a goal");
+  await click(".brief-goal-plan"); expect(planned).toBe(1);
+});
