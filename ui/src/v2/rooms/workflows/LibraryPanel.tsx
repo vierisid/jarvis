@@ -270,7 +270,9 @@ function LibraryRowWired({
       onUninstall={async () => {
         if (
           !await confirmDialog(
-            `Uninstall ${entry.displayName}? Existing workflows that use it will stop working until reinstalled.`,
+            entry.withdrawn
+              ? `Uninstall ${entry.displayName}? It is no longer offered, so it cannot be installed again, and workflows that use it will stop working.`
+              : `Uninstall ${entry.displayName}? Existing workflows that use it will stop working until reinstalled.`,
           )
         )
           return;

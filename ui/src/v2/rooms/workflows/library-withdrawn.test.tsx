@@ -85,7 +85,8 @@ test('uninstalling a withdrawn row whose manifest id is not a plain slug stays o
   // A withdrawn id comes from the local manifest, not the static catalog.
   await render([row('../../x?y', { installed: { resolvedVersion: '1.0.0', installedAt: 1, source: 'user' }, withdrawn: { reason: REASON } })]);
   const prevConfirm = window.confirm;
-  window.confirm = () => true;
+  const asked: string[] = [];
+  window.confirm = (msg?: string) => { asked.push(String(msg)); return true; };
   try {
     const li = rowFor('../../x?y');
     const btn = [...li.querySelectorAll('button')].find((b) => b.textContent?.includes('Uninstall'))!;
@@ -94,4 +95,8 @@ test('uninstalling a withdrawn row whose manifest id is not a plain slug stays o
     window.confirm = prevConfirm;
   }
   expect(calls.filter((c) => c.method === 'DELETE').map((c) => c.url)).toEqual(['/api/workflows/pieces/library/..%2F..%2Fx%3Fy']);
+  // A withdrawn piece cannot be installed again, so the prompt must not promise a reinstall.
+  expect(asked).toHaveLength(1);
+  expect(asked[0]).toContain('cannot be installed again');
+  expect(asked[0]).not.toContain('until reinstalled');
 });
