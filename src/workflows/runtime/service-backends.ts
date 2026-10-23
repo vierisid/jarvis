@@ -1,3 +1,6 @@
+import { hubspotContactInput, isHubspotContact, upsertHubspotContact } from './hubspot-contact';
+import { getConnection } from '../db/repos/app-connection';
+import { claimIdentity, completeIdentity, IdentityUnresolvedError } from '../db/repos/effect-identity';
 import { workflowBrowserRead, workflowBrowserReview } from '../../authority/ui-intent';
 import { runAsReviewed } from '../../actions/tools/reviewed-call-scope';
 import { withWorkflowMemory } from '../../vault/memory-use-context';
@@ -80,6 +83,8 @@ import { AGENT_TASK_MAX_CHARS, checkSpecialistId, SPECIALIST_ID_MAX_CHARS } from
 import { boundedApprovalLabel } from '../../authority/approval-delivery';
 
 export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependencies {
+  /** Test transport injection; production always uses the fixed HubSpot host. */
+  hubspotFetch?: typeof fetch;
   /** F-14 enrollment is explicitly enabled only with the F-12 queue. */
   decisionDocumentsEnabled?: boolean;
   credentialResolver: CredentialResolver;
@@ -397,6 +402,12 @@ export function buildSandboxServiceBackends(
           target: { channels: [...channels], recipients, ...(fallback.fallback ? { fallback: fallback.fallback } : {}) } };
       },
       execute: async (args, checkpoint) => {
+        const notifyKey = typeof args.idempotencyKey === 'string' ? args.idempotencyKey : null;
+        const currentRun = getFlowRun(ctx.runId);
+        const identity = notifyKey && currentRun ? digest(['workflow-notify-v1',ctx.projectId,currentRun.flowId,notifyKey]) : null;
+        const owner = workflowEffectId(ctx.runId,ctx.stepName!,ctx.executionPath ?? [],'notify');
+        checkpoint();
+        if (identity && claimIdentity(identity,owner,true) === 'duplicate') return { delivered: [], failed: [], unknown: [], deduplicated: true };
         const recipients = args.recipients as Record<string, string | null>;
         const guardedNotifier = new JarvisNotifierAdapter({ ...notifierDeps,
           broadcastToDashboard: (text, priority) => { checkpoint(); return opts.wsService.broadcastNotificationToDashboard(text, priority); },
@@ -426,6 +437,7 @@ export function buildSandboxServiceBackends(
           throw new DeliveryFailedError({ status: 'error', code: 'DELIVERY_FAILED', effect: 'not_started',
             message: `Not sent on any channel: ${report.failed.map(f => `${f.channel} (${f.error})`).join('; ')}` }, report);
         }
+        if (identity) completeIdentity(identity,owner);
         return report;
       },
     });
@@ -1001,11 +1013,14 @@ export function buildSandboxServiceBackends(
     const previous = getWorkflowEffect(workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], route));
     const document = whole && (previous ? previous.requestDigest === digest(requestOf(whole, true))
       : opts.decisionDocumentsEnabled === true && digest(defangPieceProjection(whole)) === digest(whole)) ? whole : null;
-    const input = document ?? projected;
+    const contact = isHubspotContact(req.piece, req.action) ? hubspotContactInput(req.input) : null;
+    if (contact && digest(contact) !== req.inputDigest) throw new Error('HubSpot contact input digest mismatch');
+    const input = contact ?? document ?? projected;
     const providerBinding = tracked ? captureProviderBinding({ projectId: ctx.projectId, versionId: run.flowVersionId,
       stepName: ctx.stepName!, piece: req.piece, credentialDigest: req.credentialDigest }) : undefined;
+    if (contact && !providerBinding) throw new Error('HubSpot contact upsert requires a saved, active HubSpot 0.12.1 OAuth connection; choose it in setup');
     const reply = await effects.invoke({ context: ctx, piece: req.piece, action: req.action,
-      externalDispatch: tracked, providerBinding,
+      externalDispatch: tracked && !contact, providerBinding,
       // #953: a governed send or payment over the workflow's level asks
       // instead of failing the step, as a gated tool does; deletes and
       // settings changes stay denied by level.
@@ -1029,7 +1044,32 @@ export function buildSandboxServiceBackends(
       revalidate: record => assertRecipientFactsCurrent((record.bindings as { facts?: FactPin[] } | undefined)?.facts),
       revalidateOnReplay: true,
       // The engine applies exactly the reviewed document it is handed here.
-      execute: async (args, checkpoint) => { checkpoint(); return { dispatch: 'authorized',
+      execute: async (args, checkpoint) => {
+        checkpoint();
+        if (contact) {
+          const connection = getConnection(providerBinding!.connectionId);
+          const token = connection?.value.access_token;
+          if (!connection || connection.status !== 'ACTIVE' || connection.projectId !== ctx.projectId || typeof token !== 'string' || digest(token) !== providerBinding!.credentialDigest)
+            throw new Error('HubSpot connection changed before dispatch');
+          const values = hubspotContactInput(args);
+          const identity = digest(['hubspot-contact-v1',ctx.projectId,connection.id,values.email]);
+          const owner = workflowEffectId(ctx.runId,ctx.stepName!,ctx.executionPath ?? [],route);
+          // Wait briefly for a competing live write. Never steal an expired
+          // lease: a process crash can leave an uncertain provider write behind.
+          const deadline = Date.now() + 2000;
+          for (;;) {
+            checkpoint();
+            try { claimIdentity(identity, owner, false); break; }
+            catch (error) {
+              if (!(error instanceof IdentityUnresolvedError) || getWorkflowEffect(error.owner)?.status !== 'dispatching' || Date.now() >= deadline) throw error;
+              await new Promise(resolve => setTimeout(resolve, 25));
+            }
+          }
+          const result = await upsertHubspotContact(values, token, checkpoint, opts.hubspotFetch);
+          completeIdentity(identity, owner);
+          return result;
+        }
+        return { dispatch: 'authorized',
         ...(document ? { document: projectDocument(req.piece, req.action, args) } : {}) }; } });
     if (reply.approval) return { governed: true, dispatch: 'approval_required', approval: reply.approval };
     const approved = () => document ? { document: (reply.result as { document: ReturnType<typeof projectDocument> }).document } : {};

@@ -293,6 +293,7 @@ export const PATCHED_VENDOR_SOURCES = [
   // either without registering them here would leave a cached engine running
   // the old table -- a stale bundle that silently governs the wrong actions.
   '../../runtime/piece-effects.ts',
+  '../../runtime/hubspot-contact.ts',
   '../../runtime/piece-effect-guard.ts',
   // The egress guard the engine's file-property download goes through (#961).
   '../../runtime/http-egress.ts',

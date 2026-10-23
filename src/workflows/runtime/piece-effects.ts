@@ -46,6 +46,7 @@
  * built-ins, no daemon singletons.
  */
 
+import { isHubspotContact, HUBSPOT_PIECE, HUBSPOT_UPSERT } from './hubspot-contact';
 import type { ActionCategory } from '../../roles/authority';
 import type { ToolDefinition } from '../../actions/tools/registry';
 
@@ -74,7 +75,7 @@ const GMAIL_TRACKED_SENDS: ReadonlySet<unknown> = new Set(['send_email', 'gmail_
  * (#953 made these reachable at the default level).
  */
 export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
-  return (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
+  return isHubspotContact(piece, action) || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
     || (piece === '@activepieces/piece-google-drive' && ['upload_gdrive_file', 'drive_upload_file', 'drive_upload_from_url'].includes(String(action)))
     || (piece === '@activepieces/piece-google-sheets' && ['insert_row', 'sheets_append_values', 'sheets_add_row'].includes(String(action)))
     || (piece === '@activepieces/piece-slack' && (action === 'send_channel_message' || action === 'slack_post_message'))
@@ -600,6 +601,10 @@ interface ResolvedPieceAction {
 export const ALL_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [...GOVERNED_PIECE_ADAPTERS, ...CORE_PIECE_ADAPTERS];
 // Narrow audited action coverage; this does not promote the entire Sheets
 // package to the Library's VERIFIED set or claim coverage of its other actions.
+const HUBSPOT_CONTACT_ADAPTER: GovernedPieceAdapter = {
+  catalogId: 'hubspot', pieceName: HUBSPOT_PIECE, unknownActionCategory: 'delete_data',
+  targetProps: ['email','objectProperties'], categories: { write_data: [HUBSPOT_UPSERT] },
+};
 const SHEETS_APPEND_ADAPTER: GovernedPieceAdapter = {
   catalogId: 'google-sheets', pieceName: '@activepieces/piece-google-sheets',
   unknownActionCategory: 'delete_data',
@@ -631,7 +636,7 @@ for (const adapter of ALL_PIECE_ADAPTERS) {
 /** True for a piece with a governed adapter. The engine-side guard asks this
  * first, so an ungoverned piece costs no round trip at all. */
 export function isGovernedPiece(pieceName: unknown): boolean {
-  return typeof pieceName === 'string' && (BY_PIECE_NAME.has(pieceName) || pieceName === SHEETS_APPEND_ADAPTER.pieceName);
+  return typeof pieceName === 'string' && (BY_PIECE_NAME.has(pieceName) || pieceName === SHEETS_APPEND_ADAPTER.pieceName || pieceName === HUBSPOT_PIECE);
 }
 
 /**
@@ -642,6 +647,7 @@ export function isGovernedPiece(pieceName: unknown): boolean {
  */
 export function resolveGovernedPieceAction(pieceName: unknown, actionName: unknown, input?: unknown): ResolvedPieceAction | null {
   if (typeof pieceName !== 'string' || typeof actionName !== 'string') return null;
+  if (isHubspotContact(pieceName, actionName)) return { adapter: HUBSPOT_CONTACT_ADAPTER, action: actionName, category: 'write_data', known: true, byInput: false };
   if (pieceName === SHEETS_APPEND_ADAPTER.pieceName) {
     return tracksPieceCompletion(pieceName, actionName)
       ? { adapter: SHEETS_APPEND_ADAPTER, action: actionName, category: 'write_data', known: true, byInput: false } : null;

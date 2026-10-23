@@ -17,7 +17,7 @@ export function captureProviderBinding(input: {
   const version = getFlowVersion(input.versionId);
   const node = walkFlowNodes(version?.trigger).find(n => n.name === input.stepName);
   const supportedVersion = input.piece === '@activepieces/piece-gmail' ? '0.17.0'
-    : input.piece === '@activepieces/piece-slack' ? '0.21.0' : null;
+    : input.piece === '@activepieces/piece-slack' ? '0.21.0' : input.piece === '@activepieces/piece-hubspot' ? '0.12.1' : null;
   if (!supportedVersion || node?.settings?.pieceVersion !== supportedVersion) return undefined;
   const auth = node?.settings?.input?.auth;
   const match = typeof auth === 'string' && /^\{\{connections(?:\.([\w:-]+)|\['([^']+)'\])\}\}$/.exec(auth);

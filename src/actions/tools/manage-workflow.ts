@@ -1,3 +1,4 @@
+import { workflowSafeguards } from '../../workflows/runtime/workflow-safeguards';
 /**
  * Manage Workflow Tool — chat-driven workflow CRUD + run management.
  *
@@ -1020,6 +1021,7 @@ function workflowDocumentPage(flow: FlowRow, params: Record<string, unknown>): R
     ...validationSummary(flow.id, version.id),
     structure: compileWorkflow(version.trigger, { pieces: workflowReadinessServices()?.pieces, phase: 'composition' }),
     readiness: versionReadiness(flow.id, version.id),
+    runtimeSafeguards: workflowSafeguards(version.trigger),
   };
   const text = JSON.stringify(document);
   const hash = createHash('sha256').update(flow.id + version.id + params.view + text).digest('hex');

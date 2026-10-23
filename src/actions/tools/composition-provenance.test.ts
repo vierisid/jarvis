@@ -20,6 +20,13 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
+  // w8-11: HubSpot contact coordination and qualified lead notifications.
+  'w8-11': {
+    'bare': '0607884f6f9ba78094b4bd40cf7747fd2bdda3ca35a6941a0e49ac92782a4be5',
+    'hosted production': '89ca16182f441794efd6f24d5b4cba3f2f65c7afd1db21ef17a4fe550b2969e3',
+    'production': '889e642ed640de1588234aedffd7d7de3a7f433aee32f546017d196752095c48',
+    'tool names only': '3d369e555ab2afe1e1f3f266eae7cd9874d2d7441069234984b65daaf88fddb7',
+  },
   // w8-10: invoice extraction, schema validation and complete readback.
   'w8-10': {
     'bare': '05263df749ecb38946893d74e1d4c189f65f8d730d45d41f28a917b708e70082',
