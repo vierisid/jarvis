@@ -1,3 +1,4 @@
+import { MEETING_ACCOUNTS, meetingSetup } from './meeting-briefs';
 import { parseOutputSchema } from './llm-output-contract';
 import { submissionConfig } from './form-submission';
 import { validateCronExpression, validateCronTimezone } from '../../lib/cron-scheduler';
@@ -215,6 +216,21 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     // Only input values are templated; source code and labels are not expressions.
     expressions(input, node, 'settings.input', scope, pieceName);
     const isPiece = (short: string) => pieceName === short || pieceName === `@jarvispieces/piece-${short}`;
+    if (!root && isPiece('jarvis-context') && settings.actionName === 'meeting_briefs' && object(input)) {
+      for (const [field, provider] of Object.entries(MEETING_ACCOUNTS)) {
+        const id = input[field];
+        if (!emptyInput(id)) {
+          if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node, `settings.input.${field}`, 'CONNECTION_BINDING', 'Select a saved account reference');
+          else if (context.phase !== 'composition') {
+            const reason = context.connection?.(id, provider) ?? (context.connection ? null : 'Connection inventory unavailable');
+            if (reason) issue(node,`settings.input.${field}`,'CONNECTION_BINDING',reason);
+            else runtime(node,`settings.input.${field}`,'connection','Recheck the pinned provider account before every read');
+          }
+        }
+      }
+      const complete = ['calendarConnection','gmailConnection','hubspotConnection','calendarId','ownerEmail','internalDomains','hubspotPortalId'].every(k=>!emptyInput(input[k]));
+      if (complete) try { meetingSetup(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
+    }
     if (!root && isPiece('jarvis-ask') && settings.actionName === 'ask' && !emptyInput(input?.outputSchema)) {
       const declared = staticInput(input.outputSchema);
       if (!declared.known) runtime(node, 'settings.input.outputSchema', 'piece-input', 'Validate the resolved output schema before model dispatch');
