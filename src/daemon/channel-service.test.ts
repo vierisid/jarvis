@@ -1245,6 +1245,6 @@ describe("#890: whether each channel has anywhere to send approval requests", ()
     expect(recipientWarning({
       telegram: { hasRecipient: false, reason: "empty_list" },
       discord: { hasRecipient: false, reason: "no_direct_message" },
-    })).toBe("Telegram will not receive approval requests or notifications: no user ID is listed for it. Discord will not receive approval requests or notifications until a listed user sends the bot a direct message (again, if they did before).");
+    })).toBe("Telegram will not receive approval requests or notifications: no user ID is listed for it. Discord will not receive approval requests or notifications until the channel's owner, the first allowed user ID, sends the bot a direct message (again, if they did before). A bot cannot start a chat with someone who has never messaged it.");
   });
 });

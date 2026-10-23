@@ -220,10 +220,16 @@ describe('#890: the routes say when a channel has no recipient', () => {
 
     expect(((await status.GET().json()) as { recipients: unknown }).recipients).toEqual({ telegram: { hasRecipient: true } });
     expect(await save({ telegram: { allowed_users: [42, 7] } })).toEqual({ ok: true, message: 'Channel config saved and applied.' });
+    // #916: the first ID is the owner, and the settings page is told which.
+    const read = routes['/api/config/channels'] as unknown as { GET: () => Response };
+    expect(((await read.GET().json()) as { telegram: { owner_id: unknown } }).telegram.owner_id).toBe(42);
+    // Putting 7 first makes 7 the owner, who has not messaged the bot.
+    expect((await save({ telegram: { allowed_users: [7, 42] } })).message).toContain("until the channel's owner, the first allowed user ID, sends the bot a direct message");
+    expect(((await read.GET().json()) as { telegram: { owner_id: unknown } }).telegram.owner_id).toBe(7);
 
     expect(await save({ telegram: { allowed_users: [7] } })).toEqual({
       ok: true,
-      message: 'Channel config saved and applied. Telegram will not receive approval requests or notifications until a listed user sends the bot a direct message (again, if they did before).',
+      message: "Channel config saved and applied. Telegram will not receive approval requests or notifications until the channel's owner, the first allowed user ID, sends the bot a direct message (again, if they did before). A bot cannot start a chat with someone who has never messaged it.",
     });
     expect(((await status.GET().json()) as { recipients: unknown }).recipients).toEqual({ telegram: { hasRecipient: false, reason: 'no_direct_message' } });
 

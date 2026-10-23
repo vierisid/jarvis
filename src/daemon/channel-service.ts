@@ -16,7 +16,7 @@ import type { STTProvider } from '../comms/voice.ts';
 import { ChannelManager } from '../comms/index.ts';
 import { TELEGRAM_CHANNEL_OFF_DROPPED_REPLY, TELEGRAM_CHANNEL_OFF_MAYBE_DROPPED_REPLY, TELEGRAM_SHUTDOWN_DROPPED_REPLY, TELEGRAM_SHUTDOWN_MAYBE_DROPPED_REPLY, TelegramAdapter, type TelegramResumePoint } from '../comms/channels/telegram.ts';
 import { activeTurns } from './active-turns.ts';
-import { channelAllowList } from '../comms/channels/allow-list.ts';
+import { channelAllowList, channelOwnerId } from '../comms/channels/allow-list.ts';
 import { LITERAL_TEXT_CHANNELS } from '../authority/approval-delivery.ts';
 import { createSTTProvider } from '../comms/voice.ts';
 import { effectiveSttForBinding, usejarvisVoiceCredentials } from './usejarvis-ai.ts';
@@ -32,8 +32,9 @@ const LAST_RECIPIENT_PREFIX = 'channel.lastRecipient.';
 /**
  * Where a channel's broadcasts go, and who put them there (#852): `to` is the
  * chat the sender wrote from, `userId` the sender. Broadcasts go to `to` only
- * while the channel's allow-list names `userId` (`getBroadcastRecipient`), so
- * removing someone from the list stops their copies at once.
+ * while `userId` is the channel's owner, the first entry of its allow-list
+ * (#916, `getBroadcastRecipient`), so removing or replacing the owner stops
+ * their copies at once.
  */
 export type BroadcastRecipient = { to: string; userId: string };
 
@@ -62,10 +63,10 @@ export function parsePersistedRecipient(channel: string, value: string): Broadca
   return null;
 }
 
-/** See `ChannelService.getRecipientStatus` (#890). */
+/** See `ChannelService.getRecipientStatus` (#890, #916). */
 export type RecipientStatus =
   | { hasRecipient: true }
-  | { hasRecipient: false; reason: 'empty_list' | 'no_direct_message' };
+  | { hasRecipient: false; reason: 'empty_list' | 'no_owner' | 'no_direct_message' };
 
 /**
  * What to tell the owner about channels that have nowhere to send approval
@@ -78,7 +79,9 @@ export function recipientWarning(status: Record<string, RecipientStatus>): strin
     if (s.hasRecipient) continue;
     lines.push(s.reason === 'empty_list'
       ? `${label(name)} will not receive approval requests or notifications: no user ID is listed for it.`
-      : `${label(name)} will not receive approval requests or notifications until a listed user sends the bot a direct message (again, if they did before).`);
+      : s.reason === 'no_owner'
+        ? `${label(name)} will not receive approval requests or notifications: the first allowed user ID, which is the channel's owner, is not a valid ID.`
+        : `${label(name)} will not receive approval requests or notifications until the channel's owner, the first allowed user ID, sends the bot a direct message (again, if they did before). A bot cannot start a chat with someone who has never messaged it.`);
   }
   return lines.length ? lines.join(' ') : null;
 }
@@ -108,8 +111,9 @@ export class ChannelService implements Service {
   private manager: ChannelManager;
   private sttProvider: STTProvider | null = null;
   /**
-   * The last allow-listed sender per channel, for proactive broadcasts and
-   * notify (#852). Persisted to the settings table (see
+   * The owner's private chat per channel, for proactive broadcasts and
+   * notify (#852, #916). Only the channel's owner is recorded; a value saved
+   * by an older version for another listed user is loaded but never used. Persisted to the settings table (see
    * {@link LAST_RECIPIENT_PREFIX}) and reloaded on start, so a daemon restart
    * doesn't drop the recipient and silently break notifications until the
    * user re-messages the bot. Read through `getBroadcastRecipient`, never
@@ -260,7 +264,12 @@ export class ChannelService implements Service {
           // decides may expire while the turn runs. The same test as
           // handleChannelMessage's, handler included: without a handler the
           // text is chat, and chat waits its turn.
-          isDecision: (text) => this.approvalHandler !== null && channelDecisionCommand(text) !== null,
+          //
+          // Only the owner's (#916). Anyone else's `approve <id>` is refused,
+          // and must not fill the lane the owner's decisions wait in: it waits
+          // in its chat's lane like other chat, and is refused there.
+          isDecision: (text, userId) => this.approvalHandler !== null && channelDecisionCommand(text) !== null
+            && this.isOwner('telegram', userId),
         });
         this.telegram = { adapter: telegram, token };
         this.manager.register(telegram);
@@ -376,7 +385,7 @@ export class ChannelService implements Service {
 
       const lastRecipient = this.getBroadcastRecipient(name);
       if (!lastRecipient) {
-        console.log(`[ChannelService] No allow-listed recipient for ${name}, skipping broadcast`);
+        console.log(`[ChannelService] No owner chat for ${name} yet, skipping broadcast`);
         continue;
       }
 
@@ -417,20 +426,25 @@ export class ChannelService implements Service {
   }
 
   /**
-   * Where this channel's broadcasts go: the chat of the last sender the
-   * allow-list named, and only while it still names them (#852). So a channel
-   * with an empty list has no recipient and gets no approval card or other
-   * broadcast: everyone may chat there, nobody may decide there, and a card
-   * telling a stranger to "Reply with: approve <id>" helped no one. Read
-   * against the live config, so removing a user from the list stops their
-   * copies without a restart.
+   * Where this channel's broadcasts go: the private chat of the channel's
+   * owner, the first entry of its allow-list (#916), and only while they are
+   * still the owner. It used to be the chat of whichever listed user sent the
+   * last direct message (#852), so with `[owner, spouse]` the spouse took over
+   * every approval card just by saying hello.
+   *
+   * The owner's chat is learned from a direct message they sent: a bot cannot
+   * open a chat with someone who never messaged it (Telegram refuses one with
+   * 403 until the user has pressed Start), so until then there is no
+   * recipient, the card stays on the dashboard, and `getRecipientStatus` says
+   * why. Read against the live config, so changing the owner or removing them
+   * stops their copies without a restart.
    *
    * Workflows resolve it once, before approval, and never switch to a later
    * sender.
    */
   getBroadcastRecipient(channel: string): string | null {
     const recipient = this.lastRecipients.get(channel);
-    return recipient && this.allowListNames(channel, recipient.userId) ? recipient.to : null;
+    return recipient && this.isOwner(channel, recipient.userId) ? recipient.to : null;
   }
 
   /**
@@ -443,10 +457,10 @@ export class ChannelService implements Service {
    *
    *   - `empty_list`: the saved list names nobody, so there can be no
    *     recipient;
-   *   - `no_direct_message`: the list names someone, but the last listed user
-   *     to message the bot privately is no longer listed, or none has yet.
-   *     Only the LAST such sender is kept, so an earlier one who is still
-   *     listed must message again.
+   *   - `no_owner`: the list names someone, but its first entry, the owner
+   *     (#916), is not a valid id, so nobody owns the channel;
+   *   - `no_direct_message`: the owner has not sent the bot a direct message
+   *     since becoming the owner (or ever), so there is no chat to send to.
    */
   getRecipientStatus(): Record<string, RecipientStatus> {
     const out: Record<string, RecipientStatus> = {};
@@ -457,7 +471,12 @@ export class ChannelService implements Service {
         continue;
       }
       const list = channelAllowList(name, this.rawAllowList(name));
-      out[name] = { hasRecipient: false, reason: list && list.ids.length > 0 ? 'no_direct_message' : 'empty_list' };
+      out[name] = {
+        hasRecipient: false,
+        reason: !list || list.ids.length === 0 ? 'empty_list'
+          : this.ownerOf(name) === null ? 'no_owner'
+            : 'no_direct_message',
+      };
     }
     return out;
   }
@@ -480,6 +499,23 @@ export class ChannelService implements Service {
     if ((typeof userId !== 'string' && typeof userId !== 'number') || userId === '') return false;
     const list = channelAllowList(channel, this.rawAllowList(channel));
     return !!list && list.ids.some((id) => String(id) === String(userId));
+  }
+
+  /** The channel's owner as configured right now (#909, #916); see `channelOwnerId`. */
+  private ownerOf(channel: string): number | string | null {
+    return channelOwnerId(channel, this.rawAllowList(channel));
+  }
+
+  /**
+   * Whether this user is the channel's owner as configured right now: the
+   * first entry of its allow-list (#909, #916). Only the owner's turns get the
+   * owner's private context, only the owner may approve or deny from the
+   * channel, and only the owner's private chat receives approval cards.
+   */
+  isOwner(channel: string, userId: unknown): boolean {
+    if (!this.allowListNames(channel, userId)) return false;
+    const owner = this.ownerOf(channel);
+    return owner !== null && String(owner) === String(userId);
   }
 
   /**
@@ -568,9 +604,14 @@ export class ChannelService implements Service {
     // Telegram group or a Discord server channel made every member of it a
     // reader of every approval card. A message there still gets its reply
     // and leaves the recipient as it was.
+    //
+    // And only the channel's owner (#916): the first entry of the list. Any
+    // other listed user's direct message leaves the recipient where it was,
+    // so they cannot take over the owner's cards by saying hello.
     const userId = msg.metadata.userId;
     const allowListed = msg.senderAllowListed === true && this.allowListNames(channelTag, userId);
-    if (allowListed && isPrivateChat(msg)) {
+    const owner = allowListed && this.isOwner(channelTag, userId);
+    if (owner && isPrivateChat(msg)) {
       const to = String(msg.metadata.chatId ?? msg.metadata.channelId ?? msg.from);
       this.recordRecipient(channelTag, { to, userId: String(userId) });
     }
@@ -583,6 +624,9 @@ export class ChannelService implements Service {
       // Discord, anyone on Telegram -- and that must not extend to approving
       // a gated action.
       if (!allowListed) return channelDecisionNeedsAllowList(channelTag);
+      // And only the owner (#916). The card went to the owner's chat; another
+      // listed user may chat with the bot but does not decide for the owner.
+      if (!owner) return channelDecisionNotOwner(channelTag);
       // A forward carries someone else's words (#914). Forwarding is a quick
       // action, and the text need not look like a command to the person
       // forwarding it, so it is never their decision.
@@ -604,11 +648,16 @@ export class ChannelService implements Service {
     addMessage(conversation.id, { role: 'user', content: msg.text });
 
     // 2. Route to AgentService (non-streaming — external channels are
-    //    request/response), on that conversation's history alone. A sender the
-    //    list does not name does not teach the agent anything either: what it
-    //    learns goes into every later turn's prompt, the owner's included.
+    //    request/response), on that conversation's history alone. Only the
+    //    channel's owner, the first entry of its list, gets the owner's
+    //    assistant (#909): their private context, their tools, and learning
+    //    from the turn. Any other sender is a guest; see
+    //    AgentService.handleGuestMessage for exactly what a guest gets.
+    //    A guest's turn still runs under origin 'user': the owner chose to
+    //    list them, the turn is foreground, and a separate origin would need
+    //    the hosted platform to weigh it. Filed as a follow-up (#909 review).
     const response = await runWithOrigin('user', () => this.agentService.handleThreadMessage(
-      msg.text, channelTag, { conversationId: conversation.id, contextKey: `channel:${channelTag}:${sender}`, learn: allowListed },
+      msg.text, channelTag, { conversationId: conversation.id, contextKey: `channel:${channelTag}:${sender}`, sender: owner ? 'owner' : 'guest' },
     ));
 
     // 3. Persist assistant response to vault
@@ -668,6 +717,14 @@ export function isPrivateChat(msg: Pick<ChannelMessage, 'channel' | 'metadata'>)
  */
 export function channelDecisionNeedsAllowList(channel: string): string {
   return `Approvals can only be decided from ${channel} by a user listed under Allowed user IDs in Jarvis Settings > Channels, and that list is empty or does not include you. Nothing was approved or denied. Open the Jarvis dashboard to decide.`;
+}
+
+/**
+ * The answer to an `approve <id>` or `deny <id>` from a listed user who is not
+ * the channel's owner (#916). Nothing is decided.
+ */
+export function channelDecisionNotOwner(channel: string): string {
+  return `Approvals can only be decided from ${channel} by this channel's owner, the first user listed under Allowed user IDs in Jarvis Settings > Channels, and that is not you. Nothing was approved or denied.`;
 }
 
 /**

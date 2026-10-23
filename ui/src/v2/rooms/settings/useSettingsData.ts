@@ -193,7 +193,7 @@ export function parseModelRef(ref: string | null | undefined): { provider: strin
 /** Whether a connected channel has anywhere to send approval requests (#890). */
 export type ChannelRecipientStatus =
   | { hasRecipient: true }
-  | { hasRecipient: false; reason: "empty_list" | "no_direct_message" };
+  | { hasRecipient: false; reason: "empty_list" | "no_owner" | "no_direct_message" };
 
 export interface ChannelStatus {
   channels: { telegram?: boolean; discord?: boolean };
@@ -207,6 +207,11 @@ export interface ChannelStatus {
  * that name someone. `allowed_users_rejected` is what it ignored, as text, and
  * `allowed_users_problems` says why, so a hand-edited value that names nobody
  * is visible here. Both are absent from an older daemon.
+ *
+ * `owner_id` is the channel's owner (#916): the first saved entry when it is a
+ * valid id, else null. `allowed_users_entries` is every saved entry as text in
+ * the saved order, so the field shows which one is first. Both absent from an
+ * older daemon.
  */
 export interface ChannelConfig {
   telegram: {
@@ -215,6 +220,8 @@ export interface ChannelConfig {
     allowed_users: number[];
     allowed_users_rejected?: string[];
     allowed_users_problems?: string[];
+    owner_id?: number | null;
+    allowed_users_entries?: string[];
   };
   discord: {
     enabled: boolean;
@@ -222,6 +229,8 @@ export interface ChannelConfig {
     allowed_users: string[];
     allowed_users_rejected?: string[];
     allowed_users_problems?: string[];
+    owner_id?: string | null;
+    allowed_users_entries?: string[];
     guild_id: string | null;
   };
 }

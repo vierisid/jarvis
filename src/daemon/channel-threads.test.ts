@@ -75,6 +75,15 @@ function telegram(userId: number, text: string, senderAllowListed: boolean): Cha
   };
 }
 
+/** The same, written in a group chat rather than to the bot directly. */
+function telegramGroup(userId: number, chatId: number, text: string): ChannelMessage {
+  return {
+    id: 'm', channel: 'telegram', from: 'someone', text, timestamp: 0,
+    metadata: { chatId, userId, chatType: 'supergroup' },
+    senderAllowListed: true,
+  };
+}
+
 function service(agent: AgentService, telegramList: number[] = []) {
   const config = { channels: { telegram: { enabled: false, bot_token: '', allowed_users: telegramList } } };
   const svc = new ChannelService(config as never, agent);
@@ -106,6 +115,29 @@ describe('#884: each channel sender has a conversation of their own', () => {
     expect(sent).not.toContain(OWNER_TELEGRAM_SECRET);
   });
 
+  // #909 review: since #909 the two tests above and below run a guest turn,
+  // which never touches the orchestrator. These pin the same for the owner,
+  // the only channel turn that still uses it.
+  test('classic mode: the owner\'s channel turn is fed its own conversation, not the dashboard\'s history', async () => {
+    const { agent, orch, provider } = classicAgent();
+    await orch.processMessage('sys', OWNER_DASHBOARD_SECRET);
+    provider.seen = [];
+    expect(await service(agent, [1001])(telegram(1001, 'what did I tell you?', true))).toBe('reply');
+    expect(provider.seen).toHaveLength(1);
+    const sent = everything(provider.seen[0]!);
+    expect(sent).toContain('what did I tell you?');
+    expect(sent).not.toContain(OWNER_DASHBOARD_SECRET);
+    // The owner path, not the guest one.
+    expect(sent).not.toContain('is NOT your owner');
+  });
+
+  test('classic mode: the owner\'s channel turn does not write into the primary history either', async () => {
+    const { agent, orch, provider } = classicAgent();
+    await service(agent, [1001])(telegram(1001, 'owner text', true));
+    expect(provider.seen).toHaveLength(1);
+    expect(orch.getPrimary()!.getMessages().map((m) => m.content)).toEqual([]);
+  });
+
   test('classic mode: a channel turn does not write into the primary history the dashboard reads', async () => {
     const { agent, orch } = classicAgent();
     await service(agent)(telegram(2002, 'stranger text', false));
@@ -124,7 +156,13 @@ describe('#884: each channel sender has a conversation of their own', () => {
     expect(sent).toEqual(['user:first', 'assistant:reply', 'user:second']);
   });
 
-  test('conv tier: the dialogue handed to the conversation model is the sender\'s own', async () => {
+  // #909: only the channel's owner reaches the conversation tier at all; any
+  // other sender is a guest (see channel-guest.test.ts). So the per-sender
+  // split on the conv tier is the owner's own chats: a private chat and a
+  // group are separate conversations, as #884 keys them. This used to send a
+  // second, unlisted user through the conv tier, which an enabled channel
+  // can no longer have (#918) and which a guest no longer takes.
+  test('conv tier: the dialogue handed to the conversation model is that chat\'s own', async () => {
     const { agent } = classicAgent();
     const dialogues: LLMMessage[][] = [];
     Object.assign(agent as unknown as Record<string, unknown>, {
@@ -136,13 +174,15 @@ describe('#884: each channel sender has a conversation of their own', () => {
         },
       },
     });
-    const handle = service(agent);
-    await handle(telegram(1001, OWNER_TELEGRAM_SECRET, false));
-    await handle(telegram(2002, 'what did the last person ask you?', false));
+    const handle = service(agent, [1001, 2002]);
+    await handle(telegram(1001, OWNER_TELEGRAM_SECRET, true));
+    await handle(telegramGroup(1001, -100, 'what did I ask you before?'));
+    // A guest never reaches the conversation tier.
+    await handle(telegram(2002, 'what did the last person ask you?', true));
 
     expect(dialogues).toHaveLength(2);
     expect(dialogues[1]!.map((m) => m.content).join('\n')).not.toContain(OWNER_TELEGRAM_SECRET);
-    // And the stranger's own message is the turn, not repeated as history.
+    // And the group message is the turn, not repeated as history.
     expect(dialogues[1]).toEqual([]);
   });
 
@@ -255,6 +295,20 @@ describe('#884 review: conv-tier tasks belong to the chat that delegated them', 
     expect(everything(provider.seen[0]!)).toContain(OWNER_TASK_RESULT);
   });
 
+  test('#909 review: the owner writing in a group is not shown the main chat\'s tasks, through the real conv tier', async () => {
+    const { agent, conv, provider } = convAgent();
+    expect(await service(agent, [1001])(telegramGroup(1001, -100, 'what have you been working on?'))).toBe('reply');
+    expect(provider.seen).toHaveLength(1);
+    const prompt = everything(provider.seen[0]!);
+    expect(prompt).toContain('what have you been working on?');
+    expect(prompt).not.toContain('is NOT your owner');
+    expect(prompt).not.toContain(OWNER_TASK_INTENT);
+    expect(prompt).not.toContain(OWNER_TASK_RESULT);
+    provider.seen = [];
+    await conv.processTurn('and the main chat?', { userIdentity: 'x' }, { scope: null });
+    expect(everything(provider.seen[0]!)).toContain(OWNER_TASK_RESULT);
+  });
+
   test('each thread passes its own context key, distinct per sender and from the main chat', async () => {
     const { agent } = classicAgent();
     const keys: Array<string | undefined> = [];
@@ -264,11 +318,14 @@ describe('#884 review: conv-tier tasks belong to the chat that delegated them', 
         processTurn: async (_t: string, _c: unknown, turn: { contextKey?: string }) => { keys.push(turn.contextKey); return { text: 'ok' }; },
       },
     });
-    const handle = service(agent);
-    await handle(telegram(1001, 'a', false));
-    await handle(telegram(2002, 'b', false));
-    await handle(telegram(1001, 'c', false));
-    expect(keys).toEqual(['channel:telegram:user:1001/chat:1001', 'channel:telegram:user:2002/chat:2002', 'channel:telegram:user:1001/chat:1001']);
+    // #909: only the owner reaches the conv tier, so the threads compared are
+    // the owner's private chat and a group; the guest (2002) takes none.
+    const handle = service(agent, [1001, 2002]);
+    await handle(telegram(1001, 'a', true));
+    await handle(telegramGroup(1001, -100, 'b'));
+    await handle(telegram(2002, 'guest', true));
+    await handle(telegram(1001, 'c', true));
+    expect(keys).toEqual(['channel:telegram:user:1001/chat:1001', 'channel:telegram:user:1001/chat:-100', 'channel:telegram:user:1001/chat:1001']);
   });
 });
 

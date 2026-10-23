@@ -8,12 +8,12 @@ import { discordAllowList, isDiscordSnowflake, telegramAllowList } from './allow
 describe('#883: telegramAllowList', () => {
   test('absent or empty does not restrict, and has nothing to report', () => {
     for (const raw of [undefined, null, []]) {
-      expect(telegramAllowList(raw)).toEqual({ ids: [], restricted: false, problems: [], rejected: [] });
+      expect(telegramAllowList(raw)).toEqual({ ids: [], restricted: false, problems: [], rejected: [], entries: [] });
     }
   });
 
   test('a list of user ids is read as it is, duplicates once', () => {
-    expect(telegramAllowList([42, 7, 42])).toEqual({ ids: [42, 7], restricted: true, problems: [], rejected: [] });
+    expect(telegramAllowList([42, 7, 42])).toEqual({ ids: [42, 7], restricted: true, problems: [], rejected: [], entries: ['42', '7', '42'] });
   });
 
   test('a string restricts the channel to nobody instead of matching substrings, and says so', () => {
@@ -43,7 +43,7 @@ describe('#883: telegramAllowList', () => {
 
 describe('#883: discordAllowList', () => {
   test('snowflake strings are ids', () => {
-    expect(discordAllowList(['123456789012345678'])).toEqual({ ids: ['123456789012345678'], restricted: true, problems: [], rejected: [] });
+    expect(discordAllowList(['123456789012345678'])).toEqual({ ids: ['123456789012345678'], restricted: true, problems: [], rejected: [], entries: ['123456789012345678'] });
   });
 
   test('a YAML number has lost its last digits, so it is ignored and named', () => {
@@ -65,5 +65,12 @@ describe('#883: discordAllowList', () => {
     expect(isDiscordSnowflake('18446744073709551616')).toBe(false);
     expect(isDiscordSnowflake('10000000000000000')).toBe(true);
     expect(isDiscordSnowflake('1000000000000000')).toBe(false);
+  });
+});
+
+describe('#916 review: entries keep the saved order', () => {
+  test('a bad first entry stays first, so the page does not show the second id as the owner', () => {
+    expect(telegramAllowList(['42', 7]).entries).toEqual(['42', '7']);
+    expect(telegramAllowList('12345').entries).toEqual(['12345']);
   });
 });
