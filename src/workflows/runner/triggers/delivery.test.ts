@@ -15,7 +15,7 @@ import { createFlowRun, getFlowRun, listRuns, updateRun } from "../../db/repos/f
 import { claimNextJob, queueStats } from "../../db/repos/job-queue";
 import { configureWorkflowReadiness } from "../../db/repos/flow-readiness";
 import { deleteConnection, upsertConnection } from "../../db/repos/app-connection";
-import { listFlowFires, pageFlowFires, pruneFires, recordFire, FIRE_RETENTION_MS } from "../../db/repos/trigger-fire";
+import { claimFire, listFlowFires, pageFlowFires, pruneFires, recordFire, FIRE_RETENTION_MS } from "../../db/repos/trigger-fire";
 import { PieceCatalog } from "../../runtime/piece-catalog";
 import { WorkflowEventBus } from "../../runtime/event-bus";
 import { WorkflowEventBuffer } from "../../runtime/event-buffer";
@@ -824,4 +824,26 @@ describe("the delivery ledger", () => {
     expect(pruneFires()).toBe(1);
     expect(getFlow(flowId)).not.toBeNull();
   });
+});
+
+
+test("email identities survive history pruning and both trigger delivery paths", async () => {
+  const { flowId, versionId } = publish({ name: "trigger", type: "PIECE_TRIGGER", settings: {
+    pieceName: "jarvis-trigger", triggerName: "on_event", input: { eventType: "observer.email_received" },
+  } });
+  const d = await daemon(Date.now());
+  try {
+    d.bus.publish("observer.email_received", { id: "retained-message", subject: "Support" });
+    const original = runsOf(flowId)[0]!;
+    pruneFires(Date.now() + FIRE_RETENTION_MS + 1000);
+    d.bus.publish("observer.email_received", { id: "retained-message", subject: "Changed snippet" });
+    expect(runsOf(flowId)).toHaveLength(1);
+    let dispatched = false;
+    const claim = claimFire({ flowId, flowVersionId: versionId, source: "poll", dedupeKey: "event:email:retained-message" }, () => {
+      dispatched = true; return { runId: "must-not-start" };
+    });
+    expect(claim.outcome).toBe("duplicate");
+    expect(claim.fire.runId).toBe(original.id);
+    expect(dispatched).toBe(false);
+  } finally { await d.stop(); }
 });

@@ -1,5 +1,6 @@
 import { prepareSubmission, submissionConfig } from '../runtime/form-submission';
-import { claimSubmissionRun } from '../db/repos/trigger-fire';
+import { prepareEmailEvent } from '../runtime/event-types';
+import { claimEmailRun, claimSubmissionRun } from '../db/repos/trigger-fire';
 /**
  * RUN_FLOW worker handler. Bridges the queue to flow execution:
  *   1. Claim a RUN_FLOW job (the worker has already done that for us).
@@ -289,6 +290,16 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
             if (Object.hasOwn(typed.payload.payload ?? {}, '_webhook')) payload._webhook = typed.payload.payload!._webhook;
           } catch (error) { throw new FlowExecutionError((error as Error).message, { name: 'trigger', displayName: 'Validate form submission' }); }
         }
+      }
+      const triggerSettings = version.trigger.settings;
+      if (!resuming && ['jarvis-trigger', '@jarvispieces/piece-jarvis-trigger'].includes(String(triggerSettings?.pieceName))
+        && triggerSettings?.triggerName === 'on_event' && triggerSettings.input?.eventType === 'observer.email_received') {
+        try {
+          if (typed.payload.stepNameToTest) throw Error('Test the complete email workflow with a message payload; isolated step previews bypass message deduplication and are disabled for this flow.');
+          const prepared = prepareEmailEvent(payload);
+          claimEmailRun(run.flowId, version.id, prepared.key, run.id);
+          payload = prepared.data;
+        } catch (error) { throw new FlowExecutionError((error as Error).message, { name: 'trigger', displayName: 'Check Gmail message identity' }); }
       }
       const result = await withRunCancellation(runId, () => opts.executor.execute({
         run,

@@ -1,3 +1,4 @@
+import { prepareEmailEvent } from '../../runtime/event-types';
 import { submissionConfig } from '../../runtime/form-submission';
 import { workflowRemovalState, workflowTriggerCurrent } from '../../db/repos/workflow-removal-state';
 /**
@@ -520,7 +521,7 @@ export class TriggerManager {
     const matches = makeFilter(filter);
     const unsubscribe = this.bus.subscribe(eventType, (payload) => {
       if (!matches(payload)) return;
-      this.fire(flowId, payload, "event", { key: eventItemKey(payload) }, generation);
+      this.fire(flowId, payload, "event", { key: eventItemKey(payload, eventType) }, generation);
     });
     this.subs.set(flowId, {
       generation,
@@ -1269,7 +1270,8 @@ function shiftedDetail(occurrence: CronOccurrence | undefined): { detail?: Recor
  * message id, a commitment and its due time), else the poll item's own key.
  * Without one, the event is not deduplicated.
  */
-function eventItemKey(payload: Record<string, unknown>): string | undefined {
+function eventItemKey(payload: Record<string, unknown>, eventType?: string): string | undefined {
+  if ((eventType ?? payload.eventType) === "observer.email_received") return prepareEmailEvent(payload).key;
   const inner = payload.payload && typeof payload.payload === "object" ? (payload.payload as Record<string, unknown>) : undefined;
   const eventKey = inner?._eventKey ?? payload._eventKey;
   if (typeof eventKey === "string" && eventKey) return `event:${eventKey}`;
