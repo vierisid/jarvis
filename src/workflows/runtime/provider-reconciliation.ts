@@ -46,7 +46,7 @@ export function pieceCompletionReceipt(effect: WorkflowEffect): { provider: 'gma
     if (effect.arguments.draft === true || typeof result.id !== 'string' || !/^[a-f0-9]{1,128}$/i.test(result.id)) return null;
     return { provider: 'gmail', id: result.id };
   }
-  // Only Gmail and Slack have a readback; any other tracked send (an HTTP request) has none.
+  // Only Gmail and Slack have a readback; other tracked writes (including HTTP and Sheets) has none.
   if (effect.provenance.piece !== '@activepieces/piece-slack') return null;
   if (result.ok !== true || typeof result.ts !== 'string' || !/^\d{1,20}\.\d{1,10}$/.test(result.ts)
     || typeof result.channel !== 'string' || !/^[A-Z0-9]{1,80}$/.test(result.channel)) return null;

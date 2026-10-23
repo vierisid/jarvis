@@ -1,3 +1,4 @@
+import { submissionConfig } from './form-submission';
 import { validateCronExpression, validateCronTimezone } from '../../lib/cron-scheduler';
 import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from './piece-catalog';
 import { evaluateWorkflowExpression, workflowExpressionReferences } from './safe-expression';
@@ -255,7 +256,10 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
           try { validateCronTimezone(input.timezone); }
           catch (error) { issue(node, 'settings.input.timezone', 'TIMEZONE', (error as Error).message); }
         }
-      } else if (!(root && pieceName === 'webhook')) {
+      } else if (root && pieceName === 'webhook') {
+        try { submissionConfig(input); }
+        catch (error) { issue(node, 'settings.input.submission', 'INPUT', (error as Error).message); }
+      } else {
         const piece = context.pieces?.get(pieceName);
         if (!piece) issue(node, 'settings.pieceName', 'PIECE', context.pieces ? `Unknown piece "${pieceName}"` : 'Piece catalog is unavailable; readiness cannot be verified');
         else {

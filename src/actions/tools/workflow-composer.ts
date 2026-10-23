@@ -1078,6 +1078,10 @@ function renderPrimitiveDetails(name: "schedule" | "webhook"): string {
     "webhook (built-in trigger primitive): fires the flow on an HTTP POST to /api/webhooks/<flow_id>.",
     "  Use as the trigger node: type='PIECE_TRIGGER', settings={ pieceName: 'webhook', input: { secret: '<optional HMAC secret>' } }.",
     "  - input.secret: string, optional; when set, requests must carry a valid HMAC signature.",
+    "  - Form submissions: set input.submission_id_field and input.submission_email_field to explicit payload field paths (e.g. id and email, or form.id and form.email). Both are required together. Ask for a sample/mapping if unknown; do not invent one.",
+    "  - With these mappings Jarvis trims all string values recursively, lowercases and validates the email, rejects invalid/missing IDs or emails with HTTP 422 before queuing, and atomically accepts each normalized submission ID once per workflow. The identity survives restart, republish and ordinary history pruning. Changing headers or using a manual run cannot create another write for that ID. Numeric safe-integer IDs become strings; IDs are case-sensitive.",
+    "  - The trigger output retains the original normalized field structure. Connect it directly to an inspected Sheets append action (prefer sheets_append_values with value_input_option RAW to preserve form text). No AI, lookup-before-append or separate normalization step is needed.",
+    "  - Sheets insert_row, sheets_append_values and sheets_add_row have durable completion receipts. A completed dispatch is replayed from its receipt; an uncertain append is blocked, never automatically resent. A failed accepted submission needs review of its original run, not another append under a new ID.",
     "  The POSTed JSON body becomes the trigger output: reference its fields as {{trigger.<field>}}.",
   ].join("\n");
 }
@@ -1163,7 +1167,7 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
     "  - Step names MUST match /^[a-zA-Z_][a-zA-Z0-9_]*$/ (identifier-style; no spaces or dashes).",
     "  - Use type='EMPTY' for manual / on-demand flows. Use type='PIECE_TRIGGER' for scheduled, webhook, or event-driven.",
     "  - For schedule triggers: pieceName='schedule', input.cron_expression='<5-field cron>' (e.g. '0 8 * * *' for 8am daily), plus input.timezone for the requested IANA timezone (e.g. 'Europe/Rome').",
-    "  - For webhook triggers: pieceName='webhook', input.secret optional.",
+    "  - For webhook triggers: pieceName='webhook', input.secret optional. Form processing uses paired input.submission_id_field / input.submission_email_field with known payload paths: trims all strings, lowercases/validates email, rejects invalid IDs/emails before queuing, and atomically accepts each ID once per workflow, across restarts and manual runs. Use an inspected Sheets append with RAW values; unknown mappings must be requested. Failed accepted submissions require review, never a blind append retry.",
     "  - For event triggers: pieceName='jarvis-trigger', triggerName='on_event', input.eventType='<event type>'.",
     "  - For action steps, type MUST be 'PIECE' and settings MUST include pieceName + actionName.",
     "  - To iterate over a list, emit a LOOP_ON_ITEMS step:",
@@ -1212,7 +1216,7 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
     "## Hard rules",
     "  - Preserve the original request. A disabled draft still needs the requested processing graph. Do not replace missing normalization, validation, writes or deduplication with a notification explaining their absence. If those cannot be built, report_blocked with concrete configurationQuestions and evidence-backed capabilityGaps. Do not weaken the request to save a scaffold.",
     "  - Build deterministic transformations and validation with inspected actions where available. Missing destination/account configuration does not prove transformations are unsupported. A partial candidate can remain in composition diagnostics; it must not be presented as a completed workflow.",
-    "  - Duplicate prevention must match the requested scope. Jarvis effect receipts are keyed by run and step; they do NOT deduplicate a submission ID across separate webhook runs. Inspect connector guarantees and persistent/atomic capabilities. A lookup followed by append, an AI instruction or a browser step does not establish concurrency-safe deduplication. Consider uncertain append outcomes and retries, not just simultaneous requests. Cite the inspected capability and exact gap; never claim runtime receipt replay provides cross-run idempotency.",
+    "  - Duplicate prevention must match the requested scope. Jarvis effect receipts are keyed by run and step; they do NOT deduplicate a submission ID across separate webhook runs. For form webhooks, inspect get_piece_details(webhook): its submission ID/email mapping provides atomic, persistent per-workflow admission, including manual runs. Use the tracked Google Sheets append actions for completion receipts. Other workflows still need an inspected persistent/atomic capability. A lookup followed by append, an AI instruction or a browser step does not establish concurrency-safe deduplication. Consider uncertain append outcomes and retries, not just simultaneous requests. Cite the inspected capability and exact gap; never claim runtime receipt replay provides cross-run idempotency.",
     "  - Every required input field MUST be present.",
     "  - The composed flow is created DISABLED. Do NOT claim the flow is running; the user reviews and publishes it explicitly.",
     "  - Installing a connector does not connect an account. Never invent credentials or connection IDs. If no real connection binding was supplied, leave auth unset in the disabled draft and explain that connecting the account is required before execution. Never execute actions to validate a draft.",
@@ -1238,7 +1242,7 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
 const BUILTIN_PRIMITIVE_LINES = [
   "Built-in trigger primitives (no piece registration needed):",
   "- schedule: settings={pieceName:'schedule', input:{cron_expression:'0 8 * * *',timezone:'Europe/Rome'}} fires at 08:00 in Europe/Rome, including daylight-saving changes. Use the user's requested zone.",
-  "- webhook:  settings={pieceName:'webhook',  input:{secret:'<optional HMAC secret>'}} fires on HTTP POST to /api/webhooks/<flow_id>.",
+  "- webhook:  settings={pieceName:'webhook',  input:{secret:'<optional HMAC secret>',submission_id_field:'<known ID path>',submission_email_field:'<known email path>'}} (submission mappings optional together) fires on HTTP POST to /api/webhooks/<flow_id>.",
 ];
 
 /**
