@@ -23,6 +23,7 @@ import { createDelegateTool } from '../actions/tools/delegate.ts';
 import { TAINT_PROFILE_LABEL } from '../authority/taint-gating.ts';
 import { approvalIntentFields } from '../authority/approval-delivery.ts';
 import type { LLMToolCall } from '../llm/provider.ts';
+import { RealtimeTaint } from './realtime-taint.ts';
 
 function makeEngine(
   overrides: AuthorityConfig['overrides'] = [],
@@ -353,7 +354,7 @@ describe('the spawn sink gates every path that reaches it (#932)', () => {
   // policy; the sink honours that decision rather than refusing it again.
   it('a realtime spawn the voice policy auto-approved is not refused again at the sink', async () => {
     const h = lifecycleHarness({ overrides: APPROVAL_OVERRIDE });
-    const out = await h.orch.executeRealtimeToolCall('manage_agents', { action: 'spawn', specialist: 'spec' });
+    const out = await h.orch.executeRealtimeToolCall('manage_agents', { action: 'spawn', specialist: 'spec' }, { taint: new RealtimeTaint() });
     expect(out).not.toContain('Error');
     expect(h.subAgents()).toHaveLength(1);
     expect(h.cards).toHaveLength(0);
@@ -490,7 +491,7 @@ describe('the spawn sink, after review (#932)', () => {
 
   it('a realtime spawn is auto-approved only for the category that asked', async () => {
     const h = lifecycleHarness({ overrides: APPROVAL_OVERRIDE });
-    const out = await h.orch.executeRealtimeToolCall('manage_agents', { action: 'spawn', specialist: 'spec' });
+    const out = await h.orch.executeRealtimeToolCall('manage_agents', { action: 'spawn', specialist: 'spec' }, { taint: new RealtimeTaint() });
     expect(out).not.toContain('Error');
     expect(h.spawnRows().map((r) => [r.authority_decision, r.executed, r.channel])).toEqual([['approval_required', 1, 'voice']]);
   });

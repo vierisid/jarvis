@@ -8,6 +8,7 @@
  */
 
 import {
+  REALTIME_INPUT_TRANSCRIPTION_MODEL,
   RealtimeSession,
   type RealtimeSessionOptions,
   type RealtimeTranscript,
@@ -17,6 +18,8 @@ import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
 import type { LLMTool } from '../llm/provider.ts';
 import { recordUsage } from '../llm/usage.ts';
 import { hostedRealtimeError } from '../util/hosted-error.ts';
+import { RealtimeTaint } from '../agents/realtime-taint.ts';
+import { estimateTranscriptionCostUsd } from './realtime-budget.ts';
 
 export type RealtimeVoiceDeps = {
   /** Shared tool schema (same `LLMTool[]` the text providers use). */
@@ -25,25 +28,12 @@ export type RealtimeVoiceDeps = {
   instructions: string;
   /**
    * Auto-approve tool executor — bind to
-   * `orchestrator.executeRealtimeToolCall(name, args, { blockedCategories })`.
-   * Always resolves to a string (result or denial marker).
+   * `orchestrator.executeRealtimeToolCall(name, args, { blockedCategories, taint })`.
+   * `taint` is THIS session's (#928): every call the session makes is judged
+   * against, and taints, its own marks only. Always resolves to a string
+   * (result or denial marker).
    */
-  executeToolCall: (name: string, args: Record<string, unknown>) => Promise<string>;
-  /**
-   * The user has started a new utterance (server VAD), before the model
-   * responds to it: the taint-gating turn boundary for voice. Bind to
-   * `orchestrator.resetRealtimeTaint`.
-   *
-   * REQUIRED, and that is the point. A voice session has no turn objects, so
-   * this event is the only thing that clears the session taint, and
-   * `executeRealtimeToolCall` refuses a taint-gated call outright rather than
-   * auto-approving it. A surface that does not wire it works until the first
-   * `capture_screen` or page read and then refuses every machine-changing
-   * action for the life of the process -- whatever the authority level, since
-   * taint gating is a profile, not a level. The pebble shipped that way
-   * because this was wired out of band, at one of the two call sites only.
-   */
-  onUserTurnStart: () => void;
+  executeToolCall: (name: string, args: Record<string, unknown>, taint: RealtimeTaint) => Promise<string>;
   /** Transcript sink (UI captions + vault writes). */
   onTranscript?: (t: RealtimeTranscript) => void;
   /** Error sink. Receives text that is safe to show the user: on a hosted
@@ -52,6 +42,12 @@ export type RealtimeVoiceDeps = {
   /** Fired when the underlying session closes (for ws-service cleanup).
    *  `detail` is the socket's close code/reason when the server gave one. */
   onClose?: (detail?: string) => void;
+  /**
+   * The estimated USD cost of one input transcription, billed apart from the
+   * session's minutes. The dashboard adds it to the BYO monthly budget; a
+   * hosted session leaves billing to the proxy.
+   */
+  onTranscriptionCostUsd?: (usd: number) => void;
   /** Hashed user id for OpenAI abuse monitoring. */
   safetyIdentifier?: string;
   /** Injectable session factory (tests). Defaults to a real `RealtimeSession`. */
@@ -67,6 +63,13 @@ export class RealtimeVoiceSession {
   private session: RealtimeSession;
   private deps: RealtimeVoiceDeps;
   private closed = false;
+  /**
+   * This session's taint (#928). Owned here, not by the callers, for the
+   * reason the turn boundary is wired here: it is the same for every surface,
+   * and leaving it to each caller is how the pebble once shipped with no
+   * boundary at all, and how every surface came to share one set.
+   */
+  readonly taint = new RealtimeTaint();
 
   constructor(resolved: ResolvedRealtimeVoice, transport: AudioTransport, deps: RealtimeVoiceDeps) {
     this.deps = deps;
@@ -79,12 +82,23 @@ export class RealtimeVoiceSession {
     };
     this.session = deps.sessionFactory ? deps.sessionFactory(opts) : new RealtimeSession(opts);
 
-    this.session.onTranscript((t) => this.deps.onTranscript?.(t));
+    this.session.onTranscript((t) => {
+      // Only a final transcript of something the user said clears the
+      // session's taint, and only what was read before that utterance began
+      // (#1007; see RealtimeTaint).
+      if (t.role === 'user' && t.final) this.taint.userTranscript(t.itemId, t.text);
+      this.deps.onTranscript?.(t);
+    });
     // The taint-gating turn boundary, wired HERE rather than by each caller:
-    // it is the same event for every surface, and leaving it to the callers is
-    // what left the pebble without one. Optional call because a test fake of
-    // the inner session may not implement it.
-    this.session.onUserTurnStart?.(() => this.deps.onUserTurnStart());
+    // it is the same events for every surface, and leaving it to the callers
+    // is what left the pebble without one. A voice session has no turn
+    // objects, so the user's own words are the only thing that clears the
+    // session's taint, and `executeRealtimeToolCall` refuses a taint-gated
+    // call outright rather than auto-approving it. The VAD start only records
+    // where an utterance began; its transcript (above) clears (#1007).
+    // Optional call because a test fake of the inner session may not
+    // implement it.
+    this.session.onUserTurnStart?.((itemId) => this.taint.userTurnStarted(itemId));
     // The one place both realtime surfaces (the dashboard socket in ws-service
     // and the pebble in pebble-realtime) receive session errors, so the hosted
     // rule lives here rather than in each of them. The proxy relays upstream
@@ -119,12 +133,34 @@ export class RealtimeVoiceSession {
       });
     });
 
+    // The user-side transcription (#1007) is billed apart from the response
+    // tokens, on its own model. Recorded as its own subsystem so the Usage
+    // room shows it, and costed for the BYO budget. Optional call because a
+    // test fake of the inner session may not implement it.
+    this.session.onTranscriptionUsage?.((u) => {
+      recordUsage({
+        tier: 'conversation',
+        resolved_tier: 'conversation',
+        subsystem: 'realtime_transcription',
+        provider: resolved.provider,
+        model: REALTIME_INPUT_TRANSCRIPTION_MODEL,
+        // A duration-billed model reports seconds, not tokens: its row counts
+        // the call with no token volume, and its cost reaches the budget
+        // below. gpt-4o-mini-transcribe always reports tokens.
+        input_tokens: u.input_tokens,
+        output_tokens: u.output_tokens,
+        latency_ms: 0,
+      });
+      const usd = estimateTranscriptionCostUsd(u);
+      if (usd > 0) this.deps.onTranscriptionCostUsd?.(usd);
+    });
+
     // The critical path: model requests a tool -> run it through the
     // auto-approve executor -> return the result so the model keeps talking.
     this.session.onFunctionCall(async (call) => {
       let result: string;
       try {
-        result = await this.deps.executeToolCall(call.name, call.args);
+        result = await this.deps.executeToolCall(call.name, call.args, this.taint);
       } catch (err) {
         result = `Error executing ${call.name}: ${err instanceof Error ? err.message : String(err)}`;
       }

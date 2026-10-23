@@ -16,6 +16,7 @@ const closeOf = (out: string): string => {
 const OLD_SEAM = '\n\n---\nYou are now on ';
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { capTextBlocks } from '../llm/provider.ts';
+import { RealtimeTaint } from './realtime-taint.ts';
 
 type Exec = { executeTool: (tc: { id: string; name: string; arguments: Record<string, unknown> }) => Promise<unknown> };
 
@@ -285,12 +286,12 @@ describe('#608: a tool can declare that its FAILURES carry outside content', () 
       { name: 'manage_goals', description: 't', category: 'productivity', parameters: {},
         execute: async () => { throw new Error(stepName); } },
     ]);
-    const framedOut = await orch.executeRealtimeToolCall('manage_workflow', {});
+    const framedOut = await orch.executeRealtimeToolCall('manage_workflow', {}, { taint: new RealtimeTaint() });
     expect(framedOut).toContain(stepName);
     expect(framedOut).toContain(UNTRUSTED_OPEN);
     expect(framedOut.trimEnd().endsWith(UNTRUSTED_CLOSE)).toBe(true);
 
-    const plainOut = await orch.executeRealtimeToolCall('manage_goals', {});
+    const plainOut = await orch.executeRealtimeToolCall('manage_goals', {}, { taint: new RealtimeTaint() });
     expect(plainOut).not.toContain(UNTRUSTED_OPEN);
     expect(plainOut).toBe(`Error executing manage_goals: Tool 'manage_goals' execution failed: ${stepName}`);
   });
@@ -571,7 +572,7 @@ describe('#876: a multi-modal result has its text capped before it is framed', (
 
   test('the realtime dispatch caps the flattened text before it frames it', async () => {
     const orch = orchestratorWith([blocksTool([{ type: 'text', text: 'r'.repeat(50_000) }, IMAGE])]);
-    const out = await orch.executeRealtimeToolCall('browser_screenshot', {});
+    const out = await orch.executeRealtimeToolCall('browser_screenshot', {}, { taint: new RealtimeTaint() });
     expect(out).toContain('r'.repeat(CAP));
     expect(out.split('r'.repeat(CAP + 1)).length).toBe(1);
     expect(out).toContain('truncated, was ');
@@ -583,14 +584,32 @@ describe('#876: a multi-modal result has its text capped before it is framed', (
   test('realtime text under the cap is flattened and framed unchanged', async () => {
     // Regression guard, passes with and without #876.
     const orch = orchestratorWith([blocksTool([{ type: 'text', text: 's'.repeat(CAP - 8) }, IMAGE])]);
-    const out = await orch.executeRealtimeToolCall('browser_screenshot', {});
+    const out = await orch.executeRealtimeToolCall('browser_screenshot', {}, { taint: new RealtimeTaint() });
     expect(out).toContain('s'.repeat(CAP - 8) + '\n[image]');
     expect(out).not.toContain('truncated');
   });
 
+  // #928 on the #876 flatten: a multi-modal result read in one voice session
+  // taints that session, and no other one.
+  test('realtime: a flattened multi-modal result taints the session that read it, and only that one', async () => {
+    let orch!: AgentOrchestrator;
+    orch = orchestratorWith([blocksTool([{ type: 'text', text: 'page' }, IMAGE]),
+      { name: 'manage_goals', description: 't', category: 'productivity', parameters: {},
+        execute: async () => `seen=[${[...orch.getTurnTaint()].join(',')}]` }]);
+    const dashboard = new RealtimeTaint();
+    const pebble = new RealtimeTaint();
+    const out = await orch.executeRealtimeToolCall('browser_screenshot', {}, { taint: dashboard });
+    expect(out).toContain('page\n[image]');
+    expect([...dashboard.marks]).toEqual(['browser_screenshot']);
+    // A call in the other session runs under that session's taint, which the
+    // read did not reach.
+    expect(await orch.executeRealtimeToolCall('manage_goals', {}, { taint: pebble })).toBe('seen=[]');
+    expect(await orch.executeRealtimeToolCall('manage_goals', {}, { taint: dashboard })).toBe('seen=[browser_screenshot]');
+  });
+
   test('realtime: image tags do not count against the text cap', async () => {
     const orch = orchestratorWith([blocksTool([{ type: 'text', text: 's'.repeat(CAP - 5) }, IMAGE])]);
-    const out = await orch.executeRealtimeToolCall('browser_screenshot', {});
+    const out = await orch.executeRealtimeToolCall('browser_screenshot', {}, { taint: new RealtimeTaint() });
     expect(out).toContain('s'.repeat(CAP - 5) + '\n[image]');
     expect(out).not.toContain('truncated');
   });

@@ -3,6 +3,8 @@ import { PebbleRealtimeManager, foldTranscript, newTranscriptAccumulator } from 
 import { clearRealtimeGateCache } from './realtime-gate.ts';
 import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
 import type { RealtimeVoiceSession, RealtimeVoiceDeps } from './realtime-voice.ts';
+import { RealtimeTaint } from '../agents/realtime-taint.ts';
+import type { PebbleAudioTransport } from '../comms/pebble-audio-transport.ts';
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
@@ -30,7 +32,6 @@ const makeManager = (over: Partial<ConstructorParameters<typeof PebbleRealtimeMa
     tools: () => [],
     instructions: () => 'test',
     executeToolCall: async () => 'ok',
-    onUserTurnStart: () => {},
     ...over,
   });
 
@@ -159,6 +160,24 @@ describe('a session that never becomes usable downgrades the summon hotkey', () 
     expect(mgr.isActive('sidecar-1')).toBe(false);
   });
 
+  test('a stop while the dial is pending leaves the pebble idle, not listening', async () => {
+    planAllows();
+    let open!: () => void;
+    const fake = fakeSession(() => new Promise<void>((r) => { open = r; }));
+    const states: string[] = [];
+    const statuses: string[] = [];
+    const mgr = makeManager({ createSession: fake.createSession, onState: (_id, s) => { states.push(s); },
+      onStatus: (_id, s) => { statuses.push(s); } });
+    const starting = mgr.start('sidecar-1');
+    await new Promise((r) => setTimeout(r, 0));
+    mgr.stop('sidecar-1');
+    open();
+    await starting;
+    expect(states).toEqual(['idle']);
+    // Nor is a session that is gone announced as live.
+    expect(statuses).toEqual(['closed']);
+  });
+
   test('a conversation that ran does NOT downgrade when it ends', async () => {
     planAllows();
     const unusable: string[] = [];
@@ -174,39 +193,46 @@ describe('a session that never becomes usable downgrades the summon hotkey', () 
   });
 });
 
-// A voice session has no turn objects, so the user starting to speak is the
-// only thing that clears the session taint -- and executeRealtimeToolCall
-// refuses a taint-gated call outright instead of auto-approving it. The
-// dashboard wired that boundary; the pebble did not, so after one
-// capture_screen (or any page read) every later machine-changing action came
-// back "[BLOCKED] ... voice cannot approve it" for the rest of the daemon's
-// life, however high the authority level was set, and the refusal told the
-// user to say it again -- which could never help.
-describe('the user-turn taint boundary', () => {
-  test('the manager hands the voice session a turn-start handler bound to its own dep', async () => {
+// #928: the realtime taint was one process-wide set, so a pebble's session and
+// the dashboard's read and cleared the same marks. Each voice session now owns
+// its taint, and the manager hands every tool call the calling session's.
+describe('each pebble session judges its tool calls against its own taint', () => {
+  test('a tool call carries the taint of the session that made it, and its sidecar', async () => {
     globalThis.fetch = (async () => new Response(JSON.stringify({ data: [{ id: 'uj-realtime' }] }), {
       status: 200, headers: { 'Content-Type': 'application/json' },
     })) as unknown as typeof fetch;
 
-    const resets: string[] = [];
-    let captured: RealtimeVoiceDeps | null = null;
+    const seen: Array<{ sidecarId: string; taint: RealtimeTaint }> = [];
+    const captured = new Map<string, RealtimeVoiceDeps>();
+    let current = '';
     const mgr = makeManager({
       createSession: ((_r: unknown, _t: unknown, deps: RealtimeVoiceDeps) => {
-        captured = deps;
+        captured.set(current, deps);
         return { connect: async () => {}, close: () => {}, interrupt: () => {} } as unknown as RealtimeVoiceSession;
       }) as NonNullable<ConstructorParameters<typeof PebbleRealtimeManager>[0]['createSession']>,
-      onUserTurnStart: (id) => { resets.push(id); },
+      executeToolCall: async (sidecarId, _name, _args, _blocked, taint) => { seen.push({ sidecarId, taint }); return 'ok'; },
     });
+    current = 'sidecar-1';
     await mgr.start('sidecar-1');
+    current = 'sidecar-2';
+    await mgr.start('sidecar-2');
 
-    // Present at all: a session built without it can never clear its taint.
-    const voiceDeps = captured!;
-    expect(typeof voiceDeps.onUserTurnStart).toBe('function');
-    // And it names the sidecar it belongs to, rather than a bare call.
-    voiceDeps.onUserTurnStart();
-    voiceDeps.onUserTurnStart();
-    expect(resets).toEqual(['sidecar-1', 'sidecar-1']);
-    mgr.stop('sidecar-1');
+    const one = new RealtimeTaint();
+    const two = new RealtimeTaint();
+    await captured.get('sidecar-1')!.executeToolCall('read_file', {}, one);
+    await captured.get('sidecar-2')!.executeToolCall('read_file', {}, two);
+    expect(seen.map((s) => s.sidecarId)).toEqual(['sidecar-1', 'sidecar-2']);
+    expect(seen[0]!.taint).toBe(one);
+    expect(seen[1]!.taint).toBe(two);
+    mgr.stopAll();
+  });
+});
+
+describe('the daemon wires the pebble session taint into the tool bridge (#928)', () => {
+  test('the pebble executor hands the orchestrator the calling session\'s taint', async () => {
+    const src = await Bun.file(new URL('./index.ts', import.meta.url)).text();
+    expect(src).toContain('executeToolCall: async (sidecarId, name, args, blockedCategories, taint) => {');
+    expect(src).toContain('executeRealtimeToolCall(name, args, { blockedCategories, taint })');
   });
 });
 
@@ -236,12 +262,67 @@ describe('foldTranscript', () => {
     expect(next).toEqual({ state: 'speaking', text: 'Also,' });
   });
 
-  test('user final flips to listening and resets the buffer', () => {
+  // Speech start shows listening; the async transcript must not, or it flips
+  // the pebble while the reply's audio may still be playing.
+  test('a user final changes nothing, even after the reply\'s final', () => {
+    const acc = newTranscriptAccumulator();
+    expect(foldTranscript(acc, { role: 'user', text: 'what time is it', final: true }, 1000)).toBeNull();
+    foldTranscript(acc, { role: 'assistant', text: 'Noon.', final: true }, 1100);
+    expect(foldTranscript(acc, { role: 'user', text: 'what time is it', final: true }, 1200)).toBeNull();
+  });
+
+  // The user's transcript is asynchronous and, with input transcription on
+  // (#1007), routinely lands while the reply to it is still streaming.
+  test('a user final that lands mid-reply neither flickers the pebble nor drops the reply text', () => {
     const acc = newTranscriptAccumulator();
     foldTranscript(acc, { role: 'assistant', text: 'Hello', final: false }, 1000);
-    const user = foldTranscript(acc, { role: 'user', text: 'stop', final: true }, 1100);
-    expect(user).toEqual({ state: 'listening' });
-    expect(acc.buffer).toBe('');
+    expect(foldTranscript(acc, { role: 'user', text: 'what time is it', final: true }, 1100)).toBeNull();
+    expect(foldTranscript(acc, { role: 'assistant', text: ' there', final: false }, 1500))
+      .toEqual({ state: 'speaking', text: 'Hello there' });
+  });
+
+  test('the user starting to speak shows listening at once and clears the stream', async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ data: [{ id: 'uj-realtime' }] }), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    })) as unknown as typeof fetch;
+    let deps: RealtimeVoiceDeps | null = null;
+    let transport: PebbleAudioTransport | null = null;
+    const states: string[] = [];
+    const mgr = makeManager({
+      createSession: ((_r: unknown, t: PebbleAudioTransport, d: RealtimeVoiceDeps) => {
+        deps = d; transport = t;
+        return { connect: async () => {}, close: () => {}, interrupt: () => {} } as unknown as RealtimeVoiceSession;
+      }) as NonNullable<ConstructorParameters<typeof PebbleRealtimeManager>[0]['createSession']>,
+      onState: (_id, state) => { states.push(state); },
+    });
+    await mgr.start('sidecar-1');
+    expect(states).toEqual(['listening']);
+    // A speech start while already listening pushes nothing more.
+    transport!.stopPlayback();
+    expect(states).toEqual(['listening']);
+    states.length = 0;
+    deps!.onTranscript!({ role: 'assistant', text: 'Hello', final: false });
+    // The user talks over it: speech_started stops playback, and the pebble
+    // shows listening at once, not when the transcript lands.
+    transport!.stopPlayback();
+    expect(states).toEqual(['speaking', 'listening']);
+    // The cancelled reply's final, words never played, does not take the
+    // turn back.
+    deps!.onTranscript!({ role: 'assistant', text: 'Hello and the rest', final: true, interrupted: true });
+    expect(states).toEqual(['speaking', 'listening']);
+    // The reply to the barge-in starts before its transcript: no flicker.
+    deps!.onTranscript!({ role: 'assistant', text: 'Okay', final: false });
+    deps!.onTranscript!({ role: 'user', text: 'stop', final: true });
+    expect(states).toEqual(['speaking', 'listening', 'speaking']);
+    mgr.stop('sidecar-1');
+  });
+
+  test('an interrupted reply\'s final emits nothing and clears the stream', () => {
+    const acc = newTranscriptAccumulator();
+    foldTranscript(acc, { role: 'assistant', text: 'Hel', final: false }, 1000);
+    expect(foldTranscript(acc, { role: 'assistant', text: 'Hello there', final: true, interrupted: true }, 1100)).toBeNull();
+    // The next reply starts clean and unthrottled.
+    expect(foldTranscript(acc, { role: 'assistant', text: 'Okay', final: false }, 1200)).toEqual({ state: 'speaking', text: 'Okay' });
   });
 
   test('user deltas emit nothing', () => {
