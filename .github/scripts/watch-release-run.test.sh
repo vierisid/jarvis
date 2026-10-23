@@ -351,7 +351,7 @@ await Bun.write(process.env.TO, s.replace(process.env.OLD, () => process.env.NEW
 	release_caught 'the watch made skippable (#683)' \
 		'      - name: Start the release executor and wait for it' $'      - name: Start the release executor and wait for it\n        continue-on-error: true'
 	release_caught 'no job clock to bound the watch against (#683)' \
-		'    timeout-minutes: 330' ''
+		'    timeout-minutes: 355' ''
 	release_caught 'the watch step given an if: (#683 review)' \
 		'      - name: Start the release executor and wait for it' $'      - name: Start the release executor and wait for it\n        if: github.event_name == \'push\''
 	release_caught 'the watch run before the tag exists (#683 review)' \
