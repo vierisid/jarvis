@@ -5,6 +5,28 @@ export const HUBSPOT_UPSERT = 'create-or-update-contact';
 export const isHubspotContact = (piece: unknown, action: unknown) => piece === HUBSPOT_PIECE && action === HUBSPOT_UPSERT;
 /** The provider definitely refused every write this call sent: nothing changed. */
 export class HubspotWriteRefusedError extends Error {}
+/** Nothing this call sent could have written: the run's checkpoint refused
+ * before a request left (every earlier request was a definite non-write), or
+ * a read-only lookup failed. `refusal` is the checkpoint's own error, if any. */
+export class HubspotNotStartedError extends Error {
+  constructor(message: string, public readonly refusal?: unknown) { super(message); }
+}
+/** Per-request timeout, and the most requests one upsert sends (PATCH, POST,
+ * PATCH after a 409, then a reconciling GET). Bounds how long a call can own
+ * a contact identity. */
+export const HUBSPOT_REQUEST_TIMEOUT_MS = 15_000;
+export const HUBSPOT_UPSERT_MAX_MS = 4 * HUBSPOT_REQUEST_TIMEOUT_MS;
+/** How long an upsert waits for a competing claim of the same contact that is
+ * still dispatching: the longest the owning upsert can take, plus slack for
+ * its bookkeeping. Shorter, a second submission for the same email during a
+ * slow write would fail, and its webhook submission ID is already consumed, so
+ * its update would be lost. */
+export const HUBSPOT_CLAIM_WAIT_MS = HUBSPOT_UPSERT_MAX_MS + 5_000;
+/** Idle timeout the sandbox API gives a piece authorize request: a contact
+ * upsert may wait for a competing claim and then run its own upsert, both in
+ * that one request. Bun's 10 s default would drop the engine's connection
+ * while the daemon kept writing. */
+export const PIECE_AUTHORIZE_IDLE_TIMEOUT_S = Math.ceil((HUBSPOT_CLAIM_WAIT_MS + HUBSPOT_UPSERT_MAX_MS) / 1000) + 15;
 export interface ContactInput extends Record<string, unknown> { email: string; objectProperties: Record<string,string> }
 export function hubspotContactInput(raw: unknown): ContactInput {
   const input = raw as Record<string,unknown> | null;
@@ -33,9 +55,12 @@ export async function upsertHubspotContact(input: ContactInput, token: string, c
   const base = 'https://api.hubapi.com/crm/v3/objects/contacts';
   const byEmail = base + '/' + encodeURIComponent(input.email) + '?idProperty=email';
   const request = async (method: string, url: string, properties?: object) => {
-    checkpoint();
+    // A refusal here comes before this request is sent. Callers keep it apart
+    // from a lost reply: only an earlier uncertain request makes it uncertain.
+    try { checkpoint(); }
+    catch (error) { throw new HubspotNotStartedError(error instanceof Error ? error.message : String(error), error); }
     return fetchImpl(url, {method, headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
-      ...(properties ? {body:JSON.stringify({properties})} : {}), redirect:'error', signal:AbortSignal.timeout(15_000)});
+      ...(properties ? {body:JSON.stringify({properties})} : {}), redirect:'error', signal:AbortSignal.timeout(HUBSPOT_REQUEST_TIMEOUT_MS)});
   };
   const read = async (res: Response) => {
     const reader=res.body?.getReader(); if (!reader) throw new Error('Missing HubSpot response');
@@ -58,12 +83,23 @@ export async function upsertHubspotContact(input: ContactInput, token: string, c
   };
   const write = async (method:string,url:string,properties:object):Promise<Response|null> => {
     let res:Response;
-    try { res=await request(method,url,properties); } catch { return null; }
+    try { res=await request(method,url,properties); }
+    catch (error) { if (error instanceof HubspotNotStartedError) throw error; return null; }
     if(res.status>=500 || res.status===408) { await res.body?.cancel(); return null; }
     return res;
   };
-  let res = Object.keys(input.objectProperties).length
-    ? await write('PATCH',byEmail,input.objectProperties) : await request('GET',byEmail);
+  // With no properties the contact is only read: a GET writes nothing, so any
+  // failure of it (transport, HTTP or body) leaves nothing to reconcile.
+  const readFailed = (error: unknown) => error instanceof HubspotNotStartedError ? error
+    : new HubspotNotStartedError('HubSpot contact lookup failed before any write: '+(error instanceof Error ? error.message : String(error)));
+  const lookup = async (): Promise<Response> => {
+    let res: Response;
+    try { res = await request('GET',byEmail); } catch (error) { throw readFailed(error); }
+    if (!res.ok && res.status !== 404) { await res.body?.cancel(); throw readFailed(new Error('HTTP '+res.status)); }
+    return res;
+  };
+  const writes = Object.keys(input.objectProperties).length > 0;
+  let res = writes ? await write('PATCH',byEmail,input.objectProperties) : await lookup();
   if(!res) return reconcile();
   if(res.status===404) {
     await res.body?.cancel();
@@ -71,9 +107,15 @@ export async function upsertHubspotContact(input: ContactInput, token: string, c
     if(!res) return reconcile();
     if(res.status===409) {
       await res.body?.cancel();
-      res=Object.keys(input.objectProperties).length ? await write('PATCH',byEmail,input.objectProperties) : await request('GET',byEmail);
+      res=writes ? await write('PATCH',byEmail,input.objectProperties) : await lookup();
       if(!res) return reconcile();
+      if(!writes) {
+        if(!res.ok) { await res.body?.cancel(); throw readFailed(new Error('HTTP '+res.status)); }
+        try { return await read(res); } catch (error) { throw readFailed(error); }
+      }
     }
+  } else if(!writes) {
+    try { return await read(res); } catch (error) { throw readFailed(error); }
   }
   if(!res.ok) { const status=res.status; await res.body?.cancel(); throw new HubspotWriteRefusedError('HubSpot contact write refused: HTTP '+status+'; inspect the run before retrying'); }
   try { return await read(res); } catch { return reconcile(); }

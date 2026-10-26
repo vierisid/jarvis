@@ -7,7 +7,7 @@ import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS, getWorkflowDb } from '../
 import { setEncryptionKey } from '../db/encryption';
 import { createFlow, getFlow, listFlows, setPublishedVersion, updateFlowStatus } from '../db/repos/flow';
 import { createDraftVersion, getLatestDraft, lockVersion, updateDraftVersion } from '../db/repos/flow-version';
-import { createFlowRun, getFlowRun, listRuns } from '../db/repos/flow-run';
+import { createFlowRun, getFlowRun, listRuns, updateRun } from '../db/repos/flow-run';
 import { enqueue } from '../db/repos/job-queue';
 import { upsertConnection } from '../db/repos/app-connection';
 import { configureWorkflowReadiness, versionReadiness } from '../db/repos/flow-readiness';
@@ -39,6 +39,8 @@ const native = (name:string) => '@jarvispieces/piece-jarvis-'+name;
 let dir:string, api:SandboxApi, runtime:EngineRuntime, manager:TriggerManager, worker:Worker, catalog:PieceCatalog;
 let provider:ReturnType<typeof Bun.serve>;
 let reply='', loseReply=false, unconfirmed=false, loseNotification=false, refuse=0, dashboardClosed=false;
+// stopOnMissing: a PATCH that finds no contact stops its run first. hold: the first PATCH for holdEmail waits on it.
+let stopOnMissing=false, hold:Promise<void>|null=null, holdEmail='';
 const contacts = new Map<string,{id:string;properties:Record<string,any>}>();
 const calls:Array<{method:string;email:string}> = [], notifications:string[] = [], runIds:string[]=[];
 const versions:Record<string,string>={};
@@ -50,7 +52,9 @@ beforeAll(async()=>{
     const url=new URL(req.url), body=req.method==='GET'?null:await req.json();
     const email=req.method==='POST'?body.properties.email:decodeURIComponent(url.pathname.split('/').at(-1)!);
     calls.push({method:req.method,email});
+    if(hold && req.method==='PATCH' && email===holdEmail) { const gate=hold; hold=null; await gate; }
     const existing=contacts.get(email);
+    if(stopOnMissing && req.method==='PATCH' && !existing) for(const run of listRuns({status:'RUNNING'})) updateRun(run.id,{status:'STOPPED'});
     if(refuse && req.method!=='GET') return Response.json({}, {status:refuse});
     if(req.method==='GET') return existing && !unconfirmed ? Response.json(existing) : Response.json({}, {status:404});
     if(req.method==='PATCH') {
@@ -114,7 +118,7 @@ function graph(configured=true):any {
   return {name:'trigger',type:'PIECE_TRIGGER',settings:{pieceName:'webhook',input:{submission_id_field:configured?'id':'',submission_email_field:configured?'email':''}},nextAction:first};
 }
 async function fixture(){
-  loseReply=unconfirmed=loseNotification=dashboardClosed=false;refuse=0;
+  loseReply=unconfirmed=loseNotification=dashboardClosed=stopOnMissing=false;refuse=0;hold=null;
   const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Lead fixture',trigger:graph()});
   expect(versionReadiness(flow.id,version.id).issues).toEqual([]);
   lockVersion(version.id);setPublishedVersion(flow.id,version.id);updateFlowStatus(flow.id,'ENABLED');await manager.refresh(flow.id);
@@ -162,7 +166,9 @@ test('unconfirmed contact write fences future submissions and sends nothing',asy
 },45_000);
 test('uncertain notification never repeats on a later submission',async()=>{
   const f=await fixture();loseNotification=true;reply=answer(10);const before=notifications.length;
-  await f.send('one');loseNotification=false;await f.send('two');expect(notifications.length-before).toBe(1);
+  const first=await f.send('one');loseNotification=false;await f.send('two');expect(notifications.length-before).toBe(1);
+  // The key stays consumed, and the record says why: the send may have arrived.
+  expect(listWorkflowEffects(first.id).find(e=>e.provenance.piece===native('notify'))?.outcome).toMatchObject({status:'unknown',code:'DELIVERY_UNCERTAIN',effect:'may_have_occurred'});
 },45_000);
 
 test('a definite provider refusal records not started and releases the contact for a later submission',async()=>{
@@ -180,6 +186,33 @@ test('a notification sent on no channel leaves its identity for a later submissi
   expect(notifications.length-before).toBe(1);
 },45_000);
 
+test('a run stopped between a missing-contact PATCH and its POST records not started and releases the contact',async()=>{
+  const f=await fixture();stopOnMissing=true;reply=answer(10);const before=notifications.length;
+  const email=f.flow.id.toLowerCase()+'@example.com';
+  const first=await f.send('one');expect(first.status).not.toBe('SUCCEEDED');
+  const effect=listWorkflowEffects(first.id).find(e=>e.provenance.piece===HUBSPOT)!;
+  expect(effect.outcome).toMatchObject({status:'blocked',code:'RUN_NOT_RUNNING',effect:'not_started'});
+  expect(calls.filter(c=>c.email===email).map(c=>c.method)).toEqual(['PATCH']);
+  expect(getWorkflowDb().query('SELECT COUNT(*) AS n FROM workflow_effect_identity WHERE owner=?').get(effect.id)).toEqual({n:0});
+  stopOnMissing=false;expect((await f.send('two')).status).toBe('SUCCEEDED');
+  expect(contacts.get(email)?.properties.firstname).toBe('Alice');expect(notifications.length-before).toBe(1);
+},45_000);
+test('a second submission for the same contact waits out a write slower than two seconds and then updates it',async()=>{
+  const f=await fixture();reply=answer(10);const before=notifications.length;
+  const email=f.flow.id.toLowerCase()+'@example.com';let release!:()=>void;
+  holdEmail=email;hold=new Promise<void>(resolve=>{release=resolve;});
+  const deliveries=[await f.submit('one',email,'First'),await f.submit('two',email,'Second')];
+  const drained=Promise.all([worker.drain(),worker.drain()]);
+  // Both upserts are in flight at once: one holds the contact inside the provider, the other waits on its claim.
+  const dispatching=()=>deliveries.every(d=>listWorkflowEffects(d.runId).some(e=>e.provenance.piece===HUBSPOT && e.status==='dispatching'));
+  for(const deadline=Date.now()+30_000;!dispatching();) { if(Date.now()>deadline) throw Error('upserts never overlapped'); await Bun.sleep(25); }
+  expect(hold).toBeNull();
+  await Bun.sleep(2_500);release();await drained;
+  for(const delivery of deliveries) expect(getFlowRun(delivery.runId)?.status).toBe('SUCCEEDED');
+  expect(calls.filter(c=>c.email===email).map(c=>c.method)).toEqual(['PATCH','POST','PATCH']);
+  expect(['First','Second']).toContain(contacts.get(email)!.properties.firstname);
+  expect(notifications.length-before).toBe(1);
+},60_000);
 test('concurrent distinct submissions share one contact and alert',async()=>{
   const f=await fixture();reply=answer(10);const before=notifications.length;
   const deliveries=await Promise.all([f.submit('one'),f.submit('two')]);

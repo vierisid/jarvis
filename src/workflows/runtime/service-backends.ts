@@ -1,4 +1,4 @@
-import { HubspotWriteRefusedError, hubspotContactInput, isHubspotContact, upsertHubspotContact } from './hubspot-contact';
+import { HUBSPOT_CLAIM_WAIT_MS, HubspotNotStartedError, HubspotWriteRefusedError, hubspotContactInput, isHubspotContact, upsertHubspotContact } from './hubspot-contact';
 import { getConnection } from '../db/repos/app-connection';
 import { claimIdentity, completeIdentity, IdentityUnresolvedError, releaseIdentity } from '../db/repos/effect-identity';
 import { workflowBrowserRead, workflowBrowserReview } from '../../authority/ui-intent';
@@ -82,14 +82,30 @@ import { escapedLiteralForCard, forCard, withoutCardInvisibles } from '../../uti
 import { AGENT_TASK_MAX_CHARS, checkSpecialistId, SPECIALIST_ID_MAX_CHARS } from '../../actions/tools/agents.ts';
 import { boundedApprovalLabel } from '../../authority/approval-delivery';
 
-/** Claim a cross-run identity, waiting briefly while a competing claim is
- * still dispatching. Never steals an unresolved claim: a crash can leave an
+/** A refusal raised before anything was sent, typed as not started. The
+ * boundary records an untyped error from inside an effect as uncertain, so a
+ * checkpoint refusal (run stopped, approval withdrawn, Authority changed) that
+ * provably came first is retyped here, keeping its own code where it has one. */
+function notStartedOutcome(error: unknown): ActionOutcomeError {
+  if (error instanceof ActionOutcomeError && error.outcome.effect === 'not_started') return error;
+  const code = (error as { code?: unknown } | null)?.code;
+  return new ActionOutcomeError({ status: 'blocked', code: typeof code === 'string' && code ? code : 'DISPATCH_BLOCKED',
+    message: error instanceof Error ? error.message : String(error), effect: 'not_started' });
+}
+
+/** A notification owner only fans out to channels; its key is consumed once,
+ * so a waiter that gives up loses no delivery. */
+const NOTIFY_CLAIM_WAIT_MS = 2_000;
+
+/** Claim a cross-run identity, waiting while a competing claim is still
+ * dispatching. Never steals an unresolved claim: a crash can leave an
  * uncertain provider effect behind. A claim that stays unresolved stops this
  * effect before it starts, typed as not started. */
-async function claimSettledIdentity(identity: string, owner: string, once: boolean, checkpoint: () => void): Promise<'claimed' | 'duplicate'> {
-  const deadline = Date.now() + 2000;
+async function claimSettledIdentity(identity: string, owner: string, once: boolean, checkpoint: () => void, waitMs: number): Promise<'claimed' | 'duplicate'> {
+  const deadline = Date.now() + waitMs;
   for (;;) {
-    checkpoint();
+    // Nothing is claimed or sent yet: a refusal here started nothing.
+    try { checkpoint(); } catch (error) { throw notStartedOutcome(error); }
     try { return claimIdentity(identity, owner, once); }
     catch (error) {
       if (!(error instanceof IdentityUnresolvedError)) throw error;
@@ -425,7 +441,7 @@ export function buildSandboxServiceBackends(
         const identity = notifyKey && currentRun ? digest(['workflow-notify-v1',ctx.projectId,currentRun.flowId,notifyKey]) : null;
         const owner = workflowEffectId(ctx.runId,ctx.stepName!,ctx.executionPath ?? [],'notify');
         checkpoint();
-        if (identity && await claimSettledIdentity(identity,owner,true,checkpoint) === 'duplicate') return { delivered: [], failed: [], unknown: [], deduplicated: true };
+        if (identity && await claimSettledIdentity(identity,owner,true,checkpoint,NOTIFY_CLAIM_WAIT_MS) === 'duplicate') return { delivered: [], failed: [], unknown: [], deduplicated: true };
         // The notifier reports a thrown dashboard, voice or desktop send as
         // failed, but it may have reached someone: such a key stays consumed.
         let mayHaveArrived = false;
@@ -460,8 +476,13 @@ export function buildSandboxServiceBackends(
           // when nothing was sent anywhere. A channel that may have taken it
           // counts as sent: failing would invite a resend that could repeat it.
           if (report.delivered.length === 0 && report.unknown.length === 0) {
-            throw new DeliveryFailedError({ status: 'error', code: 'DELIVERY_FAILED', effect: 'not_started',
-              message: `Not sent on any channel: ${report.failed.map(f => `${f.channel} (${f.error})`).join('; ')}` }, report);
+            const failures = report.failed.map(f => `${f.channel} (${f.error})`).join('; ');
+            // A thrown dashboard, voice or desktop send may have reached
+            // someone, so its key stays consumed below; the outcome says so
+            // too, rather than telling an operator nothing was sent.
+            throw new DeliveryFailedError(mayHaveArrived
+              ? { status: 'unknown', code: 'DELIVERY_UNCERTAIN', effect: 'may_have_occurred', message: `Not confirmed on any channel; it may have arrived: ${failures}` }
+              : { status: 'error', code: 'DELIVERY_FAILED', effect: 'not_started', message: `Not sent on any channel: ${failures}` }, report);
           }
           if (identity) completeIdentity(identity,owner);
           return report;
@@ -1085,12 +1106,19 @@ export function buildSandboxServiceBackends(
           const values = hubspotContactInput(args);
           const identity = digest(['hubspot-contact-v1',ctx.projectId,connection.id,values.email]);
           const owner = workflowEffectId(ctx.runId,ctx.stepName!,ctx.executionPath ?? [],route);
-          await claimSettledIdentity(identity, owner, false, checkpoint);
+          await claimSettledIdentity(identity, owner, false, checkpoint, HUBSPOT_CLAIM_WAIT_MS);
           let result: Awaited<ReturnType<typeof upsertHubspotContact>>;
           try { result = await upsertHubspotContact(values, token, checkpoint, opts.hubspotFetch); }
           catch (error) {
-            // A definite refusal changed nothing: release the contact and record
-            // the step as not started. Anything else stays fenced for review.
+            // A definite refusal, a checkpoint refusal before any possible
+            // write, or a failed read-only lookup changed nothing: release the
+            // contact and record the step as not started. Anything else stays
+            // fenced for review.
+            if (error instanceof HubspotNotStartedError) {
+              releaseIdentity(identity, owner);
+              throw error.refusal !== undefined ? notStartedOutcome(error.refusal)
+                : new ActionOutcomeError({ status: 'error', code: 'PROVIDER_UNAVAILABLE', message: error.message, effect: 'not_started' });
+            }
             if (!(error instanceof HubspotWriteRefusedError)) throw error;
             releaseIdentity(identity, owner);
             throw new ActionOutcomeError({ status: 'error', code: 'PROVIDER_REFUSED', message: error.message, effect: 'not_started' });
