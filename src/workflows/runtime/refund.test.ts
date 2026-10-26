@@ -1,0 +1,46 @@
+import {expect,test} from 'bun:test';
+import {refundFixtureProvider,refundFixtureSetup,refundFixtureTicket} from './refund-fixtures';
+import {refundSetup,refundTicket,proposeRefund,dispatchApprovedRefund,type RefundState,type RefundStore} from './refund';
+import {refundTransport} from './refund-transport';
+const setup=refundSetup(refundFixtureSetup);
+test('payment proposal uses captured amount, not authorization amount; partial amounts stay exact',async()=>{
+ const f=refundFixtureProvider();f.payment.amount_captured=1800;f.payment.amount_refunded=500;
+ const provider=refundTransport(setup,'synthetic',()=>{},f.fetchImpl),s={...setup,amountMinorPath:''};
+ expect((await proposeRefund(s,refundTicket(s,refundFixtureTicket)!,provider,1)).amount).toBe(1300);
+ expect((await proposeRefund(setup,refundTicket(setup,{...refundFixtureTicket,amount:1})!,provider,1)).amount).toBe(1);
+ await expect(proposeRefund(setup,refundTicket(setup,{...refundFixtureTicket,amount:1301})!,provider,1)).rejects.toThrow('exceeds');
+});
+test('payment account, mode, currency and eligibility are checked before approval or refund',async()=>{
+ for(const change of [{livemode:true},{captured:false},{paid:false},{disputed:true},{currency:'badcode'},{amount_refunded:3000}]){
+  const f=refundFixtureProvider();Object.assign(f.payment,change);await expect(proposeRefund(setup,refundTicket(setup,refundFixtureTicket)!,refundTransport(setup,'synthetic',()=>{},f.fetchImpl),1)).rejects.toThrow();expect(f.calls.some(c=>c.method==='POST')).toBe(false);
+ }
+ const f=refundFixtureProvider();await expect(proposeRefund(setup,refundTicket(setup,refundFixtureTicket)!,refundTransport({...setup,stripeAccountId:'acct_other'},'synthetic',()=>{},f.fetchImpl),1)).rejects.toThrow('account');
+});
+test('refund enumeration follows all pages and uncertainty never permits a proposal',async()=>{
+ const f=refundFixtureProvider();f.options.pageSize=1;f.refunds.push({id:'re_old1',charge:'ch_fixture',currency:'eur',amount:1,status:'succeeded',metadata:{}},{id:'re_old2',charge:'ch_fixture',currency:'eur',amount:1,status:'pending',metadata:{}});
+ await expect(proposeRefund(setup,refundTicket(setup,refundFixtureTicket)!,refundTransport(setup,'synthetic',()=>{},f.fetchImpl),1)).rejects.toThrow('unresolved');
+ expect(f.calls.some(c=>c.path.includes('starting_after=re_old1'))).toBe(true);
+});
+test('interruption after ledger claim resumes by readback even after Stripe key retention',async()=>{
+ const f=refundFixtureProvider(),provider=refundTransport(setup,'synthetic',()=>{},f.fetchImpl);
+ let state:RefundState={originRun:'old-run',state:'approval',proposal:await proposeRefund(setup,refundTicket(setup,refundFixtureTicket)!,provider,1)};
+ let writes=0;const store:RefundStore={check(){},load:()=>structuredClone(state),save(s){state=structuredClone(s);if(++writes===1)throw Error('Simulated process death after durable dispatch claim');}};
+ await expect(dispatchApprovedRefund(store,provider,'key',2,()=>{})).rejects.toThrow('process death');expect(state.attemptedAt).toBe(2);expect(f.calls.some(c=>c.method==='POST')).toBe(false);
+ store.save=s=>{state=structuredClone(s);};expect((await dispatchApprovedRefund(store,provider,'key',3*86400000,()=>{})).state).toBe('needs_review');expect(f.calls.some(c=>c.method==='POST')).toBe(false);
+});
+test('interruption after provider commit recovers paginated receipt with no second POST',async()=>{
+ const f=refundFixtureProvider(),provider=refundTransport(setup,'synthetic',()=>{},f.fetchImpl);
+ const proposal=await proposeRefund(setup,refundTicket(setup,refundFixtureTicket)!,provider,1);
+ await provider.create(proposal.charge,proposal.amount,'durable-key');
+ let state:RefundState={originRun:'old-run',state:'dispatching',proposal,attemptedAt:2};
+ const store:RefundStore={check(){},load:()=>structuredClone(state),save:s=>{state=structuredClone(s);}};
+ expect((await dispatchApprovedRefund(store,provider,'durable-key',3*86400000,()=>{})).state).toBe('refunded');expect(f.calls.filter(c=>c.method==='POST')).toHaveLength(1);
+});
+test('malformed, incomplete and mismatched provider receipts are not success',async()=>{
+ const f=refundFixtureProvider(),provider=refundTransport(setup,'synthetic',()=>{},f.fetchImpl),proposal=await proposeRefund(setup,refundTicket(setup,refundFixtureTicket)!,provider,1);
+ f.refunds.push({id:'re_wrong',charge:proposal.charge,amount:1201,currency:'eur',status:'succeeded',metadata:{jarvis_refund_key:'key'}});
+ let state:RefundState={originRun:'run',state:'dispatching',attemptedAt:1,proposal};const store:RefundStore={check(){},load:()=>state,save:s=>{state=s;}};
+ expect((await dispatchApprovedRefund(store,provider,'key',2,()=>{})).state).toBe('needs_review');expect(f.calls.some(c=>c.method==='POST')).toBe(false);
+ const broken=refundTransport(setup,'synthetic',()=>{},(async(url:any)=>new Response(JSON.stringify(String(url).endsWith('account')?{id:'acct_fixture'}:{data:[],has_more:true}))) as typeof fetch);
+ await expect(broken.refunds('ch_fixture')).rejects.toThrow('advance');
+});

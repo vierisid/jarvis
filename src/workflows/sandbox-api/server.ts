@@ -35,6 +35,7 @@ import { DEFAULT_IDS } from "../db/schema";
 import { createConnectionsRoute } from "./routes/connections";
 import { createMeetingBriefsRoute, type MeetingBriefsFn } from './routes/jarvis-meetings';
 import { createWeeklyReportRoute, type WeeklyReportFn } from './routes/jarvis-report';
+import { createApprovalRefundRoute, type ApprovalRefundFn } from './routes/jarvis-refund';
 import { createContactImportRoute, type ContactImportFn } from './routes/jarvis-import';
 import { createSalesFollowupsRoute, type SalesFollowupsFn } from './routes/jarvis-sales';
 import {
@@ -92,6 +93,7 @@ import { runWithOrigin } from "../../llm/origin.ts";
 export interface SandboxApiServices {
   meetingBriefs?: MeetingBriefsFn;
   weeklyReport?: WeeklyReportFn;
+  approvalRefund?: ApprovalRefundFn;
   contactImport?: ContactImportFn;
   salesFollowups?: SalesFollowupsFn;
   credentialResolver: CredentialResolver;
@@ -290,6 +292,7 @@ export class SandboxApi {
       },
       { path: '/v1/jarvis/context/meeting-briefs', method: 'POST', handler: createMeetingBriefsRoute(this.services) },
       { path: '/v1/jarvis/reports/weekly', method: 'POST', handler: createWeeklyReportRoute(this.services) },
+      { path: '/v1/jarvis/refunds/approval', method: 'POST', handler: createApprovalRefundRoute(this.services) },
       { path: '/v1/jarvis/imports/contacts', method: 'POST', handler: createContactImportRoute(this.services) },
       { path: '/v1/jarvis/sales/followups', method: 'POST', handler: createSalesFollowupsRoute(this.services) },
       {

@@ -3364,6 +3364,8 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
       ? [['hubspotConnection','@activepieces/piece-hubspot','HubSpot'],['gmailConnection','@activepieces/piece-gmail','Gmail']] as const
       : piece?.name === '@jarvispieces/piece-jarvis-report' && subName === 'weekly_operating_report'
         ? [['stripeConnection','@activepieces/piece-stripe','Stripe'],['hubspotConnection','@activepieces/piece-hubspot','HubSpot'],['googleConnection','@activepieces/piece-google-docs','Google Docs']] as const
+        : piece?.name === '@jarvispieces/piece-jarvis-refund' && subName === 'approval_refund'
+          ? [['stripeConnection','@activepieces/piece-stripe','Stripe']] as const
         : piece?.name === '@jarvispieces/piece-jarvis-import' && subName === 'resumable_contact_import'
           ? [['hubspotConnection','@activepieces/piece-hubspot','HubSpot'], ...(formInput.sourceAuth === 'oauth2' ? [['sourceConnection','@activepieces/piece-http-oauth2','Source API'] as const] : [])] as const : [];
 

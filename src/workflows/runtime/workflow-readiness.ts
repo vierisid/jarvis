@@ -1,4 +1,5 @@
 import { MEETING_ACCOUNTS, meetingSetup } from './meeting-briefs';
+import { REFUND_REQUIRED, REFUND_ACTION, refundSetup } from './refund';
 import { IMPORT_ACCOUNTS, IMPORT_REQUIRED, IMPORT_ACTION, importSetup } from './contact-import';
 import { REPORT_ACCOUNTS, REPORT_REQUIRED, REPORT_ACTION, reportSetup } from './weekly-report';
 import { SALES_ACCOUNTS, SALES_REQUIRED, SALES_ACTION, salesSetup } from './sales-followups';
@@ -219,6 +220,18 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     // Only input values are templated; source code and labels are not expressions.
     expressions(input, node, 'settings.input', scope, pieceName);
     const isPiece = (short: string) => pieceName === short || pieceName === `@jarvispieces/piece-${short}`;
+    if (!root && isPiece('jarvis-refund') && settings.actionName === REFUND_ACTION && object(input)) {
+      const id=input.stripeConnection;
+      if (!emptyInput(id)) {
+        if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node,'settings.input.stripeConnection','CONNECTION_BINDING','Select a saved Stripe account');
+        else if (context.phase !== 'composition') {
+          const reason=context.connection?.(id,'@activepieces/piece-stripe') ?? (context.connection ? null : 'Connection inventory unavailable');
+          if(reason) issue(node,'settings.input.stripeConnection','CONNECTION_BINDING',reason);
+        }
+      }
+      if(REFUND_REQUIRED.filter(k=>k!=='ticket').every(k=>!emptyInput(input[k]))) try {refundSetup(input);} catch(e){issue(node,'settings.input','INPUT_TYPE',(e as Error).message);}
+      runtime(node,'settings.input','connection','Recheck pinned Stripe account and mode; exact amount approval expires after 48 hours. Refund dispatch requires durable approval and fresh payment state.');
+    }
     if (!root && isPiece('jarvis-import') && settings.actionName === IMPORT_ACTION && object(input)) {
       for (const [field, provider] of Object.entries(IMPORT_ACCOUNTS)) {
         if (field === 'sourceConnection' && input.sourceAuth !== 'oauth2') continue;

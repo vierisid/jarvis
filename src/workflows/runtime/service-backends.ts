@@ -1,6 +1,7 @@
 import { MEETING_ACCOUNTS, meetingSetup, parseMeetingGuard, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, type MeetingSetup } from './meeting-briefs';
 import { createSalesFollowupsService } from './sales-service';
 import { createWeeklyReportService } from './report-service';
+import { createRefundService } from './refund-service';
 import { createContactImportService } from './import-service';
 import type { ImportRequest } from './contact-import';
 import { connectionBindings, enforceRunConnectionBinding } from '../db/repos/binding-pins';
@@ -96,6 +97,8 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
   meetingNow?: () => number;
   reportFetch?: typeof fetch;
   reportNow?: () => number;
+  refundFetch?: typeof fetch;
+  refundNow?: () => number;
   importRequest?: ImportRequest;
   importNow?: () => number;
   salesFetch?: typeof fetch;
@@ -1150,6 +1153,7 @@ export function buildSandboxServiceBackends(
     credentialResolver: opts.credentialResolver,
     meetingBriefs: cancellableWorkflowService(meetingBriefs),
     weeklyReport: cancellableWorkflowService(createWeeklyReportService({effects,credentials:opts.credentialResolver,fetchImpl:opts.reportFetch,now:opts.reportNow})),
+    approvalRefund: cancellableWorkflowService(createRefundService({effects,credentials:opts.credentialResolver,fetchImpl:opts.refundFetch,now:opts.refundNow})),
     contactImport: cancellableWorkflowService(createContactImportService({effects,credentials:opts.credentialResolver,request:opts.importRequest,now:opts.importNow})),
     salesFollowups: cancellableWorkflowService(createSalesFollowupsService({effects,credentials:opts.credentialResolver,fetchImpl:opts.salesFetch,now:opts.salesNow})),
     pieceAuthorize: cancellableWorkflowService(pieceAuthorize),

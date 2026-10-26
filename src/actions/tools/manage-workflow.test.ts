@@ -61,7 +61,7 @@ const tool = createManageWorkflowTool();
  * schema drifting apart silently.
  */
 const FRAMED_ACTIONS = new Set([
-  "get", "list_runs", "get_run",
+  "get", "list_runs", "get_run", "validate_fixtures",
   "list", "create", "enable", "disable", "publish", "compose", "continue_setup",
 ]);
 

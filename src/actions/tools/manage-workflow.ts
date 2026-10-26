@@ -190,6 +190,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       "Composed flows are DISABLED; publish enables them and requires user confirmation. Draft-only limits do not ban future actions.",
       "create requires empty: true for an explicitly blank canvas; otherwise compose.",
       "CODE steps: publish/enable/run are REFUSED without user permission for that flow; no tool action grants it. Never bypass.",
+      "validate_fixtures {flow}: synthetic refund component tests only; no network or activation. Report scope and limits.",
       "Read all get pages to nextCursor:null. Structural checks are not fixture tests.",
       ...(hasLibrary ? [deps.installLibraryPiece ? "Install required Library connectors by default under software-install Authority; false opts out. Account connection is separate." : "Relay suggestedInstalls from the Library page; retry after installation, never unchanged."] : []),
     ].join("\n"),
@@ -240,7 +241,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       action: {
         type: "string",
         description: "What to do.",
-        enum: ["compose", "continue_setup", "create", "list", "get", "run", "enable", "disable", "publish", "delete", "list_runs", "get_run"],
+        enum: ["compose", "continue_setup", "create", "list", "get", "validate_fixtures", "run", "enable", "disable", "publish", "delete", "list_runs", "get_run"],
         required: true,
       },
       flow: {
@@ -376,6 +377,14 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       const project = deps.callerProjectId?.() ?? DEFAULT_IDS.project;
       const requireFlowParam = (p: Record<string, unknown>) => requireFlowIn(project, p);
       switch (action) {
+        case "validate_fixtures": {
+          const flow=requireFlowParam(params), draft=getLatestDraft(flow.id);
+          if (!draft) throw new Error("No saved draft to validate");
+          const validation=compileWorkflow(draft.trigger,{pieces:deps.pieceRegistry,phase:'composition'});
+          if (!validation.ready) throw new Error('Saved draft has structural errors; fix them before fixture validation');
+          const {validateRefundFixtures}=await import('../../workflows/runtime/refund-fixtures');
+          return framedForModel({flowId:flow.id,versionId:draft.id,...await validateRefundFixtures(draft.trigger)},'local synthetic fixture results');
+        }
         case "list":
           return framedForModel(actList(project), "the workflow list and its stored metadata");
         case "get":

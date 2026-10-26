@@ -360,6 +360,7 @@ export class ApprovalManager {
   approve(requestId: string, decidedBy: string): ApprovalRequest | null {
     const db = getDb();
     const now = Date.now();
+    this.expireDeadlines(now);
 
     const result = db.run(
       `UPDATE approval_requests SET status = 'approved', decided_at = ?, decided_by = ? WHERE id = ? AND status = 'pending'`,
@@ -368,6 +369,19 @@ export class ApprovalManager {
 
     if (result.changes === 0) return null;
     return this.getRequest(requestId);
+  }
+
+  /** Explicit deadlines belong to trusted workflow effects, never model-authored approval text. */
+  expireDeadlines(now = Date.now()): number {
+    const db = getDb(); let count = 0;
+    const rows = db.query("SELECT id, context FROM approval_requests WHERE status='pending' AND execution_mode='workflow'").all() as Array<{id:string;context:string}>;
+    for (const row of rows) {
+      let deadline: unknown;
+      try { deadline = JSON.parse(row.context).expiresAt; } catch { continue; }
+      if (typeof deadline !== 'number' || !Number.isSafeInteger(deadline) || deadline > now) continue;
+      count += db.run("UPDATE approval_requests SET status='expired',decided_at=?,decided_by='deadline' WHERE id=? AND status='pending'",[now,row.id]).changes;
+    }
+    return count;
   }
 
   /**
