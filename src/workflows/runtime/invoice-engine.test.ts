@@ -331,7 +331,10 @@ test('an attachment claim is never released from a run that recorded an effect',
   expect(releaseAttachmentClaim(f.flow.id, run.id)).toBe(0);
   expect(() => claimAttachmentRun(f.flow.id, f.version.id, key, 'another-run')).toThrow('already accepted');
   getWorkflowDb().run('DELETE FROM workflow_effect WHERE run_id = ?', [run.id]);
-  expect(releaseAttachmentClaim(f.flow.id, run.id)).toBe(1); await f.stop();
+  expect(releaseAttachmentClaim(f.flow.id, run.id)).toBe(1);
+  // Released like a refused delivery: the hash stays in the record, off the key.
+  expect(listFlowFires(f.flow.id)).toEqual([expect.objectContaining({ runId: run.id, dedupeKey: null, detail: expect.objectContaining({ deliveryKey: key }) })]);
+  await f.stop();
 }, 60000);
 
 test('explicit pending label/folder stay setup-required after account bindings are supplied', () => {
