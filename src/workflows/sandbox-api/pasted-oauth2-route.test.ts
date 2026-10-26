@@ -38,7 +38,7 @@ beforeEach(async () => {
   const tokenTransport: TokenTransport = async () => { tokenCalls++; return tokenAnswer(); };
   const resolver = new CredentialResolver({ tokenTransport, now: () => clock });
   // A managed source whose value looks long expired: its own source refreshes it, never this path.
-  resolver.register({ id: "fixture", canResolve: id => id === "jarvis:fixture", resolve: async () => {
+  resolver.register({ id: "fixture", pieceNames: ["@activepieces/piece-gmail"], canResolve: id => id === "jarvis:fixture", resolve: async () => {
     managedCalls++;
     return { type: "OAUTH2", value: { access_token: "managed", refresh_token: "", client_id: "c", client_secret: "s",
       token_url: "https://oauth2.example.test/token", claimed_at: 1, expires_in: 1 } };

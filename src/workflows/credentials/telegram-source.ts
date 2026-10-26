@@ -29,6 +29,7 @@ export const JARVIS_TELEGRAM_PREFIX = "jarvis:telegram";
 
 export class JarvisTelegramConnectionSource implements JarvisConnectionSource {
   readonly id = "telegram";
+  readonly pieceNames: readonly string[] = ["@activepieces/piece-telegram-bot"];
 
   /**
    * Token supplier. Closes over the daemon's config so changes (e.g., user

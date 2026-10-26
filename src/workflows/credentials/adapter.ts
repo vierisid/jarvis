@@ -46,6 +46,14 @@ export interface ResolvedConnection {
 export interface JarvisConnectionSource {
   /** Lower-cased externalId suffix this source claims, e.g. "google", "telegram". */
   readonly id: string;
+  /**
+   * The pieces whose steps may use this source's credential, by full piece
+   * name. Only a step of one of these pieces may name the connection, and only
+   * as its `auth`: readiness refuses any other reference, and so does the
+   * engine's credential route for the run's own graph. Without this a CODE or
+   * HTTP step could read the token and use it outside the governed pieces.
+   */
+  readonly pieceNames: readonly string[];
   /** True if this source can resolve `externalId`. */
   canResolve(externalId: string): boolean;
   /**
@@ -62,6 +70,22 @@ export interface JarvisConnectionSource {
    * A source without it is one fixed identity.
    */
   identity?(externalId: string): string | null;
+}
+
+/** The registered source that owns a `jarvis:` external id, if any. */
+export function managedSourceFor(sources: readonly JarvisConnectionSource[] | undefined, externalId: string): JarvisConnectionSource | undefined {
+  return sources?.find(candidate => candidate.canResolve(externalId));
+}
+
+/**
+ * Why a step may not name a managed connection, or null when it may: it must
+ * be a step of one of the source's pieces, naming it as that step's `auth`.
+ */
+export function managedConnectionMisuse(source: JarvisConnectionSource, pieceName: string, path: string): string | null {
+  if (!source.pieceNames.includes(pieceName)) {
+    return `Managed connection jarvis:${source.id} can only be used by ${source.pieceNames.join(', ') || 'no'} steps`;
+  }
+  return path === 'settings.input.auth' ? null : `Managed connection jarvis:${source.id} can only be a step's auth`;
 }
 
 /** A credential fingerprint for binding pins: never the credential itself. */

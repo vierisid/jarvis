@@ -75,6 +75,7 @@ describe("Phase L: plumbing smoke (connection resolver + store + run-progress)",
 
   const validateSource: JarvisConnectionSource = {
     id: "validate",
+    pieceNames: [PIECE_VALIDATE_NAME],
     canResolve: (externalId) => externalId === CONNECTION_EXTERNAL_ID,
     resolve: async () => ({
       type: "OAUTH2",

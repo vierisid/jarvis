@@ -19,7 +19,7 @@ beforeEach(async () => {
   managedCalls = 0;
   const resolver = new CredentialResolver();
   resolver.register({
-    id: "fixture", canResolve: id => id === "jarvis:fixture",
+    id: "fixture", pieceNames: ["fixture-piece"], canResolve: id => id === "jarvis:fixture",
     resolve: async () => {
       managedCalls++;
       return { type: "OAUTH2", value: { access_token: "managed-fixture-token" } };
@@ -92,7 +92,8 @@ describe("Q-05: a run keeps the connection identity it started with", () => {
 describe("Q-05: a managed connection is bound like a saved one", () => {
   test("the resolver that hands a managed connection out is the one that identifies it", async () => {
     const flow = createFlow({});
-    const version = createDraftVersion({ flowId: flow.id, displayName: "Managed binding", trigger: { name: "trigger", type: "EMPTY" } as any });
+    const version = createDraftVersion({ flowId: flow.id, displayName: "Managed binding", trigger: { name: "trigger", type: "EMPTY",
+      nextAction: { name: "send", type: "PIECE", settings: { pieceName: "fixture-piece", actionName: "send", input: { auth: "{{connections.jarvis:fixture}}" } } } } as any });
     const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "RUNNING" });
     const identity = { projectId: DEFAULT_IDS.project, sandboxId: crypto.randomUUID(), runId: run.id };
     const { token, expiresAt } = await api.signer.mint(identity, 60);
@@ -161,7 +162,16 @@ describe("native connections through the authenticated engine endpoint", () => {
     await save("jarvis:fixture", "piece-a");
     await save("jarvis:fixture", "piece-b");
     await save("jarvis:unknown");
-    const response = await lookup("jarvis:fixture");
+    // The managed source answers for a run whose fixture-piece step names it.
+    const flow = createFlow({});
+    const version = createDraftVersion({ flowId: flow.id, displayName: "Managed priority", trigger: { name: "trigger", type: "EMPTY",
+      nextAction: { name: "send", type: "PIECE", settings: { pieceName: "fixture-piece", actionName: "send", input: { auth: "{{connections.jarvis:fixture}}" } } } } as any });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "RUNNING" });
+    const identity = { projectId: DEFAULT_IDS.project, sandboxId: crypto.randomUUID(), runId: run.id };
+    const { token, expiresAt } = await api.signer.mint(identity, 60);
+    api.registry.register({ ...identity, engineToken: token, expiresAt, terminatedAt: null });
+    const response = await fetch(`${api.baseUrl}/v1/worker/app-connections/${encodeURIComponent("jarvis:fixture")}?projectId=${DEFAULT_IDS.project}`,
+      { headers: { Authorization: `Bearer ${token}` } });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ value: { access_token: "managed-fixture-token" } });
     expect(managedCalls).toBe(1);
