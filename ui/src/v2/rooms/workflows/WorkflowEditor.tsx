@@ -1,3 +1,4 @@
+import { SlackChannelPicker } from "../../integrations/SlackChannelPicker";
 import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
 /**
  * WorkflowEditor (Phase 4 stage 2).
@@ -16,6 +17,7 @@ import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
  */
 
 import { ClickUpConnection } from "../../integrations/ClickUpConnection";
+import { SlackConnection } from "../../integrations/SlackConnection";
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSampleDraftText } from "./useSampleDraftText";
 import { confirmDialog } from "../../ui/ConfirmDialog";
@@ -3373,8 +3375,11 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const subList = isTrigger ? piece?.triggers ?? [] : piece?.actions ?? [];
   const selectedSubAction: PieceCatalogActionOrTrigger | undefined = subList.find((s) => s.name === subName);
   const clickUpLocation = piece?.name === "@activepieces/piece-clickup" && ['create_task','update_task','get_task_by_name'].includes(subName ?? '');
-  const selectedSchema = selectedSubAction?.inputSchema ?? null;
-  const rawSchema = clickUpLocation && selectedSchema ? {...selectedSchema,fields:selectedSchema.fields.filter(f=>!['workspace_id','space_id','list_id'].includes(f.name))} : selectedSchema;
+  const managedSlack = piece?.name === "@activepieces/piece-slack" && step.settings?.input?.auth === "{{connections.jarvis:slack}}";
+  const slackChannel = managedSlack && ['send_channel_message', 'slack_post_message', 'slack_get_channel_info'].includes(subName ?? '');
+  const baseSchema = selectedSubAction?.inputSchema ?? null;
+  const selectedSchema = managedSlack && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["sendAsUser","sendAsBot","file","username","profilePicture","iconEmoji","mentionOriginFlow","onlyBotChannels","info"].includes(f.name))} : baseSchema;
+  const rawSchema = clickUpLocation && selectedSchema ? {...selectedSchema,fields:selectedSchema.fields.filter(f=>!['workspace_id','space_id','list_id'].includes(f.name))} : slackChannel && selectedSchema ? {...selectedSchema, fields:selectedSchema.fields.filter(f=>f.name !== "channel")} : selectedSchema;
   const clickUpCreate = piece?.name === "@activepieces/piece-clickup" && subName === "create_task";
   const standardFields = clickUpCreate && JSON.stringify(step.settings?.propertySettings?.custom_fields?.schema) === "{}"
     && JSON.stringify(step.settings?.input?.custom_fields) === "{}" && step.settings?.input?.check_required_custom_fields === true;
@@ -3485,6 +3490,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         />
       ) : null}
 
+      {slackChannel && <SlackChannelPicker value={String(step.settings?.input?.channel ?? "")} onChange={value => onSetInput("channel", value)} />}
       {clickUpLocation && <ClickUpTaskLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {clickUpCreate && <div className="wf-props__hint" role="note">
         {standardFields ? <p>Using standard task fields. ClickUp will reject the task if this list requires custom fields.</p>
@@ -3725,11 +3731,12 @@ function ConnectionPicker({
   return (
     <div className="wf-props__connection">
       {pieceName === "@activepieces/piece-clickup" && <ClickUpConnection onPick={onPick} currentValue={currentValue} />}
+      {pieceName === "@activepieces/piece-slack" && <SlackConnection onPick={onPick} currentValue={currentValue} />}
       <label className="wf-props__field-label">
         {authDisplayName}
         <span className="wf-props__connection-type">({authType})</span>
       </label>
-      {matching.length === 0 && pieceName !== "@activepieces/piece-clickup" ? (
+      {matching.length === 0 && !["@activepieces/piece-clickup", "@activepieces/piece-slack"].includes(pieceName ?? "") ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.

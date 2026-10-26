@@ -23,6 +23,7 @@
 
 import { HTTP_PIECE, isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { documentInput, applyDocument, documentFields, type DecisionDocument } from './decision-document';
+import {managedSlackInput, managedSlackIssue, sendManagedSlackMessage} from './managed-slack';
 
 export const PIECE_AUTHORIZE_PATH = '/v1/jarvis/pieces/authorize';
 export const PIECE_RECEIPT_PATH = '/v1/jarvis/pieces/receipt';
@@ -97,6 +98,11 @@ export interface AuthorizePieceDispatchParams {
 }
 
 export async function authorizePieceDispatch(params: AuthorizePieceDispatchParams): Promise<PieceAuthorizeResponse> {
+  const slack = params.piece === '@activepieces/piece-slack' && managedSlackInput(params.input);
+  if (slack) {
+    const issue = managedSlackIssue(params.action, slack);
+    if (issue) throw new Error(issue);
+  }
   const governed = isGovernedPiece(params.piece) && typeof params.action === 'string' && params.action.length > 0;
   const url = `${params.apiUrl.replace(/\/+$/u, '')}${PIECE_AUTHORIZE_PATH}`;
   const editable = documentInput(params.piece, params.action, params.input);
@@ -180,7 +186,22 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
 export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParams, governance: PieceAuthorizeResponse, execute: () => Promise<unknown>): Promise<unknown> {
   if ('dispatch' in governance && governance.dispatch === 'completed') return governance.result;
   if ('dispatch' in governance && (governance.dispatch === 'held' || governance.dispatch === 'approval_required')) throw new Error('Piece is waiting for authorization');
-  const raw = await execute();
+  const slack = params.piece === '@activepieces/piece-slack' && managedSlackInput(params.input);
+  if (slack) {
+    // Recheck after an approval document has applied edits.
+    const issue = managedSlackIssue(params.action, slack);
+    if (issue) throw new Error(issue);
+  }
+  let raw: unknown;
+  if (slack) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Slack dispatch was not authorized');
+    if (params.action === 'slack_post_message' || params.action === 'send_channel_message') raw = await sendManagedSlackMessage(slack);
+    else {
+      // SDK transport errors can carry the original authenticated request.
+      try { raw = await execute(); }
+      catch { throw new Error('Could not read Slack channel details. Check channel access or reconnect Slack.'); }
+    }
+  } else raw = await execute();
   // Gmail 0.17 returns a Gaxios response, including transport configuration.
   // Keep its data envelope for expressions, but never persist request headers
   // (which can contain the OAuth bearer) as a completion receipt or step output.

@@ -157,6 +157,7 @@ export const VERSION_PIN: Record<
   string,
   { versionRange: string; vettedVersion: string; reason: string }
 > = {
+  slack: {versionRange: "0.23.1", vettedVersion: "0.23.1", reason: "Managed bot connection actions qualified against 0.23.1; review before upgrading"},
   clickup: {versionRange: "0.9.1", vettedVersion: "0.9.1", reason: "Managed connection task actions qualified against 0.9.1; review before upgrading"},
   // github 0.6 line never made it to npm even though it was in the
   // monorepo's package.json; npm tops out at 0.6.7. Force the working 0.7.

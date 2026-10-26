@@ -2488,6 +2488,20 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    '/api/integrations/slack/options': {
+      GET: async (req: Request) => {
+        const {slackOptions, SlackOptionsError} = await import('../integrations/slack-options');
+        try { return json(await slackOptions(ctx.config, new URL(req.url).searchParams)); }
+        catch (error) { return json({error: error instanceof SlackOptionsError ? error.message : 'Could not load Slack choices.'}, error instanceof SlackOptionsError ? error.status : 502); }
+      },
+    },
+    '/api/integrations/slack': {
+      GET: async () => {
+        const { slackStatus } = await import('../integrations/slack-connection');
+        return json(slackStatus(ctx.config));
+      },
+    },
+
     // --- Google Auth Management ---
     '/api/auth/google/status': {
       GET: async () => {
