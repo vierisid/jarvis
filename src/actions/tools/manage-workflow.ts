@@ -336,7 +336,8 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           // setup.continueWith.install), so a compose that needs nothing new
           // asks for nothing. The card lists exactly the entries the action
           // installs: both read `install` through requestedInstalls, and an
-          // unparseable value is refused by the action before it acts.
+          // unparseable value is refused by the action before it acts. A
+          // stored no-install setup is not visible here; see actContinueSetup.
           if (action === "create" && !(typeof params.description === "string" && params.description.trim())) return null;
           let ids: string[];
           try { ids = requestedInstalls(params.install); } catch { return null; }
@@ -1219,21 +1220,41 @@ async function actCompose(
   // A null contract, as some models send for an unused optional parameter, is none.
   const stated = contract ?? undefined;
   const setupContext = installMissing ? context : { ...context, workflowSetup: { ...(context?.workflowSetup as Record<string, unknown> ?? {}), installMissing: false } };
-  const result = await composePersistedFlow(composeDeps, { name, description, ...(setupContext ? { context: setupContext } : {}), ...(stated !== undefined ? { contract: stated as JobContract } : {}) }, project, undefined, preinstall);
+  let result: Awaited<ReturnType<typeof composePersistedFlow>>;
+  try {
+    result = await composePersistedFlow(composeDeps, { name, description, ...(setupContext ? { context: setupContext } : {}), ...(stated !== undefined ? { contract: stated as JobContract } : {}) }, project, undefined, preinstall);
+  } catch (error) {
+    // A connector installed before the composer failed stays installed; say
+    // so with the error rather than leaving it to the journal. Cancellation
+    // is rethrown as is.
+    const installed = (error as { installedPieces?: unknown } | null)?.installedPieces;
+    if (!Array.isArray(installed) || !installed.length || (error as { name?: unknown }).name === "AbortError") throw error;
+    throw Object.assign(new Error(`${error instanceof Error ? error.message : String(error)} (installedConnectors: ${installed.join(", ")}; they stay installed)`, { cause: error }),
+      { installedConnectors: installed });
+  }
   const installReport = {
     ...(result.installedPieces?.length ? { installedConnectors: result.installedPieces } : {}),
+    ...(result.alreadyInstalledPieces?.length ? { alreadyInstalledConnectors: result.alreadyInstalledPieces } : {}),
     ...(result.installationErrors?.length ? { installationErrors: result.installationErrors } : {}),
   };
 
   if (!result.ok) {
     // A connector that failed to install in this call is not offered again:
-    // the failure is the blocker to report, not something to retry.
-    const failed = new Set(preinstall.filter(id => !result.installedPieces?.includes(id)));
+    // the failure is the blocker to report, not something to retry. One that
+    // was already installed did not fail.
+    const failed = new Set(preinstall.filter(id => !result.installedPieces?.includes(id) && !result.alreadyInstalledPieces?.includes(id)));
     const missing = result.suggestedInstalls ?? [];
-    const offer = installMissing && deps.installLibraryPiece
+    const gaps = result.capabilityGaps ?? [];
+    // A real capability gap is not fixed by installing a connector, so no
+    // install is offered alongside one: approving it would leave the user
+    // just as blocked.
+    const offer = installMissing && deps.installLibraryPiece && !gaps.length
       ? missing.filter(s => !failed.has(s.id)).slice(0, MAX_INSTALLS_PER_CALL) : [];
     const missingNames = missing.map(s => s.displayName ? `${s.displayName} (${s.id})` : s.id);
     const offerNames = offer.map(s => s.displayName ? `${s.displayName} (${s.id})` : s.id);
+    const blockedQuestion = gaps.length && missingNames.length
+      ? `This workflow is blocked by a missing capability: ${gaps.join("; ")}. It also needs the Library connector${missingNames.length > 1 ? "s" : ""} ${missingNames.join(", ")}, but installing ${missingNames.length > 1 ? "them" : "it"} alone would not unblock it.`
+      : undefined;
     return {
       ok: false,
       errors: result.errors,
@@ -1242,12 +1263,12 @@ async function actCompose(
       ...(result.capabilityGaps?.length ? { capabilityGaps: result.capabilityGaps } : {}),
       ...(result.errorCode ? { errorCode: result.errorCode } : {}),
       ...(result.configurationQuestions?.length || missing.length ? { setup: {
-        status: offer.length ? "needs_installation" : result.capabilityGaps?.length ? "blocked" : missing.length ? "needs_installation" : "needs_input",
+        status: gaps.length ? "blocked" : missing.length ? "needs_installation" : "needs_input",
         label: "Setup required",
         ...(missing.length ? { missingConnectors: missingNames } : {}),
-        nextQuestion: offer.length
+        nextQuestion: blockedQuestion ?? (offer.length
           ? `This workflow needs the Library connector${offer.length > 1 ? "s" : ""} ${offerNames.join(", ")}. Install ${offer.length > 1 ? "them" : "it"} now? You will be asked to approve the install.`
-          : result.configurationQuestions?.[0] ?? `Install ${missingNames.join(", ")} from the Library page, then continue setup.`,
+          : result.configurationQuestions?.[0] ?? `Install ${missingNames.join(", ")} from the Library page, then continue setup.`),
         ...(result.configurationQuestions?.length ? { questions: result.configurationQuestions } : {}),
         continueWith: { action: "continue_setup", composition_id: result.compositionRecordId,
           ...(offer.length ? { install: offer.map(s => s.id).join(",") } : {}), ...(installMissing ? {} : { install_missing: false }) },
@@ -1347,7 +1368,13 @@ async function actContinueSetup(compositionId: string, rawAnswers: unknown, inst
   const answers = { ...(prior?.answers as Record<string, unknown> ?? {}), ...(rawAnswers as Record<string, unknown> ?? {}) };
   if (JSON.stringify(answers).length > 16000) throw new Error("Setup answers exceed 16,000 characters; provide a small redacted sample");
   const install = installOption === undefined ? prior?.installMissing !== false : installOption !== false;
-  if (preinstall.length && !install) throw new Error("This setup was started with install_missing: false; pass install_missing: true with install only if the user now allows installing connectors");
+  // The Authority gate reads only this call's params, never the stored
+  // setup, so a continue_setup that names `install` without repeating the
+  // setup's install_missing: false still raises an install card. That card is
+  // refused here, before anything is installed. Such a setup's continueWith
+  // never offers `install` and carries install_missing: false, so following
+  // it raises no card.
+  if (preinstall.length && !install) throw new Error("Nothing was installed, even if an install was just approved: this setup was started with install_missing: false. Ask the user whether connectors may now be installed; if so, continue_setup with install_missing: true and install");
   return actCompose(current.specification.name, current.specification.description, deps, project, current.specification.contract, install,
     { ...current.specification.context, workflowSetup: { rootCompositionId: rootId, previousCompositionId: current.id, answers, installMissing: install } }, preinstall);
 }

@@ -19,7 +19,7 @@ export async function composePersistedFlow(deps: ComposeDeps, input: ComposeRequ
    * tool loop is then given no installer: the approval named these entries,
    * so nothing else can be installed under it.
    */
-  preinstall: readonly string[] = []): Promise<ComposeResult & { compositionRecordId: string; installedPieces?: string[]; installationErrors?: string[] }> {
+  preinstall: readonly string[] = []): Promise<ComposeResult & { compositionRecordId: string; installedPieces?: string[]; alreadyInstalledPieces?: string[]; installationErrors?: string[] }> {
   // Snapshot the job (including supplemental context and selected ingredients) so caller mutations cannot change intent mid-await.
   const request = { ...jobSpecification(input), signal: input.signal };
   request.signal?.throwIfAborted();
@@ -44,7 +44,7 @@ export async function composePersistedFlow(deps: ComposeDeps, input: ComposeRequ
     signal?.throwIfAborted();
     (snapshot.deps.pieceRegistry as PieceCatalog).upsert(metadata);
   };
-  const installedPieces: string[] = [], installationErrors: string[] = [];
+  const installedPieces: string[] = [], alreadyInstalledPieces: string[] = [], installationErrors: string[] = [];
   try {
     if (preinstall.length) {
       const install = snapshot.deps.installLibraryPiece;
@@ -52,7 +52,7 @@ export async function composePersistedFlow(deps: ComposeDeps, input: ComposeRequ
       delete snapshot.deps.installLibraryPiece;
       for (const id of preinstall) {
         const entry = snapshot.deps.library?.find(candidate => candidate.id === id);
-        if (entry && snapshot.deps.pieceRegistry.get(entry.npmPackage)) continue;
+        if (entry && snapshot.deps.pieceRegistry.get(entry.npmPackage)) { alreadyInstalledPieces.push(id); continue; }
         try {
           await install(id, request.signal);
           installedPieces.push(id);
@@ -70,11 +70,18 @@ export async function composePersistedFlow(deps: ComposeDeps, input: ComposeRequ
     request.signal?.throwIfAborted();
     journal.finish(result.ok ? "VALIDATED" : "FAILED", result.ok ? [] : result.errors);
     return { ...result, compositionRecordId: journal.id,
-      ...(installedPieces.length ? { installedPieces } : {}), ...(installationErrors.length ? { installationErrors } : {}) };
+      ...(installedPieces.length ? { installedPieces } : {}),
+      ...(alreadyInstalledPieces.length ? { alreadyInstalledPieces } : {}),
+      ...(installationErrors.length ? { installationErrors } : {}) };
   } catch (error) {
     // Preserve cancellation/provider failures. If shutdown closed the captured
     // DB, its last durable checkpoint remains COMPOSING (outcome unknown).
     try { journal.finish("FAILED", [error instanceof Error ? error.message : String(error)]); } catch { /* closed DB */ }
+    // Connectors installed before the failure stay installed (the journal
+    // records them); the caller reports them with the error.
+    if (installedPieces.length && error && typeof error === "object") {
+      try { Object.assign(error, { installedPieces: [...installedPieces] }); } catch { /* frozen error */ }
+    }
     throw error;
   }
 }

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS } from '../../workflows/db';
+import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS, getWorkflowDb } from '../../workflows/db';
 import { getWorkflowComposition } from '../../workflows/db/repos/workflow-composition';
 import { assertVersionReady, versionReadiness, configureWorkflowReadiness } from '../../workflows/db/repos/flow-readiness';
 import { updateDraftVersion, getFlowVersion } from '../../workflows/db/repos/flow-version';
@@ -141,9 +141,78 @@ test('install is refused before anything runs when it is not one this call may i
   const noInstall = await call(f.tool, { ...base, install_missing: false });
   expect(noInstall.setup.continueWith).toMatchObject({ install_missing: false });
   expect(noInstall.setup.continueWith.install).toBeUndefined();
-  await expect(f.tool.execute({ action: 'continue_setup', composition_id: noInstall.compositionRecordId, install: 'google-sheets' })).rejects.toThrow('install_missing: false');
+  // Following continueWith with install added keeps install_missing: false, so no card.
+  expect(gate(f.tool, { ...noInstall.setup.continueWith, install: 'google-sheets' })).toBeNull();
+  // Dropping it raises a card the gate cannot know is moot; the refusal says nothing was installed.
+  const dropped = { action: 'continue_setup', composition_id: noInstall.compositionRecordId, install: 'google-sheets' };
+  expect(gate(f.tool, dropped)).toMatchObject({ actionCategory: 'install_software' });
+  await expect(f.tool.execute(dropped)).rejects.toThrow('Nothing was installed, even if an install was just approved');
   expect(f.installed).toEqual([]);
   expect(f.turns()).toBe(1);
+});
+
+function scripted(respond: (turn: number) => Record<string, unknown>) {
+  const registry = new PieceCatalog([]), installed: string[] = [];
+  configureWorkflowReadiness({ pieces: registry });
+  let turn = 0;
+  const llm: ComposerLlmClient = { chat: async () => { throw Error('Use discovery'); },
+    chatTools: async () => ({ content: '', tool_calls: [respond(++turn)] }) as never };
+  const tool = createManageWorkflowTool({ pieceRegistry: registry, llm, library: [entry], installLibraryPiece: async id => {
+    installed.push(id); registry.upsert(piece);
+  } });
+  return { tool, registry, installed };
+}
+
+test('a real capability gap is reported as blocked, naming the connector, with no install offered', async () => {
+  const f = scripted(() => ({ id: 'gap', name: 'report_blocked', arguments: { reason: 'Unsupported',
+    capabilityGaps: ['No action reads every page of results'],
+    suggestedPieces: [{ id: 'google-sheets', reason: 'Required destination' }] } }));
+  const result = await call(f.tool, { action: 'compose', name: 'Submission processor', description: 'Build disabled draft' });
+  expect(result.ok).toBe(false);
+  expect(result.capabilityGaps).toEqual(['No action reads every page of results']);
+  expect(result.setup).toMatchObject({ status: 'blocked', missingConnectors: ['Google Sheets (google-sheets)'] });
+  expect(result.setup.nextQuestion).toContain('No action reads every page of results');
+  expect(result.setup.nextQuestion).toContain('Google Sheets (google-sheets)');
+  expect(result.setup.nextQuestion).toContain('would not unblock');
+  expect(result.setup.continueWith.install).toBeUndefined();
+  expect(gate(f.tool, result.setup.continueWith)).toBeNull();
+  expect(f.installed).toEqual([]);
+});
+
+test('a preinstall that is already installed is reported as already installed, not failed', async () => {
+  const f = setup();
+  f.registry.upsert(piece);
+  const first = await call(f.tool, { action: 'compose', name: 'Submission processor', description: 'Build disabled draft' });
+  const params = { action: 'continue_setup', composition_id: first.compositionRecordId, install: 'google-sheets' };
+  expect(gate(f.tool, params)).toMatchObject({ actionCategory: 'install_software' });
+  const result = await call(f.tool, params);
+  expect(f.installed).toEqual([]);
+  expect(result.alreadyInstalledConnectors).toEqual(['google-sheets']);
+  expect(result.installedConnectors).toBeUndefined();
+  expect(result.installationErrors).toBeUndefined();
+});
+
+test('a composer failure after a preinstall reports the connector it installed', async () => {
+  const f = scripted(turn => turn > 1 ? { id: 'saved', name: 'submit_flow', arguments: graph } : blocked(true));
+  const first = await call(f.tool, { action: 'compose', name: 'Submission processor', description: 'Build disabled draft' });
+  expect(first.setup.continueWith.install).toBe('google-sheets');
+  // The install is journaled (an UPDATE of specification); the composer's
+  // next checkpoint then fails, so the composer throws after installing.
+  getWorkflowDb().exec(`CREATE TRIGGER broken_checkpoint BEFORE UPDATE OF previous_response ON workflow_composition
+    BEGIN SELECT RAISE(ABORT, 'checkpoint write failed'); END`);
+  const failure = f.tool.execute(first.setup.continueWith);
+  await expect(failure).rejects.toThrow('checkpoint write failed');
+  await expect(failure).rejects.toThrow('installedConnectors: google-sheets');
+  await expect(failure).rejects.toMatchObject({ installedConnectors: ['google-sheets'] });
+  expect(f.installed).toEqual(['google-sheets']);
+});
+
+test('create with a blank description raises no install card and installs nothing', async () => {
+  const f = setup();
+  const params = { action: 'create', name: 'Blank', description: '   ', install: 'google-sheets' };
+  expect(gate(f.tool, params)).toBeNull();
+  await expect(f.tool.execute(params)).rejects.toThrow('empty workflow');
+  expect(f.installed).toEqual([]);
 });
 
 test('setup continuation preserves the original request and answers, then saves only one disabled draft', async () => {
