@@ -49,7 +49,7 @@ export function refundMajorAmount(amount:number,currency:string){
 /** Ticket ID and source come from the event and setup: quoted, so they cannot rewrite the sentence. */
 const quoted=(v:string)=>JSON.stringify(v).replace(/[^\x20-\x7e]/g,c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0'));
 export function refundIntent(p:RefundProposal){
-  return `Refund ${refundMajorAmount(p.amount,p.currency)} (${p.amount} minor units ${p.currency.toUpperCase()}) from ${p.charge}, account ${p.account} (${p.mode}), for ${quoted(p.ticketSource)} ticket ${quoted(p.ticketId)}. Approve before ${new Date(p.expiresAt).toISOString()}.`;
+  return `Refund ${refundMajorAmount(p.amount,p.currency)} (${p.amount} minor units ${p.currency.toUpperCase()}) from ${p.charge}, account ${p.account} (${p.mode}), for ${quoted(p.ticketSource)} ticket ${quoted(p.ticketId)}. Approve before ${new Date(p.expiresAt).toISOString()}. Rejecting does not clear the ticket's refund flag; a later event for this ticket proposes again.`;
 }
 export function refundDecision(expiresAt:number,decision:{status:string;decided_at:number|null}|null,now:number):'approved'|'pending'|'rejected'|'expired' {
   if(decision?.status==='denied')return 'rejected';

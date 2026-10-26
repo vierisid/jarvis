@@ -145,6 +145,7 @@ test('an attempted but uncertain refund never restarts on a later delivery',asyn
  expect(getWorkflowDb().query('SELECT COUNT(*) AS n FROM workflow_refund_payment').get()).toEqual({n:1});
 },120000);
 const setApprovalId=(id:string)=>{const row=getWorkflowDb().query('SELECT identity,state FROM workflow_refund').get() as any;getWorkflowDb().run('UPDATE workflow_refund SET state=? WHERE identity=?',[JSON.stringify({...JSON.parse(row.state),approvalId:id}),row.identity]);};
+const liveCards=(since:number)=>(getWorkflowDb().query("SELECT COUNT(*) AS n FROM approval_requests WHERE tool_name='workflow_approved_refund' AND status='pending' AND created_at>=?").get(since) as any).n;
 test("an '' approval ID from a waiting hold is replaced by the effect's card; a stale card is still withdrawn",async()=>{
  // Rejection is seen even though the request recorded '' while its card waited for a place.
  reset();let f=fixture();const held=await begin(f);setApprovalId('');approvals.deny(approvalFor(held.id).id,'dashboard');
@@ -162,4 +163,12 @@ test('a superseded card whose withdrawal fails is retried on the next invocation
  approvals.approve(approvalFor(fresh.id).id,'dashboard');expect((await resume(fresh.id)).status).toBe('SUCCEEDED');
  expect(approvals.getRequest(a.id)?.status).toBe('denied');expect(records()[0].withdraw).toBeUndefined();expect(posts()).toHaveLength(1);
  expect((await resume(stale.id)).status).toBe('FAILED');expect(posts()).toHaveLength(1);
+},120000);
+test('after a human rejection the same ticket proposes again on its next event, with one live card and no refund',async()=>{
+ reset();const since=Date.now(),f=fixture(),first=await begin(f),a=approvalFor(first.id);approvals.deny(a.id,'dashboard');
+ expect((await resume(first.id)).status).toBe('SUCCEEDED');expect(records()[0].state).toBe('rejected');expect(liveCards(since)).toBe(0);
+ // Rejecting does not clear the ticket's refund flag: the redelivered event raises a new card for the same ticket.
+ const again=await begin(f);expect(again.status).toBe('PAUSED');const b=approvalFor(again.id);expect(b.id).not.toBe(a.id);
+ expect(JSON.parse(b.tool_arguments).ticketId).toBe('ticket-1');expect(JSON.parse(b.context).intent).toContain('Rejecting does not clear');expect(liveCards(since)).toBe(1);
+ expect((await begin(f)).status).toBe('SUCCEEDED');expect(liveCards(since)).toBe(1);expect(posts()).toHaveLength(0);
 },120000);
