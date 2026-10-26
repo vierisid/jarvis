@@ -1,5 +1,6 @@
 import {randomUUID} from 'node:crypto';
-import {IMPORT_ACCOUNTS,IMPORT_ACTION,IMPORT_PIECE,importSetup,importSlice,type ImportRequest} from './contact-import';
+import {IMPORT_ACCOUNTS,IMPORT_ACTION,IMPORT_PIECE,ImportStop,importSetup,importSlice,type ImportRequest} from './contact-import';
+import {ActionOutcomeError} from '../../actions/action-outcome';
 import {importTransport} from './import-transport';
 import {acquireImport} from '../db/repos/contact-import';
 import {connectionBindings,currentConnectionIdentity,enforceRunConnectionBinding} from '../db/repos/binding-pins';
@@ -40,7 +41,16 @@ export function createContactImportService(deps:{effects:WorkflowEffectBoundary;
           if(!resolved||resolved.pieceName!==pieceName||resolved.status&&resolved.status!=='ACTIVE'||resolved.type!=='OAUTH2'||typeof resolved.value.access_token!=='string'||!resolved.value.access_token)throw Error('Connect the selected import accounts securely');
           tokens[field==='hubspotConnection'?'hubspot':'source']=resolved.value.access_token;
         }
-        check();return importSlice(setup,acquired.store,deps.request??importTransport(setup,tokens,()=>{check();acquired.store.check();}),clock(),clock,ctx.runId);
+        check();
+        try{return await importSlice(setup,acquired.store,deps.request??importTransport(setup,tokens,()=>{check();acquired.store.check();}),clock(),clock,ctx.runId);}
+        catch(e){
+          // A resumable stop is a typed block, not an uncertain dispatch. It says
+          // not_started only when no earlier slice of this run ran and the
+          // stopping request itself had no effect.
+          if(!(e instanceof ImportStop))throw e;
+          const ran=!!getWorkflowEffect(workflowEffectId(ctx.runId,stepName,executionPath,'contact-import'))?.partial;
+          throw new ActionOutcomeError({status:'blocked',code:e.code,message:e.message,effect:e.unexecuted&&!ran?'not_started':'may_have_occurred'});
+        }
       }});
     if(reply.approval)return {approval:reply.approval};
     return park(reply.result as {complete:boolean;resumeAt?:number});

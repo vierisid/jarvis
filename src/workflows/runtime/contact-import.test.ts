@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {initWorkflowDb,closeWorkflowDb,getWorkflowDb} from '../db';
 import {acquireImport} from '../db/repos/contact-import';
-import {importSlice,importSetup,importDigest,retryDeadline,type ImportRequest} from './contact-import';
+import {importSlice,importSetup,importDigest,retryDeadline,ImportStop,MAX_IMPORT_PAGES_PER_RUN,MAX_RETRY_AFTER_MS,type ImportRequest} from './contact-import';
 import {publicImportAddress} from './import-transport';
 import {importFixtureSetup as setup,importFixtureProvider} from './import-fixtures';
 let dir:string,now:number,seq:number;
@@ -106,3 +106,45 @@ test('Retry-After HTTP dates are GMT whatever the machine zone, and zone-less da
   for(const v of ['Mon, 26 Oct 2026 08:02:00','2026-10-26 08:02:00','2026-10-26T08:02:00'])expect(()=>retryDeadline(v,now,1)).toThrow('Invalid');
  }finally{if(zone===undefined)delete process.env.TZ;else process.env.TZ=zone;}
 });
+
+const progress=()=>JSON.parse((getWorkflowDb().query('SELECT progress FROM workflow_contact_import').get() as {progress:string}).progress);
+test('a Retry-After beyond 24 hours stops the run without using a retry; a new run resumes from the checkpoint',async()=>{
+ expect(MAX_RETRY_AFTER_MS).toBe(86_400_000);
+ const f=importFixtureProvider();await tick(f.request,'run-1');
+ const far=async()=>({status:429,retryAfter:'172800',body:null});
+ const stop=await tick(far,'run-1').catch(e=>e);expect(stop).toBeInstanceOf(ImportStop);expect(stop.code).toBe('IMPORT_RETRY_AFTER_TOO_LONG');expect(stop.unexecuted).toBe(true);
+ expect(stop.message).toContain(new Date(now+172_800_000).toISOString());
+ expect(progress()).toMatchObject({retries:0,notBefore:0,cursor:null,page:null,phase:'page'});
+ await expect(tick(f.request,'run-1')).rejects.toThrow('more than 24 hours');
+ // An HTTP-date two days out stops the same way.
+ await expect(tick(async()=>({status:429,retryAfter:new Date(now+2*86_400_000).toUTCString(),body:null}),'run-2')).rejects.toThrow('more than 24 hours');expect(progress().retries).toBe(0);
+ reopen();expect(await finish(f.request,'run-3')).toMatchObject({complete:true,pages:2,contacts:2});expect(f.creates).toBe(2);
+});
+test('a far Retry-After on an uncertain write stops, then the new run reconciles instead of writing again',async()=>{
+ const f=importFixtureProvider();let far=false;
+ const request:ImportRequest=async(provider,url,method,body)=>{const r=await f.request(provider,url,method,body);if(method==='POST'&&!far){far=true;return {status:503,retryAfter:'172800',body:null};}return r;};
+ const err=await finish(request,'run-1').catch(e=>e);expect(err).toBeInstanceOf(ImportStop);expect(err.unexecuted).toBe(false);expect(f.creates).toBe(1);
+ expect(progress()).toMatchObject({retries:0,phase:'reconcile'});
+ expect((await finish(f.request,'run-2')).contacts).toBe(2);expect(f.creates).toBe(2);expect(f.calls.filter(c=>c.method==='POST')).toHaveLength(2);
+});
+test('a Retry-After within 24 hours still parks the run until then',async()=>{
+ const f=importFixtureProvider();await tick(f.request,'run-1');
+ const r=await tick(async()=>({status:429,retryAfter:'86400',body:null}),'run-1');expect(r.resumeAt).toBe(now+86_400_000);expect(progress().retries).toBe(1);
+ now=r.resumeAt!;expect((await finish(f.request,'run-1')).complete).toBe(true);
+});
+test('a run stops after the page cap; the count survives restart and a new run resumes from the checkpoint',async()=>{
+ expect(MAX_IMPORT_PAGES_PER_RUN).toBe(1000);
+ const total=1500,fetched:string[]=[];const f=importFixtureProvider();
+ const request:ImportRequest=async(provider,url,method,body)=>{
+  if(provider!=='source')return f.request(provider,url,method,body);
+  const cursor=new URL(url).searchParams.get('cursor')??'0';fetched.push(cursor);const n=Number(cursor)+1;
+  return {status:200,body:{items:[],next_cursor:n<total?String(n):null}};
+ };
+ const drive=async(run:string,limit:number)=>{for(let i=0;i<limit;i++){const r=await tick(request,run);if(r.complete)return r;now=Math.max(now+1,r.resumeAt??now+1);}return null;};
+ expect(await drive('run-1',1201)).toBeNull();expect(progress()).toMatchObject({pages:600,runPages:600,pageRun:'run-1'});
+ reopen();
+ const stop=await drive('run-1',4000).catch(e=>e);expect(stop).toBeInstanceOf(ImportStop);expect(stop.code).toBe('IMPORT_PAGE_LIMIT');
+ expect(stop.message).toContain('stopped after 1000 pages');expect(progress()).toMatchObject({pages:1000,cursor:'1000',page:null});expect(fetched).toHaveLength(1000);
+ await expect(tick(request,'run-1')).rejects.toThrow('stopped after 1000 pages');expect(fetched).toHaveLength(1000);
+ expect(await drive('run-2',4000)).toMatchObject({complete:true,pages:total});expect(fetched).toHaveLength(total);expect(new Set(fetched).size).toBe(total);
+},60_000);

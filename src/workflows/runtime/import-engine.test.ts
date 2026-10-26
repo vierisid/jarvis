@@ -122,3 +122,26 @@ test('canceling between slices never receipts already-run import work as not sta
  expect((effect.outcome as {effect?:string}|undefined)?.effect).toBe('may_have_occurred');expect(effect.status).not.toBe('blocked');
  expect(approvals.getRequest(id)?.execution_outcome).toBe('failed');
 },60000);
+
+test('a Retry-After beyond 24 hours is a typed resumable block, not_started only when nothing ran',async()=>{
+ reset();const f=fixture();authority.setGovernedCategories(['write_data']);const base=provider;let far=true;
+ provider={...base,request:async(p,url,method,body)=>far&&new URL(url).pathname==='/account-info/v3/details'?{status:429,retryAfter:'172800',body:null}:base.request(p,url,method,body)} as typeof provider;
+ const begin1=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'});runIds.push(begin1.id);
+ const ctx={runId:begin1.id,projectId:DEFAULT_IDS.project,stepName:'import_contacts',executionPath:[] as Array<[string,number]>};
+ const first=await services.contactImport!({...setup},ctx) as any;approvals.approve(first.approval.approvalId,'fixture');
+ await expect(services.contactImport!({...setup},ctx)).rejects.toThrow('more than 24 hours');
+ const blocked=listWorkflowEffects(begin1.id).find(e=>e.route==='contact-import')!;
+ expect(blocked.outcome).toMatchObject({status:'blocked',code:'IMPORT_RETRY_AFTER_TOO_LONG',effect:'not_started'});expect(approvals.getRequest(first.approval.approvalId)?.execution_outcome).toBe('blocked');
+ far=false;const run2=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'});runIds.push(run2.id);const ctx2={...ctx,runId:run2.id};
+ const second=await services.contactImport!({...setup},ctx2) as any;approvals.approve(second.approval.approvalId,'fixture');
+ for(let i=0;i<4;i++){const r=await services.contactImport!({...setup},ctx2) as any;now=Math.max(now+1,r.resumeAt);}
+ expect(base.creates).toBe(1);provider={...base,request:async()=>({status:429,retryAfter:'172800',body:null})} as typeof provider;
+ let stop:unknown;for(let i=0;i<3&&!stop;i++){try{const r=await services.contactImport!({...setup},ctx2) as any;now=Math.max(now+1,r.resumeAt);}catch(e){stop=e;}}
+ expect(String(stop)).toContain('more than 24 hours');
+ expect(listWorkflowEffects(run2.id).find(e=>e.route==='contact-import')!.outcome).toMatchObject({code:'IMPORT_RETRY_AFTER_TOO_LONG',effect:'may_have_occurred'});
+ expect(approvals.getRequest(second.approval.approvalId)?.execution_outcome).toBe('failed');
+ provider=base;const run3=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'});runIds.push(run3.id);const ctx3={...ctx,runId:run3.id};
+ const third=await services.contactImport!({...setup},ctx3) as any;approvals.approve(third.approval.approvalId,'fixture');
+ for(let i=0;i<40;i++){const r=await services.contactImport!({...setup},ctx3) as any;if(r.complete)break;now=Math.max(now+1,r.resumeAt);}
+ expect(base.creates).toBe(2);expect(approvals.getRequest(third.approval.approvalId)?.status).toBe('executed');
+},60000);

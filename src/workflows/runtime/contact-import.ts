@@ -39,6 +39,8 @@ export interface ImportContact {id:string;email:string;properties:Record<string,
 export interface ImportProgress {
   cursor:string|null;page:ImportContact[]|null;next:string|null;index:number;pages:number;contacts:number;complete:boolean;
   phase:'account'|'page'|'lookup'|'write'|'reconcile';method:'POST'|'PATCH';retries:number;notBefore:number;inFlight:boolean;error?:string;stoppedRun?:string;
+  /** Pages completed by the run named in pageRun. Saved with the page cursor. */
+  runPages?:number;pageRun?:string;
 }
 export const initialImportProgress=():ImportProgress=>({cursor:null,page:null,next:null,index:0,pages:0,contacts:0,complete:false,phase:'account',method:'POST',retries:0,notBefore:0,inFlight:false});
 export interface ImportStore {
@@ -50,6 +52,18 @@ export interface ImportStore {
 export interface ImportResponse {status:number;retryAfter?:string|null;body:unknown}
 export type ImportRequest=(provider:'source'|'hubspot',url:string,method:'GET'|'POST'|'PATCH',body?:unknown)=>Promise<ImportResponse>;
 export class ImportTransportError extends Error {constructor(){super('Provider transport interrupted');}}
+/** A provider may ask for a delay up to this long; a longer one stops the run
+ * instead of parking it (and any open approval) for days. */
+export const MAX_RETRY_AFTER_MS=24*60*60*1000;
+/** Pages one run may complete. The budget is per run: a new run resumes from
+ * the checkpoint with a fresh budget. (The weekly report caps a report at 200
+ * pages; an import is resumable, so its cap bounds a run, not the import.) */
+export const MAX_IMPORT_PAGES_PER_RUN=1000;
+/** A resumable stop: final for this run, and a new run resumes from the
+ * checkpoint. unexecuted means the stopping request itself had no effect. */
+export class ImportStop extends Error {
+  constructor(message:string,readonly code:'IMPORT_RETRY_AFTER_TOO_LONG'|'IMPORT_PAGE_LIMIT',readonly unexecuted:boolean){super(message);this.name='ImportStop';}
+}
 export function retryDeadline(value:string|null|undefined,now:number,retries:number):number {
   const fallback=now+1000*2**Math.min(retries,3);
   if(!value)return fallback;
@@ -79,7 +93,7 @@ function pageData(body:unknown,s:ImportSetup){
 export async function importSlice(s:ImportSetup,store:ImportStore,request:ImportRequest,now:number,clock:()=>number=()=>now,run?:string):Promise<{complete:boolean;pages:number;contacts:number;resumeAt?:number}> {
   const p=store.load();store.check();
   const result=(resumeAt?:number)=>({complete:p.complete,pages:p.pages,contacts:p.contacts,...(!p.complete?{resumeAt:resumeAt??now+1}: {})});
-  const fail=(message:string):never=>{p.error=message;p.stoppedRun=run;p.inFlight=false;store.save(p);throw Error(message);};
+  const fail=(message:string,stop?:ImportStop):never=>{p.error=message;p.stoppedRun=run;p.inFlight=false;store.save(p);throw stop??Error(message);};
   // A stop is final for the run that hit it. A new run (a fresh start, and
   // fresh approval when governed) resumes from the checkpoint with a fresh
   // budget, reconciling a possibly committed write by lookup before any repeat.
@@ -89,16 +103,21 @@ export async function importSlice(s:ImportSetup,store:ImportStore,request:Import
     delete p.error;delete p.stoppedRun;p.retries=0;p.notBefore=0;if(p.phase==='write')p.phase='reconcile';store.save(p);
   }
   if(p.complete)return result();
+  if(p.pageRun!==run){p.pageRun=run;p.runPages=0;}
   if(p.notBefore>now)return result(p.notBefore);
   // A process died after reserving a request. Count that attempt, and reconcile
   // a potentially committed write before any repeat. Do not reset the budget.
   if(p.inFlight){p.inFlight=false;p.retries++;if(p.phase==='write')p.phase='reconcile';else if(p.retries>3)return fail('Import retry budget exhausted after interruption');store.save(p);}
-  if(p.page&&p.index>=p.page.length){p.cursor=p.next;p.page=null;p.index=0;p.pages++;p.complete=p.next===null;p.phase='page';p.retries=0;p.notBefore=0;store.save(p);return result();}
+  if(p.page&&p.index>=p.page.length){p.cursor=p.next;p.page=null;p.index=0;p.pages++;p.runPages=(p.runPages??0)+1;p.complete=p.next===null;p.phase='page';p.retries=0;p.notBefore=0;store.save(p);return result();}
   let contact=p.page?.[p.index];
   if(contact){const receipt=store.record(contact.id);if(receipt){if(receipt.hash!==contact.hash)return fail('Source identity changed since its confirmed import');p.index++;p.phase='lookup';p.retries=0;store.save(p);return result();}}
   let url:string,method:'GET'|'POST'|'PATCH'='GET',body:unknown,provider:'source'|'hubspot';
   if(p.phase==='account'){provider='hubspot';url='https://api.hubapi.com/account-info/v3/details';}
   else if(!p.page){
+    if((p.runPages??0)>=MAX_IMPORT_PAGES_PER_RUN){
+      const message='Import stopped after '+MAX_IMPORT_PAGES_PER_RUN+' pages in this run; start a new run to resume from the checkpoint';
+      return fail(message,new ImportStop(message,'IMPORT_PAGE_LIMIT',true));
+    }
     if(store.seenCursor(p.cursor))return fail('Source cursor cycle detected');
     const u=new URL(s.sourceUrl);if(p.cursor!==null)u.searchParams.set(s.cursorParameter,p.cursor);url=u.toString();provider='source';
   }else{
@@ -125,6 +144,13 @@ export async function importSlice(s:ImportSetup,store:ImportStore,request:Import
     p.retries++;if(method!=='GET'&&r.status!==429)p.phase='reconcile';
     if(p.retries>3&&(method==='GET'||p.phase!=='reconcile'))return fail('Import retry budget exhausted');
     try{p.notBefore=retryDeadline(r.retryAfter,clock(),p.retries);}catch{return fail('Invalid Retry-After; import stopped without ignoring the provider delay');}
+    if(p.notBefore-clock()>MAX_RETRY_AFTER_MS){
+      // Too far to park. Stop without spending a retry; a new run resumes from
+      // the checkpoint (reconciling first if this was an uncertain write).
+      p.retries--;const at=new Date(p.notBefore).toISOString();p.notBefore=0;
+      const message='Provider asked to retry at '+at+', more than 24 hours away; import stopped without using a retry. Start a new run after then to resume from the checkpoint';
+      return fail(message,new ImportStop(message,'IMPORT_RETRY_AFTER_TOO_LONG',method==='GET'||r.status===429));
+    }
     store.save(p);return result(p.notBefore);
   }
   if(p.phase==='account'){
