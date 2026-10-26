@@ -3359,11 +3359,11 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const selectedSubAction: PieceCatalogActionOrTrigger | undefined = subList.find((s) => s.name === subName);
   const formInput = step.settings?.input ?? {};
   const formWebhook = detectedTriggerKind === 'webhook' && ('submission_id_field' in formInput || 'submission_email_field' in formInput);
-  const schema = selectedSubAction?.inputSchema ?? (formWebhook ? { fields: [
+  const schema = formWebhook ? { fields: [
     { name: 'submission_id_field', label: 'Submission ID field', type: 'string' as const, required: true, description: 'The field path containing the unique submission ID, for example form.id.' },
     { name: 'submission_email_field', label: 'Email field', type: 'string' as const, required: true, description: 'The field path containing the email address, for example form.email.' },
-    ...Object.keys(formInput).filter(key => !['submission_id_field', 'submission_email_field'].includes(key)).map(key => ({ name: key, label: key, type: 'string' as const, required: false })),
-  ] } : null);
+    ...Object.keys(formInput).filter(key => !['submission_id_field', 'submission_email_field', 'secret'].includes(key)).map(key => ({ name: key, label: key, type: 'string' as const, required: false })),
+  ] } : selectedSubAction?.inputSchema ?? null;
 
   const [newKey, setNewKey] = useState("");
   const [tab, setTab] = useState("Configure");
@@ -3477,10 +3477,14 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
               the sample-output editor below, so a section header would
               just be visual noise. */}
           {isTriggerStep && detectedTriggerKind === "webhook" ? (
-            <WebhookTriggerFields
-              secret={step.settings?.input?.["secret"]}
-              onSetSecret={(value) => (value ? onSetInput("secret", value) : onRemoveInputKey("secret"))}
-            />
+            <>
+              <WebhookTriggerFields
+                secret={step.settings?.input?.["secret"]}
+                onSetSecret={(value) => (value ? onSetInput("secret", value) : onRemoveInputKey("secret"))}
+              />
+              {formWebhook && schema ? <SchemaInputs schema={schema}
+                input={(step.settings?.input ?? {}) as Record<string, unknown>} onSetInput={onSetInput} /> : null}
+            </>
           ) : schema ? (
             <SchemaInputs
               schema={schema}

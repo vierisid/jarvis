@@ -373,7 +373,7 @@ test('setup notice opens mapped fields and partial saves remain editable without
   const { CANVAS_CATALOG } = await import('./fixtures');
   const saved = fixture.snapshot().version;
   saved.trigger = { name: 'trigger', displayName: 'Receive form submissions', type: 'PIECE_TRIGGER',
-    settings: { pieceName: 'webhook', input: { submission_id_field: '', submission_email_field: '' } },
+    settings: { pieceName: 'webhook', input: { submission_id_field: '', submission_email_field: '', secret: 'fixture-signature' } },
     nextAction: { name: 'append', displayName: 'Append to Sheets', type: 'PIECE',
       settings: { pieceName: 'fixture-tools', actionName: 'prepare', input: {} } },
   };
@@ -395,6 +395,8 @@ test('setup notice opens mapped fields and partial saves remain editable without
   await React.act(async () => button('Receive form submissions').click());
   expect(host.querySelector('[aria-label="Step settings"]')?.getAttribute('data-open')).toBe('true');
   expect(host.querySelector('[aria-label="Step settings"]')?.hasAttribute('inert')).toBe(false);
+  expect((host.querySelector('input[type="password"]') as HTMLInputElement)?.value).toBe('fixture-signature');
+  expect(host.querySelector('[contenteditable]')?.textContent).not.toContain('fixture-signature');
   const field = [...host.querySelectorAll('label')].find(e => e.textContent?.startsWith('Submission ID field'))!.querySelector('[contenteditable]')!;
   await React.act(async () => {
     field.textContent = 'form.id';
@@ -402,7 +404,7 @@ test('setup notice opens mapped fields and partial saves remain editable without
   });
   expect(button('Save changes').disabled).toBe(false);
   await React.act(async () => button('Save changes').click());
-  expect(fixture.snapshot().version.trigger.settings?.input).toEqual({ submission_id_field: 'form.id', submission_email_field: '' });
+  expect(fixture.snapshot().version.trigger.settings?.input).toEqual({ submission_id_field: 'form.id', submission_email_field: '', secret: 'fixture-signature' });
   expect(host.querySelector('[role="alertdialog"]')).toBeNull();
   expect(host.querySelector('.brief-canvas-setup')?.textContent).toContain('Email field');
   expect(fixture.requests.filter(r => r.method !== 'GET').map(r => r.method)).toEqual(['PATCH']);
