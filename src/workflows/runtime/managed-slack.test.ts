@@ -8,11 +8,18 @@ test('bot contract refuses unsupported actions, destinations, identity and inval
  expect(managedSlackIssue('slack_post_message',input)).toBeNull();
 });
 test('a provider error or lost response produces one attempt and no private error body',async()=>{
- for(const failure of ['network','rate','rejected']) {
+ for(const failure of ['network','rate','rejected','invalid-json','null','oversized','stream']) {
   let calls=0;
-  const request=(async()=>{calls++;if(failure==='network')throw Error('lost response');return Response.json({ok:false,error:'PRIVATE_UPSTREAM'}, {status:failure==='rate'?429:200});}) as unknown as typeof fetch;
-  try {await sendManagedSlackMessage(input,request);throw Error('expected failure');}
-  catch(e) {expect(String(e)).not.toContain('PRIVATE_UPSTREAM');}
+  const request=(async()=>{
+   calls++;
+   if(failure==='network')throw Error('PRIVATE_UPSTREAM');
+   if(failure==='invalid-json')return new Response('PRIVATE_UPSTREAM');
+   if(failure==='null')return Response.json(null);
+   if(failure==='oversized')return new Response('x'.repeat(1_048_577));
+   if(failure==='stream')return new Response(new ReadableStream({start(controller){controller.error(Error('PRIVATE_UPSTREAM'));}}));
+   return Response.json({ok:false,error:'PRIVATE_UPSTREAM'}, {status:failure==='rate'?429:200});
+  }) as unknown as typeof fetch;
+  await expect(sendManagedSlackMessage(input,request)).rejects.toThrow(/^Slack (send outcome is unknown|rate limited this send|did not confirm the message)\./);
   expect(calls).toBe(1);
  }
 });

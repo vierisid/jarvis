@@ -33,7 +33,32 @@ export async function sendManagedSlackMessage(input: Record<string,unknown>, req
   }); } catch { throw new Error('Slack send outcome is unknown. Check the channel before trying again.'); }
   if (!response.ok) throw new Error(response.status===429 ? 'Slack rate limited this send. Check the channel before trying again.' : 'Slack send did not finish. Check the channel before trying again.');
   // Never preserve upstream request headers or token-bearing SDK error objects.
-  const body=await response.json() as {ok?:unknown;channel?:unknown;ts?:unknown;message?:unknown;error?:unknown};
+  let body: {ok?:unknown;channel?:unknown;ts?:unknown;message?:unknown;error?:unknown};
+  try {
+    const reader=response.body?.getReader();
+    if (!reader) throw new Error('Empty response');
+    const chunks:Uint8Array[]=[];
+    let size=0;
+    try {
+      for (;;) {
+        const {done,value}=await reader.read();
+        if (done) break;
+        size+=value.length;
+        if (size>1_048_576) throw new Error('Response too large');
+        chunks.push(value);
+      }
+    } finally { await reader.cancel(); reader.releaseLock(); }
+    const bytes=new Uint8Array(size);
+    let offset=0;
+    for (const chunk of chunks) { bytes.set(chunk,offset); offset+=chunk.length; }
+    const parsed:unknown=JSON.parse(new TextDecoder().decode(bytes));
+    if (!parsed || typeof parsed!=='object' || Array.isArray(parsed)) throw new Error('Invalid response');
+    body=parsed;
+  } catch {
+    // Parse/stream errors may contain upstream response text. Keep the send
+    // uncertain and never expose that text to the workflow's run history.
+    throw new Error('Slack send outcome is unknown. Check the channel before trying again.');
+  }
   if (body.ok!==true || body.channel!==input.channel || typeof body.ts!=='string' || !/^\d+\.\d{6}$/.test(body.ts)) {
     const reason = body.error==='not_in_channel' ? 'Invite the Jarvis app to this channel first.'
       : ['invalid_auth','token_revoked','token_expired','account_inactive','missing_scope'].includes(String(body.error)) ? 'Reconnect Slack from your Account page.'
