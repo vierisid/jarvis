@@ -120,7 +120,8 @@ export class CredentialResolver {
     if (input.externalId.startsWith(JARVIS_PREFIX)) {
       for (const source of this.sources) {
         if (source.canResolve(input.externalId)) {
-          return source.resolve(input.externalId);
+          const resolved = await source.resolve(input.externalId);
+          return input.pieceName && resolved?.pieceName && input.pieceName !== resolved.pieceName ? null : resolved;
         }
       }
       return null;

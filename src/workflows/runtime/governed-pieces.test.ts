@@ -1693,3 +1693,16 @@ describe('#961: the core HTTP piece is governed by method', () => {
     expect(JSON.parse(receiptBody(HTTP, effectId, { ...cookie, body: 'x'.repeat(PIECE_RECEIPT_MAX_BYTES) })).result.headers).toEqual({ 'content-type': 'x' });
   });
 });
+
+
+describe('managed ClickUp task permissions', () => {
+  test('read-only authority cannot create tasks; a configured approval pauses writes', async () => {
+    const readOnly = fixture('@activepieces/piece-clickup','create_task',1);
+    await expect(readOnly.authorize({list_id:'sandbox',name:'Example'})).rejects.toThrow(/Authority denied/);
+    const allowed = fixture('@activepieces/piece-clickup','get_list_task',1);
+    expect(await allowed.authorize({task_id:'task1'})).toMatchObject({governed:true,dispatch:'authorized'});
+    const approved = fixture('@activepieces/piece-clickup','update_task');
+    approved.authority.setGovernedCategories(['write_data']);
+    expect(await approved.authorize({task_id:'task1',name:'Changed'})).toMatchObject({governed:true,dispatch:'approval_required'});
+  });
+});

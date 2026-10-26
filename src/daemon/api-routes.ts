@@ -2474,6 +2474,20 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    '/api/integrations/clickup/options': {
+      GET: async (req: Request) => {
+        const {clickUpOptions, ClickUpOptionsError} = await import('../integrations/clickup-options');
+        try { return json({options: await clickUpOptions(ctx.config, new URL(req.url).searchParams)}); }
+        catch (error) { return json({error: error instanceof ClickUpOptionsError ? error.message : 'Could not load ClickUp choices.'}, error instanceof ClickUpOptionsError ? error.status : 502); }
+      },
+    },
+    '/api/integrations/clickup': {
+      GET: async () => {
+        const { clickUpStatus } = await import('../integrations/clickup-connection');
+        return json(clickUpStatus(ctx.config));
+      },
+    },
+
     // --- Google Auth Management ---
     '/api/auth/google/status': {
       GET: async () => {

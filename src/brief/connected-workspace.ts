@@ -6,6 +6,7 @@ import type { ConnectedRow, ConnectedWorkspaceSnapshot, ConnectionSetupAction } 
 
 export interface ConnectedWorkspaceSources {
   devices?: () => Pick<SidecarInfo, 'id' | 'name' | 'status' | 'connected'>[];
+  clickup?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   google?: () => { mode: 'self' | 'managed' | 'none' | 'unavailable'; authenticated: boolean; reconnect: boolean; canSetup: boolean };
   channels?: () => Partial<Record<'telegram' | 'discord', { enabled: boolean; connected: boolean; authentication?: 'verified' | 'rejected' | 'unknown' }>>;
   pieces?: () => PieceLookup | null;
@@ -77,6 +78,22 @@ export class ConnectedWorkspace {
         states.google = 'ready';
       } catch { google.status = 'unavailable'; }
       rows.push(google);
+      if (this.sources.clickup) {
+        const row = base('native:clickup', 'native_service', 'clickup', 'ClickUp');
+        try {
+          const c = this.sources.clickup();
+          if (c.configured || c.connected) {
+            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('ClickUp: ' + c.account.label) : 'ClickUp';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:clickup', label: 'ClickUp',
+              target: {kind: 'hosted_integration', provider: 'clickup'}, verifies: {kind: 'native_service', serviceId: 'clickup'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
       try {
         if (!this.sources.channels) throw new Error('absent');
         const channels = this.sources.channels();
