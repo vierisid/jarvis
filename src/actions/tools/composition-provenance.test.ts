@@ -20,6 +20,13 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
+  // w8-8: deferred setup, connector continuation and form processing.
+  'w8-8': {
+    'bare': '2e7622eb199df8f1ea33d8a77d686b34e1282028823f818719132b07b4949b80',
+    'hosted production': '8efd7c5dd6ee559f9758e716de4c70665ff3e64bd16f0a91e47bf923fc7492f6',
+    'production': '546b58cc39e2a413ef9702b53b22c4ce7544b6bd2df3ec0a95fcf57a2367d469',
+    'tool names only': 'a2ec151afbc98276e6d31d667a2cd1bf3c91eddd055d5748ba7ab5dd1a46c78c',
+  },
   // w8-7: inspect browser fallback before refusing missing connector setup.
   'w8-7': {
     bare: '79604471f26e16b11f4deb6edbe2cab47ef1f00db537552f941868629d3d0398',

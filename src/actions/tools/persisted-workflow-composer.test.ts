@@ -1,3 +1,4 @@
+import { COMPOSER_PROMPT_VERSION } from './composition-provenance';
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -173,7 +174,7 @@ test("composition provenance is durable and catalog changes cannot alter a repai
   expect(result.ok).toBe(true);
   closeWorkflowDb(); initWorkflowDb(path);
   const provenance = getWorkflowComposition(result.compositionRecordId)!.specification.provenance!;
-  expect(provenance).toMatchObject({ schemaVersion: 1, promptVersion: "w8-7", planningPolicy: "deterministic-first-v1" });
+  expect(provenance).toMatchObject({ schemaVersion: 1, promptVersion: COMPOSER_PROMPT_VERSION, planningPolicy: "deterministic-first-v1" });
   expect(provenance.catalogSha256).toMatch(/^[a-f0-9]{64}$/);
   expect(provenance.environmentSha256).toMatch(/^[a-f0-9]{64}$/);
 });
