@@ -1016,7 +1016,7 @@ function workflowDocumentPage(flow: FlowRow, params: Record<string, unknown>): R
   if (params.view !== 'definition' && params.view !== 'validation') throw new Error('get: unknown view');
   const version = typeof params.version_id === 'string' ? getFlowVersion(params.version_id) : getLatestDraft(flow.id) ?? (flow.published_version_id ? getFlowVersion(flow.published_version_id) : null);
   if (!version || version.flowId !== flow.id) throw new Error('Version not found in this workflow');
-  const document = params.view === 'definition' ? version : {
+  const document = params.view === 'definition' ? versionForModel(version) : {
     ...validationSummary(flow.id, version.id),
     structure: compileWorkflow(version.trigger, { pieces: workflowReadinessServices()?.pieces, phase: 'composition' }),
     readiness: versionReadiness(flow.id, version.id),

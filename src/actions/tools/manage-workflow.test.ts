@@ -161,6 +161,15 @@ describe("manage_workflow tool", () => {
     const got = await call("get", { flow: "hooked" }) as { latestDraft: { trigger: { settings: { input: { secret: string } } } } };
     expect(JSON.stringify(got)).not.toContain("whsec-s3cret-value");
     expect(got.latestDraft.trigger.settings.input.secret).toBe("[redacted]");
+    for (const view of ['definition', 'validation']) {
+      let text = '', cursor: string | null = null;
+      do {
+        const page = await call('get', { flow: created.id, view, ...(cursor ? { cursor } : {}) }) as { content: string; nextCursor: string | null };
+        text += page.content; cursor = page.nextCursor;
+      } while (cursor);
+      expect(text).not.toContain('whsec-s3cret-value');
+      if (view === 'definition') expect(JSON.parse(text).trigger.settings.input.secret).toBe('[redacted]');
+    }
     // The stored version keeps it: the ingress still checks against it.
     expect((getLatestDraft(created.id)!.trigger as unknown as { settings: { input: { secret: string } } }).settings.input.secret).toBe("whsec-s3cret-value");
   });
