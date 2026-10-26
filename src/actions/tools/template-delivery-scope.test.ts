@@ -91,8 +91,11 @@ describe('who decides a site-playbook delivery scope, derived from the source', 
     expect(executor.match(/registry\.execute\(/g)?.length).toBe(1);
 
     const backends = read('workflows/runtime/service-backends.ts');
-    expect(backends).toContain('withoutTemplateDelivery(() => registry.execute(call.toolCall.name, args))');
-    expect(backends.match(/registry\.execute\(/g)?.length).toBe(1);
+    expect(backends).toContain(`withoutTemplateDelivery(() => browserReview
+                  ? runAsReviewed(browserExecution!.reviewed, () => browserExecution!.registry.execute(call.toolCall.name, args))
+                  : registry.execute(call.toolCall.name, args))`);
+    // Both the reviewed browser registry and ordinary dispatch stay suppressed.
+    expect(backends.match(/registry\.execute\(/g)?.length).toBe(2);
 
     const adapter = read('workflows/adapters/tool-registry.ts');
     expect(adapter).toContain('withoutTemplateDelivery(() => this.registry.execute(name, params))');
