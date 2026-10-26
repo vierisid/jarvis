@@ -9,6 +9,7 @@ export function reportReceipt(owner:string):ReportReceipt {
       getWorkflowDb().run('INSERT INTO workflow_weekly_report(identity,owner,state,created) VALUES(?,?,?,?)',[identity,owner,'pending',Date.now()]);return {state:'new' as const};
     })();},
     created(identity,id){if(getWorkflowDb().run("UPDATE workflow_weekly_report SET document_id=? WHERE identity=? AND owner=? AND state='pending'",[id,identity,owner]).changes!==1)throw Error('Report receipt ownership changed');},
+    release(identity){getWorkflowDb().run("DELETE FROM workflow_weekly_report WHERE identity=? AND owner=? AND state='pending' AND document_id IS NULL",[identity,owner]);},
     finish(identity,result){if(getWorkflowDb().run("UPDATE workflow_weekly_report SET state='complete',result=? WHERE identity=? AND owner=? AND state='pending'",[JSON.stringify(result),identity,owner]).changes!==1)throw Error('Report receipt ownership changed');},
   };
 }

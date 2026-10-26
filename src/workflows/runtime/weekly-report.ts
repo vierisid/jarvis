@@ -143,13 +143,20 @@ export async function collectWeeklyReport(s:ReportSetup,request:ReportRequest,no
   if(content.length>150000)throw Error('Report exceeds document limit');
   return {title,content,weeks,datasets,comparisons,partial:datasets.some(d=>d.coverage.status==='Unavailable')};
 }
-export interface ReportReceipt {claim(key:string):{state:'new'|'pending'|'complete';result?:Obj};created(key:string,id:string):void;finish(key:string,result:Obj):void}
+export interface ReportReceipt {claim(key:string):{state:'new'|'pending'|'complete';result?:Obj};created(key:string,id:string):void;finish(key:string,result:Obj):void;release(key:string):void}
+/** Failures known to have happened before a request reached the provider, or that the provider rejected outright. */
+const notSent=new WeakSet<object>();
+const markNotSent=(e:unknown)=>{const error=e instanceof Error?e:Error(String(e));notSent.add(error);return error;};
+export const reportRequestNotSent=(e:unknown)=>typeof e==='object'&&e!==null&&notSent.has(e);
 export async function saveWeeklyReport(s:ReportSetup,report:Awaited<ReturnType<typeof collectWeeklyReport>>,request:ReportRequest,receipt:ReportReceipt,key:string){
   const profile=await request('google','/drive/v3/about?fields=user(emailAddress)');if(profile.user?.emailAddress?.toLowerCase()!==s.googleEmail)throw Error('Selected Google account does not match configured email');
   const folder=await request('google',`/drive/v3/files/${s.folderId}?fields=id,mimeType,trashed,capabilities(canAddChildren)&supportsAllDrives=true`);
   if(folder.id!==s.folderId||folder.trashed||folder.mimeType!=='application/vnd.google-apps.folder'||folder.capabilities?.canAddChildren!==true)throw Error('Selected report folder is unavailable or not writable');
   const claim=receipt.claim(key);if(claim.state==='complete')return claim.result!;if(claim.state==='pending')throw Error('Report creation is unresolved. Review the recorded attempt; no duplicate document was created.');
-  const file=await request('google','/drive/v3/files?fields=id,name,mimeType,parents&supportsAllDrives=true',{name:report.title,mimeType:'application/vnd.google-apps.document',parents:[s.folderId],appProperties:{jarvisReport:key}});
+  let file:Obj;
+  try{file=await request('google','/drive/v3/files?fields=id,name,mimeType,parents&supportsAllDrives=true',{name:report.title,mimeType:'application/vnd.google-apps.document',parents:[s.folderId],appProperties:{jarvisReport:key}});}
+  // A create that certainly never happened must not fence the week; an uncertain one stays fenced for review.
+  catch(e){if(reportRequestNotSent(e))receipt.release(key);throw e;}
   if(typeof file.id!=='string'||! /^[\w-]+$/.test(file.id))throw Error('Document creation did not confirm its ID');receipt.created(key,file.id);
   await request('google',`/v1/documents/${file.id}:batchUpdate`,{requests:[{insertText:{location:{index:1},text:report.content}}]});
   const doc=await request('google',`/v1/documents/${file.id}`),meta=await request('google',`/drive/v3/files/${file.id}?fields=id,name,mimeType,parents,trashed&supportsAllDrives=true`);
@@ -167,11 +174,11 @@ export function reportTransport(tokens:Record<ReportProvider,string>,checkpoint:
     const create=provider==='google'&&u.pathname==='/drive/v3/files'&&body&&Object.keys(body).sort().join()==='appProperties,mimeType,name,parents'&&body.mimeType==='application/vnd.google-apps.document'&&typeof body.name==='string'&&Array.isArray(body.parents)&&body.parents.length===1;
     const update=/^\/v1\/documents\/([\w-]+):batchUpdate$/.exec(u.pathname),id=update?.[1];
     const insert=provider==='google'&&id&&created.has(id)&&!written.has(id)&&body&&Object.keys(body).join()==='requests'&&body.requests?.length===1&&Object.keys(body.requests[0]).join()==='insertText'&&Object.keys(body.requests[0].insertText).sort().join()==='location,text'&&JSON.stringify(body.requests[0].insertText.location)==='{"index":1}'&&typeof body.requests[0].insertText.text==='string';
-    if(!(read&&!body)&&!create&&!insert)throw Error('Report operation is outside the read/create-new-document scope');
-    checkpoint();if(insert)written.add(id!);
+    if(!(read&&!body)&&!create&&!insert)throw markNotSent(Error('Report operation is outside the read/create-new-document scope'));
+    try{checkpoint();}catch(e){throw markNotSent(e);}if(insert)written.add(id!);
     const host=provider==='stripe'?'https://api.stripe.com':provider==='hubspot'?'https://api.hubapi.com':u.pathname.startsWith('/v1/documents')?'https://docs.googleapis.com':'https://www.googleapis.com';
     const response=await fetchImpl(host+path,{method:body?'POST':'GET',headers:{Authorization:`Bearer ${tokens[provider]}`,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),redirect:'error',signal:AbortSignal.timeout(20000)});
-    if(!response.ok){await response.body?.cancel();throw Error(`${provider} request failed (HTTP ${response.status})`);}
+    if(!response.ok){await response.body?.cancel();const e=Error(`${provider} request failed (HTTP ${response.status})`);throw response.status>=400&&response.status<500?markNotSent(e):e;}
     const reader=response.body?.getReader();if(!reader)throw Error('Empty source response');let size=0;const chunks:Uint8Array[]=[];
     for(;;){const n=await reader.read();if(n.done)break;size+=n.value.length;if(size>4_000_000){await reader.cancel();throw Error('Source response exceeds completeness limit');}chunks.push(n.value);}
     checkpoint();const data=JSON.parse(Buffer.concat(chunks).toString('utf8'));if(!data||typeof data!=='object'||Array.isArray(data)||data.error)throw Error('Malformed provider response');

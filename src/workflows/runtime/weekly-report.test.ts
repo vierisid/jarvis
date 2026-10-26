@@ -108,3 +108,15 @@ test('a local midnight skipped by DST starts at the transition; a repeated one u
   expect(new Date(localMidnight(Date.UTC(2026,10,1),'America/Havana')).toISOString()).toBe('2026-11-01T04:00:00.000Z');
   expect(new Date(localMidnight(Date.UTC(2026,9,26),'Europe/Rome')).toISOString()).toBe('2026-10-25T23:00:00.000Z');
 });
+test('a create that was refused or never dispatched releases the weekly claim; a later run creates the report',async()=>{
+  for(const [key,refuse] of [['rejected',(async()=>new Response('{}',{status:403})) as any],['cancelled','checkpoint']] as const){
+    const writes:any[]=[],fixture=reportFixtureRequest({writes}),r=await collectWeeklyReport(setup,fixture,now);
+    const transport=reportTransport({stripe:'x',hubspot:'x',google:'x'},()=>{if(refuse==='checkpoint')throw Error('Cancelled');},refuse==='checkpoint'?(async()=>{throw Error('No network should run');}) as any:refuse);
+    const failing=async(p:any,path:string,body?:any)=>body?transport(p,path,body):fixture(p,path,body);
+    await expect(saveWeeklyReport(setup,r,failing,reportReceipt('a'),key)).rejects.toThrow(refuse==='checkpoint'?'Cancelled':'HTTP 403');expect(writes).toHaveLength(0);
+    expect((await saveWeeklyReport(setup,r,fixture,reportReceipt('b'),key)).documentId).toBe('doc1');expect(writes).toHaveLength(2);
+  }
+  const transport=reportTransport({stripe:'x',hubspot:'x',google:'x'},()=>{},(async()=>new Response('{}',{status:503})) as any),fixture=reportFixtureRequest(),r=await collectWeeklyReport(setup,fixture,now);
+  await expect(saveWeeklyReport(setup,r,async(p,path,body)=>body?transport(p,path,body):fixture(p,path,body),reportReceipt('a'),'uncertain')).rejects.toThrow('HTTP 503');
+  await expect(saveWeeklyReport(setup,r,fixture,reportReceipt('b'),'uncertain')).rejects.toThrow('unresolved');
+});
