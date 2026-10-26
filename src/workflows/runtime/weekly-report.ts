@@ -1,4 +1,5 @@
 /** Deterministic weekly reporting. Provider data is never interpreted as instructions. */
+import { getCronTimezone } from '../../lib/cron-scheduler';
 export const REPORT_PIECE = '@jarvispieces/piece-jarvis-report';
 export const REPORT_ACTION = 'weekly_operating_report';
 export const REPORT_ACCOUNTS = {stripeConnection:'@activepieces/piece-stripe',hubspotConnection:'@activepieces/piece-hubspot',googleConnection:'@activepieces/piece-google-docs'} as const;
@@ -14,20 +15,29 @@ export function reportSetup(v:Obj):ReportSetup {
   if(v.stripeDateBasis!=='balance_posted')throw Error('Select Stripe balance-posted reporting basis; capture/PaymentIntent dates are not substituted');
   const stages=typeof v.dealStageIds==='string'?v.dealStageIds.split(',').map((s:string)=>s.trim()):v.dealStageIds;
   if(!Array.isArray(stages)||!stages.length||stages.length>100)throw Error('Select deal stages explicitly');
-  if(v.timezone!=='Europe/Rome')throw Error('This report uses Europe/Rome calendar weeks');
+  // Empty means the zone Jarvis's own schedules use: the configured timezone, else this machine's zone.
+  const configured=v.timezone==null||(typeof v.timezone==='string'&&!v.timezone.trim());
+  const timezone=configured?getCronTimezone() ?? Intl.DateTimeFormat().resolvedOptions().timeZone:v.timezone;
+  if(typeof timezone!=='string'||timezone.length>100)throw Error('Configure timezone');
+  try{new Intl.DateTimeFormat('en',{timeZone:timezone}).format();}catch{throw Error('Configure a valid IANA timezone');}
   return {...accounts,stripeAccountId:required(v.stripeAccountId,'Stripe account ID',/^acct_[a-zA-Z0-9]+$/),stripeMode:v.stripeMode,stripeDateBasis:v.stripeDateBasis,
     hubspotPortalId:required(v.hubspotPortalId,'HubSpot portal ID',/^\d+$/),dealDateProperty:required(v.dealDateProperty,'deal date property',/^[a-zA-Z][a-zA-Z0-9_]*$/),dealStageIds:[...new Set(stages.map(s=>required(s,'deal stage',/^\w+$/)))],
-    googleEmail:required(v.googleEmail,'Google account email',/^[^\s@]+@[^\s@]+\.[^\s@]+$/).toLowerCase(),folderId:required(v.folderId,'destination folder ID',/^[a-zA-Z0-9_-]+$/),timezone:v.timezone} as ReportSetup;
+    googleEmail:required(v.googleEmail,'Google account email',/^[^\s@]+@[^\s@]+\.[^\s@]+$/).toLowerCase(),folderId:required(v.folderId,'destination folder ID',/^[a-zA-Z0-9_-]+$/),timezone} as ReportSetup;
 }
-function parts(t:number){return Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Rome',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(t).map(p=>[p.type,p.value]));}
-function midnight(civil:number):number {
-  let t=civil;
-  for(let i=0;i<4;i++){const p=parts(t),shown=Date.UTC(+p.year!,+p.month!-1,+p.day!,+p.hour!,+p.minute!,+p.second!);if(shown===civil)return t;t+=civil-shown;}
-  throw Error('Cannot resolve Rome midnight');
+function parts(t:number,timezone:string){return Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(t).map(p=>[p.type,p.value]));}
+/** The first instant of a local civil day: the earliest of an ambiguous midnight, or the transition when midnight is skipped by DST. */
+export function localMidnight(civil:number,timezone:string):number {
+  const wall=(t:number)=>{const p=parts(t,timezone);return Date.UTC(+p.year!,+p.month!-1,+p.day!,+p.hour!,+p.minute!,+p.second!);};
+  const candidates=[...new Set([-36,0,36].map(h=>{const t=civil+h*3600_000;return civil-(wall(t)-t);}))].sort((a,b)=>a-b);
+  const exact=candidates.find(t=>wall(t)===civil);if(exact!==undefined)return exact;
+  let lo=candidates[0]!,hi=candidates.at(-1)!;
+  if(wall(lo)>=civil||wall(hi)<civil)throw Error(`Cannot resolve local midnight in ${timezone}`);
+  while(hi-lo>1000){const mid=lo+Math.floor((hi-lo)/2000)*1000;if(wall(mid)>=civil)hi=mid;else lo=mid;}
+  return hi;
 }
-export function reportWeeks(now:number){
-  const p=parts(now),day=Date.UTC(+p.year!,+p.month!-1,+p.day!),monday=day-((new Date(day).getUTCDay()+6)%7)*86400_000;
-  return [1,2].map(n=>({name:n===1?'current':'prior',start:midnight(monday-n*7*86400_000),end:midnight(monday-(n-1)*7*86400_000),localStart:new Date(monday-n*7*86400_000).toISOString().slice(0,10),localEnd:new Date(monday-(n-1)*7*86400_000).toISOString().slice(0,10)}));
+export function reportWeeks(now:number,timezone:string){
+  const p=parts(now,timezone),day=Date.UTC(+p.year!,+p.month!-1,+p.day!),monday=day-((new Date(day).getUTCDay()+6)%7)*86400_000;
+  return [1,2].map(n=>({name:n===1?'current':'prior',start:localMidnight(monday-n*7*86400_000,timezone),end:localMidnight(monday-(n-1)*7*86400_000,timezone),localStart:new Date(monday-n*7*86400_000).toISOString().slice(0,10),localEnd:new Date(monday-(n-1)*7*86400_000).toISOString().slice(0,10)}));
 }
 const query=(v:Record<string,string>)=>new URLSearchParams(v).toString();
 export interface Coverage {source:string;period:string;status:'Complete'|'Unavailable';pages:number;unique:number;reason?:string;terminal:boolean;url:string}
@@ -75,7 +85,7 @@ async function pages(request:ReportRequest,provider:'stripe'|'hubspot',path:stri
 }
 function unavailable(d:Dataset,e:unknown){d.coverage.status='Unavailable';d.coverage.reason=errText(e);d.coverage.terminal=false;d.totals={};}
 export async function collectWeeklyReport(s:ReportSetup,request:ReportRequest,now:number,checkpoint:()=>void=()=>{}){
-  const weeks=reportWeeks(now),datasets:Dataset[]=[];
+  const weeks=reportWeeks(now,s.timezone),datasets:Dataset[]=[];
   const wrap=async(source:string,week:typeof weeks[number],url:string,fn:(d:Dataset)=>Promise<void>)=>{
     const d:Dataset={coverage:{source,period:week.name,status:'Complete',pages:0,unique:0,terminal:false,url},totals:{}};
     try{checkpoint();await fn(d);}catch(e){checkpoint();unavailable(d,e);}datasets.push(d);
@@ -122,7 +132,7 @@ export async function collectWeeklyReport(s:ReportSetup,request:ReportRequest,no
     for(const c of currencies){const a=current.totals[c]??{count:0,amount:'0'},b=prior.totals[c]??{count:0,amount:'0'};comparisons.push({source,currency:c,current:a,prior:b,amountChange:comparison(decimal(a.amount),decimal(b.amount)),countChange:comparison(BigInt(a.count)*SCALE,BigInt(b.count)*SCALE)});}
   }
   const title=`Weekly Stripe and HubSpot report | ${weeks[0]!.localStart} to ${weeks[0]!.localEnd} (end exclusive)`;
-  const content=[title,`Observed at: ${new Date(now).toISOString()}`,'Reporting timezone: Europe/Rome. Weeks are Monday 00:00 to next Monday 00:00 (exclusive).',
+  const content=[title,`Observed at: ${new Date(now).toISOString()}`,`Reporting timezone: ${s.timezone}. Weeks are Monday 00:00 to next Monday 00:00 (exclusive).`,
     ...weeks.map(w=>`${w.name}: ${w.localStart} to ${w.localEnd}; UTC [${new Date(w.start).toISOString()}, ${new Date(w.end).toISOString()})`),
     `Stripe account ${s.stripeAccountId}, mode ${s.stripeMode}. Basis: balance transaction posting date, NOT PaymentIntent creation, capture timestamp or payout availability. Successful captured charge/payment and succeeded refund/payment_refund ledger entries only; gross before Stripe fees, in Stripe BALANCE currency. Conversion may already have occurred in Stripe. Disputes, transfers, fees, refund reversals and other ledger types excluded.`,
     `HubSpot portal ${s.hubspotPortalId}: current nonarchived deals in selected stages ${s.dealStageIds.join(',')}, dated by ${s.dealDateProperty}. This is current record state, not a historical pipeline snapshot. Amounts use original deal_currency_code.`,
