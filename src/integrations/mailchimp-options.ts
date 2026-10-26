@@ -16,7 +16,7 @@ export async function mailchimpOptions(config: JarvisConfig, params: URLSearchPa
     if (!Array.isArray(items) || items.length > 100 || typeof raw.total_items !== 'number' || !Number.isInteger(raw.total_items) || raw.total_items < items.length) throw new MailchimpOptionsError('Mailchimp returned invalid choices. Try again.');
     const options = items.map(item => {
       const label = campaigns ? item?.settings?.title : item?.name;
-      if (!/^[a-zA-Z0-9]{1,64}$/.test(item?.id) || typeof label !== 'string') throw new MailchimpOptionsError('Mailchimp returned invalid choices. Try again.');
+      if (typeof item?.id !== 'string' || !/^[a-zA-Z0-9]{1,64}$/.test(item.id) || typeof label !== 'string') throw new MailchimpOptionsError('Mailchimp returned invalid choices. Try again.');
       return {value: item.id as string, label};
     });
     if (readMailchimpConnection(config.daemon.data_dir)?.generation !== connection.generation) throw new MailchimpOptionsError('Mailchimp account changed. Reload choices.', 409);

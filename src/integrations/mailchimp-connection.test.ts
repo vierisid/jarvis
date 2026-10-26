@@ -34,6 +34,14 @@ test('audience/campaign pickers use fixed read endpoints and reject stale accoun
   await expect(mailchimpOptions(config(),new URLSearchParams({kind:'../evil'}),request)).rejects.toMatchObject({status:400});
   write(doc());await expect(mailchimpOptions(config(),new URLSearchParams({kind:'audiences',generation:result.generation}),request)).rejects.toMatchObject({status:409});
 });
+test('pickers reject missing and non-string IDs instead of coercing them into choices',async()=>{
+  for(const id of [undefined,null,123,true,'../audience']){
+    for(const kind of ['audiences','campaigns']){
+      const payload=kind==='audiences'?{lists:[{id,name:'Sandbox'}],total_items:1}:{campaigns:[{id,settings:{title:'Newsletter'}}],total_items:1};
+      await expect(mailchimpOptions(config(),new URLSearchParams({kind}),(async()=>Response.json(payload)) as unknown as typeof fetch)).rejects.toMatchObject({status:502});
+    }
+  }
+});
 for(const [status,expected] of [[401,409],[403,409],[429,429],[500,502]])test('actionable provider failure '+status,async()=>{
   try{await mailchimpOptions(config(),new URLSearchParams({kind:"audiences"}),(async()=>new Response('SENSITIVE',{status})) as unknown as typeof fetch);throw Error('expected rejection');}
   catch(e){expect(e).toMatchObject({status:expected});expect(String(e)).not.toContain('SENSITIVE');}
