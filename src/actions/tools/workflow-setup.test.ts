@@ -162,9 +162,14 @@ test('unconfigured processor saves disabled and becomes ready only after setup',
   const saved = await call(tool, { action: 'compose', name: 'Submission processor', description: 'Save disabled with setup required; normalize webhook submissions and append once to Sheets. Payload and destination are unknown.' });
   expect(saved.ok).toBe(true);
   expect(saved.flow.status).toBe('DISABLED');
-  expect(saved.validation).toEqual({ structureValid: true, readyToRun: false });
+  expect(saved.validation).toMatchObject({ structureValid: true, readyToRun: false, functionalTesting: 'not_performed' });
   expect(saved.setup.status).toBe('needs_configuration');
-  expect(saved.setup.fields.map((f: any) => f.path)).toEqual(expect.arrayContaining([
+  let report = '', cursor: string | undefined;
+  do {
+    const page = await call(tool, { action: 'get', flow: saved.flow.id, version_id: saved.versionId, view: 'validation', ...(cursor ? { cursor } : {}) });
+    report += page.content; cursor = page.nextCursor ?? undefined;
+  } while (cursor);
+  expect(JSON.parse(report).readiness.issues.map((f: any) => f.path)).toEqual(expect.arrayContaining([
     'settings.input.submission_id_field', 'settings.input.submission_email_field',
     'settings.input.spreadsheet_id', 'settings.input.values', 'settings.input.auth',
   ]));
@@ -230,7 +235,7 @@ test('configuration-only blocker is repaired into a saved draft without asking t
   expect(turns).toBe(2);
   expect(result.ok).toBe(true);
   expect(result.setup.label).toBe('Setup required');
-  expect(result.readiness.ready).toBe(false);
+  expect(result.validation.readyToRun).toBe(false);
   expect(result.flow.status).toBe('DISABLED');
 });
 
