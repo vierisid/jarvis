@@ -360,3 +360,15 @@ export function claimAttachmentRun(flowId: string, versionId: string, key: strin
       detail: { delivery: 'Gmail attachment content' } }, () => ({ runId }));
   }).immediate();
 }
+
+/**
+ * A run refused at admission (its file gone, the workflow not ready) never
+ * reached a step, so the attachment content it held is released: the next
+ * identical attachment can run once. Never once the run recorded an effect.
+ */
+export function releaseAttachmentClaim(flowId: string, runId: string): number {
+  return db().run(
+    `UPDATE workflow_trigger_fire SET dedupe_key = NULL WHERE flow_id = ? AND run_id = ? AND source IN ('event', 'poll')
+      AND dedupe_key LIKE 'attachment:v1:%' AND NOT EXISTS (SELECT 1 FROM workflow_effect WHERE run_id = ?)`,
+    [flowId, runId, runId]).changes;
+}

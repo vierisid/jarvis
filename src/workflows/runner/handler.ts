@@ -1,7 +1,7 @@
 import { prepareSubmission, submissionConfig } from '../runtime/form-submission';
 import { prepareEmailEvent } from '../runtime/event-types';
 import { gmailAttachmentKey, isGmailAttachmentTrigger } from '../runtime/gmail-attachment';
-import { claimAttachmentRun, claimEmailRun, claimSubmissionRun } from '../db/repos/trigger-fire';
+import { claimAttachmentRun, claimEmailRun, claimSubmissionRun, releaseAttachmentClaim } from '../db/repos/trigger-fire';
 /**
  * RUN_FLOW worker handler. Bridges the queue to flow execution:
  *   1. Claim a RUN_FLOW job (the worker has already done that for us).
@@ -276,6 +276,8 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
     }
 
     const cancellation = watchRunCancellation(runId);
+    // Set just before the executor is called: until then no step ran.
+    let executing = false;
     try {
       assertRunIngredientsReady(run, version.trigger,
         typed.payload.executionType === 'RESUME' ? undefined : typed.payload);
@@ -308,6 +310,7 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
           claimAttachmentRun(run.flowId, version.id, gmailAttachmentKey(payload, run.flowId, run.projectId), run.id);
         } catch (error) { throw new FlowExecutionError((error as Error).message, { name: 'trigger', displayName: 'Check attachment identity' }); }
       }
+      executing = true;
       const result = await withRunCancellation(runId, () => opts.executor.execute({
         run,
         version,
@@ -351,6 +354,12 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
       // row left to mark FAILED, and retrying would only re-enter the stale-
       // job return above.
       if (!getFlowRun(runId)) return;
+      // A fresh run refused before any step held its attachment's content for
+      // nothing: release it so a later identical attachment runs once.
+      if (!resuming && !executing && isGmailAttachmentTrigger(version.trigger.settings)) {
+        try { releaseAttachmentClaim(run.flowId, runId); }
+        catch (releaseError) { console.warn(`[run-flow ${runId}] could not release the attachment claim: ${(releaseError as Error).message}`); }
+      }
       if (getRunCancellation(runId)) {
         if (e instanceof FlowExecutionError) updateRun(runId, { steps: e.steps });
         return;

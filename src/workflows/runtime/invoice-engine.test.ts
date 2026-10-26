@@ -36,7 +36,7 @@ import { createManageWorkflowTool } from '../../actions/tools/manage-workflow';
 
 import { createWorkflowFile } from '../db/repos/workflow-file';
 import { gmailAttachmentKey } from './gmail-attachment';
-import { claimAttachmentRun } from '../db/repos/trigger-fire';
+import { claimAttachmentRun, releaseAttachmentClaim } from '../db/repos/trigger-fire';
 import { checkJobContract } from '../../actions/tools/job-contract';
 import { digest } from './effect-context';
 import { updateRun } from '../db/repos/flow-run';
@@ -265,6 +265,36 @@ test('a polled attachment without a usable identity fails visibly instead of van
   const runs = await f.poll();
   expect(runs).toHaveLength(1); expect(runs[0]!.status).toBe('FAILED');
   expect(runs[0]!.failedStep?.displayName).toBe('Check attachment identity'); expect(stats()).toEqual(before); await f.stop();
+}, 60000);
+
+test('an attachment run refused at admission before any step does not block a later identical attachment', async () => {
+  const f = await fixture(), before = stats();
+  incoming = [item('Invoice INV-11 EUR 11.00')];
+  // The poll admits the item and queues its run; its stored file is gone before the run starts.
+  await (manager as any).pollEngineTrigger(f.flow.id, f.version.id, 'fixture', undefined, false);
+  getWorkflowDb().run('DELETE FROM workflow_file WHERE flow_id = ?', [f.flow.id]);
+  await worker.drain();
+  const refused = listRuns({ flowId: f.flow.id });
+  for (const run of refused) runIds.push(run.id);
+  expect(refused).toHaveLength(1); expect(refused[0]!.status).toBe('FAILED');
+  expect(refused[0]!.failedStep?.displayName).toBe('Check attachment identity'); expect(stats()).toEqual(before);
+  // The same content arrives again: it runs once, and only once.
+  const runs = await f.poll();
+  expect(runs).toHaveLength(2); expect(runs.filter(r => r.status === 'SUCCEEDED')).toHaveLength(1);
+  expect(stats().map((n, i) => n - before[i]!)).toEqual([1, 1, 0, 1]);
+  const after = stats(); expect(await f.poll()).toHaveLength(2); expect(stats()).toEqual(after); await f.stop();
+}, 60000);
+
+test('an attachment claim is never released from a run that recorded an effect', async () => {
+  const f = await fixture(); const bytes = pdf('Effect recorded'); const file = createWorkflowFile({ projectId: DEFAULT_IDS.project, flowId: f.flow.id, type: 'FLOW_STEP_FILE', fileName: 'e.pdf', size: bytes.length, data: bytes });
+  const key = gmailAttachmentKey({ message: { id: 'e' }, attachment: { data: '/v1/step-files/' + file.id } }, f.flow.id, DEFAULT_IDS.project);
+  const run = createFlowRun({ flowId: f.flow.id, flowVersionId: f.version.id }); runIds.push(run.id);
+  claimAttachmentRun(f.flow.id, f.version.id, key, run.id);
+  getWorkflowDb().run("INSERT INTO workflow_effect (id, run_id, status, record) VALUES (?, ?, 'dispatching', '{}')", ['effect-' + run.id, run.id]);
+  expect(releaseAttachmentClaim(f.flow.id, run.id)).toBe(0);
+  expect(() => claimAttachmentRun(f.flow.id, f.version.id, key, 'another-run')).toThrow('already accepted');
+  getWorkflowDb().run('DELETE FROM workflow_effect WHERE run_id = ?', [run.id]);
+  expect(releaseAttachmentClaim(f.flow.id, run.id)).toBe(1); await f.stop();
 }, 60000);
 
 test('explicit pending label/folder stay setup-required after account bindings are supplied', () => {
