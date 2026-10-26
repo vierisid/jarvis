@@ -2256,7 +2256,23 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         if (!scopedRun(req, runId)) return err('run not found', 404);
         const read = await readWriteBody(req, 8192);
         if ('error' in read) return read.error;
-        const receipt = await decideRunRecovery(runId, read.body, { authority: opts.recoveryAuthority });
+        const receipt = await decideRunRecovery(runId, read.body, { authority: opts.recoveryAuthority, via: 'dashboard' });
+        return ok({ receipt, recovery: getRunRecovery(runId) });
+      }),
+    },
+    // Resolve the cross-run identity (HubSpot contact, notification
+    // idempotencyKey) an uncertain effect still holds, after checking the
+    // provider: mark_done if the write happened, release if it did not. The
+    // same audited recovery receipt as the route above; never runs anything.
+    "/api/workflow-runs/:runId/effects/:effectId/identity": {
+      POST: req => trapErrors(async () => {
+        const { runId, effectId } = (req as RequestWithParams<{ runId: string; effectId: string }>).params;
+        if (!scopedRun(req, runId)) return err('run not found', 404);
+        const read = await readWriteBody(req, 8192);
+        if ('error' in read) return read.error;
+        const { resolution, ...rest } = read.body;
+        if (resolution !== 'mark_done' && resolution !== 'release') return err('resolution must be mark_done or release', 400);
+        const receipt = await decideRunRecovery(runId, { ...rest, action: resolution, effectId }, { via: 'dashboard' });
         return ok({ receipt, recovery: getRunRecovery(runId) });
       }),
     },

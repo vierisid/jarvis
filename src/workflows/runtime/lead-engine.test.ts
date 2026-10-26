@@ -32,6 +32,7 @@ import { WorkflowEventBus } from './event-bus';
 import { PieceCatalog, metadataToCatalogEntry } from './piece-catalog';
 import { compileWorkflow } from './workflow-readiness';
 import { createManageWorkflowTool } from '../../actions/tools/manage-workflow';
+import { decideRunRecovery, getRunRecovery } from './recovery';
 
 
 const HUBSPOT = '@activepieces/piece-hubspot';
@@ -164,6 +165,36 @@ test('unconfirmed contact write fences future submissions and sends nothing',asy
   loseReply=unconfirmed=false;expect((await f.send('two')).status).toBe('FAILED');
   expect(calls.length).toBe(count);expect(notifications.length).toBe(before);
 },45_000);
+// The person checked the provider and resolves the uncertain effect that holds the identity.
+const resolve=(runId:string,piece:string,action:'mark_done'|'release')=>decideRunRecovery(runId,{requestId:action+'_'+runId,
+  revision:getRunRecovery(runId)!.revision,action,effectId:listWorkflowEffects(runId).find(e=>e.provenance.piece===piece)!.id});
+for(const resolution of ['release','mark_done'] as const)
+  test('an unconfirmed contact write blocks the next submission until '+resolution+', then the next writes once',async()=>{
+    const f=await fixture();loseReply=unconfirmed=true;reply=answer(10);const before=notifications.length;
+    const email=f.flow.id.toLowerCase()+'@example.com';
+    const first=await f.send('one');expect(first.status).toBe('FAILED');
+    loseReply=unconfirmed=false;const blocked=await f.send('two');expect(blocked.status).toBe('FAILED');
+    const fence=listWorkflowEffects(blocked.id).find(e=>e.provenance.piece===HUBSPOT)!;
+    expect(fence.outcome).toMatchObject({code:'IDENTITY_UNRESOLVED',effect:'not_started'});
+    // The refusal names the real action and the run that holds the identity.
+    expect(fence.outcome!.status!=='succeeded' && fence.outcome!.message).toContain('in run '+first.id);
+    expect(getRunRecovery(first.id)!.effects.find(e=>e.stepName==='upsert')).toMatchObject({identityUnresolved:true});
+    const count=calls.length;
+    await resolve(first.id,HUBSPOT,resolution);
+    expect((await f.send('three')).status).toBe('SUCCEEDED');
+    expect(calls.slice(count).filter(c=>c.email===email && c.method!=='GET').map(c=>c.method)).toEqual(['PATCH']);
+    expect(notifications.length-before).toBe(1);
+  },45_000);
+for(const [resolution,alerts] of [['mark_done',1],['release',2]] as const)
+  test('an uncertain notification after '+resolution+': the next submission '+(alerts===1?'dedupes':'alerts once'),async()=>{
+    const f=await fixture();loseNotification=true;reply=answer(10);const before=notifications.length;
+    const first=await f.send('one');loseNotification=false;expect(first.status).toBe('FAILED');
+    expect((await f.send('two')).status).toBe('FAILED');expect(notifications.length-before).toBe(1);
+    await resolve(first.id,native('notify'),resolution);
+    const third=await f.send('three');expect(third.status).toBe('SUCCEEDED');
+    expect(notifications.length-before).toBe(alerts);
+    if(alerts===1) expect(JSON.stringify(third.steps)).toContain('"deduplicated":true');
+  },45_000);
 test('uncertain notification never repeats on a later submission',async()=>{
   const f=await fixture();loseNotification=true;reply=answer(10);const before=notifications.length;
   const first=await f.send('one');loseNotification=false;await f.send('two');expect(notifications.length-before).toBe(1);

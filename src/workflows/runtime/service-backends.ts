@@ -109,8 +109,12 @@ async function claimSettledIdentity(identity: string, owner: string, once: boole
     try { return claimIdentity(identity, owner, once); }
     catch (error) {
       if (!(error instanceof IdentityUnresolvedError)) throw error;
-      if (getWorkflowEffect(error.owner)?.status !== 'dispatching' || Date.now() >= deadline)
-        throw new ActionOutcomeError({ status: 'blocked', code: 'IDENTITY_UNRESOLVED', message: error.message, effect: 'not_started' });
+      const ownerEffect = getWorkflowEffect(error.owner);
+      if (ownerEffect?.status !== 'dispatching' || Date.now() >= deadline)
+        throw new ActionOutcomeError({ status: 'blocked', code: 'IDENTITY_UNRESOLVED', effect: 'not_started',
+          message: ownerEffect && ownerEffect.status !== 'dispatching'
+            ? `An earlier write for this identity is unresolved: effect ${error.owner} in run ${ownerEffect.runId}. Check the provider, then resolve it (manage_workflow resolve_effect, or POST /api/workflow-runs/${ownerEffect.runId}/effects/${error.owner}/identity): mark_done if it happened, release if it did not.`
+            : error.message });
       await new Promise(resolve => setTimeout(resolve, 25));
     }
   }
@@ -1113,7 +1117,7 @@ export function buildSandboxServiceBackends(
             // A definite refusal, a checkpoint refusal before any possible
             // write, or a failed read-only lookup changed nothing: release the
             // contact and record the step as not started. Anything else stays
-            // fenced for review.
+            // fenced until a person resolves it (recovery mark_done/release).
             if (error instanceof HubspotNotStartedError) {
               releaseIdentity(identity, owner);
               throw error.refusal !== undefined ? notStartedOutcome(error.refusal)

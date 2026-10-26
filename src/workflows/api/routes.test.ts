@@ -1658,6 +1658,8 @@ describe("#729: the flow, version and run routes share one project scope", () =>
     { name: "run GET", route: "/api/workflow-runs/:runId", method: "GET", kind: "run" },
     { name: "run effects", route: "/api/workflow-runs/:runId/effects", method: "GET", kind: "run" },
     { name: "run cancel", route: "/api/workflow-runs/:runId/cancel", method: "POST", kind: "run" },
+    { name: "run recovery POST", route: "/api/workflow-runs/:runId/recovery", method: "POST", body: {}, kind: "run" },
+    { name: "effect identity POST", route: "/api/workflow-runs/:runId/effects/:effectId/identity", method: "POST", body: { resolution: "release" }, kind: "run" },
     { name: "run waitpoints", route: "/api/workflow-runs/:runId/waitpoints", method: "GET", kind: "run" },
   ];
 
@@ -1689,11 +1691,13 @@ describe("#729: the flow, version and run routes share one project scope", () =>
       runs: db.query("SELECT * FROM flow_run WHERE flow_id = ? ORDER BY id").all(flowId),
       cancellations: db.query("SELECT * FROM workflow_run_cancellation").all(),
       jobs: db.query("SELECT COUNT(*) AS n FROM workflow_job").get(),
+      identities: db.query("SELECT * FROM workflow_effect_identity").all(),
+      receipts: db.query("SELECT * FROM workflow_recovery_receipt").all(),
     };
   }
 
   function paramsFor(call: Call, ids: { flowId: string; versionId: string; runId: string }): Record<string, string> {
-    if (call.kind === "run") return { runId: ids.runId };
+    if (call.kind === "run") return { runId: ids.runId, effectId: "wfe_" + "0".repeat(64) };
     if (call.kind === "version") return { id: ids.flowId, versionId: ids.versionId, stepName: "trigger" };
     return { id: ids.flowId };
   }

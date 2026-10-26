@@ -79,7 +79,7 @@ export async function upsertHubspotContact(input: ContactInput, token: string, c
       const found=await read(res);
       if(String(found.properties.email).toLowerCase() !== input.email || !Object.entries(input.objectProperties).every(([k,v])=>String(found.properties[k])===v)) throw new Error();
       return found;
-    } catch { throw new Error('HubSpot write is unconfirmed; no automatic resend. Inspect the original contact and run.'); }
+    } catch { throw new Error('HubSpot write is unconfirmed; no automatic resend. Check the contact in HubSpot, then resolve this effect from the run recovery: mark_done if it was written, release if not.'); }
   };
   const write = async (method:string,url:string,properties:object):Promise<Response|null> => {
     let res:Response;
