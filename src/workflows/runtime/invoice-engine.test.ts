@@ -10,9 +10,11 @@ import { createFlow, getFlow, listFlows, setPublishedVersion, updateFlowStatus }
 import { createDraftVersion, getFlowVersion, getLatestDraft, lockVersion } from '../db/repos/flow-version';
 import { createFlowRun, getFlowRun, listRuns } from '../db/repos/flow-run';
 import { enqueue } from '../db/repos/job-queue';
-import { upsertConnection } from '../db/repos/app-connection';
+import { deleteConnection, upsertConnection } from '../db/repos/app-connection';
+import { pinFlowBindings } from '../db/repos/binding-pins';
+import { cancelFlowRun } from '../db/repos/run-cancellation';
 import { configureWorkflowReadiness, versionReadiness } from '../db/repos/flow-readiness';
-import { pruneFires, FIRE_RETENTION_MS } from '../db/repos/trigger-fire';
+import { listFlowFires, pruneFires, FIRE_RETENTION_MS } from '../db/repos/trigger-fire';
 import { listWorkflowEffects } from '../db/repos/workflow-effect';
 import { AuthorityEngine } from '../../authority/engine';
 import { AuditTrail } from '../../authority/audit';
@@ -45,7 +47,7 @@ const GMAIL = '@activepieces/piece-gmail', DRIVE = '@activepieces/piece-google-d
 const ASK = '@jarvispieces/piece-jarvis-ask';
 let dir: string, api: SandboxApi, runtime: EngineRuntime, manager: TriggerManager, worker: Worker, catalog: PieceCatalog;
 let services: ReturnType<typeof buildSandboxServiceBackends>, provider: ReturnType<typeof Bun.serve>;
-let reply = '', loseDrive = false, loseSheets = false;
+let reply = '', loseDrive = false, loseSheets = false, onPoll: (() => void) | null = null;
 const files: any[] = [], rows: any[] = [], prompts: string[] = [], labels: any[] = [], runIds: string[] = [];
 let incoming: Array<{ id: string; fileName: string; data: string; mimeType: string }> = [];
 const versions: Record<string, string> = { [GMAIL]: '0.18.1', [DRIVE]: '0.12.2', [SHEETS]: '0.18.2' };
@@ -69,7 +71,7 @@ beforeAll(async () => {
   const bundle = await buildEngineBundle();
   provider = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
     const path = new URL(req.url).pathname;
-    if (path === '/poll') return Response.json(incoming);
+    if (path === '/poll') { onPoll?.(); onPoll = null; return Response.json(incoming); }
     const body = await req.json();
     if (path === '/drive') { files.push(body); return loseDrive ? new Response('Lost reply', { status: 500 }) : Response.json({ id: 'file-' + files.length, name: body.fileName }); }
     if (path === '/sheets') { rows.push(body); return loseSheets ? new Response('Lost reply', { status: 500 }) : Response.json({ updatedRange: 'Invoices!A2:I2' }); }
@@ -283,6 +285,41 @@ test('an attachment run refused at admission before any step does not block a la
   expect(runs).toHaveLength(2); expect(runs.filter(r => r.status === 'SUCCEEDED')).toHaveLength(1);
   expect(stats().map((n, i) => n - before[i]!)).toEqual([1, 1, 0, 1]);
   const after = stats(); expect(await f.poll()).toHaveLength(2); expect(stats()).toEqual(after); await f.stop();
+}, 60000);
+
+for (const retry of ['redelivery', 'manual run'] as const) test(`a polled attachment refused at readiness is processed once by a ${retry} after setup is fixed`, async () => {
+  const f = await fixture(), before = stats();
+  const drive = () => upsertConnection({ externalId: 'fixture-drive', displayName: 'Fixture', type: 'OAUTH2', pieceName: DRIVE, pieceVersion: versions[DRIVE]!, value: { access_token: 'synthetic-only' } });
+  incoming = [item('Invoice INV-12 EUR 12.00')];
+  // Setup breaks while the poll is in flight: the item is taken from the source, then refused at readiness.
+  const connection = getWorkflowDb().query<{ id: string }, []>("SELECT id FROM app_connection WHERE external_id = 'fixture-drive'").get()!;
+  onPoll = () => deleteConnection(connection.id);
+  await f.poll();
+  expect(stats()).toEqual(before);
+  const refused = listFlowFires(f.flow.id).filter(fire => fire.source === 'poll');
+  expect(refused).toEqual([expect.objectContaining({ outcome: 'blocked', dedupeKey: null, detail: expect.objectContaining({ deliveryKey: expect.stringMatching(/^attachment:v1:/) }) })]);
+  drive(); pinFlowBindings(f.flow.id);
+  if (retry === 'redelivery') await f.poll();
+  else {
+    const bytes = pdf('Invoice INV-12 EUR 12.00'); const file = createWorkflowFile({ projectId: DEFAULT_IDS.project, flowId: f.flow.id, type: 'FLOW_STEP_FILE', fileName: 'invoice.pdf', size: bytes.length, data: bytes });
+    expect((await f.manual({ message: { id: 'message-1' }, attachment: { fileName: 'invoice.pdf', mimeType: 'application/pdf', data: '/v1/step-files/' + file.id } })).status).toBe('SUCCEEDED');
+  }
+  expect(stats().map((n, i) => n - before[i]!)).toEqual([1, 1, 0, 1]);
+  // The content is now held by the run that processed it.
+  const after = stats(); await f.poll(); expect(stats()).toEqual(after); await f.stop();
+}, 60000);
+
+test('a polled attachment whose queued run was canceled before it began is processed once by the next delivery', async () => {
+  const f = await fixture(), before = stats();
+  incoming = [item('Invoice INV-13 EUR 13.00')];
+  await (manager as any).pollEngineTrigger(f.flow.id, f.version.id, 'fixture', undefined, false);
+  const queued = listRuns({ flowId: f.flow.id }); for (const run of queued) runIds.push(run.id);
+  expect(queued).toHaveLength(1); cancelFlowRun(queued[0]!.id); await worker.drain();
+  expect(getFlowRun(queued[0]!.id)?.status).toBe('STOPPED'); expect(stats()).toEqual(before);
+  const runs = await f.poll();
+  expect(runs.filter(r => r.status === 'SUCCEEDED')).toHaveLength(1);
+  expect(stats().map((n, i) => n - before[i]!)).toEqual([1, 1, 0, 1]);
+  const after = stats(); await f.poll(); expect(stats()).toEqual(after); await f.stop();
 }, 60000);
 
 test('an attachment claim is never released from a run that recorded an effect', async () => {

@@ -58,7 +58,7 @@ import { ungrantedCodeSteps } from "../../db/repos/flow-code-steps";
 import { createFlowRun, updateRun } from "../../db/repos/flow-run";
 import { enqueue, countQueued } from "../../db/repos/job-queue";
 import {
-  claimFire, clearScheduleWatch, DELAYED_AFTER_MS, getScheduleWatch, latestScheduledFire, pruneFires, recordBlocked,
+  claimFire, clearScheduleWatch, DELAYED_AFTER_MS, getScheduleWatch, isRetainedKey, latestScheduledFire, pruneFires, recordBlocked,
   recordFire, repeatOf, setScheduleWatch, type FireSource,
 } from "../../db/repos/trigger-fire";
 import { RUN_FLOW } from "../handler";
@@ -841,9 +841,10 @@ export class TriggerManager {
     // first notice reached nobody.
     if (fresh && runId) this.tell(signature, { flowId, runId, message: error.message });
     else this.tellUntold(flowId, signature);
-    // An email refused here ran nothing, so it keeps no claim on its message:
-    // once setup is fixed, a redelivery or manual run processes it once.
-    const releasesKey = opts.dedupeKey?.startsWith("event:email:") === true;
+    // An email or attachment refused here ran nothing, so it keeps no claim on
+    // its message or content: once setup is fixed, a redelivery or manual run
+    // processes it once.
+    const releasesKey = isRetainedKey(opts.dedupeKey);
     const detail = { reason: error.message, code: error.code, ...(releasesKey ? { deliveryKey: opts.dedupeKey } : {}) };
     const fire = carriesInput
       ? recordFire({ flowId, flowVersionId: versionId, source, dedupeKey: releasesKey ? null : opts.dedupeKey, scheduledFor: opts.scheduledFor,

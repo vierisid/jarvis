@@ -391,12 +391,15 @@ export function claimEmailRun(flowId: string, versionId: string, key: string, ru
 export function claimAttachmentRun(flowId: string, versionId: string, key: string, runId: string): void {
   if (!/^attachment:v1:[a-f0-9]{64}$/.test(key)) throw Error('Invalid attachment identity');
   db().transaction(() => {
+    releaseUnstartedKey(flowId, key);
     const previous = db().query<{ run_id: string | null }, [string, string]>(
       "SELECT run_id FROM workflow_trigger_fire WHERE flow_id = ? AND source IN ('event', 'poll') AND dedupe_key = ?").get(flowId, key);
     if (previous?.run_id === runId) return;
     if (previous) throw Error('This attachment was already accepted by this workflow. Inspect the original run and its Drive/Sheets receipts; a fresh run cannot repeat an uncertain write.');
-    claimFire({ flowId, flowVersionId: versionId, source: 'poll', dedupeKey: key,
+    const claimed = claimFire({ flowId, flowVersionId: versionId, source: 'poll', dedupeKey: key,
       detail: { delivery: 'Gmail attachment content' } }, () => ({ runId }));
+    // Claimed as the run begins: it has started processing the attachment.
+    db().run('UPDATE workflow_trigger_fire SET started_at = ? WHERE id = ?', [Date.now(), claimed.fire.id]);
   }).immediate();
 }
 
