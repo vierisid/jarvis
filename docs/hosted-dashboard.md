@@ -13,11 +13,35 @@ Brief provider flags for a hosted install. Hosted identity uses the existing
 values are preserved. Provider readiness, capability dependencies, authentication,
 Authority, approvals and workflow activation checks remain enforced.
 
+These defaults change backend behaviour, not only the UI. The full set is
+`HOSTED_BRIEF_FEATURES` in `src/daemon/hosted-dashboard.ts`; the ones an existing
+hosted user notices are:
+
+- `QUIET_AWARENESS`: ambient awareness no longer triggers automatic research,
+  proactive chat messages, voice, or the external-channel fallback. Suggestions
+  appear in Brief instead (see [quiet awareness](brief-quiet-awareness.md)).
+- `PREPARED_OPPORTUNITIES`: a background worker composes prepared opportunities,
+  spending model calls within the background budget (on hosted, the hosted
+  LLM allowance).
+- `MEMORY_USAGE`: every memory recall records a usage-ledger entry.
+- `RECOMMENDATIONS`: the next-action planner is wired.
+
+Set any `JARVIS_BRIEF_<FEATURE>=0` in the service environment to keep one off.
+
+`isHostedInstall` deliberately leans towards hosted. A self-hosted brain that
+listens on a `unix:` socket (for example behind a reverse proxy) or whose
+`config.yaml` carries a `usejarvis_ai` block is treated as hosted and gets this
+default and these features. Set `JARVIS_HOSTED_DASHBOARD=legacy` to opt out.
+
 The authenticated, uncached `/api/brief/host` descriptor supplies `dashboard: brief`.
 The ordinary production UI uses that descriptor to select the connected host, with
 one conversation/socket owner. It does not use `JARVIS_LOCAL_INTEGRATION`, developer
-tools, browser storage or a URL as release authorization. Its choice is fixed for
-the document lifetime, preserving drafts through navigation and temporary outages.
+tools, browser storage or a URL as release authorization. Its choice is made once,
+from the URL the document opened on, and fixed for the document lifetime, preserving
+drafts through navigation and temporary outages. A document opened on a view that
+keeps the previous dashboard (logs, a native panel, a result window, an advanced
+settings link) stays on it until reload. Brief's own links into maintenance rooms
+keep the Brief owner mounted, as in local integration.
 Network/authentication failures offer reconnect; an older daemon's missing endpoint
 or missing dashboard field retains the legacy UI.
 
@@ -28,14 +52,17 @@ hosted users keep the existing onboarding wizard and its Brief draft handoff.
 
 ## Compatibility and rollback
 
-- Self-hosted installs retain their previous default.
+- Self-hosted installs retain their previous default, except the Unix-socket and
+  `usejarvis_ai` cases above.
 - Existing foreground bookmarks open their matching Brief rooms. Selected workflow,
   version, run and memory IDs are retained.
 - Native panels, result windows, onboarding/reset, advanced settings and device
   setup links keep their existing owners.
-- `?brief=0` opens the previous dashboard for that browser URL.
+- `?brief=0` opens the previous dashboard for that browser URL. It changes the UI
+  only: the backend feature defaults above stay on.
 - Set `JARVIS_HOSTED_DASHBOARD=legacy` in the instance service environment and restart
-  to restore the previous default and stop applying automatic feature defaults.
+  to restore the previous default and stop applying automatic feature defaults,
+  including quiet awareness.
   No data is reset or downgraded. Explicit operator feature flags still apply.
 - Unset the variable, or set it to `brief`, and restart to use the hosted default.
   Unknown values select legacy. Reload existing tabs after a server-side rollback.

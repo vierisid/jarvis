@@ -44,7 +44,9 @@ export function DashboardRoot({ integration = false }: { integration?: boolean }
   const [devtools] = useState(isDevToolsEnabled);
   const internalEntry = resolveReleaseEntry(href, 'off', devtools);
   const reviewing = devtools && internalEntry.kind !== 'legacy';
-  const needsHostedEntry = !integration && !reviewing && resolveReleaseEntry(href, 'released').kind !== 'legacy';
+  // Document-start choice, from the URL the document opened on: navigation must
+  // never swap the mounted root (and its socket and drafts) for the loading screen.
+  const [needsHostedEntry] = useState(() => !integration && !reviewing && resolveReleaseEntry(href, 'released').kind !== 'legacy');
   const hosted = useHostedEntry(needsHostedEntry);
   const guard = useRef<DashboardOwner | null>(null), epoch = useRef(0);
   useEffect(() => {
@@ -68,7 +70,9 @@ export function DashboardRoot({ integration = false }: { integration?: boolean }
   const legacy = <AppShellV2 sharedRoomActions />;
   const lastRoute = useRef<BriefRoute>({ room: 'today', selection: {} });
   if (entry.kind === 'brief') lastRoute.current = entry.route;
-  const retained = integration || devtools ? maintenanceRoom(href) : null;
+  const hostedBrief = initialDescriptor?.installMode === 'hosted' && initialDescriptor.dashboard === 'brief';
+  // Brief's maintenance links keep the Brief owner mounted, as in local integration.
+  const retained = integration || devtools || hostedBrief ? maintenanceRoom(href) : null;
   if (needsHostedEntry && hosted.state.status !== 'ready') return <main className="brief-root brief-foundation">
     <h1>{hosted.state.status === 'unavailable' ? 'Dashboard unavailable' : 'Opening your workspace…'}</h1>
     {hosted.state.status === 'unavailable' && <><p>Your saved work is retained.</p><button onClick={hosted.retry}>Reconnect</button></>}
