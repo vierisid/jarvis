@@ -34,7 +34,7 @@ export const VERIFIED_MANIFESTS: Record<string, VerifiedManifest> = {
     ],
   },
   "discord": {
-    version: "0.7.2",
+    version: "0.8.0",
     actions: [
       {"name":"add_role_to_member","classification":"WRITE","props":["guild_id","role_id","user_id"]},
       {"name":"ban_guild_member","classification":"DESTRUCTIVE","props":["ban_reason","guild_id","user_id"]},
@@ -165,7 +165,7 @@ export const VERIFIED_MANIFESTS: Record<string, VerifiedManifest> = {
     ],
   },
   "google-calendar": {
-    version: "0.12.3",
+    version: "0.13.1",
     actions: [
       {"name":"create_google_calendar_event","classification":"WRITE","props":["attendees","calendar_id","colorId","create_meet_link","description","end_date_time","guests_can_invite_others","guests_can_modify","guests_can_see_other_guests","location","send_notifications","start_date_time","title"]},
       {"name":"create_quick_event","classification":"WRITE","props":["calendar_id","send_updates","text"]},
@@ -195,7 +195,7 @@ export const VERIFIED_MANIFESTS: Record<string, VerifiedManifest> = {
     ],
   },
   "google-drive": {
-    version: "0.12.2",
+    version: "0.13.0",
     actions: [
       {"name":"create_new_gdrive_file","classification":"WRITE","props":["fileName","fileType","include_team_drives","parentFolder","text"]},
       {"name":"create_new_gdrive_folder","classification":"WRITE","props":["folderName","include_team_drives","parentFolder"]},
@@ -253,7 +253,7 @@ export const VERIFIED_MANIFESTS: Record<string, VerifiedManifest> = {
     ],
   },
   "notion": {
-    version: "0.7.5",
+    version: "0.8.1",
     actions: [
       {"name":"add_comment","classification":"WRITE","props":["comment_text","page_id"]},
       {"name":"append_to_page","classification":"WRITE","props":["content","pageId"]},
@@ -291,7 +291,7 @@ export const VERIFIED_MANIFESTS: Record<string, VerifiedManifest> = {
       {"name":"notion-find-database-item","classification":"SEARCH","props":["database_id","filterDatabaseFields","filter_hint"]},
       {"name":"restore_database_item","classification":"WRITE","props":["archived_item_id","database_id"]},
       {"name":"retrieve_database","classification":"READ","props":["database_id"]},
-      {"name":"update_database_item","classification":"WRITE","props":["databaseFields","database_id","database_item_id"]},
+      {"name":"update_database_item","classification":"WRITE","props":["changes_info","databaseFields","database_id","database_item_id"]},
     ],
   },
   "openai": {
