@@ -95,6 +95,15 @@ test('Sheets append blocks uncertain replay and returns a persisted completion w
   }
 });
 
+test('other Sheets actions stay ungoverned community steps: audited and badged', async () => {
+  const sheets = '@activepieces/piece-google-sheets';
+  expect(isCommunityPiece(sheets)).toBe(true);
+  const f = fixture(COMMUNITY_PIECE, 'create_contact');
+  expect(await f.backends.pieceAuthorize!({ piece: sheets, action: 'clear_sheet', input: {} }, f.context)).toEqual({ governed: false });
+  expect((f.options.auditTrail as AuditTrail).query({ limit: 5 })).toEqual([
+    expect.objectContaining({ tool_name: `community piece ${sheets}/clear_sheet`, authority_decision: 'allowed' })]);
+});
+
 describe('governed piece adapters: the catalogue stays open', () => {
   test('a community piece is reported ungoverned and leaves no effect record', async () => {
     const f = fixture(COMMUNITY_PIECE, 'create_contact');
