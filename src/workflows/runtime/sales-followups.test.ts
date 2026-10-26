@@ -107,3 +107,8 @@ test('Unicode personalization uses folded MIME without header injection',async()
   const raw=Buffer.from(drafts[0].message.raw,'base64url').toString();
   expect(raw.split('\r\n').every(line=>Buffer.byteLength(line)<998)).toBe(true);expect(raw).not.toContain('\r\nBcc:');
 });
+test('a sender display name repeating the contact address is still a recent reply',async()=>{
+  const drafts:any[]=[],base=request([deal()],{drafts,replied:['person1@example.net']});
+  const r=await run(async(p,path,body)=>{const result=await base(p,path,body);if(path.includes('/threads/abc?'))result.messages[0].payload={headers:[{name:'From',value:'"Person1@Example.net" <person1@example.net>'}]};return result;});
+  expect(r.counts.replied).toBe(1);expect(drafts).toHaveLength(0);
+});

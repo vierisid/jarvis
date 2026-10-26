@@ -104,7 +104,8 @@ async function recentReply(address: string,s: SalesSetup,request: SalesRequest,n
       const from=message.payload.headers.find((h: Obj)=>String(h.name).toLowerCase()==='from')?.value;
       if(typeof from!=='string')throw Error('Missing message sender');
       const matches=from.toLowerCase().match(/[a-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[a-z0-9.-]+\.[a-z]{2,}/g) ?? [];
-      if(matches.length!==1)throw Error('Ambiguous message sender');
+      // A display name repeating the address ("a@x.com" <a@x.com>) is one sender, not an ambiguity.
+      if(new Set(matches).size!==1)throw Error('Ambiguous message sender');
       if(matches[0]===address)replied=true;
     }
   }
