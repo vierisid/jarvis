@@ -160,9 +160,26 @@ test('a superseded card whose withdrawal fails is retried on the next invocation
  ApprovalManager.prototype.deny=function(){throw Error('Synthetic approval store failure');};console.warn=()=>{};
  let fresh;try{fresh=await begin(f,{...ticket,amount:1000});}finally{ApprovalManager.prototype.deny=deny;console.warn=warn;}
  expect(fresh.status).toBe('PAUSED');expect(approvals.getRequest(a.id)?.status).toBe('pending');expect(records()[0].withdraw).toEqual([a.id]);
- approvals.approve(approvalFor(fresh.id).id,'dashboard');expect((await resume(fresh.id)).status).toBe('SUCCEEDED');
+ // A redelivery runs the retry while the new card is still pending: it withdraws only the stale card, never the live one.
+ const b=approvalFor(fresh.id);expect((await begin(f,{...ticket,amount:1000})).status).toBe('SUCCEEDED');expect(getFlowRun(fresh.id)?.status).toBe('PAUSED');
+ expect(approvals.getRequest(a.id)?.status).toBe('denied');expect(approvals.getRequest(b.id)?.status).toBe('pending');expect(records()[0].withdraw).toBeUndefined();expect(posts()).toHaveLength(0);
+ approvals.approve(b.id,'dashboard');expect((await resume(fresh.id)).status).toBe('SUCCEEDED');
  expect(approvals.getRequest(a.id)?.status).toBe('denied');expect(records()[0].withdraw).toBeUndefined();expect(posts()).toHaveLength(1);
- expect((await resume(stale.id)).status).toBe('FAILED');expect(posts()).toHaveLength(1);
+ // The same pass resumed the stale run, whose card was withdrawn by the redelivery.
+ expect(getFlowRun(stale.id)?.status).toBe('FAILED');expect(posts()).toHaveLength(1);
+},120000);
+test('a second supersede keeps the first one\'s failed withdrawal: the oldest card still ends denied',async()=>{
+ reset();const f=fixture(),first=await begin(f),a=approvalFor(first.id);const deny=ApprovalManager.prototype.deny,warn=console.warn;
+ ApprovalManager.prototype.deny=function(){throw Error('Synthetic approval store failure');};console.warn=()=>{};
+ let second;try{second=await begin(f,{...ticket,amount:1000});}finally{ApprovalManager.prototype.deny=deny;console.warn=warn;}
+ expect(second.status).toBe('PAUSED');expect(records()[0].withdraw).toEqual([a.id]);const b=approvalFor(second.id);
+ // C supersedes B before B ran again, so B never retried its withdrawal of A.
+ const third=await begin(f,{...ticket,amount:900});expect(third.status).toBe('PAUSED');const c=approvalFor(third.id);
+ expect(approvals.getRequest(a.id)?.status).toBe('denied');expect(approvals.getRequest(b.id)?.status).toBe('denied');expect(approvals.getRequest(c.id)?.status).toBe('pending');
+ expect(records()[0].withdraw).toBeUndefined();expect(posts()).toHaveLength(0);
+ // Both withdrawn runs end without a refund; C stays waiting on its own card.
+ expect((await resume(first.id)).status).toBe('FAILED');expect(getFlowRun(second.id)?.status).toBe('FAILED');expect(getFlowRun(third.id)?.status).toBe('PAUSED');expect(posts()).toHaveLength(0);
+ approvals.deny(c.id,'dashboard');expect((await resume(third.id)).status).toBe('SUCCEEDED');expect(posts()).toHaveLength(0);
 },120000);
 test('after a human rejection the same ticket proposes again on its next event, with one live card and no refund',async()=>{
  reset();const since=Date.now(),f=fixture(),first=await begin(f),a=approvalFor(first.id);approvals.deny(a.id,'dashboard');

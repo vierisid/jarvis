@@ -28,7 +28,8 @@ export function createRefundService(deps:{effects:WorkflowEffectBoundary;credent
    // A newer run or changed ticket data replaced a request that never reached dispatch: its card can no longer run.
    // The request may hold '' (an APPROVALS_WAITING hold) while its effect has the real card, so both are withdrawn.
    // A failed withdrawal is kept on the request and retried on its next invocation, including after a restart.
-   const sup=acquired.superseded,stale=[...(state.withdraw??[]),...(sup?[sup.approvalId,getWorkflowEffect(effectFor(sup.originRun))?.approvalId]:[])].filter((a):a is string=>!!a);
+   // The superseded request's own unfinished withdrawals carry forward, so a second supersede cannot drop them.
+   const sup=acquired.superseded,stale=[...(state.withdraw??[]),...(sup?.withdraw??[]),...(sup?[sup.approvalId,getWorkflowEffect(effectFor(sup.originRun))?.approvalId]:[])].filter((a):a is string=>!!a);
    if(stale.length){
     const failed=[...new Set(stale)].filter(a=>{try{approvals.deny(a,'refund-superseded');return false;}catch(e){console.warn('[refund] could not withdraw superseded approval '+a+'; retrying on the next invocation:',e);return true;}});
     if(failed.length)state.withdraw=failed;else delete state.withdraw;store.save(state);
