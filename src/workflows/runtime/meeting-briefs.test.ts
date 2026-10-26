@@ -67,3 +67,42 @@ test('Gmail threads are read as metadata only, never full bodies',async()=>{
   const request=meetingTransport({calendar:'test',gmail:'test',hubspot:'test'},()=>{},(async()=>Response.json({id:'abc',messages:[]})) as any);
   expect(await request('gmail',reads[0]!)).toEqual({id:'abc',messages:[]});
 });
+const twoMeetings=()=>[fixtureEvent(),fixtureEvent({id:'occurrence-2',summary:'Long history',start:{dateTime:'2026-10-23T09:20:00Z'},attendees:[{email:'owner@example.com',self:true},{email:'big@external.test'}]})];
+test('an oversized brief fails only its own meeting, visibly, and leaves its key for a later poll',async()=>{
+  const result=await prepareMeetingBriefs(fixtureSetup,fixtureRequest(twoMeetings(),{oversized:'big@external.test'}),fixtureNow);
+  expect(result.meetings.map(m=>m.eventId)).toEqual(['occurrence-1']);expect(result.meetings[0]!.brief).toContain('Discuss pilot timing');
+  expect(result.failed).toHaveLength(1);const failure=result.failed[0]!;
+  expect(failure).toMatchObject({eventId:'occurrence-2',start:'2026-10-23T09:20:00.000Z',title:'Long history'});expect(failure.reason).toContain('24,000');
+  const later=await prepareMeetingBriefs(fixtureSetup,fixtureRequest(twoMeetings()),fixtureNow);
+  expect(later.failed).toEqual([]);expect(later.meetings.find(m=>m.eventId==='occurrence-2')!.notificationKey).toBe(failure.notificationKey);
+});
+test('Calendar is asked through now+30min inclusive, since timeMax is exclusive on start',async()=>{
+  const paths:string[]=[];const base=fixtureRequest();
+  await prepareMeetingBriefs(fixtureSetup,async(provider,path,body)=>{paths.push(path);return base(provider,path,body);},fixtureNow);
+  const list=new URL('https://x'+paths.find(p=>p.startsWith('/calendar/'))!).searchParams;
+  expect(list.get('timeMin')).toBe('2026-10-23T09:00:00.000Z');expect(list.get('timeMax')).toBe('2026-10-23T09:30:00.001Z');
+  // The code-side window still drops anything a provider returns past the boundary.
+  const late:MeetingRequest=async(provider)=>provider==='calendar'?{items:[fixtureEvent({start:{dateTime:'2026-10-23T09:30:00.001Z'}})]}:{};
+  expect((await prepareMeetingBriefs(fixtureSetup,late,fixtureNow)).meetings).toEqual([]);
+});
+test('addresses that could break the Gmail OR group are rejected',async()=>{
+  for(const bad of ['a}b@external.test','{x@external.test','x{@external.test'])
+    await expect(prepareMeetingBriefs(fixtureSetup,fixtureRequest([fixtureEvent({attendees:[{email:bad}]})]),fixtureNow)).rejects.toThrow('Invalid email');
+  expect(()=>meetingSetup({...fixtureSetup,internalDomains:'example.com',ownerEmail:'o}@example.com'})).toThrow('Invalid email');
+  const paths:string[]=[];const base=fixtureRequest();
+  await prepareMeetingBriefs(fixtureSetup,async(provider,path,body)=>{paths.push(path);return base(provider,path,body);},fixtureNow);
+  const q=new URL('https://x'+paths.find(p=>p.startsWith('/gmail/v1/users/me/threads?'))!).searchParams.get('q')!;
+  expect(q).toMatch(/^\{from:"customer@external\.test" to:"customer@external\.test"\} after:\d+ before:\d+$/);
+});
+test('transport only reads Gmail threads as metadata with the brief headers',async()=>{
+  let count=0;const request=meetingTransport({calendar:'test',gmail:'test',hubspot:'test'},()=>{},(async()=>{count++;return Response.json({id:'abc',messages:[]});}) as any);
+  for(const path of ['/gmail/v1/users/me/threads/abc?','/gmail/v1/users/me/threads/abc?format=full','/gmail/v1/users/me/threads/abc?format=raw&metadataHeaders=From',
+    '/gmail/v1/users/me/threads/abc?format=metadata','/gmail/v1/users/me/threads/abc?format=metadata&metadataHeaders=From&format=full',
+    '/gmail/v1/users/me/threads/abc?format=metadata&metadataHeaders=From&fields=messages','/gmail/v1/users/me/threads/abc?format=metadata&metadataHeaders=Authorization',
+    '/gmail/v1/users/me/threads?format=full','/gmail/v1/users/me/threads?q=x&fields=threads'])
+    await expect(request('gmail',path)).rejects.toThrow('only');
+  expect(count).toBe(0);
+  await request('gmail','/gmail/v1/users/me/threads/abc?format=metadata&metadataHeaders=From&metadataHeaders=Subject');
+  await request('gmail','/gmail/v1/users/me/threads?q=x&maxResults=100&includeSpamTrash=false&pageToken=two');
+  expect(count).toBe(2);
+});

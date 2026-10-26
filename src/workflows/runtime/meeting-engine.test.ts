@@ -38,7 +38,7 @@ let authority:AuthorityEngine;
 let approvals:ApprovalManager,services:ReturnType<typeof buildSandboxServiceBackends>;
 let dir:string,api:SandboxApi,runtime:EngineRuntime,worker:Worker,catalog:PieceCatalog;
 const versions:Record<string,string>={},notifications:string[]=[],runIds:string[]=[],calls:string[]=[];
-let events:any[]=[fixtureEvent()],changed:any,fail:string|undefined,loseNotification=false;
+let events:any[]=[fixtureEvent()],changed:any,fail:string|undefined,oversized:string|undefined,loseNotification=false;
 beforeAll(async()=>{
  dir=mkdtempSync(join(tmpdir(),'jarvis-meeting-engine-'));initWorkflowDb(join(dir,'fixture.db'));setEncryptionKey(Buffer.alloc(32,76));
  const bundle=await buildEngineBundle();
@@ -57,7 +57,7 @@ beforeAll(async()=>{
   expect(init.headers.Authorization).toBe('Bearer synthetic-'+provider);expect(init.redirect).toBe('error');
   expect(init.method).toBe(provider==='hubspot'?'POST':'GET');if(provider==='hubspot')expect(u.pathname).toBe('/crm/v3/objects/contacts/search');
   calls.push(init.method+' '+u.pathname);
-  return Response.json(await fixtureRequest(events,{changed,fail})(provider,u.pathname+u.search,init.body?JSON.parse(init.body):undefined));
+  return Response.json(await fixtureRequest(events,{changed,fail,oversized})(provider,u.pathname+u.search,init.body?JSON.parse(init.body):undefined));
  }) as typeof fetch,llmManager:{chat:async()=>{throw Error('No LLM may execute');}} as any,channelService:{sendWorkflowNotification:async()=>{throw Error('No external notification');}} as any,
  wsService:{broadcastNotificationToDashboard:(text:string)=>{notifications.push(text);if(loseNotification)throw Error('Unknown delivery');return 1;}} as any});
  api=new SandboxApi({services});await api.start({port:0});runtime=new EngineRuntime({api,pool:true,bundlePath:bundle.bundlePath,expectedDigest:bundle.digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code')});
@@ -70,7 +70,7 @@ function graph(configured=true):any {
  return {name:'trigger',type:'PIECE_TRIGGER',settings:{pieceName:'schedule',input:{cron_expression:'*/10 * * * *',timezone:'Europe/Rome'}},nextAction:{name:'prepare',type:'PIECE',settings:{pieceName:native('context'),pieceVersion:versions[native('context')],actionName:'meeting_briefs',input},nextAction:{name:'each_meeting',type:'LOOP_ON_ITEMS',settings:{items:'{{prepare.meetings}}'},firstLoopAction:{name:'notify',type:'PIECE',settings:{pieceName:native('notify'),pieceVersion:versions[native('notify')],actionName:'notify',input:{message:'{{each_meeting.item.brief}}',meetingGuard:'{{each_meeting.item.guard}}',idempotencyKey:'{{each_meeting.item.notificationKey}}',channels:['dashboard'],priority:'normal'}}}}}};
 }
 async function fixture() {
- events=[fixtureEvent()];changed=undefined;fail=undefined;loseNotification=false;authority.updateConfig({...authority.getConfig(),overrides:[],governed_categories:[]});
+ events=[fixtureEvent()];changed=undefined;fail=undefined;oversized=undefined;loseNotification=false;authority.updateConfig({...authority.getConfig(),overrides:[],governed_categories:[]});
  const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Meeting fixture',trigger:graph()});
  expect(versionReadiness(flow.id,version.id).issues).toEqual([]);lockVersion(version.id);setPublishedVersion(flow.id,version.id);updateFlowStatus(flow.id,'ENABLED');
  return {flow,version,run:()=>run(flow.id,version.id)};
@@ -87,6 +87,13 @@ test('rescheduled start gets one new alert, returning to original start does not
 },60_000);
 test('late reschedule suppresses stale brief without consuming identity',async()=>{
  const f=await fixture(),n=notifications.length;changed=fixtureEvent({status:'cancelled'});expect((await f.run()).status).toBe('SUCCEEDED');expect(notifications.length).toBe(n);changed=undefined;expect((await f.run()).status).toBe('SUCCEEDED');expect(notifications.length).toBe(n+1);
+},60_000);
+test('oversized brief fails only its meeting; others deliver and its key stays unused',async()=>{
+ const f=await fixture(),n=notifications.length;oversized='big@external.test';
+ events=[fixtureEvent(),fixtureEvent({id:'occurrence-2',summary:'Long history',start:{dateTime:'2026-10-23T09:20:00Z'},attendees:[{email:'owner@example.com',self:true},{email:'big@external.test'}]})];
+ const first=await f.run();expect(first.status).toBe('SUCCEEDED');expect(notifications.length).toBe(n+1);expect(notifications.at(-1)).toContain('Customer planning');
+ oversized=undefined;expect((await f.run()).status).toBe('SUCCEEDED');expect(notifications.length).toBe(n+2);expect(notifications.at(-1)).toContain('Long history');
+ expect((await f.run()).status).toBe('SUCCEEDED');expect(notifications.length).toBe(n+2);
 },60_000);
 test('source failure fails run and sends no brief',async()=>{
  const f=await fixture(),n=notifications.length;fail='gmail';expect((await f.run()).status).toBe('FAILED');expect(notifications.length).toBe(n);

@@ -14,6 +14,8 @@ export interface MeetingSetup {
 }
 export interface MeetingGuard { setup: MeetingSetup; eventId: string; start: string; fingerprint: string }
 export interface MeetingBrief { eventId: string; start: string; title: string; brief: string; notificationKey: string; guard: MeetingGuard }
+/** A meeting whose brief could not be delivered. Nothing was notified, so its key stays unused. */
+export interface MeetingBriefFailure { eventId: string; start: string; title: string; notificationKey: string; reason: string }
 type RecordValue = Record<string, any>;
 type RequestProvider = 'calendar' | 'gmail' | 'hubspot';
 export type MeetingRequest = (provider: RequestProvider, path: string, body?: RecordValue) => Promise<RecordValue>;
@@ -24,7 +26,8 @@ const text = (v: unknown, label: string, max = 512): string => {
 };
 const email = (v: unknown) => {
   const s = text(v, 'email', 254).toLowerCase();
-  if (!/^[a-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$/i.test(s)) throw Error('Invalid email');
+  // No braces: attendee addresses are interpolated into a Gmail {..} OR group.
+  if (!/^[a-z0-9.!#$%&'*+\/=?^_`|~-]+@[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$/i.test(s)) throw Error('Invalid email');
   return s;
 };
 export function meetingSetup(v: RecordValue): MeetingSetup {
@@ -49,6 +52,7 @@ export function meetingSetup(v: RecordValue): MeetingSetup {
   return { calendarConnection: account('calendarConnection'), gmailConnection: account('gmailConnection'), hubspotConnection: account('hubspotConnection'),
     calendarId: text(v.calendarId, 'calendar ID'), ownerEmail: email(v.ownerEmail), internalDomains, hubspotPortalId, recentDays, timezone };
 }
+const GMAIL_THREAD_HEADERS = ['From', 'To', 'Cc', 'Subject'];
 const query = (params: Record<string, string>) => new URLSearchParams(params).toString();
 const calendarPath = (s: MeetingSetup) => `/calendar/v3/calendars/${encodeURIComponent(s.calendarId)}/events`;
 const timestamp = (v: unknown) => {
@@ -99,12 +103,13 @@ async function pages(load: (cursor?: string) => Promise<RecordValue>, field: str
   throw Error('Pagination limit exceeded; completeness unavailable');
 }
 const clean = (v: unknown, max = 1000) => String(v ?? '').replace(/[\r\n]+/g, ' ').replace(/[\[\]<>]/g, '').slice(0, max);
-export async function prepareMeetingBriefs(setup: MeetingSetup, request: MeetingRequest, now = Date.now()): Promise<{ complete: true; meetings: MeetingBrief[] }> {
+export async function prepareMeetingBriefs(setup: MeetingSetup, request: MeetingRequest, now = Date.now()): Promise<{ complete: true; meetings: MeetingBrief[]; failed: MeetingBriefFailure[] }> {
+  // timeMax is exclusive on start time; +1 ms keeps a start at exactly now+30min in (now, now+30min].
   const events = await pages(cursor => request('calendar', calendarPath(setup) + '?' + query({
-    timeMin: new Date(now).toISOString(), timeMax: new Date(now + 30 * 60_000).toISOString(), singleEvents: 'true', showDeleted: 'false',
+    timeMin: new Date(now).toISOString(), timeMax: new Date(now + 30 * 60_000 + 1).toISOString(), singleEvents: 'true', showDeleted: 'false',
     maxResults: '2500', orderBy: 'startTime', timeZone: setup.timezone, ...(cursor ? { pageToken: cursor } : {}),
   })), 'items');
-  const meetings: MeetingBrief[] = [], seen = new Set<string>();
+  const meetings: MeetingBrief[] = [], failed: MeetingBriefFailure[] = [], seen = new Set<string>();
   for (const event of events) {
     const m = eventMeeting(event, setup, now); if (!m) continue;
     const guard: MeetingGuard = { setup, eventId: m.eventId, start: m.start, fingerprint: m.fingerprint };
@@ -136,7 +141,7 @@ export async function prepareMeetingBriefs(setup: MeetingSetup, request: Meeting
       if (!/^[a-f0-9]+$/i.test(id)) throw Error('Invalid Gmail thread ID');
       // Headers and snippet are all a brief uses: metadata keeps message bodies out
       // of the daemon and long quoted threads under the response size limit.
-      const thread = await request('gmail', `/gmail/v1/users/me/threads/${id}?format=metadata&` + ['From', 'To', 'Cc', 'Subject'].map(h => `metadataHeaders=${h}`).join('&'));
+      const thread = await request('gmail', `/gmail/v1/users/me/threads/${id}?format=metadata&` + GMAIL_THREAD_HEADERS.map(h => `metadataHeaders=${h}`).join('&'));
       if (thread.id !== id || !Array.isArray(thread.messages)) throw Error('Incomplete Gmail thread');
       let count = 0;
       for (const message of thread.messages) {
@@ -157,10 +162,16 @@ export async function prepareMeetingBriefs(setup: MeetingSetup, request: Meeting
     if (threadIds.length && !conversationCount) lines.push('No matching recent messages after exact participant and date filtering.');
     lines.push('Email excerpts are snippets; open the source links for full conversations.');
     const brief = lines.join('\n');
-    if (brief.length > 24_000) throw Error('Brief exceeds delivery limit; narrow the recent history window');
+    // Fail only this meeting: the others still get their briefs, and this one is reported, not notified.
+    if (brief.length > 24_000) {
+      failed.push({ eventId: m.eventId, start: m.start, title: m.title, notificationKey,
+        reason: `Brief is ${brief.length} characters, over the 24,000 character delivery limit; narrow the recent history window` });
+      continue;
+    }
     meetings.push({ eventId: m.eventId, start: m.start, title: m.title, brief, notificationKey, guard });
   }
-  return { complete: true, meetings: meetings.sort((a, b) => a.start.localeCompare(b.start) || a.eventId.localeCompare(b.eventId)) };
+  const order = (a: { start: string; eventId: string }, b: { start: string; eventId: string }) => a.start.localeCompare(b.start) || a.eventId.localeCompare(b.eventId);
+  return { complete: true, meetings: meetings.sort(order), failed: failed.sort(order) };
 }
 export async function meetingStillCurrent(guard: MeetingGuard, request: MeetingRequest, now = Date.now()): Promise<boolean> {
   const event = await request('calendar', `${calendarPath(guard.setup)}/${encodeURIComponent(guard.eventId)}`);
@@ -168,11 +179,22 @@ export async function meetingStillCurrent(guard: MeetingGuard, request: MeetingR
   return !!current && current.eventId === guard.eventId && current.start === guard.start && current.fingerprint === guard.fingerprint;
 }
 
+/** Thread list, or a single thread read as metadata with only the brief's headers (never full bodies). */
+function gmailReadAllowed(path: string): boolean {
+  const match = /^\/gmail\/v1\/users\/me\/threads(\/[a-f0-9]+)?\?([^#]*)$/.exec(path);
+  if (!match) return false;
+  const params = [...new URLSearchParams(match[2])];
+  if (!match[1]) return params.every(([k]) => ['q', 'maxResults', 'includeSpamTrash', 'pageToken'].includes(k));
+  const headers = params.filter(([k]) => k === 'metadataHeaders').map(([, v]) => v);
+  return params.filter(([k]) => k === 'format').length === 1 && params.some(([k, v]) => k === 'format' && v === 'metadata')
+    && params.every(([k]) => k === 'format' || k === 'metadataHeaders')
+    && headers.length > 0 && headers.every(h => GMAIL_THREAD_HEADERS.includes(h));
+}
 /** Closed allowlist applies even to the injectable fixture transport. */
 export function meetingTransport(tokens: Record<RequestProvider, string>, checkpoint: () => void, fetchImpl: typeof fetch = fetch): MeetingRequest {
   return async (provider, path, body) => {
     const allowed = provider === 'calendar' ? /^\/calendar\/v3\/calendars\/[^/?]+\/events(?:\/[^/?]+)?(?:\?|$)/.test(path) && !body
-      : provider === 'gmail' ? /^\/gmail\/v1\/users\/me\/threads(?:\/[a-f0-9]+)?\?/.test(path) && !body
+      : provider === 'gmail' ? gmailReadAllowed(path) && !body
       : path === '/crm/v3/objects/contacts/search' && !!body;
     if (!allowed) throw Error('Meeting preparation only permits declared read endpoints');
     const host = provider === 'calendar' ? 'https://www.googleapis.com' : provider === 'gmail' ? 'https://gmail.googleapis.com' : 'https://api.hubapi.com';
