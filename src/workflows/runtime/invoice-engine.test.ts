@@ -337,6 +337,28 @@ test('an attachment claim is never released from a run that recorded an effect',
   await f.stop();
 }, 60000);
 
+test('an attachment run that fails after a step ran keeps its content even with no recorded effect', async () => {
+  // The PDF router (an untracked step) runs, then the upload fails on its own
+  // input before any send: no workflow_effect row exists for the run.
+  const g = graph(); g.nextAction.children[0].settings.input.fileName = '{{trigger.attachment.missing}}';
+  const f = await fixture(g), before = stats();
+  incoming = [item('Invoice INV-14 EUR 14.00')];
+  const runs = await f.poll();
+  expect(runs).toHaveLength(1); expect(runs[0]!.status).toBe('FAILED'); expect(runs[0]!.failedStep?.name).toBe('upload');
+  expect(Object.keys(runs[0]!.steps ?? {})).toContain('only_pdf');
+  expect(getWorkflowDb().query('SELECT 1 FROM workflow_effect WHERE run_id = ?').all(runs[0]!.id)).toEqual([]);
+  expect(stats()).toEqual(before); const after = stats();
+  // The failed run still holds the content's key.
+  expect(listFlowFires(f.flow.id).filter(fire => fire.runId === runs[0]!.id)).toEqual([expect.objectContaining({ dedupeKey: expect.stringMatching(/^attachment:v1:/) })]);
+  // Redelivery of the same content starts nothing.
+  expect(await f.poll()).toHaveLength(1); expect(stats()).toEqual(after);
+  // A manual run with the same bytes is refused as already accepted.
+  const bytes = pdf('Invoice INV-14 EUR 14.00'); const file = createWorkflowFile({ projectId: DEFAULT_IDS.project, flowId: f.flow.id, type: 'FLOW_STEP_FILE', fileName: 'invoice.pdf', size: bytes.length, data: bytes });
+  const manual = await f.manual({ message: { id: 'message-1' }, attachment: { fileName: 'invoice.pdf', mimeType: 'application/pdf', data: '/v1/step-files/' + file.id } });
+  expect(manual.status).toBe('FAILED'); expect(manual.failedStep?.displayName).toBe('Check attachment identity');
+  expect(manual.failedStep?.errorMessage).toContain('already accepted'); expect(stats()).toEqual(after); await f.stop();
+}, 60000);
+
 test('explicit pending label/folder stay setup-required after account bindings are supplied', () => {
   const trigger = graph(); trigger.settings.input.label = null;
   trigger.nextAction.children[0].settings.input.parentFolder = null;
