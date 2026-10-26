@@ -74,7 +74,8 @@ const GMAIL_TRACKED_SENDS: ReadonlySet<unknown> = new Set(['send_email', 'gmail_
  * (#953 made these reachable at the default level).
  */
 export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
-  return (piece === '@activepieces/piece-gmail' && GMAIL_TRACKED_SENDS.has(action))
+  return (piece === '@activepieces/piece-clickup' && (action === 'create_task' || action === 'update_task'))
+    || (piece === '@activepieces/piece-gmail' && GMAIL_TRACKED_SENDS.has(action))
     || (piece === '@activepieces/piece-slack' && (action === 'send_channel_message' || action === 'slack_post_message'))
     // #961: an HTTP request that is not a read is a send whose outcome the
     // server alone knows, so a retry after a lost or failed request is
@@ -595,7 +596,14 @@ interface ResolvedPieceAction {
 }
 
 /** Every adapter: the verified catalog pieces, then the vendored core pieces. */
-export const ALL_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [...GOVERNED_PIECE_ADAPTERS, ...CORE_PIECE_ADAPTERS];
+/** Managed ClickUp rollout: only these task actions have been reviewed. Unknown
+ * actions require the highest permission; the community badge remains unchanged. */
+export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
+  catalogId: 'clickup', pieceName: '@activepieces/piece-clickup', unknownActionCategory: 'modify_settings',
+  targetProps: ['workspace_id', 'space_id', 'list_id', 'task_id', 'task_name', 'name', 'status_id', 'add_assignee', 'rem_assignee'],
+  categories: {read_data: ['get_list_task', 'get_task_by_name'], write_data: ['create_task', 'update_task']},
+}];
+export const ALL_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [...GOVERNED_PIECE_ADAPTERS, ...CORE_PIECE_ADAPTERS, ...MANAGED_PIECE_ADAPTERS];
 
 const BY_PIECE_NAME = new Map<string, GovernedPieceAdapter>();
 const ACTION_CATEGORY = new Map<string, Map<string, ActionCategory>>();
