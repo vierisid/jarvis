@@ -4,6 +4,7 @@ import { credentialFingerprint, type JarvisConnectionSource, type ResolvedConnec
 /** Read through the atomically delivered file. Disconnects need no daemon restart. */
 export class JarvisClickUpConnectionSource implements JarvisConnectionSource {
   readonly id = "clickup";
+  readonly pieceNames = [CLICKUP_PIECE];
   constructor(private readonly dataDir: string) {}
   canResolve(externalId: string) { return externalId === CLICKUP_CONNECTION; }
   identity(externalId: string) {

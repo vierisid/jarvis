@@ -1,3 +1,5 @@
+import { GitHubRepository } from "../../integrations/GitHubRepository";
+import { GitHubConnection } from "../../integrations/GitHubConnection";
 import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
 /**
  * WorkflowEditor (Phase 4 stage 2).
@@ -3373,7 +3375,10 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const subList = isTrigger ? piece?.triggers ?? [] : piece?.actions ?? [];
   const selectedSubAction: PieceCatalogActionOrTrigger | undefined = subList.find((s) => s.name === subName);
   const clickUpLocation = piece?.name === "@activepieces/piece-clickup" && ['create_task','update_task','get_task_by_name'].includes(subName ?? '');
-  const selectedSchema = selectedSubAction?.inputSchema ?? null;
+  const managedGitHub = piece?.name === "@activepieces/piece-github" && ["{{connections.jarvis:github}}", "{{connections['jarvis:github']}}"].includes(String(step.settings?.input?.auth));
+  const githubRepository = managedGitHub && ['github_create_issue','getIssueInformation','update_issue','find_issue','createCommentOnAIssue'].includes(subName ?? '');
+  const baseSchema = selectedSubAction?.inputSchema ?? null;
+  const selectedSchema = managedGitHub && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['labels','assignees','milestone','state_reason', ...(githubRepository ? ['repository'] : [])].includes(f.name))} : baseSchema;
   const rawSchema = clickUpLocation && selectedSchema ? {...selectedSchema,fields:selectedSchema.fields.filter(f=>!['workspace_id','space_id','list_id'].includes(f.name))} : selectedSchema;
   const clickUpCreate = piece?.name === "@activepieces/piece-clickup" && subName === "create_task";
   const standardFields = clickUpCreate && JSON.stringify(step.settings?.propertySettings?.custom_fields?.schema) === "{}"
@@ -3485,6 +3490,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         />
       ) : null}
 
+      {githubRepository && <GitHubRepository input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {clickUpLocation && <ClickUpTaskLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {clickUpCreate && <div className="wf-props__hint" role="note">
         {standardFields ? <p>Using standard task fields. ClickUp will reject the task if this list requires custom fields.</p>
@@ -3724,12 +3730,13 @@ function ConnectionPicker({
   const currentExternalId = m ? m[1]! : "";
   return (
     <div className="wf-props__connection">
+      {pieceName === "@activepieces/piece-github" && <GitHubConnection onPick={onPick} currentValue={currentValue} />}
       {pieceName === "@activepieces/piece-clickup" && <ClickUpConnection onPick={onPick} currentValue={currentValue} />}
       <label className="wf-props__field-label">
         {authDisplayName}
         <span className="wf-props__connection-type">({authType})</span>
       </label>
-      {matching.length === 0 && pieceName !== "@activepieces/piece-clickup" ? (
+      {matching.length === 0 && !["@activepieces/piece-clickup", "@activepieces/piece-github"].includes(pieceName ?? "") ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.

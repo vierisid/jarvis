@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ClickUpConnection } from "../../../integrations/ClickUpConnection";
+import { GitHubConnection } from "../../../integrations/GitHubConnection";
 import type { SettingsHook } from "../useSettingsData";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
 
@@ -125,6 +126,7 @@ export function IntegrationsTab({
 
   return (
     <div>
+      <GitHubConnection optional />
       <section className="v2-set__section">
         <div className="v2-set__section-head">
           <div>
