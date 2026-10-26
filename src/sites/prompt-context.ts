@@ -107,6 +107,7 @@ ${structure ? `\n## Project Structure (top level)\n${structure}` : ''}
 - Use site_read_file, site_write_file, site_list_files, site_run_command, site_git_commit, site_github_push tools with project_id="${safe.id}".
 - Do NOT use regular read_file, write_file, or run_command — always use the site_* variants.
 - Do NOT start dev servers via site_run_command. The dev server is managed by the dashboard (make dev runs automatically).
+- The dashboard preview strips Cookie, Authorization, X-API-Key and similar credential headers from requests, drops Set-Cookie from responses, and never serves a service worker, so a cookie or header based login, or a PWA service worker, cannot work in the preview. Do not try to debug that; tell the user to test it outside the preview.
 ${autoCommitEnabled
   ? '- Changes are auto-committed after this conversation turn completes.'
   : '- Changes are NOT auto-committed. Commit with site_git_commit only when the user asks.'}

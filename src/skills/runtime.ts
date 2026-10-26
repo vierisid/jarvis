@@ -19,6 +19,7 @@
  * sidecar.
  */
 
+import { isDesktopDisabledError } from '../actions/tools/desktop-guard.ts';
 import { resolveRef } from '../structural/resolver.ts';
 import { nextHealRung, verifyPostcondition, type HealRung, type VerifyContext } from '../structural/verifier.ts';
 import type { SemanticNode } from '../structural/types.ts';
@@ -121,7 +122,12 @@ export async function runSkill(
     return { ok: false, steps: results, failedAt: i };
   };
   const snapshotSafe = async (kind: SurfaceKind): Promise<SkillSurface> => {
-    try { return await deps.snapshot(kind); } catch { return EMPTY; }
+    try { return await deps.snapshot(kind); } catch (err) {
+      // desktop.enabled turned off mid-run (#905) is a stop, not an empty
+      // surface that would fail the step as an unmet postcondition.
+      if (isDesktopDisabledError(err)) throw err;
+      return EMPTY;
+    }
   };
 
   for (let i = 0; i < skill.steps.length; i++) {

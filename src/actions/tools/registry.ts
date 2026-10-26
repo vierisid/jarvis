@@ -5,6 +5,8 @@ import { ActionOutcomeError } from '../action-outcome.ts';
 import { activeEmergencyState } from '../../authority/emergency.ts';
 import { WorkflowCancellationError } from '../../workflows/runtime/cancellation-error.ts';
 import { observeToolExecution } from '../progress-context.ts';
+import { assertCurrentMemoryContext } from '../../vault/memory-use-context.ts';
+import { assertDesktopAllowed } from './desktop-guard.ts';
 
 export type ToolParameter = {
   type: string;
@@ -90,6 +92,14 @@ export type ToolDefinition = {
    * force. Must be cheap and must not act.
    */
   authorityGate?: (params: Record<string, unknown>) => ToolGate | null;
+  /**
+   * Trusted declaration, never accepted from model input: this tool reaches the
+   * user's desktop (a window list, a UI tree, a screen capture, or input), so
+   * `desktop.enabled: false` refuses it (#905, desktop-guard.ts). `true` for
+   * every call, or a cheap check of one call's arguments that must not act.
+   * Category `desktop` implies `true`.
+   */
+  usesDesktop?: true | ((params: Record<string, unknown>) => boolean);
   /**
    * Trusted, never accepted from model input. Applied to a call's arguments
    * before it is gated, so the gate, the approval card and the eventual run
@@ -230,6 +240,13 @@ export class ToolRegistry {
       throw new Error(`Tool '${name}' not found in registry`);
     }
 
+    // Every dispatch path reaches here (chat, voice, sub-agents, approved
+    // cards, workflows), so this is where desktop.enabled: false holds even for
+    // a call nothing upstream stopped (#905). Typed, and nothing was started.
+    // Before validation: a switched-off surface is the answer whatever the
+    // arguments were.
+    assertDesktopAllowed(tool, params);
+
     this.validateParameters(tool, params);
 
     // Outside the try: a cancellation fence is not a tool failure, and
@@ -241,7 +258,10 @@ export class ToolRegistry {
       // reaches while running (a sidecar call, a channel send, a TTS chunk)
       // refuses once Jarvis is stopped. Pause does not: work in flight
       // finishes, and nothing new starts.
-      return await observeToolExecution(name, () => withExecutionScope(killFence, () => tool.execute(params)));
+      return await observeToolExecution(name, () => withExecutionScope(killFence, () => {
+        assertCurrentMemoryContext();
+        return tool.execute(params);
+      }));
     } catch (error) {
       if (error instanceof ActionOutcomeError) throw error;
       // #630. The fence above is NOT the only place cancellation is raised, and

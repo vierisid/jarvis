@@ -8,6 +8,7 @@ import { StyleSpecimen } from "../styles/StyleSpecimen";
 import { ControlSpecimen } from "../components/controls/ControlSpecimen";
 import { MotionSpecimen } from "../motion/MotionSpecimen";
 import { NavigationSpecimen } from "../shell/navigation/NavigationSpecimen";
+import { NavigationCompatibilitySpecimen } from "../navigation/NavigationCompatibilitySpecimen";
 import { PebbleSpecimen } from "../shell/pebble-layout/PebbleSpecimen";
 import { TodaySpecimen } from "../today/preview/TodaySpecimen";
 import { ChatTabsSpecimen } from "../chat/tab-strip/preview/ChatTabsSpecimen";
@@ -18,6 +19,10 @@ import { WorkflowCreationSpecimen } from "../workflows/create/preview/WorkflowCr
 import { OpportunitiesSpecimen } from "../opportunities/OpportunitiesSpecimen";
 import { DecisionsSpecimen } from "../decisions/DecisionsSpecimen";
 import { MemoryDetailSpecimen } from "../memory/detail/MemoryDetailSpecimen";
+import { AuthoritySpecimen } from "../authority/AuthoritySpecimen";
+import { BillingSpecimen } from "../account/billing/BillingSpecimen";
+import { SettingsSpecimen } from "../account/settings/SettingsSpecimen";
+import { ProfileSpecimen } from "../account/profile/ProfileSpecimen";
 import { ConnectionsSpecimen } from "../connections/ConnectionsSpecimen";
 import { MemorySpecimen } from "../memory/stream/MemorySpecimen";
 import { GoalsSpecimen } from "../goals/GoalsSpecimen";
@@ -26,6 +31,7 @@ import { WorkflowContextSpecimen } from "../workflows/context/WorkflowContextSpe
 import { WorkflowManagementSpecimen } from "../workflows/manage-list/WorkflowManagementSpecimen";
 import { WorkflowRunsSpecimen } from "../workflows/runs/WorkflowRunsSpecimen";
 import { WorkflowCanvasSpecimen } from "../workflows/canvas/WorkflowCanvasSpecimen";
+import { CraftTrace } from "../verification/CraftTrace";
 
 interface PreviewModel { note: string }
 const PreviewBody = bindBriefView<PreviewModel>(() => ({ ...unavailableView<PreviewModel>("No live provider is connected in this preview."), source: "fixture" }),
@@ -49,10 +55,19 @@ const PreviewBody = bindBriefView<PreviewModel>(() => ({ ...unavailableView<Prev
 
 /** Explicit fixture-only URL. Never used as the fallback for real business data. */
 export function FoundationPreview() {
+  return new URLSearchParams(window.location.search).get("craft") === "1"
+    ? <CraftTrace><Specimen /></CraftTrace> : <Specimen />;
+}
+
+function Specimen() {
   const specimen = new URLSearchParams(window.location.search).get("specimen");
   if (specimen === "workflow-context") return <WorkflowContextSpecimen />;
   if (specimen === "workflow-manage") return <WorkflowManagementSpecimen />;
   if (specimen === "opportunities") return <OpportunitiesSpecimen />;
+  if (specimen === "billing") return <BillingSpecimen />;
+  if (specimen === "settings") return <SettingsSpecimen />;
+  if (specimen === "profile") return <ProfileSpecimen />;
+  if (specimen === "authority") return <AuthoritySpecimen />;
   if (specimen === "connections") return <ConnectionsSpecimen />;
   if (specimen === "memory-detail") return <MemoryDetailSpecimen />;
   if (specimen === "memory") return <MemorySpecimen />;
@@ -67,6 +82,7 @@ export function FoundationPreview() {
   if (specimen === "composer") return <ComposerSpecimen />;
   if (specimen === "chat-tabs") return <ChatTabsSpecimen />;
   if (specimen === "today") return <TodaySpecimen />;
+  if (specimen === "navigation-compatibility") return <NavigationCompatibilitySpecimen />;
   return specimen === "pebble" ? <PebbleSpecimen /> : specimen === "navigation" ? <NavigationSpecimen /> : specimen === "motion" ? <MotionSpecimen /> : specimen === "controls" ? <ControlSpecimen /> : specimen === "styles" ? <StyleSpecimen /> : <FoundationControls />;
 }
 
@@ -89,6 +105,7 @@ function FoundationControls() {
       <a className="brief-foundation__return" href="?brief=preview&specimen=controls#/_brief_preview">Try shared controls</a>{" · "}
       <a className="brief-foundation__return" href="?brief=preview&specimen=motion#/_brief_preview">Try motion reference</a>{" · "}
       <a className="brief-foundation__return" href="?brief=preview&specimen=navigation#/_brief_preview">Try navigation shell</a>{" · "}
+      <a className="brief-foundation__return" href="?brief=preview&specimen=navigation-compatibility#/_brief_preview">Try retained navigation</a>{" · "}
       <a className="brief-foundation__return" href="?brief=preview&specimen=pebble#/_brief_preview">Try Pebble workspace</a>{" · "}
       <a className="brief-foundation__return" href="?brief=preview&specimen=today#/_brief_preview">Try Today composition</a>{" · "}
       <a className="brief-foundation__return" href={legacyHref(window.location.href)}>Return to current dashboard</a>

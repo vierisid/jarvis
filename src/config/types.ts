@@ -83,31 +83,36 @@ export type GoogleConfig = {
  * a value that names nobody (a string, `["042"]`) lets nobody in rather than
  * everyone (#883, comms/channels/allow-list.ts).
  *
- * `allowed_users` means two different things when it is EMPTY (#811):
- *   - chat: everyone who can reach the bot may talk to Jarvis (any Telegram
- *     user who finds it, any member of a Discord guild it is in), each in a
- *     conversation of their own (#884), though with the owner's tools;
- *   - approvals: nobody may approve or deny from that channel. An
- *     `approve <id>` or `deny <id>` reply is refused, and the decision has to
- *     be made in the dashboard. A gated action is the one place "allow all"
- *     is the wrong default.
- *   - notifications: nothing is sent proactively (#852). Approval cards and
- *     other broadcasts go to the private chat of the last sender the list
- *     names (never a group or server channel), so an empty list has no
- *     recipient; a stranger who messages the bot gets replies, never the
- *     owner's cards.
- * A non-empty list admits only the users it names, for all three.
+ * An enabled channel must list at least one user (#908, #918): with an empty
+ * list the channel is not started, and the API refuses to save that state.
+ * Only the users the list names may message the bot.
+ *
+ * The FIRST entry is the channel's owner (#909, #916). Every listed user may
+ * chat, each in a conversation of their own (#884), but only the owner:
+ *   - gets turns built from the owner's private context (profile, knowledge,
+ *     commitments, goals, observations) with the owner's tools, and teaches
+ *     the assistant anything. Every other listed user is a guest: a plain
+ *     conversational model with none of that and no tools
+ *     (AgentService.handleGuestMessage).
+ *   - may approve or deny from the channel. Anyone else's `approve <id>` or
+ *     `deny <id>` is refused.
+ *   - receives approval cards and other broadcasts, in their private chat
+ *     (never a group or server channel). That chat is learned from a direct
+ *     message the owner sent the bot, so until the owner has sent one there
+ *     is no recipient and cards stay on the dashboard.
+ * A first entry that is not a valid id makes nobody the owner; ownership
+ * does not pass to the second entry.
  */
 export type ChannelConfig = {
   telegram?: {
     enabled: boolean;
     bot_token: string;
-    allowed_users: number[];  // Telegram user IDs; empty = anyone may chat, nobody may approve
+    allowed_users: number[];  // Telegram user IDs; the first is the owner (#916)
   };
   discord?: {
     enabled: boolean;
     bot_token: string;
-    allowed_users: string[];  // Discord user IDs; empty = anyone may chat, nobody may approve
+    allowed_users: string[];  // Discord user IDs; the first is the owner (#916)
     guild_id?: string;        // restrict to single guild
   };
 };
@@ -255,6 +260,18 @@ export type PebbleConfig = {
  * unknown keys, and nothing reads them.
  */
 export type DesktopConfig = {
+  /**
+   * The desktop off switch (#905). `false` stops Jarvis from asking for or
+   * acting on any machine's desktop: the desktop_* tools, capture_screen,
+   * ui_snapshot / ui_act / run_skill on a desktop surface, record_skill, and
+   * the pebble's own screenshot and foreground-window reads. Screen events a
+   * sidecar sends are dropped unread by awareness and the generic event
+   * pipeline; the sidecar's own observer still captures and OCRs the screen.
+   * Browser tools are unaffected. Takes effect on restart (set in
+   * config.yaml). A value or a section in the wrong shape fails closed; an
+   * empty one is the default (desktop-guard.ts desktopEnabledFromSection).
+   * Default true.
+   */
   enabled: boolean;
 };
 
@@ -272,6 +289,12 @@ export type AwarenessConfig = {
   struggle_cooldown_ms: number;       // min gap between struggle detections
   suggestion_rate_limit_ms: number;
   overlay_autolaunch: boolean;        // auto-open floating overlay widget on start
+  /**
+   * When the user last chose `enabled` themselves (persistAwarenessChoice).
+   * Absent on rows stamped from defaults by older builds, so only a marked
+   * `true` counts as consent (#1070).
+   */
+  enabled_chosen_at?: number;
   retention: {
     full_hours: number;
     key_moment_hours: number;

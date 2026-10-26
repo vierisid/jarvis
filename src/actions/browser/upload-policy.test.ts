@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { checkUploadPath, credentialPathsFromEnv, sensitiveReason, type UploadPolicyContext } from './upload-policy.ts';
 
 /**
@@ -110,7 +110,7 @@ describe.skipIf(process.platform === 'win32')('browser_upload_file path rule (#5
     expect(() => checkUploadPath('/dev/null', ctx)).toThrow(/under \/dev/);
     expect(() => checkUploadPath('/var/run/does-not-matter', ctx)).toThrow(/under \/var\/run/);
     // Resolved before judging: .. cannot climb out of the check.
-    expect(() => checkUploadPath(`${home}/../../../../proc/self/environ`, ctx)).toThrow(/under \/proc/);
+    expect(() => checkUploadPath(`${home}/${relative(home, '/proc/self/environ')}`, ctx)).toThrow(/under \/proc/);
   });
 
   test('only absolute paths to existing regular files', () => {

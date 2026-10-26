@@ -1,12 +1,33 @@
 import type { BriefEvidenceRef, BriefMeasurement } from "../../../../../src/brief/contracts";
 import { isBriefCapabilityEnabled } from "../../../../../src/brief/capabilities";
+import { goalValue, type GoalPath } from "../../goals/model";
+import { qualifiedProgress } from "../outcomes/model";
 import type { BriefReadState, BriefViewPort } from "../../contracts";
 
 /** Optional presentation seam. F-13 owns recommendations/receipts; F-15 owns measurements. */
 export interface GoalCardData {
   goalId: string; revision: string; title: string; periodLabel?: string;
+  fraction?: number | null;
   progress: BriefMeasurement | null; progressLabel: string; change: BriefMeasurement | null;
-  drivers: readonly { goalId: string; title: string; progress: BriefMeasurement | null }[];
+  drivers: readonly { goalId: string; title: string; progress: BriefMeasurement | null; fraction?: number | null }[];
+}
+/** The dashboard summarizes direct key results; Goals retains the full milestone tree. */
+export function goalCardData(path: GoalPath): GoalCardData {
+  const summarize = (goal: GoalPath["goal"]) => {
+    const value = goalValue(goal);
+    return { goalId: goal.goalId, title: goal.title, fraction: value.fraction,
+      progress: value.kind === "measurement" && value.ordinaryCount ? value.measurement : null };
+  };
+  return { ...summarize(path.goal), revision: path.goal.revision,
+    periodLabel: path.goal.status === "draft" ? "Draft goal · Ready to review" : "Active objective",
+    progressLabel: path.goal.measurement?.unit ?? "progress", change: null,
+    drivers: path.stages.filter(stage => stage.parentId === path.goal.goalId).map(summarize) };
+}
+/** Zero is the requested initial display, not a stored measurement or an invented business count. */
+export function cardProgress(progress: BriefMeasurement | null, fraction?: number | null) {
+  if (qualifiedProgress(progress)) return { value: progress.value, target: progress.target, percent: false };
+  const value = typeof fraction === "number" && Number.isFinite(fraction) ? Math.max(0, Math.min(1, fraction)) : 0;
+  return { value: Math.round(value * 1000) / 10, target: 100, percent: true };
 }
 export interface GoalRecommendation {
   recommendationId: string; revision: string; goalId: string; goalRevision: string;

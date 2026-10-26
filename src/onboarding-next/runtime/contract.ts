@@ -59,6 +59,9 @@ export interface RuntimeOptions {
   /** Inject the release owner's candidate-bound U11/B13/D/F/Q decision.
    * No endpoint, env toggle or provider manifest may set this decision. */
   authorizeRelease?: (candidate: Readonly<Candidate>, context: Context) => Promise<boolean>;
+  /** Isolated host integration entry only. Never supplied by production bootstrap,
+   * HTTP input or an environment flag. Does not set released or certify a candidate. */
+  authorizeIntegration?: (context: Context) => boolean;
   /** Bounded observational checks. Does not imply cancellation of effects. */
   probeTimeoutMs?: number;
 }
@@ -68,5 +71,6 @@ export interface CapabilityState {
 export interface RuntimeStatus {
   schemaVersion: 1; installMode: InstallMode; supported: boolean; ready: boolean;
   enabled: boolean; released: boolean; reason: Reason;
+  integration?: true;
   capabilities: Record<Capability, CapabilityState>;
 }

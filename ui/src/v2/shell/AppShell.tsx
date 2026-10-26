@@ -10,6 +10,7 @@ import { VoiceRail, type VoiceState } from "./VoiceRail";
 import { useVoice } from "../../hooks/useVoice";
 import { mapVoiceState } from "../voice/stateMapper";
 import { shownApprovalId } from "../voice/shownApproval";
+import { currentVisibility } from "../voice/panelReveal";
 import { useLLMSuggestions, useSuggestions } from "../voice/useSuggestions";
 import { CommandPalette } from "../palette/CommandPalette";
 import type { PaletteNavEntry, PaletteResult, PaletteResultType } from "../palette/types";
@@ -27,9 +28,7 @@ import { useNotificationCenter } from "../../hooks/useNotificationCenter";
 import { NotificationDrawer } from "../notifications/NotificationDrawer";
 import { LiveDataProvider } from "./LiveDataContext";
 import { PausedTasksBanner } from "./PausedTasksBanner";
-import { useRoomActionDispatcher } from "../rooms/useRoomActionBus";
-import { dispatchDashboardRoomAction } from "../rooms/panel-room-action";
-import type { DashboardRoomActionRequest } from "../../hooks/useWebSocket";
+import { RoomActionBridge } from "./RoomActionBridge";
 import { IndexSidebar, useIndexCollapsed } from "./IndexSidebar";
 import { TopBar } from "./TopBar";
 import { NowRoom } from "./NowRoom";
@@ -143,13 +142,14 @@ function AppShellLive() {
     return m ? m[1]! : "home";
   }, []);
   // #809: the approval a spoken "yes" answers is the one on top of the rail
-  // (RailConfirmationStack sorts newest first), while the page is on screen.
+  // (RailConfirmationStack sorts newest first), while the page is on screen
+  // (#886: a Windows panel still hidden during its first load is not).
   // Read through a ref so the getter keeps a stable identity, like
   // getCurrentRoom.
   const approvalsRef = useRef(live.approvals);
   approvalsRef.current = live.approvals;
   const getShownApprovalId = useCallback(
-    (): string | null => shownApprovalId(approvalsRef.current, document.visibilityState),
+    (): string | null => shownApprovalId(approvalsRef.current, currentVisibility()),
     [],
   );
   const voice = useVoice({
@@ -568,7 +568,7 @@ function AppShellLive() {
         latestAssistantReply,
       }}
     >
-      <RoomActionBridge request={live.roomActionRequest} forceIdle={voice.forceIdle} wsRef={live.wsRef} />
+      <RoomActionBridge requests={live.roomActionRequests} ack={live.ackRoomActionRequests} forceIdle={voice.forceIdle} wsRef={live.wsRef} />
       <ShellLayout
         connection={live.isConnected ? "live" : "offline"}
         items={live.items}
@@ -637,39 +637,6 @@ function AppShellLive() {
       />
     </LiveDataProvider>
   );
-}
-
-/**
- * Tiny bridge: lives inside RoomActionBusProvider, reads the dispatcher,
- * and fires it whenever a new `roomActionRequest` arrives from the WS.
- * Also force-idles the voice orb (the Room handles the action itself, no
- * tts_start ever fires to clear `processing`).
- */
-function RoomActionBridge({
-  request,
-  forceIdle,
-  wsRef,
-}: {
-  request: DashboardRoomActionRequest | null;
-  forceIdle: () => void;
-  wsRef: React.MutableRefObject<WebSocket | null>;
-}) {
-  const { dispatch } = useRoomActionDispatcher();
-  const ts = request?.ts;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (!request) return;
-    // When the daemon asked, tell it whether the room ran the action, so its
-    // acknowledgement says what happened (#965). A queued action answers when
-    // its room mounts; after a reconnect the daemon ignores that answer (it
-    // asked the old socket) and has already said it got none.
-    dispatchDashboardRoomAction(request, dispatch, (text) => {
-      const ws = wsRef.current;
-      if (ws?.readyState === WebSocket.OPEN) ws.send(text);
-    });
-    forceIdle();
-  }, [ts]);
-  return null;
 }
 
 /* ─────────── Mock shell — Phase 3A fixture (no WS, no mic) ─────────── */

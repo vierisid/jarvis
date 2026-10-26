@@ -38,7 +38,10 @@ export function RepeatBackCard({
   return (
     <article
       className="v2-repeatback"
-      role="alertdialog"
+      // Inline and non-modal: it never takes focus or blocks the page, so it is a
+      // named region a screen reader can jump to, not an alertdialog. The thread
+      // around it announces it politely when it arrives (#1092).
+      role="region"
       aria-label={`Heard transcript needs confirmation`}
     >
       <div className="v2-repeatback__attribution">

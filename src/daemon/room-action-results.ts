@@ -9,13 +9,16 @@
  * answer opens an entry here, sends its `resultId` with the action, and the
  * panel that ran it replies with `room_action_result`.
  *
- * The first answer settles the entry. For the pebble's requests only native
- * panels answer (a dashboard answers only a request addressed to it, and then
- * only its answer counts: see `answerer`, #965). The action is broadcast, so
- * every open panel of that room answers: a second panel of it on this
- * sidecar, or one on another sidecar. They run the same check and agree, except that Settings shows its
- * billing tab per client. Addressing the action to the one panel the pebble
- * meant would need the panel to know its native id, which it does not.
+ * The first answer that counts settles the entry. For the pebble's requests
+ * only native panels answer (a dashboard answers only a request addressed to
+ * it, and then only its answer counts: see `answerer`, #965). That is the
+ * client's own rule, so it binds nobody: any /ws client could answer first.
+ * The daemon therefore counts only answers from sockets of the sidecar that
+ * asked (`accepts`, #1026). The action is broadcast, so every open panel of
+ * that room on that sidecar may answer; they run the same check and agree,
+ * except that Settings shows its billing tab per client. Addressing the
+ * action to the one panel the pebble meant would need the panel to know its
+ * native id, which it does not.
  *
  * NO IMPORTS: the UI bundles this file for ROOM_ACTION_QUEUE_TTL_MS.
  */
@@ -39,13 +42,17 @@ export const ROOM_ACTION_QUEUE_TTL_MS = 5000;
  * the bus drops the action rather than run it late.
  *
  * The daemon's clock started when it sent the action, this one when the
- * client handled the message, so the action can still run after the daemon
- * gave up by as long as that took: the network, any backlog in the daemon's
- * send queue, and any time the page's main thread was busy before it read the
- * message (a room's code still loading, the late-mount case itself). A
- * relative wait, not the daemon's timestamp, because the two clocks need not
- * agree at all; `receivedAt` should be monotonic (performance.now) so a wall
- * clock step cannot stretch it.
+ * client handled the message, so on its own this lets the action run after
+ * the daemon gave up by as long as that took: the network, any backlog in the
+ * daemon's send queue, and any time the page's main thread was busy before it
+ * read the message (a room's code still loading, the late-mount case
+ * itself). That window is closed by the claim (#1025, `claim` below): the
+ * dashboard asked runs the action only once the daemon, asked just before,
+ * says it still waits. This deadline remains the bus's own early drop, and
+ * the only bound for a dashboard or daemon from before the claim. A relative
+ * wait, not the daemon's timestamp, because the two clocks need not agree at
+ * all; `receivedAt` should be monotonic (performance.now) so a wall clock
+ * step cannot stretch it.
  *
  * Anything but a finite, non-negative number is no deadline, as from a daemon
  * that sends none: the daemon always sends its own timeout, which is neither.
@@ -90,8 +97,33 @@ export function roomAnswerOf(accepted: unknown, outcome?: unknown): RoomAnswer |
  */
 export type RoomActionOutcome = RoomAnswer | 'started' | 'no_answer' | 'unreached';
 
+/**
+ * Told the room's answer to an action whose wait had already run out (#1034),
+ * and what the wait was reported as then: `started` (recorded as run) or
+ * `no_answer`. Called at most once.
+ */
+export type LateRoomAnswer = (answer: RoomAnswer | 'disconnected', reported: 'started' | 'no_answer') => void;
+
+/**
+ * How many waits that ran out are remembered for a late answer at once
+ * (#1034). A memory bound, not a timing one: a room's request has no
+ * deadline of its own (a dev server alone gets 30s to come up, and a fetch
+ * from the page none), so a late answer is heard for as long as its
+ * dashboard stays connected, and the oldest is forgotten past this many.
+ */
+export const LATE_ANSWER_LIMIT = 256;
+
+type Pending = { settle: (o: RoomActionOutcome) => void; answerer?: unknown; accepts?: (from: unknown) => boolean; started?: boolean; claimed?: boolean; onLate?: LateRoomAnswer };
+
 export class RoomActionResults {
-  private pending = new Map<string, { settle: (o: RoomActionOutcome) => void; answerer?: unknown; started?: boolean }>();
+  private pending = new Map<string, Pending>();
+  /**
+   * Waits that ran out while the room may still answer (#1034), by id, oldest
+   * first. Only for a caller that asked to hear (`onLate`) and a named
+   * answerer: a late answer must come from the dashboard that was asked, and
+   * goes when it does.
+   */
+  private late = new Map<string, { answerer: unknown; reported: 'started' | 'no_answer'; onLate: LateRoomAnswer }>();
 
   constructor(private readonly newId: () => string = () => crypto.randomUUID()) {}
 
@@ -100,11 +132,30 @@ export class RoomActionResults {
    * `timeoutMs` with `started` when the room said it had started on it, else
    * `no_answer`. With `answerer`, only an answer from that client counts
    * (#965): a dashboard voice turn asks the dashboard the user spoke to.
+   * With `onLate` too, that client's answer after the wait ran out is passed
+   * to it rather than dropped (#1034): the outcome said `started` or
+   * `no_answer`, and the room's real answer is still worth recording.
+   *
+   * Without `answerer`, `accepts` says whose answer counts (#1026): the
+   * pebble's tab switch is broadcast to every panel, and only a panel of the
+   * sidecar that asked may say whether it switched. Without either, any
+   * client's answer counts; no daemon caller opens one like that.
    */
-  open(timeoutMs: number, answerer?: unknown): { id: string; outcome: Promise<RoomActionOutcome> } {
+  open(
+    timeoutMs: number,
+    answerer?: unknown,
+    onLate?: LateRoomAnswer,
+    accepts?: (from: unknown) => boolean,
+  ): { id: string; outcome: Promise<RoomActionOutcome> } {
     const id = this.newId();
     const outcome = new Promise<RoomActionOutcome>((resolve) => {
-      const timer = setTimeout(() => this.finish(id, this.pending.get(id)?.started ? 'started' : 'no_answer'), timeoutMs);
+      const timer = setTimeout(() => {
+        const entry = this.pending.get(id);
+        // Claimed (#1025): the room was told to go ahead, so it is under way.
+        const reported = entry?.started || entry?.claimed ? 'started' : 'no_answer';
+        if (entry?.onLate && entry.answerer !== undefined) this.remember(id, entry.answerer, reported, entry.onLate);
+        this.finish(id, reported);
+      }, timeoutMs);
       // A pending answer must not hold the daemon open at shutdown.
       (timer as { unref?: () => void }).unref?.();
       this.pending.set(id, {
@@ -113,6 +164,8 @@ export class RoomActionResults {
           resolve(o);
         },
         answerer,
+        accepts,
+        onLate,
       });
     });
     return { id, outcome };
@@ -128,8 +181,26 @@ export class RoomActionResults {
     const answer = roomAnswerOf(accepted, outcome);
     if (typeof id !== 'string' || answer === null) return;
     const entry = this.pending.get(id);
-    if (entry?.answerer !== undefined && entry.answerer !== from) return;
+    if (!entry) {
+      this.answerLate(id, answer, from);
+      return;
+    }
+    if (!this.counts(entry, from)) return;
     this.finish(id, answer);
+  }
+
+  /** A late answer (#1034): heard once, and only from the client asked. */
+  private answerLate(id: string, answer: RoomAnswer, from: unknown): void {
+    const late = this.late.get(id);
+    if (!late || late.answerer !== from) return;
+    this.late.delete(id);
+    late.onLate(answer, late.reported);
+  }
+
+  private remember(id: string, answerer: unknown, reported: 'started' | 'no_answer', onLate: LateRoomAnswer): void {
+    this.late.set(id, { answerer, reported, onLate });
+    // Map order is insertion order, so the first key is the oldest.
+    while (this.late.size > LATE_ANSWER_LIMIT) this.late.delete(this.late.keys().next().value!);
   }
 
   /**
@@ -140,8 +211,38 @@ export class RoomActionResults {
   started(id: unknown, from?: unknown): void {
     if (typeof id !== 'string') return;
     const entry = this.pending.get(id);
-    if (!entry || (entry.answerer !== undefined && entry.answerer !== from)) return;
+    if (!entry || !this.counts(entry, from)) return;
     entry.started = true;
+  }
+
+  /** Whether `from` may answer this entry: the client asked, or one `accepts` allows. */
+  private counts(entry: Pending, from: unknown): boolean {
+    if (entry.answerer !== undefined) return entry.answerer === from;
+    return entry.accepts ? entry.accepts(from) : true;
+  }
+
+  /**
+   * The answerer asks to run the action now (#1025). Granted only while this
+   * is still waiting on that client: once the wait has run out the caller has
+   * said it got no answer and may have asked again, so the action must not
+   * run. The answerer's own deadline is on its clock and starts when it read
+   * the message, so it alone cannot promise that. A granted claim means the
+   * action is running: the wait running out before its answer is `started`.
+   * Only for an entry with a named answerer: the pebble's broadcasts have
+   * none, and any panel may run those.
+   */
+  claim(id: unknown, from: unknown): boolean {
+    if (typeof id !== 'string') return false;
+    const entry = this.pending.get(id);
+    if (!entry || entry.answerer === undefined || entry.answerer !== from) return false;
+    entry.claimed = true;
+    return true;
+  }
+
+  /** Take back a claim whose grant never reached the answerer (#1025). */
+  unclaim(id: string): void {
+    const entry = this.pending.get(id);
+    if (entry) entry.claimed = false;
   }
 
   /** Stop waiting now: the action reached no one who could answer (#1011). */
@@ -159,11 +260,25 @@ export class RoomActionResults {
     for (const [id, entry] of [...this.pending]) {
       if (entry.answerer === answerer) this.finish(id, 'no_answer');
     }
+    // Nothing late can come from it now either. One reported `started` was
+    // recorded as run on the room's word, or on a claim it may never have
+    // received; with no answer to come, say the dashboard went, so that row
+    // is not the last word.
+    for (const [id, late] of [...this.late]) {
+      if (late.answerer !== answerer) continue;
+      this.late.delete(id);
+      if (late.reported === 'started') late.onLate('disconnected', 'started');
+    }
   }
 
   /** Entries still waiting. */
   get size(): number {
     return this.pending.size;
+  }
+
+  /** Waits that ran out and may still hear a late answer (#1034). */
+  get lateSize(): number {
+    return this.late.size;
   }
 
   private finish(id: string, outcome: RoomActionOutcome): void {

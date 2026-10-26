@@ -28,3 +28,12 @@ test('abort before request performs no network call; unknown writes are not retr
   await expect(t.call('setup.complete', {}, c.signal)).rejects.toThrow('unavailable'); expect(calls).toBe(0);
   await expect(t.call('setup.complete', {}, signal())).rejects.toThrow('unavailable'); expect(calls).toBe(1);
 });
+
+
+test('goal planning on finish/explore outlives the ordinary request budget and still supports abort', async () => {
+  const t = createTransport(async () => { await Bun.sleep(30); return Response.json({ schemaVersion: 1, result: { ready: true } }); }, 5);
+  for (const type of ['finish', 'explore']) expect(await t.call('journey.transition', { command: { type } }, signal())).toEqual({ ready: true });
+  const controller = new AbortController();
+  const request = t.call('journey.transition', { command: { type: 'finish' } }, controller.signal); controller.abort();
+  await expect(request).rejects.toThrow('unavailable');
+});

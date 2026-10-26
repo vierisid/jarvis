@@ -27,6 +27,11 @@ export interface WorkflowEffect {
   replayRefusal?: { outcome: ActionOutcome; at: number };
   /** Q-07: native connection identity at dispatch; no credential is retained. */
   providerBinding?: { connectionId: string; credentialDigest: string };
+  /**
+   * #1039: the step is waiting for a place in its flow's card budget, since
+   * `since`. Kept when it waits again, so it keeps its place in the queue.
+   */
+  deferral?: { budget: 'start' | 'other'; since: number };
   /** F-14 document generation; unchanged by policy/receipt writes. */
   documentRevision?: number;
 }

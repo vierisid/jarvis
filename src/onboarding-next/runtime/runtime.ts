@@ -115,10 +115,12 @@ export function createOnboardingRuntime(options: RuntimeOptions) {
       } catch { /* stale/missing evidence never enables a route */ }
     }
     await recheck(context);
-    const ready = closureReady && options.enabled === true && released;
-    return { schemaVersion: 1, installMode, supported, ready, enabled: options.enabled === true, released,
+    const integration = closureReady && options.enabled === true && options.authorizeIntegration?.(context) === true;
+    await recheck(context);
+    const ready = closureReady && options.enabled === true && (released || integration);
+    return { schemaVersion: 1, installMode, supported, ready, enabled: options.enabled === true, released, ...(integration ? { integration: true as const } : {}),
       reason: installMode === 'unknown' ? 'install_mode_unknown' : !closureReady ? 'dependency_unavailable'
-        : !options.enabled ? 'disabled' : !released ? 'release_blocked' : 'ready', capabilities };
+        : !options.enabled ? 'disabled' : !released && !integration ? 'release_blocked' : 'ready', capabilities };
   }
   return {
     async status(request: Request) { return inspect(await authorize(request)); },

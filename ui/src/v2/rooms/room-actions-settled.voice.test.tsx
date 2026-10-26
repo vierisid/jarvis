@@ -142,8 +142,6 @@ const ARGS: Record<string, Record<string, unknown>> = {
   "settings/disable_tts": {},
   "settings/set_tts_provider": { provider: "edge" },
   "settings/set_tts_voice": { voice: "en-US-AriaNeural" },
-  "settings/set_heartbeat_interval": { minutes: 30 },
-  "settings/set_heartbeat_aggressiveness": { level: "passive" },
   "settings/restart_daemon": {},
   "settings/replay_onboarding": { scope: "tutorial" },
   "tasks/create_task": { title: "Water plants" },
@@ -157,18 +155,13 @@ const ARGS: Record<string, Record<string, unknown>> = {
   "content/create_content": { title: "Draft" },
   "content/advance": { name: "launch" },
   "content/regress": { name: "launch" },
-  "content/schedule": { name: "launch", when: "tomorrow" },
+  // A time comes settled by the daemon, as the instant to use (#1022).
+  "content/schedule": { name: "launch", when: "tomorrow", when_ts: NOW + 86_400_000 },
   "memory/remember_that": { subject: "alice", predicate: "birthday", object: "march 15" },
   "goals/create_goal": { title: "Ship it" },
-  "calendar/schedule_event": { title: "Dentist", when: "tomorrow" },
+  "calendar/schedule_event": { title: "Dentist", when: "tomorrow", when_ts: NOW + 86_400_000 },
   "workflows/create_from_nl": { prompt: "" },
 };
-
-/**
- * The heartbeat actions make no request: the daemon has no endpoint for
- * them, so they can only be answered no.
- */
-const NO_REQUEST = new Set(["settings/set_heartbeat_interval", "settings/set_heartbeat_aggressiveness"]);
 
 /** The write each action makes first. */
 const WRITES: Record<string, string> = {
@@ -210,7 +203,7 @@ const sideEffecting = () => Object.entries(table.ROOM_ACTIONS).flatMap(([room, a
 test("every side-effecting action but spawn_agent is covered here", () => {
   // agents/spawn_agent has its own (AgentsRoom.voice.test.tsx, #991).
   expect(Object.keys(ARGS).sort()).toEqual(sideEffecting().filter((a) => a !== "agents/spawn_agent").sort());
-  expect(Object.keys(ARGS).length).toBe(32);
+  expect(Object.keys(ARGS).length).toBe(30);
 });
 
 for (const room of ["settings", "tasks", "workspaces", "content", "memory", "goals", "calendar", "workflows"]) {
@@ -230,12 +223,6 @@ for (const room of ["settings", "tasks", "workspaces", "content", "memory", "goa
           dispatch({ room, action, args: ARGS[key]!, ts: Date.now(), onStarted: () => { started = true; } },
             (ok, outcome) => { answer = `${ok} ${outcome}`; });
         });
-        if (NO_REQUEST.has(key)) {
-          await until(() => answer !== undefined, `${key} to answer`);
-          got.push(`${key} ${status}: ${held.length} writes, ${answer}`);
-          want.push(`${key} ${status}: 0 writes, false rejected`);
-          continue;
-        }
         await until(() => held.length > 0, `${key} to write`);
         await flush();
         // The write is out and unanswered: the room has said it started, and

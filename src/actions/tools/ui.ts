@@ -23,6 +23,7 @@ import { recordPerception } from '../../structural/telemetry.ts';
 import type { SemanticNode, SemanticSurface } from '../../structural/types.ts';
 import { uiEffectHints } from '../../authority/ui-intent';
 import { forCard } from '../../util/card-text.ts';
+import { DESKTOP_DISABLED_MESSAGE, isDesktopEnabled } from './desktop-guard.ts';
 
 /**
  * Cap for the two free-text values in `ui_act`'s gate sentence (#631).
@@ -284,6 +285,8 @@ export const uiSnapshotTool: ToolDefinition = {
   description:
     'Perceive the current app or web page as an accessibility tree: an interactable-first list of elements, each with an [id] you pass to ui_act. This is the PRIMARY way to see UI - prefer it over screenshots. Reports a structural coverage %; when coverage is low the surface is canvas/custom-drawn and you should fall back to a screenshot. Set kind="browser" for the web page, "desktop" for a native window (optionally target a pid).',
   category: 'ui',
+  // kind defaults to desktop; only an explicit browser read leaves the desktop alone (#905).
+  usesDesktop: (params) => params.kind !== 'browser',
   parameters: {
     kind: { type: 'string', description: 'What to perceive: "desktop" (native window) or "browser" (web page). Default "desktop".', required: false, enum: ['desktop', 'browser'] },
     pid: { type: 'number', description: 'Desktop only: window PID (from desktop_list_windows). Omit for the foreground window.', required: false },
@@ -323,6 +326,14 @@ export const uiActTool: ToolDefinition = {
   description:
     'Act on an element from a recent ui_snapshot by its [id], then VERIFY the effect. Actions: click, set_value (needs value), toggle, select, expand, collapse, focus, scroll_into_view, get_value. Optionally pass verify to confirm the outcome (window_appeared | element_gone | element_present | focus_moved | title_changed | value_equals). The action is dispatched EXACTLY ONCE and is never re-sent: if verification does not hold, the runtime re-reads the surface a couple of times and then reports the outcome as unconfirmed, with a diff of what changed. Decide from that diff whether to act again - an unconfirmed action may still have happened. Always returns what actually changed, so you do not need a separate snapshot to check.',
   category: 'ui',
+  // Acts on the surface the element was read from. An unknown id is not
+  // refused here: execute refuses a missing ref on its own (#905).
+  // Anything not captured from the browser is acted on through the desktop
+  // provider (dispatchAct), so that is what the switch covers.
+  usesDesktop: (params) => {
+    const entry = addressed.get(params.element_id as number);
+    return !!entry && entry.kind !== 'browser';
+  },
   captureApprovalGuard: (params) => {
     const id = params.element_id as number;
     const entry = addressed.get(id);
@@ -427,6 +438,10 @@ export const uiActTool: ToolDefinition = {
       return 'Error: the UI control changed since review - nothing was done; take a fresh ui_snapshot and review the action again';
     }
     if (typeof pc === 'string') return `Error: ${pc} - nothing was done`;
+
+    // Again here, after the re-capture: the switch may have been turned off
+    // while this call was in flight, and nothing has been acted on yet (#905).
+    if (kind !== 'browser' && !isDesktopEnabled()) return `${DESKTOP_DISABLED_MESSAGE} Nothing was done.`;
 
     let actResult: unknown;
     try {

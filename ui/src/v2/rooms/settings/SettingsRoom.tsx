@@ -31,7 +31,7 @@ import { SidecarTab } from "./tabs/SidecarTab";
 import { BillingTab } from "./tabs/BillingTab";
 import { useBilling } from "../../billing/useBilling";
 import { billingTabVisible } from "../../billing/billing-view";
-import { SETTINGS_TAB_EVENT, takeRequestedSettingsTab } from "../../shell/settings-tab-request";
+import { SETTINGS_TAB_EVENT, takeRequestedSettingsTab, settingsTabFromHref, clearRequestedSettingsTab } from "../../shell/settings-tab-request";
 import { isRoomTab, ROOM_TABS, type RoomTab } from "../../../../../src/daemon/room-tabs";
 import { withRoomActionDefaults } from "../../../../../src/daemon/room-action-targets";
 import "./SettingsRoom.css";
@@ -66,11 +66,34 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
   useEffect(() => {
     const onRequest = (e: Event) => {
       const t = (e as CustomEvent<SettingsTab>).detail;
-      if (VALID_TABS.has(t)) setTab(t);
+      if (VALID_TABS.has(t)) {
+        // Inline observers must leave it for the destination mount. An expanded
+        // destination has already received it and must not leak it to a later room.
+        if (mode === "expanded") clearRequestedSettingsTab();
+        setTab(t);
+      }
+    };
+    const onLocation = () => {
+      const t = settingsTabFromHref(window.location.href);
+      if (t) setTab(t);
     };
     window.addEventListener(SETTINGS_TAB_EVENT, onRequest);
-    return () => window.removeEventListener(SETTINGS_TAB_EVENT, onRequest);
-  }, []);
+    window.addEventListener("popstate", onLocation);
+    window.addEventListener("hashchange", onLocation);
+    return () => {
+      window.removeEventListener(SETTINGS_TAB_EVENT, onRequest);
+      window.removeEventListener("popstate", onLocation);
+      window.removeEventListener("hashchange", onLocation);
+    };
+  }, [mode]);
+  // A retained-control link names its tab in the query. Keep it in step with
+  // the selected tab, or a later remount or reload jumps back to the old one.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (!settingsTabFromHref(url.href) || url.searchParams.get("settingsTab") === tab) return;
+    url.searchParams.set("settingsTab", tab);
+    window.history.replaceState(window.history.state, "", url);
+  }, [tab]);
   // A self-hosted install has no bill, so it gets no Billing tab. Same shared
   // store as the shell banner, and refreshOnMount: false so opening Settings
   // does not itself trigger a read; see billingTabVisible for why the tab stays
@@ -251,24 +274,12 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
       }
 
       // ── General ──
-      case "set_heartbeat_interval": {
-        const minutes = Number(args.minutes);
-        if (!Number.isFinite(minutes) || minutes <= 0) return false;
-        setTab("general");
-        return answerFrom(data.setHeartbeatInterval(minutes));
-      }
-      case "set_heartbeat_aggressiveness": {
-        const level = String(args.level).toLowerCase();
-        if (!["passive", "moderate", "aggressive"].includes(level)) return false;
-        setTab("general");
-        return answerFrom(data.setHeartbeatAggressiveness(level as any));
-      }
       case "restart_daemon": {
         // Answered from the route, so a restart it refuses (no keepalive
-        // service installed) is a no (#1015). On Linux the route's
-        // `systemctl --no-block restart` can stop the daemon before this
-        // answer reaches it; nothing is heard then, where the old early yes
-        // could be.
+        // service installed) is a no (#1015). The restart itself comes a
+        // moment after the route answers: on Linux from a systemd timer
+        // 2s out (#1037), on macOS from launchctl 1s out. A spoken answer
+        // longer than that can still be cut off by the restart.
         return answerFrom(data.restartDaemon());
       }
 

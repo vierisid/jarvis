@@ -324,6 +324,20 @@
   50%      { box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 30%, transparent); }
 }
 
+/* "Not approval-gated" (#955): a community piece step runs without asking. */
+.wf-node__ungated {
+  display: flex;
+  margin-bottom: 4px;
+}
+.wf-node__ungated-desc {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 /* Small status pip on the right side of the node's head row. */
 .wf-node__run-pip {
   display: inline-block;
@@ -1628,7 +1642,8 @@
   padding-top: var(--s-2);
 }
 .wf-props__add-row input,
-.wf-props__field input[type="text"] {
+.wf-props__field input[type="text"],
+.wf-props__field input[type="password"] {
   flex: 1;
   background: var(--paper-3);
   border: 1px solid var(--rule-soft);
@@ -1638,7 +1653,8 @@
   font-size: 0.82rem;
 }
 
-.wf-props__field input[type="text"] { width: 100%; box-sizing: border-box; }
+.wf-props__field input[type="text"],
+.wf-props__field input[type="password"] { width: 100%; box-sizing: border-box; }
 
 .wf-props__segmented {
   display: flex;

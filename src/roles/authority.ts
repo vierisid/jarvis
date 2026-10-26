@@ -39,8 +39,9 @@ export function impactFromCategory(category: ActionCategory): Impact {
 }
 
 /**
- * Minimum classifier confidence required to resolve a non-destructive
- * approval by voice. Below this, we ask the user to repeat or click.
+ * Minimum classifier confidence required to resolve an approval by voice:
+ * approving a non-destructive one, or denying any (#887). Below this, we
+ * ask the user to repeat or click.
  *
  * 0.85 sits above STT's typical "noisy environment" output (~0.6–0.8) but
  * below confident clean-input output (~0.9+). Tunable; raise if voice
@@ -70,11 +71,18 @@ export type VoiceApprovalGateOutcome =
  *
  * Two-tier safety net:
  *   1. Destructive impacts (make_payment, delete_data, terminate_agent,
- *      execute_command, install_software, modify_settings) NEVER resolve
- *      by voice. A single misheard syllable could trigger a payment;
- *      the dashboard click is the only authoritative path.
- *   2. Non-destructive impacts require confidence ≥ 0.85. STT mishears,
- *      podcasts, third parties saying "yes" all hit this gate.
+ *      execute_command, install_software, modify_settings) are never
+ *      APPROVED by voice. A single misheard syllable could trigger a payment;
+ *      the dashboard click is the only authoritative path. A spoken "no"
+ *      may deny one (#887): denying is the safe direction, and refusing it
+ *      only left the action pending and its agent blocked. The caller still
+ *      holds a "no" to a card that stops an agent, where denying is not. `decision`
+ *      defaults to 'approve', so a caller that does not say is refused.
+ *   2. Every voice answer requires confidence >= 0.85, a "no" included.
+ *      STT mishears, podcasts, third parties saying "yes" all hit this gate.
+ *
+ * A click-only card (`approvalNeedsClick`) is not this function's call: the
+ * caller refuses it in both directions before asking (Q-08).
  *
  * Returning `clarify` is intentionally not the same as falling through —
  * the caller posts a thread message saying the spoken answer was heard but
@@ -88,9 +96,10 @@ export type VoiceApprovalGateOutcome =
 export function gateVoiceApprovalResolution(
   category: ActionCategory,
   confidence: number,
+  decision: 'approve' | 'cancel' = 'approve',
 ): VoiceApprovalGateOutcome {
   const impact = IMPACT_MAP[category];
-  if (impact === 'destructive') {
+  if (impact === 'destructive' && decision !== 'cancel') {
     return {
       kind: 'clarify',
       reason: 'destructive_impact',

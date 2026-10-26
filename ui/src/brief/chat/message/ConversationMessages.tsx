@@ -6,6 +6,8 @@ import { ReplyMarkdown } from "./ReplyMarkdown";
 import { running, threadItems, type MessageBinding } from "./model";
 import { useReadingPosition, type ThreadMemory } from "./reading";
 import { useBriefReducedMotion } from "../../motion";
+// The .brief-sr-only helper on the approval waiting line (#1092).
+import "../../components/controls/controls.css";
 import "./messages.css";
 
 export function ConversationMessages({ mode, binding, panelId, labelledBy, reducedMotion = false }: {
@@ -75,7 +77,11 @@ function Thread({ binding, panelId, labelledBy, reducedMotion, memory }: {
             {activities.length > 0 && <ActivityList activities={activities} turn={turn} expanded={expanded} connected={binding.connected} reduced={reduced}
               toggle={() => { scroll.beforeToggle(viewport.current?.querySelector<HTMLElement>(`[data-thread-item="${CSS.escape(item.key)}"] .brief-activity-toggle`) ?? undefined); memory.expanded[item.key] = !expanded; setVersion(v => v + 1); }}/> }
             {/* Say why the turn waits instead of "working", then the existing dashboard card for it (#1075). */}
-            {item.awaitingApproval && <p className="brief-message-notice" data-reading-anchor="approval" role="status">Waiting for your approval before continuing.</p>}
+            {/* The cards are regions, not dialogs (#1092): this line is what a screen reader hears, so it names the
+                action and changes in place when another one arrives or a card's details land. The card below
+                already shows the action, so the naming part is for screen readers only. */}
+            {item.awaitingApproval && <p className="brief-message-notice" data-reading-anchor="approval" role="status">Waiting for your approval before continuing.{" "}
+              <span className="brief-sr-only">{waitingDetail(item.pendingApprovalIds, binding.approvalCards)}</span></p>}
             {item.pendingApprovalIds.map(approvalId => {
               const card = binding.approvalCards?.[approvalId];
               return card ? <div key={approvalId} className="brief-message-approval" data-approval-id={approvalId}>
@@ -83,7 +89,10 @@ function Thread({ binding, panelId, labelledBy, reducedMotion, memory }: {
                   onApprove={decide && (() => void decide(approvalId, "approve"))} onCancel={decide && (() => void decide(approvalId, "deny"))}/>
               </div> : null;
             })}
-            {!activities.length && running(turn) && !item.awaitingApproval && <p className="brief-message-notice" role="status">{binding.connected ? "Preparing your response…" : "Reconnecting…"}</p>}
+            {!activities.length && running(turn) && !item.awaitingApproval && <div className="brief-response-working" role="status" data-reduced={reduced}>
+            <span className="brief-activity-marker" data-current={binding.connected} aria-hidden="true"/>
+            <span>{binding.connected ? (turn?.state === "queued" ? "Waiting to respond…" : "Preparing your response…") : "Reconnecting…"}</span>
+          </div>}
             {message?.content && <ReplyMarkdown text={message.content}/>}
             {(failed || cancelled) && <p className="brief-message-notice" data-error={failed} data-reading-anchor="terminal" role="status">
               {failed ? "This response could not finish." : "Response stopped."}{message?.content ? " The partial answer is kept above." : ""}</p>}
@@ -94,4 +103,11 @@ function Thread({ binding, panelId, labelledBy, reducedMotion, memory }: {
     </div>
     {!scroll.following && items.length > 0 && <button className="brief-reply-latest" type="button" onClick={scroll.toLatest}><ArrowDown size={14} aria-hidden="true"/>Latest messages</button>}
   </section>;
+}
+
+function waitingDetail(ids: readonly string[], cards: MessageBinding["approvalCards"]): string {
+  const shown = ids.flatMap(id => cards?.[id] ? [cards[id]!] : []);
+  if (shown.length > 1) return `${shown.length} actions are waiting.`;
+  if (shown.length === 1) return `Action: ${shown[0]!.intent}`;
+  return "";
 }

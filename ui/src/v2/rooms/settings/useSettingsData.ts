@@ -193,7 +193,7 @@ export function parseModelRef(ref: string | null | undefined): { provider: strin
 /** Whether a connected channel has anywhere to send approval requests (#890). */
 export type ChannelRecipientStatus =
   | { hasRecipient: true }
-  | { hasRecipient: false; reason: "empty_list" | "no_direct_message" };
+  | { hasRecipient: false; reason: "empty_list" | "no_owner" | "no_direct_message" };
 
 export interface ChannelStatus {
   channels: { telegram?: boolean; discord?: boolean };
@@ -207,6 +207,11 @@ export interface ChannelStatus {
  * that name someone. `allowed_users_rejected` is what it ignored, as text, and
  * `allowed_users_problems` says why, so a hand-edited value that names nobody
  * is visible here. Both are absent from an older daemon.
+ *
+ * `owner_id` is the channel's owner (#916): the first saved entry when it is a
+ * valid id, else null. `allowed_users_entries` is every saved entry as text in
+ * the saved order, so the field shows which one is first. Both absent from an
+ * older daemon.
  */
 export interface ChannelConfig {
   telegram: {
@@ -215,6 +220,8 @@ export interface ChannelConfig {
     allowed_users: number[];
     allowed_users_rejected?: string[];
     allowed_users_problems?: string[];
+    owner_id?: number | null;
+    allowed_users_entries?: string[];
   };
   discord: {
     enabled: boolean;
@@ -222,6 +229,8 @@ export interface ChannelConfig {
     allowed_users: string[];
     allowed_users_rejected?: string[];
     allowed_users_problems?: string[];
+    owner_id?: string | null;
+    allowed_users_entries?: string[];
     guild_id: string | null;
   };
 }
@@ -414,6 +423,7 @@ export interface UserProfileQuestion {
 }
 
 export interface UserProfileResponse {
+  revision?: string;
   questions: UserProfileQuestion[];
   profile: {
     version: 1;
@@ -432,6 +442,17 @@ export type ActionResult =
   | { ok: false; message: string };
 
 export type ProviderTestResult = ActionResult & { models?: string[] };
+
+/** A profile save refused with 409. `latest` is the newer profile the form should rebase
+ * its draft onto; it is absent when that profile could not be loaded. */
+export type ProfileSaveResult =
+  | ActionResult
+  | { ok: false; message: string; conflict: true; latest?: { revision: string; answers: Record<string, string> } };
+
+/** Non-2xx answer from postJson; carries the HTTP status so callers can tell a 409 apart. */
+class HttpError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
 
 async function getJson<T>(url: string): Promise<T | null> {
   try {
@@ -467,7 +488,7 @@ async function postJson<T>(
     } catch {
       // Not JSON. The body is the message.
     }
-    throw new Error(message || `HTTP ${r.status}`);
+    throw new HttpError(message || `HTTP ${r.status}`, r.status);
   }
   return (await r.json()) as T;
 }
@@ -522,10 +543,12 @@ export function useSettingsData() {
   const [profile, setProfile] = useState<UserProfileResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const inFlightRef = useRef(false);
+  const profileGenerationRef = useRef(0);
 
   const refresh = useCallback(async () => {
     if (inFlightRef.current) return;
     inFlightRef.current = true;
+    const profileGeneration = profileGenerationRef.current;
     try {
       const [
         llmR,
@@ -571,7 +594,7 @@ export function useSettingsData() {
       if (roleR) setRole((p) => preserveRef(p, roleR));
       if (gR) setGoogle((p) => preserveRef(p, gR));
       if (scR) setSidecars((p) => preserveRef(p, scR));
-      if (profR) setProfile((p) => preserveRef(p, profR));
+      if (profR && profileGeneration === profileGenerationRef.current) setProfile((p) => preserveRef(p, profR));
     } finally {
       inFlightRef.current = false;
       setLoading(false);
@@ -806,7 +829,7 @@ export function useSettingsData() {
       enabled?: boolean;
       bot_token?: string;
       allowed_users?: string[];
-      guild_id?: string;
+      guild_id?: string | null;
     }): Promise<ActionResult> => {
       try {
         const r = await postJson<{ ok: boolean; message: string }>(
@@ -957,31 +980,6 @@ export function useSettingsData() {
     [refresh],
   );
 
-  // ── Heartbeat (config write — root /api/config) ─────────────────────
-  // Note: backend has no dedicated heartbeat endpoint; field-level writes
-  // would go through /api/config (POST). This room exposes the read but
-  // defers heartbeat WRITES to a future backend endpoint — the UI button
-  // is still keyboard-only and disabled with a tooltip until then.
-  const setHeartbeatInterval = useCallback(
-    async (_minutes: number): Promise<ActionResult> => {
-      return {
-        ok: false,
-        message: "Heartbeat write endpoint not yet wired in daemon.",
-      };
-    },
-    [],
-  );
-
-  const setHeartbeatAggressiveness = useCallback(
-    async (_level: "passive" | "moderate" | "aggressive"): Promise<ActionResult> => {
-      return {
-        ok: false,
-        message: "Heartbeat write endpoint not yet wired in daemon.",
-      };
-    },
-    [],
-  );
-
   // ── Service control ─────────────────────────────────────────────────
   const restartDaemon = useCallback(async (): Promise<ActionResult> => {
     try {
@@ -998,33 +996,63 @@ export function useSettingsData() {
   }, [refresh]);
 
   // ── User profile ────────────────────────────────────────────────────
+  const publishProfile = useCallback(async (mutation: number, saved?: UserProfileResponse) => {
+    if (mutation !== profileGenerationRef.current) return 'superseded';
+    // Invalidate polls that started before or during the mutation. A settings
+    // refresh may already be running, so never rely on its in-flight shortcut.
+    const generation = ++profileGenerationRef.current;
+    const value = saved ?? await getJson<UserProfileResponse>("/api/user-profile");
+    if (generation !== profileGenerationRef.current) return 'superseded';
+    if (!value) return 'unavailable';
+    setProfile(value);
+    return 'published';
+  }, []);
+
   const saveProfile = useCallback(
-    async (answers: Record<string, string>): Promise<ActionResult> => {
+    async (answers: Record<string, string>, revision?: string): Promise<ProfileSaveResult> => {
+      const mutation = ++profileGenerationRef.current;
       try {
-        const r = await postJson<{ message: string }>("/api/user-profile", {
-          answers,
+        const r = await postJson<UserProfileResponse & { message: string }>("/api/user-profile", {
+          answers, revision,
         });
-        await refresh();
+        const publication = await publishProfile(mutation, r.revision && Array.isArray(r.questions) ? r : undefined);
+        if (publication !== 'published') return { ok: false, message: publication === 'unavailable'
+          ? "Profile was saved, but its latest state could not be loaded. Refresh before editing."
+          : "Another profile action started. Refresh before editing again." };
         return { ok: true, message: r.message || "Profile saved." };
       } catch (err) {
-        return { ok: false, message: err instanceof Error ? err.message : "Failed" };
+        const message = err instanceof Error ? err.message : "Failed";
+        if (!(err instanceof HttpError) || err.status !== 409) return { ok: false, message };
+        // Someone else saved first (#1101). Load the newer profile so the form can
+        // rebase its draft and the next explicit Save carries the newer revision.
+        const latest = await getJson<UserProfileResponse>("/api/user-profile");
+        const usable = latest && typeof latest.revision === "string" && Array.isArray(latest.questions) ? latest : undefined;
+        const publication = usable ? await publishProfile(mutation, usable) : 'unavailable';
+        if (publication === 'superseded') return { ok: false, message: "Another profile action started. Refresh before editing again." };
+        if (!usable || publication !== 'published') return { ok: false, conflict: true, message };
+        return { ok: false, conflict: true, message,
+          latest: { revision: usable.revision!, answers: { ...(usable.profile?.answers ?? {}) } } };
       }
     },
-    [refresh],
+    [publishProfile],
   );
 
   const clearProfile = useCallback(async (): Promise<ActionResult> => {
     try {
-      const r = await postJson<{ message: string }>(
+      const mutation = ++profileGenerationRef.current;
+      const r = await postJson<UserProfileResponse & { message: string }>(
         "/api/user-profile/clear",
         {},
       );
-      await refresh();
+      const publication = await publishProfile(mutation, r.revision && Array.isArray(r.questions) ? r : undefined);
+      if (publication !== 'published') return { ok: false, message: publication === 'unavailable'
+        ? "Profile was cleared, but its latest state could not be loaded. Refresh before editing."
+        : "Another profile action started. Refresh before editing again." };
       return { ok: true, message: r.message || "Profile cleared." };
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : "Failed" };
     }
-  }, [refresh]);
+  }, [publishProfile]);
 
   // ── Google integration ──────────────────────────────────────────────
   const saveGoogleCredentials = useCallback(
@@ -1154,8 +1182,6 @@ export function useSettingsData() {
     setSTTLanguage,
     setTTS,
     setVoiceConfig,
-    setHeartbeatInterval,
-    setHeartbeatAggressiveness,
     restartDaemon,
     saveProfile,
     clearProfile,

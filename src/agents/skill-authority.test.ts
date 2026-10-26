@@ -18,6 +18,7 @@ import { ApprovalManager, approvalNeedsClick, approvalIntentFromContext } from '
 import { AuditTrail } from '../authority/audit.ts';
 import { runSubAgent } from './sub-agent-runner.ts';
 import type { RoleDefinition } from '../roles/types.ts';
+import { RealtimeTaint } from './realtime-taint.ts';
 
 type Exec = { executeTool: (tc: { id: string; name: string; arguments: Record<string, unknown> }, signal?: AbortSignal, taint?: Set<string>) => Promise<unknown> };
 const exec = (o: AgentOrchestrator, name: string, args: Record<string, unknown> = {}) =>
@@ -189,17 +190,17 @@ describe('record_skill confirmation', () => {
 
   test('a realtime voice session cannot start a recording', async () => {
     const { orch, calls } = build(9);
-    const out = await orch.executeRealtimeToolCall('record_skill', { action: 'start' });
+    const out = await orch.executeRealtimeToolCall('record_skill', { action: 'start' }, { taint: new RealtimeTaint() });
     expect(out).toContain('[BLOCKED]');
     expect(out).toContain('confirmation in the dashboard');
     expect(calls).toEqual([]);
     // but a plain skill run at level 9 still goes through
-    expect(await orch.executeRealtimeToolCall('run_skill', { name: 'notes' })).toContain('ran');
+    expect(await orch.executeRealtimeToolCall('run_skill', { name: 'notes' }, { taint: new RealtimeTaint() })).toContain('ran');
   });
 
   test('a realtime session does not get the level substitution: the denial stands', async () => {
     const { orch, calls } = build(5);
-    const out = await orch.executeRealtimeToolCall('run_skill', { name: 'gmail' });
+    const out = await orch.executeRealtimeToolCall('run_skill', { name: 'gmail' }, { taint: new RealtimeTaint() });
     expect(out).toContain('[AUTHORITY DENIED]');
     expect(calls).toEqual([]);
   });

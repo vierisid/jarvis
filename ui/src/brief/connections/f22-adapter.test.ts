@@ -7,6 +7,12 @@ import {
 } from "./f22-adapter";
 import { ConnectionsController } from "./controller";
 import { connectionKey, connectionStatus } from "./model";
+import { ConnectionSetup } from "./setup";
+import type { ConnectedWorkspaceSnapshot } from "../../../../src/brief/connected-workspace-contracts";
+
+// Compile-time drift guard: D-27's structural subset and F-22's contract stay assignable both ways.
+const _toF22 = (s: ConnectedWorkspaceSnapshot): F22Snapshot => s;
+const _fromF22 = (s: F22Snapshot): ConnectedWorkspaceSnapshot => s;
 
 function snapshot(): F22Snapshot {
   return {
@@ -119,13 +125,8 @@ test("missing F22 remains unsupported without importing an unmerged provider", a
   ).toEqual({ state: "unsupported" });
 });
 
-// Run against the pinned F-22 export without making this D branch depend on an unmerged module.
-// Set D27_F22_SETUP_MODULE to F-22 ui/src/brief/connections/setup.ts (see the Brief README). No live service, credential write or OAuth is involved.
-const modulePath = process.env.D27_F22_SETUP_MODULE;
-const ConnectionSetup = modulePath
-  ? (await import(modulePath)).ConnectionSetup
-  : null;
-describe.skipIf(!modulePath)("real F22 headless adapter integration", () => {
+// Runs against F-22's real headless setup adapter. No live service, credential write or OAuth is involved.
+describe("real F22 headless adapter integration", () => {
   function fixture() {
     let data = snapshot(),
       available = true,

@@ -63,6 +63,7 @@ import {
 import { publishFlowVersion } from "../../workflows/db/repos/flow-publication.ts";
 import { assertVersionReady } from '../../workflows/db/repos/flow-readiness';
 import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow } from '../../workflows/db/repos/flow-turn-off';
+import { assertFlowDeletable } from '../../workflows/db/repos/workflow-removal-state';
 import { listFlowFires } from '../../workflows/db/repos/trigger-fire';
 import { bindingChangesToAccept } from '../../workflows/db/repos/binding-pins';
 import { assertCodeStepsAllowed } from "../../workflows/db/repos/flow-code-steps.ts";
@@ -949,14 +950,26 @@ function actList(project: string): Record<string, unknown> {
   };
 }
 
+/**
+ * A version as the model may see it: the Webhook trigger's signing secret
+ * (#961) is the credential that authorizes a request to start the flow, so it
+ * is replaced, not shown. Everything else is the stored version.
+ */
+export function versionForModel<V extends { trigger?: unknown } | null | undefined>(version: V): V {
+  const trigger = version?.trigger as { settings?: { input?: Record<string, unknown> } } | undefined;
+  const input = trigger?.settings?.input;
+  if (!version || !input || typeof input !== "object" || !("secret" in input) || input.secret === undefined || input.secret === "") return version;
+  return { ...version, trigger: { ...trigger, settings: { ...trigger!.settings, input: { ...input, secret: "[redacted]" } } } };
+}
+
 function actGet(flow: FlowRow): Record<string, unknown> {
   const summary = summarizeFlow(flow);
   const draft = getLatestDraft(flow.id);
   const published = flow.published_version_id ? getFlowVersion(flow.published_version_id) : null;
   return {
     ...summary,
-    latestDraft: draft,
-    published,
+    latestDraft: versionForModel(draft),
+    published: versionForModel(published),
     // Q-06: what became of its latest scheduled times, deliveries and events,
     // so "why didn't it run?" has an answer: missed, blocked, skipped,
     // delayed, or the run's own state, with how many repeats each absorbed.
@@ -1106,6 +1119,7 @@ function publishOsWarnings(trigger: unknown, deps: ManageWorkflowDeps): string[]
 
 function actDelete(flow: FlowRow, deps: ManageWorkflowDeps, project: string): Record<string, unknown> {
   // The flow was resolved in the caller's project before stopping its runs.
+  assertFlowDeletable(flow.id);
   stopRunsOfDeletedFlow(flow.id);
   // Its own predicate rather than trusting the resolve above for its scope,
   // as #692 made the connections UPDATE carry one.

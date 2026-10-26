@@ -373,14 +373,22 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 					if panelShown.CompareAndSwap(false, true) {
 						_ = platformSetWindowVisible(earlyHandle, true)
 						_ = platformFocusWindow(earlyHandle)
+						if panelTracksReveal {
+							// The 6s fallback can reveal a page still waiting on
+							// `load`; tell it now rather than after `load` (#886).
+							wv.Eval(panelRevealedScript)
+						}
 					}
 				}
 				// Injected at document start on each navigation: call the binding a
 				// beat after `load` so the first paint is done before we reveal.
-				wv.Init(`(function(){try{var r=function(){if(window.__sidecar_panel_ready)window.__sidecar_panel_ready();};` +
-					`if(document.readyState==='complete'){setTimeout(r,120);}` +
-					`else{window.addEventListener('load',function(){setTimeout(r,120);});}}catch(e){}})();`)
-				_ = wv.Bind("__sidecar_panel_ready", func() { showPanel() })
+				// On Windows the script also keeps window.__jarvis_panel_revealed
+				// false until the binding answers that the window is shown (#886).
+				wv.Init(panelReadyInitScript(panelTracksReveal))
+				_ = wv.Bind("__sidecar_panel_ready", func() bool {
+					showPanel()
+					return panelShown.Load()
+				})
 				// Timeout fallback, cancellable: stopReveal (joined by the defer
 				// above before Destroy) keeps the Dispatch CALL off a freed
 				// engine, and revealStopped keeps an already-queued closure off

@@ -1,12 +1,11 @@
 import React, { useState } from "react";
+import { MaintenanceLinks } from "../../../../brief/navigation/MaintenanceLinks";
 import type { SettingsHook } from "../useSettingsData";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
 import {
   resetOnboarding,
   type OnboardingResetScope,
 } from "../../../onboarding/resetClient";
-
-const HEARTBEAT_LEVELS = ["passive", "moderate", "aggressive"] as const;
 
 export function GeneralTab({
   data,
@@ -28,6 +27,7 @@ export function GeneralTab({
 
   return (
     <div>
+      {typeof window !== "undefined" && new URLSearchParams(window.location.search).get("briefMaintenance") === "1" && <MaintenanceLinks href={window.location.href} />}
       {/* Service / Restart */}
       <section className="v2-set__section">
         <div className="v2-set__section-head">
@@ -97,57 +97,19 @@ export function GeneralTab({
           <div>
             <h3 className="v2-set__section-title">Heartbeat</h3>
             <div className="v2-set__section-sub">
-              How often Jarvis checks in with you proactively.
+              How long Jarvis waits before acting on a due commitment by itself: aggressive 5s,
+              moderate 30s, passive never (it asks first). Read at startup; read-only.
             </div>
           </div>
         </div>
 
         {rootCfg?.heartbeat ? (
-          <>
-            <div className="v2-set__row">
-              <span className="v2-set__row-label">Interval</span>
-              <span className="v2-set__row-value">
-                {rootCfg.heartbeat.interval_minutes} min
-              </span>
-            </div>
-            <div className="v2-set__row">
-              <span className="v2-set__row-label">Active hours</span>
-              <span className="v2-set__row-value">
-                {rootCfg.heartbeat.active_hours.start}:00 –{" "}
-                {rootCfg.heartbeat.active_hours.end}:00
-              </span>
-            </div>
-            <div className="v2-set__row">
-              <span className="v2-set__row-label">Aggressiveness</span>
-              <span className="v2-set__row-value" style={{ textTransform: "capitalize" }}>
-                {rootCfg.heartbeat.aggressiveness}
-              </span>
-            </div>
-            <div className="v2-set__field">
-              <label className="v2-set__field-label">Set aggressiveness (write)</label>
-              <div style={{ display: "flex", gap: "var(--s-2)", flexWrap: "wrap" }}>
-                {HEARTBEAT_LEVELS.map((lv) => (
-                  <button
-                    key={lv}
-                    type="button"
-                    className="v2-set__btn"
-                    data-active={rootCfg.heartbeat?.aggressiveness === lv}
-                    onClick={async () => {
-                      const r = await data.setHeartbeatAggressiveness(lv);
-                      onToast(r.message, r.ok ? "ok" : "warn");
-                    }}
-                  >
-                    {lv}
-                  </button>
-                ))}
-              </div>
-              <p className="v2-set__hint">
-                Note: heartbeat write endpoint is not yet wired in the daemon — these buttons
-                surface the capability for parity with voice actions but currently return a
-                "not implemented" message.
-              </p>
-            </div>
-          </>
+          <div className="v2-set__row">
+            <span className="v2-set__row-label">Aggressiveness</span>
+            <span className="v2-set__row-value" style={{ textTransform: "capitalize" }}>
+              {rootCfg.heartbeat.aggressiveness}
+            </span>
+          </div>
         ) : (
           <div className="v2-set__empty">No heartbeat config loaded.</div>
         )}

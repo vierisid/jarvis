@@ -70,7 +70,7 @@ type Exemption = { reason: string; calls: Record<string, number> };
 
 const EXEMPT: Record<string, Exemption> = {
   'cli/autostart.ts': {
-    reason: USER_CLI + ' scheduleSystemdRestart and spawnDetachedShell (the launchd restart) are also reached from the daemon (api-routes), and run fixed systemctl/launchctl commands that restart the unit. scheduleSystemdRestart runs two: `reset-failed` clears the start rate-limit the generated unit sets (#543) before the restart it would otherwise refuse. readAutostartEnabled runs one read-only `systemctl --user is-enabled jarvis.service` for `jarvis autostart --status`, enableAutostart the `daemon-reload` + `enable` pair that repairs a unit whose file is already current, and startLaunchdService a third: a `launchctl bootout` before the bootstrap, because bootstrapping an already-loaded agent would keep the plist launchd read last (#548). All three are fixed command lines, reached only from the CLI.',
+    reason: USER_CLI + ' spawnDetachedShell (the launchd restart) is also reached from the daemon (api-routes), and runs a fixed launchctl command that restarts the agent. The systemd restart the daemon asks for (scheduleSystemdRestart) spawns nothing here since #1037: it goes through systemd-unit.ts runCommand. readAutostartEnabled runs one read-only `systemctl --user is-enabled jarvis.service` for `jarvis autostart --status`, enableAutostart the `daemon-reload` + `enable` pair that repairs a unit whose file is already current, and startLaunchdService a third: a `launchctl bootout` before the bootstrap, because bootstrapping an already-loaded agent would keep the plist launchd read last (#548). All three are fixed command lines, reached only from the CLI.',
     calls: {
       spawnDetachedShell: 1,
       defaultSpawnSync: 1,
@@ -79,7 +79,6 @@ const EXEMPT: Record<string, Exemption> = {
       probeSystemdUserService: 3,
       installSystemd: 3,
       startSystemdService: 1,
-      scheduleSystemdRestart: 2,
       uninstallSystemd: 3,
       startLaunchdService: 3,
       uninstallLaunchd: 2,
@@ -98,7 +97,7 @@ const EXEMPT: Record<string, Exemption> = {
     calls: { defaultSpawn: 1, restartDaemonDetached: 1, updateBunGlobal: 1, updateScript: 6 },
   },
   'cli/systemd-unit.ts': {
-    reason: USER_CLI + ' runCommand runs the fixed systemctl/systemd-run/journalctl command lines of `jarvis restart` and `jarvis update` for a systemd-managed daemon (#525), and adds XDG_RUNTIME_DIR back when a trimmed env lacks it; updateThroughSystemd follows the transient updater with `journalctl --user -f`.',
+    reason: USER_CLI + ' runCommand runs the fixed systemctl/systemd-run/journalctl command lines of `jarvis restart` and `jarvis update` for a systemd-managed daemon (#525), and, reached from the daemon (api-routes, via autostart.ts scheduleSystemdRestart, #1037), the read-only `systemctl --user show` of the keepalive unit, its `reset-failed` and the `systemd-run` timer that restarts it; it adds XDG_RUNTIME_DIR back when a trimmed env lacks it; updateThroughSystemd follows the transient updater with `journalctl --user -f`.',
     calls: { runCommand: 1, updateThroughSystemd: 1 },
   },
   'cli/version.ts': { reason: USER_CLI + ' Also reached from telemetry: a read-only `git -C <package root>` query.', calls: { runGit: 1 } },
@@ -122,12 +121,14 @@ const EXEMPT: Record<string, Exemption> = {
   },
   'comms/desktop-notify.ts': {
     reason:
-      'notify-send and `which`; need the session env (DBUS_SESSION_BUS_ADDRESS). NOT a fixed command ' +
+      'notify-send; needs the session env (DBUS_SESSION_BUS_ADDRESS). NOT a fixed command ' +
       'line: the title and body can be workflow- or model-authored, and reach notify-send as positional ' +
       'argv after `--` (#515). The PowerShell toast is in MODEL_EXEC.',
     // detectMethod was 2: its second `which` looked for powershell.exe on
     // PATH, and #896 replaced it with a System32 lookup that spawns nothing.
-    calls: { detectMethod: 1, sendViaNotifySend: 1 },
+    // #900 did the same for the first, `which notify-send`: detectMethod
+    // spawns nothing now, so it has no entry.
+    calls: { sendViaNotifySend: 1 },
   },
   'actions/app-control/native-exec.ts': {
     reason: '`runNative` is the injected exec seam, a name match rather than a real spawn. The real one, defaultExec, is in MODEL_EXEC.',
@@ -135,7 +136,7 @@ const EXEMPT: Record<string, Exemption> = {
   },
   'actions/app-control/linux.ts': {
     reason:
-      'xdotool/wmctrl/xprop/import/scrot via Bun.spawn (for a timeout, #802 and #895), and `which` via Bun `$`: ' + DESKTOP_SESSION + ' Model text reaches xdotool only as ' +
+      'xdotool/wmctrl/xprop/import/scrot via Bun.spawn (for a timeout, #802 and #895), each by its absolute path in a system directory (#900): ' + DESKTOP_SESSION + ' Model text reaches xdotool only as ' +
       'argv, with no shell, placed after `--`, which ends xdotool\'s own option ' +
       'parsing; key chords are checked against keysym names first (#518). ' +
       'launchApp, the model-chosen executable, is in MODEL_EXEC.',
@@ -148,9 +149,10 @@ const EXEMPT: Record<string, Exemption> = {
       // #895 did the same for every remaining `$` but checkTool's `which`
       // (getActiveWindow, listWindows, clickElement, typeText, pressKeys,
       // focusWindow), one for one, env inherited as before: counts unchanged.
+      // #900 replaced checkTool's `which` with a lookup in the system
+      // directories that spawns nothing, so checkTool has no entry.
       'LinuxAppController.captureScreen/<anonymous>': 2,
       'LinuxAppController.captureWindow/<anonymous>': 1,
-      'LinuxAppController.checkTool': 1,
       'LinuxAppController.clickElement': 4,
       'LinuxAppController.findWindowByPid': 1,
       'LinuxAppController.focusWindow': 1,
@@ -992,7 +994,6 @@ describe('no spawn under src/ inherits the daemon environment', () => {
   test("the daemon's own restart spawns are never model-exec: a restarted daemon needs its secrets", () => {
     const restarts: Array<[string, string]> = [
       ['cli/autostart.ts', 'spawnDetachedShell'],
-      ['cli/autostart.ts', 'scheduleSystemdRestart'],
       ['cli/update.ts', 'restartDaemonDetached'],
       // `systemctl --user restart` and the systemd-run updater (#525).
       ['cli/systemd-unit.ts', 'runCommand'],
@@ -1000,8 +1001,10 @@ describe('no spawn under src/ inherits the daemon environment', () => {
     for (const [file, fn] of restarts) {
       expect({ file, fn, modelExec: MODEL_EXEC[file]?.calls[fn] ?? 0 }).toEqual({ file, fn, modelExec: 0 });
       // At least one, not exactly one: a restart path may run more than one
-      // fixed systemctl command (scheduleSystemdRestart clears the unit's start
-      // rate-limit before restarting it). What matters here is that none of them
+      // fixed systemctl command (scheduleUnitRestart clears the unit's start
+      // rate-limit before scheduling the restart; the daemon's own restart
+      // route reaches it through autostart.ts scheduleSystemdRestart, which
+      // spawns nothing itself since #1037). What matters here is that none of them
       // is model-exec, asserted above.
       expect({ file, fn, exempt: (EXEMPT[file]?.calls[fn] ?? 0) > 0 }).toEqual({ file, fn, exempt: true });
     }

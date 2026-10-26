@@ -1,4 +1,5 @@
 import type { Server, ServerWebSocket } from 'bun';
+import { markPanelSession } from './panel-session-marker.ts';
 import { debugRpcGate } from '../daemon/debug-rpc-gate.ts';
 import { timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
@@ -7,6 +8,7 @@ import type { SidecarManager } from '../sidecar/manager.ts';
 import { PANEL_SESSION_COOKIE } from '../sidecar/panel-sessions.ts';
 import { getCookie } from '../util/cookie.ts';
 import { rejectsCrossSiteWrite } from './cross-site-guard.ts';
+import { isServiceWorkerScriptRequest, serviceWorkerKillSwitch } from './service-worker-kill-switch.ts';
 
 /** Constant-time string comparison to prevent timing attacks */
 export type WSMessage = {
@@ -22,6 +24,9 @@ export type WSMessage = {
       // A native panel's answer to a room_action that carried a resultId:
       // { resultId, accepted }. See src/daemon/room-action-results.ts.
       | 'room_action_result'
+      // The dashboard asked to run a room action asks to go ahead just before
+      // it runs it, { resultId }, and is told { resultId, granted } (#1025).
+      | 'room_action_claim' | 'room_action_claim_result'
       | 'thinking_start' | 'thinking_end'
       | 'workflow_event'
       | 'goal_event'
@@ -165,7 +170,7 @@ export class WebSocketServer {
   private corsOrigin: string | null = null;
   private proxyLimiter = new ProxyRateLimiter();
 
-  constructor(port: number = 3142, unixPath?: string) {
+  constructor(port: number = 3142, unixPath?: string, private readonly hostname?: string) {
     this.port = port;
     this.unixPath = unixPath ?? null;
     this.corsOrigin = `http://localhost:${port}`;
@@ -242,7 +247,7 @@ export class WebSocketServer {
     // a discriminated union). TypeScript can't narrow a conditional spread to
     // one variant, so the pair is cast to the port variant; at runtime Bun
     // receives exactly one of the two keys.
-    const listenOpts = (this.unixPath ? { unix: this.unixPath } : { port: this.port }) as { port: number };
+    const listenOpts = (this.unixPath ? { unix: this.unixPath } : { port: this.port, ...(this.hostname ? { hostname: this.hostname } : {}) }) as { port: number };
     this.server = Bun.serve<{ sidecar_id?: string; channel?: string; proxy_target?: string; panel_session?: string; _proxyUpstream?: WebSocket }>({
       ...listenOpts,
       idleTimeout: 30, // seconds — prevent timeout during heavy processing (OCR, PowerShell)
@@ -253,6 +258,11 @@ export class WebSocketServer {
         /** Set by the auth block when this request carried a live panel
          *  session; read by the /ws upgrade to bind the socket to it. */
         let panelSessionId: string | null = null;
+
+        // Before auth and routing: no route on this origin may serve a service
+        // worker, and a worker a site preview registered here before the proxy
+        // refused them is evicted on its next update check, session or not.
+        if (isServiceWorkerScriptRequest(req)) return serviceWorkerKillSwitch();
 
         // 0. Sidecar WebSocket upgrade (has its own JWT auth)
         if (pathname === '/sidecar/connect' && self.sidecarManager) {
@@ -325,6 +335,7 @@ export class WebSocketServer {
             // Remembered for the /ws upgrade below, which binds the socket to
             // the session so an open panel counts as live (panel-sessions.ts).
             panelSessionId = session.id;
+            markPanelSession(req, session.sid);
           }
           if (!session) {
             // No session yet (a freshly spawned panel) or a dead one. Bootstrap
@@ -462,7 +473,11 @@ export class WebSocketServer {
           const exactRoute = self.apiRoutes.get(pathname);
           if (exactRoute) {
             const handler = exactRoute[req.method];
-            if (handler) return handler(req);
+            if (handler) {
+              // Finishing onboarding prepares the OKR before the atomic dashboard handoff.
+              if (pathname === '/api/onboarding-next/v1/journey/transition' && req.method === 'POST') server.timeout(req, 120);
+              return handler(req);
+            }
             return new Response('Method Not Allowed', { status: 405 });
           }
 
@@ -853,6 +868,20 @@ export class WebSocketServer {
 
   getClients(): Set<ServerWebSocket<unknown>> {
     return this.clients;
+  }
+
+  /**
+   * Whether a dashboard socket may speak for this sidecar (#1026): its panel
+   * session, re-resolved now so a revoked enrollment no longer counts, was
+   * opened from that sidecar's token. Every /ws socket carries one, except
+   * under `insecure_open_access`, where no socket has an identity and every
+   * one already has the whole dashboard API: there, any socket may.
+   */
+  socketSpeaksForSidecar(ws: unknown, sidecarId: string): boolean {
+    if (this.insecureOpenAccess) return true;
+    const sessionId = (ws as { data?: { panel_session?: unknown } } | null)?.data?.panel_session;
+    if (typeof sessionId !== 'string' || !this.sidecarManager) return false;
+    return this.sidecarManager.resolvePanelSession(sessionId)?.sid === sidecarId;
   }
 }
 

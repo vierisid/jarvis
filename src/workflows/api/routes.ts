@@ -1,3 +1,7 @@
+import type { WorkflowContext } from '../../brief/workflow-context';
+import type { BriefCapabilities } from '../../brief/capabilities';
+import { requireWorkflowContext } from '../../brief/workflow-context-routes';
+import { WorkflowInspectionError } from '../../brief/inspection-values';
 /**
  * HTTP routes for the workflow runtime.
  *
@@ -85,10 +89,13 @@ import {
 } from "../db/repos/waitpoint";
 import { fireForRun, pageFlowFires } from "../db/repos/trigger-fire";
 import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
+import { assertFlowDeletable } from "../db/repos/workflow-removal-state";
 import { claimContinuation } from "../runtime/continuation";
+import { flowBindingBlock } from "../runtime/binding-refusals";
 import { emergencyHold, KILLED_REASON, manualStartRefusal } from "../runtime/emergency-hold";
 import {
   deleteConnectionInProject,
+  getConnectionByExternalId,
   getConnectionInProject,
   listConnections,
   updateConnectionById,
@@ -97,10 +104,12 @@ import {
   type AppConnectionType,
 } from "../db/repos/app-connection";
 import type { CredentialResolver } from "../credentials/adapter";
+import { pastedOAuth2Status, stampOAuth2Claim } from "../credentials/pasted-oauth2";
 import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers/manager";
 import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
 import type { PieceLookup } from "../runtime/piece-catalog";
-import { CATALOG, findCatalogEntry } from "../pieces-library/catalog";
+import { isCommunityPiece } from "../runtime/step-admission";
+import { CATALOG, excludedReason, findCatalogEntry, sharedBuildCatalog, withdrawnPiece } from "../pieces-library/catalog";
 import { piecesManagedByHost } from "../pieces-library/shared";
 import {
   installPiece,
@@ -643,6 +652,7 @@ const trapErrors = async (fn: () => Promise<Response> | Response): Promise<Respo
     // is well-formed and the caller is told exactly which grant is missing.
     if (e instanceof CodeStepsRefusedError) return err(e.message, e.status);
     const msg = e instanceof Error ? e.message : String(e);
+    if (['workflow_removed', 'workflow_history_retained', 'workflow_purging'].includes(msg)) return ok({ error: msg, code: msg }, 409);
     if (/not found/i.test(msg)) return err(msg, 404);
     return err(msg, 500);
   }
@@ -683,6 +693,8 @@ function sampleStepNameRefusal(stepName: string): Response | null {
 
 export interface CreateWorkflowRoutesOptions {
   recoveryAuthority?: AuthorityEngine;
+  briefWorkflowContext?: WorkflowContext;
+  briefCapabilities?: BriefCapabilities;
   /**
    * Optional trigger manager. When provided, every flow status / version
    * change calls `triggerManager.refresh(flowId)` so cron/webhook/event
@@ -900,6 +912,10 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             // renders a connection picker so the user picks an
             // existing connection instead of re-entering credentials.
             ...(p.auth ? { auth: p.auth } : {}),
+            // #955: a community piece's actions run without approval, and the
+            // editor badges its steps. The daemon decides, so the badge and
+            // the gate in `pieceAuthorize` cannot disagree.
+            ...(isCommunityPiece(p.name) ? { notApprovalGated: true } : {}),
             actions: Object.values(p.actions).map((a) => ({
               name: a.name,
               displayName: a.displayName,
@@ -970,10 +986,12 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // hidden by the client, so that no client can render them: not a
           // stale cached bundle, not a future one that forgets to check
           // `managed`, not curl.
+          // Only what the host's shared build installed: it leaves out the
+          // pieces whose dependencies the license policy denies (#971).
           if (managed) {
             return ok({
               managed: true,
-              entries: CATALOG.map((entry) => ({
+              entries: sharedBuildCatalog().map((entry) => ({
                 id: entry.id,
                 // Kept because the Library's search matches on it -- users
                 // type "activepieces" or a package name as readily as a
@@ -1006,8 +1024,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               iconUrl: entry.iconUrl ?? null,
               vettedVersion: entry.vettedVersion,
               vettedAt: entry.vettedAt ?? null,
-              sourceUrl: entry.sourceUrl,
-              licenseSpdx: entry.licenseSpdx,
+              sourceUrl: entry.sourceUrl as string | null,
+              licenseSpdx: entry.licenseSpdx as string | null,
               estimatedSizeMb: entry.estimatedSizeMb ?? null,
               tier: entry.tier,
               installed: installed
@@ -1017,8 +1035,38 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
                     source: "user" as const,
                   }
                 : null,
+              withdrawn: null as { reason: string } | null,
             };
           });
+          // A piece this install has but the catalog no longer lists (an
+          // EXCLUDED one, or one upstream dropped) stays installed and keeps
+          // running. Without a row it would vanish from the Library with no
+          // word on why and no Uninstall button, so it gets one: installed,
+          // withdrawn with the reason, nothing to install or update.
+          for (const piece of manifest.pieces) {
+            if (findCatalogEntry(piece.id)) continue;
+            const gone = withdrawnPiece(piece.id);
+            entries.push({
+              id: piece.id,
+              npmPackage: piece.npmPackage,
+              versionRange: piece.versionRange,
+              displayName: gone.displayName,
+              description: gone.description,
+              iconUrl: null,
+              vettedVersion: piece.resolvedVersion,
+              vettedAt: null,
+              sourceUrl: gone.sourceUrl,
+              licenseSpdx: gone.licenseSpdx,
+              estimatedSizeMb: null,
+              tier: "community" as const,
+              installed: {
+                resolvedVersion: piece.resolvedVersion,
+                installedAt: piece.installedAt,
+                source: "user" as const,
+              },
+              withdrawn: { reason: gone.reason },
+            });
+          }
           return ok({ managed: false, entries });
         }),
     },
@@ -1028,6 +1076,10 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         trapErrors(async () => {
           if (managed) return err(MANAGED_MESSAGE, 403);
           const { id } = (req as RequestWithParams<{ id: string }>).params;
+          // Excluded everywhere: say why rather than "unknown", for a fresh
+          // install and for an Update of one installed before the exclusion.
+          const excluded = excludedReason(id);
+          if (excluded !== null) return err(excluded, 410);
           const entry = findCatalogEntry(id);
           if (!entry) return err(`unknown piece id "${id}"`, 404);
           const result = await withLibraryLock(() => installPiece(id));
@@ -1141,7 +1193,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflows/connections": {
       GET: (req) =>
         trapErrors(() => {
-          const list = listConnections(callerProject(req)).map((c) => ({
+          const list = listConnections(callerProject(req)).map((c) => ({ c, oauth2: pastedOAuth2Status(c.type, c.value) })).map(({ c, oauth2 }) => ({
             id: c.id,
             externalId: c.externalId,
             displayName: c.displayName,
@@ -1154,7 +1206,10 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             preSelectForNewProjects: c.preSelectForNewProjects,
             created: c.created,
             updated: c.updated,
-            // value intentionally omitted -- secrets stay server-side.
+            // value intentionally omitted -- secrets stay server-side. For an
+            // OAuth2 row only whether Jarvis refreshes it and when its token
+            // expires, so the panel can say so (#954).
+            ...(oauth2 ? { oauth2 } : {}),
           }));
           const sources = (opts.credentialResolver?.list() ?? []).map((s) => ({
             id: s.id,
@@ -1207,6 +1262,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // later fail with a confusing "auth missing" at run time).
           const schemaError = validateConnectionValueShape(body.type, body.value);
           if (schemaError) return err(schemaError);
+          // An OAuth2 token with `expires_in` is dated now, as upstream dates
+          // the tokens it stores, so Jarvis knows when to refresh it (#954).
+          const previous = getConnectionByExternalId(callerProject(req), body.pieceName, body.externalId);
           const conn = upsertConnection({
             projectId: callerProject(req),
             externalId: body.externalId,
@@ -1214,7 +1272,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             type: body.type,
             pieceName: body.pieceName,
             pieceVersion: body.pieceVersion ?? "0.0.0",
-            value: body.value,
+            value: stampOAuth2Claim(body.type, body.value, previous?.value),
           });
           return ok(
             {
@@ -1307,7 +1365,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // `updateConnectionById` for the race this also closes.
           const merged = updateConnectionById(callerProject(req), id, {
             ...(body.displayName !== undefined ? { displayName: body.displayName } : {}),
-            ...(body.value !== undefined ? { value: body.value } : {}),
+            ...(body.value !== undefined ? { value: stampOAuth2Claim(current.type, body.value, current.value) } : {}),
             ...(status ? { status } : {}),
           });
           if (!merged) return err("connection not found", 404);
@@ -1398,6 +1456,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // A step parked while Jarvis was paused is released by Jarvis on
           // Resume, never by a URL (Q-08).
           if (wp.type === "HOLD") return err("This waitpoint holds a step while Jarvis is paused; Jarvis releases it when resumed", 403);
+          // A step waiting for a place in its flow's card budget is released
+          // by Jarvis when one frees, never by a URL (#1039).
+          if (wp.type === "DEFER") return err("This waitpoint holds a step until its workflow has room for another approval card; Jarvis releases it", 403);
           if (wp.resumedAt !== null) return err("waitpoint already resumed", 410);
           const run = getFlowRun(wp.flowRunId);
           if (!run) return err("waitpoint references a missing run", 410);
@@ -1506,7 +1567,14 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             opts.status = status;
           }
           const flows = listFlows(callerProject(req), opts);
-          return ok(flows.map(serializeFlow));
+          // #1080: why an enabled workflow is not doing its work, from its
+          // latest finished run, so the list can say so. One unreadable run
+          // costs its flow the badge, never the whole list.
+          const blockedOf = (flow: Parameters<typeof flowBindingBlock>[0]) => {
+            try { return flowBindingBlock(flow); }
+            catch (error) { console.error(`[workflows] blocked state of ${flow.id} unreadable:`, error); return null; }
+          };
+          return ok(flows.map((flow) => ({ ...serializeFlow(flow), blocked: blockedOf(flow) })));
         }),
       POST: (req) =>
         trapErrors(async () => {
@@ -1606,6 +1674,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           const project = callerProject(req);
           if (!getFlowInProject(project, id)) return err("flow not found", 404);
+          assertFlowDeletable(id);
           stopRunsOfDeletedFlow(id);
           // BEHAVIOUR CHANGE (#729): a flow that does not exist used to answer
           // 200 `{ ok: true }`. It is a 404 now, because a flow in another
@@ -1992,6 +2061,21 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // await is the one this run uses rather than the stale pointer.
           const flow = scopedFlow(req, id);
           if (!flow) return err("flow not found", 404);
+          if (Object.hasOwn(read.body, 'brief')) {
+            let response: Response;
+            try {
+              const provider = requireWorkflowContext(opts.briefCapabilities, opts.briefWorkflowContext);
+              if (provider.projectId !== callerProject(req)) return err('flow not found', 404);
+              response = ok(provider.start(id, read.body), 202);
+            } catch (e) {
+              if (e instanceof WorkflowInspectionError) response = ok({ code: e.code }, e.status);
+              else if (e instanceof WorkflowReadinessError || e instanceof CodeStepsRefusedError) response = ok({ code: 'not_ready' }, 409);
+              else if (e instanceof Error && (e.message === 'workflow_removed' || e.message === 'workflow_purging')) response = ok({ code: e.message }, 409);
+              else response = ok({ code: 'unavailable' }, 503);
+            }
+            response.headers.set('Cache-Control', 'no-store');
+            return response;
+          }
           const body = read.body as {
             environment?: unknown;
             triggeredBy?: unknown;
@@ -2249,7 +2333,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           if (!run) return err("run not found", 404);
           // Acknowledgement closes the durable dispatch fence. It does not
           // claim that an already-dispatched remote effect was rolled back.
-          return ok({ ok: true, ...cancelFlowRun(run.id) });
+          // The ids of the cards it closed are for the daemon's surfaces, not this answer.
+          const { closedApprovalIds: _closed, ...result } = cancelFlowRun(run.id);
+          return ok({ ok: true, ...result });
         }),
     },
 
@@ -2271,8 +2357,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             created: wp.created,
             ...(children.some(child => child.waitpointId === wp.id)
               ? { child: children.find(child => child.waitpointId === wp.id) }
-              // A HOLD is released by Jarvis on Resume, never by a URL (Q-08).
-              : { resumeUrl: wp.type === "HOLD" ? null : `/api/webhooks/waitpoints/${wp.id}` }),
+              // A HOLD is released by Jarvis on Resume, a DEFER when its flow
+              // has room for its card; never by a URL (Q-08, #1039).
+              : { resumeUrl: wp.type === "HOLD" || wp.type === "DEFER" ? null : `/api/webhooks/waitpoints/${wp.id}` }),
           }));
           return ok({ runId, waitpoints });
         }),

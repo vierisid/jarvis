@@ -70,6 +70,7 @@ export class ChatTurnRepository {
       [input.turnId, this.workspaceId, input.conversationId, input.requestId, input.text, input.speak ? 1 : 0, userMessageId, assistantMessageId, createdAt]);
       if (ids.length) this.attachments.bind(input.conversationId, input.turnId, ids);
       insertConversationMessage(this.db, input.conversationId, { role: 'user', content: input.text }, userMessageId, createdAt);
+      this.conversations.titleFromFirstMessage(input.conversationId);
       const turn = this.get(input);
       return { turn, created: true, events: [
         this.append(turn, { kind: 'message', message: { ...this.ref(turn), messageId: userMessageId, role: 'user', content: input.text, createdAt, ...(turn.attachments.length ? { attachments: turn.attachments } : {}) } }),

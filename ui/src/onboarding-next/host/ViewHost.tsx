@@ -20,19 +20,20 @@ function Recovery({ retry }: { retry: () => void }) {
 }
 /** Only local, trusted adapter render ports cross this boundary. No JSON can
  * select a component, callback, capability, account or project. */
-export function ViewHost({ session, legacy, children }: { session: Session; legacy: ReactNode; children: ReactNode }) {
+export function ViewHost({ session, legacy, children, renderWorkspace }: { session: Session; legacy: ReactNode; children?: ReactNode; renderWorkspace?: (result: ReactNode | null) => ReactNode }) {
   const state = useSyncExternalStore(session.subscribe, session.state, session.state);
   const workspace = useRef({ session, mounted: false, generation: 0 });
   if (workspace.current.session !== session) workspace.current = { session, mounted: false, generation: workspace.current.generation + 1 };
-  if (state.mode === 'complete') workspace.current.mounted = true;
+  const result = state.mode === 'journey' && state.view === 'result' && !!renderWorkspace;
+  if (state.mode === 'complete' || result) workspace.current.mounted = true;
   // Replay overlays the existing workspace instead of replacing its room and
   // conversation instances. Fresh setup must not start the live app early.
-  const visible = state.mode === 'complete';
+  const visible = state.mode === 'complete' || result;
   return <>
     <div key={workspace.current.generation} hidden={!visible} inert={!visible} style={{ display: visible ? 'contents' : 'none' }}>
-      {workspace.current.mounted ? children : null}
+      {workspace.current.mounted ? renderWorkspace ? renderWorkspace(result ? <OnboardingViewHost session={session} legacy={legacy}>{null}</OnboardingViewHost> : null) : children : null}
     </div>
-    <OnboardingViewHost session={session} legacy={legacy}>{null}</OnboardingViewHost>
+    {!result && <OnboardingViewHost session={session} legacy={legacy}>{null}</OnboardingViewHost>}
   </>;
 }
 function OnboardingViewHost({ session, legacy, children }: { session: Session; legacy: ReactNode; children: ReactNode }) {
@@ -102,13 +103,13 @@ function OnboardingViewHost({ session, legacy, children }: { session: Session; l
     case 'tour': case 'pebble-tour': props = { ...props, onNavigate: intent }; break;
     case 'activation': props = { ...props, onDraftChange: draft, onIntent: intent }; break;
     case 'build': props = { ...props, model: { ...model, actions: { ...(base.actions as Record<string, unknown>), openResult: !state.busy && (base.actions as Record<string, unknown>)?.openResult === true } }, onIntent: intent }; break;
-    case 'result': props = { ...props, onReview: (value: unknown) => action('review', value), onContinue: (value: unknown) => action('finish', value) }; break;
+    case 'result': props = { ...props, onReview: (value: unknown) => action('review', value), onContinue: (value: unknown) => action('finish', value), onRefresh: (value: unknown) => action('refresh', value), onOpenWorkflow: (value: unknown) => action('open_workflow', value) }; break;
     case 'legacy-provider-setup': props = { ...props, onComplete: () => action('complete'), onBack: () => action('back') }; break;
   }
   const View = state.view === 'legacy-provider-setup' ? state.presentation?.ports?.View as ComponentType<Record<string, unknown>> : session.views()?.[state.view];
-  return <div className="on-host" data-theme={theme} data-onboarding-step={state.view} ref={headingHost}>
+  return <div className={`on-host${state.view === 'result' ? ' brief-root' : ''}`} data-theme={theme} data-brief-theme={theme} data-onboarding-step={state.view} ref={headingHost}>
     {state.blocked ? <Recovery retry={() => void session.refresh()} /> : <ViewBoundary key={`${state.journey.journeyId}:${state.view}`} recover={() => void session.refresh()}>
-      <div aria-busy={state.busy} inert={state.busy}>{View ? <View {...props} /> : <Recovery retry={() => void session.refresh()} />}</div>
+      <div className="on-host__view" aria-busy={state.busy} inert={state.busy}>{View ? <View {...props} /> : <Recovery retry={() => void session.refresh()} />}</div>
     </ViewBoundary>}
   </div>;
 }

@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS } from '../db';
+import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS, getWorkflowDb } from '../db';
+import { TimerWaitpointScheduler } from '../timer-scheduler';
 import { createFlow } from '../db/repos/flow';
 import { createDraftVersion, type FlowTriggerNode } from '../db/repos/flow-version';
 import { createFlowRun, updateRun } from '../db/repos/flow-run';
@@ -64,7 +65,7 @@ function services(approvals: ApprovalManager, call?: { name: string; args: Recor
     authorityEngine: new AuthorityEngine({ default_level: 10, governed_categories: governed as never, overrides: [],
       context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' }),
     emergencyController: new EmergencyController(), auditTrail: audit, approvalManager: approvals,
-    agentOrchestrator: { getPrimary: () => ({ id: 'primary' }), spawnSubAgent: child, reapAgent: () => {} } as never,
+    agentOrchestrator: { getPrimary: () => ({ id: 'primary' }), getProfileFor: () => null, getTaintGating: () => null, spawnSubAgent: child, reapAgent: () => {} } as never,
     agentSpecialists: new Map([[ROLE.id, ROLE]]) as never,
     agentScopedRegistry: () => registry,
     llmManager: { chatTier: async (_tier: string, _origin: string, messages: Array<{ role: string }>) =>
@@ -81,7 +82,7 @@ const delegateIn = (s: ReturnType<typeof services>, runId: string) => s.agentDel
 const startCards = (approvals: ApprovalManager) => approvals.getPending().filter((r) => r.action_category === 'spawn_agent');
 
 describe('workflow cards that start an agent count against the waiting-start cap (#1017)', () => {
-  test('a repeatedly triggered workflow stops raising start cards at the cap, and the run past it is refused', async () => {
+  test('a repeatedly triggered workflow stops raising start cards at the cap, and the run past it waits for a place (#1039)', async () => {
     const approvals = new ApprovalManager();
     const audit = new AuditTrail();
     const s = services(approvals, undefined, ['spawn_agent'], audit);
@@ -92,13 +93,17 @@ describe('workflow cards that start an agent count against the waiting-start cap
     }
     expect(startCards(approvals)).toHaveLength(cap);
     const over = routine.newRun();
-    await expect(delegateIn(s, over.id)).rejects.toThrow(`${cap} requests to start an agent or a workflow are already waiting`);
-    // No card, and the effect is refused for good rather than left to ask again.
+    // No card, and no failure (owner, 2026-10-21: defer, don't fail): the
+    // step waits, undecided, and raises its card when a place frees.
+    const reply = await delegateIn(s, over.id);
+    expect(reply.status).toBe('approval_required');
+    expect(reply.approval).toMatchObject({ approvalId: '', code: 'APPROVALS_WAITING' });
+    expect(reply.approval!.hold).toContain(`${cap} requests to start an agent or a workflow are already waiting`);
     expect(startCards(approvals)).toHaveLength(cap);
-    expect(listWorkflowEffects(over.id).map((e) => [e.route, e.status, e.decision, e.approvalId])).toEqual([['agent', 'blocked', 'denied', null]]);
-    // Audited as a refusal, so a flood shows in the trail.
+    expect(listWorkflowEffects(over.id).map((e) => [e.route, e.status, e.decision, e.approvalId])).toEqual([['agent', 'pending', 'unresolved', null]]);
+    // Audited once as needing approval, unexecuted and with no card yet, so a flood shows in the trail.
     expect(audit.query({ action: 'spawn_agent' }).filter((r) => r.agent_id === `workflow:${over.id}`)
-      .map((r) => [r.authority_decision, r.executed])).toEqual([['denied', 0]]);
+      .map((r) => [r.authority_decision, r.executed, r.approval_id])).toEqual([['approval_required', 0, null]]);
   });
 
   test('a card whose run has ended does not use up the budget', async () => {
@@ -115,12 +120,13 @@ describe('workflow cards that start an agent count against the waiting-start cap
     expect((await delegateIn(s, routine.newRun().id)).status).toBe('approval_required');
   });
 
-  test('a spawn the delegated agent asks for past the cap is refused to the agent, and nothing waits for it', async () => {
+  test('a spawn the delegated agent asks for past the cap parks the step until a place frees (#1039)', async () => {
     const approvals = new ApprovalManager();
     const registry = new ToolRegistry();
     registry.register({ name: 'start_helper', category: 'delegation', description: 'Synthetic spawn', parameters: {},
       authorityGate: () => ({ actionCategory: 'spawn_agent', intent: 'Start a helper' }), execute: async () => 'ok' });
-    const s = services(approvals, { name: 'start_helper', args: {}, registry });
+    const audit = new AuditTrail();
+    const s = services(approvals, { name: 'start_helper', args: {}, registry }, ['spawn_agent'], audit);
     const routine = flow();
     const cap = maxWaitingSpawnCards();
     // This run's delegation is approved before the budget fills up...
@@ -128,12 +134,25 @@ describe('workflow cards that start an agent count against the waiting-start cap
     const outer = await delegateIn(s, first.id);
     approvals.approve(outer.approval!.approvalId, 'dashboard');
     for (let i = 0; i < cap; i++) await delegateIn(s, routine.newRun().id);
-    // ...and its agent's spawn finds no room.
+    // ...and its agent's spawn finds no room: the step waits with it, as it does on a card.
     const done = await delegateIn(s, first.id);
-    expect(done.status).not.toBe('approval_required');
-    expect(done.toolCalls[0]!.error).toContain('already waiting');
+    expect(done.status).toBe('approval_required');
+    expect(done.approval).toMatchObject({ approvalId: '', code: 'APPROVALS_WAITING' });
     expect(startCards(approvals)).toHaveLength(cap);
-    expect(listWorkflowEffects(first.id).find((e) => e.route === 'agent-tool:1')).toMatchObject({ status: 'blocked', decision: 'denied', approvalId: null });
+    expect(listWorkflowEffects(first.id).find((e) => e.route === 'agent-tool:1')).toMatchObject({ status: 'pending', decision: 'unresolved', approvalId: null });
+    // Its rows, the sub-agent gate's and the boundary's, say it needed approval and name no card: there is none yet.
+    expect(audit.query({ action: 'spawn_agent' }).filter((r) => r.tool_name === 'start_helper')
+      .map((r) => [r.authority_decision, r.approval_id])).toEqual([['approval_required', null], ['approval_required', null]]);
+    // A place frees: the scheduler wakes the run, and the call raises its own card.
+    updateRun(first.id, { status: 'PAUSED' });
+    approvals.deny(startCards(approvals)[0]!.id, 'dashboard');
+    new TimerWaitpointScheduler(15_000).tick();
+    expect(getWorkflowDb().query(`SELECT flow_run_id AS id FROM workflow_job WHERE json_extract(payload, '$.executionType') = 'RESUME'`).all())
+      .toEqual([{ id: first.id }]);
+    updateRun(first.id, { status: 'RUNNING' });
+    const asked = await delegateIn(s, first.id);
+    expect(asked.status).toBe('approval_required');
+    expect(approvals.getRequest(asked.approval!.approvalId)!.tool_name).toBe('start_helper');
   });
 
   test('a workflow a step starts counts against the same budget', async () => {
@@ -147,7 +166,7 @@ describe('workflow cards that start an agent count against the waiting-start cap
     // Starting a workflow asks as a start, and fills the flow's budget the same way.
     for (let i = 0; i < cap; i++) expect((await startIn(starter.newRun().id)).approval).toBeDefined();
     expect(startCards(approvals)).toHaveLength(cap);
-    await expect(startIn(starter.newRun().id)).rejects.toThrow('already waiting');
+    expect((await startIn(starter.newRun().id)).approval).toMatchObject({ approvalId: '', code: 'APPROVALS_WAITING' });
     expect(startCards(approvals)).toHaveLength(cap);
   });
 
@@ -190,7 +209,7 @@ describe('workflow cards that start an agent count against the waiting-start cap
     // The rest of the budget is used by delegations of later runs.
     for (let i = 1; i < cap; i++) expect((await delegateIn(s, routine.newRun().id)).status).toBe('approval_required');
     expect(startCards(approvals)).toHaveLength(cap);
-    await expect(delegateIn(s, routine.newRun().id)).rejects.toThrow('already waiting');
+    expect((await delegateIn(s, routine.newRun().id)).approval).toMatchObject({ approvalId: '', code: 'APPROVALS_WAITING' });
   });
 
   test('a stop is never capped', async () => {

@@ -138,6 +138,13 @@ export interface EngineBundle {
    * (#671, #762; see bundle-integrity.ts).
    */
   digest: string | null;
+  /**
+   * Only on a fresh BUILD: every file this build wrote into `bundleDir`, by
+   * name, with the sha256 of the bytes it wrote, computed in memory like
+   * `digest`. The hosting builder copies exactly these, checked against these
+   * values (#862), so a stale or planted file beside them never ships.
+   */
+  builtFiles?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -287,6 +294,8 @@ export const PATCHED_VENDOR_SOURCES = [
   // the old table -- a stale bundle that silently governs the wrong actions.
   '../../runtime/piece-effects.ts',
   '../../runtime/piece-effect-guard.ts',
+  // The egress guard the engine's file-property download goes through (#961).
+  '../../runtime/http-egress.ts',
   '../../runtime/decision-document.ts',
   // The CODE-step sandbox builds its child's env from this allowlist, so it is
   // compiled into the bundle too: widening or narrowing the allowlist has to
@@ -853,12 +862,15 @@ export function assertHoistedStaging(nodeModules: string): void {
 /** Runs the staging install in `dir` with `args`. Injectable for tests. */
 export type StagingInstaller = (dir: string, args: readonly string[]) => Promise<void>;
 
-const bunStagingInstall: StagingInstaller = (dir, args) =>
+export const bunStagingInstall: StagingInstaller = (dir, args) =>
   new Promise<void>((res, rej) => {
     // Third-party packages, none of which need the daemon's secrets. The
     // allowlist keeps what bun needs (PATH, HOME, proxies, registry and CA
     // settings); lifecycle scripts are skipped -- see BUN_INSTALL_ARGS.
-    const child = spawn("bun", [...args], {
+    // process.execPath, not "bun" (#864): the binary that installs what the
+    // engine is built from is the one running the daemon, never the first
+    // `bun` on PATH.
+    const child = spawn(process.execPath, [...args], {
       cwd: dir,
       stdio: "inherit",
       env: sanitizedEnv(),
@@ -1051,10 +1063,14 @@ export async function buildEngineBundle(opts?: {
   // Published by rename, `main.js` LAST: the sourcemap and metafile first, so
   // the file whose existence means "built" never appears before its siblings,
   // and a reader (or a crash) never sees it torn.
+  const metaJson = JSON.stringify(result.metafile);
+  const builtFiles: Record<string, string> = {};
+  for (const f of outputs) builtFiles[relative(bundleDir, f.target)] = createHash("sha256").update(f.contents).digest("hex");
+  builtFiles[relative(bundleDir, bundlePath + ".meta.json")] = createHash("sha256").update(metaJson).digest("hex");
   for (const f of outputs) if (f !== main) publishAtomically(f.target, f.contents);
-  publishAtomically(bundlePath + ".meta.json", JSON.stringify(result.metafile));
+  publishAtomically(bundlePath + ".meta.json", metaJson);
   publishAtomically(bundlePath, main.contents);
-  return { bundlePath, hash, bundleDir, digest };
+  return { bundlePath, hash, bundleDir, digest, builtFiles };
 }
 
 /**

@@ -54,6 +54,53 @@ export const SITE_CHAT_ROUTING_NOTE =
   + 'can use the project tools. The composer is still a general chat box, so '
   + 'ordinary requests unrelated to the project are handled exactly as elsewhere.';
 
+/**
+ * What the ROUTER is told on a Pebble turn (#927).
+ *
+ * The Pebble hands its "execute, don't ask" directive to the task tier as
+ * `siteContext` (pebbleActionDirectives in daemon/pebble-desktop-context.ts,
+ * via buildPanelContext in daemon/index.ts), and the router never
+ * sees it. The router is the tier that decides whether anything runs at all,
+ * and its static prompt tells it it does no real work and knows no state, so
+ * on a spoken "open Chrome" it was free to answer "shall I go ahead?" and
+ * stop there.
+ *
+ * Deliberately a fixed string, for the same reason as SITE_CHAT_ROUTING_NOTE:
+ * the panel context interpolates window titles, panel names and the
+ * foreground app, all text other software writes, and none of it belongs in
+ * front of the component that decides what runs. Nothing is interpolated
+ * here, and nothing may be: the routing fact is the same on every Pebble
+ * turn.
+ *
+ * It changes routing only. Authority is decided at dispatch (taint, the
+ * approval cards and the levels), not by anything the router is told, and
+ * the one confirmation the Pebble directive keeps (genuinely irreversible
+ * actions) stays with the task tier, which has that directive in full. That
+ * question reaches the user only through the router (a paused task's
+ * needs_input), so the note tells the router to relay it, never to answer it:
+ * "do not ask" alone would have read as permission to skip it.
+ *
+ * It names no tier or template of its own: which tier and template a request
+ * gets is the static Delegation Catalog's call (a look-up is research, a
+ * workflow build is high), and a pair named here would override that table on
+ * every spoken turn.
+ *
+ * Rendered in the DYNAMIC half, not the cached static one: the static half is
+ * one byte-stable prefix shared by every chat and channel, and a per-channel
+ * sentence there would split it into two cached prefixes that evict each
+ * other whenever the Pebble and the dashboard alternate.
+ */
+export const PEBBLE_VOICE_ROUTING_NOTE =
+  'This turn was spoken to the desktop voice assistant (the Pebble). A spoken '
+  + 'request IS the user\'s authorization: when they ask you to do something, '
+  + 'delegate it now, routed by the Delegation Catalog above, instead of first '
+  + 'asking whether to go ahead or whether they want you to. Whether a genuinely '
+  + 'irreversible action needs a confirmation is decided after you delegate, not '
+  + 'by you. If a delegated task comes back needing input or confirmation, ask '
+  + 'the user its question as written and wait for their reply; never answer it '
+  + 'yourself. Before delegating, ask a question only when the request is '
+  + 'genuinely ambiguous. Your reply is spoken aloud, so keep it short.';
+
 export type ConvSystemContext = {
   /** User persona (name, timezone, role, etc.) - short identity block. */
   userIdentity?: string;
@@ -134,6 +181,12 @@ export type ConvTurn = {
    * sentence with no project data in it (`SITE_CHAT_ROUTING_NOTE`).
    */
   siteContext?: string;
+  /**
+   * This turn was spoken to the Pebble (#927). A boolean on purpose: the
+   * router gets one fixed sentence for it (`PEBBLE_VOICE_ROUTING_NOTE`), and
+   * a flag is a field nobody can later widen into carrying text.
+   */
+  pebbleVoice?: boolean;
 };
 
 export type ConvTaskEvent =
@@ -445,13 +498,20 @@ export class ConvOrchestrator {
 
         // Dispatch produces a result envelope. We notify the caller as the
         // task moves through its lifecycle via the registry subscription.
+        // The registry is shared by every chat, and every turn with no
+        // context key (main chat, pebble, voice, background turns) shares the
+        // null context, so the context check alone let another such turn's
+        // task report as this one's (#915). Filter by this dispatch's own
+        // id, as the resume path does; the dispatcher reports it at creation,
+        // before the task can start running.
+        let ownId: string | null = null;
         const unsub = this.registry.subscribe(rec => {
-          if (rec.status === 'running' && rec.id && this.sameContext(rec, turn)) {
+          if (rec.status === 'running' && ownId !== null && rec.id === ownId) {
             onTaskEvent?.({ type: 'task_started', record: rec });
           }
         });
         try {
-          const envelope = await this.dispatcher.dispatch(request, turn);
+          const envelope = await this.dispatcher.dispatch(request, turn, (created) => { ownId = created.id; });
           const rec = this.registry.get(envelope.task_id);
           if (rec) {
             if (envelope.status === 'completed') {
@@ -753,6 +813,13 @@ export class ConvOrchestrator {
     if (turn.scope) {
       parts.push('# This Chat');
       parts.push(SITE_CHAT_ROUTING_NOTE);
+      parts.push('');
+    }
+
+    // Fixed text only, never the panel context (see PEBBLE_VOICE_ROUTING_NOTE).
+    if (turn.pebbleVoice) {
+      parts.push('# Spoken Request');
+      parts.push(PEBBLE_VOICE_ROUTING_NOTE);
       parts.push('');
     }
 

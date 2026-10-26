@@ -2,6 +2,7 @@ import type { Database } from 'bun:sqlite';
 import { getDb } from '../vault/schema';
 import { getGoal } from '../vault/goals';
 import { getGoalApplication } from '../goals/application-service';
+import { initialGoalUnplanned } from '../goals/initial-goal-notice';
 import { measurementProgress, readMeasurementReceipt } from '../goals/measurements';
 import { listObservations, readObservationReceipt } from '../goals/observations';
 import type { Goal } from '../goals/types';
@@ -39,6 +40,24 @@ export class GoalMeasurements {
     } catch { return 'unavailable'; }
   }
   private available(): void { if (this.readiness() !== 'ready') throw Error('Goal measurements unavailable'); }
+  /** Complete collection for Today and both goal rooms, from one database snapshot. */
+  list() {
+    this.available();
+    return this.db.transaction(() => {
+      const rows = this.db.query<{ id: string }, []>('SELECT id FROM goals ORDER BY sort_order, created_at, id').all();
+      if (rows.length > 10000) throw new Error('Goal collection exceeds display capacity');
+      const data = rows.map(row => {
+        const goal = getGoal(row.id); if (!goal) throw new Error('Goal changed during read');
+        return { ...projectMeasuredGoal(goal), title: goal.title, parentId: goal.parent_id, pathTitle: goal.title };
+      });
+      return { state: data.length ? 'ready' as const : 'empty' as const, data, asOf: Date.now() };
+    })();
+  }
+  /** Whether onboarding finished without the interview goal because it could not be planned. */
+  initialGoal(): { state: 'unplanned' | 'none' } {
+    this.available();
+    return this.db.transaction(() => ({ state: initialGoalUnplanned() && !this.db.query('SELECT 1 FROM goals LIMIT 1').get() ? 'unplanned' as const : 'none' as const }))();
+  }
   async read(query: { goalId: string }): Promise<BriefReadResult<BriefGoal>> {
     this.available(); const goal = getGoal(query.goalId);
     return goal ? { state: 'ready', data: projectMeasuredGoal(goal), asOf: Date.now() } : { state: 'empty', asOf: Date.now() };

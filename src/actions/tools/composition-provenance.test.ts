@@ -36,6 +36,13 @@ const PINNED_PROMPTS: Record<string, Record<string, string>> = {
     'hosted production': '50b09c7486cfd034ad8e1ce36df92e5869d78cedd1dab6d87ffa251d1ca00968',
     'tool names only': '5f053e6a131f0eae15ee8756433f4657938fa2f41867b3b5e4a3e2e861ae1a1a',
   },
+  // w8-5 adds human-readable trigger and action labels to both composer paths.
+  'w8-5': {
+    bare: '41a5c1b342330f660916dea599a42626057f0b4a1963f5beee9ddaa15e37c556',
+    production: '4f67a0b66e587a9520c024009c1be166d6250c8d39c9eb6738cf4eaa3fc5c7a5',
+    'hosted production': '405b7af3c2e676305b613659d12334820e0fa485630e68451493806062932b07',
+    'tool names only': '4f32051ea90de5cd65eb4da745b94eee805e2986372938b6037f159019b7930f',
+  },
 };
 const PINNED_POLICIES: Record<PlanningPolicy, string> = {
   'baseline-v1': fingerprint(''),

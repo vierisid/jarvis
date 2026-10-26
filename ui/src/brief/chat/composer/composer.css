@@ -21,8 +21,8 @@
 .brief-root .brief-composer-send-mark { position:relative; display:block; width:30px; height:30px; overflow:hidden; transform-origin:50% 50%; }
 .brief-root .brief-composer-send-mark[hidden] { display:none; }
 /* Crop the exact official lockup to its mark, as in the workspace opener. */
-.brief-root .brief-composer-send-mark .brief-brand { position:absolute; width:136.31px; height:38.04px; max-width:none; left:-4.02px; top:-4.02px; }
-.brief-root .brief-composer-send-mark .brief-brand img { width:136.31px; height:38.04px; max-width:none; }
+.brief-root .brief-composer-send-mark .brief-brand { position:absolute; width:140.62px; height:38.04px; max-width:none; left:-4.02px; top:-4.02px; }
+.brief-root .brief-composer-send-mark .brief-brand img { width:140.62px; height:38.04px; max-width:none; }
 .brief-root .brief-composer [aria-disabled="true"] { cursor:default; }
 .brief-root .brief-composer-unavailable { flex:none; margin-top:auto; min-height:56px; display:flex; align-items:center; color:var(--brief-secondary); font:400 14px/20px var(--brief-sans); }
 

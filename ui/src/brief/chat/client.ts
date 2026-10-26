@@ -5,7 +5,7 @@ import { uuid } from '../../lib/uuid';
 import type { WebSocketChatAdapter, WSMessage } from '../../hooks/useWebSocket';
 import type { ConversationTabs } from '../../../../src/vault/conversation-lifecycle';
 import { ChatApiError, conversationApi, isMessagePage, type ConversationApi } from './api';
-import { ConversationStore, type ChatSnapshot } from './store';
+import { ConversationStore, type ChatSnapshot, type StoragePort } from './store';
 
 export interface ChatClientState {
   attachmentsEnabled: boolean;
@@ -36,7 +36,7 @@ export class BriefConversationClient {
   private outbox = new Map<string, BriefSendTurn>();
   private queue: Promise<unknown> = Promise.resolve();
   readonly adapter: WebSocketChatAdapter;
-  constructor(private readonly api: ConversationApi = conversationApi(), storage?: Pick<Storage, 'getItem' | 'setItem'>, files: AttachmentApi = attachmentApi()) {
+  constructor(private readonly api: ConversationApi = conversationApi(), storage?: StoragePort, files: AttachmentApi = attachmentApi()) {
     this.store = new ConversationStore(storage);
     this.attachments = new DraftAttachments(this.store, files, () => this.state.mode === 'scoped' && this.state.attachmentsEnabled,
       id => [...this.outbox.values()].some(input => input.attachmentIds?.includes(id)));
@@ -135,6 +135,14 @@ export class BriefConversationClient {
     if (frame.type === 'brief_chat_event' && isChatEvent(payload)) {
       if (this.store.applyEvent(payload, frame.timestamp)) this.sync(id, this.store.getSnapshot().conversations[id]!.sequence);
       if (payload.payload.kind === 'message' || payload.payload.kind === 'terminal') this.accepted(payload.requestId);
+      if (payload.payload.kind === 'message' && payload.payload.message.role === 'user'
+        && this.store.getSnapshot().conversations[id]?.conversation.title === 'New chat') {
+        // Read the canonical title without changing selection, drafts or subscriptions.
+        void this.mutate(async signal => {
+          const tabs = await this.api.tabs(signal);
+          if (!signal.aborted) for (const conversation of tabs.tabs) this.store.putConversation(conversation);
+        }).catch(() => {});
+      }
     } else if (frame.type === 'brief_chat_sync') {
       const pending = this.syncRequests.get(id);
       if (!pending || frame.id !== pending.id) return true;
@@ -190,6 +198,14 @@ export class BriefConversationClient {
     }).finally(() => { if (generation === this.generation) this.patch({ pending: this.state.pending - 1 }); });
     this.queue = result.catch(() => {}); return result;
   }
+  ensureActive = () => this.mutate(async signal => {
+    const active = this.store.getSnapshot().activeId;
+    if (active) return active;
+    const conversation = await (this.api.ensureActive?.(signal) ?? this.api.create(signal));
+    if (signal.aborted) throw new Error('Conversation opening interrupted.');
+    this.store.putConversation(conversation, true); this.sync(conversation.conversationId, 0);
+    return conversation.conversationId;
+  });
   add = () => this.mutate(async signal => {
     const conversation = await this.api.create(signal); if (signal.aborted) throw new Error('Conversation request was interrupted.');
     this.store.putConversation(conversation, true); this.sync(conversation.conversationId, 0); return conversation.conversationId;

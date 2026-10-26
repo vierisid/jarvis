@@ -103,12 +103,13 @@ base, so a trigger cursor saved before a restart never hides new events.
 
 ## Continuations
 
-A paused run continues once per pause. A due timer, a resolved approval and a
-POST to a resume URL all claim the continuation the same way: the waitpoint is
-consumed, the RESUME job queued naming it, and the continuation recorded, in
-one transaction. While one continuation of a run is queued or running, another
-is not queued behind it. A timer or approval whose own step already finished
-is retired instead of waking the run's next pause.
+A paused run continues once per pause. A due timer, a resolved approval, a
+POST to a resume URL and a required child workflow that finished all claim the
+continuation the same way: the waitpoint is consumed, the RESUME job queued
+naming it, and the continuation recorded, in one transaction. While one
+continuation of a run is queued or running, another is not queued behind it. A
+timer, approval or child whose own step already finished is retired instead of
+waking the run's next pause.
 
 A resume URL is not held to that last rule: the approval piece's Create
 Approval Links step makes its URL in one step, and the run waits for it at a
@@ -116,10 +117,9 @@ later one. Each URL still continues the run once, and only while it is paused
 with no other continuation queued.
 
 A parent run waiting on a required child workflow is continued by the child-run
-scheduler (`runtime/child-run-scheduler.ts`), which consumes the child's
-waitpoint and queues the RESUME in its own transaction, without a ledger row.
-Its waitpoint refuses a manual resume (403). The run handler still stops it if
-its workflow was turned off.
+scheduler (`runtime/child-run-scheduler.ts`) once the child has finished. The
+child's waitpoint refuses a manual resume (403). A parent whose workflow was
+turned off is stopped instead of continued.
 
 The run handler checks the waitpoint again, refuses a run of a workflow turned
 off since it began (and stops it), and does not continue a draft edited while

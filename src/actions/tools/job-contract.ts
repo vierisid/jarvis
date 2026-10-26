@@ -28,7 +28,7 @@ import { TOOL_ACTION_MAP } from '../../authority/tool-action-map';
 import { getCronTimezone } from '../../lib/cron-scheduler';
 import { VERIFIED_MANIFESTS } from '../../workflows/pieces-library/verified-manifests-generated';
 import { BOUNDED_TOOL_NAMES } from '../../workflows/runtime/effect-capabilities';
-import { GOVERNED_PIECE_ADAPTERS, resolveGovernedPieceAction } from '../../workflows/runtime/piece-effects';
+import { ALL_PIECE_ADAPTERS, GOVERNED_PIECE_ADAPTERS, resolveGovernedPieceAction } from '../../workflows/runtime/piece-effects';
 import { walkFlowNodes } from '../../workflows/db/flow-graph';
 import type { FlowTriggerNode } from '../../workflows/db/repos/flow-version';
 
@@ -162,12 +162,14 @@ interface Kind {
 function pieceKind(pieceName: string, actionName: string | undefined): Kind | null {
   if (samePiece(pieceName, AGENT)) return { effect: 'spawn_agent', open: 'delegates to an agent, which chooses its own tools when it runs', agent: true };
   if (samePiece(pieceName, WORKFLOW)) return { effect: 'spawn_agent', open: 'starts another workflow, whose steps this check does not see' };
-  const adapter = GOVERNED_PIECE_ADAPTERS.find(a => samePiece(pieceName, a.pieceName));
+  const adapter = ALL_PIECE_ADAPTERS.find(a => samePiece(pieceName, a.pieceName));
   if (adapter) {
     if (!actionName) return null;
     const governed = resolveGovernedPieceAction(adapter.pieceName, actionName);
     if (!governed) return null;
-    return OPEN_ACTIONS.has(actionName) || !governed.known
+    // An action decided by its input (an HTTP request's method, #961) is open
+    // here: a contract names the step, not the value, so only the worst case bounds it.
+    return OPEN_ACTIONS.has(actionName) || !governed.known || governed.byInput
       ? { effect: governed.category, open: `uses ${pieceName} ${actionName}, whose effect depends on the call`, serviceOnly: true }
       : { effect: governed.category };
   }

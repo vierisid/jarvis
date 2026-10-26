@@ -221,3 +221,13 @@ describe('GoalEstimator', () => {
     expect(est!.similar_past_goals.length).toBe(2);
   });
 });
+
+test('parseGoal hands the caller signal to the model call', async () => {
+  initDatabase(':memory:');
+  const seen: unknown[] = [];
+  const llm: any = { chatTier: async (_t: string, _s: string, messages: any[], opts?: any) => { seen.push(opts?.signal); return mockLLM.chat(messages, opts); } };
+  const controller = new AbortController();
+  await new NLGoalBuilder(llm).parseGoal('Ship MVP', undefined, { signal: controller.signal });
+  await new NLGoalBuilder(llm).parseGoal('Ship MVP');
+  expect(seen).toEqual([controller.signal, undefined]);
+});

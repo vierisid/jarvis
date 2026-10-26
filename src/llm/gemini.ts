@@ -1,3 +1,4 @@
+import { CHAT_MODEL_SUGGESTIONS } from './model-catalog.ts';
 import type {
   LLMProvider,
   LLMMessage,
@@ -259,14 +260,7 @@ export class GeminiProvider implements LLMProvider {
         .filter(id => id.startsWith('gemini'))
         .sort();
     } catch {
-      return [
-        'gemini-3.1-pro-preview',
-        'gemini-3-deep-think',
-        'gemini-3-flash-preview',
-        'gemini-3-1-flash-lite-preview',
-        'gemini-2.5-pro',
-        'gemini-2.5-flash',
-      ];
+      return [...CHAT_MODEL_SUGGESTIONS.gemini];
     }
   }
 

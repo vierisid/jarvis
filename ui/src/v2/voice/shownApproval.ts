@@ -45,8 +45,10 @@ export function newestApprovalId(approvals: ReadonlyArray<{ id: string; timestam
  * keeps reporting `visible`, because WebView2 only learns of that through
  * `put_IsVisible`, which the vendored engine only ever sets to TRUE. The
  * panels use SW_HIDE only to keep a panel hidden while its page first loads
- * (at most 6s, `panels_runtime.go`), and close a panel by destroying it, so
- * the guard holds for a panel the person minimised or closed.
+ * (at most 6s, `panels_runtime.go`), and close a panel by destroying it. For
+ * that first load the panel marks the page not yet revealed, and the caller
+ * passes `currentVisibility()` (`panelReveal.ts`), which reads it as hidden
+ * (#886).
  */
 export function shownApprovalId(
   approvals: ReadonlyArray<{ id: string; timestamp: number }>,

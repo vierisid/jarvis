@@ -14,13 +14,18 @@ import { listDueTimerWaitpoints, markWaitpointResumed } from './db/repos/waitpoi
 import { stopTurnedOffRun, turnedOffReason } from './db/repos/flow-turn-off.ts';
 import { resumeCompletedChildRuns } from './runtime/child-run-scheduler';
 import { resumeResolvedWorkflowEffects } from './runtime/effect-approval-scheduler';
+import { releaseDeferredSteps } from './runtime/deferred-cards';
 import { claimContinuation, releaseEmergencyHolds } from './runtime/continuation';
 import { emergencyHold } from './runtime/emergency-hold';
 
 export class TimerWaitpointScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(private readonly intervalMs = 15_000) {}
+  /**
+   * `onCardClosed` hears each workflow card the child and terminal sweep
+   * closed (#1039), to drop it from the dashboard.
+   */
+  constructor(private readonly intervalMs = 15_000, private readonly onCardClosed?: (approvalId: string) => void) {}
 
   start(): void {
     if (this.timer) return;
@@ -50,8 +55,11 @@ export class TimerWaitpointScheduler {
     catch (error) { console.error('[Workflow emergency] releasing held steps failed:', error); }
     try { resumed += resumeResolvedWorkflowEffects(); }
     catch (error) { console.error('[Workflow Authority] approval recovery failed:', error); }
-    try { resumed += resumeCompletedChildRuns(); }
+    try { resumed += resumeCompletedChildRuns(this.onCardClosed); }
     catch (error) { console.error('[TimerScheduler] child continuation failed:', error); }
+    // After the sweeps that close cards, so a place they freed is used now (#1039).
+    try { resumed += releaseDeferredSteps(now); }
+    catch (error) { console.error('[Workflow Authority] releasing waiting steps failed:', error); }
     let due;
     try {
       due = listDueTimerWaitpoints(new Date(now).toISOString());

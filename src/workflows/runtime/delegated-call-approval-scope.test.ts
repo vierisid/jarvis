@@ -2,10 +2,17 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS } from '../db';
+import { initWorkflowDb, closeWorkflowDb, getWorkflowDb, DEFAULT_IDS } from '../db';
 import { createFlow } from '../db/repos/flow';
 import { createDraftVersion, type FlowTriggerNode } from '../db/repos/flow-version';
-import { createFlowRun } from '../db/repos/flow-run';
+import { createFlowRun, updateRun } from '../db/repos/flow-run';
+import { cancelFlowRun } from '../db/repos/run-cancellation';
+import { deleteFlow } from '../db/repos/flow';
+import { stopRunsOfDeletedFlow } from '../db/repos/flow-turn-off';
+import { stopUnfinishedRunsForKill } from './emergency-hold';
+import { signalRunEnded } from './cancellation-signals';
+import { withRunCancellation } from './cancellation';
+import { currentRunOwner } from '../../actions/run-owner-scope';
 import { listWorkflowEffects } from '../db/repos/workflow-effect';
 import { ToolRegistry, type ToolDefinition, type ToolGate } from '../../actions/tools/registry';
 import { AuthorityEngine, type AuthorityConfig } from '../../authority/engine';
@@ -16,7 +23,7 @@ import { approvalIntentFields } from '../../authority/approval-delivery';
 import { spendApproval } from '../../authority/approved-action-scope';
 import { checkpointExecution } from '../../actions/execution-scope';
 import { AgentOrchestrator } from '../../agents/orchestrator';
-import { AgentTaskManager } from '../../agents/task-manager';
+import { AgentTaskManager, RUN_STOPPED_REASON } from '../../agents/task-manager';
 import { createManageAgentsTool, startPersistentAgent, type AgentToolDeps } from '../../actions/tools/agents';
 import { createDelegateTool } from '../../actions/tools/delegate';
 import type { RoleDefinition } from '../../roles/types';
@@ -81,7 +88,7 @@ function setup(registry: ToolRegistry, name: string, args: Record<string, unknow
     // One orchestrator, as in the daemon, when the call's own tools spawn from
     // it: the delegated agent is then a real agent the spawn sink can judge
     // (#1014). Otherwise a stand-in whose spawn only spends the grant.
-    agentOrchestrator: opts.orchestrator ?? { getPrimary: () => ({ id: 'primary' }), spawnSubAgent: child, reapAgent: () => {} } as never,
+    agentOrchestrator: opts.orchestrator ?? { getPrimary: () => ({ id: 'primary' }), getProfileFor: () => null, getTaintGating: () => null, spawnSubAgent: child, reapAgent: () => {} } as never,
     agentSpecialists: new Map([[ROLE.id, opts.orchestrator ? COORDINATOR : ROLE]]) as never,
     agentScopedRegistry: () => registry,
     llmManager: { chatTier: async (_tier: string, _origin: string, messages: Array<{ role: string }>) =>
@@ -163,6 +170,99 @@ describe('an approved workflow-delegated call is not asked again at the spawn si
     // the task at its first model call.
     await new Promise((r) => setTimeout(r, 30));
     expect(s.taskManager.listTasks().map((t) => [t.status, t.result?.response])).toEqual([['completed', 'researched']]);
+  });
+
+  // Owner, #1018: a task started from a workflow dies with its run.
+  test('a task the approved call started is cancelled when its run is stopped (#1018)', async () => {
+    const approvals = new ApprovalManager();
+    const s = sink(approvals, { taskRunsUntilStopped: true });
+    const f = setup(s.registry, 'manage_agents', { action: 'spawn', specialist: 'spec', task: 'research the thing' }, approvals, { orchestrator: s.orch });
+    const { done } = await f.approveThrough();
+    expect(done.toolCalls[0]!.error).toBeUndefined();
+    const [task] = s.taskManager.listTasks();
+    expect(task).toMatchObject({ status: 'running', workflowRunId: f.run.id });
+    expect(cancelFlowRun(f.run.id).accepted).toBe(true);
+    for (let i = 0; i < 200 && s.taskManager.getTask(task!.id)!.status === 'running'; i++) await new Promise((r) => setTimeout(r, 1));
+    expect(s.taskManager.getTask(task!.id)).toMatchObject({ status: 'cancelled', cancelRequested: RUN_STOPPED_REASON });
+  });
+
+  test('a run that finishes on its own leaves the task it started running (#1018)', async () => {
+    const approvals = new ApprovalManager();
+    const s = sink(approvals, { taskRunsUntilStopped: true });
+    const f = setup(s.registry, 'manage_agents', { action: 'spawn', specialist: 'spec', task: 'research the thing' }, approvals, { orchestrator: s.orch });
+    await f.approveThrough();
+    updateRun(f.run.id, { status: 'SUCCEEDED', finishTime: Date.now() });
+    // A finished run cannot be stopped, so nothing reaches the task.
+    expect(cancelFlowRun(f.run.id).accepted).toBe(false);
+    await new Promise((r) => setTimeout(r, 10));
+    const [task] = s.taskManager.listTasks();
+    expect(task!.status).toBe('running');
+    s.taskManager.cancel(task!.id);
+  });
+
+  /** The approved spawn's task, running until something cancels it. */
+  async function ownedTask() {
+    const approvals = new ApprovalManager();
+    const s = sink(approvals, { taskRunsUntilStopped: true });
+    const f = setup(s.registry, 'manage_agents', { action: 'spawn', specialist: 'spec', task: 'research the thing' }, approvals, { orchestrator: s.orch });
+    await f.approveThrough();
+    const [task] = s.taskManager.listTasks();
+    expect(task).toMatchObject({ status: 'running', workflowRunId: f.run.id });
+    const status = async () => {
+      for (let i = 0; i < 200 && s.taskManager.getTask(task!.id)!.status === 'running'; i++) await new Promise((r) => setTimeout(r, 1));
+      return s.taskManager.getTask(task!.id)!;
+    };
+    return { s, f, task: task!, status };
+  }
+
+  test('deleting the workflow while its run executes cancels the task the run started (#1018)', async () => {
+    const t = await ownedTask();
+    expect(stopRunsOfDeletedFlow(t.f.run.flowId)).toBe(1);
+    deleteFlow(t.f.run.flowId);
+    expect(await t.status()).toMatchObject({ status: 'cancelled', cancelRequested: RUN_STOPPED_REASON });
+  });
+
+  test('Kill stops the run and cancels the task the run started (#1018, Q-08)', async () => {
+    const t = await ownedTask();
+    expect(stopUnfinishedRunsForKill()).toBe(1);
+    expect(await t.status()).toMatchObject({ status: 'cancelled', cancelRequested: RUN_STOPPED_REASON });
+  });
+
+  test('a run that ended on its own releases its task: deleting the workflow later leaves it running (#1018)', async () => {
+    const t = await ownedTask();
+    updateRun(t.f.run.id, { status: 'SUCCEEDED', finishTime: Date.now() });
+    signalRunEnded(t.f.run.id);
+    stopRunsOfDeletedFlow(t.f.run.flowId);
+    deleteFlow(t.f.run.flowId);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(t.s.taskManager.getTask(t.task.id)!.status).toBe('running');
+    t.s.taskManager.cancel(t.task.id);
+  });
+
+  test('a run stops new tasks when stopped, gone, or turned off while live; once ended on its own it only reads as ended (#1018)', () => {
+    const states = () => {
+      const owner = withRunCancellation(f.run.id, () => currentRunOwner())!;
+      return [owner.stopped(), owner.ended()];
+    };
+    const f = setup(new ToolRegistry(), 'manage_agents', {});
+    expect(states()).toEqual([false, false]);
+    getWorkflowDb().run("UPDATE flow SET status = 'DISABLED', disabled_at = ? WHERE id = ?", [Date.now() + 1, f.run.flowId]);
+    expect(states()).toEqual([true, false]);
+    updateRun(f.run.id, { status: 'SUCCEEDED', finishTime: Date.now() });
+    expect(states()).toEqual([false, true]);
+    getWorkflowDb().run('DELETE FROM flow_run WHERE id = ?', [f.run.id]);
+    expect(states()).toEqual([true, false]);
+  });
+
+  // Q-06 lets a run executing at turn-off finish; it starts no new task (#1018 review).
+  test('a run whose workflow was turned off while it executes starts no background task (#1018)', async () => {
+    const approvals = new ApprovalManager();
+    const s = sink(approvals, { taskRunsUntilStopped: true });
+    const f = setup(s.registry, 'manage_agents', { action: 'spawn', specialist: 'spec', task: 'research the thing' }, approvals, { orchestrator: s.orch });
+    getWorkflowDb().run("UPDATE flow SET status = 'DISABLED', disabled_at = ? WHERE id = ?", [Date.now() + 1, f.run.flowId]);
+    const { done } = await f.approveThrough();
+    expect(String(done.toolCalls[0]!.error ?? done.toolCalls[0]!.result)).toContain('turned off');
+    expect(s.taskManager.listTasks()).toEqual([]);
   });
 
   // A stop takes only a real card at the sink (#963). This one is: a person

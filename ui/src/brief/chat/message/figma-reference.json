@@ -1,11 +1,11 @@
 {
   "file": "eNfKeirIKLZLlZEasrurZa",
   "page": "81:2",
-  "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+  "checkpoint": "UI-35 \u00b7 Dashboard craft pass verified \u00b7 prototype limits recorded",
   "today": "81:212",
   "specification": "738:418541",
   "workbench": "738:379733",
-  "inspection": "Saved UI-20 native source, native audit and full-size Light/Dark response exports; no fresh editor inspection.",
+  "inspection": "2026-10-21: open Chrome Figma editor and prototype inspected, UI-20 working/finished Light and Dark reference (738:402158 and 738:379733). Current work uses an 8px pebble; completed markers remain still; response appears immediately.",
   "native_source": "workspace/Jarvis/dashboard-brief-figma-2026-09-14-v6-1/ui-20-activity-replies-2026-10-02",
   "geometry": {
     "readingInset": 16,

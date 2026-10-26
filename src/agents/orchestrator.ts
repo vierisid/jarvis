@@ -1,7 +1,7 @@
 import type { RoleDefinition } from '../roles/types.ts';
 import type { SystemPromptParts } from '../roles/prompt-builder.ts';
 import type { LLMMessage, LLMResponse, LLMStreamEvent, LLMToolCall, LLMTool, ContentBlock } from '../llm/provider.ts';
-import { guardImageSize } from '../llm/provider.ts';
+import { capTextBlocks, guardImageSize } from '../llm/provider.ts';
 import { LLMManager } from '../llm/manager.ts';
 import type { Tier } from '../llm/tiers.ts';
 import { AgentInstance, canSpawnChildren } from './agent.ts';
@@ -14,6 +14,7 @@ import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFail
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { taintProfile, mergeProfiles, TAINT_PROFILE_LABEL, type TaintGating } from '../authority/taint-gating.ts';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import type { RealtimeTaint } from './realtime-taint.ts';
 
 /**
  * Whether a resumed task buffer holds a browser read whose element ids the
@@ -50,6 +51,7 @@ import {
 } from '../actions/tools/tool-relevance/discover.ts';
 import { getToolFilterPolicy } from '../actions/tools/tool-relevance/policy.ts';
 import { toolsInScope, toolInScope, outOfScopeMessage, type TurnToolScope } from '../actions/tools/tool-scope.ts';
+import { desktopRefusal } from '../actions/tools/desktop-guard.ts';
 import { withTurnScopeId } from '../actions/tools/turn-scope-store.ts';
 import { newSnapshotReadLog, withSnapshotReadLog } from '../actions/tools/snapshot-read-log.ts';
 import type { LLMProviderEntry } from '../config/types.ts';
@@ -225,8 +227,6 @@ export class AgentOrchestrator {
    * read the parent turn's taint through getEffectiveProfile().
    */
   private taintStore = new AsyncLocalStorage<Set<string>>();
-  /** Realtime voice has no turn objects; its taint lives per session here. */
-  private realtimeTaint: Set<string> = new Set();
   /** Logged once: tools ran with no authority engine wired (tests, embedded use). */
   private warnedNoAuthority = false;
   /**
@@ -366,14 +366,28 @@ export class AgentOrchestrator {
     this.taintGating = gating;
   }
 
-  /** The taint set of the turn currently executing, or the realtime session's. */
+  /**
+   * The taint set of the turn or realtime voice session currently executing.
+   * Outside both there is no taint to read and nowhere to keep it: a fresh
+   * empty set, so a background or workflow path neither inherits marks a voice
+   * session read nor leaves its own for one to find (#928).
+   */
   private currentTaint(): Set<string> {
-    return this.taintStore.getStore() ?? this.realtimeTaint;
+    return this.taintStore.getStore() ?? new Set<string>();
   }
 
   /** Sources of outside content read so far in the calling turn (or voice session). */
   getTurnTaint(): ReadonlySet<string> {
     return new Set([...this.currentTaint()].filter((mark) => !mark.startsWith(DECLINED_INTENT)));
+  }
+
+  /**
+   * Sources of outside content a realtime voice session has read, for a check
+   * made outside its tool calls (a dashboard room action the session asked
+   * for, #973).
+   */
+  getRealtimeSessionTaint(session: RealtimeTaint): ReadonlySet<string> {
+    return new Set([...session.marks].filter((mark) => !mark.startsWith(DECLINED_INTENT)));
   }
 
   /**
@@ -387,11 +401,6 @@ export class AgentOrchestrator {
     // Trimmed as request_approval trims it, so the card and the rule agree.
     const trimmed = typeof category === 'string' ? category.trim() : category;
     if (isActionCategory(trimmed)) this.currentTaint().add(`${DECLINED_INTENT}${trimmed}`);
-  }
-
-  /** Voice sessions have no turn objects: the WS layer calls this on each final user transcript. */
-  resetRealtimeTaint(): void {
-    this.realtimeTaint.clear();
   }
 
   private noteTaint(toolName: string, category: string | undefined): void {
@@ -506,18 +515,92 @@ export class AgentOrchestrator {
   private inheritedRestrictions = new Map<string, AuthorityProfile>();
 
   /**
+   * The roles whose restrictive overrides bind an agent (#1043): the role of
+   * every agent that started it, directly or through agents of its own, and
+   * of its hierarchy parent. Kept as role ids and read against the engine
+   * whenever a run starts or a lifecycle decision is made, so an override the
+   * owner adds later applies from the agent's next run; a run already going
+   * keeps the profile it started with, and Pause is the immediate lever. One
+   * the owner removes later stops binding an agent the primary or the
+   * dashboard started from its next run, but NOT one a sub-agent started:
+   * that agent also inherited its caller's restrictions as of the spawn
+   * (`inheritedRestrictions`), which carried the override then, and keeps
+   * them for its life. Removed when the agent is.
+   */
+  private starterRoles = new Map<string, string[]>();
+
+  /** Who started each agent: the agent that asked, else its hierarchy parent (#1044). */
+  private startedBy = new Map<string, string>();
+
+  /** Told the id of every agent removed, so state kept elsewhere goes with it (#1044). */
+  private reapListeners = new Set<(agentId: string) => void>();
+
+  onAgentReaped(listener: (agentId: string) => void): () => void {
+    this.reapListeners.add(listener);
+    return () => { this.reapListeners.delete(listener); };
+  }
+
+  /**
+   * Whether whoever is acting may read `agentId`'s status, tasks and results
+   * (#1044). Nobody but the primary or the person acting: yes, everything. A
+   * sub-agent: only itself and the agents it started, directly or through
+   * agents of its own. A call that has returned, or an agent that is gone,
+   * reads nothing.
+   */
+  mayInspectAgent(agentId: string): boolean {
+    const acting = actingAgent();
+    if (!acting) return true;
+    if (acting.settled || !this.hierarchy.getAgent(acting.agentId)) return false;
+    const seen = new Set<string>();
+    for (let id: string | undefined = agentId; id !== undefined && !seen.has(id); id = this.startedBy.get(id)) {
+      if (id === acting.agentId) return true;
+      seen.add(id);
+    }
+    return false;
+  }
+
+  /**
+   * The deny and requires-approval overrides scoped to a role that started
+   * `agentId`, as a profile (#1043, owner decision): a deny becomes a denied
+   * category and a requires-approval a governed one. An allow is never
+   * carried, so this only tightens, and a profile is applied after the
+   * child's own decision, so it wins over the child's role-specific allow.
+   * Global overrides are not carried here: the engine already applies them to
+   * every role.
+   */
+  private roleOverrideRestrictions(agentId: string): AuthorityProfile | null {
+    return this.restrictiveRoleOverrides(this.starterRoles.get(agentId) ?? []);
+  }
+
+  /** The deny and requires-approval overrides scoped to any of `roles`, as a profile. */
+  private restrictiveRoleOverrides(roles: readonly string[]): AuthorityProfile | null {
+    if (!roles.length || !this.authorityEngine) return null;
+    const binding = this.authorityEngine.getConfig().overrides
+      .filter((o) => o.role_id !== undefined && roles.includes(o.role_id) && (!o.allowed || o.requires_approval));
+    if (binding.length === 0) return null;
+    const denied = [...new Set(binding.filter((o) => !o.allowed).map((o) => o.action))];
+    const governed = [...new Set(binding.filter((o) => o.allowed && o.requires_approval).map((o) => o.action))];
+    const from = [...new Set(binding.map((o) => o.role_id!))];
+    return {
+      label: `an override on a role above it (${from.join(', ')})`,
+      ...(governed.length ? { governed_categories: governed } : {}),
+      ...(denied.length ? { denied_categories: denied } : {}),
+    };
+  }
+
+  /**
    * The sub-agent whose tool call is running, and the restrictions it is
    * under: the profile its run was given, and its taint judged by THIS
-   * orchestrator's taint gating, whether or not its own run gates on taint (a
-   * workflow-delegated run does not). Null when nobody but the primary or the
-   * person is acting.
+   * orchestrator's taint gating, whether or not its own run gates on taint
+   * (every run started here does, and a workflow delegation does since
+   * #1041; an embedded caller may not). Null when nobody but the primary or
+   * the person is acting.
    *
-   * Not carried: an override the owner scoped to the caller's ROLE
-   * (`overrides[].role_id`). The engine matches those on the role being
-   * judged, so a child of another role is not bound by them -- exactly as a
-   * specialist the primary starts is not bound by an override on the
-   * primary's role. What is carried is everything the caller's run is
-   * restricted by as a profile, plus its level and tools.
+   * Also carried since #1043: the deny and requires-approval overrides the
+   * owner scoped to the role of an agent that started this one
+   * (`roleOverrideRestrictions`). Never an allow. What is carried is
+   * everything the caller's run is restricted by as a profile, plus its
+   * level and tools.
    */
   private actingCaller(action: LifecycleAction, subject: string): { agent: AgentInstance; restrictions: AuthorityProfile | null } | null {
     const acting = actingAgent();
@@ -537,7 +620,8 @@ export class AgentOrchestrator {
         ? 'The tool call that asked for this has already finished, so nothing was done.'
         : 'The agent that asked for this is no longer running, so nothing was done.');
     }
-    return { agent, restrictions: tighten(acting.profile, taintProfile(this.taintGating, new Set(acting.taint))) };
+    return { agent, restrictions: tighten(acting.profile, this.roleOverrideRestrictions(agent.id),
+      taintProfile(this.taintGating, new Set(acting.taint))) };
   }
 
   /**
@@ -550,7 +634,13 @@ export class AgentOrchestrator {
   getProfileFor(agentId: string): AuthorityProfile | null {
     // An assign is gated as a start (`manageAgentsGate`), so it is refused as one.
     const caller = this.actingCaller('spawn_agent', this.hierarchy.getAgent(agentId)?.agent.role.id ?? agentId);
-    return tighten(this.getEffectiveProfile(), this.inheritedRestrictions.get(agentId) ?? null, caller?.restrictions ?? null);
+    // And a sub-agent asking for this run binds it by its OWN role's
+    // overrides too (#1043 review): a task it assigns to an agent somebody
+    // else started would otherwise run free of them. On a spawn the actor's
+    // role is in the child's starter roles already; this is for an assign.
+    return tighten(this.getEffectiveProfile(), this.inheritedRestrictions.get(agentId) ?? null,
+      this.roleOverrideRestrictions(agentId), caller?.restrictions ?? null,
+      caller ? this.restrictiveRoleOverrides([caller.agent.agent.role.id]) : null);
   }
 
   /**
@@ -645,6 +735,12 @@ export class AgentOrchestrator {
     // (`getProfileFor`), including a task the primary assigns it later.
     const inherited = tighten(caller?.restrictions ?? null, this.inheritedRestrictions.get(actor.id) ?? null);
     if (inherited) this.inheritedRestrictions.set(agent.id, inherited);
+    // And by the overrides on the role of whoever started it, and on every
+    // role above that one (#1043): the agent that asked and the hierarchy
+    // parent, as the child's authority is capped by both.
+    const starters = [...new Set([actor, parent].flatMap((a) => [...(this.starterRoles.get(a.id) ?? []), a.agent.role.id]))];
+    this.starterRoles.set(agent.id, starters);
+    this.startedBy.set(agent.id, actor.id);
     recordSpawn();
 
     // Add system message with role context for sub-agents. Communication
@@ -749,6 +845,15 @@ export class AgentOrchestrator {
     // of the process.
     this.exposureLedgers.delete(agentId);
     this.inheritedRestrictions.delete(agentId);
+    this.starterRoles.delete(agentId);
+    this.startedBy.delete(agentId);
+    for (const listener of this.reapListeners) {
+      try {
+        listener(agentId);
+      } catch (err) {
+        console.warn(`[Orchestrator] a reap listener failed for ${agentId}:`, err instanceof Error ? err.message : err);
+      }
+    }
   }
 
   getPrimary(): AgentInstance | undefined {
@@ -1635,6 +1740,28 @@ export class AgentOrchestrator {
     return interceptOffList(tc.name, this.discoveryContext(exposed, ledger, scope));
   }
 
+  /**
+   * One denied row for a call refused because desktop.enabled is off (#905),
+   * named like out_of_scope(...) so it never reads as a gate decision on the
+   * tool itself. An audit failure must not take the turn down.
+   */
+  private auditDesktopOff(name: string, channel?: 'voice'): void {
+    try {
+      const agent = this.getPrimary();
+      this.auditTrail?.log({
+        agent_id: agent?.id ?? 'unknown',
+        agent_name: this.auditAgentName(agent?.agent.role.name ?? 'unknown'),
+        tool_name: `desktop_disabled(${name})`,
+        action_category: getActionForTool(name, this.toolRegistry?.get(name)?.category ?? 'unknown'),
+        authority_decision: 'denied',
+        executed: false,
+        ...(channel ? { channel } : {}),
+      });
+    } catch (err) {
+      console.warn('[Orchestrator] could not audit a desktop-off refusal:', err instanceof Error ? err.message : err);
+    }
+  }
+
   /** What both interceptors need: the gate, the emergency check, the audit hook. */
   private discoveryContext(
     exposed: ReadonlySet<string>,
@@ -1850,6 +1977,16 @@ export class AgentOrchestrator {
         : `Error: no tool named "${toolCall.name}" is available.`;
     }
 
+    // desktop.enabled: false (#905). Before the gate for the same reason as the
+    // scope check above: a switched-off surface is not a governance decision,
+    // and raising an approval card for a call that would then be refused only
+    // asks the person to approve nothing. The registry refuses it again.
+    const desktopOff = desktopRefusal(this.toolRegistry.get(toolCall.name), toolCall.arguments);
+    if (desktopOff) {
+      this.auditDesktopOff(toolCall.name);
+      return desktopOff;
+    }
+
     // Pin what the tool would otherwise resolve at run time (a relative file
     // path against the site chat's cwd), so the gate, an approval card and a
     // run after that card is clicked all mean the same file (#522).
@@ -1984,13 +2121,14 @@ export class AgentOrchestrator {
             this.noteTaint(toolCall.name, tool?.category);
             return markUntrustedToolFailure(toolCall.name, tool?.category, receipt.result, MAX_TOOL_RESULT_CHARS, true);
           }
-          // A picture (#709): the blocks, sized and framed exactly as the
-          // ungated path below hands them over, rather than the receipt's text
+          // A picture (#709): the blocks, sized, capped (#876) and framed exactly
+          // as the ungated path below hands them over, rather than the receipt's text
           // form, which names the image and does not carry it. An approved
           // screenshot is often the very thing the person approved acting on.
           if (receipt.content) {
             this.noteTaint(toolCall.name, tool?.category);
-            return markUntrustedToolBlocks(toolCall.name, tool?.category, receipt.content.map(guardImageSize));
+            return markUntrustedToolBlocks(toolCall.name, tool?.category,
+              capTextBlocks(receipt.content, MAX_TOOL_RESULT_CHARS).map(guardImageSize));
           }
           // A trusted trailer (#708): the tool's own repo-authored sentence,
           // placed AFTER the block the way the ungated path below places it,
@@ -2003,7 +2141,8 @@ export class AgentOrchestrator {
             return frame(capToolResult(receipt.outside ?? '')) + receipt.trailer;
           }
           // Capped BEFORE it is framed, as the ungated path caps a plain
-          // result (#828; content blocks are uncapped text on both paths). Uncapped, an approved `browser_navigate` or
+          // result (#828; content blocks are capped the same way since #876).
+          // Uncapped, an approved `browser_navigate` or
           // `desktop_snapshot` -- page- and screen-sized results, and exactly
           // the tools that take a card -- reached the model whole; and the
           // order matters as much as the cap, because a cut made after the
@@ -2111,7 +2250,9 @@ export class AgentOrchestrator {
 
       // Multi-modal result (e.g. screenshot with image data)
       if (isToolResult(raw)) {
-        return markUntrustedToolBlocks(toolCall.name, category, raw.content.map(guardImageSize));
+        // Text capped before it is framed, as a plain result is below (#876).
+        return markUntrustedToolBlocks(toolCall.name, category,
+          capTextBlocks(raw.content, MAX_TOOL_RESULT_CHARS).map(guardImageSize));
       }
 
       // Plain text result, plus any repo-authored trailer the tool handed over
@@ -2180,16 +2321,20 @@ export class AgentOrchestrator {
   async executeRealtimeToolCall(
     name: string,
     args: Record<string, unknown>,
-    opts: { blockedCategories?: string[] } = {},
+    opts: { blockedCategories?: readonly string[]; taint: RealtimeTaint },
   ): Promise<string> {
-    // A realtime voice session is the person talking (src/llm/origin.ts).
-    return runWithOrigin('user', () => this.executeRealtimeToolCallInner(name, args, opts));
+    // A realtime voice session is the person talking (src/llm/origin.ts). The
+    // call runs inside the session's own taint (#928), as a text turn's tool
+    // runs inside the turn's: what it reads taints this session only, and a
+    // sub-agent it starts inherits this session's marks, not another's.
+    return runWithOrigin('user', () =>
+      this.taintStore.run(opts.taint.marks, () => this.executeRealtimeToolCallInner(name, args, opts)));
   }
 
   private async executeRealtimeToolCallInner(
     name: string,
     args: Record<string, unknown>,
-    opts: { blockedCategories?: string[] },
+    opts: { blockedCategories?: readonly string[] },
   ): Promise<string> {
     if (!this.toolRegistry) return 'Error: No tool registry configured';
 
@@ -2204,6 +2349,12 @@ export class AgentOrchestrator {
     // announcement about a tool that does not exist.
     if (!this.toolRegistry.has(name)) {
       return `Error: no tool named "${name}" is available.`;
+    }
+    // As on the task path: a switched-off desktop is answered before the gate (#905).
+    const desktopOff = desktopRefusal(this.toolRegistry.get(name), args);
+    if (desktopOff) {
+      this.auditDesktopOff(name, 'voice');
+      return desktopOff;
     }
 
     const primary = this.getPrimary();
@@ -2301,7 +2452,7 @@ export class AgentOrchestrator {
       // the user. Refuse, and let the model say so out loud.
       if (decision.requiresApproval && decision.profileLabel?.includes(TAINT_PROFILE_LABEL)) {
         logAudit('denied', false);
-        return `[BLOCKED] ${name} (${actionCategory}) was not run: this session read outside content (${[...this.realtimeTaint].join(', ')}) and voice cannot approve it. ` +
+        return `[BLOCKED] ${name} (${actionCategory}) was not run: this session read outside content (${[...this.getTurnTaint()].join(', ')}) and voice cannot approve it. ` +
                `Tell the user what you wanted to do and ask them to say it again as a fresh request.`;
       }
 
@@ -2322,7 +2473,10 @@ export class AgentOrchestrator {
       this.noteTaint(name, category);
       if (isToolResult(raw)) {
         // Realtime function output is text; flatten non-text blocks to a tag.
-        const flat = raw.content.map((c) => (c.type === 'text' ? c.text : `[${c.type}]`)).join('\n');
+        // The text is capped before flattening and framing, like the block
+        // paths above (#876), so the [image] tags do not count against it.
+        const flat = capTextBlocks(raw.content, MAX_TOOL_RESULT_CHARS)
+          .map((c) => (c.type === 'text' ? c.text : `[${c.type}]`)).join('\n');
         return markUntrustedToolResult(name, category, flat);
       }
       const { outside, trailer } = splitToolReturn(raw);

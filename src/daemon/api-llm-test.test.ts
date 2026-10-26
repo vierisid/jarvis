@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createApiRoutes, type ApiContext } from './api-routes.ts';
 import { saveLLMSettings } from './llm-settings.ts';
+import { closeDb, initDatabase } from '../vault/schema.ts';
 import type { JarvisConfig, LLMProviderEntry } from '../config/types.ts';
 
 type Handler = (req: Request) => Response | Promise<Response>;
@@ -491,6 +495,81 @@ describe('POST /api/config/llm/test auth header selection', () => {
 });
 
 /**
+ * An empty auth_header is how a caller returns a provider to its own default
+ * header (the onboarding wizard sends it with base_url "" when no custom
+ * endpoint is in play, #1066). Without it, a header saved for an earlier
+ * gateway would ride along to the official endpoint.
+ */
+describe('empty auth_header returns to the provider default', () => {
+  const realFetch = globalThis.fetch;
+  let requests: CapturedRequest[];
+  let prevSecretsDir: string | undefined;
+  let secretsDir: string;
+
+  beforeEach(() => {
+    requests = [];
+    prevSecretsDir = process.env.JARVIS_SECRETS_DIR;
+    secretsDir = mkdtempSync(join(tmpdir(), 'jarvis-llm-auth-header-'));
+    process.env.JARVIS_SECRETS_DIR = secretsDir;
+    initDatabase(':memory:');
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      requests.push({ url: String(input), authorization: headers.get('authorization'), apiKey: headers.get('x-api-key') });
+      return new Response(JSON.stringify({
+        id: 'msg_test', type: 'message', role: 'assistant', content: [{ type: 'text', text: 'OK' }],
+        model: 'claude-default', stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    closeDb();
+    if (prevSecretsDir === undefined) delete process.env.JARVIS_SECRETS_DIR;
+    else process.env.JARVIS_SECRETS_DIR = prevSecretsDir;
+    rmSync(secretsDir, { recursive: true, force: true });
+  });
+
+  it('a save with auth_header "" clears the stored header', () => {
+    const config = {
+      llm: {
+        providers: {
+          'anthropic-hdr-clear': { kind: 'anthropic', base_url: 'https://gw.example', auth_header: 'x-api-key' },
+        },
+        tiers: {},
+      },
+    } as unknown as JarvisConfig;
+
+    saveLLMSettings(config, {
+      providers: { 'anthropic-hdr-clear': { api_key: 'sk-ant-fresh', base_url: '', auth_header: '' } },
+    });
+
+    const stored = config.llm.providers?.['anthropic-hdr-clear'];
+    if (!stored) throw new Error('provider entry missing after save');
+    expect(stored.base_url).toBe('');
+    expect(stored.auth_header).toBeUndefined();
+    expect(Object.hasOwn(stored, 'api_key')).toBe(false);
+  });
+
+  it('a Test with auth_header "" ignores the stored header; omitting it does not', async () => {
+    const stored = {
+      'anthropic-hdr-clear': { kind: 'anthropic', api_key: 'gw-key', base_url: 'https://gw.example', auth_header: 'Authorization' },
+    } as Record<string, LLMProviderEntry>;
+    const fresh = { name: 'anthropic-hdr-clear', kind: 'anthropic', base_url: '', api_key: 'sk-ant-fresh' };
+
+    // Control: without the empty header the stored Bearer choice is inherited,
+    // so the assertion below is about auth_header "" and not about base_url.
+    await callEndpoint(stored, fresh);
+    expect(requests).toEqual([{ url: 'https://api.anthropic.com/v1/messages', authorization: 'Bearer sk-ant-fresh', apiKey: null }]);
+
+    requests = [];
+    const response = await callEndpoint(stored, { ...fresh, auth_header: '' });
+    expect((await response.json() as { ok: boolean }).ok).toBe(true);
+    expect(requests).toEqual([{ url: 'https://api.anthropic.com/v1/messages', authorization: null, apiKey: 'sk-ant-fresh' }]);
+  });
+});
+
+/**
  * A connection test probes catalog models until one answers. Each probe is a
  * real billable request, so the walk is capped — gateways fronting many
  * upstreams routinely advertise catalogs in the hundreds.
@@ -581,5 +660,42 @@ describe('POST /api/config/llm/test model probing is bounded', () => {
 
     expect(body.ok).toBe(true);
     expect(body.model).toBe('usable');
+  });
+});
+
+
+describe('OpenAI Responses connection test', () => {
+  const realFetch = globalThis.fetch;
+  const previousSecretsDir = process.env.JARVIS_SECRETS_DIR;
+  let secretsDir: string;
+  beforeEach(() => {
+    secretsDir = mkdtempSync(join(tmpdir(), 'jarvis-responses-test-'));
+    process.env.JARVIS_SECRETS_DIR = secretsDir;
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    if (previousSecretsDir === undefined) delete process.env.JARVIS_SECRETS_DIR;
+    else process.env.JARVIS_SECRETS_DIR = previousSecretsDir;
+    rmSync(secretsDir, { recursive: true, force: true });
+  });
+  it('uses the Responses minimum budget for the small onboarding probe', async () => {
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      expect(String(url)).toBe('https://api.openai.com/v1/responses');
+      const body = JSON.parse(String(init?.body));
+      if (body.max_output_tokens < 16) return Response.json({ error: { message: "Invalid 'max_output_tokens': expected >= 16" } }, { status: 400 });
+      expect(body.max_output_tokens).toBe(16);
+      return Response.json({ model: body.model, status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'OK' }] }], usage: { input_tokens: 8, output_tokens: 2 } });
+    }) as unknown as typeof fetch;
+    const response = await callEndpoint({}, { provider: 'openai', api_key: 'test-key', model: 'gpt-6.1-sol' });
+    expect(await response.json()).toMatchObject({ ok: true, model: 'gpt-6.1-sol' });
+  });
+  it('returns the actionable upstream explanation without echoing credentials', async () => {
+    globalThis.fetch = (async () => Response.json({ error: { message: 'Invalid key sk-example-secret. Check your API key.' } }, { status: 401 })) as unknown as typeof fetch;
+    const response = await callEndpoint({}, { provider: 'openai', api_key: 'sk-example-secret', model: 'gpt-6.1-sol' });
+    const body = await response.json() as { ok: boolean; error: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain('Check your API key');
+    expect(body.error).toContain('HTTP 401');
+    expect(body.error).not.toContain('sk-example-secret');
   });
 });

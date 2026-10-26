@@ -1,3 +1,5 @@
+import { ensureWorkflowInspectionSchema } from './workflow-inspection-schema';
+import { ensureWorkflowRemovalSchema } from './workflow-removal-schema';
 /**
  * SQLite schema for the Jarvis workflow runtime.
  *
@@ -179,6 +181,13 @@ const STATEMENTS: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_workflow_effect_run ON workflow_effect(run_id)`,
   `CREATE INDEX IF NOT EXISTS idx_workflow_effect_pending ON workflow_effect(status)`,
+  // #1039: steps waiting for a place in their flow's card budget, by flow,
+  // budget and age. Partial and over expressions, so the timer's release and
+  // each new step's place in the queue read only this set and parse no
+  // record (runtime/deferred-cards.ts states the same filter).
+  `CREATE INDEX IF NOT EXISTS idx_workflow_effect_deferred ON workflow_effect(
+    json_extract(record, '$.flowId'), json_extract(record, '$.deferral.budget'), json_extract(record, '$.deferral.since'))
+    WHERE status = 'pending' AND approval_id IS NULL AND json_extract(record, '$.deferral.budget') IS NOT NULL`,
 
   // A nested dispatch is bound to the parent's effect (including loop path).
   // Keep the child id even if its flow is deleted: missing is not success.
@@ -388,6 +397,8 @@ export function createSchema(db: Database): void {
   for (const stmt of STATEMENTS) db.exec(stmt);
   applyAdditiveColumnMigrations(db);
   backfillRunProjects(db);
+  ensureWorkflowRemovalSchema(db);
+  ensureWorkflowInspectionSchema(db);
 }
 
 /**

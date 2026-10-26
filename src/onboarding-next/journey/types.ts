@@ -106,5 +106,8 @@ export interface JourneyDependencies {
   /** Required for a new finish transition. Check the exact authorized draft
    * synchronously inside this transaction; missing/failed checks cannot finish.
    * No writes, promises or network calls. B10 supplies the result guard. */
+  /** Prepare an initial goal plan before an authenticated exit; called outside SQLite.
+   * The request, state, authorization and finish guard are checked again before commit. */
+  prepareExit?(scope: Scope, snapshot: JourneySnapshot): Promise<void>;
   validateFinish?(scope: Scope, snapshot: JourneySnapshot, resource: unknown): boolean;
 }

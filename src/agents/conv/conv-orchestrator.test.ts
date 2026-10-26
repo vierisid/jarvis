@@ -461,4 +461,45 @@ describe('ConvOrchestrator', () => {
     expect(messages[0]!.role).toBe('system');
     expect(messages[1]!.role).toBe('user'); // no empty dynamic system message
   });
+
+  // #915. Every turn with no context key (the dashboard's main chat, pebble,
+  // voice, background turns) shares the null context, so the delegate
+  // listener's context check alone let another such turn's task fire this
+  // turn's `task_started`.
+  it('a delegating turn reports task_started only for the task it created, not another main-chat task', async () => {
+    const provider = new MockProvider([
+      toolCallResponse('delegate', { tier: 'medium', template: 'research', intent: 'mine' }),
+      textResponse('Done.'),
+    ]);
+    const llm = makeManager(provider);
+    let releaseMine!: () => void;
+    const mineHeld = new Promise<void>((resolve) => { releaseMine = resolve; });
+    let mineRunning!: () => void;
+    const mineStarted = new Promise<void>((resolve) => { mineRunning = resolve; });
+    const runner = async ({ intent }: { intent: string }) => {
+      if (intent === 'mine') { mineRunning(); await mineHeld; }
+      return { kind: 'completed' as const, text: `${intent} result`, conversation: [] };
+    };
+    const dispatcher = new TaskDispatcher(llm, registry, runner as never);
+    const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot.');
+
+    const events: Array<{ type: string; intent: string }> = [];
+    // streamTurn, as the dashboard's turns run it: processTurn passes no listener.
+    const turn = (async () => {
+      for await (const _ of conv.streamTurn('do my thing', {}, { scope: null }, (event) => {
+        events.push({ type: event.type, intent: event.record.request.intent });
+      })) { /* drain */ }
+    })();
+    await mineStarted;
+    // Another null-context turn's task starts while this turn's delegate waits.
+    await dispatcher.dispatch({ tier: 'medium', template: 'general', intent: 'theirs' }, { scope: null });
+    releaseMine();
+    await turn;
+
+    const started = events.filter((e) => e.type === 'task_started').map((e) => e.intent);
+    // Not vacuous: this turn's own task does report its start.
+    expect(started).toContain('mine');
+    expect(started).toEqual(['mine']);
+    expect(events.map((e) => e.intent)).not.toContain('theirs');
+  });
 });

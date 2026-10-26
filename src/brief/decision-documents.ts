@@ -68,8 +68,12 @@ export class DecisionDocuments {
     const effect = getWorkflowEffect(row.effect_id), approval = this.approvals.getRequest(row.approval_id);
     const input = effect && documentInput(effect.provenance.piece, effect.provenance.action, effect.arguments);
     const editable = !!input && this.mutable(row, effect);
+    // Kept and expired drafts read as such only while their effect can still
+    // run. Once run cancellation or completion has blocked it (#1094), the
+    // effect's own state wins.
+    const open = !effect || effect.status === 'pending';
     const state = approval?.status === 'denied' || row.disposition === 'rejected' ? 'rejected'
-      : row.disposition === 'deferred' ? 'deferred' : approval?.status === 'expired' ? 'expired'
+      : open && row.disposition === 'deferred' ? 'deferred' : open && approval?.status === 'expired' ? 'expired'
       : effect && ['blocked','failed','unknown','dispatching'].includes(effect.status) ? effect.status
       : effect?.status === 'succeeded' ? 'dispatch_authorized' : approval?.status === 'approved' ? 'permission_granted' : decision.state;
     const document = input && effect ? projectDocument(effect.provenance.piece, effect.provenance.action, input) : null;

@@ -138,7 +138,7 @@ test('dirty canvas guards all leaving/refresh actions until saved or discarded',
 test('finish carries exact server descriptor once and does not mark completion on delivery', async () => {
   await mount(); await act(async () => { button('Continue to dashboard').click(); button('Continue to dashboard').click(); });
   expect(calls.length).toBe(1); expect(calls[0]?.draft?.continuation).toEqual(example().continuation);
-  expect(host.textContent).toContain('Waiting for confirmation'); await render({ theme: 'dark' }); expect(button('Continue to dashboard').disabled).toBe(true);
+  expect(host.textContent).toContain('Preparing your goal plan'); await render({ theme: 'dark' }); expect(button('Continue to dashboard').disabled).toBe(true);
 });
 test('missing completion guard allows review but disables Continue', async () => {
   const r = example(); r.continuation = null; await mount({ model: modelFor(r) });

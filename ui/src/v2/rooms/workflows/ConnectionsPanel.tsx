@@ -7,7 +7,8 @@
  * shows metadata + accepts new values via the add form.
  */
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import { CONNECTION_SETUP_EVENT, takePieceSetup, type PieceSetupRequest } from './connection-setup-request';
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { Button, Chip, Icon } from "../../ui";
 import { RefreshCw, Trash2, Plus, KeyRound } from "lucide-react";
@@ -16,10 +17,17 @@ import {
   type AppConnectionType,
   type ConnectionMeta,
 } from "./useConnections";
+import { OAUTH2_VALUE_HELP, OAUTH2_VALUE_PLACEHOLDER, isOAuth2Type, oauth2RowLabel, pastedOAuth2Warning } from "./connection-oauth";
 
 export function ConnectionsPanel(): React.ReactElement {
   const conn = useConnections();
-  const [showForm, setShowForm] = useState(false);
+  const [setup, setSetup] = useState<PieceSetupRequest | null>(() => takePieceSetup());
+  const [showForm, setShowForm] = useState(() => !!setup && !setup.rowId);
+  useEffect(() => {
+    const apply = () => { const request = takePieceSetup(); if (request) { setSetup(request); setShowForm(!request.rowId); } };
+    window.addEventListener(CONNECTION_SETUP_EVENT, apply);
+    return () => window.removeEventListener(CONNECTION_SETUP_EVENT, apply);
+  }, []);
   const [toast, setToast] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
 
   const flash = (tone: "ok" | "warn", text: string): void => {
@@ -67,6 +75,8 @@ export function ConnectionsPanel(): React.ReactElement {
 
       {showForm ? (
         <AddConnectionForm
+          key={setup?.requestId}
+          setup={setup}
           onSubmit={async (input) => {
             const r = await conn.create(input);
             flash(r.ok ? "ok" : "warn", r.ok ? `Connection "${input.displayName}" added` : `Add failed: ${r.message}`);
@@ -85,6 +95,7 @@ export function ConnectionsPanel(): React.ReactElement {
             <ConnectionRow
               key={c.id}
               connection={c}
+              requestedEdit={setup?.rowId === `account:${c.id}` ? setup.requestId : undefined}
               onDelete={async () => {
                 if (!await confirmDialog(`Delete connection "${c.displayName}"? Secrets are removed permanently.`)) return;
                 const r = await conn.remove(c.id);
@@ -108,10 +119,12 @@ export function ConnectionsPanel(): React.ReactElement {
 
 function ConnectionRow({
   connection,
+  requestedEdit,
   onDelete,
   onUpdate,
 }: {
   connection: ConnectionMeta;
+  requestedEdit?: string;
   onDelete: () => void;
   onUpdate: (patch: {
     displayName?: string;
@@ -119,7 +132,9 @@ function ConnectionRow({
     status?: "ACTIVE" | "MISSING" | "ERROR";
   }) => Promise<boolean>;
 }): React.ReactElement {
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(!!requestedEdit);
+  useEffect(() => { if (requestedEdit) setEditing(true); }, [requestedEdit]);
+  const oauth = oauth2RowLabel(connection);
   return (
     <li className="wf-conn__row">
       <div className="wf-conn__row-summary">
@@ -127,6 +142,7 @@ function ConnectionRow({
           <span className="wf-conn__row-name">{connection.displayName}</span>
           <Chip tone="neutral">{connection.type}</Chip>
           <Chip tone={connection.status === "ACTIVE" ? "ok" : "warn"}>{connection.status}</Chip>
+          {oauth ? <span title={oauth.title}><Chip tone={oauth.tone}>{oauth.label}</Chip></span> : null}
           <code className="wf-conn__row-extid">{connection.externalId}</code>
         </div>
         <div className="wf-conn__row-meta">
@@ -243,8 +259,10 @@ function EditConnectionForm({
           rows={5}
           value={valueText}
           onChange={(e) => setValueText(e.target.value)}
-          placeholder='{"access_token": "...", "refresh_token": "..."}'
+          placeholder={isOAuth2Type(connection.type) ? OAUTH2_VALUE_PLACEHOLDER : "{}"}
         />
+        {isOAuth2Type(connection.type) ? <span className="wf-conn__form-help">{OAUTH2_VALUE_HELP}</span> : null}
+        {valueWarning(connection.type, valueText)}
         {parseError ? <span className="wf-conn__form-err">{parseError}</span> : null}
       </label>
       <div className="wf-conn__form-actions">
@@ -261,6 +279,15 @@ function EditConnectionForm({
   );
 }
 
+/** The not-refreshed warning for a value being typed, once it parses as a JSON object. */
+function valueWarning(type: AppConnectionType, valueText: string): React.ReactElement | null {
+  let parsed: unknown;
+  try { parsed = JSON.parse(valueText); } catch { return null; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const warning = pastedOAuth2Warning(type, parsed as Record<string, unknown>);
+  return warning ? <span className="wf-conn__form-warn">{warning}</span> : null;
+}
+
 const TYPES: AppConnectionType[] = [
   "OAUTH2",
   "PLATFORM_OAUTH2",
@@ -272,8 +299,10 @@ const TYPES: AppConnectionType[] = [
 ];
 
 function AddConnectionForm({
+  setup,
   onSubmit,
 }: {
+  setup?: PieceSetupRequest | null;
   onSubmit: (input: {
     externalId: string;
     displayName: string;
@@ -285,10 +314,10 @@ function AddConnectionForm({
 }): React.ReactElement {
   const [externalId, setExternalId] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [type, setType] = useState<AppConnectionType>("OAUTH2");
-  const [pieceName, setPieceName] = useState("");
-  const [pieceVersion, setPieceVersion] = useState("0.0.0");
-  const [valueText, setValueText] = useState('{"access_token": ""}');
+  const [type, setType] = useState<AppConnectionType>((setup?.authType as AppConnectionType) ?? "OAUTH2");
+  const [pieceName, setPieceName] = useState(setup?.pieceName ?? "");
+  const [pieceVersion, setPieceVersion] = useState(setup?.pieceVersion ?? "0.0.0");
+  const [valueText, setValueText] = useState(setup && !["OAUTH2", "PLATFORM_OAUTH2", "CLOUD_OAUTH2"].includes(setup.authType) ? '{}' : '{"access_token": ""}');
   const [submitting, setSubmitting] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
 
@@ -372,8 +401,10 @@ function AddConnectionForm({
           rows={5}
           value={valueText}
           onChange={(e) => setValueText(e.target.value)}
-          placeholder='{"access_token": "...", "refresh_token": "..."}'
+          placeholder={isOAuth2Type(type) ? OAUTH2_VALUE_PLACEHOLDER : "{}"}
         />
+        {isOAuth2Type(type) ? <span className="wf-conn__form-help">{OAUTH2_VALUE_HELP}</span> : null}
+        {valueWarning(type, valueText)}
         {parseError ? <span className="wf-conn__form-err">{parseError}</span> : null}
       </label>
       <div className="wf-conn__form-actions">

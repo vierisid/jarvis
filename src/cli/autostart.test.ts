@@ -21,6 +21,7 @@ import {
   type SpawnResultLike,
   type SpawnSyncFn,
 } from './autostart.ts';
+import { SCHEDULE_DELAY_SEC, type CommandResult, type CommandRunner } from './systemd-unit.ts';
 
 function makeSpawn(responses: Record<string, SpawnResultLike>): SpawnSyncFn {
   return (cmd) => {
@@ -174,40 +175,89 @@ describe('isLaunchdAlreadyLoaded', () => {
   });
 });
 
-describe('scheduleSystemdRestart', () => {
-  test('uses --no-block so caller returns before systemd cycles the unit', () => {
+describe('scheduleSystemdRestart (#1037)', () => {
+  type Ran = CommandResult;
+  const done = (stdout = '', exitCode: number | null = 0, stderr = ''): Ran => ({ exitCode, stdout, stderr });
+
+  /**
+   * systemd as the daemon sees it from inside jarvis.service (KillMode=
+   * control-group): a restart of the unit run synchronously from this process
+   * starts the stop job, which SIGTERMs the whole cgroup, the systemctl
+   * included, before it returns. Measured on systemd 262 with a probe unit
+   * running the old command pair from an HTTP handler: 10 of 10 calls came
+   * back killed by SIGTERM with no exit code. `systemd-run` returns once the
+   * timer exists, and that timer restarts the unit later, from outside.
+   */
+  function insideUnit(load = 'loaded') {
     const calls: string[][] = [];
-    const spawn: SpawnSyncFn = (cmd) => {
+    const run: CommandRunner = (cmd): Ran => {
       calls.push(cmd);
-      return ok;
+      const line = cmd.join(' ');
+      if (line.includes('--property=LoadState')) return done(`LoadState=${load}\n`);
+      if (cmd[0] === 'systemctl' && cmd.includes('restart')) return done('', null, '');
+      return done();
     };
-    expect(scheduleSystemdRestart(spawn)).toBe(true);
-    // The unit's StartLimitBurst counts deliberate restarts too, so the
-    // rate-limit is cleared BEFORE the restart is queued: otherwise --no-block
-    // returns 0 and this reports success while the unit refuses to start.
-    expect(calls).toEqual([
+    return { calls, run: run as CommandRunner };
+  }
+
+  test('a restart asked from inside the unit is answered yes, not killed with the unit', () => {
+    const systemd = insideUnit();
+    expect(scheduleSystemdRestart(systemd.run)).toBe(true);
+    // Nothing in this process restarts the unit: only the timer does.
+    const direct = systemd.calls.filter((c) => c[0] === 'systemctl' && c.includes('restart'));
+    expect(direct).toEqual([]);
+  });
+
+  test('the restart is a transient timer, after the start limit is cleared', () => {
+    const systemd = insideUnit();
+    expect(scheduleSystemdRestart(systemd.run)).toBe(true);
+    expect(systemd.calls.slice(0, 2)).toEqual([
+      ['systemctl', '--user', 'show', '--property=LoadState', 'jarvis.service'],
+      // The unit's StartLimitBurst counts deliberate restarts too, so the
+      // rate-limit is cleared BEFORE the restart is scheduled.
       ['systemctl', '--user', 'reset-failed', 'jarvis.service'],
-      ['systemctl', '--user', '--no-block', 'restart', 'jarvis.service'],
     ]);
+    expect(systemd.calls.length).toBe(3);
+    const timer = systemd.calls[2]!;
+    expect(timer.slice(0, 2)).toEqual(['systemd-run', '--user']);
+    expect(timer).toContain(`--on-active=${SCHEDULE_DELAY_SEC}s`);
+    expect(timer).toContain('--unit=jarvis-restart');
+    expect(timer.slice(-3)).toEqual(['--user', 'restart', 'jarvis.service']);
   });
 
-  test('a unit that was never failed still restarts (reset-failed is advisory)', () => {
-    // `reset-failed` exits non-zero for a unit with nothing to reset on some
-    // systemd versions; that must not stop the restart or the report.
-    const spawn: SpawnSyncFn = (cmd) => (cmd.includes('reset-failed') ? fail : ok);
-    expect(scheduleSystemdRestart(spawn)).toBe(true);
+  test('a unit that is not loaded is a no, and no restart is scheduled', () => {
+    // What made the old in-request restart fail at once still does.
+    for (const load of ['not-found', 'masked', 'bad-setting', 'error', '']) {
+      const systemd = insideUnit(load);
+      expect({ load, ok: scheduleSystemdRestart(systemd.run) }).toEqual({ load, ok: false });
+      expect(systemd.calls.length).toBe(1);
+    }
   });
 
-  test('returns false when systemctl exits non-zero', () => {
-    const spawn: SpawnSyncFn = () => ({ exitCode: 5 });
-    expect(scheduleSystemdRestart(spawn)).toBe(false);
+  test('no user bus (systemctl fails) is a no', () => {
+    const calls: string[][] = [];
+    const run: CommandRunner = (cmd): Ran => { calls.push(cmd); return done('', 1, 'Failed to connect to bus: No medium found'); };
+    expect(scheduleSystemdRestart(run)).toBe(false);
+    expect(calls.length).toBe(1);
   });
 
-  test('returns false when spawn throws', () => {
-    const spawn: SpawnSyncFn = () => {
-      throw new Error('boom');
-    };
-    expect(scheduleSystemdRestart(spawn)).toBe(false);
+  test('a timer systemd refuses is a no', () => {
+    const run: CommandRunner = (cmd): Ran => (cmd[0] === 'systemd-run' ? done('', 1, 'Failed to start transient timer unit: Access denied') : done(cmd.includes('--property=LoadState') ? 'LoadState=loaded' : ''));
+    expect(scheduleSystemdRestart(run)).toBe(false);
+  });
+
+  test('a timer still pending from an earlier request is a yes: that restart is on its way', () => {
+    const run: CommandRunner = (cmd): Ran => (cmd[0] === 'systemd-run' ? done('', 1, 'Failed to start transient timer unit: Unit jarvis-restart.timer was already loaded or has a fragment file.') : done(cmd.includes('--property=LoadState') ? 'LoadState=loaded' : ''));
+    expect(scheduleSystemdRestart(run)).toBe(true);
+  });
+
+  test('a reset-failed that fails does not stop the restart (it is advisory)', () => {
+    const run: CommandRunner = (cmd): Ran => (cmd.includes('reset-failed') ? done('', 1) : done(cmd.includes('--property=LoadState') ? 'LoadState=loaded' : ''));
+    expect(scheduleSystemdRestart(run)).toBe(true);
+  });
+
+  test('a runner that throws is a no', () => {
+    expect(scheduleSystemdRestart(() => { throw new Error('boom'); })).toBe(false);
   });
 });
 

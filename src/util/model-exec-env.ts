@@ -172,6 +172,9 @@ export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
   'JARVIS_TELEMETRY', 'JARVIS_TELEMETRY_DEBUG', 'JARVIS_TOOL_FILTER',
   'JARVIS_WAKE_ENGINE', 'JARVIS_REALTIME_VOICE', 'JARVIS_AMBIENT_UI',
   // Preserve the owner's Brief lifecycle opt-in when the CLI restarts the daemon.
+  'JARVIS_BRIEF_NAVIGATION_COMPATIBILITY',
+  'JARVIS_BRIEF_RECONCILIATION',
+  'JARVIS_BRIEF_ONBOARDING',
   'JARVIS_BRIEF_CONVERSATIONS',
   'JARVIS_BRIEF_CHAT_TRANSPORT',
   'JARVIS_BRIEF_CHAT_STATE',
@@ -190,6 +193,10 @@ export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
   'JARVIS_BRIEF_MEMORY_STREAM',
   'JARVIS_BRIEF_MEMORY_USAGE',
   'JARVIS_BRIEF_MEMORY_FORGET',
+  'JARVIS_BRIEF_WORKFLOW_REMOVAL',
+  'JARVIS_BRIEF_WORKFLOW_CONTEXT',
+  'JARVIS_BRIEF_CONNECTIONS',
+  'JARVIS_BRIEF_PROFILE_SETTINGS',
   'JARVIS_ALLOW_LEAKED_ENGINES',
   // The Linux Chrome sandbox opt-out (actions/browser/chrome-sandbox.ts, #521).
   // A daemon or browser started from the model's shell must keep the user's
@@ -225,9 +232,13 @@ export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
  * one. Listed so the classification test knows them.
  */
 export const JARVIS_INTERNAL_ENV_NAMES: readonly string[] = Object.freeze([
+  'JARVIS_LOCAL_INTEGRATION', // Set by the explicit local launcher, never inherited by model children.
   'JARVIS_ENGINE_MARKER', 'JARVIS_ENGINE_OWNER_PID', 'JARVIS_ENGINE_OWNER_START',
   'JARVIS_ENGINE_BUNDLE', 'JARVIS_ENGINE_STARTED_AT',
   'JARVIS_UPDATE_UNIT', 'JARVIS_UPDATE_RUN',
+  // The HTTP step's egress policy (#961), set by the daemon on the engine it
+  // spawns (spawn.ts) from whether the install is hosted.
+  'JARVIS_ENGINE_EGRESS',
   // The private capture path the win32 screenshot one-liner reads instead of
   // taking it from the command text (#746). Set only on that spawn, by the
   // daemon, on a file it just created with mkdtemp.

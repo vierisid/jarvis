@@ -19,7 +19,7 @@ import { promises as fs, existsSync, mkdirSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
-import { catalogById, type CatalogEntry } from "./catalog";
+import { catalogById, excludedReason, PieceExcludedError, type CatalogEntry } from "./catalog";
 import { sanitizedEnv } from "../../util/subprocess-env";
 import { BUN_INSTALL_ARGS, SANITIZED_INSTALL_HINT } from "../../util/sanitized-install";
 
@@ -179,6 +179,10 @@ export async function installPiece(
   opts: InstallOptions = {},
 ): Promise<InstallResult> {
   const base = opts.base ?? piecesBaseDir();
+  // Before the manifest is touched: an excluded piece is refused for a fresh
+  // install and for an update of one installed before the exclusion alike.
+  const excluded = excludedReason(id);
+  if (excluded !== null) throw new PieceExcludedError(id, excluded);
   const entry = catalogById().get(id);
   if (!entry) {
     throw new Error(`unknown piece id "${id}" -- not in the catalog`);
@@ -274,11 +278,12 @@ function runBunInstall(cwd: string): Promise<void> {
  * The packages are third-party npm code, so the child gets the sanitized env
  * rather than the daemon's, and lifecycle scripts do not run at all (see
  * BUN_INSTALL_ARGS for why that is safe for the catalog). `label` only names
- * the caller in the error.
+ * the caller in the error. Run by process.execPath, the Bun running the
+ * daemon, never a `bun` found on PATH (#864).
  */
 export function runPiecesBunInstall(cwd: string, label: string): Promise<void> {
   return new Promise((res, rej) => {
-    const child = spawn("bun", [...BUN_INSTALL_ARGS], {
+    const child = spawn(process.execPath, [...BUN_INSTALL_ARGS], {
       cwd,
       stdio: "inherit",
       env: sanitizedEnv(),

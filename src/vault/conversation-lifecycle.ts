@@ -1,3 +1,4 @@
+import { conversationTitle } from '../brief/conversation-title';
 import type { Database } from 'bun:sqlite';
 import type { BriefConversation, BriefPage, BriefPageQuery } from '../brief/contracts.ts';
 import type { ConversationMessage } from './conversations.ts';
@@ -15,7 +16,7 @@ export interface ConversationTabs {
 }
 type Row = {
   id: string; workspace_id: string; title: string; revision: number;
-  is_open: number; tab_order: number; started_at: number; last_message_at: number; message_count: number;
+  is_open: number; tab_order: number; started_at: number; last_message_at: number; message_count: number; first_message?: string;
 };
 type Cursor = { v: 1; kind: string; workspace: string; scope: string; time: number; id: string };
 function limitOf(value = 50): number {
@@ -30,7 +31,7 @@ function titleOf(value: string): string {
 }
 function project(row: Row): BriefConversation {
   return {
-    conversationId: row.id, workspaceId: row.workspace_id, title: row.title, revision: String(row.revision),
+    conversationId: row.id, workspaceId: row.workspace_id, title: row.title === 'New chat' && row.first_message ? conversationTitle(row.first_message) : row.title, revision: String(row.revision),
     tab: { open: row.is_open === 1, order: row.tab_order },
     lastMessageAt: row.message_count > 0 ? row.last_message_at : null,
   };
@@ -48,7 +49,8 @@ export class ConversationRepository {
   }
 
   private select = `SELECT c.id, COALESCE(c.workspace_id, ?) AS workspace_id,
-    c.started_at, c.last_message_at, c.message_count, t.title, t.revision, t.is_open, t.tab_order
+    c.started_at, c.last_message_at, c.message_count,
+    (SELECT content FROM conversation_messages m WHERE m.conversation_id = c.id AND m.role = 'user' AND trim(m.content) <> '' ORDER BY m.created_at, m.id LIMIT 1) AS first_message, t.title, t.revision, t.is_open, t.tab_order
     FROM conversations c JOIN conversation_tabs t ON t.conversation_id = c.id
     WHERE COALESCE(c.workspace_id, ?) = ?`;
   private scopeArgs(): [string, string, string] { return [this.rootWorkspace, this.rootWorkspace, this.workspaceId]; }
@@ -76,6 +78,22 @@ export class ConversationRepository {
   }
 
   get(id: string): BriefConversation { return project(this.row(id)); }
+
+  /** Atomic across multiple dashboard windows, including retries after a lost response. */
+  ensureActive(): BriefConversation {
+    return this.db.transaction(() => {
+      const tabs = this.tabs();
+      const id = tabs.activeConversationId ?? tabs.tabs[0]?.conversationId;
+      if (!id) return this.create();
+      if (!tabs.activeConversationId) this.activate(id);
+      return this.get(id);
+    })();
+  }
+
+  titleFromFirstMessage(id: string): void {
+    const row = this.row(id);
+    if (row.title === 'New chat' && row.first_message?.trim()) this.rename(id, conversationTitle(row.first_message));
+  }
 
   create(options: { title?: string } = {}): BriefConversation {
     const title = titleOf(options.title ?? 'New chat');

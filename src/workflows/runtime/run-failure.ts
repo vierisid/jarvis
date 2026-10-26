@@ -25,6 +25,7 @@ import { getFlowVersion } from '../db/repos/flow-version';
 import { listWorkflowEffects, type WorkflowEffect } from '../db/repos/workflow-effect';
 import { walkFlowNodes } from '../db/flow-graph';
 import type { FlowTriggerNode } from '../db/repos/flow-version';
+import { nodeConnectionReferences, type RunConnectionBindingView } from '../db/repos/binding-pins';
 
 const ENDED_BADLY = new Set(['FAILED', 'TIMEOUT', 'INTERNAL_ERROR', 'QUOTA_EXCEEDED', 'MEMORY_LIMIT_EXCEEDED', 'SCHEDULE_FAILURE', 'STOPPED']);
 
@@ -103,6 +104,22 @@ function readinessIssues(run: FlowRun): Array<{ code: string; message?: string }
 }
 
 /**
+ * #954: the binding of a connection this step names whose last fetch in this
+ * run was not handed out (an expired token Jarvis could not refresh), or
+ * null. A binding the run was refused (Q-05) says why the step failed on its
+ * own, so a stale credential failure never stands in for it. The fetch that
+ * failed did nothing; whether the step did anything before it (an earlier
+ * attempt, an earlier round of a loop, a fetch mid-step) is `handedOut`'s and
+ * the effect records' to say.
+ */
+function credentialFailureFor(run: FlowRun, node: FlowTriggerNode): RunConnectionBindingView | null {
+  const named = new Set(nodeConnectionReferences(node).map(([externalId]) => externalId));
+  const bindings = (run.connectionBindings ?? []).filter(binding => named.has(binding.externalId));
+  if (bindings.some(binding => binding.refusal)) return null;
+  return bindings.find(binding => binding.credentialFailure) ?? null;
+}
+
+/**
  * The failure of a run that ended badly, or null for one that did not. Pass
  * `effects` and `nodes` when the caller already has them; nothing is read for
  * a run that did not end badly.
@@ -138,6 +155,22 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
   const outcome = record ? failure(record) : null;
   let evidence: FailureEvidence;
   let sideEffects = true;
+  const node = graph.find(n => n.name === step.name);
+  const binding = !(record && outcome) && node ? credentialFailureFor(run, node) : null;
+  if (binding?.credentialFailure) {
+    // A typed reason recorded by the connection fetch: that fetch handed nothing out.
+    const { code, message } = binding.credentialFailure;
+    const typed = projectFailure({ source: 'action', outcome: { status: 'blocked', code, message, effect: 'not_started' } },
+      { label, sideEffects: false }, links);
+    // The step may still have acted before it: a dispatch on its own record, or, for a step with no
+    // records of its own, a credential this run handed out earlier (a retry, a loop round, a mid-step fetch).
+    const acted = own.some(dispatched) || (!!binding.handedOut && untracked(node!));
+    const reading = acted ? { ...typed, effect: 'unknown' as const,
+      outcome: 'This run had already used this connection, so this step may already have taken effect.',
+      next: recoverySteps(...typed.next.map(n => n.step).filter(s => s !== 'run_again' && s !== 'open_details'), 'check_before_running_again', 'open_details') }
+      : typed;
+    return withOtherSteps(reading, otherSteps(run, records, graph, step.name), 'Steps before it');
+  }
   if (record && outcome) {
     Object.assign(links, { effectId: record.id, ...(record.approvalId ? { approvalId: record.approvalId } : {}) });
     const provider = record.route === 'llm' ? providerCode(outcome.code) : null;
@@ -151,7 +184,6 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
   } else {
     evidence = { source: 'unknown', message: step.errorMessage ?? `${step.displayName} failed` };
     // A record still pending (waiting on approval, or refused before its claim) never dispatched.
-    const node = graph.find(n => n.name === step.name);
     sideEffects = own.some(dispatched) || !node || untracked(node);
   }
   // The sentence is about the failed step; it also says what the steps before it had done.

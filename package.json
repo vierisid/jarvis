@@ -1,6 +1,6 @@
 {
   "name": "@usejarvis/brain",
-  "version": "0.16.0",
+  "version": "0.17.1",
   "description": "J.A.R.V.I.S. — Just A Rather Very Intelligent System. An always-on autonomous AI daemon.",
   "module": "src/daemon/index.ts",
   "type": "module",
@@ -8,7 +8,7 @@
     "jarvis": "bin/jarvis.ts"
   },
   "engines": {
-    "bun": ">=1.0.0"
+    "bun": ">=1.3.11"
   },
   "repository": {
     "type": "git",
@@ -59,7 +59,8 @@
     "generate:onboarding-runtime": "bun run scripts/onboarding-next-runtime-manifest.ts",
     "check:onboarding-runtime": "bun run scripts/onboarding-next-runtime-manifest.ts --check",
     "generate:onboarding-ui": "bun run scripts/onboarding-next-ui-manifest.ts",
-    "check:onboarding-ui": "bun run scripts/onboarding-next-ui-manifest.ts --check"
+    "check:onboarding-ui": "bun run scripts/onboarding-next-ui-manifest.ts --check",
+    "dev:local": "bun --no-env-file run scripts/integration/dev.ts"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",

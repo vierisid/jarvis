@@ -5,6 +5,7 @@
 import type { SQLQueryBindings } from 'bun:sqlite';
 import { getDb, generateId } from './schema.ts';
 import { getGoalReviewRecord } from '../goals/review-evidence.ts';
+import { clearInitialGoalUnplanned } from '../goals/initial-goal-notice.ts';
 import { enumeration, GOAL_LEVELS, invalid, nextGoalLevel, text, validateGoalFields } from '../goals/validation.ts';
 import type {
   Goal, GoalProgressEntry, GoalCheckIn,
@@ -130,6 +131,8 @@ export function createGoal(
       now, now,
       ['completed', 'failed', 'killed'].includes(opts?.status ?? 'draft') ? now : null,
     );
+    // Any goal answers the "interview goal could not be planned" notice.
+    clearInitialGoalUnplanned();
 
     return getGoal(id)!;
   })();

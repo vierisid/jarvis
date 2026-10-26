@@ -31,10 +31,10 @@
 .on-result__footer { padding:16px 24px; border-top:1px solid var(--on-r-line); display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; }
 .on-result__feedback { font-size:14px; color:var(--on-r-muted); max-width:480px; }
 .on-result__actions { display:flex; flex-wrap:wrap; gap:10px; margin-left:auto; }
-.on-result button { min-height:44px; padding:10px 16px; border:1px solid var(--on-r-line); border-radius:8px 0 8px 8px; color:var(--on-r-ink); background:var(--on-r-card); font:500 14px/1.5 'Familjen Grotesk',system-ui,sans-serif; cursor:pointer; }
-.on-result button.on-result__primary { color:var(--on-r-card); background:var(--on-r-ink); border-color:var(--on-r-ink); }
-.on-result button:disabled { cursor:default; opacity:.5; }
-.on-result button:focus-visible,.on-result summary:focus-visible { outline:2px solid var(--on-r-focus); outline-offset:3px; }
+.on-result :is(.on-result__header,.on-result__review,.on-result__footer) button { min-height:44px; padding:10px 16px; border:1px solid var(--on-r-line); border-radius:8px 0 8px 8px; color:var(--on-r-ink); background:var(--on-r-card); font:500 14px/1.5 'Familjen Grotesk',system-ui,sans-serif; cursor:pointer; }
+.on-result :is(.on-result__header,.on-result__review,.on-result__footer) button.on-result__primary { color:var(--on-r-card); background:var(--on-r-ink); border-color:var(--on-r-ink); }
+.on-result :is(.on-result__header,.on-result__review,.on-result__footer) button:disabled { cursor:default; opacity:.5; }
+.on-result :is(.on-result__header,.on-result__review,.on-result__footer) button:focus-visible,.on-result summary:focus-visible { outline:2px solid var(--on-r-focus); outline-offset:3px; }
 .on-result h1:focus { outline:none; }
 @media(max-width:1000px) { .on-result__review { flex-basis:260px; margin-right:16px; padding:18px; } .on-result__header { padding:20px; gap:16px; } }
 @media(max-width:720px) { .on-result__header { flex-wrap:wrap; } .on-result__header h1 { font-size:24px; } .on-result__header-actions { width:100%; justify-content:space-between; }

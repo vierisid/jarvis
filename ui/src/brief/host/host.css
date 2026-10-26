@@ -1,0 +1,7 @@
+.brief-host-conversation { display:flex; flex-direction:column; min-height:0; height:100%; }
+.brief-host-conversation > .brief-message-thread { flex:1; min-height:0; }
+.brief-host-conversation > [role="status"]:empty { display:none; }
+.brief-host-notice { padding:8px 16px; border-bottom:1px solid var(--brief-rule); }
+.brief-host-attention { padding:16px; border:1px solid var(--brief-rule); }
+
+.brief-maintenance { padding:24px; min-height:0; overflow:auto; height:100%; }

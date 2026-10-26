@@ -20,6 +20,7 @@ import { getFlowRun, updateRun, type FlowRun } from "../db/repos/flow-run";
 import { cancelFlowRun, getRunCancellation } from "../db/repos/run-cancellation";
 import { assertRunIngredientsReady } from "../db/repos/flow-readiness";
 import { watchRunCancellation, withRunCancellation } from "../runtime/cancellation";
+import { signalRunEnded } from "../runtime/cancellation-signals";
 import {
   getFlowVersion,
   mergeRunOutputsIntoSampleData,
@@ -143,6 +144,11 @@ export interface CreateRunFlowHandlerOptions {
   executor: FlowExecutor;
   /** Override for tests. Defaults to Date.now. */
   now?: () => number;
+  /**
+   * Called once a run this handler executed has ended, whatever the outcome,
+   * after its final state is written (#1080). A throw is logged, never the run's.
+   */
+  onRunEnded?: (runId: string) => void;
 }
 
 /**
@@ -340,6 +346,16 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
       throw e;
     } finally {
       cancellation.dispose();
+      // Never in place of the run's own error: a throw here is only logged.
+      try {
+        const ended = getFlowRun(runId);
+        if (ended && !["QUEUED", "RUNNING", "PAUSED"].includes(ended.status)) {
+          // A run that finished on its own releases the background tasks it
+          // started (#1018); a stopped one already cancelled them.
+          if (ended.status !== "STOPPED") signalRunEnded(runId);
+          opts.onRunEnded?.(runId);
+        }
+      } catch (hookError) { console.error(`[run-flow ${runId}] run-ended hook failed:`, hookError); }
     }
   };
 }

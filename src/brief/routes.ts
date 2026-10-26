@@ -1,3 +1,13 @@
+import { DEFAULT_IDS } from '../workflows/db';
+import { createMemoryDecisionRoutes } from './memory-decision-routes';
+import { createProfileSettingsRoutes } from './profile-settings-routes';
+import type { ProfileSettings } from './profile-settings';
+import { createConnectedWorkspaceRoutes } from './connected-workspace-routes';
+import type { ConnectedWorkspace } from './connected-workspace';
+import { createWorkflowContextRoutes } from './workflow-context-routes';
+import type { WorkflowContext } from './workflow-context';
+import { createWorkflowRemovalRoutes } from './workflow-removal-routes';
+import type { WorkflowRemoval } from './workflow-removal';
 import { createMemoryForgetRoutes } from './memory-forget-routes';
 import type { MemoryForget } from './memory-forget';
 import { createMemoryUsageRoutes } from './memory-usage-routes';
@@ -27,11 +37,21 @@ import { createCompositionRoutes } from './composition-routes';
 import type { BriefCompositionProvider } from './composition';
 
 /** Mounted only inside the daemon's existing authenticated API route table. */
-export function createBriefRoutes(capabilities: BriefCapabilities, json: (body: unknown, status?: number) => Response, conversations?: BriefConversationProvider, attachments?: BriefAttachmentProvider, composition?: BriefCompositionProvider, prepared?: PreparedOpportunities, activation?: OpportunityActivation, decisions?: DecisionQueue, recommendations?: Recommendations, documents?: DecisionDocuments, goals?: GoalMeasurements, outcomes?: Outcomes, memory?: MemoryStream, memoryUsage?: MemoryUsageLedger, memoryForget?: MemoryForget) {
+export function createBriefRoutes(capabilities: BriefCapabilities, json: (body: unknown, status?: number) => Response, conversations?: BriefConversationProvider, attachments?: BriefAttachmentProvider, composition?: BriefCompositionProvider, prepared?: PreparedOpportunities, activation?: OpportunityActivation, decisions?: DecisionQueue, recommendations?: Recommendations, documents?: DecisionDocuments, goals?: GoalMeasurements, outcomes?: Outcomes, memory?: MemoryStream, memoryUsage?: MemoryUsageLedger, memoryForget?: MemoryForget, workflowRemoval?: WorkflowRemoval, workflowContext?: WorkflowContext, connections?: ConnectedWorkspace, profileSettings?: ProfileSettings, host?: { generation: string; installMode(): 'self' | 'hosted' }) {
   return {
+    '/api/brief/host': { GET: () => {
+      const response = host ? json({ schemaVersion: 1, scopeId: DEFAULT_IDS.project, generation: host.generation,
+        installMode: host.installMode(), capabilities: capabilities.snapshot() }) : json({ state: 'unsupported' }, 501);
+      response.headers.set('Cache-Control', 'no-store'); return response;
+    } },
+    ...createProfileSettingsRoutes(capabilities, json, profileSettings),
     ...createMemoryStreamRoutes(capabilities, json, memory),
+    ...createMemoryDecisionRoutes(capabilities, json, memory),
     ...createMemoryUsageRoutes(capabilities, json, memoryUsage),
     ...createMemoryForgetRoutes(capabilities, json, memoryForget),
+    ...createWorkflowRemovalRoutes(capabilities, json, workflowRemoval),
+    ...createWorkflowContextRoutes(capabilities, json, workflowContext),
+    ...createConnectedWorkspaceRoutes(capabilities, json, connections),
     ...createOutcomeRoutes(capabilities, json, outcomes),
     ...createGoalMeasurementRoutes(capabilities, json, goals),
     ...createDecisionDocumentRoutes(capabilities, json, documents),

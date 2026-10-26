@@ -106,8 +106,8 @@ export function taintProfile(gating: TaintGating | null, sources: ReadonlySet<st
 }
 
 /**
- * Merge two tighten-only profiles: the union of governed categories and the
- * lower level cap. Either may be null.
+ * Merge two tighten-only profiles: the union of governed and of denied
+ * categories, and the lower level cap. Either may be null.
  */
 export function mergeProfiles(a: AuthorityProfile | null, b: AuthorityProfile | null): AuthorityProfile | null {
   if (!a) return b;
@@ -119,5 +119,7 @@ export function mergeProfiles(a: AuthorityProfile | null, b: AuthorityProfile | 
     governed_categories: [...governed],
   };
   if (caps.length > 0) merged.level_cap = Math.min(...caps);
+  const denied = new Set<ActionCategory>([...(a.denied_categories ?? []), ...(b.denied_categories ?? [])]);
+  if (denied.size > 0) merged.denied_categories = [...denied];
   return merged;
 }

@@ -1,10 +1,11 @@
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { RealtimeVoiceSession } from './realtime-voice.ts';
-import type { RealtimeSession, RealtimeFunctionCall, RealtimeTranscript, RealtimeUsage } from '../comms/realtime.ts';
+import type { RealtimeSession, RealtimeFunctionCall, RealtimeTranscript, RealtimeUsage, RealtimeTranscriptionUsage } from '../comms/realtime.ts';
 import { BrowserAudioTransport } from '../comms/audio-transport.ts';
 import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
 import { initDatabase, closeDb, getDb } from '../vault/schema.ts';
 import { setUsageDatabase } from '../llm/usage.ts';
+import { RealtimeTaint } from '../agents/realtime-taint.ts';
 
 const RESOLVED: ResolvedRealtimeVoice = {
   apiKey: 'k', provider: 'usejarvis_ai', url: 'wss://proxy.test/v1/realtime', model: 'gpt-realtime-2', reasoningEffort: 'low', maxSessionMinutes: 10, blockedCategories: [],
@@ -15,9 +16,10 @@ class FakeRealtimeSession {
   fnCb: ((c: RealtimeFunctionCall) => void) | null = null;
   transcriptCb: ((t: RealtimeTranscript) => void) | null = null;
   usageCb: ((u: RealtimeUsage) => void) | null = null;
+  transcriptionUsageCb: ((u: RealtimeTranscriptionUsage) => void) | null = null;
   errorCb: ((e: string) => void) | null = null;
   closeCb: (() => void) | null = null;
-  turnStartCb: (() => void) | null = null;
+  turnStartCb: ((itemId?: string) => void) | null = null;
   results: Array<{ callId: string; result: unknown }> = [];
   connected = false;
   closed = false;
@@ -25,10 +27,11 @@ class FakeRealtimeSession {
   onTranscript(cb: (t: RealtimeTranscript) => void) { this.transcriptCb = cb; }
   onFunctionCall(cb: (c: RealtimeFunctionCall) => void) { this.fnCb = cb; }
   onUsage(cb: (u: RealtimeUsage) => void) { this.usageCb = cb; }
+  onTranscriptionUsage(cb: (u: RealtimeTranscriptionUsage) => void) { this.transcriptionUsageCb = cb; }
   onError(cb: (e: string) => void) { this.errorCb = cb; }
   onOpen() {}
   onClose(cb: () => void) { this.closeCb = cb; }
-  onUserTurnStart(cb: () => void) { this.turnStartCb = cb; }
+  onUserTurnStart(cb: (itemId?: string) => void) { this.turnStartCb = cb; }
   onSpeechStarted() {}
   async connect() { this.connected = true; }
   sendFunctionResult(callId: string, result: unknown) { this.results.push({ callId, result }); }
@@ -36,22 +39,20 @@ class FakeRealtimeSession {
   close() { this.closed = true; }
 }
 
-function setup(executeToolCall: (n: string, a: Record<string, unknown>) => Promise<string>) {
+function setup(executeToolCall: (n: string, a: Record<string, unknown>, taint: RealtimeTaint) => Promise<string>) {
   const fake = new FakeRealtimeSession();
   const transport = new BrowserAudioTransport({ sendAudio: () => {}, inputSampleRate: 24000 });
   const transcripts: RealtimeTranscript[] = [];
   let closeCalls = 0;
-  let turnStarts = 0;
   const rv = new RealtimeVoiceSession(RESOLVED, transport, {
     tools: [],
     instructions: 'persona',
     executeToolCall,
-    onUserTurnStart: () => { turnStarts++; },
     onTranscript: (t) => transcripts.push(t),
     onClose: () => { closeCalls++; },
     sessionFactory: () => fake as unknown as RealtimeSession,
   });
-  return { fake, rv, transcripts, getCloseCalls: () => closeCalls, getTurnStarts: () => turnStarts };
+  return { fake, rv, transcripts, getCloseCalls: () => closeCalls };
 }
 
 describe('RealtimeVoiceSession', () => {
@@ -60,12 +61,34 @@ describe('RealtimeVoiceSession', () => {
   // left every later machine-changing action refused as taint-gated for the
   // life of the daemon, at any authority level. It is wired here now, so a
   // surface cannot have a session without one.
-  test('the session registers the deps user-turn handler with the inner session', () => {
-    const { fake, getTurnStarts } = setup(async () => 'ok');
+  test('the session registers its own turn boundary with the inner session', () => {
+    const { fake, rv, transcripts } = setup(async () => 'ok');
     expect(fake.turnStartCb).not.toBeNull();
-    fake.turnStartCb!();
-    fake.turnStartCb!();
-    expect(getTurnStarts()).toBe(2);
+    rv.taint.marks.add('browser_snapshot');
+    fake.turnStartCb!('item-1');
+    // A VAD start alone is any sound: it clears nothing (#1007).
+    expect([...rv.taint.marks]).toEqual(['browser_snapshot']);
+    fake.transcriptCb!({ role: 'user', text: 'thanks', final: true, itemId: 'item-1' });
+    expect([...rv.taint.marks]).toEqual([]);
+    // The transcript still reaches the caller.
+    expect(transcripts).toEqual([{ role: 'user', text: 'thanks', final: true, itemId: 'item-1' }]);
+  });
+
+  // #928: every surface's session used to share one process-wide taint set.
+  test('each session hands its tool calls its own taint, which another session never touches', async () => {
+    const seen: RealtimeTaint[] = [];
+    const a = setup(async (_n, _a, taint) => { seen.push(taint); return 'ok'; });
+    const b = setup(async (_n, _a, taint) => { seen.push(taint); return 'ok'; });
+    expect(a.rv.taint).not.toBe(b.rv.taint);
+    await a.fake.fnCb!({ callId: 'a1', name: 'read_file', args: {} });
+    await b.fake.fnCb!({ callId: 'b1', name: 'read_file', args: {} });
+    await Promise.resolve();
+    expect(seen[0]).toBe(a.rv.taint);
+    expect(seen[1]).toBe(b.rv.taint);
+    a.rv.taint.marks.add('browser_snapshot');
+    b.fake.turnStartCb!('b-item');
+    b.fake.transcriptCb!({ role: 'user', text: 'hello', final: true, itemId: 'b-item' });
+    expect([...a.rv.taint.marks]).toEqual(['browser_snapshot']);
   });
 
   test('connect() delegates to the underlying session', async () => {
@@ -135,6 +158,30 @@ describe('RealtimeVoiceSession usage tracking', () => {
     setUsageDatabase(() => null);
   });
 
+  // #1007 turned on input transcription; it is billed apart, on its own model.
+  test('input transcription usage lands in llm_usage on its own model and is costed', async () => {
+    const fake = new FakeRealtimeSession();
+    const costs: number[] = [];
+    const rv = new RealtimeVoiceSession(RESOLVED, new BrowserAudioTransport({ sendAudio: () => {}, inputSampleRate: 24000 }), {
+      tools: [], instructions: 'persona', executeToolCall: async () => 'ok',
+      onTranscriptionCostUsd: (usd) => costs.push(usd),
+      sessionFactory: () => fake as unknown as RealtimeSession,
+    });
+    await rv.connect();
+    fake.transcriptionUsageCb!({ input_tokens: 400, output_tokens: 20 });
+    const rows = getDb()!
+      .query<{ tier: string; subsystem: string; provider: string; model: string; input_tokens: number; output_tokens: number }, []>(
+        'SELECT tier, subsystem, provider, model, input_tokens, output_tokens FROM llm_usage',
+      )
+      .all();
+    expect(rows).toEqual([{
+      tier: 'conversation', subsystem: 'realtime_transcription', provider: 'usejarvis_ai',
+      model: 'gpt-4o-mini-transcribe', input_tokens: 400, output_tokens: 20,
+    }]);
+    expect(costs).toHaveLength(1);
+    expect(costs[0]).toBeCloseTo(400 * 1.25e-6 + 20 * 5e-6, 12);
+  });
+
   test('usage events land in llm_usage as conversation/realtime_voice', async () => {
     const { fake, rv } = setup(async () => 'ok');
     await rv.connect();
@@ -174,7 +221,6 @@ describe('RealtimeVoiceSession error copy', () => {
         tools: [],
         instructions: 'persona',
         executeToolCall: async () => 'ok',
-        onUserTurnStart: () => {},
         onError: (e) => errors.push(e),
         sessionFactory: () => fake as unknown as RealtimeSession,
       },

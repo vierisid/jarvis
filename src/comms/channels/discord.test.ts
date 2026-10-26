@@ -139,6 +139,48 @@ describe('#811: senderAllowListed', () => {
   });
 });
 
+/**
+ * #914, pinned. A Discord forward carries the forwarded text in
+ * `messageSnapshots` and has empty `content`, so it never reaches the handler
+ * at all: there is no text to read an `approve <id>` from. If the adapter
+ * ever starts reading snapshots, it must mark the message forwarded the way
+ * the Telegram adapter does.
+ */
+describe('#914: a forwarded Discord message is not handled', () => {
+  test('a listed member forwarding an approve sends nothing to the handler', async () => {
+    const adapter = new DiscordAdapter('test-token', { allowedUsers: ['100000000000000042'] });
+    const seen: ChannelMessage[] = [];
+    adapter.onMessage(async (m) => { seen.push(m); return ''; });
+    const forward = {
+      id: 'm1', content: '', createdTimestamp: 0, channelId: 'c1', guildId: null,
+      author: { id: '100000000000000042', username: 'owner', bot: false },
+      attachments: { find: () => undefined },
+      channel: { isSendable: () => false },
+      reference: { type: 1, messageId: 'm0', channelId: 'c0' },
+      messageSnapshots: new Map([['m0', { content: 'approve 1a2b3c4d' }]]),
+    };
+    await (adapter as unknown as { processMessage(m: unknown): Promise<void> }).processMessage(forward);
+    expect(seen).toEqual([]);
+  });
+
+  test('a forward that ever carries text is still marked forwarded, and a typed message is not', async () => {
+    const adapter = new DiscordAdapter('test-token', { allowedUsers: ['100000000000000042'] });
+    const seen: ChannelMessage[] = [];
+    adapter.onMessage(async (m) => { seen.push(m); return ''; });
+    const base = {
+      id: 'm1', content: 'approve 1a2b3c4d', createdTimestamp: 0, channelId: 'c1', guildId: null,
+      author: { id: '100000000000000042', username: 'owner', bot: false },
+      attachments: { find: () => undefined },
+      channel: { isSendable: () => false },
+    };
+    const deliver = (m: unknown) => (adapter as unknown as { processMessage(m: unknown): Promise<void> }).processMessage(m);
+    await deliver({ ...base, reference: { type: 1, messageId: 'm0' }, messageSnapshots: new Map() });
+    await deliver({ ...base, messageSnapshots: new Map([['m0', {}]]) });
+    await deliver({ ...base, reference: { type: 0, messageId: 'm0' }, messageSnapshots: new Map() });
+    expect(seen.map((m) => m.forwarded)).toEqual([true, true, false]);
+  });
+});
+
 /** #883. A string setting made the Discord gate a substring test too. */
 describe('#883: an allowed_users value that is not a list of snowflakes', () => {
   const reaches = async (allowedUsers: unknown, authorId: string) => {

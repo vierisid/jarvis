@@ -54,17 +54,16 @@ leaving the entire tour, and discovery belong to ON-B-06/U-10/B-11.
 bun ui/src/onboarding-next/views/pebble-tour/preview/serve.ts
 # http://127.0.0.1:4415/
 bun ui/src/onboarding-next/views/pebble-tour/preview/serve.ts --build
-ON_U_06_MISSING_SHELL=1 bun ui/src/onboarding-next/views/pebble-tour/preview/serve.ts --build
 ```
 
-The D-06 Pebble layout (PR #736) is not on main yet. When its commit
-(`SHELL_SHA` in `preview/serve.ts`) happens to exist in the local object store,
-the preview copies its `ui/src/brief` tree into a temporary directory and bundles
-the real PebbleLayout, motion code, controls and logo. The preview never fetches,
-changes the checkout or registers a feature, and production code imports nothing
-from it. If the object is absent the preview builds the unsupported-adapter
-fixture instead. No test, typecheck or production build depends on it. The only
-remote preview resource is the Google Fonts stylesheet `ui/index.html` uses.
+The preview bundles the real D-06 PebbleLayout, logo and Brief styles straight
+from `ui/src/brief` in the current tree (`preview/build.ts`), in memory, so a
+fresh clone shows the same shell. It never fetches, spawns git, changes the
+checkout or registers a feature, and production code imports nothing from it.
+Use the "Missing adapter" control to see the unsupported-adapter path.
+`preview/build.test.ts` builds it and checks the real layout is in the bundle.
+The only remote preview resource is the Google Fonts stylesheet `ui/index.html`
+uses.
 
 Preview room/sidebar/header and unsent conversation content are labeled samples,
 not a claim that all D rooms or the final conversation are assembled. The imported

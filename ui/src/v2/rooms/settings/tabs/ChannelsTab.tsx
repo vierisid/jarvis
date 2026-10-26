@@ -6,20 +6,9 @@ import type {
   TTSProvider,
 } from "../useSettingsData";
 import { allowedFieldText, parseDiscordIds, parseTelegramIds } from "./channel-ids";
-import { recipientNotice } from "./channel-recipient";
+import { ownerNotice, recipientNotice } from "./channel-recipient";
 
-// OpenAI-style voices the hosted Usejarvis TTS accepts (see createTTSProvider:
-// Edge neural names are rejected there, so this list is the whole picker).
-const UJ_VOICES = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"];
-
-const EDGE_VOICES = [
-  { id: "en-US-AriaNeural", label: "Aria (US Female)" },
-  { id: "en-US-GuyNeural", label: "Guy (US Male)" },
-  { id: "en-GB-SoniaNeural", label: "Sonia (UK Female)" },
-  { id: "en-AU-NatashaNeural", label: "Natasha (AU Female)" },
-  { id: "en-US-JennyNeural", label: "Jenny (US Female)" },
-  { id: "en-US-DavisNeural", label: "Davis (US Male)" },
-];
+import { UJ_VOICES, EDGE_VOICES } from "../../../../../../src/comms/voice-options";
 
 const EDGE_RATES = [
   { id: "-20%", label: "Slow" },
@@ -48,14 +37,12 @@ const SARVAM_SPEAKERS = [
   "hitesh",
 ];
 
-// #811, #852: an empty allow-list means different things, so say them. The
-// daemon refuses approve/deny replies from a channel whose list is empty, and
-// sends approval requests and notifications only to a listed user. #884: each
-// sender has their own conversation, but the agent still answers them with
-// the owner's tools and profile, which an owner leaving the list empty should
-// know.
+// #908: an enabled channel needs at least one ID; only listed users may
+// message the bot. #909/#916: the first ID is the channel's owner, the only
+// one answered with the owner's tools and context, sent approval requests and
+// notifications, and able to approve or deny. Everyone else is a guest.
 export const ALLOW_LIST_HINT =
-  "Leave empty to let anyone who can message the bot chat with Jarvis. Each person gets their own conversation, but Jarvis answers them with your tools and what it knows about you. Approval requests and notifications are sent, and can be approved or denied, only for an ID listed here, and are sent to your last direct message with the bot, never a group.";
+  "Only the people listed here can message the bot, and an enabled channel needs at least one. Put your own ID first: the first ID is the channel's owner. Only the owner is answered with your tools and what Jarvis knows about you; anyone else listed chats with a plain assistant that has neither. Approval requests and notifications go only to the owner's direct messages with the bot (never a group), once the owner has messaged the bot, and only the owner can approve or deny from here. In a group or server channel the owner's answers, which can include what Jarvis knows about you, are seen by everyone there.";
 
 /**
  * Entries of the saved allow-list the daemon ignores, and why (#883). A
@@ -72,6 +59,16 @@ function AllowListProblems({ problems }: { problems?: string[] }) {
           <li key={p}>{p}</li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/** Which saved ID owns the channel, or why none does (#916). */
+function OwnerNotice({ notice }: { notice: { text: string; warn: boolean } | null }) {
+  if (!notice) return null;
+  return (
+    <div className={notice.warn ? "v2-set__hint v2-set__hint--warn" : "v2-set__hint"} role="status">
+      {notice.text}
     </div>
   );
 }
@@ -111,7 +108,12 @@ export function ChannelsTab({
   const [dcGuild, setDcGuild] = useState("");
 
   // STT form
-  const [sttKey, setSttKey] = useState("");
+  // Held per provider: an OpenAI key typed before switching to Groq must not
+  // be saved as, and sent to, Groq (#1066).
+  const [sttKeyByProvider, setSttKeyByProvider] = useState<Record<string, string>>({});
+  const sttKeyProvider = sttCfg?.provider ?? "";
+  const sttKey = sttKeyByProvider[sttKeyProvider] ?? "";
+  const setSttKey = (value: string) => setSttKeyByProvider((keys) => ({ ...keys, [sttKeyProvider]: value }));
   const [sttEndpoint, setSttEndpoint] = useState("http://localhost:8080");
   const [sttServerType, setSttServerType] = useState("whisper_cpp");
 
@@ -212,6 +214,7 @@ export function ChannelsTab({
           />
           <div className="v2-set__hint">{ALLOW_LIST_HINT}</div>
           <AllowListProblems problems={channelCfg?.telegram.allowed_users_problems} />
+          <OwnerNotice notice={ownerNotice(channelCfg?.telegram)} />
           <RecipientNotice text={recipientNotice("Telegram", channelStatus?.recipients?.telegram)} />
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -293,6 +296,7 @@ export function ChannelsTab({
           />
           <div className="v2-set__hint">{ALLOW_LIST_HINT}</div>
           <AllowListProblems problems={channelCfg?.discord.allowed_users_problems} />
+          <OwnerNotice notice={ownerNotice(channelCfg?.discord)} />
           <RecipientNotice text={recipientNotice("Discord", channelStatus?.recipients?.discord)} />
         </div>
         <div className="v2-set__field">
@@ -317,7 +321,10 @@ export function ChannelsTab({
               const r = await data.setDiscord({
                 bot_token: dcToken || undefined,
                 allowed_users: allowed.ids,
-                guild_id: dcGuild || undefined,
+                // An emptied field sends null, which clears the saved guild;
+                // undefined is dropped by JSON and keeps it (#913). Before the
+                // config has loaded the field is empty unseen, so keep it then.
+                guild_id: dcGuild.trim() !== "" ? dcGuild.trim() : channelCfg ? null : undefined,
               });
               if (r.ok) setDcToken("");
               onToast(r.message, r.ok ? "ok" : "warn");

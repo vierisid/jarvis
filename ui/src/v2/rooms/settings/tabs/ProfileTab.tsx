@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { SettingsHook } from "../useSettingsData";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
 import { resetOnboarding } from "../../../onboarding/resetClient";
@@ -14,7 +14,12 @@ export function ProfileTab({
   const [editing, setEditing] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [draftRevision, setDraftRevision] = useState<string | undefined>();
+  // The saved answers the draft started from, so a conflict can tell edited answers apart.
+  const [baseAnswers, setBaseAnswers] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const editingRef = useRef(editing);
+  useLayoutEffect(() => { editingRef.current = editing; }, [editing]);
 
   // Seed the local draft from the server profile, but NOT while the user is
   // mid-edit. `profile` gets a fresh object reference on every 10s settings
@@ -26,6 +31,8 @@ export function ProfileTab({
     if (!profile) return;
     if (editing) return;
     setAnswers(profile.profile?.answers ?? {});
+    setBaseAnswers(profile.profile?.answers ?? {});
+    setDraftRevision(profile.revision);
   }, [profile, editing]);
 
   const steps = useMemo(() => {
@@ -55,13 +62,40 @@ export function ProfileTab({
 
   const handleSave = async () => {
     setSaving(true);
-    const r = await data.saveProfile(answers);
-    onToast(r.message, r.ok ? "ok" : "warn");
+    const r = await data.saveProfile(answers, draftRevision);
+    // Cancel and Clear are disabled while saving; this guard is only defensive.
+    if (!editingRef.current) { setSaving(false); return; }
+    if (!r.ok && "conflict" in r && r.latest) {
+      // A newer save landed while editing (#1101). Keep every answer this draft changed,
+      // take the newer value for the rest, and move to the newer revision. Nothing is
+      // written until the user presses Save again, which is conflict-checked once more.
+      const latest = r.latest;
+      const clashes = clashingAnswers(baseAnswers, answers, latest.answers);
+      setAnswers(rebaseDraft(baseAnswers, answers, latest.answers));
+      setBaseAnswers(latest.answers);
+      setDraftRevision(latest.revision);
+      if (clashes.length) {
+        // Both sides changed these answers: name them and show the first one, so the
+        // newer value is never replaced without the user seeing it.
+        const first = steps.findIndex((step) => step.questions.some((q) => q.id === clashes[0]));
+        if (first >= 0) setStepIndex(first);
+        const short = (v: string) => (v.length > 60 ? `${v.slice(0, 57)}...` : v);
+        const label = (id: string) => profile?.questions.find((q) => q.id === id)?.label ?? id;
+        onToast(`Also changed somewhere else: ${clashes.map((id) => `${label(id)} (now "${short(latest.answers[id] ?? "")}")`).join(", ")}. Your edits are kept; save again to replace those values.`, "warn");
+      } else {
+        onToast("Your profile changed somewhere else. Your edits are kept on top of the newer version; review them and save again.", "warn");
+      }
+    } else if (!r.ok && "conflict" in r) {
+      onToast("Your profile changed somewhere else and the newer version could not be loaded. Your draft is kept; press Save to try again.", "warn");
+    } else {
+      onToast(r.message, r.ok ? "ok" : "warn");
+    }
     if (r.ok) setEditing(false);
     setSaving(false);
   };
 
   const handleClear = async () => {
+    if (saving) return;
     if (!await confirmDialog("Clear the saved user profile context?")) return;
     const r = await data.clearProfile();
     if (r.ok) {
@@ -92,6 +126,7 @@ export function ProfileTab({
               type="button"
               className="v2-set__btn v2-set__btn--primary"
               onClick={() => {
+                if (editing || saving) return;
                 setEditing(true);
                 setStepIndex(0);
               }}
@@ -99,7 +134,7 @@ export function ProfileTab({
               {profile.has_profile ? "Edit profile" : "Start wizard"}
             </button>
             {profile.has_profile && (
-              <button type="button" className="v2-set__btn v2-set__btn--danger" onClick={handleClear}>
+              <button type="button" className="v2-set__btn v2-set__btn--danger" disabled={saving} onClick={handleClear}>
                 Clear
               </button>
             )}
@@ -140,7 +175,7 @@ export function ProfileTab({
                 {currentStep.title}
               </h3>
             </div>
-            <button type="button" className="v2-set__btn" onClick={() => setEditing(false)}>
+            <button type="button" className="v2-set__btn" disabled={saving} onClick={() => setEditing(false)}>
               Cancel
             </button>
           </div>
@@ -157,6 +192,7 @@ export function ProfileTab({
                 {q.multiline ? (
                   <textarea
                     className="v2-set__textarea"
+                    disabled={saving}
                     value={answers[q.id] ?? ""}
                     onChange={(e) => setAnswers((p) => ({ ...p, [q.id]: e.target.value }))}
                     placeholder={q.placeholder}
@@ -164,6 +200,7 @@ export function ProfileTab({
                 ) : (
                   <input
                     className="v2-set__input"
+                    disabled={saving}
                     value={answers[q.id] ?? ""}
                     onChange={(e) => setAnswers((p) => ({ ...p, [q.id]: e.target.value }))}
                     placeholder={q.placeholder}
@@ -242,6 +279,32 @@ export function ProfileTab({
       <OnboardingReplaySection onToast={onToast} />
     </div>
   );
+}
+
+/** Answers both the draft and the newer profile changed, to different values. */
+export function clashingAnswers(
+  base: Record<string, string>,
+  draft: Record<string, string>,
+  latest: Record<string, string>,
+): string[] {
+  const keys = new Set([...Object.keys(base), ...Object.keys(draft), ...Object.keys(latest)]);
+  return [...keys].filter((key) => {
+    const b = base[key] ?? "", d = draft[key] ?? "", l = latest[key] ?? "";
+    return d !== b && l !== b && l !== d;
+  });
+}
+
+/** Edited answers (draft differs from base) win; every other answer takes the newer value. */
+export function rebaseDraft(
+  base: Record<string, string>,
+  draft: Record<string, string>,
+  latest: Record<string, string>,
+): Record<string, string> {
+  const merged = { ...latest };
+  for (const key of new Set([...Object.keys(base), ...Object.keys(draft)])) {
+    if ((draft[key] ?? "") !== (base[key] ?? "")) merged[key] = draft[key] ?? "";
+  }
+  return merged;
 }
 
 /**

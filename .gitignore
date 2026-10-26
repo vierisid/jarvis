@@ -93,3 +93,4 @@ privkey.pem
 
 # Local optional onboarding assembly preview.
 ui/dist-on-u-10/
+ui/dist-local-integration/

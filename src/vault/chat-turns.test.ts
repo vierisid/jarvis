@@ -147,3 +147,38 @@ test('additive transport migration preserves legacy writers and adoption across 
   const repo = new ConversationRepository(getDb());
   expect(repo.get(legacy.id).lastMessageAt).toBe(message.created_at);
 });
+
+
+test('the first accepted message names the chat durably without replacing an explicit title', () => {
+  const { repo, input } = setup();
+  input.text = 'can you tell me a cool fact';
+  repo.accept(input);
+  expect(repo.conversations.get(input.conversationId).title).toBe('A cool fact');
+  expect(getDb().query<{ title: string }, [string]>('SELECT title FROM conversation_tabs WHERE conversation_id = ?').get(input.conversationId)?.title).toBe('A cool fact');
+  repo.accept(input); repo.finish(input, 'completed');
+  repo.accept({ ...input, turnId: 'second', requestId: 'second', text: 'another one' });
+  expect(new ConversationRepository(getDb()).tabs().tabs[0]?.title).toBe('A cool fact');
+  const named = repo.conversations.create({ title: 'My research' });
+  repo.accept({ ...input, conversationId: named.conversationId, turnId: 'named', requestId: 'named' });
+  expect(repo.conversations.get(named.conversationId).title).toBe('My research');
+});
+
+test('existing untitled chats derive a bounded topic from their first written message on reload', () => {
+  const { repo, input } = setup();
+  addMessage(input.conversationId, { role: 'user', content: 'Plan our autumn launch\n' + 'with the team '.repeat(50) });
+  const title = new ConversationRepository(getDb()).tabs().tabs[0]!.title;
+  expect(title).toStartWith('Plan our autumn launch'); expect(title.length).toBeLessThanOrEqual(60);
+  expect(title).not.toContain('\n');
+});
+
+test('ensureActive reuses an open conversation across windows and never reopens closed history', () => {
+  initDatabase(':memory:', { quiet: true });
+  const first = new ConversationRepository(getDb()), second = new ConversationRepository(getDb());
+  const a = first.ensureActive();
+  expect(second.ensureActive().conversationId).toBe(a.conversationId);
+  first.activate(null);
+  expect(second.ensureActive().conversationId).toBe(a.conversationId);
+  first.setOpen(a.conversationId, false);
+  const b = second.ensureActive(); expect(b.conversationId).not.toBe(a.conversationId);
+  expect(first.tabs().tabs).toHaveLength(1); expect(first.list().items).toHaveLength(2);
+});

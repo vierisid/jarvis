@@ -3,17 +3,16 @@
  * that pause is waiting on.
  *
  * Every continuation path (a due timer, a resolved approval, a POST to a
- * resume URL) goes through `claimContinuation`: the waitpoint is consumed, the
+ * resume URL, a required child run that finished, a held or waiting step
+ * released) goes through `claimContinuation`: the waitpoint is consumed, the
  * RESUME job is queued naming that waitpoint, and the continuation is recorded
  * in the trigger ledger, in one transaction. Two guards stop a continuation
  * from waking the wrong pause:
  *  - while one continuation of a run is queued or running, another is not
  *    queued behind it;
- *  - a timer or approval waitpoint whose own step has already finished (the
- *    run was woken early by something else) is retired, never used to wake
+ *  - a waitpoint other than a resume URL's whose own step has already
+ *    finished (the run was woken early by something else) is retired, never used to wake
  *    whatever the run paused on next.
- * A parent waiting on a required child is continued separately, by
- * child-run-scheduler.ts (no waitpoint named on its job, no ledger row).
  * The RUN_FLOW handler checks the same again when the job is claimed
  * (`continuationRefusal`), and a run of a workflow turned off since it began
  * never continues (repos/flow-turn-off.ts). While Jarvis is paused or stopped
@@ -72,12 +71,17 @@ export function activeContinuation(runId: string): boolean {
   ).get(runId);
 }
 
-/** A timer or approval waitpoint whose step already finished: using it would wake the run's next pause. */
+/**
+ * A waitpoint whose step already finished: using it would wake the run's next
+ * pause. Every kind but a resume URL's (WEBHOOK) names the step it parks: a
+ * timer, an approval, a held or waiting step, and a required child's MANUAL
+ * waitpoint, whose step is the parent's `run_workflow` step (#1073).
+ */
 function stale(run: FlowRun, waitpoint: Waitpoint): boolean {
   return waitpoint.type !== "WEBHOOK" && stepIsPaused(run.steps, waitpoint.stepName) === false;
 }
 
-export type ContinuationKind = "timer" | "approval" | "webhook" | "hold";
+export type ContinuationKind = "timer" | "approval" | "webhook" | "hold" | "deferred" | "child";
 export type ContinuationOutcome =
   /** The waitpoint was consumed and the RESUME job queued. */
   | "resumed"
@@ -162,7 +166,7 @@ export function releaseEmergencyHolds(now = Date.now()): number {
 /**
  * Why the RUN_FLOW handler must not continue this run with this job, or null.
  * A RESUME names the waitpoint it consumed: it must belong to the run, have
- * been consumed, and (for a timer or an approval) still be the paused step's.
+ * been consumed, and (for any but a resume URL's) still be the paused step's.
  * A job from before this check carries no waitpoint and is let through.
  */
 export function continuationRefusal(run: FlowRun, waitpointId: unknown): string | null {

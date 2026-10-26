@@ -17,6 +17,8 @@ import { homedir } from 'node:os';
 import { hostname, platform, arch, cpus, version } from 'node:os';
 import { TerminalExecutor } from '../terminal/executor.ts';
 import { WSLBridge, windowsSystemExe } from '../terminal/wsl-bridge.ts';
+import { ActionOutcomeError } from '../action-outcome.ts';
+import { WSL_NO_LOCAL_DESKTOP } from '../app-control/interface.ts';
 import { BrowserController, type PageSnapshot } from '../browser/session.ts';
 import { checkNavigationUrl } from '../browser/url-policy.ts';
 import { checkUploadPath, pageOrigin, uploadTargetRefusal } from '../browser/upload-policy.ts';
@@ -34,6 +36,7 @@ import { listSidecarsTool } from './sidecar-list.ts';
 import { DESKTOP_TOOLS, localScreenshotResult } from './desktop.ts';
 import { awaitCaptureTool, awaitCaptureToolOutput, captureViaPrivateFileAsync, CaptureTimeoutError } from '../app-control/capture-file.ts';
 import { sanitizedEnv } from '../../util/subprocess-env.ts';
+import { linuxSystemExe, SystemExeNotFoundError, win32SystemExe } from '../../util/system-exe.ts';
 import { WorkflowCancellationError } from '../../workflows/runtime/cancellation-error.ts';
 import { UI_TOOLS } from './ui.ts';
 import { SKILL_TOOLS } from './skills.ts';
@@ -680,14 +683,30 @@ export const listDirectoryTool: ToolDefinition = {
 const CLIPBOARD_READ = { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' } as const;
 const clipboardWrite = (content: string) => ({ stdin: Buffer.from(content, 'utf-8'), stdout: 'ignore', stderr: 'pipe' } as const);
 
+/**
+ * The Linux tools here come in pairs, the second tried when the first fails
+ * (xclip then xsel, scrot then import), and both are taken from the system
+ * directories only (#900). When neither is there, say so for both, not just
+ * for the one tried last; when the first ran and failed and the second is not
+ * there, the first one's failure is the one that explains it.
+ */
+function neitherInstalled(what: string, firstErr: unknown, secondErr: unknown): unknown {
+  if (!(secondErr instanceof SystemExeNotFoundError)) return secondErr;
+  if (firstErr instanceof SystemExeNotFoundError) {
+    return new Error(`no ${what} tool: ${firstErr.message}; ${secondErr.message}`);
+  }
+  return firstErr;
+}
+
 async function localClipboardRead(): Promise<string> {
   const os = platform();
   if (os === 'darwin') {
     return awaitCaptureToolOutput(Bun.spawn(['pbpaste'], CLIPBOARD_READ), 'pbpaste');
   } else if (os === 'win32') {
     // powershell run directly, not through cmd.exe as execSync did, so the
-    // bound's kill reaches the process doing the work.
-    return (await awaitCaptureToolOutput(Bun.spawn(['powershell', '-command', 'Get-Clipboard'], { ...CLIPBOARD_READ, windowsHide: true }), 'Get-Clipboard')).trimEnd();
+    // bound's kill reaches the process doing the work; by absolute path from
+    // %SystemRoot%, never by name (#907).
+    return (await awaitCaptureToolOutput(Bun.spawn([win32SystemExe('powershell.exe'), '-command', 'Get-Clipboard'], { ...CLIPBOARD_READ, windowsHide: true }), 'Get-Clipboard')).trimEnd();
   } else if (WSLBridge.isWSL()) {
     // On WSL the X clipboard (xclip/xsel via WSLg) is NOT the clipboard the
     // user copies/pastes with -- that's the Windows clipboard. Read it through
@@ -697,10 +716,17 @@ async function localClipboardRead(): Promise<string> {
       .replace(/\r\n/g, '\n').trimEnd();
   } else {
     try {
-      return await awaitCaptureToolOutput(Bun.spawn(['xclip', '-selection', 'clipboard', '-o'], CLIPBOARD_READ), 'xclip');
+      return await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xclip'), '-selection', 'clipboard', '-o'], CLIPBOARD_READ), 'xclip');
     } catch (err) {
       if (err instanceof CaptureTimeoutError) throw err;
-      return awaitCaptureToolOutput(Bun.spawn(['xsel', '--clipboard', '--output'], CLIPBOARD_READ), 'xsel');
+      // Past the output cap (#904): xsel would read the same selection to the
+      // same cap, so it is not tried.
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOBUFS') throw err;
+      try {
+        return await awaitCaptureToolOutput(Bun.spawn([linuxSystemExe('xsel'), '--clipboard', '--output'], CLIPBOARD_READ), 'xsel');
+      } catch (e) {
+        throw neitherInstalled('clipboard', err, e);
+      }
     }
   }
 }
@@ -710,7 +736,7 @@ async function localClipboardWrite(content: string): Promise<void> {
   if (os === 'darwin') {
     await awaitCaptureTool(Bun.spawn(['pbcopy'], clipboardWrite(content)), 'pbcopy');
   } else if (os === 'win32') {
-    await awaitCaptureTool(Bun.spawn(['powershell', '-command', 'Set-Clipboard'], { ...clipboardWrite(content), windowsHide: true }), 'Set-Clipboard');
+    await awaitCaptureTool(Bun.spawn([win32SystemExe('powershell.exe'), '-command', 'Set-Clipboard'], { ...clipboardWrite(content), windowsHide: true }), 'Set-Clipboard');
   } else if (WSLBridge.isWSL()) {
     // Write to the Windows clipboard via interop. `clip.exe` is the simplest
     // sink and is always present on WSL; it consumes stdin verbatim. (xclip/
@@ -720,10 +746,14 @@ async function localClipboardWrite(content: string): Promise<void> {
     await awaitCaptureTool(Bun.spawn([windowsSystemExe('clip.exe')], clipboardWrite(content)), 'clip.exe');
   } else {
     try {
-      await awaitCaptureTool(Bun.spawn(['xclip', '-selection', 'clipboard'], clipboardWrite(content)), 'xclip');
+      await awaitCaptureTool(Bun.spawn([linuxSystemExe('xclip'), '-selection', 'clipboard'], clipboardWrite(content)), 'xclip');
     } catch (err) {
       if (err instanceof CaptureTimeoutError) throw err;
-      await awaitCaptureTool(Bun.spawn(['xsel', '--clipboard', '--input'], clipboardWrite(content)), 'xsel');
+      try {
+        await awaitCaptureTool(Bun.spawn([linuxSystemExe('xsel'), '--clipboard', '--input'], clipboardWrite(content)), 'xsel');
+      } catch (e) {
+        throw neitherInstalled('clipboard', err, e);
+      }
     }
   }
 }
@@ -744,6 +774,17 @@ async function localClipboardWrite(content: string): Promise<void> {
  */
 async function localCaptureScreen(): Promise<string> {
   const os = platform();
+  // Under WSL, scrot and import capture WSLg's X display, which holds none of
+  // the Windows desktop the user is looking at (see WSL_NO_LOCAL_DESKTOP), and
+  // the picture came back as their screen (#901). Refused as the desktop
+  // tools are (#899), before any tool runs; the sidecar on Windows captures
+  // the real desktop, and capture_screen routes to it when one is enrolled.
+  if (os !== 'darwin' && os !== 'win32' && WSLBridge.isWSL()) {
+    throw new ActionOutcomeError({
+      status: 'blocked', code: 'LOCAL_DESKTOP_UNAVAILABLE', effect: 'not_started',
+      message: `Error: ${WSL_NO_LOCAL_DESKTOP}`,
+    });
+  }
   const tool = { stdin: 'ignore', stdout: 'ignore', stderr: 'pipe' } as const;
   return (await captureViaPrivateFileAsync(async (file) => {
     if (os === 'darwin') {
@@ -754,7 +795,7 @@ async function localCaptureScreen(): Promise<string> {
       // leaves its powershell child running. The script has no double quotes
       // and no %, so neither cmd.exe's parsing nor its expansion had any part
       // in what it means.
-      await awaitCaptureTool(Bun.spawn(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', 'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen | ForEach-Object { $bmp = New-Object System.Drawing.Bitmap($_.Bounds.Width, $_.Bounds.Height); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($_.Bounds.Location, [System.Drawing.Point]::Empty, $_.Bounds.Size); $bmp.Save($env:JARVIS_CAPTURE_PATH) }'], {
+      await awaitCaptureTool(Bun.spawn([win32SystemExe('powershell.exe'), '-NoProfile', '-NonInteractive', '-Command', 'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen | ForEach-Object { $bmp = New-Object System.Drawing.Bitmap($_.Bounds.Width, $_.Bounds.Height); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($_.Bounds.Location, [System.Drawing.Point]::Empty, $_.Bounds.Size); $bmp.Save($env:JARVIS_CAPTURE_PATH) }'], {
         ...tool,
         windowsHide: true,
         // sanitizedEnv, not a process.env spread: the allowlist keeps
@@ -765,12 +806,16 @@ async function localCaptureScreen(): Promise<string> {
       }), 'powershell capture');
     } else {
       try {
-        await awaitCaptureTool(Bun.spawn(['scrot', file], tool), 'scrot');
+        await awaitCaptureTool(Bun.spawn([linuxSystemExe('scrot'), file], tool), 'scrot');
       } catch (err) {
         // A scrot that hung says the display is wedged, and import would only
         // hang on it too; any other failure (scrot not installed) falls back.
         if (err instanceof CaptureTimeoutError) throw err;
-        await awaitCaptureTool(Bun.spawn(['import', '-window', 'root', file], tool), 'import');
+        try {
+          await awaitCaptureTool(Bun.spawn([linuxSystemExe('import'), '-window', 'root', file], tool), 'import');
+        } catch (e) {
+          throw neitherInstalled('screenshot', err, e);
+        }
       }
     }
   })).toString('base64');
@@ -847,6 +892,8 @@ export const captureScreenTool: ToolDefinition = {
   name: 'capture_screen',
   description: 'Take a screenshot of the screen. Optionally specify a "target" sidecar name/ID to capture a remote machine instead of locally.',
   category: 'general',
+  // The whole screen, like desktop_screenshot: off with desktop.enabled (#905).
+  usesDesktop: true,
   parameters: {
     target: {
       type: 'string',
@@ -872,6 +919,8 @@ export const captureScreenTool: ToolDefinition = {
       // A canceled run's fence (#803) is a stop, not a capture error: as in
       // desktop.ts's executeLocal, it goes on up for ToolRegistry to pass on.
       if (err instanceof WorkflowCancellationError) throw err;
+      // A typed refusal (#901) goes up as itself, as desktop_screenshot's does.
+      if (err instanceof ActionOutcomeError) throw err;
       return `Error capturing screen: ${err instanceof Error ? err.message : err}`;
     }
   },
@@ -1234,6 +1283,12 @@ function browserCallGuard(
     const machineCurrent = captureMachineApprovalGuard(params.target, 'browser', tool);
     const mayConnectLazily = !opts.bindDocument;
     const local = reviewedRoute ? null : browser.captureApprovalGuard(mayConnectLazily, opts);
+    // The local map's generation, read in the same synchronous step as the
+    // guard above, for the element action to compare again under the
+    // controller's snapshot lock (#875). The guard's own comparison runs
+    // before the action takes that lock, so a snapshot finishing in between
+    // passes it.
+    const localSnapshotGen = local && opts.bindDocument ? browser.snapshotGeneration() : undefined;
     // What the remote call will be held to (#676), captured NOW -- the newest
     // generation is re-recorded on every snapshot, so reading it at execution
     // would name a snapshot the person never saw. Only for the element-
@@ -1249,7 +1304,8 @@ function browserCallGuard(
     // default-scope caller took, and an approved navigate records into it.
     const readLog = reviewedRoute ? currentSnapshotReadLog() : undefined;
     const reader = { reader: currentSnapshotReader(), ...(readLog ? { readLog } : {}) };
-    const reviewed: ReviewedExecution | undefined = !reviewedRoute ? undefined
+    const reviewed: ReviewedExecution | undefined = !reviewedRoute
+      ? (localSnapshotGen !== undefined ? { localSnapshotGen } : undefined)
       : opts.bindDocument
         ? { remoteBrowserSnapshot: reviewedRemoteSnapshot(reviewedRoute), ...reader }
         : reader;
@@ -1278,6 +1334,26 @@ function browserCallGuard(
     return reviewed ? Object.assign(guard, { reviewed }) : guard;
   };
 }
+
+/**
+ * What a LOCAL element action was reviewed against, for the controller to
+ * compare under its snapshot lock (#875). Empty outside an approved execution:
+ * an ungated call is held to nothing but the map and the refs agreeing, which
+ * the lock alone gives it.
+ */
+function localReview(): { reviewedGen?: number } | null {
+  const reviewed = currentReviewedExecution();
+  if (!reviewed) return {};
+  // APPROVED, but with no local generation bound: a guard that bound none.
+  // Refused rather than run as if ungated, the way the remote half refuses an
+  // approved element action with no snapshot in its scope -- otherwise a
+  // registry whose guard forgot to bind one fails open without a sound.
+  return reviewed.localSnapshotGen === undefined ? null : { reviewedGen: reviewed.localSnapshotGen };
+}
+
+/** What an approved local element action with no bound generation returns (#875). */
+const LOCAL_REVIEW_UNBOUND = 'Error: This approved browser action carries no record of the snapshot it was reviewed '
+  + 'against, so nothing was done. Run browser_snapshot and review the action again.';
 
 /**
  * The remote snapshot a reviewed element action is being approved against:
@@ -1468,10 +1544,12 @@ export const browserClickTool: ToolDefinition = {
     if (isLocalBrowserDisabled()) return browserActionFailure(LOCAL_BROWSER_DISABLED_MSG);
     if (isNoLocalTools()) return browserActionFailure(LOCAL_DISABLED_MSG);
     try {
+      const review = localReview();
+      if (!review) return browserActionFailure(LOCAL_REVIEW_UNBOUND);
       return await browser.click(params.element_id as number, {
         button: params.button === 'right' ? 'right' : 'left',
         double: (params.double as boolean) ?? false,
-      });
+      }, review);
     } catch (err) {
       return browserActionError(err);
     }
@@ -1504,7 +1582,9 @@ export const browserHoverTool: ToolDefinition = {
     if (isLocalBrowserDisabled()) return browserActionFailure(LOCAL_BROWSER_DISABLED_MSG);
     if (isNoLocalTools()) return browserActionFailure(LOCAL_DISABLED_MSG);
     try {
-      return await browser.hover(params.element_id as number);
+      const review = localReview();
+      if (!review) return browserActionFailure(LOCAL_REVIEW_UNBOUND);
+      return await browser.hover(params.element_id as number, review);
     } catch (err) {
       return browserActionError(err);
     }
@@ -1588,11 +1668,14 @@ export const browserTypeTool: ToolDefinition = {
     if (isLocalBrowserDisabled()) return browserActionFailure(LOCAL_BROWSER_DISABLED_MSG);
     if (isNoLocalTools()) return browserActionFailure(LOCAL_DISABLED_MSG);
     try {
+      const review = localReview();
+      if (!review) return browserActionFailure(LOCAL_REVIEW_UNBOUND);
       return await browser.type(
         params.element_id as number,
         params.text as string,
         (params.submit as boolean) ?? false,
         (params.append as boolean) ?? false,
+        review,
       );
     } catch (err) {
       return browserActionError(err);
@@ -1915,10 +1998,12 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
       parameters: browserClickTool.parameters,
       execute: async (params) => {
         try {
+          const review = localReview();
+          if (!review) return browserActionFailure(LOCAL_REVIEW_UNBOUND);
           return await ctrl.click(params.element_id as number, {
             button: params.button === 'right' ? 'right' : 'left',
             double: (params.double as boolean) ?? false,
-          });
+          }, review);
         } catch (err) {
           return browserActionError(err);
         }
@@ -1931,11 +2016,14 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
       parameters: browserTypeTool.parameters,
       execute: async (params) => {
         try {
+          const review = localReview();
+          if (!review) return browserActionFailure(LOCAL_REVIEW_UNBOUND);
           return await ctrl.type(
             params.element_id as number,
             params.text as string,
             (params.submit as boolean) ?? false,
             (params.append as boolean) ?? false,
+            review,
           );
         } catch (err) {
           return browserActionError(err);
@@ -1949,7 +2037,9 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
       parameters: browserHoverTool.parameters,
       execute: async (params) => {
         try {
-          return await ctrl.hover(params.element_id as number);
+          const review = localReview();
+          if (!review) return browserActionFailure(LOCAL_REVIEW_UNBOUND);
+          return await ctrl.hover(params.element_id as number, review);
         } catch (err) {
           return browserActionError(err);
         }
@@ -2031,7 +2121,16 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
     // Same rule as the main registry: everything that connects lazily may be
     // reviewed against a cold browser, and only the element-addressed tools
     // genuinely require the snapshot that minted their ids.
-    tool.captureApprovalGuard = () => ctrl.captureApprovalGuard(!bindDocument, { bindDocument });
+    //
+    // And the element-addressed three carry the generation they bound, for the
+    // action to compare again under the controller's snapshot lock (#875): the
+    // guard's own comparison runs before the action waits on that lock.
+    tool.captureApprovalGuard = () => {
+      const guard = ctrl.captureApprovalGuard(!bindDocument, { bindDocument });
+      if (!bindDocument) return guard;
+      const reviewed: ReviewedExecution = { localSnapshotGen: ctrl.snapshotGeneration() };
+      return Object.assign(guard, { reviewed });
+    };
   }
   return tools;
 }

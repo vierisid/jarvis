@@ -13,6 +13,7 @@
  *     deferred until pieces have stable output shapes.
  */
 
+import { CONNECTION_SETUP_EVENT, hasPieceSetup } from './connection-setup-request';
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import {
@@ -33,11 +34,12 @@ import { WorkflowEditor } from "./WorkflowEditor";
 import { Button, Chip, FailureNotice, Icon } from "../../ui";
 import { RoomShell } from "../RoomShell";
 import { useRoomActions } from "../useRoomActionBus";
-import { useRunFocus, type RunFocus } from "./run-focus";
+import { focusRun, useRunFocus, type RunFocus } from "./run-focus";
 import {
   useWorkflowsData,
   CANCELED_EFFECT_WARNING,
   type Flow,
+  type FlowBlock,
   type FlowRun,
   type FlowRunStatus,
   type FlowStatus,
@@ -84,12 +86,13 @@ type RoomTab = "flows" | "connections" | "library" | "routines";
 
 export function WorkflowsRoomBody(): React.ReactElement {
   const data = useWorkflowsData();
+  const [actionMessage, setActionMessage] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
+  const [tab, setTab] = useState<RoomTab>(() => hasPieceSetup() ? "connections" : "flows");
+  // A piece setup handoff opens Connections; a ?workflow= deep link must not pull it back to the editor.
   useEffect(() => {
     const flowId = new URLSearchParams(window.location.search).get('workflow');
-    if (flowId) data.setEditingFlowId(flowId);
+    if (flowId && tab === "flows") data.setEditingFlowId(flowId);
   }, [data.setEditingFlowId]);
-  const [actionMessage, setActionMessage] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
-  const [tab, setTab] = useState<RoomTab>("flows");
   // Q-19: Today's "Open" on a failed run lands on that run.
   const [focusRunId, setFocusRunId] = useState<string | null>(null);
   useRunFocus(useCallback(({ flowId, runId }: RunFocus) => {
@@ -97,6 +100,11 @@ export function WorkflowsRoomBody(): React.ReactElement {
     data.setSelectedFlowId(flowId);
     setFocusRunId(runId);
   }, [data.setSelectedFlowId]));
+  useEffect(() => {
+    const open = () => { data.setEditingFlowId(null); setTab('connections'); };
+    window.addEventListener(CONNECTION_SETUP_EVENT, open);
+    return () => window.removeEventListener(CONNECTION_SETUP_EVENT, open);
+  }, [data.setEditingFlowId]);
 
   const handleAction = async (label: string, fn: () => Promise<{ ok: boolean; message: string }>): Promise<void> => {
     const result = await fn();
@@ -304,7 +312,7 @@ interface FlowRowProps {
   onDelete: () => void;
 }
 
-function FlowRow({ flow, selected, triggerWarning, onSelect, onEdit, onRun, onToggle, onPublish, onDelete }: FlowRowProps): React.ReactElement {
+export function FlowRow({ flow, selected, triggerWarning, onSelect, onEdit, onRun, onToggle, onPublish, onDelete }: FlowRowProps): React.ReactElement {
   const stop = (e: React.MouseEvent): void => e.stopPropagation();
   return (
     <li
@@ -335,6 +343,7 @@ function FlowRow({ flow, selected, triggerWarning, onSelect, onEdit, onRun, onTo
             // long messages wrap cleanly.
             <TriggerWarningChip text={triggerWarning} />
           ) : null}
+          {flow.blocked ? <FlowBlockedChip flowId={flow.id} blocked={flow.blocked} /> : null}
           <span className="wf-list__hint">updated {fmtRelative(flow.updated)}</span>
         </div>
       </div>
@@ -358,6 +367,36 @@ function FlowRow({ flow, selected, triggerWarning, onSelect, onEdit, onRun, onTo
         </Button>
       </div>
     </li>
+  );
+}
+
+/**
+ * #1080: an enabled workflow that is not doing its work says why, on its row.
+ * The sentence is the one its refused run shows; clicking opens that run, the
+ * way Today's "Open" does (Q-19 run focus).
+ */
+export function FlowBlockedChip({ flowId, blocked }: { flowId: string; blocked: FlowBlock }): React.ReactElement {
+  const open = (): void => focusRun(flowId, blocked.runId);
+  const preview = blocked.message.length > 60 ? blocked.message.slice(0, 57) + "..." : blocked.message;
+  // A runtime refusal is the last run's outcome, which can clear on its own.
+  const label = blocked.kind === "runtime" ? "Last run refused" : "Blocked";
+  return (
+    <Chip
+      tone="warn"
+      dot={false}
+      className="wf-list__blocked"
+      role="button"
+      tabIndex={0}
+      title={`${blocked.message} Click to open the run.`}
+      aria-label={`${label}: ${blocked.message} Open the run.`}
+      data-blocked-code={blocked.code}
+      onClick={(e: React.MouseEvent) => { e.stopPropagation(); open(); }}
+      onKeyDown={(e: React.KeyboardEvent) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); open(); }
+      }}
+    >
+      {label}: {preview}
+    </Chip>
   );
 }
 

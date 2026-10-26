@@ -8,10 +8,12 @@
  * already in its real startup environment.
  *
  * PATH is pointed at a fake `bun` that dumps its own environment and exits 0,
- * so each `bun install` / `bun run` site is asserted against what a real
- * grandchild process received. The CODE-step sandbox is the exception: it runs
- * `process.execPath`, never PATH, so it runs the REAL bun on a code module
- * that returns its own `process.env`, and the probe writes that out.
+ * so each `bun run` site is asserted against what a real grandchild process
+ * received. The install sites run `process.execPath`, never PATH (#864), so for
+ * them the probe points `process.execPath` at the same fake (see
+ * `useFakeBun`). The CODE-step sandbox also runs `process.execPath`, and it
+ * keeps the REAL bun on a code module that returns its own `process.env`,
+ * which the probe writes out.
  *
  * argv: <site> <workDir>
  */
@@ -29,6 +31,15 @@ const site = process.argv[2]!;
 const workDir = process.argv[3]!;
 const dumpDir = join(workDir, 'dumps');
 const piecesDir = join(workDir, 'pieces');
+
+/**
+ * Point `process.execPath` at a fake `bun`, for the install sites (#864): they
+ * spawn the running Bun, not one from PATH. Only this probe process is
+ * affected, and the CODE-sandbox site never calls it.
+ */
+function useFakeBun(path: string): void {
+  process.execPath = path;
+}
 
 /** A real catalog entry: installPiece refuses anything else before it spawns. */
 const PIECE = catalogById().values().next().value!;
@@ -50,6 +61,7 @@ switch (site) {
 
   // installer.ts: `bun install` behind installPiece (the API install path).
   case 'pieces-install': {
+    useFakeBun(join(workDir, 'bin', 'bun'));
     try {
       await installPiece(PIECE.id, { base: piecesDir });
     } catch (e) {
@@ -62,6 +74,7 @@ switch (site) {
 
   // reconciler.ts: the startup `bun install` for a manifest with no node_modules.
   case 'pieces-reconcile': {
+    useFakeBun(join(workDir, 'bin', 'bun'));
     await writeManifest({
       version: 1,
       pieces: [{
@@ -85,6 +98,7 @@ switch (site) {
     if (!ENGINE_BUILD_PATHS.STAGING_DIR.startsWith(workDir + '/')) {
       throw new Error(`staging dir ${ENGINE_BUILD_PATHS.STAGING_DIR} is outside the probe's work dir`);
     }
+    useFakeBun(join(workDir, 'bin', 'bun'));
     await ensureStagingInstalled();
     break;
   }
@@ -98,12 +112,12 @@ switch (site) {
   }
 
   // Both install paths against a `bun` that fails: print the errors they
-  // raise. The failing fake goes first on PATH for this site only.
+  // raise. The failing fake is this site's process.execPath.
   case 'install-errors': {
     const failDir = join(workDir, 'failbin');
     mkdirSync(failDir, { recursive: true });
     writeFileSync(join(failDir, 'bun'), '#!/bin/sh\nexit 3\n', { mode: 0o755 });
-    process.env.PATH = `${failDir}:${process.env.PATH ?? ''}`;
+    useFakeBun(join(failDir, 'bun'));
     if (!ENGINE_BUILD_PATHS.STAGING_DIR.startsWith(workDir + '/')) {
       throw new Error(`staging dir ${ENGINE_BUILD_PATHS.STAGING_DIR} is outside the probe's work dir`);
     }

@@ -1,3 +1,4 @@
+import { CHAT_MODEL_SUGGESTIONS } from './model-catalog.ts';
 import type {
   LLMProvider,
   LLMMessage,
@@ -358,11 +359,7 @@ export class GroqProvider implements LLMProvider {
       const data = await response.json() as { data: Array<{ id: string }> };
       return data.data.map(m => m.id).filter(isGroqJarvisModel).sort();
     } catch (_err) {
-      return [
-        'openai/gpt-oss-20b',
-        'openai/gpt-oss-120b',
-        'qwen/qwen3.6-27b',
-      ];
+      return [...CHAT_MODEL_SUGGESTIONS.groq];
     }
   }
 

@@ -1,0 +1,154 @@
+import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
+import { GlobalRegistrator } from "@happy-dom/global-registrator";
+import { inspect, layoutProblems, runCases, workflowSelectionProblems } from "../../../../scripts/brief-craft/browser.mjs";
+import { requiredCases } from "../../../../scripts/brief-craft/matrix.mjs";
+
+beforeAll(() => {
+  GlobalRegistrator.register();
+  Object.defineProperties(globalThis, {
+    innerWidth: { configurable: true, value: 390 },
+    innerHeight: { configurable: true, value: 1100 },
+    devicePixelRatio: { configurable: true, value: 1 },
+  });
+});
+afterEach(() => document.body.replaceChildren());
+afterAll(() => GlobalRegistrator.unregister());
+
+// Run the real read-only observation against DOM fixtures. Happy DOM has no
+// layout engine: supply explicit rectangles to model visible and clipped cases.
+const tab = { playwright: { evaluate: async (fn: Function, args: unknown) => fn(args) } };
+const room = { selector: ".brief-workflow-canvas" };
+const compact = { room: "workflow", theme: "light", sidebar: "expanded", chat: true, width: 390 };
+function bounds(selector: string, x: number, y: number, width: number, height: number) {
+  const rect = { x, y, width, height, top: y, left: x, right: x + width, bottom: y + height };
+  for (const element of document.querySelectorAll(selector)) Object.defineProperties(element, {
+    getBoundingClientRect: { configurable: true, value: () => rect },
+    getClientRects: { configurable: true, value: () => [rect] },
+  });
+}
+function fixture() {
+  document.body.innerHTML = `<div class="brief-root" data-brief-theme="light">
+    <div class="brief-navigation" data-requested-sidebar="expanded" data-rail="true" data-chat-open="true">
+      <div data-pebble-layout="single" data-pebble-open="true" data-pebble-available="true">
+        <div class="brief-pebble-work" aria-hidden="true" inert><main class="brief-workspace-content" data-brief-room="workflow">
+          <section class="brief-workflow-canvas"><button role="tab" aria-selected="true">Canvas</button>
+            <div class="react-flow__node" data-id="notes"><div class="wf-node wf-node--selected">Read notes</div></div>
+            <div class="react-flow__node" data-id="draft"><div class="wf-node">Draft follow-up</div></div>
+          </section>
+        </main></div>
+        <section class="brief-pebble-surface" aria-label="Conversation"><div class="brief-pebble-reading">
+          <button aria-label="Close conversation">Close</button>
+          <div class="brief-pebble-content"><textarea aria-label="Message"></textarea></div>
+        </div></section>
+      </div>
+    </div></div><aside data-brief-craft data-active-animations="0"></aside>`;
+  bounds("*", 80, 110, 300, 850);
+  bounds("[data-pebble-layout]", 70, 100, 320, 900);
+  bounds(".brief-pebble-content", 90, 160, 280, 750);
+  bounds("[aria-label='Close conversation']", 320, 120, 44, 44);
+  bounds("textarea", 100, 800, 260, 70);
+}
+
+test("a real visible conversation permits hidden work in the single-panel fallback", async () => {
+  fixture();
+  const metrics = await inspect(tab, room);
+  expect(metrics.roomVisible).toBe(false);
+  expect(metrics.conversation.surface.visible).toBe(true);
+  expect(layoutProblems(compact, metrics)).toEqual([]);
+  expect(layoutProblems({ ...compact, chat: false }, { ...metrics, chat: "false", roomVisible: true })).toContain("Wrong rendered conversation state.");
+});
+
+test("requested chat-open cannot pass with both surfaces hidden or conversation unavailable", async () => {
+  fixture();
+  const pebble = document.querySelector("[data-pebble-layout]")!;
+  pebble.setAttribute("data-pebble-open", "false");
+  pebble.setAttribute("data-pebble-available", "false");
+  document.querySelector(".brief-pebble-surface")!.setAttribute("aria-hidden", "true");
+  const metrics = await inspect(tab, room);
+  expect(metrics.chat).toBe("true");
+  expect(metrics.roomVisible).toBe(false);
+  expect(layoutProblems(compact, metrics)).toContain("Wrong rendered conversation state.");
+  expect(layoutProblems(compact, metrics).some(error => error.startsWith("Conversation surface"))).toBe(true);
+});
+
+test("open conversation rejects missing, transparent, zero-sized and offscreen panels", async () => {
+  for (const broken of ["missing", "transparent", "zero", "offscreen"] as const) {
+    fixture();
+    const surface = document.querySelector<HTMLElement>(".brief-pebble-surface")!;
+    if (broken === "missing") surface.remove();
+    if (broken === "transparent") surface.style.opacity = "0";
+    if (broken === "zero") bounds(".brief-pebble-surface", 80, 110, 0, 0);
+    if (broken === "offscreen") bounds(".brief-pebble-surface", 400, 110, 300, 850);
+    expect(layoutProblems(compact, await inspect(tab, room)).some(error => error.startsWith("Conversation surface"))).toBe(true);
+  }
+});
+
+test("a collapsed clipping surface and a clipped or missing composer cannot pass", async () => {
+  fixture();
+  bounds(".brief-pebble-surface", 322, 902, 58, 58);
+  expect(layoutProblems(compact, await inspect(tab, room))).toContain("Conversation reading is missing, hidden, collapsed or clipped.");
+  fixture();
+  bounds("textarea", 100, 950, 260, 70);
+  expect(layoutProblems(compact, await inspect(tab, room))).toContain("Conversation composer is missing, hidden, collapsed or clipped.");
+  fixture();
+  document.querySelector("textarea")!.remove();
+  expect(layoutProblems(compact, await inspect(tab, room))).toContain("Conversation composer is missing, hidden, collapsed or clipped.");
+});
+
+test("visible SVG edges with a zero-width box remain valid named controls", async () => {
+  fixture();
+  document.querySelector(".brief-pebble-content")!.insertAdjacentHTML("beforeend", '<svg><g role="button" aria-label="Edge from notes to draft"><path d="M0 0 V60" stroke="black" /></g></svg>');
+  bounds("svg, g, path", 100, 200, 0, 60);
+  const metrics = await inspect(tab, room);
+  expect(metrics.controls).toBe(3);
+  expect(metrics.unnamed).toEqual([]);
+  expect(layoutProblems(compact, metrics)).toEqual([]);
+});
+
+test("a transparent native input inside a custom radio remains a named keyboard control", async () => {
+  fixture();
+  document.querySelector(".brief-navigation")!.insertAdjacentHTML("beforeend", '<label><input type="radio" name="mode" style="opacity:0">Configured</label>');
+  bounds('input[type="radio"]', 100, 200, 120, 44);
+  document.querySelector<HTMLInputElement>('input[type="radio"]')!.focus();
+  const metrics = await inspect(tab, room);
+  expect(metrics.controls).toBe(3);
+  expect(metrics.unnamed).toEqual([]);
+  expect(metrics.focus).toMatchObject({ tag: "INPUT", name: "Configured", visible: true });
+});
+
+test("workflow observation detects a changed or lost node even while the Canvas tab stays selected", async () => {
+  fixture();
+  const before = await inspect(tab, room);
+  expect(before.workflowNodeIds).toEqual(["notes"]);
+  expect(workflowSelectionProblems("notes", before)).toEqual([]);
+  document.querySelector(".wf-node--selected")!.classList.remove("wf-node--selected");
+  document.querySelector('[data-id="draft"] .wf-node')!.classList.add("wf-node--selected");
+  const changed = await inspect(tab, room);
+  expect(changed.selected).toEqual(before.selected);
+  expect(workflowSelectionProblems("notes", changed)).toEqual(["Selected workflow node was lost or changed."]);
+  document.querySelector(".wf-node--selected")!.classList.remove("wf-node--selected");
+  expect(workflowSelectionProblems("notes", await inspect(tab, room))).toEqual(["Selected workflow node was lost or changed."]);
+  expect(workflowSelectionProblems(null, await inspect(tab, room))).toEqual(["Selected workflow node was lost or changed."]);
+});
+
+test("a preview that stays on the current dashboard stops with the developer-setting hint", async () => {
+  // The D33 release gate keeps fixture URLs on v2 unless jarvis-devtools=1 is set in the origin.
+  const test = requiredCases().find(row => row.room === "billing" && row.kind === "layout" && row.state === "ready");
+  const saved: Record<string, string> = {};
+  const visits: string[] = [];
+  const legacyTab = {
+    url: async () => "about:blank",
+    goto: async (href: string) => { visits.push(href); },
+    reload: async () => {},
+    playwright: { locator: () => ({ waitFor: async () => { throw Error("Timed out waiting for .brief-navigation"); } }) },
+  };
+  const results = await runCases({
+    tab: legacyTab, viewport: { set: async () => {} }, baseUrl: "http://127.0.0.1:4422", cases: [test, test],
+    save: async (name: string, data: string) => { saved[name] = data; },
+  });
+  expect(visits).toHaveLength(1);
+  expect(results).toHaveLength(1);
+  expect(results[0]!.status).toBe("failed");
+  expect(results[0]!.reason).toContain('Set localStorage "jarvis-devtools" to "1"');
+  expect(results[0]!.reason).toContain("http://127.0.0.1:4422");
+});

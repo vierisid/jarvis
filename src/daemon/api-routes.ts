@@ -7,6 +7,7 @@ import { memoryPageResponse } from '../vault/memory-page';
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { patchUserProfile, readEditableProfile, ProfileEditError } from '../vault/profile-edit';
 import { createOnboardingRoutes } from '../onboarding-next/runtime/routes.ts';
 import type { OnboardingRuntime } from '../onboarding-next/runtime/runtime.ts';
 import { DEBUG_RPC_HEADER, debugRpcGate, debugRpcTokenMatches } from './debug-rpc-gate.ts';
@@ -49,9 +50,9 @@ import { getFlowVersion, getLatestDraft } from '../workflows/db/repos/flow-versi
 const VALID_ENTITY_TYPES = new Set(['person', 'project', 'tool', 'place', 'concept', 'event']);
 import { getDb } from '../vault/schema.ts';
 import { findCommitments, getUpcoming, createCommitment, getCommitment, patchCommitment, reorderCommitments } from '../vault/commitments.ts';
-import { validateCommitmentPatch } from './commitment-patch.ts';
+import { COMMITMENT_CREATE_MAX_BODY_BYTES, readBoundedJson, validateCommitmentCreate, validateCommitmentPatch } from './commitment-patch.ts';
 import { getOrCreateConversation, getMessages, getRecentConversation } from '../vault/conversations.ts';
-import { telegramAllowList, discordAllowList } from '../comms/channels/allow-list.ts';
+import { telegramAllowList, discordAllowList, channelOwnerId } from '../comms/channels/allow-list.ts';
 import { getRecentObservations, summarizeObservation } from '../vault/observations.ts';
 import { listAgentActivity, countAgentActivity } from '../vault/agent-activity.ts';
 import { getPersonality } from '../personality/model.ts';
@@ -164,6 +165,10 @@ export type ApiContext = {
   briefMemoryStream?: import('../brief/memory-stream').MemoryStream;
   briefMemoryUsage?: import('../vault/memory-usage').MemoryUsageLedger;
   briefMemoryForget?: import('../brief/memory-forget').MemoryForget;
+  briefProfileSettings?: import('../brief/profile-settings').ProfileSettings;
+  briefWorkflowContext?: import('../brief/workflow-context').WorkflowContext;
+  briefConnections?: import('../brief/connected-workspace').ConnectedWorkspace;
+  briefWorkflowRemoval?: import('../brief/workflow-removal').WorkflowRemoval;
   briefOutcomes?: import('../brief/outcomes').Outcomes;
   briefDecisionDocuments?: import('../brief/decision-documents').DecisionDocuments;
   briefRecommendations?: import('../brief/recommendations').Recommendations;
@@ -386,6 +391,9 @@ function buildAgentSnapshots(ctx: ApiContext) {
   };
 }
 
+/** Fact sources a client may label a POST /api/vault/facts write with (#1099). */
+const API_FACT_SOURCES: ReadonlySet<string> = new Set(['dashboard', 'user', 'api']);
+
 /**
  * Create all API route handlers.
  */
@@ -432,7 +440,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
   return {
     ...createOpportunityRoutes(json),
-    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations, ctx.briefAttachments, ctx.briefWorkflowComposition, ctx.briefPreparedOpportunities, ctx.briefOpportunityActivation, ctx.briefDecisions, ctx.briefRecommendations, ctx.briefDecisionDocuments, ctx.briefGoalMeasurements, ctx.briefOutcomes, ctx.briefMemoryStream, ctx.briefMemoryUsage, ctx.briefMemoryForget),
+    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations, ctx.briefAttachments, ctx.briefWorkflowComposition, ctx.briefPreparedOpportunities, ctx.briefOpportunityActivation, ctx.briefDecisions, ctx.briefRecommendations, ctx.briefDecisionDocuments, ctx.briefGoalMeasurements, ctx.briefOutcomes, ctx.briefMemoryStream, ctx.briefMemoryUsage, ctx.briefMemoryForget, ctx.briefWorkflowRemoval, ctx.briefWorkflowContext, ctx.briefConnections, ctx.briefProfileSettings, { generation: crypto.randomUUID(), installMode: () => isHostedInstall(ctx.config) ? 'hosted' : 'self' }),
     // --- Health ---
     '/api/health': {
       GET: () => json(ctx.healthMonitor.getHealth()),
@@ -536,11 +544,19 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           if (!body.subject_id || !body.predicate || !body.object) {
             return error('subject_id, predicate, and object are required', 400);
           }
+          // Only user-entered labels. Automatic sources (llm_extraction,
+          // goal_completion, user_profile) carry replay and Forget semantics,
+          // and decision sources (user_correction, user_confirmation) are
+          // written only by the confirm/correct routes (#1099).
+          const source = body.source ?? 'dashboard';
+          if (typeof source !== 'string' || !API_FACT_SOURCES.has(source)) {
+            return error(`source must be one of: ${[...API_FACT_SOURCES].join(', ')}`, 400);
+          }
           const subject = getEntity(body.subject_id);
           if (!subject) return error(`Unknown subject_id: ${body.subject_id}`, 404);
           const fact = createFact(body.subject_id, body.predicate, body.object, {
             confidence: body.confidence,
-            source: body.source ?? 'dashboard',
+            source,
             scope: body.scope, validFrom: body.valid_from, validTo: body.valid_to,
           });
           return json(fact);
@@ -676,27 +692,25 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (overdue === 'true') query.overdue = true;
         return json(findCommitments(query));
       },
+      // The PATCH's rules, which this never had (#1036): one-line text where
+      // the commitments tool lists it one task per line, bounded fields and a
+      // bounded body, and nothing it does not write.
       POST: async (req: Request) => {
+        const read = await readBoundedJson(req, COMMITMENT_CREATE_MAX_BODY_BYTES);
+        if (!read.ok) return error(read.error, read.status);
+        const parsed = validateCommitmentCreate(read.body);
+        if (!parsed.ok) return error(parsed.error);
+        const { what, ...opts } = parsed.create;
+        let commitment: ReturnType<typeof createCommitment>;
         try {
-          const body = await req.json() as {
-            what: string;
-            when_due?: number;
-            context?: string;
-            priority?: CommitmentPriority;
-            assigned_to?: string;
-          };
-          if (!body.what) return error('Missing "what" field');
-          const commitment = createCommitment(body.what, {
-            when_due: body.when_due,
-            context: body.context,
-            priority: body.priority,
-            assigned_to: body.assigned_to,
-          });
-          ctx.wsService?.broadcastTaskUpdate(commitment, 'created');
-          return json(commitment, 201);
+          commitment = createCommitment(what, opts);
         } catch (err) {
-          return error('Invalid request body');
+          // Not the request's fault: it used to be reported as a bad body.
+          console.error('[api] task create failed:', err);
+          return error('Could not create the task', 500);
         }
+        ctx.wsService?.broadcastTaskUpdate(commitment, 'created');
+        return json(commitment, 201);
       },
     },
 
@@ -1112,29 +1126,42 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     // --- User Profile Wizard ---
     '/api/user-profile': {
       GET: () => {
-        const profile = getUserProfile();
-        return json({
-          questions: USER_PROFILE_QUESTIONS,
-          profile,
-          answered_count: countAnsweredUserProfileQuestions(profile),
-          total_questions: USER_PROFILE_QUESTIONS.length,
-          has_profile: hasUserProfile(profile),
-        });
+        let response: Response;
+        try {
+          const { profile, revision } = readEditableProfile();
+          response = json({ revision, questions: USER_PROFILE_QUESTIONS, profile,
+            answered_count: countAnsweredUserProfileQuestions(profile),
+            total_questions: USER_PROFILE_QUESTIONS.length, has_profile: hasUserProfile(profile) });
+        } catch { response = error('Profile unavailable.', 503); }
+        response.headers.set('Cache-Control', 'no-store');
+        return response;
       },
       POST: async (req: Request) => {
         try {
-          const body = await req.json() as { answers?: Record<string, unknown> };
-          const profile = saveUserProfile(body.answers ?? {});
+          const body = await req.json() as { answers?: Record<string, unknown>; revision?: unknown };
+          if (process.env.JARVIS_BRIEF_PROFILE_SETTINGS === '1' && body.revision === undefined) {
+            return error('Reload the profile before saving.', 428);
+          }
+          const answers = body.answers ?? {};
+          // The Settings form resends every answer; an empty form with a current revision is a no-op, not a malformed patch.
+          const emptyForm = body.revision !== undefined && typeof answers === 'object' && !Array.isArray(answers) && Object.keys(answers).length === 0;
+          if (emptyForm && readEditableProfile().revision !== body.revision) throw new ProfileEditError('revision_conflict', 409);
+          const profile = body.revision === undefined ? saveUserProfile(answers)
+            : emptyForm ? getUserProfile() : patchUserProfile(body.revision, answers).profile;
           return json({
             ok: true,
             profile,
+            revision: readEditableProfile().revision,
+            questions: USER_PROFILE_QUESTIONS,
+            has_profile: hasUserProfile(profile),
             answered_count: countAnsweredUserProfileQuestions(profile),
             total_questions: USER_PROFILE_QUESTIONS.length,
             message: 'User profile saved.',
           });
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return error(`Failed to save user profile: ${msg}`);
+          if (err instanceof ProfileEditError) return error(err.code === 'revision_conflict' ? 'Profile changed. Reload before saving; your draft has been kept.'
+            : err.code === 'invalid_patch' ? 'Profile answers are invalid or too long.' : 'Profile unavailable.', err.status);
+          return error('Failed to save user profile.');
         }
       },
     },
@@ -1142,7 +1169,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/user-profile/clear': {
       POST: () => {
         clearUserProfile();
-        return json({ ok: true, message: 'User profile cleared.' });
+        const { profile, revision } = readEditableProfile();
+        return json({ ok: true, message: 'User profile cleared.', profile, revision,
+          questions: USER_PROFILE_QUESTIONS, answered_count: 0,
+          total_questions: USER_PROFILE_QUESTIONS.length, has_profile: false });
       },
     },
 
@@ -2735,6 +2765,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             allowed_users: tgList.ids,
             allowed_users_rejected: tgList.rejected,
             allowed_users_problems: tgList.problems,
+            allowed_users_entries: tgList.entries,
+            // The first entry, when it is a valid id (#916): see channelOwnerId.
+            owner_id: channelOwnerId('telegram', cfg?.telegram?.allowed_users),
           },
           discord: {
             enabled: cfg?.discord?.enabled ?? false,
@@ -2742,6 +2775,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             allowed_users: dcList.ids,
             allowed_users_rejected: dcList.rejected,
             allowed_users_problems: dcList.problems,
+            allowed_users_entries: dcList.entries,
+            owner_id: channelOwnerId('discord', cfg?.discord?.allowed_users),
             guild_id: cfg?.discord?.guild_id ?? null,
           },
         });

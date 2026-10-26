@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fingerprint } from '../../actions/tools/composition-provenance';
 import type { EvaluationRow } from './types';
+import { loadTasks } from './runner';
 
 const root = resolve(import.meta.dir, '../../..');
 
@@ -20,8 +21,10 @@ test('CLI review accepts the exact redacted hosted error row and still rejects c
     id: 'review-regression', version: '1', intendedModel: 'terra-fixture',
     baseUrl: 'https://example.invalid', apiKeyEnv: 'W8_REVIEW_TEST_KEY', routingEvidence: 'Synthetic test only',
   }));
-  writeFileSync(authorization, JSON.stringify({ schemaVersion: 1, approvedBy: 'Fixture approver', approvedAt: '2026-01-01',
-    validUntil: '2999-12-31', profileId: 'review-regression', splits: ['development'], maxRequests: 1, maxTokens: 1000 }));
+  const tasks = loadTasks('development', 'w8');
+  writeFileSync(authorization, JSON.stringify({ schemaVersion: 2, approvedBy: 'Fixture approver', approvedAt: '2026-01-01',
+    validUntil: '2999-12-31', profileId: 'review-regression', splits: ['development'],
+    tasksets: [{ version: tasks.version, sha256: tasks.sha256 }], maxRequests: 1, maxTokens: 1000 }));
 
   async function cli(args: string[], withProvider = false) {
     const child = Bun.spawn([process.execPath, ...(withProvider ? ['--preload', preload] : []),

@@ -37,6 +37,66 @@ exit "${STUB_JAVA_EXIT:-0}"
 STUB
 chmod +x "$WORK/bin/java"
 
+# Two real certificates with the SAME subject (#871): the leaf the chain names,
+# and another one a public CA could just as well issue to someone else. The
+# pin is the SHA-256 of the certificate itself, so only the first is ours.
+# Hashed here from the DER with sha256sum, not the way the script reads it
+# (openssl -fingerprint), so the two have to agree on the bytes.
+command -v openssl >/dev/null || {
+	echo "openssl is required" >&2
+	exit 1
+}
+for n in leaf other; do
+	openssl req -x509 -newkey rsa:2048 -nodes \
+		-keyout "$WORK/${n}.key" -out "$WORK/${n}.pem" -days 2 \
+		-subj "/C=US/O=Jarvis Technologies Inc/CN=Jarvis Technologies Inc" >/dev/null 2>&1 || {
+		echo "could not make the test certificate ${n}" >&2
+		exit 1
+	}
+done
+der_sha256() { openssl x509 -in "$1" -outform DER | sha256sum | cut -d' ' -f1; }
+LEAF_SHA="$(der_sha256 "$WORK/leaf.pem")"
+OTHER_SHA="$(der_sha256 "$WORK/other.pem")"
+if ! [[ "$LEAF_SHA" =~ ^[0-9a-f]{64}$ && "$OTHER_SHA" =~ ^[0-9a-f]{64}$ ]] || [ "$LEAF_SHA" = "$OTHER_SHA" ]; then
+	echo "test certificates did not hash: '${LEAF_SHA}' '${OTHER_SHA}'" >&2
+	exit 1
+fi
+# What the stub osslsigncode reports as the signer: the leaf, unless a test
+# says otherwise.
+export STUB_SIGNER_SHA256="$LEAF_SHA"
+
+# The leaf check every osslsigncode stub runs, as osslsigncode 2.7 to 2.13 do
+# (verify_leaf_hash, verify_signature): with -require-leaf-hash, it compares
+# the value with the signer certificate hash and prints "Leaf hash match: ok";
+# on a mismatch it prints the computed hash, "Leaf hash match: failed" and
+# "Signature verification: failed", and verifies nothing further. Without the
+# option it prints neither line, and STUB_IGNORE_LEAF=1 plays an osslsigncode
+# that ignores it. Exit 0 = matched (or not asked), 1 = mismatch.
+cat >"$WORK/leafcheck" <<'STUB'
+#!/usr/bin/env bash
+want="" prev=""
+for a in "$@"; do
+	[ "$prev" = "-require-leaf-hash" ] && want="$a"
+	prev="$a"
+done
+[ -z "$want" ] || [ "${STUB_IGNORE_LEAF:-}" = 1 ] && exit 0
+# STUB_NESTED_IMPOSTOR=1: an impostor primary signature with one of ours
+# nested, as real osslsigncode 2.9 reports it: a failed leaf for the first,
+# an ok leaf for the second, and exit 0 because one signature verified.
+if [ "${STUB_NESTED_IMPOSTOR:-}" = 1 ]; then
+	printf '\nLeaf hash value mismatch: 00 computed\n\nLeaf hash match: failed\nSignature verification: failed\n\nSignature Index: 1  (Nested Signature)\n\nLeaf hash match: ok\n'
+	exit 0
+fi
+if [ "$want" = "sha256:${STUB_SIGNER_SHA256}" ]; then
+	printf '\nLeaf hash match: ok\n'
+	exit 0
+fi
+printf '\nLeaf hash value mismatch: %s computed\n\nLeaf hash match: failed\nSignature verification: failed\n\nNumber of verified signatures: 1\nFailed\n' "$(printf '%s' "$STUB_SIGNER_SHA256" | tr 'a-f' 'A-F')"
+exit 1
+STUB
+chmod +x "$WORK/leafcheck"
+export LEAFCHECK="$WORK/leafcheck"
+
 # A permissive default osslsigncode stub, installed BEFORE any test runs.
 # Without it the suite is not hermetic: on a machine that has the real
 # osslsigncode (any developer who followed the runbook) it would run against
@@ -45,6 +105,8 @@ chmod +x "$WORK/bin/java"
 cat >"$WORK/bin/osslsigncode" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\0' "$@" >> "${VERIFY_LOG:-/dev/null}"
+leaf="$("$LEAFCHECK" "$@")" || { printf '%s\n' "$leaf"; exit 1; }
+printf '%s\n' "$leaf"
 cat <<'OUT'
 Message digest algorithm  : SHA256
 Current message digest    : AAAA
@@ -67,9 +129,10 @@ export JSIGN_JAR="$WORK/fake-jsign.jar"
 # (tests that exercise the download branch pass JSIGN_JAR= to blank it; the
 #  script checks ${JSIGN_JAR:-} so empty behaves as unset)
 
-# A stand-in certificate chain. Only its existence and the PEM marker matter to
-# the script — Cloud KMS holds the key, this file holds the public chain.
-printf -- '-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n' >"$WORK/chain.pem"
+# The certificate chain: the leaf first, as the committed one is. Signing only
+# needs it to exist and hold a PEM (Cloud KMS holds the key); verifying pins
+# its first certificate (#871).
+cat "$WORK/leaf.pem" "$WORK/other.pem" >"$WORK/chain.pem"
 
 # An OAuth access token containing characters that have historically broken
 # naive shell quoting — including '|', which the DigiCert storetype used as a
@@ -357,6 +420,7 @@ make_osslsigncode() {
 	cat >"$WORK/bin/osslsigncode" <<STUB
 #!/usr/bin/env bash
 printf '%s\0' "\$@" >> "\${VERIFY_LOG:-/dev/null}"
+leaf="\$("\$LEAFCHECK" "\$@")" || { printf '%s\n' "\$leaf"; exit 1; }
 cat <<'OUT'
 PE checksum   : 0001FB65
 
@@ -369,6 +433,9 @@ Signer's certificate:
 	Signer #0:
 		Subject: ${subject}
 		Issuer : /C=GB/O=Sectigo Limited/CN=Sectigo Public Code Signing CA R36
+OUT
+printf '%s\n' "\$leaf"
+cat <<'OUT'
 ${3}
 Number of verified signatures: 1
 ${4}
@@ -545,10 +612,11 @@ else
 	no "--defer-verify signs and defers the check" "$out; verify log: $(tr '\0' ' ' <"$WORK/verify.log")"
 fi
 
-# run_verify_only <file...>: no credentials, no certificate file, no jar.
+# run_verify_only <file...>: no credentials and no jar. The chain is read: its
+# leaf is the signer the check pins (#871).
 run_verify_only() {
 	env -u GCP_KMS_KEYRING -u GCP_KMS_KEY_ALIAS -u GCP_ACCESS_TOKEN \
-		STUB_JAVA_LOG="$WORK/argv.log" CODESIGN_CERT_FILE="$WORK/no-such-chain.pem" \
+		STUB_JAVA_LOG="$WORK/argv.log" CODESIGN_CERT_FILE="${CERTFILE_OVERRIDE-$WORK/chain.pem}" \
 		JSIGN_JAR="$WORK/no-such.jar" VERIFY_LOG="${VERIFY_LOG:-/dev/null}" \
 		bash "$SCRIPT" --verify-only "$@"
 }
@@ -557,9 +625,98 @@ run_verify_only() {
 out="$(VERIFY_LOG="$WORK/verify.log" SIGNING_PUBLISHER_CN="Jarvis Technologies Inc" run_verify_only "$WORK/app.exe" "$WORK/second.exe" 2>&1)"
 if [ $? -eq 0 ] && [ ! -s "$WORK/argv.log" ] && [ "$(grep -zc -- 'verify' "$WORK/verify.log" 2>/dev/null || true)" = 2 ] &&
 	[[ "$out" == *"chain trusted"* ]]; then
-	ok "--verify-only verifies every file with no credential, certificate or jar, and signs nothing"
+	ok "--verify-only verifies every file with no credential or jar, and signs nothing"
 else
 	no "--verify-only verifies without signing" "$out; java argv: $(tr '\0' ' ' <"$WORK/argv.log")"
+fi
+
+# --- the signer is pinned to the leaf of the chain, not just its CN (#871) ---
+# verify_log_field <flag>: the values that followed <flag> in verify.log, one
+# per line (one per osslsigncode run).
+verify_log_field() {
+	local want="$1" prev="" cur
+	while IFS= read -r -d '' cur; do
+		[ "$prev" = "$want" ] && printf '%s\n' "$cur"
+		prev="$cur"
+	done <"$WORK/verify.log"
+}
+pins="$(verify_log_field -require-leaf-hash | sort -u)"
+[ "$pins" = "sha256:${LEAF_SHA}" ] &&
+	ok "--verify-only asks osslsigncode for the SHA-256 of the chain leaf on every file" ||
+	no "--verify-only pins the chain leaf" "wanted sha256:${LEAF_SHA}, got: ${pins:-<none>}"
+
+# The attack #871 is about: a publicly trusted certificate with OUR CN that is
+# not our certificate. The CN check passes it; the pin must not.
+out="$(STUB_SIGNER_SHA256="$OTHER_SHA" SIGNING_PUBLISHER_CN="Jarvis Technologies Inc" run_verify_only "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"signed by a certificate other than the leaf"* ]] && [[ "$out" == *"$LEAF_SHA"* ]]; then
+	ok "--verify-only refuses a signer with the expected CN that is not the chain leaf"
+else
+	no "--verify-only refuses a same-CN signer that is not the chain leaf" "$out"
+fi
+: >"$WORK/verify.log"
+out="$(VERIFY_LOG="$WORK/verify.log" STUB_SIGNER_SHA256="$OTHER_SHA" SIGNING_PUBLISHER_CN="Jarvis Technologies Inc" run_sign "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"signed by a certificate other than the leaf"* ]] &&
+	[ "$(verify_log_field -require-leaf-hash)" = "sha256:${LEAF_SHA}" ]; then
+	ok "signing then verifying in place pins the chain leaf too"
+else
+	no "signing then verifying in place pins the chain leaf" "$out"
+fi
+
+# The leaf is the FIRST certificate: a chain with another certificate first
+# pins that one, so our signer no longer matches.
+cat "$WORK/other.pem" "$WORK/leaf.pem" >"$WORK/reversed.pem"
+out="$(CERTFILE_OVERRIDE="$WORK/reversed.pem" run_verify_only "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"$OTHER_SHA"* ]]; then
+	ok "pins the first certificate in the chain file"
+else
+	no "pins the first certificate in the chain file" "$out"
+fi
+
+# A nested signature of ours does not excuse an impostor primary one, even
+# though osslsigncode exits 0 for it: the leaf check refuses, by name.
+out="$(STUB_NESTED_IMPOSTOR=1 SIGNING_PUBLISHER_CN="Jarvis Technologies Inc" run_verify_only "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"signed by a certificate other than the leaf"* ]]; then
+	ok "--verify-only refuses an impostor signature even when a nested one is ours"
+else
+	no "--verify-only refuses an impostor signature next to a nested one of ours" "$out"
+fi
+
+# A primary signature with no single signer makes osslsigncode skip its leaf
+# line entirely (PKCS7_get0_signers error), so a nested signature of ours is
+# the only "Leaf hash match: ok" and the exit is 0. We never nest, so any
+# count but one is refused, whatever the leaf lines say.
+make_osslsigncode "$GOOD_DIGEST" "Jarvis Technologies Inc" "$TS_OK" "$CHAIN_OK" 0
+sed -i 's/^PE checksum   : 0001FB65$/PKCS7_get0_signers error/; s/Number of verified signatures: 1/Number of verified signatures: 2/' "$WORK/bin/osslsigncode"
+out="$(SIGNING_PUBLISHER_CN="Jarvis Technologies Inc" run_verify_only "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"more than one Authenticode signature"* ]]; then
+	ok "--verify-only refuses a file with a nested signature, even when every leaf line it prints is ok"
+else
+	no "--verify-only refuses a nested signature" "$out"
+fi
+make_osslsigncode "$GOOD_DIGEST" "Jarvis Technologies Inc" "$TS_OK" "$CHAIN_OK" 0
+
+# Allowlisted: an osslsigncode that ignores the option prints no leaf line,
+# and that is not a confirmed signer.
+out="$(STUB_IGNORE_LEAF=1 run_verify_only "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"did not confirm"* ]]; then
+	ok "--verify-only refuses output that never confirms the leaf"
+else
+	no "--verify-only refuses output that never confirms the leaf" "$out"
+fi
+
+# The chain is now what verification checks against, so it is required.
+out="$(CERTFILE_OVERRIDE="$WORK/no-such-chain.pem" run_verify_only "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"certificate chain not found"* ]]; then
+	ok "--verify-only refuses to run without the certificate chain"
+else
+	no "--verify-only refuses to run without the certificate chain" "$out"
+fi
+printf -- '-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n' >"$WORK/garbage.pem"
+out="$(CERTFILE_OVERRIDE="$WORK/garbage.pem" run_verify_only "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"openssl cannot read the leaf certificate"* ]]; then
+	ok "--verify-only refuses a chain whose leaf does not parse"
+else
+	no "--verify-only refuses a chain whose leaf does not parse" "$out"
 fi
 
 make_osslsigncode "DEADBEEF     MISMATCH!!!" "Jarvis Technologies Inc" "$TS_OK" "$CHAIN_OK" 1
@@ -647,6 +804,20 @@ if [ $? -eq 0 ] && [[ "$out" == *"skipping post-sign verification"* ]]; then
 	ok "warns (not fails) when osslsigncode is unavailable under SIGN_REQUIRE_TRUSTED_CHAIN=0"
 else
 	no "warns when osslsigncode is unavailable under SIGN_REQUIRE_TRUSTED_CHAIN=0" "$out"
+fi
+# The pin needs openssl: osslsigncode present, openssl not, is a failure too.
+mkdir -p "$WORK/osslonly"
+cat >"$WORK/osslonly/osslsigncode" <<'STUB'
+#!/usr/bin/env bash
+echo "Number of verified signatures: 1"
+exit 0
+STUB
+chmod +x "$WORK/osslonly/osslsigncode"
+out="$(PATH="$WORK/osslonly:$WORK/nopath" run_verify_only "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"openssl is not installed"* ]]; then
+	ok "--verify-only fails when openssl is unavailable to read the pin"
+else
+	no "--verify-only fails when openssl is unavailable" "$out"
 fi
 # --defer-verify needs no osslsigncode: the check runs elsewhere.
 out="$(PATH="$WORK/bin:$WORK/nopath" run_sign --defer-verify "$WORK/app.exe" 2>&1)"

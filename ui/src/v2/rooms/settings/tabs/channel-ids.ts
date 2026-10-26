@@ -42,7 +42,11 @@ export function parseDiscordIds(text: string): ParsedIds<string> {
  * ignored, so the owner sees and can correct a bad entry rather than having it
  * silently dropped from the field and then from the list on the next save.
  */
-export function allowedFieldText(list: { allowed_users: Array<number | string>; allowed_users_rejected?: string[] } | undefined): string {
+export function allowedFieldText(list: { allowed_users: Array<number | string>; allowed_users_rejected?: string[]; allowed_users_entries?: string[] } | undefined): string {
   if (!list) return "";
+  // In the saved order when the daemon gives it (#916 review): the first ID
+  // is the owner, and moving a bad first entry behind the valid ones made the
+  // second ID the owner on the next save.
+  if (list.allowed_users_entries) return list.allowed_users_entries.join(", ");
   return [...list.allowed_users.map(String), ...(list.allowed_users_rejected ?? [])].join(", ");
 }

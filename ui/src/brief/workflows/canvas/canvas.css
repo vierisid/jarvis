@@ -362,3 +362,7 @@
   .brief-root .brief-canvas-tools { gap: 0; }
   .brief-root .brief-workflow-canvas .wf-editor__body { padding-bottom: 82px; }
 }
+
+.brief-root .wf-props__configuration { border: 0; padding: 0; margin: 0; min-width: 0; }
+.brief-root .wf-library__search { display: flex; align-items: center; gap: 8px; }
+.brief-root .wf-library__search input { flex: 1; min-width: 0; }

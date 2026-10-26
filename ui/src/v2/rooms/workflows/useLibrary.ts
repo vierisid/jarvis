@@ -43,8 +43,9 @@ export interface LibraryEntry {
   vettedVersion?: string;
   /** ISO date when a human last vetted this piece. Null on community pieces. */
   vettedAt?: string | null;
-  sourceUrl?: string;
-  licenseSpdx?: string;
+  /** Null on a withdrawn row the generated catalog no longer knows. */
+  sourceUrl?: string | null;
+  licenseSpdx?: string | null;
   /** Disk footprint after install, in MB. Null when not measured. */
   estimatedSizeMb?: number | null;
   installed?: {
@@ -59,6 +60,13 @@ export interface LibraryEntry {
      */
     source: "user";
   } | null;
+  /**
+   * Set on a piece this install has but the catalog no longer offers (it was
+   * excluded, for example for its dependencies' licenses, or upstream dropped
+   * it). It is still installed and still runs; the server refuses Install and
+   * Update for it, so the row offers only Uninstall and shows the reason.
+   */
+  withdrawn?: { reason: string } | null;
 }
 
 export type LibraryActionState = "idle" | "installing" | "uninstalling";
@@ -129,7 +137,7 @@ export function useLibrary(): LibraryState {
     async (id) => {
       setOne(id, "installing");
       try {
-        const r = await fetch(`/api/workflows/pieces/library/${id}/install`, {
+        const r = await fetch(`/api/workflows/pieces/library/${encodeURIComponent(id)}/install`, {
           method: "POST",
         });
         if (!r.ok) {
@@ -159,11 +167,13 @@ export function useLibrary(): LibraryState {
     [refresh, setOne],
   );
 
+  // Ids are encoded: a withdrawn row's id comes from the local manifest, not
+  // the static catalog, so it is not guaranteed to be a plain slug.
   const uninstall: LibraryState["uninstall"] = useCallback(
     async (id) => {
       setOne(id, "uninstalling");
       try {
-        const r = await fetch(`/api/workflows/pieces/library/${id}`, {
+        const r = await fetch(`/api/workflows/pieces/library/${encodeURIComponent(id)}`, {
           method: "DELETE",
         });
         if (!r.ok) {

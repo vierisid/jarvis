@@ -1,0 +1,292 @@
+.brief-root .brief-billing {
+  container: billing / inline-size;
+  min-width: 0;
+  padding: 4px 0 32px;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+.brief-root .brief-billing > header,
+.brief-root .brief-billing-section-heading,
+.brief-root .brief-billing > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.brief-root .brief-billing > header > div,
+.brief-root .brief-billing > footer > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.brief-root .brief-billing h1,
+.brief-root .brief-billing h2,
+.brief-root .brief-billing h3 {
+  margin: 0;
+}
+.brief-root .brief-billing h2 {
+  font-size: 15px;
+  font-weight: 500;
+}
+.brief-root .brief-billing p {
+  margin: 8px 0 0;
+  color: var(--brief-secondary);
+}
+.brief-root .brief-billing small {
+  font-size: 11px;
+  color: var(--brief-secondary);
+}
+.brief-root .brief-billing-feedback {
+  min-height: 32px;
+  color: var(--brief-secondary);
+}
+.brief-root .brief-billing-plan {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 24px;
+  padding: 26px;
+  border: 1px solid var(--brief-card-edge);
+  border-radius: 16px 0 16px 16px;
+  background: var(--brief-card);
+}
+.brief-root .brief-billing-plan h2 {
+  font-size: 12px;
+  color: var(--brief-secondary);
+}
+.brief-root .brief-billing-plan-name {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+}
+.brief-root .brief-billing-plan h3 {
+  font-size: 24px;
+  line-height: 1.3;
+  font-weight: 500;
+  min-width: 0;
+}
+.brief-root .brief-billing-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  text-transform: capitalize;
+}
+.brief-root .brief-billing-chip::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--brief-secondary);
+  flex-shrink: 0;
+}
+.brief-root .brief-billing-chip[data-tone="ok"]::before {
+  background: var(--brief-success-text);
+}
+.brief-root .brief-billing-chip[data-tone="warn"]::before {
+  background: var(--brief-attention-text);
+}
+.brief-root .brief-billing .brief-billing-price {
+  color: var(--brief-ink);
+  font-size: 17px;
+}
+.brief-root .brief-billing-actions {
+  align-self: center;
+}
+.brief-root .brief-billing-plan-lines {
+  grid-column: 1 / -1;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  border-top: 1px solid var(--brief-card-edge);
+}
+.brief-root .brief-billing-plan-lines li {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 12px;
+}
+.brief-root .brief-billing-plan-lines li > span {
+  min-width: 0;
+}
+.brief-root .brief-billing-section {
+  margin-top: 32px;
+  padding-bottom: 26px;
+  border-bottom: 1px solid var(--brief-card-edge);
+}
+.brief-root .brief-billing-section-heading {
+  margin-bottom: 20px;
+}
+.brief-root .brief-billing-meters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 32px;
+}
+.brief-root .brief-billing-meter > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.brief-root .brief-billing-meter strong {
+  font-weight: 500;
+}
+.brief-root .brief-billing-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--brief-card-edge);
+  margin: 12px 0 8px;
+  overflow: hidden;
+}
+.brief-root .brief-billing-track > span {
+  display: block;
+  height: 100%;
+  background: var(--brief-secondary);
+}
+.brief-root .brief-billing-track[data-tone="hold"] > span {
+  background: var(--brief-attention-text);
+}
+.brief-root .brief-billing-track[data-tone="fail"] > span {
+  background: var(--brief-error-text);
+}
+.brief-root .brief-billing .brief-billing-caption {
+  font-size: 11px;
+  margin-top: 16px;
+}
+.brief-root .brief-billing .brief-billing-notice {
+  padding: 16px;
+  margin: 0 0 20px;
+  background: var(--brief-card);
+  border: 1px solid var(--brief-card-edge);
+  border-radius: 10px 0 10px 10px;
+}
+.brief-root .brief-billing-method {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 16px;
+}
+.brief-root .brief-billing-method > svg {
+  flex-shrink: 0;
+  color: var(--brief-secondary);
+}
+.brief-root .brief-billing-method strong {
+  font-weight: 500;
+}
+.brief-root .brief-billing-method small {
+  margin-left: 10px;
+}
+.brief-root .brief-billing-method p {
+  margin-top: 4px;
+}
+.brief-root .brief-billing-history {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  margin: 14px 0;
+  text-align: left;
+}
+.brief-root .brief-billing-history th {
+  color: var(--brief-secondary);
+  font-size: 11px;
+  font-weight: 400;
+}
+.brief-root .brief-billing-history th:nth-child(1) {
+  width: 23%;
+}
+.brief-root .brief-billing-history th:nth-child(2) {
+  width: 25%;
+}
+.brief-root .brief-billing-history th:nth-child(3) {
+  width: 16%;
+}
+.brief-root .brief-billing-history th,
+.brief-root .brief-billing-history td {
+  padding: 12px 12px 12px 0;
+  border-bottom: 1px solid var(--brief-card-edge);
+  vertical-align: top;
+}
+.brief-root .brief-billing-history td:last-child {
+  padding-right: 0;
+}
+.brief-root .brief-billing-history td > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.brief-root .brief-billing-history strong {
+  font-weight: 500;
+}
+.brief-root .brief-billing-history small {
+  display: block;
+  margin-top: 4px;
+}
+.brief-root .brief-billing > footer {
+  align-items: start;
+  padding-top: 24px;
+  font-size: 11px;
+}
+.brief-root .brief-billing > footer p {
+  margin: 0 0 4px;
+}
+.brief-root .brief-billing .brief-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+@container billing (max-width: 580px) {
+  .brief-root .brief-billing > header,
+  .brief-root .brief-billing > footer {
+    flex-wrap: wrap;
+  }
+  .brief-root .brief-billing-plan {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 20px;
+    gap: 16px;
+  }
+  .brief-root .brief-billing-meters {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+  .brief-root .brief-billing-plan-lines li {
+    flex-direction: column;
+    gap: 4px;
+  }
+  .brief-root .brief-billing-section-heading {
+    flex-wrap: wrap;
+  }
+  .brief-root .brief-billing-history thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .brief-root .brief-billing-history tr {
+    display: block;
+    border-bottom: 1px solid var(--brief-card-edge);
+    padding: 12px 0;
+  }
+  .brief-root .brief-billing-history td {
+    display: grid;
+    grid-template-columns: 70px minmax(0, 1fr);
+    border: 0;
+    padding: 6px 0;
+    gap: 0 12px;
+  }
+  .brief-root .brief-billing-history td::before {
+    content: attr(data-label);
+    color: var(--brief-secondary);
+    font-size: 11px;
+  }
+  .brief-root .brief-billing-history td > small,
+  .brief-root .brief-billing-history td > div {
+    grid-column: 2;
+  }
+}

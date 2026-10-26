@@ -346,3 +346,52 @@ describe('#885: a message sent on behalf of a chat is not handled', () => {
     }
   });
 });
+
+/**
+ * #914. A listed user who forwards someone else's message forwards its text
+ * too, and `approve <id>` in it was read as the listed user's own decision.
+ * Telegram marks a forward with `forward_origin` (Bot API 7.0); older servers
+ * and clients sent `forward_from`, `forward_from_chat`, `forward_sender_name`
+ * and `forward_date` instead.
+ */
+describe('#914: a forwarded message says so', () => {
+  const deliver = async (extra: Record<string, unknown>) => {
+    const adapter = new TelegramAdapter('test-token', { allowedUsers: [42] });
+    const seen: ChannelMessage[] = [];
+    adapter.onMessage(async (m) => { seen.push(m); return ''; });
+    await (adapter as unknown as { processUpdate(u: unknown): Promise<void> }).processUpdate({
+      update_id: 1,
+      message: { message_id: 7, from: { id: 42, first_name: 'A' }, chat: { id: 42, type: 'private' }, date: 0, text: 'approve 1a2b3c4d', ...extra },
+    });
+    expect(seen).toHaveLength(1);
+    return seen[0]!;
+  };
+
+  test('forward_origin marks it forwarded, whoever it came from', async () => {
+    for (const origin of [
+      { type: 'user', date: 1, sender_user: { id: 7, first_name: 'Stranger' } },
+      { type: 'hidden_user', date: 1, sender_user_name: 'Stranger' },
+      { type: 'chat', date: 1, sender_chat: { id: -100, type: 'group' } },
+      { type: 'channel', date: 1, chat: { id: -100, type: 'channel' }, message_id: 3 },
+      // The listed user forwarding their own message is still a forward.
+      { type: 'user', date: 1, sender_user: { id: 42, first_name: 'A' } },
+    ]) {
+      expect((await deliver({ forward_origin: origin })).forwarded).toBe(true);
+    }
+  });
+
+  test('the fields older servers sent mark it forwarded too', async () => {
+    for (const legacy of [
+      { forward_from: { id: 7, first_name: 'Stranger' }, forward_date: 1 },
+      { forward_from_chat: { id: -100, type: 'channel' }, forward_date: 1 },
+      { forward_sender_name: 'Stranger', forward_date: 1 },
+      { forward_date: 1 },
+    ]) {
+      expect((await deliver(legacy)).forwarded).toBe(true);
+    }
+  });
+
+  test('a message the sender wrote is not forwarded', async () => {
+    expect((await deliver({})).forwarded).toBe(false);
+  });
+});

@@ -41,8 +41,11 @@ import { assertRunNotCanceled } from "../../runtime/cancellation";
 /**
  * HOLD: a step reached while Jarvis is paused parks on one; only the daemon
  * releases it, once Jarvis is resumed (Q-08). Never resumable by URL.
+ * DEFER: a governed step whose card would go past its flow's budget parks on
+ * one; only the daemon releases it, when a place frees (#1039,
+ * `runtime/deferred-cards.ts`). Never resumable by URL.
  */
-export type WaitpointType = "WEBHOOK" | "TIMER" | "MANUAL" | "HOLD";
+export type WaitpointType = "WEBHOOK" | "TIMER" | "MANUAL" | "HOLD" | "DEFER";
 
 interface WaitpointRow {
   id: string;

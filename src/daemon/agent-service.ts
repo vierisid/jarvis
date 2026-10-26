@@ -37,6 +37,7 @@ import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import { loadRole } from '../roles/loader.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
 import { scopeSystemNote, type TurnToolScope } from '../actions/tools/tool-scope.ts';
+import { desktopOffSystemNote } from '../actions/tools/desktop-guard.ts';
 import { BUILTIN_TOOLS, browser } from '../actions/tools/builtin.ts';
 import { createDelegateTool, type DelegateToolDeps } from '../actions/tools/delegate.ts';
 import { createManageAgentsTool, type AgentToolDeps } from '../actions/tools/agents.ts';
@@ -83,6 +84,7 @@ import { TaskDispatcher } from '../agents/conv/task-dispatcher.ts';
 import { DialogueCompactor } from '../agents/conv/dialogue-compactor.ts';
 import type { ConvTaskEvent } from '../agents/conv/conv-orchestrator.ts';
 import { getRecentConversation, getMessages } from '../vault/conversations.ts';
+import { PEBBLE_CHANNEL, PEBBLE_DIALOGUE_WINDOW_MS, recordPebbleExchange } from './pebble-dialogue.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import type { ScopedChatInput } from '../brief/chat-transport.ts';
 
@@ -404,7 +406,10 @@ export class AgentService implements Service, IAgentService {
         const userProfile = self.buildUserProfileBlock();
         const recentDialogue = conversation
           ? (self.dialogueCompactor ? await self.dialogueCompactor.compact(conversation.contextKey, conversation.history) : conversation.history.slice(-10))
-          : await self.loadRecentDialogue(channel);
+          // The conv orchestrator appends this turn's message itself (#912).
+          // Callers that store the turn's message first (the dashboard and
+          // voice, ws-service handleChat) would otherwise send it twice.
+          : withoutTrailingTurn(await self.loadRecentDialogue(channel), text);
         conversation?.signal.throwIfAborted();
         const ambient = self.buildAmbientFactsBlock(text);
 
@@ -423,6 +428,9 @@ export class AgentService implements Service, IAgentService {
           ...(contextKey ? { contextKey } : {}),
           ...(siteContext ? { siteContext } : {}),
           ...(conversation ? { signal: conversation.signal } : {}),
+          // The router's own "execute, don't ask" (#927); the panel context
+          // above goes to the task tier only.
+          ...(channel === PEBBLE_CHANNEL ? { pebbleVoice: true } : {}),
         }, taskListener)) {
           if (event.type === 'text') {
             // Insert a separator so the acknowledgment text doesn't blur into
@@ -627,10 +635,13 @@ export class AgentService implements Service, IAgentService {
    * stranger's results. Required, so a thread cannot fall back to the main
    * chat's key.
    *
-   * `learn: false` also skips knowledge extraction and personality learning.
-   * Those write into what EVERY later turn's prompt is built from, so a
-   * stranger's turn would leak into the owner's context and into other
-   * strangers', which separate conversations are meant to prevent.
+   * `sender` says whose turn it is (#909): the channel's owner, the first
+   * entry of its allow-list, or a guest, any other sender. Only the owner's
+   * turn is the owner's assistant. A guest's is `handleGuestMessage`: a plain
+   * conversational model with none of the owner's private context and no
+   * tools, and nothing is learned from it. Knowledge extraction and
+   * personality learning write into what EVERY later turn's prompt is built
+   * from, so a guest's turn would leak into the owner's context.
    *
    * The caller has already stored `text` in the conversation; it is passed as
    * this turn's message and dropped from the history, so it is not sent twice.
@@ -638,12 +649,13 @@ export class AgentService implements Service, IAgentService {
   async handleThreadMessage(
     text: string,
     channel: string,
-    thread: { conversationId: string; contextKey: string; learn: boolean },
+    thread: { conversationId: string; contextKey: string; sender: 'owner' | 'guest' },
   ): Promise<string> {
     if (activeTurns.isDraining) throw new DrainingError();
     const endTurn = activeTurns.begin();
     try {
       const history = withoutTrailingTurn(await this.loadDialogue(thread.conversationId), text);
+      if (thread.sender !== 'owner') return await this.handleGuestMessage(text, channel, history);
       let response: string;
       if (this.convOrchestrator) {
         response = await this.handleMessageConv(text, channel, null, undefined, history, thread.contextKey);
@@ -652,21 +664,76 @@ export class AgentService implements Service, IAgentService {
         response = await this.orchestrator.processMessage(systemPrompt, text, undefined, undefined, null, { history });
       }
 
-      if (thread.learn) {
-        Promise.allSettled([
-          this.extractKnowledge(text, response).catch((err) =>
-            console.error('[AgentService] Extraction error:', err instanceof Error ? err.message : err)
-          ),
-          this.learnFromInteraction(text, response, channel).catch((err) =>
-            console.error('[AgentService] Learning error:', err instanceof Error ? err.message : err)
-          ),
-        ]);
-      }
+      // Only the owner's turn teaches the assistant (#909); a guest's returned above.
+      void Promise.allSettled([
+        this.extractKnowledge(text, response).catch((err) =>
+          console.error('[AgentService] Extraction error:', err instanceof Error ? err.message : err)
+        ),
+        this.learnFromInteraction(text, response, channel).catch((err) =>
+          console.error('[AgentService] Learning error:', err instanceof Error ? err.message : err)
+        ),
+      ]);
 
       return response;
     } finally {
       endTurn();
     }
+  }
+
+  /**
+   * A channel turn from a guest: a listed user who is not the channel's owner
+   * (#909). The owner's prompt is built from the owner's profile, knowledge,
+   * commitments, goals, content pipeline and recent observations, and tells
+   * the model it is the owner's assistant talking to the owner; a spouse or
+   * colleague the owner listed was answered from all of it.
+   *
+   * What a guest gets, exactly:
+   *   - their own conversation's history (#884), and this message;
+   *   - a fixed system prompt: the assistant's name and configured traits,
+   *     the time, and a plain statement that they are not the owner and that
+   *     nothing of the owner's is available here;
+   *   - NO tools. Stripping the prompt alone would be cosmetic: every tool
+   *     runs with the owner's authority on the owner's machine and accounts,
+   *     and several read the same private context back (`commitments`,
+   *     `content_pipeline`, `research_queue`, the browser's signed-in
+   *     sessions, and `read_file`/`run_command` on the vault itself). There
+   *     is no tool boundary between "the owner's" and "not", so a guest gets
+   *     none, which also means a guest can never raise an approval card;
+   *   - no delegated tasks (the conv tier is not used), no memory recall, and
+   *     nothing learned: no knowledge extraction, no personality learning.
+   *
+   * Billed to the conversation tier when one is configured, else medium,
+   * under its own subsystem label so guest usage is visible.
+   */
+  private async handleGuestMessage(text: string, channel: string, history: LLMMessage[]): Promise<string> {
+    const messages: LLMMessage[] = [
+      { role: 'system', content: this.buildGuestSystemPrompt(channel) },
+      ...history,
+      { role: 'user', content: text },
+    ];
+    const tier = this.llmManager.hasConversationTier() ? 'conversation' : 'medium';
+    const response = await this.llmManager.chatTier(tier, 'channel_guest', messages);
+    return response.finish_reason === 'length'
+      ? `${response.content}\n\n[Response was truncated due to output token limits.]`
+      : response.content;
+  }
+
+  /**
+   * The guest's system prompt (#909). Built from config only, never from the
+   * vault, the user profile or the learned personality: the owner's name is
+   * left out too, since it is the owner's to give.
+   */
+  buildGuestSystemPrompt(channel: string): string {
+    const name = this.config.personality?.assistant_name?.trim() || 'JARVIS';
+    const traits = (this.config.personality?.core_traits ?? []).slice(0, 6).join(', ');
+    return [
+      `You are ${name}, an AI assistant, answering a message sent to you on ${channel}.`,
+      'The person writing is NOT your owner. Your owner allowed them to message you, as a guest.',
+      'In this conversation you have nothing of your owner\'s: no profile, memories, notes, files, calendar, email, commitments, tasks, accounts or tools. Do not claim to know anything about your owner, and do not guess.',
+      'Help as a general assistant, from general knowledge. If they ask about your owner, or ask you to do something (send, schedule, look up, run, remember, approve), say plainly that you cannot do that from this chat.',
+      traits ? `Your character: ${traits}.` : '',
+      `Current time: ${new Date().toISOString()}.`,
+    ].filter(Boolean).join('\n');
   }
 
   /**
@@ -689,7 +756,11 @@ export class AgentService implements Service, IAgentService {
       throw new Error('Conv orchestrator not initialized');
     }
     const identity = this.buildUserIdentityBlock();
-    const recentDialogue = dialogue ?? await this.loadRecentDialogue(channel);
+    // No caller of handleMessage stores its message first today; this keeps
+    // the non-streaming path in step with streamMessageConv, so one that does
+    // cannot send it twice (#912). `dialogue` comes already stripped
+    // (handleThreadMessage).
+    const recentDialogue = dialogue ?? withoutTrailingTurn(await this.loadRecentDialogue(channel), text);
     const result = await this.convOrchestrator.processTurn(
       text,
       {
@@ -705,6 +776,17 @@ export class AgentService implements Service, IAgentService {
   }
 
   /**
+   * Store a finished Pebble exchange as dialogue (#927), only when this agent
+   * runs the conversation tier: that tier is the only reader of it (see
+   * loadRecentDialogue), and classic mode would keep transcripts in the vault
+   * for nothing. Returns whether it was stored; never throws.
+   */
+  recordPebbleExchange(userText: string, reply: string): boolean {
+    if (!this.convOrchestrator) return false;
+    return recordPebbleExchange(userText, reply);
+  }
+
+  /**
    * Pull recent messages from the persistent conversation for the conv LLM.
    * When the conversation is long, the DialogueCompactor condenses old turns
    * into a summary system message and keeps the most-recent N verbatim. This
@@ -715,6 +797,9 @@ export class AgentService implements Service, IAgentService {
     try {
       const recent = getRecentConversation(channel);
       if (!recent) return [];
+      // A Pebble turn continues only a recent exchange (#927).
+      if (channel === PEBBLE_CHANNEL
+        && Date.now() - recent.conversation.last_message_at > PEBBLE_DIALOGUE_WINDOW_MS) return [];
       conversationId = recent.conversation.id;
     } catch (err) {
       console.warn('[AgentService] Failed to load recent dialogue:', err);
@@ -1037,9 +1122,13 @@ export class AgentService implements Service, IAgentService {
     const channelPersonality = getChannelPersonality(personality, channel);
     const personalityPrompt = personalityToPrompt(channelPersonality);
 
+    // The tool guide in the static half documents the desktop tools whatever
+    // the setting, and varying it would miss the prompt cache; this note goes
+    // in the dynamic half instead, and only while desktop.enabled is off (#905).
+    const desktopNote = desktopOffSystemNote();
     return {
       static: `${roleParts.static}\n\n${personalityPrompt}`,
-      dynamic: roleParts.dynamic,
+      dynamic: desktopNote ? `${roleParts.dynamic}\n\n${desktopNote}` : roleParts.dynamic,
     };
   }
 

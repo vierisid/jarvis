@@ -27,10 +27,13 @@
  *    withRoomActionDefaults, and not written in the case;
  *  - an argument that stands in for another is in ROOM_ACTION_ALIASES;
  *  - an item is found only through pickRoomActionTarget(<list>, args, ...),
- *    never by a direct find, findBy*, matcher or the selection.
+ *    never by a direct find, findBy*, matcher or the selection;
+ *  - every argument a case reads is in ROOM_ACTION_ARGS, and nothing else
+ *    is (#1021).
  * It reads each case's own code. A default or lookup inside a data hook the
- * case calls (useMemoryData's rememberThat finds its subject itself) is not
- * seen, so remember_that is not covered here.
+ * case calls is not seen. remember_that attaches to a memory entity rather
+ * than picking an item from the room's list, and creates one when none has
+ * the name, so it has its own table (ROOM_ACTION_ENTITY_TARGETS, #1023).
  *
  * NO IMPORTS: the UI bundles this file, as it does room-actions.ts.
  */
@@ -119,6 +122,174 @@ export function collapseRoomActionAliases(room: string, action: string, args: Re
   if (!own(ROOM_ACTION_ALIASES, room)) return args;
   const actions = ROOM_ACTION_ALIASES[room]!;
   return own(actions, action) ? actions[action]!(args) : args;
+}
+
+/** What an argument's value may be: a JSON scalar of one of these types. */
+export type RoomActionArgType = 'string' | 'number' | 'boolean';
+
+const S = ['string'] as const;
+const N = ['number'] as const;
+const B = ['boolean'] as const;
+/** The item a picking action acts on (pickRoomActionTarget reads both). */
+const PICK = { id: S, name: S } as const;
+
+/**
+ * room -> action -> every argument its handler reads, and the types of value
+ * it takes for each (#1021). The classifier writes whatever keys it likes,
+ * and a held action's card printed them all, so a key no handler reads (text
+ * the classifier picked up from what it was shown, or a `duration` the
+ * calendar never stored) sat on the card as part of what the person approved.
+ * roomActionArgs keeps only what is listed here, and the card shows what is
+ * left.
+ *
+ * A type is what the handler uses: one that checks `typeof args.x ===
+ * "string"` lists only "string", since any other value is the argument left
+ * out. Objects and arrays are never kept: no handler reads one. Only those
+ * `typeof` checks are held to the handlers; a type for an argument read
+ * through String(), Number() or a cast is set here by hand.
+ *
+ * room-actions.test.ts reads every handler case with the TypeScript parser
+ * and holds this table to the arguments it reads in both directions,
+ * including those read through pickRoomActionTarget (id, name) and
+ * withRoomActionDefaults (the action's defaults, and whatever is read off
+ * what it returns). The arguments the daemon pins into a held action (an
+ * item's id; the memory entity, #1023; the time a `when` names, #1022) are
+ * arguments the handler reads, so they are listed too.
+ */
+export const ROOM_ACTION_ARGS: Record<string, Record<string, Record<string, readonly RoomActionArgType[]>>> = {
+  settings: {
+    switch_tab: { tab: S },
+    read_status: {},
+    set_default_model: { ref: S, provider: S, model: S },
+    set_model: { ref: S, provider: S, model: S },
+    test_provider: { provider: S, name: S },
+    enable_telegram: {},
+    disable_telegram: {},
+    enable_discord: {},
+    disable_discord: {},
+    set_stt_provider: { provider: S },
+    enable_tts: {},
+    disable_tts: {},
+    set_tts_provider: { provider: S },
+    set_tts_voice: { voice: S },
+    restart_daemon: {},
+    replay_onboarding: { scope: S },
+  },
+  agents: {
+    switch_tab: { tab: S },
+    open_spawn_dialog: {},
+    close_dialog: {},
+    set_search: { query: S },
+    spawn_agent: { specialist: S, task: S, context: S },
+  },
+  authority: { switch_tab: { tab: S }, set_filter: { decision: S } },
+  memory: {
+    switch_tab: { tab: S },
+    search: { query: S },
+    set_filter: { type: S },
+    select: { name: S },
+    // `id` or `new_entity` is the entity the daemon settled on (#1023).
+    remember_that: { subject: S, predicate: S, object: S, id: S, new_entity: B },
+  },
+  goals: {
+    switch_tab: { tab: S },
+    search: { query: S },
+    set_filter: { field: S, value: S },
+    select: { name: S },
+    create_goal: { title: S, level: S, deadline: N },
+  },
+  tasks: {
+    switch_view: { view: S },
+    search: { query: S },
+    set_filter: { field: S, value: S },
+    select: { name: S },
+    create_task: { title: S, when: S, when_ts: N, priority: S, assigned_to: S },
+    complete_task: PICK,
+    update_priority: { ...PICK, level: S },
+    reassign: { ...PICK, agent: S },
+  },
+  workspaces: {
+    switch_view: { view: S },
+    search: { query: S },
+    select_project: PICK,
+    back_to_list: {},
+    create_project: { name: S, template: S },
+    start_server: PICK,
+    stop_server: PICK,
+  },
+  content: {
+    switch_view: { view: S },
+    search: { query: S },
+    set_filter: { field: S, value: S },
+    select: { name: S },
+    create_content: { title: S, type: S },
+    advance: PICK,
+    regress: PICK,
+    schedule: { ...PICK, when: S, when_ts: N },
+  },
+  tools: { set_filter: { filter: S }, search: { query: S }, select: { name: S } },
+  logs: { toggle_source: { source: S }, set_time_window: { window: S }, toggle_live_tail: {}, refresh: {} },
+  calendar: {
+    switch_view: { view: S },
+    search: { query: S },
+    select_event: { title: S },
+    schedule_event: { title: S, when: S, when_ts: N, priority: S, with: S },
+  },
+  workflows: { create_from_nl: { prompt: S } },
+};
+
+function argsFor(room: string, action: string): Record<string, readonly RoomActionArgType[]> | null {
+  if (!own(ROOM_ACTION_ARGS, room)) return null;
+  const actions = ROOM_ACTION_ARGS[room]!;
+  return own(actions, action) ? actions[action]! : null;
+}
+
+/**
+ * `args` with only the arguments `room`'s handler reads for `action`, each of
+ * a type it takes (#1021). Anything else is dropped, so it is neither shown
+ * on a card nor sent: a key the table does not list, a value of another
+ * type, an object or an array, and every argument of an action no handler
+ * carries out.
+ */
+export function roomActionArgs(room: string, action: string, args: Record<string, unknown> | undefined): Record<string, unknown> {
+  const spec = argsFor(room, action);
+  const out: Record<string, unknown> = {};
+  if (!spec || !args || typeof args !== 'object') return out;
+  for (const [name, types] of Object.entries(spec)) {
+    if (!own(args, name)) continue;
+    const v = args[name];
+    if ((types as readonly string[]).includes(typeof v) && !(typeof v === 'number' && !Number.isFinite(v))) out[name] = v;
+  }
+  return out;
+}
+
+/** The argument a settled time is pinned in (#1022): Unix ms. */
+export const SETTLED_TIME_ARG = 'when_ts';
+
+/**
+ * room -> action -> the argument naming the time it is for, as it was said
+ * ("tomorrow at 9"), and whether the action needs one (#1022).
+ *
+ * The rooms used to read that phrase when the action ran: after the yes, on
+ * the dashboard's clock and in its zone, while the card showed only the
+ * phrase. So the person approved words, and "tomorrow" said before midnight
+ * and confirmed after it was a day later than meant. Now the daemon settles
+ * the phrase to an instant before anything is shown or sent, in the zone of
+ * the dashboard that asked, pins it in SETTLED_TIME_ARG, and the card shows
+ * it; the room takes that instant as given and never reads the phrase as a
+ * time again.
+ */
+export const ROOM_ACTION_TIMES: Record<string, Record<string, { arg: string; required: boolean }>> = {
+  tasks: { create_task: { arg: 'when', required: false } },
+  calendar: { schedule_event: { arg: 'when', required: false } },
+  content: { schedule: { arg: 'when', required: true } },
+};
+
+/** The time argument of `room`'s `action`, or null when it takes none. */
+export function roomActionTimeArg(room: string, action: string): { arg: string; required: boolean } | null {
+  if (!own(ROOM_ACTION_TIMES, room)) return null;
+  const actions = ROOM_ACTION_TIMES[room]!;
+  return own(actions, action) ? actions[action]! : null;
 }
 
 export type RoomActionTargetKind = 'project' | 'content' | 'task';
@@ -220,4 +391,72 @@ export function matchByTitle<T>(items: readonly T[], titleOf: (item: T) => strin
   const exact = items.find((i) => titleOf(i).toLowerCase() === q);
   if (exact) return exact;
   return items.find((i) => titleOf(i).toLowerCase().includes(q)) ?? null;
+}
+
+/**
+ * room -> action -> the argument naming the memory entity it attaches to
+ * (#1023). remember_that found its subject inside the Memory room's data
+ * hook after the yes: by a substring of whatever the room had loaded (so "me"
+ * found "James"), and with nothing loaded yet it made a duplicate. The card
+ * showed the fact and not where it would land.
+ *
+ * So the daemon settles the entity before the card, as it does an item: it
+ * pins the existing entity by `id` with its full name in the argument, or
+ * marks `new_entity: true` when none has the name, and the card says which.
+ * The hook takes either as given (useMemoryData.rememberThat) and never
+ * looks the name up again.
+ */
+export const ROOM_ACTION_ENTITY_TARGETS: Record<string, Record<string, string>> = {
+  memory: { remember_that: 'subject' },
+};
+
+/**
+ * `args` without the entity pin (`id`, `new_entity`) for an entity action,
+ * else as they are (#1023 review). Only the daemon's settling of a held
+ * action sets the pin; an action that was not settled (the classifier's own
+ * reading, the realtime model's call) is matched by name in the room, so a
+ * pin it carries would be one nobody checked.
+ */
+export function withoutEntityPin(room: string, action: string, args: Record<string, unknown>): Record<string, unknown> {
+  if (roomActionEntityArg(room, action) === null || !(own(args, 'id') || own(args, 'new_entity'))) return args;
+  const { id: _id, new_entity: _new, ...rest } = args;
+  return rest;
+}
+
+/** The argument naming the entity `room`'s `action` attaches to, or null. */
+export function roomActionEntityArg(room: string, action: string): string | null {
+  if (!own(ROOM_ACTION_ENTITY_TARGETS, room)) return null;
+  const actions = ROOM_ACTION_ENTITY_TARGETS[room]!;
+  return own(actions, action) ? actions[action]! : null;
+}
+
+/**
+ * An entity name as names are compared: NFC, so one typed with combining
+ * accents is the one stored precomposed, trimmed and lowercased.
+ */
+export function foldEntityName(name: string): string {
+  return name.normalize('NFC').trim().toLowerCase();
+}
+
+/**
+ * The entity `name` means (#1023): one whose name is it, ignoring case;
+ * failing that, one whose name holds it as whole words ("alice" finds "Alice
+ * Smith"; "me" does not find "James"). Two or more at the first step that
+ * finds any is `ambiguous`, as the card could not say which; none is null.
+ * The daemon and the Memory room both match with this.
+ */
+export function matchEntityByName<T extends { name: string }>(
+  entities: readonly T[],
+  name: string,
+): { entity: T } | { ambiguous: number } | null {
+  const fold = foldEntityName;
+  const q = fold(name);
+  if (!q) return null;
+  const one = (found: T[]) => (found.length === 1 ? { entity: found[0]! } : found.length > 1 ? { ambiguous: found.length } : null);
+  const exact = one(entities.filter((e) => fold(e.name) === q));
+  if (exact) return exact;
+  const words = (s: string) => ` ${fold(s).replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim()} `;
+  const qWords = words(q);
+  if (qWords.trim() === '') return null;
+  return one(entities.filter((e) => words(e.name).includes(qWords)));
 }

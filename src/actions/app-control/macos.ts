@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
 import { captureViaPrivateFileAsync } from './capture-file.ts';
 import { defaultExec, runNative, type NativeExec } from './native-exec.ts';
+import { typingAllowanceMs } from './typing-allowance.ts';
 
 /**
  * macOS App Controller.
@@ -140,12 +141,13 @@ export class MacAppController implements AppController {
    * Run a command of the fixed helper script. Dynamic values travel as
    * osascript arguments — never interpolated into script text.
    */
-  private async runScript(command: string, args: string[] = []): Promise<string> {
+  private async runScript(command: string, args: string[] = [], extraMs = 0): Promise<string> {
     const stdout = await runNative(
       this.exec,
       ['osascript', SCRIPT_PATH, command, ...args],
       '',
       `desktop.applescript ${command}`,
+      extraMs,
     );
     return stdout.replace(/\n$/, '');
   }
@@ -179,7 +181,8 @@ export class MacAppController implements AppController {
   }
 
   async typeText(text: string): Promise<void> {
-    await this.runScript('type-text', [text]);
+    // The bound grows with the text (#903): see typing-allowance.ts.
+    await this.runScript('type-text', [text], typingAllowanceMs(text));
   }
 
   async pressKeys(keys: string[]): Promise<void> {

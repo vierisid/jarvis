@@ -82,7 +82,7 @@ export function roomActionStartedText(resultId: string): string {
  * Without that the daemon acknowledged room actions blindly.
  */
 export function dispatchDashboardRoomAction(
-  request: { room: string; action: string; args: Record<string, unknown>; ts: number; resultId?: string; expiresAt?: number; stillAsked?: () => boolean },
+  request: { room: string; action: string; args: Record<string, unknown>; ts: number; resultId?: string; expiresAt?: number; stillAsked?: () => boolean; claim?: () => Promise<boolean> },
   dispatch: (req: RoomActionRequest, onResult?: RoomActionResultCallback) => void,
   send: (text: string) => void,
 ): void {

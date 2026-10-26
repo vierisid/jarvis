@@ -28,6 +28,9 @@ export interface WorkflowCanvasBinding {
   onDirtyChange?: (dirty: boolean) => void;
   /** Explicit, owner-bounded manual-run command. No automatic retry. */
   run?: () => Promise<{ ok: boolean; message: string }>;
+  readOnly?: boolean;
+  publish?: () => Promise<void>;
+  edit?: () => Promise<void>;
 }
 export function canvasAvailable(
   shell: BriefShellPort,
@@ -85,8 +88,8 @@ function BoundCanvas({
   const [portalHost, setPortalHost] = useState<HTMLDivElement | null>(null);
   const request = useMemo(
     () =>
-      versionBoundRequest(binding.request, binding.flowId, binding.versionId),
-    [binding.request, binding.flowId, binding.versionId],
+      versionBoundRequest(binding.request, binding.flowId, binding.versionId, binding.readOnly),
+    [binding.request, binding.flowId, binding.versionId, binding.readOnly],
   );
   const environment = useMemo(
     () => ({
@@ -103,6 +106,7 @@ function BoundCanvas({
         <WorkflowEditor
           flowId={binding.flowId}
           workspace
+          readOnly={binding.readOnly}
           onDirtyChange={binding.onDirtyChange}
           onClose={() => {}}
           renderHeader={(controls) => (
@@ -130,6 +134,14 @@ function CanvasHeader({
   const [running, setRunning] = useState(false),
     [runMessage, setRunMessage] = useState("");
   const busy = useRef(false);
+  const [changing, setChanging] = useState(false);
+  async function change(action: () => Promise<void>) {
+    if (busy.current || editor.dirty) return;
+    busy.current = true; setChanging(true); setRunMessage('');
+    try { await action(); }
+    catch { setRunMessage('The version change could not be confirmed. Reopen this workflow to check before trying again.'); }
+    finally { setChanging(false); busy.current = false; }
+  }
   const versionMatches = editor.version?.id === binding.versionId;
   async function run() {
     if (busy.current || !binding.run || editor.dirty || !versionMatches) return;
@@ -144,6 +156,7 @@ function CanvasHeader({
         "Run request could not be confirmed. Check Runs before trying again.",
       );
     } finally {
+      busy.current = false;
       setRunning(
         false,
       ); /* An uncertain submission must not be retried here. F-21 owns reconciliation. */
@@ -182,7 +195,7 @@ function CanvasHeader({
             editor.dirty
               ? "Save your changes before running"
               : !binding.run
-                ? "Run is not available"
+                ? binding.publish ? "Publish this saved draft before running" : "Run is not available"
                 : undefined
           }
         >
@@ -191,6 +204,8 @@ function CanvasHeader({
       }
     >
       <div className="brief-canvas-tools" aria-label="Draft tools">
+        {binding.publish && <BriefButton size="sm" disabled={changing || saving || editor.dirty || !versionMatches} onClick={() => void change(binding.publish!)}>Publish version</BriefButton>}
+        {binding.edit && <BriefButton size="sm" disabled={changing} onClick={() => void change(binding.edit!)}>Edit a new draft</BriefButton>}
         <BriefButton
           size="sm"
           onClick={() => shell.navigate({ room: "workflows", selection: {} })}
@@ -202,7 +217,7 @@ function CanvasHeader({
         <BriefButton
           size="sm"
           onClick={arrange}
-          disabled={saving || !Object.keys(editor.stepPositions).length}
+          disabled={binding.readOnly || saving || !Object.keys(editor.stepPositions).length}
           icon={<LayoutGrid size={14} />}
         >
           Arrange

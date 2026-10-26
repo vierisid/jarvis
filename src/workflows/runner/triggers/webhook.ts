@@ -14,6 +14,8 @@ export type WebhookRoute = {
   path: string;
   secret: string | null;
   registeredAt: number;
+  /** Captured by the runtime at registration, never taken from the HTTP payload. */
+  generation?: number;
 };
 
 /**
@@ -41,7 +43,7 @@ export type WebhookFireResult =
   | { outcome: 'error'; reason: string };
 
 /** Returns a `WebhookFireResult`; any other value is answered as accepted. */
-export type WebhookTriggerCallback = (workflowId: string, data: Record<string, unknown>, delivery: WebhookDelivery) => unknown;
+export type WebhookTriggerCallback = (workflowId: string, data: Record<string, unknown>, delivery: WebhookDelivery, generation?: number) => unknown;
 
 /** How long an identical signed request counts as the same delivery. */
 export const SIGNED_REPEAT_WINDOW_MS = 10 * 60_000;
@@ -169,7 +171,7 @@ export class WebhookManager {
    * Register a workflow webhook.
    * @returns the webhook path (e.g. "/webhooks/wf_abc123")
    */
-  register(workflowId: string, secret?: string): string {
+  register(workflowId: string, secret?: string, generation?: number): string {
     const path = `/webhooks/${workflowId}`;
 
     this.routes.set(workflowId, {
@@ -177,6 +179,7 @@ export class WebhookManager {
       path,
       secret: secret ?? null,
       registeredAt: Date.now(),
+      ...(generation === undefined ? {} : { generation }),
     });
 
     console.log(`[WebhookManager] Registered webhook for workflow "${workflowId}" at ${path}`);
@@ -281,6 +284,12 @@ export class WebhookManager {
       if (limited) return limited;
     }
 
+    // Body/HMAC awaits can outlive Remove/Undo/re-enable (or secret rotation).
+    // Never deliver a request authorized for a replaced registration.
+    if (this.routes.get(workflowId) !== route) {
+      return json(409, { error: 'Webhook registration changed' });
+    }
+
     // Parse body
     let data: Record<string, unknown> = {};
     if (rawBody.trim()) {
@@ -309,7 +318,7 @@ export class WebhookManager {
     let result: unknown;
     if (this.triggerCallback) {
       try {
-        result = this.triggerCallback(workflowId, data, webhookDelivery(req.headers, data, verifiedSignature));
+        result = this.triggerCallback(workflowId, data, webhookDelivery(req.headers, data, verifiedSignature), route.generation);
       } catch (err) {
         console.error(`[WebhookManager] Trigger callback threw for workflow "${workflowId}":`, err);
         result = { outcome: 'error', reason: 'The delivery could not be recorded; retry later.' };

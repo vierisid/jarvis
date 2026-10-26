@@ -1,0 +1,147 @@
+.brief-root .brief-profile {
+  container: profile / inline-size;
+  min-width: 0;
+  padding: 4px 0 32px;
+}
+.brief-root .brief-profile > h1 {
+  margin: 0 0 32px;
+}
+.brief-root .brief-profile-identity {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding-bottom: 32px;
+  margin-bottom: 32px;
+  border-bottom: 1px solid var(--brief-card-edge);
+}
+.brief-root .brief-profile-identity > span {
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  background: var(--brief-soft);
+  border-radius: 50% 0 50% 50%;
+  flex-shrink: 0;
+}
+.brief-root .brief-profile-identity strong {
+  font-size: 16px;
+  font-weight: 500;
+}
+.brief-root .brief-profile-identity p {
+  color: var(--brief-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 6px 0 0;
+}
+.brief-root .brief-profile h2 {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 24px;
+  margin: 0 0 18px;
+}
+.brief-root .brief-profile-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px 24px;
+}
+.brief-root .brief-profile-context {
+  display: grid;
+  gap: 12px;
+}
+.brief-root .brief-profile form > section + section {
+  margin-top: 24px;
+}
+.brief-root .brief-profile textarea.brief-profile-multiline {
+  height: 96px;
+  min-height: 96px;
+}
+.brief-root .brief-profile textarea.brief-profile-singleline {
+  height: 44px;
+  min-height: 44px;
+  resize: none;
+}
+.brief-root .brief-profile-save {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-top: 20px;
+  min-height: 72px;
+}
+.brief-root .brief-profile-feedback {
+  display: grid;
+  min-height: 48px;
+  align-items: center;
+  flex: 1;
+  color: var(--brief-secondary);
+  font-size: 13px;
+  line-height: 20px;
+}
+.brief-root .brief-profile-feedback > * {
+  grid-area: 1/1;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.brief-root .brief-profile-feedback > span {
+  visibility: hidden;
+}
+.brief-root .brief-profile-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.brief-root .brief-profile-actions > .brief-button {
+  flex-shrink: 0;
+}
+.brief-root .brief-profile-actions > .brief-button:first-child {
+  min-width: 121px;
+}
+.brief-root .brief-profile-actions .brief-button[type="submit"] {
+  min-width: 144px;
+}
+.brief-root .brief-profile-empty {
+  min-height: 360px;
+  color: var(--brief-secondary);
+}
+.brief-root .brief-profile-dialog {
+  max-width: min(480px, calc(100vw - 40px));
+  border: 1px solid var(--brief-card-edge);
+  border-radius: 16px 0 16px 16px;
+  background: var(--brief-card);
+  color: var(--brief-ink);
+  padding: 24px;
+  font-family: var(--brief-sans);
+}
+.brief-root .brief-profile-dialog::backdrop {
+  background: rgb(0 0 0 / 0.4);
+}
+.brief-root .brief-profile-dialog p {
+  font-size: 14px;
+  line-height: 1.6;
+}
+.brief-root .brief-profile-dialog > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 24px;
+}
+@container profile (max-width: 600px) {
+  .brief-root .brief-profile-fields {
+    grid-template-columns: 1fr;
+  }
+  .brief-root .brief-profile-save {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .brief-root .brief-profile-actions {
+    justify-content: flex-end;
+  }
+}
+
+.brief-root .brief-profile-interview-help { color: var(--brief-secondary); margin: 0 0 16px; }
+.brief-root .brief-profile-interview { margin: 0; display: grid; gap: 16px; }
+.brief-root .brief-profile-interview dt { text-transform: capitalize; font-weight: 500; margin-bottom: 4px; }
+.brief-root .brief-profile-interview dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }

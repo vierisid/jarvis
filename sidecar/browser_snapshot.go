@@ -267,6 +267,21 @@ func takePageSnapshot(cdp *cdpClient) (*pageSnapshot, pageIdentity, error) {
 		return nil, checked, fmt.Errorf("the browser did not name the document it is showing, so refusing to read it")
 	}
 
+	// The generation as it stands before the world is fetched (#878). Fills
+	// are serialised by snapMu, which this holds, so the only thing that can
+	// move it before the fill below is forgetSnapshotElements: a scroll, a
+	// paging key or ax_click's scrollIntoViewIfNeeded, which deliberately do
+	// not take snapMu. Taken here and not earlier because a forget that lands
+	// before the world is fetched is harmless (the script has not run, so it
+	// measures the page after the move, and the world it arms is the one the
+	// fill pairs with). That relies on every caller forgetting AFTER its
+	// page-moving command has returned, which all three do today; a caller
+	// that forgot before dispatching would reopen the hole. From here on, a
+	// forget either clears the world this snapshot is about to arm or races
+	// the script's measurement, and the fill must not then install
+	// coordinates the forget said are gone.
+	genBefore := cdp.snapshotGeneration()
+
 	// The element refs go in an ISOLATED WORLD, so the page cannot reach them
 	// (#592). Refused rather than degraded when no world can be minted: falling
 	// back to a main-world evaluate would put the page-writable global straight
@@ -340,6 +355,15 @@ func takePageSnapshot(cdp *cdpClient) (*pageSnapshot, pageIdentity, error) {
 	}
 
 	cdp.elemMu.Lock()
+	// Compared in the same critical section as the fill, so no forget can
+	// slip in between the check and the write. Refused rather than retried:
+	// the model scrolled, and the tool descriptions already tell it to
+	// snapshot again after that. The deferred cleanup forgets the world this
+	// script armed.
+	if cdp.elemGen != genBefore {
+		cdp.elemMu.Unlock()
+		return nil, checked, fmt.Errorf("the page moved while the snapshot was being taken (it was scrolled at the same time); take another snapshot")
+	}
 	cdp.elemCoords = make(map[int][2]float64, len(snap.Elements))
 	cdp.elemFrames = make(map[int]bool, len(snap.Elements))
 	for _, el := range snap.Elements {

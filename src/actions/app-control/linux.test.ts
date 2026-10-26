@@ -45,16 +45,19 @@ type Action =
   | { op: 'listWindows' }
   | { op: 'click'; action?: string }
   | { op: 'focus'; pid: number };
-type Outcome = { ok: boolean; error?: string; code?: string; effect?: string; ms?: number };
+type Outcome = { ok: boolean; error?: string; code?: string; effect?: string; ms?: number; value?: unknown };
 
 const CAPTURE_FILE_TS = new URL('./capture-file.ts', import.meta.url).href;
+const SYSTEM_EXE_TS = new URL('../../util/system-exe.ts', import.meta.url).href;
 
 /**
  * Run LinuxAppController in a child whose PATH is only `binDir` and which has
- * no DISPLAY, so a tool missing from `binDir` cannot fall through to a real
- * one on the machine running the tests. A spawn without an env resolves
- * commands against the PATH the process started with (Bun `$` did the same),
- * which is why this is a child and not an in-process PATH swap.
+ * no DISPLAY. Since #900 the controller takes its tools from the system
+ * directories, never PATH; the child points that lookup at `systemDirs`
+ * (default: `binDir` alone), so a tool missing from there cannot fall through
+ * to a real one on the machine running the tests. A child rather than
+ * in-process, because a spawn without an env resolves anything it does find
+ * by name against the PATH the process started with.
  *
  * `boundMs` shortens CAPTURE_TIMEOUT_MS in the child, and `timed` adds each
  * action's duration. The child itself is killed past `deadlineMs`, so a call
@@ -64,11 +67,13 @@ async function runController(
   binDir: string,
   actions: Action[],
   env: Record<string, string> = {},
-  opts: { boundMs?: number; timed?: boolean; deadlineMs?: number } = {},
+  opts: { boundMs?: number; timed?: boolean; deadlineMs?: number; systemDirs?: string[] } = {},
 ): Promise<Outcome[]> {
   const script = `
     import { LinuxAppController } from ${JSON.stringify(LINUX_TS)};
     import { __setCaptureTimeoutForTests } from ${JSON.stringify(CAPTURE_FILE_TS)};
+    import { __setLinuxSystemDirsForTests } from ${JSON.stringify(SYSTEM_EXE_TS)};
+    __setLinuxSystemDirsForTests(${JSON.stringify(opts.systemDirs ?? [binDir])});
     ${opts.boundMs !== undefined ? `__setCaptureTimeoutForTests(${opts.boundMs});` : ''}
     const ctrl = new LinuxAppController();
     const out = [];
@@ -78,13 +83,14 @@ async function runController(
       const started = performance.now();
       let o;
       try {
+        let value;
         if (a.op === 'type') await ctrl.typeText(a.text);
-        else if (a.op === 'activeWindow') await ctrl.getActiveWindow();
-        else if (a.op === 'listWindows') await ctrl.listWindows();
+        else if (a.op === 'activeWindow') value = await ctrl.getActiveWindow();
+        else if (a.op === 'listWindows') value = await ctrl.listWindows();
         else if (a.op === 'click') await ctrl.clickElement(element(a.action));
         else if (a.op === 'focus') await ctrl.focusWindow(a.pid);
         else await ctrl.pressKeys(a.keys);
-        o = { ok: true };
+        o = value === undefined ? { ok: true } : { ok: true, value };
       } catch (e) {
         o = { ok: false, error: e instanceof Error ? e.message : String(e) };
         if (e && e.outcome) Object.assign(o, { code: e.outcome.code, effect: e.outcome.effect });
@@ -421,7 +427,7 @@ describe('LinuxAppController with a recording xdotool on PATH', () => {
     try {
       const [outcome] = await runController(emptyDir, [{ op: 'type', text: '' }]);
       expect(outcome).toMatchObject({ ok: false });
-      expect(outcome?.error).toMatch(/Required tool 'xdotool' not found/);
+      expect(outcome?.error).toMatch(/Required tool 'xdotool' is not available: xdotool is not installed in a system directory/);
     } finally {
       rmSync(emptyDir, { recursive: true, force: true });
     }
@@ -456,6 +462,89 @@ describe('LinuxAppController with a recording xdotool on PATH', () => {
       expect(o.error).toMatch(/Nothing was pressed\.$/);
     }
     expect(readCalls(binDir)).toEqual([]);
+  });
+});
+
+/**
+ * #900: the X tools were run by bare name, so the first `xdotool` on PATH ran,
+ * and a stock PATH puts ~/.local/bin and ~/.bun/bin ahead of /usr/bin. Here
+ * PATH holds a planted xdotool and the system directory the real one; only
+ * the real one may run, and with none in the system directory the call is
+ * refused, naming the copy it would not use, rather than falling back to PATH.
+ */
+describe('X tools come from the system directories, never PATH (#900)', () => {
+  let planted: string;
+  let system: string;
+  let empty: string;
+
+  beforeAll(() => {
+    planted = mkdtempSync(join(tmpdir(), 'jarvis-900-planted-'));
+    system = mkdtempSync(join(tmpdir(), 'jarvis-900-system-'));
+    empty = mkdtempSync(join(tmpdir(), 'jarvis-900-empty-'));
+    writeRecordingXdotool(planted);
+    writeRecordingXdotool(system);
+  });
+
+  afterAll(() => {
+    for (const dir of [planted, system, empty]) rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('the system directory\'s xdotool runs, not the one first on PATH', async () => {
+    const outcomes = await runController(planted, [{ op: 'type', text: 'hello' }, { op: 'keys', keys: ['ctrl', 's'] }], {}, { systemDirs: [system] });
+    expect(outcomes).toEqual([{ ok: true }, { ok: true }]);
+    expect(readCalls(system).map((c) => c.argv)).toEqual([
+      ['type', '--clearmodifiers', '--', 'hello'],
+      ['key', '--clearmodifiers', '--', 'ctrl+s+'],
+    ]);
+    expect(readCalls(planted)).toEqual([]);
+  });
+
+  test('with no xdotool in a system directory the call is refused and the PATH copy is named, not run', async () => {
+    const [outcome] = await runController(planted, [{ op: 'type', text: 'hello' }], {}, { systemDirs: [empty] });
+    expect(outcome!.ok).toBe(false);
+    expect(outcome!.error).toContain(`Required tool 'xdotool' is not available: xdotool is not installed in a system directory (${empty})`);
+    // The child's HOME is the planted directory, so the copy is shown under ~.
+    expect(outcome!.error).toContain('not used: ~/xdotool (not a system directory)');
+    expect(readCalls(planted)).toEqual([]);
+  });
+});
+
+/**
+ * #904: every window lookup ran a bare `xprop -id`, which prints every
+ * property the window has, _NET_WM_ICON included (31 KB for one window with a
+ * seven-size icon set, measured with xprop 1.2.8), once per window. Only three
+ * are read. The fake answers the way xprop does: each asked-for property, or
+ * "not found" for one the window lacks; asked for nothing, it prints an icon.
+ */
+describe('window lookups ask xprop only for what they read (#904)', () => {
+  let dir: string;
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'jarvis-xprop-fields-'));
+    writeFileSync(join(dir, 'xdotool'), ['#!/bin/sh',
+      'case "$1" in search|getactivewindow) echo 77;; getwindowgeometry) printf "Window 77\n  Position: 1,2 (screen: 0)\n  Geometry: 30x40\n";; esac', ''].join('\n'));
+    writeFileSync(join(dir, 'xprop'), ['#!/bin/sh',
+      `printf '%s\\n' "$*" >> '${join(dir, 'calls')}'`,
+      'shift 2',
+      '[ $# -eq 0 ] && { echo "_NET_WM_ICON(CARDINAL) = Icon (16 x 16):"; echo "WM_NAME(STRING) = \"Editor\""; echo "_NET_WM_PID(CARDINAL) = 42"; exit 0; }',
+      'for p in "$@"; do case "$p" in',
+      '  WM_NAME) echo "WM_NAME(STRING) = \"Editor\"";;',
+      '  _NET_WM_PID) echo "_NET_WM_PID(CARDINAL) = 42";;',
+      '  *) echo "$p:  not found.";;',
+      'esac; done', ''].join('\n'));
+    for (const tool of ['xdotool', 'xprop']) chmodSync(join(dir, tool), 0o755);
+  });
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('getActiveWindow, listWindows and focusWindow pass the three properties, and a missing one reads as Unknown', async () => {
+    rmSync(join(dir, 'calls'), { force: true });
+    const outcomes = await runController(dir, [{ op: 'activeWindow' }, { op: 'listWindows' }, { op: 'focus', pid: 42 }]);
+    const window = { pid: 42, title: 'Editor', className: 'Unknown', bounds: { x: 1, y: 2, width: 30, height: 40 }, focused: true };
+    expect(outcomes).toEqual([{ ok: true, value: window }, { ok: true, value: [window] }, { ok: true }]);
+    expect(readFileSync(join(dir, 'calls'), 'utf-8').trim().split('\n')).toEqual(Array(3).fill('-id 77 WM_NAME WM_CLASS _NET_WM_PID'));
   });
 });
 
@@ -549,7 +638,7 @@ describe('X calls on a wedged X server give up at the bound (#895)', () => {
       expect(outcome).toMatchObject({ ok: false });
       expect(outcome!.error).toMatch(/xprop did not finish within 0\.3s and was stopped/);
       expect(outcome!.ms!).toBeLessThan(BOUND_MS + 2_500);
-      expect(readFileSync(log, 'utf-8').trim().split('\n').filter((l) => l.startsWith('xprop'))).toEqual(['xprop -id 1']);
+      expect(readFileSync(log, 'utf-8').trim().split('\n').filter((l) => l.startsWith('xprop'))).toEqual(['xprop -id 1 WM_NAME WM_CLASS _NET_WM_PID']);
     } finally {
       rmSync(perWindow, { recursive: true, force: true });
     }
@@ -680,7 +769,10 @@ function prepareShim(): { dir: string; log: string } | null {
   writeFileSync(join(dir, 'shim.c'), SHIM_C);
   const cc = spawnSync(compiler, ['-shared', '-fPIC', '-o', join(dir, 'shim.so'), join(dir, 'shim.c')], { encoding: 'utf-8' });
   const bin = join(dir, 'bin');
-  mkdirSync(bin);
+  // 0755 whatever the umask: the system-directory lookup (#900) refuses a
+  // group-writable directory.
+  mkdirSync(bin, { mode: 0o755 });
+  chmodSync(bin, 0o755);
   writeFileSync(join(bin, 'xdotool'), [
     '#!/bin/sh',
     'unset DISPLAY WAYLAND_DISPLAY XAUTHORITY',
@@ -852,6 +944,7 @@ describe.skipIf(!xvfb || !xterm || !realXdotool)('typing into an xterm on a priv
     // The controller finds only the verified xdotool on its PATH.
     const bin = join(dir, 'bin');
     mkdirSync(bin);
+    chmodSync(bin, 0o755);
     symlinkSync(realXdotool!, join(bin, 'xdotool'));
 
     const outcomes = await runController(bin, actions, { DISPLAY: display });

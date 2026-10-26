@@ -30,6 +30,7 @@ import { confirmDialog } from "../../ui/ConfirmDialog";
 import { Button, Chip, Icon } from "../../ui";
 import { ChevronRight, RefreshCw, Download, Trash2, ExternalLink, ShieldCheck } from "lucide-react";
 import { useLibrary, type LibraryEntry, type LibraryActionState } from "./useLibrary";
+import { COMMUNITY_APPROVAL_NOTE } from "./approval-gate";
 
 export function LibraryPanel(): React.ReactElement {
   const lib = useLibrary();
@@ -45,6 +46,9 @@ export function LibraryPanel(): React.ReactElement {
   // Self-managed only: on a managed install every entry is installed, so the
   // count would say the same thing as the total on every single render.
   const installedCount = lib.entries.filter((e) => e.installed != null).length;
+  // A withdrawn row is installed but no longer available, so it counts in the
+  // first number only.
+  const availableCount = lib.entries.filter((e) => !e.withdrawn).length;
 
   // Filtered + tier-split view. Search is case-insensitive against
   // displayName + npmPackage + description so users typing "gmail" find
@@ -81,7 +85,7 @@ export function LibraryPanel(): React.ReactElement {
               ? "loading..."
               : lib.managed
                 ? `${lib.entries.length} pieces available`
-                : `${installedCount} installed of ${lib.entries.length} available`}
+                : `${installedCount} installed of ${availableCount} available`}
             {lib.error ? ` - ${lib.error}` : null}
           </p>
         </div>
@@ -158,6 +162,10 @@ export function LibraryPanel(): React.ReactElement {
               Community
               <span className="wf-lib__section-count">{community.length}</span>
             </button>
+            {/* Said in both modes, and with the list collapsed (#955): a
+                hosted user who installed nothing still builds flows from
+                these pieces, and nothing else tells them they never ask. */}
+            <p className="wf-lib__section-hint">{COMMUNITY_APPROVAL_NOTE}</p>
             {showCommunity ? (
               <>
                 {/* The opt-in notice is addressed to someone about to
@@ -262,7 +270,9 @@ function LibraryRowWired({
       onUninstall={async () => {
         if (
           !await confirmDialog(
-            `Uninstall ${entry.displayName}? Existing workflows that use it will stop working until reinstalled.`,
+            entry.withdrawn
+              ? `Uninstall ${entry.displayName}? It is no longer offered, so it cannot be installed again, and workflows that use it will stop working.`
+              : `Uninstall ${entry.displayName}? Existing workflows that use it will stop working until reinstalled.`,
           )
         )
           return;
@@ -295,12 +305,15 @@ function LibraryRow({
   // string renders as a blank chip instead of "undefined".
   const vettedVersion = entry.vettedVersion ?? "";
   const isInstalled = entry.installed != null;
+  // Withdrawn: installed before the catalog stopped offering it. No version
+  // comparison (there is no vetted version to update to) and no Install.
+  const withdrawn = entry.withdrawn ?? null;
   const busy = actionState !== "idle";
   // Compare resolved vs vetted to surface the right hint:
   //   resolved < vetted -> "Update available" (we vetted a newer version)
   //   resolved > vetted -> "Newer than vetted" (user upgraded past our audit)
   //   resolved == vetted -> no chip
-  const versionRel = isInstalled
+  const versionRel = isInstalled && !withdrawn
     ? compareSemver(entry.installed!.resolvedVersion, vettedVersion)
     : 0;
   const updateAvailable = versionRel < 0;
@@ -316,6 +329,7 @@ function LibraryRow({
           ) : (
             <Chip tone="neutral">{entry.versionRange}</Chip>
           )}
+          {withdrawn ? <Chip tone="warn">Withdrawn</Chip> : null}
           {updateAvailable ? (
             <Chip
               tone="warn"
@@ -339,16 +353,23 @@ function LibraryRow({
         {entry.description ? (
           <p className="wf-lib__row-desc">{entry.description}</p>
         ) : null}
+        {withdrawn ? (
+          <p className="wf-lib__row-desc wf-lib__row-withdrawn">
+            {withdrawn.reason} It stays installed, and workflows can keep using it until you uninstall it.
+          </p>
+        ) : null}
         <div className="wf-lib__row-meta">
           <code className="wf-lib__row-pkg">{entry.npmPackage}</code>
-          <a
-            className="wf-lib__row-source"
-            href={entry.sourceUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Icon icon={ExternalLink} size={11} /> source
-          </a>
+          {entry.sourceUrl ? (
+            <a
+              className="wf-lib__row-source"
+              href={entry.sourceUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <Icon icon={ExternalLink} size={11} /> source
+            </a>
+          ) : null}
           {entry.vettedAt ? <span>vetted {entry.vettedAt}</span> : null}
         </div>
       </div>

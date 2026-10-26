@@ -52,13 +52,25 @@ export interface RunConnectionBinding {
   boundAt: number;
   /** Set when the run asked for a credential that no longer matched; the fetch was refused. */
   refusal?: { message: string; at: number };
+  /**
+   * #954: the last fetch in this run found the credential expired and could
+   * not get a fresh one, so it was not handed out. Unlike `refusal` it does not
+   * bar later fetches (a refresh may succeed then), and a fetch that hands the
+   * credential out clears it.
+   */
+  credentialFailure?: RunCredentialFailure;
+  /** #954: set once a fetch in this run handed the credential out, so a step may have acted with it. */
+  handedOut?: true;
 }
+export interface RunCredentialFailure { code: string; message: string; at: number }
 /** A run's binding as the run API shows it: a managed grant's fingerprint is derived from its token, so it stays inside. */
 export interface RunConnectionBindingView {
   externalId: string;
   identity: { kind: 'native'; connectionId: string; generation: number } | { kind: 'managed'; source: string } | null;
   boundAt: number;
   refusal?: { message: string; at: number };
+  credentialFailure?: RunCredentialFailure;
+  handedOut?: true;
 }
 /** Where a version names a connection. */
 export interface ConnectionReference { node: string; path: string }
@@ -84,21 +96,33 @@ function paramsOf(input: Record<string, unknown>): Record<string, unknown> {
 export function connectionBindings(trigger: unknown): Map<string, ConnectionReference[]> {
   const bindings = new Map<string, ConnectionReference[]>();
   for (const node of walkFlowNodes(trigger as FlowTriggerNode)) {
-    const pending: Array<[unknown, string]> = [[node.settings?.input, 'settings.input']];
-    for (let visits = 0; pending.length && visits < 20_000; visits++) {
-      const [value, path] = pending.pop()!;
-      if (typeof value === 'string') {
-        for (const [, expression] of value.matchAll(/\{\{(.*?)\}\}/g)) {
-          const reference = CONNECTION_SOURCE.exec(expression!);
-          const externalId = reference?.[1] ?? reference?.[2];
-          if (externalId) bindings.set(externalId, [...bindings.get(externalId) ?? [], { node: node.name, path }]);
-        }
-      } else if (value && typeof value === 'object') {
-        for (const [key, child] of Object.entries(value)) pending.push([child, `${path}.${key}`]);
-      }
+    for (const [externalId, path] of nodeConnectionReferences(node)) {
+      // Append in place: copying the list per match made one long string quadratic.
+      const references = bindings.get(externalId);
+      if (references) references.push({ node: node.name, path });
+      else bindings.set(externalId, [{ node: node.name, path }]);
     }
   }
   return bindings;
+}
+
+/** Each connection one step names, with where it names it, by the same rule as `connectionBindings`. */
+export function nodeConnectionReferences(node: FlowTriggerNode): Array<[externalId: string, path: string]> {
+  const out: Array<[string, string]> = [];
+  const pending: Array<[unknown, string]> = [[node.settings?.input, 'settings.input']];
+  for (let visits = 0; pending.length && visits < 20_000; visits++) {
+    const [value, path] = pending.pop()!;
+    if (typeof value === 'string') {
+      for (const [, expression] of value.matchAll(/\{\{(.*?)\}\}/g)) {
+        const reference = CONNECTION_SOURCE.exec(expression!);
+        const externalId = reference?.[1] ?? reference?.[2];
+        if (externalId) out.push([externalId, path]);
+      }
+    } else if (value && typeof value === 'object') {
+      for (const [key, child] of Object.entries(value)) pending.push([child, `${path}.${key}`]);
+    }
+  }
+  return out;
 }
 
 type Current = { identity: ConnectionIdentity } | { problem: 'missing' | 'ambiguous' | 'revoked' };
@@ -235,7 +259,7 @@ function versionTrigger(versionId: string): unknown {
 /** The version an enabled flow runs: its published version, else its latest draft. */
 function runningVersion(flowId: string): { projectId: string; versionId: string; trigger: unknown } | null {
   const row = getWorkflowDb().query<{ project_id: string; version_id: string | null }, [string]>(
-    `SELECT f.project_id AS project_id, COALESCE(f.published_version_id, (SELECT id FROM flow_version WHERE flow_id = f.id AND state = 'DRAFT' ORDER BY updated DESC LIMIT 1)) AS version_id
+    `SELECT f.project_id AS project_id, COALESCE(f.published_version_id, (SELECT version_id FROM brief_workflow_draft_selection WHERE flow_id = f.id)) AS version_id
        FROM flow f WHERE f.id = ?`,
   ).get(flowId);
   return row?.version_id ? { projectId: row.project_id, versionId: row.version_id, trigger: versionTrigger(row.version_id) } : null;
@@ -331,28 +355,59 @@ export function bindingPinIssues(flowId: string, versionId: string, trigger: unk
 
 /**
  * What enabling or publishing `versionId` now would accept that differs from
- * what a person last accepted: each pinned connection that resolves to another
- * identity, and the computer when the choice would change. Empty when nothing
- * was accepted yet. manage_workflow shows these to a person, who approves
- * before the assistant enables or publishes; the dashboard is the person.
+ * what a person last accepted, by kind: each pinned connection the version
+ * names that resolves to another identity (keyed by external ID), and the
+ * computer when the choice would change. `machine.determined` is true only when
+ * the computer inventory could be read and this version has a computer step that
+ * picks a fixed computer; otherwise the next choice is a guess, not a fact.
+ * Empty when nothing was accepted yet.
  */
-export function bindingChangesToAccept(flowId: string, versionId: string): string[] {
+export interface BindingDrift {
+  connections: Map<string, string>;
+  machine: { pinned: MachinePin; next: MachinePin | null; determined: boolean } | null;
+}
+/**
+ * `tolerateInventoryFailure` is for read-only views: a computer inventory that
+ * throws leaves the computer undetermined (`machine: null`) while connection
+ * drift still shows. The approval gate never passes it, so there a failure
+ * still stops the action rather than hiding a computer change from a person.
+ */
+export function bindingDrift(flowId: string, versionId: string, { tolerateInventoryFailure = false } = {}): BindingDrift {
+  const drift: BindingDrift = { connections: new Map(), machine: null };
   const pins = readBindingPins(flowId);
   const projectId = flowProject(flowId);
-  if (!pins || !projectId) return [];
+  if (!pins || !projectId) return drift;
   const trigger = versionTrigger(versionId);
-  const changes: string[] = [];
   for (const externalId of connectionBindings(trigger).keys()) {
     const pinned = pins.connections[externalId];
     const current = pinned ? currentConnectionIdentity(projectId, externalId) : null;
     const change = pinned && current && 'identity' in current ? describeConnectionChange(externalId, pinned, current.identity) : null;
-    if (change) changes.push(`${change}; it may now act as a different account.`);
+    if (change) drift.connections.set(externalId, change);
   }
   if (pins.machine) {
-    const next = computeMachinePin(trigger, false);
-    if (!next || next.sidecarId !== pins.machine.sidecarId) {
-      changes.push(`The computer it runs on changes from ${pins.machine.name} to ${next?.name ?? 'whichever computer each run picks'}.`);
+    try {
+      const next = computeMachinePin(trigger, false);
+      if (!next || next.sidecarId !== pins.machine.sidecarId) {
+        const needs = machineNeeds(trigger);
+        drift.machine = { pinned: pins.machine, next,
+          determined: !!workflowReadinessServices()?.machines?.() && !!needs.capability && !needs.dynamic };
+      }
+    } catch (error) {
+      if (!tolerateInventoryFailure) throw error;
     }
+  }
+  return drift;
+}
+
+/**
+ * `bindingDrift` as sentences. manage_workflow shows these to a person, who
+ * approves before the assistant enables or publishes; the dashboard is the person.
+ */
+export function bindingChangesToAccept(flowId: string, versionId: string): string[] {
+  const drift = bindingDrift(flowId, versionId);
+  const changes = [...drift.connections.values()].map(change => `${change}; it may now act as a different account.`);
+  if (drift.machine) {
+    changes.push(`The computer it runs on changes from ${drift.machine.pinned.name} to ${drift.machine.next?.name ?? 'whichever computer each run picks'}.`);
   }
   return changes;
 }
@@ -422,6 +477,28 @@ export function enforceRunConnectionBinding(runId: string, projectId: string, ex
   }).immediate();
 }
 
+/**
+ * #954: record on the run's binding why its credential was not handed out
+ * (expired, refresh failed), or, with null, that this fetch handed it out:
+ * that clears an earlier failure and marks `handedOut`. Only a binding the run
+ * already holds is written: the fetch that got here passed
+ * `enforceRunConnectionBinding`, which created it.
+ */
+export function recordRunCredentialOutcome(runId: string, externalId: string, failure: Omit<RunCredentialFailure, 'at'> | null): void {
+  const db = getWorkflowDb();
+  const settled = (bound: RunConnectionBinding | null) => !bound || (!failure && bound.handedOut && !bound.credentialFailure);
+  // After its first hand-out a run's fetches change nothing: answer those without the write lock.
+  if (settled(runBinding(runId, externalId))) return;
+  db.transaction(() => {
+    const bound = runBinding(runId, externalId);
+    if (!bound || settled(bound)) return;
+    const { credentialFailure: _previous, ...rest } = bound;
+    const record: RunConnectionBinding = failure ? { ...rest, credentialFailure: { ...failure, at: Date.now() } } : { ...rest, handedOut: true };
+    db.run('UPDATE workflow_run_connection_binding SET record = ? WHERE run_id = ? AND external_id = ?',
+      [JSON.stringify(record), runId, externalId]);
+  }).immediate();
+}
+
 export function listRunConnectionBindings(runId: string): RunConnectionBinding[] {
   return getWorkflowDb().query<{ record: string }, [string]>(
     'SELECT record FROM workflow_run_connection_binding WHERE run_id = ? ORDER BY external_id').all(runId)
@@ -430,8 +507,8 @@ export function listRunConnectionBindings(runId: string): RunConnectionBinding[]
 
 /** A run's bindings for the run API: which connection, what kind, and any refusal, without a grant fingerprint. */
 export function runConnectionBindingViews(runId: string): RunConnectionBindingView[] {
-  return listRunConnectionBindings(runId).map(({ externalId, identity, boundAt, refusal }) => ({
-    externalId, boundAt, ...(refusal ? { refusal } : {}),
+  return listRunConnectionBindings(runId).map(({ externalId, identity, boundAt, refusal, credentialFailure, handedOut }) => ({
+    externalId, boundAt, ...(refusal ? { refusal } : {}), ...(credentialFailure ? { credentialFailure } : {}), ...(handedOut ? { handedOut } : {}),
     identity: identity?.kind === 'managed' ? { kind: 'managed', source: identity.source } : identity,
   }));
 }

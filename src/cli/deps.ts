@@ -15,6 +15,7 @@ import { c, printOk, printWarn, printErr, printInfo, askYesNo, ask, askSecret, s
 import { LINUX_BROWSER_PATHS, MACOS_BROWSER_PATHS, type BrowserExecutable } from '../actions/browser/chrome-launcher.ts';
 import { externalUrl, resolveExternalOrigin } from '../util/external-origin.ts';
 import { GoogleOAuthFlowStore } from '../integrations/google-oauth-flow.ts';
+import { linuxSystemExe, SystemExeNotFoundError, type LinuxSystemTool } from '../util/system-exe.ts';
 
 export type DepKind = 'core' | 'browser' | 'linux' | 'google';
 
@@ -160,21 +161,34 @@ export function checkLinuxTools(): DepStatus[] {
   const platform = detectPlatform();
   if (platform === 'macos') return []; // Not needed on macOS
 
-  const tools = [
-    { name: 'xdotool', pkg: 'xdotool', desc: 'keyboard/mouse automation' },
-    { name: 'xprop', pkg: 'x11-utils', desc: 'window property inspection' },
+  const tools: Array<{ name: string; cmd: LinuxSystemTool; pkg: string; desc: string }> = [
+    { name: 'xdotool', cmd: 'xdotool', pkg: 'xdotool', desc: 'keyboard/mouse automation' },
+    { name: 'xprop', cmd: 'xprop', pkg: 'x11-utils', desc: 'window property inspection' },
     { name: 'import (ImageMagick)', cmd: 'import', pkg: 'imagemagick', desc: 'screenshot capture' },
   ];
 
+  // Found the way the daemon finds them (#900): in a system directory, never
+  // through PATH. A copy the daemon would not use (only on PATH, or in a
+  // system directory but writable by someone other than root) does not count
+  // as installed here either, and the message says why.
   return tools.map(tool => {
-    const cmd = tool.cmd ?? tool.name;
-    const result = commandExists(cmd);
+    let message: string;
+    let path: string | undefined;
+    try {
+      path = linuxSystemExe(tool.cmd);
+      message = path;
+    } catch (err) {
+      message = `Not installed (${tool.desc})`;
+      if (err instanceof SystemExeNotFoundError && err.message.includes('; not used: ')) {
+        message += `: ${err.message}`;
+      }
+    }
     return {
       name: tool.name,
       kind: 'linux',
-      found: result.found,
-      path: result.path,
-      message: result.found ? result.path! : `Not installed (${tool.desc})`,
+      found: path !== undefined,
+      path,
+      message,
       installable: true,
     };
   });

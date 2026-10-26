@@ -201,6 +201,30 @@ export function persistPlainUserPatch<K extends PlainPatchSection>(
 }
 
 /**
+ * Record an Awareness on/off choice the user made, with when they made it.
+ * Older builds stamped DEFAULT_CONFIG's `enabled: true` into config.yaml and
+ * the legacy import copied it into the row, so an unmarked `true` is not
+ * evidence of consent (#1070).
+ */
+export function persistAwarenessChoice(enabled: boolean, now = Date.now()): void {
+  persistPlainUserPatch('awareness', { enabled, enabled_chosen_at: now });
+}
+
+/**
+ * The Awareness choice a stored row proves: `false` whenever stored (off is
+ * always safe), `true` only with a choice marker, otherwise null (no choice).
+ * A non-boolean `enabled` is unreadable and throws.
+ */
+export function storedAwarenessChoice(row: Record<string, unknown> | null): boolean | null {
+  const enabled = row?.enabled;
+  if (enabled === undefined) return null;
+  if (typeof enabled !== 'boolean') throw new Error('Unreadable Awareness choice');
+  if (!enabled) return false;
+  const at = row?.enabled_chosen_at;
+  return typeof at === 'number' && Number.isFinite(at) && at > 0 ? true : null;
+}
+
+/**
  * Drop the user's explicit provider choice for a voice section, restoring
  * SILENCE — which is what the hosted defaults key off (effectiveSttForBinding
  * / effectiveTtsForBinding fill a provider-free row with the included uj

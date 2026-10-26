@@ -18,19 +18,24 @@ import { AuthorityEngine } from '../../authority/engine';
 import { AuditTrail } from '../../authority/audit';
 import { EmergencyController } from '../../authority/emergency';
 import { ApprovalManager } from '../../authority/approval';
-import { listWorkflowEffects } from '../db/repos/workflow-effect';
+import { listWorkflowEffects, saveWorkflowEffect } from '../db/repos/workflow-effect';
+import { workflowEffectId } from './effect-boundary';
 import { resumeResolvedWorkflowEffects } from './effect-approval-scheduler';
 import { CredentialResolver } from '../credentials/adapter';
 import { WorkflowEventBuffer } from './event-buffer';
+import { maxWaitingWorkflowCards } from './deferred-cards';
 import { buildSandboxServiceBackends, type BuildServiceBackendsOptions } from './service-backends';
 import { AUTHORITY_REQUIREMENTS, type ActionCategory } from '../../roles/authority';
-import { GOVERNED_PIECE_ADAPTERS, governedPieceTarget, governedPieceToolDefinition, governedPieceToolName, RESERVED_TARGET_KEYS, isWellFormedPieceActionName, PIECE_ACTION_NAME_MAX_CHARS, reprojectPieceInput,
+import { DEFAULT_CONFIG } from '../../config/types';
+import { ABOVE_LEVEL_SUBSTITUTION } from '../../authority/tool-action-map';
+import { ALL_PIECE_ADAPTERS, GOVERNED_PIECE_ADAPTERS, governedPieceTarget, redactHttpInput, REDACTED, governedPieceToolDefinition, governedPieceToolName, RESERVED_TARGET_KEYS, isWellFormedPieceActionName, PIECE_ACTION_NAME_MAX_CHARS, reprojectPieceInput,
   resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { defangPieceProjection } from './piece-effect-receipt';
 import { digest } from './effect-context';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN, wrapUntrusted } from '../../roles/untrusted';
-import { authorizePieceDispatch, CODE_STEP_PIECE, pieceInputDigest } from './piece-effect-guard';
+import { authorizePieceDispatch, CODE_STEP_PIECE, PIECE_RECEIPT_MAX_BYTES, pieceInputDigest, receiptBody } from './piece-effect-guard';
 import { getWaitpoint } from '../db/repos/waitpoint';
+import { isCommunityPiece } from './step-admission';
 import { WebSocketService } from '../../daemon/ws-service';
 import { SandboxApi } from '../sandbox-api/server';
 import { EngineTokenSigner } from '../sandbox-api/engine-token';
@@ -1144,9 +1149,10 @@ describe('Q-08: every piece step obeys Pause and Kill', () => {
     expect(await f.backends.pieceAuthorize!({ piece: CODE_STEP_PIECE, action: 'run', input: {} }, f.context)).toMatchObject({ dispatch: 'held' });
   });
 
-  test("Jarvis's own pieces and the built-in steps leave no admission row", async () => {
+  test("Jarvis's own pieces and the in-run core steps leave no admission row", async () => {
     const f = fixture(COMMUNITY_PIECE, 'create_contact');
-    for (const piece of ['@jarvispieces/piece-jarvis-tool', '@activepieces/piece-delay', '@activepieces/piece-http']) {
+    // The HTTP piece is governed since #961 and has its own tests (core-pieces.test.ts).
+    for (const piece of ['@jarvispieces/piece-jarvis-tool', '@activepieces/piece-delay', '@activepieces/piece-store']) {
       expect(await f.backends.pieceAuthorize!({ piece, action: 'run', input: {} }, f.context)).toEqual({ governed: false });
     }
     expect(audit(f)).toEqual([]);
@@ -1254,5 +1260,436 @@ describe('the admission route (Q-08)', () => {
     const whole = 'a'.repeat(64);
     expect((await call(run.id, deps, { piece: GMAIL, action: 'send_email', input: {}, inputDigest: whole })).status).toBe(200);
     expect(seen).toEqual([{ piece: GMAIL, action: 'send_email', input: {}, inputDigest: whole }]);
+  });
+});
+
+describe('#953: a verified piece action above the level asks only when its category is governed', () => {
+  // The shipped Authority defaults: level 3, send_email/send_message/make_payment governed.
+  const shipped = (action: string) => {
+    const f = fixture(GMAIL, action, DEFAULT_CONFIG.authority.default_level);
+    f.authority.setGovernedCategories([...DEFAULT_CONFIG.authority.governed_categories] as ActionCategory[]);
+    return f;
+  };
+  const approvalOf = (reply: unknown) => (reply as { approval: { approvalId: string } }).approval.approvalId;
+
+  test('at the shipped defaults a Gmail send raises a card, then authorizes exactly once after approval', async () => {
+    expect(DEFAULT_CONFIG.authority.default_level).toBe(3);
+    expect(DEFAULT_CONFIG.authority.governed_categories).toContain('send_email');
+    const f = shipped('send_email');
+    const pending = await f.authorize(SEND_INPUT);
+    expect(pending).toMatchObject({ governed: true, dispatch: 'approval_required' });
+    const approvalId = approvalOf(pending);
+    expect(f.deliveredApprovals).toEqual([approvalId]);
+    const request = f.approvals.getRequest(approvalId)!;
+    expect(request.action_category).toBe('send_email');
+    // The substituted reason, so the approval learner never learns from it.
+    expect(request.reason).toContain(ABOVE_LEVEL_SUBSTITUTION);
+    expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ decision: 'approval_required', status: 'pending' });
+
+    f.approvals.approve(approvalId, 'dashboard');
+    const dispatched = await f.authorize(SEND_INPUT) as { effectId: string };
+    expect(dispatched).toMatchObject({ governed: true, dispatch: 'authorized' });
+    await expect(f.authorize(SEND_INPUT)).rejects.toThrow(/replay is blocked/);
+    expect(listWorkflowEffects(f.run.id)).toHaveLength(1);
+  });
+
+  test('above-level send cards count against the flow\'s card budget, and one past it waits for a place (#1039)', async () => {
+    const f = shipped('send_email');
+    const cap = maxWaitingWorkflowCards();
+    const authorizeIn = async (runId: string) => f.backends.pieceAuthorize!({ piece: GMAIL, action: 'send_email', input: SEND_INPUT,
+      inputDigest: await pieceInputDigest(SEND_INPUT) }, { ...f.context, runId });
+    const runs = [f.run.id, ...Array.from({ length: cap }, () => createFlowRun({ flowId: f.version.flowId, flowVersionId: f.version.id, status: 'RUNNING' }).id)];
+    for (const runId of runs.slice(0, cap)) expect(await authorizeIn(runId)).toMatchObject({ governed: true, dispatch: 'approval_required' });
+    const cards = f.approvals.getPending().filter((r) => r.execution_mode === 'workflow');
+    // Recorded under the category the budget counts: the send's, not the substitution floor.
+    expect(cards.map((r) => r.action_category)).toEqual(Array(cap).fill('send_email'));
+    const over = await authorizeIn(runs[cap]!) as { dispatch: string; approval: { approvalId: string; code?: string } };
+    expect(over.dispatch).toBe('approval_required');
+    expect(over.approval).toMatchObject({ approvalId: '', code: 'APPROVALS_WAITING' });
+    expect(f.approvals.getPending()).toHaveLength(cap);
+    expect(listWorkflowEffects(runs[cap]!)[0]).toMatchObject({ status: 'pending', approvalId: null, deferral: { budget: 'other' } });
+  });
+
+  test('a send whose category is not governed stays denied by level', async () => {
+    const f = shipped('send_email');
+    f.authority.setGovernedCategories(['send_message', 'make_payment']);
+    await expect(f.authorize(SEND_INPUT)).rejects.toThrow(/Authority level 3 is below required 7 for send_email/);
+    expect(f.approvals.getPending()).toHaveLength(0);
+  });
+
+  test('deletes and settings changes stay denied by level, even when governed', async () => {
+    for (const [action, category] of [['gmail_trash_message', 'delete_data'], ['gmail_stop_watch', 'modify_settings'],
+      ['custom_api_call', 'delete_data']] as const) {
+      const f = shipped(action);
+      f.authority.setGovernedCategories([...DEFAULT_CONFIG.authority.governed_categories as ActionCategory[], 'delete_data', 'modify_settings']);
+      await expect(f.authorize({ message_id: 'm1' })).rejects.toThrow(new RegExp(`Authority level 3 is below required 9 for ${category}`));
+      expect(f.approvals.getPending()).toHaveLength(0);
+      closeWorkflowDb(); initWorkflowDb(':memory:');
+    }
+  });
+
+  test('an override or a context rule that denies still denies', async () => {
+    const overridden = shipped('send_email');
+    overridden.authority.addOverride({ action: 'send_email', allowed: false });
+    await expect(overridden.authorize(SEND_INPUT)).rejects.toThrow(/Explicitly denied by override/);
+    expect(overridden.approvals.getPending()).toHaveLength(0);
+    closeWorkflowDb(); initWorkflowDb(':memory:');
+    const ruled = shipped('send_email');
+    ruled.authority.addContextRule({ id: 'no-mail', action: 'send_email', condition: 'always', params: {}, effect: 'deny', description: 'No mail from workflows' });
+    await expect(ruled.authorize(SEND_INPUT)).rejects.toThrow(/No mail from workflows/);
+    expect(ruled.approvals.getPending()).toHaveLength(0);
+  });
+
+  test('below the write_data floor a governed send is denied, not asked', async () => {
+    const f = fixture(GMAIL, 'send_email', 2);
+    f.authority.setGovernedCategories(['send_email']);
+    await expect(f.authorize(SEND_INPUT)).rejects.toThrow(/Authority level 2 is below required 7 for send_email/);
+    expect(f.approvals.getPending()).toHaveLength(0);
+  });
+
+  test('an approved card is refused at dispatch once the category stops being governed, or after Kill', async () => {
+    const ungoverned = shipped('send_email');
+    ungoverned.approvals.approve(approvalOf(await ungoverned.authorize(SEND_INPUT)), 'dashboard');
+    ungoverned.authority.setGovernedCategories([]);
+    await expect(ungoverned.authorize(SEND_INPUT)).rejects.toThrow(/below required 7/);
+    closeWorkflowDb(); initWorkflowDb(':memory:');
+    const killed = shipped('send_email');
+    killed.approvals.approve(approvalOf(await killed.authorize(SEND_INPUT)), 'dashboard');
+    (killed.options.emergencyController as EmergencyController).kill();
+    await expect(killed.authorize(SEND_INPUT)).rejects.toThrow(/system killed/);
+    expect(listWorkflowEffects(killed.run.id)[0]).toMatchObject({ status: 'blocked' });
+  });
+});
+
+describe('Q-07 after #953: no Gmail send is replayed by an engine retry', () => {
+  const REPLY_INPUT = { message_id: 'm1', reply_type: 'reply', body: 'Thanks, received.' };
+  const approvalOf = (reply: unknown) => (reply as { approval: { approvalId: string } }).approval.approvalId;
+  const shippedLevel = (action: string) => {
+    const f = fixture(GMAIL, action, DEFAULT_CONFIG.authority.default_level);
+    f.authority.setGovernedCategories([...DEFAULT_CONFIG.authority.governed_categories] as ActionCategory[]);
+    return f;
+  };
+
+  test('every Gmail send action except the one that parks itself is tracked', () => {
+    const sends = GOVERNED_PIECE_ADAPTERS.find((a) => a.catalogId === 'gmail')!.categories.send_email!;
+    expect(sends.filter((action) => !tracksPieceCompletion(GMAIL, action))).toEqual(['request_approval_in_mail']);
+  });
+
+  for (const action of ['reply_to_email', 'gmail_reply_to_thread', 'gmail_send_draft', 'gmail_forward_message']) {
+    test(`${action} at level 3: card, approve, one dispatch, and an engine retry is not resent`, async () => {
+      const f = shippedLevel(action);
+      const pending = await f.authorize(REPLY_INPUT);
+      expect(pending).toMatchObject({ governed: true, dispatch: 'approval_required' });
+      f.approvals.approve(approvalOf(pending), 'dashboard');
+      expect(await f.authorize(REPLY_INPUT)).toMatchObject({ governed: true, dispatch: 'authorized', effectId: expect.any(String) });
+      // The engine's "Retry on failure" asks again with no completion receipt: refused, not resent.
+      await expect(f.authorize(REPLY_INPUT)).rejects.toThrow(/replay is blocked/);
+    });
+  }
+
+  test('a recorded authorization is not handed out again once Authority denies it', async () => {
+    const f = fixture(GMAIL, 'gmail_create_draft');
+    expect(await f.authorize(SEND_INPUT)).toEqual({ governed: true, dispatch: 'authorized' });
+    expect(await f.authorize(SEND_INPUT)).toEqual({ governed: true, dispatch: 'authorized' });
+    f.authority.addOverride({ action: 'write_data', allowed: false });
+    await expect(f.authorize(SEND_INPUT)).rejects.toThrow(/Explicitly denied by override/);
+    expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'succeeded', replayRefusal: { outcome: { code: 'AUTHORITY_DENIED' } } });
+    // The refused retry is in the trail, not only on the record.
+    expect((f.options.auditTrail as AuditTrail).query({ agentId: `workflow:${f.run.id}` })
+      .filter((row) => row.authority_decision === 'denied' && row.tool_name === 'piece:gmail/gmail_create_draft')).toHaveLength(1);
+  });
+
+  test('a recorded authorization is not handed out again once Authority wants an approval it never got', async () => {
+    const f = fixture(GMAIL, 'gmail_create_draft');
+    expect(await f.authorize(SEND_INPUT)).toEqual({ governed: true, dispatch: 'authorized' });
+    f.authority.setGovernedCategories(['write_data']);
+    await expect(f.authorize(SEND_INPUT)).rejects.toThrow(/now requires approval/);
+  });
+
+  test('a tracked send whose receipt is recorded hands back its result even after Authority changes', async () => {
+    const f = shippedLevel('reply_to_email');
+    f.approvals.approve(approvalOf(await f.authorize(REPLY_INPUT)), 'dashboard');
+    const dispatched = await f.authorize(REPLY_INPUT) as { effectId: string };
+    f.backends.pieceReceipt!(f.context, dispatched.effectId, { id: 'a1b2' });
+    f.authority.addOverride({ action: 'send_email', allowed: false });
+    // Nothing is sent again, so nothing is asked again: the stored result comes back.
+    expect(await f.authorize(REPLY_INPUT)).toEqual({ governed: true, dispatch: 'completed', result: { id: 'a1b2' } });
+  });
+
+  for (const decided of [false, true]) {
+    test(`a send recorded untracked before the upgrade and never sent ends typed, its card ${decided ? 'closed' : 'denied'}`, async () => {
+      const f = shippedLevel('reply_to_email');
+      const pending = await f.authorize(REPLY_INPUT);
+      const approvalId = approvalOf(pending);
+      // What an older daemon recorded: the same step under the untracked route.
+      const tracked = listWorkflowEffects(f.run.id)[0]!;
+      const legacyId = workflowEffectId(f.run.id, 'action', [], 'piece');
+      saveWorkflowEffect({ ...tracked, id: legacyId, route: 'piece' });
+      if (decided) f.approvals.approve(approvalId, 'dashboard');
+      await expect(f.authorize(REPLY_INPUT)).rejects.toThrow(/before an upgrade changed how sends are tracked/);
+      expect(listWorkflowEffects(f.run.id).find((e) => e.id === legacyId)).toMatchObject({ status: 'blocked',
+        outcome: { code: 'WORKFLOW_UPGRADED', effect: 'not_started' } });
+      expect(f.approvals.getRequest(approvalId)).toMatchObject(decided
+        ? { status: 'executed', execution_outcome: 'blocked' } : { status: 'denied' });
+      // An engine retry of the same step repeats the typed outcome; it does not claim a send may have happened.
+      await expect(f.authorize(REPLY_INPUT)).rejects.toThrow(/before an upgrade changed how sends are tracked/);
+    });
+  }
+
+  test('the approval request mail resumes through its recorded authorization', async () => {
+    const f = shippedLevel('request_approval_in_mail');
+    const input = { receiver: 'boss@example.test', subject: 'OK?', body: 'Approve the spend?' };
+    f.approvals.approve(approvalOf(await f.authorize(input)), 'dashboard');
+    expect(await f.authorize(input)).toEqual({ governed: true, dispatch: 'authorized' });
+    // The piece parks itself after sending; on resume the engine re-runs the step.
+    expect(await f.authorize(input)).toEqual({ governed: true, dispatch: 'authorized' });
+  });
+});
+
+describe('#955: the editor badge and the admission agree on which steps skip approval', () => {
+  test('a step is audited as a community piece exactly when isCommunityPiece says so', async () => {
+    const pieces = [COMMUNITY_PIECE, '@activepieces/piece-mcp', GMAIL, '@jarvispieces/piece-jarvis-notify',
+      '@activepieces/piece-http', '@activepieces/piece-webhook', '@activepieces/piece-delay'];
+    for (const piece of pieces) {
+      // The admission reads the request's piece, not the step's settings; a
+      // governed piece is checked against the pinned graph, so it gets its own.
+      const governed = piece === GMAIL || piece === '@activepieces/piece-http';
+      const f = fixture(governed ? piece : COMMUNITY_PIECE, 'send_email');
+      const reply = await f.backends.pieceAuthorize!({ piece, action: 'send_email', input: {}, inputDigest: await pieceInputDigest({}) }, f.context);
+      // Every ungoverned piece was let through by the admission; the verified
+      // one and the governed core HTTP piece (#961) went to Authority.
+      expect(reply).toMatchObject({ governed });
+      const audited = (f.options.auditTrail as AuditTrail).query({ limit: 5 })
+        .some((row) => row.tool_name === `community piece ${piece}/send_email`);
+      expect(`${piece}: ${audited}`).toBe(`${piece}: ${isCommunityPiece(piece)}`);
+      closeWorkflowDb(); initWorkflowDb(':memory:');
+    }
+    // The core webhook piece is not loaded (#961: the editor's Webhook trigger
+    // is Jarvis's own ingress), so it has no in-run exemption: were it ever to
+    // run, it would be treated, audited and badged as any community piece.
+    expect(pieces.filter(isCommunityPiece)).toEqual([COMMUNITY_PIECE, '@activepieces/piece-mcp', '@activepieces/piece-webhook']);
+  });
+});
+
+describe('#961: the core HTTP piece is governed by method', () => {
+  const HTTP = '@activepieces/piece-http';
+  const shipped = () => {
+    const f = fixture(HTTP, 'send_request', DEFAULT_CONFIG.authority.default_level);
+    f.authority.setGovernedCategories([...DEFAULT_CONFIG.authority.governed_categories] as ActionCategory[]);
+    return f;
+  };
+  // A read carries no body; anything else sends one, as a flow would.
+  const request = (method: string, extra: Record<string, unknown> = {}) => ({ method, url: 'https://ops.example.test/api/logs',
+    headers: { 'Content-Type': 'application/json' }, queryParams: {}, authType: 'NONE',
+    ...(/^(get|head)$/i.test(method) ? { body_type: 'none' } : { body_type: 'json', body: { data: { line: 'ok' } } }), ...extra });
+  const approvalOf = (reply: unknown) => (reply as { approval: { approvalId: string } }).approval.approvalId;
+
+  test('at the shipped defaults a POST raises a card naming the method and the URL, and a GET runs without one', async () => {
+    const post = shipped();
+    const pending = await post.authorize(request('POST'));
+    expect(pending).toMatchObject({ governed: true, dispatch: 'approval_required' });
+    const card = post.approvals.getRequest(approvalOf(pending))!;
+    expect(card).toMatchObject({ action_category: 'send_message', tool_name: 'piece:http/send_request' });
+    expect(JSON.parse(card.context).target).toMatchObject({ piece: 'http', action: 'send_request', method: 'POST', url: 'https://ops.example.test/api/logs' });
+    closeWorkflowDb(); initWorkflowDb(':memory:');
+    const get = shipped();
+    expect(await get.authorize(request('GET'))).toEqual({ governed: true, dispatch: 'authorized' });
+    expect(get.approvals.getPending()).toHaveLength(0);
+    expect(listWorkflowEffects(get.run.id)[0]).toMatchObject({ actionCategory: 'read_data', status: 'succeeded' });
+  });
+
+  test('PUT and PATCH ask as a POST does; DELETE and any other method are denied at the default level', async () => {
+    for (const [method, outcome] of [['PUT', 'card'], ['PATCH', 'card'], ['post', 'card'], ['HEAD', 'run'], ['get', 'run'],
+      ['DELETE', 'denied'], ['PURGE', 'denied'], [' GET', 'denied'], ['', 'denied']] as const) {
+      const f = shipped();
+      const reply = f.authorize(request(method));
+      if (outcome === 'card') expect(await reply).toMatchObject({ dispatch: 'approval_required' });
+      else if (outcome === 'run') expect(await reply).toEqual({ governed: true, dispatch: 'authorized' });
+      else await expect(reply).rejects.toThrow(/Authority level 3 is below required 9 for delete_data/);
+      closeWorkflowDb(); initWorkflowDb(':memory:');
+    }
+  });
+
+  test('a request that is not a read is never sent twice: an engine retry after a lost or failed send is refused (Q-07)', async () => {
+    const f = shipped();
+    f.approvals.approve(approvalOf(await f.authorize(request('POST'))), 'dashboard');
+    expect(await f.authorize(request('POST'))).toMatchObject({ governed: true, dispatch: 'authorized', effectId: expect.any(String) });
+    await expect(f.authorize(request('POST'))).rejects.toThrow(/replay is blocked/);
+    expect(listWorkflowEffects(f.run.id)).toHaveLength(1);
+    expect(tracksPieceCompletion(HTTP, 'send_request', request('GET'))).toBe(false);
+    expect(tracksPieceCompletion(HTTP, 'send_request', request('HEAD'))).toBe(false);
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'get ', 'PURGE']) expect(tracksPieceCompletion(HTTP, 'send_request', request(method))).toBe(true);
+    // A caller that cannot see the input assumes a send.
+    expect(tracksPieceCompletion(HTTP, 'send_request')).toBe(true);
+    expect(tracksPieceCompletion(HTTP, 'parse_url', request('POST'))).toBe(false);
+  });
+
+  test('a GET or HEAD that carries a body is a send: it asks, and it is never sent twice', async () => {
+    for (const [method, body] of [['GET', { data: { leak: 'x' } }], ['HEAD', { data: 'raw text' }], ['GET', { data: [{ fieldName: 'f', fieldType: 'file', fileFieldValue: 'x' }] }],
+      ['GET', '[nested value omitted]']] as const) {
+      const input = request(method, { body_type: 'json', body });
+      expect(resolveGovernedPieceAction(HTTP, 'send_request', input)!.category).toBe('send_message');
+      expect(tracksPieceCompletion(HTTP, 'send_request', input)).toBe(true);
+      const f = shipped();
+      expect(await f.authorize(input)).toMatchObject({ dispatch: 'approval_required' });
+      closeWorkflowDb(); initWorkflowDb(':memory:');
+    }
+    // An empty body is no body.
+    for (const body of [undefined, null, '', {}, { data: '' }, { data: null }]) {
+      expect(resolveGovernedPieceAction(HTTP, 'send_request', request('GET', { body }))!.category).toBe('read_data');
+    }
+  });
+
+  test('a GET is a read: the engine retry of a recorded authorization reads it again', async () => {
+    const f = shipped();
+    expect(await f.authorize(request('GET'))).toEqual({ governed: true, dispatch: 'authorized' });
+    expect(await f.authorize(request('GET'))).toEqual({ governed: true, dispatch: 'authorized' });
+  });
+
+  test('a POST whose receipt is recorded hands back the stored response and sends nothing', async () => {
+    const f = shipped();
+    f.approvals.approve(approvalOf(await f.authorize(request('POST'))), 'dashboard');
+    const dispatched = await f.authorize(request('POST')) as { effectId: string };
+    f.backends.pieceReceipt!(f.context, dispatched.effectId, { status: 201, headers: {}, body: { id: 7 } });
+    expect(await f.authorize(request('POST'))).toEqual({ governed: true, dispatch: 'completed', result: { status: 201, headers: {}, body: { id: 7 } } });
+  });
+
+  test('inline credentials never reach the effect record or the card', async () => {
+    const secrets = ['sekret-token', 'sekret-header', 'key-1', 'q-secret', 'pw-1', 't-1', 'proxy-pw', 'basic-pw'];
+    const input = request('POST', {
+      url: 'https://user:pw-1@ops.example.test/api/logs?token=t-1&page=2',
+      headers: { Authorization: 'Bearer sekret-header', 'X-Api-Key': 'key-1', Accept: 'application/json' },
+      queryParams: { api_key: 'q-secret', page: '2' },
+      authType: 'BEARER_TOKEN', authFields: { token: 'sekret-token', password: 'basic-pw', username: 'ops' },
+      use_proxy: true, proxy_settings: { proxy_host: 'proxy.example.test', proxy_password: 'proxy-pw' },
+    });
+    const f = shipped();
+    const card = f.approvals.getRequest(approvalOf(await f.authorize(sanitizePieceInput(input, HTTP))))!;
+    const stored = JSON.stringify([listWorkflowEffects(f.run.id), card]);
+    for (const secret of secrets) expect(`${secret}: ${stored.includes(secret)}`).toBe(`${secret}: false`);
+    // Redacted, not dropped: the reviewer still sees that the request is authenticated, and the rest is kept.
+    expect(JSON.parse(card.context).target.url).toBe('https://[redacted]@ops.example.test/api/logs?token=[redacted]&page=2');
+    expect(JSON.parse(card.tool_arguments)).toMatchObject({ headers: { Authorization: '[redacted]', 'X-Api-Key': '[redacted]', Accept: 'application/json' },
+      queryParams: { api_key: '[redacted]', page: '2' }, authFields: { token: '[redacted]', password: '[redacted]', username: 'ops' } });
+    // The daemon redacts what an engine sent unredacted too.
+    closeWorkflowDb(); initWorkflowDb(':memory:');
+    const raw = shipped();
+    const rawCard = raw.approvals.getRequest(approvalOf(await raw.authorize(input)))!;
+    const rawStored = JSON.stringify([listWorkflowEffects(raw.run.id), rawCard]);
+    for (const secret of secrets) expect(`${secret}: ${rawStored.includes(secret)}`).toBe(`${secret}: false`);
+  });
+
+  test('the engine sends the redacted projection and the digest of the whole input', async () => {
+    const input = request('POST', { headers: { Authorization: 'Bearer sekret-header' } });
+    let sent: Record<string, any> = {};
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      sent = JSON.parse(String(init.body));
+      return new Response(JSON.stringify({ governed: true, dispatch: 'authorized', effectId: 'wfe_x' }), { status: 200 });
+    }) as unknown as typeof fetch;
+    await authorizePieceDispatch({ apiUrl: 'http://127.0.0.1:1', engineToken: 't', piece: HTTP, action: 'send_request',
+      stepName: 'action', executionPath: [], input, fetchImpl });
+    expect(sent.input.headers.Authorization).toBe('[redacted]');
+    expect(sent.inputDigest).toBe(await pieceInputDigest(input));
+    expect(JSON.stringify(sent)).not.toContain('sekret-header');
+  });
+
+  test('redaction is idempotent, so the daemon pass is still the identity on the engine pass', () => {
+    const long = `https://u:p@ops.example.test/${'a'.repeat(600)}?api_key=k&x=1`;
+    const input = request('POST', { url: long, headers: { Cookie: 'c=1', Accept: 'x' }, authFields: { token: 'tk' } });
+    const engine = sanitizePieceInput(input, HTTP);
+    expect(reprojectPieceInput(engine, HTTP)).toEqual(engine);
+    expect(redactHttpInput(redactHttpInput(input))).toEqual(redactHttpInput(input));
+    // Another piece's input is untouched.
+    expect(sanitizePieceInput({ headers: { Authorization: 'x' } }, GMAIL)).toEqual({ headers: { Authorization: 'x' } });
+  });
+
+  test('a cut that lands inside a redacted value keeps its note through the daemon pass', () => {
+    // Place the cut (512 characters) inside "[redacted]" for every offset into it.
+    for (let inside = 0; inside < REDACTED.length; inside++) {
+      const prefix = 'https://ops.example.test/?token=';
+      const url = `${prefix.replace('?', `${'p'.repeat(512 - prefix.length - inside)}?`)}secret-value&next=1`;
+      const engine = sanitizePieceInput(request('GET', { url }), HTTP);
+      expect(String(engine.url)).toMatch(/\.\.\. \[\d+ more characters\]$/);
+      expect(reprojectPieceInput(engine, HTTP)).toEqual(engine);
+      expect(String(engine.url)).not.toContain('secret-value');
+    }
+  });
+
+  test('credential names are matched as words: an author is content, an access token is not', () => {
+    const out = redactHttpInput(request('POST', {
+      url: 'https://x.test/?author=bob&oauth_callback_url=https%3A%2F%2Fa&accessToken=t1&sig=s1',
+      headers: { 'X-Author': 'ann', 'X-Api-Key': 'k1', accessToken: 'a1', clientSecret: 'c1', 'X-Session-Id': 'sid', Accept: 'json' },
+      body: { data: { password: 'p1', note: 'hello', authToken: 'q1' } },
+    }));
+    expect(out.url).toBe('https://x.test/?author=bob&oauth_callback_url=https%3A%2F%2Fa&accessToken=[redacted]&sig=[redacted]');
+    expect(out.headers).toEqual({ 'X-Author': 'ann', 'X-Api-Key': '[redacted]', accessToken: '[redacted]', clientSecret: '[redacted]',
+      'X-Session-Id': '[redacted]', Accept: 'json' });
+    expect(out.body).toEqual({ data: { password: '[redacted]', note: 'hello', authToken: '[redacted]' } });
+    const form = redactHttpInput(request('POST', { body_type: 'form_data', body: { data: [
+      { fieldName: 'api_key', fieldType: 'text', textFieldValue: 'f1' }, { fieldName: 'name', fieldType: 'text', textFieldValue: 'Ann' }] } }));
+    expect(form.body).toEqual({ data: [{ fieldName: 'api_key', fieldType: 'text', textFieldValue: '[redacted]' },
+      { fieldName: 'name', fieldType: 'text', textFieldValue: 'Ann' }] });
+  });
+
+  test('keys, nested body fields and a password holding an @ are redacted too', () => {
+    const out = redactHttpInput(request('POST', {
+      url: 'https://user:p@ss@ops.example.test/x?key=g1&monkey=ok',
+      headers: { key: 'k0', 'Ocp-Apim-Subscription-Key': 'k1', 'x-functions-key': 'k2' },
+      body: { data: { user: { password: 'p1', name: 'Ann' }, items: [{ token: 't1' }, { note: 'n' }] } },
+    }));
+    expect(out.url).toBe('https://[redacted]@ops.example.test/x?key=[redacted]&monkey=ok');
+    expect(out.headers).toEqual({ key: '[redacted]', 'Ocp-Apim-Subscription-Key': '[redacted]', 'x-functions-key': '[redacted]' });
+    expect(out.body).toEqual({ data: { user: { password: '[redacted]', name: 'Ann' }, items: [{ token: '[redacted]' }, { note: 'n' }] } });
+    expect(redactHttpInput(out)).toEqual(out);
+    for (const name of ['authtoken', 'AUTHTOKEN', 'apitoken', 'clientsecret', 'privatekey', 'PHPSESSID']) {
+      expect(`${name}: ${(redactHttpInput(request('GET', { headers: { [name]: 'v' } })).headers as Record<string, unknown>)[name]}`).toBe(`${name}: [redacted]`);
+    }
+  });
+
+  test('a wide input whose projection loses the method is a tracked worst case on both sides', async () => {
+    const wide = request('GET', Object.fromEntries(Array.from({ length: 45 }, (_, i) => [`a${String(i).padStart(2, '0')}`, i])));
+    let sent: Record<string, any> = {};
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      sent = JSON.parse(String(init.body));
+      return new Response(JSON.stringify({ governed: true, dispatch: 'completed', result: { status: 200 } }), { status: 200 });
+    }) as unknown as typeof fetch;
+    // The engine reads the projection it sends: the method is cut, so it takes the send's worst case and accepts a stored receipt.
+    expect(await authorizePieceDispatch({ apiUrl: 'http://127.0.0.1:1', engineToken: 't', piece: HTTP, action: 'send_request',
+      stepName: 'action', executionPath: [], input: wide, fetchImpl })).toMatchObject({ dispatch: 'completed' });
+    expect('method' in sent.input).toBe(false);
+    expect(tracksPieceCompletion(HTTP, 'send_request', sent.input)).toBe(true);
+    expect(resolveGovernedPieceAction(HTTP, 'send_request', sent.input)!.category).toBe('delete_data');
+  });
+
+  test('without its input the category is the worst case, and the method may only narrow it', () => {
+    const blind = resolveGovernedPieceAction(HTTP, 'send_request')!;
+    expect(blind).toMatchObject({ category: 'delete_data', known: true, byInput: true, categoryProps: ['method', 'body'] });
+    expect(resolveGovernedPieceAction(HTTP, 'parse_url', request('POST'))).toMatchObject({ category: 'read_data', byInput: false });
+    for (const method of ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'TRACE', 'CONNECT', '', 'x', 'get']) {
+      const narrowed = resolveGovernedPieceAction(HTTP, 'send_request', { method })!.category;
+      expect(AUTHORITY_REQUIREMENTS[narrowed]).toBeLessThanOrEqual(AUTHORITY_REQUIREMENTS[blind.category]);
+    }
+    for (const adapter of ALL_PIECE_ADAPTERS) {
+      for (const action of Object.keys(adapter.categoryFromInput ?? {})) {
+        expect(`${adapter.catalogId}/${action}: ${AUTHORITY_REQUIREMENTS[resolveGovernedPieceAction(adapter.pieceName, action)!.category]}`)
+          .toBe(`${adapter.catalogId}/${action}: ${AUTHORITY_REQUIREMENTS[adapter.unknownActionCategory]}`);
+      }
+    }
+  });
+
+  test('an HTTP receipt too large for the route keeps the status and says how much body it left out', () => {
+    const effectId = `wfe_${'a'.repeat(64)}`;
+    const small = { status: 200, headers: { a: 'b' }, body: { ok: true } };
+    expect(JSON.parse(receiptBody(HTTP, effectId, small))).toEqual({ effectId, result: small });
+    const big = { status: 201, headers: { a: 'b' }, body: 'x'.repeat(PIECE_RECEIPT_MAX_BYTES) };
+    const reduced = receiptBody(HTTP, effectId, big);
+    expect(new TextEncoder().encode(reduced).byteLength).toBeLessThanOrEqual(PIECE_RECEIPT_MAX_BYTES);
+    expect(JSON.parse(reduced)).toEqual({ effectId, result: { status: 201, headers: { a: 'b' }, body: null, receiptOmittedBodyBytes: PIECE_RECEIPT_MAX_BYTES + 2 } });
+    // Any other piece's receipt is sent as it is; the route decides.
+    expect(receiptBody(GMAIL, effectId, big)).toBe(JSON.stringify({ effectId, result: big }));
+    // A cookie the server set never reaches the durable receipt, whole or reduced.
+    const cookie = { status: 200, headers: { 'Set-Cookie': 'sid=1', 'content-type': 'x' }, body: 'ok' };
+    expect(JSON.parse(receiptBody(HTTP, effectId, cookie)).result.headers).toEqual({ 'content-type': 'x' });
+    expect(JSON.parse(receiptBody(HTTP, effectId, { ...cookie, body: 'x'.repeat(PIECE_RECEIPT_MAX_BYTES) })).result.headers).toEqual({ 'content-type': 'x' });
   });
 });

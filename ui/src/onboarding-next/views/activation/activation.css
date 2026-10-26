@@ -23,6 +23,12 @@
 .on-activation__examples { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 22px; }
 .on-activation button { font-family: inherit; font-size: 14px; line-height: 1.5; cursor: pointer; }
 .on-activation__example { min-height: 44px; padding: 10px 12px; border: 1px solid var(--on-a-edge); border-radius: 10px 0 10px 10px; color: var(--on-a-ink); background: var(--on-a-card); font-weight: 600; }
+.on-activation[data-personalized="true"] { padding-block: 24px; }
+.on-activation[data-personalized="true"] .on-activation__mark { margin-bottom: 24px; }
+.on-activation[data-personalized="true"] .on-activation__form { margin-top: 24px; }
+.on-activation__goal { margin: 0 0 20px; font-size: 18px; line-height: 1.5; }
+.on-activation__examples--personal { grid-template-columns: 1fr; }
+.on-activation__examples--personal .on-activation__example { text-align: left; }
 .on-activation__example:hover:not([aria-disabled="true"]) { background: var(--on-a-soft); }
 .on-activation__example[aria-pressed="true"] { border-color: var(--on-a-ink); }
 /* Space grows above the lower edge; input growth does not displace the actions. */

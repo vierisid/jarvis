@@ -25,6 +25,9 @@ export function parseJourney(v: unknown): Journey {
     || !member(s.completion, ['active', 'completed', 'explored', 'legacy_completed'])
     || !(s.jobId === null || id(s.jobId)) || !(s.buildRequestId === undefined || s.buildRequestId === null || id(s.buildRequestId))
     || !(s.draft === null || (object(s.draft) && id(s.draft.flowId) && id(s.draft.versionId)))) throw new Unavailable();
+  if (s.buildHistory !== undefined && (!Array.isArray(s.buildHistory) || s.buildHistory.length > 2048
+    || s.buildHistory.some(h => !object(h) || !(h.buildRequestId === null || id(h.buildRequestId))
+      || !(h.jobId === null || id(h.jobId)) || !member(h.outcome, ['failed', 'cancelled'])))) throw new Unavailable();
   if (s.stepId === 'result' && (!s.draft || !id(s.jobId) || s.activationState !== 'draft_saved')) throw new Unavailable();
   if (s.completion === 'active' && s.stepId === 'exited') throw new Unavailable();
   return structuredClone(s) as unknown as Journey;
@@ -36,8 +39,12 @@ export function released(config: Configuration): boolean {
       && config.authorizeRelease?.(Object.freeze({ ...c })) === true;
   } catch { return false; }
 }
+export function configured(config: Configuration): boolean {
+  return released(config) || (config.enabled === true && config.integration === true);
+}
 export function closure(config: Configuration, status: Status): boolean {
-  if (!released(config) || !status.enabled || !status.released || !status.supported || !status.ready || status.installMode === 'unknown' || status.reason !== 'ready') return false;
+  const authorized = (released(config) && status.released) || (config.enabled === true && config.integration === true && status.integration === true);
+  if (!authorized || !status.enabled || !status.supported || !status.ready || status.installMode === 'unknown' || status.reason !== 'ready') return false;
   if (!PROVIDERS.every(key => { const c = status.capabilities[key]; return c?.present && c.registered && c.supported && c.ready && c.reason === 'ready'; })) return false;
   if (config.modules.length !== VIEWS.length || !VIEWS.every(spec => config.modules.filter(m => validManifest(m.manifest, spec)).length === 1)) return false;
   try {

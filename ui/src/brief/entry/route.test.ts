@@ -37,9 +37,9 @@ test("every registered destination resolves without requiring another room's mod
   }
 });
 
-test("unknown or malformed Brief destinations use the existing safe fallback", () => {
+test("unknown or malformed Brief destinations explain the retained controls instead of silently opening home", () => {
   for (const path of ["missing", "__proto__", "today/extra", "today%3F", ""]) {
-    expect(resolveBriefEntry(`http://localhost/?brief=1#/brief/${path}`)).toEqual({ kind: "legacy" });
+    expect(resolveBriefEntry(`http://localhost/?brief=1#/brief/${path}`)).toEqual({ kind: "moved" });
   }
 });
 
@@ -49,9 +49,9 @@ test("source identities roundtrip without inventing a record or retaining unknow
   expect(resolveBriefEntry(url)).toEqual({ kind: "brief", route });
 });
 
-test("rollback removes only the Brief opt-in and preserves connection parameters", () => {
+test("rollback explicitly opts out and preserves connection parameters", () => {
   const next = new URL(legacyHref("https://brain.example/path?brief=1&access=sample&sidecar=desktop#/brief/workflow", "#/_room_workflows"));
-  expect(next.searchParams.has("brief")).toBe(false);
+  expect(next.searchParams.get("brief")).toBe("0");
   expect(next.searchParams.get("access")).toBe("sample");
   expect(next.searchParams.get("sidecar")).toBe("desktop");
   expect(next.pathname).toBe("/path");

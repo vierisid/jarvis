@@ -5,20 +5,34 @@ The Brief dashboard is opt-in. A normal URL still renders `AppShellV2`; `ui/src/
 
 ## Entry points
 
-- `?brief=1#/brief/<room>` opens a registered Brief room behind the existing onboarding gate. Rooms
-  without a `Body` show an explicit "not available in Brief yet" notice with a link back to the
-  current dashboard.
-- `?brief=preview#/_brief_preview` opens an isolated development preview. It starts no brain API,
-  chat WebSocket or voice connection and bypasses the onboarding gate.
+The release switch (`entry/release.ts`, `entry/release-route.ts`) is off: `BRIEF_RELEASE` has
+`rollout: "off"` and `ui/src/main.tsx` supplies no release runtime or live composition, so every
+ordinary URL renders `AppShellV2`. `scripts/brief-release/README.md` holds the integration contract,
+the release checklist and the rollback table.
+
+- Internal review needs the existing developer setting: run
+  `localStorage.setItem("jarvis-devtools", "1")` in the dashboard's origin, then reload. The setting is
+  read once per page load. With it:
+  - `?brief=1#/brief/<room>` opens a registered Brief room behind the existing onboarding gate. Rooms
+    without a `Body` show an explicit "not available in Brief yet" notice with a link back to the
+    current dashboard.
+  - `?brief=preview#/_brief_preview` opens an isolated development preview. It starts no brain API,
+    chat WebSocket or voice connection and bypasses the onboarding gate.
+- Without the developer setting, `?brief=1#/brief/<room>` and `?brief=preview` stay on `AppShellV2`.
+  A `#/brief/<room>` bookmark is rewritten before `AppShellV2` mounts: the hash becomes the matching
+  legacy room, `brief=0` is set and `briefReturn` keeps the Brief route.
 - Anything else, including every existing room, panel, task, answer and developer hash, and any URL
   with an `onboarding` query, stays with `AppShellV2`.
 
-Rollback: remove the `brief` query parameter.
+Rollback: `?brief=0` on a fresh load always opens `AppShellV2`. The "Return to current dashboard"
+links set `brief=0` rather than removing the parameter, so they also override a future default-on
+release.
 
 ## Layout
 
 - `entry/route.ts` owns the exact URL gates and the allow-listed source-ID selection. Unknown
-  destinations fall back to the current app.
+  destinations fall back to the current app. `entry/release-route.ts` applies the release switch on
+  top of it, and `entry/release.ts` assesses the release record.
 - `entry/DashboardEntry.tsx` chooses exactly one root. No thread, voice or socket provider belongs here.
 - `contracts.ts` holds presentation ports only, not domain schemas. Keep source IDs, `unavailable`
   and `empty` distinct; never infer successful data from a missing provider.
@@ -147,6 +161,42 @@ renders it, so the room's ancestors stay mounted; only the navigation chrome is 
 
 `?brief=preview&specimen=navigation#/_brief_preview` opens the shell with local fixture data. It
 starts no API read, socket or account action.
+
+## Retained navigation
+
+`navigation/` routes Brief callers to controls that stay in the current dashboard. Nothing here is
+mounted live yet; a composition root wires it after the rooms it targets are ready.
+
+- `NavigationCompatibility` (`controller.ts`) opens a destination only while the F-01
+  `navigationCompatibility` capability is enabled. Its provider is
+  `src/brief/registrations/navigation-compatibility.ts`; registering it does not enable it. Every
+  open waits for the shared dirty-draft guard, then resolves the target, so a cancel, an abort, a
+  lost capability or a newer open never navigates.
+- `destinations.ts` lists every retained destination with its owner and the exact released room or
+  Settings tab. Profile and Billing open the D-29 and D-31 rooms when they are mounted, otherwise
+  Settings > Profile and Settings > Billing. Opening a destination never runs its action. Room
+  commands that carry an action keep their canonical handler. A voice "open settings" opens the
+  Brief Settings room when it is mounted (owner decision on #1102); Advanced settings and support
+  keeps its own destination.
+- `notifications.ts` and `AttentionRoutes.tsx` route approvals, failures and updates from the existing
+  notification owner's rows, outside the conversation. A row is marked read only after its
+  destination opened, by `source` plus `id`.
+- `devices.ts` hands a device off to Settings > Sidecar with `sidecarId`. It never updates, revokes or
+  enrolls.
+- Retained links use `?briefMaintenance=1&settingsTab=<tab>#/_room_settings`. `settingsTabFromHref`
+  accepts only `ROOM_TABS.settings` names on the Settings hashes, and the room keeps the query in step
+  with the selected tab. `briefMaintenance=1` adds the support links to General.
+- An unknown `?brief=1#/brief/<room>` shows a notice with those links and a link to the current
+  dashboard, instead of silently opening the current dashboard. With the release switch off this
+  applies to the developer-setting path; an ordinary document stays on `AppShellV2` (see Entry
+  points). Under an approved release (owner decision on #1106) the notice shows only when `<room>`
+  is shaped like a room id (lower-case letters and digits in hyphen-separated words, at most 64
+  characters) and the URL passes the same opt-in rules as a known room; anything else under
+  `#/brief/` is malformed and opens the current dashboard. The developer-setting path still shows
+  the notice for any unknown `#/brief/` hash, malformed or not.
+
+`?brief=preview&specimen=navigation-compatibility#/_brief_preview` opens these parts over fixture
+notifications. It starts no API read, socket, voice or Settings write.
 
 ## Pebble workspace
 
@@ -474,13 +524,20 @@ ingredients (ready, loading, unavailable). It sends no request.
   across room, chat and sidebar changes and calls `retire()` only when the owner or workflow changes.
 - Run is the optional `port.start`: single-flight, and a lost or mismatched acknowledgement leaves it
   `uncertain` and locked for that controller. Nothing is retried or re-sent; `not_submitted` is only for
-  a request that was never sent.
-- `readRunHistory(scope, request)` is the `list` half of the port over `GET /api/workflows/:id/runs`
-  (`{ items, nextOffset }`, the offset as the cursor). It copies identity, status and time only, maps a
-  stop whose in-flight call may have completed to `uncertain`, and treats a 404 as unavailable. The
-  `detail` half is F-21's: it must build the redacted projection (step fields, effect receipts with
-  `unknown` kept distinct, waitpoints without resume URLs, Q-19 failure wording) before binding. The
-  card renders strings as text and shows `Redacted` for fields marked so; it is not a redaction layer.
+  a request that was never sent. `Check result` (`check()`, #1093) reads that same request back through
+  the optional `port.reconcile`, F-21's `GET /api/brief/workflows/:flowId/run-requests/:requestId`: an
+  accepted receipt shows and selects its run and unlocks Run; F-21's `not_found` (no run has been
+  accepted under that ID yet) unlocks Run for a new, explicit request and says that one still in
+  transit could yet start; any other answer leaves it uncertain.
+- `briefRunsPort(scope, request)` is the read half of the port, over F-21 (#1100): F-21's keyset reader
+  owns Brief run history, so `list` reads `GET /api/brief/workflows/:flowId/runs[?cursor=]` (newest
+  first, 50 a page, opaque cursor) and `detail` reads `GET /api/brief/workflows/:flowId/runs/:runId`, the
+  redacted inspection (step fields, effect receipts with `unknown` kept distinct, waitpoints without
+  resume URLs, Q-19 failure wording). The offset reader over `GET /api/workflows/:id/runs` is retired
+  for Brief. A 404 is unavailable, never an empty history. Labels are F-21's short `Run <last 6>`
+  (`Test run` for a test run); the full run ID is the label's title and a `Run ID` row in the
+  inspection. The card renders strings as text and shows `Redacted` for fields marked so; it is not a
+  redaction layer.
 - Opt-in `workflowRunsRegistration(useBinding)`, not in the production registry. `runsAvailable`
   requires a non-empty scope, flow, version and title, a `source` matching the shell mode, the routed
   flow/version, a controller bound to the same scope and the `workflowContext` capability.
@@ -717,8 +774,7 @@ actions only change local fixture state.
   settings.
 - `ConnectionsPort` is the only input. There is no live implementation on main: `createF22ConnectionsPort`
   bridges to F-22's headless setup adapter (#943) through an injected `F22Binding`, and without one it
-  returns `unsupported`. Its real-module tests are skipped unless `D27_F22_SETUP_MODULE` points at
-  F-22's `ui/src/brief/connections/setup.ts`; they run by default once F-22 is on main.
+  returns `unsupported`. Its real-module tests run against F-22's `ui/src/brief/connections/setup.ts`.
 - Connected comes only from the canonical projection: after a check the controller re-reads and
   requires the exact account (`connectionKey`) with `authenticated === true` and `availability ===
   "ready"`. A browser return or launch is never confirmation, and saved credentials show as
@@ -733,3 +789,125 @@ actions only change local fixture state.
   `connections` and `navigationCompatibility` capabilities.
 - `?brief=preview&specimen=connections#/_brief_preview` opens it over in-memory fixtures (ready,
   empty, stale, unavailable, read-only, expired, lost-start, lost-cancel, long, configured, partial).
+
+## Authority
+
+- `authority/` is the D-28 Authority room: the default authority level (1-10 slider, continuous drag,
+  integer on release, keyboard steps) and the thirteen governed-category switches. It adds no policy:
+  it edits only `default_level` and `governed_categories` through main's existing
+  `POST /api/authority/config` (Q-08 validation), and sends only the fields that changed, so
+  overrides, context rules, learning and background restrictions are never written from here.
+- Edits stay a draft until an explicit Save. Before posting, the adapter re-reads
+  `/api/authority/status` and reports a conflict if an edited field changed elsewhere (the endpoint has
+  no revision, so this narrows but does not close the race). Saved is shown only after `ok: true` and a
+  fresh readback that matches. A failed or lost response is never replayed automatically; after a
+  reload the person can choose Retry save or discard it.
+- The emergency banner comes from `EmergencyController` (`emergency_state` on the status route), not
+  the engine's startup config copy. Pause holds tool actions; Kill refuses tools and stops agent runs.
+  Pause, Kill, Resume, Reset and per-action overrides are not here: they stay in the existing controls,
+  reached through the F-25 `advanced-authority` and `emergency-controls` destinations.
+- A stored level of 0 (accepted by main's route) displays; the slider itself sets 1-10.
+- `createAuthorityPort(scopeId, host)` needs an authenticated, scope-bound `AuthorityHost`; there is no
+  live host on main. Opt-in `authorityRegistration(useBinding)`, not in the production registry. In
+  live mode `authorityAvailable` requires the `navigationCompatibility` capability and both F-25
+  destinations.
+- `?brief=preview&specimen=authority#/_brief_preview` opens it over in-memory fixtures (ready,
+  read-only, save-failure, persistence-failure, lost-response, conflict, paused, killed, unavailable,
+  error, unsupported).
+
+## Profile
+
+- `account/profile/` is the D-29 Profile form: six fields in two groups (About you, Your context).
+  Full name belongs to the sign-in provider and is shown read-only and empty; it is never sent or
+  aliased to an assistant answer. The other five edit F-23 canonical answers (`preferred_name`,
+  `company`, `work_role`, `current_projects`, `communication_preferences`), up to 4,000 characters
+  each; a blank field clears its answer. Unrelated answers and interview facts are never written.
+- It reads and writes only through `ProfilePort`. `createProfilePort(scopeId, host)`
+  (`account/profile/adapter.ts`) is the live port over F-23's `GET /api/brief/profile-settings` and
+  `PATCH /api/brief/profile-settings/profile` (default off, `JARVIS_BRIEF_PROFILE_SETTINGS`). It
+  rejects a snapshot whose six field mappings are not explicit, maps 401/403 to unavailable,
+  404/501 to unsupported and 409 to conflict, and confirms a save only from a matching receipt
+  and a matching fresh read. Without a host it is unsupported. The live room still needs the
+  `profileSettings` capability (`profileAvailable`). It does not touch `/api/user-profile`, the
+  onboarding profile writes or the vault's user-profile source. The preview fixtures drive the
+  same adapter through an in-memory host.
+- Edits stay a draft until an explicit Save, survive polls, chat/sidebar changes and remounts, and
+  are dropped only by a confirmed Cancel or leave. Saves are revision-bound partial patches; Saved
+  is shown only when the confirmed profile matches what was submitted. A failed or lost save keeps
+  the draft; Retry re-reads first and reports a conflict instead of overwriting a correction made
+  elsewhere. Permission or scope loss purges the draft.
+- Leaving with edits asks first. Install `guardProfileNavigation(shell, controller)` at the shell
+  host so the sidebar and account menu share the guard; other route sources call `navigateAway`.
+  `beforeunload` warns while a draft exists. Profile values are personal: nothing is logged or
+  shared with other rooms.
+- Opt-in `profileRegistration(useBinding)`, not in the production registry.
+- `?brief=preview&specimen=profile#/_brief_preview` opens it over in-memory fixtures (ready, empty,
+  read-only, save-failure, lost-response, conflict, unavailable, unsupported, error).
+
+## Settings and Appearance
+
+- `account/settings/` is the D-30 Settings room: Appearance, Conversation (voice), Check-ins and
+  Workspace controls. Appearance is the existing `useTheme()` owner (`ui/src/v2/shell/useTheme.ts`,
+  `jarvis-theme` in localStorage, `data-theme` on `<html>`); every mounted selector and the v2
+  top-bar toggle follow the root attribute, and a change in another tab is picked up from its
+  `storage` event by re-reading the stored value.
+- Voice saves only one of the listed canonical choices, revision-bound, and reports the saved value
+  separately from live application (applied, restart required, failed, unconfirmed). A lost or
+  failed save keeps the selection; Retry re-reads first and reports a conflict instead of
+  overwriting a change made elsewhere. Realtime voice, Authority, Connected workspace and Advanced
+  settings only navigate through host callbacks. Check-in frequency and active hours are shown as
+  unavailable. Hosted installs never expose provider setup.
+- It reads and writes only through `SettingsPort`. `createSettingsPort(scopeId, host)`
+  (`account/settings/adapter.ts`) is the live port over F-23's `GET /api/brief/profile-settings`
+  and `PATCH /api/brief/profile-settings/voice` (default off). No production host builds this
+  port or the Profile port yet (the rooms stay opt-in). A host supplies destinations, for example
+  F-25's `destinationPort(navigation).callback(id)`, and a replay that delegates only the existing
+  `tutorial` reset scope (`replayProfileSettings` in `profile-settings/actions.ts`, whose result
+  the host maps to `{ state }`). The live room needs
+  the `profileSettings` and `navigationCompatibility` capabilities and all four destination
+  callbacks (`settingsAvailable`). The preview fixtures drive the same adapter through an
+  in-memory host.
+- Replay the tutorial asks first, rechecks eligibility before it runs, and delegates only the
+  existing `tutorial` reset scope (`replayExistingTutorial` -> `POST /api/onboarding/reset`). An
+  unconfirmed result is not retried automatically.
+- Opt-in `settingsRegistration(binding)`, not in the production registry.
+- `?brief=preview&specimen=settings#/_brief_preview` opens it over in-memory fixtures (local,
+  hosted, read-only, voice-unavailable, save-failure, lost-response, conflict, restart-required,
+  apply-failure, unavailable, unsupported, error).
+
+## Billing
+
+- `account/billing/` is the D-31 Billing room: plan, AI usage, payment method and billing history.
+  It reads only the existing hosted read model: the shared `useBilling()` store (`GET /api/billing`,
+  `v2/billing/useBilling.ts`) and `useHostedBudget()` (`v2/rooms/usage/`). It adds no endpoint, no
+  plan tier, no price and no write; `account/billing/model.ts` re-validates both answers at the
+  presentation boundary because the shared hooks accept older daemon responses.
+- Every action (change plan, update card, resume, complete payment, cancel, manage, receipts) opens
+  a URL the daemon supplied in `links` or on a payment through `openExternal`, and the page reports
+  a blocked browser instead of claiming the change. Action links must be http(s) without embedded
+  credentials; receipt links must be https. Cancel stays one click away while active.
+- Loading, unavailable, stale (last read shown with its time), self-hosted, restricted and missing
+  usage are shown as such, never as a zero bill, an empty history or 0% usage. The account email is
+  shown only from the billing summary, as the existing Settings billing tab does.
+- The live Body is registered in `rooms/billing/registration.ts` and mounts only through the opt-in
+  Brief route; it never consumes a fixture, and a preview without a fixture shows "unavailable".
+- `?brief=preview&specimen=billing#/_brief_preview` opens it over in-memory fixtures (active, trial,
+  grace, past due, canceling, incomplete, restricted, blocked, no plan, self-hosted, loading,
+  missing, degraded, old response, mixed currency, multiple prices, undated charge, long history).
+  It sends no request; actions record the URL locally.
+
+## Craft verification
+
+- `verification/CraftTrace.tsx` mounts only in the fixture preview and only with `craft=1`
+  (`?brief=preview&specimen=<id>&craft=1#/_brief_preview`). It records bounded rAF intervals, click
+  and keydown timestamps (never input text), long tasks and running animations, and writes a trace
+  into a DOM output when "Capture craft trace" is pressed. It sends nothing. Live rooms and normal
+  previews mount no recorder.
+- `scripts/brief-craft/` holds the D-32 case matrix (`matrix.mjs`), the browser runner
+  (`browser.mjs`), the fail-closed report assessment (`report.mjs`, `verify.mjs`) and a loopback
+  read-only preview server (`serve.ts`). Missing rooms, states and manual checks stay in the
+  denominator as blocked cases. Fixture results never make a release ready. See
+  `scripts/brief-craft/README.md` for the runbook. The preview origin needs `jarvis-devtools=1` in
+  localStorage before the runner starts (see Entry points).
+- `verification/*.test.ts` are unit tests of the matrix, assessment and DOM observations; they run
+  in the normal suite without a browser.

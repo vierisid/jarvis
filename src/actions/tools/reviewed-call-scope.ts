@@ -48,6 +48,13 @@ export type ReviewedRemoteSnapshot = {
 export type ReviewedExecution = {
   readonly remoteBrowserSnapshot?: ReviewedRemoteSnapshot;
   /**
+   * The LOCAL controller's element-map generation when a local click, hover or
+   * type card was raised (#875). The approval guard compares it too, but before
+   * the action takes the controller's snapshot lock, so the action compares it
+   * again under that lock -- the local half of the sidecar's `elem_gen`.
+   */
+  readonly localSnapshotGen?: number;
+  /**
    * The snapshot reader that raised the card (`currentSnapshotReader` in
    * sidecar-route.ts), so a snapshot the approved call itself takes -- an
    * approved `browser_navigate` -- is recorded as THAT reader's and not as

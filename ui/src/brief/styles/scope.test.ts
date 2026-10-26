@@ -29,6 +29,11 @@ const SHEETS = [
   "../memory/stream/stream.css",
   "../memory/detail/detail.css",
   "../connections/connections.css",
+  "../authority/authority.css",
+  "../account/profile/profile.css",
+  "../account/settings/settings.css",
+  "../account/billing/billing.css",
+  "../navigation/specimen.css",
 ];
 
 function selectors(css: string): string[] {

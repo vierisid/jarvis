@@ -115,16 +115,22 @@ A hosted run also needs a spend authorization, approved by someone who can autho
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "approvedBy": "Name",
   "approvedAt": "2026-10-05",
   "validUntil": "2026-10-12",
   "profileId": "starter",
   "splits": ["development", "heldout"],
+  "tasksets": [
+    { "version": "w8-development-1", "sha256": "<taskset.sha256 from a plan run's manifest.json>" },
+    { "version": "w8-heldout-1", "sha256": "<taskset.sha256 from a plan run's manifest.json>" }
+  ],
   "maxRequests": 300,
   "maxTokens": 3000000
 }
 ```
+
+`tasksets` names each task set the spend covers by the `version` and `sha256` a run records in `manifest.json` under `taskset`; a `--mode plan` run writes that manifest without spending anything. For the sealed founder reserve, copy `version` and `sha256` from `src/workflows/evaluation/tasks/founder-reserve-1.commitment.json` instead, without opening the plaintext. A run is refused unless both match one entry, so an authorization for the 12-task w8 held-out set does not admit the 66-task founder held-out set, and an edited task set needs a new approval. A `schemaVersion: 1` authorization names no task set: it still parses, but a hosted run under it is `not_run`, with a reason naming the task set to add when reissuing it.
 
 The credential belongs in the named environment variable, not either file. The repository does not contain credentials.
 
@@ -141,7 +147,7 @@ Run development smoke first, then the frozen held-out run. Do not tune prompts a
 
 A hosted run spends money and claims to measure a deployed plan, so it does not start unless each condition below holds. A missing condition produces a `not_run` report listing every reason, and exit code 2. Malformed files are errors, exit code 1.
 
-- **Spend authorization.** Required for every hosted run. It must name this profile and split, and the run must start inside its dates. `maxRequests` counts **actual HTTP POSTs**, including provider-internal recovery and manager retries; `--max-requests` may lower it, never raise it. `maxTokens` counts input, cached input and output as the provider reports them. Both are checked before each request, so a request already in flight can exceed the token limit by its own size. A successful response that reports no usage stops the run, because spend can no longer be counted. A stop leaves the remaining tasks explicitly unrun. These are request and token limits, not an invoice or a dollar cap.
+- **Spend authorization.** Required for every hosted run. It must name this profile, split and task set (version and sha256), and the run must start inside its dates. `maxRequests` counts **actual HTTP POSTs**, including provider-internal recovery and manager retries; `--max-requests` may lower it, never raise it. `maxTokens` counts input, cached input and output as the provider reports them. Both are checked before each request, so a request already in flight can exceed the token limit by its own size. A successful response that reports no usage stops the run, because spend can no longer be counted. A stop leaves the remaining tasks explicitly unrun. These are request and token limits, not an invoice or a dollar cap.
 - **Admin evidence (held-out only).** `admin` is the unmodified control-plane export. The runner resolves plan, profile, `high` slot and upstream model from it and refuses a profile whose `intendedModel` differs. Hosting stores no profile revision, so the revision is a SHA-256 fingerprint of the resolved profile: every slot's model, reasoning effort, pricing and update time, plus the declared proxy fallbacks. Re-slotting the profile changes it; editing an unrelated profile does not. Proxy fallbacks must be listed, even as `[]`.
 - **Frozen rubric (held-out only).** `src/workflows/evaluation/rubric/workflow-release-v1.json` holds the release thresholds from the implementation roadmap. It ships as `proposed`. Freezing sets `status: "frozen"` with the date and approvers, and requires agreed per-plan budgets (requests and tokens per task, p95 composition time). A rubric dated after the run started is refused. A changed threshold is a new rubric id, not an edit. Every manifest pins the rubric and its hash, so a result cannot be re-judged against a different one.
 

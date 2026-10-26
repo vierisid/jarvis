@@ -44,7 +44,7 @@ For example, you can build workflows to prepare a client brief from connected so
 
 The brain runs on **Linux, macOS, or WSL2**, or in **Docker**. The desktop app has builds for **Windows, macOS, and Linux**. On Windows, run the brain in WSL2 or Docker and use the native Windows desktop app.
 
-You provide the infrastructure and model access. For a native brain install, install [Bun](https://bun.sh) and use the version pinned in [CI](.github/actions/bun-setup/action.yml) (currently **1.4.2**). Linux also needs libc development headers, such as `libc6-dev` on Debian/Ubuntu.
+You provide the infrastructure and model access. A native brain install needs [Bun](https://bun.sh) **1.3.11 or later**; Bun does not enforce this on `bun install -g`, so run `bun upgrade` first if yours is older. Linux also needs libc development headers, such as `libc6-dev` on Debian/Ubuntu.
 
 **1. Install and start the brain.**
 
@@ -157,7 +157,7 @@ git clone https://github.com/vierisid/jarvis.git
 cd jarvis
 bun install --frozen-lockfile
 bun run build:ui
-bun run dev
+bun run dev             # Hot-reload daemon
 ```
 
 Use the enrollment flow above to access the dashboard. From a source checkout, run brain CLI commands as `bun run bin/jarvis.ts <command>`, for example `bun run bin/jarvis.ts enroll "dev-desktop"`.

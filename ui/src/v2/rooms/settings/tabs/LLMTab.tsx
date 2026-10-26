@@ -1,3 +1,4 @@
+import { CHAT_MODEL_SUGGESTIONS } from "../../../../../../src/llm/model-catalog";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronRight, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
@@ -78,64 +79,12 @@ function pickerProviders(llm: LLMConfig): Record<string, LLMConfigProviderView> 
  * routes are loaded live because its catalog includes user-defined combos.
  */
 const MODELS_BY_KIND: Record<LLMProviderKind, string[]> = {
-  anthropic: [
-    "claude-fable-5",
-    "claude-opus-4-8",
-    "claude-sonnet-5",
-    "claude-opus-4-7",
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5-20251001",
-  ],
-  openai: [
-    // API model ids ONLY — not ChatGPT product labels. Reasoning ("thinking")
-    // is a request param (reasoning.effort), not a separate "-thinking" model,
-    // so ids like "gpt-5.4-thinking"/"gpt-5.3-instant" 404 as model_not_found.
-    "gpt-5.5",
-    "gpt-5.5-pro",
-    "gpt-5.4",
-    "gpt-5.4-pro",
-    "gpt-5.4-mini",
-    "gpt-5.4-nano",
-    "gpt-5-mini",
-    "gpt-5-nano",
-    "gpt-4.1",
-    "o3",
-    "o4-mini",
-  ],
-  groq: [
-    "openai/gpt-oss-20b",
-    "openai/gpt-oss-120b",
-    "qwen/qwen3.6-27b",
-  ],
-  gemini: [
-    "gemini-3.1-pro-preview",
-    "gemini-3-deep-think",
-    "gemini-3-flash-preview",
-    "gemini-3-1-flash-lite-preview",
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
-  ],
-  ollama: [
-    "llama3",
-    "llama3.1",
-    "llama3.2",
-    "mistral",
-    "mixtral",
-    "codellama",
-    "qwen2.5",
-    "deepseek-coder-v2",
-    "phi3",
-  ],
-  openrouter: [
-    "anthropic/claude-sonnet-4",
-    "anthropic/claude-opus-4",
-    "openai/gpt-5.4",
-    "openai/o3",
-    "google/gemini-2.5-pro",
-    "deepseek/deepseek-r1",
-    "meta-llama/llama-4-maverick",
-    "mistralai/mistral-large",
-  ],
+  anthropic: CHAT_MODEL_SUGGESTIONS.anthropic,
+  openai: CHAT_MODEL_SUGGESTIONS.openai,
+  groq: CHAT_MODEL_SUGGESTIONS.groq,
+  gemini: CHAT_MODEL_SUGGESTIONS.gemini,
+  ollama: CHAT_MODEL_SUGGESTIONS.ollama,
+  openrouter: CHAT_MODEL_SUGGESTIONS.openrouter,
   nvidia: [...NVIDIA_FALLBACK_MODELS],
   openai_compatible: [],
   litellm: [],
@@ -386,7 +335,8 @@ function ManagedUsejarvisRow() {
   );
 }
 
-function ProviderRow({
+/** Exported for its DOM test only. */
+export function ProviderRow({
   name,
   entry,
   data,
@@ -433,6 +383,9 @@ function ProviderRow({
   useEffect(() => {
     setBaseUrl(entry.base_url ?? "");
     setCustomEndpoint(optionalUrl && Boolean(entry.base_url));
+    // The saved endpoint moved under this row, so a key typed for the old one
+    // must not be sent to the new one.
+    setApiKey("");
   }, [entry.base_url, optionalUrl]);
 
   useEffect(() => {
@@ -493,6 +446,9 @@ function ProviderRow({
                 role="switch"
                 onClick={() => {
                   setCustomEndpoint((enabled) => !enabled);
+                  // Official key and gateway token are for different
+                  // destinations; neither follows the toggle (#1066).
+                  setApiKey("");
                   setBaseUrl("");
                   setTestResult(null);
                 }}
@@ -600,7 +556,8 @@ function ProviderRow({
   );
 }
 
-function NewProviderRow({
+/** Exported for its DOM test only. */
+export function NewProviderRow({
   existing,
   data,
   onToast,
@@ -648,6 +605,9 @@ function NewProviderRow({
               value={kind}
               onChange={(e) => {
                 setKind(e.target.value as LLMProviderKind);
+                // A key typed for one kind must not go to the next kind's
+                // endpoint, least of all a URL the user types (#1066).
+                setApiKey("");
                 setBaseUrl("");
                 setCustomEndpoint(false);
                 setTestResult(null);
@@ -691,6 +651,9 @@ function NewProviderRow({
               role="switch"
               onClick={() => {
                 setCustomEndpoint((enabled) => !enabled);
+                // The Anthropic key and a gateway's auth token are for
+                // different destinations (#1066).
+                setApiKey("");
                 setBaseUrl("");
                 setTestResult(null);
               }}

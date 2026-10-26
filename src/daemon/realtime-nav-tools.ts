@@ -43,14 +43,15 @@ export const REALTIME_NAV_TOOL_NAMES = new Set([
 // "matches ..." examples from the classifier are omitted to keep token cost
 // low; the GPT-5-class model infers usage from names + args).
 const ROOM_ACTION_REFERENCE = `Available actions by room (pass via dashboard_room_action):
-- settings: ${switchTab('settings')}, set_model{provider,model}, test_provider{provider}, enable_telegram, disable_telegram, enable_discord, disable_discord, set_stt_provider{provider}, enable_tts, disable_tts, set_tts_provider{provider}, set_tts_voice{voice}, set_heartbeat_interval{minutes}, set_heartbeat_aggressiveness{level: passive|moderate|aggressive}, restart_daemon, replay_onboarding{scope?: all|setup|profile|tutorial}. (Do NOT set API keys by voice.)
+- settings: ${switchTab('settings')}, set_model{provider,model}, test_provider{provider}, enable_telegram, disable_telegram, enable_discord, disable_discord, set_stt_provider{provider}, enable_tts, disable_tts, set_tts_provider{provider}, set_tts_voice{voice}, restart_daemon, replay_onboarding{scope?: all|setup|profile|tutorial}. (Do NOT set API keys by voice.)
 - tools: set_filter{filter: all|read|write|external|destructive}, search{query}, select{name}
 - workflows: create_from_nl{prompt}
 - agents: ${switchTab('agents')}, open_spawn_dialog, close_dialog, set_search{query}, spawn_agent{specialist,task?,context?}
 - content: switch_view{view: kanban|list}, search{query}, set_filter{field: stage|type, value}, select{name}, create_content{title,type?}, advance{name?}, regress{name?}, schedule{name?,when}
 - tasks: set_filter{field: status|priority|assigned_to, value}, search{query}
 - goals: ${switchTab('goals')}, set_filter{field: status|health, value}
-- memory: ${switchTab('memory')}`;
+- memory: ${switchTab('memory')}
+A "when" is a day and/or a time, like 'tomorrow at 3pm', 'friday at 10am', 'friday' or 'in an hour': an hour needs am/pm, a 24-hour clock or a part of day.`;
 // Every action named here must be one its room carries out (ROOM_ACTIONS);
 // anything else is refused before it is sent (#969), and
 // room-actions-vocabulary.test.ts holds this list to the table.

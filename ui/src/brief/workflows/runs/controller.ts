@@ -15,12 +15,13 @@ export interface RunsSnapshot {
   selectedId: string | null;
   detail: BriefReadState<RunDetail>;
   loadingMore: boolean;
-  submission: "idle" | "pending" | "accepted" | "uncertain";
+  submission: "idle" | "pending" | "accepted" | "uncertain" | "checking";
   request: ManualRunRequest | null;
   message: string;
 }
 /** One owner/flow/version lifetime. Host retains this store across room returns,
- * and retires it on owner changes. A pending/uncertain command is never replayed. */
+ * and retires it on owner changes. A pending/uncertain command is never replayed:
+ * an uncertain one is resolved only by reading its outcome back (`check`, #1093). */
 export class WorkflowRunsController {
   readonly scope: RunScope;
   private state: RunsSnapshot = {
@@ -37,6 +38,7 @@ export class WorkflowRunsController {
   private detailRequest = 0;
   private historyAbort?: AbortController;
   private detailAbort?: AbortController;
+  private checkAbort?: AbortController;
   private retired = false;
   private refreshWork?: Promise<void>;
   private moreWork?: Promise<void>;
@@ -54,8 +56,13 @@ export class WorkflowRunsController {
   constructor(
     scope: RunScope,
     readonly port: WorkflowRunsPort,
+    pending?: ManualRunRequest,
   ) {
     this.scope = { ...scope };
+    // A request journaled before a reload stays uncertain and locked until an
+    // explicit check reads its outcome back. Nothing is read or re-sent here.
+    if (pending && pending.scopeId === scope.scopeId && pending.flowId === scope.flowId && pending.versionId === scope.versionId && pending.requestId)
+      this.state = { ...this.state, submission: 'uncertain', request: pending, message: 'A previous run request was not confirmed. Check its result before starting another run.' };
   }
   getSnapshot = () => this.state;
   subscribe = (fn: () => void) => {
@@ -353,7 +360,17 @@ export class WorkflowRunsController {
       !this.retired &&
       !!this.port.start &&
       this.state.submission !== "pending" &&
-      this.state.submission !== "uncertain"
+      this.state.submission !== "uncertain" &&
+      this.state.submission !== "checking"
+    );
+  }
+  /** An uncertain request can be read back by its ID when the port can do that. */
+  get canCheck() {
+    return (
+      !this.retired &&
+      !!this.port.reconcile &&
+      this.state.submission === "uncertain" &&
+      !!this.state.request
     );
   }
   start = async () => {
@@ -373,38 +390,11 @@ export class WorkflowRunsController {
         });
         return;
       }
-      if (
-        result.status !== "accepted" ||
-        !validSummary(result.run, this.scope) ||
-        result.run.versionId !== this.scope.versionId
-      )
-        throw Error("Unconfirmed run");
-      // A pre-command history read may omit the accepted run. Retire that read
-      // before inserting its receipt; later refreshes merge against this state.
-      ++this.historyRequest;
-      this.historyAbort?.abort();
-      this.acknowledged.set(result.run.runId, result.run);
-      const page = this.page();
-      const isNew = !page?.items.some((r) => r.runId === result.run.runId);
-      this.emit({
-        submission: "accepted",
-        loadingMore: false,
-        message: "Run requested.",
-        history: {
-          status: "ready",
-          data: {
-            items: [
-              result.run,
-              ...(page?.items ?? []).filter(
-                (r) => r.runId !== result.run.runId,
-              ),
-            ],
-            total: page?.total == null ? null : page.total + (isNew ? 1 : 0),
-            nextCursor: page?.nextCursor ?? null,
-          },
-        },
-      });
-      this.select(result.run.runId);
+      if (result.status === 'rejected') {
+        this.emit({ submission: 'idle', request: null, message: result.message });
+        return;
+      }
+      this.acknowledge(result);
     } catch {
       this.emit({
         submission: "uncertain",
@@ -413,11 +403,82 @@ export class WorkflowRunsController {
       });
     }
   };
+  /** Read the uncertain request's durable outcome by its ID. Nothing is re-sent: an
+   * accepted receipt shows its run and unlocks Run; an answer that no run has been
+   * recorded for the ID yet unlocks Run for a new, explicit request (never an
+   * automatic one); anything else leaves it uncertain and locked. A missing receipt
+   * is true only when read: an original request still in transit may yet land, so
+   * the message says so rather than inviting another run. */
+  check = async () => {
+    if (!this.canCheck) return;
+    const request = this.state.request!;
+    this.checkAbort?.abort();
+    const abort = (this.checkAbort = new AbortController());
+    this.emit({ submission: "checking", message: "Checking the run request..." });
+    try {
+      const result = await this.port.reconcile!(request, abort.signal);
+      // Defensive: start and check are both locked while checking.
+      if (this.retired || this.state.request !== request) return;
+      if (result.requestId !== request.requestId)
+        throw Error("Mismatched request");
+      if (result.status === "not_recorded") {
+        this.emit({
+          submission: "idle",
+          request: null,
+          message:
+            "No run has been recorded for that request yet. If it was still on its way it could still start, so check history before running again.",
+        });
+        // Re-read history now, so a request that did land is on screen for that choice.
+        void this.refresh();
+        return;
+      }
+      this.acknowledge(result);
+    } catch {
+      if (this.retired || this.state.request !== request) return;
+      this.emit({
+        submission: "uncertain",
+        message:
+          "Run request still could not be confirmed. Check again before starting another run.",
+      });
+    }
+  };
+  private acknowledge(result: { status: string; run?: RunSummary }) {
+    if (
+      result.status !== "accepted" ||
+      !result.run ||
+      !validSummary(result.run, this.scope) ||
+      result.run.versionId !== this.scope.versionId
+    )
+      throw Error("Unconfirmed run");
+    const run = result.run;
+    // A pre-command history read may omit the accepted run. Retire that read
+    // before inserting its receipt; later refreshes merge against this state.
+    ++this.historyRequest;
+    this.historyAbort?.abort();
+    this.acknowledged.set(run.runId, run);
+    const page = this.page();
+    const isNew = !page?.items.some((r) => r.runId === run.runId);
+    this.emit({
+      submission: "accepted",
+      loadingMore: false,
+      message: "Run requested.",
+      history: {
+        status: "ready",
+        data: {
+          items: [run, ...(page?.items ?? []).filter((r) => r.runId !== run.runId)],
+          total: page?.total == null ? null : page.total + (isNew ? 1 : 0),
+          nextCursor: page?.nextCursor ?? null,
+        },
+      },
+    });
+    this.select(run.runId);
+  }
   /** Explicit owner teardown, never called merely because Pebble or a room closes. */
   retire() {
     this.retired = true;
     this.historyAbort?.abort();
     this.detailAbort?.abort();
+    this.checkAbort?.abort();
     this.listeners.clear();
   }
 }

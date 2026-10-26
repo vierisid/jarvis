@@ -16,12 +16,12 @@ import { assertRunNotCanceled } from './cancellation';
 import { withExecutionScope } from '../../actions/execution-scope';
 import { ActionOutcomeError, type ActionFailure } from '../../actions/action-outcome';
 import { getFlowRun } from '../db/repos/flow-run';
-import { createWaitpoint } from '../db/repos/waitpoint';
+import { createWaitpoint, getWaitpoint } from '../db/repos/waitpoint';
 import { claimWorkflowEffect, getWorkflowEffect, saveWorkflowEffect, type WorkflowEffect } from '../db/repos/workflow-effect';
 import { canonicalJson, digest, resolveEffectContext, type WorkflowApprovalPending, type WorkflowEffectContext } from './effect-context';
-import { substituteAboveLevel } from '../../authority/tool-action-map';
+import { aboveLevelMayAsk, governedCategoriesFor, substituteAboveLevel } from '../../authority/tool-action-map';
 import { boundedApprovalLabel } from '../../authority/approval-delivery';
-import { maxWaitingSpawnCards } from '../../agents/lifecycle-gate';
+import { budgetCap, budgetOf, deferredAhead, deferredAheadLimit, waitingWorkflowCards } from './deferred-cards';
 
 /**
  * A flow name on a card or an audit row: the same 512 the HTTP routes cap a
@@ -31,7 +31,7 @@ import { maxWaitingSpawnCards } from '../../agents/lifecycle-gate';
  */
 const WORKFLOW_NAME_LABEL_MAX_CHARS = 512;
 /** A step name on a card or an audit row: the 120 `auditRefusal` already uses. */
-const WORKFLOW_STEP_LABEL_MAX_CHARS = 120;
+export const WORKFLOW_STEP_LABEL_MAX_CHARS = 120;
 import { holdStep, PAUSED_REASON } from './emergency-hold';
 
 export interface WorkflowAuthorityDependencies {
@@ -65,6 +65,22 @@ export interface EffectInvocation {
   prepare: () => { arguments: Record<string, unknown>; target: Record<string, unknown>; bindings?: Record<string, unknown> };
   validateTarget?: (args: Record<string, unknown>, target: Record<string, unknown>) => void;
   /**
+   * Why a card could not show this effect as it would run, or null (#1040).
+   * Asked only when the decision needs a card, before one is raised: a value
+   * the card would cut or could not display is refused, typed and for good,
+   * rather than approved unseen. An effect let run without a card is not
+   * asked, since there is nothing to show it on.
+   */
+  cardRefusal?: (args: Record<string, unknown>) => string | null;
+  /**
+   * The card sentence from the frozen arguments (#1040). `prepare` puts it in
+   * the target; this gives one to a record made before that, by an earlier
+   * build, that reaches its card only now (a step held by Pause across the
+   * upgrade). The target is not part of the request digest, so no identity
+   * changes.
+   */
+  intentFor?: (args: Record<string, unknown>) => string;
+  /**
    * Q-05: recheck what the record was made against beyond its arguments and
    * target, such as the memory facts a recipient matched. Runs before the
    * policy and any approval, inside the dispatch checkpoint and, with
@@ -88,6 +104,14 @@ export interface EffectInvocation {
    * to a shell rc at the default level, #522). Absent: a shortfall denies.
    */
   aboveLevelFloor?: ActionCategory;
+  /**
+   * Narrows `aboveLevelFloor` (#953): the substitution is made only when every
+   * category denied by level is one of these AND governed for the principal
+   * (the shared governed list or its profile's), checked afresh on every
+   * recheck. Anything else denied by level stays denied. Absent: the floor
+   * alone decides, as for a gated tool.
+   */
+  aboveLevelGovernedOnly?: readonly ActionCategory[];
 }
 export type EffectReply = { result: unknown; outcome?: ActionOutcome; approval?: never } | { approval: WorkflowApprovalPending; result?: never };
 
@@ -124,37 +148,8 @@ export function closeEffectApproval(approvals: ApprovalManager | undefined, effe
   } catch (error) { console.error('[Workflow Authority] approval receipt failed:', error); }
 }
 
-/**
- * Workflow cards waiting on a decision for an act that starts an agent, from
- * runs of `flowId` (#1017). A delegation step (`workflow_delegate`), a started
- * workflow (`workflow_start`) and a delegated agent's own spawn call all ask
- * as `spawn_agent`; a stop is `terminate_agent` and is never counted.
- *
- * The flow is the source, not the run: a repeatedly triggered workflow is a
- * new run each time, so a per-run count bounds nothing. Each flow has its own
- * budget, separate from the deferred budget of each agent the lifecycle gate
- * counts, so the bound is per source as #1012 put it, not one global number.
- *
- * Only cards of runs still able to act on them count. A run that was stopped
- * or failed leaves its card pending (nothing closes it), and approving it
- * resumes nothing, so it must not use up the budget of the runs that can. A
- * card whose run no longer exists names no flow and is not counted either.
- */
-const LIVE_RUN_STATUSES: ReadonlySet<string> = new Set(['QUEUED', 'RUNNING', 'PAUSED']);
-function waitingStartCards(approvals: ApprovalManager, flowId: string): number {
-  const runs = new Map<string, string | null>();
-  const flowOf = (agentId: string): string | null => {
-    if (!agentId.startsWith('workflow:')) return null;
-    const runId = agentId.slice('workflow:'.length);
-    if (!runs.has(runId)) {
-      const run = getFlowRun(runId);
-      runs.set(runId, run && LIVE_RUN_STATUSES.has(run.status) ? run.flowId : null);
-    }
-    return runs.get(runId)!;
-  };
-  return approvals.getPending().filter((r) => r.execution_mode === 'workflow' && r.action_category === 'spawn_agent'
-    && flowOf(r.agent_id) === flowId).length;
-}
+/** Budgets for waiting workflow cards, and the steps that wait for a place: `deferred-cards.ts` (#1039). */
+export { maxWaitingWorkflowCards } from './deferred-cards';
 
 /**
  * A refusal decided before anything was dispatched (Q-19). Typed so a failed
@@ -173,11 +168,41 @@ const refused = (error: PolicyRefusal): ActionFailure =>
  * handles one as an outcome to branch on: it fails the step, even a probe's.
  */
 export const GOVERNANCE_REFUSALS: ReadonlySet<string> = new Set(['EMERGENCY_STOPPED', 'RUN_NOT_RUNNING', 'AUTHORITY_DENIED',
-  'APPROVAL_DENIED', 'APPROVAL_EXPIRED', 'APPROVAL_WITHDRAWN', 'APPROVAL_REQUIRED', 'WORKFLOW_CHANGED']);
+  'APPROVAL_DENIED', 'APPROVAL_EXPIRED', 'APPROVAL_WITHDRAWN', 'APPROVAL_REQUIRED', 'WORKFLOW_CHANGED', 'CARD_CANNOT_SHOW']);
 
 /** The durable identity of an effect: one per run, step, loop position and route. */
 export const workflowEffectId = (runId: string, stepName: string, executionPath: Array<[string, number]>, route: string) =>
   'wfe_' + digest([runId, stepName, executionPath, route]);
+
+/**
+ * The Authority decision for one effect, as the principal it runs as: every
+ * category folded, then the above-level substitution. The emergency, run and
+ * cancellation fences, and the ratchets a caller adds, are `policy()`'s.
+ */
+function judgeEffect(authority: AuthorityEngine, input: EffectInvocation, runId: string) {
+  const who = input.principal ?? { agentId: `workflow:${runId}`, agentRoleId: 'workflow-default', agentAuthorityLevel: 0, profile: null };
+  // Fold first, then ratchet. Every category the effect reaches is judged
+  // as the SAME principal -- its level and its merged profile apply to
+  // each one, not just to the nominal category -- and `combineDecisions`
+  // folds them the way the chat gate does. The fold can only tighten: it
+  // returns a denial if any category denies, else an approval if any
+  // requires one, so it can never clear an approval another category
+  // asked for. The caller's ratchet then applies to that folded result,
+  // so a gate that already required approval cannot be talked out of it
+  // by a looser recomputation here, and the fold cannot bypass it.
+  const categories = input.categories?.length ? input.categories : [input.category];
+  const check = (actionCategory: ActionCategory) => authority.checkAuthority({
+    agentId: who.agentId, agentRoleId: who.agentRoleId, agentAuthorityLevel: who.agentAuthorityLevel,
+    toolName: input.toolName, toolCategory: input.toolCategory,
+    actionCategory, temporaryGrants: new Map(), profile: who.profile ?? null });
+  const decisions = categories.map(check);
+  const folded = combineDecisions(decisions);
+  const governed = governedCategoriesFor(authority.getConfig().governed_categories, who.profile);
+  const decision = input.aboveLevelFloor && aboveLevelMayAsk(decisions, input.aboveLevelGovernedOnly, governed)
+    ? substituteAboveLevel(folded, { confirm: 'above_level', floorCategory: input.aboveLevelFloor }, check)
+    : folded;
+  return decision;
+}
 
 /** The daemon owns policy, frozen arguments, approvals and the dispatch fence. */
 export class WorkflowEffectBoundary {
@@ -256,9 +281,39 @@ export class WorkflowEffectBoundary {
       // retry, and the piece then calls the service again: recheck first. A
       // refusal is kept beside the result, which stays what it was.
       if (input.revalidateOnReplay) {
-        try { input.revalidate?.(effect); } catch (error) {
-          if (error instanceof ActionOutcomeError) { effect.replayRefusal = { outcome: error.outcome, at: Date.now() }; saveWorkflowEffect(effect); }
-          throw error;
+        try {
+          input.revalidate?.(effect);
+          // Authority is asked again too: an override, a context rule or an
+          // un-governed category added since the first dispatch stops the
+          // retry, as the checkpoint would have stopped the first one. Not for
+          // a tracked send whose receipt is recorded: its replay hands back
+          // the stored result and calls nothing.
+          if (input.route === 'piece-dispatch') return { result: effect.result, ...(effect.outcome ? { outcome: effect.outcome } : {}) };
+          const current = judgeEffect(authority, input, effect.runId);
+          if (!current.allowed) throw new PolicyRefusal('AUTHORITY_DENIED', `Authority denied ${input.toolName}: ${current.reason}`);
+          if ((current.requiresApproval || input.confirmation || input.approvalRequired) && !effect.approvalId) {
+            throw new PolicyRefusal('APPROVAL_REQUIRED', 'Workflow Authority now requires approval; effect was not dispatched');
+          }
+          // Granted is `approved`, or `executed` with a committed outcome once
+          // the first dispatch recorded its receipt (`executionState`).
+          const approval = effect.approvalId ? approvals?.getRequest(effect.approvalId) : null;
+          const granted = approval?.status === 'approved'
+            || (approval?.status === 'executed' && (approval.execution_outcome ?? 'committed') === 'committed');
+          if (effect.approvalId && !granted) {
+            throw new PolicyRefusal('APPROVAL_WITHDRAWN', 'Workflow approval is no longer approved; dispatch blocked');
+          }
+        } catch (error) {
+          const failure = error instanceof PolicyRefusal ? new ActionOutcomeError(refused(error)) : error;
+          if (failure instanceof ActionOutcomeError) { effect.replayRefusal = { outcome: failure.outcome, at: Date.now() }; saveWorkflowEffect(effect); }
+          // A refused retry is a governance decision, so the trail shows it
+          // like every other refusal, not only the effect record.
+          if (error instanceof PolicyRefusal) {
+            audit.log({ agent_id: `workflow:${effect.runId}`,
+              agent_name: `Workflow ${boundedApprovalLabel(resolved.version.displayName, WORKFLOW_NAME_LABEL_MAX_CHARS)} / ${boundedApprovalLabel(effect.stepName, WORKFLOW_STEP_LABEL_MAX_CHARS)} / ${effect.id}`,
+              tool_name: effect.toolName, action_category: input.category, authority_decision: 'denied',
+              approval_id: effect.approvalId, executed: false });
+          }
+          throw failure;
         }
       }
       return { result: effect.result, ...(effect.outcome ? { outcome: effect.outcome } : {}) };
@@ -317,25 +372,7 @@ export class WorkflowEffectBoundary {
       // rather than reading job rows here, so the boundary and the daemon's
       // other dispatch points can never disagree about whether a run is dead.
       assertRunNotCanceled(record.runId);
-      const who = input.principal ?? { agentId: `workflow:${record.runId}`, agentRoleId: 'workflow-default', agentAuthorityLevel: 0, profile: null };
-      // Fold first, then ratchet. Every category the effect reaches is judged
-      // as the SAME principal -- its level and its merged profile apply to
-      // each one, not just to the nominal category -- and `combineDecisions`
-      // folds them the way the chat gate does. The fold can only tighten: it
-      // returns a denial if any category denies, else an approval if any
-      // requires one, so it can never clear an approval another category
-      // asked for. The caller's ratchet then applies to that folded result,
-      // so a gate that already required approval cannot be talked out of it
-      // by a looser recomputation here, and the fold cannot bypass it.
-      const categories = input.categories?.length ? input.categories : [input.category];
-      const check = (actionCategory: ActionCategory) => authority.checkAuthority({
-        agentId: who.agentId, agentRoleId: who.agentRoleId, agentAuthorityLevel: who.agentAuthorityLevel,
-        toolName: input.toolName, toolCategory: input.toolCategory,
-        actionCategory, temporaryGrants: new Map(), profile: who.profile ?? null });
-      const folded = combineDecisions(categories.map(check));
-      const decision = input.aboveLevelFloor
-        ? substituteAboveLevel(folded, { confirm: 'above_level', floorCategory: input.aboveLevelFloor }, check)
-        : folded;
+      const decision = judgeEffect(authority, input, record.runId);
       if (!decision.allowed) throw new PolicyRefusal('AUTHORITY_DENIED', `Authority denied ${input.toolName}: ${decision.reason}`);
       // A capability whose UI effect cannot be described is reviewed whatever
       // the category check concluded; the card carries the uncertainty.
@@ -349,7 +386,20 @@ export class WorkflowEffectBoundary {
       return decision;
     };
     const held = holdIfPaused();
-    if (held) return held;
+    if (held) {
+      // A step released from waiting for a place (#1039) that Pause holds
+      // when it runs again keeps that place through the hold: its record
+      // names the HOLD, so only this record's own hold keeps it live
+      // (`deferred-cards.ts`), never another pass of the same step. One not
+      // yet released keeps its open DEFER, which already keeps it live.
+      if (record.deferral && !record.approvalId) {
+        const current = record.waitpointId ? getWaitpoint(record.waitpointId) : null;
+        if (!current || current.type !== 'DEFER' || current.resumedAt !== null) {
+          record.waitpointId = held.approval!.waitpointId; saveWorkflowEffect(record);
+        }
+      }
+      return held;
+    }
     // Bindings first, so a stale one is refused before anyone is asked to approve it.
     try { input.revalidate?.(record); } catch (error) {
       if (error instanceof ActionOutcomeError) {
@@ -373,20 +423,72 @@ export class WorkflowEffectBoundary {
     if (record.approvalId || decision.requiresApproval) {
       if (!approvals) throw new Error('Workflow approval service unavailable; execution denied');
       if (!record.approvalId) {
-        // A start request waits within the same per-source budget a deferred
-        // one does (#1012, #1017): the running-task cap, per flow. Refused
-        // for good, as a policy refusal is, and audited as denied, so a flood
-        // shows in the trail rather than as cards nobody can get through.
-        // Synchronous from the count to the card below, so two runs cannot
-        // both see room for the last one.
-        if (decision.actionCategory === 'spawn_agent') {
-          const waiting = waitingStartCards(approvals, record.flowId);
-          const cap = maxWaitingSpawnCards();
-          if (waiting >= cap) {
-            record.status = 'blocked'; record.decision = 'denied';
-            record.error = `${waiting} requests to start an agent or a workflow are already waiting for your decision (the limit is ${cap}). Approve or deny those in the Authority room first.`;
-            record.reason = record.error; record.finishedAt = Date.now(); saveWorkflowEffect(record);
-            log(false); throw new Error(record.error);
+        if (typeof record.target.intent !== 'string' && input.intentFor) {
+          record.target = { ...record.target, intent: input.intentFor(record.arguments) };
+        }
+        const unshowable = input.cardRefusal?.(record.arguments) ?? null;
+        if (unshowable) {
+          record.status = 'blocked'; record.decision = 'denied'; record.error = unshowable;
+          record.outcome = refused(new PolicyRefusal('CARD_CANNOT_SHOW', unshowable));
+          record.reason = record.error; record.finishedAt = Date.now(); saveWorkflowEffect(record);
+          log(false); throw new ActionOutcomeError(record.outcome);
+        }
+        // A card waits within its flow's budget (#1012, #1017, #1039): a
+        // start in the running-task cap, any other card but a stop in a
+        // budget of the same size. The budget is the one the card would be
+        // recorded in: keyed on `decision.actionCategory`, the category
+        // `createRequest` below stores as the card's `action_category`, which
+        // is what `waitingWorkflowCards` counts. Past it, or behind steps
+        // already waiting for a place, the step waits with no card instead of
+        // failing (owner, 2026-10-21): it parks on a DEFER waitpoint, which
+        // the timer releases, oldest first, once a place frees. Its record
+        // stays pending and undecided, and is judged afresh when it runs
+        // again. Synchronous from the count to the card below, so two runs
+        // cannot both see room for the last place.
+        const budget = budgetOf(decision.actionCategory);
+        if (budget) {
+          const waiting = waitingWorkflowCards(record.flowId, budget);
+          const ahead = deferredAhead(record, budget);
+          const cap = budgetCap(budget);
+          if (waiting + ahead >= cap) {
+            // Its place in the queue is kept while it waits again in the same
+            // budget. A decision that now lands in the other budget queues it
+            // at the back of that one: it never waited there.
+            const first = record.deferral?.budget !== budget;
+            if (first) record.deferral = { budget, since: Date.now() };
+            // A step the engine ran again before it parked keeps the waitpoint it already has.
+            const current = record.waitpointId ? getWaitpoint(record.waitpointId) : null;
+            getWorkflowDb().transaction(() => {
+              if (!current || current.type !== 'DEFER' || current.resumedAt !== null) {
+                record.waitpointId = createWaitpoint({ flowRunId: record.runId, projectId: record.projectId,
+                  stepName: record.stepName, type: 'DEFER' }).id;
+              }
+              // A run waits at one step at a time. A DEFER of this run's that
+              // is still open belongs to a step the run has gone past, so it
+              // is retired and holds no place (`deferred-cards.ts`): one run
+              // cannot hold several places, whatever calls reach the boundary.
+              getWorkflowDb().run(`UPDATE waitpoint SET resumed_at = ? WHERE flow_run_id = ? AND type = 'DEFER'
+                AND resumed_at IS NULL AND id <> ?`, [Date.now(), record.runId, record.waitpointId!]);
+              saveWorkflowEffect(record);
+            })();
+            // Once per wait, not per tick: a flood shows in the trail as steps
+            // that needed approval and were not run, with no card yet. Under
+            // the decision's category, as the card it stands for will be,
+            // and as the budget is counted.
+            if (first) {
+              audit.log({ agent_id: `workflow:${record.runId}`,
+                agent_name: `Workflow ${flowLabel} / ${stepLabel} / ${record.id}${judged}`,
+                tool_name: record.toolName, action_category: decision.actionCategory,
+                authority_decision: 'approval_required', approval_id: null, executed: false });
+            }
+            const queued = !ahead ? '' : ahead >= deferredAheadLimit(budget)
+              ? `, and ${ahead} or more earlier steps are waiting for a place`
+              : `, and ${ahead} earlier step${ahead === 1 ? ' is' : 's are'} waiting for a place`;
+            const hold = (budget === 'start'
+              ? `${waiting} requests to start an agent or a workflow are already waiting for your decision (the limit is ${cap})`
+              : `${waiting} requests from this workflow, other than to start or stop an agent, are already waiting for your decision (the limit is ${cap})`)
+              + `${queued}. This step waits, and asks you when one of those is approved or denied in the Authority room.`;
+            return { approval: { effectId: id, approvalId: '', waitpointId: record.waitpointId!, hold, code: 'APPROVALS_WAITING' } };
           }
         }
         let request!: ApprovalRequest;
@@ -411,6 +513,7 @@ export class WorkflowEffectBoundary {
               ...(input.confirmation ? { confirm: input.confirmation.confirm } : {}),
               ...(intent ? { intent } : {}) }), executionMode: 'workflow' });
           record.approvalId = request.id;
+          delete record.deferral;
           record.waitpointId = createWaitpoint({ flowRunId: record.runId, projectId: record.projectId,
             stepName: record.stepName, type: 'MANUAL' }).id;
           record.decision = 'approval_required'; saveWorkflowEffect(record);

@@ -125,7 +125,7 @@ export function TourView({ model, renderer, onNavigate, sidebarWidth, reducedMot
     ? Math.min(320, Math.max(0, sidebarWidth)) : model.sidebar === "rail" ? 72 : 232;
   return <div className="on-tour-frame"><section className="on-tour" data-theme={model.theme} data-sidebar={model.sidebar} data-reduced-motion={reducedMotion || undefined}
     style={{ "--on-tour-sidebar": `${inset}px` } as CSSProperties} aria-label="Workspace tutorial">
-    <div className="on-tour__sandbox-label">Tutorial sandbox · Sample content · Actions disabled</div>
+    <div className="on-tour__sandbox-label">Guided tour · Sample content · Preview only</div>
     <div className="on-tour__room" inert aria-hidden="true" data-room-id={step?.id}
       onClickCapture={event => { event.preventDefault(); event.stopPropagation(); }}
       onSubmitCapture={event => { event.preventDefault(); event.stopPropagation(); }}>

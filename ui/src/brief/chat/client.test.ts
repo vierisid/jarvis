@@ -352,3 +352,32 @@ test('acceptance in a stale window preserves a newer draft saved by another wind
   const reloaded = new BriefConversationClient(f.api, storage); cleanups.push(() => reloaded.stop()); await reloaded.start();
   expect(reloaded.store.getSnapshot().conversations[a]?.draft).toBe('New question in the other window');
 });
+
+
+test('opening an empty Pebble is serialized and retries a lost response without duplicate chats', async () => {
+  const f = fixture(); await f.client.start(); await f.open();
+  f.api.ensureActive = async () => f.repository.ensureActive();
+  const ids = await Promise.all([f.client.ensureActive(), f.client.ensureActive(), f.client.ensureActive()]);
+  expect(new Set(ids).size).toBe(1); expect(f.repository.tabs().tabs).toHaveLength(1);
+  f.sync(ids[0]!); f.client.store.setDraft(ids[0]!, 'Keep this draft');
+  expect(await f.client.ensureActive()).toBe(ids[0]);
+  expect(f.client.store.getSnapshot().conversations[ids[0]!]!.draft).toBe('Keep this draft');
+  await f.client.close(ids[0]!);
+  f.api.ensureActive = async () => { f.repository.ensureActive(); throw Error('Lost response'); };
+  await expect(f.client.ensureActive()).rejects.toThrow('Lost response');
+  const recovered = f.client.store.getSnapshot().activeId;
+  expect(recovered).not.toBeNull(); expect(f.repository.list().items).toHaveLength(2);
+  f.api.ensureActive = async () => f.repository.ensureActive();
+  expect(await f.client.ensureActive()).toBe(recovered!);
+  expect(f.repository.list().items).toHaveLength(2);
+});
+
+test('accepted first-message titles update the tab without changing its draft or selection', async () => {
+  const f = fixture(); await f.client.start(); await f.open();
+  const id = await f.client.add(); f.sync(id);
+  answer(f, id, 'launch');
+  await until(() => f.client.store.getSnapshot().conversations[id]?.conversation.title === 'Question launch');
+  expect(f.client.store.getSnapshot().activeId).toBe(id);
+  await f.client.start(); await f.open();
+  expect(f.client.store.getSnapshot().conversations[id]?.conversation.title).toBe('Question launch');
+});

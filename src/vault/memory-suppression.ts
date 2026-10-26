@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import type { Database } from 'bun:sqlite';
 import { predicateKey, valueKey } from './fact-policy';
 
@@ -57,9 +57,29 @@ export function profileSourceRef(db: Database, kind: string, field: string): str
   const edit = db.query<{ revision: string }, [string]>('SELECT revision FROM memory_profile_revisions WHERE field = ?').get(field);
   return `profile:${kind}:${field}${edit ? `:revision:${edit.revision}` : ''}`;
 }
+/** Stable identity matches the interview writer's case-insensitive deduplication. */
+export function interviewSourceRef(fact: { theme: string; summary: string }): string {
+  return 'profile:interview:' + createHash('sha256').update(JSON.stringify([
+    fact.theme.trim().toLowerCase(), fact.summary.trim().toLowerCase(),
+  ])).digest('hex');
+}
+export function interviewSourceWithheld(db: Database, fact: { theme: string; summary: string }): boolean {
+  const ref = interviewSourceRef(fact);
+  return !!db.query('SELECT 1 FROM memory_forget_suppressions WHERE source_key = ? LIMIT 1')
+    .get(automaticSourceKey(db, { source: 'user_profile', source_ref: ref, quote: fact.summary }))
+    || !!db.query(`SELECT 1 FROM fact_evidence e JOIN facts f ON f.id = e.fact_id
+      WHERE e.source = 'user_profile' AND e.source_ref = ? AND f.status = 'superseded' LIMIT 1`).get(ref);
+}
 export function profileSourceForgotten(db: Database, field: string, answer: string): boolean {
   return ['answer', 'derived'].some(kind => db.query('SELECT 1 FROM memory_forget_suppressions WHERE source_key = ? LIMIT 1')
     .get(automaticSourceKey(db, { source: 'user_profile', source_ref: profileSourceRef(db, kind, field), quote: answer })));
+}
+/** A paragraph may contain a corrected derived alias. Keep the editable source,
+ * but withhold its unchanged revision instead of reasserting it in new prompts. */
+export function profileSourceSuperseded(db: Database, field: string, answer: string): boolean {
+  return ['answer', 'derived'].some(kind => db.query(`SELECT 1 FROM fact_evidence e
+    JOIN facts f ON f.id = e.fact_id WHERE e.source = 'user_profile' AND e.source_ref = ?
+      AND e.quote = ? AND f.status = 'superseded' LIMIT 1`).get(profileSourceRef(db, kind, field), answer));
 }
 export function assertNoForgottenMemory(db: Database, ids: readonly string[]): void {
   for (const id of ids) if (db.query('SELECT 1 FROM memory_forget_receipts WHERE fact_id = ?').get(id)) {

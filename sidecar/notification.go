@@ -103,3 +103,31 @@ func notificationFromParams(params map[string]any) Notification {
 	}
 	return n
 }
+
+// notifyActionOpensChat reports whether a notification action is one that
+// only opens the app (#853). Approve/Deny act on the brain from the
+// notification itself; Dismiss/Later do nothing. The brain ignores the
+// open-the-app actions because the sidecar handles them (src/daemon/index.ts,
+// the notify.action handler), so a platform that forgot to open the chat left
+// the tap doing nothing at all, which is what macOS did before this.
+func notifyActionOpensChat(action string) bool {
+	switch action {
+	case "review", "view", "reconnect", "restart":
+		return true
+	}
+	return false
+}
+
+// dispatchNotifyAction is what every platform does with a notification tap:
+// tell the brain (so it can act on approve/deny and mark the rest seen), then
+// open the chat for the open-the-app actions. openChat is the platform's
+// tray hook; nil (the tray is not up yet) opens nothing. openChat runs on its
+// own goroutine because the callers are UI threads (the Cocoa main thread, the
+// Windows message loop) that must not block on minting a panel. The emit is
+// still synchronous, as it was on both platforms before this helper existed.
+func dispatchNotifyAction(id, kind, action string, openChat func()) {
+	notifyEmitAction(id, kind, action)
+	if openChat != nil && notifyActionOpensChat(action) {
+		go openChat()
+	}
+}

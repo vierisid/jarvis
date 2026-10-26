@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { AgentTaskManager, MAX_RUNNING_TASKS, TaskCapacityError } from './task-manager.ts';
+import { AgentTaskManager, MAX_RUNNING_TASKS, RUN_STOPPED_REASON, TaskCapacityError, TaskRunStoppedError } from './task-manager.ts';
+import { withRunOwner, type RunOwner } from '../actions/run-owner-scope.ts';
 import { AgentInstance } from './agent.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
 import { AuthorityEngine } from '../authority/engine.ts';
@@ -365,5 +366,146 @@ describe('emergency Kill stops a sub-agent run that has no signal', () => {
     });
     expect(calls).toBe(2);
     expect(result.canceled).toBe(true);
+  });
+});
+
+describe('a task started for a workflow run belongs to that run (#1018)', () => {
+  /** A runner that only returns when its task is cancelled. */
+  const untilStopped = (async (o: { signal?: AbortSignal }) => {
+    await new Promise((resolve) => o.signal?.addEventListener('abort', resolve, { once: true }));
+    return { success: false, canceled: true, response: 'stopped', toolsUsed: [], tokensUsed: { input: 0, output: 0 },
+      terminationReason: 'cancelled', messages: [] };
+  }) as unknown as ConstructorParameters<typeof AgentTaskManager>[0];
+  /**
+   * A run the test stops or ends by hand, counting who listens for that.
+   * `gone()` is the workflow turned off or deleted after the run ended: a live
+   * run would read as stopped then.
+   */
+  function run(runId = 'run-1') {
+    let state: 'live' | 'ended' | 'stopped' = 'live';
+    const listeners = new Set<() => void>();
+    const endedListeners = new Set<() => void>();
+    const owner: RunOwner = { runId, stopped: () => state === 'stopped', ended: () => state === 'ended',
+      onStopped: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
+      onEnded: (listener) => { endedListeners.add(listener); return () => endedListeners.delete(listener); } };
+    return { owner, listeners, endedListeners,
+      stop: () => { state = 'stopped'; for (const listener of [...listeners]) listener(); },
+      end: () => { state = 'ended'; for (const listener of [...endedListeners]) listener(); },
+      gone: () => { state = 'stopped'; } };
+  }
+  /**
+   * A runner whose first task waits for `next()`, then starts one nested task
+   * from inside its own async context (where the run's scope is), and then
+   * runs until cancelled. Nested tasks run until cancelled too.
+   */
+  function nestingRunner(manager: () => AgentTaskManager) {
+    let calls = 0;
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    const nested: Array<{ id?: string; error?: unknown }> = [];
+    const runner = (async (o: { signal?: AbortSignal }) => {
+      if (++calls === 1) {
+        await gate;
+        try { nested.push({ id: manager().launch(launchOptions('nested')) }); } catch (error) { nested.push({ error }); }
+      }
+      await new Promise((resolve) => o.signal?.addEventListener('abort', resolve, { once: true }));
+      return { success: false, canceled: true, response: 'stopped', toolsUsed: [], tokensUsed: { input: 0, output: 0 },
+        terminationReason: 'cancelled', messages: [] };
+    }) as unknown as ConstructorParameters<typeof AgentTaskManager>[0];
+    const startNested = async () => { open(); for (let i = 0; i < 50 && nested.length === 0; i++) await new Promise((r) => setTimeout(r, 1)); return nested[0]!; };
+    return { runner, startNested };
+  }
+  const settle = async (manager: AgentTaskManager, id: string) => {
+    for (let i = 0; i < 200 && manager.getTask(id)!.status === 'running'; i++) await new Promise((r) => setTimeout(r, 1));
+  };
+
+  test('stopping the run cancels the task, saying why, and the task stops listening', async () => {
+    const manager = new AgentTaskManager(untilStopped);
+    const r = run();
+    const id = withRunOwner(r.owner, () => manager.launch(launchOptions('wf')));
+    expect(manager.getTask(id)).toMatchObject({ status: 'running', workflowRunId: 'run-1' });
+    expect(r.listeners.size).toBe(1);
+    r.stop();
+    await settle(manager, id);
+    expect(manager.getTask(id)).toMatchObject({ status: 'cancelled', cancelRequested: RUN_STOPPED_REASON });
+    expect(manager.getTask(id)!.result!.response).toBe(`Task cancelled: ${RUN_STOPPED_REASON}`);
+    expect(r.listeners.size).toBe(0);
+  });
+
+  test('a task whose run is already stopped does not start, and leaves no record', () => {
+    const manager = new AgentTaskManager(untilStopped);
+    const r = run();
+    r.stop();
+    expect(() => withRunOwner(r.owner, () => manager.launch(launchOptions('wf')))).toThrow(TaskRunStoppedError);
+    expect(manager.listTasks()).toEqual([]);
+    expect(r.listeners.size).toBe(0);
+  });
+
+  test('a task that finishes stops listening to its run, and a later stop changes nothing', async () => {
+    const runner = controllableRunner();
+    const manager = new AgentTaskManager(runner.run);
+    const r = run();
+    const id = withRunOwner(r.owner, () => manager.launch(launchOptions('wf')));
+    runner.finishOne();
+    await settle(manager, id);
+    expect(manager.getTask(id)!.status).toBe('completed');
+    expect(r.listeners.size).toBe(0);
+    r.stop();
+    expect(manager.getTask(id)!.status).toBe('completed');
+  });
+
+  test('a task started while its run is live belongs to the run, and stopping the run cancels both', async () => {
+    let manager!: AgentTaskManager;
+    const n = nestingRunner(() => manager);
+    manager = new AgentTaskManager(n.runner);
+    const r = run();
+    const id = withRunOwner(r.owner, () => manager.launch(launchOptions('wf')));
+    const nested = await n.startNested();
+    expect(manager.getTask(nested.id!)).toMatchObject({ status: 'running', workflowRunId: 'run-1' });
+    r.stop();
+    await settle(manager, id);
+    await settle(manager, nested.id!);
+    expect([manager.getTask(id)!.status, manager.getTask(nested.id!)!.status]).toEqual(['cancelled', 'cancelled']);
+  });
+
+  test('a run that ends on its own releases its task: it keeps running, and what it starts later is its own', async () => {
+    let manager!: AgentTaskManager;
+    const n = nestingRunner(() => manager);
+    manager = new AgentTaskManager(n.runner);
+    const r = run();
+    const id = withRunOwner(r.owner, () => manager.launch(launchOptions('wf')));
+    r.end();
+    // The task stops listening to its run, and is not cancelled.
+    expect([r.listeners.size, r.endedListeners.size]).toEqual([0, 0]);
+    expect(manager.getTask(id)!.status).toBe('running');
+    // The finished workflow is turned off or deleted later: nothing the task
+    // starts now is refused for it.
+    r.gone();
+    const nested = await n.startNested();
+    expect(nested.error).toBeUndefined();
+    expect(manager.getTask(nested.id!)).toMatchObject({ status: 'running' });
+    expect(manager.getTask(nested.id!)!.workflowRunId).toBeUndefined();
+    manager.cancel(id);
+    manager.cancel(nested.id!);
+    await settle(manager, id);
+  });
+
+  test('a task started after its run already ended is not the run\'s', async () => {
+    const manager = new AgentTaskManager(untilStopped);
+    const r = run();
+    r.end();
+    const id = withRunOwner(r.owner, () => manager.launch(launchOptions('wf')));
+    expect(manager.getTask(id)!.workflowRunId).toBeUndefined();
+    expect([r.listeners.size, r.endedListeners.size]).toEqual([0, 0]);
+    manager.cancel(id);
+    await settle(manager, id);
+  });
+
+  test('a task started outside any run is not tied to one', async () => {
+    const manager = new AgentTaskManager(untilStopped);
+    const id = manager.launch(launchOptions('chat'));
+    expect(manager.getTask(id)!.workflowRunId).toBeUndefined();
+    manager.cancel(id);
+    await settle(manager, id);
   });
 });

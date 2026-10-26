@@ -254,12 +254,62 @@ jobs:
       # plain alphabet only (a newline in one could fake the listing); and
       # the version it records is the one `check` resolved. All of it before
       # anything in the checkout is touched.
+      #
+      # And its content (#1049), so a person reading the PR diff is not the
+      # only check on what a job running upstream code handed over:
+      #   * at most 100 files, 50 directories and 8 MiB, checked first. A
+      #     re-vendor of the pinned version measured 23 files, 7 directories
+      #     (the artifact root included) and 1101746 bytes (WebView2.h, 903831
+      #     bytes in git, arrives with CRLF), so all three leave room for
+      #     upstream to grow.
+      #   * the top of the vendor dir holds only what vendor-webview.sh
+      #     copies (*.go but *_test.go, *.cc, *.c, *.h, go.mod, go.sum,
+      #     LICENSE, libs/), the files it keeps (JARVIS_PATCH.md,
+      #     jarvis.patch, .gitattributes) and the UPSTREAM_VERSION it writes.
+      #     A name only starting LICENSE is refused: Go builds LICENSE.syso
+      #     or LICENSE.S by their extension (security review). libs/ holds
+      #     only headers, Go files, text and licenses, as upstream ships it.
+      #   * the kept files are main's, byte for byte (the script restores
+      #     them from main), and no other .git* file sits anywhere: a changed
+      #     .gitattributes could mark the bumped code -diff and hide it from
+      #     the person reviewing the PR (security review).
+      #   * sidecar/go.mod says what main says, directive for directive:
+      #     no new replace, toolchain, tool, godebug, go or require. Main
+      #     already has one replace (webview_go to the vendor dir), so this
+      #     compares with main rather than refusing a kind of directive. The
+      #     same re-vendor left go.mod byte for byte as it was (the module is
+      #     replaced by a local path, so its version never moves there); a
+      #     bump that needs a new requirement is for a person to make.
+      #   * the vendored go.mod adds no directive either, beyond its own go
+      #     and require lines, which only matter through sidecar/go.mod.
+      #   * sidecar/go.sum is main's, byte for byte, as that re-vendor left it.
+      # A difference is printed through cat -v, so a carriage return in the
+      # artifact cannot start a line the runner reads as a workflow command.
+      # A directive is read as Go writes it: comments dropped, spacing
+      # folded, and a block entry prefixed with its keyword.
       - name: Put the vendored tree in place
         env:
           VERSION: ${{ needs.check.outputs.version }}
         run: |
           set -euo pipefail
           in="$RUNNER_TEMP/webview-bump"
+          # Sizes from the file metadata, summed only once the count is known
+          # to be small, so a huge artifact is refused without reading it.
+          files="$(find "$in" -type f | wc -l)"
+          dirs="$(find "$in" -type d | wc -l)"
+          if [ "$files" -gt 100 ] || [ "$dirs" -gt 50 ]; then
+            echo "::error::the webview-bump artifact holds more than 100 files or 50 directories (#1049)"
+            exit 1
+          fi
+          sizes="$(find "$in" -type f -printf '%s\n')"
+          bytes=0
+          while read -r size; do
+            bytes=$((bytes + size))
+          done <<<"$sizes"
+          if [ "$bytes" -gt 8388608 ]; then
+            echo "::error::the webview-bump artifact holds more than 8 MiB (#1049)"
+            exit 1
+          fi
           if [ -n "$(find "$in" -mindepth 1 -not -type f -not -type d -print -quit)" ]; then
             echo "::error::the webview-bump artifact holds something other than files and directories"
             exit 1
@@ -278,6 +328,60 @@ jobs:
           fi
           if [ "$(cat "$in/webview_go/UPSTREAM_VERSION" 2>/dev/null)" != "$VERSION" ]; then
             echo "::error::the vendored tree records another version than ${VERSION}"
+            exit 1
+          fi
+          # Assigned first, so a find that fails stops the step (set -e)
+          # rather than leaving a test that reads as false.
+          top="$(find "$in/webview_go" -mindepth 1 -maxdepth 1 -printf '%y %f\n')"
+          libs="$(find "$in/webview_go" -mindepth 2 -type f -printf '%P\n')"
+          while read -r kind name; do
+            case "$kind $name" in
+              "d libs" | "f go.mod" | "f go.sum" | "f UPSTREAM_VERSION" | "f JARVIS_PATCH.md" | "f jarvis.patch" | "f .gitattributes" | "f LICENSE") ;;
+              "f "*_test.go) echo "::error::the vendored tree holds ${name}, a test file vendor-webview.sh does not copy (#1049)"; exit 1 ;;
+              "f "*.go | "f "*.cc | "f "*.c | "f "*.h) ;;
+              *) echo "::error::the vendored tree holds ${name}, which vendor-webview.sh does not copy (#1049)"; exit 1 ;;
+            esac
+          done <<<"$top"
+          while read -r name; do
+            case "$name" in
+              "" | libs/*_test.go) [ -z "$name" ] || { echo "::error::the vendored tree holds ${name}, a test file (#1049)"; exit 1; } ;;
+              libs/*.h | libs/*.go | libs/*.txt | libs/*/LICENSE) ;;
+              *) echo "::error::the vendored tree holds ${name}, which is not a header, Go file, text or license under libs/ (#1049)"; exit 1 ;;
+            esac
+          done <<<"$libs"
+          for f in .gitattributes jarvis.patch JARVIS_PATCH.md; do
+            if ! cmp -s "$in/webview_go/$f" "sidecar/third_party/webview_go/$f"; then
+              echo "::error::the bump changes ${f}, which vendor-webview.sh keeps from main (#1049)"
+              exit 1
+            fi
+          done
+          if [ -n "$(find "$in/webview_go" -mindepth 2 -iname '.git*' -print -quit)" ]; then
+            echo "::error::the vendored tree holds a .git file below its top, such as a .gitattributes (#1049)"
+            exit 1
+          fi
+          if ! cmp -s "$in/go.sum" sidecar/go.sum; then
+            echo "::error::the bumped sidecar/go.sum differs from main (#1049)"
+            exit 1
+          fi
+          if [ ! -f "$in/webview_go/go.mod" ]; then
+            echo "::error::the vendored tree holds no go.mod (#1049)"
+            exit 1
+          fi
+          directives() {
+            awk '{ sub(/\/\/.*/, "") } NF == 0 { next } { $1 = $1 } $0 == ")" { block = ""; next } NF == 2 && $2 == "(" { block = $1; next } block != "" { print block " " $0; next } { print }' "$1" | LC_ALL=C sort
+          }
+          main_mod="$(directives sidecar/go.mod)"
+          new_mod="$(directives "$in/go.mod")"
+          if [ "$new_mod" != "$main_mod" ]; then
+            echo "::error::the bumped sidecar/go.mod differs from main in its directives (#1049):"
+            diff <(printf '%s\n' "$main_mod") <(printf '%s\n' "$new_mod") | cat -v || true
+            exit 1
+          fi
+          main_mod="$(directives sidecar/third_party/webview_go/go.mod | awk '$1 != "go" && $1 != "require"')"
+          new_mod="$(directives "$in/webview_go/go.mod" | awk '$1 != "go" && $1 != "require"')"
+          if [ "$new_mod" != "$main_mod" ]; then
+            echo "::error::the vendored go.mod differs from main in a directive other than go and require (#1049):"
+            diff <(printf '%s\n' "$main_mod") <(printf '%s\n' "$new_mod") | cat -v || true
             exit 1
           fi
           rm -rf sidecar/third_party/webview_go
@@ -354,5 +458,5 @@ jobs:
             exit 0
           fi
           gh issue create --title "$title" --label automated,dependencies \
-            --body "The monthly webview_go update to \`${VERSION}\` failed: the patch no longer applies, the bump broke the build, or the PR could not be opened (RELEASE_PR_TOKEN unset or expired). If it is the patch, re-apply the SW_HIDE patch, regenerate \`sidecar/third_party/webview_go/jarvis.patch\`, then re-run. Run: ${RUN_URL}" \
+            --body "The monthly webview_go update to \`${VERSION}\` failed: the patch no longer applies, the bump broke the build, the artifact failed the content checks in publish (go.mod or go.sum changed, unexpected files, or too large; see the run's ::error:: line), or the PR could not be opened (RELEASE_PR_TOKEN unset or expired). If it is the patch, re-apply the SW_HIDE patch, regenerate \`sidecar/third_party/webview_go/jarvis.patch\`, then re-run. Run: ${RUN_URL}" \
             || true

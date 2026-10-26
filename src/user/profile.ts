@@ -3,6 +3,7 @@ export type UserProfileQuestionId =
   | 'pronouns'
   | 'location_timezone'
   | 'work_role'
+  | 'company'
   | 'interests'
   | 'current_projects'
   | 'goals_next_90_days'
@@ -91,6 +92,14 @@ export const USER_PROFILE_QUESTIONS: UserProfileQuestion[] = [
     description: 'Career, studies, side hustles, and the kinds of responsibilities you handle.',
     placeholder: 'e.g. founder, student, engineer, creator',
     multiline: true,
+  },
+  {
+    id: 'company',
+    step: 1,
+    step_title: 'Identity',
+    label: 'Company',
+    prompt: 'What company or organization do you work with?',
+    description: 'Assistant context, separate from your account identity and role.',
   },
   {
     id: 'interests',
