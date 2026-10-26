@@ -158,13 +158,13 @@ export const triggerHelper = {
                 await pieceTrigger.onEnable(context)
                 return {
                     listeners: appListeners,
-                    // Community polling triggers may rely on the host's default cadence.
-                    // Preserve explicit schedules; never leave an enabled poller inert.
+                    // Community polling triggers may rely on the host's default cadence:
+                    // every 5 minutes. Preserve explicit schedules; never leave an enabled
+                    // poller inert. No timezone, so Jarvis's configured timezone applies.
                     scheduleOptions: pieceTrigger.type === TriggerStrategy.POLLING ? scheduleOptions ?? {
                         type: TriggerSourceScheduleType.CRON_EXPRESSION,
-                        cronExpression: '* * * * *',
-                        timezone: 'UTC',
-                    } : undefined,
+                        cronExpression: '*/5 * * * *',
+                    } as ScheduleOptions : undefined,
                 }
             }
             case TriggerHookType.RENEW: {

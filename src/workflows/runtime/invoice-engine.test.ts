@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS, getWorkflowDb } from '../db';
 import { setEncryptionKey } from '../db/encryption';
 import { createFlow, getFlow, listFlows, setPublishedVersion, updateFlowStatus } from '../db/repos/flow';
-import { createDraftVersion, getLatestDraft, lockVersion } from '../db/repos/flow-version';
+import { createDraftVersion, getFlowVersion, getLatestDraft, lockVersion } from '../db/repos/flow-version';
 import { createFlowRun, getFlowRun, listRuns } from '../db/repos/flow-run';
 import { enqueue } from '../db/repos/job-queue';
 import { upsertConnection } from '../db/repos/app-connection';
@@ -167,6 +167,8 @@ const item=(text='Invoice INV-1 EUR 120.00',id='message-1',name='invoice.pdf')=>
 
 test('two PDFs from one email create two files and rows; duplicate/renamed/resent PDFs do not',async()=>{
   const f=await fixture(),before=stats();incoming=[item(),item('Invoice INV-2 EUR 99.00'),item(),item('Invoice INV-1 EUR 120.00','another-email','renamed.pdf')];
+  // A community poller that never sets a schedule polls every 5 minutes, in Jarvis's timezone.
+  const schedule=getFlowVersion(f.version.id)!.engineSchedule;expect(schedule?.cronExpression).toBe('*/5 * * * *');expect(schedule?.timezone).toBeUndefined();
   const runs=await f.poll();expect(runs).toHaveLength(2);for(const run of runs)expect(run.status).toBe('SUCCEEDED');
   expect(stats().map((n,i)=>n-before[i]!)).toEqual([2,2,0,2]);expect(prompts.at(-1)).toContain('Invoice INV-2 EUR 99.00');
   expect(Buffer.from(files.at(-1).file.bytes,'base64').toString()).toContain('%PDF-');
