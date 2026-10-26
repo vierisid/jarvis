@@ -14,9 +14,30 @@ export function managedSlackIssue(action: unknown, input: Record<string,unknown>
     if (!dynamic(input.threadTs) && input.threadTs && (typeof input.threadTs !== 'string' || !/^\d+\.\d{6}$/.test(input.threadTs))) return 'Use the parent message timestamp (ts) to reply in a thread.';
     if (!dynamic(input.text) && input.text != null && typeof input.text !== 'string') return 'Slack message text must be a string.';
     if (!dynamic(input.blocks) && input.blocks != null && !Array.isArray(input.blocks)) return 'Slack blocks must be an array.';
-    if (!input.text && !(Array.isArray(input.blocks) && input.blocks.length)) return 'Enter message text or blocks.';
+    if (!input.text && !dynamic(input.blocks) && !(Array.isArray(input.blocks) && input.blocks.length)) return 'Enter message text or blocks.';
   }
   return null;
+}
+
+/** Section size the published 0.23.1 piece splits message text at. */
+const SECTION_TEXT_LIMIT = 3000;
+/** The published piece renders text as mrkdwn section blocks ahead of any
+ * custom blocks. Slack treats top-level text only as a notification fallback
+ * once blocks are present, so sending text and blocks as-is would hide the
+ * reviewed text whenever both are set. */
+export function messageBlocks(input: Record<string,unknown>): unknown[] | undefined {
+  const blocks: unknown[] = [];
+  let rest = typeof input.text === 'string' ? input.text : '';
+  while (rest.length > 0) {
+    if (rest.length <= SECTION_TEXT_LIMIT) { blocks.push({type:'section',text:{type:'mrkdwn',text:rest}}); break; }
+    let cut = rest.lastIndexOf('\n', SECTION_TEXT_LIMIT);
+    if (cut <= 0) cut = rest.lastIndexOf(' ', SECTION_TEXT_LIMIT);
+    if (cut <= 0) cut = SECTION_TEXT_LIMIT;
+    blocks.push({type:'section',text:{type:'mrkdwn',text:rest.substring(0,cut)}});
+    rest = rest.substring(cut).trimStart();
+  }
+  if (Array.isArray(input.blocks)) blocks.push(...input.blocks);
+  return blocks.length ? blocks : undefined;
 }
 
 /** One POST, no SDK retries. A lost response leaves the existing completion
@@ -28,7 +49,7 @@ export async function sendManagedSlackMessage(input: Record<string,unknown>, req
     method:'POST', headers:{Authorization:'Bearer '+auth.access_token,'Content-Type':'application/json'},
     redirect:'error', signal:AbortSignal.timeout(15000),
     body:JSON.stringify({channel:input.channel, text:input.text || undefined,
-      blocks:input.blocks, thread_ts:input.threadTs || undefined,
+      blocks:messageBlocks(input), thread_ts:input.threadTs || undefined,
       reply_broadcast:input.replyBroadcast === true, unfurl_links:input.unfurlLinks !== false}),
   }); } catch { throw new Error('Slack send outcome is unknown. Check the channel before trying again.'); }
   if (!response.ok) throw new Error(response.status===429 ? 'Slack rate limited this send. Check the channel before trying again.' : 'Slack send did not finish. Check the channel before trying again.');

@@ -48,3 +48,20 @@ test('managed channel reads redact SDK transport details and completed sends nev
  await expect(executeAuthorizedPiece(params,{governed:false},execute)).rejects.toThrow('not authorized');
  expect(await executeAuthorizedPiece({...params,action:'slack_post_message'}, {governed:true,dispatch:'completed',result:{ok:true,ts:'1710304378.123456'}},execute)).toEqual({ok:true,ts:'1710304378.123456'});
 });
+test('text stays visible next to custom blocks, matching the published piece', async () => {
+ const custom = {type: 'divider'};
+ let sent: {text?: unknown; blocks?: unknown} = {};
+ const request = (async (_url: string|URL|Request, init?: RequestInit) => {
+  sent = JSON.parse(String(init?.body));
+  return Response.json({ok: true, channel: 'C123', ts: '1710304378.123456'});
+ }) as unknown as typeof fetch;
+ await sendManagedSlackMessage({...input, blocks: [custom]}, request);
+ expect(sent).toMatchObject({text: 'Hello', blocks: [{type: 'section', text: {type: 'mrkdwn', text: 'Hello'}}, custom]});
+ const long = 'a'.repeat(2990) + '\n' + 'b'.repeat(20);
+ await sendManagedSlackMessage({...input, text: long}, request);
+ expect(sent.blocks).toEqual([{type: 'section', text: {type: 'mrkdwn', text: 'a'.repeat(2990)}}, {type: 'section', text: {type: 'mrkdwn', text: 'b'.repeat(20)}}]);
+});
+test('readiness accepts blocks bound to an earlier step', () => {
+ expect(managedSlackIssue('slack_post_message', {...input, text: '', blocks: '{{build.blocks}}'}, false)).toBeNull();
+ expect(managedSlackIssue('slack_post_message', {...input, text: '', blocks: []}, false)).not.toBeNull();
+});
