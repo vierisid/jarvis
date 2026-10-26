@@ -48,7 +48,13 @@ const query=(v:Record<string,string>)=>new URLSearchParams(v).toString();
 export interface Coverage {source:string;period:string;status:'Complete'|'Unavailable';pages:number;unique:number;reason?:string;terminal:boolean;url:string}
 export interface Dataset {coverage:Coverage;totals:Record<string,{count:number;amount:string}>;excluded?:Record<string,Record<string,{count:number;amount:string}>>}
 /** Refund statuses that are reported but kept out of totals. Any other non-succeeded status makes refunds Unavailable. */
-export const EXCLUDED_REFUND_STATUSES=['pending','failed','canceled'] as const;
+export const EXCLUDED_REFUND_STATUSES=['pending','requires_action','failed','canceled'] as const;
+/** How each excluded status reads in the report: "1 pending refund", "2 refunds requiring customer action". */
+const excludedLabel=(status:string,count:number)=>{const noun=`refund${count===1?'':'s'}`;return status==='requires_action'?`${count} ${noun} requiring customer action`:`${count} ${status} ${noun}`;};
+/** All source reads together stop after this long, well inside the 600-second flow timeout, leaving time to save the Doc.
+ * A dataset not complete by then is Unavailable with this reason instead of the run timing out without a report. */
+export const SOURCE_READ_BUDGET_MS=300_000;
+export const sourceBudgetText=`${SOURCE_READ_BUDGET_MS/60000}-minute source read time budget`;
 const errText=(e:unknown)=>String((e as Error).message).replace(/[\x00-\x1f]/g,' ').slice(0,250);
 const SCALE=1000000n;
 export function decimal(v:unknown):bigint {
@@ -82,7 +88,7 @@ function stripeMoney(c:string,amount:string):string {
 }
 /** "2 pending refunds (EUR 40.00) and 1 failed refund (USD 5.00) not included" */
 export function excludedRefundsText(x:NonNullable<Dataset['excluded']>):string {
-  const items=EXCLUDED_REFUND_STATUSES.flatMap(status=>Object.entries(x[status]??{}).sort(([a],[b])=>a<b?-1:1).map(([c,t])=>`${t.count} ${status} refund${t.count===1?'':'s'} (${stripeMoney(c,t.amount)})`));
+  const items=EXCLUDED_REFUND_STATUSES.flatMap(status=>Object.entries(x[status]??{}).sort(([a],[b])=>a<b?-1:1).map(([c,t])=>`${excludedLabel(status,t.count)} (${stripeMoney(c,t.amount)})`));
   return items.length?(items.length>1?items.slice(0,-1).join(', ')+' and '+items.at(-1):items[0])+' not included':'';
 }
 function add(t:Dataset['totals'],c:string,amount:bigint){const old=t[c]??{count:0,amount:'0'};t[c]={count:old.count+1,amount:formatAmount(decimal(old.amount)+amount)};}
@@ -158,8 +164,10 @@ async function searchDeals(request:ReportRequest,s:ReportSetup,start:number,end:
   await range(start,end);return out;
 }
 function unavailable(d:Dataset,e:unknown){d.coverage.status='Unavailable';d.coverage.reason=errText(e);d.coverage.terminal=false;d.totals={};delete d.excluded;}
-export async function collectWeeklyReport(s:ReportSetup,request:ReportRequest,now:number,checkpoint:()=>void=()=>{}){
-  const weeks=reportWeeks(now,s.timezone),datasets:Dataset[]=[];
+export async function collectWeeklyReport(s:ReportSetup,source:ReportRequest,now:number,checkpoint:()=>void=()=>{},clock:()=>number=Date.now){
+  const weeks=reportWeeks(now,s.timezone),datasets:Dataset[]=[],deadline=clock()+SOURCE_READ_BUDGET_MS;
+  // No source request starts after the budget; whatever is still being read is Unavailable, never partial.
+  const request:ReportRequest=(provider,path,body)=>{if(clock()>=deadline)throw Error(`The ${sourceBudgetText} ran out before this dataset was complete; partial totals discarded`);return source(provider,path,body);};
   const wrap=async(source:string,week:typeof weeks[number],url:string,fn:(d:Dataset)=>Promise<void>)=>{
     const d:Dataset={coverage:{source,period:week.name,status:'Complete',pages:0,unique:0,terminal:false,url},totals:{}};
     try{checkpoint();await fn(d);}catch(e){checkpoint();unavailable(d,e);}datasets.push(d);
@@ -184,7 +192,7 @@ export async function collectWeeklyReport(s:ReportSetup,request:ReportRequest,no
           if(source==='payments'&&(src.object!=='charge'||src.paid!==true||src.captured!==true||src.status!=='succeeded'))throw Error('Successful captured payment cannot be confirmed');
           if(source==='refunds'&&(src.object!=='refund'||src.status!=='succeeded'&&!(EXCLUDED_REFUND_STATUSES as readonly unknown[]).includes(src.status)))throw Error('Refund status cannot be confirmed');
           const c=currency(r.currency),n=stripeAmount(r.amount,c);if((source==='payments'&&n<0n)||(source==='refunds'&&n>0n))throw Error('Unexpected transaction sign');
-          // Only succeeded refunds count; pending, failed and canceled ones are disclosed per currency instead.
+          // Only succeeded refunds count; pending, requires_action, failed and canceled ones are disclosed per currency instead.
           if(source==='refunds'&&src.status!=='succeeded'){d.excluded??={};add(d.excluded[src.status]??={},c,-n);continue;}
           add(d.totals,c,source==='refunds'?-n:n);
         }
@@ -210,8 +218,9 @@ export async function collectWeeklyReport(s:ReportSetup,request:ReportRequest,no
   const title=`Weekly Stripe and HubSpot report | ${weeks[0]!.localStart} to ${weeks[0]!.localEnd} (end exclusive)`;
   const content=[title,`Observed at: ${new Date(now).toISOString()}`,`Reporting timezone: ${s.timezone}. Weeks are Monday 00:00 to next Monday 00:00 (exclusive).`,
     ...weeks.map(w=>`${w.name}: ${w.localStart} to ${w.localEnd}; UTC [${new Date(w.start).toISOString()}, ${new Date(w.end).toISOString()})`),
-    `Stripe account ${s.stripeAccountId}, mode ${s.stripeMode}. Basis: balance transaction posting date, NOT PaymentIntent creation, capture timestamp or payout availability. Successful captured charge/payment and succeeded refund/payment_refund ledger entries only; pending, failed and canceled refunds are excluded from totals and listed per currency, and any other refund status makes refunds Unavailable; gross before Stripe fees, in Stripe BALANCE currency. Conversion may already have occurred in Stripe. Disputes, transfers, fees, refund reversals and other ledger types excluded.`,
+    `Stripe account ${s.stripeAccountId}, mode ${s.stripeMode}. Basis: balance transaction posting date, NOT PaymentIntent creation, capture timestamp or payout availability. Successful captured charge/payment and succeeded refund/payment_refund ledger entries only; pending, requiring customer action (requires_action), failed and canceled refunds are excluded from totals and listed per currency, and any other refund status makes refunds Unavailable; gross before Stripe fees, in Stripe BALANCE currency. Conversion may already have occurred in Stripe. Disputes, transfers, fees, refund reversals and other ledger types excluded.`,
     `HubSpot portal ${s.hubspotPortalId}: current nonarchived deals in selected stages ${s.dealStageIds.join(',')}, dated by ${s.dealDateProperty}. This is current record state, not a historical pipeline snapshot. Amounts use original deal_currency_code. Deals come from HubSpot CRM search filtered to each week and read twice; a window that could reach the ${HUBSPOT_SEARCH_CAP}-result search cap is split, and more than ${HUBSPOT_DEAL_LIMIT} matching deals or ${HUBSPOT_SEARCH_REQUESTS} search requests per read marks the week Unavailable.`,
+    `All Stripe and HubSpot reads together stop at a ${sourceBudgetText}; any dataset not complete by then is Unavailable. On a large account this budget is reached before the per-read page and request limits.`,
     'No FX or cross-source totals. Currency amounts are decimal strings, computed with exact scaled integers. Missing data is never zero. Complete empty datasets establish zero activity. Percentage N/A for zero/negative baselines as labelled.',
     '\nSOURCE COVERAGE',...datasets.map(({coverage:c})=>`${c.source} | ${c.period} | ${c.status}${c.reason?': '+c.reason:''} | pages ${c.pages}, unique records ${c.unique}, end confirmed ${c.terminal}. Source: ${c.url}`),
     '\nTOTALS BY SOURCE, PERIOD AND CURRENCY',...datasets.flatMap(d=>d.coverage.status==='Unavailable'?[`${d.coverage.source} | ${d.coverage.period} | Unavailable: ${d.coverage.reason}`]:[...Object.keys(d.totals).length?Object.entries(d.totals).map(([c,t])=>`${d.coverage.source} | ${d.coverage.period} | ${c} | count ${t.count} | amount ${t.amount}`):[`${d.coverage.source} | ${d.coverage.period} | 0 records; no currency inferred`],
@@ -258,7 +267,16 @@ export function validSearchBody(b:unknown):boolean {
   if(JSON.stringify(o.sorts)!==JSON.stringify(HUBSPOT_SORTS)||!Number.isSafeInteger(o.limit)||o.limit<1||o.limit>HUBSPOT_SEARCH_PAGE)return false;
   return o.after===undefined||typeof o.after==='string'&&/^\d{1,5}$/.test(o.after)&&Number(o.after)+o.limit<=HUBSPOT_SEARCH_CAP;
 }
-export function reportTransport(tokens:Record<ReportProvider,string>,checkpoint:()=>void,fetchImpl:typeof fetch=fetch,searchIntervalMs=250):ReportRequest {
+/** HubSpot limits search per account, so another run can take the shared allowance. A 429 is retried this many times,
+ * waiting Retry-After (or 1 second) when that is at most the maximum wait; a longer wait fails the request. */
+export const HUBSPOT_429_RETRIES=2,HUBSPOT_RETRY_MAX_WAIT_MS=5000,HUBSPOT_RETRY_DEFAULT_WAIT_MS=1000;
+export function retryAfterMs(header:string|null,now:number=Date.now()):number|null {
+  if(header==null||!header.trim())return HUBSPOT_RETRY_DEFAULT_WAIT_MS;
+  const v=header.trim(),ms=/^\d{1,6}$/.test(v)?Number(v)*1000:Number.isFinite(Date.parse(v))?Math.max(0,Date.parse(v)-now):NaN;
+  return Number.isFinite(ms)&&ms<=HUBSPOT_RETRY_MAX_WAIT_MS?ms:null;
+}
+const delay=(ms:number)=>new Promise<void>(r=>setTimeout(r,ms));
+export function reportTransport(tokens:Record<ReportProvider,string>,checkpoint:()=>void,fetchImpl:typeof fetch=fetch,searchIntervalMs=250,sleep:(ms:number)=>Promise<void>=delay):ReportRequest {
   const created=new Set<string>(),written=new Set<string>();let lastSearch=0;
   return async(provider,path,body)=>{
     const u=new URL('https://placeholder.invalid'+path);if(!path.startsWith('/')||path.startsWith('//')||u.hash)throw Error('Invalid report endpoint');
@@ -270,9 +288,17 @@ export function reportTransport(tokens:Record<ReportProvider,string>,checkpoint:
     if(!(read&&!body)&&!create&&!insert&&!search)throw markNotSent(Error('Report operation is outside the read/create-new-document scope'));
     try{checkpoint();}catch(e){throw markNotSent(e);}if(insert)written.add(id!);
     // HubSpot limits search to a few requests per second per token.
-    if(search){const wait=lastSearch+searchIntervalMs-Date.now();if(wait>0){await new Promise(r=>setTimeout(r,wait));try{checkpoint();}catch(e){throw markNotSent(e);}}lastSearch=Date.now();}
+    const pace=async()=>{if(!search)return;const wait=lastSearch+searchIntervalMs-Date.now();if(wait>0){await sleep(wait);try{checkpoint();}catch(e){throw markNotSent(e);}}lastSearch=Date.now();};
     const host=provider==='stripe'?'https://api.stripe.com':provider==='hubspot'?'https://api.hubapi.com':u.pathname.startsWith('/v1/documents')?'https://docs.googleapis.com':'https://www.googleapis.com';
-    const response=await fetchImpl(host+path,{method:body?'POST':'GET',headers:{Authorization:`Bearer ${tokens[provider]}`,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),redirect:'error',signal:AbortSignal.timeout(20000)});
+    let response:Response;
+    for(let attempt=0;;attempt++){
+      await pace();
+      response=await fetchImpl(host+path,{method:body?'POST':'GET',headers:{Authorization:`Bearer ${tokens[provider]}`,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),redirect:'error',signal:AbortSignal.timeout(20000)});
+      // HubSpot reads and searches change nothing, so a rate-limited one is safe to repeat after a short wait.
+      const wait=provider==='hubspot'&&response.status===429&&attempt<HUBSPOT_429_RETRIES?retryAfterMs(response.headers.get('retry-after')):null;
+      if(wait===null)break;
+      await response.body?.cancel();await sleep(wait);try{checkpoint();}catch(e){throw markNotSent(e);}
+    }
     if(!response.ok){await response.body?.cancel();const e=Error(`${provider} request failed (HTTP ${response.status})`);throw response.status>=400&&response.status<500?markNotSent(e):e;}
     const reader=response.body?.getReader();if(!reader)throw Error('Empty source response');let size=0;const chunks:Uint8Array[]=[];
     for(;;){const n=await reader.read();if(n.done)break;size+=n.value.length;if(size>4_000_000){await reader.cancel();throw Error('Source response exceeds completeness limit');}chunks.push(n.value);}

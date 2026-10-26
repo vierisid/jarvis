@@ -1,7 +1,7 @@
 import {beforeEach,afterEach,expect,test} from 'bun:test';
 import {initWorkflowDb,closeWorkflowDb} from '../db';
 import {reportReceipt} from '../db/repos/weekly-report';
-import {collectWeeklyReport,saveWeeklyReport,reportSetup,reportWeeks,localMidnight,reportTransport,decimal,comparison,hubspotSearchBody,HUBSPOT_SEARCH_PATH,isReportStep,REPORT_PIECE,REPORT_ACTION} from './weekly-report';
+import {collectWeeklyReport,saveWeeklyReport,reportSetup,reportWeeks,localMidnight,reportTransport,decimal,comparison,hubspotSearchBody,HUBSPOT_SEARCH_PATH,isReportStep,REPORT_PIECE,REPORT_ACTION,SOURCE_READ_BUDGET_MS,retryAfterMs,HUBSPOT_RETRY_MAX_WAIT_MS} from './weekly-report';
 import {nodeConnectionReferences} from '../db/repos/binding-pins';
 import {workflowSafeguards} from './workflow-safeguards';
 import {compileWorkflow} from './workflow-readiness';
@@ -132,7 +132,7 @@ test('pending, failed and canceled refunds stay out of exact totals and are disc
   expect(refunds.totals).toEqual({EUR:{count:1,amount:'2'}});
   expect(refunds.excluded).toEqual({pending:{EUR:{count:1,amount:'1'}},failed:{JPY:{count:1,amount:'5'}}});
   expect(r.content).toContain('stripe-refunds | current | Excluded from totals: 1 pending refund (EUR 1.00) and 1 failed refund (JPY 5) not included');
-  expect(r.content).toContain('pending, failed and canceled refunds are excluded from totals');
+  expect(r.content).toContain('pending, requiring customer action (requires_action), failed and canceled refunds are excluded from totals');
   expect(r.comparisons.find(c=>c.source==='stripe-refunds'&&c.currency==='EUR')).toMatchObject({current:{count:1,amount:'2'}});
   expect(r.comparisons.some(c=>c.source==='stripe-refunds'&&c.currency==='JPY')).toBe(false);
   const all=await collectWeeklyReport(setup,reportFixtureRequest({refundStatus:n=>n===3?'canceled':'pending'}),now);
@@ -140,7 +140,7 @@ test('pending, failed and canceled refunds stay out of exact totals and are disc
   expect(all.content).toContain('stripe-refunds | current | 0 records; no currency inferred\nstripe-refunds | current | Excluded from totals: 2 pending refunds (EUR 3.00) and 1 canceled refund (JPY 5) not included');
 });
 test('an unknown refund status makes refunds unavailable instead of dropping the refund',async()=>{
-  for(const status of ['requires_action','refunded',undefined,null]){
+  for(const status of ['refunded','requires_capture','',undefined,null]){
     const r=await collectWeeklyReport(setup,reportFixtureRequest({refundStatus:n=>n===2?status as any:'succeeded'}),now);
     expect(r.datasets[1]!.coverage).toMatchObject({status:'Unavailable',reason:'Refund status cannot be confirmed'});expect(r.datasets[1]!.totals).toEqual({});expect(r.datasets[1]!.excluded).toBeUndefined();
     expect(r.datasets[0]!.coverage.status).toBe('Complete');expect(r.partial).toBe(true);
@@ -222,4 +222,50 @@ test('every check treats a short report piece name as the report step; readiness
   const evil=graph('@evil/piece-jarvis-report');
   expect(isReportStep(evil.nextAction.settings)).toBe(false);
   expect(workflowSafeguards(evil).safeguards.map(x=>x.kind)).not.toContain('weekly-source-scope');
+});
+test('refunds requiring customer action are excluded from totals and disclosed like pending ones',async()=>{
+  const r=await collectWeeklyReport(setup,reportFixtureRequest({refundStatus:n=>n===2?'requires_action':'succeeded'}),now),refunds=r.datasets[1]!;
+  expect(refunds.coverage.status).toBe('Complete');
+  expect(refunds.totals).toEqual({EUR:{count:1,amount:'1'},JPY:{count:1,amount:'5'}});
+  expect(refunds.excluded).toEqual({requires_action:{EUR:{count:1,amount:'2'}}});
+  expect(r.content).toContain('stripe-refunds | current | Excluded from totals: 1 refund requiring customer action (EUR 2.00) not included');
+  const mixed=await collectWeeklyReport(setup,reportFixtureRequest({refundStatus:n=>n===3?'pending':'requires_action'}),now);
+  expect(mixed.content).toContain('Excluded from totals: 1 pending refund (JPY 5) and 2 refunds requiring customer action (EUR 3.00) not included');
+});
+test('source reads stop at the time budget; unfinished datasets are Unavailable and the report is still saved',async()=>{
+  let t=0,late=0,jumped=false;const calls:string[]=[];
+  const fixture=reportFixtureRequest({calls});
+  const req:typeof fixture=async(p,path,body)=>{
+    if(jumped)late++;
+    // The first HubSpot search of the current week takes the clock past the budget.
+    if(p==='hubspot'&&path===HUBSPOT_SEARCH_PATH&&!jumped){jumped=true;t+=SOURCE_READ_BUDGET_MS;}
+    return fixture(p,path,body);
+  };
+  const r=await collectWeeklyReport(setup,req,now,()=>{},()=>t);
+  expect(late).toBe(0);
+  const status=r.datasets.map(d=>`${d.coverage.source}/${d.coverage.period}/${d.coverage.status}`);
+  expect(status).toEqual(['stripe-payments/current/Complete','stripe-refunds/current/Complete','hubspot-deals/current/Unavailable','stripe-payments/prior/Unavailable','stripe-refunds/prior/Unavailable','hubspot-deals/prior/Unavailable']);
+  for(const d of r.datasets.slice(2)){expect(d.coverage.reason).toContain('5-minute source read time budget ran out');expect(d.totals).toEqual({});}
+  expect(r.partial).toBe(true);expect(r.content).toContain('stop at a 5-minute source read time budget');
+  expect((await saveWeeklyReport(setup,r,fixture,reportReceipt('budget'),'budget')).complete).toBe(true);
+  // Within the budget nothing is affected.
+  t=0;expect((await collectWeeklyReport(setup,reportFixtureRequest(),now,()=>{},()=>t+=1000)).partial).toBe(false);
+});
+test('HubSpot 429 is retried a bounded number of times honouring Retry-After',async()=>{
+  const run=async(responses:Array<()=>Response>,provider:'hubspot'|'stripe'='hubspot')=>{
+    const waits:number[]=[];let n=0;
+    const req=reportTransport({stripe:'x',hubspot:'x',google:'x'},()=>{},(async()=>responses[Math.min(n++,responses.length-1)]!()) as any,0,async ms=>{waits.push(ms);});
+    const path=provider==='hubspot'?HUBSPOT_SEARCH_PATH:'/v1/account',body=provider==='hubspot'?hubspotSearchBody(setup,1000,2000):undefined;
+    const out=await req(provider,path,body).then(v=>v,e=>e as Error);return {out,waits,fetches:n};
+  };
+  const limited=(after?:string)=>()=>new Response('{}',{status:429,headers:after===undefined?{}:{'Retry-After':after}}),ok=()=>Response.json({total:0,results:[]});
+  expect(await run([limited('2'),ok])).toEqual({out:{total:0,results:[]},waits:[2000],fetches:2});
+  expect(await run([limited(),limited('0'),ok])).toEqual({out:{total:0,results:[]},waits:[1000,0],fetches:3});
+  const exhausted=await run([limited('1')]);expect(exhausted.fetches).toBe(3);expect(exhausted.waits).toEqual([1000,1000]);expect((exhausted.out as Error).message).toContain('HTTP 429');
+  const tooLong=await run([limited('60'),ok]);expect(tooLong.fetches).toBe(1);expect(tooLong.waits).toEqual([]);expect((tooLong.out as Error).message).toContain('HTTP 429');
+  const stripe=await run([limited('1'),()=>Response.json({id:'acct'})],'stripe');expect(stripe.fetches).toBe(1);
+  expect(retryAfterMs(new Date(10_000).toUTCString(),7_000)).toBe(3000);expect(retryAfterMs('soon')).toBeNull();expect(retryAfterMs(String(HUBSPOT_RETRY_MAX_WAIT_MS/1000+1))).toBeNull();
+  // Cancellation during the wait stops the retry and is known not to have been re-sent.
+  let checks=0;const cancelled=reportTransport({stripe:'x',hubspot:'x',google:'x'},()=>{if(++checks>1)throw Error('Cancelled');},(async()=>limited('1')()) as any,0,async()=>{});
+  await expect(cancelled('hubspot',HUBSPOT_SEARCH_PATH,hubspotSearchBody(setup,1000,2000))).rejects.toThrow('Cancelled');
 });
