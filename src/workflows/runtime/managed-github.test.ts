@@ -48,6 +48,13 @@ test('wrong issue, repository, incomplete search and unconfirmed changes fail cl
   expect(result).toMatchObject({found: true, has_more: true, result: [{number: 42}]});
   expect(await runManagedGitHubAction('find_issue', input, fake(async () => Response.json({total_count: 0, items: [], incomplete_results: false})))).toMatchObject({found: false, result: []});
 });
+test('ordinary dots in repository names and titles are preserved', async () => {
+  const result = await runManagedGitHubAction('find_issue', {...input, repository: {owner: 'octocat', repo: 'sandbox..test'}, title: 'Loading...'}, fake(async url => {
+    expect(new URL(url).searchParams.get('q')).toBe('repo:octocat/sandbox..test is:issue in:title "Loading..." state:open');
+    return Response.json({total_count: 0, items: [], incomplete_results: false});
+  }));
+  expect(result).toMatchObject({found: false});
+});
 test('network/provider failures and oversized or broken bodies do not retry or leak', async () => {
   for (const failure of ['network','429','401','403','404','500','json','large','stream']) {
     let calls = 0;

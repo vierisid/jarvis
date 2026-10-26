@@ -33,7 +33,7 @@ export interface GitHubAuth {access_token: string}
 export class GitHubRequestError extends Error {constructor(message: string, readonly status: number) {super(message);}}
 export async function githubJson(path: string, auth: GitHubAuth, init: RequestInit = {}, request: typeof fetch = fetch): Promise<unknown> {
   if (!auth || typeof auth.access_token !== 'string' || !auth.access_token || auth.access_token.length > 16384) throw new GitHubRequestError('Reconnect GitHub.', 401);
-  if (!/^(?:repos\/|user\/repos\?|search\/issues\?)/.test(path) || path.includes('..') || path.includes('#') || path.includes('\\')) throw new GitHubRequestError('Invalid GitHub endpoint.', 400);
+  if (!/^(?:repos\/|user\/repos\?|search\/issues\?)/.test(path) || path.split('?')[0]!.split('/').some(part => part === '.' || part === '..') || path.includes('#') || path.includes('\\')) throw new GitHubRequestError('Invalid GitHub endpoint.', 400);
   let response: Response;
   try {response = await request('https://api.github.com/' + path, {...init, redirect: 'error', signal: AbortSignal.timeout(15000),
     headers: {Authorization: 'Bearer ' + auth.access_token, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'Jarvis'}});}
