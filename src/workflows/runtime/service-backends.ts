@@ -1,6 +1,6 @@
-import { hubspotContactInput, isHubspotContact, upsertHubspotContact } from './hubspot-contact';
+import { HubspotWriteRefusedError, hubspotContactInput, isHubspotContact, upsertHubspotContact } from './hubspot-contact';
 import { getConnection } from '../db/repos/app-connection';
-import { claimIdentity, completeIdentity, IdentityUnresolvedError } from '../db/repos/effect-identity';
+import { claimIdentity, completeIdentity, IdentityUnresolvedError, releaseIdentity } from '../db/repos/effect-identity';
 import { workflowBrowserRead, workflowBrowserReview } from '../../authority/ui-intent';
 import { runAsReviewed } from '../../actions/tools/reviewed-call-scope';
 import { withWorkflowMemory } from '../../vault/memory-use-context';
@@ -81,6 +81,24 @@ import { providerOutcome } from '../../failures/evidence.ts';
 import { escapedLiteralForCard, forCard, withoutCardInvisibles } from '../../util/card-text.ts';
 import { AGENT_TASK_MAX_CHARS, checkSpecialistId, SPECIALIST_ID_MAX_CHARS } from '../../actions/tools/agents.ts';
 import { boundedApprovalLabel } from '../../authority/approval-delivery';
+
+/** Claim a cross-run identity, waiting briefly while a competing claim is
+ * still dispatching. Never steals an unresolved claim: a crash can leave an
+ * uncertain provider effect behind. A claim that stays unresolved stops this
+ * effect before it starts, typed as not started. */
+async function claimSettledIdentity(identity: string, owner: string, once: boolean, checkpoint: () => void): Promise<'claimed' | 'duplicate'> {
+  const deadline = Date.now() + 2000;
+  for (;;) {
+    checkpoint();
+    try { return claimIdentity(identity, owner, once); }
+    catch (error) {
+      if (!(error instanceof IdentityUnresolvedError)) throw error;
+      if (getWorkflowEffect(error.owner)?.status !== 'dispatching' || Date.now() >= deadline)
+        throw new ActionOutcomeError({ status: 'blocked', code: 'IDENTITY_UNRESOLVED', message: error.message, effect: 'not_started' });
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
+}
 
 export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependencies {
   /** Test transport injection; production always uses the fixed HubSpot host. */
@@ -407,38 +425,51 @@ export function buildSandboxServiceBackends(
         const identity = notifyKey && currentRun ? digest(['workflow-notify-v1',ctx.projectId,currentRun.flowId,notifyKey]) : null;
         const owner = workflowEffectId(ctx.runId,ctx.stepName!,ctx.executionPath ?? [],'notify');
         checkpoint();
-        if (identity && claimIdentity(identity,owner,true) === 'duplicate') return { delivered: [], failed: [], unknown: [], deduplicated: true };
-        const recipients = args.recipients as Record<string, string | null>;
-        const guardedNotifier = new JarvisNotifierAdapter({ ...notifierDeps,
-          broadcastToDashboard: (text, priority) => { checkpoint(); return opts.wsService.broadcastNotificationToDashboard(text, priority); },
-          broadcastToChannels: async (channels, text) => {
-            const report: ChannelDeliveryReport = { delivered: [], failed: [], unknown: [] };
-            for (const channel of channels) {
-              try { checkpoint(); } catch (error) { report.failed.push({ channel, error: (error as Error).message }); continue; }
-              try {
-                await opts.channelService.sendWorkflowNotification(channel, recipients[channel] ?? null, text);
-                report.delivered.push(channel);
-              } catch (error) {
-                // Q-19: a send that may have arrived is reported unknown, never as not sent.
-                (sendMayHaveArrived(error) ? report.unknown : report.failed).push({ channel, error: (error as Error).message });
+        if (identity && await claimSettledIdentity(identity,owner,true,checkpoint) === 'duplicate') return { delivered: [], failed: [], unknown: [], deduplicated: true };
+        // The notifier reports a thrown dashboard, voice or desktop send as
+        // failed, but it may have reached someone: such a key stays consumed.
+        let mayHaveArrived = false;
+        const sent = <T>(send: () => T): T => {
+          try { const result = send(); if (result instanceof Promise) result.catch(() => { mayHaveArrived = true; }); return result; }
+          catch (error) { mayHaveArrived = true; throw error; }
+        };
+        try {
+          const recipients = args.recipients as Record<string, string | null>;
+          const guardedNotifier = new JarvisNotifierAdapter({ ...notifierDeps,
+            broadcastToDashboard: (text, priority) => { checkpoint(); return sent(() => opts.wsService.broadcastNotificationToDashboard(text, priority)); },
+            broadcastToChannels: async (channels, text) => {
+              const report: ChannelDeliveryReport = { delivered: [], failed: [], unknown: [] };
+              for (const channel of channels) {
+                try { checkpoint(); } catch (error) { report.failed.push({ channel, error: (error as Error).message }); continue; }
+                try {
+                  await opts.channelService.sendWorkflowNotification(channel, recipients[channel] ?? null, text);
+                  report.delivered.push(channel);
+                } catch (error) {
+                  // Q-19: a send that may have arrived is reported unknown, never as not sent.
+                  (sendMayHaveArrived(error) ? report.unknown : report.failed).push({ channel, error: (error as Error).message });
+                }
               }
-            }
-            return report;
-          },
-          sendVoice: async text => { checkpoint(); return (await opts.wsService.broadcastProactiveVoice(text)) > 0; },
-          ...(opts.sendDesktop ? { sendDesktop: async (title: string, body: string) => { checkpoint(); return opts.sendDesktop!(title, body); } } : {}),
-        });
-        const report = await guardedNotifier.notify({ message: args.message as string, channels: args.channels as any, priority: args.priority as any,
-          ...(args.autoDashboard === true ? { autoDashboard: true } : {}) });
-        // Q-19, owner decision: the step reports each channel and fails only
-        // when nothing was sent anywhere. A channel that may have taken it
-        // counts as sent: failing would invite a resend that could repeat it.
-        if (report.delivered.length === 0 && report.unknown.length === 0) {
-          throw new DeliveryFailedError({ status: 'error', code: 'DELIVERY_FAILED', effect: 'not_started',
-            message: `Not sent on any channel: ${report.failed.map(f => `${f.channel} (${f.error})`).join('; ')}` }, report);
+              return report;
+            },
+            sendVoice: async text => { checkpoint(); return (await sent(() => opts.wsService.broadcastProactiveVoice(text))) > 0; },
+            ...(opts.sendDesktop ? { sendDesktop: async (title: string, body: string) => { checkpoint(); return sent(() => opts.sendDesktop!(title, body)); } } : {}),
+          });
+          const report = await guardedNotifier.notify({ message: args.message as string, channels: args.channels as any, priority: args.priority as any,
+            ...(args.autoDashboard === true ? { autoDashboard: true } : {}) });
+          // Q-19, owner decision: the step reports each channel and fails only
+          // when nothing was sent anywhere. A channel that may have taken it
+          // counts as sent: failing would invite a resend that could repeat it.
+          if (report.delivered.length === 0 && report.unknown.length === 0) {
+            throw new DeliveryFailedError({ status: 'error', code: 'DELIVERY_FAILED', effect: 'not_started',
+              message: `Not sent on any channel: ${report.failed.map(f => `${f.channel} (${f.error})`).join('; ')}` }, report);
+          }
+          if (identity) completeIdentity(identity,owner);
+          return report;
+        } catch (error) {
+          // Definitely sent on no channel: the key was not consumed, so a later run may alert.
+          if (identity && error instanceof DeliveryFailedError && !mayHaveArrived) releaseIdentity(identity,owner);
+          throw error;
         }
-        if (identity) completeIdentity(identity,owner);
-        return report;
       },
     });
     return reply.approval ? { delivered: [], failed: [], unknown: [], approval: reply.approval } : reply.result as Awaited<ReturnType<NotifyFn>>;
@@ -1054,18 +1085,16 @@ export function buildSandboxServiceBackends(
           const values = hubspotContactInput(args);
           const identity = digest(['hubspot-contact-v1',ctx.projectId,connection.id,values.email]);
           const owner = workflowEffectId(ctx.runId,ctx.stepName!,ctx.executionPath ?? [],route);
-          // Wait briefly for a competing live write. Never steal an expired
-          // lease: a process crash can leave an uncertain provider write behind.
-          const deadline = Date.now() + 2000;
-          for (;;) {
-            checkpoint();
-            try { claimIdentity(identity, owner, false); break; }
-            catch (error) {
-              if (!(error instanceof IdentityUnresolvedError) || getWorkflowEffect(error.owner)?.status !== 'dispatching' || Date.now() >= deadline) throw error;
-              await new Promise(resolve => setTimeout(resolve, 25));
-            }
+          await claimSettledIdentity(identity, owner, false, checkpoint);
+          let result: Awaited<ReturnType<typeof upsertHubspotContact>>;
+          try { result = await upsertHubspotContact(values, token, checkpoint, opts.hubspotFetch); }
+          catch (error) {
+            // A definite refusal changed nothing: release the contact and record
+            // the step as not started. Anything else stays fenced for review.
+            if (!(error instanceof HubspotWriteRefusedError)) throw error;
+            releaseIdentity(identity, owner);
+            throw new ActionOutcomeError({ status: 'error', code: 'PROVIDER_REFUSED', message: error.message, effect: 'not_started' });
           }
-          const result = await upsertHubspotContact(values, token, checkpoint, opts.hubspotFetch);
           completeIdentity(identity, owner);
           return result;
         }

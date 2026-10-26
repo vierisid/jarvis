@@ -21,3 +21,8 @@ export function completeIdentity(identity: string, owner: string): void {
   if (getWorkflowDb().run('UPDATE workflow_effect_identity SET completed=1 WHERE identity=? AND owner=?',[identity,owner]).changes !== 1)
     throw new Error('Identity completion owner changed');
 }
+/** Give back a claim whose operation definitely did not happen (a provider
+ * refusal, or a notification sent on no channel). Never for an uncertain one. */
+export function releaseIdentity(identity: string, owner: string): void {
+  getWorkflowDb().run('DELETE FROM workflow_effect_identity WHERE identity=? AND owner=? AND completed=0', [identity, owner]);
+}

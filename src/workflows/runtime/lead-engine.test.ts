@@ -38,7 +38,7 @@ const HUBSPOT = '@activepieces/piece-hubspot';
 const native = (name:string) => '@jarvispieces/piece-jarvis-'+name;
 let dir:string, api:SandboxApi, runtime:EngineRuntime, manager:TriggerManager, worker:Worker, catalog:PieceCatalog;
 let provider:ReturnType<typeof Bun.serve>;
-let reply='', loseReply=false, unconfirmed=false, loseNotification=false;
+let reply='', loseReply=false, unconfirmed=false, loseNotification=false, refuse=0, dashboardClosed=false;
 const contacts = new Map<string,{id:string;properties:Record<string,any>}>();
 const calls:Array<{method:string;email:string}> = [], notifications:string[] = [], runIds:string[]=[];
 const versions:Record<string,string>={};
@@ -51,6 +51,7 @@ beforeAll(async()=>{
     const email=req.method==='POST'?body.properties.email:decodeURIComponent(url.pathname.split('/').at(-1)!);
     calls.push({method:req.method,email});
     const existing=contacts.get(email);
+    if(refuse && req.method!=='GET') return Response.json({}, {status:refuse});
     if(req.method==='GET') return existing && !unconfirmed ? Response.json(existing) : Response.json({}, {status:404});
     if(req.method==='PATCH') {
       if(!existing) return Response.json({}, {status:404});
@@ -86,7 +87,7 @@ beforeAll(async()=>{
       return fetch(fixtureUrl,init);
     }) as typeof fetch,
     llmManager:{chat:async()=>({content:reply,finish_reason:'end_turn',tool_calls:[],usage:{input_tokens:1,output_tokens:1}})} as any,
-    channelService:{} as any,wsService:{broadcastNotificationToDashboard:(text:string)=>{notifications.push(text);if(loseNotification)throw Error('Lost notification reply');return 1;}} as any});
+    channelService:{} as any,wsService:{broadcastNotificationToDashboard:(text:string)=>{if(dashboardClosed)return 0;notifications.push(text);if(loseNotification)throw Error('Lost notification reply');return 1;}} as any});
   api=new SandboxApi({services}); await api.start({port:0});
   runtime=new EngineRuntime({api,pool:true,bundlePath:bundle.bundlePath,expectedDigest:bundle.digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code')});
   const handle=await runtime.acquire({runId:'lead-fixture-metadata',projectId:DEFAULT_IDS.project});
@@ -113,7 +114,7 @@ function graph(configured=true):any {
   return {name:'trigger',type:'PIECE_TRIGGER',settings:{pieceName:'webhook',input:{submission_id_field:configured?'id':'',submission_email_field:configured?'email':''}},nextAction:first};
 }
 async function fixture(){
-  loseReply=unconfirmed=loseNotification=false;
+  loseReply=unconfirmed=loseNotification=dashboardClosed=false;refuse=0;
   const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Lead fixture',trigger:graph()});
   expect(versionReadiness(flow.id,version.id).issues).toEqual([]);
   lockVersion(version.id);setPublishedVersion(flow.id,version.id);updateFlowStatus(flow.id,'ENABLED');await manager.refresh(flow.id);
@@ -162,6 +163,21 @@ test('unconfirmed contact write fences future submissions and sends nothing',asy
 test('uncertain notification never repeats on a later submission',async()=>{
   const f=await fixture();loseNotification=true;reply=answer(10);const before=notifications.length;
   await f.send('one');loseNotification=false;await f.send('two');expect(notifications.length-before).toBe(1);
+},45_000);
+
+test('a definite provider refusal records not started and releases the contact for a later submission',async()=>{
+  const f=await fixture();refuse=429;reply=answer(10);const before=notifications.length;
+  const first=await f.send('one');expect(first.status).toBe('FAILED');
+  expect(listWorkflowEffects(first.id).find(e=>e.provenance.piece===HUBSPOT)?.outcome).toMatchObject({code:'PROVIDER_REFUSED',effect:'not_started'});
+  refuse=0;expect((await f.send('two')).status).toBe('SUCCEEDED');
+  expect(contacts.get(f.flow.id.toLowerCase()+'@example.com')?.properties.firstname).toBe('Alice');
+  expect(notifications.length-before).toBe(1);
+},45_000);
+test('a notification sent on no channel leaves its identity for a later submission',async()=>{
+  const f=await fixture();dashboardClosed=true;reply=answer(10);const before=notifications.length;
+  expect((await f.send('one')).status).toBe('FAILED');expect(notifications.length).toBe(before);
+  dashboardClosed=false;expect((await f.send('two')).status).toBe('SUCCEEDED');
+  expect(notifications.length-before).toBe(1);
 },45_000);
 
 test('concurrent distinct submissions share one contact and alert',async()=>{

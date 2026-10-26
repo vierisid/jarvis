@@ -3,6 +3,8 @@
 export const HUBSPOT_PIECE = '@activepieces/piece-hubspot';
 export const HUBSPOT_UPSERT = 'create-or-update-contact';
 export const isHubspotContact = (piece: unknown, action: unknown) => piece === HUBSPOT_PIECE && action === HUBSPOT_UPSERT;
+/** The provider definitely refused every write this call sent: nothing changed. */
+export class HubspotWriteRefusedError extends Error {}
 export interface ContactInput extends Record<string, unknown> { email: string; objectProperties: Record<string,string> }
 export function hubspotContactInput(raw: unknown): ContactInput {
   const input = raw as Record<string,unknown> | null;
@@ -73,6 +75,6 @@ export async function upsertHubspotContact(input: ContactInput, token: string, c
       if(!res) return reconcile();
     }
   }
-  if(!res.ok) { const status=res.status; await res.body?.cancel(); throw new Error('HubSpot contact write refused: HTTP '+status+'; inspect the run before retrying'); }
+  if(!res.ok) { const status=res.status; await res.body?.cancel(); throw new HubspotWriteRefusedError('HubSpot contact write refused: HTTP '+status+'; inspect the run before retrying'); }
   try { return await read(res); } catch { return reconcile(); }
 }
