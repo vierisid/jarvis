@@ -108,7 +108,7 @@ import { pastedOAuth2Status, stampOAuth2Claim } from "../credentials/pasted-oaut
 import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers/manager";
 import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
 import type { PieceLookup } from "../runtime/piece-catalog";
-import { isCommunityPiece } from "../runtime/step-admission";
+import { isCommunityAction, isCommunityPiece } from "../runtime/step-admission";
 import { CATALOG, excludedReason, findCatalogEntry, sharedBuildCatalog, withdrawnPiece } from "../pieces-library/catalog";
 import { piecesManagedByHost } from "../pieces-library/shared";
 import {
@@ -907,6 +907,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               displayName: a.displayName,
               description: a.description,
               inputSchema: a.inputSchema ?? null,
+              // A partly governed piece badges only its ungoverned actions.
+              ...(!isCommunityPiece(p.name) && isCommunityAction(p.name, a.name) ? { notApprovalGated: true } : {}),
               // Optional declared output sample (Jarvis extension to AP).
               // Surfaced to the dashboard so the variable picker can show
               // field-level rows for actions that have never been run yet.

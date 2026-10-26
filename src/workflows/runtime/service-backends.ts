@@ -63,7 +63,7 @@ import { defangPieceProjection } from './piece-effect-receipt';
 import { getFlowInProject } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
 import { digest, resolveEffectContext, type WorkflowEffectContext } from './effect-context';
-import { isCommunityPiece } from './step-admission';
+import { isCommunityAction } from './step-admission';
 import { CODE_STEP_PIECE, type PieceAuthorizeRequest, type PieceAuthorizeResponse } from './piece-effect-guard';
 import { holdStep, KILLED_REASON, PAUSED_REASON } from './emergency-hold';
 import { getFlowRun } from '../db/repos/flow-run';
@@ -921,8 +921,8 @@ export function buildSandboxServiceBackends(
       const hold = holdStep({ runId: run.id, projectId: run.projectId, stepName: ctx.stepName ?? 'unknown step' });
       return { governed: false, dispatch: 'held', approval: { effectId: '', approvalId: '', waitpointId: hold.id, hold: PAUSED_REASON } };
     }
-    // `isCommunityPiece` is also what the editor's "Not approval-gated" badge reads (#955).
-    if (req.piece === CODE_STEP_PIECE || isCommunityPiece(req.piece)) {
+    // `isCommunityAction` is also what the editor's "Not approval-gated" badge reads (#955).
+    if (req.piece === CODE_STEP_PIECE || isCommunityAction(req.piece, req.action)) {
       try {
         opts.auditTrail?.log({ agent_id: `workflow:${run.id}`, agent_name: `Workflow ${run.id} / ${stepName}`,
           tool_name: req.piece === CODE_STEP_PIECE ? 'code step' : `community piece ${boundedReceiptText(`${req.piece}/${req.action}`, 160)}`,

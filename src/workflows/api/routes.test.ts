@@ -444,6 +444,19 @@ describe("workflow API: piece catalog says which pieces skip approval (#955)", (
   });
 });
 
+describe("workflow API: a partly governed piece badges only its ungoverned actions (#955)", () => {
+  test("the HubSpot contact upsert is gated; its other actions are marked", async () => {
+    const action = (name: string) => ({ name, displayName: name, description: "", props: {} });
+    const reg = new (await import("../runtime/piece-catalog")).PieceCatalog([{ name: "@activepieces/piece-hubspot", displayName: "HubSpot", description: "",
+      actions: { "create-or-update-contact": action("create-or-update-contact"), "create-deal": action("create-deal") }, triggers: {} } as any]);
+    const get = createWorkflowRoutes({ pieceRegistry: reg })["/api/workflows/pieces"]?.GET;
+    const { body } = await callJson(get, plainReq("GET", "http://x/api/workflows/pieces"));
+    const piece = (body as Array<{ notApprovalGated?: boolean; actions: Array<{ name: string; notApprovalGated?: boolean }> }>)[0]!;
+    expect(piece.notApprovalGated).toBeUndefined();
+    expect(Object.fromEntries(piece.actions.map((a) => [a.name, a.notApprovalGated ?? false]))).toEqual({ "create-or-update-contact": false, "create-deal": true });
+  });
+});
+
 describe("workflow API: flows", () => {
   test("POST /api/workflows creates a flow + initial draft version", async () => {
     const post = routes["/api/workflows"]?.POST;

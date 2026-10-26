@@ -13,7 +13,7 @@
  * editor's "Not approval-gated" badge and the daemon's admission cannot drift.
  */
 
-import { isGovernedPiece } from './piece-effects';
+import { isGovernedPiece, resolveGovernedPieceAction } from './piece-effects';
 
 /** Jarvis's own pieces: each of their effects passes the boundary and is audited there. */
 export const JARVIS_PIECE_PREFIX = '@jarvispieces/';
@@ -44,4 +44,13 @@ export const IN_RUN_STEP_PIECES: ReadonlySet<string> = new Set([
  */
 export function isCommunityPiece(pieceName: string): boolean {
   return !isGovernedPiece(pieceName) && !pieceName.startsWith(JARVIS_PIECE_PREFIX) && !IN_RUN_STEP_PIECES.has(pieceName);
+}
+
+/**
+ * An action that runs as a community piece's would: every action of a
+ * community piece, and an action of a partly governed piece (Sheets append,
+ * HubSpot contact upsert) that has no adapter. Audited and badged the same way.
+ */
+export function isCommunityAction(pieceName: string, actionName: unknown): boolean {
+  return isCommunityPiece(pieceName) || (isGovernedPiece(pieceName) && !resolveGovernedPieceAction(pieceName, actionName));
 }
