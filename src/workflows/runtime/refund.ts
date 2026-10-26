@@ -22,10 +22,23 @@ export interface RefundPayment {id:string;currency:string;amount:number;refunded
 export interface RefundReceipt {id:string;charge:string;currency:string;amount:number;status:string;key:string}
 export interface RefundProvider {payment(id:string):Promise<RefundPayment>;refunds(charge:string):Promise<RefundReceipt[]>;create(charge:string,amount:number,key:string):Promise<RefundReceipt>}
 export interface RefundProposal {ticketId:string;ticketSource:string;account:string;mode:'test'|'live';charge:string;currency:string;amount:number;refunded:number;expiresAt:number}
-export interface RefundState {proposal?:RefundProposal;approvalId?:string;originRun:string;state:'new'|'approval'|'dispatching'|'refunded'|'pending_provider'|'rejected'|'expired'|'needs_review';attemptedAt?:number;receipt?:RefundReceipt;reason?:string;retiredRuns?:string[]}
+export interface RefundState {proposal?:RefundProposal;approvalId?:string;originRun:string;state:'new'|'approval'|'dispatching'|'refunded'|'pending_provider'|'rejected'|'expired'|'needs_review';attemptedAt?:number;receipt?:RefundReceipt;reason?:string;retiredRuns?:string[];withdraw?:string[]}
 export interface RefundStore {load():RefundState;save(state:RefundState):void;check():void}
+/** A Stripe HTTP error response: the request reached Stripe and was answered. */
+export class RefundProviderError extends Error {
+  constructor(readonly status:number,readonly code?:string,readonly type?:string){super('Stripe request failed ('+status+(code?' '+code:'')+')');}
+}
+/** Why a create call ended with no matching refund on readback. Only an answered 4xx is definitive:
+ * 409 and idempotency errors may mean another request with this key exists, so they stay uncertain. */
+function dispatchFailure(e:unknown){
+  if(!(e instanceof RefundProviderError))return 'Refund delivery uncertain (no Stripe response); no automatic second dispatch';
+  const http='HTTP '+e.status+(e.code?', code '+e.code:'');
+  if(e.status>=400&&e.status<500&&e.status!==409&&e.type!=='idempotency_error')return 'Stripe rejected the refund request ('+http+'); no refund was created and no automatic second dispatch';
+  return 'Refund delivery uncertain ('+http+'); no automatic second dispatch';
+}
 // Stripe minor-unit exponents that differ from 2 (docs.stripe.com/currencies).
-const ZERO_DECIMAL=new Set(['bif','clp','djf','gnf','jpy','kmf','krw','mga','pyg','rwf','ugx','vnd','vuv','xaf','xof','xpf']);
+// ISK and UGX are not here: Stripe takes them as two-decimal amounts whose decimal is always 00 (500 is 5 UGX).
+const ZERO_DECIMAL=new Set(['bif','clp','djf','gnf','jpy','kmf','krw','mga','pyg','rwf','vnd','vuv','xaf','xof','xpf']);
 const THREE_DECIMAL=new Set(['bhd','jod','kwd','omr','tnd']);
 /** The amount an approver reads in major units, beside the exact minor-unit value sent to Stripe. */
 export function refundMajorAmount(amount:number,currency:string){
@@ -76,5 +89,5 @@ export async function dispatchApprovedRefund(store:RefundStore,provider:RefundPr
   // This durable transition precedes the only mutating provider operation.
   state.attemptedAt=now;state.state='dispatching';save(state);checkpoint();
   try {return finish(await provider.create(p.charge,p.amount,key));}
-  catch {const matches=(await provider.refunds(p.charge)).filter(r=>r.key===key);checkpoint();return matches.length===1?finish(matches[0]!):save({...state,state:'needs_review',reason:'Refund delivery uncertain; no automatic second dispatch'});}
+  catch(e) {const matches=(await provider.refunds(p.charge)).filter(r=>r.key===key);checkpoint();return matches.length===1?finish(matches[0]!):save({...state,state:'needs_review',reason:dispatchFailure(e)});}
 }

@@ -6,7 +6,7 @@ export const refundFixtureTicket={id:'ticket-1',payment:'pi_fixture',kind:'refun
 export function refundFixtureProvider(){
  const calls:Array<{method:string;path:string;body:string}>=[],refunds:any[]=[];
  const payment={id:'ch_fixture',currency:'eur',amount:3000,amount_captured:3000,amount_refunded:0,paid:true,captured:true,disputed:false,livemode:false};
- const options={loseReply:false,rejectWrite:false,status:'succeeded',pageSize:100};
+ const options={loseReply:false,rejectWrite:false,status:'succeeded',pageSize:100,answerWrite:null as null|{status:number;body:unknown}};
  const fetchImpl=(async(url:any,init:any={})=>{
   const u=new URL(String(url)),method=init.method??'GET';calls.push({method,path:u.pathname+u.search,body:String(init.body??'')});
   if(u.origin!=='https://api.stripe.com')throw Error('Fixture denied unexpected network target');
@@ -19,6 +19,7 @@ export function refundFixtureProvider(){
    const body=new URLSearchParams(init.body),key=new Headers(init.headers).get('Idempotency-Key');
    if(!key||body.get('metadata[jarvis_refund_key]')!==key)throw Error('Missing refund idempotency identity');
    if(options.rejectWrite)throw Error('Synthetic disconnected write');
+   if(options.answerWrite)return json(options.answerWrite.body,options.answerWrite.status);
    const old=refunds.find(r=>r.metadata.jarvis_refund_key===key);if(old)return json(old);
    const r={id:'re_fixture'+(refunds.length+1),charge:body.get('charge'),amount:Number(body.get('amount')),currency:payment.currency,status:options.status,metadata:{jarvis_refund_key:key}};
    refunds.push(r);payment.amount_refunded+=r.amount;if(options.loseReply)throw Error('Synthetic reply loss after provider commit');return json(r);

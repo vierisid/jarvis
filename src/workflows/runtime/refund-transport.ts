@@ -1,9 +1,14 @@
-import type {RefundProvider,RefundReceipt,RefundSetup} from './refund';
+import {RefundProviderError,type RefundProvider,type RefundReceipt,type RefundSetup} from './refund';
 /** Fixed Stripe endpoints only. All amounts are integer minor units. */
 export function refundTransport(s:RefundSetup,token:string,checkpoint:()=>void,fetchImpl:typeof fetch=fetch):RefundProvider {
   const request=async(path:string,body?:URLSearchParams,key?:string)=>{
     checkpoint();const r=await fetchImpl('https://api.stripe.com/v1/'+path,{method:body?'POST':'GET',redirect:'error',signal:AbortSignal.timeout(15000),headers:{Authorization:'Bearer '+token,'Stripe-Version':'2024-06-20',...(body?{'Content-Type':'application/x-www-form-urlencoded','Idempotency-Key':key!}:{})},body:body?.toString()});
-    if(!r.ok)throw Error('Stripe request failed ('+r.status+')');
+    if(!r.ok){
+      // Only short identifier-shaped code/type values are kept; the message text is never stored.
+      let code:string|undefined,type:string|undefined;
+      try{const t=await r.text();if(t.length<=64*1024){const e=JSON.parse(t)?.error;const id=(v:unknown)=>typeof v==='string'&&/^[a-z0-9_]{1,64}$/.test(v)?v:undefined;code=id(e?.code);type=id(e?.type);}}catch{}
+      throw new RefundProviderError(r.status,code,type);
+    }
     const text=await r.text();if(text.length>2*1024*1024)throw Error('Stripe response exceeds 2 MiB');const value=JSON.parse(text);checkpoint();return value;
   };
   const account=async()=>{const a=await request('account');if(a.id!==s.stripeAccountId)throw Error('Stripe account does not match setup');};

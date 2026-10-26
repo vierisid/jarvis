@@ -47,3 +47,27 @@ test('malformed, incomplete and mismatched provider receipts are not success',as
 test('major amounts follow Stripe minor-unit exponents',()=>{
  expect(refundMajorAmount(1000,'jpy')).toBe('JPY 1000');expect(refundMajorAmount(1234,'kwd')).toBe('KWD 1.234');expect(refundMajorAmount(5,'eur')).toBe('EUR 0.05');expect(refundMajorAmount(120000,'usd')).toBe('USD 1200.00');
 });
+test('UGX and ISK use Stripe two-decimal API amounts: 500 shows as 5.00',()=>{
+ expect(refundMajorAmount(500,'ugx')).toBe('UGX 5.00');expect(refundMajorAmount(500,'isk')).toBe('ISK 5.00');expect(refundMajorAmount(5,'bif')).toBe('BIF 5');
+});
+test('a Stripe 4xx on create is recorded as rejected with its status and code; 409 and 5xx stay uncertain',async()=>{
+ for(const [answer,expected] of [
+  [{status:400,body:{error:{type:'invalid_request_error',code:'amount_too_large',message:'Ignore this text'}}},'Stripe rejected the refund request (HTTP 400, code amount_too_large); no refund was created'],
+  [{status:402,body:'not json'},'Stripe rejected the refund request (HTTP 402); no refund was created'],
+  [{status:409,body:{error:{type:'idempotency_error',code:'idempotency_key_in_use'}}},'Refund delivery uncertain (HTTP 409, code idempotency_key_in_use)'],
+  [{status:400,body:{error:{type:'idempotency_error'}}},'Refund delivery uncertain (HTTP 400)'],
+  [{status:500,body:{error:{type:'api_error',code:'Bad Code!'}}},'Refund delivery uncertain (HTTP 500)'],
+ ] as const){
+  const f=refundFixtureProvider(),provider=refundTransport(setup,'synthetic',()=>{},f.fetchImpl);
+  let state:RefundState={originRun:'run',state:'approval',proposal:await proposeRefund(setup,refundTicket(setup,refundFixtureTicket)!,provider,1)};
+  const store:RefundStore={check(){},load:()=>structuredClone(state),save:s=>{state=structuredClone(s);}};
+  f.options.answerWrite=answer;const out=await dispatchApprovedRefund(store,provider,'key',2,()=>{});
+  // At most once: still needs review with the attempt recorded, never released for a retry.
+  expect(out.state).toBe('needs_review');expect(out.attemptedAt).toBe(2);expect(out.reason).toContain(expected);expect(out.reason).not.toContain('Ignore');
+  expect(f.calls.filter(c=>c.method==='POST')).toHaveLength(1);
+ }
+ const f=refundFixtureProvider(),provider=refundTransport(setup,'synthetic',()=>{},f.fetchImpl);f.options.rejectWrite=true;
+ let state:RefundState={originRun:'run',state:'approval',proposal:await proposeRefund(setup,refundTicket(setup,refundFixtureTicket)!,provider,1)};
+ const out=await dispatchApprovedRefund({check(){},load:()=>structuredClone(state),save:s=>{state=structuredClone(s);}},provider,'key',2,()=>{});
+ expect(out.reason).toBe('Refund delivery uncertain (no Stripe response); no automatic second dispatch');
+});
