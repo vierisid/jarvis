@@ -66,7 +66,9 @@ The gated engine test installs the npm package and builds the engine if needed. 
 
 ## Live acceptance, after company app registration
 
-Register the OAuth redirect `https://app.usejarvis.dev/api/integrations/clickup/callback` from a company-owned ClickUp workspace. Give the deployment operator `CLICKUP_CLIENT_ID` and `CLICKUP_CLIENT_SECRET` through a secure store, and the tester the sandbox List URL. No secret in chat or this repository.
+Register the OAuth redirect `https://app.usejarvis.dev/api/integrations/clickup/callback` from a company-owned ClickUp workspace. After the companion hosting change is deployed, open **Jarvis admin console → Infrastructure → Integrations → ClickUp**. With **Manage integrations** permission, paste the company Client ID and Client Secret, enable new connections, and save. The existing encrypted store holds the pair; the API and worker read it on demand. No ClickUp environment variables or service restart is required. Keep a backup in the company password manager and give the tester only the sandbox List URL. No secret in chat or this repository.
+
+The hosting framework owns the reviewed provider registry, company app configuration, shared connection routes/jobs and revision checks. Saving changed credentials expires older sign-ins and queued connects. Disabling blocks new sign-ins while existing grants and customer disconnect remain available. Google remains on its existing path under Lapo. The instance document may include a non-secret `definition` containing provider ID, capabilities and API hosts; current ClickUp credential resolution remains compatible.
 
 Use a sandbox List without required custom fields. Complete sign-in, inspect workspace/Space/List choices, and run the four-node sequence. Confirm the created task and changed name in ClickUp. Inspect downstream output chips and run records. Deny/cancel sign-in, disconnect/reconnect, revoke the provider grant, and check write approval and recovery behavior. Record evidence before release.
 
