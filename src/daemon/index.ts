@@ -3,6 +3,7 @@ import { registerReconciliation } from '../brief/registrations/reconciliation';
 import { registerOnboarding } from '../brief/registrations/onboarding';
 import { ConnectedWorkspace } from '../brief/connected-workspace';
 import { MIN_BUN_VERSION, versionAtLeast } from '../util/bun-minimum.ts';
+import { trelloStatus } from "../integrations/trello-connection";
 import { clickUpStatus } from "../integrations/clickup-connection";
 import { connectedGoogle } from '../brief/connected-workspace-runtime';
 import { registerConnections } from '../brief/registrations/connections';
@@ -4752,6 +4753,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       devices: () => sidecarManager.listSidecars(),
       google: () => connectedGoogle(jarvisConfig),
       clickup: () => clickUpStatus(jarvisConfig),
+      trello: () => trelloStatus(jarvisConfig),
       channels: () => {
         const status = channelService.getChannelStatus();
         return Object.fromEntries((['telegram', 'discord'] as const).map(name => [name, {
@@ -4994,6 +4996,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisGoogleConnectionSource(() => googleAuth));
       const { JarvisClickUpConnectionSource } = await import("../workflows/credentials/clickup-source");
       credentialResolver.register(new JarvisClickUpConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisTrelloConnectionSource } = await import("../workflows/credentials/trello-source");
+      credentialResolver.register(new JarvisTrelloConnectionSource(jarvisConfig.daemon.data_dir));
       logWithTimestamp(
         "Workflow credential resolver: registered jarvis:google source",
       );

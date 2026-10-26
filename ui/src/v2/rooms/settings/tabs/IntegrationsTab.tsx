@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ClickUpConnection } from "../../../integrations/ClickUpConnection";
+import { TrelloConnection } from "../../../integrations/TrelloConnection";
 import type { SettingsHook } from "../useSettingsData";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
 
@@ -162,7 +163,7 @@ export function IntegrationsTab({
              off to the account page — which then opens the system browser,
              because Google refuses OAuth inside an embedded webview. */
           <>
-      <ClickUpConnection optional />
+      <ClickUpConnection optional /><TrelloConnection optional />
             {g.is_authenticated ? (
               <>
                 <p className="v2-set__hint">

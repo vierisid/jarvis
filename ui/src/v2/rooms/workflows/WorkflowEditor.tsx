@@ -1,3 +1,4 @@
+import { TrelloCardLocation } from "../../integrations/TrelloCardLocation";
 import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
 /**
  * WorkflowEditor (Phase 4 stage 2).
@@ -16,6 +17,7 @@ import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
  */
 
 import { ClickUpConnection } from "../../integrations/ClickUpConnection";
+import { TrelloConnection } from "../../integrations/TrelloConnection";
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSampleDraftText } from "./useSampleDraftText";
 import { confirmDialog } from "../../ui/ConfirmDialog";
@@ -3373,8 +3375,11 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const subList = isTrigger ? piece?.triggers ?? [] : piece?.actions ?? [];
   const selectedSubAction: PieceCatalogActionOrTrigger | undefined = subList.find((s) => s.name === subName);
   const clickUpLocation = piece?.name === "@activepieces/piece-clickup" && ['create_task','update_task','get_task_by_name'].includes(subName ?? '');
-  const selectedSchema = selectedSubAction?.inputSchema ?? null;
-  const rawSchema = clickUpLocation && selectedSchema ? {...selectedSchema,fields:selectedSchema.fields.filter(f=>!['workspace_id','space_id','list_id'].includes(f.name))} : selectedSchema;
+  const managedTrello = piece?.name === "@activepieces/piece-trello" && step.settings?.input?.auth === "{{connections.jarvis:trello}}";
+  const trelloLocation = managedTrello && ['create_card','move_card','list_lists'].includes(subName ?? '');
+  const baseSchema = selectedSubAction?.inputSchema ?? null;
+  const selectedSchema = managedTrello && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["labels","member_id"].includes(f.name))} : baseSchema;
+  const rawSchema = clickUpLocation && selectedSchema ? {...selectedSchema,fields:selectedSchema.fields.filter(f=>!['workspace_id','space_id','list_id'].includes(f.name))} : trelloLocation && selectedSchema ? {...selectedSchema, fields:selectedSchema.fields.filter(f=>!['board_id','list_id'].includes(f.name))} : selectedSchema;
   const clickUpCreate = piece?.name === "@activepieces/piece-clickup" && subName === "create_task";
   const standardFields = clickUpCreate && JSON.stringify(step.settings?.propertySettings?.custom_fields?.schema) === "{}"
     && JSON.stringify(step.settings?.input?.custom_fields) === "{}" && step.settings?.input?.check_required_custom_fields === true;
@@ -3485,6 +3490,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         />
       ) : null}
 
+      {trelloLocation && <TrelloCardLocation input={step.settings?.input ?? {}} onChange={onSetInput} boardOnly={subName === "list_lists"} />}
       {clickUpLocation && <ClickUpTaskLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {clickUpCreate && <div className="wf-props__hint" role="note">
         {standardFields ? <p>Using standard task fields. ClickUp will reject the task if this list requires custom fields.</p>
@@ -3725,11 +3731,12 @@ function ConnectionPicker({
   return (
     <div className="wf-props__connection">
       {pieceName === "@activepieces/piece-clickup" && <ClickUpConnection onPick={onPick} currentValue={currentValue} />}
+      {pieceName === "@activepieces/piece-trello" && <TrelloConnection onPick={onPick} currentValue={currentValue} />}
       <label className="wf-props__field-label">
         {authDisplayName}
         <span className="wf-props__connection-type">({authType})</span>
       </label>
-      {matching.length === 0 && pieceName !== "@activepieces/piece-clickup" ? (
+      {matching.length === 0 && !["@activepieces/piece-clickup", "@activepieces/piece-trello"].includes(pieceName ?? "") ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.

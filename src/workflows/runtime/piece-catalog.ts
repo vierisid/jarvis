@@ -313,7 +313,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "9"; // v9: ClickUp task output contracts
+export const CATALOG_SCHEMA_VERSION = "10"; // v10: Trello board/list/card output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -903,6 +903,14 @@ export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
         id: 'task_example', name: 'Example task', url: 'https://app.clickup.com/t/task_example',
         status: {status: 'to do', type: 'open'}, list: {id: 'list_example', name: 'Sandbox'},
       };
+    }
+  }
+  if (entry.name === '@activepieces/piece-trello') {
+    const board = {id:'aaaaaaaaaaaaaaaaaaaaaaaa',name:'Jarvis sandbox',closed:false};
+    const list = {id:'bbbbbbbbbbbbbbbbbbbbbbbb',name:'To do',idBoard:board.id,closed:false};
+    const card = {id:'cccccccccccccccccccccccc',name:'Example task',desc:'',idBoard:board.id,idList:list.id,closed:false,url:'https://trello.com/c/abcd1234'};
+    for (const [name,sample] of Object.entries({list_boards:{boards:[board],count:1},list_lists:{lists:[list],count:1},get_card:card,create_card:card,move_card:card})) {
+      const action=entry.actions[name];if(action && action.outputSample===undefined)action.outputSample=sample;
     }
   }
   if (entry.name !== JARVIS_ON_EVENT_TRIGGER.piece) return;
