@@ -101,15 +101,16 @@ function contextFor(flowId: string, ancestors: string[] = [], cache = new Map<st
     pieces: configured?.pieces,
     tool: configured?.tool,
     roles: configured?.roles,
-    connection(externalId, pieceName, path) {
+    connection(externalId, pieceName, path, settings) {
       if (externalId.startsWith('jarvis:')) {
         const source = managedSourceFor(configured?.credentials?.list(), externalId);
         if (!source) return 'Managed connection source is unavailable';
         // Only the auth of a step of the source's own pieces: anywhere else
         // (a CODE or HTTP step, another piece, a loop or router, a non-auth
         // input) the step would hold the token outside the governed piece.
-        const misuse = managedConnectionMisuse(source, pieceName, path);
-        if (misuse) return misuse;
+        // A custom API call of such a step stays on that piece's own hosts.
+        const misuse = managedConnectionMisuse(source, pieceName, path, settings);
+        if (misuse) return { message: misuse, allowedPieces: source.pieceNames };
         // A source that can say it holds no credential to hand out (not
         // connected, or revoked by the provider) is not ready to run.
         return source.identity && source.identity(externalId) === null

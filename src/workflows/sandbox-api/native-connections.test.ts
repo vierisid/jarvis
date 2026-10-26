@@ -8,6 +8,7 @@ import { createFlow } from "../db/repos/flow";
 import { createDraftVersion } from "../db/repos/flow-version";
 import { createFlowRun, getFlowRun } from "../db/repos/flow-run";
 import { SandboxApi } from "./server";
+import { graphDigest } from "../runtime/continuation";
 
 const TOKEN = "synthetic-native-lookup-token";
 let api: SandboxApi;
@@ -95,6 +96,8 @@ describe("Q-05: a managed connection is bound like a saved one", () => {
     const version = createDraftVersion({ flowId: flow.id, displayName: "Managed binding", trigger: { name: "trigger", type: "EMPTY",
       nextAction: { name: "send", type: "PIECE", settings: { pieceName: "fixture-piece", actionName: "send", input: { auth: "{{connections.jarvis:fixture}}" } } } } as any });
     const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "RUNNING" });
+    // The graph the RUN_FLOW handler records before the engine starts.
+    getWorkflowDb().run("UPDATE flow_run SET graph_digest = ? WHERE id = ?", [graphDigest(version.trigger), run.id]);
     const identity = { projectId: DEFAULT_IDS.project, sandboxId: crypto.randomUUID(), runId: run.id };
     const { token, expiresAt } = await api.signer.mint(identity, 60);
     api.registry.register({ ...identity, engineToken: token, expiresAt, terminatedAt: null });
@@ -167,6 +170,8 @@ describe("native connections through the authenticated engine endpoint", () => {
     const version = createDraftVersion({ flowId: flow.id, displayName: "Managed priority", trigger: { name: "trigger", type: "EMPTY",
       nextAction: { name: "send", type: "PIECE", settings: { pieceName: "fixture-piece", actionName: "send", input: { auth: "{{connections.jarvis:fixture}}" } } } } as any });
     const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "RUNNING" });
+    // The graph the RUN_FLOW handler records before the engine starts.
+    getWorkflowDb().run("UPDATE flow_run SET graph_digest = ? WHERE id = ?", [graphDigest(version.trigger), run.id]);
     const identity = { projectId: DEFAULT_IDS.project, sandboxId: crypto.randomUUID(), runId: run.id };
     const { token, expiresAt } = await api.signer.mint(identity, 60);
     api.registry.register({ ...identity, engineToken: token, expiresAt, terminatedAt: null });
