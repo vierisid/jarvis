@@ -1,3 +1,4 @@
+import { ClickUpConnection } from "../../v2/integrations/ClickUpConnection";
 import React, { Component, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 import type { ComponentType, ReactNode } from 'react';
 import { useTheme } from '../../v2/shell/useTheme.ts';
@@ -98,7 +99,7 @@ function OnboardingViewHost({ session, legacy, children }: { session: Session; l
   switch (state.view) {
     case 'welcome': props = { model: { theme, installMode: session.installMode(), state: navigation }, onSetUp: () => action('continue'), onExit: () => action('explore'), onThemeChange: setTheme }; break;
     case 'explainer': props = { model: { theme, state: navigation }, onBack: () => action('back'), onContinue: () => action('continue') }; break;
-    case 'google': props = { ...props, model: { ...model, navigation }, onConnect: () => action('connect'), onCancel: (attemptId: string) => action('cancel', { attemptId }), onBack: () => action('back'), onSkip: () => action('skip'), onContinue: () => action('continue') }; break;
+    case 'google': props = { ...props, additionalConnections: <div className="on-host__clickup"><ClickUpConnection optional appearance="onboarding" /></div>, model: { ...model, navigation }, onConnect: () => action('connect'), onCancel: (attemptId: string) => action('cancel', { attemptId }), onBack: () => action('back'), onSkip: () => action('skip'), onContinue: () => action('continue') }; break;
     case 'interview': props = { ...props, model: { ...model, navigation }, onDraftChange: draft, onSubmit: (answer: unknown) => action('answer', answer), onRetry: (recovery: unknown) => action('retry', recovery), onSkip: () => action('skip'), onContinue: () => action('continue') }; break;
     case 'tour': case 'pebble-tour': props = { ...props, onNavigate: intent }; break;
     case 'activation': props = { ...props, onDraftChange: draft, onIntent: intent }; break;
@@ -109,7 +110,7 @@ function OnboardingViewHost({ session, legacy, children }: { session: Session; l
   const View = state.view === 'legacy-provider-setup' ? state.presentation?.ports?.View as ComponentType<Record<string, unknown>> : session.views()?.[state.view];
   return <div className={`on-host${state.view === 'result' ? ' brief-root' : ''}`} data-theme={theme} data-brief-theme={theme} data-onboarding-step={state.view} ref={headingHost}>
     {state.blocked ? <Recovery retry={() => void session.refresh()} /> : <ViewBoundary key={`${state.journey.journeyId}:${state.view}`} recover={() => void session.refresh()}>
-      <div className="on-host__view" aria-busy={state.busy} inert={state.busy}>{View ? <View {...props} /> : <Recovery retry={() => void session.refresh()} />}</div>
+      <div className={`on-host__view${state.view === "google" ? " on-host__connections" : ""}`} aria-busy={state.busy} inert={state.busy}>{View ? <View {...props} /> : <Recovery retry={() => void session.refresh()} />}</div>
     </ViewBoundary>}
   </div>;
 }

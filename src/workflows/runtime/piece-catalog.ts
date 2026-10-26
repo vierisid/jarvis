@@ -313,7 +313,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "8"; // v8: retain ARRAY row contracts for readiness
+export const CATALOG_SCHEMA_VERSION = "9"; // v9: ClickUp task output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -890,6 +890,21 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
  * on-disk caches re-project.
  */
 export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
+  // ClickUp 0.9.1 returns a task directly for these actions, not an HTTP envelope.
+  // These stable fields let the picker wire task outputs into downstream steps.
+  if (entry.name === '@activepieces/piece-clickup') {
+    for (const name of ['create_task', 'get_list_task', 'get_task_by_name', 'update_task']) {
+      const action = entry.actions[name];
+      for (const field of action?.inputSchema?.fields ?? []) {
+        if (field.sourceType === 'DROPDOWN') {field.type = 'string'; field.placeholder = 'Value, ID or workflow variable'; delete field.options;}
+        if (field.sourceType === 'MULTI_SELECT_DROPDOWN') {field.type = 'json'; field.sourceType = 'ARRAY'; field.placeholder = '[]'; field.description = (field.description ?? '') + ' Enter an array of ClickUp user IDs.'; delete field.options;}
+      }
+      if (action && action.outputSample === undefined) action.outputSample = {
+        id: 'task_example', name: 'Example task', url: 'https://app.clickup.com/t/task_example',
+        status: {status: 'to do', type: 'open'}, list: {id: 'list_example', name: 'Sandbox'},
+      };
+    }
+  }
   if (entry.name !== JARVIS_ON_EVENT_TRIGGER.piece) return;
   const onEvent = entry.triggers?.[JARVIS_ON_EVENT_TRIGGER.trigger];
   if (onEvent) {
