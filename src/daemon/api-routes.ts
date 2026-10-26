@@ -146,6 +146,7 @@ import { GoalValidationError, number as goalNumber, keys as goalKeys, record as 
 import { createSuggestionFeedbackRoutes } from '../awareness/suggestion-feedback-routes.ts';
 import { approvalIntentFields } from '../authority/approval-delivery.ts';
 import { createBriefRoutes } from '../brief/routes.ts';
+import { hostedDashboardDefault } from './hosted-dashboard';
 import { createBriefCapabilities } from '../brief/registrations/index.ts';
 import type { BriefCapabilities } from '../brief/capabilities.ts';
 import type { BriefConversationProvider } from '../brief/conversations.ts';
@@ -440,7 +441,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
   return {
     ...createOpportunityRoutes(json),
-    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations, ctx.briefAttachments, ctx.briefWorkflowComposition, ctx.briefPreparedOpportunities, ctx.briefOpportunityActivation, ctx.briefDecisions, ctx.briefRecommendations, ctx.briefDecisionDocuments, ctx.briefGoalMeasurements, ctx.briefOutcomes, ctx.briefMemoryStream, ctx.briefMemoryUsage, ctx.briefMemoryForget, ctx.briefWorkflowRemoval, ctx.briefWorkflowContext, ctx.briefConnections, ctx.briefProfileSettings, { generation: crypto.randomUUID(), installMode: () => isHostedInstall(ctx.config) ? 'hosted' : 'self' }),
+    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations, ctx.briefAttachments, ctx.briefWorkflowComposition, ctx.briefPreparedOpportunities, ctx.briefOpportunityActivation, ctx.briefDecisions, ctx.briefRecommendations, ctx.briefDecisionDocuments, ctx.briefGoalMeasurements, ctx.briefOutcomes, ctx.briefMemoryStream, ctx.briefMemoryUsage, ctx.briefMemoryForget, ctx.briefWorkflowRemoval, ctx.briefWorkflowContext, ctx.briefConnections, ctx.briefProfileSettings, { generation: crypto.randomUUID(), installMode: () => isHostedInstall(ctx.config) ? 'hosted' : 'self', dashboard: () => hostedDashboardDefault(ctx.config) }),
     // --- Health ---
     '/api/health': {
       GET: () => json(ctx.healthMonitor.getHealth()),

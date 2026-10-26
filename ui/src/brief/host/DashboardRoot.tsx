@@ -36,10 +36,16 @@ import { LiveDataProvider } from '../../v2/shell/LiveDataContext';
 import type { RoomKey } from '../../v2/router';
 import { InputHost, inputDialog } from './InputDialog';
 import './host.css';
+import { resolveHostedEntry, useHostedEntry } from './hosted-entry';
 
 /** A distinct local bundle supplies integration=true. URL/storage never supply it. */
 export function DashboardRoot({ integration = false }: { integration?: boolean }) {
   const [href, setHref] = useState(() => window.location.href), current = useRef(href);
+  const [devtools] = useState(isDevToolsEnabled);
+  const internalEntry = resolveReleaseEntry(href, 'off', devtools);
+  const reviewing = devtools && internalEntry.kind !== 'legacy';
+  const needsHostedEntry = !integration && !reviewing && resolveReleaseEntry(href, 'released').kind !== 'legacy';
+  const hosted = useHostedEntry(needsHostedEntry);
   const guard = useRef<DashboardOwner | null>(null), epoch = useRef(0);
   useEffect(() => {
     const changed = (event: Event) => {
@@ -57,24 +63,33 @@ export function DashboardRoot({ integration = false }: { integration?: boolean }
     window.addEventListener('hashchange', changed); window.addEventListener('popstate', changed); window.addEventListener('beforeunload', unload);
     return () => { window.removeEventListener('hashchange', changed); window.removeEventListener('popstate', changed); window.removeEventListener('beforeunload', unload); };
   }, []);
-  const entry = integration ? resolveBriefEntry(href) : resolveReleaseEntry(href, 'off', isDevToolsEnabled());
+  const initialDescriptor = needsHostedEntry && hosted.state.status === 'ready' ? hosted.state.descriptor : null;
+  const entry = integration ? resolveBriefEntry(href) : reviewing ? internalEntry : resolveHostedEntry(href, initialDescriptor);
   const legacy = <AppShellV2 sharedRoomActions />;
   const lastRoute = useRef<BriefRoute>({ room: 'today', selection: {} });
   if (entry.kind === 'brief') lastRoute.current = entry.route;
-  const retained = integration || isDevToolsEnabled() ? maintenanceRoom(href) : null;
+  const retained = integration || devtools ? maintenanceRoom(href) : null;
+  if (needsHostedEntry && hosted.state.status !== 'ready') return <main className="brief-root brief-foundation">
+    <h1>{hosted.state.status === 'unavailable' ? 'Dashboard unavailable' : 'Opening your workspace…'}</h1>
+    {hosted.state.status === 'unavailable' && <><p>Your saved work is retained.</p><button onClick={hosted.retry}>Reconnect</button></>}
+  </main>;
+  if (entry.kind === 'moved' && !reviewing && !integration) return <main className="brief-root brief-foundation">
+    <h1>This view is not part of Brief</h1><p>Your saved work is retained.</p><a href="#/brief/today">Open your dashboard</a>
+  </main>;
   return <RoomActionBusProvider><ConfirmHost /><InputHost />{entry.kind === 'brief' || retained
-    ? <ConnectedDashboard route={entry.kind === 'brief' ? entry.route : lastRoute.current} retained={retained} integration={integration} legacy={legacy} installGuard={owner => { guard.current = owner; }} />
+    ? <ConnectedDashboard route={entry.kind === 'brief' ? entry.route : lastRoute.current} retained={retained} integration={integration} initialDescriptor={initialDescriptor} legacy={legacy} installGuard={owner => { guard.current = owner; }} />
     : <DashboardEntry legacy={legacy} />}</RoomActionBusProvider>;
 }
-export function ConnectedDashboard({ route, retained = null, integration = false, legacy, installGuard = () => {} }: {
-  route: BriefRoute; retained?: RoomKey | null; integration?: boolean; legacy: ReactNode; installGuard?(owner: DashboardOwner | null): void;
+export function ConnectedDashboard({ route, retained = null, integration = false, initialDescriptor = null, legacy, installGuard = () => {} }: {
+  route: BriefRoute; retained?: RoomKey | null; integration?: boolean; initialDescriptor?: HostDescriptor | null; legacy: ReactNode; installGuard?(owner: DashboardOwner | null): void;
 }) {
-  const [descriptor, setDescriptor] = useState<HostDescriptor | null>(null), [error, setError] = useState(false), [attempt, retry] = useState(0);
+  const [descriptor, setDescriptor] = useState<HostDescriptor | null>(initialDescriptor), [error, setError] = useState(false), [attempt, retry] = useState(0);
   useEffect(() => {
+    if (initialDescriptor) return;
     const http = createHostTransport(); setError(false);
     void http.json('/api/brief/host').then(value => { if (!http.signal.aborted) setDescriptor(readHost(value)); }).catch(() => { if (!http.signal.aborted) setError(true); });
     return () => http.stop();
-  }, [attempt]);
+  }, [attempt, initialDescriptor]);
   if (!descriptor) return <main className="brief-root brief-foundation"><h1>{error ? 'Dashboard unavailable' : 'Opening your workspace…'}</h1>
     {error && <><p>Your saved work is retained.</p><button onClick={() => retry(n => n + 1)}>Reconnect</button></>}</main>;
   return <OwnedDashboard key={JSON.stringify([descriptor.scopeId, descriptor.generation])} {...{ descriptor, route, retained, integration, legacy, installGuard }} />;
