@@ -95,13 +95,25 @@ function emailIdentity(input: Pick<FireInput, 'source' | 'dedupeKey'>): boolean 
 }
 
 /**
- * A message's key belongs to the run that processes it. A delivery that
- * started nothing (refused at readiness before this rule, for one) gives its
- * key up, keeping it in its detail, so the message can still be processed once.
+ * Evidence that a run never began: the handler had not reached it (no graph
+ * recorded, the fire never marked started), it recorded no step and it has no
+ * effect. Each part alone can mislead; a run that executed keeps its key.
+ */
+const RUN_NEVER_BEGAN = `r.graph_digest IS NULL AND COALESCE(r.steps, '{}') = '{}' AND COALESCE(r.steps_count, 0) = 0
+  AND NOT EXISTS (SELECT 1 FROM workflow_effect e WHERE e.run_id = r.id)`;
+
+/**
+ * A message's key belongs to the run that processes it. Two kinds of delivery
+ * give their key up, keeping it in their detail, so the message can still be
+ * processed once: one that started no run (refused at readiness before this
+ * rule, for one), and one whose run ended (stopped, canceled or failed) before
+ * it began, by the evidence above.
  */
 function releaseUnstartedEmailKey(flowId: string, key: string): void {
   db().run(`UPDATE workflow_trigger_fire SET detail = json_set(COALESCE(detail, '{}'), '$.deliveryKey', dedupe_key), dedupe_key = NULL
-    WHERE flow_id = ? AND source IN ('event', 'poll') AND dedupe_key = ? AND outcome != 'started'`, [flowId, key]);
+    WHERE flow_id = ? AND source IN ('event', 'poll') AND dedupe_key = ? AND (outcome != 'started'
+      OR (started_at IS NULL AND EXISTS (SELECT 1 FROM flow_run r WHERE r.id = workflow_trigger_fire.run_id
+        AND r.status NOT IN ('QUEUED', 'RUNNING', 'PAUSED', 'SUCCEEDED') AND ${RUN_NEVER_BEGAN})))`, [flowId, key]);
 }
 
 /**
@@ -352,11 +364,11 @@ export function claimEmailRun(flowId: string, versionId: string, key: string, ru
   if (!key.startsWith('event:email:') || key.length <= 12) throw Error('Invalid email identity');
   db().transaction(() => {
     releaseUnstartedEmailKey(flowId, key);
-    const previous = db().query<{ run_id: string | null; started_at: number | null; status: string | null }, [string, string]>(
-      `SELECT f.run_id, f.started_at, r.status FROM workflow_trigger_fire f LEFT JOIN flow_run r ON r.id = f.run_id
+    const previous = db().query<{ run_id: string | null; started_at: number | null; status: string | null; unbegun: number | null }, [string, string]>(
+      `SELECT f.run_id, f.started_at, r.status, (${RUN_NEVER_BEGAN}) AS unbegun FROM workflow_trigger_fire f LEFT JOIN flow_run r ON r.id = f.run_id
         WHERE f.flow_id = ? AND f.source IN ('event', 'poll') AND f.dedupe_key = ?`).get(flowId, key);
     if (previous?.run_id === runId) return;
-    if (previous && previous.started_at === null) {
+    if (previous && previous.started_at === null && previous.status !== null && previous.unbegun === 1) {
       throw Error(`This Gmail message already belongs to run ${previous.run_id ?? 'unknown'} of this workflow, which has not begun processing it (${(previous.status ?? 'missing').toLowerCase()}). Nothing was classified, labeled or notified by this run. Check that run instead of starting another.`);
     }
     if (previous) throw Error(`This Gmail message was already accepted by run ${previous.run_id ?? 'unknown'} of this workflow. No new classification, label or notification was attempted. Inspect the original run to reconcile an uncertain outcome.`);

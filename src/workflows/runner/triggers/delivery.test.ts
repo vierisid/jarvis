@@ -12,6 +12,7 @@ import { setEncryptionKey } from "../../db/encryption";
 import { createFlow, getFlow, setPublishedVersion, updateFlowStatus } from "../../db/repos/flow";
 import { createDraftVersion, lockVersion, updateDraftVersion } from "../../db/repos/flow-version";
 import { createFlowRun, getFlowRun, listRuns, updateRun } from "../../db/repos/flow-run";
+import { cancelFlowRun } from "../../db/repos/run-cancellation";
 import { claimNextJob, enqueue, queueStats } from "../../db/repos/job-queue";
 import { configureWorkflowReadiness } from "../../db/repos/flow-readiness";
 import { pinFlowBindings } from "../../db/repos/binding-pins";
@@ -41,6 +42,7 @@ beforeEach(() => {
     { name: "jarvis-ask", displayName: "", description: "", actions: { ask: { name: "ask", displayName: "", description: "" } } },
     { name: "jarvis-notify", displayName: "", description: "", actions: { notify: { name: "notify", displayName: "", description: "" } } },
     { name: "@activepieces/piece-gmail", displayName: "", description: "", actions: { gmail_add_label_to_email: { name: "gmail_add_label_to_email", displayName: "", description: "" } } },
+    { name: "@activepieces/piece-http", displayName: "", description: "", actions: { send_request: { name: "send_request", displayName: "", description: "" } } },
     { name: "@activepieces/piece-schedule", displayName: "", description: "", actions: {}, triggers: { cron_expression: { name: "cron_expression", displayName: "", description: "" } } },
   ]) });
 });
@@ -980,8 +982,8 @@ describe("Gmail message admission", () => {
     try {
       d.bus.publish("observer.email_received", { id: "queued-1" });
       const live = runsOf(flowId)[0]!;
-      // The queued live run is stopped before the worker reaches it; a manual run arrives first.
-      updateRun(live.id, { status: "STOPPED", finishTime: Date.now() });
+      // The live run is still queued (its job not due yet) when a manual run arrives.
+      getWorkflowDb().run("UPDATE workflow_job SET scheduled_at = ? WHERE flow_run_id = ?", [Date.now() + 3_600_000, live.id]);
       const manual = manualRun(flowId, versionId, { payload: { id: "queued-1" } });
       await drain();
       const message = getFlowRun(manual)?.failedStep?.errorMessage ?? "";
@@ -989,6 +991,82 @@ describe("Gmail message admission", () => {
       expect(message).toContain("has not begun");
       expect(message).not.toContain("already accepted");
     } finally { await d.stop(); }
+  });
+
+  for (const stop of ["turned off", "cancel"] as const) for (const retry of ["redelivery", "manual run"] as const)
+    test(`a queued delivery stopped (${stop}) before it began gives its message up to a ${retry}, processed once`, async () => {
+      seen.length = 0;
+      const { flowId, versionId } = emailFlow();
+      const d = await daemon(Date.now());
+      try {
+        d.bus.publish("observer.email_received", { id: "stopped-1", subject: "Support" });
+        const live = runsOf(flowId)[0]!;
+        // Kill stops a queued run with the same cancelFlowRun call as cancel.
+        if (stop === "cancel") cancelFlowRun(live.id);
+        else {
+          updateFlowStatus(flowId, "DISABLED");
+          await drain();
+          setSystemTime(new Date(Date.now() + 1000));
+          updateFlowStatus(flowId, "ENABLED");
+        }
+        await drain();
+        expect(getFlowRun(live.id)?.status).toBe("STOPPED");
+        expect(seen).toHaveLength(0);
+        const processed = retry === "redelivery"
+          ? (d.bus.publish("observer.email_received", { id: "stopped-1", subject: "Support" }), runsOf(flowId).find(r => r.status === "QUEUED")!.id)
+          : manualRun(flowId, versionId, { payload: { id: "stopped-1", subject: "Support" } });
+        await drain();
+        expect(getFlowRun(processed)?.status).toBe("SUCCEEDED");
+        expect(seen).toHaveLength(1);
+        d.bus.publish("observer.email_received", { id: "stopped-1", subject: "Support" });
+        const again = manualRun(flowId, versionId, { payload: { id: "stopped-1" } });
+        await drain();
+        expect(seen).toHaveLength(1);
+        expect(getFlowRun(again)?.failedStep?.errorMessage).toContain("already accepted");
+      } finally { await d.stop(); }
+    });
+
+  for (const evidence of ["executed with no recorded start", "an effect row"] as const)
+    test(`a stopped delivery whose run left ${evidence} keeps its message`, async () => {
+      seen.length = 0;
+      const { flowId, versionId } = emailFlow();
+      const d = await daemon(Date.now());
+      try {
+        d.bus.publish("observer.email_received", { id: "kept-1" });
+        const live = runsOf(flowId)[0]!;
+        if (evidence === "an effect row") {
+          getWorkflowDb().run("INSERT INTO workflow_effect (id, run_id, status, record) VALUES ('effect-1', ?, 'unknown', '{}')", [live.id]);
+          cancelFlowRun(live.id);
+        } else {
+          // The run executed, but recording when it began failed (non-fatal); it was then stopped.
+          getWorkflowDb().run("CREATE TRIGGER no_start BEFORE UPDATE OF started_at ON workflow_trigger_fire BEGIN SELECT RAISE(ABORT, 'disk full'); END");
+          await drain();
+          getWorkflowDb().run("DROP TRIGGER no_start");
+          expect(listFlowFires(flowId).find(f => f.runId === live.id)?.startedAt ?? null).toBeNull();
+          expect(seen).toHaveLength(1);
+          updateRun(live.id, { status: "STOPPED", finishTime: Date.now() });
+        }
+        d.bus.publish("observer.email_received", { id: "kept-1" });
+        const manual = manualRun(flowId, versionId, { payload: { id: "kept-1" } });
+        await drain();
+        expect(runsOf(flowId).filter(r => r.triggeredBy === "trigger:event")).toHaveLength(1);
+        expect(getFlowRun(manual)?.failedStep?.errorMessage).toContain("already accepted");
+        expect(seen).toHaveLength(evidence === "an effect row" ? 0 : 1);
+      } finally { await d.stop(); }
+    });
+
+  test("Test from here judges a step by the input it will run with: an HTTP GET overridden to a POST is refused", async () => {
+    seen.length = 0;
+    const { flowId, versionId } = emailFlow({ name: "fetch", type: "PIECE",
+      settings: { pieceName: "@activepieces/piece-http", actionName: "send_request", input: { method: "GET", url: "https://example.test" } } });
+    const plain = manualRun(flowId, versionId, {}, { stepNameToTest: "fetch" });
+    const posted = manualRun(flowId, versionId, {}, { stepNameToTest: "fetch",
+      sampleInputOverride: { fetch: { method: "POST", url: "https://example.test", body: { data: "x" } } } });
+    await drain();
+    expect(getFlowRun(plain)?.status).toBe("SUCCEEDED");
+    expect(getFlowRun(posted)?.status).toBe("FAILED");
+    expect(getFlowRun(posted)?.failedStep?.errorMessage).toContain('"fetch" is a tracked send or change');
+    expect(seen).toHaveLength(1);
   });
 
   test("an email key held by a delivery that started nothing, from before this rule, is given up to the next delivery", async () => {

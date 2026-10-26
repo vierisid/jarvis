@@ -1,7 +1,7 @@
 import { prepareSubmission, submissionConfig } from '../runtime/form-submission';
 import { lacksEmailMessageId, prepareEmailEvent, unclaimedEmailEvent } from '../runtime/event-types';
 import { claimEmailRun, claimSubmissionRun, fireForRun } from '../db/repos/trigger-fire';
-import { walkFlowNodes } from '../db/flow-graph';
+import { applyInputOverrides, walkFlowNodes } from '../db/flow-graph';
 import { tracksPieceCompletion } from '../runtime/piece-effects';
 /**
  * RUN_FLOW worker handler. Bridges the queue to flow execution:
@@ -298,7 +298,11 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
         && triggerSettings?.triggerName === 'on_event' && triggerSettings.input?.eventType === 'observer.email_received') {
         try {
           const tested = typed.payload.stepNameToTest;
-          const effect = tested ? trackedEffectUnder(version.trigger, tested) : null;
+          // Judged on the graph the preview runs: its input override can turn an
+          // untracked step (an HTTP GET) into a tracked one (a POST).
+          const overrides = typed.payload.sampleInputOverride;
+          const previewed = overrides && Object.keys(overrides).length > 0 ? applyInputOverrides(version.trigger, overrides) : version.trigger;
+          const effect = tested ? trackedEffectUnder(previewed, tested) : null;
           if (effect) throw Error(`"${effect}" is a tracked send or change, and a preview of it would act outside this email workflow's once-per-message check. Test the complete workflow with a message payload instead.`);
           // A preview of any other step, or a manual run naming no message,
           // cannot repeat a message: it runs without a claim. A live delivery
