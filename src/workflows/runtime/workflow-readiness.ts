@@ -1,4 +1,5 @@
 import { MEETING_ACCOUNTS, meetingSetup } from './meeting-briefs';
+import { IMPORT_ACCOUNTS, IMPORT_REQUIRED, IMPORT_ACTION, importSetup } from './contact-import';
 import { REPORT_ACCOUNTS, REPORT_REQUIRED, REPORT_ACTION, reportSetup } from './weekly-report';
 import { SALES_ACCOUNTS, SALES_REQUIRED, SALES_ACTION, salesSetup } from './sales-followups';
 import { parseOutputSchema } from './llm-output-contract';
@@ -218,6 +219,22 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     // Only input values are templated; source code and labels are not expressions.
     expressions(input, node, 'settings.input', scope, pieceName);
     const isPiece = (short: string) => pieceName === short || pieceName === `@jarvispieces/piece-${short}`;
+    if (!root && isPiece('jarvis-import') && settings.actionName === IMPORT_ACTION && object(input)) {
+      for (const [field, provider] of Object.entries(IMPORT_ACCOUNTS)) {
+        if (field === 'sourceConnection' && input.sourceAuth !== 'oauth2') continue;
+        const id = input[field];
+        if (field === 'sourceConnection' && emptyInput(id)) needsSetup(node,'settings.input.'+field,'Select the source OAuth2 account');
+        if (!emptyInput(id)) {
+          if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node,'settings.input.'+field,'CONNECTION_BINDING','Select a saved account reference');
+          else if (context.phase !== 'composition') {
+            const reason=context.connection?.(id,provider) ?? (context.connection ? null : 'Connection inventory unavailable');
+            if (reason) issue(node,'settings.input.'+field,'CONNECTION_BINDING',reason);
+            else runtime(node,'settings.input.'+field,'connection','Recheck pinned import account before each operation');
+          }
+        }
+      }
+      if (IMPORT_REQUIRED.every(k=>!emptyInput(input[k])) && (input.sourceAuth !== 'oauth2' || !emptyInput(input.sourceConnection))) try { importSetup(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
+    }
     if (!root && isPiece('jarvis-report') && settings.actionName === REPORT_ACTION && object(input)) {
       for (const [field, provider] of Object.entries(REPORT_ACCOUNTS)) {
         const id = input[field];

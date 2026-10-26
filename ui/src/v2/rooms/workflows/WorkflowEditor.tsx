@@ -3363,7 +3363,9 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
     : piece?.name === '@jarvispieces/piece-jarvis-sales' && subName === 'draft_followups'
       ? [['hubspotConnection','@activepieces/piece-hubspot','HubSpot'],['gmailConnection','@activepieces/piece-gmail','Gmail']] as const
       : piece?.name === '@jarvispieces/piece-jarvis-report' && subName === 'weekly_operating_report'
-        ? [['stripeConnection','@activepieces/piece-stripe','Stripe'],['hubspotConnection','@activepieces/piece-hubspot','HubSpot'],['googleConnection','@activepieces/piece-google-docs','Google Docs']] as const : [];
+        ? [['stripeConnection','@activepieces/piece-stripe','Stripe'],['hubspotConnection','@activepieces/piece-hubspot','HubSpot'],['googleConnection','@activepieces/piece-google-docs','Google Docs']] as const
+        : piece?.name === '@jarvispieces/piece-jarvis-import' && subName === 'resumable_contact_import'
+          ? [['hubspotConnection','@activepieces/piece-hubspot','HubSpot'], ...(formInput.sourceAuth === 'oauth2' ? [['sourceConnection','@activepieces/piece-http-oauth2','Source API'] as const] : [])] as const : [];
 
   const formWebhook = detectedTriggerKind === 'webhook' && ('submission_id_field' in formInput || 'submission_email_field' in formInput);
   const schema = detectedTriggerKind === 'schedule' && step.settings?.pieceName === 'schedule' ? {fields:[

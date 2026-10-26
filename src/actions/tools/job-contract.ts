@@ -165,6 +165,7 @@ interface Kind {
 }
 function pieceKind(pieceName: string, actionName: string | undefined): Kind | null {
   if (samePiece('jarvis-report', pieceName) && actionName === 'weekly_operating_report') return { effect: 'write_data' };
+  if (samePiece('jarvis-import', pieceName) && actionName === 'resumable_contact_import') return { effect: 'write_data' };
   if (samePiece('jarvis-sales', pieceName) && actionName === 'draft_followups') return { effect: 'write_data' };
   if (samePiece(pieceName, AGENT)) return { effect: 'spawn_agent', open: 'delegates to an agent, which chooses its own tools when it runs', agent: true };
   if (samePiece(pieceName, WORKFLOW)) return { effect: 'spawn_agent', open: 'starts another workflow, whose steps this check does not see' };

@@ -36,3 +36,12 @@ test('weekly report selects saved Stripe, HubSpot and Google Docs references sep
   await React.act(async()=>{selects[0]!.value='saved-0';selects[0]!.dispatchEvent(new Event('change',{bubbles:true}));});expect(writes).toEqual([['stripeConnection','saved-0']]);
  }finally{await React.act(async()=>root.unmount());host.remove();}
 });
+
+test('contact import keeps source OAuth and destination HubSpot account references separate',async()=>{
+ const host=document.createElement('div');document.body.append(host);const root=createRoot(host),writes:Array<[string,string]>=[];
+ const connections=['hubspot','http-oauth2','gmail'].map((name,i)=>({id:String(i),externalId:'saved-'+i,pieceName:'@activepieces/piece-'+name,displayName:'Account '+i,status:'ACTIVE'})) as any;
+ await React.act(async()=>root.render(<Pickers fields={[["hubspotConnection","@activepieces/piece-hubspot","HubSpot"],["sourceConnection","@activepieces/piece-http-oauth2","Source API"]]} connections={connections} input={{hubspotConnection:'saved-0'}} onSetInput={(k,v)=>writes.push([k,v])}/>));
+ try{const selects=host.querySelectorAll('select');expect(selects.length).toBe(2);expect(selects[0]!.value).toBe('saved-0');expect(selects[1]!.textContent).not.toContain('Account 0');expect(host.textContent).not.toContain('Account 2');
+  await React.act(async()=>{selects[1]!.value='saved-1';selects[1]!.dispatchEvent(new Event('change',{bubbles:true}));});expect(writes).toEqual([['sourceConnection','saved-1']]);
+ }finally{await React.act(async()=>root.unmount());host.remove();}
+});

@@ -99,6 +99,10 @@ export interface EffectInvocation {
   approvalRequired?: boolean;
   /** The engine owns this dispatch. Only its completion receipt can finish it. */
   externalDispatch?: boolean;
+  /** Qualified native resumable work owns its own dispatch/checkpoint ledger.
+   * Keep the same approval pending between timer slices, and recheck policy on
+   * every slice. Only the final confirmed result completes the effect. */
+  deferCompletion?: (result: unknown) => boolean;
   providerBinding?: WorkflowEffect['providerBinding'];
   /**
    * The tool's own gate asked for `confirm` and this is its floor: a pure
@@ -619,6 +623,10 @@ export class WorkflowEffectBoundary {
       // records the hand-off now, as it does for every piece authorization:
       // a lost completion receipt must not leave a send with no audit row.
       if (input.externalDispatch) { log(true); return { result }; }
+      if (input.deferCompletion?.(result)) {
+        record.status='pending'; record.result=null;
+        saveWorkflowEffect(record); log(true); return {result};
+      }
       if (verification) record.outcome = { status: 'succeeded', verification };
       // NOT bounded and NOT defanged, deliberately: this is replay and
       // idempotency state that a resumed run reads back instead of acting again,

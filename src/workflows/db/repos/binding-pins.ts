@@ -1,4 +1,5 @@
 import { MEETING_ACCOUNTS } from '../../runtime/meeting-briefs';
+import { IMPORT_ACCOUNTS, IMPORT_PIECE, IMPORT_ACTION } from '../../runtime/contact-import';
 import { REPORT_ACCOUNTS, REPORT_PIECE, REPORT_ACTION } from '../../runtime/weekly-report';
 import { SALES_ACCOUNTS, SALES_PIECE, SALES_ACTION } from '../../runtime/sales-followups';
 /**
@@ -112,6 +113,13 @@ export function connectionBindings(trigger: unknown): Map<string, ConnectionRefe
 /** Each connection one step names, with where it names it, by the same rule as `connectionBindings`. */
 export function nodeConnectionReferences(node: FlowTriggerNode): Array<[externalId: string, path: string]> {
   const out: Array<[string, string]> = [];
+  if (node.settings?.pieceName === IMPORT_PIECE && node.settings?.actionName === IMPORT_ACTION) {
+    for (const field of Object.keys(IMPORT_ACCOUNTS)) {
+      if (field === 'sourceConnection' && node.settings.input?.sourceAuth !== 'oauth2') continue;
+      const id = node.settings?.input?.[field];
+      if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
+    }
+  }
   if (node.settings?.pieceName === REPORT_PIECE && node.settings?.actionName === REPORT_ACTION) {
     for (const field of Object.keys(REPORT_ACCOUNTS)) {
       const id = node.settings?.input?.[field];

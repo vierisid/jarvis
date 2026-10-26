@@ -25,6 +25,17 @@ export const DEFAULT_IDS = {
 } as const;
 
 const STATEMENTS: string[] = [
+  `CREATE TABLE IF NOT EXISTS workflow_contact_import (
+    identity TEXT PRIMARY KEY, config TEXT NOT NULL, owner TEXT NOT NULL,
+    lease_until INTEGER NOT NULL, progress TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS workflow_import_cursor (
+    identity TEXT NOT NULL, cursor TEXT NOT NULL, PRIMARY KEY(identity,cursor)
+  )`,
+  `CREATE TABLE IF NOT EXISTS workflow_import_contact (
+    identity TEXT NOT NULL, source_id TEXT NOT NULL, hash TEXT NOT NULL,
+    contact_id TEXT NOT NULL, PRIMARY KEY(identity,source_id)
+  )`,
   `CREATE TABLE IF NOT EXISTS workflow_weekly_report (
     identity TEXT PRIMARY KEY, owner TEXT NOT NULL, state TEXT NOT NULL,
     document_id TEXT, result TEXT, created INTEGER NOT NULL
