@@ -1,7 +1,7 @@
 import {beforeEach,afterEach,expect,test} from 'bun:test';
 import {initWorkflowDb,closeWorkflowDb} from '../db';
 import {reportReceipt} from '../db/repos/weekly-report';
-import {collectWeeklyReport,saveWeeklyReport,reportSetup,reportWeeks,localMidnight,reportTransport,decimal,comparison} from './weekly-report';
+import {collectWeeklyReport,saveWeeklyReport,reportSetup,reportWeeks,localMidnight,reportTransport,decimal,comparison,hubspotSearchBody,HUBSPOT_SEARCH_PATH} from './weekly-report';
 import {getCronTimezone,setCronTimezone} from '../../lib/cron-scheduler';
 import {reportFixtureSetup as setup,reportFixtureNow as now,reportFixtureRequest} from './report-fixtures';
 beforeEach(()=>initWorkflowDb(':memory:'));afterEach(()=>closeWorkflowDb());
@@ -66,7 +66,7 @@ test('cancellation or account checkpoint failure cannot be disguised as unavaila
 
 test('incomplete HubSpot date or currency invalidates the dataset and never assumes EUR',async()=>{
  for(const field of ['closedate','deal_currency_code']){
-  const req=reportFixtureRequest({mutate:(p,path,r)=>p==='hubspot'&&path.startsWith('/crm/v3/objects/deals?')?{...r,results:r.results.map((x:any)=>({...x,properties:{...x.properties,[field]:null}}))}:r});
+  const req=reportFixtureRequest({mutate:(p,path,r)=>p==='hubspot'&&path==='/crm/v3/objects/deals/search'?{...r,results:r.results.map((x:any)=>({...x,properties:{...x.properties,[field]:null}}))}:r});
   expect((await collectWeeklyReport(setup,req,now)).datasets[2]!.coverage.status).toBe('Unavailable');
  }
 });
@@ -119,4 +119,89 @@ test('a create that was refused or never dispatched releases the weekly claim; a
   const transport=reportTransport({stripe:'x',hubspot:'x',google:'x'},()=>{},(async()=>new Response('{}',{status:503})) as any),fixture=reportFixtureRequest(),r=await collectWeeklyReport(setup,fixture,now);
   await expect(saveWeeklyReport(setup,r,async(p,path,body)=>body?transport(p,path,body):fixture(p,path,body),reportReceipt('a'),'uncertain')).rejects.toThrow('HTTP 503');
   await expect(saveWeeklyReport(setup,r,fixture,reportReceipt('b'),'uncertain')).rejects.toThrow('unresolved');
+});
+
+const deal=(id:number,date:string|number,amount='1',dealstage='won',deal_currency_code='EUR')=>({id:String(id),properties:{dealstage,closedate:typeof date==='number'?new Date(date).toISOString():date,amount,deal_currency_code}});
+test('pending, failed and canceled refunds stay out of exact totals and are disclosed per currency',async()=>{
+  const statuses:Record<number,string>={1:'pending',2:'succeeded',3:'failed'};
+  const r=await collectWeeklyReport(setup,reportFixtureRequest({refundStatus:n=>statuses[n]!}),now),refunds=r.datasets[1]!;
+  expect(refunds.coverage).toMatchObject({source:'stripe-refunds',status:'Complete',unique:3});
+  expect(refunds.totals).toEqual({EUR:{count:1,amount:'2'}});
+  expect(refunds.excluded).toEqual({pending:{EUR:{count:1,amount:'1'}},failed:{JPY:{count:1,amount:'5'}}});
+  expect(r.content).toContain('stripe-refunds | current | Excluded from totals: 1 pending refund (EUR 1.00) and 1 failed refund (JPY 5) not included');
+  expect(r.content).toContain('pending, failed and canceled refunds are excluded from totals');
+  expect(r.comparisons.find(c=>c.source==='stripe-refunds'&&c.currency==='EUR')).toMatchObject({current:{count:1,amount:'2'}});
+  expect(r.comparisons.some(c=>c.source==='stripe-refunds'&&c.currency==='JPY')).toBe(false);
+  const all=await collectWeeklyReport(setup,reportFixtureRequest({refundStatus:n=>n===3?'canceled':'pending'}),now);
+  expect(all.datasets[1]!.totals).toEqual({});
+  expect(all.content).toContain('stripe-refunds | current | 0 records; no currency inferred\nstripe-refunds | current | Excluded from totals: 2 pending refunds (EUR 3.00) and 1 canceled refund (JPY 5) not included');
+});
+test('an unknown refund status makes refunds unavailable instead of dropping the refund',async()=>{
+  for(const status of ['requires_action','refunded',undefined,null]){
+    const r=await collectWeeklyReport(setup,reportFixtureRequest({refundStatus:n=>n===2?status as any:'succeeded'}),now);
+    expect(r.datasets[1]!.coverage).toMatchObject({status:'Unavailable',reason:'Refund status cannot be confirmed'});expect(r.datasets[1]!.totals).toEqual({});expect(r.datasets[1]!.excluded).toBeUndefined();
+    expect(r.datasets[0]!.coverage.status).toBe('Complete');expect(r.partial).toBe(true);
+  }
+});
+test('HubSpot search is filtered to each week in the timezone configured for Jarvis and read twice',async()=>{
+  const previous=getCronTimezone();let s;
+  try{setCronTimezone('America/New_York');s=reportSetup({...setup,timezone:''});}finally{setCronTimezone(previous);}
+  const searches:any[]=[],r=await collectWeeklyReport(s,reportFixtureRequest({searches}),Date.parse('2026-11-02T12:00:00Z'));
+  const windows=searches.map(b=>{const [stage,from,to]=b.filterGroups[0].filters;expect(stage).toEqual({propertyName:'dealstage',operator:'IN',values:['won']});expect([from.propertyName,from.operator,to.propertyName,to.operator]).toEqual(['closedate','GTE','closedate','LT']);return [new Date(Number(from.value)).toISOString(),new Date(Number(to.value)).toISOString()];});
+  const current=['2026-10-26T04:00:00.000Z','2026-11-02T05:00:00.000Z'],prior=['2026-10-19T04:00:00.000Z','2026-10-26T04:00:00.000Z'];
+  expect(windows).toEqual([current,current,prior,prior]);
+  expect(r.datasets.filter(d=>d.coverage.source==='hubspot-deals').map(d=>d.coverage.status)).toEqual(['Complete','Complete']);
+  // Deal 4 (2026-10-26T10:00Z) is in the New York current week and deal 2 is outside both; the lost-stage deal never counts.
+  expect(r.datasets[2]!.totals).toEqual({EUR:{count:1,amount:'999'}});expect(r.datasets[5]!.totals).toEqual({EUR:{count:1,amount:'123.456789'}});
+});
+test('HubSpot search pagination reads every page with exact totals',async()=>{
+  const week=reportWeeks(now,'Europe/Rome')[0]!,deals=Array.from({length:900},(_,i)=>deal(i+1,week.start+i*1000,'0.000001',i%2?'won':'lost',i%3?'EUR':'usd'));
+  const searches:any[]=[],r=await collectWeeklyReport(setup,reportFixtureRequest({deals,searches}),now),d=r.datasets[2]!;
+  expect(d.coverage).toMatchObject({status:'Complete',pages:6,unique:450,terminal:true});
+  expect(searches.slice(0,3).map(b=>b.after)).toEqual([undefined,'200','400']);
+  expect(d.totals).toEqual({EUR:{count:300,amount:'0.0003'},USD:{count:150,amount:'0.00015'}});
+});
+test('a week over the HubSpot search cap is split into smaller windows, never truncated',async()=>{
+  const week=reportWeeks(now,'Europe/Rome')[0]!,span=week.end-week.start,deals=Array.from({length:10050},(_,i)=>deal(i+1,week.start+Math.floor(i*span/10050)));
+  const searches:any[]=[],r=await collectWeeklyReport(setup,reportFixtureRequest({deals,searches}),now),d=r.datasets[2]!;
+  expect(d.coverage).toMatchObject({status:'Complete',unique:10050});expect(d.totals).toEqual({EUR:{count:10050,amount:'10050'}});
+  const firstPages=searches.filter(b=>b.after===undefined).map(b=>[Number(b.filterGroups[0].filters[1].value),Number(b.filterGroups[0].filters[2].value)]);
+  expect(firstPages.slice(0,3)).toEqual([[week.start,week.end],[week.start,week.start+Math.floor(span/2)],[week.start+Math.floor(span/2),week.end]]);
+  expect(r.content).toContain('a window that could reach the 10000-result search cap is split');
+});
+test('a window over the search cap that cannot be split is unavailable',async()=>{
+  const week=reportWeeks(now,'Europe/Rome')[0]!,deals=Array.from({length:10000},(_,i)=>deal(i+1,week.start+5000));
+  const r=await collectWeeklyReport(setup,reportFixtureRequest({deals}),now),d=r.datasets[2]!;
+  expect(d.coverage.status).toBe('Unavailable');expect(d.coverage.reason).toContain('More than 10000 matching HubSpot deals share one closedate millisecond');expect(d.totals).toEqual({});
+  expect(r.datasets[5]!.coverage.status).toBe('Complete');
+});
+test('deals that change or shift during or between HubSpot search reads make the week unavailable',async()=>{
+  const week=reportWeeks(now,'Europe/Rome')[0]!,deals=Array.from({length:300},(_,i)=>deal(i+1,week.start+i*1000));
+  let n=0;const changed=reportFixtureRequest({deals,mutate:(p,path,r)=>{if(path!==HUBSPOT_SEARCH_PATH)return r;n++;return n===3?{...r,results:r.results.map((x:any)=>({...x,properties:{...x.properties,amount:'2'}}))}:r;}});
+  expect((await collectWeeklyReport(setup,changed,now)).datasets[2]!.coverage.reason).toContain('changed between the two complete reads');
+  let m=0;const shifted=reportFixtureRequest({deals,mutate:(p,path,r)=>{if(path!==HUBSPOT_SEARCH_PATH)return r;m++;return m===2?{...r,total:r.total+1}:r;}});
+  expect((await collectWeeklyReport(setup,shifted,now)).datasets[2]!.coverage.reason).toContain('total changed during pagination');
+  let k=0;const repeated=reportFixtureRequest({deals,mutate:(p,path,r)=>{if(path!==HUBSPOT_SEARCH_PATH)return r;k++;return k===2?{...r,results:[deals[199],...r.results.slice(1)]}:r;}});
+  expect((await collectWeeklyReport(setup,repeated,now)).datasets[2]!.coverage.reason).toContain('results shifted');
+  const outside=reportFixtureRequest({deals,mutate:(p,path,r)=>path===HUBSPOT_SEARCH_PATH&&r.results.length?{...r,results:[{...r.results[0],properties:{...r.results[0].properties,dealstage:'lost'}},...r.results.slice(1)]}:r});
+  expect((await collectWeeklyReport(setup,outside,now)).datasets[2]!.coverage.reason).toContain('outside the selected stages');
+});
+test('transport allows exactly the deal search POST and refuses every other HubSpot write',async()=>{
+  const sent:any[]=[],req=reportTransport({stripe:'x',hubspot:'x',google:'x'},()=>{},(async(url:any,init:any)=>{sent.push([String(url),init.method,init.body]);return Response.json({total:0,results:[]});}) as any,0);
+  const body=hubspotSearchBody(setup,1000,2000),page=hubspotSearchBody(setup,1000,2000,'200');
+  await req('hubspot',HUBSPOT_SEARCH_PATH,body);await req('hubspot',HUBSPOT_SEARCH_PATH,page);
+  expect(sent).toEqual([['https://api.hubapi.com/crm/v3/objects/deals/search','POST',JSON.stringify(body)],['https://api.hubapi.com/crm/v3/objects/deals/search','POST',JSON.stringify(page)]]);
+  const f=(i:number,patch:any)=>({...body,filterGroups:[{filters:body.filterGroups[0].filters.map((x:any,j:number)=>j===i?{...x,...patch}:x)}]});
+  for(const [path,b] of [
+    ['/crm/v3/objects/deals',{properties:{amount:'1'}}],['/crm/v3/objects/deals/1',{properties:{amount:'1'}}],['/crm/v3/objects/deals/batch/update',{inputs:[]}],['/crm/v3/objects/deals/batch/archive',{inputs:[]}],
+    ['/crm/v3/objects/contacts/search',body],[HUBSPOT_SEARCH_PATH+'?archived=true',body],['/crm/v3/objects/deals?limit=100',undefined],[HUBSPOT_SEARCH_PATH,undefined],
+    [HUBSPOT_SEARCH_PATH,{...body,extra:1}],[HUBSPOT_SEARCH_PATH,{...body,limit:201}],[HUBSPOT_SEARCH_PATH,hubspotSearchBody(setup,1000,2000,'9900')],[HUBSPOT_SEARCH_PATH,{...body,sorts:[{propertyName:'amount',direction:'DESCENDING'}]}],
+    [HUBSPOT_SEARCH_PATH,{...body,filterGroups:[...body.filterGroups,...body.filterGroups]}],[HUBSPOT_SEARCH_PATH,f(0,{operator:'NOT_IN'})],[HUBSPOT_SEARCH_PATH,f(1,{operator:'GT'})],[HUBSPOT_SEARCH_PATH,f(2,{value:'500'})],[HUBSPOT_SEARCH_PATH,f(2,{propertyName:'createdate'})],
+  ] as any[])await expect(req('hubspot',path,b)).rejects.toThrow('outside the read/create-new-document scope');
+  expect(sent).toHaveLength(2);
+});
+test('transport paces HubSpot searches',async()=>{
+  const at:number[]=[],req=reportTransport({stripe:'x',hubspot:'x',google:'x'},()=>{},(async()=>{at.push(Date.now());return Response.json({total:0,results:[]});}) as any,80);
+  for(let i=0;i<3;i++)await req('hubspot',HUBSPOT_SEARCH_PATH,hubspotSearchBody(setup,1000,2000));
+  expect(at[1]!-at[0]!).toBeGreaterThanOrEqual(75);expect(at[2]!-at[1]!).toBeGreaterThanOrEqual(75);
 });
