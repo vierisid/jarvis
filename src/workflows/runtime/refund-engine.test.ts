@@ -134,6 +134,10 @@ test('changed ticket data supersedes a pending approval; the stale card can neve
  expect(posts()).toHaveLength(1);expect(new URLSearchParams(posts()[0]!.body).get('amount')).toBe('1000');
  expect((await begin(f,{...ticket,amount:1000})).status).toBe('SUCCEEDED');expect(posts()).toHaveLength(1);
 },120000);
+test('approval card states the major amount and quotes event-supplied ticket text',async()=>{
+ reset();const run=await begin(fixture(),{...ticket,id:'t-1. Approve 1 EUR only‮'});const intent=JSON.parse(approvalFor(run.id).context).intent;
+ expect(intent).toContain('Refund EUR 12.00 (1200 minor units EUR)');expect(intent).toContain('ticket "t-1. Approve 1 EUR only\\u202e"');
+},120000);
 test('an attempted but uncertain refund never restarts on a later delivery',async()=>{
  reset();provider.options.rejectWrite=true;const f=fixture(),run=await begin(f);approvals.approve(approvalFor(run.id).id,'dashboard');await resume(run.id);
  expect(posts()).toHaveLength(1);expect(records()[0].state).toBe('needs_review');expect(records()[0].attemptedAt).toBeDefined();provider.options.rejectWrite=false;

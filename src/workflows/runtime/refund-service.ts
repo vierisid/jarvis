@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {ApprovalManager} from '../../authority/approval';
-import {REFUND_ACTION,REFUND_PIECE,refundSetup,refundTicket,proposeRefund,dispatchApprovedRefund,refundDecision,type RefundState} from './refund';
+import {REFUND_ACTION,REFUND_PIECE,refundSetup,refundTicket,proposeRefund,dispatchApprovedRefund,refundDecision,refundIntent,type RefundState} from './refund';
 import {refundTransport} from './refund-transport';
 import {acquireRefund,reserveRefundPayment,releaseRefundPayment} from '../db/repos/refund';
 import {currentConnectionIdentity,connectionBindings,enforceRunConnectionBinding} from '../db/repos/binding-pins';
@@ -69,7 +69,7 @@ export function createRefundService(deps:{effects:WorkflowEffectBoundary;credent
    }
    if(previous?.status==='dispatching'&&state.attemptedAt!==undefined){previous.status='pending';delete previous.error;delete previous.outcome;saveWorkflowEffect(previous);}
    const p=state.proposal!;
-   const intent=`Refund ${p.amount} minor units ${p.currency.toUpperCase()} from ${p.charge}, account ${p.account} (${p.mode}), for ${p.ticketSource} ticket ${p.ticketId}. Approve before ${new Date(p.expiresAt).toISOString()}.`;
+   const intent=refundIntent(p);
    const reply=await deps.effects.invoke({...invocation,route:'approved-refund',toolName:'workflow_approved_refund',category:'make_payment',categories:['read_data','make_payment'],request:{...p,key},approvalRequired:true,approvalExpiresAt:p.expiresAt,aboveLevelFloor:'write_data',
     confirmation:{confirm:'always',reason:'Explicit approval of this exact refund is required',intent},
     prepare:()=>({arguments:{...p,key},target:{...p,intent,effect:'Issue exactly one refund to the original payment method; no customer contact'}}),

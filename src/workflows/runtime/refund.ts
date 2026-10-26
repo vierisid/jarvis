@@ -24,6 +24,20 @@ export interface RefundProvider {payment(id:string):Promise<RefundPayment>;refun
 export interface RefundProposal {ticketId:string;ticketSource:string;account:string;mode:'test'|'live';charge:string;currency:string;amount:number;refunded:number;expiresAt:number}
 export interface RefundState {proposal?:RefundProposal;approvalId?:string;originRun:string;state:'new'|'approval'|'dispatching'|'refunded'|'pending_provider'|'rejected'|'expired'|'needs_review';attemptedAt?:number;receipt?:RefundReceipt;reason?:string;retiredRuns?:string[]}
 export interface RefundStore {load():RefundState;save(state:RefundState):void;check():void}
+// Stripe minor-unit exponents that differ from 2 (docs.stripe.com/currencies).
+const ZERO_DECIMAL=new Set(['bif','clp','djf','gnf','jpy','kmf','krw','mga','pyg','rwf','ugx','vnd','vuv','xaf','xof','xpf']);
+const THREE_DECIMAL=new Set(['bhd','jod','kwd','omr','tnd']);
+/** The amount an approver reads in major units, beside the exact minor-unit value sent to Stripe. */
+export function refundMajorAmount(amount:number,currency:string){
+  const exp=ZERO_DECIMAL.has(currency)?0:THREE_DECIMAL.has(currency)?3:2,scale=10**exp;
+  const whole=Math.floor(amount/scale),frac=String(amount%scale).padStart(exp,'0');
+  return currency.toUpperCase()+' '+whole+(exp?'.'+frac:'');
+}
+/** Ticket ID and source come from the event and setup: quoted, so they cannot rewrite the sentence. */
+const quoted=(v:string)=>JSON.stringify(v).replace(/[^\x20-\x7e]/g,c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0'));
+export function refundIntent(p:RefundProposal){
+  return `Refund ${refundMajorAmount(p.amount,p.currency)} (${p.amount} minor units ${p.currency.toUpperCase()}) from ${p.charge}, account ${p.account} (${p.mode}), for ${quoted(p.ticketSource)} ticket ${quoted(p.ticketId)}. Approve before ${new Date(p.expiresAt).toISOString()}.`;
+}
 export function refundDecision(expiresAt:number,decision:{status:string;decided_at:number|null}|null,now:number):'approved'|'pending'|'rejected'|'expired' {
   if(decision?.status==='denied')return 'rejected';
   if(decision?.status==='expired')return 'expired';

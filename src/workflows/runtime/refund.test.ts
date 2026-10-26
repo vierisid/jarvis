@@ -1,6 +1,6 @@
 import {expect,test} from 'bun:test';
 import {refundFixtureProvider,refundFixtureSetup,refundFixtureTicket} from './refund-fixtures';
-import {refundSetup,refundTicket,proposeRefund,dispatchApprovedRefund,type RefundState,type RefundStore} from './refund';
+import {refundSetup,refundTicket,proposeRefund,dispatchApprovedRefund,refundMajorAmount,type RefundState,type RefundStore} from './refund';
 import {refundTransport} from './refund-transport';
 const setup=refundSetup(refundFixtureSetup);
 test('payment proposal uses captured amount, not authorization amount; partial amounts stay exact',async()=>{
@@ -43,4 +43,7 @@ test('malformed, incomplete and mismatched provider receipts are not success',as
  expect((await dispatchApprovedRefund(store,provider,'key',2,()=>{})).state).toBe('needs_review');expect(f.calls.some(c=>c.method==='POST')).toBe(false);
  const broken=refundTransport(setup,'synthetic',()=>{},(async(url:any)=>new Response(JSON.stringify(String(url).endsWith('account')?{id:'acct_fixture'}:{data:[],has_more:true}))) as typeof fetch);
  await expect(broken.refunds('ch_fixture')).rejects.toThrow('advance');
+});
+test('major amounts follow Stripe minor-unit exponents',()=>{
+ expect(refundMajorAmount(1000,'jpy')).toBe('JPY 1000');expect(refundMajorAmount(1234,'kwd')).toBe('KWD 1.234');expect(refundMajorAmount(5,'eur')).toBe('EUR 0.05');expect(refundMajorAmount(120000,'usd')).toBe('USD 1200.00');
 });
