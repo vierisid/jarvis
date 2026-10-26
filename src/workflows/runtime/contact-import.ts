@@ -38,7 +38,7 @@ export const importDigest=(v:unknown)=>createHash('sha256').update(JSON.stringif
 export interface ImportContact {id:string;email:string;properties:Record<string,string>;hash:string}
 export interface ImportProgress {
   cursor:string|null;page:ImportContact[]|null;next:string|null;index:number;pages:number;contacts:number;complete:boolean;
-  phase:'account'|'page'|'lookup'|'write'|'reconcile';method:'POST'|'PATCH';retries:number;notBefore:number;inFlight:boolean;error?:string;
+  phase:'account'|'page'|'lookup'|'write'|'reconcile';method:'POST'|'PATCH';retries:number;notBefore:number;inFlight:boolean;error?:string;stoppedRun?:string;
 }
 export const initialImportProgress=():ImportProgress=>({cursor:null,page:null,next:null,index:0,pages:0,contacts:0,complete:false,phase:'account',method:'POST',retries:0,notBefore:0,inFlight:false});
 export interface ImportStore {
@@ -71,11 +71,19 @@ function pageData(body:unknown,s:ImportSetup){
 }
 /** One bounded provider operation per slice. Progress, retry reservation and page
  * snapshot live in SQLite; timer waitpoints release the engine between slices. */
-export async function importSlice(s:ImportSetup,store:ImportStore,request:ImportRequest,now:number,clock:()=>number=()=>now):Promise<{complete:boolean;pages:number;contacts:number;resumeAt?:number}> {
+export async function importSlice(s:ImportSetup,store:ImportStore,request:ImportRequest,now:number,clock:()=>number=()=>now,run?:string):Promise<{complete:boolean;pages:number;contacts:number;resumeAt?:number}> {
   const p=store.load();store.check();
   const result=(resumeAt?:number)=>({complete:p.complete,pages:p.pages,contacts:p.contacts,...(!p.complete?{resumeAt:resumeAt??now+1}: {})});
-  const fail=(message:string):never=>{p.error=message;p.inFlight=false;store.save(p);throw Error(message);};
-  if(p.error)throw Error(p.error);if(p.complete)return result();
+  const fail=(message:string):never=>{p.error=message;p.stoppedRun=run;p.inFlight=false;store.save(p);throw Error(message);};
+  // A stop is final for the run that hit it. A new run (a fresh start, and
+  // fresh approval when governed) resumes from the checkpoint with a fresh
+  // budget, reconciling a possibly committed write by lookup before any repeat.
+  // Deterministic stops (cycles, changed identities) are detected again.
+  if(p.error){
+    if(run===undefined||p.stoppedRun===run)throw Error(p.error);
+    delete p.error;delete p.stoppedRun;p.retries=0;p.notBefore=0;if(p.phase==='write')p.phase='reconcile';store.save(p);
+  }
+  if(p.complete)return result();
   if(p.notBefore>now)return result(p.notBefore);
   // A process died after reserving a request. Count that attempt, and reconcile
   // a potentially committed write before any repeat. Do not reset the budget.

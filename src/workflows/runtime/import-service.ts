@@ -40,7 +40,7 @@ export function createContactImportService(deps:{effects:WorkflowEffectBoundary;
           if(!resolved||resolved.pieceName!==pieceName||resolved.status&&resolved.status!=='ACTIVE'||resolved.type!=='OAUTH2'||typeof resolved.value.access_token!=='string'||!resolved.value.access_token)throw Error('Connect the selected import accounts securely');
           tokens[field==='hubspotConnection'?'hubspot':'source']=resolved.value.access_token;
         }
-        check();return importSlice(setup,acquired.store,deps.request??importTransport(setup,tokens,()=>{check();acquired.store.check();}),clock(),clock);
+        check();return importSlice(setup,acquired.store,deps.request??importTransport(setup,tokens,()=>{check();acquired.store.check();}),clock(),clock,ctx.runId);
       }});
     if(reply.approval)return {approval:reply.approval};
     return park(reply.result as {complete:boolean;resumeAt?:number});

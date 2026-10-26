@@ -11,8 +11,8 @@ let dir:string,now:number,seq:number;
 beforeEach(()=>{dir=mkdtempSync(join(tmpdir(),'jarvis-import-'));initWorkflowDb(join(dir,'db'));now=Date.parse('2026-10-26T08:00:00Z');seq=0;});
 afterEach(()=>{closeWorkflowDb();rmSync(dir,{recursive:true,force:true});});
 const reopen=()=>{closeWorkflowDb();initWorkflowDb(join(dir,'db'));};
-async function tick(request:ImportRequest){const acquired=acquireImport('job',importDigest(setup),'owner-'+(++seq),()=>now);if('busyUntil'in acquired)throw Error('Busy fixture');try{return await importSlice(setup,acquired.store,request,now,()=>now);}finally{acquired.release();}}
-async function finish(request:ImportRequest){for(let i=0;i<80;i++){const r=await tick(request);if(r.complete)return r;now=Math.max(now+1,r.resumeAt??now+1);}throw Error('Import did not finish');}
+async function tick(request:ImportRequest,run?:string){const acquired=acquireImport('job',importDigest(setup),'owner-'+(++seq),()=>now);if('busyUntil'in acquired)throw Error('Busy fixture');try{return await importSlice(setup,acquired.store,request,now,()=>now,run);}finally{acquired.release();}}
+async function finish(request:ImportRequest,run?:string){for(let i=0;i<80;i++){const r=await tick(request,run);if(r.complete)return r;now=Math.max(now+1,r.resumeAt??now+1);}throw Error('Import did not finish');}
 test('all pages, normalization, duplicate source IDs and full replay preserve two contacts',async()=>{
  const f=importFixtureProvider();expect(await finish(f.request)).toMatchObject({complete:true,pages:2,contacts:2});expect(f.creates).toBe(2);expect(f.contacts.get('alice@example.com')?.properties.firstname).toBe('Alice');
  const n=f.calls.length;reopen();expect((await finish(f.request)).complete).toBe(true);expect(f.calls).toHaveLength(n);
@@ -85,4 +85,16 @@ test('setup rejects identity mutation and credentials in endpoints; private DNS 
  expect(()=>importSetup({...setup,propertyMapping:{email:'other'}})).toThrow('mapping');expect(()=>importSetup({...setup,idPath:'__proto__.x'})).toThrow('field path');
  for(const ip of ['127.0.0.1','10.1.2.3','169.254.169.254','192.168.1.2','::1','::ffff:127.0.0.1','fd00::1'])expect(publicImportAddress(ip)).toBe(false);
  expect(publicImportAddress('8.8.8.8')).toBe(true);
+});
+
+test('a stop is final for its run; a new run resumes from the checkpoint and reconciles before writing',async()=>{
+ const f=importFixtureProvider();let n=0;await tick(f.request,'run-1');
+ await expect(tick(async()=>{n++;return {status:401,body:null};},'run-1')).rejects.toThrow('401');
+ await expect(tick(f.request,'run-1')).rejects.toThrow('401');expect(n).toBe(1);
+ reopen();expect((await finish(f.request,'run-2')).complete).toBe(true);expect(f.creates).toBe(2);
+ const g=importFixtureProvider();getWorkflowDb().run('DELETE FROM workflow_contact_import');getWorkflowDb().run('DELETE FROM workflow_import_contact');getWorkflowDb().run('DELETE FROM workflow_import_cursor');
+ let lost=false;const flaky:ImportRequest=async(provider,url,method,body)=>{if(lost)return {status:503,body:null};const r=await g.request(provider,url,method,body);if(method==='POST'){lost=true;return {status:503,body:null};}return r;};
+ await expect(finish(flaky,'run-3')).rejects.toThrow('retry budget');expect(g.creates).toBe(1);
+ await expect(tick(g.request,'run-3')).rejects.toThrow('retry budget');
+ expect((await finish(g.request,'run-4')).contacts).toBe(2);expect(g.creates).toBe(2);expect(g.calls.filter(c=>c.method==='POST')).toHaveLength(2);
 });
