@@ -34,6 +34,8 @@ import {createManageWorkflowTool} from '../../actions/tools/manage-workflow';
 import {IMPORT_PIECE,IMPORT_ACTION,IMPORT_REQUIRED} from './contact-import';
 import {importFixtureSetup as setup,importFixtureProvider} from './import-fixtures';
 import {workflowSafeguards} from './workflow-safeguards';
+import {cancelFlowRun} from '../db/repos/run-cancellation';
+import {listWorkflowEffects} from '../db/repos/workflow-effect';
 let dir:string,api:SandboxApi,runtime:EngineRuntime,worker:Worker,catalog:PieceCatalog,authority:AuthorityEngine,approvals:ApprovalManager;
 let services:ReturnType<typeof buildSandboxServiceBackends>,now=Date.now(),provider=importFixtureProvider();
 const runIds:string[]=[];
@@ -109,3 +111,14 @@ test('actual generated Test 10 draft executes after filling setup only',async()=
  updateDraftVersion(draft.id,{trigger:g});expect(versionReadiness(flow.id,draft.id).ready).toBe(true);lockVersion(draft.id);setPublishedVersion(flow.id,draft.id);updateFlowStatus(flow.id,'ENABLED');
  provider.options.throttle=true;provider.options.loseWrite=true;const first=await begin({flow,version:draft});expect((await finish(first.id)).status).toBe('SUCCEEDED');expect(provider.creates).toBe(2);
 },120_000);
+
+test('canceling between slices never receipts already-run import work as not started',async()=>{
+ reset();const f=fixture();authority.setGovernedCategories(['write_data']);const run=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'});runIds.push(run.id);
+ const ctx={runId:run.id,projectId:DEFAULT_IDS.project,stepName:'import_contacts',executionPath:[] as Array<[string,number]>};
+ const first=await services.contactImport!({...setup},ctx) as any;const id=first.approval.approvalId;approvals.approve(id,'fixture');
+ for(let i=0;i<4;i++){const r=await services.contactImport!({...setup},ctx) as any;expect(r.complete).toBe(false);now=Math.max(now+1,r.resumeAt);}
+ expect(provider.creates).toBe(1);cancelFlowRun(run.id);
+ const effect=listWorkflowEffects(run.id).find(e=>e.route==='contact-import')!;
+ expect((effect.outcome as {effect?:string}|undefined)?.effect).toBe('may_have_occurred');expect(effect.status).not.toBe('blocked');
+ expect(approvals.getRequest(id)?.execution_outcome).toBe('failed');
+},60000);

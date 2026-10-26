@@ -625,6 +625,7 @@ export class WorkflowEffectBoundary {
       if (input.externalDispatch) { log(true); return { result }; }
       if (input.deferCompletion?.(result)) {
         record.status='pending'; record.result=null;
+        record.partial={slices:(record.partial?.slices??0)+1,at:Date.now()};
         saveWorkflowEffect(record); log(true); return {result};
       }
       if (verification) record.outcome = { status: 'succeeded', verification };
