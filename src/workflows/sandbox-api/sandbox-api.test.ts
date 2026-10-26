@@ -20,6 +20,7 @@ import { createDraftVersion, lockVersion } from "../db/repos/flow-version";
 import { createFlowRun } from "../db/repos/flow-run";
 import { getWaitpoint } from "../db/repos/waitpoint";
 import { workflowFileDir } from "./routes/files";
+import { createWorkflowFile } from "../db/repos/workflow-file";
 import { triggerHookRunId } from "../runner/triggers/hook-run-id";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -628,6 +629,28 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
     expect(r.status).toBe(404);
     const body = (await r.json()) as { error?: string };
     expect(body.error).toMatch(/file not found/);
+  });
+
+  test("GET /v1/step-files serves only files of the token's own flow", async () => {
+    // A declarative File prop resolves any /v1/step-files/<id>, so another
+    // flow's file id must not be readable from this flow's sandbox.
+    const other = createFlow({ projectId: DEFAULT_IDS.project });
+    const foreign = createWorkflowFile({ projectId: DEFAULT_IDS.project, flowId: other.id, type: "FLOW_STEP_FILE",
+      fileName: "secret.pdf", size: 3, data: Buffer.from("abc") });
+    const refused = await authedFetchForRun(`/v1/step-files/${foreign.id}`);
+    expect(refused.status).toBe(403);
+    expect(await refused.text()).not.toContain("abc");
+    // The other flow's own trigger hook still reads it.
+    const owner = await authedFetchForRun(`/v1/step-files/${foreign.id}`, {}, triggerHookRunId("poll", other.id));
+    expect(owner.status).toBe(200);
+    expect(await owner.text()).toBe("abc");
+    // Same flow: a file written by this flow's poll hook is read by its run.
+    const upload = await authedFetchForRun("/v1/step-files", { method: "POST", body: stepFileForm(testFlowId, "trigger") }, triggerHookRunId("poll", testFlowId));
+    const { url } = (await upload.json()) as { url: string };
+    const same = await authedFetchForRun(url);
+    expect(same.status).toBe(200);
+    // A token whose run belongs to no flow reads nothing.
+    expect((await authedFetchForRun(url, {}, "run_without_row")).status).toBe(403);
   });
 
   function stepFileForm(flowId: string, stepName: string): FormData {
