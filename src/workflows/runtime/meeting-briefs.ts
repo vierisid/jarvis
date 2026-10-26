@@ -1,5 +1,6 @@
 /** Fixed read-only provider surface. No browser, model, send or mutation endpoint. */
 import { createHash } from 'node:crypto';
+import { getCronTimezone } from '../../lib/cron-scheduler';
 
 export const MEETING_ACCOUNTS = {
   calendarConnection: '@activepieces/piece-google-calendar',
@@ -33,7 +34,10 @@ export function meetingSetup(v: RecordValue): MeetingSetup {
   if (internalDomains.some(d => !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$/.test(d))) throw Error('Invalid internal domain');
   const recentDays = v.recentDays ?? 30;
   if (!Number.isInteger(recentDays) || recentDays < 1 || recentDays > 365) throw Error('Recent days must be 1-365');
-  const timezone = text(v.timezone ?? 'Europe/Rome', 'timezone');
+  // Empty means Jarvis's configured timezone (the one schedules use), else the machine's.
+  const configured = typeof v.timezone === 'string' ? v.timezone.trim() : v.timezone;
+  const timezone = text(configured === undefined || configured === null || configured === ''
+    ? getCronTimezone() ?? Intl.DateTimeFormat().resolvedOptions().timeZone : configured, 'timezone');
   new Intl.DateTimeFormat('en', { timeZone: timezone }).format();
   const hubspotPortalId = text(v.hubspotPortalId, 'HubSpot portal ID');
   if (!/^\d+$/.test(hubspotPortalId)) throw Error('HubSpot portal ID must be numeric');

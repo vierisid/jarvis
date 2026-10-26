@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { getCronTimezone, setCronTimezone } from '../../lib/cron-scheduler';
 import { meetingSetup, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, type MeetingRequest } from './meeting-briefs';
 import { fixtureNow, fixtureSetup, fixtureEvent, fixtureRequest } from './meeting-fixtures';
 test('all pages and source links, timezone and stable occurrence/start identity',async()=>{
@@ -46,4 +47,15 @@ test('successful empty sources are explicit; deleted event is skipped',async()=>
   const transport=meetingTransport({calendar:'test',gmail:'test',hubspot:'test'},()=>{},(async()=>new Response('',{status:404})) as any);
   expect(await meetingStillCurrent(m.guard,transport,fixtureNow)).toBe(false);
   await expect(prepareMeetingBriefs(fixtureSetup,transport,fixtureNow)).rejects.toThrow('HTTP 404');
+});
+test('empty timezone uses the configured Jarvis timezone, not a fixed zone',async()=>{
+  const previous=getCronTimezone();
+  try{
+    setCronTimezone('America/New_York');
+    for(const timezone of [undefined,null,''])expect(meetingSetup({...fixtureSetup,internalDomains:'example.com',timezone}).timezone).toBe('America/New_York');
+    expect(meetingSetup({...fixtureSetup,internalDomains:'example.com',timezone:'Asia/Tokyo'}).timezone).toBe('Asia/Tokyo');
+    const setup=meetingSetup({...fixtureSetup,internalDomains:'example.com',timezone:''});
+    const m=(await prepareMeetingBriefs(setup,fixtureRequest(),fixtureNow)).meetings[0]!;
+    expect(m.brief).toContain('05:15');expect(m.brief).toContain('(America/New_York)');
+  }finally{setCronTimezone(previous);}
 });
