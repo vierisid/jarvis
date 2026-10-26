@@ -74,7 +74,8 @@ const GMAIL_TRACKED_SENDS: ReadonlySet<unknown> = new Set(['send_email', 'gmail_
  * (#953 made these reachable at the default level).
  */
 export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
-  return (piece === '@activepieces/piece-clickup' && (action === 'create_task' || action === 'update_task'))
+  return (piece === '@activepieces/piece-mailchimp' && (action === 'add_subscriber_to_tag' || action === 'remove_subscriber_from_tag'))
+    || (piece === '@activepieces/piece-clickup' && (action === 'create_task' || action === 'update_task'))
     || (piece === '@activepieces/piece-gmail' && GMAIL_TRACKED_SENDS.has(action))
     || (piece === '@activepieces/piece-slack' && (action === 'send_channel_message' || action === 'slack_post_message'))
     // #961: an HTTP request that is not a read is a send whose outcome the
@@ -599,6 +600,10 @@ interface ResolvedPieceAction {
 /** Managed ClickUp rollout: only these task actions have been reviewed. Unknown
  * actions require the highest permission; the community badge remains unchanged. */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
+  catalogId: 'mailchimp', pieceName: '@activepieces/piece-mailchimp', unknownActionCategory: 'modify_settings',
+  targetProps: ['list_id','email','tag_name','campaign_id','query'],
+  categories: {read_data: ['find_subscriber','find_campaign','get_campaign_report'], write_data: ['add_subscriber_to_tag','remove_subscriber_from_tag']},
+}, {
   catalogId: 'clickup', pieceName: '@activepieces/piece-clickup', unknownActionCategory: 'modify_settings',
   targetProps: ['workspace_id', 'space_id', 'list_id', 'task_id', 'task_name', 'name', 'status_id', 'add_assignee', 'rem_assignee'],
   categories: {read_data: ['get_list_task', 'get_task_by_name'], write_data: ['create_task', 'update_task']},

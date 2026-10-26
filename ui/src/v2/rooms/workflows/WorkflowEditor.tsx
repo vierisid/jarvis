@@ -1,3 +1,5 @@
+import { MailchimpLocation } from "../../integrations/MailchimpLocation";
+import { MailchimpConnection } from "../../integrations/MailchimpConnection";
 import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
 /**
  * WorkflowEditor (Phase 4 stage 2).
@@ -3373,7 +3375,10 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const subList = isTrigger ? piece?.triggers ?? [] : piece?.actions ?? [];
   const selectedSubAction: PieceCatalogActionOrTrigger | undefined = subList.find((s) => s.name === subName);
   const clickUpLocation = piece?.name === "@activepieces/piece-clickup" && ['create_task','update_task','get_task_by_name'].includes(subName ?? '');
-  const selectedSchema = selectedSubAction?.inputSchema ?? null;
+  const managedMailchimp = piece?.name === "@activepieces/piece-mailchimp" && ["{{connections.jarvis:mailchimp}}", "{{connections['jarvis:mailchimp']}}"].includes(String(step.settings?.input?.auth));
+  const mailchimpLocation = managedMailchimp && ['find_subscriber','add_subscriber_to_tag','remove_subscriber_from_tag','get_campaign_report'].includes(subName ?? '');
+  const baseSchema = selectedSubAction?.inputSchema ?? null;
+  const selectedSchema = managedMailchimp && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['fields','include_fields','exclude_fields', ...(mailchimpLocation ? ['list_id','campaign_id'] : [])].includes(f.name))} : baseSchema;
   const rawSchema = clickUpLocation && selectedSchema ? {...selectedSchema,fields:selectedSchema.fields.filter(f=>!['workspace_id','space_id','list_id'].includes(f.name))} : selectedSchema;
   const clickUpCreate = piece?.name === "@activepieces/piece-clickup" && subName === "create_task";
   const standardFields = clickUpCreate && JSON.stringify(step.settings?.propertySettings?.custom_fields?.schema) === "{}"
@@ -3485,6 +3490,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         />
       ) : null}
 
+      {mailchimpLocation && <MailchimpLocation key={subName} input={step.settings?.input ?? {}} onChange={onSetInput} campaign={subName === "get_campaign_report"} />}
       {clickUpLocation && <ClickUpTaskLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {clickUpCreate && <div className="wf-props__hint" role="note">
         {standardFields ? <p>Using standard task fields. ClickUp will reject the task if this list requires custom fields.</p>
@@ -3724,12 +3730,13 @@ function ConnectionPicker({
   const currentExternalId = m ? m[1]! : "";
   return (
     <div className="wf-props__connection">
+      {pieceName === "@activepieces/piece-mailchimp" && <MailchimpConnection onPick={onPick} currentValue={currentValue} />}
       {pieceName === "@activepieces/piece-clickup" && <ClickUpConnection onPick={onPick} currentValue={currentValue} />}
       <label className="wf-props__field-label">
         {authDisplayName}
         <span className="wf-props__connection-type">({authType})</span>
       </label>
-      {matching.length === 0 && pieceName !== "@activepieces/piece-clickup" ? (
+      {matching.length === 0 && !["@activepieces/piece-clickup", "@activepieces/piece-mailchimp"].includes(pieceName ?? "") ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.

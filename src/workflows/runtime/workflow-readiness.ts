@@ -1,3 +1,4 @@
+import {managedMailchimpIssue} from './managed-mailchimp';
 import { validateCronExpression } from '../../lib/cron-scheduler';
 import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from './piece-catalog';
 import { evaluateWorkflowExpression, workflowExpressionReferences } from './safe-expression';
@@ -203,6 +204,11 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     const input = settings.input === undefined ? {} : settings.input;
     if (!object(input)) issue(node, 'settings.input', 'INPUT_TYPE', 'Expected an input object');
     const pieceName = typeof settings.pieceName === 'string' ? settings.pieceName : '';
+    if (pieceName === '@activepieces/piece-mailchimp' && object(input)
+      && ["{{connections.jarvis:mailchimp}}", "{{connections['jarvis:mailchimp']}}"].includes(String(input.auth))) {
+      const reason = managedMailchimpIssue(root ? settings.triggerName : settings.actionName, input, false);
+      if (reason) issue(node, 'settings.input', 'MANAGED_MAILCHIMP', reason);
+    }
     // Only input values are templated; source code and labels are not expressions.
     expressions(input, node, 'settings.input', scope, pieceName);
     const isPiece = (short: string) => pieceName === short || pieceName === `@jarvispieces/piece-${short}`;
