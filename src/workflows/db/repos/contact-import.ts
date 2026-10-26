@@ -14,6 +14,7 @@ export function acquireImport(key:string,config:string,owner:string,clock:()=>nu
   const check=()=>{if(db.run('UPDATE workflow_contact_import SET lease_until=? WHERE identity=? AND owner=? AND lease_until>?',[clock()+45_000,key,owner,clock()]).changes!==1)throw Error('Import ownership changed; stopped before further dispatch');};
   const save=(p:ImportProgress)=>{check();db.run('UPDATE workflow_contact_import SET progress=? WHERE identity=? AND owner=?',[JSON.stringify(p),key,owner]);};
   return {store:{check,load(){check();return JSON.parse((db.query('SELECT progress FROM workflow_contact_import WHERE identity=?').get(key) as {progress:string}).progress);},save,
+    runLive(run){const row=db.query('SELECT status FROM flow_run WHERE id=?').get(run) as {status:string}|null;return !!row&&['QUEUED','RUNNING','PAUSED'].includes(row.status);},
     seenCursor(cursor){return !!db.query('SELECT 1 FROM workflow_import_cursor WHERE identity=? AND cursor=?').get(key,JSON.stringify(cursor));},
     savePage(p){db.transaction(()=>{save(p);db.run('INSERT INTO workflow_import_cursor(identity,cursor) VALUES(?,?)',[key,JSON.stringify(p.cursor)]);})();},
     record(id){return db.query('SELECT hash,contact_id AS contactId FROM workflow_import_contact WHERE identity=? AND source_id=?').get(key,id) as {hash:string;contactId:string}|null;},

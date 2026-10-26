@@ -39,13 +39,20 @@ export interface ImportContact {id:string;email:string;properties:Record<string,
 export interface ImportProgress {
   cursor:string|null;page:ImportContact[]|null;next:string|null;index:number;pages:number;contacts:number;complete:boolean;
   phase:'account'|'page'|'lookup'|'write'|'reconcile';method:'POST'|'PATCH';retries:number;notBefore:number;inFlight:boolean;error?:string;stoppedRun?:string;
-  /** Pages completed by the run named in pageRun. Saved with the page cursor. */
+  /** The run that owns this import, and the pages it has completed. Saved with
+   * the page cursor. Another run may take over only once the owner has stopped
+   * or its flow run has ended. */
   runPages?:number;pageRun?:string;
+  /** A provider deadline beyond MAX_RETRY_AFTER_MS that stopped a run. A new
+   * run refuses to start before it. */
+  retryAt?:number;
 }
 export const initialImportProgress=():ImportProgress=>({cursor:null,page:null,next:null,index:0,pages:0,contacts:0,complete:false,phase:'account',method:'POST',retries:0,notBefore:0,inFlight:false});
 export interface ImportStore {
   load():ImportProgress;save(state:ImportProgress):void;check():void;
   seenCursor(cursor:string|null):boolean;savePage(state:ImportProgress):void;
+  /** Whether the flow run with this ID is queued, running or paused. */
+  runLive(run:string):boolean;
   record(id:string):{hash:string;contactId:string}|null;
   finishContact(state:ImportProgress,contact:ImportContact,contactId:string):void;
 }
@@ -62,7 +69,7 @@ export const MAX_IMPORT_PAGES_PER_RUN=1000;
 /** A resumable stop: final for this run, and a new run resumes from the
  * checkpoint. unexecuted means the stopping request itself had no effect. */
 export class ImportStop extends Error {
-  constructor(message:string,readonly code:'IMPORT_RETRY_AFTER_TOO_LONG'|'IMPORT_PAGE_LIMIT',readonly unexecuted:boolean){super(message);this.name='ImportStop';}
+  constructor(message:string,readonly code:'IMPORT_RETRY_AFTER_TOO_LONG'|'IMPORT_RETRY_AFTER_PENDING'|'IMPORT_PAGE_LIMIT'|'IMPORT_RUN_ACTIVE',readonly unexecuted:boolean){super(message);this.name='ImportStop';}
 }
 export function retryDeadline(value:string|null|undefined,now:number,retries:number):number {
   const fallback=now+1000*2**Math.min(retries,3);
@@ -98,11 +105,20 @@ export async function importSlice(s:ImportSetup,store:ImportStore,request:Import
   // fresh approval when governed) resumes from the checkpoint with a fresh
   // budget, reconciling a possibly committed write by lookup before any repeat.
   // Deterministic stops (cycles, changed identities) are detected again.
-  if(p.error){
-    if(run===undefined||p.stoppedRun===run)throw Error(p.error);
-    delete p.error;delete p.stoppedRun;p.retries=0;p.notBefore=0;if(p.phase==='write')p.phase='reconcile';store.save(p);
-  }
+  if(p.error&&(run===undefined||p.stoppedRun===run))throw Error(p.error);
   if(p.complete)return result();
+  // One run owns the import at a time, so the per-run page budget cannot be
+  // reset by two runs taking turns. A refusal saves nothing: it is not a stop
+  // of the import, and the owner continues where it was.
+  if(run!==undefined&&p.pageRun!==undefined&&p.pageRun!==run&&!(p.error&&p.stoppedRun===p.pageRun)&&store.runLive(p.pageRun)){
+    throw new ImportStop('Import '+s.importId+' is in use by another run ('+p.pageRun+'); this run did not start it. Wait for that run to finish or stop it, then start a new run','IMPORT_RUN_ACTIVE',true);
+  }
+  // A far provider deadline outlives the run it stopped. A new run before it
+  // would only be refused again, so it does not start (or spend a retry).
+  if(p.retryAt!==undefined&&p.retryAt>clock()){
+    throw new ImportStop('Provider asked to retry at '+new Date(p.retryAt).toISOString()+'; this run did not start the import. Start a new run after then to resume from the checkpoint','IMPORT_RETRY_AFTER_PENDING',true);
+  }
+  if(p.error){delete p.error;delete p.stoppedRun;delete p.retryAt;p.retries=0;p.notBefore=0;if(p.phase==='write')p.phase='reconcile';store.save(p);}
   if(p.pageRun!==run){p.pageRun=run;p.runPages=0;}
   if(p.notBefore>now)return result(p.notBefore);
   // A process died after reserving a request. Count that attempt, and reconcile
@@ -141,17 +157,20 @@ export async function importSlice(s:ImportSetup,store:ImportStore,request:Import
   }
   store.check();p.inFlight=false;p.notBefore=0;
   if([408,425,429,500,502,503,504].includes(r.status)){
-    p.retries++;if(method!=='GET'&&r.status!==429)p.phase='reconcile';
-    if(p.retries>3&&(method==='GET'||p.phase!=='reconcile'))return fail('Import retry budget exhausted');
-    try{p.notBefore=retryDeadline(r.retryAfter,clock(),p.retries);}catch{return fail('Invalid Retry-After; import stopped without ignoring the provider delay');}
-    if(p.notBefore-clock()>MAX_RETRY_AFTER_MS){
-      // Too far to park. Stop without spending a retry; a new run resumes from
-      // the checkpoint (reconciling first if this was an uncertain write).
-      p.retries--;const at=new Date(p.notBefore).toISOString();p.notBefore=0;
+    if(method!=='GET'&&r.status!==429)p.phase='reconcile';
+    let deadline:number;
+    try{deadline=retryDeadline(r.retryAfter,clock(),p.retries+1);}catch{p.retries++;return fail('Invalid Retry-After; import stopped without ignoring the provider delay');}
+    if(deadline-clock()>MAX_RETRY_AFTER_MS){
+      // Too far to park. Checked before the retry budget so it is always this
+      // typed stop. It spends no retry; a new run after the deadline resumes
+      // from the checkpoint (reconciling first if this was an uncertain write).
+      p.retryAt=deadline;const at=new Date(deadline).toISOString();
       const message='Provider asked to retry at '+at+', more than 24 hours away; import stopped without using a retry. Start a new run after then to resume from the checkpoint';
       return fail(message,new ImportStop(message,'IMPORT_RETRY_AFTER_TOO_LONG',method==='GET'||r.status===429));
     }
-    store.save(p);return result(p.notBefore);
+    p.retries++;
+    if(p.retries>3&&(method==='GET'||p.phase!=='reconcile'))return fail('Import retry budget exhausted');
+    p.notBefore=deadline;store.save(p);return result(p.notBefore);
   }
   if(p.phase==='account'){
     if(r.status!==200||!object(r.body)||String(r.body.portalId)!==s.hubspotPortalId)return fail('HubSpot portal verification failed');

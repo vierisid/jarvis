@@ -132,7 +132,7 @@ test('a Retry-After beyond 24 hours is a typed resumable block, not_started only
  await expect(services.contactImport!({...setup},ctx)).rejects.toThrow('more than 24 hours');
  const blocked=listWorkflowEffects(begin1.id).find(e=>e.route==='contact-import')!;
  expect(blocked.outcome).toMatchObject({status:'blocked',code:'IMPORT_RETRY_AFTER_TOO_LONG',effect:'not_started'});expect(approvals.getRequest(first.approval.approvalId)?.execution_outcome).toBe('blocked');
- far=false;const run2=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'});runIds.push(run2.id);const ctx2={...ctx,runId:run2.id};
+ far=false;now+=172_800_000;const run2=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'});runIds.push(run2.id);const ctx2={...ctx,runId:run2.id};
  const second=await services.contactImport!({...setup},ctx2) as any;approvals.approve(second.approval.approvalId,'fixture');
  for(let i=0;i<4;i++){const r=await services.contactImport!({...setup},ctx2) as any;now=Math.max(now+1,r.resumeAt);}
  expect(base.creates).toBe(1);provider={...base,request:async()=>({status:429,retryAfter:'172800',body:null})} as typeof provider;
@@ -140,7 +140,7 @@ test('a Retry-After beyond 24 hours is a typed resumable block, not_started only
  expect(String(stop)).toContain('more than 24 hours');
  expect(listWorkflowEffects(run2.id).find(e=>e.route==='contact-import')!.outcome).toMatchObject({code:'IMPORT_RETRY_AFTER_TOO_LONG',effect:'may_have_occurred'});
  expect(approvals.getRequest(second.approval.approvalId)?.execution_outcome).toBe('failed');
- provider=base;const run3=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'});runIds.push(run3.id);const ctx3={...ctx,runId:run3.id};
+ provider=base;now+=172_800_000;const run3=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'});runIds.push(run3.id);const ctx3={...ctx,runId:run3.id};
  const third=await services.contactImport!({...setup},ctx3) as any;approvals.approve(third.approval.approvalId,'fixture');
  for(let i=0;i<40;i++){const r=await services.contactImport!({...setup},ctx3) as any;if(r.complete)break;now=Math.max(now+1,r.resumeAt);}
  expect(base.creates).toBe(2);expect(approvals.getRequest(third.approval.approvalId)?.status).toBe('executed');
@@ -167,4 +167,17 @@ test('a slice that dies mid-dispatch still counts as run, so a later typed stop 
  expect(effect.outcome).toMatchObject({code:'IMPORT_RETRY_AFTER_TOO_LONG',effect:'may_have_occurred'});
  expect(approvals.getRequest(b.approval.approvalId)?.execution_outcome).toBe('failed');
  provider=base;
+},60000);
+test('an overlapping run on the same import is refused as not started while the owner run is live',async()=>{
+ reset();const f=fixture();authority.setGovernedCategories(['write_data']);
+ const ctxFor=(runId:string)=>({runId,projectId:DEFAULT_IDS.project,stepName:'import_contacts',executionPath:[] as Array<[string,number]>});
+ const runA=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'}),runB=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'});runIds.push(runA.id,runB.id);
+ const a=await services.contactImport!({...setup},ctxFor(runA.id)) as any;approvals.approve(a.approval.approvalId,'fixture');
+ const r=await services.contactImport!({...setup},ctxFor(runA.id)) as any;now=Math.max(now+1,r.resumeAt);
+ const b=await services.contactImport!({...setup},ctxFor(runB.id)) as any;approvals.approve(b.approval.approvalId,'fixture');const n=provider.calls.length;
+ await expect(services.contactImport!({...setup},ctxFor(runB.id))).rejects.toThrow('in use by another run');expect(provider.calls).toHaveLength(n);
+ expect(listWorkflowEffects(runB.id).find(e=>e.route==='contact-import')!.outcome).toMatchObject({code:'IMPORT_RUN_ACTIVE',effect:'not_started'});
+ expect(approvals.getRequest(b.approval.approvalId)?.execution_outcome).toBe('blocked');
+ for(let i=0;i<40;i++){const next=await services.contactImport!({...setup},ctxFor(runA.id)) as any;if(next.complete)break;now=Math.max(now+1,next.resumeAt);}
+ expect(provider.creates).toBe(2);expect(approvals.getRequest(a.approval.approvalId)?.status).toBe('executed');
 },60000);

@@ -8,10 +8,12 @@ import {importSlice,importSetup,importDigest,retryDeadline,ImportStop,MAX_IMPORT
 import {publicImportAddress} from './import-transport';
 import {importFixtureSetup as setup,importFixtureProvider} from './import-fixtures';
 let dir:string,now:number,seq:number;
-beforeEach(()=>{dir=mkdtempSync(join(tmpdir(),'jarvis-import-'));initWorkflowDb(join(dir,'db'));now=Date.parse('2026-10-26T08:00:00Z');seq=0;});
+beforeEach(()=>{dir=mkdtempSync(join(tmpdir(),'jarvis-import-'));initWorkflowDb(join(dir,'db'));now=Date.parse('2026-10-26T08:00:00Z');seq=0;live.clear();});
 afterEach(()=>{closeWorkflowDb();rmSync(dir,{recursive:true,force:true});});
 const reopen=()=>{closeWorkflowDb();initWorkflowDb(join(dir,'db'));};
-async function tick(request:ImportRequest,run?:string){const acquired=acquireImport('job',importDigest(setup),'owner-'+(++seq),()=>now);if('busyUntil'in acquired)throw Error('Busy fixture');try{return await importSlice(setup,acquired.store,request,now,()=>now,run);}finally{acquired.release();}}
+/** Runs whose flow run is still live; the real store reads flow_run. */
+const live=new Set<string>();
+async function tick(request:ImportRequest,run?:string){const acquired=acquireImport('job',importDigest(setup),'owner-'+(++seq),()=>now);if('busyUntil'in acquired)throw Error('Busy fixture');try{return await importSlice(setup,{...acquired.store,runLive:r=>live.has(r)},request,now,()=>now,run);}finally{acquired.release();}}
 async function finish(request:ImportRequest,run?:string){for(let i=0;i<80;i++){const r=await tick(request,run);if(r.complete)return r;now=Math.max(now+1,r.resumeAt??now+1);}throw Error('Import did not finish');}
 test('all pages, normalization, duplicate source IDs and full replay preserve two contacts',async()=>{
  const f=importFixtureProvider();expect(await finish(f.request)).toMatchObject({complete:true,pages:2,contacts:2});expect(f.creates).toBe(2);expect(f.contacts.get('alice@example.com')?.properties.firstname).toBe('Alice');
@@ -116,16 +118,16 @@ test('a Retry-After beyond 24 hours stops the run without using a retry; a new r
  expect(stop.message).toContain(new Date(now+172_800_000).toISOString());
  expect(progress()).toMatchObject({retries:0,notBefore:0,cursor:null,page:null,phase:'page'});
  await expect(tick(f.request,'run-1')).rejects.toThrow('more than 24 hours');
- // An HTTP-date two days out stops the same way.
- await expect(tick(async()=>({status:429,retryAfter:new Date(now+2*86_400_000).toUTCString(),body:null}),'run-2')).rejects.toThrow('more than 24 hours');expect(progress().retries).toBe(0);
- reopen();expect(await finish(f.request,'run-3')).toMatchObject({complete:true,pages:2,contacts:2});expect(f.creates).toBe(2);
+ // An HTTP-date two days out stops the same way, once the first deadline has passed.
+ now+=172_800_000;await expect(tick(async()=>({status:429,retryAfter:new Date(now+2*86_400_000).toUTCString(),body:null}),'run-2')).rejects.toThrow('more than 24 hours');expect(progress().retries).toBe(0);
+ reopen();now+=2*86_400_000;expect(await finish(f.request,'run-3')).toMatchObject({complete:true,pages:2,contacts:2});expect(f.creates).toBe(2);
 });
 test('a far Retry-After on an uncertain write stops, then the new run reconciles instead of writing again',async()=>{
  const f=importFixtureProvider();let far=false;
  const request:ImportRequest=async(provider,url,method,body)=>{const r=await f.request(provider,url,method,body);if(method==='POST'&&!far){far=true;return {status:503,retryAfter:'172800',body:null};}return r;};
  const err=await finish(request,'run-1').catch(e=>e);expect(err).toBeInstanceOf(ImportStop);expect(err.unexecuted).toBe(false);expect(f.creates).toBe(1);
  expect(progress()).toMatchObject({retries:0,phase:'reconcile'});
- expect((await finish(f.request,'run-2')).contacts).toBe(2);expect(f.creates).toBe(2);expect(f.calls.filter(c=>c.method==='POST')).toHaveLength(2);
+ now+=172_800_000;expect((await finish(f.request,'run-2')).contacts).toBe(2);expect(f.creates).toBe(2);expect(f.calls.filter(c=>c.method==='POST')).toHaveLength(2);
 });
 test('a Retry-After within 24 hours still parks the run until then',async()=>{
  const f=importFixtureProvider();await tick(f.request,'run-1');
@@ -148,3 +150,45 @@ test('a run stops after the page cap; the count survives restart and a new run r
  await expect(tick(request,'run-1')).rejects.toThrow('stopped after 1000 pages');expect(fetched).toHaveLength(1000);
  expect(await drive('run-2',4000)).toMatchObject({complete:true,pages:total});expect(fetched).toHaveLength(total);expect(new Set(fetched).size).toBe(total);
 },60_000);
+test('one run owns an import until it ends or stops; an overlapping run is refused without touching progress',async()=>{
+ const total=3000,fetched:string[]=[];const f=importFixtureProvider();
+ const request:ImportRequest=async(provider,url,method,body)=>{
+  if(provider!=='source')return f.request(provider,url,method,body);
+  const cursor=new URL(url).searchParams.get('cursor')??'0';fetched.push(cursor);const n=Number(cursor)+1;
+  return {status:200,body:{items:[],next_cursor:n<total?String(n):null}};
+ };
+ live.add('run-A');live.add('run-B');
+ await tick(request,'run-A');const before=progress();
+ const refused=await tick(request,'run-B').catch(e=>e);expect(refused).toBeInstanceOf(ImportStop);expect(refused.code).toBe('IMPORT_RUN_ACTIVE');expect(refused.unexecuted).toBe(true);
+ expect(refused.message).toContain('run-A');expect(progress()).toEqual(before);
+ // Alternating slices: B never advances or resets A's page budget, so A still stops at the cap.
+ let stop:unknown;
+ for(let i=0;i<6000&&!stop;i++){
+  await expect(tick(request,'run-B')).rejects.toThrow('another run');
+  try{const r=await tick(request,'run-A');now=Math.max(now+1,r.resumeAt??now+1);}catch(e){stop=e;}
+ }
+ expect(stop).toBeInstanceOf(ImportStop);expect((stop as ImportStop).code).toBe('IMPORT_PAGE_LIMIT');expect(fetched).toHaveLength(1000);
+ // A stopped, so B may resume although A's flow run has not ended yet.
+ stop=undefined;for(let i=0;i<4000&&!stop;i++){try{const r=await tick(request,'run-B');now=Math.max(now+1,r.resumeAt??now+1);}catch(e){stop=e;}}
+ expect((stop as ImportStop).code).toBe('IMPORT_PAGE_LIMIT');expect(progress()).toMatchObject({pages:2000,runPages:1000,pageRun:'run-B'});
+ // An ended owner releases the import too.
+ live.delete('run-B');live.add('run-C');let done=null;for(let i=0;i<4000&&!done;i++){const r=await tick(request,'run-C');if(r.complete)done=r;else now=Math.max(now+1,r.resumeAt??now+1);}
+ expect(done).toMatchObject({complete:true,pages:total});expect(new Set(fetched).size).toBe(total);
+},60_000);
+test('a new run before a far Retry-After deadline refuses without a request, a retry or a park',async()=>{
+ const f=importFixtureProvider();await tick(f.request,'run-1');
+ await expect(tick(async()=>({status:429,retryAfter:'172800',body:null}),'run-1')).rejects.toThrow('more than 24 hours');
+ const at=new Date(now+172_800_000).toISOString(),before=progress(),calls=f.calls.length;
+ now+=86_400_000;
+ const early=await tick(f.request,'run-2').catch(e=>e);expect(early).toBeInstanceOf(ImportStop);expect(early.code).toBe('IMPORT_RETRY_AFTER_PENDING');expect(early.unexecuted).toBe(true);
+ expect(early.message).toContain(at);expect(f.calls).toHaveLength(calls);expect(progress()).toEqual(before);
+ now=Date.parse(at)-1;await expect(tick(f.request,'run-3')).rejects.toThrow(at);expect(f.calls).toHaveLength(calls);
+ now=Date.parse(at);expect(await finish(f.request,'run-4')).toMatchObject({complete:true,pages:2,contacts:2});
+});
+test('a far Retry-After after three retries is the typed stop, not an exhausted budget',async()=>{
+ const f=importFixtureProvider();await tick(f.request,'run-1');
+ for(let i=0;i<3;i++){const r=await tick(async()=>({status:429,retryAfter:'1',body:null}),'run-1');now=r.resumeAt!;}
+ expect(progress().retries).toBe(3);
+ const stop=await tick(async()=>({status:429,retryAfter:'172800',body:null}),'run-1').catch(e=>e);
+ expect(stop).toBeInstanceOf(ImportStop);expect(stop.code).toBe('IMPORT_RETRY_AFTER_TOO_LONG');expect(stop.unexecuted).toBe(true);expect(progress().retries).toBe(3);
+});
