@@ -20,6 +20,13 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
+  // w8-12: workflow-meeting-briefs capabilities.
+  'w8-12': {
+    'bare': '2cb75d3294bf28ccb48093c7f9f7181846f2fab22a362dc18c337c970daa7644',
+    'hosted production': '76c60995e2e5af8079cb51ad6af3e264b1ba77d5ad017a098331cf1c9f380ff1',
+    'production': '3ffe8ff4ff3c0cd4561ab478dac950daf3aa285213b0ec268b2bfa02e059fbe9',
+    'tool names only': '63de2acdd9b8e59ec723525a53091a8165fec872a738ac48f9c30b0685d63e13',
+  },
   // w8-11: HubSpot contact coordination and qualified lead notifications.
   'w8-11': {
     'bare': '0607884f6f9ba78094b4bd40cf7747fd2bdda3ca35a6941a0e49ac92782a4be5',
