@@ -144,3 +144,22 @@ test('an attempted but uncertain refund never restarts on a later delivery',asyn
  const later=await begin(f);expect(later.status).toBe('SUCCEEDED');expect(listWorkflowEffects(later.id).some(e=>e.toolName==='workflow_approved_refund')).toBe(false);expect(posts()).toHaveLength(1);
  expect(getWorkflowDb().query('SELECT COUNT(*) AS n FROM workflow_refund_payment').get()).toEqual({n:1});
 },120000);
+const setApprovalId=(id:string)=>{const row=getWorkflowDb().query('SELECT identity,state FROM workflow_refund').get() as any;getWorkflowDb().run('UPDATE workflow_refund SET state=? WHERE identity=?',[JSON.stringify({...JSON.parse(row.state),approvalId:id}),row.identity]);};
+test("an '' approval ID from a waiting hold is replaced by the effect's card; a stale card is still withdrawn",async()=>{
+ // Rejection is seen even though the request recorded '' while its card waited for a place.
+ reset();let f=fixture();const held=await begin(f);setApprovalId('');approvals.deny(approvalFor(held.id).id,'dashboard');
+ expect((await resume(held.id)).status).toBe('SUCCEEDED');expect(records()[0].state).toBe('rejected');expect(records()[0].approvalId).toBe(approvalFor(held.id).id);
+ // Supersede falls back to the original run's effect card when the request holds ''.
+ reset();f=fixture();const stale=await begin(f),a=approvalFor(stale.id);setApprovalId('');
+ expect((await begin(f,{...ticket,amount:1000})).status).toBe('PAUSED');expect(approvals.getRequest(a.id)?.status).toBe('denied');
+ expect((await resume(stale.id)).status).toBe('FAILED');expect(posts()).toHaveLength(0);
+},120000);
+test('a superseded card whose withdrawal fails is retried on the next invocation',async()=>{
+ reset();const f=fixture(),stale=await begin(f),a=approvalFor(stale.id);const deny=ApprovalManager.prototype.deny,warn=console.warn;
+ ApprovalManager.prototype.deny=function(){throw Error('Synthetic approval store failure');};console.warn=()=>{};
+ let fresh;try{fresh=await begin(f,{...ticket,amount:1000});}finally{ApprovalManager.prototype.deny=deny;console.warn=warn;}
+ expect(fresh.status).toBe('PAUSED');expect(approvals.getRequest(a.id)?.status).toBe('pending');expect(records()[0].withdraw).toEqual([a.id]);
+ approvals.approve(approvalFor(fresh.id).id,'dashboard');expect((await resume(fresh.id)).status).toBe('SUCCEEDED');
+ expect(approvals.getRequest(a.id)?.status).toBe('denied');expect(records()[0].withdraw).toBeUndefined();expect(posts()).toHaveLength(1);
+ expect((await resume(stale.id)).status).toBe('FAILED');expect(posts()).toHaveLength(1);
+},120000);

@@ -23,9 +23,16 @@ export function createRefundService(deps:{effects:WorkflowEffectBoundary;credent
   const park=(at:number)=>({waitpointId:createWaitpoint({flowRunId:ctx.runId,projectId:ctx.projectId,stepName:resolved.stepName,type:'TIMER',resumeDateTime:new Date(at).toISOString()}).id});
   if('busyUntil'in acquired)return park(acquired.busyUntil);
   try {
-   // A newer run or changed ticket data replaced a request that never reached dispatch: its card can no longer run.
-   if(acquired.superseded?.approvalId)approvals.deny(acquired.superseded.approvalId,'refund-superseded');
    const store=acquired.store;let state=store.load();
+   const effectFor=(run:string)=>workflowEffectId(run,resolved.stepName,resolved.executionPath,'approved-refund');
+   // A newer run or changed ticket data replaced a request that never reached dispatch: its card can no longer run.
+   // The request may hold '' (an APPROVALS_WAITING hold) while its effect has the real card, so both are withdrawn.
+   // A failed withdrawal is kept on the request and retried on its next invocation, including after a restart.
+   const sup=acquired.superseded,stale=[...(state.withdraw??[]),...(sup?[sup.approvalId,getWorkflowEffect(effectFor(sup.originRun))?.approvalId]:[])].filter((a):a is string=>!!a);
+   if(stale.length){
+    const failed=[...new Set(stale)].filter(a=>{try{approvals.deny(a,'refund-superseded');return false;}catch(e){console.warn('[refund] could not withdraw superseded approval '+a+'; retrying on the next invocation:',e);return true;}});
+    if(failed.length)state.withdraw=failed;else delete state.withdraw;store.save(state);
+   }
    const result=(st:RefundState)=>{
     // Ended before the pre-dispatch claim: the charge is free for another request again.
     if(st.attemptedAt===undefined&&['rejected','expired','needs_review'].includes(st.state))releaseRefundPayment(key);
@@ -52,8 +59,9 @@ export function createRefundService(deps:{effects:WorkflowEffectBoundary;credent
    }
    // A crash between proposal persistence and reservation must not bypass the reservation.
    if(!reserveRefundPayment(digest([ctx.projectId,s.stripeAccountId,s.stripeMode,state.proposal!.charge]),key))throw Error('Payment belongs to another refund request');
-   const effectId=workflowEffectId(state.originRun,resolved.stepName,resolved.executionPath,'approved-refund');
-   const previous=getWorkflowEffect(effectId);state.approvalId??=previous?.approvalId??undefined;store.save(state);
+   const effectId=effectFor(state.originRun);
+   // ||= so an '' saved from an APPROVALS_WAITING hold is replaced by the card the effect now holds.
+   const previous=getWorkflowEffect(effectId);state.approvalId||=previous?.approvalId||undefined;store.save(state);
    const approval=state.approvalId?approvals.getRequest(state.approvalId):null;
    const decisionState=refundDecision(state.proposal!.expiresAt,approval,clock());
    if(state.attemptedAt===undefined&&(decisionState==='rejected'||decisionState==='expired')){
