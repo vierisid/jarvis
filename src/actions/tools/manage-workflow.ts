@@ -184,7 +184,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
     name: "manage_workflow",
     description: [
       "Create, run, and manage the user's Jarvis workflows (automations).",
-      "compose { name, description } builds the requested graph. Preserve every requirement; never substitute a diagnostic-only scaffold.",
+      "compose { name, description } builds the full requested graph; never substitute diagnostics.",
       "Save supported graphs as Setup required. Use continue_setup for answers; connect accounts securely in Connected workspace.",
       "Use real schemas; never invent IDs or credentials. Notifications use dashboard. If needed, verify browser tools, computer, permissions and login for an authorized alternative.",
       "Composed flows are DISABLED; publish enables them and requires user confirmation. Draft-only limits do not ban future actions.",
@@ -246,7 +246,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       },
       flow: {
         type: "string",
-        description: "Name or ID; required for get/run/enable/disable/publish/delete; optional list_runs filter.",
+        description: "Workflow name/ID; optional list_runs filter.",
         required: false,
       },
       view: { type: "string", enum: ["definition", "validation"], description: "get: definition or validation pages; concatenate content through nextCursor:null, then parse JSON.", required: false },
