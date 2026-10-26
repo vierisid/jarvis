@@ -54,7 +54,12 @@ export function retryDeadline(value:string|null|undefined,now:number,retries:num
   const fallback=now+1000*2**Math.min(retries,3);
   if(!value)return fallback;
   if(/^\d+$/.test(value.trim())){const seconds=Number(value);if(Number.isSafeInteger(seconds)&&seconds>=0&&now+seconds*1000<8.64e15)return Math.max(fallback,now+seconds*1000);throw Error('Invalid Retry-After delay');}
-  const date=Date.parse(value);if(!Number.isFinite(date))throw Error('Invalid Retry-After date');return Math.max(fallback,date);
+  // HTTP-date is always GMT (RFC 9110 5.6.7). Date.parse reads a zone-less
+  // string in the machine zone, so accept only IMF-fixdate/RFC 850 (explicit
+  // GMT) and asctime (implicitly GMT, so pinned to it here).
+  const v=value.trim(),asctime=/^[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d{2}:\d{2}:\d{2} \d{4}$/.test(v);
+  const date=asctime?Date.parse(v+' GMT'):/^[A-Z][a-z]+, [\d -]+[A-Z][a-z]{2}[\d -]+ \d{2}:\d{2}:\d{2} GMT$/.test(v)?Date.parse(v):NaN;
+  if(!Number.isFinite(date))throw Error('Invalid Retry-After date');return Math.max(fallback,date);
 }
 function pageData(body:unknown,s:ImportSetup){
   const items=atPath(body,s.itemsPath),next=atPath(body,s.nextCursorPath);

@@ -98,3 +98,11 @@ test('a stop is final for its run; a new run resumes from the checkpoint and rec
  await expect(tick(g.request,'run-3')).rejects.toThrow('retry budget');
  expect((await finish(g.request,'run-4')).contacts).toBe(2);expect(g.creates).toBe(2);expect(g.calls.filter(c=>c.method==='POST')).toHaveLength(2);
 });
+test('Retry-After HTTP dates are GMT whatever the machine zone, and zone-less dates are refused',()=>{
+ const zone=process.env.TZ;process.env.TZ='America/New_York';
+ try{
+  expect(retryDeadline('Mon Oct 26 08:02:00 2026',now,1)).toBe(now+120_000);
+  expect(retryDeadline('Monday, 26-Oct-26 08:02:00 GMT',now,1)).toBe(now+120_000);
+  for(const v of ['Mon, 26 Oct 2026 08:02:00','2026-10-26 08:02:00','2026-10-26T08:02:00'])expect(()=>retryDeadline(v,now,1)).toThrow('Invalid');
+ }finally{if(zone===undefined)delete process.env.TZ;else process.env.TZ=zone;}
+});
