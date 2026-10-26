@@ -26,8 +26,11 @@ export function createContactImportService(deps:{effects:WorkflowEffectBoundary;
     // Only a fenced owner may recover a dispatch abandoned by a lost worker.
     // The import ledger reconciles any possibly committed write before retrying.
     // A reported failure needs a new run (and fresh approval), retaining progress.
+    // The abandoned slice may have reached a provider, so the effect is marked
+    // as having run: a later stop of this run must not receipt it not_started.
     if(previous?.status==='dispatching'){
-      previous.status='pending';delete previous.outcome;delete previous.error;saveWorkflowEffect(previous);
+      previous.status='pending';delete previous.outcome;delete previous.error;
+      previous.partial={slices:(previous.partial?.slices??0)+1,at:Date.now()};saveWorkflowEffect(previous);
     }
     const reply=await deps.effects.invoke({context:ctx,piece:IMPORT_PIECE,action:IMPORT_ACTION,route:'contact-import',toolName:'workflow_contact_import',category:'write_data',categories:['read_data','write_data'],toolCategory:'imports',request:setup,
       deferCompletion:result=>(result as {complete?:boolean})?.complete===false,

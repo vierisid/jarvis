@@ -145,3 +145,26 @@ test('a Retry-After beyond 24 hours is a typed resumable block, not_started only
  for(let i=0;i<40;i++){const r=await services.contactImport!({...setup},ctx3) as any;if(r.complete)break;now=Math.max(now+1,r.resumeAt);}
  expect(base.creates).toBe(2);expect(approvals.getRequest(third.approval.approvalId)?.status).toBe('executed');
 },60000);
+test('a slice that dies mid-dispatch still counts as run, so a later typed stop is not receipted as not started',async()=>{
+ reset();const f=fixture();authority.setGovernedCategories(['write_data']);const base=provider;
+ const ctxFor=(runId:string)=>({runId,projectId:DEFAULT_IDS.project,stepName:'import_contacts',executionPath:[] as Array<[string,number]>});
+ // Run 1 reaches the first create and is canceled between slices, so run 2 starts with that create.
+ const run1=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'});runIds.push(run1.id);
+ const a=await services.contactImport!({...setup},ctxFor(run1.id)) as any;approvals.approve(a.approval.approvalId,'fixture');
+ for(let i=0;i<3;i++){const r=await services.contactImport!({...setup},ctxFor(run1.id)) as any;now=Math.max(now+1,r.resumeAt);}
+ expect(base.creates).toBe(0);expect(base.calls.at(-1)?.method).toBe('GET');cancelFlowRun(run1.id);
+ // Run 2's first slice commits the create, then the worker dies: the call never returns.
+ let reached!:()=>void;const committed=new Promise<void>(r=>{reached=r;});
+ provider={...base,request:async(p,url,method,body)=>{if(method==='POST'){await base.request(p,url,method,body);reached();return new Promise(()=>{});}return base.request(p,url,method,body);}} as typeof provider;
+ const run2=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'});runIds.push(run2.id);
+ const b=await services.contactImport!({...setup},ctxFor(run2.id)) as any;approvals.approve(b.approval.approvalId,'fixture');
+ void services.contactImport!({...setup},ctxFor(run2.id));await committed;expect(base.creates).toBe(1);
+ expect(listWorkflowEffects(run2.id).find(e=>e.route==='contact-import')!.status).toBe('dispatching');
+ // The lease expires; the next slice reconciles by GET and is told to wait two days.
+ now+=46_000;provider={...base,request:async()=>({status:429,retryAfter:'172800',body:null})} as typeof provider;
+ await expect(services.contactImport!({...setup},ctxFor(run2.id))).rejects.toThrow('more than 24 hours');
+ const effect=listWorkflowEffects(run2.id).find(e=>e.route==='contact-import')!;
+ expect(effect.outcome).toMatchObject({code:'IMPORT_RETRY_AFTER_TOO_LONG',effect:'may_have_occurred'});
+ expect(approvals.getRequest(b.approval.approvalId)?.execution_outcome).toBe('failed');
+ provider=base;
+},60000);
