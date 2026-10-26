@@ -88,12 +88,15 @@ test('rescheduled start gets one new alert, returning to original start does not
 test('late reschedule suppresses stale brief without consuming identity',async()=>{
  const f=await fixture(),n=notifications.length;changed=fixtureEvent({status:'cancelled'});expect((await f.run()).status).toBe('SUCCEEDED');expect(notifications.length).toBe(n);changed=undefined;expect((await f.run()).status).toBe('SUCCEEDED');expect(notifications.length).toBe(n+1);
 },60_000);
-test('oversized brief fails only its meeting; others deliver and its key stays unused',async()=>{
+test('oversized brief is delivered truncated under its own key, once; later polls deduplicate',async()=>{
  const f=await fixture(),n=notifications.length;oversized='big@external.test';
  events=[fixtureEvent(),fixtureEvent({id:'occurrence-2',summary:'Long history',start:{dateTime:'2026-10-23T09:20:00Z'},attendees:[{email:'owner@example.com',self:true},{email:'big@external.test'}]})];
- const first=await f.run();expect(first.status).toBe('SUCCEEDED');expect(notifications.length).toBe(n+1);expect(notifications.at(-1)).toContain('Customer planning');
- oversized=undefined;expect((await f.run()).status).toBe('SUCCEEDED');expect(notifications.length).toBe(n+2);expect(notifications.at(-1)).toContain('Long history');
+ const first=await f.run();expect(first.status).toBe('SUCCEEDED');expect(notifications.length).toBe(n+2);
+ const sent=notifications.slice(n);expect(sent.filter(t=>t.includes('Customer planning'))).toHaveLength(1);
+ const long=sent.filter(t=>t.includes('Long history'));expect(long).toHaveLength(1);
+ expect(long[0]).toMatch(/\d+ older message excerpts from \d+ conversations omitted to fit the 24,000 character brief limit; open the meeting or Gmail for the full history\./);
  expect((await f.run()).status).toBe('SUCCEEDED');expect(notifications.length).toBe(n+2);
+ oversized=undefined;expect((await f.run()).status).toBe('SUCCEEDED');expect(notifications.length).toBe(n+2);
 },60_000);
 test('source failure fails run and sends no brief',async()=>{
  const f=await fixture(),n=notifications.length;fail='gmail';expect((await f.run()).status).toBe('FAILED');expect(notifications.length).toBe(n);

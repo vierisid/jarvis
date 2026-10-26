@@ -14,8 +14,6 @@ export interface MeetingSetup {
 }
 export interface MeetingGuard { setup: MeetingSetup; eventId: string; start: string; fingerprint: string }
 export interface MeetingBrief { eventId: string; start: string; title: string; brief: string; notificationKey: string; guard: MeetingGuard }
-/** A meeting whose brief could not be delivered. Nothing was notified, so its key stays unused. */
-export interface MeetingBriefFailure { eventId: string; start: string; title: string; notificationKey: string; reason: string }
 type RecordValue = Record<string, any>;
 type RequestProvider = 'calendar' | 'gmail' | 'hubspot';
 export type MeetingRequest = (provider: RequestProvider, path: string, body?: RecordValue) => Promise<RecordValue>;
@@ -24,12 +22,17 @@ const text = (v: unknown, label: string, max = 512): string => {
   if (typeof v !== 'string' || !v.trim() || v.length > max || /[\r\n\x00]/.test(v)) throw Error(`Invalid or missing ${label}`);
   return v.trim();
 };
-const email = (v: unknown) => {
+const email = (v: unknown, allowBraces = false) => {
   const s = text(v, 'email', 254).toLowerCase();
-  // No braces: attendee addresses are interpolated into a Gmail {..} OR group.
-  if (!/^[a-z0-9.!#$%&'*+\/=?^_`|~-]+@[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$/i.test(s)) throw Error('Invalid email');
+  // Braces are valid in a local part but would break the Gmail {..} OR group, so only
+  // attendee addresses may carry them, and those are kept out of the Gmail query.
+  if (!(allowBraces ? /^[a-z0-9.!#$%&'*+\/=?^_`{|}~-]+@/ : /^[a-z0-9.!#$%&'*+\/=?^_`|~-]+@/).test(s)
+    || !/@[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$/i.test(s) || s.split('@').length !== 2) throw Error('Invalid email');
   return s;
 };
+const unsearchable = (address: string) => /[{}]/.test(address);
+/** Delivery limit for one brief. Longer briefs are shortened, never dropped. */
+export const MEETING_BRIEF_LIMIT = 24_000;
 export function meetingSetup(v: RecordValue): MeetingSetup {
   const domains = typeof v.internalDomains === 'string' ? v.internalDomains.split(',') : v.internalDomains;
   if (!Array.isArray(domains) || domains.length < 1 || domains.length > 100) throw Error('Configure internal domains explicitly');
@@ -67,7 +70,7 @@ function eventMeeting(event: RecordValue, setup: MeetingSetup, now: number) {
   if (event.attendees !== undefined && !Array.isArray(event.attendees)) throw Error('Invalid attendee list');
   const attendees: RecordValue[] = event.attendees ?? [];
   if (attendees.some(a => (a.self === true || a.email?.toLowerCase() === setup.ownerEmail) && a.responseStatus === 'declined')) return null;
-  const external = [...new Set(attendees.filter(a => !a.resource && !a.self && a.responseStatus !== 'declined').map(a => email(a.email))
+  const external = [...new Set(attendees.filter(a => !a.resource && !a.self && a.responseStatus !== 'declined').map(a => email(a.email, true))
     .filter(e => e !== setup.ownerEmail && !setup.internalDomains.includes(e.split('@')[1]!)))].sort();
   if (!external.length) return null;
   if (external.length > 50) throw Error('Meeting exceeds 50 external attendees; no partial brief produced');
@@ -103,13 +106,13 @@ async function pages(load: (cursor?: string) => Promise<RecordValue>, field: str
   throw Error('Pagination limit exceeded; completeness unavailable');
 }
 const clean = (v: unknown, max = 1000) => String(v ?? '').replace(/[\r\n]+/g, ' ').replace(/[\[\]<>]/g, '').slice(0, max);
-export async function prepareMeetingBriefs(setup: MeetingSetup, request: MeetingRequest, now = Date.now()): Promise<{ complete: true; meetings: MeetingBrief[]; failed: MeetingBriefFailure[] }> {
+export async function prepareMeetingBriefs(setup: MeetingSetup, request: MeetingRequest, now = Date.now()): Promise<{ complete: true; meetings: MeetingBrief[] }> {
   // timeMax is exclusive on start time; +1 ms keeps a start at exactly now+30min in (now, now+30min].
   const events = await pages(cursor => request('calendar', calendarPath(setup) + '?' + query({
     timeMin: new Date(now).toISOString(), timeMax: new Date(now + 30 * 60_000 + 1).toISOString(), singleEvents: 'true', showDeleted: 'false',
     maxResults: '2500', orderBy: 'startTime', timeZone: setup.timezone, ...(cursor ? { pageToken: cursor } : {}),
   })), 'items');
-  const meetings: MeetingBrief[] = [], failed: MeetingBriefFailure[] = [], seen = new Set<string>();
+  const meetings: MeetingBrief[] = [], seen = new Set<string>();
   for (const event of events) {
     const m = eventMeeting(event, setup, now); if (!m) continue;
     const guard: MeetingGuard = { setup, eventId: m.eventId, start: m.start, fingerprint: m.fingerprint };
@@ -123,27 +126,32 @@ export async function prepareMeetingBriefs(setup: MeetingSetup, request: Meeting
       }), 'results', true);
       if (!contacts.length) lines.push(`${address}: no matching contact.`);
       for (const contact of contacts) {
-        if (!/^\d+$/.test(contact.id) || email(contact.properties?.email) !== address) throw Error('HubSpot returned an unrelated or malformed contact');
+        if (!/^\d+$/.test(contact.id) || email(contact.properties?.email, true) !== address) throw Error('HubSpot returned an unrelated or malformed contact');
         lines.push(`${address}: ${clean(contact.properties.firstname)} ${clean(contact.properties.lastname)}; company: ${clean(contact.properties.company) || 'not recorded'}; role: ${clean(contact.properties.jobtitle) || 'not recorded'}; stage: ${clean(contact.properties.lifecyclestage) || 'not recorded'}; last contacted: ${clean(contact.properties.notes_last_contacted) || 'not recorded'}.`,
           `https://app.hubspot.com/contacts/${setup.hubspotPortalId}/contact/${contact.id}`);
       }
     }
     lines.push('', `Recent Gmail conversations (${setup.recentDays} days):`);
-    const addresses = m.external.map(e => `from:"${e}" to:"${e}"`).join(' ');
-    const after = Math.floor((now - setup.recentDays * 86400_000) / 1000), before = Math.ceil(now / 1000);
-    const threads = await pages(cursor => request('gmail', '/gmail/v1/users/me/threads?' + query({
-      q: `{${addresses}} after:${after} before:${before}`, maxResults: '100', includeSpamTrash: 'false', ...(cursor ? { pageToken: cursor } : {}),
-    })), 'threads');
-    const threadIds = [...new Set(threads.map(t => text(t.id, 'thread ID')))];
-    if (!threadIds.length) lines.push('No matching recent conversations.');
-    let conversationCount = 0;
+    const searchable = m.external.filter(e => !unsearchable(e));
+    for (const e of m.external.filter(unsearchable)) lines.push(`${clean(e, 254)}: Gmail not searched; the address contains { or }, which a Gmail search cannot express.`);
+    const conversations: { id: string; excerpts: { date: number; line: (max: number) => string }[] }[] = [];
+    let threadIds: string[] = [];
+    if (searchable.length) {
+      const addresses = searchable.map(e => `from:"${e}" to:"${e}"`).join(' ');
+      const after = Math.floor((now - setup.recentDays * 86400_000) / 1000), before = Math.ceil(now / 1000);
+      const threads = await pages(cursor => request('gmail', '/gmail/v1/users/me/threads?' + query({
+        q: `{${addresses}} after:${after} before:${before}`, maxResults: '100', includeSpamTrash: 'false', ...(cursor ? { pageToken: cursor } : {}),
+      })), 'threads');
+      threadIds = [...new Set(threads.map(t => text(t.id, 'thread ID')))];
+      if (!threadIds.length) lines.push('No matching recent conversations.');
+    }
     for (const id of threadIds) {
       if (!/^[a-f0-9]+$/i.test(id)) throw Error('Invalid Gmail thread ID');
       // Headers and snippet are all a brief uses: metadata keeps message bodies out
       // of the daemon and long quoted threads under the response size limit.
       const thread = await request('gmail', `/gmail/v1/users/me/threads/${id}?format=metadata&` + GMAIL_THREAD_HEADERS.map(h => `metadataHeaders=${h}`).join('&'));
       if (thread.id !== id || !Array.isArray(thread.messages)) throw Error('Incomplete Gmail thread');
-      let count = 0;
+      const excerpts: { date: number; line: (max: number) => string }[] = [];
       for (const message of thread.messages) {
         const date = Number(message.internalDate);
         if (!Number.isFinite(date)) throw Error('Missing Gmail message date');
@@ -153,25 +161,52 @@ export async function prepareMeetingBriefs(setup: MeetingSetup, request: Meeting
         const header = (name: string) => String(headers.find((h: RecordValue) => h.name?.toLowerCase() === name)?.value ?? '');
         const participants = (header('from') + ' ' + header('to') + ' ' + header('cc')).toLowerCase().match(/[a-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[a-z0-9.-]+\.[a-z]{2,}/g) ?? [];
         if (!participants.some(e => m.external.includes(e))) continue;
-        count++;
-        lines.push(`${new Date(date).toISOString()} | ${clean(header('subject'), 200)} | ${clean(header('from'), 254)}: ${clean(message.snippet)}`);
+        const prefix = `${new Date(date).toISOString()} | ${clean(header('subject'), 200)} | ${clean(header('from'), 254)}: `, snippet = message.snippet;
+        excerpts.push({ date, line: max => prefix + clean(snippet, max) });
       }
-      conversationCount += count;
-      if (count) lines.push(`https://mail.google.com/mail/u/?authuser=${encodeURIComponent(setup.ownerEmail)}#all/${id}`);
+      if (excerpts.length) conversations.push({ id, excerpts });
     }
-    if (threadIds.length && !conversationCount) lines.push('No matching recent messages after exact participant and date filtering.');
-    lines.push('Email excerpts are snippets; open the source links for full conversations.');
-    const brief = lines.join('\n');
-    // Fail only this meeting: the others still get their briefs, and this one is reported, not notified.
-    if (brief.length > 24_000) {
-      failed.push({ eventId: m.eventId, start: m.start, title: m.title, notificationKey,
-        reason: `Brief is ${brief.length} characters, over the 24,000 character delivery limit; narrow the recent history window` });
-      continue;
-    }
+    if (threadIds.length && !conversations.length) lines.push('No matching recent messages after exact participant and date filtering.');
+    const brief = fitBrief(lines, conversations, setup.ownerEmail);
     meetings.push({ eventId: m.eventId, start: m.start, title: m.title, brief, notificationKey, guard });
   }
   const order = (a: { start: string; eventId: string }, b: { start: string; eventId: string }) => a.start.localeCompare(b.start) || a.eventId.localeCompare(b.eventId);
-  return { complete: true, meetings: meetings.sort(order), failed: failed.sort(order) };
+  return { complete: true, meetings: meetings.sort(order) };
+}
+/**
+ * Render a brief within MEETING_BRIEF_LIMIT, deterministically. Drops the oldest
+ * excerpts first (keeping the newest), then shortens the newest snippet, then drops
+ * it, and only as a last resort cuts the fixed context. Always says what was left out.
+ */
+function fitBrief(head: string[], conversations: { id: string; excerpts: { date: number; line: (max: number) => string }[] }[], ownerEmail: string): string {
+  const all = conversations.flatMap((c, t) => c.excerpts.map((e, i) => ({ ...e, t, i })));
+  // Oldest first; ties broken by thread then message order so the result never depends on timing.
+  const byAge = [...all].sort((a, b) => a.date - b.date || a.t - b.t || a.i - b.i);
+  const render = (dropped: Set<typeof all[number]>, max: number) => {
+    const lines = [...head];
+    conversations.forEach((c, t) => {
+      const kept = all.filter(e => e.t === t && !dropped.has(e));
+      if (!kept.length) return;
+      lines.push(...kept.map(e => e.line(max)), `https://mail.google.com/mail/u/?authuser=${encodeURIComponent(ownerEmail)}#all/${c.id}`);
+    });
+    if (dropped.size) {
+      const threads = new Set([...dropped].map(e => e.t)).size;
+      lines.push(`${dropped.size} older message excerpt${dropped.size === 1 ? '' : 's'} from ${threads} conversation${threads === 1 ? '' : 's'} omitted to fit the ${MEETING_BRIEF_LIMIT.toLocaleString('en-US')} character brief limit; open the meeting or Gmail for the full history.`);
+    }
+    if (max < 1000) lines.push('Remaining snippet shortened to fit the brief limit.');
+    lines.push('Email excerpts are snippets; open the source links for full conversations.');
+    return lines.join('\n');
+  };
+  const dropped = new Set<typeof all[number]>();
+  let brief = render(dropped, 1000);
+  for (const e of byAge.slice(0, -1)) { if (brief.length <= MEETING_BRIEF_LIMIT) return brief; dropped.add(e); brief = render(dropped, 1000); }
+  if (brief.length <= MEETING_BRIEF_LIMIT) return brief;
+  if (byAge.length) {
+    brief = render(dropped, 100); if (brief.length <= MEETING_BRIEF_LIMIT) return brief;
+    dropped.add(byAge.at(-1)!); brief = render(dropped, 1000); if (brief.length <= MEETING_BRIEF_LIMIT) return brief;
+  }
+  const notice = `\nBrief cut at the ${MEETING_BRIEF_LIMIT.toLocaleString('en-US')} character limit; open the meeting, HubSpot or Gmail for the full context.`;
+  return brief.slice(0, MEETING_BRIEF_LIMIT - notice.length) + notice;
 }
 export async function meetingStillCurrent(guard: MeetingGuard, request: MeetingRequest, now = Date.now()): Promise<boolean> {
   const event = await request('calendar', `${calendarPath(guard.setup)}/${encodeURIComponent(guard.eventId)}`);

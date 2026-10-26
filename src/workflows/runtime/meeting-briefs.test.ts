@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { getCronTimezone, setCronTimezone } from '../../lib/cron-scheduler';
-import { meetingSetup, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, type MeetingRequest } from './meeting-briefs';
+import { meetingSetup, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, MEETING_BRIEF_LIMIT, type MeetingRequest } from './meeting-briefs';
 import { fixtureNow, fixtureSetup, fixtureEvent, fixtureRequest } from './meeting-fixtures';
 test('all pages and source links, timezone and stable occurrence/start identity',async()=>{
   const result=await prepareMeetingBriefs(fixtureSetup,fixtureRequest(),fixtureNow);
@@ -68,13 +68,33 @@ test('Gmail threads are read as metadata only, never full bodies',async()=>{
   expect(await request('gmail',reads[0]!)).toEqual({id:'abc',messages:[]});
 });
 const twoMeetings=()=>[fixtureEvent(),fixtureEvent({id:'occurrence-2',summary:'Long history',start:{dateTime:'2026-10-23T09:20:00Z'},attendees:[{email:'owner@example.com',self:true},{email:'big@external.test'}]})];
-test('an oversized brief fails only its own meeting, visibly, and leaves its key for a later poll',async()=>{
+test('an oversized brief is truncated oldest-first, never dropped, and keeps its notification key',async()=>{
   const result=await prepareMeetingBriefs(fixtureSetup,fixtureRequest(twoMeetings(),{oversized:'big@external.test'}),fixtureNow);
-  expect(result.meetings.map(m=>m.eventId)).toEqual(['occurrence-1']);expect(result.meetings[0]!.brief).toContain('Discuss pilot timing');
-  expect(result.failed).toHaveLength(1);const failure=result.failed[0]!;
-  expect(failure).toMatchObject({eventId:'occurrence-2',start:'2026-10-23T09:20:00.000Z',title:'Long history'});expect(failure.reason).toContain('24,000');
+  expect(result).not.toHaveProperty('failed');
+  expect(result.meetings.map(m=>m.eventId)).toEqual(['occurrence-1','occurrence-2']);expect(result.meetings[0]!.brief).toContain('Discuss pilot timing');
+  const long=result.meetings[1]!;expect(long.title).toBe('Long history');expect(long.brief.length).toBeLessThanOrEqual(MEETING_BRIEF_LIMIT);
+  const omitted=/(\d+) older message excerpts from (\d+) conversations omitted to fit the 24,000 character brief limit; open the meeting or Gmail for the full history\./.exec(long.brief);
+  expect(omitted).not.toBeNull();const n=Number(omitted![1]);expect(n).toBeGreaterThan(0);expect(n).toBeLessThan(30);
+  // Newest conversations survive; exactly the n oldest (b29 downwards) are gone.
+  for(let i=0;i<30;i++)expect(long.brief.includes('#all/b'+i+'\n')).toBe(i<30-n);
+  const again=await prepareMeetingBriefs(fixtureSetup,fixtureRequest(twoMeetings(),{oversized:'big@external.test'}),fixtureNow);
+  expect(again.meetings[1]!.brief).toBe(long.brief);
   const later=await prepareMeetingBriefs(fixtureSetup,fixtureRequest(twoMeetings()),fixtureNow);
-  expect(later.failed).toEqual([]);expect(later.meetings.find(m=>m.eventId==='occurrence-2')!.notificationKey).toBe(failure.notificationKey);
+  expect(later.meetings.find(m=>m.eventId==='occurrence-2')!.notificationKey).toBe(long.notificationKey);
+});
+test('fixed context over the limit is cut with a notice, still delivered',async()=>{
+  const attendees=[{email:'owner@example.com',self:true},...Array.from({length:8},(_,i)=>({email:`c${i}@external.test`}))];
+  const base=fixtureRequest([fixtureEvent({attendees})]);
+  const request:MeetingRequest=async(provider,path,body)=>provider==='hubspot'
+    ?{results:[{id:'5',properties:{email:body!.filterGroups[0].filters[0].value,firstname:'y'.repeat(1000),lastname:'y'.repeat(1000),company:'y'.repeat(1000)}}]}
+    :base(provider,path,body);
+  const m=(await prepareMeetingBriefs(fixtureSetup,request,fixtureNow)).meetings[0]!;
+  expect(m.brief.length).toBeLessThanOrEqual(MEETING_BRIEF_LIMIT);
+  expect(m.brief).toEndWith('Brief cut at the 24,000 character limit; open the meeting, HubSpot or Gmail for the full context.');
+  expect(m.brief).toContain('Customer planning');
+});
+test('HubSpot contact for a different address is never used in the brief',async()=>{
+  await expect(prepareMeetingBriefs(fixtureSetup,fixtureRequest(undefined,{unrelatedContact:true}),fixtureNow)).rejects.toThrow('unrelated');
 });
 test('Calendar is asked through now+30min inclusive, since timeMax is exclusive on start',async()=>{
   const paths:string[]=[];const base=fixtureRequest();
@@ -85,14 +105,20 @@ test('Calendar is asked through now+30min inclusive, since timeMax is exclusive 
   const late:MeetingRequest=async(provider)=>provider==='calendar'?{items:[fixtureEvent({start:{dateTime:'2026-10-23T09:30:00.001Z'}})]}:{};
   expect((await prepareMeetingBriefs(fixtureSetup,late,fixtureNow)).meetings).toEqual([]);
 });
-test('addresses that could break the Gmail OR group are rejected',async()=>{
-  for(const bad of ['a}b@external.test','{x@external.test','x{@external.test'])
-    await expect(prepareMeetingBriefs(fixtureSetup,fixtureRequest([fixtureEvent({attendees:[{email:bad}]})]),fixtureNow)).rejects.toThrow('Invalid email');
+test('attendee addresses with braces are kept out of the Gmail query without failing the poll',async()=>{
+  for(const bad of ['a}b@external.test','{x@external.test','x{@external.test']){
+    const paths:string[]=[];const base=fixtureRequest([fixtureEvent({attendees:[{email:'owner@example.com',self:true},{email:'customer@external.test'},{email:bad}]})]);
+    const m=(await prepareMeetingBriefs(fixtureSetup,async(provider,path,body)=>{paths.push(path);return base(provider,path,body);},fixtureNow)).meetings[0]!;
+    expect(m.brief).toContain(bad+': Gmail not searched');expect(m.brief).toContain('Discuss pilot timing');
+    const q=new URL('https://x'+paths.find(p=>p.startsWith('/gmail/v1/users/me/threads?'))!).searchParams.get('q')!;
+    expect(q).toMatch(/^\{from:"customer@external\.test" to:"customer@external\.test"\} after:\d+ before:\d+$/);
+  }
+  // Only brace attendees: no Gmail search at all, still a brief.
+  const paths:string[]=[];const base=fixtureRequest([fixtureEvent({attendees:[{email:'owner@example.com',self:true},{email:'{x@external.test'}]})]);
+  const only=(await prepareMeetingBriefs(fixtureSetup,async(provider,path,body)=>{paths.push(path);return base(provider,path,body);},fixtureNow)).meetings[0]!;
+  expect(only.brief).toContain('{x@external.test: Gmail not searched');expect(paths.some(p=>p.startsWith('/gmail/'))).toBe(false);
   expect(()=>meetingSetup({...fixtureSetup,internalDomains:'example.com',ownerEmail:'o}@example.com'})).toThrow('Invalid email');
-  const paths:string[]=[];const base=fixtureRequest();
-  await prepareMeetingBriefs(fixtureSetup,async(provider,path,body)=>{paths.push(path);return base(provider,path,body);},fixtureNow);
-  const q=new URL('https://x'+paths.find(p=>p.startsWith('/gmail/v1/users/me/threads?'))!).searchParams.get('q')!;
-  expect(q).toMatch(/^\{from:"customer@external\.test" to:"customer@external\.test"\} after:\d+ before:\d+$/);
+  await expect(prepareMeetingBriefs(fixtureSetup,fixtureRequest([fixtureEvent({attendees:[{email:'a@b@external.test'}]})]),fixtureNow)).rejects.toThrow('Invalid email');
 });
 test('transport only reads Gmail threads as metadata with the brief headers',async()=>{
   let count=0;const request=meetingTransport({calendar:'test',gmail:'test',hubspot:'test'},()=>{},(async()=>{count++;return Response.json({id:'abc',messages:[]});}) as any);
