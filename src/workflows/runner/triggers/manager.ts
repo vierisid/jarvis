@@ -1143,10 +1143,17 @@ export class TriggerManager {
         ? (item as Record<string, unknown>)
         : { value: item };
       try {
+        // An attachment without a usable identity still starts a run, so the
+        // run's admission check fails it visibly instead of dropping the item
+        // after the source cursor has moved past it.
+        let attachmentKey: string | undefined;
+        if (!pureSchedule && isGmailAttachmentTrigger(version.trigger.settings)) {
+          try { attachmentKey = gmailAttachmentKey(payload, flowId, getFlow(flowId)!.project_id); } catch { attachmentKey = undefined; }
+        }
         const result = this.startRun({
           flowId, versionId, generation, kind: "engine", source: fireSource, payload, executeTrigger: false,
           dedupeKey: pureSchedule ? occurrence?.key : isGmailAttachmentTrigger(version.trigger.settings)
-            ? gmailAttachmentKey(payload, flowId, getFlow(flowId)!.project_id) : eventItemKey(payload),
+            ? attachmentKey : eventItemKey(payload),
           // The poll moved the source's cursor past it (Pause may have come mid-poll).
           ...(pureSchedule ? {} : { takenFromSource: true }),
           ...(pureSchedule ? { scheduledFor: occurrence?.at, lateMs: occurrence?.lateMs, ...shiftedDetail(occurrence) } : {}),

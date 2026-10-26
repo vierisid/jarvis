@@ -257,6 +257,13 @@ test('non-PDF attachments have no writes and zero invoice totals remain valid', 
   expect(rows.at(-1).values.values).toContain(0); expect(rows.at(-1).values.values.at(-1)).toBe('Ready'); await f.stop();
 }, 60000);
 
+test('a polled attachment without a usable identity fails visibly instead of vanishing', async () => {
+  const f = await fixture(), before = stats();
+  incoming = [item('Invoice INV-9 EUR 9.00', '')];
+  const runs = await f.poll();
+  expect(runs).toHaveLength(1); expect(runs[0]!.status).toBe('FAILED'); expect(stats()).toEqual(before); await f.stop();
+}, 60000);
+
 test('explicit pending label/folder stay setup-required after account bindings are supplied', () => {
   const trigger = graph(); trigger.settings.input.label = null;
   trigger.nextAction.children[0].settings.input.parentFolder = null;
