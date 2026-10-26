@@ -1,6 +1,6 @@
 import { MEETING_ACCOUNTS, meetingSetup } from './meeting-briefs';
-import { REPORT_ACCOUNTS, REPORT_REQUIRED, REPORT_ACTION, reportSetup } from './weekly-report';
-import { SALES_ACCOUNTS, SALES_REQUIRED, SALES_ACTION, salesSetup } from './sales-followups';
+import { REPORT_ACCOUNTS, REPORT_REQUIRED, REPORT_PIECE, isReportStep, reportSetup } from './weekly-report';
+import { SALES_ACCOUNTS, SALES_REQUIRED, SALES_PIECE, isSalesStep, salesSetup } from './sales-followups';
 import { parseOutputSchema } from './llm-output-contract';
 import { submissionConfig } from './form-submission';
 import { validateCronExpression, validateCronTimezone } from '../../lib/cron-scheduler';
@@ -218,7 +218,8 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     // Only input values are templated; source code and labels are not expressions.
     expressions(input, node, 'settings.input', scope, pieceName);
     const isPiece = (short: string) => pieceName === short || pieceName === `@jarvispieces/piece-${short}`;
-    if (!root && isPiece('jarvis-report') && settings.actionName === REPORT_ACTION && object(input)) {
+    if (!root && isReportStep(settings) && pieceName !== REPORT_PIECE) issue(node, 'settings.pieceName', 'PIECE', `Use the full piece name ${REPORT_PIECE}`);
+    if (!root && isReportStep(settings) && object(input)) {
       for (const [field, provider] of Object.entries(REPORT_ACCOUNTS)) {
         const id = input[field];
         if (!emptyInput(id)) {
@@ -232,7 +233,8 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
       }
       if (REPORT_REQUIRED.every(k=>!emptyInput(input[k]))) try { reportSetup(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
     }
-    if (!root && isPiece('jarvis-sales') && settings.actionName === SALES_ACTION && object(input)) {
+    if (!root && isSalesStep(settings) && pieceName !== SALES_PIECE) issue(node, 'settings.pieceName', 'PIECE', `Use the full piece name ${SALES_PIECE}`);
+    if (!root && isSalesStep(settings) && object(input)) {
       for (const [field, provider] of Object.entries(SALES_ACCOUNTS)) {
         const id = input[field];
         if (!emptyInput(id)) {

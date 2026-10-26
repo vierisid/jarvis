@@ -1,6 +1,8 @@
 import { walkFlowNodes } from '../db/flow-graph';
 import { tracksPieceCompletion } from './piece-effects';
 import { isHubspotContact } from './hubspot-contact';
+import { isSalesStep } from './sales-followups';
+import { isReportStep } from './weekly-report';
 /** Evidence of the installed runtime contract, not a claim a saved graph has run. */
 export function workflowSafeguards(trigger: unknown) {
   const safeguards: Array<{node:string;kind:string;coverage:string;limits:string}> = [];
@@ -8,14 +10,14 @@ export function workflowSafeguards(trigger: unknown) {
     const s = node.settings ?? {};
     const input = s.input && typeof s.input === 'object' && !Array.isArray(s.input) ? s.input : {};
     const add=(kind:string,coverage:string,limits:string)=>safeguards.push({node:node.name,kind,coverage,limits});
-    if (String(s.pieceName).endsWith('jarvis-report') && s.actionName === 'weekly_operating_report') {
+    if (isReportStep(s)) {
       add('weekly-source-scope','Fixed Stripe/HubSpot read endpoints, selected account/mode verification and pinned credentials. Google writes only create a new Doc and insert text into its newly returned ID. No source writes, sending, payments, sharing, browser or delegate tools.', 'Requires selected accounts, reporting semantics and writable Google folder. Stripe uses balance posting dates and balance currencies; HubSpot uses current records with a selected datetime property and stages.');
       add('weekly-calculations','Complete bounded Stripe cursor pagination with stable identity deduplication; HubSpot deals via CRM search filtered to each week, every page read, windows that could reach the 10,000-result search cap split, and a second complete read that must match; pending/failed/canceled Stripe refunds are excluded from totals and disclosed per currency, unknown refund statuses mark refunds Unavailable; cap/cursor/missing-data failures discard partial aggregates and mark affected source/period Unavailable. Civil-week boundaries in the selected timezone (empty uses the timezone configured for Jarvis) handle DST. Exact scaled-integer arithmetic separates currencies and handles zero/negative prior denominators.', 'Stripe: maximum 200 pages/20000 records per enumeration. HubSpot: maximum 50000 matching deals and 1000 search requests per week and read. A limit is Unavailable, never complete. Provider reads are not atomic snapshots; financial totals use the stated reporting basis, not PaymentIntent creation dates.');
       add('weekly-document-receipt','Durable per-workflow/settings/report-week document claim. Uncertain creation or writes are fenced for review. Completion requires matching saved Doc ID, title, destination and full text read back from Google.', 'No automatic retry of uncertain writes or eventual-delivery guarantee. A pending receipt may identify a partial document requiring review.');
     }
-    if (String(s.pieceName).endsWith('jarvis-sales') && s.actionName === 'draft_followups') {
+    if (isSalesStep(s)) {
       add('sales-draft-only','Fixed HubSpot GET and Gmail GET/draft-create endpoints; no send, browser, model tools or CRM mutations. Pipeline/inactivity property and Gmail owner checked. Complete bounded cursor pagination; limits fail explicitly.', 'HubSpot is the supported CRM and must be selected in setup. Inactivity means elapsed 24-hour days. Personalization uses contact, company, deal and sender names in an unsent draft; multiple associated contacts require review.');
-      add('sales-daily-identity','Durable atomic per-workflow/Gmail account/normalized-contact/local-date claims and draft receipts; concurrent deliveries, retries, versions and restarts cannot re-dispatch a claimed contact that day.', 'Failures and uncertain writes remain consumed for that day, without automatic retry or eventual-delivery guarantees. Different dates are new daily processing identities.');
+      add('sales-daily-identity','Durable atomic per-workflow/Gmail account/normalized-contact/local-date claims and draft receipts; concurrent deliveries, retries, versions and restarts cannot re-dispatch a claimed contact that day.', 'Drafts, reply vetoes and uncertain writes consume the contact for that day, without automatic retry or eventual-delivery guarantees; a deal refused before any draft request leaves the contact free for its other deals. Different dates are new daily processing identities.');
       add('sales-results','Exact recent inbound sender/date checks across paginated threads, fresh deal/contact recheck, per-deal failure isolation and complete result aggregation for a single downstream summary.', 'Requires explicit reply window and one associated contact. Source changes after the final recheck are not atomic with draft creation. Governance/cancellation and batch discovery failures stop the run.');
     }
     if (s.pieceName === 'webhook' && 'submission_id_field' in input && 'submission_email_field' in input)

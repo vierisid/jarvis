@@ -1,6 +1,6 @@
 import { MEETING_ACCOUNTS } from '../../runtime/meeting-briefs';
-import { REPORT_ACCOUNTS, REPORT_PIECE, REPORT_ACTION } from '../../runtime/weekly-report';
-import { SALES_ACCOUNTS, SALES_PIECE, SALES_ACTION } from '../../runtime/sales-followups';
+import { REPORT_ACCOUNTS, isReportStep } from '../../runtime/weekly-report';
+import { SALES_ACCOUNTS, isSalesStep } from '../../runtime/sales-followups';
 /**
  * Q-05: the bindings a workflow was enabled against, and the checks that stop
  * work when one of them changes.
@@ -112,13 +112,13 @@ export function connectionBindings(trigger: unknown): Map<string, ConnectionRefe
 /** Each connection one step names, with where it names it, by the same rule as `connectionBindings`. */
 export function nodeConnectionReferences(node: FlowTriggerNode): Array<[externalId: string, path: string]> {
   const out: Array<[string, string]> = [];
-  if (node.settings?.pieceName === REPORT_PIECE && node.settings?.actionName === REPORT_ACTION) {
+  if (isReportStep(node.settings)) {
     for (const field of Object.keys(REPORT_ACCOUNTS)) {
       const id = node.settings?.input?.[field];
       if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
     }
   }
-  if (node.settings?.pieceName === SALES_PIECE && node.settings?.actionName === SALES_ACTION) {
+  if (isSalesStep(node.settings)) {
     for (const field of Object.keys(SALES_ACCOUNTS)) {
       const id = node.settings?.input?.[field];
       if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);

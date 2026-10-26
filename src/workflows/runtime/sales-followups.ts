@@ -1,8 +1,14 @@
 /** Qualified HubSpot reads and Gmail draft creation. No sending or browser surface. */
 import { createHash } from 'node:crypto';
+import { getCronTimezone } from '../../lib/cron-scheduler';
 
 export const SALES_PIECE = '@jarvispieces/piece-jarvis-sales';
 export const SALES_ACTION = 'draft_followups';
+/** One rule for every check (pins, readiness, safeguards): any spelling of the sales piece is the sales step.
+ * Only the canonical name runs; readiness refuses the short name instead of passing it to fail at run time. */
+export function isSalesStep(settings: {pieceName?: unknown; actionName?: unknown} | undefined): boolean {
+  return (settings?.pieceName === SALES_PIECE || settings?.pieceName === 'jarvis-sales') && settings?.actionName === SALES_ACTION;
+}
 export const SALES_ACCOUNTS = { hubspotConnection: '@activepieces/piece-hubspot', gmailConnection: '@activepieces/piece-gmail' } as const;
 export const SALES_REQUIRED = ['crmProvider','hubspotConnection','gmailConnection','ownerEmail','senderName','openStageIds','inactivityProperty','replyLookbackDays'] as const;
 export interface SalesSetup {
@@ -13,10 +19,19 @@ type Obj = Record<string, any>;
 export type SalesRequest = (provider: 'hubspot'|'gmail', path: string, body?: Obj) => Promise<Obj>;
 export interface SalesResult { dealId: string; status: 'drafted'|'replied'|'already_processed'|'ineligible'|'review'|'unknown'; detail: string; draftId?: string }
 export interface SalesLedger {
-  /** Reserves once, atomically. An unfinished/uncertain claim is never released. */
-  claim(key: string): 'claimed'|'completed'|'unresolved';
+  /** Reserves once, atomically. An unfinished/uncertain claim is never released.
+   * Otherwise reports what the earlier claim recorded today: a draft, a reply veto, or no draft. */
+  claim(key: string): 'claimed'|'drafted'|'replied'|'no_draft'|'unresolved';
   finish(key: string, result: SalesResult): void;
+  /** Frees a claim that ended in a definite failure before any draft request was sent. */
+  release(key: string): void;
 }
+const PRIOR: Record<string, Pick<SalesResult,'status'|'detail'>> = {
+  drafted: {status:'already_processed',detail:'Contact already has a follow-up draft from today.'},
+  replied: {status:'replied',detail:'Contact replied recently (checked earlier today); no draft created.'},
+  no_draft: {status:'review',detail:'Contact was reviewed earlier today without a draft; not retried until tomorrow.'},
+  unresolved: {status:'review',detail:'Earlier claim is unresolved; no duplicate draft dispatched.'},
+};
 const hash = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
 function required(v: unknown, label: string, max=512): string {
   if (typeof v !== 'string' || !v.trim() || v.length>max || /[\x00-\x1f\x7f]/.test(v)) throw Error(`Configure ${label}`);
@@ -40,7 +55,9 @@ export function salesSetup(v: Obj): SalesSetup {
   const replyLookbackDays=v.replyLookbackDays, inactivityDays=v.inactivityDays ?? 7;
   for(const [label,n] of [['Reply lookback',replyLookbackDays],['Inactivity',inactivityDays]] as const)
     if(!Number.isInteger(n)||n<1||n>365)throw Error(`${label} must be 1-365 days`);
-  const timezone=required(v.timezone ?? 'Europe/Rome','timezone');new Intl.DateTimeFormat('en',{timeZone:timezone}).format();
+  // Empty means the day Jarvis's own schedules use: the configured timezone, else this machine's zone.
+  const configured=v.timezone==null||(typeof v.timezone==='string'&&!v.timezone.trim());
+  const timezone=required(configured?getCronTimezone() ?? Intl.DateTimeFormat().resolvedOptions().timeZone:v.timezone,'timezone');new Intl.DateTimeFormat('en',{timeZone:timezone}).format();
   return {crmProvider:'hubspot',hubspotConnection:account('hubspotConnection'),gmailConnection:account('gmailConnection'),ownerEmail:email(v.ownerEmail),
     senderName:required(v.senderName,'sender name',120),openStageIds,inactivityProperty,replyLookbackDays,inactivityDays,timezone};
 }
@@ -104,19 +121,24 @@ async function recentReply(address: string,s: SalesSetup,request: SalesRequest,n
       const from=message.payload.headers.find((h: Obj)=>String(h.name).toLowerCase()==='from')?.value;
       if(typeof from!=='string')throw Error('Missing message sender');
       const matches=from.toLowerCase().match(/[a-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[a-z0-9.-]+\.[a-z]{2,}/g) ?? [];
-      if(matches.length!==1)throw Error('Ambiguous message sender');
+      // A display name repeating the address ("a@x.com" <a@x.com>) is one sender, not an ambiguity.
+      if(new Set(matches).size!==1)throw Error('Ambiguous message sender');
       if(matches[0]===address)replied=true;
     }
   }
   return replied;
 }
+function dealName(deal: Obj): string {
+  const name=safeText(deal.properties?.dealname);
+  if(!name)throw Error('Deal name is missing; cannot personalize the draft');
+  return name;
+}
 function rawDraft(deal: Obj,contact: Obj,s: SalesSetup,key: string): string {
-  const dealName=safeText(deal.properties?.dealname);
-  if(!dealName)throw Error('Deal name is missing; cannot personalize the draft');
+  const name=dealName(deal);
   const firstName=safeText(contact.properties?.firstname,120)||'there';
   const company=safeText(contact.properties?.company,200);
-  const subject=`Following up: ${dealName}`;
-  const body=`Hi ${firstName},\n\nI'm following up on ${dealName}${company?` for ${company}`:''}. Would you like to discuss the next steps?\n\nBest,\n${s.senderName}`;
+  const subject=`Following up: ${name}`;
+  const body=`Hi ${firstName},\n\nI'm following up on ${name}${company?` for ${company}`:''}. Would you like to discuss the next steps?\n\nBest,\n${s.senderName}`;
   // Only fixed headers, encoded subject/body and validated addresses. CRM text cannot inject headers.
   const words:string[]=[];let chunk='';
   for(const ch of subject){if(Buffer.byteLength(chunk+ch)>42){words.push(chunk);chunk='';}chunk+=ch;}if(chunk)words.push(chunk);
@@ -150,46 +172,59 @@ export async function processSalesFollowups(s: SalesSetup,request: SalesRequest,
   const fields=['dealname','dealstage',s.inactivityProperty];
   const deals=await pages(request,'hubspot','/crm/v3/objects/deals?'+query({properties:fields.join(','),limit:'100',archived:'false'}),'results');
   const seen=new Set<string>();
-  for(const deal of deals) {
-    checkpoint(); // Governance and cancellation always stop the batch, never become a per-deal failure.
-    let dealId=safeText(deal.id,80)||'unknown',key: string|undefined,claimed=false,dispatched=false;
-    try {
-      dealId=id(deal.id);if(seen.has(dealId))continue;seen.add(dealId);
-      if(!eligible(deal,s,now))continue;
-      const contact=await contactFor(dealId,s,request);
-      const currentDay=salesDay(clock(),s.timezone);
-      if(currentDay.date!==day.date)throw Error('Date changed during batch; retry on the next scheduled run');
-      key=salesIdentity(scope,s,contact.address,day.date);
-      const claim=ledger.claim(key);
-      if(claim!=='claimed') {results.push({dealId,status:claim==='completed'?'already_processed':'review',detail:claim==='completed'?'Contact already processed today.':'Earlier claim is unresolved; no duplicate draft dispatched.'});continue;}
-      claimed=true;
-      const reread=await request('hubspot',`/crm/v3/objects/deals/${dealId}?${query({properties:fields.join(',')})}`);
-      if(id(reread.id)!==dealId)throw Error('Deal identity changed');
-      if(!eligible(reread,s,clock())) {
-        const result: SalesResult={dealId,status:'ineligible',detail:'Deal closed or activity changed before drafting.'};ledger.finish(key,result);results.push(result);continue;
-      }
-      const latestContact=await contactFor(dealId,s,request);
-      if(latestContact.address!==contact.address)throw Error('Contact association or address changed; review before drafting');
-      if(await recentReply(contact.address,s,request,clock())) {
-        const result: SalesResult={dealId,status:'replied',detail:'Recent inbound message found; no draft created.'};ledger.finish(key,result);results.push(result);continue;
-      }
-      const raw=rawDraft(reread,latestContact,s,key);
-      checkpoint();
-      if(salesDay(clock(),s.timezone).date!==day.date)throw Error('Date changed before draft dispatch');
-      dispatched=true;
-      const draft=await request('gmail','/gmail/v1/users/me/drafts',{message:{raw}});
-      if(typeof draft.id!=='string'||!draft.id||!draft.message?.id)throw Error('Draft response did not confirm its identity');
-      const result: SalesResult={dealId,status:'drafted',draftId:draft.id,detail:`Unsent Gmail draft ${safeText(draft.id,100)} saved.`};
-      ledger.finish(key,result);results.push(result);
-    } catch(error) {
-      checkpoint(); // Propagate emergency/authority/account changes instead of swallowing them.
-      const result: SalesResult={dealId,status:dispatched?'unknown':'review',detail:dispatched?'Draft creation may have succeeded. Inspect Gmail before any manual retry.':safeText((error as Error).message,300)};
-      // Even a definite per-deal failure is consumed for today. Uncertain claims never unlock automatically.
-      if(claimed&&key)ledger.finish(key,result);
-      results.push(result);
-    }
+  try { await batch(); } catch(error) {
+    // A stopped batch keeps its already-saved drafts visible in the run error and its audit record.
+    const done=results.filter(r=>r.status==='drafted').map(r=>`Deal ${r.dealId} draft ${safeText(r.draftId,100)}`);
+    if(done.length&&error instanceof Error)error.message=safeText(`${error.message} | Drafts saved before stop: ${done.slice(0,50).join(', ')}${done.length>50?` and ${done.length-50} more`:''}`,4000);
+    throw error;
   }
   return finish();
+  async function batch() {
+    for(const deal of deals) {
+      checkpoint(); // Governance and cancellation always stop the batch, never become a per-deal failure.
+      let dealId=safeText(deal.id,80)||'unknown',key: string|undefined,claimed=false,dispatched=false;
+      try {
+        dealId=id(deal.id);if(seen.has(dealId))continue;seen.add(dealId);
+        if(!eligible(deal,s,now))continue;
+        const contact=await contactFor(dealId,s,request);
+        const currentDay=salesDay(clock(),s.timezone);
+        if(currentDay.date!==day.date)throw Error('Date changed during batch; retry on the next scheduled run');
+        key=salesIdentity(scope,s,contact.address,day.date);
+        // Deal-specific checks run before the contact is claimed, so they never block another deal for that contact.
+        rawDraft(deal,contact,s,key);
+        const claim=ledger.claim(key);
+        if(claim!=='claimed') {results.push({dealId,...PRIOR[claim]!});continue;}
+        claimed=true;
+        const reread=await request('hubspot',`/crm/v3/objects/deals/${dealId}?${query({properties:fields.join(',')})}`);
+        if(id(reread.id)!==dealId)throw Error('Deal identity changed');
+        if(!eligible(reread,s,clock())) {
+          // Nothing was sent for this deal, so the contact stays free for its other deals.
+          claimed=false;ledger.release(key);results.push({dealId,status:'ineligible',detail:'Deal closed or activity changed before drafting.'});continue;
+        }
+        const latestContact=await contactFor(dealId,s,request);
+        if(latestContact.address!==contact.address)throw Error('Contact association or address changed; review before drafting');
+        if(await recentReply(contact.address,s,request,clock())) {
+          const result: SalesResult={dealId,status:'replied',detail:'Recent inbound message found; no draft created.'};ledger.finish(key,result);results.push(result);continue;
+        }
+        const raw=rawDraft(reread,latestContact,s,key);
+        checkpoint();
+        if(salesDay(clock(),s.timezone).date!==day.date)throw Error('Date changed before draft dispatch');
+        dispatched=true;
+        const draft=await request('gmail','/gmail/v1/users/me/drafts',{message:{raw}});
+        if(typeof draft.id!=='string'||!draft.id||!draft.message?.id)throw Error('Draft response did not confirm its identity');
+        const result: SalesResult={dealId,status:'drafted',draftId:draft.id,detail:`Unsent Gmail draft ${safeText(draft.id,100)} saved.`};
+        ledger.finish(key,result);results.push(result);
+      } catch(error) {
+        // Refused before any draft request: the claim is freed, so it does not consume the contact for today.
+        // An uncertain draft request keeps its claim and never unlocks automatically.
+        if(claimed&&key&&!dispatched){claimed=false;ledger.release(key);}
+        checkpoint(); // Propagate emergency/authority/account changes instead of swallowing them.
+        const result: SalesResult={dealId,status:dispatched?'unknown':'review',detail:dispatched?'Draft creation may have succeeded. Inspect Gmail before any manual retry.':safeText((error as Error).message,300)};
+        if(claimed&&key)ledger.finish(key,result);
+        results.push(result);
+      }
+    }
+  }
 }
 
 /** Credentials cannot be used outside this fixed endpoint/method allowlist, including fixture transports. */

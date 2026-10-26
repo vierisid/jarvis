@@ -7,7 +7,7 @@ export function salesLedger(owner: string): SalesLedger {
     claim(identity) {
       return getWorkflowDb().transaction(()=>{
         const row=getWorkflowDb().query('SELECT state FROM workflow_sales_followup WHERE identity=?').get(identity) as {state:string}|null;
-        if(row)return ['claimed','unknown'].includes(row.state)?'unresolved':'completed';
+        if(row)return ['claimed','unknown'].includes(row.state)?'unresolved':row.state==='drafted'?'drafted':row.state==='replied'?'replied':'no_draft';
         getWorkflowDb().run('INSERT INTO workflow_sales_followup(identity,owner,state,created) VALUES(?,?,?,?)',[identity,owner,'claimed',Date.now()]);
         return 'claimed';
       })();
@@ -15,6 +15,11 @@ export function salesLedger(owner: string): SalesLedger {
     finish(identity,result: SalesResult) {
       if(getWorkflowDb().run("UPDATE workflow_sales_followup SET state=?,result=? WHERE identity=? AND owner=? AND state='claimed'",
         [result.status,JSON.stringify(result),identity,owner]).changes!==1)throw Error('Daily draft claim ownership changed');
+    },
+    release(identity) {
+      // Only this run's own open claim, and only when no draft request was sent for it.
+      if(getWorkflowDb().run("DELETE FROM workflow_sales_followup WHERE identity=? AND owner=? AND state='claimed'",[identity,owner]).changes!==1)
+        throw Error('Daily draft claim ownership changed');
     },
   };
 }

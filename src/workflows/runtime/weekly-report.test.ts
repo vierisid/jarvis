@@ -1,7 +1,10 @@
 import {beforeEach,afterEach,expect,test} from 'bun:test';
 import {initWorkflowDb,closeWorkflowDb} from '../db';
 import {reportReceipt} from '../db/repos/weekly-report';
-import {collectWeeklyReport,saveWeeklyReport,reportSetup,reportWeeks,localMidnight,reportTransport,decimal,comparison,hubspotSearchBody,HUBSPOT_SEARCH_PATH} from './weekly-report';
+import {collectWeeklyReport,saveWeeklyReport,reportSetup,reportWeeks,localMidnight,reportTransport,decimal,comparison,hubspotSearchBody,HUBSPOT_SEARCH_PATH,isReportStep,REPORT_PIECE,REPORT_ACTION} from './weekly-report';
+import {nodeConnectionReferences} from '../db/repos/binding-pins';
+import {workflowSafeguards} from './workflow-safeguards';
+import {compileWorkflow} from './workflow-readiness';
 import {getCronTimezone,setCronTimezone} from '../../lib/cron-scheduler';
 import {reportFixtureSetup as setup,reportFixtureNow as now,reportFixtureRequest} from './report-fixtures';
 beforeEach(()=>initWorkflowDb(':memory:'));afterEach(()=>closeWorkflowDb());
@@ -204,4 +207,19 @@ test('transport paces HubSpot searches',async()=>{
   const at:number[]=[],req=reportTransport({stripe:'x',hubspot:'x',google:'x'},()=>{},(async()=>{at.push(Date.now());return Response.json({total:0,results:[]});}) as any,80);
   for(let i=0;i<3;i++)await req('hubspot',HUBSPOT_SEARCH_PATH,hubspotSearchBody(setup,1000,2000));
   expect(at[1]!-at[0]!).toBeGreaterThanOrEqual(75);expect(at[2]!-at[1]!).toBeGreaterThanOrEqual(75);
+});
+test('every check treats a short report piece name as the report step; readiness refuses it',()=>{
+  const graph=(pieceName:string)=>({name:'trigger',type:'PIECE_TRIGGER',settings:{pieceName:'schedule',input:{cron_expression:'0 9 * * 1'}},
+    nextAction:{name:'report',type:'PIECE',settings:{pieceName,actionName:REPORT_ACTION,input:{...setup}}}});
+  for(const name of [REPORT_PIECE,'jarvis-report']) {
+    const g=graph(name),node=g.nextAction as any;
+    expect(isReportStep(node.settings)).toBe(true);
+    expect(nodeConnectionReferences(node).map(([id])=>id)).toEqual(['fixture-stripe','fixture-hubspot','fixture-google']);
+    expect(workflowSafeguards(g).safeguards.map(x=>x.kind)).toContain('weekly-source-scope');
+    const refused=compileWorkflow(g,{connection:()=>null}).issues.filter(i=>i.code==='PIECE'&&i.message.includes('full piece name'));
+    expect(refused).toHaveLength(name===REPORT_PIECE?0:1);
+  }
+  const evil=graph('@evil/piece-jarvis-report');
+  expect(isReportStep(evil.nextAction.settings)).toBe(false);
+  expect(workflowSafeguards(evil).safeguards.map(x=>x.kind)).not.toContain('weekly-source-scope');
 });

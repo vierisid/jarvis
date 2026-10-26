@@ -2,6 +2,11 @@
 import { getCronTimezone } from '../../lib/cron-scheduler';
 export const REPORT_PIECE = '@jarvispieces/piece-jarvis-report';
 export const REPORT_ACTION = 'weekly_operating_report';
+/** One rule for every check (pins, readiness, safeguards), as for the sales step: any spelling of the report piece is the
+ * report step. Only the canonical name runs; readiness refuses the short name instead of passing it to fail at run time. */
+export function isReportStep(settings: {pieceName?: unknown; actionName?: unknown} | undefined): boolean {
+  return (settings?.pieceName === REPORT_PIECE || settings?.pieceName === 'jarvis-report') && settings?.actionName === REPORT_ACTION;
+}
 export const REPORT_ACCOUNTS = {stripeConnection:'@activepieces/piece-stripe',hubspotConnection:'@activepieces/piece-hubspot',googleConnection:'@activepieces/piece-google-docs'} as const;
 export const REPORT_REQUIRED = [...Object.keys(REPORT_ACCOUNTS),'stripeAccountId','stripeMode','stripeDateBasis','hubspotPortalId','dealDateProperty','dealStageIds','googleEmail','folderId'] as const;
 type Obj = Record<string,any>;

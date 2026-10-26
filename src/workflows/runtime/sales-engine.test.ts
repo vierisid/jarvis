@@ -138,5 +138,5 @@ test('actual model-generated saved graph executes with fixtures, partial failure
   deals=[salesFixtureDeal(),salesFixtureDeal(2),salesFixtureDeal(3)];options={failContact:'1',replied:['person2@example.net'],pageTwoReply:true};
   const before=[drafts.length,notifications.length];expect((await run(flow.id,draft.id)).status).toBe('SUCCEEDED');
   expect(drafts.length).toBe(before[0]!+1);expect(notifications.length).toBe(before[1]!+1);expect(notifications.at(-1)).toContain('1 drafts saved');expect(notifications.at(-1)).toContain('1 need review');
-  expect((await run(flow.id,draft.id)).status).toBe('SUCCEEDED');expect(drafts.length).toBe(before[0]!+1);expect(notifications.at(-1)).toContain('2 already processed');
+  expect((await run(flow.id,draft.id)).status).toBe('SUCCEEDED');expect(drafts.length).toBe(before[0]!+1);expect(notifications.at(-1)).toContain('0 drafts saved; 1 skipped for replies; 1 already processed');
 },60_000);
