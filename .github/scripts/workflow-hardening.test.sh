@@ -3107,7 +3107,7 @@ done
 	# catches them: the cached validate build gaining an upload of a parent
 	# directory, or of the same path spelled another way (#868 review).
 	expect_caught 'a cached build uploading the directory holding its output (#868 review)' pushcache "$WORKFLOWS/docker-build.yml" \
-		'      - name: Check the release cache guard has not been disarmed' $'      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n        with:\n          name: image\n          path: ${{ runner.temp }}\n      - name: Check the release cache guard has not been disarmed' \
+		'      - name: Check the release cache guard has not been disarmed' $'      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2\n        with:\n          name: image\n          path: ${{ runner.temp }}\n      - name: Check the release cache guard has not been disarmed' \
 		'restores cache-from "type=gha" in a job that builds an image and uploads an artifact'
 	# The whole build step is replaced, so its text is read from the
 	# workflow (it carries the action SHA, which an anchor never spells).
@@ -3121,7 +3121,7 @@ process.stdout.write(s.slice(a, b + end.length));
 ')" || build_step="(the build step was not found)"
 	expect_caught 'a classic docker build with a cache, saved and uploaded (#868 review)' pushcache "$WORKFLOWS/docker-build.yml" \
 		"$build_step"$'\n' \
-		$'      - run: docker build --cache-from jarvis:ci -t jarvis:ci . && docker save jarvis:ci -o i.tar\n      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n        with:\n          name: image\n          path: i.tar\n' \
+		$'      - run: docker build --cache-from jarvis:ci -t jarvis:ci . && docker save jarvis:ci -o i.tar\n      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2\n        with:\n          name: image\n          path: i.tar\n' \
 		'runs a build with --cache-from in a job that builds an image and uploads an artifact'
 }
 
@@ -3829,8 +3829,8 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 		'          echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c -' $'          set +o pipefail\n          echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c -' \
 		'failure excused'
 	expect_caught 'the download action spelled in another case, used before its check (#781 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
-		$'      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: unsigned-win32-x64\n          path: ${{ runner.temp }}/unsigned\n' \
-		$'      - uses: Actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: unsigned-win32-x64\n          path: ${{ runner.temp }}/unsigned\n      - run: ls sidecar\n' \
+		$'      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n          name: unsigned-win32-x64\n          path: ${{ runner.temp }}/unsigned\n' \
+		$'      - uses: Actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n          name: unsigned-win32-x64\n          path: ${{ runner.temp }}/unsigned\n      - run: ls sidecar\n' \
 		'is not followed at once by a sha256sum -c'
 	expect_caught 'an artifact fetched with gh run download in a signing job (#781 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
 		'      - name: Windows signing readiness' $'      - run: gh run download "$GITHUB_RUN_ID" -n unsigned-win32-x64\n      - name: Windows signing readiness' \
@@ -4002,8 +4002,8 @@ expect_caught 'the regenerated catalog put in place after the scan' license-scan
 	$'      - name: License-check the shared pieces tree\n        run: bun run scripts/check-piece-licenses.ts --install "$RUNNER_TEMP/license-scan" --summary-md "$GITHUB_STEP_SUMMARY"\n      - name: Use the regenerated catalog\n        run: cp "$RUNNER_TEMP/catalog-sync/catalog-generated.ts" src/workflows/pieces-library/catalog-generated.ts\n' \
 	'does not put the regenerated catalog in place first'
 expect_caught 'the generated catalog downloaded only sometimes' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
-	$'      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: catalog-sync\n          path: ${{ runner.temp }}/catalog-sync\n\n      - name: Use the regenerated catalog' \
-	$'      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        if: false\n        with:\n          name: catalog-sync\n          path: ${{ runner.temp }}/catalog-sync\n\n      - name: Use the regenerated catalog' \
+	$'      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n          name: catalog-sync\n          path: ${{ runner.temp }}/catalog-sync\n\n      - name: Use the regenerated catalog' \
+	$'      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        if: false\n        with:\n          name: catalog-sync\n          path: ${{ runner.temp }}/catalog-sync\n\n      - name: Use the regenerated catalog' \
 	'downloading the generated catalog is conditional'
 expect_caught 'the license scan scanning without installing' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
 	'check-piece-licenses.ts --install' 'check-piece-licenses.ts --dir' \
