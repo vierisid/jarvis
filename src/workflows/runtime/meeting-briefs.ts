@@ -134,7 +134,9 @@ export async function prepareMeetingBriefs(setup: MeetingSetup, request: Meeting
     let conversationCount = 0;
     for (const id of threadIds) {
       if (!/^[a-f0-9]+$/i.test(id)) throw Error('Invalid Gmail thread ID');
-      const thread = await request('gmail', `/gmail/v1/users/me/threads/${id}?format=full`);
+      // Headers and snippet are all a brief uses: metadata keeps message bodies out
+      // of the daemon and long quoted threads under the response size limit.
+      const thread = await request('gmail', `/gmail/v1/users/me/threads/${id}?format=metadata&` + ['From', 'To', 'Cc', 'Subject'].map(h => `metadataHeaders=${h}`).join('&'));
       if (thread.id !== id || !Array.isArray(thread.messages)) throw Error('Incomplete Gmail thread');
       let count = 0;
       for (const message of thread.messages) {

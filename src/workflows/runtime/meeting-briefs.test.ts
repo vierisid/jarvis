@@ -59,3 +59,11 @@ test('empty timezone uses the configured Jarvis timezone, not a fixed zone',asyn
     expect(m.brief).toContain('05:15');expect(m.brief).toContain('(America/New_York)');
   }finally{setCronTimezone(previous);}
 });
+test('Gmail threads are read as metadata only, never full bodies',async()=>{
+  const paths:string[]=[];const base=fixtureRequest();
+  await prepareMeetingBriefs(fixtureSetup,async(provider,path,body)=>{paths.push(path);return base(provider,path,body);},fixtureNow);
+  const reads=paths.filter(p=>p.startsWith('/gmail/v1/users/me/threads/'));
+  expect(reads).toEqual(['/gmail/v1/users/me/threads/abc?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Subject']);
+  const request=meetingTransport({calendar:'test',gmail:'test',hubspot:'test'},()=>{},(async()=>Response.json({id:'abc',messages:[]})) as any);
+  expect(await request('gmail',reads[0]!)).toEqual({id:'abc',messages:[]});
+});
