@@ -46,7 +46,10 @@ export function DashboardRoot({ integration = false }: { integration?: boolean }
   const reviewing = devtools && internalEntry.kind !== 'legacy';
   // Document-start choice, from the URL the document opened on: navigation must
   // never swap the mounted root (and its socket and drafts) for the loading screen.
-  const [needsHostedEntry] = useState(() => !integration && !reviewing && resolveReleaseEntry(href, 'released').kind !== 'legacy');
+  // A reloaded Brief maintenance link also needs the descriptor, so a hosted Brief
+  // install keeps the room inside Brief instead of stranding the tab on legacy.
+  const [startsInMaintenance] = useState(() => !integration && !reviewing && maintenanceRoom(href) !== null);
+  const [needsHostedEntry] = useState(() => !integration && !reviewing && (startsInMaintenance || resolveReleaseEntry(href, 'released').kind !== 'legacy'));
   const hosted = useHostedEntry(needsHostedEntry);
   const guard = useRef<DashboardOwner | null>(null), epoch = useRef(0);
   useEffect(() => {
@@ -73,7 +76,10 @@ export function DashboardRoot({ integration = false }: { integration?: boolean }
   const hostedBrief = initialDescriptor?.installMode === 'hosted' && initialDescriptor.dashboard === 'brief';
   // Brief's maintenance links keep the Brief owner mounted, as in local integration.
   const retained = integration || devtools || hostedBrief ? maintenanceRoom(href) : null;
-  if (needsHostedEntry && hosted.state.status !== 'ready') return <main className="brief-root brief-foundation">
+  // A maintenance link already rendered legacy before the hosted default; a failed
+  // read keeps that rather than blocking a self-hosted maintenance room on reconnect.
+  const fallback = startsInMaintenance && hosted.state.status === 'unavailable';
+  if (needsHostedEntry && hosted.state.status !== 'ready' && !fallback) return <main className="brief-root brief-foundation">
     <h1>{hosted.state.status === 'unavailable' ? 'Dashboard unavailable' : 'Opening your workspace…'}</h1>
     {hosted.state.status === 'unavailable' && <><p>Your saved work is retained.</p><button onClick={hosted.retry}>Reconnect</button></>}
   </main>;
