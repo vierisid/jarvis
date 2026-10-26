@@ -1497,6 +1497,17 @@ describe('#955: a partly governed piece badges and audits its ungoverned actions
     expect(reply).toEqual({ governed: false });
     expect((f.options.auditTrail as AuditTrail).query({ limit: 5 })).toEqual([expect.objectContaining({ tool_name: `community piece ${HUBSPOT}/create-deal`, executed: 1 })]);
   });
+  test('a Sheets action other than append is admitted, audited and badged as community', async () => {
+    const SHEETS = '@activepieces/piece-google-sheets';
+    expect(isCommunityPiece(SHEETS)).toBe(false);
+    for (const append of ['insert_row', 'sheets_append_values', 'sheets_add_row']) expect(isCommunityAction(SHEETS, append)).toBe(false);
+    expect(isCommunityAction(SHEETS, 'update_row')).toBe(true);
+    const f = fixture(SHEETS, 'update_row');
+    const reply = await f.backends.pieceAuthorize!({ piece: SHEETS, action: 'update_row', input: {}, inputDigest: await pieceInputDigest({}) }, f.context);
+    expect(reply).toEqual({ governed: false });
+    expect(listWorkflowEffects(f.run.id)).toHaveLength(0);
+    expect((f.options.auditTrail as AuditTrail).query({ limit: 5 })).toEqual([expect.objectContaining({ tool_name: `community piece ${SHEETS}/update_row`, executed: 1 })]);
+  });
 });
 
 describe('#961: the core HTTP piece is governed by method', () => {

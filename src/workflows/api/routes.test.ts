@@ -455,6 +455,18 @@ describe("workflow API: a partly governed piece badges only its ungoverned actio
     expect(piece.notApprovalGated).toBeUndefined();
     expect(Object.fromEntries(piece.actions.map((a) => [a.name, a.notApprovalGated ?? false]))).toEqual({ "create-or-update-contact": false, "create-deal": true });
   });
+  test("Sheets append actions are gated; its other actions are marked", async () => {
+    const action = (name: string) => ({ name, displayName: name, description: "", props: {} });
+    const names = ["insert_row", "sheets_append_values", "sheets_add_row", "update_row", "delete_row"];
+    const reg = new (await import("../runtime/piece-catalog")).PieceCatalog([{ name: "@activepieces/piece-google-sheets", displayName: "Google Sheets", description: "",
+      actions: Object.fromEntries(names.map((n) => [n, action(n)])), triggers: {} } as any]);
+    const get = createWorkflowRoutes({ pieceRegistry: reg })["/api/workflows/pieces"]?.GET;
+    const { body } = await callJson(get, plainReq("GET", "http://x/api/workflows/pieces"));
+    const piece = (body as Array<{ notApprovalGated?: boolean; actions: Array<{ name: string; notApprovalGated?: boolean }> }>)[0]!;
+    expect(piece.notApprovalGated).toBeUndefined();
+    expect(Object.fromEntries(piece.actions.map((a) => [a.name, a.notApprovalGated ?? false]))).toEqual({
+      insert_row: false, sheets_append_values: false, sheets_add_row: false, update_row: true, delete_row: true });
+  });
 });
 
 describe("workflow API: flows", () => {
