@@ -180,37 +180,12 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
     name: "manage_workflow",
     description: [
       "Create, run, and manage the user's Jarvis workflows (automations).",
-      "",
-      "compose { name, description } is the PRIMARY action: use it whenever the user",
-      "describes what an automation should DO (\"make a workflow that ...\", \"automate X",
-      "every morning\"). It drafts a flow from plain English (LLM-backed). On",
-      "{ ok: false, errors } read the errors, refine the description with concrete",
-      "piece/tool names, and call compose again.",
-      ...(hasLibrary && deps.installLibraryPiece
-        ? ["When the user permits installing missing connectors, use compose { name, description, install_missing: true }. This installs required Library entries under software-install authority and refreshes their schemas. Account connection is separate. Report installation failures and missing account bindings honestly; do not retry compose unchanged."]
-        : hasLibrary ? [
-            "A failure may also carry suggestedInstalls: community-library pieces that would",
-            "make the request possible. Relay them (the user installs them from the",
-            "dashboard's Library page) and offer to compose again after; do NOT retry",
-            "compose unchanged.",
-          ]
-        : []),
-      "Preserve the user's original job when composing or retrying. Missing connector setup is not proof that the job is impossible: ask the composer to inspect a browser-agent alternative if native actions cannot cover it and AI/browser use is permitted. It must verify registered browser tools, a connected browser-capable computer and role permissions; never assume a logged-in account. Do not narrow a retry to connector-only unless the user requires it.",
-      "Native Jarvis in-app notifications use channel dashboard, never in_app. Do not invent schema names, account IDs or calendar IDs in the description or contract. Keep unknown implementation choices in plain English for composer discovery.",
-      "Composed flows are DISABLED: publish once the user confirms, then run to test.",
-      "create makes an EMPTY workflow with a manual trigger and REQUIRES empty: true.",
-      "Use it only for an explicitly blank canvas, never for a workflow the user",
-      "described -- that case is always compose.",
-      "",
-      "Other actions: list, get (full detail), run (queues a run, returns run_id),",
-      "enable, disable, publish (locks the latest draft and enables it), delete",
-      "(permanent), list_runs, get_run (full run detail with step outputs).",
-      "",
-      "A flow containing a CODE step runs arbitrary JavaScript with this machine's full",
-      "privileges, so publish, enable and run are REFUSED for it until the user turns",
-      "code steps on for that one flow. The error explains how; relay it and let the user",
-      "decide. Do not retry, and do not try to route around it -- there is no tool action",
-      "that grants the permission, by design.",
+      "compose { name, description } builds the requested graph. Preserve every requirement; never substitute a diagnostic-only scaffold.",
+      "Inspect real schemas; never invent credentials or IDs. Native notifications use dashboard. Check an authorized browser alternative when native actions cannot cover the job; verify tools, computer and permissions, never assume login.",
+      "Composed flows are DISABLED. Publish only with user confirmation; publish enables the flow. Draft-only restrictions are not bans on future workflow actions.",
+      "create requires empty: true for an explicitly blank canvas; otherwise compose.",
+      "CODE steps: publish, enable and run are REFUSED until the user permits code for that flow; no tool action grants permission. Never bypass this refusal.",
+      ...(hasLibrary ? [deps.installLibraryPiece ? "When authorized, install_missing:true installs required Library connectors under software-install Authority. Account connection is separate." : "Relay suggestedInstalls from the Library page; retry after installation, never unchanged."] : []),
     ].join("\n"),
     category: "automation",
     /**
@@ -264,44 +239,39 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       },
       flow: {
         type: "string",
-        description: "Workflow display name (case-insensitive) or id. Required for get/run/enable/disable/publish/delete; optional filter for list_runs.",
+        description: "Name or ID; required for get/run/enable/disable/publish/delete; optional list_runs filter.",
         required: false,
       },
       name: {
         type: "string",
-        description: "Short descriptive display name. Required for create and compose.",
+        description: "Display name for compose/create.",
         required: false,
       },
       payload: {
         type: "object",
-        description: "Trigger payload for run, when the flow expects input data.",
+        description: "run: trigger input.",
         required: false,
       },
       run_id: {
         type: "string",
-        description: "Run id for get_run; returned by run and list_runs.",
+        description: "get_run: ID from run/list_runs.",
         required: false,
       },
       description: {
         type: "string",
         description:
-          'What the workflow should do, for compose. Quote the user where possible, and include the trigger ' +
-          '(schedule, webhook, manual) and any concrete services / actions (e.g. "send a Gmail to ...").',
+          "compose: the user's complete request, including trigger, outputs and restrictions.",
         required: false,
       },
       install_missing: {
         type: "boolean",
-        description: "compose/create: allow installing required catalog connectors (default false). Subject to software-install authority. Never connects accounts or runs workflow actions.",
+        description: "Allow required Library installation (default false); software-install Authority applies. No account connection or execution.",
         required: false,
       },
       contract: {
         type: "object",
         description:
-          "compose: optional checks of the user's explicit requirements, not guesses about implementation. Use only known schema identifiers (native Jarvis notification channel is dashboard, not in_app). Leave unknown sources/actions out of this object and retain their requirements in description for discovery. Never add connector-only or no-agent restrictions the user did not request. trigger {kind: " +
-          "manual|schedule|webhook|event|piece, cron, every, timezone, eventType, piece, trigger}; sources, outputs: " +
-          "[{notify: {channels}} | {tool, params} | {piece, action, target}]; recipients; forbidden {effects e.g. " +
-          "send_email, pieces, actions, tools, channels, agents}; review. Outputs list all it may send or address. " +
-          "Forbidden constraints apply to FUTURE workflow execution. A request not to run, notify or read data WHILE DRAFTING is already satisfied by disabled composition; do not encode that as a ban on the reads or notifications the requested workflow must perform later.",
+          "compose: explicit future-run constraints, known schemas only. trigger {kind,cron,every,timezone,eventType,piece,trigger}; sources/outputs [{notify:{channels}}|{tool,params}|{piece,action,target}]; recipients; forbidden {effects,pieces,actions,tools,channels,agents}; review. Unknown choices stay in description.",
         required: false,
       },
       limit: {
@@ -312,8 +282,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       empty: {
         type: "boolean",
         description:
-          "Confirms the user wants a blank canvas with no steps. Required by `create` when no `description` is given; " +
-          "if the user described what the flow should DO, call `compose` instead. Defaults to false.",
+          "create: explicitly blank canvas only; otherwise compose. Default false.",
         required: false,
       },
     },

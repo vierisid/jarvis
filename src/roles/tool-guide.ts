@@ -259,6 +259,10 @@ export function buildToolGuide({ hasSidecars, piecesManaged, machines }: ToolGui
   lines.push('When the user says "make a workflow that ...", "automate X", "set up a flow for Y", reach for this tool.');
   lines.push('');
   lines.push('Primary action: `compose { name, description }` builds a draft flow from a plain-English description.');
+  lines.push('Preserve the complete original job on every retry. Inspect actual schemas and unknown choices before filling contract fields; never invent action names, account IDs or calendar IDs. Native Jarvis notifications use channel dashboard, never in_app.');
+  lines.push('A missing connector does not prove the job impossible. If the user permits AI/browser work, inspect a browser-agent alternative and verify registered tools, a connected computer, role permissions and account access. Never assume login or impose connector-only restrictions the user did not request.');
+  lines.push('Contract constraints govern future workflow execution. A request not to execute real actions while drafting is satisfied by a disabled draft; do not turn it into a ban on the requested future reads or notifications. Preserve every required output, not a diagnostic-only scaffold.');
+
   lines.push('The action calls the LLM under the hood, validates against the piece catalog, and either persists a');
   lines.push('DISABLED draft or returns `{ ok: false, errors, rawResponse }`. Treat failures as iterative: read the errors,');
   lines.push('refine the description with concrete piece/tool names from the messages, and call `compose` again.');
