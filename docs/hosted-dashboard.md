@@ -40,8 +40,12 @@ tools, browser storage or a URL as release authorization. Its choice is made onc
 from the URL the document opened on, and fixed for the document lifetime, preserving
 drafts through navigation and temporary outages. A document opened on a view that
 keeps the previous dashboard (logs, a native panel, a result window, an advanced
-settings link) stays on it until reload. Brief's own links into maintenance rooms
-keep the Brief owner mounted, as in local integration.
+settings link) stays on it until the page is reloaded on a Brief view (for example
+`/`). Brief's own links into maintenance rooms (`briefMaintenance=1`) keep the
+Brief owner mounted, as in local integration, including when the document is
+opened or reloaded on such a link: the descriptor is read at document start for
+it too. If that read fails, a maintenance link opens the previous dashboard as it
+did before this default.
 Network/authentication failures offer reconnect; an older daemon's missing endpoint
 or missing dashboard field retains the legacy UI.
 
