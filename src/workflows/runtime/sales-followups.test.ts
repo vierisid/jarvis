@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import {initWorkflowDb,closeWorkflowDb,getWorkflowDb} from '../db';
 import {salesLedger} from '../db/repos/sales-followup';
 import {processSalesFollowups,salesSetup,salesDay,salesIdentity,salesTransport} from './sales-followups';
+import {getCronTimezone,setCronTimezone} from '../../lib/cron-scheduler';
 import {salesFixtureSetup as setup,salesFixtureNow as now,salesFixtureDeal as deal,salesFixtureRequest as request} from './sales-fixtures';
 let dir:string;
 beforeEach(()=>{dir=mkdtempSync(join(tmpdir(),'jarvis-sales-'));initWorkflowDb(join(dir,'fixture.db'));});
@@ -111,4 +112,14 @@ test('a sender display name repeating the contact address is still a recent repl
   const drafts:any[]=[],base=request([deal()],{drafts,replied:['person1@example.net']});
   const r=await run(async(p,path,body)=>{const result=await base(p,path,body);if(path.includes('/threads/abc?'))result.messages[0].payload={headers:[{name:'From',value:'"Person1@Example.net" <person1@example.net>'}]};return result;});
   expect(r.counts.replied).toBe(1);expect(drafts).toHaveLength(0);
+});
+test('empty timezone uses the timezone configured for Jarvis, explicit zones stay',()=>{
+  const previous=getCronTimezone();
+  try {
+    setCronTimezone('America/New_York');
+    for(const timezone of [undefined,null,'',' '])expect(salesSetup({...setup,timezone}).timezone).toBe('America/New_York');
+    expect(salesSetup({...setup,timezone:'Asia/Tokyo'}).timezone).toBe('Asia/Tokyo');
+    setCronTimezone(null);
+    expect(salesSetup({...setup,timezone:''}).timezone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  } finally { setCronTimezone(previous); }
 });

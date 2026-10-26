@@ -1,5 +1,6 @@
 /** Qualified HubSpot reads and Gmail draft creation. No sending or browser surface. */
 import { createHash } from 'node:crypto';
+import { getCronTimezone } from '../../lib/cron-scheduler';
 
 export const SALES_PIECE = '@jarvispieces/piece-jarvis-sales';
 export const SALES_ACTION = 'draft_followups';
@@ -40,7 +41,9 @@ export function salesSetup(v: Obj): SalesSetup {
   const replyLookbackDays=v.replyLookbackDays, inactivityDays=v.inactivityDays ?? 7;
   for(const [label,n] of [['Reply lookback',replyLookbackDays],['Inactivity',inactivityDays]] as const)
     if(!Number.isInteger(n)||n<1||n>365)throw Error(`${label} must be 1-365 days`);
-  const timezone=required(v.timezone ?? 'Europe/Rome','timezone');new Intl.DateTimeFormat('en',{timeZone:timezone}).format();
+  // Empty means the day Jarvis's own schedules use: the configured timezone, else this machine's zone.
+  const configured=v.timezone==null||(typeof v.timezone==='string'&&!v.timezone.trim());
+  const timezone=required(configured?getCronTimezone() ?? Intl.DateTimeFormat().resolvedOptions().timeZone:v.timezone,'timezone');new Intl.DateTimeFormat('en',{timeZone:timezone}).format();
   return {crmProvider:'hubspot',hubspotConnection:account('hubspotConnection'),gmailConnection:account('gmailConnection'),ownerEmail:email(v.ownerEmail),
     senderName:required(v.senderName,'sender name',120),openStageIds,inactivityProperty,replyLookbackDays,inactivityDays,timezone};
 }
