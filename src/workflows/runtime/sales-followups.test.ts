@@ -4,7 +4,10 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {initWorkflowDb,closeWorkflowDb,getWorkflowDb} from '../db';
 import {salesLedger} from '../db/repos/sales-followup';
-import {processSalesFollowups,salesSetup,salesDay,salesIdentity,salesTransport} from './sales-followups';
+import {processSalesFollowups,salesSetup,salesDay,salesIdentity,salesTransport,isSalesStep,SALES_PIECE,SALES_ACTION} from './sales-followups';
+import {nodeConnectionReferences} from '../db/repos/binding-pins';
+import {workflowSafeguards} from './workflow-safeguards';
+import {compileWorkflow} from './workflow-readiness';
 import {getCronTimezone,setCronTimezone} from '../../lib/cron-scheduler';
 import {salesFixtureSetup as setup,salesFixtureNow as now,salesFixtureDeal as deal,salesFixtureRequest as request} from './sales-fixtures';
 let dir:string;
@@ -93,8 +96,55 @@ test('setup rejects credentials, missing CRM, invalid windows and injection',()=
 
 test('cancellation stops the batch even when one draft already completed',async()=>{
   const drafts:any[]=[];
-  await expect(processSalesFollowups(setup,request([deal(),deal(2)],{drafts}),salesLedger('run'),'fixture',()=>now,()=>{if(drafts.length)throw Error('Run canceled');})).rejects.toThrow('Run canceled');
+  await expect(processSalesFollowups(setup,request([deal(),deal(2)],{drafts}),salesLedger('run'),'fixture',()=>now,()=>{if(drafts.length)throw Error('Run canceled');})).rejects.toThrow('Run canceled | Drafts saved before stop: Deal 1 draft draft-1');
   expect(drafts).toHaveLength(1);
+  // Deal 1's draft receipt is durable; deal 2 was never claimed, so its contact is free for the next run.
+  const rows=getWorkflowDb().query('select identity,state,result from workflow_sales_followup').all() as any[];
+  expect(rows).toHaveLength(1);
+  expect(rows[0].identity).toBe(salesIdentity('fixture',setup,'person1@example.net',salesDay(now,setup.timezone).date));
+  expect(rows[0].state).toBe('drafted');expect(JSON.parse(rows[0].result)).toMatchObject({dealId:'1',status:'drafted',draftId:'draft-1'});
+});
+/** Deals 1 and 2 share contact 1, so they share one daily claim. */
+const shared=(base:ReturnType<typeof request>,override?:(path:string)=>any):ReturnType<typeof request>=>async(p,path,body)=>{
+  const o=override?.(path);if(o!==undefined)return typeof o==='function'?o():o;
+  return path.includes('/deals/2/associations/')?{results:[{toObjectId:'1'}]}:base(p,path,body);
+};
+const states=()=>(getWorkflowDb().query('select state from workflow_sales_followup').all() as any[]).map(r=>r.state);
+test('a deal-specific failure does not consume the contact for its other deals',async()=>{
+  const drafts:any[]=[];const r=await run(shared(request([deal(1,{dealname:''}),deal(2)],{drafts})));
+  expect(r.results.map(x=>[x.dealId,x.status])).toEqual([['1','review'],['2','drafted']]);
+  expect(r.results[0]!.detail).toContain('Deal name is missing');expect(drafts).toHaveLength(1);
+  expect(Buffer.from(Buffer.from(drafts[0].message.raw,'base64url').toString().split('\r\n\r\n')[1]!,'base64').toString()).toContain('Project 2');
+  expect(states()).toEqual(['drafted']);
+  expect(r.summary).not.toContain('already processed.');
+});
+test('failures after the claim but before any draft request free the contact',async()=>{
+  for(const [label,override] of [
+    ['reread ineligible',(path:string)=>path.startsWith('/crm/v3/objects/deals/1?')?deal(1,{dealstage:'closedwon'}):undefined],
+    ['reread missing name',(path:string)=>path.startsWith('/crm/v3/objects/deals/1?')?deal(1,{dealname:' '}):undefined],
+    ['transient reread',(path:string)=>path.startsWith('/crm/v3/objects/deals/1?')?()=>{throw Error('hubspot request failed (HTTP 503)');}:undefined],
+  ] as const) {
+    const drafts:any[]=[];const r=await run(shared(request([deal(),deal(2)],{drafts}),override),()=>now,label);
+    expect(r.results.map(x=>x.status)).toEqual([label==='reread ineligible'?'ineligible':'review','drafted']);
+    expect(drafts).toHaveLength(1);
+  }
+  expect(states()).toEqual(['drafted','drafted','drafted']);
+});
+test('an uncertain draft request keeps the contact claimed for its other deals',async()=>{
+  const drafts:any[]=[],base=request([deal(),deal(2)],{drafts});
+  const r=await run(shared(base,path=>path==='/gmail/v1/users/me/drafts'&&!drafts.length?()=>{drafts.push('lost');throw Error('Reply lost after dispatch');}:undefined));
+  expect(r.results.map(x=>x.status)).toEqual(['unknown','review']);
+  expect(r.results[1]!.detail).toContain('unresolved');expect(drafts).toHaveLength(1);expect(states()).toEqual(['unknown']);
+});
+test('an earlier claim that drafted nothing is never reported as processed',async()=>{
+  const key=salesIdentity('fixture',setup,'person1@example.net',salesDay(now,setup.timezone).date);
+  for(const [state,status,text] of [['review','review','without a draft'],['ineligible','review','without a draft'],['replied','replied','replied recently'],['drafted','already_processed','follow-up draft']] as const) {
+    getWorkflowDb().run('delete from workflow_sales_followup');
+    getWorkflowDb().run('insert into workflow_sales_followup(identity,owner,state,created) values(?,?,?,?)',[key,'earlier',state,now]);
+    const drafts:any[]=[];const r=await run(request([deal()],{drafts}));
+    expect(r.results[0]).toMatchObject({status,detail:expect.stringContaining(text)});expect(drafts).toHaveLength(0);
+    if(state!=='drafted')expect(r.summary).not.toContain('Contact already');
+  }
 });
 test('outbound, draft, old and unrelated messages do not count as recent replies',async()=>{
   for(const override of [{labelIds:['SENT']},{labelIds:['DRAFT']},{internalDate:String(now-8*86400_000)},{payload:{headers:[{name:'From',value:'someoneelse@example.net'}]}}]) {
@@ -122,4 +172,17 @@ test('empty timezone uses the timezone configured for Jarvis, explicit zones sta
     setCronTimezone(null);
     expect(salesSetup({...setup,timezone:''}).timezone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
   } finally { setCronTimezone(previous); }
+});
+test('every check treats a short sales piece name as the sales step; readiness refuses it',()=>{
+  const graph=(pieceName:string)=>({name:'trigger',type:'PIECE_TRIGGER',settings:{pieceName:'schedule',input:{cron_expression:'0 9 * * 1-5'}},
+    nextAction:{name:'prepare',type:'PIECE',settings:{pieceName,actionName:SALES_ACTION,input:{...setup}}}});
+  for(const name of [SALES_PIECE,'jarvis-sales']) {
+    const g=graph(name),node=g.nextAction as any;
+    expect(isSalesStep(node.settings)).toBe(true);
+    expect(nodeConnectionReferences(node).map(([id])=>id)).toEqual(['fixture-hubspot','fixture-gmail']);
+    expect(workflowSafeguards(g).safeguards.map(x=>x.kind)).toContain('sales-draft-only');
+    const refused=compileWorkflow(g,{connection:()=>null}).issues.filter(i=>i.code==='PIECE'&&i.message.includes('full piece name'));
+    expect(refused).toHaveLength(name===SALES_PIECE?0:1);
+  }
+  expect(isSalesStep({pieceName:'@evil/piece-jarvis-sales',actionName:SALES_ACTION})).toBe(false);
 });
