@@ -160,10 +160,11 @@ export const triggerHelper = {
                     listeners: appListeners,
                     // Community polling triggers may rely on the host's default cadence:
                     // every 5 minutes. Preserve explicit schedules; never leave an enabled
-                    // poller inert. No timezone, so Jarvis's configured timezone applies.
+                    // poller inert.
                     scheduleOptions: pieceTrigger.type === TriggerStrategy.POLLING ? scheduleOptions ?? {
                         type: TriggerSourceScheduleType.CRON_EXPRESSION,
                         cronExpression: '*/5 * * * *',
+                        // timezone intentionally omitted: Jarvis's configured zone applies.
                     } as ScheduleOptions : undefined,
                 }
             }
