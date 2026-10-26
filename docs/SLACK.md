@@ -35,7 +35,7 @@ Successful sends persist the existing completion receipt before returning. Error
 | 4 catalog API | Production projection retains required/auth fields and stable message/channel outputs. |
 | 5 extraction | Gated test extracts metadata using the real engine and published npm package. |
 | 6 editor | Slack account control, joined-channel picker and Google-style onboarding card are rendered with actual UI components in a local fixture. Live deployed output-chip interaction still requires acceptance. |
-| 7 execution | Real queue/engine/resolver/Authority flow: find → info → post → reply, with downstream channel and timestamp references. Both the package read URL and the engine adapter send URL are redirected to a disposable localhost fixture. No live Slack request occurs. |
+| 7 execution | Real queue/engine/resolver/Authority flow: find -> info -> post -> reply, with downstream channel and timestamp references. Both the package read URL and the engine adapter send URL are redirected to a disposable localhost fixture. No live Slack request occurs. |
 | 8 tests | Connection, chooser, permission, single-attempt transport, readiness and real-engine tests; manual acceptance below remains pending. |
 
 ```sh
@@ -51,7 +51,7 @@ The engine test checks published metadata, exact calls, parent timestamp mapping
 
 Deploy the ClickUp framework first, then both Slack changes and hosting wrapper 48. Converge the existing system-owned `usejarvis_integrations.page_url`, normally `https://app.usejarvis.dev/account`. Install/pin Slack 0.23.1 in the shared piece tree; rebuild the engine and catalogue (schema version 10).
 
-Register one company bot app with rotation disabled and exactly the three bot scopes. Configure its Client ID/Secret in Jarvis Admin → Infrastructure → Integrations → Slack. Connect through customer Account, then invite the app to a company-controlled sandbox channel. No service environment variable is needed for Slack credentials.
+Register one company bot app with rotation disabled and exactly the three bot scopes. Configure its Client ID/Secret in Jarvis Admin -> Infrastructure -> Integrations -> Slack. Connect through customer Account, then invite the app to a company-controlled sandbox channel. No service environment variable is needed for Slack credentials.
 
 Complete `PIECE_VERIFICATION.md` stages 4, 6 and 7 on the deployed instance: select the managed account, pick the sandbox channel, inspect output chips, execute the four-action sequence, and confirm the parent/reply in Slack. Test cancellation, expired consent, disconnect/reconnect, revoked access, missing membership, approval denial and uncertain-send recovery. Record actual run IDs and provider evidence before release.
 
