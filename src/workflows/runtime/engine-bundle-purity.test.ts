@@ -1,6 +1,6 @@
 /**
- * The two daemon source files compiled INTO the engine bundle must keep
- * type-only imports (#634).
+ * Daemon sources compiled INTO the engine bundle may import runtime values
+ * only from other registered, guarded sources (#634).
  *
  * WHY THIS IS A TEST AND NOT A COMMENT. `runner/engine-runtime/build.ts` holds
  * `PATCHED_VENDOR_SOURCES`, the explicit cache-invalidation registry for
@@ -26,12 +26,10 @@
  * `spawn-env-guard.test.ts`: a property argued in prose becomes an invariant
  * the suite enforces.
  *
- * SCOPE, stated because it is narrower than "the bundle is pure": this checks
- * the two files the registry names, not their transitive graph, because with
- * type-only imports there is no runtime graph to walk. If a value import is
- * ever genuinely needed, the fix is to add the dependency to
- * `PATCHED_VENDOR_SOURCES` and exempt the file here with a reason -- not to
- * delete this test.
+ * SCOPE: every permitted sibling is checked by this same guard. A new value
+ * dependency must be registered in `PATCHED_VENDOR_SOURCES` and included
+ * below, so its own imports cannot pull in unregistered daemon dependencies.
+ * `piece-executor-gate.drift.test.ts` independently checks that registration.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -39,17 +37,16 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import ts from 'typescript';
 
-/** Relative to this directory. Mirrors `PATCHED_VENDOR_SOURCES`' two entries. */
-const BUNDLED_DAEMON_SOURCES = ['piece-effects.ts', 'piece-effect-guard.ts', 'decision-document.ts'];
+/** Relative to this directory. Each source is also covered by the bundle hash. */
+const BUNDLED_DAEMON_SOURCES = ['piece-effects.ts', 'piece-effect-guard.ts', 'decision-document.ts', 'hubspot-contact.ts'];
 
 /**
- * A value import of ANOTHER registered source is fine, and is the one shape
- * that exists today: `piece-effect-guard.ts` imports `isGovernedPiece` and
- * `sanitizePieceInput` from `piece-effects.ts`. The registry already covers
- * that file's content, so the bundle hash follows it. What this guard is for is
- * a value import that reaches OUTSIDE the registry.
+ * A value import of ANOTHER registered source is fine: the guard uses the
+ * adapter table, approved documents and HubSpot input validation. The bundle
+ * hash already covers these sources. Derive the allowed imports from the
+ * files we check so allowing a sibling also guards its dependencies.
  */
-const REGISTERED_SPECIFIERS = new Set(['./piece-effects', './piece-effect-guard', './decision-document']);
+const REGISTERED_SPECIFIERS = new Set(BUNDLED_DAEMON_SOURCES.map(file => `./${file.replace(/\.ts$/u, '')}`));
 
 const reachesOutsideTheRegistry = (specifier: string): boolean =>
   !REGISTERED_SPECIFIERS.has(specifier.replace(/^['"]|['"]$/gu, '').replace(/\.ts$/u, ''));
@@ -89,9 +86,9 @@ function valueImportsOf(file: string): string[] {
   return offenders;
 }
 
-describe('#634: the engine bundle\'s daemon sources stay type-only', () => {
+describe('#634: the engine bundle\'s daemon sources stay within the registered runtime', () => {
   for (const file of BUNDLED_DAEMON_SOURCES) {
-    test(`${file} has no value imports`, () => {
+    test(`${file} has no unregistered value imports`, () => {
       expect(valueImportsOf(file)).toEqual([]);
     });
   }
@@ -120,11 +117,13 @@ describe('#634: the engine bundle\'s daemon sources stay type-only', () => {
     // A value import of the SIBLING registered source is allowed, because the
     // registry already carries that file's content into the bundle hash. This
     // is the shape `piece-effect-guard.ts` actually uses.
-    writeFileSync(join(import.meta.dir, 'sibling.ts'), `import { isGovernedPiece } from './piece-effects';\nvoid isGovernedPiece;\n`);
-    try {
-      expect(valueImportsOf('sibling.ts')).toEqual([]);
-    } finally {
-      rmSync(join(import.meta.dir, 'sibling.ts'));
+    for (const specifier of REGISTERED_SPECIFIERS) {
+      writeFileSync(join(import.meta.dir, 'sibling.ts'), `import * as sibling from '${specifier}';\nvoid sibling;\n`);
+      try {
+        expect(valueImportsOf('sibling.ts')).toEqual([]);
+      } finally {
+        rmSync(join(import.meta.dir, 'sibling.ts'));
+      }
     }
     // And the two forms that are genuinely erased are NOT reported, so the
     // guard does not block the imports these files are allowed to have.
