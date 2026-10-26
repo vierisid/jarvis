@@ -25,7 +25,7 @@ The **brain** keeps your memory, conversations, and workflows running. The **des
 - **Build recurring workflows.** Describe a task in chat or edit it on the visual canvas. Combine app integrations, branching, loops, AI steps, and approvals. Run manually, on schedules, or from supported event and webhook triggers; inspect individual runs afterward.
 - **Keep context across tasks.** Store facts, relationships, preferences, and goals in the memory vault so conversations and automations can use relevant context.
 - **Work across your computers.** Connect desktop apps to one brain. Available tools include browser and desktop control, terminal commands, file access, screenshots, and clipboard access, subject to each device's capabilities and permissions.
-- **Chat from Telegram or Discord.** Enable a channel in Settings and list the user IDs allowed to talk to it. An enabled channel with an empty allow-list is refused and not started.
+- **Chat from Telegram or Discord.** Enable a channel in Settings and list the user IDs allowed to talk to it. The first ID is the channel owner and the only one who gets tools, approval cards, and decisions; anyone else listed chats as a guest. An enabled channel with an empty allow-list is refused and not started.
 - **Talk or type.** Use the dashboard or the floating Pebble desktop interface, with voice, wake-word support, and keyboard shortcuts. Desktop features depend on the operating system and permissions granted.
 - **Set boundaries.** Configure Authority rules for governed actions, review approval requests, inspect the audit trail, and pause or stop execution.
 - **Choose your models.** Self-hosted setups support cloud providers including Anthropic, OpenAI, Gemini, and OpenRouter, plus Ollama and OpenAI-compatible endpoints. Configure providers and model routing in Settings.
@@ -54,7 +54,7 @@ jarvis start -d --no-open
 jarvis enroll "my-desktop"
 ```
 
-Instead of Bun's global install you can use the install script, which installs Bun and the libc headers if missing, clones the repository under `~/.jarvis/daemon`, and links the `jarvis` command (macOS, Linux, and WSL only):
+Instead of Bun's global install you can use the install script, which installs Bun if missing (or upgrades an older one) and the libc headers, clones the repository under `~/.jarvis/daemon`, and links the `jarvis` command (macOS, Linux, and WSL only):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/vierisid/jarvis/main/install.sh | bash
@@ -73,6 +73,8 @@ On Linux or Windows you can also launch the extracted binary with the token:
 ```
 
 The brain CLI and sidecar binary are both named `jarvis`. Use the desktop launcher or the explicit sidecar path (`./jarvis`, or `jarvis.exe` on Windows) to distinguish them from the brain CLI.
+
+The desktop app is versioned separately from the brain and updates itself to the version your brain ships with, never newer. You get a prompt at startup, a tray item, and an **Update** button in **Settings -> Sidecar**. If a desktop app is too old for the brain (**Update required**), the brain refuses the connection; the app keeps running, offers the update, and retries every 30 minutes. See the [sidecar guide](sidecar/README.md) for details.
 
 **3. Complete setup.**
 
@@ -102,16 +104,20 @@ These commands refer to the **brain CLI**:
 ```bash
 jarvis status              # Check the running brain
 jarvis doctor              # Check environment and connectivity
-jarvis logs -f             # Follow file logs when configured
+jarvis logs -f             # Follow the log written by jarvis start -d
 jarvis restart             # Restart the brain
 jarvis stop                # Stop the brain
 jarvis autostart           # Install a login service on Linux or macOS
 jarvis autostart --status  # Inspect that service
 jarvis update              # Update a Bun global or install-script installation
-jarvis uninstall           # Remove a Bun global or install-script installation
+jarvis export --out jarvis-backup.tar  # Back up user data (--full adds plaintext secrets)
+jarvis restore jarvis-backup.tar       # Restore a backup (stop the brain first)
+jarvis uninstall           # Remove the brain AND delete all its data in ~/.jarvis
 ```
 
-`jarvis start -d` writes to `~/.jarvis/logs/jarvis.log`. For a service or container, use `journalctl` or `docker logs jarvis`, respectively. See [self-hosting operations](docs/SELF_HOSTING.md#running-under-systemd) for service lifecycle, updates, and logging. Docker images and developer checkouts are updated and removed outside `jarvis update` and `jarvis uninstall`.
+> **Warning:** `jarvis uninstall` deletes `~/.jarvis` (or `JARVIS_HOME`): memory, conversations, workflows, and stored credentials. This includes developer checkouts, where the checkout itself is left in place. Run `jarvis export` first if you might want the data back. It does not remove desktop apps. In Docker it is refused; remove the container (and optionally the `jarvis-data` volume) on the host instead.
+
+`jarvis start -d` writes to `~/.jarvis/logs/jarvis.log`. For a service or container, use `journalctl` or `docker logs jarvis`, respectively. See [self-hosting operations](docs/SELF_HOSTING.md#running-under-systemd) for service lifecycle, updates, and logging. Docker images and developer checkouts are updated outside `jarvis update`.
 
 ## Configuration
 
@@ -150,7 +156,7 @@ This repository contains the brain, dashboard, workflow runtime, and desktop app
 
 ## Development
 
-Use the Bun version pinned by the branch's [CI setup](.github/actions/bun-setup/action.yml). Node.js is also needed by the package's install script. Go and platform-specific native libraries are needed only when building the sidecar; see its [build instructions](sidecar/README.md#building).
+Use Bun 1.3.11 or later; CI pins the exact version in its [setup action](.github/actions/bun-setup/action.yml). Node.js is also needed by the package's install script. Go and platform-specific native libraries are needed only when building the sidecar; see its [build instructions](sidecar/README.md#building).
 
 ```bash
 git clone https://github.com/vierisid/jarvis.git
