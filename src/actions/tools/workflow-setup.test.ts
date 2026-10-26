@@ -51,16 +51,99 @@ function setup(installError = false) {
   return { tool, registry, installed, prompts, complete: () => { complete = true; }, turns: () => turns };
 }
 
-test('ordinary compose installs the missing connector before guiding the first setup question', async () => {
+const gate = (tool: ReturnType<typeof createManageWorkflowTool>, params: Record<string, unknown>) => tool.authorityGate?.(params) ?? null;
+
+test('compose raises no install card and installs nothing when every connector is already present', async () => {
   const f = setup();
-  expect(f.tool.authorityGate?.({ action: 'compose', name: 'Submission processor' })).toMatchObject({ actionCategory: 'install_software' });
-  const result = await call(f.tool, { action: 'compose', name: 'Submission processor', description: 'Original job: trim and validate form submissions, append once, never activate.' });
+  f.registry.upsert(piece);
+  const params = { action: 'compose', name: 'Submission processor', description: 'Trim and validate form submissions, append once, never activate.' };
+  expect(gate(f.tool, params)).toBeNull();
+  const result = await call(f.tool, params);
+  expect(f.installed).toEqual([]);
+  expect(result.suggestedInstalls).toBeUndefined();
+  expect(result.setup).toMatchObject({ status: 'needs_input', nextQuestion: question });
+  expect(result.setup.continueWith).toEqual({ action: 'continue_setup', composition_id: result.compositionRecordId });
+  expect(gate(f.tool, result.setup.continueWith)).toBeNull();
+});
+
+test('a missing connector is offered by name and installed only by a continue_setup that raises a card naming it', async () => {
+  const f = setup();
+  const params = { action: 'compose', name: 'Submission processor', description: 'Original job: trim and validate form submissions, append once, never activate.' };
+  // Whether anything is missing is only known once the composer has looked,
+  // so compose itself never asks for installation authority.
+  expect(gate(f.tool, params)).toBeNull();
+  const first = await call(f.tool, params);
+  expect(f.installed).toEqual([]);
+  expect(first.ok).toBe(false);
+  expect(first.setup).toMatchObject({ status: 'needs_installation', label: 'Setup required',
+    missingConnectors: ['Google Sheets (google-sheets)'],
+    continueWith: { action: 'continue_setup', composition_id: first.compositionRecordId, install: 'google-sheets' } });
+  expect(first.setup.nextQuestion).toContain('Google Sheets (google-sheets)');
+  const card = gate(f.tool, first.setup.continueWith);
+  expect(card).toMatchObject({ actionCategory: 'install_software', confirm: 'above_level' });
+  expect(card!.intent).toContain('Install Library connector Google Sheets (google-sheets)');
+  const result = await call(f.tool, first.setup.continueWith);
   expect(f.installed).toEqual(['google-sheets']);
-  expect(f.turns()).toBe(3);
-  expect(f.prompts[1]).toContain('sheets_append_values');
+  expect(result.installedConnectors).toEqual(['google-sheets']);
+  expect(f.registry.get(name)).toBeTruthy();
   expect(result.setup).toMatchObject({ status: 'needs_input', nextQuestion: question,
     continueWith: { action: 'continue_setup', composition_id: result.compositionRecordId } });
+  expect(result.setup.continueWith.install).toBeUndefined();
   expect(result.suggestedInstalls).toBeUndefined();
+  expect(getWorkflowComposition(result.compositionRecordId)?.specification.provenance?.installedPieces?.map(p => p.id)).toEqual(['google-sheets']);
+});
+
+test('a denied install card leaves setup required, naming the connector that was not installed', async () => {
+  const f = setup();
+  const first = await call(f.tool, { action: 'compose', name: 'Submission processor', description: 'Build disabled draft' });
+  // Denial means the gated continue_setup never executes. What the person is
+  // left with is the compose result: no draft, nothing installed, the
+  // connector named. A later continuation without install still installs
+  // nothing and keeps naming it.
+  expect(gate(f.tool, first.setup.continueWith)).toMatchObject({ actionCategory: 'install_software' });
+  expect(first.flow).toBeUndefined();
+  expect((await call(f.tool, { action: 'list' })).flows).toHaveLength(0);
+  expect(first.suggestedInstalls).toEqual([expect.objectContaining({ id: 'google-sheets', displayName: 'Google Sheets' })]);
+  const later = await call(f.tool, { action: 'continue_setup', composition_id: first.compositionRecordId, answers: { idField: 'id' } });
+  expect(f.installed).toEqual([]);
+  expect(later.setup).toMatchObject({ status: 'needs_installation', missingConnectors: ['Google Sheets (google-sheets)'],
+    continueWith: { install: 'google-sheets' } });
+});
+
+test('create with a description offers the install and installs only under a card naming it', async () => {
+  const f = setup();
+  const params = { action: 'create', name: 'Submission processor', description: 'Build disabled draft' };
+  expect(gate(f.tool, params)).toBeNull();
+  const first = await call(f.tool, params);
+  expect(f.installed).toEqual([]);
+  expect(first.routedFrom).toBe('create');
+  expect(first.setup.continueWith.install).toBe('google-sheets');
+  const direct = { ...params, name: 'Submission processor 2', install: 'google-sheets' };
+  expect(gate(f.tool, direct)!.intent).toContain('Google Sheets (google-sheets)');
+  expect(gate(f.tool, { action: 'create', name: 'Blank', empty: true, install: 'google-sheets' })).toBeNull();
+  await call(f.tool, { action: 'create', name: 'Blank', empty: true, install: 'google-sheets' });
+  expect(f.installed).toEqual([]);
+  const installed = await call(f.tool, direct);
+  expect(f.installed).toEqual(['google-sheets']);
+  expect(installed.installedConnectors).toEqual(['google-sheets']);
+});
+
+test('install is refused before anything runs when it is not one this call may install', async () => {
+  const f = setup();
+  const base = { action: 'compose', name: 'Submission processor', description: 'Build disabled draft' };
+  expect(gate(f.tool, { ...base, install: 'google-sheets', install_missing: false })).toBeNull();
+  await expect(f.tool.execute({ ...base, install: 'google-sheets', install_missing: false })).rejects.toThrow('install_missing: false');
+  await expect(f.tool.execute({ ...base, install: 'not-in-library' })).rejects.toThrow('Unknown Library ID');
+  await expect(f.tool.execute({ ...base, install: 'a,b,c,d' })).rejects.toThrow('at most 3');
+  const hosted = createManageWorkflowTool({ pieceRegistry: f.registry, llm: { chat: async () => { throw Error('unused'); } } });
+  expect(gate(hosted, { ...base, install: 'google-sheets' })).toBeNull();
+  await expect(hosted.execute({ ...base, install: 'google-sheets' })).rejects.toThrow('not available');
+  const noInstall = await call(f.tool, { ...base, install_missing: false });
+  expect(noInstall.setup.continueWith).toMatchObject({ install_missing: false });
+  expect(noInstall.setup.continueWith.install).toBeUndefined();
+  await expect(f.tool.execute({ action: 'continue_setup', composition_id: noInstall.compositionRecordId, install: 'google-sheets' })).rejects.toThrow('install_missing: false');
+  expect(f.installed).toEqual([]);
+  expect(f.turns()).toBe(1);
 });
 
 test('setup continuation preserves the original request and answers, then saves only one disabled draft', async () => {
@@ -68,7 +151,7 @@ test('setup continuation preserves the original request and answers, then saves 
   const description = 'Trim, validate, append once. No real actions or activation.';
   const initial = await call(f.tool, { action: 'compose', name: 'Submission processor', description });
   const answers = { sample: { id: 'fixture-1', email: ' A@EXAMPLE.COM ' }, idField: 'id', emailField: 'email' };
-  const waiting = await call(f.tool, { action: 'continue_setup', composition_id: initial.compositionRecordId, answers });
+  const waiting = await call(f.tool, { ...initial.setup.continueWith, answers });
   expect(f.installed).toEqual(['google-sheets']);
   const record = getWorkflowComposition(waiting.compositionRecordId)!;
   expect(record.specification.description).toBe(description);
@@ -85,6 +168,7 @@ test('setup continuation preserves the original request and answers, then saves 
   expect(await call(f.tool, { action: 'list_runs', flow: saved.flow.id })).toEqual([]);
   expect((await call(f.tool, { action: 'list' })).flows).toHaveLength(1);
   expect(getWorkflowComposition(initial.compositionRecordId)?.specification.description).toBe(description);
+  expect(f.installed).toEqual(['google-sheets']);
 });
 
 test('explicit no-install stays disabled and is retained across setup continuation', async () => {
@@ -95,13 +179,16 @@ test('explicit no-install stays disabled and is retained across setup continuati
   expect(f.installed).toEqual([]);
 });
 
-test('failed installation is attempted once and reported as the concrete blocker', async () => {
+test('failed installation is attempted once and reported as the concrete blocker, not offered again', async () => {
   const f = setup(true);
-  const result = await call(f.tool, { action: 'compose', name: 'Submission processor', description: 'Build disabled draft' });
+  const first = await call(f.tool, { action: 'compose', name: 'Submission processor', description: 'Build disabled draft' });
+  const result = await call(f.tool, first.setup.continueWith);
   expect(f.installed).toEqual(['google-sheets']);
   expect(result.ok).toBe(false);
-  expect(f.prompts[1]).toContain('Fixture install unavailable');
-  expect(result.capabilityGaps.join(' ')).toContain('Fixture install unavailable');
+  expect(result.installationErrors.join(' ')).toContain('Fixture install unavailable');
+  expect(result.installedConnectors).toBeUndefined();
+  expect(result.setup.missingConnectors).toEqual(['Google Sheets (google-sheets)']);
+  expect(result.setup.continueWith.install).toBeUndefined();
 });
 
 test('continuation cannot access another project or run a completed draft', async () => {
@@ -139,7 +226,7 @@ test('setup answers and the original request survive database restart', async ()
   try {
     const f = setup();
     const first = await call(f.tool, { action: 'compose', name: 'Submission processor', description: 'Keep the original disabled form processor request' });
-    await call(f.tool, { action: 'continue_setup', composition_id: first.compositionRecordId, answers: { sample: { id: 'fixture-after-restart' } } });
+    await call(f.tool, { ...first.setup.continueWith, answers: { sample: { id: 'fixture-after-restart' } } });
     closeWorkflowDb(); initWorkflowDb(database); configureWorkflowReadiness({ pieces: f.registry });
     f.complete();
     const saved = await call(f.tool, { action: 'continue_setup', composition_id: first.compositionRecordId, answers: { spreadsheet: 'fixture-only' } });

@@ -188,7 +188,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       "Composed flows are DISABLED. Publish only with user confirmation; publish enables the flow. Draft-only restrictions are not bans on future workflow actions.",
       "create requires empty: true for an explicitly blank canvas; otherwise compose.",
       "CODE steps: publish, enable and run are REFUSED until the user permits code for that flow; no tool action grants permission. Never bypass this refusal.",
-      ...(hasLibrary ? [deps.installLibraryPiece ? "Install required Library connectors by default under software-install Authority; false opts out. Account connection is separate." : "Relay suggestedInstalls from the Library page; retry after installation, never unchanged."] : []),
+      ...(hasLibrary ? [deps.installLibraryPiece ? "A missing Library connector returns setup.continueWith with install; call it so the user approves that install under software-install Authority. install_missing:false opts out. Account connection is separate." : "Relay suggestedInstalls from the Library page; retry after installation, never unchanged."] : []),
     ].join("\n"),
     category: "automation",
     /**
@@ -274,7 +274,12 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       },
       install_missing: {
         type: "boolean",
-        description: "Install needed Library connectors (default true); software-install Authority applies. No account connection or execution.",
+        description: "Offer to install needed Library connectors (default true); false never installs. No account connection or execution.",
+        required: false,
+      },
+      install: {
+        type: "string",
+        description: "compose/continue_setup: comma-separated Library IDs to install first, from setup.continueWith (max 3). The user approves them.",
         required: false,
       },
       contract: {
@@ -325,9 +330,24 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
         case "compose":
         case "continue_setup":
         case "create":
-          return (action !== "create" || typeof params.description === "string" && !!params.description.trim()) && params.install_missing !== false && deps.installLibraryPiece && hasLibrary
-            ? { actionCategory: "install_software", confirm: "above_level", intent: `Install required Library connectors while composing workflow: ${forCard(params.name)}` }
-            : null;
+        {
+          // Raised only when this call names connectors to install: the
+          // composer itself never installs (it reports what is missing as
+          // setup.continueWith.install), so a compose that needs nothing new
+          // asks for nothing. The card lists exactly the entries the action
+          // installs: both read `install` through requestedInstalls, and an
+          // unparseable value is refused by the action before it acts.
+          if (action === "create" && !(typeof params.description === "string" && params.description.trim())) return null;
+          let ids: string[];
+          try { ids = requestedInstalls(params.install); } catch { return null; }
+          if (!ids.length || params.install_missing === false || !deps.installLibraryPiece || !hasLibrary) return null;
+          const labels = ids.map(id => {
+            const entry = deps.library!.find(e => e.id === id);
+            return entry ? `${forCard(entry.displayName, 80)} (${forCard(id, 80)})` : forCard(id, 80);
+          });
+          return { actionCategory: "install_software", confirm: "above_level",
+            intent: `Install Library connector${ids.length > 1 ? "s" : ""} ${labels.join(", ")} to set up workflow: ${forCard(params.name ?? params.composition_id)}` };
+        }
         case "enable":
         case "publish": {
           // Q-05: enabling or publishing accepts the connections and computer
@@ -394,7 +414,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           const name = requireString(params, "name");
           const description = typeof params["description"] === "string" ? params["description"].trim() : "";
           if (description.length > 0) {
-            const composed = await actCompose(name, description, deps, project, params["contract"], params["install_missing"] !== false);
+            const composed = await actCompose(name, description, deps, project, params["contract"], params["install_missing"] !== false, undefined, approvedInstalls(params, deps));
             // ACCEPTED COST of one block per action: `note` is repo-authored
             // guidance to the model, and framing the whole return puts it under
             // a preamble that says not to follow instructions inside the block.
@@ -456,12 +476,12 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           );
         case "continue_setup":
           return framedForModel(
-            await actContinueSetup(requireString(params, "composition_id"), params.answers, params.install_missing, deps, project),
+            await actContinueSetup(requireString(params, "composition_id"), params.answers, params.install_missing, deps, project, approvedInstalls(params, deps)),
             "workflow setup and the composer's text",
           );
         case "compose":
           return framedForModel(
-            await actCompose(requireString(params, "name"), requireString(params, "description"), deps, project, params["contract"], params["install_missing"] !== false),
+            await actCompose(requireString(params, "name"), requireString(params, "description"), deps, project, params["contract"], params["install_missing"] !== false, undefined, approvedInstalls(params, deps)),
             "a composed workflow and the composer's text",
           );
         default:
@@ -1145,6 +1165,8 @@ async function actCompose(
   contract?: unknown,
   installMissing = true,
   context?: Record<string, unknown>,
+  /** Library IDs this call's Authority gate named; see approvedInstalls. */
+  preinstall: string[] = [],
 ): Promise<Record<string, unknown>> {
   if (!deps.llm) {
     throw new Error("compose: an LLM client is not configured for this build");
@@ -1184,7 +1206,10 @@ async function actCompose(
     if (roles.length > 0) composeDeps.specialistRoles = roles;
   }
   if (deps.library && deps.library.length > 0) composeDeps.library = deps.library;
-  if (installMissing && deps.installLibraryPiece) composeDeps.installLibraryPiece = deps.installLibraryPiece;
+  // Only the entries the gate named, installed before composing. The
+  // composer's tool loop never receives an installer, so it cannot install a
+  // connector nobody approved; it reports one as suggestedInstalls instead.
+  if (preinstall.length && deps.installLibraryPiece) composeDeps.installLibraryPiece = deps.installLibraryPiece;
   if (deps.executionTargets) {
     const targets = deps.executionTargets();
     if (targets.length > 0) composeDeps.executionTargets = targets;
@@ -1194,9 +1219,21 @@ async function actCompose(
   // A null contract, as some models send for an unused optional parameter, is none.
   const stated = contract ?? undefined;
   const setupContext = installMissing ? context : { ...context, workflowSetup: { ...(context?.workflowSetup as Record<string, unknown> ?? {}), installMissing: false } };
-  const result = await composePersistedFlow(composeDeps, { name, description, ...(setupContext ? { context: setupContext } : {}), ...(stated !== undefined ? { contract: stated as JobContract } : {}) }, project);
+  const result = await composePersistedFlow(composeDeps, { name, description, ...(setupContext ? { context: setupContext } : {}), ...(stated !== undefined ? { contract: stated as JobContract } : {}) }, project, undefined, preinstall);
+  const installReport = {
+    ...(result.installedPieces?.length ? { installedConnectors: result.installedPieces } : {}),
+    ...(result.installationErrors?.length ? { installationErrors: result.installationErrors } : {}),
+  };
 
   if (!result.ok) {
+    // A connector that failed to install in this call is not offered again:
+    // the failure is the blocker to report, not something to retry.
+    const failed = new Set(preinstall.filter(id => !result.installedPieces?.includes(id)));
+    const missing = result.suggestedInstalls ?? [];
+    const offer = installMissing && deps.installLibraryPiece
+      ? missing.filter(s => !failed.has(s.id)).slice(0, MAX_INSTALLS_PER_CALL) : [];
+    const missingNames = missing.map(s => s.displayName ? `${s.displayName} (${s.id})` : s.id);
+    const offerNames = offer.map(s => s.displayName ? `${s.displayName} (${s.id})` : s.id);
     return {
       ok: false,
       errors: result.errors,
@@ -1204,12 +1241,19 @@ async function actCompose(
       ...(result.configurationQuestions?.length ? { configurationQuestions: result.configurationQuestions } : {}),
       ...(result.capabilityGaps?.length ? { capabilityGaps: result.capabilityGaps } : {}),
       ...(result.errorCode ? { errorCode: result.errorCode } : {}),
-      ...(result.configurationQuestions?.length ? { setup: {
-        status: result.capabilityGaps?.length ? "blocked" : result.suggestedInstalls?.length ? "needs_installation" : "needs_input",
-        nextQuestion: result.configurationQuestions[0], questions: result.configurationQuestions,
-        continueWith: { action: "continue_setup", composition_id: result.compositionRecordId, ...(installMissing ? {} : { install_missing: false }) },
+      ...(result.configurationQuestions?.length || missing.length ? { setup: {
+        status: offer.length ? "needs_installation" : result.capabilityGaps?.length ? "blocked" : missing.length ? "needs_installation" : "needs_input",
+        label: "Setup required",
+        ...(missing.length ? { missingConnectors: missingNames } : {}),
+        nextQuestion: offer.length
+          ? `This workflow needs the Library connector${offer.length > 1 ? "s" : ""} ${offerNames.join(", ")}. Install ${offer.length > 1 ? "them" : "it"} now? You will be asked to approve the install.`
+          : result.configurationQuestions?.[0] ?? `Install ${missingNames.join(", ")} from the Library page, then continue setup.`,
+        ...(result.configurationQuestions?.length ? { questions: result.configurationQuestions } : {}),
+        continueWith: { action: "continue_setup", composition_id: result.compositionRecordId,
+          ...(offer.length ? { install: offer.map(s => s.id).join(",") } : {}), ...(installMissing ? {} : { install_missing: false }) },
         accountSetup: ACCOUNT_SETUP_GUIDANCE,
       } } : {}),
+      ...installReport,
       rawResponse: capRawResponse(result.rawResponse),
       compositionRecordId: result.compositionRecordId,
       ...(result.suggestedInstalls && result.suggestedInstalls.length > 0
@@ -1236,7 +1280,34 @@ async function actCompose(
     versionId: version.id,
     ...setupReadiness(flow.id, version.id, result.compositionRecordId),
     compositionRecordId: result.compositionRecordId,
+    ...installReport,
   };
+}
+
+const MAX_INSTALLS_PER_CALL = 3;
+
+/**
+ * The Library IDs one compose / continue_setup call asks to install. The
+ * Authority gate and the action both read `install` through this, so the card
+ * names exactly what the action installs.
+ */
+function requestedInstalls(value: unknown): string[] {
+  if (value === undefined || value === null) return [];
+  if (typeof value !== "string") throw new Error("install must be a comma-separated list of Library IDs");
+  const ids = [...new Set(value.split(",").map(id => id.trim()).filter(Boolean))];
+  if (ids.length > MAX_INSTALLS_PER_CALL) throw new Error(`install accepts at most ${MAX_INSTALLS_PER_CALL} Library connectors per call`);
+  return ids;
+}
+
+/** requestedInstalls, refused before anything runs when this call cannot install them. */
+function approvedInstalls(params: Record<string, unknown>, deps: ManageWorkflowDeps): string[] {
+  const ids = requestedInstalls(params.install);
+  if (!ids.length) return ids;
+  if (params.install_missing === false) throw new Error("install cannot be combined with install_missing: false");
+  if (!deps.installLibraryPiece || !deps.library?.length) throw new Error("Library installation is not available here; the user can install connectors from the Library page");
+  const unknown = ids.filter(id => !deps.library!.some(e => e.id === id));
+  if (unknown.length) throw new Error(`Unknown Library ID: ${unknown.join(", ")}. Use the IDs from setup.continueWith.install.`);
+  return ids;
 }
 
 
@@ -1254,7 +1325,7 @@ function setupReadiness(flowId: string, versionId: string, compositionId: string
   } } : {}) };
 }
 
-async function actContinueSetup(compositionId: string, rawAnswers: unknown, installOption: unknown, deps: ManageWorkflowDeps, project: string): Promise<Record<string, unknown>> {
+async function actContinueSetup(compositionId: string, rawAnswers: unknown, installOption: unknown, deps: ManageWorkflowDeps, project: string, preinstall: string[] = []): Promise<Record<string, unknown>> {
   const requested = getWorkflowComposition(compositionId, project);
   if (!requested) throw new Error("Workflow setup not found in this project");
   const root = (requested.specification.context?.workflowSetup as Record<string, unknown> | undefined)?.rootCompositionId;
@@ -1276,8 +1347,9 @@ async function actContinueSetup(compositionId: string, rawAnswers: unknown, inst
   const answers = { ...(prior?.answers as Record<string, unknown> ?? {}), ...(rawAnswers as Record<string, unknown> ?? {}) };
   if (JSON.stringify(answers).length > 16000) throw new Error("Setup answers exceed 16,000 characters; provide a small redacted sample");
   const install = installOption === undefined ? prior?.installMissing !== false : installOption !== false;
+  if (preinstall.length && !install) throw new Error("This setup was started with install_missing: false; pass install_missing: true with install only if the user now allows installing connectors");
   return actCompose(current.specification.name, current.specification.description, deps, project, current.specification.contract, install,
-    { ...current.specification.context, workflowSetup: { rootCompositionId: rootId, previousCompositionId: current.id, answers, installMissing: install } });
+    { ...current.specification.context, workflowSetup: { rootCompositionId: rootId, previousCompositionId: current.id, answers, installMissing: install } }, preinstall);
 }
 
 function findFlowByDisplayName(project: string, name: string): FlowRow | null {

@@ -161,8 +161,9 @@ export interface ComposeOk {
 
 /**
  * A community-library piece the composer thinks would satisfy the request if
- * it were installed. When installation capability is available, the composer
- * resolves these dependencies before returning questions to the caller.
+ * it were installed. When the caller gives the tool loop an installer, the
+ * composer resolves these dependencies before returning questions; the chat
+ * tool does not, and offers them for an approved install instead.
  */
 export interface SuggestedInstall {
   /** Library catalog id (e.g. "discord"). */
@@ -752,9 +753,11 @@ async function composeWithTools(
         }
 
         const failure = blockedResult(call.arguments, deps.library, lastRaw);
-        // Do available setup work before asking the user for information. The
-        // outer tool's Authority gate grants installation capability; this
-        // path never grants it or bypasses an explicit no-install request.
+        // Do available setup work before asking the user for information, when
+        // the caller handed this loop an installer. manage_workflow never
+        // does: it installs only entries an approval card named, before
+        // composing, and relays the rest as suggestedInstalls. This path never
+        // grants installation or bypasses an explicit no-install request.
         const pending = canInstall ? [...new Set((failure.suggestedInstalls ?? []).map(s => s.id))]
           .filter(id => !installAttempts.has(id) && !deps.pieceRegistry.get(deps.library!.find(e => e.id === id)!.npmPackage))
           .slice(0, Math.max(0, 3 - installAttempts.size)) : [];

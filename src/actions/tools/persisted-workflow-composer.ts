@@ -12,7 +12,14 @@ export async function composePersistedFlow(deps: ComposeDeps, input: ComposeRequ
   /** The project the journal is recorded in: the one the composed flow will be created in (#844). */
   projectId?: string,
   /** Synchronous attachment, in the journal's creation transaction, before any provider call. */
-  onJournal?: (id: string) => void): Promise<ComposeResult & { compositionRecordId: string }> {
+  onJournal?: (id: string) => void,
+  /**
+   * Library IDs a person approved installing for this composition. They are
+   * installed, in order, before the composer starts, and the composer's own
+   * tool loop is then given no installer: the approval named these entries,
+   * so nothing else can be installed under it.
+   */
+  preinstall: readonly string[] = []): Promise<ComposeResult & { compositionRecordId: string; installedPieces?: string[]; installationErrors?: string[] }> {
   // Snapshot the job (including supplemental context and selected ingredients) so caller mutations cannot change intent mid-await.
   const request = { ...jobSpecification(input), signal: input.signal };
   request.signal?.throwIfAborted();
@@ -37,7 +44,24 @@ export async function composePersistedFlow(deps: ComposeDeps, input: ComposeRequ
     signal?.throwIfAborted();
     (snapshot.deps.pieceRegistry as PieceCatalog).upsert(metadata);
   };
+  const installedPieces: string[] = [], installationErrors: string[] = [];
   try {
+    if (preinstall.length) {
+      const install = snapshot.deps.installLibraryPiece;
+      if (!install) throw new Error('Library installation is not available in this context');
+      delete snapshot.deps.installLibraryPiece;
+      for (const id of preinstall) {
+        const entry = snapshot.deps.library?.find(candidate => candidate.id === id);
+        if (entry && snapshot.deps.pieceRegistry.get(entry.npmPackage)) continue;
+        try {
+          await install(id, request.signal);
+          installedPieces.push(id);
+        } catch (error) {
+          request.signal?.throwIfAborted();
+          installationErrors.push(`Could not install ${id}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    }
     const result = await composeFlow({ ...snapshot.deps, onCandidate(candidate) {
       request.signal?.throwIfAborted();
       journal.checkpoint(candidate);
@@ -45,7 +69,8 @@ export async function composePersistedFlow(deps: ComposeDeps, input: ComposeRequ
     } }, request);
     request.signal?.throwIfAborted();
     journal.finish(result.ok ? "VALIDATED" : "FAILED", result.ok ? [] : result.errors);
-    return { ...result, compositionRecordId: journal.id };
+    return { ...result, compositionRecordId: journal.id,
+      ...(installedPieces.length ? { installedPieces } : {}), ...(installationErrors.length ? { installationErrors } : {}) };
   } catch (error) {
     // Preserve cancellation/provider failures. If shutdown closed the captured
     // DB, its last durable checkpoint remains COMPOSING (outcome unknown).

@@ -267,8 +267,8 @@ export function buildToolGuide({ hasSidecars, piecesManaged, machines }: ToolGui
   lines.push('DISABLED draft or returns setup questions or concrete errors. Continue setup through continue_setup;');
   lines.push('other errors need a targeted repair that preserves the original request. Do not weaken requirements.');
   if (!piecesManaged) {
-    lines.push('Required Library connectors are installed by compose by default under software-install Authority. Do not stop to ask for a separate install instruction. Set install_missing:false only if the user forbids installation.');
-    lines.push('If installation fails, suggestedInstalls and the actual failure identify the remaining dependency; do not repeatedly retry it.');
+    lines.push('When a Library connector is missing, compose returns setup.status needs_installation with setup.continueWith.install naming it. Call that continueWith as given: the user approves installing exactly those connectors on a software-install card. Nothing is installed when nothing is missing. Set install_missing:false only if the user forbids installation.');
+    lines.push('If the install card is denied, say which connectors were not installed and that the workflow stays Setup required; do not retry the install. If installation fails, installationErrors and suggestedInstalls identify the remaining dependency; do not repeatedly retry it.');
   }
   lines.push('Save the full disabled processing graph even when payload paths, destination, column mapping or account are unknown. Leave inputs empty/null for Setup required in the editor; configuration alone must not block saving. Never invent values or substitute diagnostic steps.');
   lines.push('When setup is returned without a saved draft, ask its nextQuestion directly and keep the compositionRecordId. On the answer call continue_setup { composition_id, answers }. It retains the original job and earlier answers; never ask the user to repeat the workflow prompt or tell you to continue.');
