@@ -95,6 +95,16 @@ function emailIdentity(input: Pick<FireInput, 'source' | 'dedupeKey'>): boolean 
 }
 
 /**
+ * A message's key belongs to the run that processes it. A delivery that
+ * started nothing (refused at readiness before this rule, for one) gives its
+ * key up, keeping it in its detail, so the message can still be processed once.
+ */
+function releaseUnstartedEmailKey(flowId: string, key: string): void {
+  db().run(`UPDATE workflow_trigger_fire SET detail = json_set(COALESCE(detail, '{}'), '$.deliveryKey', dedupe_key), dedupe_key = NULL
+    WHERE flow_id = ? AND source IN ('event', 'poll') AND dedupe_key = ? AND outcome != 'started'`, [flowId, key]);
+}
+
+/**
  * Record a delivery that started nothing. With a key it is recorded once:
  * recording the same missed occurrence again (a second restart) is a no-op.
  */
@@ -145,6 +155,7 @@ export function recordBlocked(input: FireInput & { signature: string; runId?: st
  */
 export function repeatOf(input: { flowId: string; source: FireSource; dedupeKey: string; duplicateSince?: number }): TriggerFire | null {
   return db().transaction((): TriggerFire | null => {
+    if (emailIdentity(input)) releaseUnstartedEmailKey(input.flowId, input.dedupeKey);
     const existing = db().query<FireRow, [string, string, number, string, number]>(
       `SELECT * FROM workflow_trigger_fire WHERE flow_id = ? AND (source = ? OR (? = 1 AND source IN ('event', 'poll'))) AND dedupe_key = ? AND observed_at >= ?`,
     ).get(input.flowId, input.source, Number(emailIdentity(input)), input.dedupeKey, emailIdentity(input) ? 0 : input.duplicateSince ?? 0);
@@ -172,6 +183,7 @@ export function claimFire(input: FireInput & { duplicateSince?: number }, start:
   const now = input.observedAt ?? Date.now();
   return db().transaction((): ClaimResult => {
     if (input.dedupeKey) {
+      if (emailIdentity(input)) releaseUnstartedEmailKey(input.flowId, input.dedupeKey);
       const existing = db().query<FireRow, [string, string, number, string, number]>(
         `SELECT * FROM workflow_trigger_fire WHERE flow_id = ? AND (source = ? OR (? = 1 AND source IN ('event', 'poll'))) AND dedupe_key = ? AND observed_at >= ?`,
       ).get(input.flowId, input.source, Number(emailIdentity(input)), input.dedupeKey, emailIdentity(input) ? 0 : input.duplicateSince ?? 0);
@@ -339,11 +351,18 @@ export function claimSubmissionRun(flowId: string, versionId: string, key: strin
 export function claimEmailRun(flowId: string, versionId: string, key: string, runId: string): void {
   if (!key.startsWith('event:email:') || key.length <= 12) throw Error('Invalid email identity');
   db().transaction(() => {
-    const previous = db().query<{ run_id: string | null }, [string, string]>(
-      "SELECT run_id FROM workflow_trigger_fire WHERE flow_id = ? AND source IN ('event', 'poll') AND dedupe_key = ?").get(flowId, key);
+    releaseUnstartedEmailKey(flowId, key);
+    const previous = db().query<{ run_id: string | null; started_at: number | null; status: string | null }, [string, string]>(
+      `SELECT f.run_id, f.started_at, r.status FROM workflow_trigger_fire f LEFT JOIN flow_run r ON r.id = f.run_id
+        WHERE f.flow_id = ? AND f.source IN ('event', 'poll') AND f.dedupe_key = ?`).get(flowId, key);
     if (previous?.run_id === runId) return;
-    if (previous) throw Error('This Gmail message was already accepted by this workflow. No new classification, label or notification was attempted. Inspect the original run to reconcile an uncertain outcome.');
-    claimFire({ flowId, flowVersionId: versionId, source: 'event', dedupeKey: key,
+    if (previous && previous.started_at === null) {
+      throw Error(`This Gmail message already belongs to run ${previous.run_id ?? 'unknown'} of this workflow, which has not begun processing it (${(previous.status ?? 'missing').toLowerCase()}). Nothing was classified, labeled or notified by this run. Check that run instead of starting another.`);
+    }
+    if (previous) throw Error(`This Gmail message was already accepted by run ${previous.run_id ?? 'unknown'} of this workflow. No new classification, label or notification was attempted. Inspect the original run to reconcile an uncertain outcome.`);
+    const claimed = claimFire({ flowId, flowVersionId: versionId, source: 'event', dedupeKey: key,
       detail: { delivery: 'Gmail message ID' } }, () => ({ runId }));
+    // Claimed as the run begins: it has started processing the message.
+    db().run('UPDATE workflow_trigger_fire SET started_at = ? WHERE id = ?', [Date.now(), claimed.fire.id]);
   }).immediate();
 }

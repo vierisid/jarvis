@@ -22,10 +22,10 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
   // w8-9: Gmail triage and persistent message admission.
   'w8-9': {
-    'bare': '57d4704c8577c6fda9da6c11c64b8cb0524acac0ffc23624a2fc9890b65fdaec',
-    'hosted production': '03bde7f6f985268d83e1e482adf981ec539566971d6e58cd453c7978072d44c6',
-    'production': '96de39d26ed372d1fc3aa871106d1a4206a75fe80c5b32175de0a8f7b004803f',
-    'tool names only': '0ae7d1e35a57b0b531036d328115cba3ba710a28cdffd11dbfe06b4105df60aa',
+    'bare': '729110a19aba46318acfa836345686c035b28e4b0772efab9cb62bf6a8c31dbe',
+    'hosted production': 'eb363935d5a05f3d08716a2f91562fd661e6fddcd2f7db8bb8cbf7a6bedc1908',
+    'production': '49c0da151a101f4d160d47186220d41d6485fdf35caa5121a36801ea126f822b',
+    'tool names only': 'f6c257d486170b6613aabd712775fa598f29d76b808aba78dc56f21f242113d8',
   },
   // w8-8: deferred setup, connector continuation and form processing.
   'w8-8': {
