@@ -28,12 +28,13 @@ export interface RefundStore {load():RefundState;save(state:RefundState):void;ch
 export class RefundProviderError extends Error {
   constructor(readonly status:number,readonly code?:string,readonly type?:string){super('Stripe request failed ('+status+(code?' '+code:'')+')');}
 }
-/** Why a create call ended with no matching refund on readback. Only an answered 4xx is definitive:
- * 409 and idempotency errors may mean another request with this key exists, so they stay uncertain. */
-function dispatchFailure(e:unknown){
+/** Why a create call ended without exactly one matching refund on readback. Only an answered 4xx with no
+ * refund carrying the key is definitive: 409 and idempotency errors may mean another request with this key
+ * exists, and several refunds carrying the key mean one may be ours, so they stay uncertain. */
+function dispatchFailure(e:unknown,keyed:number){
   if(!(e instanceof RefundProviderError))return 'Refund delivery uncertain (no Stripe response); no automatic second dispatch';
   const http='HTTP '+e.status+(e.code?', code '+e.code:'');
-  if(e.status>=400&&e.status<500&&e.status!==409&&e.type!=='idempotency_error')return 'Stripe rejected the refund request ('+http+'); no refund was created and no automatic second dispatch';
+  if(keyed===0&&e.status>=400&&e.status<500&&e.status!==409&&e.type!=='idempotency_error')return 'Stripe rejected the refund request ('+http+'); no refund was created and no automatic second dispatch';
   return 'Refund delivery uncertain ('+http+'); no automatic second dispatch';
 }
 // Stripe minor-unit exponents that differ from 2 (docs.stripe.com/currencies).
@@ -89,5 +90,5 @@ export async function dispatchApprovedRefund(store:RefundStore,provider:RefundPr
   // This durable transition precedes the only mutating provider operation.
   state.attemptedAt=now;state.state='dispatching';save(state);checkpoint();
   try {return finish(await provider.create(p.charge,p.amount,key));}
-  catch(e) {const matches=(await provider.refunds(p.charge)).filter(r=>r.key===key);checkpoint();return matches.length===1?finish(matches[0]!):save({...state,state:'needs_review',reason:dispatchFailure(e)});}
+  catch(e) {const matches=(await provider.refunds(p.charge)).filter(r=>r.key===key);checkpoint();return matches.length===1?finish(matches[0]!):save({...state,state:'needs_review',reason:dispatchFailure(e,matches.length)});}
 }
