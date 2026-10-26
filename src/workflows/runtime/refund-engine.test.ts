@@ -119,3 +119,24 @@ test('actual generated Test 11 workflow runs with fixture setup only',async()=>{
  for(const[k,v]of Object.entries(setup))if(g.nextAction.settings.input[k]===''||g.nextAction.settings.input[k]==null)g.nextAction.settings.input[k]=v;
  const f=fixture(g),run=await begin(f);expect(run.status).toBe('PAUSED');expect(posts()).toHaveLength(0);approvals.approve(approvalFor(run.id).id,'dashboard');expect((await resume(run.id)).status).toBe('SUCCEEDED');expect(posts()).toHaveLength(1);expect((await validateRefundFixtures(original)).passed).toBe(true);
 },120000);
+test('a request that ended before dispatch does not consume its ticket or charge',async()=>{
+ reset();let f=fixture();provider.payment.paid=false;expect((await begin(f)).status).toBe('FAILED');provider.payment.paid=true;
+ const retried=await begin(f);expect(retried.status).toBe('PAUSED');expect(JSON.parse(approvalFor(retried.id).tool_arguments).amount).toBe(1200);
+ reset();f=fixture();expect((await begin(f,{...ticket,amount:5000})).status).toBe('FAILED');expect((await begin(f)).status).toBe('PAUSED');
+ reset();f=fixture();const rejected=await begin(f);approvals.deny(approvalFor(rejected.id).id,'dashboard');expect((await resume(rejected.id)).status).toBe('SUCCEEDED');
+ const other=await begin(f,{...ticket,id:'other-ticket'});expect(other.status).toBe('PAUSED');expect(JSON.parse(approvalFor(other.id).tool_arguments).ticketId).toBe('other-ticket');expect(posts()).toHaveLength(0);
+},120000);
+test('changed ticket data supersedes a pending approval; the stale card can never refund',async()=>{
+ reset();const f=fixture(),stale=await begin(f),a=approvalFor(stale.id);
+ const fresh=await begin(f,{...ticket,amount:1000});expect(fresh.status).toBe('PAUSED');expect(approvals.getRequest(a.id)?.status).toBe('denied');
+ expect(approvals.approve(a.id,'dashboard')).toBeNull();expect((await resume(stale.id)).status).toBe('FAILED');expect(posts()).toHaveLength(0);
+ const b=approvalFor(fresh.id);expect(JSON.parse(b.tool_arguments).amount).toBe(1000);approvals.approve(b.id,'dashboard');expect((await resume(fresh.id)).status).toBe('SUCCEEDED');
+ expect(posts()).toHaveLength(1);expect(new URLSearchParams(posts()[0]!.body).get('amount')).toBe('1000');
+ expect((await begin(f,{...ticket,amount:1000})).status).toBe('SUCCEEDED');expect(posts()).toHaveLength(1);
+},120000);
+test('an attempted but uncertain refund never restarts on a later delivery',async()=>{
+ reset();provider.options.rejectWrite=true;const f=fixture(),run=await begin(f);approvals.approve(approvalFor(run.id).id,'dashboard');await resume(run.id);
+ expect(posts()).toHaveLength(1);expect(records()[0].state).toBe('needs_review');expect(records()[0].attemptedAt).toBeDefined();provider.options.rejectWrite=false;
+ const later=await begin(f);expect(later.status).toBe('SUCCEEDED');expect(listWorkflowEffects(later.id).some(e=>e.toolName==='workflow_approved_refund')).toBe(false);expect(posts()).toHaveLength(1);
+ expect(getWorkflowDb().query('SELECT COUNT(*) AS n FROM workflow_refund_payment').get()).toEqual({n:1});
+},120000);

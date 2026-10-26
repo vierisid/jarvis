@@ -22,7 +22,7 @@ export interface RefundPayment {id:string;currency:string;amount:number;refunded
 export interface RefundReceipt {id:string;charge:string;currency:string;amount:number;status:string;key:string}
 export interface RefundProvider {payment(id:string):Promise<RefundPayment>;refunds(charge:string):Promise<RefundReceipt[]>;create(charge:string,amount:number,key:string):Promise<RefundReceipt>}
 export interface RefundProposal {ticketId:string;ticketSource:string;account:string;mode:'test'|'live';charge:string;currency:string;amount:number;refunded:number;expiresAt:number}
-export interface RefundState {proposal?:RefundProposal;approvalId?:string;originRun:string;state:'new'|'approval'|'dispatching'|'refunded'|'pending_provider'|'rejected'|'expired'|'needs_review';attemptedAt?:number;receipt?:RefundReceipt;reason?:string}
+export interface RefundState {proposal?:RefundProposal;approvalId?:string;originRun:string;state:'new'|'approval'|'dispatching'|'refunded'|'pending_provider'|'rejected'|'expired'|'needs_review';attemptedAt?:number;receipt?:RefundReceipt;reason?:string;retiredRuns?:string[]}
 export interface RefundStore {load():RefundState;save(state:RefundState):void;check():void}
 export function refundDecision(expiresAt:number,decision:{status:string;decided_at:number|null}|null,now:number):'approved'|'pending'|'rejected'|'expired' {
   if(decision?.status==='denied')return 'rejected';

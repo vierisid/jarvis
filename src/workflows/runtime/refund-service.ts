@@ -2,7 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {ApprovalManager} from '../../authority/approval';
 import {REFUND_ACTION,REFUND_PIECE,refundSetup,refundTicket,proposeRefund,dispatchApprovedRefund,refundDecision,type RefundState} from './refund';
 import {refundTransport} from './refund-transport';
-import {acquireRefund,reserveRefundPayment} from '../db/repos/refund';
+import {acquireRefund,reserveRefundPayment,releaseRefundPayment} from '../db/repos/refund';
 import {currentConnectionIdentity,connectionBindings,enforceRunConnectionBinding} from '../db/repos/binding-pins';
 import {createWaitpoint} from '../db/repos/waitpoint';
 import {walkFlowNodes} from '../db/flow-graph';
@@ -23,8 +23,14 @@ export function createRefundService(deps:{effects:WorkflowEffectBoundary;credent
   const park=(at:number)=>({waitpointId:createWaitpoint({flowRunId:ctx.runId,projectId:ctx.projectId,stepName:resolved.stepName,type:'TIMER',resumeDateTime:new Date(at).toISOString()}).id});
   if('busyUntil'in acquired)return park(acquired.busyUntil);
   try {
+   // A newer run or changed ticket data replaced a request that never reached dispatch: its card can no longer run.
+   if(acquired.superseded?.approvalId)approvals.deny(acquired.superseded.approvalId,'refund-superseded');
    const store=acquired.store;let state=store.load();
-   const result=(st:RefundState)=>({requestId:key,status:st.state,proposal:st.proposal,refund:st.receipt,reason:st.reason});
+   const result=(st:RefundState)=>{
+    // Ended before the pre-dispatch claim: the charge is free for another request again.
+    if(st.attemptedAt===undefined&&['rejected','expired','needs_review'].includes(st.state))releaseRefundPayment(key);
+    return {requestId:key,status:st.state,proposal:st.proposal,refund:st.receipt,reason:st.reason};
+   };
    if(['refunded','pending_provider','rejected','expired','needs_review'].includes(state.state))return result(state);
    const provider=async(checkpoint:()=>void)=>{
     const check=()=>{checkpoint();store.check();const refusal=enforceRunConnectionBinding(ctx.runId,ctx.projectId,s.stripeConnection,deps.credentials);if(refusal)throw Error(refusal);};
