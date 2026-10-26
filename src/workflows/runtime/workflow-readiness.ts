@@ -25,7 +25,8 @@ export interface ReadinessContext {
   phase?: 'composition' | 'activation';
   /** Single-step engine execution; bindings on other draft nodes are not used. */
   preview?: { stepName: string; inputOverride?: Record<string, unknown> };
-  connection?: (externalId: string, pieceName: string) => string | null;
+  /** `pieceName` is empty for a step that is not a piece step; `path` is where the step names the connection. */
+  connection?: (externalId: string, pieceName: string, path: string) => string | null;
   workflow?: (id: string) => string | null;
   tool?: (name: string) => { params: Array<{ name: string; type: string; required: boolean; enum?: string[] }> } | null;
   roles?: () => ReadonlySet<string>;
@@ -103,7 +104,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         const connection = CONNECTION_SOURCE.exec(source);
         if (connection && source === match[1]) {
           if (context.phase !== 'composition') {
-            const reason = context.connection?.((connection[1] ?? connection[2])!, pieceName) ?? (context.connection ? null : 'Connection inventory is unavailable');
+            const reason = context.connection?.((connection[1] ?? connection[2])!, pieceName, path) ?? (context.connection ? null : 'Connection inventory is unavailable');
             if (reason) issue(node, path, 'CONNECTION_BINDING', reason);
             else runtime(node, path, 'connection', 'Re-resolve this project-scoped connection before dispatch');
           }
@@ -204,7 +205,10 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     if (!object(input)) issue(node, 'settings.input', 'INPUT_TYPE', 'Expected an input object');
     const pieceName = typeof settings.pieceName === 'string' ? settings.pieceName : '';
     // Only input values are templated; source code and labels are not expressions.
-    expressions(input, node, 'settings.input', scope, pieceName);
+    // A connection is checked against the step's piece, and only a piece step
+    // has one: a CODE step's `settings.pieceName` is ignored by the engine, so
+    // it must not lend the step a piece's connections either.
+    expressions(input, node, 'settings.input', scope, type === 'PIECE' || type === 'PIECE_TRIGGER' ? pieceName : '');
     const isPiece = (short: string) => pieceName === short || pieceName === `@jarvispieces/piece-${short}`;
     if (!root && isPiece('jarvis-tool') && settings.actionName === 'invoke' && object(input) && context.phase !== 'composition') {
       const name = staticInput(input.toolName);

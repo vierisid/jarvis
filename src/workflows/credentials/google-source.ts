@@ -26,8 +26,17 @@ import { credentialFingerprint } from "./adapter";
 
 export const JARVIS_GOOGLE_PREFIX = "jarvis:google";
 
+/** The Google pieces that use Jarvis's own Google grant. */
+export const JARVIS_GOOGLE_PIECES: readonly string[] = [
+  "@activepieces/piece-gmail",
+  "@activepieces/piece-google-calendar",
+  "@activepieces/piece-google-drive",
+  "@activepieces/piece-google-sheets",
+];
+
 export class JarvisGoogleConnectionSource implements JarvisConnectionSource {
   readonly id = "google";
+  readonly pieceNames = JARVIS_GOOGLE_PIECES;
 
   private readonly getAuth: () => GoogleAuth | null;
 

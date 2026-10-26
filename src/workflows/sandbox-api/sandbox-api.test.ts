@@ -367,6 +367,7 @@ describe("SandboxApi routes (B2: connections, store, flows)", () => {
     // Stub Jarvis source so jarvis:test resolves to a fake OAuth2 connection.
     resolver.register({
       id: "test",
+      pieceNames: ["test-piece"],
       canResolve: (e) => e === "jarvis:test",
       resolve: async () => ({
         type: "OAUTH2",
@@ -387,7 +388,16 @@ describe("SandboxApi routes (B2: connections, store, flows)", () => {
   });
 
   test("GET /v1/worker/app-connections/:externalId resolves a Jarvis source", async () => {
-    const r = await authedFetch("/v1/worker/app-connections/jarvis%3Atest");
+    // Only for a run whose graph names it as the auth of a step of the source's piece.
+    expect((await authedFetch("/v1/worker/app-connections/jarvis%3Atest")).status).toBe(403);
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: "Managed source", trigger: { name: "trigger", type: "EMPTY",
+      nextAction: { name: "send", type: "PIECE", settings: { pieceName: "test-piece", actionName: "send", input: { auth: "{{connections.jarvis:test}}" } } } } as any });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "RUNNING" });
+    const id = { ...sampleIdentity(), runId: run.id };
+    const { token } = await signer.mint(id);
+    registry.register({ ...id, engineToken: token, expiresAt: Date.now() + 60_000, terminatedAt: null });
+    const r = await fetch(`${api.baseUrl}/v1/worker/app-connections/jarvis%3Atest`, { headers: { Authorization: `Bearer ${token}` } });
     expect(r.status).toBe(200);
     const body = (await r.json()) as { externalId: string; status: string; value: { type?: string; access_token?: string } };
     expect(body.externalId).toBe("jarvis:test");

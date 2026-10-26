@@ -1160,7 +1160,11 @@ src/workflows/
 
   credentials/                  JarvisConnectionSource adapters that bridge
                                 Jarvis's existing OAuth/state into pieces
-    adapter.ts                  Registry of sources by `jarvis:*` external id
+    adapter.ts                  Registry of sources by `jarvis:*` external id;
+                                each source names the pieces whose `auth` may
+                                use it, and readiness plus the engine's
+                                credential route refuse any other reference
+                                (db/repos/managed-connection-scope.ts)
     google-source.ts            jarvis:google -> existing Google OAuth tokens
     pasted-oauth2.ts            Refreshes pasted OAuth2 rows on resolve (#954)
     telegram-source.ts          jarvis:telegram -> daemon's bot token
