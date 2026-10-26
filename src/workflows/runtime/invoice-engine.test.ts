@@ -263,7 +263,8 @@ test('a polled attachment without a usable identity fails visibly instead of van
   const f = await fixture(), before = stats();
   incoming = [item('Invoice INV-9 EUR 9.00', '')];
   const runs = await f.poll();
-  expect(runs).toHaveLength(1); expect(runs[0]!.status).toBe('FAILED'); expect(stats()).toEqual(before); await f.stop();
+  expect(runs).toHaveLength(1); expect(runs[0]!.status).toBe('FAILED');
+  expect(runs[0]!.failedStep?.displayName).toBe('Check attachment identity'); expect(stats()).toEqual(before); await f.stop();
 }, 60000);
 
 test('explicit pending label/folder stay setup-required after account bindings are supplied', () => {
