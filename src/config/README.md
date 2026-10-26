@@ -32,7 +32,6 @@ const config = await loadConfig('/path/to/config.yaml');
 
 // Config is type-safe
 console.log(config.daemon.port);        // number
-console.log(config.llm.primary);        // string
 console.log(config.personality.core_traits);  // string[]
 ```
 
@@ -136,7 +135,7 @@ Daemon server configuration.
 
 ```typescript
 daemon: {
-  port: number;          // WebSocket server port (default: 7777)
+  port: number;          // HTTP + WebSocket server port (default: 3142)
   data_dir: string;      // Data directory path (default: ~/.jarvis)
   db_path: string;       // SQLite database path (default: ~/.jarvis/jarvis.db)
   public_url?: string;   // Public HTTPS origin behind a reverse proxy
@@ -255,32 +254,13 @@ stop the daemon booting. Full grammar and the macOS caveats:
 
 ### `llm`
 
-LLM provider configuration.
-
-```typescript
-llm: {
-  primary: string;       // Primary provider name ('anthropic' | 'openai' | 'ollama')
-  fallback: string[];    // Fallback providers in order
-
-  // Anthropic (Claude) configuration
-  anthropic?: {
-    api_key: string;
-    model?: string;      // Default: claude-sonnet-4-5-20250929
-  };
-
-  // OpenAI (GPT) configuration
-  openai?: {
-    api_key: string;
-    model?: string;      // Default: gpt-4o
-  };
-
-  // Ollama (local models) configuration
-  ollama?: {
-    base_url?: string;   // Default: http://localhost:11434
-    model?: string;      // Default: llama3
-  };
-}
-```
+Not configurable in `config.yaml`. Providers, credentials, the default model,
+and per-tier routing are managed from the dashboard (onboarding or
+**Settings > LLM**) and stored in the database and encrypted keychain.
+`loadConfig` discards any `llm:` block in the file, and LLM settings are not
+read from environment variables. At daemon boot
+`mergeLLMSettingsIntoConfig` (`src/daemon/llm-settings.ts`) fills
+`config.llm` from the DB; see `LLMConfig` in `types.ts` for its shape.
 
 ### `personality`
 
@@ -331,25 +311,10 @@ Roles are loaded from `./roles/` directory.
 
 ```yaml
 daemon:
-  port: 7777
+  port: 3142
   data_dir: "~/.jarvis"
   db_path: "~/.jarvis/jarvis.db"
   # public_url: "https://jarvis.example.com"
-
-llm:
-  primary: "anthropic"
-  fallback:
-    - "openai"
-    - "ollama"
-  anthropic:
-    api_key: ""
-    model: "claude-sonnet-4-5-20250929"
-  openai:
-    api_key: ""
-    model: "gpt-4o"
-  ollama:
-    base_url: "http://localhost:11434"
-    model: "llama3"
 
 personality:
   core_traits:
@@ -366,44 +331,6 @@ active_role: "default"
 ```
 
 ## Example Usage
-
-### Initializing LLM Providers from Config
-
-```typescript
-import { loadConfig } from './config/index.ts';
-import { LLMManager, AnthropicProvider, OpenAIProvider, OllamaProvider } from './llm/index.ts';
-
-const config = await loadConfig();
-const manager = new LLMManager();
-
-// Register providers based on config
-if (config.llm.anthropic?.api_key) {
-  const anthropic = new AnthropicProvider(
-    config.llm.anthropic.api_key,
-    config.llm.anthropic.model
-  );
-  manager.registerProvider(anthropic);
-}
-
-if (config.llm.openai?.api_key) {
-  const openai = new OpenAIProvider(
-    config.llm.openai.api_key,
-    config.llm.openai.model
-  );
-  manager.registerProvider(openai);
-}
-
-if (config.llm.ollama) {
-  const ollama = new OllamaProvider(
-    config.llm.ollama.base_url,
-    config.llm.ollama.model
-  );
-  manager.registerProvider(ollama);
-}
-
-manager.setPrimary(config.llm.primary);
-manager.setFallbackChain(config.llm.fallback);
-```
 
 ### Setting Up Data Directory
 
@@ -448,10 +375,8 @@ and restart (self-host), or let the hosting server rewrite it (hosted).
    nano ~/.jarvis/config.yaml
    ```
 
-3. **Add API Keys**:
-   - Get Anthropic API key from: https://console.anthropic.com/
-   - Get OpenAI API key from: https://platform.openai.com/
-   - Install Ollama from: https://ollama.ai/
+3. **Add Model Providers**: start the daemon and add providers and API keys
+   in the dashboard (onboarding or **Settings > LLM**), not in the YAML file.
 
 4. **Test Configuration**:
    ```typescript
@@ -462,29 +387,8 @@ and restart (self-host), or let the hosting server rewrite it (hosted).
 
 ## Environment Variables
 
-You can also use environment variables for sensitive values:
-
-```yaml
-llm:
-  anthropic:
-    api_key: "${ANTHROPIC_API_KEY}"
-  openai:
-    api_key: "${OPENAI_API_KEY}"
-```
-
-Then set in your shell:
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-export OPENAI_API_KEY="sk-..."
-```
-
-Note: The loader doesn't currently support env var substitution, but you can implement it with:
-
-```typescript
-function substituteEnvVars(value: string): string {
-  return value.replace(/\$\{(\w+)\}/g, (_, key) => process.env[key] || '');
-}
-```
+LLM providers and API keys are not read from environment variables or from
+`${VAR}` placeholders in `config.yaml`; configure them in **Settings > LLM**.
 
 ## Migration Guide
 
@@ -497,10 +401,8 @@ If you have an existing config and the schema changes:
 ## Best Practices
 
 1. **Never commit API keys**: Add `~/.jarvis/config.yaml` to `.gitignore`
-2. **Use environment variables**: For CI/CD and production deployments
-3. **Keep backups**: Copy config before major changes
-4. **Validate on load**: Check that required API keys are present
-5. **Document custom settings**: Add comments to your config YAML
+2. **Keep backups**: Copy config before major changes, and use `jarvis export` for user data
+3. **Document custom settings**: Add comments to your config YAML
 
 ## Type Safety
 
