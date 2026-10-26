@@ -1,7 +1,9 @@
 import { prepareSubmission, submissionConfig } from '../runtime/form-submission';
-import { prepareEmailEvent } from '../runtime/event-types';
+import { lacksEmailMessageId, prepareEmailEvent, unclaimedEmailEvent } from '../runtime/event-types';
 import { gmailAttachmentKey, isGmailAttachmentTrigger } from '../runtime/gmail-attachment';
-import { claimAttachmentRun, claimEmailRun, claimSubmissionRun, releaseAttachmentClaim } from '../db/repos/trigger-fire';
+import { claimAttachmentRun, claimEmailRun, claimSubmissionRun, fireForRun, releaseAttachmentClaim } from '../db/repos/trigger-fire';
+import { applyInputOverrides, walkFlowNodes } from '../db/flow-graph';
+import { tracksPieceCompletion } from '../runtime/piece-effects';
 /**
  * RUN_FLOW worker handler. Bridges the queue to flow execution:
  *   1. Claim a RUN_FLOW job (the worker has already done that for us).
@@ -298,10 +300,24 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
       if (!resuming && ['jarvis-trigger', '@jarvispieces/piece-jarvis-trigger'].includes(String(triggerSettings?.pieceName))
         && triggerSettings?.triggerName === 'on_event' && triggerSettings.input?.eventType === 'observer.email_received') {
         try {
-          if (typed.payload.stepNameToTest) throw Error('Test the complete email workflow with a message payload; isolated step previews bypass message deduplication and are disabled for this flow.');
-          const prepared = prepareEmailEvent(payload);
-          claimEmailRun(run.flowId, version.id, prepared.key, run.id);
-          payload = prepared.data;
+          const tested = typed.payload.stepNameToTest;
+          // Judged on the graph the preview runs: its input override can turn an
+          // untracked step (an HTTP GET) into a tracked one (a POST).
+          const overrides = typed.payload.sampleInputOverride;
+          const previewed = overrides && Object.keys(overrides).length > 0 ? applyInputOverrides(version.trigger, overrides) : version.trigger;
+          const effect = tested ? trackedEffectUnder(previewed, tested) : null;
+          if (effect) throw Error(`"${effect}" is a tracked send or change, and a preview of it would act outside this email workflow's once-per-message check. Test the complete workflow with a message payload instead.`);
+          // A preview of any other step, or a manual run naming no message,
+          // cannot repeat a message: it runs without a claim. A live delivery
+          // always carries its message ID; one that does not is refused.
+          const live = fireForRun(run.id);
+          if (tested || (!(live && (live.source === 'event' || live.source === 'poll')) && lacksEmailMessageId(payload))) {
+            payload = unclaimedEmailEvent(payload);
+          } else {
+            const prepared = prepareEmailEvent(payload);
+            claimEmailRun(run.flowId, version.id, prepared.key, run.id);
+            payload = prepared.data;
+          }
         } catch (error) { throw new FlowExecutionError((error as Error).message, { name: 'trigger', displayName: 'Check Gmail message identity' }); }
       }
       if (!resuming && isGmailAttachmentTrigger(triggerSettings)) {
@@ -400,4 +416,22 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
       } catch (hookError) { console.error(`[run-flow ${runId}] run-ended hook failed:`, hookError); }
     }
   };
+}
+
+/**
+ * The tracked effect a step preview would run, or null: the step itself, or
+ * one inside a router or loop being previewed (its body runs too, not the
+ * steps after it). Tracked effects are the completion-receipt sends and
+ * changes plus jarvis-notify; another step may be previewed.
+ */
+function trackedEffectUnder(trigger: FlowVersion['trigger'], stepName: string): string | null {
+  const step = walkFlowNodes(trigger).find(node => node.name === stepName);
+  if (!step) return null;
+  for (const node of walkFlowNodes({ ...step, nextAction: undefined })) {
+    const piece = String(node.settings?.pieceName ?? '');
+    const full = piece.startsWith('@') ? piece : piece.startsWith('jarvis-') ? `@jarvispieces/piece-${piece}` : `@activepieces/piece-${piece}`;
+    const action = node.settings?.actionName;
+    if ((full === '@jarvispieces/piece-jarvis-notify' && action === 'notify') || tracksPieceCompletion(full, action, node.settings?.input)) return node.name;
+  }
+  return null;
 }

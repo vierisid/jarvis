@@ -12,8 +12,10 @@ import { setEncryptionKey } from "../../db/encryption";
 import { createFlow, getFlow, setPublishedVersion, updateFlowStatus } from "../../db/repos/flow";
 import { createDraftVersion, lockVersion, updateDraftVersion } from "../../db/repos/flow-version";
 import { createFlowRun, getFlowRun, listRuns, updateRun } from "../../db/repos/flow-run";
-import { claimNextJob, queueStats } from "../../db/repos/job-queue";
+import { cancelFlowRun } from "../../db/repos/run-cancellation";
+import { claimNextJob, enqueue, queueStats } from "../../db/repos/job-queue";
 import { configureWorkflowReadiness } from "../../db/repos/flow-readiness";
+import { pinFlowBindings } from "../../db/repos/binding-pins";
 import { deleteConnection, upsertConnection } from "../../db/repos/app-connection";
 import { claimFire, listFlowFires, pageFlowFires, pruneFires, recordFire, FIRE_RETENTION_MS } from "../../db/repos/trigger-fire";
 import { PieceCatalog } from "../../runtime/piece-catalog";
@@ -37,6 +39,10 @@ beforeEach(() => {
     { name: "jarvis-trigger", displayName: "", description: "", actions: {}, triggers: { on_event: { name: "on_event", displayName: "", description: "" } } },
     { name: "private-piece", displayName: "", description: "", auth: { type: "SECRET_TEXT" }, actions: { send: { name: "send", displayName: "", description: "" } } },
     { name: "note-piece", displayName: "", description: "", actions: { add: { name: "add", displayName: "", description: "" } } },
+    { name: "jarvis-ask", displayName: "", description: "", actions: { ask: { name: "ask", displayName: "", description: "" } } },
+    { name: "jarvis-notify", displayName: "", description: "", actions: { notify: { name: "notify", displayName: "", description: "" } } },
+    { name: "@activepieces/piece-gmail", displayName: "", description: "", actions: { gmail_add_label_to_email: { name: "gmail_add_label_to_email", displayName: "", description: "" } } },
+    { name: "@activepieces/piece-http", displayName: "", description: "", actions: { send_request: { name: "send_request", displayName: "", description: "" } } },
     { name: "@activepieces/piece-schedule", displayName: "", description: "", actions: {}, triggers: { cron_expression: { name: "cron_expression", displayName: "", description: "" } } },
   ]) });
 });
@@ -846,4 +852,233 @@ test("email identities survive history pruning and both trigger delivery paths",
     expect(claim.fire.runId).toBe(original.id);
     expect(dispatched).toBe(false);
   } finally { await d.stop(); }
+});
+
+describe("Gmail message admission", () => {
+  const emailFlow = (next?: Record<string, unknown>) => publish({ name: "trigger", type: "PIECE_TRIGGER", settings: {
+    pieceName: "jarvis-trigger", triggerName: "on_event", input: { eventType: "observer.email_received" } }, ...(next ? { nextAction: next } : {}) });
+  const seen: Array<Record<string, unknown>> = [];
+  const drain = () => new Worker({ log: silent, handlers: { [RUN_FLOW]: createRunFlowHandler({ executor: { execute: async (ctx) => {
+    seen.push(ctx.payload); return { steps: {}, stepsCount: 0 };
+  } } }) } }).drain();
+  const manualRun = (flowId: string, versionId: string, payload: Record<string, unknown>, extra: Record<string, unknown> = {}) => {
+    const run = createFlowRun({ flowId, flowVersionId: versionId, triggeredBy: "dashboard" });
+    enqueue({ jobType: RUN_FLOW, payload: { runId: run.id, payload, ...extra }, flowRunId: run.id, flowId, flowVersionId: versionId, maxAttempts: 1 });
+    return run.id;
+  };
+  const keys = (flowId: string) => listFlowFires(flowId).map(f => f.dedupeKey).filter(Boolean);
+
+  test("a manual run without a message ID runs unclaimed and leaves real message keys to their deliveries", async () => {
+    seen.length = 0;
+    const { flowId, versionId } = emailFlow();
+    const d = await daemon(Date.now());
+    try {
+      const bare = manualRun(flowId, versionId, {});
+      // A caller-supplied ledger key without a message ID claims nothing.
+      const spoofed = manualRun(flowId, versionId, { eventType: "observer.email_received", payload: { subject: "Test", _eventKey: "email:real-1" } });
+      await drain();
+      expect(getFlowRun(bare)?.status).toBe("SUCCEEDED");
+      expect(getFlowRun(spoofed)?.status).toBe("SUCCEEDED");
+      expect(JSON.stringify(seen)).not.toContain("_eventKey");
+      expect(keys(flowId)).toEqual([]);
+      d.bus.publish("observer.email_received", { id: "real-1", subject: "Support" });
+      expect(runsOf(flowId).filter(r => r.triggeredBy === "trigger:event")).toHaveLength(1);
+      await drain();
+      expect(keys(flowId)).toEqual(["event:email:real-1"]);
+      // A malformed ID is still refused rather than run unclaimed.
+      const padded = manualRun(flowId, versionId, { payload: { id: " real-1" } });
+      await drain();
+      expect(getFlowRun(padded)?.status).toBe("FAILED");
+    } finally { await d.stop(); }
+  });
+
+  test("a live delivery without a message ID is never run unclaimed and leaves a visible record", async () => {
+    const { flowId } = emailFlow();
+    const d = await daemon(Date.now());
+    try {
+      d.bus.publish("observer.email_received", { subject: "No id" });
+      expect(runsOf(flowId)).toHaveLength(0);
+      expect(listFlowFires(flowId)).toEqual([expect.objectContaining({ source: "event", outcome: "blocked", dedupeKey: null,
+        detail: expect.objectContaining({ reason: expect.stringContaining("message ID") }) })]);
+    } finally { await d.stop(); }
+  });
+
+  test("a polled email without a message ID leaves a visible record", async () => {
+    setCronTimezone("UTC");
+    const polls = [[{ id: "9", eventType: "observer.email_received", payload: { subject: "No id" }, timestamp: 1, _dedupe_key: "9" }]];
+    const { engine } = stubEngine({ enable: { listeners: [], scheduleOptions: { cronExpression: "* * * * *" } }, poll: () => polls.shift() ?? [] });
+    const { flowId } = emailFlow();
+    const d = await daemon(at("2026-10-07T09:00:00Z"), engine);
+    try {
+      await d.poll(flowId, "2026-10-07T09:00:10Z");
+      expect(runsOf(flowId)).toHaveLength(0);
+      expect(listFlowFires(flowId)).toEqual([expect.objectContaining({ source: "poll", outcome: "blocked", dedupeKey: null,
+        detail: expect.objectContaining({ reason: expect.stringContaining("message ID") }) })]);
+    } finally { await d.stop(); }
+  });
+
+  for (const retry of ["redelivery", "manual run"] as const) test(`an email refused at readiness is processed once by a ${retry} after setup is fixed`, async () => {
+    seen.length = 0;
+    setEncryptionKey(Buffer.alloc(32, 0x63));
+    const account = () => upsertConnection({ externalId: "account", pieceName: "private-piece", displayName: "S", pieceVersion: "1", type: "SECRET_TEXT", value: { secret_text: "x" } });
+    const connection = account();
+    const { flowId, versionId } = emailFlow({ name: "send", type: "PIECE", settings: { pieceName: "private-piece", actionName: "send", input: { auth: "{{connections.account}}" } } });
+    const d = await daemon(Date.now());
+    try {
+      deleteConnection(connection.id);
+      d.bus.publish("observer.email_received", { id: "fix-me", subject: "Support" });
+      expect(listFlowFires(flowId)).toEqual([expect.objectContaining({ outcome: "blocked", dedupeKey: null,
+        detail: expect.objectContaining({ deliveryKey: "event:email:fix-me" }) })]);
+      account();
+      // The owner checks the new connection and accepts it, as enabling again does.
+      pinFlowBindings(flowId);
+      const processed = retry === "redelivery"
+        ? (d.bus.publish("observer.email_received", { id: "fix-me", subject: "Support" }), runsOf(flowId).find(r => r.status === "QUEUED")!.id)
+        : manualRun(flowId, versionId, { payload: { id: "fix-me", subject: "Support" } });
+      await drain();
+      expect(getFlowRun(processed)?.status).toBe("SUCCEEDED");
+      expect(seen).toHaveLength(1);
+      d.bus.publish("observer.email_received", { id: "fix-me", subject: "Support" });
+      const again = manualRun(flowId, versionId, { payload: { id: "fix-me" } });
+      await drain();
+      expect(seen).toHaveLength(1);
+      expect(getFlowRun(again)?.failedStep?.errorMessage).toContain("already accepted");
+    } finally { await d.stop(); }
+  });
+
+  test("Test from here runs a step that changes nothing, and refuses a tracked effect or a branch holding one", async () => {
+    seen.length = 0;
+    const step = (name: string, pieceName: string, actionName: string, input: Record<string, unknown> = {}) =>
+      ({ name, type: "PIECE", settings: { pieceName, actionName, input } });
+    const label = { ...step("label", "@activepieces/piece-gmail", "gmail_add_label_to_email", { message_id: "{{trigger.payload.id}}" }),
+      nextAction: { name: "route", type: "ROUTER", settings: { executionType: "EXECUTE_FIRST_MATCH", branches: [
+        { branchName: "Urgent", branchType: "CONDITION", conditions: [[{ firstValue: "{{classify.urgent}}", operator: "BOOLEAN_IS_TRUE" }]] },
+        { branchName: "Otherwise", branchType: "FALLBACK" },
+      ] }, children: [step("alert", "jarvis-notify", "notify", { message: "x" }), null] } };
+    const { flowId, versionId } = emailFlow({ ...step("classify", "jarvis-ask", "ask", { prompt: "x" }), nextAction: label });
+    const preview = (stepNameToTest: string, payload: Record<string, unknown> = {}) => manualRun(flowId, versionId, payload, { stepNameToTest });
+    const classify = preview("classify", { payload: { id: "real-2" } });
+    const labelRun = preview("label", { payload: { id: "real-2" } });
+    const routeRun = preview("route");
+    const alertRun = preview("alert");
+    await drain();
+    expect(getFlowRun(classify)?.status).toBe("SUCCEEDED");
+    for (const [run, name] of [[labelRun, "label"], [routeRun, "alert"], [alertRun, "alert"]] as const) {
+      expect(getFlowRun(run)?.status).toBe("FAILED");
+      expect(getFlowRun(run)?.failedStep?.errorMessage).toContain(`"${name}" is a tracked send or change`);
+    }
+    expect(seen).toHaveLength(1);
+    // The preview claimed nothing: the message is still processed once when it arrives.
+    expect(keys(flowId)).toEqual([]);
+    const full = manualRun(flowId, versionId, { payload: { id: "real-2" } });
+    await drain();
+    expect(getFlowRun(full)?.status).toBe("SUCCEEDED");
+    expect(keys(flowId)).toEqual(["event:email:real-2"]);
+  });
+
+  test("a message held by a run that has not begun is refused without claiming it was processed", async () => {
+    const { flowId, versionId } = emailFlow();
+    const d = await daemon(Date.now());
+    try {
+      d.bus.publish("observer.email_received", { id: "queued-1" });
+      const live = runsOf(flowId)[0]!;
+      // The live run is still queued (its job not due yet) when a manual run arrives.
+      getWorkflowDb().run("UPDATE workflow_job SET scheduled_at = ? WHERE flow_run_id = ?", [Date.now() + 3_600_000, live.id]);
+      const manual = manualRun(flowId, versionId, { payload: { id: "queued-1" } });
+      await drain();
+      const message = getFlowRun(manual)?.failedStep?.errorMessage ?? "";
+      expect(message).toContain(`belongs to run ${live.id}`);
+      expect(message).toContain("has not begun");
+      expect(message).not.toContain("already accepted");
+    } finally { await d.stop(); }
+  });
+
+  for (const stop of ["turned off", "cancel"] as const) for (const retry of ["redelivery", "manual run"] as const)
+    test(`a queued delivery stopped (${stop}) before it began gives its message up to a ${retry}, processed once`, async () => {
+      seen.length = 0;
+      const { flowId, versionId } = emailFlow();
+      const d = await daemon(Date.now());
+      try {
+        d.bus.publish("observer.email_received", { id: "stopped-1", subject: "Support" });
+        const live = runsOf(flowId)[0]!;
+        // Kill stops a queued run with the same cancelFlowRun call as cancel.
+        if (stop === "cancel") cancelFlowRun(live.id);
+        else {
+          updateFlowStatus(flowId, "DISABLED");
+          await drain();
+          setSystemTime(new Date(Date.now() + 1000));
+          updateFlowStatus(flowId, "ENABLED");
+        }
+        await drain();
+        expect(getFlowRun(live.id)?.status).toBe("STOPPED");
+        expect(seen).toHaveLength(0);
+        const processed = retry === "redelivery"
+          ? (d.bus.publish("observer.email_received", { id: "stopped-1", subject: "Support" }), runsOf(flowId).find(r => r.status === "QUEUED")!.id)
+          : manualRun(flowId, versionId, { payload: { id: "stopped-1", subject: "Support" } });
+        await drain();
+        expect(getFlowRun(processed)?.status).toBe("SUCCEEDED");
+        expect(seen).toHaveLength(1);
+        d.bus.publish("observer.email_received", { id: "stopped-1", subject: "Support" });
+        const again = manualRun(flowId, versionId, { payload: { id: "stopped-1" } });
+        await drain();
+        expect(seen).toHaveLength(1);
+        expect(getFlowRun(again)?.failedStep?.errorMessage).toContain("already accepted");
+      } finally { await d.stop(); }
+    });
+
+  for (const evidence of ["executed with no recorded start", "an effect row"] as const)
+    test(`a stopped delivery whose run left ${evidence} keeps its message`, async () => {
+      seen.length = 0;
+      const { flowId, versionId } = emailFlow();
+      const d = await daemon(Date.now());
+      try {
+        d.bus.publish("observer.email_received", { id: "kept-1" });
+        const live = runsOf(flowId)[0]!;
+        if (evidence === "an effect row") {
+          getWorkflowDb().run("INSERT INTO workflow_effect (id, run_id, status, record) VALUES ('effect-1', ?, 'unknown', '{}')", [live.id]);
+          cancelFlowRun(live.id);
+        } else {
+          // The run executed, but recording when it began failed (non-fatal); it was then stopped.
+          getWorkflowDb().run("CREATE TRIGGER no_start BEFORE UPDATE OF started_at ON workflow_trigger_fire BEGIN SELECT RAISE(ABORT, 'disk full'); END");
+          await drain();
+          getWorkflowDb().run("DROP TRIGGER no_start");
+          expect(listFlowFires(flowId).find(f => f.runId === live.id)?.startedAt ?? null).toBeNull();
+          expect(seen).toHaveLength(1);
+          updateRun(live.id, { status: "STOPPED", finishTime: Date.now() });
+        }
+        d.bus.publish("observer.email_received", { id: "kept-1" });
+        const manual = manualRun(flowId, versionId, { payload: { id: "kept-1" } });
+        await drain();
+        expect(runsOf(flowId).filter(r => r.triggeredBy === "trigger:event")).toHaveLength(1);
+        expect(getFlowRun(manual)?.failedStep?.errorMessage).toContain("already accepted");
+        expect(seen).toHaveLength(evidence === "an effect row" ? 0 : 1);
+      } finally { await d.stop(); }
+    });
+
+  test("Test from here judges a step by the input it will run with: an HTTP GET overridden to a POST is refused", async () => {
+    seen.length = 0;
+    const { flowId, versionId } = emailFlow({ name: "fetch", type: "PIECE",
+      settings: { pieceName: "@activepieces/piece-http", actionName: "send_request", input: { method: "GET", url: "https://example.test" } } });
+    const plain = manualRun(flowId, versionId, {}, { stepNameToTest: "fetch" });
+    const posted = manualRun(flowId, versionId, {}, { stepNameToTest: "fetch",
+      sampleInputOverride: { fetch: { method: "POST", url: "https://example.test", body: { data: "x" } } } });
+    await drain();
+    expect(getFlowRun(plain)?.status).toBe("SUCCEEDED");
+    expect(getFlowRun(posted)?.status).toBe("FAILED");
+    expect(getFlowRun(posted)?.failedStep?.errorMessage).toContain('"fetch" is a tracked send or change');
+    expect(seen).toHaveLength(1);
+  });
+
+  test("an email key held by a delivery that started nothing, from before this rule, is given up to the next delivery", async () => {
+    const { flowId } = emailFlow();
+    recordFire({ flowId, source: "event", dedupeKey: "event:email:legacy-1", outcome: "blocked", detail: { reason: "Readiness refused" } });
+    const d = await daemon(Date.now());
+    try {
+      d.bus.publish("observer.email_received", { id: "legacy-1" });
+      d.bus.publish("observer.email_received", { id: "legacy-1" });
+      expect(runsOf(flowId)).toHaveLength(1);
+      expect(listFlowFires(flowId).find(f => f.outcome === "blocked")).toMatchObject({ dedupeKey: null,
+        detail: expect.objectContaining({ deliveryKey: "event:email:legacy-1" }) });
+    } finally { await d.stop(); }
+  });
 });

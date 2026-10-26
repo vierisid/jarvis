@@ -522,7 +522,9 @@ export class TriggerManager {
     const matches = makeFilter(filter);
     const unsubscribe = this.bus.subscribe(eventType, (payload) => {
       if (!matches(payload)) return;
-      this.fire(flowId, payload, "event", { key: eventItemKey(payload, eventType) }, generation);
+      const key = this.deliveryKey(flowId, versionId, "event", payload, eventType);
+      if (key === null) return;
+      this.fire(flowId, payload, "event", { key }, generation);
     });
     this.subs.set(flowId, {
       generation,
@@ -839,9 +841,12 @@ export class TriggerManager {
     // first notice reached nobody.
     if (fresh && runId) this.tell(signature, { flowId, runId, message: error.message });
     else this.tellUntold(flowId, signature);
-    const detail = { reason: error.message, code: error.code };
+    // An email refused here ran nothing, so it keeps no claim on its message:
+    // once setup is fixed, a redelivery or manual run processes it once.
+    const releasesKey = opts.dedupeKey?.startsWith("event:email:") === true;
+    const detail = { reason: error.message, code: error.code, ...(releasesKey ? { deliveryKey: opts.dedupeKey } : {}) };
     const fire = carriesInput
-      ? recordFire({ flowId, flowVersionId: versionId, source, dedupeKey: opts.dedupeKey, scheduledFor: opts.scheduledFor,
+      ? recordFire({ flowId, flowVersionId: versionId, source, dedupeKey: releasesKey ? null : opts.dedupeKey, scheduledFor: opts.scheduledFor,
           lateMs: opts.lateMs, outcome: "blocked", runId, detail })
       : recordBlocked({ flowId, flowVersionId: versionId, source, signature, scheduledFor: opts.scheduledFor,
           lateMs: opts.lateMs, runId, detail });
@@ -920,6 +925,25 @@ export class TriggerManager {
     if (claimed.outcome === "started") return { outcome: "started", fireId: claimed.fire.id, runId: claimed.runId };
     if (claimed.outcome === "duplicate") return { outcome: "duplicate", fireId: claimed.fire.id, runId: claimed.fire.runId ?? undefined };
     return { outcome: "blocked", fireId: claimed.fire.id, reason: claimed.reason };
+  }
+
+  /**
+   * A live event's delivery key, or null when it must not run: an email with
+   * no usable message ID. That one is recorded as blocked, so it does not
+   * vanish; repeats of it fold into one counted row.
+   */
+  private deliveryKey(flowId: string, versionId: string, source: "event" | "poll", payload: Record<string, unknown>,
+    eventType?: string): string | undefined | null {
+    try { return eventItemKey(payload, eventType); }
+    catch (error) {
+      const reason = `This Gmail event had no usable message ID (payload.id), so nothing ran for it: ${(error as Error).message}`;
+      try {
+        recordBlocked({ flowId, flowVersionId: versionId, source, signature: JSON.stringify([versionId, "email-message-id"]),
+          detail: { reason } });
+      } catch (e) { this.log(`flow ${flowId} (${source}): could not record an email without a message ID: ${(e as Error).message}`); }
+      this.log(`flow ${flowId} (${source}) not started: ${reason}`);
+      return null;
+    }
   }
 
   /** A run from an earlier occurrence has not started yet: piling another behind it would only burst later. */
@@ -1146,14 +1170,17 @@ export class TriggerManager {
         // An attachment without a usable identity still starts a run, so the
         // run's admission check fails it visibly instead of dropping the item
         // after the source cursor has moved past it.
+        const attachment = !pureSchedule && isGmailAttachmentTrigger(version.trigger.settings);
         let attachmentKey: string | undefined;
-        if (!pureSchedule && isGmailAttachmentTrigger(version.trigger.settings)) {
+        if (attachment) {
           try { attachmentKey = gmailAttachmentKey(payload, flowId, getFlow(flowId)!.project_id); } catch { attachmentKey = undefined; }
         }
+        const itemKey = pureSchedule ? undefined : attachment ? attachmentKey
+          : this.deliveryKey(flowId, versionId, "poll", payload, eventTypeOf(version.trigger as unknown as TriggerNode | null));
+        if (itemKey === null) continue;
         const result = this.startRun({
           flowId, versionId, generation, kind: "engine", source: fireSource, payload, executeTrigger: false,
-          dedupeKey: pureSchedule ? occurrence?.key : isGmailAttachmentTrigger(version.trigger.settings)
-            ? attachmentKey : eventItemKey(payload),
+          dedupeKey: pureSchedule ? occurrence?.key : itemKey,
           // The poll moved the source's cursor past it (Pause may have come mid-poll).
           ...(pureSchedule ? {} : { takenFromSource: true }),
           ...(pureSchedule ? { scheduledFor: occurrence?.at, lateMs: occurrence?.lateMs, ...shiftedDetail(occurrence) } : {}),
@@ -1279,6 +1306,11 @@ function shiftedDetail(occurrence: CronOccurrence | undefined): { detail?: Recor
  * message id, a commitment and its due time), else the poll item's own key.
  * Without one, the event is not deduplicated.
  */
+function eventTypeOf(trigger: TriggerNode | null | undefined): string | undefined {
+  const eventType = (trigger?.settings?.input as Record<string, unknown> | undefined)?.eventType;
+  return typeof eventType === "string" && eventType ? eventType : undefined;
+}
+
 function eventItemKey(payload: Record<string, unknown>, eventType?: string): string | undefined {
   if ((eventType ?? payload.eventType) === "observer.email_received") return prepareEmailEvent(payload).key;
   const inner = payload.payload && typeof payload.payload === "object" ? (payload.payload as Record<string, unknown>) : undefined;

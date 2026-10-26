@@ -22,17 +22,17 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
   // w8-10: invoice extraction, schema validation and complete readback.
   'w8-10': {
-    'bare': '05263df749ecb38946893d74e1d4c189f65f8d730d45d41f28a917b708e70082',
-    'hosted production': 'cb230bd1dd945e1aa339b5ddf7f6466047da42bf5d6f66d816906f1465c41544',
-    'production': 'a0b0107f99d23e9569400d79daed03f121074d84a9fbef7f49365179ddadaa3f',
-    'tool names only': 'e20bb23dc1a02fa9e0299331498dbc04ae6dada072b46665290f8cf130b0b9c9',
+    'bare': '7d67902a5b5322f09f6674087300adede90f760c32a838ff63a1c5c52d697cd7',
+    'hosted production': '00295869f68756af263c3a3887438caa2ad821f91f93603f2246d51898fb36a1',
+    'production': '03c9c503659f663adb6d7a1180506ba1cdac5acfe968c623ddd226d24da66f72',
+    'tool names only': '1754937b5fb64635cf361c4ccd1a882c41a2cfac7c2be872040ab2ea73901c49',
   },
   // w8-9: Gmail triage and persistent message admission.
   'w8-9': {
-    'bare': '57d4704c8577c6fda9da6c11c64b8cb0524acac0ffc23624a2fc9890b65fdaec',
-    'hosted production': '03bde7f6f985268d83e1e482adf981ec539566971d6e58cd453c7978072d44c6',
-    'production': '96de39d26ed372d1fc3aa871106d1a4206a75fe80c5b32175de0a8f7b004803f',
-    'tool names only': '0ae7d1e35a57b0b531036d328115cba3ba710a28cdffd11dbfe06b4105df60aa',
+    'bare': '729110a19aba46318acfa836345686c035b28e4b0772efab9cb62bf6a8c31dbe',
+    'hosted production': 'eb363935d5a05f3d08716a2f91562fd661e6fddcd2f7db8bb8cbf7a6bedc1908',
+    'production': '49c0da151a101f4d160d47186220d41d6485fdf35caa5121a36801ea126f822b',
+    'tool names only': 'f6c257d486170b6613aabd712775fa598f29d76b808aba78dc56f21f242113d8',
   },
   // w8-8: deferred setup, connector continuation and form processing.
   'w8-8': {
