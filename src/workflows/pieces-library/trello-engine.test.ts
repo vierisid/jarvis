@@ -51,7 +51,7 @@ beforeAll(async()=>{
   if(path==='/1/members/me/boards')return Response.json([{id:board,name:'Sandbox',closed:false}]);
   if(path===`/1/boards/${board}/lists`)return Response.json([{id:list,name:'To do',idBoard:board,closed:false},{id:done,name:'Done',idBoard:board,closed:false}]);
   if(path===`/1/lists/${list}`)return Response.json({id:list,idBoard:board,closed:false});
-  if(path==='/1/cards' || path===`/1/cards/${card}` || path===`/1/cards/${card}/idList`)return Response.json({id:card,name:'Sandbox card',desc:'',idBoard:board,idList:body.value || list,url:'https://trello.com/c/abcd1234',closed:false});
+  if(path==='/1/cards' || path===`/1/cards/${card}`)return Response.json({id:card,name:'Sandbox card',desc:'',idBoard:board,idList:body.idList || list,url:'https://trello.com/c/abcd1234',closed:false});
   return new Response('unknown endpoint',{status:404});
  }});
  // Keep the published piece intact. Managed dispatch is deliberately qualified
@@ -95,6 +95,7 @@ test.skipIf(!gate)('published Trello metadata and boards → lists → create �
  const complete=getFlowRun(run.id)!;
  expect({status:complete.status,steps:complete.steps}).toMatchObject({status:'SUCCEEDED'});
  expect(requests.map(r=>r.method)).toEqual(['GET','GET','GET','POST','GET','PUT']);
- expect(requests[5]!.body).toMatchObject({value:'d'.repeat(24)});
+ expect(requests[5]!.path).toBe('/1/cards/'+'c'.repeat(24));
+ expect(requests[5]!.body).toEqual({idList:'d'.repeat(24)});
  expect(JSON.stringify(complete.steps)).not.toContain('ENGINE_ONLY_TRELLO');
 },90000);

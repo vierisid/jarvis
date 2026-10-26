@@ -62,8 +62,8 @@ export async function runManagedTrelloAction(action:string,input:Record<string,u
     const list=await trelloJson(`lists/${input.list_id}?fields=idBoard,closed`,credentials,{},request) as {idBoard?:unknown;closed?:unknown};
     if(list?.idBoard!==input.board_id || list.closed!==false)throw new Error('The selected list no longer belongs to this board or is archived. Choose it again.');
   }
-  const path=action==='create_card'?'cards':`cards/${input.card_id}/idList`;
-  const body=action==='create_card'?{idList:input.list_id,name:input.name,desc:input.description ?? '',pos:input.position || 'bottom'}:{value:input.list_id};
+  const path=action==='create_card'?'cards':`cards/${input.card_id}`;
+  const body=action==='create_card'?{idList:input.list_id,name:input.name,desc:input.description ?? '',pos:input.position || 'bottom'}:{idList:input.list_id};
   const result=record(await trelloJson(path,credentials,{method:action==='create_card'?'POST':'PUT',body:JSON.stringify(body)},request));
   if(result.idList!==input.list_id || (action==='move_card' && result.id!==input.card_id))throw new Error('Trello did not confirm the card’s destination. Check the board before trying again.');
   return result;
