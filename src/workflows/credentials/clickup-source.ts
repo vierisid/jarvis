@@ -1,7 +1,15 @@
 import { CLICKUP_CONNECTION, CLICKUP_PIECE, readClickUpConnection } from "../../integrations/clickup-connection";
 import { credentialFingerprint, type JarvisConnectionSource, type ManagedPieceDetails, type ResolvedConnection } from "./adapter";
 
-/** Read through the atomically delivered file. Disconnects need no daemon restart. */
+/**
+ * Resolves `{{connections.jarvis:clickup}}`, read through the atomically
+ * delivered file, so a disconnect needs no daemon restart. Like
+ * `jarvis:google`, the reference is valid only as the whole `auth` of a
+ * ClickUp step: readiness and the engine credential route refuse it anywhere
+ * else, and a ClickUp `custom_api_call` with it may reach only the piece base
+ * URL or an https URL on `api.clickup.com`. The fingerprint covers generation,
+ * account and token, so a reconnect invalidates existing run bindings.
+ */
 export class JarvisClickUpConnectionSource implements JarvisConnectionSource {
   readonly id = "clickup";
   /** Only ClickUp steps may name jarvis:clickup, and only as their auth (readiness and the credential route). */

@@ -1,9 +1,20 @@
+/**
+ * The hosted ClickUp connection. Hosting signs the person in on its account
+ * page (`usejarvis_integrations.page_url`) and its worker atomically writes
+ * `<data_dir>/connections/clickup.json`; the brain only reads that file, on
+ * every use, so a reconnect (new `generation`) or a disconnect takes effect
+ * with no restart. The file mode is the worker's to set and is not checked
+ * here. "Connected" means a grant is stored, not that ClickUp still honours
+ * it. ClickUp OAuth tokens do not expire today, so there is no refresh flow.
+ * Status and metadata routes expose labels and state, never the token.
+ */
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
 
 export const CLICKUP_PIECE = "@activepieces/piece-clickup";
 export const CLICKUP_CONNECTION = "jarvis:clickup";
+/** The file's shape (`version: 1`); anything else reads as not connected. */
 export interface ClickUpConnection {
   version: 1; provider: "clickup"; status: "connected"; generation: string;
   access_token: string; account: {id: string; label: string};
