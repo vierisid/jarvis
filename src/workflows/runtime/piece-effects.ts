@@ -616,10 +616,6 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
-  catalogId: 'trello', pieceName: '@activepieces/piece-trello', unknownActionCategory: 'modify_settings',
-  targetProps: ['board_id','list_id','card_id','cardId','name','description','position'],
-  categories: {read_data: ['list_boards','list_lists','get_card'], write_data: ['create_card','move_card']},
-}, {
   catalogId: 'clickup', pieceName: '@activepieces/piece-clickup', unknownActionCategory: 'modify_settings',
   targetProps: ['workspace_id', 'space_id', 'folder_id', 'list_id', 'task_id', 'task_name', 'name', 'status_id',
     'add_assignee', 'rem_assignee', 'destination_list_id', 'channel_id', 'message_id', 'comment_id',
@@ -655,6 +651,11 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
       'clickup_delete_space', 'clickup_delete_space_tag', 'clickup_delete_task_dependency', 'clickup_delete_task',
       'clickup_delete_time_entry'],
   },
+}, {
+  // Trello: only the managed actions are named; any other action falls back to `modify_settings`.
+  catalogId: 'trello', pieceName: '@activepieces/piece-trello', unknownActionCategory: 'modify_settings',
+  targetProps: ['board_id','list_id','card_id','cardId','name','description','position'],
+  categories: {read_data: ['list_boards','list_lists','get_card'], write_data: ['create_card','move_card']},
 }];
 
 /** Every adapter: the verified catalog pieces, the vendored core pieces, then the managed ones. */

@@ -381,7 +381,8 @@ describe("managed Trello is scoped to Trello steps", () => {
     expect(issue!.message).toBe("Managed connection jarvis:trello can only be used by Trello steps");
     expect(issue!.allowedPieces).toEqual([TRELLO]);
   });
-  test("a Trello step auth, or a custom API call on api.trello.com, is ready and resolves", async () => {
+  // The connection scope only: the managed Trello action list still refuses a custom API call on its own.
+  test("a Trello step auth, or a custom API call on api.trello.com, passes the connection scope and resolves", async () => {
     for (const trigger of [empty(card()), empty(trelloCall("https://api.trello.com/1/members/me")), empty(trelloCall("/members/me"))]) {
       expect(bindingIssues(trigger)).toEqual([]);
       const response = await fetchFor(runOf(trigger), "jarvis:trello");
