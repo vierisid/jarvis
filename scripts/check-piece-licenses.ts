@@ -12,6 +12,8 @@
  *   bun run scripts/check-piece-licenses.ts --dir <an installed tree>
  *     [--notices PATH]      write the generated notices (only when it passes)
  *     [--summary-md PATH]   append a Markdown report (e.g. $GITHUB_STEP_SUMMARY)
+ *     [--problems PATH]     write one line per problem (empty when it passes), for
+ *                           the catalog PR body; a failed install writes its reason
  *
  * Exit 0 when every package is allowed, 1 on any violation, 2 on bad usage
  * or a failed install.
@@ -33,8 +35,11 @@ const installDir = flagValue("--install");
 const scanDir = flagValue("--dir");
 const noticesPath = flagValue("--notices");
 const summaryMd = flagValue("--summary-md");
+const problemsPath = flagValue("--problems");
 if ((installDir === null) === (scanDir === null)) {
-  console.error("usage: check-piece-licenses (--install <empty dir> | --dir <installed tree>) [--notices PATH] [--summary-md PATH]");
+  console.error(
+    "usage: check-piece-licenses (--install <empty dir> | --dir <installed tree>) [--notices PATH] [--summary-md PATH] [--problems PATH]",
+  );
   process.exit(2);
 }
 
@@ -57,6 +62,7 @@ if (installDir !== null) {
   });
   if (install.status !== 0) {
     console.error(`bun install failed (exit ${install.status})`);
+    if (problemsPath) writeFileSync(resolve(problemsPath), `bun install of the shared pieces tree failed (exit ${install.status}), so nothing was scanned\n`);
     process.exit(2);
   }
 } else {
@@ -65,6 +71,7 @@ if (installDir !== null) {
 
 const result = checkSharedTreeLicenses(dir, catalog);
 if (noticesPath && result.notices !== null) writeFileSync(resolve(noticesPath), result.notices);
+if (problemsPath) writeFileSync(resolve(problemsPath), result.problems.map((line) => line + "\n").join(""));
 const annotate = process.env.GITHUB_ACTIONS === "true";
 // Every line below is already oneLine()d by the gate: no `::`, no newlines.
 for (const line of result.problems) {
