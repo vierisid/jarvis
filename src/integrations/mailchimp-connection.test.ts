@@ -9,7 +9,7 @@ import {mailchimpOptions} from './mailchimp-options';
 import {JarvisMailchimpConnectionSource} from '../workflows/credentials/mailchimp-source';
 import {CredentialResolver} from '../workflows/credentials/adapter';
 let dir:string;
-const doc=()=>({version:1,provider:'mailchimp',status:'connected',generation:randomUUID(),access_token:'PRIVATE',server_prefix:'us1',account:{id:'a'.repeat(24),label:'Owner'},workspaces:[],connected_at:new Date().toISOString()});
+const doc=()=>({version:1,provider:'mailchimp',status:'connected',generation:randomUUID(),access_token:'PRIVATE',settings:{server_prefix:'us1'},account:{id:'a'.repeat(24),label:'Owner'},workspaces:[],connected_at:new Date().toISOString()});
 const write=(value:unknown)=>writeFileSync(join(dir,'connections/mailchimp.json'),JSON.stringify(value));
 const config=()=>({...DEFAULT_CONFIG,daemon:{...DEFAULT_CONFIG.daemon,data_dir:dir},usejarvis_integrations:{page_url:'https://app.usejarvis.dev/account'}});
 beforeEach(()=>{dir=mkdtempSync(join(tmpdir(),'mailchimp-connection-'));mkdirSync(join(dir,'connections'));write(doc());});
@@ -24,7 +24,7 @@ test('read-through OAUTH2 credentials bind reconnect and disconnect; status reve
   write({version:1,provider:'mailchimp',status:'disconnected',generation:randomUUID()});expect(await source.resolve('jarvis:mailchimp')).toBeNull();
 });
 test('rejects foreign, malformed and oversized documents',()=>{
-  for(const v of [null,{}, {...doc(),provider:'clickup'},{...doc(),server_prefix:'us1.evil.test'},{...doc(),account:{id:'',label:'Owner'}}]){write(v);expect(readMailchimpConnection(dir)).toBeNull();}
+  for(const v of [null,{}, {...doc(),provider:'clickup'},{...doc(),settings:{server_prefix:'us1.evil.test'}},{...doc(),settings:undefined},{...doc(),settings:undefined,server_prefix:'us1'},{...doc(),account:{id:'',label:'Owner'}}]){write(v);expect(readMailchimpConnection(dir)).toBeNull();}
   writeFileSync(join(dir,'connections/mailchimp.json'),'x'.repeat(65537));expect(readMailchimpConnection(dir)).toBeNull();
 });
 test('audience/campaign pickers use fixed read endpoints and reject stale account selections',async()=>{

@@ -7,32 +7,36 @@ export const MAILCHIMP_CONNECTION = "jarvis:mailchimp";
 /**
  * Written by the hosting worker as connections/mailchimp.json (mode 0600) and
  * replaced atomically on reconnect; disconnect leaves a non-connected
- * tombstone. server_prefix is the account's data-center prefix, resolved on
+ * tombstone. settings.server_prefix is the account's data-center prefix, resolved on
  * hosting from OAuth metadata. Mailchimp tokens do not expire, so there is no
  * refresh path. The token grants broad account access: the managed action
  * allowlist limits what Jarvis dispatches, not what the token can do.
  */
 export interface MailchimpConnection {
   version: 1; provider: "mailchimp"; status: "connected"; generation: string;
+  /** From the file's settings.server_prefix. */
   server_prefix: string;
   access_token: string; account: {id: string; label: string};
   workspaces: Array<{id: string; name: string}>; connected_at: string;
 }
+type MailchimpConnectionFile = Omit<MailchimpConnection, "server_prefix"> & {settings?: {server_prefix?: unknown}};
 export function readMailchimpConnection(dataDir: string): MailchimpConnection | null {
   try {
     const path = join(dataDir, "connections", "mailchimp.json");
     if (statSync(path).size > 65536) return null;
-    const v = JSON.parse(readFileSync(path, "utf8")) as MailchimpConnection;
+    const v = JSON.parse(readFileSync(path, "utf8")) as MailchimpConnectionFile;
+    const serverPrefix = v.settings?.server_prefix;
     if (v.version !== 1 || v.provider !== "mailchimp" || v.status !== "connected"
       || typeof v.generation !== "string" || !/^[a-f0-9-]{36}$/.test(v.generation)
       || typeof v.access_token !== "string" || !v.access_token || v.access_token.length > 16384
       || typeof v.account?.id !== "string" || !v.account.id
       || typeof v.account.label !== "string" || !v.account.label
-      || typeof v.server_prefix !== "string" || !/^us[1-9][0-9]{0,3}$/.test(v.server_prefix)
+      || typeof serverPrefix !== "string" || !/^us[1-9][0-9]{0,3}$/.test(serverPrefix)
       || !Array.isArray(v.workspaces) || v.workspaces.length > 1000
       || !v.workspaces.every(w => typeof w.id === "string" && !!w.id && typeof w.name === "string")
       || typeof v.connected_at !== "string") return null;
-    return v;
+    const {settings: _settings, ...connection} = v;
+    return {...connection, server_prefix: serverPrefix};
   } catch { return null; }
 }
 /** This block is system-owned; UI settings cannot redirect account setup. */

@@ -50,7 +50,7 @@ beforeAll(async () => {
   return new Response('unknown endpoint', {status: 404});
  }});
  mkdirSync(join(dir, 'connections'));
- writeFileSync(join(dir, 'connections/mailchimp.json'), JSON.stringify({version: 1, provider: 'mailchimp', status: 'connected', generation: randomUUID(), access_token: 'ENGINE_ONLY_MAILCHIMP', server_prefix: 'us1', account: {id: 'account1', label: 'Owner'}, workspaces: [], connected_at: new Date().toISOString()}));
+ writeFileSync(join(dir, 'connections/mailchimp.json'), JSON.stringify({version: 1, provider: 'mailchimp', status: 'connected', generation: randomUUID(), access_token: 'ENGINE_ONLY_MAILCHIMP', settings: {server_prefix: 'us1'}, account: {id: 'account1', label: 'Owner'}, workspaces: [], connected_at: new Date().toISOString()}));
  const resolver = new CredentialResolver(); resolver.register(new JarvisMailchimpConnectionSource(dir));
  api = new SandboxApi({services: buildSandboxServiceBackends({credentialResolver: resolver, llmManager: {} as any, channelService: {} as any, wsService: {} as any, eventBuffer: new WorkflowEventBuffer(), approvalManager: new ApprovalManager(), auditTrail: new AuditTrail(), emergencyController: new EmergencyController(), authorityEngine: new AuthorityEngine({default_level: 10, governed_categories: [], overrides: [], context_rules: [], learning: {enabled: false, suggest_threshold: 10}, emergency_state: 'normal'})})});
  await api.start({port: 0});
