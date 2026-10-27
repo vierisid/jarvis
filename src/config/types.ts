@@ -711,6 +711,13 @@ export type JarvisConfig = {
     /** The account billing page a person opens. */
     page_url?: string;
   };
+  /**
+   * Hosted integrations (SYSTEM-owned, file-authoritative): written by the
+   * hosting control plane, re-read on SIGHUP, never written by the brain.
+   * `page_url` is the public account page where a person connects a hosted
+   * integration (ClickUp: `integrations/clickup-connection.ts`); not a secret.
+   */
+  usejarvis_integrations?: { page_url?: string };
   user?: UserConfig;
   onboarding?: OnboardingConfig;
   telemetry?: TelemetryConfig;

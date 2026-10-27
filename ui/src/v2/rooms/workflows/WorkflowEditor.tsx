@@ -16,6 +16,8 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSampleDraftText } from "./useSampleDraftText";
+import { ClickUpConnection, useClickUpStatus } from "../../integrations/ClickUpConnection";
+import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { WorkflowEditorEnvironment, WorkflowPortal, useWorkflowRequest } from "./WorkflowEditorEnvironment";
 import { BriefTabs } from "../../../brief/components/controls/Choices";
@@ -965,6 +967,11 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
             onSetTriggerKind={(kind) => editor.setTriggerKind(kind)}
             onSetErrorHandling={(patch) => editor.setStepErrorHandling(selectedStep.name, patch)}
             onSetInput={(key, value) => editor.updateStepInput(selectedStep.name, key, value)}
+            onUseStandardClickUpFields={() => editor.updateStep(selectedStep.name, {settings: {
+              ...selectedStep.settings,
+              input: {...selectedStep.settings?.input, custom_fields: {}, check_required_custom_fields: true},
+              propertySettings: {...selectedStep.settings?.propertySettings, custom_fields: {schema: {}}},
+            }})}
             onAddInputKey={(key) => editor.updateStepInput(selectedStep.name, key, "")}
             onRemoveInputKey={(key) => {
               const settings = selectedStep.settings ?? {};
@@ -3303,6 +3310,7 @@ interface PropertiesPanelProps {
   onSetTriggerKind: (kind: "manual" | "schedule" | "webhook" | "event") => void;
   onSetErrorHandling: (patch: { continueOnFailure?: boolean; retryOnFailure?: boolean }) => void;
   onSetInput: (key: string, value: unknown) => void;
+  onUseStandardClickUpFields: () => void;
   onAddInputKey: (key: string) => void;
   onRemoveInputKey: (key: string) => void;
   /** Commit a new display name for this step. Called by EditableStepName in the panel header. */
@@ -3364,7 +3372,22 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const subName = isTrigger ? step.settings?.triggerName : step.settings?.actionName;
   const subList = isTrigger ? piece?.triggers ?? [] : piece?.actions ?? [];
   const selectedSubAction: PieceCatalogActionOrTrigger | undefined = subList.find((s) => s.name === subName);
-  const schema = selectedSubAction?.inputSchema ?? null;
+  // The workspace/Space/List chooser reads through the managed connection, so
+  // it replaces the piece's own id fields only for a step that uses that
+  // connection while it exists. Every other ClickUp step keeps the id fields.
+  const clickUpStatus = useClickUpStatus(piece?.name === "@activepieces/piece-clickup");
+  const clickUpLocation = piece?.name === "@activepieces/piece-clickup" && ["create_task", "update_task", "get_task_by_name"].includes(subName ?? "")
+    && !!clickUpStatus?.connected && step.settings?.input?.auth === "{{connections." + clickUpStatus.external_id + "}}";
+  const selectedSchema = selectedSubAction?.inputSchema ?? null;
+  const rawSchema = clickUpLocation && selectedSchema ? {...selectedSchema,fields:selectedSchema.fields.filter(f=>!['workspace_id','space_id','list_id'].includes(f.name))} : selectedSchema;
+  // ClickUp 0.9.1 declares `custom_fields` on Create Task as a required
+  // dynamic prop even when a list has none. "Use standard task fields" saves
+  // an empty schema and value with check_required_custom_fields, so ClickUp
+  // itself rejects the task if the list does require custom fields.
+  const clickUpCreate = piece?.name === "@activepieces/piece-clickup" && subName === "create_task";
+  const standardFields = clickUpCreate && JSON.stringify(step.settings?.propertySettings?.custom_fields?.schema) === "{}"
+    && JSON.stringify(step.settings?.input?.custom_fields) === "{}" && step.settings?.input?.check_required_custom_fields === true;
+  const schema = standardFields && rawSchema ? {...rawSchema, fields: rawSchema.fields.filter(f => !["custom_fields", "check_required_custom_fields"].includes(f.name))} : rawSchema;
 
   const [newKey, setNewKey] = useState("");
   const [tab, setTab] = useState("Configure");
@@ -3471,6 +3494,13 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         />
       ) : null}
 
+      {clickUpLocation && <ClickUpTaskLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
+      {clickUpCreate && <div className="wf-props__hint" role="note">
+        {standardFields ? <p>Using standard task fields. ClickUp will reject the task if this list requires custom fields.</p>
+          : <><p>Start with standard task fields. Lists with required custom fields need a separately configured field schema.</p>
+            <Button variant="ghost" size="sm" disabled={!!step.settings?.input?.custom_fields && JSON.stringify(step.settings.input.custom_fields) !== "{}"}
+              onClick={props.onUseStandardClickUpFields}>Use standard task fields</Button></>}
+      </div>}
       {!isLoop && !isRouter ? (
         <div className="wf-props__inputs">
           {/* No "Inputs" section title: the panel only has one
@@ -3701,18 +3731,23 @@ function ConnectionPicker({
   // the dropdown reflect the user's choice on re-open.
   const m = /^\{\{connections\.([^}]+)\}\}$/.exec(currentValue.trim());
   const currentExternalId = m ? m[1]! : "";
+  // ClickUp may also offer the hosted connection; without it (self-hosted, or
+  // not connected) the picker reads exactly as for any other piece.
+  const isClickUp = pieceName === "@activepieces/piece-clickup";
+  const managedClickUp = useClickUpStatus(isClickUp)?.connected === true;
   return (
     <div className="wf-props__connection">
+      {isClickUp && <ClickUpConnection optional onPick={onPick} currentValue={currentValue} />}
       <label className="wf-props__field-label">
         {authDisplayName}
         <span className="wf-props__connection-type">({authType})</span>
       </label>
-      {matching.length === 0 ? (
+      {matching.length === 0 && !managedClickUp ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.
         </p>
-      ) : (
+      ) : matching.length > 0 ? (
         <select
           value={currentExternalId}
           onChange={(e) => {
@@ -3727,7 +3762,7 @@ function ConnectionPicker({
             </option>
           ))}
         </select>
-      )}
+      ) : null}
     </div>
   );
 }
