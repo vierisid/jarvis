@@ -21,9 +21,9 @@
 
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { sharedBuildCatalog } from "../src/workflows/pieces-library/catalog";
-import { checkSharedTreeLicenses, sharedPiecesPackageJson } from "../src/workflows/pieces-library/shared-build";
+import { checkSharedTreeLicenses, problemsFileText, sharedPiecesPackageJson } from "../src/workflows/pieces-library/shared-build";
 import { sanitizedEnv } from "../src/util/subprocess-env";
 
 function flagValue(flag: string): string | null {
@@ -41,6 +41,15 @@ if ((installDir === null) === (scanDir === null)) {
     "usage: check-piece-licenses (--install <empty dir> | --dir <installed tree>) [--notices PATH] [--summary-md PATH] [--problems PATH]",
   );
   process.exit(2);
+}
+
+// --notices and --problems may name a directory nothing has created yet (the
+// catalog sync passes $RUNNER_TEMP/license-problems/...): create it, or the
+// write throws ENOENT after the scan and the run reports a crash, not the scan.
+function writeCreatingDir(path: string, text: string): void {
+  const p = resolve(path);
+  mkdirSync(dirname(p), { recursive: true });
+  writeFileSync(p, text);
 }
 
 const catalog = sharedBuildCatalog();
@@ -62,7 +71,7 @@ if (installDir !== null) {
   });
   if (install.status !== 0) {
     console.error(`bun install failed (exit ${install.status})`);
-    if (problemsPath) writeFileSync(resolve(problemsPath), `bun install of the shared pieces tree failed (exit ${install.status}), so nothing was scanned\n`);
+    if (problemsPath) writeCreatingDir(problemsPath, `bun install of the shared pieces tree failed (exit ${install.status}), so nothing was scanned\n`);
     process.exit(2);
   }
 } else {
@@ -70,8 +79,8 @@ if (installDir !== null) {
 }
 
 const result = checkSharedTreeLicenses(dir, catalog);
-if (noticesPath && result.notices !== null) writeFileSync(resolve(noticesPath), result.notices);
-if (problemsPath) writeFileSync(resolve(problemsPath), result.problems.map((line) => line + "\n").join(""));
+if (noticesPath && result.notices !== null) writeCreatingDir(noticesPath, result.notices);
+if (problemsPath) writeCreatingDir(problemsPath, problemsFileText(result.problems));
 const annotate = process.env.GITHUB_ACTIONS === "true";
 // Every line below is already oneLine()d by the gate: no `::`, no newlines.
 for (const line of result.problems) {

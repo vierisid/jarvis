@@ -396,8 +396,11 @@ jobs:
             echo "The license scan of the shared pieces tree did not pass (licenses job: ${LICENSES_RESULT}). A denied package makes the next hosted shared build refuse the whole tree, so review it (a reviewed entry in src/workflows/pieces-library/license-policy.ts, or hold the piece back) before merging. Run: ${RUN_URL}"
             echo
             if [ -s "$PROBLEMS" ]; then
-              # A backtick would end the code span early.
-              tr '`' "'" < "$PROBLEMS" | while IFS= read -r line; do
+              # A backtick would end the code span early. The scan already
+              # caps the file (50 lines of at most 300 characters, no bidi
+              # controls); head is the backstop that keeps the verdict below
+              # inside the 65536-character PR body.
+              head -n 50 "$PROBLEMS" | tr '`' "'" | while IFS= read -r line; do
                 printf -- '- `%s`\n' "$line"
               done
             else

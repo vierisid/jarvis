@@ -60,6 +60,27 @@ export function oneLine(s: string): string {
   return s.replace(/[\x00-\x1f\x7f]+/g, " ").replace(/::/g, ": :");
 }
 
+/**
+ * The --problems file of scripts/check-piece-licenses.ts, which the catalog
+ * sync pastes into its PR body (#1177 follow-up). A PR body holds 65536
+ * characters and the verdict the sync wrote follows this section, so each
+ * line is capped and so is their number: a tree with hundreds of denied
+ * packages must not push the verdict off the end. Unicode line and paragraph
+ * separators and bidi controls are dropped too, so a package name cannot
+ * reorder or split what a reviewer reads.
+ */
+export const PROBLEMS_MAX_LINES = 50;
+export const PROBLEMS_MAX_LINE_CHARS = 300;
+export function problemsFileText(problems: readonly string[]): string {
+  const clean = problems.map((p) => {
+    const line = oneLine(p).replace(/[\u2028\u2029\u202a-\u202e\u2066-\u2069\u200e\u200f\u061c\ufeff]/g, "");
+    return line.length > PROBLEMS_MAX_LINE_CHARS ? line.slice(0, PROBLEMS_MAX_LINE_CHARS - 3) + "..." : line;
+  });
+  const shown = clean.length > PROBLEMS_MAX_LINES ? clean.slice(0, PROBLEMS_MAX_LINES - 1) : clean;
+  if (shown.length < clean.length) shown.push(`... and ${clean.length - shown.length} more problem(s); see the licenses job in the run`);
+  return shown.map((line) => line + "\n").join("");
+}
+
 /** Scan an installed shared tree, and render its notices when it passes. */
 export function checkSharedTreeLicenses(
   piecesDir: string,
