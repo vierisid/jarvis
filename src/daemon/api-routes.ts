@@ -1178,8 +1178,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     },
 
     // ── Onboarding ──────────────────────────────────────────────────
-    // Status + reset endpoints powering the v2 onboarding gate. See
-    // `docs/ONBOARDING_PLAN.md`. Reset is intentionally available on
+    // Status + reset endpoints powering the v2 onboarding gate. Reset is
+    // intentionally available on
     // demand (not behind a build flag) so users can replay the tour
     // after a Jarvis update or when swapping LLM providers.
 
