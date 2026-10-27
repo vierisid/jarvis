@@ -10,6 +10,13 @@ export interface ReadinessIssue {
   path: string;
   code: string;
   message: string;
+  /** For a managed connection named by the wrong step: the pieces (by full name) that may use it. */
+  allowedPieces?: string[];
+}
+/** A connection refusal; `allowedPieces` is copied onto the issue for tooling. */
+export interface ConnectionRefusal {
+  message: string;
+  allowedPieces?: readonly string[];
 }
 export interface RuntimeCheck extends ReadinessIssue {
   /** The boundary responsible for checking actual data before dispatch. */
@@ -26,7 +33,12 @@ export interface ReadinessContext {
   phase?: 'composition' | 'activation';
   /** Single-step engine execution; bindings on other draft nodes are not used. */
   preview?: { stepName: string; inputOverride?: Record<string, unknown> };
-  connection?: (externalId: string, pieceName: string) => string | null;
+  /**
+   * `pieceName` is empty for a step that is not a piece step; `path` is where
+   * the step names the connection; `settings` are the step's settings (with a
+   * preview's input override applied).
+   */
+  connection?: (externalId: string, pieceName: string, path: string, settings: Record<string, unknown>) => string | ConnectionRefusal | null;
   workflow?: (id: string) => string | null;
   tool?: (name: string) => { params: Array<{ name: string; type: string; required: boolean; enum?: string[] }> } | null;
   roles?: () => ReadonlySet<string>;
@@ -72,9 +84,11 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
   const issues: ReadinessIssue[] = [], runtimeChecks: RuntimeCheck[] = [];
   const seen = new Set<unknown>(), names = new Set<string>();
   let count = 0, inputVisits = 0, schemaVisits = 0, runtimeCount = 0, previewFound = false;
-  const issue = (node: string, path: string, code: string, message: string) => {
-    if (issues.length < 100) issues.push({ node, path, code, message });
+  const issue = (node: string, path: string, code: string, message: string, allowedPieces?: readonly string[]) => {
+    if (issues.length < 100) issues.push({ node, path, code, message, ...(allowedPieces ? { allowedPieces: [...allowedPieces] } : {}) });
   };
+  // The settings of the piece step whose input is being read, for connection checks.
+  let stepSettings: Record<string, unknown> = {};
   const runtime = (node: string, path: string, guard: RuntimeCheck['guard'], message: string) => {
     if (++runtimeCount === 501) issue(node, path, 'LIMIT', 'Graph exceeds 500 runtime checks');
     if (runtimeChecks.length < 500) runtimeChecks.push({ node, path, code: 'RUNTIME_CHECK', guard, message });
@@ -104,8 +118,9 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         const connection = CONNECTION_SOURCE.exec(source);
         if (connection && source === match[1]) {
           if (context.phase !== 'composition') {
-            const reason = context.connection?.((connection[1] ?? connection[2])!, pieceName) ?? (context.connection ? null : 'Connection inventory is unavailable');
-            if (reason) issue(node, path, 'CONNECTION_BINDING', reason);
+            const reason = context.connection?.((connection[1] ?? connection[2])!, pieceName, path, stepSettings) ?? (context.connection ? null : 'Connection inventory is unavailable');
+            if (typeof reason === 'string') issue(node, path, 'CONNECTION_BINDING', reason);
+            else if (reason) issue(node, path, 'CONNECTION_BINDING', reason.message, reason.allowedPieces);
             else runtime(node, path, 'connection', 'Re-resolve this project-scoped connection before dispatch');
           }
           continue;
@@ -210,7 +225,12 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
       if (reason) issue(node, 'settings.input', 'MANAGED_TRELLO', reason);
     }
     // Only input values are templated; source code and labels are not expressions.
-    expressions(input, node, 'settings.input', scope, pieceName);
+    // A connection is checked against the step's piece, and only a piece step
+    // has one: a CODE step's `settings.pieceName` is ignored by the engine, so
+    // it must not lend the step a piece's connections either.
+    stepSettings = settings;
+    expressions(input, node, 'settings.input', scope, type === 'PIECE' || type === 'PIECE_TRIGGER' ? pieceName : '');
+    stepSettings = {};
     const isPiece = (short: string) => pieceName === short || pieceName === `@jarvispieces/piece-${short}`;
     if (!root && isPiece('jarvis-tool') && settings.actionName === 'invoke' && object(input) && context.phase !== 'composition') {
       const name = staticInput(input.toolName);

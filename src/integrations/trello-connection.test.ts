@@ -19,7 +19,8 @@ test('read-through BASIC_AUTH credentials bind reconnect and disconnect; status 
   expect(trelloStatus(config())).toMatchObject({connected:true,connect_url:'https://app.usejarvis.dev/account?integration=trello'});
   expect(JSON.stringify(trelloStatus(config()))).not.toContain('PRIVATE');
   expect(await source.resolve('jarvis:trello')).toMatchObject({type:'BASIC_AUTH',value:{username:'PUBLIC',password:'PRIVATE',jarvis_managed:'trello'}});
-  expect(await resolver.resolve({projectId:'p',pieceName:'@activepieces/piece-clickup',externalId:'jarvis:trello'})).toBeNull();
+  // Which steps may use it is enforced by readiness and the credential route (managed-connection-scope.test.ts).
+  expect(source.pieceNames).toEqual(['@activepieces/piece-trello']); expect(source.pieceDetails['@activepieces/piece-trello']!.apiHosts).toEqual(['api.trello.com']);
   const before=source.identity('jarvis:trello');write(doc());expect(source.identity('jarvis:trello')).not.toBe(before);
   write({version:1,provider:'trello',status:'disconnected',generation:randomUUID()});expect(await source.resolve('jarvis:trello')).toBeNull();
 });

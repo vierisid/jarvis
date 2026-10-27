@@ -1,5 +1,5 @@
 import { TRELLO_CONNECTION, TRELLO_PIECE, readTrelloConnection } from "../../integrations/trello-connection";
-import { credentialFingerprint, type JarvisConnectionSource, type ResolvedConnection } from "./adapter";
+import { credentialFingerprint, type JarvisConnectionSource, type ManagedPieceDetails, type ResolvedConnection } from "./adapter";
 
 /**
  * Read through the atomically delivered file. Disconnects need no daemon restart.
@@ -8,6 +8,12 @@ import { credentialFingerprint, type JarvisConnectionSource, type ResolvedConnec
  */
 export class JarvisTrelloConnectionSource implements JarvisConnectionSource {
   readonly id = "trello";
+  /** Only Trello steps may name jarvis:trello, and only as their auth (readiness and the credential route). */
+  readonly pieceNames: readonly string[] = [TRELLO_PIECE];
+  /** The piece's custom API call base URL is https://api.trello.com/1/. */
+  readonly pieceDetails: Readonly<Record<string, ManagedPieceDetails>> = {
+    [TRELLO_PIECE]: { displayName: "Trello", apiHosts: ["api.trello.com"] },
+  };
   constructor(private readonly dataDir: string) {}
   canResolve(externalId: string) { return externalId === TRELLO_CONNECTION; }
   identity(externalId: string) {
