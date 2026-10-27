@@ -4,6 +4,13 @@ import type { JarvisConfig } from "../config/types";
 
 export const TRELLO_PIECE = "@activepieces/piece-trello";
 export const TRELLO_CONNECTION = "jarvis:trello";
+/**
+ * Written by the hosting worker as connections/trello.json (mode 0600) and
+ * replaced atomically on reconnect; disconnect leaves a non-connected
+ * tombstone. api_key is the company app's public key, which Trello requires
+ * next to the user's OAuth 1.0a token; the app secret stays on hosting.
+ * The token does not expire, so there is no refresh path.
+ */
 export interface TrelloConnection {
   version: 1; provider: "trello"; status: "connected"; generation: string;
   api_key: string;

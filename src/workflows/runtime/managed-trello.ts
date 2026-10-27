@@ -1,4 +1,9 @@
-/** Fetch-only managed adapter: no SDK retries or credential-bearing URLs. */
+/**
+ * Fetch-only managed adapter: no SDK retries or credential-bearing URLs.
+ * Only these actions are qualified for the managed connection; every other
+ * action and all triggers are refused. Manual connections keep the wider
+ * community piece behaviour.
+ */
 export const MANAGED_TRELLO_ACTIONS = ['list_boards','list_lists','get_card','create_card','move_card'] as const;
 export function managedTrelloInput(input: unknown): Record<string,unknown> | null {
   return (input as {auth?:{jarvis_managed?:unknown}} | null)?.auth?.jarvis_managed === 'trello' ? input as Record<string,unknown> : null;

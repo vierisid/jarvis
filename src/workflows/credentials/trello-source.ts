@@ -1,7 +1,11 @@
 import { TRELLO_CONNECTION, TRELLO_PIECE, readTrelloConnection } from "../../integrations/trello-connection";
 import { credentialFingerprint, type JarvisConnectionSource, type ResolvedConnection } from "./adapter";
 
-/** Read through the atomically delivered file. Disconnects need no daemon restart. */
+/**
+ * Read through the atomically delivered file. Disconnects need no daemon restart.
+ * The community Trello piece takes BASIC_AUTH: username = API key,
+ * password = user token.
+ */
 export class JarvisTrelloConnectionSource implements JarvisConnectionSource {
   readonly id = "trello";
   constructor(private readonly dataDir: string) {}
