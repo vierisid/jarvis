@@ -7,32 +7,36 @@ export const TRELLO_CONNECTION = "jarvis:trello";
 /**
  * Written by the hosting worker as connections/trello.json (mode 0600) and
  * replaced atomically on reconnect; disconnect leaves a non-connected
- * tombstone. api_key is the company app's public key, which Trello requires
- * next to the user's OAuth 1.0a token; the app secret stays on hosting.
+ * tombstone. settings.api_key is the company app's public key, which Trello
+ * requires next to the user's OAuth 1.0a token; the app secret stays on hosting.
  * The token does not expire, so there is no refresh path.
  */
 export interface TrelloConnection {
   version: 1; provider: "trello"; status: "connected"; generation: string;
+  /** From the file's settings.api_key. */
   api_key: string;
   access_token: string; account: {id: string; label: string};
   workspaces: Array<{id: string; name: string}>; connected_at: string;
 }
+type TrelloConnectionFile = Omit<TrelloConnection, "api_key"> & {settings?: {api_key?: unknown}};
 export function readTrelloConnection(dataDir: string): TrelloConnection | null {
   try {
     const path = join(dataDir, "connections", "trello.json");
     if (statSync(path).size > 65536) return null;
-    const v = JSON.parse(readFileSync(path, "utf8")) as TrelloConnection;
+    const v = JSON.parse(readFileSync(path, "utf8")) as TrelloConnectionFile;
+    const apiKey = v.settings?.api_key;
     if (v.version !== 1 || v.provider !== "trello" || v.status !== "connected"
       || typeof v.generation !== "string" || !/^[a-f0-9-]{36}$/.test(v.generation)
       || typeof v.access_token !== "string" || !v.access_token || v.access_token.length > 16384
       || typeof v.account?.id !== "string" || !v.account.id
       || typeof v.account.label !== "string" || !v.account.label
-      || typeof v.api_key !== "string" || !v.api_key || v.api_key.length > 512
+      || typeof apiKey !== "string" || !apiKey || apiKey.length > 512
       || !/^[a-f0-9]{24}$/.test(v.account.id)
       || !Array.isArray(v.workspaces) || v.workspaces.length > 1000
       || !v.workspaces.every(w => typeof w.id === "string" && /^[a-f0-9]{24}$/.test(w.id) && typeof w.name === "string")
       || typeof v.connected_at !== "string") return null;
-    return v;
+    const {settings: _settings, ...connection} = v;
+    return {...connection, api_key: apiKey};
   } catch { return null; }
 }
 /** This block is system-owned; UI settings cannot redirect account setup. */

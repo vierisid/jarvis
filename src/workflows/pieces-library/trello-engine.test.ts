@@ -57,7 +57,7 @@ beforeAll(async()=>{
  // Keep the published piece intact. Managed dispatch is deliberately qualified
  // through our adapter; only the disposable engine's fixed API origin changes.
  mkdirSync(join(dir,'connections'));
- writeFileSync(join(dir,'connections/trello.json'),JSON.stringify({version:1,provider:'trello',status:'connected',generation:randomUUID(),access_token:'ENGINE_ONLY_TRELLO',api_key:'PUBLIC_KEY',account:{id:'e'.repeat(24),label:'Owner'},workspaces:[],connected_at:new Date().toISOString()}));
+ writeFileSync(join(dir,'connections/trello.json'),JSON.stringify({version:1,provider:'trello',status:'connected',generation:randomUUID(),access_token:'ENGINE_ONLY_TRELLO',settings:{api_key:'PUBLIC_KEY'},account:{id:'e'.repeat(24),label:'Owner'},workspaces:[],connected_at:new Date().toISOString()}));
  const resolver=new CredentialResolver();resolver.register(new JarvisTrelloConnectionSource(dir));
  api=new SandboxApi({services:buildSandboxServiceBackends({credentialResolver:resolver,llmManager:{} as any,channelService:{} as any,wsService:{} as any,eventBuffer:new WorkflowEventBuffer(),approvalManager:new ApprovalManager(),auditTrail:new AuditTrail(),emergencyController:new EmergencyController(),authorityEngine:new AuthorityEngine({default_level:10,governed_categories:[],overrides:[],context_rules:[],learning:{enabled:false,suggest_threshold:10},emergency_state:'normal'})})});
  await api.start({port:0});

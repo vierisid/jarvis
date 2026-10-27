@@ -9,7 +9,7 @@ import {trelloOptions} from './trello-options';
 import {JarvisTrelloConnectionSource} from '../workflows/credentials/trello-source';
 import {CredentialResolver} from '../workflows/credentials/adapter';
 let dir:string;
-const doc=()=>({version:1,provider:'trello',status:'connected',generation:randomUUID(),access_token:'PRIVATE',api_key:'PUBLIC',account:{id:'a'.repeat(24),label:'Owner'},workspaces:[],connected_at:new Date().toISOString()});
+const doc=()=>({version:1,provider:'trello',status:'connected',generation:randomUUID(),access_token:'PRIVATE',settings:{api_key:'PUBLIC'},account:{id:'a'.repeat(24),label:'Owner'},workspaces:[],connected_at:new Date().toISOString()});
 const write=(value:unknown)=>writeFileSync(join(dir,'connections/trello.json'),JSON.stringify(value));
 const config=()=>({...DEFAULT_CONFIG,daemon:{...DEFAULT_CONFIG.daemon,data_dir:dir},usejarvis_integrations:{page_url:'https://app.usejarvis.dev/account'}});
 beforeEach(()=>{dir=mkdtempSync(join(tmpdir(),'trello-connection-'));mkdirSync(join(dir,'connections'));write(doc());});
@@ -24,7 +24,7 @@ test('read-through BASIC_AUTH credentials bind reconnect and disconnect; status 
   write({version:1,provider:'trello',status:'disconnected',generation:randomUUID()});expect(await source.resolve('jarvis:trello')).toBeNull();
 });
 test('rejects foreign, malformed and oversized documents',()=>{
-  for(const v of [null,{}, {...doc(),provider:'clickup'},{...doc(),api_key:''},{...doc(),account:{id:'bad',label:'Owner'}}]){write(v);expect(readTrelloConnection(dir)).toBeNull();}
+  for(const v of [null,{}, {...doc(),provider:'clickup'},{...doc(),settings:{api_key:''}},{...doc(),settings:undefined},{...doc(),settings:undefined,api_key:'PUBLIC'},{...doc(),account:{id:'bad',label:'Owner'}}]){write(v);expect(readTrelloConnection(dir)).toBeNull();}
   writeFileSync(join(dir,'connections/trello.json'),'x'.repeat(65537));expect(readTrelloConnection(dir)).toBeNull();
 });
 test('board/list pickers use fixed read endpoints and reject stale account selections',async()=>{
