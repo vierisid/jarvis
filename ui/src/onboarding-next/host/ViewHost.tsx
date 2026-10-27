@@ -1,7 +1,7 @@
-import { ClickUpConnection } from "../../v2/integrations/ClickUpConnection";
 import React, { Component, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 import type { ComponentType, ReactNode } from 'react';
 import { useTheme } from '../../v2/shell/useTheme.ts';
+import { ClickUpConnection } from '../../v2/integrations/ClickUpConnection';
 import type { Session } from './session.ts';
 import './host.css';
 
