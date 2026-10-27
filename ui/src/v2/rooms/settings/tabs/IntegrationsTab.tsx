@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ClickUpConnection } from "../../../integrations/ClickUpConnection";
+import { AsanaConnection } from "../../../integrations/AsanaConnection";
 import type { SettingsHook } from "../useSettingsData";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
 
@@ -327,7 +328,7 @@ export function IntegrationsTab({
       </section>
       {/* Its own block, independent of how Google is connected; renders
           nothing unless hosting offers ClickUp or it is already connected. */}
-      <ClickUpConnection optional />
+      <ClickUpConnection optional /><AsanaConnection optional />
     </div>
   );
 }

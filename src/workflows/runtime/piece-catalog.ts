@@ -313,7 +313,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "9"; // v9: ClickUp task output contracts
+export const CATALOG_SCHEMA_VERSION = "10"; // v10: Asana task and comment output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -890,6 +890,24 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
  * on-disk caches re-project.
  */
 export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
+  if (entry.name === '@activepieces/piece-asana') {
+    for (const action of Object.values(entry.actions)) {
+      if (action.name !== 'create_task') continue;
+      for (const field of action.inputSchema?.fields ?? []) {
+        if (field.sourceType === 'DROPDOWN') {field.type='string';field.placeholder='Asana ID or workflow variable';delete field.options;}
+        if (field.name === 'due_on') {field.placeholder='YYYY-MM-DD';field.description='Hosted Asana requires a date as YYYY-MM-DD.';}
+        if (field.name === 'tags') {field.type='json';field.sourceType='ARRAY';field.placeholder='[]';field.description='Managed Asana does not support tags yet. Leave empty.';delete field.options;}
+      }
+    }
+    const task = {gid:'123456', resource_type:'task', name:'Example task', notes:'Task description', completed:false, due_on:'2026-10-30', due_at:null, start_on:null, assignee:{gid:'123', name:'Owner'}, projects:[{gid:'456',name:'Project'}], workspace:{gid:'789',name:'Workspace'}, permalink_url:'https://app.asana.com/0/456/123456'};
+    const samples: Record<string,unknown> = {
+      create_task:task, get_task:task, update_task:task,
+      list_project_tasks:{data:[task],next_offset:null},
+      add_task_comment:{gid:'654321',resource_type:'story',resource_subtype:'comment_added',type:'comment',text:'Task comment',created_at:'2026-10-27T12:00:00Z',created_by:{gid:'123',name:'Owner'},target:{gid:'123456',name:'Example task'},is_pinned:false},
+    };
+    for (const [name,sample] of Object.entries(samples)) if (entry.actions[name]) entry.actions[name]!.outputSample=sample;
+  }
+
   // ClickUp 0.9.1 returns a task directly for these actions, not an HTTP envelope.
   // These stable fields let the picker wire task outputs into downstream steps.
   if (entry.name === '@activepieces/piece-clickup') {

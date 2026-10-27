@@ -17,6 +17,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSampleDraftText } from "./useSampleDraftText";
 import { ClickUpConnection, useClickUpStatus } from "../../integrations/ClickUpConnection";
+import { AsanaConnection, useAsanaStatus } from "../../integrations/AsanaConnection";
+import { AsanaTaskLocation } from "../../integrations/AsanaTaskLocation";
 import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { WorkflowEditorEnvironment, WorkflowPortal, useWorkflowRequest } from "./WorkflowEditorEnvironment";
@@ -3378,7 +3380,11 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const clickUpStatus = useClickUpStatus(piece?.name === "@activepieces/piece-clickup");
   const clickUpLocation = piece?.name === "@activepieces/piece-clickup" && ["create_task", "update_task", "get_task_by_name"].includes(subName ?? "")
     && !!clickUpStatus?.connected && step.settings?.input?.auth === "{{connections." + clickUpStatus.external_id + "}}";
-  const selectedSchema = selectedSubAction?.inputSchema ?? null;
+  const asanaStatus = useAsanaStatus(piece?.name === "@activepieces/piece-asana");
+  const asanaLocation = piece?.name === "@activepieces/piece-asana" && ["create_task", "list_project_tasks"].includes(subName ?? "")
+    && !!asanaStatus?.connected && step.settings?.input?.auth === "{{connections." + asanaStatus.external_id + "}}";
+  const baseSchema = selectedSubAction?.inputSchema ?? null;
+  const selectedSchema = asanaLocation && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["workspace","project"].includes(f.name))} : baseSchema;
   const rawSchema = clickUpLocation && selectedSchema ? {...selectedSchema,fields:selectedSchema.fields.filter(f=>!['workspace_id','space_id','list_id'].includes(f.name))} : selectedSchema;
   // ClickUp 0.9.1 declares `custom_fields` on Create Task as a required
   // dynamic prop even when a list has none. "Use standard task fields" saves
@@ -3494,6 +3500,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         />
       ) : null}
 
+      {asanaLocation && <AsanaTaskLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {clickUpLocation && <ClickUpTaskLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {clickUpCreate && <div className="wf-props__hint" role="note">
         {standardFields ? <p>Using standard task fields. ClickUp will reject the task if this list requires custom fields.</p>
@@ -3734,15 +3741,19 @@ function ConnectionPicker({
   // ClickUp may also offer the hosted connection; without it (self-hosted, or
   // not connected) the picker reads exactly as for any other piece.
   const isClickUp = pieceName === "@activepieces/piece-clickup";
+  const isAsana = pieceName === "@activepieces/piece-asana";
+  const managedAsana = useAsanaStatus(isAsana)?.connected === true;
   const managedClickUp = useClickUpStatus(isClickUp)?.connected === true;
   return (
     <div className="wf-props__connection">
       {isClickUp && <ClickUpConnection optional onPick={onPick} currentValue={currentValue} />}
+      {isAsana && <><AsanaConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedAsana && <p className="wf-props__hint">This account supports creating, reading and updating tasks, listing project tasks and adding comments. Use Asana IDs or workflow variables. Tags are not supported yet.</p>}</>}
       <label className="wf-props__field-label">
         {authDisplayName}
         <span className="wf-props__connection-type">({authType})</span>
       </label>
-      {matching.length === 0 && !managedClickUp ? (
+      {matching.length === 0 && !managedClickUp && !managedAsana ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.
