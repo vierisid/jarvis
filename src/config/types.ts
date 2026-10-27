@@ -491,8 +491,6 @@ export type TelemetryConfig = {
  * (user-owned section) so the dashboard knows which phase (setup / profile
  * interview / tutorial) to show on next load. Each `*_completed_at` is a `Date.now()` stamp;
  * `null` means not yet done. Reset endpoint clears subsets per scope.
- *
- * See `docs/ONBOARDING_PLAN.md` for the gate logic and reset semantics.
  */
 export type OnboardingConfig = {
   /** Phase A — LLM provider + key + model + TTS choice all saved. */

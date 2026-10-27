@@ -1780,7 +1780,7 @@ fi
 		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      packages: write\n' \
 		'build-image: holds packages: write'
 	mutant 'the build job logging in to GHCR again (#868)' \
-		'      - name: Generate Docker metadata' $'      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0\n        with:\n          registry: ghcr.io\n      - name: Generate Docker metadata' \
+		'      - name: Generate Docker metadata' $'      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0\n        with:\n          registry: ghcr.io\n      - name: Generate Docker metadata' \
 		'build-image: logs in to a registry'
 	mutant 'the build pushing by digest again, as #680 did (#868)' \
 		'          outputs: type=oci,dest=${{ runner.temp }}/release-image.oci.tar' '          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true' \
@@ -1811,7 +1811,7 @@ fi
           path: \${{ runner.temp }}/release-image
 
       # The amd64"
-	DL_TO_LOGIN="      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+	DL_TO_LOGIN="      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
       - name: Download the archive
@@ -2033,7 +2033,7 @@ fi
 		$'      - name: Dry-run summary\n        if: env.DRY_RUN == \'true\'\n        env:\n          DIGEST:' $'      - run: skopeo --debug copy oci-archive:x docker://ghcr.io/o/r:latest\n      - name: Dry-run summary\n        if: env.DRY_RUN == \'true\'\n        env:\n          DIGEST:' \
 		'publish-docker: steps must be exactly'
 	mutant 'the credential written before the artifact is unpacked again (#868 review)' \
-		$'      - name: Verify the archive\n        if: env.DRY_RUN != \'true\'\n' $'      - name: Log in again\n        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0\n      - name: Verify the archive\n        if: env.DRY_RUN != \'true\'\n' \
+		$'      - name: Verify the archive\n        if: env.DRY_RUN != \'true\'\n' $'      - name: Log in again\n        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0\n      - name: Verify the archive\n        if: env.DRY_RUN != \'true\'\n' \
 		'publish-docker: steps must be exactly'
 	mutant 'the archive check before the login switched off (#868 review)' \
 		$'      - name: Verify the archive\n        if: env.DRY_RUN != \'true\'\n' $'      - name: Verify the archive\n        if: false\n' \
@@ -2609,7 +2609,7 @@ fi
 	mutant 'the darwin signer uploading a file its digest step never hashed (#870)' \
 		'          path: ${{ runner.temp }}/out/darwin-x64/jarvis-app.tar.gz' '          path: ${{ runner.temp }}/work/darwin-x64/jarvis-app.tar.gz'
 	mutant 'the darwin signer downloading a third artifact (#870)' \
-		$'          name: unsigned-darwin-x64\n          path: ${{ runner.temp }}/unsigned/darwin-x64\n' $'          name: unsigned-darwin-x64\n          path: ${{ runner.temp }}/unsigned/darwin-x64\n\n      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: extra\n          path: ${{ runner.temp }}/unsigned/extra\n'
+		$'          name: unsigned-darwin-x64\n          path: ${{ runner.temp }}/unsigned/darwin-x64\n' $'          name: unsigned-darwin-x64\n          path: ${{ runner.temp }}/unsigned/darwin-x64\n\n      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n          name: extra\n          path: ${{ runner.temp }}/unsigned/extra\n'
 	mutant 'the darwin signer digest check allowed to fail (#870)' \
 		$'      - name: Verify the bundles\n' $'      - name: Verify the bundles\n        continue-on-error: true\n'
 	mutant 'the darwin signer output not its digest step (#870)' \
@@ -3711,7 +3711,7 @@ done
 		$'      - name: Verify the signed DMG digest\n' $'      - run: ../.github/scripts/verify-macos-signature.sh dmg x\n        if: needs.sign-macos.outputs.signed == \'true\'\n        env:\n          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}\n          ALLOW_UNPINNED_MACOS: ${{ vars.ALLOW_UNPINNED_MACOS }}\n      - name: Verify the signed DMG digest\n' \
 		'is not a shasum -a 256 -c'
 	mutant 'the installer team check after an action that can export env (#921)' \
-		$'      - name: Verify the signed DMG digest\n' $'      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0\n      - name: Verify the signed DMG digest\n' \
+		$'      - name: Verify the signed DMG digest\n' $'      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0\n      - name: Verify the signed DMG digest\n' \
 		'before the signature check (only checkout and download-artifact)'
 	mutant 'publish not waiting for the macOS check (#921)' \
 		'    needs: [resolve, sign-windows, verify-windows, sign-macos, verify-macos]' '    needs: [resolve, sign-windows, verify-windows, sign-macos]' \

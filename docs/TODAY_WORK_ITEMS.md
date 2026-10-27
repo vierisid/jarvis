@@ -106,8 +106,7 @@ count an already recorded goal progress entry again. That payload shares a
 prompt with step error text, so each field is length-bounded, and it shares one
 untrusted-content block with the goal review's own evidence bundle. Passed
 checks are the only source of the evening check-in's completed actions, and the
-review writes no goal score at all; see
-`docs/superpowers/specs/2026-09-15-goal-review-evidence.md`. LLM narration never
+review writes no goal score at all. LLM narration never
 writes work-item verification.
 
 The schema is additive and installed by vault initialization, so goal rhythms do
