@@ -123,15 +123,6 @@ provider measurement, complete capture pipeline benchmark or production capacity
 certificate. The recorded 250 ms responsiveness thresholds apply only to this
 fixture and hardware. No paid calls or external effects are used.
 
-Q-20 is based on main `5024ea7455a5613be0514475be32c0dee6de0edd`, not on Q-19 or
-the unmerged F stack. There is no new activation flag: these bounds apply when
-this daemon revision starts. F-09 retains its own prepared queue, ownership and
-attempt limits; its merge must preserve these legacy queue bounds and use the
-shared composer adapter/manager. Q-19's typed failure projection should map the
-new `background_throttled` code to a resource pause when the stacks are assembled.
-Neither stacked integration nor Q-22 certification is claimed here.
-
-Rollback: revert Q-20 and rebuild the daemon/UI together. Keep the additive
-`background_model_reservations`, `background_model_backoff` and
-`suggestion_composition_attempts` tables; old binaries ignore them. Preserve jobs,
-composition journals and authority/effect history. Rollback does not replay work.
+There is no activation flag: these bounds apply whenever the daemon runs. F-09
+prepared opportunities keep their own queue, ownership and attempt limits on top
+of these bounds.

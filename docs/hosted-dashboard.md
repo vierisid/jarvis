@@ -18,8 +18,11 @@ These defaults change backend behaviour, not only the UI. The full set is
 hosted user notices are:
 
 - `QUIET_AWARENESS`: ambient awareness no longer triggers automatic research,
-  proactive chat messages, voice, or the external-channel fallback. Suggestions
-  appear in Brief instead (see [quiet awareness](brief-quiet-awareness.md)).
+  proactive chat messages, voice, or the external-channel fallback. Durable
+  opportunities still arrive as cards; other suggestions (for example an error
+  suggestion) are listed by `GET /api/awareness/suggestions`. Explicit chat,
+  research, Authority requests and enabled workflow subscriptions keep their
+  existing delivery.
 - `PREPARED_OPPORTUNITIES`: a background worker composes prepared opportunities,
   spending model calls within the background budget (on hosted, the hosted
   LLM allowance).
