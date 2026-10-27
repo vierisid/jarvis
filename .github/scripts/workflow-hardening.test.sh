@@ -2354,6 +2354,21 @@ if (rule === "license-scan") {
     else loud(steps[getAt], "downloading the generated catalog");
   }
   if (found.length !== 1) out.push("expected exactly one license scan step (scripts/check-piece-licenses.ts), found " + found.length);
+  // (#1200 review) --problems names $RUNNER_TEMP/license-problems/..., a
+  // directory no step creates, and the script wrote it with a bare
+  // writeFileSync: every run threw ENOENT after the scan, so a clean tree
+  // failed and the problem lines never reached the PR. The script must
+  // write --problems only through a helper that creates the directory first.
+  let src = null;
+  try { src = require("node:fs").readFileSync(process.env.REPO + "/scripts/check-piece-licenses.ts", "utf8"); } catch {}
+  if (src === null) out.push("scripts/check-piece-licenses.ts: not found, so the --problems write cannot be checked");
+  else {
+    const helper = /function (\w+)\(path: string, text: string\): void \{\s*const p = resolve\(path\);\s*mkdirSync\(dirname\(p\), \{ recursive: true \}\);\s*writeFileSync\(p, text\);\s*\}/.exec(src);
+    const direct = /writeFileSync\([^\n]*\bproblemsPath\b/.test(src);
+    const viaHelper = helper ? src.split(helper[1] + "(problemsPath,").length - 1 : 0;
+    if (!helper || direct || viaHelper < 2)
+      out.push("scripts/check-piece-licenses.ts: writes --problems without creating its directory first (ENOENT on the sync run)");
+  }
   // (#1177 follow-up) The catalog PR went out titled "(safe)" while this
   // scan failed, because nothing waited on it. publish now needs the scan
   // job, runs whatever it concluded (a violation must not hold the PR back),
@@ -2395,7 +2410,13 @@ if (rule === "pr-license-scan") {
     "bun.lock",
     "scripts/check-piece-licenses.ts",
     "scripts/build-shared-runtime.ts",
+    "src/util/subprocess-env.ts",
+    "src/workflows/activepieces/LICENSE.activepieces",
   ];
+  // (#1200 review) bun-setup restores and saves ~/.bun/install/cache under
+  // the bun.lock key every job shares; the scan install must not fill it
+  // with ~900 MB of pieces, so it gets a cache dir of its own in runner.temp.
+  const CACHE = "${{ runner.temp }}/license-scan-cache";
   const found = [];
   for (const [name, job] of Object.entries(jobs)) {
     const steps = flatSteps(job.steps).map(({ st }) => st);
@@ -2407,6 +2428,8 @@ if (rule === "pr-license-scan") {
     if (job["continue-on-error"]) out.push(name + ": the license scan job may fail without failing the PR (continue-on-error)");
     if (scan["continue-on-error"]) out.push(name + ": the license scan may fail without failing the PR (continue-on-error)");
     if (scan.if !== undefined) out.push(name + ": the license scan is conditional within its job");
+    if (scan.env?.BUN_INSTALL_CACHE_DIR !== CACHE)
+      out.push(name + ": the license scan installs into the shared bun cache (env BUN_INSTALL_CACHE_DIR is not exactly " + CACHE + ")");
     if (job.if !== JOB_IF) out.push(name + ": runs under " + JSON.stringify(job.if) + ", not exactly " + JOB_IF);
     if (![].concat(job.needs ?? []).includes("changes")) out.push(name + ": does not need the changes job its if: reads");
   }
@@ -4114,6 +4137,48 @@ expect_caught 'the catalog dropped from the PR license scan filter' pr-license-s
 expect_caught 'the PR license scan filter output not wired' pr-license-scan "$WORKFLOWS/test.yml" \
 	'      pieces-licenses: ${{ steps.filter.outputs.pieces-licenses }}' '      pieces-licenses: "true"' \
 	'does not output pieces-licenses'
+expect_caught 'the subprocess env dropped from the PR license scan filter (#1200 review)' pr-license-scan "$WORKFLOWS/test.yml" \
+	$'              - \x27src/util/subprocess-env.ts\x27\n' '' \
+	'does not list src/util/subprocess-env.ts'
+expect_caught 'the activepieces license dropped from the PR license scan filter (#1200 review)' pr-license-scan "$WORKFLOWS/test.yml" \
+	$'              - \x27src/workflows/activepieces/LICENSE.activepieces\x27\n' '' \
+	'does not list src/workflows/activepieces/LICENSE.activepieces'
+expect_caught 'the PR license scan filling the shared bun cache (#1200 review)' pr-license-scan "$WORKFLOWS/test.yml" \
+	$'        env:\n          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/license-scan-cache\n' '' \
+	'installs into the shared bun cache'
+expect_caught 'the PR license scan cache pointed back at the shared one (#1200 review)' pr-license-scan "$WORKFLOWS/test.yml" \
+	'BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/license-scan-cache' 'BUN_INSTALL_CACHE_DIR: ~/.bun/install/cache' \
+	'installs into the shared bun cache'
+# The script half of the license-scan rule reads scripts/check-piece-licenses.ts
+# from REPO_DIR, so these mutants put a mutated copy in a scratch repo.
+lic_mutant() {
+	local label="$1" old="$2" new="$3" repo="${WORK}/lic-repo" found
+	mkdir -p "${repo}/scripts"
+	if ! FROM="${HERE}/../../scripts/check-piece-licenses.ts" TO="${repo}/scripts/check-piece-licenses.ts" OLD="$old" NEW="$new" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+if (!s.includes(process.env.OLD)) { console.error("anchor not found"); process.exit(2); }
+await Bun.write(process.env.TO, s.replace(process.env.OLD, () => process.env.NEW));
+'; then
+		no "mutant '${label}' could be applied (the script no longer has the text it mutates)"
+		return
+	fi
+	found="$(REPO_DIR="$repo" check license-scan "$WORKFLOWS/sync-pieces-catalog.yml")" || {
+		no "reports: ${label}" "the check failed to run: ${found}"
+		return
+	}
+	if grep -qF 'writes --problems without creating its directory first' <<<"$found"; then
+		ok "reports: ${label}"
+	else
+		no "reports: ${label}" "wanted the --problems directory finding, got:
+${found}"
+	fi
+}
+lic_mutant 'the license scan writing --problems without creating its directory (#1200 review)' \
+	$'  mkdirSync(dirname(p), { recursive: true });\n' ''
+lic_mutant 'the license scan writing its problems with a bare writeFileSync (#1200 review)' \
+	'if (problemsPath) writeCreatingDir(problemsPath, problemsFileText(' 'if (problemsPath) writeFileSync(resolve(problemsPath), problemsFileText('
+lic_mutant 'the license scan writing its install failure with a bare writeFileSync (#1200 review)' \
+	'if (problemsPath) writeCreatingDir(problemsPath, `bun install' 'if (problemsPath) writeFileSync(resolve(problemsPath), `bun install'
 expect_caught 'the license scan scanning without installing' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
 	'check-piece-licenses.ts --install' 'check-piece-licenses.ts --dir' \
 	'does not install the catalog'

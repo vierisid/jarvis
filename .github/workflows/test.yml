@@ -110,6 +110,8 @@ jobs:
               - 'bun.lock'
               - 'scripts/check-piece-licenses.ts'
               - 'scripts/build-shared-runtime.ts'
+              - 'src/util/subprocess-env.ts'
+              - 'src/workflows/activepieces/LICENSE.activepieces'
               - '.github/actions/bun-setup/**'
               - '.github/workflows/test.yml'
 
@@ -190,7 +192,12 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/bun-setup
+      # Its own bun cache, not ~/.bun/install/cache: bun-setup restores and
+      # saves that one under the bun.lock key every job shares, and ~900 MB
+      # of pieces in it would be saved there and restored by every job.
       - name: License-check the shared pieces tree
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/license-scan-cache
         run: bun run scripts/check-piece-licenses.ts --install "$RUNNER_TEMP/license-scan" --summary-md "$GITHUB_STEP_SUMMARY"
 
   # ─── Daemon lifecycle on macOS (launchd) ───────────────────────
