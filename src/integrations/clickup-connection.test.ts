@@ -22,7 +22,8 @@ test('metadata contains no credential; reconnect changes bindings and disconnect
  expect(JSON.stringify(clickUpStatus(config))).not.toContain('INSTANCE_SECRET');
  const first=source.identity(CLICKUP_CONNECTION);
  expect(await resolver.resolve({projectId:'p',pieceName:CLICKUP_PIECE,externalId:CLICKUP_CONNECTION})).toMatchObject({type:'OAUTH2',value:{access_token:'INSTANCE_SECRET'}});
- expect(await resolver.resolve({projectId:'p',pieceName:'@activepieces/piece-slack',externalId:CLICKUP_CONNECTION})).toBeNull();
+ // Which steps may use it is enforced by readiness and the credential route (managed-connection-scope.test.ts).
+ expect(source.pieceNames).toEqual([CLICKUP_PIECE]); expect(source.pieceDetails[CLICKUP_PIECE]!.apiHosts).toEqual(['api.clickup.com']);
  write(doc()); expect(source.identity(CLICKUP_CONNECTION)).not.toBe(first);
  write({version:1,provider:'clickup',status:'disconnected',generation:randomUUID()});
  expect(source.identity(CLICKUP_CONNECTION)).toBeNull(); expect(await source.resolve(CLICKUP_CONNECTION)).toBeNull();
