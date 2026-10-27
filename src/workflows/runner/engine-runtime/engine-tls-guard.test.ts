@@ -227,6 +227,37 @@ describe.skipIf(skipTls)("engine TLS guard shim", () => {
     expect(out.split("ignored an attempt to set https.globalAgent").length - 1).toBe(1);
   });
 
+  test("with the guard, a replacement https.globalAgent whose options cannot be locked still verifies", async () => {
+    // Each swap defeats an in-place lock of the agent's own options object: a
+    // frozen object, a Proxy that swallows defines, and an options property
+    // that is itself a non-configurable getter. The guard must fail closed.
+    const out = await inChild(ENGINE_TLS_GUARD_SHIM, `
+      const https = require("node:https");
+      const axios = require("axios");
+      const ax = async (label) => {
+        try { await axios.get(${JSON.stringify(url)}); console.log(label + " ACCEPTED"); } catch { console.log(label + " REJECTED"); }
+      };
+      const frozen = new https.Agent({ rejectUnauthorized: false });
+      Object.freeze(frozen.options);
+      https.globalAgent = frozen;
+      await th("frozen-https"); await ax("frozen-axios");
+      const proxied = new https.Agent();
+      proxied.options = new Proxy({ rejectUnauthorized: false }, { defineProperty: () => true });
+      https.globalAgent = proxied;
+      await th("proxy-https"); await ax("proxy-axios");
+      const getter = new https.Agent();
+      Object.defineProperty(getter, "options", { get: () => ({ rejectUnauthorized: false }), configurable: false });
+      https.globalAgent = getter;
+      await th("getter-https"); await ax("getter-axios");
+      console.log("read=" + https.globalAgent.options.rejectUnauthorized);
+    `);
+    for (const label of ["frozen", "proxy", "getter"]) {
+      expect(out).toContain(`${label}-https REJECTED`);
+      expect(out).toContain(`${label}-axios REJECTED`);
+    }
+    expect(out).toContain("read=true");
+  });
+
   test("control: without the guard, a Bun.env write disables verification for WebSocket", async () => {
     const out = await inChild("", `
       await tw("before");
@@ -259,6 +290,21 @@ describe.skipIf(skipTls)("engine TLS guard shim", () => {
     expect(out).toContain("optout ACCEPTED proto=");
     expect(out).toContain("optout-protocols ACCEPTED proto=chat");
     expect(out).toContain("instanceof=true OPEN=1");
+  });
+
+  test("with the guard, WebSocket keeps protocols given as any iterable and options with non-enumerable headers", async () => {
+    // A trusted CA so the connection opens without an opt-out and the
+    // protocol the server saw can be read back.
+    const out = await inChild(ENGINE_TLS_GUARD_SHIM, `
+      await tw("set", new Set(["chat"]));
+      await tw("array", ["chat"]);
+      const opts = {};
+      Object.defineProperty(opts, "headers", { value: { "sec-websocket-protocol": "chat" }, enumerable: false });
+      await tw("hidden-headers", opts);
+    `, { NODE_EXTRA_CA_CERTS: resolve(certDir, "cert.pem") });
+    expect(out).toContain("set ACCEPTED proto=chat");
+    expect(out).toContain("array ACCEPTED proto=chat");
+    expect(out).toContain("hidden-headers ACCEPTED proto=chat");
   });
 
   test("the guard is wired into the engine banner, ahead of any piece code", () => {

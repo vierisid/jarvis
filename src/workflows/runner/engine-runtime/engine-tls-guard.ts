@@ -43,17 +43,20 @@
  *      the explicit option is honoured on both versions, and it is what
  *      protects these paths. (With the Proxy in place, 1.3.8 no longer sees a
  *      `Bun.env` write from fetch or WebSocket either; 1.4.2 still does.)
- *      `node:https` and `node:tls` read the Proxy and stay safe. Only the boolean `false` counts as an opt-out: null, 0 or
- *      "" would otherwise reach Bun as "not chosen" and fall back to the env
- *      var. A caller that passes `rejectUnauthorized: false` keeps its
- *      choice, scoped to its own request.
+ *      `node:https` and `node:tls` read the Proxy and stay safe. Only the
+ *      boolean `false` counts as an opt-out: null, 0 or "" would otherwise
+ *      reach Bun as "not chosen" and fall back to the env var. A caller that
+ *      passes `rejectUnauthorized: false` keeps its choice, scoped to its own
+ *      request.
  *   3. `https.globalAgent.options.rejectUnauthorized` reads true and drops
  *      writes (logged once). Its options are merged into every default-agent
  *      `node:https` request, which is also what axios's http adapter uses
  *      under Bun, so a write there was process-wide (measured on 1.3.8 and
  *      1.4.2). The getter is non-enumerable so a request's own
  *      `rejectUnauthorized: false` still wins, `options` cannot be replaced,
- *      and a replacement `https.globalAgent` is locked the same way. An agent
+ *      and a replacement `https.globalAgent` is locked the same way. The lock
+ *      fails closed: it goes on a fresh copy of the options, and a
+ *      replacement whose `options` cannot be redefined is refused. An agent
  *      a caller builds itself, `new https.Agent({ rejectUnauthorized: false })`,
  *      is a per-agent choice and is left alone; `new https.Agent()` verifies.
  *
@@ -106,26 +109,37 @@ export const ENGINE_TLS_GUARD_SHIM = `(() => {
   // so a request's own rejectUnauthorized: false still wins over it.
   try {
     var https = require("node:https");
+    // Fails closed: returns the locked agent, or null when it cannot be
+    // locked. The lock goes on a fresh plain copy of the options, never the
+    // caller's object, which may be frozen, shared or a Proxy that swallows
+    // defines; the read-back catches an agent that ignores the define.
     var lockAgent = function (agent) {
-      if (agent == null || typeof agent !== "object") return agent;
-      var opts = agent.options;
-      if (opts == null || typeof opts !== "object") opts = {};
+      if (agent == null || (typeof agent !== "object" && typeof agent !== "function")) return null;
       try {
+        var src = agent.options;
+        var opts = Object.assign({}, src != null && typeof src === "object" ? src : {});
         Object.defineProperty(opts, "rejectUnauthorized", {
           get: function () { return true; },
           set: function () { drop("https.globalAgent.options.rejectUnauthorized"); },
           enumerable: false, configurable: false,
         });
         Object.defineProperty(agent, "options", { value: opts, writable: false, configurable: false, enumerable: true });
-      } catch (e) {}
-      return agent;
+        if (agent.options !== opts || opts.rejectUnauthorized !== true) return null;
+        return agent;
+      } catch (e) {
+        return null;
+      }
     };
-    var current = lockAgent(https.globalAgent);
+    var current = lockAgent(https.globalAgent) || lockAgent(new https.Agent()) || https.globalAgent;
     Object.defineProperty(https, "globalAgent", {
       get: function () { return current; },
       // Replacing the global agent (a proxy library does) is allowed, but the
-      // replacement verifies too.
-      set: function (agent) { current = lockAgent(agent); },
+      // replacement verifies too; one that cannot be locked is refused.
+      set: function (agent) {
+        var locked = lockAgent(agent);
+        if (locked) current = locked;
+        else drop("https.globalAgent (replacement refused)");
+      },
       enumerable: true, configurable: false,
     });
   } catch (e) {}
@@ -140,7 +154,17 @@ export const ENGINE_TLS_GUARD_SHIM = `(() => {
         if (second == null) opts = {};
         else if (typeof second === "string") opts = { protocols: [second] };
         else if (Array.isArray(second)) opts = { protocols: second };
-        else opts = Object.assign({}, second);
+        else if (typeof second[Symbol.iterator] === "function") opts = { protocols: Array.from(second) };
+        else if (typeof second !== "object" && typeof second !== "function") opts = {};
+        // Copy every own property, non-enumerable ones too: Bun reads own
+        // properties of the options (headers, protocols, proxy), measured,
+        // and not inherited ones, so Object.create would drop them.
+        else {
+          var own = Object.getOwnPropertyDescriptors(second);
+          delete own.tls;
+          opts = Object.defineProperties({}, own);
+          opts.tls = second.tls;
+        }
         opts.tls = verifyUnless(opts.tls);
         super(url, opts);
       }
