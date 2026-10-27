@@ -1705,4 +1705,40 @@ describe('managed ClickUp task permissions', () => {
     approved.authority.setGovernedCategories(['write_data']);
     expect(await approved.authorize({task_id:'task1',name:'Changed'})).toMatchObject({governed:true,dispatch:'approval_required'});
   });
+
+  // A self-hosted ClickUp workflow on the user's own connection ran at the
+  // default level before the piece was governed; its reads, writes and
+  // comments must keep doing so, with no card.
+  test('reads, writes and comments run at the default level 3 without a card', async () => {
+    for (const [action, input] of [['clickup_get_spaces', {workspace_id:'8'}], ['get_task_comments', {task_id:'task1'}],
+      ['list_workspace_tasks', {workspace_id:'8'}], ['create_task_comments', {task_id:'task1', comment:'Done'}],
+      ['clickup_set_task_status', {task_id:'task1', status:'done'}]] as const) {
+      const f = fixture('@activepieces/piece-clickup', action, 3);
+      expect({action, reply: await f.authorize(input)}).toMatchObject({action, reply: {governed:true, dispatch:'authorized'}});
+      expect(f.approvals.getPending()).toHaveLength(0);
+      expect(f.deliveredApprovals).toEqual([]);
+    }
+  });
+
+  test('a delete requires delete_data and an unmapped action stays modify_settings', async () => {
+    for (const action of ['delete_task', 'clickup_delete_task', 'delete_message', 'clickup_delete_space']) {
+      expect(resolveGovernedPieceAction('@activepieces/piece-clickup', action)).toMatchObject({category:'delete_data', known:true});
+    }
+    await expect(fixture('@activepieces/piece-clickup', 'delete_task', 3).authorize({task_id:'task1'})).rejects.toThrow(/Authority denied/);
+    expect(await fixture('@activepieces/piece-clickup', 'delete_task', 9).authorize({task_id:'task1'})).toMatchObject({governed:true, dispatch:'authorized'});
+    for (const action of ['custom_api_call', 'clickup_added_upstream_later']) {
+      expect(resolveGovernedPieceAction('@activepieces/piece-clickup', action)).toMatchObject({category:'modify_settings', known:false});
+    }
+    await expect(fixture('@activepieces/piece-clickup', 'custom_api_call', 3).authorize({url:'/user', method:'GET'})).rejects.toThrow(/Authority denied/);
+  });
+
+  test('every ClickUp write, send and delete carries a completion receipt; no read does', () => {
+    const adapter = ALL_PIECE_ADAPTERS.find(a => a.catalogId === 'clickup')!;
+    for (const [category, names] of Object.entries(adapter.categories)) {
+      for (const action of names ?? []) {
+        expect(`${action}: ${tracksPieceCompletion(adapter.pieceName, action)}`).toBe(`${action}: ${category !== 'read_data'}`);
+      }
+    }
+    expect(tracksPieceCompletion(adapter.pieceName, 'custom_api_call')).toBe(false);
+  });
 });

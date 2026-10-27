@@ -172,6 +172,7 @@ export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
   'JARVIS_TELEMETRY', 'JARVIS_TELEMETRY_DEBUG', 'JARVIS_TOOL_FILTER',
   'JARVIS_WAKE_ENGINE', 'JARVIS_REALTIME_VOICE', 'JARVIS_AMBIENT_UI',
   // Preserve the owner's Brief lifecycle opt-in when the CLI restarts the daemon.
+  'JARVIS_HOSTED_DASHBOARD', // Preserve an operator's hosted UI rollback on CLI restart.
   'JARVIS_BRIEF_NAVIGATION_COMPATIBILITY',
   'JARVIS_BRIEF_RECONCILIATION',
   'JARVIS_BRIEF_ONBOARDING',

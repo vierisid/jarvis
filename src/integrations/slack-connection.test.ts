@@ -19,7 +19,8 @@ test('read-through credentials bind reconnect and disconnect; public metadata ha
  expect(slackStatus(config())).toMatchObject({connected:true,connect_url:'https://app.usejarvis.dev/account?integration=slack'});
  expect(JSON.stringify(slackStatus(config()))).not.toContain('PRIVATE');
  expect(await source.resolve('jarvis:slack')).toMatchObject({type:'OAUTH2',value:{access_token:'PRIVATE',scope:'channels:read,chat:write,groups:read',data:{team:{id:'T123'},jarvis_managed:'slack'}}});
- expect(await resolver.resolve({projectId:'p',pieceName:'@activepieces/piece-clickup',externalId:'jarvis:slack'})).toBeNull();
+ // Which steps may use it is enforced by readiness and the credential route (managed-connection-scope.test.ts).
+ expect(source.pieceNames).toEqual(['@activepieces/piece-slack']); expect(source.pieceDetails['@activepieces/piece-slack']!.apiHosts).toEqual(['slack.com']);
  const before=source.identity('jarvis:slack');write(doc());expect(source.identity('jarvis:slack')).not.toBe(before);
  write({version:1,provider:'slack',status:'disconnected',generation:randomUUID()});
  expect(await source.resolve('jarvis:slack')).toBeNull();expect(slackStatus(config()).connected).toBe(false);

@@ -1,6 +1,6 @@
 # Local dashboard and onboarding integration
 
-Approved scope: finish the merged dashboard/onboarding bindings and run local integration tests. Hosting PR F-24 and deployment are deferred by the owner on 20 October 2026.
+Historical scope approved on 20 October 2026: finish the merged dashboard/onboarding bindings and run local integration tests, with hosting deferred. The hosted dashboard default is now covered separately in [hosted-dashboard.md](../hosted-dashboard.md). The local-only evidence below does not establish a production deployment.
 
 ## Architecture
 

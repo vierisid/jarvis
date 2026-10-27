@@ -1,6 +1,7 @@
 /** Actual npm piece in the real engine. Only its provider base URL is replaced
  * in a disposable copy; no live ClickUp calls or account credentials are used.
- * Run JARVIS_TEST_CLICKUP_ENGINE=1 bun test this-file (installs pinned 0.9.1). */
+ * Gated on JARVIS_TEST_ENGINE_BUILD=1 like the other engine tests; CI runs it
+ * in test.yml's engine step. It installs the pinned 0.9.1 from npm. */
 import {afterAll, beforeAll, expect, test} from 'bun:test';
 import {mkdtempSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync} from 'node:fs';
 import {join} from 'node:path';
@@ -21,6 +22,7 @@ import {EmergencyController} from '../../authority/emergency';
 import {WorkflowEventBuffer} from '../runtime/event-buffer';
 import {buildSandboxServiceBackends} from '../runtime/service-backends';
 import {buildPieceCatalog} from '../runtime/piece-catalog';
+import {resolveGovernedPieceAction} from '../runtime/piece-effects';
 import {SandboxApi} from '../sandbox-api/server';
 import {workflowLogsBase} from '../sandbox-api/config';
 import {buildEngineBundle} from '../runner/engine-runtime/build';
@@ -28,7 +30,7 @@ import {EngineRuntime} from '../runner/engine-runtime/engine-runtime';
 import {EngineFlowExecutor} from '../runner/engine-runtime/engine-flow-executor';
 import {createRunFlowHandler} from '../runner/handler';
 import {Worker} from '../queue/worker';
-const gate=process.env.JARVIS_TEST_CLICKUP_ENGINE==='1';
+const gate=process.env.JARVIS_TEST_ENGINE_BUILD==='1';
 const piece='@activepieces/piece-clickup';
 let dir:string, api:SandboxApi, runtime:EngineRuntime, provider:ReturnType<typeof Bun.serve>;
 let runId:string|undefined;
@@ -76,6 +78,11 @@ test.skipIf(!gate)('catalog extraction and create/read/update/find through actua
  expect(failures).toEqual([]);
  const metadata=catalog.get(piece)!;
  expect(metadata.auth?.type).toBe('OAUTH2');
+ // Every action the installed package declares is in the governed table, so
+ // an upstream addition fails here instead of falling to modify_settings.
+ const actions=Object.keys(metadata.actions);
+ expect(actions.length).toBeGreaterThan(80);
+ expect(actions.filter(name=>name!=='custom_api_call'&&!resolveGovernedPieceAction(piece,name)!.known)).toEqual([]);
  for(const name of ['create_task','get_list_task','update_task','get_task_by_name']){
   expect(metadata.actions[name]?.requireAuth).toBe(true);
   expect(metadata.actions[name]?.outputSample).toMatchObject({id:'task_example'});

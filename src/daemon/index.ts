@@ -4,7 +4,7 @@ import { registerOnboarding } from '../brief/registrations/onboarding';
 import { ConnectedWorkspace } from '../brief/connected-workspace';
 import { MIN_BUN_VERSION, versionAtLeast } from '../util/bun-minimum.ts';
 import { slackStatus } from "../integrations/slack-connection";
-import { clickUpStatus } from "../integrations/clickup-connection";
+import { clickUpStatus } from '../integrations/clickup-connection';
 import { connectedGoogle } from '../brief/connected-workspace-runtime';
 import { registerConnections } from '../brief/registrations/connections';
 import { WorkflowContext } from '../brief/workflow-context';
@@ -80,6 +80,7 @@ import { hostedRealtimeIncluded, warmRealtimeGateFor } from './realtime-gate.ts'
 import { resolveRealtimeVoice } from "../config/realtime.ts";
 import { pebbleHotkeyRequestKey, resolvePebbleHotkeys, shouldCloseBeforeSpawn } from "../config/pebble-hotkeys.ts";
 import { isHostedInstall, realtimeEnablement } from "./usejarvis-ai.ts";
+import { configureHostedDashboard } from './hosted-dashboard';
 import { REALTIME_NAV_TOOLS } from "./realtime-nav-tools.ts";
 import { EventReactor } from "./event-reactor.ts";
 import { EventCoalescer } from "./event-coalescer.ts";
@@ -612,6 +613,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
   }
 
   const localIntegration = localIntegrationEnabled(jarvisConfig);
+  configureHostedDashboard(jarvisConfig);
   if (localIntegration) console.log("[Daemon] Local development: connected dashboard, real providers, persistent local data");
 
   // Resolve the bench debug gate once, before any service starts: it refuses a
@@ -860,15 +862,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // voice intent, pebble toggle — schedule the section's appliers.
     const { SettingsReloadCoordinator } = await import('./settings-reload.ts');
     const { setSectionSavedListener } = await import('./user-settings.ts');
-    const { reloadUsejarvisAiBlock, reloadUsejarvisBillingBlock } = await import('../config/loader.ts');
+    const { reloadUsejarvisAiBlock, reloadUsejarvisBillingBlock, reloadUsejarvisIntegrationsBlock } = await import('../config/loader.ts');
     settingsReload = new SettingsReloadCoordinator(jarvisConfig, {
       // File-authoritative SYSTEM sections are re-read on every reloadAll so
       // a provisioner rotation of the usejarvis_ai key (or un-hosting) takes
       // effect on SIGHUP / POST /api/config/reload without a restart. Same
-      // for the billing read's block.
+      // for the billing read's block and the hosted integrations link.
       reloadSystemSections: async (cfg) => {
         await reloadUsejarvisAiBlock(cfg);
         await reloadUsejarvisBillingBlock(cfg);
+        await reloadUsejarvisIntegrationsBlock(cfg);
       },
     });
     setSectionSavedListener((section) => settingsReload?.sectionChanged(section));

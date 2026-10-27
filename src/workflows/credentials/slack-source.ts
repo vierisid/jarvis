@@ -1,9 +1,15 @@
 import { SLACK_CONNECTION, SLACK_PIECE, readSlackConnection } from "../../integrations/slack-connection";
-import { credentialFingerprint, type JarvisConnectionSource, type ResolvedConnection } from "./adapter";
+import { credentialFingerprint, type JarvisConnectionSource, type ManagedPieceDetails, type ResolvedConnection } from "./adapter";
 
 /** Read through the atomically delivered file. Disconnects need no daemon restart. */
 export class JarvisSlackConnectionSource implements JarvisConnectionSource {
   readonly id = "slack";
+  /** Only Slack steps may name jarvis:slack, and only as their auth (readiness and the credential route). */
+  readonly pieceNames: readonly string[] = [SLACK_PIECE];
+  /** The piece's custom API call base URL is https://slack.com/api in the pinned 0.23.1 bundle. */
+  readonly pieceDetails: Readonly<Record<string, ManagedPieceDetails>> = {
+    [SLACK_PIECE]: { displayName: "Slack", apiHosts: ["slack.com"] },
+  };
   constructor(private readonly dataDir: string) {}
   canResolve(externalId: string) { return externalId === SLACK_CONNECTION; }
   identity(externalId: string) {

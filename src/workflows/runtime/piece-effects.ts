@@ -74,13 +74,22 @@ const GMAIL_TRACKED_SENDS: ReadonlySet<unknown> = new Set(['send_email', 'gmail_
  * (#953 made these reachable at the default level).
  */
 export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
-  return (piece === '@activepieces/piece-clickup' && (action === 'create_task' || action === 'update_task'))
+  return (piece === CLICKUP_PIECE && clickUpTracked(action))
     || (piece === '@activepieces/piece-gmail' && GMAIL_TRACKED_SENDS.has(action))
     || (piece === '@activepieces/piece-slack' && (action === 'send_channel_message' || action === 'slack_post_message'))
     // #961: an HTTP request that is not a read is a send whose outcome the
     // server alone knows, so a retry after a lost or failed request is
     // refused rather than repeated. Without the input it is assumed a send.
     || (piece === HTTP_PIECE && action === 'send_request' && !httpRequestIsRead(inputObject(input) ?? {}));
+}
+
+const CLICKUP_PIECE = '@activepieces/piece-clickup';
+/** Every ClickUp action that changes the account (write, send or delete). None
+ * parks its flow, so each one can be tracked; a read never is. */
+function clickUpTracked(action: unknown): boolean {
+  const categories = MANAGED_PIECE_ADAPTERS.find(a => a.pieceName === CLICKUP_PIECE)!.categories;
+  return typeof action === 'string' && (['write_data', 'send_message', 'delete_data'] as const)
+    .some(category => categories[category]?.includes(action));
 }
 
 /** The vendored core HTTP piece (#961). */
@@ -595,14 +604,55 @@ interface ResolvedPieceAction {
   categoryProps?: readonly string[];
 }
 
-/** Every adapter: the verified catalog pieces, then the vendored core pieces. */
-/** Managed ClickUp rollout: only these task actions have been reviewed. Unknown
- * actions require the highest permission; the community badge remains unchanged. */
+/**
+ * ClickUp, a community piece (its badge stays) whose managed `jarvis:clickup`
+ * connection made it governed. Every action of the pinned 0.9.1 bundle is
+ * named (0.10.0 has the same set; `clickup-connection.test.ts` pins the list
+ * and the engine test checks it against the installed package), so a
+ * self-hosted workflow on the user's own connection keeps running at the
+ * default level: reads, task and content writes, and comments or chat
+ * messages need no more than level 3. Only `custom_api_call` and an action
+ * added upstream fall back to `modify_settings`.
+ */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
   catalogId: 'clickup', pieceName: '@activepieces/piece-clickup', unknownActionCategory: 'modify_settings',
-  targetProps: ['workspace_id', 'space_id', 'list_id', 'task_id', 'task_name', 'name', 'status_id', 'add_assignee', 'rem_assignee'],
-  categories: {read_data: ['get_list_task', 'get_task_by_name'], write_data: ['create_task', 'update_task']},
+  targetProps: ['workspace_id', 'space_id', 'folder_id', 'list_id', 'task_id', 'task_name', 'name', 'status_id',
+    'add_assignee', 'rem_assignee', 'destination_list_id', 'channel_id', 'message_id', 'comment_id',
+    'checklist_id', 'checklist_item_id', 'timer_id', 'template_id', 'field_id'],
+  categories: {
+    read_data: ['get_list', 'get_list_task', 'get_task_by_name', 'get_space', 'get_spaces', 'get_task_comments',
+      'get_channel', 'get_channels', 'get_channel_messages', 'get_message_reactions', 'get_message_replies',
+      'list_workspace_tasks', 'list_workspace_time_entries', 'get_accessible_custom_fields',
+      'clickup_get_task_comments', 'clickup_get_accessible_custom_fields', 'clickup_get_folders',
+      'clickup_get_folder', 'clickup_get_folderless_lists', 'clickup_get_folder_lists', 'clickup_get_list_members',
+      'clickup_get_list', 'clickup_list_workspace_members', 'clickup_get_spaces', 'clickup_get_space',
+      'clickup_get_space_tags', 'clickup_get_bulk_tasks_time_in_status', 'clickup_get_task_members',
+      'clickup_get_task', 'clickup_list_list_tasks', 'clickup_list_tasks', 'clickup_get_running_time_entry',
+      'clickup_get_time_entry', 'clickup_list_time_entries'],
+    // Content that lands in front of other people, including an edit of it.
+    send_message: ['create_task_comments', 'clickup_create_task_comment', 'clickup_update_comment',
+      'create_message', 'create_message_reply', 'update_message'],
+    // Workspace content under the caller's own access. None of these changes
+    // who can see what (no member, guest or permission action exists here).
+    write_data: ['create_task', 'create_task_from_template', 'create_folderless_list', 'create_subtask',
+      'create_channel', 'create_channel_in_space_folder_list', 'create_message_reaction', 'update_task',
+      'set_custom_fields_value', 'clickup_create_checklist_item', 'clickup_create_checklist',
+      'clickup_update_checklist_item', 'clickup_update_checklist', 'clickup_create_folder', 'clickup_update_folder',
+      'clickup_create_folderless_list', 'clickup_create_list', 'clickup_update_list', 'clickup_create_space',
+      'clickup_update_space', 'clickup_create_space_tag', 'clickup_update_space_tag', 'clickup_add_tag_to_task',
+      'clickup_add_task_dependency', 'clickup_create_task', 'clickup_link_tasks', 'clickup_move_task_to_list',
+      'clickup_remove_tag_from_task', 'clickup_remove_task_from_list', 'clickup_set_task_status',
+      'clickup_unlink_tasks', 'clickup_update_task', 'clickup_create_time_entry', 'clickup_start_time_entry',
+      'clickup_stop_time_entry', 'clickup_update_time_entry'],
+    // Every delete, including the two upstream labels WRITE (a reaction, a dependency).
+    delete_data: ['delete_message', 'delete_message_reaction', 'delete_task', 'clickup_delete_checklist_item',
+      'clickup_delete_checklist', 'clickup_delete_comment', 'clickup_delete_folder', 'clickup_delete_list',
+      'clickup_delete_space', 'clickup_delete_space_tag', 'clickup_delete_task_dependency', 'clickup_delete_task',
+      'clickup_delete_time_entry'],
+  },
 }];
+
+/** Every adapter: the verified catalog pieces, the vendored core pieces, then the managed ones. */
 export const ALL_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [...GOVERNED_PIECE_ADAPTERS, ...CORE_PIECE_ADAPTERS, ...MANAGED_PIECE_ADAPTERS];
 
 const BY_PIECE_NAME = new Map<string, GovernedPieceAdapter>();
