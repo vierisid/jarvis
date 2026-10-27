@@ -162,11 +162,13 @@ jobs:
       # Engine tests skip without a built bundle and pieces, so this builds
       # them (seconds) and runs those files. After the full run on purpose:
       # built first, they would un-skip engine suites that need more pieces.
+      # The ClickUp test also installs its pinned piece from npm.
       - run: >-
           JARVIS_TEST_ENGINE_BUILD=1 bun test --retry=2
           src/workflows/runner/engine-runtime/emergency-hold-engine.test.ts
           src/workflows/runner/engine-runtime/outer-worker-delay.test.ts
           src/workflows/runner/engine-runtime/core-http-piece.test.ts
+          src/workflows/pieces-library/clickup-engine.test.ts
       # Not retried: deterministic.
       - run: bunx tsc --noEmit
 
