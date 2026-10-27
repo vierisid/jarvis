@@ -41,6 +41,7 @@ test("provider failures are bounded, sanitized and never automatically retried",
 });
 test("reads and writes are governed and completed writes replay without provider dispatch",async()=>{
   for(const name of MANAGED_ASANA_ACTIONS){expect(resolveGovernedPieceAction("@activepieces/piece-asana",name)?.known).toBe(true);expect(tracksPieceCompletion("@activepieces/piece-asana",name)).toBe(["create_task","update_task","add_task_comment"].includes(name));}
+  expect(resolveGovernedPieceAction("@activepieces/piece-asana","add_task_comment")?.category).toBe("send_message");
   expect(resolveGovernedPieceAction("@activepieces/piece-asana","delete_task")?.category).toBe("modify_settings");
   let calls=0;const params={piece:"@activepieces/piece-asana",action:"create_task",input:{auth}} as any;
   expect(await executeAuthorizedPiece(params,{dispatch:"completed",result:{gid:"1"}} as any,async()=>{calls++;})).toEqual({gid:"1"});

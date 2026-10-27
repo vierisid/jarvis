@@ -618,7 +618,7 @@ interface ResolvedPieceAction {
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
   catalogId: 'asana', pieceName: '@activepieces/piece-asana', unknownActionCategory: 'modify_settings',
   targetProps: ['workspace', 'project', 'task', 'name', 'notes', 'html_notes', 'assignee', 'due_on', 'due_at', 'start_on', 'completed', 'text', 'html_text', 'is_pinned', 'completed_since', 'limit', 'offset'],
-  categories: {read_data: ['get_task', 'list_project_tasks'], write_data: ['create_task', 'update_task', 'add_task_comment']},
+  categories: {read_data: ['get_task', 'list_project_tasks'], write_data: ['create_task', 'update_task'], send_message: ['add_task_comment']},
 }, {
   catalogId: 'clickup', pieceName: '@activepieces/piece-clickup', unknownActionCategory: 'modify_settings',
   targetProps: ['workspace_id', 'space_id', 'folder_id', 'list_id', 'task_id', 'task_name', 'name', 'status_id',

@@ -12,7 +12,7 @@ Asana uses the company OAuth app configured once in Jarvis Admin. Company secret
 | Get Task | Task resource | Read |
 | Update Task | Updated task resource | Write, completion receipt |
 | List Project Tasks | `{data, next_offset}`; one page, 1-100 tasks | Read |
-| Add Task Comment | Story resource, including `gid` | Write, completion receipt |
+| Add Task Comment | Story resource, including `gid` | Send message, completion receipt |
 
 Connect in the hosted dashboard, both onboarding paths or Settings. In a workflow choose the connected account, workspace and project, or enter IDs/workflow variables. Task IDs are Asana numeric strings. Create Task uses a plain description, an optional YYYY-MM-DD date and an assignee ID or `me`. Tags are not qualified. Update and comment inputs retain the published standard fields, including mutually exclusive plain/HTML content. Project choices are paginated with an explicit Load more action. Other managed actions and all triggers are refused. Manual/self-hosted connections retain their existing path.
 
