@@ -19,7 +19,8 @@ test('read-through OAUTH2 credentials bind reconnect and disconnect; status reve
   expect(mailchimpStatus(config())).toMatchObject({connected:true,connect_url:'https://app.usejarvis.dev/account?integration=mailchimp'});
   expect(JSON.stringify(mailchimpStatus(config()))).not.toContain('PRIVATE');
   expect(await source.resolve('jarvis:mailchimp')).toMatchObject({type:'OAUTH2',value:{access_token:'PRIVATE',server_prefix:'us1',jarvis_managed:'mailchimp'}});
-  expect(await resolver.resolve({projectId:'p',pieceName:'@activepieces/piece-clickup',externalId:'jarvis:mailchimp'})).toBeNull();
+  // Which steps may use it is enforced by readiness and the credential route (managed-connection-scope.test.ts).
+  expect(source.pieceNames).toEqual(['@activepieces/piece-mailchimp']); expect(source.pieceDetails['@activepieces/piece-mailchimp']!.apiHosts).toEqual([]);
   const before=source.identity('jarvis:mailchimp');write(doc());expect(source.identity('jarvis:mailchimp')).not.toBe(before);
   write({version:1,provider:'mailchimp',status:'disconnected',generation:randomUUID()});expect(await source.resolve('jarvis:mailchimp')).toBeNull();
 });

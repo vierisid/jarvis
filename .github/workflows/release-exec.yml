@@ -1039,8 +1039,12 @@ jobs:
   # attaches the sidecar binaries — so the downloads live on the brain's v*
   # release with no separate sidecar tag. The sidecar itself ships via npm
   # (sidecar-release.yml).
+  #
+  # Its if is publish-docker's sidecar rule, see there: a publish-sidecar
+  # skipped because no sidecar release was due is not a failed gate.
   github-release:
-    needs: [validate-tag, publish-docker, publish-sidecar]
+    needs: [validate-tag, sidecar-build, publish-docker, publish-sidecar]
+    if: ${{ !cancelled() && needs.validate-tag.result == 'success' && needs.sidecar-build.result == 'success' && needs.publish-docker.result == 'success' && (needs.publish-sidecar.result == 'success' || (needs.publish-sidecar.result == 'skipped' && needs.sidecar-build.outputs.released == 'false' && needs.sidecar-build.outputs.digests == '')) }}
     runs-on: ubuntu-latest
     # Creating the release (and its generated notes) is a contents write. The
     # sidecar artifacts come from this same run, which needs no token scope.
@@ -1185,8 +1189,21 @@ jobs:
   #
   # On a dry run nothing is downloaded, pushed or tagged: the rehearsal in
   # smoke-image is the dry run of this job.
+  #
+  # The if spells out the gate the default success() used to be, with one
+  # difference. When sidecar/VERSION is already on npm, sidecar-build builds
+  # nothing (released false, digests empty) and every job of the
+  # publish-sidecar call skips, so the call itself ends skipped. success()
+  # counts a skipped ancestor as a failure, so every brain-only release
+  # published brain and then skipped this job, github-release and
+  # discord-notify while the run reported success (v0.17.2). A skipped
+  # publish-sidecar passes here only for that reason; skipped while a
+  # sidecar release was due, failed or cancelled, it still blocks, as does
+  # anything else above that did not succeed. release-exec.test.sh pins
+  # this line and evaluates it against each case.
   publish-docker:
-    needs: [validate-tag, build-image, smoke-image, publish-sidecar, publish-brain]
+    needs: [validate-tag, build-image, smoke-image, sidecar-build, publish-sidecar, publish-brain]
+    if: ${{ !cancelled() && needs.validate-tag.result == 'success' && needs.build-image.result == 'success' && needs.smoke-image.result == 'success' && needs.sidecar-build.result == 'success' && needs.publish-brain.result == 'success' && (needs.publish-sidecar.result == 'success' || (needs.publish-sidecar.result == 'skipped' && needs.sidecar-build.outputs.released == 'false' && needs.sidecar-build.outputs.digests == '')) }}
     runs-on: ubuntu-latest
     # No checkout and no build: the registry write is the whole job.
     permissions:
@@ -1255,9 +1272,13 @@ jobs:
           echo "::notice::DRY RUN -- nothing pushed to GHCR. smoke-image pushed ${DIGEST} to a throwaway registry and tagged it there, with the script this job runs."
 
   # ─── Notify Discord about the new release ──────────────────────
+  # Explicit about github-release for the same reason as publish-docker: the
+  # default success() looks at every job above, a publish-sidecar skipped by
+  # design included. github-release succeeds only when everything it needs
+  # did.
   discord-notify:
     needs: [validate-tag, github-release]
-    if: ${{ inputs.dry_run != true }}
+    if: ${{ !cancelled() && inputs.dry_run != true && needs.validate-tag.result == 'success' && needs.github-release.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1388,3 +1409,26 @@ jobs:
             curl -sf -X POST "$DISCORD_WEBHOOK_URL" \
               -H "Content-Type: application/json" \
               -d @-
+
+  # --- Fail a run that published brain but not the rest ---
+  # Runs only when something is wrong, and then fails the run: brain is on
+  # npm (or, on a dry run, rehearsed) but publish-docker or github-release
+  # did not succeed. A failed one fails the run anyway; this is for one
+  # skipped by its if, which leaves every job green and the run reported a
+  # success with no image, no GitHub Release and no Discord post, as v0.17.2
+  # did. discord-notify is left out: it is skipped on every dry run, and on
+  # a real run it runs whenever github-release succeeded.
+  release-complete:
+    needs: [publish-brain, publish-docker, github-release]
+    if: ${{ !cancelled() && needs.publish-brain.result == 'success' && (needs.publish-docker.result != 'success' || needs.github-release.result != 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Report the incomplete release
+        env:
+          DOCKER_RESULT: ${{ needs.publish-docker.result }}
+          RELEASE_RESULT: ${{ needs.github-release.result }}
+        run: |
+          echo "::error::publish-brain succeeded, but publish-docker ended ${DOCKER_RESULT} and github-release ended ${RELEASE_RESULT}. Brain is on npm without its image or GitHub Release; find why they did not run and re-run the failed jobs."
+          exit 1

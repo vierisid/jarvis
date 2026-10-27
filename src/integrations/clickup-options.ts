@@ -20,6 +20,30 @@ function choices(value: unknown): Choice[] {
   });
 }
 
+/** Most a choices response may be: a provider body is read no further than this. */
+export const CLICKUP_OPTIONS_MAX_BYTES = 4 * 1024 * 1024;
+async function readJson(response: Response): Promise<unknown> {
+  const tooLarge = () => new ClickUpOptionsError('ClickUp returned too many choices. Enter IDs instead.');
+  const declared = Number(response.headers.get('content-length') ?? '');
+  if (Number.isFinite(declared) && declared > CLICKUP_OPTIONS_MAX_BYTES) { await response.body?.cancel().catch(() => {}); throw tooLarge(); }
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    const reader = response.body?.getReader();
+    while (reader) {
+      const next = await reader.read();
+      if (next.done) break;
+      size += next.value.byteLength;
+      if (size > CLICKUP_OPTIONS_MAX_BYTES) { await reader.cancel().catch(() => {}); throw tooLarge(); }
+      chunks.push(next.value);
+    }
+    return JSON.parse(new TextDecoder().decode(Buffer.concat(chunks)));
+  } catch (error) {
+    if (error instanceof ClickUpOptionsError) throw error;
+    throw new ClickUpOptionsError('ClickUp returned an invalid response. Try again.');
+  }
+}
+
 /** Fixed read-only endpoints. Never forward provider URLs, tokens or error bodies. */
 export async function clickUpOptions(config: JarvisConfig, query: URLSearchParams, request: typeof fetch = fetch) {
   const connection = readClickUpConnection(config.daemon.data_dir);
@@ -44,8 +68,7 @@ export async function clickUpOptions(config: JarvisConfig, query: URLSearchParam
     }
     if (response.status === 429) throw new ClickUpOptionsError('ClickUp is rate limiting requests. Wait a moment and try again.', 429);
     if (!response.ok) throw new ClickUpOptionsError('Could not load ClickUp choices. Try again.');
-    try { return await response.json(); }
-    catch { throw new ClickUpOptionsError('ClickUp returned an invalid response. Try again.'); }
+    return readJson(response);
   }
   const options = (values: unknown) => choices(values).map(v => ({value: String(v.id), label: v.name.slice(0, 200)}));
   if (kind === 'spaces') return options(object(await get('team/' + id + '/space?archived=false')).spaces);

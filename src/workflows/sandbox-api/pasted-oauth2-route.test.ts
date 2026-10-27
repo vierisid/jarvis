@@ -7,7 +7,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { CredentialResolver } from "../credentials/adapter";
 import type { TokenTransport } from "../credentials/pasted-oauth2";
-import { closeWorkflowDb, DEFAULT_IDS, initWorkflowDb } from "../db";
+import { closeWorkflowDb, DEFAULT_IDS, getWorkflowDb, initWorkflowDb } from "../db";
+import { graphDigest } from "../runtime/continuation";
 import { setEncryptionKey } from "../db/encryption";
 import { getConnection, upsertConnection } from "../db/repos/app-connection";
 import { createFlow } from "../db/repos/flow";
@@ -38,7 +39,7 @@ beforeEach(async () => {
   const tokenTransport: TokenTransport = async () => { tokenCalls++; return tokenAnswer(); };
   const resolver = new CredentialResolver({ tokenTransport, now: () => clock });
   // A managed source whose value looks long expired: its own source refreshes it, never this path.
-  resolver.register({ id: "fixture", canResolve: id => id === "jarvis:fixture", resolve: async () => {
+  resolver.register({ id: "fixture", pieceNames: ["@activepieces/piece-gmail"], canResolve: id => id === "jarvis:fixture", resolve: async () => {
     managedCalls++;
     return { type: "OAUTH2", value: { access_token: "managed", refresh_token: "", client_id: "c", client_secret: "s",
       token_url: "https://oauth2.example.test/token", claimed_at: 1, expires_in: 1 } };
@@ -69,6 +70,8 @@ async function runOf(externalId = "work-gmail") {
       settings: { pieceName: "@activepieces/piece-gmail", pieceVersion: "0.0.0", actionName: "read",
         input: { auth: `{{connections['${externalId}']}}` } } } } as never });
   const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "RUNNING", startTime: NOW });
+  // The graph the RUN_FLOW handler records before the engine starts.
+  getWorkflowDb().run("UPDATE flow_run SET graph_digest = ? WHERE id = ?", [graphDigest(version.trigger), run.id]);
   const identity = { projectId: DEFAULT_IDS.project, sandboxId: crypto.randomUUID(), runId: run.id };
   const { token, expiresAt } = await api.signer.mint(identity, 60);
   api.registry.register({ ...identity, engineToken: token, expiresAt, terminatedAt: null });

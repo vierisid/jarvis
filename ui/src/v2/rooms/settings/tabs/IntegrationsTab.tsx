@@ -164,7 +164,6 @@ export function IntegrationsTab({
              off to the account page — which then opens the system browser,
              because Google refuses OAuth inside an embedded webview. */
           <>
-      <ClickUpConnection optional />
             {g.is_authenticated ? (
               <>
                 <p className="v2-set__hint">
@@ -328,6 +327,9 @@ export function IntegrationsTab({
           </>
         )}
       </section>
+      {/* Its own block, independent of how Google is connected; renders
+          nothing unless hosting offers ClickUp or it is already connected. */}
+      <ClickUpConnection optional />
     </div>
   );
 }
