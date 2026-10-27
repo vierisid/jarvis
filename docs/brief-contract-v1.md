@@ -2,7 +2,10 @@
 
 Brief modules share one wire vocabulary and discover usable capabilities through an
 authenticated endpoint. Every capability is default off; hosted installs turn a set
-of them on (see [hosted dashboard](hosted-dashboard.md)).
+of them on (see [hosted dashboard](hosted-dashboard.md)). Self-hosters turn a
+feature on with `JARVIS_BRIEF_<FEATURE>=1` in the daemon environment: the feature
+names are `HOSTED_BRIEF_FEATURES` in `src/daemon/hosted-dashboard.ts`, and the
+features each one depends on are `BRIEF_CAPABILITIES` in `src/brief/capabilities.ts`.
 
 Source of truth: `src/brief/contracts.ts`, `capabilities.ts`, `providers.ts` and
 `registrations/index.ts`. The checked synthetic examples are in

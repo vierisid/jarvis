@@ -1,8 +1,7 @@
 # Hosted dashboard default
 
 Hosted installs now open the connected Brief dashboard at the ordinary root URL.
-This supersedes the default-off hosted UI policy in v0.17.1 and the earlier local-only
-integration scope. It requires a new brain build and rollout; updating the hosting
+This supersedes the default-off hosted UI policy in v0.17.1. It requires a new brain build and rollout; updating the hosting
 website alone cannot change an instance's bundled dashboard.
 
 ## Runtime ownership
@@ -77,8 +76,9 @@ hosted users keep the existing onboarding wizard and its Brief draft handoff.
 ## Verification
 
 Run the hosted-default, real API and browser-entry tests, the Brief/provider/entry
-regressions, TypeScript and `bun run build:ui`. The existing integration fixture can
-also serve the actual production bundle with synthetic hosted identity:
+regressions, TypeScript and `bun run build:ui`. The deterministic integration harness
+([LOCAL_INTEGRATION.md](LOCAL_INTEGRATION.md#deterministic-harness))
+can also serve the actual production bundle with synthetic hosted identity:
 
 ```sh
 bun run build:ui
