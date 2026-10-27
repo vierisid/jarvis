@@ -38,7 +38,7 @@ The hosting worker atomically delivers `~/.jarvis/connections/clickup.json`, mod
 }
 ```
 
-The managed reference is `{{connections.jarvis:clickup}}`. Metadata APIs expose account/workspace labels, connection state and setup URL, never the token. A generation/account/token fingerprint participates in existing run binding checks. Reconnect changes the fingerprint; disconnect makes resolution return null immediately. A stored grant means connected locally, not a live probe of remote revocation.
+The managed reference is `{{connections.jarvis:clickup}}`. Like `jarvis:google`, it is valid only as the whole `auth` of a ClickUp step: readiness refuses any other reference (a CODE or HTTP step, another piece, a non-auth input), the engine's credential route refuses a run whose graph has one, and a ClickUp `custom_api_call` with it may only reach a path under the piece's base URL or an https URL on `api.clickup.com`. The brain refuses a connection file that is not a regular file or is over 64 KiB; it does not check the file mode, which the hosting worker owns. Metadata APIs expose account/workspace labels, connection state and setup URL, never the token. A generation/account/token fingerprint participates in existing run binding checks. Reconnect changes the fingerprint; disconnect makes resolution return null immediately. A stored grant means connected locally, not a live probe of remote revocation.
 
 The public setup link comes from the system-owned `usejarvis_integrations.page_url` config block, e.g. `https://app.usejarvis.dev/account`. User settings cannot change this block. Deploy the hosting config convergence before expecting Connect on existing instances.
 

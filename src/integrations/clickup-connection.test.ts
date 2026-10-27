@@ -1,5 +1,6 @@
 import {afterEach, beforeEach, expect, test} from 'bun:test';
 import {mkdtempSync, mkdirSync, writeFileSync, rmSync} from 'node:fs';
+import {spawnSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -43,4 +44,13 @@ test('scoped task actions expose usable outputs and permission categories withou
  expect(resolveGovernedPieceAction(CLICKUP_PIECE,'create_task')?.category).toBe('write_data');
  expect(resolveGovernedPieceAction(CLICKUP_PIECE,'custom_api_call')).toMatchObject({category:'modify_settings',known:false});
  expect(tracksPieceCompletion(CLICKUP_PIECE,'create_task')).toBe(true);
+});
+test.skipIf(process.platform === 'win32')('a FIFO at the connection path is refused without blocking the daemon', () => {
+ expect(spawnSync('mkfifo', [join(dir,'connections/clickup.json')]).status).toBe(0);
+ expect(readClickUpConnection(dir)).toBeNull();
+});
+test('a file at exactly the cap is read, one byte over is refused', () => {
+ const body = JSON.stringify(doc());
+ writeFileSync(join(dir,'connections/clickup.json'), body + ' '.repeat(65536 - body.length)); expect(readClickUpConnection(dir)).not.toBeNull();
+ writeFileSync(join(dir,'connections/clickup.json'), body + ' '.repeat(65537 - body.length)); expect(readClickUpConnection(dir)).toBeNull();
 });

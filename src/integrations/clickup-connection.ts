@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
 
@@ -9,11 +9,27 @@ export interface ClickUpConnection {
   access_token: string; account: {id: string; label: string};
   workspaces: Array<{id: string; name: string}>; connected_at: string;
 }
+const MAX_CONNECTION_BYTES = 65536;
+/**
+ * The file's text, read through one descriptor: a FIFO or device would block
+ * this synchronous read (and the daemon with it), and a size checked by path
+ * could change before the read, so the open never blocks, the descriptor must
+ * be a regular file, and no more than the cap is read.
+ */
+function readBounded(path: string): string {
+  const fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+  try {
+    if (!fstatSync(fd).isFile()) throw new Error("not a regular file");
+    const buffer = Buffer.alloc(MAX_CONNECTION_BYTES + 1);
+    let size = 0;
+    for (let n; size < buffer.length && (n = readSync(fd, buffer, size, buffer.length - size, null)) > 0;) size += n;
+    if (size > MAX_CONNECTION_BYTES) throw new Error("too large");
+    return buffer.toString("utf8", 0, size);
+  } finally { closeSync(fd); }
+}
 export function readClickUpConnection(dataDir: string): ClickUpConnection | null {
   try {
-    const path = join(dataDir, "connections", "clickup.json");
-    if (statSync(path).size > 65536) return null;
-    const v = JSON.parse(readFileSync(path, "utf8")) as ClickUpConnection;
+    const v = JSON.parse(readBounded(join(dataDir, "connections", "clickup.json"))) as ClickUpConnection;
     if (v.version !== 1 || v.provider !== "clickup" || v.status !== "connected"
       || typeof v.generation !== "string" || !/^[a-f0-9-]{36}$/.test(v.generation)
       || typeof v.access_token !== "string" || !v.access_token
