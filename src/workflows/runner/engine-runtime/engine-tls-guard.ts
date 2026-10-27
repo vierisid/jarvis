@@ -22,8 +22,8 @@
  * MEASURED (Bun 1.3.8 and 1.4.2, self-signed local HTTPS server): writing "0"
  * at run time makes both `fetch` and `node:https` accept the bad certificate.
  *
- * THE GUARD, two layers, prepended to the bundle so it runs before any piece
- * module is imported:
+ * THE GUARD, prepended to the bundle so it runs before any piece module is
+ * imported:
  *   1. `process.env` is replaced by a Proxy over the real env object that
  *      drops writes, definitions and deletes of NODE_TLS_REJECT_UNAUTHORIZED,
  *      reads it as absent, and logs the first dropped write once. Writes are
@@ -32,15 +32,30 @@
  *      inside `sendRequest` and fail the request. Every other variable reads
  *      and writes through unchanged. The `env` property is then made
  *      non-writable and non-configurable so piece code cannot swap it back.
- *   2. `fetch` defaults `tls.rejectUnauthorized` to true when the caller did
- *      not choose. `Bun.env` is the same real env object and cannot be
- *      replaced (it is read-only), and on Bun 1.4.2 a write through it still
- *      disables verification for `fetch` (measured; `node:https` reads the
- *      Proxy and stays safe). An explicit `rejectUnauthorized: true` overrides
- *      the env var on 1.4.2. On 1.3.8 the explicit option is ignored, but there
- *      a write through `Bun.env` does not reach `fetch` either (measured). A
- *      caller that explicitly passes `tls: { rejectUnauthorized: false }` keeps
- *      its choice: that is scoped to its own request, not the whole process.
+ *   2. `fetch` and the global `WebSocket` force `tls.rejectUnauthorized` to
+ *      true unless the caller passed exactly `false`. This covers `Bun.env`:
+ *      it is the same real env object (writable; only the `Bun.env` property
+ *      itself cannot be replaced), and a write through it bypasses the Proxy.
+ *      Measured without the guard, on both 1.3.8 and 1.4.2: after
+ *      `Bun.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"` a plain `fetch` and a
+ *      plain `new WebSocket("wss://...")` accept the bad certificate, while
+ *      the same call with `tls: { rejectUnauthorized: true }` rejects it. So
+ *      the explicit option is honoured on both versions, and it is what
+ *      protects these paths. (With the Proxy in place, 1.3.8 no longer sees a
+ *      `Bun.env` write from fetch or WebSocket either; 1.4.2 still does.)
+ *      `node:https` and `node:tls` read the Proxy and stay safe. Only the boolean `false` counts as an opt-out: null, 0 or
+ *      "" would otherwise reach Bun as "not chosen" and fall back to the env
+ *      var. A caller that passes `rejectUnauthorized: false` keeps its
+ *      choice, scoped to its own request.
+ *   3. `https.globalAgent.options.rejectUnauthorized` reads true and drops
+ *      writes (logged once). Its options are merged into every default-agent
+ *      `node:https` request, which is also what axios's http adapter uses
+ *      under Bun, so a write there was process-wide (measured on 1.3.8 and
+ *      1.4.2). The getter is non-enumerable so a request's own
+ *      `rejectUnauthorized: false` still wins, `options` cannot be replaced,
+ *      and a replacement `https.globalAgent` is locked the same way. An agent
+ *      a caller builds itself, `new https.Agent({ rejectUnauthorized: false })`,
+ *      is a per-agent choice and is left alone; `new https.Agent()` verifies.
  *
  * CUSTOM CAs are unaffected: NODE_EXTRA_CA_CERTS / SSL_CERT_FILE add trust
  * anchors and verification against them is still verification.
@@ -57,32 +72,86 @@ export const ENGINE_TLS_GUARD_SHIM = `(() => {
   var KEY = ${JSON.stringify(TLS_REJECT_ENV)};
   var real = process.env;
   try { delete real[KEY]; } catch (e) {}
-  var warned = false;
-  var drop = function () {
-    if (!warned) {
-      warned = true;
+  var warned = {};
+  var drop = function (what) {
+    if (!warned[what]) {
+      warned[what] = true;
       try {
-        process.stderr.write("[engine] ignored an attempt to set " + KEY + "; TLS certificate verification stays on\\n");
+        process.stderr.write("[engine] ignored an attempt to set " + what + "; TLS certificate verification stays on\\n");
       } catch (e) {}
     }
     return true;
   };
+  var dropEnv = function () { return drop(KEY); };
   var guarded = new Proxy(real, {
     get: function (t, p) { return p === KEY ? undefined : Reflect.get(t, p); },
-    set: function (t, p, v) { return p === KEY ? drop() : Reflect.set(t, p, v); },
-    defineProperty: function (t, p, d) { return p === KEY ? drop() : Reflect.defineProperty(t, p, d); },
+    set: function (t, p, v) { return p === KEY ? dropEnv() : Reflect.set(t, p, v); },
+    defineProperty: function (t, p, d) { return p === KEY ? dropEnv() : Reflect.defineProperty(t, p, d); },
     deleteProperty: function (t, p) { return p === KEY ? true : Reflect.deleteProperty(t, p); },
     has: function (t, p) { return p === KEY ? false : Reflect.has(t, p); },
     getOwnPropertyDescriptor: function (t, p) { return p === KEY ? undefined : Reflect.getOwnPropertyDescriptor(t, p); },
   });
   Object.defineProperty(process, "env", { value: guarded, writable: false, configurable: false, enumerable: true });
 
+  // Only the boolean false is an explicit opt-out. null, 0, "" and the like
+  // would otherwise reach Bun as "not chosen" and fall back to the env var.
+  var verifyUnless = function (tls) {
+    var optOut = tls != null && tls.rejectUnauthorized === false;
+    return Object.assign({}, tls, { rejectUnauthorized: !optOut });
+  };
+
+  // https.globalAgent: its options are merged into every default-agent
+  // request (node:https, and axios's http adapter), so a write of
+  // rejectUnauthorized there is process-wide. The getter is non-enumerable
+  // so a request's own rejectUnauthorized: false still wins over it.
+  try {
+    var https = require("node:https");
+    var lockAgent = function (agent) {
+      if (agent == null || typeof agent !== "object") return agent;
+      var opts = agent.options;
+      if (opts == null || typeof opts !== "object") opts = {};
+      try {
+        Object.defineProperty(opts, "rejectUnauthorized", {
+          get: function () { return true; },
+          set: function () { drop("https.globalAgent.options.rejectUnauthorized"); },
+          enumerable: false, configurable: false,
+        });
+        Object.defineProperty(agent, "options", { value: opts, writable: false, configurable: false, enumerable: true });
+      } catch (e) {}
+      return agent;
+    };
+    var current = lockAgent(https.globalAgent);
+    Object.defineProperty(https, "globalAgent", {
+      get: function () { return current; },
+      // Replacing the global agent (a proxy library does) is allowed, but the
+      // replacement verifies too.
+      set: function (agent) { current = lockAgent(agent); },
+      enumerable: true, configurable: false,
+    });
+  } catch (e) {}
+
+  // WebSocket takes the same tls option as fetch and, without it, follows a
+  // Bun.env write of the variable (measured on 1.3.8 and 1.4.2).
+  var NativeWebSocket = globalThis.WebSocket;
+  if (typeof NativeWebSocket === "function") {
+    var VerifiedWebSocket = class WebSocket extends NativeWebSocket {
+      constructor(url, second) {
+        var opts;
+        if (second == null) opts = {};
+        else if (typeof second === "string") opts = { protocols: [second] };
+        else if (Array.isArray(second)) opts = { protocols: second };
+        else opts = Object.assign({}, second);
+        opts.tls = verifyUnless(opts.tls);
+        super(url, opts);
+      }
+    };
+    globalThis.WebSocket = VerifiedWebSocket;
+  }
+
   var nativeFetch = globalThis.fetch;
   if (typeof nativeFetch !== "function") return;
   var verifiedFetch = function fetch(input, init) {
-    var tls = init != null ? init.tls : undefined;
-    if (tls != null && tls.rejectUnauthorized !== undefined) return nativeFetch(input, init);
-    var withTls = Object.assign({}, tls, { rejectUnauthorized: true });
+    var withTls = verifyUnless(init != null ? init.tls : undefined);
     // Inherit from the caller's init rather than copying it, so getters and
     // prototype members (a class instance used as init) still reach fetch.
     var next = init != null && typeof init === "object"

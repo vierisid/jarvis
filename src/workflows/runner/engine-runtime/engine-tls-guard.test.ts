@@ -52,7 +52,11 @@ beforeAll(() => {
     port: 0,
     hostname: "127.0.0.1",
     tls: { key: readFileSync(resolve(certDir, "key.pem"), "utf8"), cert: certPem },
-    fetch: async (req) => new Response(`${req.method}:${await req.text()}`),
+    fetch: async (req, srv) => {
+      if (srv.upgrade(req, { data: req.headers.get("sec-websocket-protocol") ?? "" })) return undefined;
+      return new Response(`${req.method}:${await req.text()}`);
+    },
+    websocket: { open: (ws) => { ws.send(`proto=${ws.data}`); }, message: () => {} },
   });
   url = `https://127.0.0.1:${server.port}/`;
 });
@@ -63,9 +67,9 @@ afterAll(() => {
 });
 
 /**
- * Probes run in the child: each prints `<label> ACCEPTED|REJECTED`. `fetch`
- * and `node:https` are separate code paths in Bun and both honour the env var,
- * so both are checked.
+ * Probes run in the child: each prints `<label> ACCEPTED|REJECTED`. `fetch`,
+ * `node:https` and `WebSocket` are separate code paths in Bun and all honour
+ * the env var, so each is checked.
  */
 const probes = (u: string) => `
 const https = require("node:https");
@@ -76,6 +80,12 @@ const tf = async (label, init) => {
 const th = (label, opts) => new Promise((done) => {
   const q = https.get(${JSON.stringify(u)}, opts || {}, (r) => { r.resume(); console.log(label + " ACCEPTED"); done(); });
   q.on("error", () => { console.log(label + " REJECTED"); done(); });
+});
+const tw = (label, second) => new Promise((done) => {
+  const ws = new WebSocket(${JSON.stringify(u.replace("https:", "wss:"))}, second);
+  const t = setTimeout(() => { console.log(label + " TIMEOUT"); done(); }, 5000);
+  ws.onmessage = (m) => { clearTimeout(t); console.log(label + " ACCEPTED " + m.data); ws.close(); done(); };
+  ws.onerror = () => { clearTimeout(t); console.log(label + " REJECTED"); done(); };
 });
 `;
 
@@ -158,6 +168,97 @@ describe.skipIf(skipTls)("engine TLS guard shim", () => {
     `);
     expect(out).toContain("optout ACCEPTED");
     expect(out).toContain("after REJECTED");
+  });
+
+  test("only the boolean false opts out; null, 0 and the empty string still verify", async () => {
+    // After a Bun.env write, a value Bun reads as "not chosen" would fall back
+    // to the env var and accept the bad certificate (Bun 1.4.2, which CI runs;
+    // 1.3.8 behind the Proxy does not see the write).
+    const out = await inChild(ENGINE_TLS_GUARD_SHIM, `
+      Bun.env.${TLS_REJECT_ENV} = "0";
+      await tf("null", { tls: { rejectUnauthorized: null } });
+      await tf("zero", { tls: { rejectUnauthorized: 0 } });
+      await tf("empty", { tls: { rejectUnauthorized: "" } });
+      await tw("ws-null", { tls: { rejectUnauthorized: null } });
+      await tf("false", { tls: { rejectUnauthorized: false } });
+      await tf("after");
+    `);
+    for (const label of ["null", "zero", "empty", "ws-null", "after"]) expect(out).toContain(`${label} REJECTED`);
+    expect(out).toContain("false ACCEPTED");
+  });
+
+  test("control: without the guard, a https.globalAgent write disables verification for https and axios", async () => {
+    const out = await inChild("", `
+      const axios = require("axios");
+      require("node:https").globalAgent.options.rejectUnauthorized = false;
+      await th("https");
+      try { await axios.get(${JSON.stringify(url)}); console.log("axios ACCEPTED"); } catch { console.log("axios REJECTED"); }
+    `);
+    expect(out).toContain("https ACCEPTED");
+    expect(out).toContain("axios ACCEPTED");
+  });
+
+  test("with the guard, https.globalAgent cannot turn verification off, but per-request and per-agent opt-outs work", async () => {
+    const out = await inChild(ENGINE_TLS_GUARD_SHIM, `
+      const https = require("node:https");
+      const axios = require("axios");
+      const ax = async (label) => {
+        try { await axios.get(${JSON.stringify(url)}); console.log(label + " ACCEPTED"); } catch { console.log(label + " REJECTED"); }
+      };
+      https.globalAgent.options.rejectUnauthorized = false;
+      await th("write-https"); await ax("write-axios");
+      Object.assign(https.globalAgent.options, { rejectUnauthorized: false });
+      await th("assign-https");
+      try { https.globalAgent.options = { rejectUnauthorized: false }; } catch {}
+      await th("options-swap-https");
+      https.globalAgent = new https.Agent({ rejectUnauthorized: false });
+      await th("agent-swap-https"); await ax("agent-swap-axios");
+      await th("new-agent", { agent: new https.Agent() });
+      console.log("read=" + https.globalAgent.options.rejectUnauthorized);
+      await th("own-agent-optout", { agent: new https.Agent({ rejectUnauthorized: false }) });
+      await th("request-optout", { rejectUnauthorized: false });
+    `);
+    for (const label of ["write-https", "write-axios", "assign-https", "options-swap-https", "agent-swap-https", "agent-swap-axios", "new-agent"]) {
+      expect(out).toContain(`${label} REJECTED`);
+    }
+    expect(out).toContain("read=true");
+    expect(out).toContain("own-agent-optout ACCEPTED");
+    expect(out).toContain("request-optout ACCEPTED");
+    expect(out.split("ignored an attempt to set https.globalAgent").length - 1).toBe(1);
+  });
+
+  test("control: without the guard, a Bun.env write disables verification for WebSocket", async () => {
+    const out = await inChild("", `
+      await tw("before");
+      Bun.env.${TLS_REJECT_ENV} = "0";
+      await tw("after");
+      await tw("explicit-true", { tls: { rejectUnauthorized: true } });
+    `);
+    expect(out).toContain("before REJECTED");
+    expect(out).toContain("after ACCEPTED");
+    // The explicit option overrides the env var: that is what the guard relies on.
+    expect(out).toContain("explicit-true REJECTED");
+  });
+
+  test("with the guard, WebSocket verifies after a Bun.env write, keeps protocols, and honours an explicit opt-out", async () => {
+    const out = await inChild(ENGINE_TLS_GUARD_SHIM, `
+      Bun.env.${TLS_REJECT_ENV} = "0";
+      await tw("plain");
+      await tw("protocol-string", "chat");
+      await tw("optout", { tls: { rejectUnauthorized: false } });
+      await tw("optout-protocols", { protocols: ["chat"], tls: { rejectUnauthorized: false } });
+      await new Promise((done) => {
+        const ws = new WebSocket(${JSON.stringify(url.replace("https:", "wss:"))}, { tls: { rejectUnauthorized: false } });
+        console.log("instanceof=" + (ws instanceof WebSocket) + " OPEN=" + WebSocket.OPEN);
+        ws.onmessage = () => { ws.close(); done(); };
+        ws.onerror = () => done();
+      });
+    `);
+    expect(out).toContain("plain REJECTED");
+    expect(out).toContain("protocol-string REJECTED");
+    expect(out).toContain("optout ACCEPTED proto=");
+    expect(out).toContain("optout-protocols ACCEPTED proto=chat");
+    expect(out).toContain("instanceof=true OPEN=1");
   });
 
   test("the guard is wired into the engine banner, ahead of any piece code", () => {
