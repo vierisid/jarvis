@@ -78,6 +78,7 @@ import { hostedRealtimeIncluded, warmRealtimeGateFor } from './realtime-gate.ts'
 import { resolveRealtimeVoice } from "../config/realtime.ts";
 import { pebbleHotkeyRequestKey, resolvePebbleHotkeys, shouldCloseBeforeSpawn } from "../config/pebble-hotkeys.ts";
 import { isHostedInstall, realtimeEnablement } from "./usejarvis-ai.ts";
+import { configureHostedDashboard } from './hosted-dashboard';
 import { REALTIME_NAV_TOOLS } from "./realtime-nav-tools.ts";
 import { EventReactor } from "./event-reactor.ts";
 import { EventCoalescer } from "./event-coalescer.ts";
@@ -610,6 +611,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
   }
 
   const localIntegration = localIntegrationEnabled(jarvisConfig);
+  configureHostedDashboard(jarvisConfig);
   if (localIntegration) console.log("[Daemon] Local development: connected dashboard, real providers, persistent local data");
 
   // Resolve the bench debug gate once, before any service starts: it refuses a
