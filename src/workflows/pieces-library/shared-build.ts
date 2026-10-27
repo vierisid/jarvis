@@ -2,8 +2,8 @@
  * The hosted shared pieces tree (#971): what scripts/build-shared-runtime.ts
  * installs, and the license gate it must pass before anything in it runs.
  * scripts/check-piece-licenses.ts runs the same install and the same gate in
- * the weekly catalog sync, so a violation shows up there a week before the
- * next hosted build would fail on it.
+ * the weekly catalog sync and on PRs that change the tree (test.yml), so a
+ * violation shows up there before the next hosted build would fail on it.
  */
 
 import { readFileSync } from "node:fs";

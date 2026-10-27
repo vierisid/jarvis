@@ -156,7 +156,7 @@ trap 'rm -rf "$WORK"' EXIT
 # check <rule> <file>: one violation per line, nothing when clean.
 #   rule = scoped | publish-perms | pinned | authority | reach | untrusted
 #          | mutable | narrow | pushcache | opens-pr | catalog-pr | npmpin
-#          | runs | persist | images
+#          | runs | persist | images | license-scan | pr-license-scan
 check() {
 	# Written to a file once and run from there, not handed to bun -e: the
 	# source outgrew the 128 KiB Linux allows a single argument
@@ -2320,7 +2320,7 @@ if (rule === "license-scan") {
   // nothing lets it fail quietly (continue-on-error or an if, on the job, the
   // scan, or the steps that fetch and place the regenerated catalog), and
   // the regenerated catalog is put in place BEFORE the scan.
-  const exact = /^bun run scripts\/check-piece-licenses\.ts --install "\$RUNNER_TEMP\/license-scan" --summary-md "\$GITHUB_STEP_SUMMARY"$/;
+  const exact = /^bun run scripts\/check-piece-licenses\.ts --install "\$RUNNER_TEMP\/license-scan" --summary-md "\$GITHUB_STEP_SUMMARY" --problems "\$RUNNER_TEMP\/license-problems\/license-problems\.txt"$/;
   const found = [];
   for (const [name, job] of Object.entries(jobs)) {
     const steps = flatSteps(job.steps).map(({ st }) => st);
@@ -2354,6 +2354,71 @@ if (rule === "license-scan") {
     else loud(steps[getAt], "downloading the generated catalog");
   }
   if (found.length !== 1) out.push("expected exactly one license scan step (scripts/check-piece-licenses.ts), found " + found.length);
+  // (#1177 follow-up) The catalog PR went out titled "(safe)" while this
+  // scan failed, because nothing waited on it. publish now needs the scan
+  // job, runs whatever it concluded (a violation must not hold the PR back),
+  // says "(safe)" only when it passed, and otherwise puts the problem lines
+  // at the top of the body.
+  const isPr = ({ st }) => String(st.uses ?? "").toLowerCase().startsWith("peter-evans/create-pull-request@");
+  const pub = Object.entries(jobs).find(([, j]) => flatSteps(j.steps).some(isPr));
+  if (found.length === 1 && pub) {
+    const [pname, pjob] = pub;
+    const scanJob = found[0];
+    if (![].concat(pjob.needs ?? []).includes(scanJob))
+      out.push(pname + ": does not wait for the license scan, so the PR can read as safe before the scan fails");
+    const PUB_IF = "${{ !cancelled() && needs.generate.result == \x27success\x27 }}";
+    if (pjob.if !== PUB_IF)
+      out.push(pname + ": runs under " + JSON.stringify(pjob.if) + ", not exactly " + PUB_IF + ", so a failed license scan can skip the catalog PR");
+    const title = String(flatSteps(pjob.steps).find(isPr).st.with?.title ?? "");
+    if (!title.includes("needs." + scanJob + ".result == \x27success\x27 && \x27chore: refresh pieces catalog (safe)\x27"))
+      out.push(pname + ": the PR title can say (safe) without the license scan passing");
+    const NOTE_IF = "needs.generate.outputs.has_changes == \x27true\x27 && needs." + scanJob + ".result != \x27success\x27";
+    const note = flatSteps(pjob.steps).map(({ st }) => st).find((st) => typeof st.run === "string" && /\$PROBLEMS\b/.test(st.run));
+    if (!note || note.if !== NOTE_IF || note["continue-on-error"] || !String(note.env?.PR_BODY ?? "").endsWith("/catalog-sync/catalog-pr-body.md"))
+      out.push(pname + ": no step under exactly " + NOTE_IF + " puts the license problems in the PR body");
+  }
+}
+if (rule === "pr-license-scan") {
+  // (#1177 follow-up) A PR that changes what the hosted shared pieces tree
+  // installs, or the gate itself, runs the same license scan in test.yml and
+  // fails on it: one step, exactly the scan, nothing that lets it fail
+  // quietly, in a job gated only on the paths filter that lists those files.
+  const EXACT = "bun run scripts/check-piece-licenses.ts --install \"$RUNNER_TEMP/license-scan\" --summary-md \"$GITHUB_STEP_SUMMARY\"";
+  const JOB_IF = "needs.changes.outputs.pieces-licenses == \x27true\x27";
+  const PATHS = [
+    "src/workflows/pieces-library/catalog.ts",
+    "src/workflows/pieces-library/catalog-generated.ts",
+    "src/workflows/pieces-library/catalog-overrides.ts",
+    "src/workflows/pieces-library/license-policy.ts",
+    "src/workflows/pieces-library/license-scan.ts",
+    "src/workflows/pieces-library/shared-build.ts",
+    "bun.lock",
+    "scripts/check-piece-licenses.ts",
+    "scripts/build-shared-runtime.ts",
+  ];
+  const found = [];
+  for (const [name, job] of Object.entries(jobs)) {
+    const steps = flatSteps(job.steps).map(({ st }) => st);
+    const scans = steps.filter((st) => typeof st.run === "string" && /\bscripts\/check-piece-licenses\.ts\b/.test(st.run));
+    if (scans.length === 0) continue;
+    found.push(name, ...scans.slice(1).map(() => name));
+    const scan = scans[0];
+    if (scan.run.trim() !== EXACT) out.push(name + ": the license scan step runs something besides " + EXACT);
+    if (job["continue-on-error"]) out.push(name + ": the license scan job may fail without failing the PR (continue-on-error)");
+    if (scan["continue-on-error"]) out.push(name + ": the license scan may fail without failing the PR (continue-on-error)");
+    if (scan.if !== undefined) out.push(name + ": the license scan is conditional within its job");
+    if (job.if !== JOB_IF) out.push(name + ": runs under " + JSON.stringify(job.if) + ", not exactly " + JOB_IF);
+    if (![].concat(job.needs ?? []).includes("changes")) out.push(name + ": does not need the changes job its if: reads");
+  }
+  if (found.length !== 1) out.push("expected exactly one license scan step in one job, found " + found.length);
+  if (jobs.changes?.outputs?.["pieces-licenses"] !== "${{ steps.filter.outputs.pieces-licenses }}")
+    out.push("changes: does not output pieces-licenses from steps.filter");
+  const filt = flatSteps(jobs.changes?.steps).map(({ st }) => st)
+    .find((st) => st.id === "filter" && String(st.uses ?? "").startsWith("dorny/paths-filter@"));
+  let listed = [];
+  try { listed = [].concat(Bun.YAML.parse(String(filt?.with?.filters ?? ""))?.["pieces-licenses"] ?? []); } catch {}
+  for (const p of PATHS)
+    if (!listed.includes(p)) out.push("changes: the pieces-licenses filter does not list " + p + ", so a PR changing it does not run the license scan");
 }
 if (rule === "pinned") {
   const uses = [];
@@ -3998,13 +4063,57 @@ expect_caught 'the regenerated catalog copy with its failure swallowed' license-
       # Installs' \
 	'runs something besides the copy'
 expect_caught 'the regenerated catalog put in place after the scan' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
-	$'      - name: Use the regenerated catalog\n        run: cp "$RUNNER_TEMP/catalog-sync/catalog-generated.ts" src/workflows/pieces-library/catalog-generated.ts\n\n      # Installs into a fresh directory, the way scripts/build-shared-runtime.ts\n      # installs the hosted tree, then applies the same gate. Exit 1 names\n      # every denied package and the chain that installed it.\n      - name: License-check the shared pieces tree\n        run: bun run scripts/check-piece-licenses.ts --install "$RUNNER_TEMP/license-scan" --summary-md "$GITHUB_STEP_SUMMARY"\n' \
-	$'      - name: License-check the shared pieces tree\n        run: bun run scripts/check-piece-licenses.ts --install "$RUNNER_TEMP/license-scan" --summary-md "$GITHUB_STEP_SUMMARY"\n      - name: Use the regenerated catalog\n        run: cp "$RUNNER_TEMP/catalog-sync/catalog-generated.ts" src/workflows/pieces-library/catalog-generated.ts\n' \
+	$'      - name: Use the regenerated catalog\n        run: cp "$RUNNER_TEMP/catalog-sync/catalog-generated.ts" src/workflows/pieces-library/catalog-generated.ts\n\n      # Installs into a fresh directory, the way scripts/build-shared-runtime.ts\n      # installs the hosted tree, then applies the same gate. Exit 1 names\n      # every denied package and the chain that installed it. --problems\n      # writes the same lines, one each, for the catalog PR body.\n      - name: License-check the shared pieces tree\n        run: bun run scripts/check-piece-licenses.ts --install "$RUNNER_TEMP/license-scan" --summary-md "$GITHUB_STEP_SUMMARY" --problems "$RUNNER_TEMP/license-problems/license-problems.txt"\n' \
+	$'      - name: License-check the shared pieces tree\n        run: bun run scripts/check-piece-licenses.ts --install "$RUNNER_TEMP/license-scan" --summary-md "$GITHUB_STEP_SUMMARY" --problems "$RUNNER_TEMP/license-problems/license-problems.txt"\n      - name: Use the regenerated catalog\n        run: cp "$RUNNER_TEMP/catalog-sync/catalog-generated.ts" src/workflows/pieces-library/catalog-generated.ts\n' \
 	'does not put the regenerated catalog in place first'
 expect_caught 'the generated catalog downloaded only sometimes' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
 	$'      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: catalog-sync\n          path: ${{ runner.temp }}/catalog-sync\n\n      - name: Use the regenerated catalog' \
 	$'      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        if: false\n        with:\n          name: catalog-sync\n          path: ${{ runner.temp }}/catalog-sync\n\n      - name: Use the regenerated catalog' \
 	'downloading the generated catalog is conditional'
+expect_caught 'the license problems left out of the scan (#1177 follow-up)' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	' --problems "$RUNNER_TEMP/license-problems/license-problems.txt"' '' \
+	'runs something besides the scan'
+expect_caught 'the catalog PR not waiting for the license scan (#1177 follow-up)' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'    needs: [generate, licenses]' '    needs: generate' \
+	'does not wait for the license scan'
+expect_caught 'the catalog PR skipped when the license scan fails (#1177 follow-up)' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'    needs: [generate, licenses]\n    if: ${{ !cancelled() && needs.generate.result == \x27success\x27 }}\n' $'    needs: [generate, licenses]\n' \
+	'so a failed license scan can skip the catalog PR'
+expect_caught 'the catalog PR titled safe over a failed license scan (#1177 follow-up)' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	"needs.generate.outputs.verdict == 'safe' && needs.licenses.result == 'success' && " "needs.generate.outputs.verdict == 'safe' && " \
+	'the PR title can say (safe) without the license scan passing'
+expect_caught 'the license problems kept out of the PR body (#1177 follow-up)' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'      - name: Put the license problems at the top of the PR body\n        if: needs.generate.outputs.has_changes == \x27true\x27 && needs.licenses.result != \x27success\x27\n' \
+	$'      - name: Put the license problems at the top of the PR body\n        if: false\n' \
+	'puts the license problems in the PR body'
+echo
+echo "a PR that changes the shared pieces tree or its license gate runs the license scan (#1177 follow-up)"
+expect_clean "test.yml: one license scan, gated only on the pieces-licenses paths" \
+	pr-license-scan "$WORKFLOWS/test.yml"
+expect_caught 'the PR license scan removed' pr-license-scan "$WORKFLOWS/test.yml" \
+	'        run: bun run scripts/check-piece-licenses.ts --install' '        run: echo skipped --install' \
+	'expected exactly one license scan step'
+expect_caught 'the PR license scan job allowed to fail' pr-license-scan "$WORKFLOWS/test.yml" \
+	$'  pieces-licenses:\n    needs: changes\n' $'  pieces-licenses:\n    needs: changes\n    continue-on-error: true\n' \
+	'may fail without failing the PR'
+expect_caught 'the PR license scan step allowed to fail' pr-license-scan "$WORKFLOWS/test.yml" \
+	$'      - name: License-check the shared pieces tree\n' $'      - name: License-check the shared pieces tree\n        continue-on-error: true\n' \
+	'may fail without failing the PR'
+expect_caught 'the PR license scan failure swallowed' pr-license-scan "$WORKFLOWS/test.yml" \
+	'--summary-md "$GITHUB_STEP_SUMMARY"' '--summary-md "$GITHUB_STEP_SUMMARY" || true' \
+	'runs something besides'
+expect_caught 'the PR license scan job switched off' pr-license-scan "$WORKFLOWS/test.yml" \
+	$'    if: needs.changes.outputs.pieces-licenses == \x27true\x27\n' $'    if: false\n' \
+	'not exactly needs.changes.outputs.pieces-licenses'
+expect_caught 'the license policy dropped from the PR license scan filter' pr-license-scan "$WORKFLOWS/test.yml" \
+	$'              - \x27src/workflows/pieces-library/license-policy.ts\x27\n' '' \
+	'does not list src/workflows/pieces-library/license-policy.ts'
+expect_caught 'the catalog dropped from the PR license scan filter' pr-license-scan "$WORKFLOWS/test.yml" \
+	$'              - \x27src/workflows/pieces-library/catalog-generated.ts\x27\n' '' \
+	'does not list src/workflows/pieces-library/catalog-generated.ts'
+expect_caught 'the PR license scan filter output not wired' pr-license-scan "$WORKFLOWS/test.yml" \
+	'      pieces-licenses: ${{ steps.filter.outputs.pieces-licenses }}' '      pieces-licenses: "true"' \
+	'does not output pieces-licenses'
 expect_caught 'the license scan scanning without installing' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
 	'check-piece-licenses.ts --install' 'check-piece-licenses.ts --dir' \
 	'does not install the catalog'
