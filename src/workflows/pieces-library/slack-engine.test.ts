@@ -59,7 +59,7 @@ beforeAll(async()=>{
  writeFileSync(bundleFile+'.fixture',published.replaceAll('https://slack.com/api',`http://127.0.0.1:${provider.port}/api`));
  renameSync(bundleFile+'.fixture',bundleFile);
  mkdirSync(join(dir,'connections'));
- writeFileSync(join(dir,'connections/slack.json'),JSON.stringify({version:1,provider:'slack',status:'connected',generation:randomUUID(),access_token:'ENGINE_ONLY_SLACK',account:{id:'U123',label:'Jarvis bot'},workspaces:[{id:'T123',name:'Sandbox'}],scopes:['channels:read','groups:read','chat:write'],connected_at:new Date().toISOString()}));
+ writeFileSync(join(dir,'connections/slack.json'),JSON.stringify({version:1,provider:'slack',status:'connected',generation:randomUUID(),access_token:'ENGINE_ONLY_SLACK',account:{id:'U123',label:'Jarvis bot'},workspaces:[{id:'T123',name:'Sandbox'}],settings:{scopes:'channels:read,chat:write,groups:read'},connected_at:new Date().toISOString()}));
  const resolver=new CredentialResolver();resolver.register(new JarvisSlackConnectionSource(dir));
  api=new SandboxApi({services:buildSandboxServiceBackends({credentialResolver:resolver,llmManager:{} as any,channelService:{} as any,wsService:{} as any,eventBuffer:new WorkflowEventBuffer(),approvalManager:new ApprovalManager(),auditTrail:new AuditTrail(),emergencyController:new EmergencyController(),authorityEngine:new AuthorityEngine({default_level:10,governed_categories:[],overrides:[],context_rules:[],learning:{enabled:false,suggest_threshold:10},emergency_state:'normal'})})});
  await api.start({port:0});

@@ -4,7 +4,7 @@ Scope: hosted bot connection using the shared ClickUp framework, with channel di
 
 ## Contract
 
-The worker atomically delivers `~/.jarvis/connections/slack.json`, owner-only mode 0600. It contains version 1, provider `slack`, status `connected`, UUID generation, access_token, account `{id: bot_user_id, label}`, one workspace `{id, name}`, connected_at and scopes `channels:read`, `groups:read`, `chat:write`. A disconnected document carries no token. The brain resolves `{{connections.jarvis:slack}}` as OAuth with the bot token and workspace metadata. Company client credentials never enter the brain.
+The worker atomically delivers `~/.jarvis/connections/slack.json`, owner-only mode 0600. It contains version 1, provider `slack`, status `connected`, UUID generation, access_token, account `{id: bot_user_id, label}`, one workspace `{id, name}`, connected_at, and `settings.scopes`: the granted scopes comma-joined, which must be exactly `channels:read`, `groups:read`, `chat:write`. A disconnected document carries no token. The brain resolves `{{connections.jarvis:slack}}` as OAuth with the bot token and workspace metadata. Company client credentials never enter the brain.
 
 Status endpoints expose labels, setup URL and local grant state, never credentials. Connected means a stored grant, not a continuous Slack revocation probe. Generation/account/token fingerprint changes invalidate existing workflow bindings on reconnect; disconnect removes resolution immediately. The channel endpoint is a fixed read-only Slack API request with a bounded response, explicit pagination and membership filtering. It never accepts an arbitrary destination URL.
 
