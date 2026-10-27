@@ -376,7 +376,8 @@ describe("managed Slack is scoped to Slack steps", () => {
     expect(issue!.message).toBe("Managed connection jarvis:slack can only be used by Slack steps");
     expect(issue!.allowedPieces).toEqual([SLACK]);
   });
-  test("a Slack step auth, or a custom API call on slack.com, is ready and resolves", async () => {
+  // The connection scope only: the managed Slack action list still refuses a custom API call on its own.
+  test("a Slack step auth, or a custom API call on slack.com, passes the connection scope and resolves", async () => {
     for (const trigger of [empty(send()), empty(slackCall("https://slack.com/api/auth.test")), empty(slackCall("/auth.test"))]) {
       expect(bindingIssues(trigger)).toEqual([]);
       const response = await fetchFor(runOf(trigger), "jarvis:slack");
