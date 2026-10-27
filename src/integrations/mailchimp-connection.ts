@@ -4,6 +4,14 @@ import type { JarvisConfig } from "../config/types";
 
 export const MAILCHIMP_PIECE = "@activepieces/piece-mailchimp";
 export const MAILCHIMP_CONNECTION = "jarvis:mailchimp";
+/**
+ * Written by the hosting worker as connections/mailchimp.json (mode 0600) and
+ * replaced atomically on reconnect; disconnect leaves a non-connected
+ * tombstone. server_prefix is the account's data-center prefix, resolved on
+ * hosting from OAuth metadata. Mailchimp tokens do not expire, so there is no
+ * refresh path. The token grants broad account access: the managed action
+ * allowlist limits what Jarvis dispatches, not what the token can do.
+ */
 export interface MailchimpConnection {
   version: 1; provider: "mailchimp"; status: "connected"; generation: string;
   server_prefix: string;

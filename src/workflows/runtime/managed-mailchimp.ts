@@ -1,4 +1,9 @@
-/** Fetch-only managed adapter. No SDK retries, arbitrary paths or provider error bodies. */
+/**
+ * Fetch-only managed adapter. No SDK retries, arbitrary paths or provider error bodies.
+ * Only these actions are qualified for the managed connection; sending
+ * campaigns, (un)subscribing, audience changes, custom API calls and triggers
+ * are refused. Manual connections keep the wider community piece behaviour.
+ */
 export const MANAGED_MAILCHIMP_ACTIONS = ['find_subscriber', 'add_subscriber_to_tag', 'remove_subscriber_from_tag', 'find_campaign', 'get_campaign_report'] as const;
 export function managedMailchimpInput(input: unknown): Record<string, unknown> | null {
   return (input as {auth?: {jarvis_managed?: unknown}} | null)?.auth?.jarvis_managed === 'mailchimp' ? input as Record<string, unknown> : null;
@@ -94,6 +99,7 @@ export async function runManagedMailchimpAction(action: string, input: Record<st
     const path = `lists/${input.list_id}/members/${hash}`;
     if (action !== 'find_subscriber') {
       const status = action === 'add_subscriber_to_tag' ? 'active' : 'inactive';
+      // is_syncing stops the tag change from firing tag-triggered Mailchimp automations.
       const response = await mailchimpJson(path + '/tags', auth, {method: 'POST', body: JSON.stringify({tags: [{name: input.tag_name, status}], is_syncing: true})}, request);
       if (response !== null) throw new MailchimpRequestError('Mailchimp did not confirm the tag change. Check the audience before trying again.', 502);
       return {success: true, data: {list_id: input.list_id, email_address: email, tag_name: input.tag_name, status, automations_suppressed: true}};
