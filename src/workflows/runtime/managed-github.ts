@@ -1,4 +1,9 @@
-/** Managed issue operations. Fixed endpoints, bounded responses, no SDK retries. */
+/**
+ * Managed issue operations. Fixed endpoints, bounded responses, no SDK retries.
+ * Only these actions are qualified for the managed connection; pull requests,
+ * code changes, custom API/GraphQL calls and triggers are refused. Manual
+ * connections keep the wider community piece behaviour.
+ */
 export const MANAGED_GITHUB_ACTIONS = ['github_create_issue', 'getIssueInformation', 'update_issue', 'find_issue', 'createCommentOnAIssue'] as const;
 export function managedGitHubInput(input: unknown): Record<string, unknown> | null {
   return (input as {auth?: {jarvis_managed?: unknown}} | null)?.auth?.jarvis_managed === 'github' ? input as Record<string, unknown> : null;
@@ -62,6 +67,7 @@ function project(value: Record<string, unknown>, keys: string[]): Record<string,
 }
 function issue(value: unknown, repository: string, number?: number): Record<string, unknown> {
   const raw = object(value);
+  // The issues API also returns pull requests; managed reads and writes stay on issues.
   if ('pull_request' in raw) throw new GitHubRequestError('This number is a pull request. Choose an issue.', 400);
   if (!issueNumber(raw.number) || typeof raw.id !== 'number' || !Number.isSafeInteger(raw.id) || raw.id <= 0 || (number !== undefined && raw.number !== number)
     || typeof raw.title !== 'string' || !['open','closed'].includes(String(raw.state))

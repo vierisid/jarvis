@@ -4,6 +4,14 @@ import type { JarvisConfig } from "../config/types";
 
 export const GITHUB_PIECE = "@activepieces/piece-github";
 export const GITHUB_CONNECTION = "jarvis:github";
+/**
+ * Written by the hosting worker as connections/github.json (mode 0600) and
+ * replaced atomically on reconnect; disconnect leaves a non-connected
+ * tombstone. The token comes from a GitHub OAuth App with the repo scope,
+ * which includes private code: the managed action allowlist limits what
+ * Jarvis dispatches, not what the token can do. Expiring tokens are rejected
+ * on hosting, so there is no refresh path.
+ */
 export interface GitHubConnection {
   version: 1; provider: "github"; status: "connected"; generation: string;
   access_token: string; account: {id: string; label: string};
