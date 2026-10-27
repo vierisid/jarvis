@@ -63,6 +63,11 @@ const pieces = new PieceCatalog([
     find_subscriber: { name: "find_subscriber", displayName: "", description: "", inputSchema: { fields: [
       { name: "email", label: "", type: "string", required: false },
     ] } },
+    // Not in the pinned 0.5.10 piece; here to pin what an empty host list means if a later version adds one.
+    custom_api_call: { name: "custom_api_call", displayName: "", description: "", inputSchema: { fields: [
+      { name: "url", label: "", type: "json", required: false },
+      { name: "method", label: "", type: "string", required: false },
+    ] } },
   } },
   { name: SLACK, displayName: "Slack", description: "", auth: { type: "OAUTH2" }, actions: {
     send_message: { name: "send_message", displayName: "", description: "" },
@@ -355,11 +360,15 @@ describe("managed Mailchimp is scoped to Mailchimp steps", () => {
   const find = (input: Record<string, unknown> = { auth: ref }, nextAction?: any): any => ({
     name: "find", type: "PIECE", settings: { pieceName: MAILCHIMP, actionName: "find_subscriber", input }, ...(nextAction ? { nextAction } : {}),
   });
+  const mailchimpCall = (url: string): any => ({ name: "call", type: "PIECE",
+    settings: { pieceName: MAILCHIMP, actionName: "custom_api_call", input: { auth: ref, method: "GET", url: { url } } } });
   const refused: Array<[string, any]> = [
     ["a CODE step input", empty(code({ conn: ref }))],
     ["an HTTP step header", empty(http({ Authorization: "Bearer " + ref }))],
     ["a Gmail step auth", empty(gmail({ auth: ref }))],
     ["a Mailchimp step next to a CODE step that reads the token", empty(find(undefined, code({ token: "{{connections['jarvis:mailchimp'].access_token}}" })))],
+    // No fixed host: even the account's own data center is only reachable as a path.
+    ["a Mailchimp custom API call to a full URL", empty(mailchimpCall("https://us1.api.mailchimp.com/3.0/ping"))],
   ];
   for (const [label, trigger] of refused) {
     test(`${label} is not ready and the route refuses it`, async () => {
@@ -374,11 +383,12 @@ describe("managed Mailchimp is scoped to Mailchimp steps", () => {
     expect(issue!.message).toBe("Managed connection jarvis:mailchimp can only be used by Mailchimp steps");
     expect(issue!.allowedPieces).toEqual([MAILCHIMP]);
   });
-  test("a Mailchimp step auth is ready and resolves", async () => {
-    const trigger = empty(find());
-    expect(bindingIssues(trigger)).toEqual([]);
-    const response = await fetchFor(runOf(trigger), "jarvis:mailchimp");
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: MAILCHIMP, value: { access_token: MAILCHIMP_TOKEN, server_prefix: "us1" } });
+  test("a Mailchimp step auth, or a custom API call by path, passes the connection scope and resolves", async () => {
+    for (const trigger of [empty(find()), empty(mailchimpCall("/ping"))]) {
+      expect(bindingIssues(trigger)).toEqual([]);
+      const response = await fetchFor(runOf(trigger), "jarvis:mailchimp");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: MAILCHIMP, value: { access_token: MAILCHIMP_TOKEN, server_prefix: "us1" } });
+    }
   });
 });

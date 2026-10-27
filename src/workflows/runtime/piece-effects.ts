@@ -616,10 +616,6 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
-  catalogId: 'mailchimp', pieceName: '@activepieces/piece-mailchimp', unknownActionCategory: 'modify_settings',
-  targetProps: ['list_id','email','tag_name','campaign_id','query'],
-  categories: {read_data: ['find_subscriber','find_campaign','get_campaign_report'], write_data: ['add_subscriber_to_tag','remove_subscriber_from_tag']},
-}, {
   catalogId: 'clickup', pieceName: '@activepieces/piece-clickup', unknownActionCategory: 'modify_settings',
   targetProps: ['workspace_id', 'space_id', 'folder_id', 'list_id', 'task_id', 'task_name', 'name', 'status_id',
     'add_assignee', 'rem_assignee', 'destination_list_id', 'channel_id', 'message_id', 'comment_id',
@@ -655,6 +651,11 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
       'clickup_delete_space', 'clickup_delete_space_tag', 'clickup_delete_task_dependency', 'clickup_delete_task',
       'clickup_delete_time_entry'],
   },
+}, {
+  // Mailchimp: only the managed actions are named; any other action falls back to `modify_settings`.
+  catalogId: 'mailchimp', pieceName: '@activepieces/piece-mailchimp', unknownActionCategory: 'modify_settings',
+  targetProps: ['list_id','email','tag_name','campaign_id','query'],
+  categories: {read_data: ['find_subscriber','find_campaign','get_campaign_report'], write_data: ['add_subscriber_to_tag','remove_subscriber_from_tag']},
 }];
 
 /** Every adapter: the verified catalog pieces, the vendored core pieces, then the managed ones. */
