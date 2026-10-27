@@ -2,6 +2,7 @@ import React, { Component, useEffect, useLayoutEffect, useRef, useSyncExternalSt
 import type { ComponentType, ReactNode } from 'react';
 import { useTheme } from '../../v2/shell/useTheme.ts';
 import { ClickUpConnection } from '../../v2/integrations/ClickUpConnection';
+import { DropboxConnection } from '../../v2/integrations/DropboxConnection';
 import type { Session } from './session.ts';
 import './host.css';
 
@@ -99,7 +100,7 @@ function OnboardingViewHost({ session, legacy, children }: { session: Session; l
   switch (state.view) {
     case 'welcome': props = { model: { theme, installMode: session.installMode(), state: navigation }, onSetUp: () => action('continue'), onExit: () => action('explore'), onThemeChange: setTheme }; break;
     case 'explainer': props = { model: { theme, state: navigation }, onBack: () => action('back'), onContinue: () => action('continue') }; break;
-    case 'google': props = { ...props, additionalConnections: <div className="on-host__clickup"><ClickUpConnection optional appearance="onboarding" /></div>, model: { ...model, navigation }, onConnect: () => action('connect'), onCancel: (attemptId: string) => action('cancel', { attemptId }), onBack: () => action('back'), onSkip: () => action('skip'), onContinue: () => action('continue') }; break;
+    case 'google': props = { ...props, additionalConnections: <div className="on-host__clickup"><ClickUpConnection optional appearance="onboarding" /><DropboxConnection optional appearance="onboarding" /></div>, model: { ...model, navigation }, onConnect: () => action('connect'), onCancel: (attemptId: string) => action('cancel', { attemptId }), onBack: () => action('back'), onSkip: () => action('skip'), onContinue: () => action('continue') }; break;
     case 'interview': props = { ...props, model: { ...model, navigation }, onDraftChange: draft, onSubmit: (answer: unknown) => action('answer', answer), onRetry: (recovery: unknown) => action('retry', recovery), onSkip: () => action('skip'), onContinue: () => action('continue') }; break;
     case 'tour': case 'pebble-tour': props = { ...props, onNavigate: intent }; break;
     case 'activation': props = { ...props, onDraftChange: draft, onIntent: intent }; break;

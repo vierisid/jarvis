@@ -313,7 +313,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "9"; // v9: ClickUp task output contracts
+export const CATALOG_SCHEMA_VERSION = "10"; // v10: Dropbox action output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -890,6 +890,18 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
  * on-disk caches re-project.
  */
 export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
+  if (entry.name === '@activepieces/piece-dropbox') {
+    const listPath = entry.actions.list_dropbox_folder?.inputSchema?.fields.find(field => field.name === 'path');
+    if (listPath) listPath.placeholder = '/ for Dropbox home, /folder or a workflow variable';
+    const item = {'.tag': 'folder', id: 'id:example', name: 'Example', path_lower: '/example', path_display: '/Example'};
+    const samples: Record<string, unknown> = {
+      create_new_dropbox_folder: {metadata: item}, get_dropbox_file_metadata: item,
+      list_dropbox_folder: {entries: [item], cursor: 'example', has_more: false},
+      search_dropbox: {matches: [{metadata: {'.tag': 'metadata', metadata: item}}], has_more: false},
+    };
+    for (const [name, sample] of Object.entries(samples)) if (entry.actions[name]) entry.actions[name]!.outputSample = sample;
+  }
+
   // ClickUp 0.9.1 returns a task directly for these actions, not an HTTP envelope.
   // These stable fields let the picker wire task outputs into downstream steps.
   if (entry.name === '@activepieces/piece-clickup') {

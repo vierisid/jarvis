@@ -17,6 +17,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSampleDraftText } from "./useSampleDraftText";
 import { ClickUpConnection, useClickUpStatus } from "../../integrations/ClickUpConnection";
+import { DropboxConnection, useDropboxStatus } from "../../integrations/DropboxConnection";
 import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { WorkflowEditorEnvironment, WorkflowPortal, useWorkflowRequest } from "./WorkflowEditorEnvironment";
@@ -3734,15 +3735,19 @@ function ConnectionPicker({
   // ClickUp may also offer the hosted connection; without it (self-hosted, or
   // not connected) the picker reads exactly as for any other piece.
   const isClickUp = pieceName === "@activepieces/piece-clickup";
+  const isDropbox = pieceName === "@activepieces/piece-dropbox";
+  const managedDropbox = useDropboxStatus(isDropbox)?.connected === true;
   const managedClickUp = useClickUpStatus(isClickUp)?.connected === true;
   return (
     <div className="wf-props__connection">
       {isClickUp && <ClickUpConnection optional onPick={onPick} currentValue={currentValue} />}
+      {isDropbox && <><DropboxConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedDropbox && <p className="wf-props__hint">This account supports file-name search, folder listings, basic metadata and creating folders in Dropbox home. Use / for the home folder. Advanced search filters and metadata options are unavailable.</p>}</>}
       <label className="wf-props__field-label">
         {authDisplayName}
         <span className="wf-props__connection-type">({authType})</span>
       </label>
-      {matching.length === 0 && !managedClickUp ? (
+      {matching.length === 0 && !managedClickUp && !managedDropbox ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.
