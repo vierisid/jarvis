@@ -51,6 +51,7 @@ jobs:
       sidecar: ${{ steps.filter.outputs.sidecar }}
       daemon-cli: ${{ steps.filter.outputs.daemon-cli }}
       toast: ${{ steps.filter.outputs.toast }}
+      pieces-licenses: ${{ steps.filter.outputs.pieces-licenses }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -96,6 +97,22 @@ jobs:
             # other runner has -- see toast-windows below.
             toast:
               - 'src/comms/desktop-notify*'
+              - '.github/workflows/test.yml'
+            # What decides the hosted shared pieces tree and its license gate
+            # (#971): see pieces-licenses below.
+            pieces-licenses:
+              - 'src/workflows/pieces-library/catalog.ts'
+              - 'src/workflows/pieces-library/catalog-generated.ts'
+              - 'src/workflows/pieces-library/catalog-overrides.ts'
+              - 'src/workflows/pieces-library/license-policy.ts'
+              - 'src/workflows/pieces-library/license-scan.ts'
+              - 'src/workflows/pieces-library/shared-build.ts'
+              - 'bun.lock'
+              - 'scripts/check-piece-licenses.ts'
+              - 'scripts/build-shared-runtime.ts'
+              - 'src/util/subprocess-env.ts'
+              - 'src/workflows/activepieces/LICENSE.activepieces'
+              - '.github/actions/bun-setup/**'
               - '.github/workflows/test.yml'
 
   test:
@@ -152,6 +169,36 @@ jobs:
           src/workflows/runner/engine-runtime/core-http-piece.test.ts
       # Not retried: deterministic.
       - run: bunx tsc --noEmit
+
+  # --- License gate of the hosted shared pieces tree (#971) ---
+  # scripts/build-shared-runtime.ts refuses to build the hosted tree on any
+  # license violation, and before this job only the weekly catalog sync ran
+  # the same scan, as an advisory job: #1177 bumped piece-snowflake to a
+  # release that pulls browser-request@0.3.3 (no license field), merged
+  # green, and the next hosted build refused the tree. This installs the
+  # shared-build catalog into a fresh directory exactly as the hosted build
+  # does (--ignore-scripts, so no package code runs) and fails the PR on any
+  # denied or unreviewed package. Only on a change to what decides that
+  # tree: the install is ~900 MB from npm.
+  pieces-licenses:
+    needs: changes
+    if: needs.changes.outputs.pieces-licenses == 'true'
+    runs-on: ubuntu-latest
+    # Measured on the catalog sync (2026-10-21): 57 s to install with an empty
+    # bun cache, under a second to scan.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/bun-setup
+      # Its own bun cache, not ~/.bun/install/cache: bun-setup restores and
+      # saves that one under the bun.lock key every job shares, and ~900 MB
+      # of pieces in it would be saved there and restored by every job.
+      - name: License-check the shared pieces tree
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/license-scan-cache
+        run: bun run scripts/check-piece-licenses.ts --install "$RUNNER_TEMP/license-scan" --summary-md "$GITHUB_STEP_SUMMARY"
 
   # ─── Daemon lifecycle on macOS (launchd) ───────────────────────
   # The ubuntu `test` job runs the same files, but every launchd assertion in
