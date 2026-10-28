@@ -1677,6 +1677,53 @@ describe('#961: the core HTTP piece is governed by method', () => {
     }
   });
 
+  test('padding that pushes a rule\'s props out of the projection takes the blind category for every rule', () => {
+    // 40 keys that sort before any rule prop: the engine cuts the projection
+    // at 40 sorted keys, so the props the rule reads are gone from what it
+    // sees while the piece still receives them.
+    const padding = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`a${String(i).padStart(2, '0')}`, i]));
+    const samples: unknown[] = [undefined, false, true, null, '', 'GET', 'HEAD', 'get', 'subscribed', 'pending', 'transactional'];
+    let rules = 0;
+    for (const adapter of ALL_PIECE_ADAPTERS) {
+      for (const [action, rule] of Object.entries(adapter.categoryFromInput ?? {})) {
+        rules++;
+        const blind = resolveGovernedPieceAction(adapter.pieceName, action)!.category;
+        let narrowed = false;
+        const combos = rule.props.reduce<Record<string, unknown>[]>((acc, prop) =>
+          acc.flatMap(base => samples.map(value => value === undefined ? base : { ...base, [prop]: value })), [{}]);
+        for (const props of combos) {
+          if (resolveGovernedPieceAction(adapter.pieceName, action, props)!.category !== blind) narrowed = true;
+          // `zz` keeps the object over 40 keys even when the rule's props are left out.
+          const raw = { ...padding, ...props, zz: 'target' };
+          const engine = sanitizePieceInput(raw, adapter.pieceName);
+          const daemon = reprojectPieceInput(engine, adapter.pieceName);
+          const label = `${adapter.catalogId}/${action} ${JSON.stringify(props)}`;
+          for (const input of [raw, engine, daemon]) {
+            expect(`${label}: ${resolveGovernedPieceAction(adapter.pieceName, action, input)!.category}`).toBe(`${label}: ${blind}`);
+          }
+        }
+        // The samples reach a narrow case, so the padded assertions above are not vacuous.
+        expect(`${adapter.catalogId}/${action} narrows: ${narrowed}`).toBe(`${adapter.catalogId}/${action} narrows: true`);
+      }
+    }
+    expect(rules).toBeGreaterThan(0);
+  });
+
+  test('a field spelled like the cut marker neither hides a cut nor narrows a rule', () => {
+    const http = (extra: Record<string, unknown>) => sanitizePieceInput({ method: 'GET', url: 'https://x.test/', ...extra }, HTTP);
+    // Not cut: the field is escaped, so the rule still reads the GET.
+    expect(resolveGovernedPieceAction(HTTP, 'send_request', http({ omittedFields: 0 }))!.category).toBe('read_data');
+    // Cut: whatever the input spells, the bare marker is the count and the worst case holds.
+    const pad = Object.fromEntries(Array.from({ length: 45 }, (_, i) => [`z${String(i).padStart(2, '0')}`, i]));
+    for (const spoof of [{}, { omittedFields: 0 }, { '~omittedFields': 0 }]) {
+      const cut = http({ ...pad, ...spoof });
+      expect(cut.method).toBe('GET');
+      expect(typeof cut.omittedFields).toBe('number');
+      expect(resolveGovernedPieceAction(HTTP, 'send_request', cut)!.category).toBe('delete_data');
+      expect(tracksPieceCompletion(HTTP, 'send_request', cut)).toBe(true);
+    }
+  });
+
   test('an HTTP receipt too large for the route keeps the status and says how much body it left out', () => {
     const effectId = `wfe_${'a'.repeat(64)}`;
     const small = { status: 200, headers: { a: 'b' }, body: { ok: true } };

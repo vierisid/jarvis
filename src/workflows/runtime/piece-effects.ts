@@ -83,7 +83,7 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
     // #961: an HTTP request that is not a read is a send whose outcome the
     // server alone knows, so a retry after a lost or failed request is
     // refused rather than repeated. Without the input it is assumed a send.
-    || (piece === HTTP_PIECE && action === 'send_request' && !httpRequestIsRead(inputObject(input) ?? {}));
+    || (piece === HTTP_PIECE && action === 'send_request' && !httpRequestIsRead(ruleInput(input) ?? {}));
 }
 
 const CLICKUP_PIECE = '@activepieces/piece-clickup';
@@ -131,6 +131,25 @@ export function httpRequestIsRead(input: Record<string, unknown>): boolean {
 
 function inputObject(input: unknown): Record<string, unknown> | null {
   return input !== null && typeof input === 'object' && !Array.isArray(input) ? input as Record<string, unknown> : null;
+}
+
+/**
+ * The input a `categoryFromInput` rule may read, or null when it must take the
+ * table's worst case. A rule reads the projection, and a projection cut at 40
+ * keys (sorted) has lost fields the piece still receives: the engine passes
+ * the piece the whole resolved input and nothing rejects an unknown prop, so
+ * 40 padding keys that sort first (`a00`...) would push the rule's props out
+ * of the projection, and a rule that reads an absent prop as the narrow case
+ * (a Trello update with no `closed`) would be defeated. So a cut object -- one
+ * carrying the bare `omittedFields` count, which a real field can never spell
+ * (`escapeMarkerSpelling`), or one over 40 keys that was never projected -- is
+ * not read at all. The engine and the daemon both ask this, so the category
+ * and the completion tracking agree on either side.
+ */
+function ruleInput(input: unknown): Record<string, unknown> | null {
+  const fields = inputObject(input);
+  if (!fields) return null;
+  return Object.hasOwn(fields, OMITTED_FIELDS) || Object.keys(fields).length > MAX_KEYS ? null : fields;
 }
 
 /**
@@ -184,7 +203,8 @@ export interface GovernedPieceAdapter {
    * its input can reach, which is what a caller that cannot see the input (a
    * job contract, a stored provenance) is told. The rule may only narrow that
    * (`governed-pieces.test.ts` pins it), and it reads the projected input,
-   * whose whole original the engine's `inputDigest` binds.
+   * whose whole original the engine's `inputDigest` binds. A projection cut at
+   * 40 keys is never read: the action takes the worst case (`ruleInput`).
    */
   categoryFromInput?: Readonly<Record<string, InputCategoryRule>>;
   /**
@@ -788,7 +808,8 @@ export function resolveGovernedPieceAction(pieceName: unknown, actionName: unkno
   if (!adapter) return null;
   const mapped = ACTION_CATEGORY.get(pieceName)!.get(actionName);
   const rule = mapped !== undefined && Object.hasOwn(adapter.categoryFromInput ?? {}, actionName) ? adapter.categoryFromInput![actionName] : undefined;
-  const fields = inputObject(input);
+  // A cut projection takes the worst case (`ruleInput`), as no input does.
+  const fields = ruleInput(input);
   const category = rule && fields ? rule.category(fields) : mapped ?? adapter.unknownActionCategory;
   return { adapter, action: actionName, category, known: mapped !== undefined, byInput: rule !== undefined,
     ...(rule ? { categoryProps: rule.props } : {}) };

@@ -8,7 +8,7 @@ import {trelloStatus,readTrelloConnection} from './trello-connection';
 import {trelloOptions} from './trello-options';
 import {JarvisTrelloConnectionSource} from '../workflows/credentials/trello-source';
 import {CredentialResolver} from '../workflows/credentials/adapter';
-import {MANAGED_PIECE_ADAPTERS, resolveGovernedPieceAction} from '../workflows/runtime/piece-effects';
+import {MANAGED_PIECE_ADAPTERS, reprojectPieceInput, resolveGovernedPieceAction, sanitizePieceInput} from '../workflows/runtime/piece-effects';
 /** Every action of the installed @activepieces/piece-trello 0.8.1 bundle (0.7.1 has the same set), by the
  * `classification` upstream gives it, read statically from its `actions:` array (custom_api_call is added by the
  * framework and stays unmapped). The engine test checks the installed package against the adapter too. */
@@ -102,4 +102,15 @@ test('a Trello card update that archives the card is gated as the archive it is'
     expect(resolve({card_id:'c',closed:null}).category).toBe('delete_data');
   }
   expect(resolveGovernedPieceAction('@activepieces/piece-trello','archive_card',{card_id:'c',archived:false})!.category).toBe('delete_data');
+});
+test('padding a card update until closed drops out of the projection still gates the archive', () => {
+  const padding=Object.fromEntries(Array.from({length:40},(_,i)=>[`a${String(i).padStart(2,'0')}`,i]));
+  for(const action of ['update_card','update_card_ai']){
+    const projected=sanitizePieceInput({...padding,card_id:'c',closed:true},'@activepieces/piece-trello');
+    expect('closed' in projected).toBe(false);
+    expect(resolveGovernedPieceAction('@activepieces/piece-trello',action,projected)!.category).toBe('delete_data');
+    expect(resolveGovernedPieceAction('@activepieces/piece-trello',action,reprojectPieceInput(projected,'@activepieces/piece-trello'))!.category).toBe('delete_data');
+    // The narrow case still narrows when nothing is cut.
+    expect(resolveGovernedPieceAction('@activepieces/piece-trello',action,sanitizePieceInput({card_id:'c',closed:false}))!.category).toBe('write_data');
+  }
 });
