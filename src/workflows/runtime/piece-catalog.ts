@@ -313,7 +313,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "12"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts
+export const CATALOG_SCHEMA_VERSION = "13"; // v12: managed Mailchimp outputs; v13: Airtable record output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -890,6 +890,20 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
  * on-disk caches re-project.
  */
 export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
+  if(entry.name==='@activepieces/piece-airtable') {
+    const record={id:'recAAAAAAAAAAAAAA',createdTime:'2026-10-28T10:00:00.000Z',fields:{Name:'Example record'}};
+    for(const name of ['create_record_ai','update_record_ai','get_record','search_records']) {
+      const action=entry.actions[name];if(!action)continue;
+      action.displayName=({create_record_ai:'Create Record',update_record_ai:'Update Record',get_record:'Get Record',search_records:'Find Records'} as Record<string,string>)[name]!;
+      action.outputSample=name==='search_records'?{records:[record],count:1}:record;
+      for(const field of action.inputSchema?.fields ?? []) {
+        if(field.sourceType==='DROPDOWN'){field.type='string';field.placeholder='ID or workflow variable';delete field.options;}
+        if(field.name==='record_id')field.description='Record ID, or the id output from an earlier Create Record or Find Records step.';
+        if(field.name==='fields'){field.type='json';field.description='Existing field IDs or names and values as a JSON object. Managed connections support text, numbers, checkboxes, dates and existing select choices.';field.placeholder='{"Name":"Example record"}';}
+      }
+    }
+  }
+
   // ClickUp 0.9.1 returns a task directly for these actions, not an HTTP envelope.
   // These stable fields let the picker wire task outputs into downstream steps.
   if (entry.name === '@activepieces/piece-clickup') {
