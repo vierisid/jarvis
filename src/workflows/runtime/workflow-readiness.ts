@@ -2,6 +2,7 @@ import { MEETING_ACCOUNTS, meetingSetup } from './meeting-briefs';
 import { REFUND_REQUIRED, REFUND_ACTION, refundSetup } from './refund';
 import { IMPORT_ACCOUNTS, IMPORT_REQUIRED, IMPORT_ACTION, importSetup } from './contact-import';
 import { REPORT_ACCOUNTS, REPORT_REQUIRED, REPORT_ACTION, reportSetup } from './weekly-report';
+import { ONBOARDING_ACCOUNTS, ONBOARDING_REQUIRED, ONBOARDING_ACTION, onboardingSetup } from './customer-onboarding';
 import { SALES_ACCOUNTS, SALES_REQUIRED, SALES_ACTION, salesSetup } from './sales-followups';
 import { parseOutputSchema } from './llm-output-contract';
 import { submissionConfig } from './form-submission';
@@ -261,6 +262,20 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         }
       }
       if (REPORT_REQUIRED.every(k=>!emptyInput(input[k]))) try { reportSetup(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
+    }
+    if (!root && isPiece('jarvis-onboarding') && settings.actionName === ONBOARDING_ACTION && object(input)) {
+      for (const [field, provider] of Object.entries(ONBOARDING_ACCOUNTS)) {
+        const id = input[field];
+        if (!emptyInput(id)) {
+          if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node,`settings.input.${field}`,'CONNECTION_BINDING','Select a saved account reference');
+          else if (context.phase !== 'composition') {
+            const reason=context.connection?.(id,provider) ?? (context.connection ? null : 'Connection inventory unavailable');
+            if (reason) issue(node,`settings.input.${field}`,'CONNECTION_BINDING',reason);
+            else runtime(node,`settings.input.${field}`,'connection','Recheck pinned onboarding account before each provider call');
+          }
+        }
+      }
+      if (ONBOARDING_REQUIRED.every(k=>!emptyInput(input[k]))) try { onboardingSetup(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
     }
     if (!root && isPiece('jarvis-sales') && settings.actionName === SALES_ACTION && object(input)) {
       for (const [field, provider] of Object.entries(SALES_ACCOUNTS)) {
