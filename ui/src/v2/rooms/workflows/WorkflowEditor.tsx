@@ -1,3 +1,4 @@
+import { NotionLocation } from "../../integrations/NotionLocation";
 import { TrelloCardLocation } from "../../integrations/TrelloCardLocation";
 import { MailchimpLocation } from "../../integrations/MailchimpLocation";
 import { MailchimpConnection } from "../../integrations/MailchimpConnection";
@@ -20,6 +21,7 @@ import { MailchimpConnection } from "../../integrations/MailchimpConnection";
 import { TrelloConnection } from "../../integrations/TrelloConnection";
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSampleDraftText } from "./useSampleDraftText";
+import { NotionConnection, useNotionStatus } from "../../integrations/NotionConnection";
 import { ClickUpConnection, useClickUpStatus } from "../../integrations/ClickUpConnection";
 import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
 import { GitHubConnection, useGitHubStatus } from "../../integrations/GitHubConnection";
@@ -3390,8 +3392,9 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const mailchimpLocation = managedMailchimp && ['find_subscriber','add_subscriber_to_tag','remove_subscriber_from_tag','get_campaign_report'].includes(subName ?? '');
   const managedGitHub = piece?.name === "@activepieces/piece-github" && ["{{connections.jarvis:github}}", "{{connections['jarvis:github']}}"].includes(String(step.settings?.input?.auth));
   const githubRepository = managedGitHub && ['github_create_issue','getIssueInformation','update_issue','find_issue','createCommentOnAIssue'].includes(subName ?? '');
+  const notionLocation = piece?.name === "@activepieces/piece-notion" && ["{{connections.jarvis:notion}}", "{{connections['jarvis:notion']}}"].includes(String(step.settings?.input?.auth)) && ['createPage','append_to_page','notion_get_block_children'].includes(subName ?? '');
   const baseSchema = selectedSubAction?.inputSchema ?? null;
-  const selectedSchema = managedTrello && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["labels","member_id"].includes(f.name))} : managedMailchimp && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['fields','include_fields','exclude_fields', ...(mailchimpLocation ? ['list_id','campaign_id'] : [])].includes(f.name))}
+  const selectedSchema = notionLocation && baseSchema ? {...baseSchema,fields:baseSchema.fields.filter(f=>!['pageId','block_id'].includes(f.name))} : managedTrello && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["labels","member_id"].includes(f.name))} : managedMailchimp && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['fields','include_fields','exclude_fields', ...(mailchimpLocation ? ['list_id','campaign_id'] : [])].includes(f.name))}
     : managedGitHub && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['labels','assignees','milestone','state_reason', ...(githubRepository ? ['repository'] : [])].includes(f.name))} : baseSchema;
   const rawSchema = clickUpLocation && selectedSchema ? {...selectedSchema,fields:selectedSchema.fields.filter(f=>!['workspace_id','space_id','list_id'].includes(f.name))} : trelloLocation && selectedSchema ? {...selectedSchema, fields:selectedSchema.fields.filter(f=>!['board_id','list_id'].includes(f.name))} : selectedSchema;
   // ClickUp 0.9.1 declares `custom_fields` on Create Task as a required
@@ -3508,6 +3511,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         />
       ) : null}
 
+      {notionLocation && <NotionLocation input={step.settings?.input ?? {}} onChange={onSetInput} field={subName === "notion_get_block_children" ? "block_id" : "pageId"} />}
       {githubRepository && <GitHubRepository input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {trelloLocation && <TrelloCardLocation input={step.settings?.input ?? {}} onChange={onSetInput} boardOnly={subName === "list_lists"} />}
       {mailchimpLocation && <MailchimpLocation key={subName} input={step.settings?.input ?? {}} onChange={onSetInput} campaign={subName === "get_campaign_report"} />}
@@ -3748,8 +3752,10 @@ function ConnectionPicker({
   // the dropdown reflect the user's choice on re-open.
   const m = /^\{\{connections\.([^}]+)\}\}$/.exec(currentValue.trim());
   const currentExternalId = m ? m[1]! : "";
-  // ClickUp and GitHub may also offer the hosted connection; without it
-  // (self-hosted, or not connected) the picker reads exactly as for any other piece.
+  // Managed providers may also offer a hosted connection; saved manual
+  // connections remain available.
+  const isNotion = pieceName === "@activepieces/piece-notion";
+  const managedNotion = useNotionStatus(isNotion)?.connected === true;
   const isClickUp = pieceName === "@activepieces/piece-clickup";
   const managedClickUp = useClickUpStatus(isClickUp)?.connected === true;
   const isGitHub = pieceName === "@activepieces/piece-github";
@@ -3757,14 +3763,16 @@ function ConnectionPicker({
   return (
     <div className="wf-props__connection">
       {isGitHub && <GitHubConnection optional onPick={onPick} currentValue={currentValue} />}
+      {isNotion && <><NotionConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedNotion && <p className="wf-props__hint">Plain text only. Database changes, deletion, comments and triggers are not enabled.</p>}</>}
       {pieceName === "@activepieces/piece-mailchimp" && <MailchimpConnection onPick={onPick} currentValue={currentValue} />}
       {isClickUp && <ClickUpConnection optional onPick={onPick} currentValue={currentValue} />}
       {pieceName === "@activepieces/piece-trello" && <TrelloConnection onPick={onPick} currentValue={currentValue} />}
-      <label className="wf-props__field-label">
-        {authDisplayName}
-        <span className="wf-props__connection-type">({authType})</span>
-      </label>
-      {matching.length === 0 && !managedClickUp && !managedGitHub && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" ? (
+      {!(isNotion && managedNotion && matching.length === 0) && <label className="wf-props__field-label">
+        {isNotion && managedNotion ? "Or use a saved Notion account" : authDisplayName}
+        {!(isNotion && managedNotion) && <span className="wf-props__connection-type">({authType})</span>}
+      </label>}
+      {matching.length === 0 && !managedNotion && !managedClickUp && !managedGitHub && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.
