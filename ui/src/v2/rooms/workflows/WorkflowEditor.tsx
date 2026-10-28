@@ -16,6 +16,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSampleDraftText } from "./useSampleDraftText";
+import { IntercomConnection, useIntercomStatus } from "../../integrations/IntercomConnection";
 import { ClickUpConnection, useClickUpStatus } from "../../integrations/ClickUpConnection";
 import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
 import { confirmDialog } from "../../ui/ConfirmDialog";
@@ -3733,16 +3734,20 @@ function ConnectionPicker({
   const currentExternalId = m ? m[1]! : "";
   // ClickUp may also offer the hosted connection; without it (self-hosted, or
   // not connected) the picker reads exactly as for any other piece.
+  const isIntercom = pieceName === "@activepieces/piece-intercom";
+  const managedIntercom = useIntercomStatus(isIntercom)?.connected === true;
   const isClickUp = pieceName === "@activepieces/piece-clickup";
   const managedClickUp = useClickUpStatus(isClickUp)?.connected === true;
   return (
     <div className="wf-props__connection">
+      {isIntercom && <><IntercomConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedIntercom && <p className="wf-props__hint">Supports contact lookup, conversation reading, internal notes and contact tags. Use record IDs or workflow variables. Customer replies and triggers are not supported yet.</p>}</>}
       {isClickUp && <ClickUpConnection optional onPick={onPick} currentValue={currentValue} />}
       <label className="wf-props__field-label">
         {authDisplayName}
         <span className="wf-props__connection-type">({authType})</span>
       </label>
-      {matching.length === 0 && !managedClickUp ? (
+      {matching.length === 0 && !managedClickUp && !managedIntercom ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.

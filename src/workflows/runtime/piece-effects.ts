@@ -74,7 +74,8 @@ const GMAIL_TRACKED_SENDS: ReadonlySet<unknown> = new Set(['send_email', 'gmail_
  * (#953 made these reachable at the default level).
  */
 export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
-  return (piece === CLICKUP_PIECE && clickUpTracked(action))
+  return (piece === '@activepieces/piece-intercom' && ['add_note_to_contact', 'add_note_to_conversation_by_id', 'add-or-remove-tag-on-contact'].includes(String(action)))
+    || (piece === CLICKUP_PIECE && clickUpTracked(action))
     || (piece === '@activepieces/piece-gmail' && GMAIL_TRACKED_SENDS.has(action))
     || (piece === '@activepieces/piece-slack' && (action === 'send_channel_message' || action === 'slack_post_message'))
     // #961: an HTTP request that is not a read is a send whose outcome the
@@ -615,6 +616,10 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
+  catalogId: 'intercom', pieceName: '@activepieces/piece-intercom', unknownActionCategory: 'modify_settings',
+  targetProps: ['lookupBy', 'value', 'conversationId', 'plainText', 'contactId', 'body', 'adminId', 'tagId', 'untag'],
+  categories: {read_data: ['get_contact', 'get_conversation_by_id', 'list-all-tags'], write_data: ['add-or-remove-tag-on-contact'], send_message: ['add_note_to_contact', 'add_note_to_conversation_by_id']},
+}, {
   catalogId: 'clickup', pieceName: '@activepieces/piece-clickup', unknownActionCategory: 'modify_settings',
   targetProps: ['workspace_id', 'space_id', 'folder_id', 'list_id', 'task_id', 'task_name', 'name', 'status_id',
     'add_assignee', 'rem_assignee', 'destination_list_id', 'channel_id', 'message_id', 'comment_id',
