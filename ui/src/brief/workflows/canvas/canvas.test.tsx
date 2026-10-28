@@ -410,3 +410,22 @@ test('setup notice opens mapped fields and partial saves remain editable without
   expect(fixture.requests.filter(r => r.method !== 'GET').map(r => r.method)).toEqual(['PATCH']);
   expect(runs).toBe(0); expect(publishes).toBe(0);
 });
+
+
+test('request-ID-only setup is editable and does not ask for email',async()=>{
+ const {WorkflowCanvasRoom}=await import('./WorkflowCanvasRoom');
+ const saved=fixture.snapshot().version;
+ saved.trigger={name:'trigger',displayName:'Receive request',type:'PIECE_TRIGGER',settings:{pieceName:'webhook',input:{request_id_field:''}}};
+ await fixture.request(`/api/workflows/meeting/versions/${fixture.versionId}`,{method:'PATCH',body:JSON.stringify({...saved,uiMeta:fixture.snapshot().uiMeta})});
+ const shell={mode:'preview',route:{room:'workflow',selection:{flowId:'meeting'}},navigate(){}} as unknown as BriefShellPort;
+ await React.act(async()=>root.render(<div className="brief-root"><WorkflowCanvasRoom shell={shell} binding={{source:'fixture',scopeId:'request-setup',flowId:'meeting',versionId:fixture.versionId,capabilities:caps,request:fixture.request}}/></div>));
+ expect(host.querySelector('.brief-canvas-setup')?.textContent).toContain('Request ID field');
+ expect(host.querySelector('.brief-canvas-setup')?.textContent).not.toContain('Email field');
+ const button=[...host.querySelectorAll('button')].find(b=>b.querySelector('.brief-button__label')?.textContent==='Receive request')!;
+ await React.act(async()=>button.click());
+ const field = [...host.querySelectorAll('label')].find(e=>e.textContent?.startsWith('Request ID field'))!.querySelector('[contenteditable]')!;
+ await React.act(async()=>{ field.textContent='request.id'; field.dispatchEvent(new Event('input',{bubbles:true})); });
+ const save=[...host.querySelectorAll('button')].find(b=>b.querySelector('.brief-button__label')?.textContent==='Save changes')!;
+ await React.act(async()=>save.click());
+ expect(fixture.snapshot().version.trigger.settings?.input).toEqual({request_id_field:'request.id'});
+});

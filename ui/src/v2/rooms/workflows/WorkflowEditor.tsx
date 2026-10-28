@@ -3369,10 +3369,14 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         : piece?.name === '@jarvispieces/piece-jarvis-import' && subName === 'resumable_contact_import'
           ? [['hubspotConnection','@activepieces/piece-hubspot','HubSpot'], ...(formInput.sourceAuth === 'oauth2' ? [['sourceConnection','@activepieces/piece-http-oauth2','Source API'] as const] : [])] as const : [];
 
+  const requestWebhook = detectedTriggerKind === 'webhook' && 'request_id_field' in formInput;
   const formWebhook = detectedTriggerKind === 'webhook' && ('submission_id_field' in formInput || 'submission_email_field' in formInput);
   const schema = detectedTriggerKind === 'schedule' && step.settings?.pieceName === 'schedule' ? {fields:[
     {name:'cron_expression',label:'Schedule (cron)',type:'string' as const,required:true,description:'Choose the execution time before running. For weekdays, use minute hour * * 1-5.'},
     {name:'timezone',label:'Timezone',type:'string' as const,required:true},
+  ]} : requestWebhook ? { fields: [
+    { name: 'request_id_field', label: 'Request ID field', type: 'string' as const, required: true, description: 'Stable request ID path. Repeated requests are accepted once; no email is required.' },
+    ...Object.keys(formInput).filter(key => !['request_id_field', 'secret'].includes(key)).map(key => ({ name: key, label: key, type: 'string' as const, required: false })),
   ]} : formWebhook ? { fields: [
     { name: 'submission_id_field', label: 'Submission ID field', type: 'string' as const, required: true, description: 'The field path containing the unique submission ID, for example form.id.' },
     { name: 'submission_email_field', label: 'Email field', type: 'string' as const, required: true, description: 'The field path containing the email address, for example form.email.' },
@@ -3498,7 +3502,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
                 secret={step.settings?.input?.["secret"]}
                 onSetSecret={(value) => (value ? onSetInput("secret", value) : onRemoveInputKey("secret"))}
               />
-              {formWebhook && schema ? <SchemaInputs schema={schema}
+              {(formWebhook || requestWebhook) && schema ? <SchemaInputs schema={schema}
                 input={(step.settings?.input ?? {}) as Record<string, unknown>} onSetInput={onSetInput} /> : null}
             </>
           ) : schema ? (

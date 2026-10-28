@@ -30,6 +30,8 @@ export function workflowSafeguards(trigger: unknown) {
     }
     if (s.pieceName === 'webhook' && 'submission_id_field' in input && 'submission_email_field' in input)
       add('submission-admission','Persistent atomic admission by submission ID per workflow; whitespace/email normalization and validation.', 'Requires configured payload paths. Distinct submission IDs are distinct submissions. Failed accepted submissions require review.');
+    if (s.pieceName === 'webhook' && 'request_id_field' in input)
+      add('request-admission','Persistent atomic admission by request ID per workflow across concurrent deliveries, manual runs, versions, restarts and history cleanup. No email requirement.', 'Requires a configured stable request ID path. Different IDs are different requests. Failed or uncertain requests require review, not automatic redelivery.');
     if (s.pieceName === '@activepieces/piece-gmail' && s.triggerName === 'new_attachment')
       add('attachment-admission','Persistent atomic admission by actual attachment-byte hash per workflow, across deliveries, manual runs, restart and history cleanup.', 'Requires owned stored file and message ID. Different PDF bytes are different attachments, even if invoice number matches.');
     if (tracksPieceCompletion(s.pieceName,s.actionName))

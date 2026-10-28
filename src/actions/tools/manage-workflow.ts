@@ -184,14 +184,14 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
     name: "manage_workflow",
     description: [
       "Create, run, and manage the user's Jarvis workflows (automations).",
-      "compose { name, description } builds the full requested graph; never substitute diagnostics.",
-      "Save supported graphs as Setup required. Use continue_setup for answers; connect accounts securely in Connected workspace.",
-      "Use real schemas; never invent IDs or credentials. Notifications use dashboard. If needed, verify browser tools, computer, permissions and login for an authorized alternative.",
-      "Composed flows are DISABLED; publish enables them and requires user confirmation. Draft-only limits do not ban future actions.",
-      "create requires empty: true for an explicitly blank canvas; otherwise compose.",
-      "CODE steps: publish/enable/run are REFUSED without user permission for that flow; no tool action grants it. Never bypass.",
-      "validate_fixtures {flow}: synthetic refund component tests only; no network or activation. Report scope and limits.",
-      "Read all get pages to nextCursor:null. Structural checks are not fixture tests.",
+      "compose { name, description }: full graph, never diagnostics.",
+      "Save missing setup in supported drafts. continue_setup retains answers; accounts use Connected workspace.",
+      "Inspect real schemas; invent nothing. Notifications: dashboard. Verify browser access/permissions/login before fallback.",
+      "Composed flows are DISABLED; publishing enables and requires confirmation. Draft-only limits are not future bans.",
+      "create needs empty: true and a blank-canvas request.",
+      "CODE is REFUSED without per-flow user permission; no tool action grants it.",
+      "validate_fixtures: refund or ClickUp routing components with fixture_input; mock auth, no network. Disclose limits.",
+      "Page get/fixtures to nextCursor:null; structure is not testing.",
       ...(hasLibrary ? [deps.installLibraryPiece ? "Install required Library connectors by default under software-install Authority; false opts out. Account connection is separate." : "Relay suggestedInstalls from the Library page; retry after installation, never unchanged."] : []),
     ].join("\n"),
     category: "automation",
@@ -246,17 +246,18 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       },
       flow: {
         type: "string",
-        description: "Workflow name/ID; optional list_runs filter.",
+        description: "Flow ID/name; list_runs filter.",
         required: false,
       },
-      view: { type: "string", enum: ["definition", "validation"], description: "get: definition or validation pages; concatenate content through nextCursor:null, then parse JSON.", required: false },
+      view: { type: "string", enum: ["definition", "validation"], description: "get: concatenate definition/validation pages, then parse JSON.", required: false },
       version_id: { type: "string", description: "get: pin version while paging.", required: false },
-      cursor: { type: "string", description: "get: exact nextCursor; omit to start. Edits invalidate it.", required: false },
+      cursor: { type: "string", description: "get/validate_fixtures: nextCursor; edits invalidate it.", required: false },
       name: {
         type: "string",
         description: "Display name for compose/create.",
         required: false,
       },
+      fixture_input: { type: "object", description: "ClickUp mocks: {setup:{step:{emptyInput:value}},cases:[{name,payload,expectedSteps,expectedTaskCount,expectedPriority?,expectedDescription?,deliveries?,loseReply?,expectedRejection?}]}. Invalid-ID rejection only; auth mocked; saved graph unchanged.", required: false },
       payload: {
         type: "object",
         description: "run: trigger input.",
@@ -281,7 +282,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       },
       install_missing: {
         type: "boolean",
-        description: "Install needed Library connectors (default true); software-install Authority applies. No account connection or execution.",
+        description: "compose installs by default under Authority; continue_setup defaults off. No accounts/execution.",
         required: false,
       },
       contract: {
@@ -292,7 +293,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       },
       limit: {
         type: "number",
-        description: "Cap for list_runs (default 25).",
+        description: "list_runs limit (25).",
         required: false,
       },
       empty: {
@@ -330,10 +331,13 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       const action = String(params.action ?? "");
       switch (action) {
         case "compose":
-        case "continue_setup":
         case "create":
           return (action !== "create" || typeof params.description === "string" && !!params.description.trim()) && params.install_missing !== false && deps.installLibraryPiece && hasLibrary
             ? { actionCategory: "install_software", confirm: "above_level", intent: `Install required Library connectors while composing workflow: ${forCard(params.name)}` }
+            : null;
+        case "continue_setup":
+          return params.install_missing === true && deps.installLibraryPiece && hasLibrary
+            ? { actionCategory: "install_software", confirm: "above_level", intent: "Install required Library connectors while continuing unsaved workflow setup" }
             : null;
         case "enable":
         case "publish": {
@@ -382,8 +386,12 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           if (!draft) throw new Error("No saved draft to validate");
           const validation=compileWorkflow(draft.trigger,{pieces:deps.pieceRegistry,phase:'composition'});
           if (!validation.ready) throw new Error('Saved draft has structural errors; fix them before fixture validation');
+          if (params.fixture_input !== undefined) {
+            const {validateSupportRoutingFixtures}=await import('../../workflows/runtime/support-routing-fixtures');
+            return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,...await validateSupportRoutingFixtures(draft.trigger,params.fixture_input)},params),'local synthetic routing fixture results');
+          }
           const {validateRefundFixtures}=await import('../../workflows/runtime/refund-fixtures');
-          return framedForModel({flowId:flow.id,versionId:draft.id,...await validateRefundFixtures(draft.trigger)},'local synthetic fixture results');
+          return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,...await validateRefundFixtures(draft.trigger)},params),'local synthetic fixture results');
         }
         case "list":
           return framedForModel(actList(project), "the workflow list and its stored metadata");
@@ -718,6 +726,27 @@ function framedForModel(payload: unknown, source: string): string {
   // for a different block and the payload's author never learns the nonce drawn
   // after it.
   return wrapUntrusted(capped, source);
+}
+
+/** Preserve complete fixture evidence instead of slicing JSON mid-assertion. */
+function fixtureReportPage(report: Record<string, unknown>, params: Record<string, unknown>): Record<string, unknown> {
+  const text = JSON.stringify(report);
+  if (text.length <= FRAMED_PAYLOAD_MAX_CHARS && params.cursor === undefined) return report;
+  const hash = createHash('sha256').update(text).update(JSON.stringify(params.fixture_input ?? null)).digest('hex');
+  let offset = 0;
+  if (params.cursor !== undefined) {
+    const match = typeof params.cursor === 'string' && /^([a-f0-9]{64}):(\d+)$/.exec(params.cursor);
+    if (!match || match[1] !== hash) throw new Error('Fixture report changed or cursor is invalid; restart without a cursor');
+    offset = Number(match[2]);
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset >= text.length) throw new Error('Fixture cursor offset is out of range');
+  }
+  let end = Math.min(offset + 2000, text.length);
+  for (;;) {
+    const page = {flowId:report.flowId,versionId:report.versionId,view:'fixture_results',passed:report.passed,externalActions:0,
+      totalChars:text.length,offset,nextCursor:end < text.length ? hash + ':' + end : null,content:text.slice(offset,end)};
+    if (JSON.stringify(page).length <= FRAMED_PAYLOAD_MAX_CHARS) return page;
+    if (--end <= offset) throw new Error('Fixture result envelope exceeds its size budget');
+  }
 }
 
 /* ------------------------------------------------------------ resolution */
@@ -1274,7 +1303,7 @@ async function actCompose(
       ...(result.configurationQuestions?.length ? { setup: {
         status: result.capabilityGaps?.length ? "blocked" : result.suggestedInstalls?.length ? "needs_installation" : "needs_input",
         nextQuestion: result.configurationQuestions[0], questions: result.configurationQuestions,
-        continueWith: { action: "continue_setup", composition_id: result.compositionRecordId, ...(installMissing ? {} : { install_missing: false }) },
+        continueWith: { action: "continue_setup", composition_id: result.compositionRecordId, install_missing: installMissing && !!result.suggestedInstalls?.length },
         accountSetup: ACCOUNT_SETUP_GUIDANCE,
       } } : {}),
       rawResponse: capRawResponse(result.rawResponse),
@@ -1317,7 +1346,7 @@ function setupReadiness(flowId: string, versionId: string, compositionId: string
     editor: { flowId, versionId }, nextQuestion: readiness.issues.some(i => i.code === "CONNECTION_BINDING")
       ? ACCOUNT_SETUP_GUIDANCE : readiness.issues[0]?.message,
     accountSetup: ACCOUNT_SETUP_GUIDANCE,
-    continueWith: { action: "continue_setup", composition_id: compositionId },
+    continueWith: { action: "continue_setup", composition_id: compositionId, install_missing: false },
   } } : {}) };
   if (JSON.stringify(full).length <= 1800) return full;
   return { ...validationSummary(flowId, versionId),
@@ -1325,7 +1354,7 @@ function setupReadiness(flowId: string, versionId: string, compositionId: string
     definition: { action: "get", flow: flowId, version_id: versionId, view: "definition" },
     ...(!readiness.ready ? { setup: { status: structureValid ? "needs_configuration" : "needs_repair", label: structureValid ? "Setup required" : "Validation failed",
       issueCount: readiness.issues.length, editor: { flowId, versionId }, accountSetup: ACCOUNT_SETUP_GUIDANCE,
-      continueWith: { action: "continue_setup", composition_id: compositionId },
+      continueWith: { action: "continue_setup", composition_id: compositionId, install_missing: false },
     } } : {}) };
 }
 
@@ -1350,7 +1379,9 @@ async function actContinueSetup(compositionId: string, rawAnswers: unknown, inst
   const prior = current.specification.context?.workflowSetup as Record<string, unknown> | undefined;
   const answers = { ...(prior?.answers as Record<string, unknown> ?? {}), ...(rawAnswers as Record<string, unknown> ?? {}) };
   if (JSON.stringify(answers).length > 16000) throw new Error("Setup answers exceed 16,000 characters; provide a small redacted sample");
-  const install = installOption === undefined ? prior?.installMissing !== false : installOption !== false;
+  // Match the gate exactly: a readiness/setup continuation cannot gain
+  // installation authority from a previous compose call or a truthy value.
+  const install = installOption === true;
   return actCompose(current.specification.name, current.specification.description, deps, project, current.specification.contract, install,
     { ...current.specification.context, workflowSetup: { rootCompositionId: rootId, previousCompositionId: current.id, answers, installMissing: install } });
 }

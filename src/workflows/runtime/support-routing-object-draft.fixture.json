@@ -1,0 +1,133 @@
+{
+  "name": "trigger",
+  "type": "PIECE_TRIGGER",
+  "displayName": "Receive and deduplicate support requests",
+  "settings": {
+    "pieceName": "webhook",
+    "input": {
+      "request_id_field": ""
+    }
+  },
+  "nextAction": {
+    "name": "router_1",
+    "type": "ROUTER",
+    "displayName": "Choose exactly one support route",
+    "settings": {
+      "executionType": "EXECUTE_FIRST_MATCH",
+      "branches": [
+        {
+          "branchName": "Needs review",
+          "branchType": "CONDITION",
+          "conditions": [
+            [
+              {
+                "firstValue": "{{typeof (trigger.urgent ?? null) !== \"boolean\"}}",
+                "operator": "BOOLEAN_IS_TRUE"
+              }
+            ]
+          ]
+        },
+        {
+          "branchName": "Urgent",
+          "branchType": "CONDITION",
+          "conditions": [
+            [
+              {
+                "firstValue": "{{(trigger.urgent ?? null) === true}}",
+                "operator": "BOOLEAN_IS_TRUE"
+              }
+            ]
+          ]
+        },
+        {
+          "branchName": "Billing",
+          "branchType": "CONDITION",
+          "conditions": [
+            [
+              {
+                "firstValue": "{{trigger.category ?? null}}",
+                "operator": "TEXT_EXACTLY_MATCHES",
+                "secondValue": "billing"
+              }
+            ]
+          ]
+        },
+        {
+          "branchName": "General support",
+          "branchType": "FALLBACK"
+        }
+      ]
+    },
+    "children": [
+      {
+        "name": "step_1",
+        "type": "PIECE",
+        "displayName": "Create Needs review task",
+        "settings": {
+          "pieceName": "@activepieces/piece-clickup",
+          "actionName": "create_task",
+          "input": {
+            "workspace_id": null,
+            "space_id": null,
+            "list_id": null,
+            "name": "Needs review: support request",
+            "description": "Urgency is missing or is not a boolean. Original request: {{trigger}}",
+            "custom_fields": null
+          }
+        }
+      },
+      {
+        "name": "step_2",
+        "type": "PIECE",
+        "displayName": "Create high-priority support task",
+        "settings": {
+          "pieceName": "@activepieces/piece-clickup",
+          "actionName": "create_task",
+          "input": {
+            "workspace_id": null,
+            "space_id": null,
+            "list_id": null,
+            "name": "Urgent support request",
+            "priority_id": "2",
+            "description": "Original request: {{trigger}}",
+            "custom_fields": null
+          }
+        }
+      },
+      {
+        "name": "step_3",
+        "type": "PIECE",
+        "displayName": "Create billing task",
+        "settings": {
+          "pieceName": "@activepieces/piece-clickup",
+          "actionName": "create_task",
+          "input": {
+            "workspace_id": null,
+            "space_id": null,
+            "list_id": null,
+            "name": "Billing support request",
+            "description": "Original request: {{trigger}}",
+            "custom_fields": null
+          }
+        }
+      },
+      {
+        "name": "step_4",
+        "type": "PIECE",
+        "displayName": "Route to general support task",
+        "settings": {
+          "pieceName": "@activepieces/piece-clickup",
+          "actionName": "create_task",
+          "input": {
+            "workspace_id": null,
+            "space_id": null,
+            "list_id": null,
+            "name": "General support request",
+            "description": "Original request: {{trigger}}",
+            "custom_fields": null
+          }
+        }
+      }
+    ]
+  }
+}

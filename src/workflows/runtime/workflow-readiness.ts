@@ -366,6 +366,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
             if (emptyInput(input[key!])) needsSetup(node, `settings.input.${key}`, `${label}: choose the field path in your form payload`);
           }
         }
+        if (object(input) && 'request_id_field' in input && emptyInput(input.request_id_field)) needsSetup(node, 'settings.input.request_id_field', 'Request ID field: choose the stable ID path in your webhook payload');
         try { submissionConfig(input, true); }
         catch (error) { issue(node, 'settings.input.submission', 'INPUT', (error as Error).message); }
       } else {
