@@ -21,7 +21,7 @@ test('read-through OAUTH2 credentials bind reconnect and disconnect; status reve
   expect(JSON.stringify(githubStatus(config()))).not.toContain('PRIVATE');
   expect(await source.resolve('jarvis:github')).toMatchObject({type:'OAUTH2',value:{access_token:'PRIVATE',jarvis_managed:'github'}});
   // Which steps may name it is the credential route's check (managed-connection-scope.test.ts).
-  expect(source.pieceNames).toEqual(['@activepieces/piece-github']); expect(source.pieceDetails['@activepieces/piece-github']!.apiHosts).toEqual([]);
+  expect(source.pieceNames).toEqual(['@activepieces/piece-github']); expect(source.pieceDetails['@activepieces/piece-github']!.apiHosts).toEqual(['api.github.com']);
   const before=source.identity('jarvis:github');write(doc());expect(source.identity('jarvis:github')).not.toBe(before);
   write({version:1,provider:'github',status:'disconnected',generation:randomUUID()});expect(await source.resolve('jarvis:github')).toBeNull();
 });

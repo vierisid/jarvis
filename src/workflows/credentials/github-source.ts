@@ -7,11 +7,12 @@ export class JarvisGitHubConnectionSource implements JarvisConnectionSource {
   /** Only GitHub steps may name jarvis:github, and only as their auth (readiness and the credential route). */
   readonly pieceNames: readonly string[] = [GITHUB_PIECE];
   /**
-   * No API host: a custom API call may only name a path under the piece's base
-   * URL, and the managed action list (managed-github.ts) refuses it at dispatch anyway.
+   * The piece's custom API call base URL is https://api.github.com in the pinned
+   * 0.7.3 bundle. The managed action list (managed-github.ts) still refuses a
+   * custom API call at readiness and dispatch; this only bounds the token's host.
    */
   readonly pieceDetails: Readonly<Record<string, ManagedPieceDetails>> = {
-    [GITHUB_PIECE]: { displayName: "GitHub", apiHosts: [] },
+    [GITHUB_PIECE]: { displayName: "GitHub", apiHosts: ["api.github.com"] },
   };
   constructor(private readonly dataDir: string) {}
   canResolve(externalId: string) { return externalId === GITHUB_CONNECTION; }

