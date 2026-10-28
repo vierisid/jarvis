@@ -169,6 +169,7 @@ jobs:
           src/workflows/runner/engine-runtime/outer-worker-delay.test.ts
           src/workflows/runner/engine-runtime/core-http-piece.test.ts
           src/workflows/pieces-library/clickup-engine.test.ts
+          src/workflows/pieces-library/intercom-engine.test.ts
       # Not retried: deterministic.
       - run: bunx tsc --noEmit
 

@@ -313,7 +313,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "9"; // v9: ClickUp task output contracts
+export const CATALOG_SCHEMA_VERSION = "10"; // v10: Intercom contact, conversation, note and tag output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -859,13 +859,16 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
   // The piece's auth.type comes from upstream's PropertyType -- map it
   // to our AppConnectionType vocabulary so the editor + connection
   // listing share one name space.
-  if (m.auth && typeof m.auth === "object" && typeof m.auth.type === "string") {
-    const projected = projectAuthType(m.auth.type);
+  // Intercom 0.9.2 offers OAuth and a private token. The hosted connection uses OAuth.
+  const auth = name === "@activepieces/piece-intercom" && Array.isArray(m.auth)
+    ? m.auth.find(a => a?.type === "OAUTH2") : m.auth;
+  if (auth && typeof auth === "object" && typeof auth.type === "string") {
+    const projected = projectAuthType(auth.type);
     if (projected) {
       out.auth = {
         type: projected,
-        ...(typeof m.auth.displayName === "string" ? { displayName: m.auth.displayName } : {}),
-        ...(typeof m.auth.description === "string" ? { description: m.auth.description } : {}),
+        ...(typeof auth.displayName === "string" ? { displayName: auth.displayName } : {}),
+        ...(typeof auth.description === "string" ? { description: auth.description } : {}),
       };
     }
   }
@@ -890,6 +893,26 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
  * on-disk caches re-project.
  */
 export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
+  if (entry.name === '@activepieces/piece-intercom') {
+    // Legacy tag dropdowns enumerate contacts. Accept IDs/expressions without loading customer data into the editor.
+    for (const field of entry.actions['add-or-remove-tag-on-contact']?.inputSchema?.fields ?? []) {
+      if (field.sourceType === 'DROPDOWN') {field.type='string';field.placeholder='Intercom ID or workflow variable';delete field.options;}
+    }
+    const contact={type:'contact',id:'contact_1',role:'user',email:'contact@example.test',name:'Example contact',external_id:'customer_1'};
+    const note={type:'note',id:'note_1',body:'Internal note',created_at:1793188800,contact:{type:'contact',id:'contact_1'},author:{type:'admin',id:'admin_1',name:'Owner'}};
+    const tag={type:'tag',id:'tag_1',name:'Follow up'};
+    const conversation={type:'conversation',id:'conversation_1',title:'Support request',state:'open',source:{body:'How can I update my account?'},contacts:{contacts:[{type:'contact',id:'contact_1'}]}};
+    const part={id:'part_1',part_type:'note',body:'Internal note',created_at:1793188800,author:{type:'admin',id:'admin_1',name:'Owner'}};
+    const samples:Record<string,unknown>={
+      get_contact:contact,
+      get_conversation_by_id:{...conversation,parts:[{id:part.id,part_type:part.part_type,body:part.body,created_at:part.created_at,author_type:'admin',author_id:'admin_1',author_name:'Owner'}]},
+      add_note_to_contact:note,
+      add_note_to_conversation_by_id:{...conversation,conversation_parts:{type:'conversation_part.list',conversation_parts:[part],total_count:1}},
+      'list-all-tags':{type:'list',data:[tag]},'add-or-remove-tag-on-contact':tag,
+    };
+    for(const [name,sample] of Object.entries(samples))if(entry.actions[name])entry.actions[name]!.outputSample=sample;
+  }
+
   // ClickUp 0.9.1 returns a task directly for these actions, not an HTTP envelope.
   // These stable fields let the picker wire task outputs into downstream steps.
   if (entry.name === '@activepieces/piece-clickup') {
