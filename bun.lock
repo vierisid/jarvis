@@ -5,6 +5,7 @@
     "": {
       "name": "jarvis",
       "dependencies": {
+        "@activepieces/piece-json": "0.1.14",
         "@codemirror/autocomplete": "^6.20.1",
         "@codemirror/commands": "^6.10.3",
         "@codemirror/lang-css": "^6.3.1",
@@ -53,6 +54,8 @@
     },
   },
   "packages": {
+    "@activepieces/piece-json": ["@activepieces/piece-json@0.1.14", "", {}, "sha512-C8Dfri9v7+VfZm5rQzauR3aZIg05vIrj1IJXoS+fB6gBSCjf8UudVPgk4JfXaLstuHkNuMdD2kHKHcP7Et5IKA=="],
+
     "@codemirror/autocomplete": ["@codemirror/autocomplete@6.20.1", "", { "dependencies": { "@codemirror/language": "^6.0.0", "@codemirror/state": "^6.0.0", "@codemirror/view": "^6.17.0", "@lezer/common": "^1.0.0" } }, "sha512-1cvg3Vz1dSSToCNlJfRA2WSI4ht3K+WplO0UMOgmUYPivCyy2oueZY6Lx7M9wThm7SDUBViRmuT+OG/i8+ON9A=="],
 
     "@codemirror/commands": ["@codemirror/commands@6.10.3", "", { "dependencies": { "@codemirror/language": "^6.0.0", "@codemirror/state": "^6.6.0", "@codemirror/view": "^6.27.0", "@lezer/common": "^1.1.0" } }, "sha512-JFRiqhKu+bvSkDLI+rUhJwSxQxYb759W5GBezE8Uc8mHLqC9aV/9aTC7yJSqCtB3F00pylrLCwnyS91Ap5ej4Q=="],

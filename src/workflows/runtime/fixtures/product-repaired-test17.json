@@ -1,0 +1,93 @@
+{
+  "name": "trigger",
+  "type": "PIECE_TRIGGER",
+  "displayName": "Receive product record",
+  "settings": {
+    "pieceName": "webhook",
+    "input": {}
+  },
+  "nextAction": {
+    "name": "step_1",
+    "type": "PIECE",
+    "displayName": "Configure field paths and optional domain rules",
+    "settings": {
+      "pieceName": "@activepieces/piece-json",
+      "actionName": "convert_text_to_json",
+      "input": {
+        "text": ""
+      }
+    },
+    "nextAction": {
+      "name": "step_2",
+      "type": "PIECE",
+      "displayName": "Validate product numbers and boolean without coercion",
+      "settings": {
+        "pieceName": "@activepieces/piece-json",
+        "actionName": "run_jsonata_query",
+        "input": {
+          "json": {
+            "record": "{{trigger}}",
+            "mapping": "{{step_1}}"
+          },
+          "query": "($r := record; $m := mapping; $assert($type($m) = 'object', 'Setup required: mapping must be an object with pricePath, stockPath and activePath'); $assert($type($m.pricePath) = 'string' and $length($m.pricePath) > 0 and $type($m.stockPath) = 'string' and $length($m.stockPath) > 0 and $type($m.activePath) = 'string' and $length($m.activePath) > 0, 'Setup required: configure pricePath, stockPath and activePath as dot-separated object-key paths'); $get := function($path){$reduce($split($path, '.'), function($v,$k){$type($v) = 'object' ? $lookup($v,$k) : $nothing}, $r)}; $state := function($v){$not($exists($v)) ? 'missing' : $v = null ? 'null' : ($type($v) = 'string' and $v = '') ? 'empty' : 'present'}; $p := $get($m.pricePath); $s := $get($m.stockPath); $a := $get($m.activePath); $object := $type($r) = 'object'; $assert($not($exists($m.priceMinimum)) or $type($m.priceMinimum) = 'number', 'Setup: priceMinimum must be a JSON number when supplied'); $assert($not($exists($m.stockMinimum)) or $type($m.stockMinimum) = 'number', 'Setup: stockMinimum must be a JSON number when supplied'); $assert($not($exists($m.requireIntegerStock)) or $type($m.requireIntegerStock) = 'boolean', 'Setup: requireIntegerStock must be a JSON boolean when supplied'); $pv := $type($p) = 'number' ? ($p >= -1.7976931348623157e308 and $p <= 1.7976931348623157e308 and ($exists($m.priceMinimum) ? $p >= $m.priceMinimum : true)) : false; $sv := $type($s) = 'number' ? ($s >= -1.7976931348623157e308 and $s <= 1.7976931348623157e308 and ($exists($m.stockMinimum) ? $s >= $m.stockMinimum : true) and ($m.requireIntegerStock = true ? ($abs($s) <= 9007199254740991 and $floor($s) = $s) : true)) : false; $av := $type($a) = 'boolean'; {'valid': $object and $pv and $sv and $av, 'states': {'price': $state($p), 'stock': $state($s), 'active': $state($a)}, 'issues': $append($append($append($object ? [] : ['record:not_object'], $pv ? [] : ['price:' & $state($p) & ':requires_finite_JSON_number_and_configured_domain_rules_no_coercion']), $sv ? [] : ['stock:' & $state($s) & ':requires_finite_JSON_number_and_configured_domain_rules_no_coercion']), $av ? [] : ['active:' & $state($a) & ':requires_JSON_boolean']), 'product': {'price': $p, 'stock': $s, 'active': $a}, 'source': $r})"
+        }
+      },
+      "nextAction": {
+        "name": "router_1",
+        "type": "ROUTER",
+        "displayName": "Write only strictly valid product records",
+        "settings": {
+          "executionType": "EXECUTE_FIRST_MATCH",
+          "branches": [
+            {
+              "branchName": "Valid product",
+              "branchType": "CONDITION",
+              "conditions": [
+                [
+                  {
+                    "firstValue": "{{step_2.valid}}",
+                    "operator": "BOOLEAN_IS_TRUE"
+                  }
+                ]
+              ]
+            },
+            {
+              "branchName": "Reject invalid product without Sheets write",
+              "branchType": "FALLBACK"
+            }
+          ]
+        },
+        "children": [
+          {
+            "name": "step_3",
+            "type": "PIECE",
+            "displayName": "Append validated product with RAW typed values",
+            "settings": {
+              "pieceName": "@activepieces/piece-google-sheets",
+              "actionName": "sheets_append_values",
+              "input": {
+                "spreadsheet_id": "",
+                "worksheet_title": "",
+                "range": "",
+                "values": null,
+                "value_input_option": "RAW"
+              }
+            }
+          },
+          {
+            "name": "step_4",
+            "type": "PIECE",
+            "displayName": "Return rejection details locally; no external action",
+            "settings": {
+              "pieceName": "@jarvispieces/piece-jarvis-subflow",
+              "actionName": "return_result",
+              "input": {
+                "result": "{{step_2}}"
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
