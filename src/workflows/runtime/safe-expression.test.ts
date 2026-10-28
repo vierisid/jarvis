@@ -92,3 +92,10 @@ describe('expression failure messages', () => {
     expect(error!.message.match(/Workflow expressions are data only/g)).toHaveLength(1);
   });
 });
+
+// No coercion of arrays/objects when validating webhook scalar types.
+test('typeof safely inspects invalid urgency and does not call accessors',()=>{
+  for(const value of [true,false,'false',0,1,null,undefined,{},[]])
+    expect(evaluate('typeof (trigger.urgent ?? null) !== "boolean"',{trigger:{urgent:value}})).toBe(typeof value !== 'boolean');
+  expect(()=>evaluate('typeof trigger.urgent',{trigger:Object.defineProperty({},'urgent',{get(){throw Error('accessed');}})})).toThrow('accessor');
+});

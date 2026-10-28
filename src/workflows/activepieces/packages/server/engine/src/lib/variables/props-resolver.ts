@@ -4,6 +4,7 @@ import { initCodeSandbox } from '../core/code/code-sandbox'
 import { FlowExecutorContext } from '../handler/context/flow-execution-context'
 import { createConnectionResolver } from '../piece-context/connection-resolver'
 import { utils } from '../utils'
+import { workflowInterpolationText } from '../../../../../../../runtime/safe-expression'
 
 const VARIABLE_PATTERN = /\{\{(.*?)\}\}/g
 const CONNECTIONS = 'connections'
@@ -128,7 +129,7 @@ async function resolveInputAsync(params: ResolveInputInternalParams): Promise<un
             variableName,
             contextVersion: params.contextVersion,
         })
-        return isString(result) ? result : JSON.stringify(result)
+        return workflowInterpolationText(result)
     })
 }
 

@@ -1707,3 +1707,19 @@ describe('#961: the core HTTP piece is governed by method', () => {
     expect(JSON.parse(receiptBody(HTTP, effectId, { ...cookie, body: 'x'.repeat(PIECE_RECEIPT_MAX_BYTES) })).result.headers).toEqual({ 'content-type': 'x' });
   });
 });
+
+
+test('ClickUp create task obeys Authority and preserves completed or uncertain dispatch receipts',async()=>{
+ for(const action of ['create_task','clickup_create_task']){
+  const f=fixture('@activepieces/piece-clickup',action);
+  const input={workspace_id:'fixture-workspace',space_id:'fixture-space',list_id:'fixture-list',name:'Support request',priority_id:2};
+  const first=await f.authorize(input) as {effectId:string};
+  await expect(f.authorize(input)).rejects.toThrow(/uncertain|replay is blocked/);
+  f.backends.pieceReceipt!(f.context,first.effectId,{id:'fixture-task'});
+  expect(await f.authorize(input)).toMatchObject({dispatch:'completed',result:{id:'fixture-task'}});
+  await expect(f.authorize({...input,list_id:'different-list'})).rejects.toThrow(/changed/);
+  const denied=fixture('@activepieces/piece-clickup',action);
+  denied.authority.addOverride({action:'write_data',allowed:false});
+  await expect(denied.authorize(input)).rejects.toThrow(/Authority denied/);
+ }
+});

@@ -59,7 +59,7 @@ test('ordinary compose installs the missing connector before guiding the first s
   expect(f.turns()).toBe(3);
   expect(f.prompts[1]).toContain('sheets_append_values');
   expect(result.setup).toMatchObject({ status: 'needs_input', nextQuestion: question,
-    continueWith: { action: 'continue_setup', composition_id: result.compositionRecordId } });
+    continueWith: { action: 'continue_setup', composition_id: result.compositionRecordId, install_missing: false } });
   expect(result.suggestedInstalls).toBeUndefined();
 });
 
@@ -82,6 +82,10 @@ test('setup continuation preserves the original request and answers, then saves 
   expect(f.prompts.at(-1)).toContain('fixture-1');
   const repeated = await call(f.tool, { action: 'continue_setup', composition_id: initial.compositionRecordId });
   expect(repeated.flow.id).toBe(saved.flow.id);
+  expect(f.tool.authorityGate?.(saved.setup.continueWith)).toBeNull();
+  expect(f.tool.authorityGate?.({action:'continue_setup',composition_id:initial.compositionRecordId,answers:{draft_repair:'fixture auth omitted'}})).toBeNull();
+  expect(saved.setup.continueWith.install_missing).toBe(false);
+  expect(f.installed).toEqual(['google-sheets']);
   expect(await call(f.tool, { action: 'list_runs', flow: saved.flow.id })).toEqual([]);
   expect((await call(f.tool, { action: 'list' })).flows).toHaveLength(1);
   expect(getWorkflowComposition(initial.compositionRecordId)?.specification.description).toBe(description);
@@ -93,6 +97,21 @@ test('explicit no-install stays disabled and is retained across setup continuati
   const first = await call(f.tool, { action: 'compose', name: 'Submission processor', description: 'No installs', install_missing: false });
   await call(f.tool, { action: 'continue_setup', composition_id: first.compositionRecordId, answers: { idField: 'id' } });
   expect(f.installed).toEqual([]);
+});
+
+test('continuation cannot install by default or inherit install authority from prior composition', async () => {
+  const f = setup();
+  const first = await call(f.tool,{action:'compose',name:'Submission processor',description:'Save a disabled draft',install_missing:false});
+  for(const option of [undefined,false,'true',1]) {
+    const params={action:'continue_setup',composition_id:first.compositionRecordId,...(option===undefined?{}:{install_missing:option})};
+    expect(f.tool.authorityGate?.(params)).toBeNull();
+    await call(f.tool,params);
+    expect(f.installed).toEqual([]);
+  }
+  const permitted={action:'continue_setup',composition_id:first.compositionRecordId,install_missing:true};
+  expect(f.tool.authorityGate?.(permitted)).toMatchObject({actionCategory:'install_software',confirm:'above_level'});
+  await call(f.tool,permitted);
+  expect(f.installed).toEqual(['google-sheets']);
 });
 
 test('failed installation is attempted once and reported as the concrete blocker', async () => {

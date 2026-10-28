@@ -1545,6 +1545,7 @@ export function collectValidationGaps(steps: FlatStep[], catalog: PieceCatalogEn
     const add = (fieldName: string, fieldLabel: string) => gaps.push({ stepName: step.name, stepDisplayName: step.displayName ?? step.name, fieldName, fieldLabel });
     const empty = (value: unknown) => value == null || (typeof value === 'string' && !value.trim());
     if (isTrigger && step.settings?.pieceName === 'webhook') {
+      if ('request_id_field' in input && empty(input.request_id_field)) add('request_id_field', 'Request ID field');
       if ('submission_id_field' in input || 'submission_email_field' in input) {
         if (empty(input.submission_id_field)) add('submission_id_field', 'Submission ID field');
         if (empty(input.submission_email_field)) add('submission_email_field', 'Email field');
