@@ -20,6 +20,7 @@ test("status is secret-free; only qualified actions and auth position can use th
  for(const actionName of ["custom_api_call","send_message","new_conversation","reply_to_conversation_by_id"])
   expect(managedConnectionMisuse(source,source.pieceNames[0]!,"settings.input.auth",{actionName})).not.toBeNull();
  expect(managedConnectionMisuse(source,source.pieceNames[0]!,"settings.input.auth",{actionName:"get_contact"})).toBeNull();
+ expect(managedConnectionMisuse(source,source.pieceNames[0]!,"settings.input.auth",{actionName:"get_contact",triggerName:"new_conversation"})).not.toBeNull();
  expect(managedConnectionMisuse(source,"@activepieces/piece-http","settings.input.auth",{actionName:"get_contact"})).not.toBeNull();
  expect(managedConnectionMisuse(source,source.pieceNames[0]!,"settings.input.body",{actionName:"get_contact"})).not.toBeNull();
 });

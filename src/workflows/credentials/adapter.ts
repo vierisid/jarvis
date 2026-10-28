@@ -134,7 +134,7 @@ export function managedConnectionMisuse(source: JarvisConnectionSource, pieceNam
   }
   if (path !== 'settings.input.auth') return `Managed connection jarvis:${source.id} can only be a step's auth`;
   const allowed = source.pieceDetails?.[pieceName]?.actions;
-  if (allowed && (!record(settings) || typeof settings.actionName !== 'string' || !allowed.includes(settings.actionName))) return `This ${source.pieceDetails?.[pieceName]?.displayName ?? pieceName} connection does not support this action or trigger yet`;
+  if (allowed && (!record(settings) || settings.triggerName !== undefined || typeof settings.actionName !== 'string' || !allowed.includes(settings.actionName))) return `This ${source.pieceDetails?.[pieceName]?.displayName ?? pieceName} connection does not support this action or trigger yet`;
   if (record(settings) && settings.actionName === 'custom_api_call') {
     const details = source.pieceDetails?.[pieceName];
     const hosts = details?.apiHosts ?? [];
