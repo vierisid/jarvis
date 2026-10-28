@@ -659,8 +659,9 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
   // connection is narrower still: `managed-trello.ts` runs only five of these.
   // Only `custom_api_call` and an action added upstream fall back to `modify_settings`.
   catalogId: 'trello', pieceName: '@activepieces/piece-trello', unknownActionCategory: 'modify_settings',
-  targetProps: ['board_id','list_id','card_id','cardId','source_card_id','checklist_id','checkitem_id',
-    'comment_id','attachment_id','label_id','member_id','custom_field_id','org_id','name','description','position'],
+  targetProps: ['board_id','list_id','destination_list_id','card_id','cardId','source_card_id','checklist_id',
+    'checkitem_id','comment_id','action_id','attachment_id','label_id','member_id','custom_field_id','org_id','name',
+    'description','position','closed','url'],
   categories: {
     read_data: ['get_board','get_card','get_card_ai','get_card_attachment','get_card_attachments','get_custom_field',
       'get_list','get_member','get_my_member','list_board_custom_fields','list_board_labels','list_board_memberships',
@@ -677,13 +678,31 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
       'create_board_custom_field','create_board_label','create_card','create_card_ai','create_custom_field_option',
       'create_list','move_all_cards_in_list','move_card','move_list_to_board','remove_label_from_card',
       'remove_member_from_card','rename_list','set_card_custom_field_value','set_checklist_item_state','update_board',
-      'update_card','update_card_ai','update_checklist','update_checklist_item','update_label','vote_on_card'],
+      'update_checklist','update_checklist_item','update_label','vote_on_card'],
     // Every delete, and the archives upstream labels DESTRUCTIVE (a bulk list archive among them).
     delete_data: ['archive_all_cards_in_list','archive_board','archive_card','archive_list','delete_board',
       'delete_card','delete_card_ai','delete_card_attachment','delete_checklist','delete_checklist_item',
-      'delete_comment','delete_custom_field','delete_label','remove_card_vote'],
+      'delete_comment','delete_custom_field','delete_label','remove_card_vote',
+      // An update's `closed` checkbox archives the card, as archive_card does,
+      // so blind it is the archive; its input narrows it (`categoryFromInput`).
+      'update_card','update_card_ai'],
+  },
+  categoryFromInput: {
+    update_card: { props: ['closed'], category: trelloUpdateCardCategory },
+    update_card_ai: { props: ['closed'], category: trelloUpdateCardCategory },
   },
 }];
+
+/**
+ * A Trello card update archives the card when its `closed` checkbox is on.
+ * Left out or off (off restores an archived card) it is an ordinary write;
+ * any other value, including one the projection could not read as a plain
+ * false, is gated as the archive.
+ */
+function trelloUpdateCardCategory(input: Record<string, unknown>): ActionCategory {
+  const closed = input.closed;
+  return closed === undefined || closed === null || closed === false ? 'write_data' : 'delete_data';
+}
 
 /** Every adapter: the verified catalog pieces, the vendored core pieces, then the managed ones. */
 export const ALL_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [...GOVERNED_PIECE_ADAPTERS, ...CORE_PIECE_ADAPTERS, ...MANAGED_PIECE_ADAPTERS];

@@ -9,26 +9,36 @@ import {trelloOptions} from './trello-options';
 import {JarvisTrelloConnectionSource} from '../workflows/credentials/trello-source';
 import {CredentialResolver} from '../workflows/credentials/adapter';
 import {MANAGED_PIECE_ADAPTERS, resolveGovernedPieceAction} from '../workflows/runtime/piece-effects';
-/** Every action of the installed @activepieces/piece-trello 0.8.1 bundle (0.7.1 has the same set), read
- * statically from its `actions:` array (custom_api_call is added by the framework and stays unmapped).
- * The engine test checks the installed package against the adapter too. */
-const TRELLO_081_ACTIONS = [
-  'add_card_attachment', 'add_card_attachment_from_url', 'add_checklist_item', 'add_checklist_to_card',
-  'add_comment_to_card', 'add_label_to_card', 'add_member_to_card', 'add_reaction_to_comment',
-  'archive_all_cards_in_list', 'archive_board', 'archive_card', 'archive_list', 'copy_card', 'create_board',
-  'create_board_custom_field', 'create_board_label', 'create_card', 'create_card_ai', 'create_custom_field_option',
-  'create_list', 'delete_board', 'delete_card', 'delete_card_ai', 'delete_card_attachment', 'delete_checklist',
-  'delete_checklist_item', 'delete_comment', 'delete_custom_field', 'delete_label', 'get_board', 'get_card',
-  'get_card_ai', 'get_card_attachment', 'get_card_attachments', 'get_custom_field', 'get_list', 'get_member',
-  'get_my_member', 'list_board_custom_fields', 'list_board_labels', 'list_board_memberships', 'list_board_members',
-  'list_boards', 'list_card_activity', 'list_card_attachments_ai', 'list_card_checklists', 'list_card_comments',
-  'list_card_custom_field_values', 'list_card_members', 'list_cards_in_board', 'list_cards_in_list',
-  'list_card_votes', 'list_custom_field_options', 'list_lists', 'list_organization_boards', 'move_all_cards_in_list',
-  'move_card', 'move_list_to_board', 'remove_card_vote', 'remove_label_from_card', 'remove_member_from_card',
-  'rename_list', 'search_cards', 'search_members', 'set_card_custom_field_value', 'set_checklist_item_state',
-  'update_board', 'update_card', 'update_card_ai', 'update_checklist', 'update_checklist_item', 'update_comment',
-  'update_label', 'vote_on_card',
-];
+/** Every action of the installed @activepieces/piece-trello 0.8.1 bundle (0.7.1 has the same set), by the
+ * `classification` upstream gives it, read statically from its `actions:` array (custom_api_call is added by the
+ * framework and stays unmapped). The engine test checks the installed package against the adapter too. */
+const TRELLO_081_CLASSIFICATION: Record<'READ'|'SEARCH'|'WRITE'|'DESTRUCTIVE', readonly string[]> = {
+  READ: [
+    'get_board', 'get_card', 'get_card_ai', 'get_card_attachment', 'get_custom_field', 'get_list', 'get_member',
+    'get_my_member', 'list_card_custom_field_values',
+  ],
+  SEARCH: [
+    'get_card_attachments', 'list_board_custom_fields', 'list_board_labels', 'list_board_members',
+    'list_board_memberships', 'list_boards', 'list_card_activity', 'list_card_attachments_ai', 'list_card_checklists',
+    'list_card_comments', 'list_card_members', 'list_card_votes', 'list_cards_in_board', 'list_cards_in_list',
+    'list_custom_field_options', 'list_lists', 'list_organization_boards', 'search_cards', 'search_members',
+  ],
+  WRITE: [
+    'add_card_attachment', 'add_card_attachment_from_url', 'add_checklist_item', 'add_checklist_to_card',
+    'add_comment_to_card', 'add_label_to_card', 'add_member_to_card', 'add_reaction_to_comment', 'copy_card',
+    'create_board', 'create_board_custom_field', 'create_board_label', 'create_card', 'create_card_ai',
+    'create_custom_field_option', 'create_list', 'move_all_cards_in_list', 'move_card', 'move_list_to_board',
+    'remove_label_from_card', 'remove_member_from_card', 'rename_list', 'set_card_custom_field_value',
+    'set_checklist_item_state', 'update_board', 'update_card', 'update_card_ai', 'update_checklist',
+    'update_checklist_item', 'update_comment', 'update_label', 'vote_on_card',
+  ],
+  DESTRUCTIVE: [
+    'archive_all_cards_in_list', 'archive_board', 'archive_card', 'archive_list', 'delete_board', 'delete_card',
+    'delete_card_ai', 'delete_card_attachment', 'delete_checklist', 'delete_checklist_item', 'delete_comment',
+    'delete_custom_field', 'delete_label', 'remove_card_vote',
+  ],
+};
+const TRELLO_081_ACTIONS = Object.values(TRELLO_081_CLASSIFICATION).flat();
 let dir:string;
 const doc=()=>({version:1,provider:'trello',status:'connected',generation:randomUUID(),access_token:'PRIVATE',settings:{api_key:'PUBLIC'},account:{id:'a'.repeat(24),label:'Owner'},workspaces:[],connected_at:new Date().toISOString()});
 const write=(value:unknown)=>writeFileSync(join(dir,'connections/trello.json'),JSON.stringify(value));
@@ -65,8 +75,31 @@ test('the Trello adapter names every action of the installed bundle, and nothing
   const mapped=Object.values(adapter.categories).flat() as string[];
   expect(TRELLO_081_ACTIONS).toHaveLength(74);
   expect([...mapped].sort()).toEqual([...TRELLO_081_ACTIONS].sort());
-  for(const name of TRELLO_081_ACTIONS.filter(name=>/^(delete|archive)_/.test(name)))expect(resolveGovernedPieceAction('@activepieces/piece-trello',name)!.category).toBe('delete_data');
-  for(const name of ['list_boards','get_card','search_cards'])expect(resolveGovernedPieceAction('@activepieces/piece-trello',name)!.category).toBe('read_data');
-  expect(resolveGovernedPieceAction('@activepieces/piece-trello','add_comment_to_card')!.category).toBe('send_message');
   expect(resolveGovernedPieceAction('@activepieces/piece-trello','custom_api_call')).toMatchObject({category:'modify_settings',known:false});
+});
+test('every Trello action is gated by what upstream says it does', () => {
+  // A comment notifies the card's members, so it sends; an update can archive
+  // the card, so without its input it is gated as the archive (next test).
+  const sends=['add_comment_to_card','update_comment'],archives=['update_card','update_card_ai'];
+  const expected=(upstream:string,name:string)=>upstream==='READ' || upstream==='SEARCH' ? 'read_data' : upstream==='DESTRUCTIVE' || archives.includes(name)
+    ? 'delete_data' : sends.includes(name) ? 'send_message' : 'write_data';
+  const actual:Record<string,string>={},wanted:Record<string,string>={};
+  for(const [upstream,names] of Object.entries(TRELLO_081_CLASSIFICATION))for(const name of names){
+    actual[name]=resolveGovernedPieceAction('@activepieces/piece-trello',name)!.category;wanted[name]=expected(upstream,name);
+  }
+  expect(actual).toEqual(wanted);
+  expect(Object.values(wanted).filter(c=>c==='send_message')).toHaveLength(sends.length);
+});
+test('a Trello card update that archives the card is gated as the archive it is', () => {
+  for(const action of ['update_card','update_card_ai']){
+    const resolve=(input?:Record<string,unknown>)=>resolveGovernedPieceAction('@activepieces/piece-trello',action,input)!;
+    expect(resolve()).toMatchObject({category:'delete_data',known:true,byInput:true,categoryProps:['closed']});
+    expect(resolve({card_id:'c',closed:true}).category).toBe('delete_data');
+    expect(resolve({card_id:'c',closed:'true'}).category).toBe('delete_data');
+    expect(resolve({card_id:'c',closed:'{{trigger.archive}}'}).category).toBe('delete_data');
+    expect(resolve({card_id:'c'}).category).toBe('write_data');
+    expect(resolve({card_id:'c',closed:false}).category).toBe('write_data');
+    expect(resolve({card_id:'c',closed:null}).category).toBe('write_data');
+  }
+  expect(resolveGovernedPieceAction('@activepieces/piece-trello','archive_card',{card_id:'c',archived:false})!.category).toBe('delete_data');
 });
