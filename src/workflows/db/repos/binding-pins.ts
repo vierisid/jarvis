@@ -2,6 +2,7 @@ import { MEETING_ACCOUNTS } from '../../runtime/meeting-briefs';
 import { REFUND_PIECE, REFUND_ACTION } from '../../runtime/refund';
 import { IMPORT_ACCOUNTS, IMPORT_PIECE, IMPORT_ACTION } from '../../runtime/contact-import';
 import { REPORT_ACCOUNTS, REPORT_PIECE, REPORT_ACTION } from '../../runtime/weekly-report';
+import { ONBOARDING_ACCOUNTS, ONBOARDING_PIECE, ONBOARDING_ACTION } from '../../runtime/customer-onboarding';
 import { SALES_ACCOUNTS, SALES_PIECE, SALES_ACTION } from '../../runtime/sales-followups';
 /**
  * Q-05: the bindings a workflow was enabled against, and the checks that stop
@@ -127,6 +128,12 @@ export function nodeConnectionReferences(node: FlowTriggerNode): Array<[external
   }
   if (node.settings?.pieceName === REPORT_PIECE && node.settings?.actionName === REPORT_ACTION) {
     for (const field of Object.keys(REPORT_ACCOUNTS)) {
+      const id = node.settings?.input?.[field];
+      if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
+    }
+  }
+  if (node.settings?.pieceName === ONBOARDING_PIECE && node.settings?.actionName === ONBOARDING_ACTION) {
+    for (const field of Object.keys(ONBOARDING_ACCOUNTS)) {
       const id = node.settings?.input?.[field];
       if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
     }

@@ -45,3 +45,12 @@ test('contact import keeps source OAuth and destination HubSpot account referenc
   await React.act(async()=>{selects[1]!.value='saved-1';selects[1]!.dispatchEvent(new Event('change',{bubbles:true}));});expect(writes).toEqual([['sourceConnection','saved-1']]);
  }finally{await React.act(async()=>root.unmount());host.remove();}
 });
+
+test('customer onboarding uses separate saved ClickUp and Drive account references',async()=>{
+ const host=document.createElement('div');document.body.append(host);const root=createRoot(host),writes:Array<[string,string]>=[];
+ const connections=['clickup','google-drive','gmail'].map((name,i)=>({id:String(i),externalId:'saved-'+i,pieceName:'@activepieces/piece-'+name,displayName:'Account '+i,status:'ACTIVE'})) as any;
+ await React.act(async()=>root.render(<Pickers fields={[["clickupConnection","@activepieces/piece-clickup","ClickUp"],["driveConnection","@activepieces/piece-google-drive","Google Drive"]]} connections={connections} input={{clickupConnection:'saved-0'}} onSetInput={(k,v)=>writes.push([k,v])}/>));
+ try{const selects=host.querySelectorAll('select');expect(selects.length).toBe(2);expect(selects[0]!.value).toBe('saved-0');expect(host.textContent).not.toContain('Account 2');
+  await React.act(async()=>{selects[1]!.value='saved-1';selects[1]!.dispatchEvent(new Event('change',{bubbles:true}));});expect(writes).toEqual([['driveConnection','saved-1']]);
+ }finally{await React.act(async()=>root.unmount());host.remove();}
+});

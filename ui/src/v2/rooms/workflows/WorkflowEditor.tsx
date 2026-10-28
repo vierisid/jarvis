@@ -3360,6 +3360,8 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const formInput = step.settings?.input ?? {};
   const meetingAccounts = piece?.name === '@jarvispieces/piece-jarvis-context' && subName === 'meeting_briefs'
     ? [['calendarConnection','@activepieces/piece-google-calendar','Google Calendar'],['gmailConnection','@activepieces/piece-gmail','Gmail'],['hubspotConnection','@activepieces/piece-hubspot','HubSpot']] as const
+    : piece?.name === '@jarvispieces/piece-jarvis-onboarding' && subName === 'create_resources'
+      ? [['clickupConnection','@activepieces/piece-clickup','ClickUp'],['driveConnection','@activepieces/piece-google-drive','Google Drive']] as const
     : piece?.name === '@jarvispieces/piece-jarvis-sales' && subName === 'draft_followups'
       ? [['hubspotConnection','@activepieces/piece-hubspot','HubSpot'],['gmailConnection','@activepieces/piece-gmail','Gmail']] as const
       : piece?.name === '@jarvispieces/piece-jarvis-report' && subName === 'weekly_operating_report'
