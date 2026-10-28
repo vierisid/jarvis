@@ -39,9 +39,10 @@ import ts from 'typescript';
 import { PATCHED_VENDOR_SOURCES } from '../runner/engine-runtime/build';
 
 /** Relative to this directory. All must also be cache-invalidation inputs.
- * managed-trello is the engine's fetch-only send adapter; checking it here
- * prevents a future dependency from silently escaping the bundle hash. */
-const BUNDLED_DAEMON_SOURCES = ['piece-effects.ts', 'piece-effect-guard.ts', 'decision-document.ts', 'managed-trello.ts'];
+ * managed-github and managed-trello are the engine's fetch-only send adapters;
+ * checking them here prevents a future dependency from silently escaping the
+ * bundle hash. */
+const BUNDLED_DAEMON_SOURCES = ['piece-effects.ts', 'piece-effect-guard.ts', 'decision-document.ts', 'managed-github.ts', 'managed-trello.ts'];
 
 /**
  * A value import of ANOTHER registered source is fine, and is the one shape

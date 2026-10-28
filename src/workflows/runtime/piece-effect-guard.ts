@@ -23,6 +23,7 @@
 
 import { HTTP_PIECE, isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { documentInput, applyDocument, documentFields, type DecisionDocument } from './decision-document';
+import {managedGitHubInput, managedGitHubIssue, runManagedGitHubAction} from './managed-github';
 import {managedTrelloInput, managedTrelloIssue, runManagedTrelloAction} from './managed-trello';
 
 export const PIECE_AUTHORIZE_PATH = '/v1/jarvis/pieces/authorize';
@@ -98,6 +99,11 @@ export interface AuthorizePieceDispatchParams {
 }
 
 export async function authorizePieceDispatch(params: AuthorizePieceDispatchParams): Promise<PieceAuthorizeResponse> {
+  const github = params.piece === '@activepieces/piece-github' && managedGitHubInput(params.input);
+  if (github) {
+    const issue = managedGitHubIssue(params.action, github);
+    if (issue) throw new Error(issue);
+  }
   const trello = params.piece === '@activepieces/piece-trello' && managedTrelloInput(params.input);
   if (trello) {
     const issue = managedTrelloIssue(params.action, trello);
@@ -186,6 +192,12 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
 export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParams, governance: PieceAuthorizeResponse, execute: () => Promise<unknown>): Promise<unknown> {
   if ('dispatch' in governance && governance.dispatch === 'completed') return governance.result;
   if ('dispatch' in governance && (governance.dispatch === 'held' || governance.dispatch === 'approval_required')) throw new Error('Piece is waiting for authorization');
+  const github = params.piece === '@activepieces/piece-github' && managedGitHubInput(params.input);
+  if (github) {
+    // Recheck after an approval document has applied edits.
+    const issue = managedGitHubIssue(params.action, github);
+    if (issue) throw new Error(issue);
+  }
   const trello = params.piece === '@activepieces/piece-trello' && managedTrelloInput(params.input);
   if (trello) {
     // Recheck after an approval document has applied edits.
@@ -196,6 +208,9 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   if (trello) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Trello dispatch was not authorized');
     raw = await runManagedTrelloAction(String(params.action), trello);
+  } else if (github) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('GitHub dispatch was not authorized');
+    raw = await runManagedGitHubAction(String(params.action), github);
   } else raw = await execute();
   // Gmail 0.17 returns a Gaxios response, including transport configuration.
   // Keep its data envelope for expressions, but never persist request headers
