@@ -64,6 +64,8 @@ export const PIECE_JARVIS_SOURCES: readonly string[] = [
   "actions/action-outcome.ts",
   "workflows/runtime/http-egress.ts",
   "workflows/runtime/piece-effects.ts",
+  "workflows/runtime/lead-batch.ts",
+  "workflows/runtime/hubspot-contact.ts",
 ];
 
 /**

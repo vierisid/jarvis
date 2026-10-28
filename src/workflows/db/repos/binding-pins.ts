@@ -2,6 +2,7 @@ import { MEETING_ACCOUNTS } from '../../runtime/meeting-briefs';
 import { REFUND_PIECE, REFUND_ACTION } from '../../runtime/refund';
 import { IMPORT_ACCOUNTS, IMPORT_PIECE, IMPORT_ACTION } from '../../runtime/contact-import';
 import { REPORT_ACCOUNTS, REPORT_PIECE, REPORT_ACTION } from '../../runtime/weekly-report';
+import { BATCH_ACCOUNTS, BATCH_PIECE, BATCH_ACTION } from '../../runtime/lead-batch';
 import { ONBOARDING_ACCOUNTS, ONBOARDING_PIECE, ONBOARDING_ACTION } from '../../runtime/customer-onboarding';
 import { SALES_ACCOUNTS, SALES_PIECE, SALES_ACTION } from '../../runtime/sales-followups';
 /**
@@ -128,6 +129,12 @@ export function nodeConnectionReferences(node: FlowTriggerNode): Array<[external
   }
   if (node.settings?.pieceName === REPORT_PIECE && node.settings?.actionName === REPORT_ACTION) {
     for (const field of Object.keys(REPORT_ACCOUNTS)) {
+      const id = node.settings?.input?.[field];
+      if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
+    }
+  }
+  if (node.settings?.pieceName === BATCH_PIECE && node.settings?.actionName === BATCH_ACTION) {
+    for (const field of Object.keys(BATCH_ACCOUNTS)) {
       const id = node.settings?.input?.[field];
       if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
     }
