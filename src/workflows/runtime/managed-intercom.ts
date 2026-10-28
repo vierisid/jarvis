@@ -65,7 +65,10 @@ export async function runManagedIntercomAction(action:string,input:Record<string
     result=await call("/contacts/"+contact+"/tags"+(remove?"/"+tag:""),remove?"DELETE":"POST",remove?undefined:{id:tag});
   }else{
     const conversation=action==="add_note_to_conversation_by_id",recordId=id(conversation?input.conversationId:input.contactId);
-    const body=text(input.body,"internal note"),adminId=id(input.adminId===undefined || input.adminId===null || input.adminId===""?auth.admin_id:input.adminId);
+    // Notes are always attributed to the admin who connected Intercom; a workflow cannot pick another admin.
+    const body=text(input.body,"internal note"),adminId=id(auth.admin_id);
+    if(input.adminId!==undefined && input.adminId!==null && input.adminId!=="" && String(input.adminId)!==adminId)
+      throw new Error("Intercom notes are added as the admin who connected Intercom. Leave Admin empty or choose that admin.");
     result=await call((conversation?"/conversations/":"/contacts/")+recordId+(conversation?"/reply":"/notes"),"POST",
       {body,admin_id:adminId,...(conversation?{message_type:"note",type:"admin"}:{})});
   }

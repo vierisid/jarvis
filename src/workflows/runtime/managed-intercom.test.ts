@@ -15,6 +15,10 @@ test("writes send notes only, contact tags use explicit IDs and do not retry",as
  for(const action of ["add_note_to_contact","add_note_to_conversation_by_id"]){const m=mock({id:"n1"});await runManagedIntercomAction(action,{auth,contactId:"c1",conversationId:"v1",body:"Internal only"},m.request);const body=JSON.parse(m.calls[0].body);expect(body.admin_id).toBe("admin1");expect(body.body).toBe("Internal only");if(action.includes("conversation"))expect(body).toMatchObject({message_type:"note",type:"admin"});expect(m.calls.length).toBe(1);}
  for(const untag of [false,true]){const m=mock({id:"t1"});await runManagedIntercomAction("add-or-remove-tag-on-contact",{auth,contactId:"c1",tagId:"t1",untag},m.request);expect(m.calls[0].method).toBe(untag?"DELETE":"POST");expect(m.calls[0].url).toBe("https://api.eu.intercom.io/contacts/c1/tags"+(untag?"/t1":""));}
 });
+test("notes are pinned to the connected admin; another admin is refused before any request",async()=>{
+ for(const adminId of [undefined,null,"","admin1"]){const m=mock({id:"n1"});await runManagedIntercomAction("add_note_to_contact",{auth,contactId:"c1",body:"Note",adminId},m.request);expect(JSON.parse(m.calls[0].body).admin_id).toBe("admin1");}
+ for(const action of ["add_note_to_contact","add_note_to_conversation_by_id"]){const m=mock({id:"n1"});await expect(runManagedIntercomAction(action,{auth,contactId:"c1",conversationId:"v1",body:"Note",adminId:"admin2"},m.request)).rejects.toThrow("admin who connected Intercom");expect(m.calls).toEqual([]);}
+});
 test("bad IDs, unqualified actions and arbitrary hosts make no requests",async()=>{
  const m=mock({id:"x"});for(const [action,input] of [["get_contact",{value:"../me"}],["get_contact",{value:"https://evil.test"}],["send_message",{}],["get_contact",{value:"c1",auth:{...auth,api_host:"evil.test"}}],["add-or-remove-tag-on-contact",{contactId:"c1",tagId:"t1",untag:"false"}] ] as const){await expect(runManagedIntercomAction(action,{auth,...input},m.request)).rejects.toThrow();}expect(m.calls).toEqual([]);
 });
