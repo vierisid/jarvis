@@ -16,6 +16,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSampleDraftText } from "./useSampleDraftText";
+import { TypeformConnection, useTypeformStatus } from "../../integrations/TypeformConnection";
 import { ClickUpConnection, useClickUpStatus } from "../../integrations/ClickUpConnection";
 import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
 import { confirmDialog } from "../../ui/ConfirmDialog";
@@ -3733,16 +3734,20 @@ function ConnectionPicker({
   const currentExternalId = m ? m[1]! : "";
   // ClickUp may also offer the hosted connection; without it (self-hosted, or
   // not connected) the picker reads exactly as for any other piece.
+  const isTypeform = pieceName === "@activepieces/piece-typeform";
+  const managedTypeform = useTypeformStatus(isTypeform)?.connected === true;
   const isClickUp = pieceName === "@activepieces/piece-clickup";
   const managedClickUp = useClickUpStatus(isClickUp)?.connected === true;
   return (
     <div className="wf-props__connection">
+      {isTypeform && <><TypeformConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedTypeform && <p className="wf-props__hint">Read workspaces, forms and responses. Use a form ID or workflow variable. Recent responses may take up to 30 minutes to appear. Form editing and instant submission triggers are not supported yet.</p>}</>}
       {isClickUp && <ClickUpConnection optional onPick={onPick} currentValue={currentValue} />}
       <label className="wf-props__field-label">
         {authDisplayName}
         <span className="wf-props__connection-type">({authType})</span>
       </label>
-      {matching.length === 0 && !managedClickUp ? (
+      {matching.length === 0 && !managedClickUp && !managedTypeform ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.

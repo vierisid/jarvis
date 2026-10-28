@@ -313,7 +313,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "9"; // v9: ClickUp task output contracts
+export const CATALOG_SCHEMA_VERSION = "10"; // v10: Typeform form and response output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -859,13 +859,14 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
   // The piece's auth.type comes from upstream's PropertyType -- map it
   // to our AppConnectionType vocabulary so the editor + connection
   // listing share one name space.
-  if (m.auth && typeof m.auth === "object" && typeof m.auth.type === "string") {
-    const projected = projectAuthType(m.auth.type);
+  const auth = m.auth;
+  if (auth && typeof auth === "object" && typeof auth.type === "string") {
+    const projected = projectAuthType(auth.type);
     if (projected) {
       out.auth = {
         type: projected,
-        ...(typeof m.auth.displayName === "string" ? { displayName: m.auth.displayName } : {}),
-        ...(typeof m.auth.description === "string" ? { description: m.auth.description } : {}),
+        ...(typeof auth.displayName === "string" ? { displayName: auth.displayName } : {}),
+        ...(typeof auth.description === "string" ? { description: auth.description } : {}),
       };
     }
   }
@@ -890,6 +891,21 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
  * on-disk caches re-project.
  */
 export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
+  if (entry.name === '@activepieces/piece-typeform') {
+    // Accept IDs/expressions without upstream dropdown calls or an editor credential leak.
+    for (const field of entry.actions.list_responses?.inputSchema?.fields ?? []) {
+      if (field.name === 'form_id') {field.type='string';field.placeholder='Form ID or workflow variable';delete field.options;}
+    }
+    const form={id:'form_1',title:'Customer feedback',type:'form',fields:[{id:'field_1',ref:'feedback',title:'Your feedback',type:'short_text'}]};
+    const samples:Record<string,unknown>={
+      get_form:form,
+      list_forms:{total_items:1,page_count:1,items:[{id:form.id,title:form.title,type:'form'}]},
+      list_workspaces:{total_items:1,page_count:1,items:[{id:'workspace_1',name:'Team workspace'}]},
+      list_responses:{total_items:1,page_count:1,items:[{response_id:'response_1',token:'response_1',response_type:'completed',submitted_at:'2026-10-28T10:00:00Z',answers:[{field:{id:'field_1',ref:'feedback',type:'short_text'},type:'text',text:'Useful service'}]}]},
+    };
+    for(const [name,sample] of Object.entries(samples))if(entry.actions[name])entry.actions[name]!.outputSample=sample;
+  }
+
   // ClickUp 0.9.1 returns a task directly for these actions, not an HTTP envelope.
   // These stable fields let the picker wire task outputs into downstream steps.
   if (entry.name === '@activepieces/piece-clickup') {

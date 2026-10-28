@@ -615,6 +615,10 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
+  catalogId: 'typeform', pieceName: '@activepieces/piece-typeform', unknownActionCategory: 'modify_settings',
+  targetProps: ['form_id', 'workspace', 'accountId', 'search', 'query', 'page', 'pageSize', 'sortBy', 'orderBy', 'since', 'until', 'responseType', 'includedResponseIds', 'sort', 'before', 'after'],
+  categories: {read_data: ['list_forms', 'get_form', 'list_responses', 'list_workspaces']},
+}, {
   catalogId: 'clickup', pieceName: '@activepieces/piece-clickup', unknownActionCategory: 'modify_settings',
   targetProps: ['workspace_id', 'space_id', 'folder_id', 'list_id', 'task_id', 'task_name', 'name', 'status_id',
     'add_assignee', 'rem_assignee', 'destination_list_id', 'channel_id', 'message_id', 'comment_id',

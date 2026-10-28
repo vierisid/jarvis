@@ -4997,6 +4997,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisGoogleConnectionSource(() => googleAuth));
       const { JarvisClickUpConnectionSource } = await import("../workflows/credentials/clickup-source");
       credentialResolver.register(new JarvisClickUpConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisTypeformConnectionSource } = await import("../workflows/credentials/typeform-source");
+      credentialResolver.register(new JarvisTypeformConnectionSource(jarvisConfig));
       logWithTimestamp(
         "Workflow credential resolver: registered jarvis:google source",
       );
