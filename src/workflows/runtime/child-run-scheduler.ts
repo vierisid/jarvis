@@ -1,3 +1,4 @@
+import {resumeSubflowCalls} from '../db/repos/subflow';
 import { getWorkflowDb } from '../db';
 import { getChildRun } from '../db/repos/child-run';
 import { cancelFlowRun, retireTerminalRunWaits } from '../db/repos/run-cancellation';
@@ -12,6 +13,7 @@ import { emergencyHold } from './emergency-hold';
  * `onCardClosed` hears each card this sweep closed, so the dashboard stops
  * offering it (#1039). A throw from it is logged and the sweep goes on. */
 export function resumeCompletedChildRuns(onCardClosed?: (approvalId: string) => void): number {
+  const structured = resumeSubflowCalls();
   const db = getWorkflowDb();
   // A parent can fail after child dispatch but before its PAUSED upload, or
   // disappear through flow deletion. The child row retains this ownership
@@ -69,5 +71,5 @@ export function resumeCompletedChildRuns(onCardClosed?: (approvalId: string) => 
     // this run's, was consumed, and is still the paused step's.
     if (claimContinuation({ runId: parent.id, waitpoint, kind: 'child', resumePayload: { childRunId: child.childRunId } }) === 'resumed') count++;
   }
-  return count;
+  return count + structured;
 }

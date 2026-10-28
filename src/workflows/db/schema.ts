@@ -231,6 +231,21 @@ const STATEMENTS: string[] = [
     child_run_id TEXT NOT NULL UNIQUE,
     waitpoint_id TEXT UNIQUE
   )`,
+  `CREATE TABLE IF NOT EXISTS workflow_subflow_call (
+    id TEXT PRIMARY KEY, parent_flow_id TEXT NOT NULL REFERENCES flow(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL, child_run_id TEXT NOT NULL, effect_id TEXT NOT NULL,
+    version_id TEXT NOT NULL, version_digest TEXT NOT NULL, deadline INTEGER NOT NULL,
+    schema_json TEXT NOT NULL, result_json TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_subflow_pending ON workflow_subflow_call(result_json)`,
+  `CREATE TABLE IF NOT EXISTS workflow_subflow_result (
+    run_id TEXT PRIMARY KEY REFERENCES flow_run(id) ON DELETE CASCADE, value TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS workflow_subflow_wait (
+    call_id TEXT NOT NULL REFERENCES workflow_subflow_call(id) ON DELETE CASCADE,
+    parent_run_id TEXT NOT NULL REFERENCES flow_run(id) ON DELETE CASCADE,
+    waitpoint_id TEXT PRIMARY KEY REFERENCES waitpoint(id) ON DELETE CASCADE
+  )`,
   // Q-19: failures the person dismissed from Today. Keyed by the failure's
   // stable key, so a dismissal outlives the run it came from.
   `CREATE TABLE IF NOT EXISTS failure_dismissal (

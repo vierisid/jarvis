@@ -1,0 +1,4 @@
+import {SUBFLOW_PIECE,CUSTOMER_SCHEMA} from './subflow-contract';
+const step=(name:string,actionName:string,input:Record<string,unknown>,nextAction?:any)=>({name,type:'PIECE',displayName:actionName,settings:{pieceName:SUBFLOW_PIECE,pieceVersion:'0.0.1',actionName,input},...(nextAction?{nextAction}:{})});
+export function childTestGraph():any{return {name:'trigger',type:'EMPTY',nextAction:step('normalize','normalize_customer',{customer:'{{trigger}}',idPath:'',namePath:'',emailPath:''},step('returned','return_result',{result:'{{normalize}}'}))};}
+export function parentTestGraph(flow=''):any{return {name:'trigger',type:'PIECE_TRIGGER',settings:{pieceName:'webhook',input:{}},nextAction:step('child','call',{flow,invocationKey:'',payload:'{{trigger}}',outputSchema:CUSTOMER_SCHEMA,timeoutSeconds:60},step('consume','require_success',{result:'{{child}}'}))};}

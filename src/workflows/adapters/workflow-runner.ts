@@ -83,8 +83,18 @@ export class JarvisWorkflowRunnerAdapter implements PieceWorkflowRunner {
      * which is the same shape of fail-open.
      */
     callerProjectId?: string,
-    continuation?: { effectId: string; stepName: string },
+    continuation?: { effectId: string; stepName: string; versionId?: string; deadline?: number },
   ): Promise<PieceWorkflowStartResult> {
+    return this.startNow(input,callerRunId,callerProjectId,continuation);
+  }
+
+  /** Synchronous core so a durable invocation receipt can share the dispatch transaction. */
+  startNow(
+    input: PieceWorkflowStartInput,
+    callerRunId?: string,
+    callerProjectId?: string,
+    continuation?: { effectId: string; stepName: string; versionId?: string; deadline?: number },
+  ): PieceWorkflowStartResult {
     if (callerRunId) assertRunNotCanceled(callerRunId);
     if (!input.flowId) {
       throw new WorkflowRunnerError("MISSING_REF", "flowId is required");
@@ -121,14 +131,14 @@ export class JarvisWorkflowRunnerAdapter implements PieceWorkflowRunner {
         cursor = ancestor.parentRunId;
       }
     }
-    const versionId = flow.published_version_id ?? getLatestDraft(flow.id)?.id ?? null;
+    const versionId = continuation?.versionId ?? flow.published_version_id ?? getLatestDraft(flow.id)?.id ?? null;
     if (!versionId) {
       throw new WorkflowRunnerError(
         "VERSION_MISSING",
         `flow ${flow.id} has no published or draft version`,
       );
     }
-    if (!getFlowVersion(versionId)) {
+    if (getFlowVersion(versionId)?.flowId !== flow.id) {
       throw new WorkflowRunnerError("VERSION_MISSING", `flow version ${versionId} missing`);
     }
     // A nested `run_workflow` step is a third way to reach a version without
@@ -168,7 +178,8 @@ export class JarvisWorkflowRunnerAdapter implements PieceWorkflowRunner {
       });
       const waitpoint = input.waitForCompletion ? createWaitpoint({
         flowRunId: callerRunId!, projectId: callerProjectId ?? DEFAULT_IDS.project,
-        stepName: continuation!.stepName, type: "MANUAL",
+        stepName: continuation!.stepName, type: continuation!.deadline ? "TIMER" : "MANUAL",
+        ...(continuation!.deadline ? {resumeDateTime:new Date(continuation!.deadline).toISOString()} : {}),
       }) : null;
       if (continuation) getWorkflowDb().run(
         'INSERT INTO workflow_child_run (effect_id, child_run_id, waitpoint_id) VALUES (?, ?, ?)',

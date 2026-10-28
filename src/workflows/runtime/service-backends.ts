@@ -1,3 +1,4 @@
+import {createSubflowService,returnSubflowResult} from './subflow-service';
 import { MEETING_ACCOUNTS, meetingSetup, parseMeetingGuard, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, type MeetingSetup } from './meeting-briefs';
 import { createLeadBatchService } from './batch-service';
 import { createOnboardingService } from './onboarding-service';
@@ -104,6 +105,7 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
   importRequest?: ImportRequest;
   importNow?: () => number;
   batchFetch?: typeof fetch;
+  subflowNow?: () => number;
   batchNow?: () => number;
   onboardingFetch?: typeof fetch;
   salesFetch?: typeof fetch;
@@ -1155,6 +1157,8 @@ export function buildSandboxServiceBackends(
   };
 
   const services: SandboxApiServices = {
+    subflowCall: cancellableWorkflowService(createSubflowService(effects,opts.subflowNow)),
+    subflowResult: cancellableWorkflowService(returnSubflowResult),
     credentialResolver: opts.credentialResolver,
     meetingBriefs: cancellableWorkflowService(meetingBriefs),
     weeklyReport: cancellableWorkflowService(createWeeklyReportService({effects,credentials:opts.credentialResolver,fetchImpl:opts.reportFetch,now:opts.reportNow})),

@@ -315,7 +315,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "9"; // v9: retain reliability metadata and auth alternatives
+export const CATALOG_SCHEMA_VERSION = "10"; // v9: retain reliability metadata and auth alternatives
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -894,6 +894,7 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
  * on-disk caches re-project.
  */
 export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
+  if (entry.name === "@jarvispieces/piece-jarvis-subflow" && entry.actions.call) upgradeRunWorkflowFlowFieldToFlowRef(entry.actions.call);
   if (entry.name !== JARVIS_ON_EVENT_TRIGGER.piece) return;
   const onEvent = entry.triggers?.[JARVIS_ON_EVENT_TRIGGER.trigger];
   if (onEvent) {

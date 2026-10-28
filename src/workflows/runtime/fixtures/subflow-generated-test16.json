@@ -1,0 +1,111 @@
+{
+  "parent": {
+    "name": "trigger",
+    "type": "PIECE_TRIGGER",
+    "displayName": "Receive customer request",
+    "settings": {
+      "pieceName": "webhook",
+      "input": {}
+    },
+    "nextAction": {
+      "name": "step_1",
+      "type": "PIECE",
+      "displayName": "Wait for reusable customer normalization",
+      "settings": {
+        "pieceName": "@jarvispieces/piece-jarvis-subflow",
+        "actionName": "call",
+        "input": {
+          "flow": "ZtECh2zVpqTQAsKVXFUjU",
+          "invocationKey": "",
+          "payload": "{{trigger}}",
+          "outputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "valid",
+              "customer",
+              "issues"
+            ],
+            "properties": {
+              "valid": {
+                "type": "boolean"
+              },
+              "customer": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "name",
+                  "email"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string"
+                  }
+                }
+              },
+              "issues": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "timeoutSeconds": 60
+        }
+      },
+      "nextAction": {
+        "name": "step_2",
+        "type": "PIECE",
+        "displayName": "Consume result or fail explicitly",
+        "settings": {
+          "pieceName": "@jarvispieces/piece-jarvis-subflow",
+          "actionName": "require_success",
+          "input": {
+            "result": "{{step_1}}"
+          }
+        }
+      }
+    }
+  },
+  "child": {
+    "name": "trigger",
+    "type": "EMPTY",
+    "displayName": "Receive one customer object",
+    "settings": {},
+    "nextAction": {
+      "name": "step_1",
+      "type": "PIECE",
+      "displayName": "Normalize and validate customer",
+      "settings": {
+        "pieceName": "@jarvispieces/piece-jarvis-subflow",
+        "actionName": "normalize_customer",
+        "input": {
+          "customer": "{{trigger}}",
+          "idPath": "",
+          "namePath": "",
+          "emailPath": ""
+        }
+      },
+      "nextAction": {
+        "name": "step_2",
+        "type": "PIECE",
+        "displayName": "Return structured customer result",
+        "settings": {
+          "pieceName": "@jarvispieces/piece-jarvis-subflow",
+          "actionName": "return_result",
+          "input": {
+            "result": "{{step_1}}"
+          }
+        }
+      }
+    }
+  }
+}

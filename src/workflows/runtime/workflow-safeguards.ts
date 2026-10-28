@@ -8,6 +8,9 @@ export function workflowSafeguards(trigger: unknown) {
     const s = node.settings ?? {};
     const input = s.input && typeof s.input === 'object' && !Array.isArray(s.input) ? s.input : {};
     const add=(kind:string,coverage:string,limits:string)=>safeguards.push({node:node.name,kind,coverage,limits});
+    if (String(s.pieceName).endsWith('jarvis-subflow') && s.actionName === 'call') {
+      add('reusable-child-result','Actual worker child run with Authority, pinned version, durable invocation identity and explicit structured return. Parent waits, validates output schema and receives succeeded/failed/invalid_output/timeout/uncertain. Completed results are retained across parent runs and restart.', 'Key is scoped to parent workflow and call-step name; use stable request identity, not run ID. Same key with changed payload/schema/timeout is refused. 32 KiB JSON payload/result, timeout 1-86400 seconds. Failed/timed-out/uncertain child invocations are not automatically rerun. Cancellation cannot undo external actions already dispatched by a child. Handle outcome explicitly.');
+    }
     if (String(s.pieceName).endsWith('jarvis-batch') && s.actionName === 'update_leads') {
       add('lead-batch-outcomes','Update existing contacts only; isolate record failures; durable submission snapshot and per-record receipts across timer slices, restarts and versions. Collect updated/rejected/failed/uncertain references, send one deduplicated dashboard summary, then finalize_batch fails a partial run.', 'Maximum 1000 records / 1 MB. Mapped properties are required and scalar or string arrays. Same submission ID cannot change data, mapping or account. No create/upsert. Terminal outcomes never automatically replay; uncertain dispatch requires review. Resume unfinished records using the same submission. Summary delivery is receipt protected, not guaranteed after an uncertain delivery.');
     }
