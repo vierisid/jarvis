@@ -4,6 +4,7 @@ import { registerOnboarding } from '../brief/registrations/onboarding';
 import { ConnectedWorkspace } from '../brief/connected-workspace';
 import { MIN_BUN_VERSION, versionAtLeast } from '../util/bun-minimum.ts';
 import { githubStatus } from '../integrations/github-connection';
+import { trelloStatus } from "../integrations/trello-connection";
 import { clickUpStatus } from '../integrations/clickup-connection';
 import { connectedGoogle } from '../brief/connected-workspace-runtime';
 import { registerConnections } from '../brief/registrations/connections';
@@ -4757,6 +4758,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       google: () => connectedGoogle(jarvisConfig),
       clickup: () => clickUpStatus(jarvisConfig),
       github: () => githubStatus(jarvisConfig),
+      trello: () => trelloStatus(jarvisConfig),
       channels: () => {
         const status = channelService.getChannelStatus();
         return Object.fromEntries((['telegram', 'discord'] as const).map(name => [name, {
@@ -5001,6 +5003,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisClickUpConnectionSource(jarvisConfig.daemon.data_dir));
       const { JarvisGitHubConnectionSource } = await import("../workflows/credentials/github-source");
       credentialResolver.register(new JarvisGitHubConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisTrelloConnectionSource } = await import("../workflows/credentials/trello-source");
+      credentialResolver.register(new JarvisTrelloConnectionSource(jarvisConfig.daemon.data_dir));
       logWithTimestamp(
         "Workflow credential resolver: registered jarvis:google source",
       );
