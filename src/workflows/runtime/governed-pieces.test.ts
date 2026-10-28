@@ -1709,6 +1709,25 @@ describe('#961: the core HTTP piece is governed by method', () => {
     expect(rules).toBeGreaterThan(0);
   });
 
+  test('padding inside the body cannot hide its data from the read rule', () => {
+    const inner = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`a${String(i).padStart(2, '0')}`, 0]));
+    for (const method of ['GET', 'HEAD']) {
+      const raw = { url: 'https://x.test/', method, body: { ...inner, data: 'exfil' } };
+      const engine = sanitizePieceInput(raw, HTTP);
+      const daemon = reprojectPieceInput(engine, HTTP);
+      expect('data' in (engine.body as object)).toBe(false);
+      for (const [label, input] of [['raw', raw], ['engine', engine], ['daemon', daemon]] as const) {
+        expect(`${method} ${label}: ${resolveGovernedPieceAction(HTTP, 'send_request', input)!.category}`).toBe(`${method} ${label}: send_message`);
+        expect(`${method} ${label}: ${tracksPieceCompletion(HTTP, 'send_request', input)}`).toBe(`${method} ${label}: true`);
+      }
+      // A wide body with no data at all is not judged a read either: the cut could have hidden one.
+      const wideNoData = sanitizePieceInput({ url: 'https://x.test/', method, body: { ...inner, zz: 0 } }, HTTP);
+      expect(resolveGovernedPieceAction(HTTP, 'send_request', wideNoData)!.category).toBe('send_message');
+      // A small body with no data is still a read.
+      expect(resolveGovernedPieceAction(HTTP, 'send_request', sanitizePieceInput({ url: 'https://x.test/', method, body: { a: 1 } }, HTTP))!.category).toBe('read_data');
+    }
+  });
+
   test('a field spelled like the cut marker neither hides a cut nor narrows a rule', () => {
     const http = (extra: Record<string, unknown>) => sanitizePieceInput({ method: 'GET', url: 'https://x.test/', ...extra }, HTTP);
     // Not cut: the field is escaped, so the rule still reads the GET.

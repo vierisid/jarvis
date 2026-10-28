@@ -103,9 +103,12 @@ export const HTTP_PIECE = '@activepieces/piece-http';
  * True for an HTTP method that only reads: GET and HEAD, in any letter case
  * (axios upper-cases the method it sends). Anything else, including a method
  * with surrounding space or one that is not a string, is not a read. A request
- * is a read only when `httpRequestIsRead` also finds no body; the category,
+ * is a read only when `httpRequestIsRead` also finds no body. The category,
  * the completion tracking, the in-piece retry and the redirect rule all ask
- * that one function, so they cannot disagree about a request.
+ * that one function, but not of the same value: the daemon and the engine ask
+ * of the bounded projection, the piece of its raw props. They agree because a
+ * cut can only take a request away from being a read (see `httpRequestIsRead`
+ * and `ruleInput`), never make one.
  */
 export function httpMethodIsRead(method: unknown): boolean {
   return typeof method === 'string' && /^(get|head)$/iu.test(method);
@@ -115,17 +118,22 @@ export function httpMethodIsRead(method: unknown): boolean {
  * True for an HTTP request that only reads: a GET or HEAD that carries no
  * body. The piece sends `body.data` whatever the method (axios puts a body on
  * a GET too, measured), so a GET with one is content leaving for the host,
- * not a read (#961 security review). A projection that cut the body still has
- * a non-empty value there, so it never reads as body-less.
+ * not a read (#961 security review).
+ *
+ * A cut never makes a request read as body-less. A cut string or array is
+ * still a non-empty value. A `body` object cut at 40 keys can have lost
+ * `data` to keys that sort before it (`{a00..a39, data}` projects as
+ * `{a00..a39, omittedFields: 1}`), so a body object carrying the bare marker,
+ * or over 40 keys as the piece's raw props, is never a read. The top-level
+ * cut is `ruleInput`'s, which callers apply before asking.
  */
 export function httpRequestIsRead(input: Record<string, unknown>): boolean {
-  // On a projection cut at 40 keys, `body` sorts before `method`: a body lost
-  // to the cut takes the method with it, and a request with no method is
-  // never a read. So a cut can never make a request with a body read as one.
   if (!httpMethodIsRead(input.method)) return false;
   const body = input.body;
   if (body === undefined || body === null || body === '') return true;
-  const data = inputObject(body) ? (body as Record<string, unknown>).data : body;
+  const fields = inputObject(body);
+  if (fields && (Object.hasOwn(fields, OMITTED_FIELDS) || Object.keys(fields).length > MAX_KEYS)) return false;
+  const data = fields ? fields.data : body;
   return data === undefined || data === null || data === '';
 }
 
@@ -145,6 +153,26 @@ function inputObject(input: unknown): Record<string, unknown> | null {
  * (`escapeMarkerSpelling`), or one over 40 keys that was never projected -- is
  * not read at all. The engine and the daemon both ask this, so the category
  * and the completion tracking agree on either side.
+ *
+ * WHAT THIS MOVED. `bound()` is untouched, so every projection, and with it
+ * every `requestDigest`, is byte-exact as before. What changed is the category
+ * and the tracking read FROM a cut projection, and only for an input whose
+ * top-level object (or HTTP `body` object, `httpRequestIsRead`) has over 40
+ * keys:
+ *   - A padded Trello card update (or any rule that read an absent prop as the
+ *     narrow case) recorded or approved as `write_data` now resolves to the
+ *     blind `delete_data`. When it re-authorizes (a resume, an engine retry),
+ *     the recorded `actionCategory` no longer matches, so `effect-boundary.ts`
+ *     fails it with "Workflow effect changed since it was recorded; start a
+ *     new run ..." and the new run asks at the real category.
+ *   - A padded HTTP GET (method kept, or a body whose `data` was cut) that was
+ *     recorded as an untracked read is now a tracked send. A legacy record
+ *     still `pending` under the untracked route is blocked with
+ *     `WORKFLOW_UPGRADED` (`service-backends.ts`, the legacy branch of
+ *     `pieceAuthorize`) rather than moved to the tracked identity.
+ *   - Completion receipts are unaffected: a step already tracked stays tracked.
+ * This file is in `PATCHED_VENDOR_SOURCES`, so the edit rebuilds every cached
+ * engine bundle.
  */
 function ruleInput(input: unknown): Record<string, unknown> | null {
   const fields = inputObject(input);

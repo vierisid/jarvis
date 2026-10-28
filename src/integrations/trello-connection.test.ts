@@ -111,6 +111,6 @@ test('padding a card update until closed drops out of the projection still gates
     expect(resolveGovernedPieceAction('@activepieces/piece-trello',action,projected)!.category).toBe('delete_data');
     expect(resolveGovernedPieceAction('@activepieces/piece-trello',action,reprojectPieceInput(projected,'@activepieces/piece-trello'))!.category).toBe('delete_data');
     // The narrow case still narrows when nothing is cut.
-    expect(resolveGovernedPieceAction('@activepieces/piece-trello',action,sanitizePieceInput({card_id:'c',closed:false}))!.category).toBe('write_data');
+    expect(resolveGovernedPieceAction('@activepieces/piece-trello',action,sanitizePieceInput({card_id:'c',closed:false},'@activepieces/piece-trello'))!.category).toBe('write_data');
   }
 });
