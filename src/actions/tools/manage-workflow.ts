@@ -1,3 +1,4 @@
+import { draftRevision, updateSavedDraft } from './workflow-draft-update';
 import { workflowSafeguards } from '../../workflows/runtime/workflow-safeguards';
 /**
  * Manage Workflow Tool — chat-driven workflow CRUD + run management.
@@ -9,6 +10,7 @@ import { workflowSafeguards } from '../../workflows/runtime/workflow-safeguards'
  * Actions:
  *   list                   flows, newest first, bounded by a character budget
  *                          ({ returned, total, truncated, flows })
+ *   update                 validate and patch an existing selected draft in place
  *   get                    detail view of a flow + its latest version
  *   run                    queue a flow run, optionally with a payload
  *   create                 create an empty flow with a manual trigger
@@ -183,15 +185,16 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
   return {
     name: "manage_workflow",
     description: [
-      "Create, run, and manage the user's Jarvis workflows (automations).",
+      "Manage Jarvis workflows.",
       "compose { name, description }: full graph, never diagnostics.",
-      "Save missing setup in supported drafts. continue_setup retains answers; accounts use Connected workspace.",
-      "Inspect real schemas; invent nothing. Notifications: dashboard. Verify browser access/permissions/login before fallback.",
-      "Composed flows are DISABLED; publishing enables and requires confirmation. Draft-only limits are not future bans.",
-      "create needs empty: true and a blank-canvas request.",
+      "update existing drafts; get revision first.",
+      "Save supported drafts with Setup required. continue_setup resumes setup.",
+      "Inspect schemas; invent nothing. Browser requires access/login/permission.",
+      "Composed flows are DISABLED; publish enables after confirmation.",
+      "create: empty: true for blank canvas only.",
       "CODE is REFUSED without per-flow user permission; no tool action grants it.",
-      "validate_fixtures: supported saved graphs with fixture_input; offline mocks. Disclose limits.",
-      "Page get/fixtures to nextCursor:null; structure is not testing.",
+      "validate_fixtures uses offline mocks; disclose limits.",
+      "Page get/fixtures to nextCursor:null.",
       ...(hasLibrary ? [deps.installLibraryPiece ? "Install required Library connectors by default under software-install Authority; false opts out. Account connection is separate." : "Relay suggestedInstalls from the Library page; retry after installation, never unchanged."] : []),
     ].join("\n"),
     category: "automation",
@@ -241,7 +244,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       action: {
         type: "string",
         description: "What to do.",
-        enum: ["compose", "continue_setup", "create", "list", "get", "validate_fixtures", "run", "enable", "disable", "publish", "delete", "list_runs", "get_run"],
+        enum: ["compose", "continue_setup", "create", "update", "list", "get", "validate_fixtures", "run", "enable", "disable", "publish", "delete", "list_runs", "get_run"],
         required: true,
       },
       flow: {
@@ -250,14 +253,16 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
         required: false,
       },
       view: { type: "string", enum: ["definition", "validation"], description: "get: concatenate definition/validation pages, then parse JSON.", required: false },
-      version_id: { type: "string", description: "get: pin version while paging.", required: false },
+      version_id: { type: "string", description: "get/update: draft version ID.", required: false },
+      expected_revision: { type: "string", description: "update: revision from get; stale edits fail.", required: false },
+      patches: { type: "array", items: { type: "object", properties: { op: { type: "string", enum: ["add", "replace", "remove"] }, path: { type: "string" }, value: {} }, required: ["op", "path"], additionalProperties: false }, description: "update: JSON Patch on trigger; max 64 ops/256 KB. See guide.", required: false },
       cursor: { type: "string", description: "get/validate_fixtures: nextCursor; edits invalidate it.", required: false },
       name: {
         type: "string",
-        description: "Display name for compose/create.",
+        description: "Display name: compose/create/update.",
         required: false,
       },
-      fixture_input: { type: "object", description: "Offline {setup:{step:{input:value}},cases:[{name,payload,...expectations}]}. ClickUp: expectedSteps, expectedTaskCount. JSON/Sheets: expectedRows, expectedStatus, sheetsOutcome, assertions. See workflow fixture guide; no saved changes.", required: false },
+      fixture_input: { type: "object", description: "Offline setup/cases; see workflow guide. Saved graph unchanged.", required: false },
       payload: {
         type: "object",
         description: "run: trigger input.",
@@ -381,6 +386,25 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       const project = deps.callerProjectId?.() ?? DEFAULT_IDS.project;
       const requireFlowParam = (p: Record<string, unknown>) => requireFlowIn(project, p);
       switch (action) {
+        case "update": {
+          const flow = requireFlowParam(params);
+          const result = updateSavedDraft({
+            projectId: project, flowId: flow.id, versionId: requireString(params, 'version_id'),
+            expectedRevision: requireString(params, 'expected_revision'), patches: params.patches, name: params.name,
+            context: { ...workflowReadinessServices(), pieces: deps.pieceRegistry ?? workflowReadinessServices()?.pieces },
+            validateContract(graph) {
+              const report = contractRecheck(flow, graph);
+              if (report?.violations.length) throw new Error('update: saved job contract would be violated: ' + report.violations.slice(0, 5).join('; '));
+            },
+          });
+          return framedForModel({ ok: true, changed: result.changed, flowId: flow.id, versionId: result.version.id,
+            revision: draftRevision(result.version), status: flow.status, publishedVersionId: flow.published_version_id,
+            ...validationSummary(flow.id, result.version.id),
+            definition: { action: 'get', flow: flow.id, version_id: result.version.id, view: 'definition' },
+            validationReport: { action: 'get', flow: flow.id, version_id: result.version.id, view: 'validation' },
+            note: 'Updated the existing draft only. Missing setup stays unconfigured; no new workflow/version, publication, activation or execution. Functional testing is separate: validate_fixtures on this saved draft.',
+          }, 'an updated workflow draft');
+        }
         case "validate_fixtures": {
           const flow=requireFlowParam(params), draft=getLatestDraft(flow.id);
           if (!draft) throw new Error("No saved draft to validate");
@@ -1029,7 +1053,7 @@ export function versionForModel<V extends { trigger?: unknown } | null | undefin
 function checkedVersion(flowId: string, version: ReturnType<typeof getFlowVersion>) {
   if (!version) return null;
   const readiness = versionReadiness(flowId, version.id);
-  return { ...version, valid: readiness.ready, readiness };
+  return { ...version, revision: draftRevision(version), valid: readiness.ready, readiness };
 
 }
 
@@ -1060,7 +1084,7 @@ function actGet(flow: FlowRow, params: Record<string, unknown> = {}): Record<str
   const version = draft ?? published;
   return {
     ...summary, detailPaged: true,
-    latestDraft: draft ? { id: draft.id, state: draft.state } : null,
+    latestDraft: draft ? { id: draft.id, state: draft.state, revision: draftRevision(draft) } : null,
     published: published ? { id: published.id, state: published.state } : null,
     ...(version ? { ...validationSummary(flow.id, version.id),
       definition: { action: "get", flow: flow.id, version_id: version.id, view: "definition" },
@@ -1075,7 +1099,7 @@ function workflowDocumentPage(flow: FlowRow, params: Record<string, unknown>): R
   if (params.view !== 'definition' && params.view !== 'validation') throw new Error('get: unknown view');
   const version = typeof params.version_id === 'string' ? getFlowVersion(params.version_id) : getLatestDraft(flow.id) ?? (flow.published_version_id ? getFlowVersion(flow.published_version_id) : null);
   if (!version || version.flowId !== flow.id) throw new Error('Version not found in this workflow');
-  const document = params.view === 'definition' ? versionForModel(version) : {
+  const document = params.view === 'definition' ? { ...versionForModel(version), revision: draftRevision(version) } : {
     ...validationSummary(flow.id, version.id),
     structure: compileWorkflow(version.trigger, { pieces: workflowReadinessServices()?.pieces, phase: 'composition' }),
     readiness: versionReadiness(flow.id, version.id),
@@ -1092,7 +1116,7 @@ function workflowDocumentPage(flow: FlowRow, params: Record<string, unknown>): R
   }
   let end = Math.min(offset + 2000, text.length);
   for (;;) {
-    const result = { flowId: flow.id, versionId: version.id, view: params.view, totalChars: text.length,
+    const result = { flowId: flow.id, versionId: version.id, revision: draftRevision(version), view: params.view, totalChars: text.length,
       offset, nextCursor: end < text.length ? hash + ':' + end : null, content: text.slice(offset, end) };
     if (JSON.stringify(result).length <= FRAMED_PAYLOAD_MAX_CHARS) return result;
     if (--end <= offset) throw new Error('Readback envelope exceeds its size budget');
