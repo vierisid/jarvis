@@ -944,7 +944,18 @@ export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
         exactMatch: false,
         totalFound: 1,
         returned: 1,
-        pages: [{ ...page, title: "Meeting notes" }],
+        pages: [
+          {
+            id: page.id,
+            title: "Meeting notes",
+            url: page.url,
+            created_time: page.created_time,
+            last_edited_time: page.last_edited_time,
+            archived: page.archived,
+            parent: page.parent,
+            properties: page.properties,
+          },
+        ],
         summary: {
           searchTerm: "Meeting",
           matchType: "partial match",

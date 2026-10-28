@@ -97,7 +97,9 @@ beforeAll(async () => {
         properties: {
           title: {
             type: "title",
-            title: [{ plain_text: "Hello", text: { content: "Hello" } }],
+            title: [
+              { type: "text", plain_text: "Hello", text: { content: "Hello" } },
+            ],
           },
         },
       };
@@ -107,7 +109,9 @@ beforeAll(async () => {
         type: "paragraph",
         has_children: false,
         paragraph: {
-          rich_text: [{ plain_text: "Hello", text: { content: "Hello" } }],
+          rich_text: [
+            { type: "text", plain_text: "Hello", text: { content: "Hello" } },
+          ],
         },
       };
       if (path === "/v1/users/me")
@@ -340,6 +344,35 @@ test.skipIf(!gate)(
         (f) => f.name === "pageId",
       ),
     ).toMatchObject({ type: "string", required: true });
+    // Every advertised picker path must exist in the actual engine output.
+    const assertSampleShape = (sample: unknown, actual: unknown): void => {
+      if (Array.isArray(sample)) {
+        expect(Array.isArray(actual)).toBe(true);
+        if (sample.length)
+          assertSampleShape(sample[0], (actual as unknown[])[0]);
+      } else if (sample !== null && typeof sample === "object") {
+        expect(actual !== null && typeof actual === "object").toBe(true);
+        for (const [key, value] of Object.entries(sample)) {
+          expect(Object.hasOwn(actual as object, key)).toBe(true);
+          assertSampleShape(value, (actual as Record<string, unknown>)[key]);
+        }
+      } else if (sample === null) {
+        expect(actual).toBeNull();
+      } else {
+        expect(typeof actual).toBe(typeof sample);
+      }
+    };
+    for (const [stepName, actionName] of [
+      ["create", "createPage"],
+      ["append", "append_to_page"],
+      ["read", "notion_get_block_children"],
+      ["find", "find_page"],
+    ] as const) {
+      assertSampleShape(
+        metadata.actions[actionName]!.outputSample,
+        (complete.steps?.[stepName] as any).output.output,
+      );
+    }
     expect(JSON.stringify(complete.steps)).not.toContain("ENGINE_ONLY_NOTION");
   },
   90000,

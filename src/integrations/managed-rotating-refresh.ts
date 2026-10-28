@@ -24,10 +24,15 @@ interface Cached {
  */
 export function createManagedRotatingRefresher<
   T extends ManagedRefreshConnection,
->(provider: string, name: string, read: (dir: string) => T | null, options: {
-  allowUnknownExpiry?: boolean;
-  validateAccess?: (connection: T, request: typeof fetch) => Promise<boolean>;
-} = {}) {
+>(
+  provider: string,
+  name: string,
+  read: (dir: string) => T | null,
+  options: {
+    allowUnknownExpiry?: boolean;
+    validateAccess?: (connection: T, request: typeof fetch) => Promise<boolean>;
+  } = {},
+) {
   const flights = new Map<string, Promise<T>>();
   const grantKey = (c: T) =>
     createHash("sha256")
@@ -77,7 +82,9 @@ export function createManagedRotatingRefresher<
     typeof v.access_token === "string" &&
     v.access_token.length > 0 &&
     v.access_token.length <= 16384 &&
-    (options.allowUnknownExpiry && v.expires_at === null || typeof v.expires_at === "string" && Date.parse(v.expires_at) > Date.now() + 60000);
+    ((options.allowUnknownExpiry && v.expires_at === null) ||
+      (typeof v.expires_at === "string" &&
+        Date.parse(v.expires_at) > Date.now() + 60000));
   function needsReconnect(config: JarvisConfig, c: T): boolean {
     let db: Database | undefined;
     try {
@@ -225,8 +232,12 @@ export function createManagedRotatingRefresher<
             save(db, current);
           } else if (latest) current = latest;
         }
-        const accepted = usable(current) && (!options.validateAccess || await options.validateAccess({...c, ...current} as T, request));
-        if (!same(config, c)) throw new Error(`${name} connection changed. Try again.`);
+        const accepted =
+          usable(current) &&
+          (!options.validateAccess ||
+            (await options.validateAccess({ ...c, ...current } as T, request)));
+        if (!same(config, c))
+          throw new Error(`${name} connection changed. Try again.`);
         if (!accepted) {
           const { response, value } = await post(
             config,
@@ -300,13 +311,20 @@ export function createManagedRotatingRefresher<
         }
         if (!same(config, c))
           throw new Error(`${name} connection changed. Try again.`);
-        if (!accepted && options.validateAccess && !await options.validateAccess({...c, ...current} as T, request)) {
-          db.exec("BEGIN IMMEDIATE"); transaction = true;
-          if (same(config, c)) save(db, {key, reconnect:true});
-          db.exec("COMMIT"); transaction = false;
+        if (
+          !accepted &&
+          options.validateAccess &&
+          !(await options.validateAccess({ ...c, ...current } as T, request))
+        ) {
+          db.exec("BEGIN IMMEDIATE");
+          transaction = true;
+          if (same(config, c)) save(db, { key, reconnect: true });
+          db.exec("COMMIT");
+          transaction = false;
           throw new Error(`Reconnect ${name} in your account page.`);
         }
-        if (!same(config, c)) throw new Error(`${name} connection changed. Try again.`);
+        if (!same(config, c))
+          throw new Error(`${name} connection changed. Try again.`);
         return {
           ...c,
           access_token: current.access_token!,
