@@ -52,6 +52,16 @@ test("reads and writes are governed and completed writes replay without provider
   expect(await executeAuthorizedPiece(params,{dispatch:"completed",result:{gid:"1"}} as any,async()=>{calls++;})).toEqual({gid:"1"});
   await expect(executeAuthorizedPiece(params,{dispatch:"held"} as any,async()=>{calls++;})).rejects.toThrow("waiting");expect(calls).toBe(0);
 });
+test("an unauthorized managed Asana dispatch is refused before any request",async()=>{
+  const original=globalThis.fetch;let fetches=0,executed=0;
+  globalThis.fetch=(async()=>{fetches++;return new Response('{"data":{"gid":"1"}}');}) as unknown as typeof fetch;
+  try {
+    const params={piece:"@activepieces/piece-asana",action:"get_task",input:{auth,task:"1"},fetchImpl:globalThis.fetch} as any;
+    await expect(executeAuthorizedPiece(params,{governed:false},async()=>{executed++;})).rejects.toThrow("Asana dispatch was not authorized");
+    await expect(executeAuthorizedPiece({...params,action:"create_task"},{governed:false},async()=>{executed++;})).rejects.toThrow("Asana dispatch was not authorized");
+  } finally {globalThis.fetch=original;}
+  expect(fetches).toBe(0);expect(executed).toBe(0);
+});
 test("a valid JSON answer over the 1 MiB cap is refused; one just under it is read",async()=>{
   const body=(size:number)=>{const head='{"data":{"gid":"1","notes":"',tail='"}}';return head+"x".repeat(size-head.length-tail.length)+tail;};
   const under=await runManagedAsanaAction("get_task",{auth,task:"1"},(async()=>new Response(body(1048576))) as unknown as typeof fetch) as Record<string,unknown>;

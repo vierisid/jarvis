@@ -1,4 +1,5 @@
 import {managedGitHubIssue} from './managed-github';
+import {managedTrelloIssue} from './managed-trello';
 import { validateCronExpression } from '../../lib/cron-scheduler';
 import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from './piece-catalog';
 import { evaluateWorkflowExpression, workflowExpressionReferences } from './safe-expression';
@@ -223,6 +224,11 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
       && ["{{connections.jarvis:github}}", "{{connections['jarvis:github']}}"].includes(String(input.auth))) {
       const reason = managedGitHubIssue(root ? settings.triggerName : settings.actionName, input, false);
       if (reason) issue(node, 'settings.input', 'MANAGED_GITHUB', reason);
+    }
+    if (pieceName === '@activepieces/piece-trello' && object(input)
+      && ["{{connections.jarvis:trello}}", "{{connections['jarvis:trello']}}"].includes(String(input.auth))) {
+      const reason = managedTrelloIssue(root ? settings.triggerName : settings.actionName, input, false);
+      if (reason) issue(node, 'settings.input', 'MANAGED_TRELLO', reason);
     }
     // Only input values are templated; source code and labels are not expressions.
     // A connection is checked against the step's piece, and only a piece step

@@ -313,7 +313,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "11"; // v11: Asana task and comment output contracts (v10: managed GitHub issue output contracts)
+export const CATALOG_SCHEMA_VERSION = "12"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: Asana task and comment output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -895,7 +895,7 @@ export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
       if (action.name !== 'create_task') continue;
       for (const field of action.inputSchema?.fields ?? []) {
         if (field.sourceType === 'DROPDOWN') {field.type='string';field.placeholder='Asana ID or workflow variable';delete field.options;}
-        if (field.name === 'due_on') {field.placeholder='YYYY-MM-DD';field.description='Hosted Asana requires a date as YYYY-MM-DD.';}
+        if (field.name === 'due_on') {field.placeholder='YYYY-MM-DD';field.description='The hosted Jarvis Asana connection requires the date as YYYY-MM-DD.';}
         if (field.name === 'tags') {field.type='json';field.sourceType='ARRAY';field.placeholder='[]';field.description='Tag IDs or exact tag names. The hosted Jarvis Asana connection does not support tags yet: leave this empty when using it.';delete field.options;}
       }
     }
@@ -937,6 +937,14 @@ export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
         if (field.name === 'repository') {field.type = 'json'; field.placeholder = '{"owner":"owner","repo":"repo"}'; delete field.options;}
         if (field.name === 'issue_number') {field.type = 'number'; delete field.options;}
       }
+    }
+  }
+  if (entry.name === '@activepieces/piece-trello') {
+    const board = {id:'aaaaaaaaaaaaaaaaaaaaaaaa',name:'Jarvis sandbox',closed:false};
+    const list = {id:'bbbbbbbbbbbbbbbbbbbbbbbb',name:'To do',idBoard:board.id,closed:false};
+    const card = {id:'cccccccccccccccccccccccc',name:'Example task',desc:'',idBoard:board.id,idList:list.id,closed:false,url:'https://trello.com/c/abcd1234'};
+    for (const [name,sample] of Object.entries({list_boards:{boards:[board],count:1},list_lists:{lists:[list],count:1},get_card:card,create_card:card,move_card:card})) {
+      const action=entry.actions[name];if(action && action.outputSample===undefined)action.outputSample=sample;
     }
   }
   if (entry.name !== JARVIS_ON_EVENT_TRIGGER.piece) return;
