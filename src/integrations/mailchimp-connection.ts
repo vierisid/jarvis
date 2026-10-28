@@ -1,0 +1,58 @@
+import { join } from "node:path";
+import type { JarvisConfig } from "../config/types";
+import { readBounded } from "./clickup-connection";
+
+export const MAILCHIMP_PIECE = "@activepieces/piece-mailchimp";
+export const MAILCHIMP_CONNECTION = "jarvis:mailchimp";
+/**
+ * Written by the hosting worker as connections/mailchimp.json (mode 0600) and
+ * replaced atomically on reconnect; disconnect leaves a non-connected
+ * tombstone. settings.server_prefix is the account's data-center prefix, resolved on
+ * hosting from OAuth metadata. Mailchimp tokens do not expire, so there is no
+ * refresh path. The token grants broad account access: the managed action
+ * allowlist limits what Jarvis dispatches, not what the token can do.
+ */
+export interface MailchimpConnection {
+  version: 1; provider: "mailchimp"; status: "connected"; generation: string;
+  /** From the file's settings.server_prefix. */
+  server_prefix: string;
+  access_token: string; account: {id: string; label: string};
+  workspaces: Array<{id: string; name: string}>; connected_at: string;
+}
+type MailchimpConnectionFile = Omit<MailchimpConnection, "server_prefix"> & {settings?: {server_prefix?: unknown}};
+export function readMailchimpConnection(dataDir: string): MailchimpConnection | null {
+  try {
+    // One bounded, non-blocking descriptor read: a FIFO cannot stall the daemon.
+    const v = JSON.parse(readBounded(join(dataDir, "connections", "mailchimp.json"))) as MailchimpConnectionFile;
+    const serverPrefix = v.settings?.server_prefix;
+    if (v.version !== 1 || v.provider !== "mailchimp" || v.status !== "connected"
+      || typeof v.generation !== "string" || !/^[a-f0-9-]{36}$/.test(v.generation)
+      || typeof v.access_token !== "string" || !v.access_token || v.access_token.length > 16384
+      || typeof v.account?.id !== "string" || !v.account.id
+      || typeof v.account.label !== "string" || !v.account.label
+      || typeof serverPrefix !== "string" || !/^us[1-9][0-9]{0,3}$/.test(serverPrefix)
+      || !Array.isArray(v.workspaces) || v.workspaces.length > 1000
+      || !v.workspaces.every(w => typeof w.id === "string" && !!w.id && typeof w.name === "string")
+      || typeof v.connected_at !== "string") return null;
+    const {settings: _settings, ...connection} = v;
+    return {...connection, server_prefix: serverPrefix};
+  } catch { return null; }
+}
+/** This block is system-owned; UI settings cannot redirect account setup. */
+export function mailchimpConnectUrl(config: JarvisConfig): string | null {
+  const value = config.usejarvis_integrations?.page_url;
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password) return null;
+    url.searchParams.set("integration", "mailchimp");
+    return url.toString();
+  } catch { return null; }
+}
+export function mailchimpStatus(config: JarvisConfig) {
+  const connection = readMailchimpConnection(config.daemon.data_dir);
+  return {configured: !!mailchimpConnectUrl(config), connect_url: mailchimpConnectUrl(config),
+    connected: !!connection, external_id: MAILCHIMP_CONNECTION,
+    account: connection?.account ?? null, workspaces: connection?.workspaces ?? [],
+    generation: connection?.generation ?? null, connected_at: connection?.connected_at ?? null};
+}

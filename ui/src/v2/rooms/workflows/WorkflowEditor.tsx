@@ -1,4 +1,6 @@
 import { TrelloCardLocation } from "../../integrations/TrelloCardLocation";
+import { MailchimpLocation } from "../../integrations/MailchimpLocation";
+import { MailchimpConnection } from "../../integrations/MailchimpConnection";
 /**
  * WorkflowEditor (Phase 4 stage 2).
  *
@@ -3391,10 +3393,13 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const asanaSchema = asanaLocation && subSchema ? {...subSchema, fields:subSchema.fields.filter(f=>!["workspace","project"].includes(f.name))} : subSchema;
   const managedTrello = piece?.name === "@activepieces/piece-trello" && step.settings?.input?.auth === "{{connections.jarvis:trello}}";
   const trelloLocation = managedTrello && ['create_card','move_card','list_lists'].includes(subName ?? '');
+  const managedMailchimp = piece?.name === "@activepieces/piece-mailchimp" && ["{{connections.jarvis:mailchimp}}", "{{connections['jarvis:mailchimp']}}"].includes(String(step.settings?.input?.auth));
+  const mailchimpLocation = managedMailchimp && ['find_subscriber','add_subscriber_to_tag','remove_subscriber_from_tag','get_campaign_report'].includes(subName ?? '');
   const managedGitHub = piece?.name === "@activepieces/piece-github" && ["{{connections.jarvis:github}}", "{{connections['jarvis:github']}}"].includes(String(step.settings?.input?.auth));
   const githubRepository = managedGitHub && ['github_create_issue','getIssueInformation','update_issue','find_issue','createCommentOnAIssue'].includes(subName ?? '');
   const baseSchema = asanaSchema;
-  const selectedSchema = managedTrello && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["labels","member_id"].includes(f.name))} : managedGitHub && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['labels','assignees','milestone','state_reason', ...(githubRepository ? ['repository'] : [])].includes(f.name))} : baseSchema;
+  const selectedSchema = managedTrello && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["labels","member_id"].includes(f.name))} : managedMailchimp && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['fields','include_fields','exclude_fields', ...(mailchimpLocation ? ['list_id','campaign_id'] : [])].includes(f.name))}
+    : managedGitHub && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['labels','assignees','milestone','state_reason', ...(githubRepository ? ['repository'] : [])].includes(f.name))} : baseSchema;
   const rawSchema = clickUpLocation && selectedSchema ? {...selectedSchema,fields:selectedSchema.fields.filter(f=>!['workspace_id','space_id','list_id'].includes(f.name))} : trelloLocation && selectedSchema ? {...selectedSchema, fields:selectedSchema.fields.filter(f=>!['board_id','list_id'].includes(f.name))} : selectedSchema;
   // ClickUp 0.9.1 declares `custom_fields` on Create Task as a required
   // dynamic prop even when a list has none. "Use standard task fields" saves
@@ -3513,6 +3518,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
       {githubRepository && <GitHubRepository input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {trelloLocation && <TrelloCardLocation input={step.settings?.input ?? {}} onChange={onSetInput} boardOnly={subName === "list_lists"} />}
       {asanaLocation && <AsanaTaskLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
+      {mailchimpLocation && <MailchimpLocation key={subName} input={step.settings?.input ?? {}} onChange={onSetInput} campaign={subName === "get_campaign_report"} />}
       {clickUpLocation && <ClickUpTaskLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {clickUpCreate && <div className="wf-props__hint" role="note">
         {standardFields ? <p>Using standard task fields. ClickUp will reject the task if this list requires custom fields.</p>
@@ -3761,6 +3767,7 @@ function ConnectionPicker({
   return (
     <div className="wf-props__connection">
       {isGitHub && <GitHubConnection optional onPick={onPick} currentValue={currentValue} />}
+      {pieceName === "@activepieces/piece-mailchimp" && <MailchimpConnection onPick={onPick} currentValue={currentValue} />}
       {isClickUp && <ClickUpConnection optional onPick={onPick} currentValue={currentValue} />}
       {pieceName === "@activepieces/piece-trello" && <TrelloConnection onPick={onPick} currentValue={currentValue} />}
       {isAsana && <><AsanaConnection optional onPick={onPick} currentValue={currentValue} />
@@ -3769,7 +3776,7 @@ function ConnectionPicker({
         {authDisplayName}
         <span className="wf-props__connection-type">({authType})</span>
       </label>
-      {matching.length === 0 && !managedClickUp && !managedGitHub && pieceName !== "@activepieces/piece-trello" && !managedAsana ? (
+      {matching.length === 0 && !managedClickUp && !managedGitHub && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedAsana ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.

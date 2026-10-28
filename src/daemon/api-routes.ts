@@ -2531,6 +2531,19 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         return json(trelloStatus(ctx.config));
       },
     },
+    '/api/integrations/mailchimp/options': {
+      GET: async (req: Request) => {
+        const {mailchimpOptions, MailchimpOptionsError} = await import('../integrations/mailchimp-options');
+        try { return json(await mailchimpOptions(ctx.config, new URL(req.url).searchParams)); }
+        catch (error) { return json({error: error instanceof MailchimpOptionsError ? error.message : 'Could not load Mailchimp choices.'}, error instanceof MailchimpOptionsError ? error.status : 502); }
+      },
+    },
+    '/api/integrations/mailchimp': {
+      GET: async () => {
+        const { mailchimpStatus } = await import('../integrations/mailchimp-connection');
+        return json(mailchimpStatus(ctx.config));
+      },
+    },
 
     // --- Google Auth Management ---
     '/api/auth/google/status': {

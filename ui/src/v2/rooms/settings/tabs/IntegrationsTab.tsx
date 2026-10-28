@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ClickUpConnection } from "../../../integrations/ClickUpConnection";
+import { MailchimpConnection } from "../../../integrations/MailchimpConnection";
 import { AsanaConnection } from "../../../integrations/AsanaConnection";
 import { GitHubConnection } from "../../../integrations/GitHubConnection";
 import { TrelloConnection } from "../../../integrations/TrelloConnection";
@@ -128,6 +129,7 @@ export function IntegrationsTab({
 
   return (
     <div>
+      <MailchimpConnection optional />
       <section className="v2-set__section">
         <div className="v2-set__section-head">
           <div>

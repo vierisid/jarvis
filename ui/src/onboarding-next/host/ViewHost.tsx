@@ -1,4 +1,5 @@
 import { TrelloConnection } from "../../v2/integrations/TrelloConnection";
+import { MailchimpConnection } from "../../v2/integrations/MailchimpConnection";
 import React, { Component, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 import type { ComponentType, ReactNode } from 'react';
 import { useTheme } from '../../v2/shell/useTheme.ts';
@@ -102,7 +103,7 @@ function OnboardingViewHost({ session, legacy, children }: { session: Session; l
   switch (state.view) {
     case 'welcome': props = { model: { theme, installMode: session.installMode(), state: navigation }, onSetUp: () => action('continue'), onExit: () => action('explore'), onThemeChange: setTheme }; break;
     case 'explainer': props = { model: { theme, state: navigation }, onBack: () => action('back'), onContinue: () => action('continue') }; break;
-    case 'google': props = { ...props, additionalConnections: <div className="on-host__clickup"><ClickUpConnection optional appearance="onboarding" /><GitHubConnection optional appearance="onboarding" /><TrelloConnection optional appearance="onboarding" /><AsanaConnection optional appearance="onboarding" /></div>, model: { ...model, navigation }, onConnect: () => action('connect'), onCancel: (attemptId: string) => action('cancel', { attemptId }), onBack: () => action('back'), onSkip: () => action('skip'), onContinue: () => action('continue') }; break;
+    case 'google': props = { ...props, additionalConnections: <div className="on-host__clickup"><ClickUpConnection optional appearance="onboarding" /><GitHubConnection optional appearance="onboarding" /><TrelloConnection optional appearance="onboarding" /><MailchimpConnection optional appearance="onboarding" /><AsanaConnection optional appearance="onboarding" /></div>, model: { ...model, navigation }, onConnect: () => action('connect'), onCancel: (attemptId: string) => action('cancel', { attemptId }), onBack: () => action('back'), onSkip: () => action('skip'), onContinue: () => action('continue') }; break;
     case 'interview': props = { ...props, model: { ...model, navigation }, onDraftChange: draft, onSubmit: (answer: unknown) => action('answer', answer), onRetry: (recovery: unknown) => action('retry', recovery), onSkip: () => action('skip'), onContinue: () => action('continue') }; break;
     case 'tour': case 'pebble-tour': props = { ...props, onNavigate: intent }; break;
     case 'activation': props = { ...props, onDraftChange: draft, onIntent: intent }; break;
