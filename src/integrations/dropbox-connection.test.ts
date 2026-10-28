@@ -18,6 +18,27 @@ import {
 } from "./dropbox-refresh";
 import { JarvisDropboxConnectionSource } from "../workflows/credentials/dropbox-source";
 import { managedConnectionMisuse } from "../workflows/credentials/adapter";
+import {
+  MANAGED_PIECE_ADAPTERS,
+  resolveGovernedPieceAction,
+} from "../workflows/runtime/piece-effects";
+import { MANAGED_DROPBOX_ACTIONS } from "../workflows/runtime/managed-dropbox";
+/** Every action of the pinned @activepieces/piece-dropbox 0.9.2 bundle, read from
+ * its `actions()` (custom_api_call is added by the framework and stays unmapped).
+ * The engine test checks the installed package against the adapter too. */
+const DROPBOX_092_ACTIONS = [
+  "search_dropbox", "create_new_dropbox_text_file", "upload_dropbox_file", "downloadFile",
+  "get_dropbox_file_link", "delete_dropbox_file", "move_dropbox_file", "copy_dropbox_file",
+  "create_new_dropbox_folder", "delete_dropbox_folder", "move_dropbox_folder", "copy_dropbox_folder",
+  "list_dropbox_folder", "get_dropbox_file_metadata", "list_dropbox_file_revisions", "restore_dropbox_file",
+  "create_dropbox_copy_reference", "save_dropbox_copy_reference", "lock_dropbox_file", "unlock_dropbox_file",
+  "get_dropbox_file_lock", "create_dropbox_upload_link", "download_dropbox_folder_as_zip",
+  "get_dropbox_file_preview", "get_dropbox_file_thumbnail", "get_dropbox_thumbnails_batch",
+  "save_url_to_dropbox", "get_dropbox_save_url_status", "start_dropbox_copy_batch",
+  "get_dropbox_copy_batch_status", "start_dropbox_move_batch", "get_dropbox_move_batch_status",
+  "start_dropbox_delete_batch", "get_dropbox_delete_batch_status", "start_dropbox_create_folder_batch",
+  "get_dropbox_create_folder_batch_status", "copy_dropbox_entry", "move_dropbox_entry", "delete_dropbox_entry",
+];
 let dir: string, config: JarvisConfig;
 const doc = () => ({
   version: 1 as const,
@@ -196,4 +217,32 @@ test("revocation requests reconnect, transient failures preserve the binding, re
     }) as unknown as typeof fetch),
   ).rejects.toThrow("not configured");
   expect(calls).toBe(0);
+});
+
+test("the Dropbox adapter names every action of the pinned bundle, and nothing else", () => {
+  const piece = "@activepieces/piece-dropbox";
+  const adapter = MANAGED_PIECE_ADAPTERS.find((a) => a.pieceName === piece)!;
+  const mapped = Object.values(adapter.categories).flat() as string[];
+  expect(DROPBOX_092_ACTIONS).toHaveLength(39);
+  expect([...mapped].sort()).toEqual([...DROPBOX_092_ACTIONS].sort());
+  expect(resolveGovernedPieceAction(piece, "custom_api_call")).toMatchObject({
+    category: "modify_settings",
+    known: false,
+  });
+  // The managed connection's own actions are a subset of the governed table.
+  for (const action of MANAGED_DROPBOX_ACTIONS)
+    expect(DROPBOX_092_ACTIONS).toContain(action);
+});
+test("a caller without the step's settings is told about the piece only; with them, a trigger is refused", () => {
+  write(doc());
+  const source = new JarvisDropboxConnectionSource(config);
+  const piece = source.pieceNames[0]!;
+  expect(managedConnectionMisuse(source, piece, "settings.input.auth")).toBeNull();
+  expect(
+    managedConnectionMisuse(source, "@activepieces/piece-http", "settings.input.auth"),
+  ).not.toBeNull();
+  for (const settings of [{ triggerName: "new_folder" }, {}, null, "x"])
+    expect(
+      managedConnectionMisuse(source, piece, "settings.input.auth", settings),
+    ).not.toBeNull();
 });

@@ -74,7 +74,7 @@ const GMAIL_TRACKED_SENDS: ReadonlySet<unknown> = new Set(['send_email', 'gmail_
  * (#953 made these reachable at the default level).
  */
 export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
-  return (piece === '@activepieces/piece-dropbox' && action === 'create_new_dropbox_folder')
+  return (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === CLICKUP_PIECE && clickUpTracked(action))
     || (piece === '@activepieces/piece-gmail' && GMAIL_TRACKED_SENDS.has(action))
     || (piece === '@activepieces/piece-slack' && (action === 'send_channel_message' || action === 'slack_post_message'))
@@ -89,6 +89,15 @@ const CLICKUP_PIECE = '@activepieces/piece-clickup';
  * parks its flow, so each one can be tracked; a read never is. */
 function clickUpTracked(action: unknown): boolean {
   const categories = MANAGED_PIECE_ADAPTERS.find(a => a.pieceName === CLICKUP_PIECE)!.categories;
+  return typeof action === 'string' && (['write_data', 'send_message', 'delete_data'] as const)
+    .some(category => categories[category]?.includes(action));
+}
+
+const DROPBOX_PIECE = '@activepieces/piece-dropbox';
+/** Every Dropbox action that changes the account or hands out access (write,
+ * send or delete). None parks its flow, so each one can be tracked. */
+function dropboxTracked(action: unknown): boolean {
+  const categories = MANAGED_PIECE_ADAPTERS.find(a => a.pieceName === DROPBOX_PIECE)!.categories;
   return typeof action === 'string' && (['write_data', 'send_message', 'delete_data'] as const)
     .some(category => categories[category]?.includes(action));
 }
@@ -616,9 +625,36 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
-  catalogId: 'dropbox', pieceName: '@activepieces/piece-dropbox', unknownActionCategory: 'modify_settings',
-  targetProps: ['path', 'query', 'recursive', 'limit', 'max_results', 'autorename'],
-  categories: {read_data: ['search_dropbox', 'list_dropbox_folder', 'get_dropbox_file_metadata'], write_data: ['create_new_dropbox_folder']},
+  // Dropbox, a community piece whose managed `jarvis:dropbox` connection made
+  // it governed. Every action of the pinned 0.9.2 bundle is named
+  // (`dropbox-connection.test.ts` pins the list and the engine test checks it
+  // against the installed package), so a workflow on the user's own Dropbox
+  // connection keeps running at the default level for reads and writes. The
+  // managed connection itself is limited to MANAGED_DROPBOX_ACTIONS.
+  catalogId: 'dropbox', pieceName: DROPBOX_PIECE, unknownActionCategory: 'modify_settings',
+  targetProps: ['path', 'from_path', 'to_path', 'paths', 'entries', 'query', 'url', 'copy_reference', 'rev',
+    'async_job_id', 'recursive', 'limit', 'max_results', 'autorename', 'allow_ownership_transfer', 'mode', 'duration'],
+  categories: {
+    read_data: ['search_dropbox', 'downloadFile', 'list_dropbox_folder', 'get_dropbox_file_metadata',
+      'list_dropbox_file_revisions', 'get_dropbox_file_lock', 'download_dropbox_folder_as_zip',
+      'get_dropbox_file_preview', 'get_dropbox_file_thumbnail', 'get_dropbox_thumbnails_batch',
+      'get_dropbox_save_url_status', 'get_dropbox_copy_batch_status', 'get_dropbox_move_batch_status',
+      'get_dropbox_delete_batch_status', 'get_dropbox_create_folder_batch_status'],
+    // Each hands out access to whoever holds the result: a temporary download
+    // link, an upload link into the account, or a reference another account
+    // can copy the file with. Exposure, so gated like a send.
+    send_message: ['get_dropbox_file_link', 'create_dropbox_upload_link', 'create_dropbox_copy_reference'],
+    // Adds content or changes it with the earlier state kept (upload is add
+    // mode, restore writes a new revision). Nothing here removes an entry.
+    write_data: ['create_new_dropbox_text_file', 'upload_dropbox_file', 'create_new_dropbox_folder',
+      'copy_dropbox_file', 'copy_dropbox_folder', 'copy_dropbox_entry', 'start_dropbox_copy_batch',
+      'start_dropbox_create_folder_batch', 'save_url_to_dropbox', 'save_dropbox_copy_reference',
+      'lock_dropbox_file', 'unlock_dropbox_file', 'restore_dropbox_file'],
+    // Every delete, and every move: a move takes the entry away from where
+    // other people and workflows find it, and may transfer its ownership.
+    delete_data: ['delete_dropbox_file', 'delete_dropbox_folder', 'delete_dropbox_entry', 'start_dropbox_delete_batch',
+      'move_dropbox_file', 'move_dropbox_folder', 'move_dropbox_entry', 'start_dropbox_move_batch'],
+  },
 }, {
   catalogId: 'clickup', pieceName: '@activepieces/piece-clickup', unknownActionCategory: 'modify_settings',
   targetProps: ['workspace_id', 'space_id', 'folder_id', 'list_id', 'task_id', 'task_name', 'name', 'status_id',

@@ -230,6 +230,17 @@ test.skipIf(!gate)(
     expect(failures).toEqual([]);
     const metadata = catalog.get(piece)!;
     expect(metadata.auth?.type).toBe("OAUTH2");
+    // Every action the installed package declares is in the governed table, so
+    // an upstream addition fails here instead of falling to modify_settings.
+    const actions = Object.keys(metadata.actions);
+    expect(actions.length).toBeGreaterThan(35);
+    expect(
+      actions.filter(
+        (name) =>
+          name !== "custom_api_call" &&
+          !resolveGovernedPieceAction(piece, name)!.known,
+      ),
+    ).toEqual([]);
     for (const name of [
       "create_new_dropbox_folder",
       "get_dropbox_file_metadata",

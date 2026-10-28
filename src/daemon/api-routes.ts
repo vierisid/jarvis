@@ -2484,9 +2484,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     },
     '/api/integrations/dropbox': {
       GET: async () => {
-        const {dropboxStatus} = await import('../integrations/dropbox-connection');
+        const {dropboxStatus, readDropboxConnection} = await import('../integrations/dropbox-connection');
         const {dropboxNeedsReconnect} = await import('../integrations/dropbox-refresh');
-        const {readDropboxConnection} = await import('../integrations/dropbox-connection');
         const status = dropboxStatus(ctx.config), c = readDropboxConnection(ctx.config.daemon.data_dir);
         const reconnect = !!c && dropboxNeedsReconnect(ctx.config, c);
         return json({...status, connected: status.connected && !reconnect, reconnect});

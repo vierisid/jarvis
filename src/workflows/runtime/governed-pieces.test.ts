@@ -1742,3 +1742,41 @@ describe('managed ClickUp task permissions', () => {
     expect(tracksPieceCompletion(adapter.pieceName, 'custom_api_call')).toBe(false);
   });
 });
+
+describe('Dropbox action permissions', () => {
+  const DROPBOX = '@activepieces/piece-dropbox';
+  test('deletes and moves require delete_data, links are sends, and an unmapped action stays modify_settings', async () => {
+    for (const action of ['delete_dropbox_file', 'delete_dropbox_folder', 'delete_dropbox_entry', 'start_dropbox_delete_batch',
+      'move_dropbox_file', 'move_dropbox_folder', 'move_dropbox_entry', 'start_dropbox_move_batch']) {
+      expect(resolveGovernedPieceAction(DROPBOX, action)).toMatchObject({category:'delete_data', known:true});
+    }
+    for (const action of ['get_dropbox_file_link', 'create_dropbox_upload_link', 'create_dropbox_copy_reference']) {
+      expect(resolveGovernedPieceAction(DROPBOX, action)).toMatchObject({category:'send_message', known:true});
+    }
+    await expect(fixture(DROPBOX, 'delete_dropbox_file', 3).authorize({path:'/Sandbox/a.txt'})).rejects.toThrow(/Authority denied/);
+    await expect(fixture(DROPBOX, 'move_dropbox_folder', 3).authorize({from_path:'/a', to_path:'/b'})).rejects.toThrow(/Authority denied/);
+    expect(await fixture(DROPBOX, 'delete_dropbox_file', 9).authorize({path:'/Sandbox/a.txt'})).toMatchObject({governed:true, dispatch:'authorized'});
+    for (const action of ['custom_api_call', 'dropbox_added_upstream_later']) {
+      expect(resolveGovernedPieceAction(DROPBOX, action)).toMatchObject({category:'modify_settings', known:false});
+    }
+  });
+
+  test('reads and writes on the user\'s own connection run at the default level 3 without a card', async () => {
+    for (const [action, input] of [['list_dropbox_folder', {path:'/Sandbox'}], ['downloadFile', {path:'/Sandbox/a.txt'}],
+      ['create_new_dropbox_folder', {path:'/Sandbox/New'}], ['upload_dropbox_file', {path:'/Sandbox/b.txt'}]] as const) {
+      const f = fixture(DROPBOX, action, 3);
+      expect({action, reply: await f.authorize(input)}).toMatchObject({action, reply: {governed:true, dispatch:'authorized'}});
+      expect(f.approvals.getPending()).toHaveLength(0);
+    }
+  });
+
+  test('every Dropbox write, send and delete carries a completion receipt; no read does', () => {
+    const adapter = ALL_PIECE_ADAPTERS.find(a => a.catalogId === 'dropbox')!;
+    for (const [category, names] of Object.entries(adapter.categories)) {
+      for (const action of names ?? []) {
+        expect(`${action}: ${tracksPieceCompletion(adapter.pieceName, action)}`).toBe(`${action}: ${category !== 'read_data'}`);
+      }
+    }
+    expect(tracksPieceCompletion(adapter.pieceName, 'custom_api_call')).toBe(false);
+  });
+});
