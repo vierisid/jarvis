@@ -2502,6 +2502,32 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         return json(githubStatus(ctx.config));
       },
     },
+    '/api/integrations/trello/options': {
+      GET: async (req: Request) => {
+        const {trelloOptions, TrelloOptionsError} = await import('../integrations/trello-options');
+        try { return json(await trelloOptions(ctx.config, new URL(req.url).searchParams)); }
+        catch (error) { return json({error: error instanceof TrelloOptionsError ? error.message : 'Could not load Trello choices.'}, error instanceof TrelloOptionsError ? error.status : 502); }
+      },
+    },
+    '/api/integrations/trello': {
+      GET: async () => {
+        const { trelloStatus } = await import('../integrations/trello-connection');
+        return json(trelloStatus(ctx.config));
+      },
+    },
+    '/api/integrations/mailchimp/options': {
+      GET: async (req: Request) => {
+        const {mailchimpOptions, MailchimpOptionsError} = await import('../integrations/mailchimp-options');
+        try { return json(await mailchimpOptions(ctx.config, new URL(req.url).searchParams)); }
+        catch (error) { return json({error: error instanceof MailchimpOptionsError ? error.message : 'Could not load Mailchimp choices.'}, error instanceof MailchimpOptionsError ? error.status : 502); }
+      },
+    },
+    '/api/integrations/mailchimp': {
+      GET: async () => {
+        const { mailchimpStatus } = await import('../integrations/mailchimp-connection');
+        return json(mailchimpStatus(ctx.config));
+      },
+    },
 
     '/api/integrations/slack/options': {
       GET: async (req: Request) => {

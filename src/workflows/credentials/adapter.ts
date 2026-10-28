@@ -135,8 +135,9 @@ export function managedConnectionMisuse(source: JarvisConnectionSource, pieceNam
   if (path !== 'settings.input.auth') return `Managed connection jarvis:${source.id} can only be a step's auth`;
   // Judged only with the step's settings: a caller without them (prepared
   // qualification) is told about the piece alone, and readiness and the run's
-  // scope check, which always pass them, refuse any other action or a trigger,
-  // also a trigger that carries a stray actionName.
+  // scope check, which always pass them, refuse any other action or a trigger.
+  // A trigger is refused by its `triggerName` whatever stray `actionName` it
+  // also carries, since the engine runs a trigger by its trigger name.
   const allowed = source.pieceDetails?.[pieceName]?.actions;
   if (allowed && settings !== undefined && (!record(settings) || settings.triggerName !== undefined
     || typeof settings.actionName !== 'string' || !allowed.includes(settings.actionName))) {
