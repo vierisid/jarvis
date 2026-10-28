@@ -893,6 +893,8 @@ export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
   if (entry.name === '@activepieces/piece-dropbox') {
     const listPath = entry.actions.list_dropbox_folder?.inputSchema?.fields.find(field => field.name === 'path');
     if (listPath) listPath.placeholder = '/ for Dropbox home, /folder or a workflow variable';
+    const filenameOnly = entry.actions.search_dropbox?.inputSchema?.fields.find(field => field.name === 'filename_only');
+    if (filenameOnly) filenameOnly.description = (filenameOnly.description ? filenameOnly.description + ' ' : '') + 'The hosted Jarvis Dropbox connection always matches file names only.';
     const item = {'.tag': 'folder', id: 'id:example', name: 'Example', path_lower: '/example', path_display: '/Example'};
     const samples: Record<string, unknown> = {
       create_new_dropbox_folder: {metadata: item}, get_dropbox_file_metadata: item,

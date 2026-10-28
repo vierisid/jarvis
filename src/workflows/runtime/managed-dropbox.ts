@@ -80,7 +80,9 @@ export async function runManagedDropboxAction(
         order_by: orderBy,
       },
     };
-    // Qualify only filters we send; never silently ignore a workflow's intended filter.
+    // Hosted search always matches file names only (filename_only is sent as
+    // true whatever the step says; the catalog's field description says so).
+    // Every other filter the endpoint does not send is refused, not ignored.
     for (const key of ["file_extensions", "file_categories", "account_id"])
       if (input[key])
         throw new Error(
@@ -111,12 +113,16 @@ export async function runManagedDropboxAction(
       throw new Error(
         "Hosted Dropbox supports basic metadata. Disable advanced metadata options.",
       );
-  } else {
+  } else if (action === "create_new_dropbox_folder") {
     endpoint = "create_folder_v2";
     const destination = path(input.path);
     if (!destination.startsWith("/") || destination === "/")
       throw new Error("Enter the new folder's full Dropbox path.");
     body = { path: destination, autorename: input.autorename === true };
+  } else {
+    throw new Error(
+      "This Dropbox action has not been enabled for the managed connection.",
+    );
   }
   let response: Response;
   try {

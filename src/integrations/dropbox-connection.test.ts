@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import {
   mkdtempSync,
   mkdirSync,
@@ -205,18 +206,41 @@ test("revocation requests reconnect, transient failures preserve the binding, re
       )) as unknown as typeof fetch),
   ).rejects.toThrow("Reconnect");
   expect(dropboxNeedsReconnect(config, c)).toBe(true);
-  write({
-    ...doc(),
-    refresh: { ...c.refresh, url: "https://attacker.test/refresh" },
-  });
-  let calls = 0;
-  await expect(
-    freshDropboxConnection(config, (async () => {
-      calls++;
-      return success();
-    }) as unknown as typeof fetch),
-  ).rejects.toThrow("not configured");
-  expect(calls).toBe(0);
+  // The origin and the path are each checked on their own: each URL below
+  // passes every other rule and fails exactly one of them.
+  for (const url of [
+    "https://attacker.test/refresh",
+    "https://attacker.test/api/integrations/dropbox/refresh",
+    "https://app.usejarvis.dev/api/integrations/dropbox/other",
+  ]) {
+    write({ ...doc(), refresh: { ...c.refresh, url } });
+    let calls = 0;
+    await expect(
+      freshDropboxConnection(config, (async () => {
+        calls++;
+        return success();
+      }) as unknown as typeof fetch),
+    ).rejects.toThrow("not configured");
+    expect(calls).toBe(0);
+  }
+});
+test("a reconnect that lands while the renewed token is saved is not handed out", async () => {
+  const c = doc();
+  write(c);
+  const original = fs.renameSync;
+  const rename = spyOn(fs, "renameSync").mockImplementation(((from: fs.PathLike, to: fs.PathLike) => {
+    original(from, to);
+    // The grant changes after the save; only the check after it can see this.
+    if (String(to).endsWith("dropbox-access.json")) write(doc());
+  }) as typeof fs.renameSync);
+  try {
+    await expect(
+      freshDropboxConnection(config, (async () => success()) as unknown as typeof fetch),
+    ).rejects.toThrow("changed");
+    expect(rename).toHaveBeenCalled();
+  } finally {
+    rename.mockRestore();
+  }
 });
 
 test("the Dropbox adapter names every action of the pinned bundle, and nothing else", () => {
@@ -241,7 +265,15 @@ test("a caller without the step's settings is told about the piece only; with th
   expect(
     managedConnectionMisuse(source, "@activepieces/piece-http", "settings.input.auth"),
   ).not.toBeNull();
-  for (const settings of [{ triggerName: "new_folder" }, {}, null, "x"])
+  // A trigger is refused by its triggerName even when it also names an
+  // allowed action: the trigger hook runs the piece's own trigger code.
+  for (const settings of [
+    { triggerName: "new_folder" },
+    { triggerName: "new_folder", actionName: "search_dropbox" },
+    {},
+    null,
+    "x",
+  ])
     expect(
       managedConnectionMisuse(source, piece, "settings.input.auth", settings),
     ).not.toBeNull();

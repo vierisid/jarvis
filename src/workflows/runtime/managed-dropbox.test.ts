@@ -52,6 +52,9 @@ test("unsupported operations, invalid paths and filters are rejected before tran
   for (const [action, input] of [
     ["custom_api_call", {}],
     ["delete_dropbox_file", {}],
+    // Valid input, so only the action check can refuse it.
+    ["delete_dropbox_file", { path: "/Example" }],
+    ["delete_dropbox_folder", { path: "/Example" }],
     ["create_new_dropbox_folder", { path: "https://evil.test" }],
     ["search_dropbox", { query: "a" }],
     ["search_dropbox", { query: "abc", file_status: "deleted" }],
@@ -96,4 +99,18 @@ test("search forwards sorting and normalizes the home root without widening file
       request,
     ),
   ).toEqual({ matches: [], has_more: true, cursor: "next" });
+});
+
+test("a response over 1 MiB is refused even when it is valid JSON", async () => {
+  const big = JSON.stringify({ matches: [], has_more: false, pad: "x".repeat(1048576) });
+  const request = (async () => new Response(big, { headers: { "Content-Type": "application/json" } })) as unknown as typeof fetch;
+  await expect(
+    runManagedDropboxAction("search_dropbox", { auth, query: "Example" }, request),
+  ).rejects.toThrow("invalid response");
+  // Just under the cap is read.
+  const small = JSON.stringify({ matches: [], has_more: false, pad: "x".repeat(1048576 - 60) });
+  expect(
+    await runManagedDropboxAction("search_dropbox", { auth, query: "Example" },
+      (async () => new Response(small)) as unknown as typeof fetch),
+  ).toHaveProperty("has_more", false);
 });
