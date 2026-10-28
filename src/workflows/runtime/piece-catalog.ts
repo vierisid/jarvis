@@ -313,7 +313,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "10"; // v10: managed Mailchimp output contracts
+export const CATALOG_SCHEMA_VERSION = "11"; // v10: managed GitHub issue output contracts; v11: managed Mailchimp output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -921,6 +921,22 @@ export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
       if (action.outputSample === undefined) action.outputSample = sample;
       for (const field of action.inputSchema?.fields ?? []) {
         if (field.sourceType === 'DROPDOWN') {field.type = 'string'; field.placeholder = 'ID or workflow variable'; delete field.options;}
+      }
+    }
+  }
+  if (entry.name === '@activepieces/piece-github') {
+    const issue = {id: 1, number: 42, title: 'Example issue', body: 'Description', state: 'open', html_url: 'https://github.com/owner/repo/issues/42', url: 'https://api.github.com/repos/owner/repo/issues/42'};
+    const samples: Record<string, unknown> = {
+      github_create_issue: {status: 201, body: issue}, getIssueInformation: {status: 200, body: issue}, update_issue: {status: 200, body: issue},
+      createCommentOnAIssue: {status: 201, body: {id: 2, body: 'Comment', issue_url: issue.url, html_url: issue.html_url + '#issuecomment-2'}},
+      find_issue: {found: true, result: [issue], total_count: 1, has_more: false},
+    };
+    for (const [name, sample] of Object.entries(samples)) {
+      const action = entry.actions[name]; if (!action) continue;
+      if (action.outputSample === undefined) action.outputSample = sample;
+      for (const field of action.inputSchema?.fields ?? []) {
+        if (field.name === 'repository') {field.type = 'json'; field.placeholder = '{"owner":"owner","repo":"repo"}'; delete field.options;}
+        if (field.name === 'issue_number') {field.type = 'number'; delete field.options;}
       }
     }
   }

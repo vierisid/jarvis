@@ -24,6 +24,7 @@
 import { HTTP_PIECE, isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { documentInput, applyDocument, documentFields, type DecisionDocument } from './decision-document';
 import {managedMailchimpInput, managedMailchimpIssue, runManagedMailchimpAction} from './managed-mailchimp';
+import {managedGitHubInput, managedGitHubIssue, runManagedGitHubAction} from './managed-github';
 
 export const PIECE_AUTHORIZE_PATH = '/v1/jarvis/pieces/authorize';
 export const PIECE_RECEIPT_PATH = '/v1/jarvis/pieces/receipt';
@@ -101,6 +102,11 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
   const mailchimp = params.piece === '@activepieces/piece-mailchimp' && managedMailchimpInput(params.input);
   if (mailchimp) {
     const issue = managedMailchimpIssue(params.action, mailchimp);
+    if (issue) throw new Error(issue);
+  }
+  const github = params.piece === '@activepieces/piece-github' && managedGitHubInput(params.input);
+  if (github) {
+    const issue = managedGitHubIssue(params.action, github);
     if (issue) throw new Error(issue);
   }
   const governed = isGovernedPiece(params.piece) && typeof params.action === 'string' && params.action.length > 0;
@@ -192,10 +198,19 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
     const issue = managedMailchimpIssue(params.action, mailchimp);
     if (issue) throw new Error(issue);
   }
+  const github = params.piece === '@activepieces/piece-github' && managedGitHubInput(params.input);
+  if (github) {
+    // Recheck after an approval document has applied edits.
+    const issue = managedGitHubIssue(params.action, github);
+    if (issue) throw new Error(issue);
+  }
   let raw: unknown;
   if (mailchimp) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Mailchimp dispatch was not authorized');
     raw = await runManagedMailchimpAction(String(params.action), mailchimp);
+  } else if (github) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('GitHub dispatch was not authorized');
+    raw = await runManagedGitHubAction(String(params.action), github);
   } else raw = await execute();
   // Gmail 0.17 returns a Gaxios response, including transport configuration.
   // Keep its data envelope for expressions, but never persist request headers

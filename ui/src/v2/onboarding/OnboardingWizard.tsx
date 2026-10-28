@@ -1,6 +1,7 @@
 import { CHAT_MODEL_SUGGESTIONS } from "../../../../src/llm/model-catalog";
 import { ClickUpConnection } from "../integrations/ClickUpConnection";
 import { MailchimpConnection } from "../integrations/MailchimpConnection";
+import { GitHubConnection } from "../integrations/GitHubConnection";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { openExternal, openedOrHandedOff } from "./external-open";
 import { useInterviewSession } from "./useInterviewSession";
@@ -1345,7 +1346,7 @@ export function OnboardingWizard({
         return (
           <div className="obw-body"><div className="obw-wrap wide">
             <h2>Connect your everyday tools.</h2>
-            <ClickUpConnection optional /><MailchimpConnection optional />
+            <ClickUpConnection optional /><GitHubConnection optional /><MailchimpConnection optional />
             <div className="obw-sub">Start with the tools involved in your daily work. All optional, all revocable from Settings.</div>
             <div className="obw-rows" style={{ marginTop: 14 }}>
               {rows.map(([id, ic, nm, bd]) => {

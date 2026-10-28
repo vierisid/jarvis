@@ -296,6 +296,7 @@ export const PATCHED_VENDOR_SOURCES = [
   '../../runtime/piece-effects.ts',
   '../../runtime/piece-effect-guard.ts',
   '../../runtime/managed-mailchimp.ts',
+  '../../runtime/managed-github.ts',
   // The egress guard the engine's file-property download goes through (#961).
   '../../runtime/http-egress.ts',
   '../../runtime/decision-document.ts',
