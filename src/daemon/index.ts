@@ -4,6 +4,7 @@ import { registerOnboarding } from '../brief/registrations/onboarding';
 import { ConnectedWorkspace } from '../brief/connected-workspace';
 import { MIN_BUN_VERSION, versionAtLeast } from '../util/bun-minimum.ts';
 import { githubStatus } from '../integrations/github-connection';
+import { asanaStatus } from '../integrations/asana-connection';
 import { clickUpStatus } from '../integrations/clickup-connection';
 import { connectedGoogle } from '../brief/connected-workspace-runtime';
 import { registerConnections } from '../brief/registrations/connections';
@@ -4757,6 +4758,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       google: () => connectedGoogle(jarvisConfig),
       clickup: () => clickUpStatus(jarvisConfig),
       github: () => githubStatus(jarvisConfig),
+      asana: () => asanaStatus(jarvisConfig),
       channels: () => {
         const status = channelService.getChannelStatus();
         return Object.fromEntries((['telegram', 'discord'] as const).map(name => [name, {

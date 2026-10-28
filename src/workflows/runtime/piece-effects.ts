@@ -113,6 +113,41 @@ export function asanaUpdateTeamCategory(input: Record<string, unknown>): ActionC
   return present(input.visibility) || present(input.endorsed) ? 'modify_settings' : 'write_data';
 }
 
+/**
+ * Asana `create_project` and `instantiate_project_template`: the new project
+ * is shared with a team, and a privacy setting other than private opens it to
+ * the workspace; template roles put people on it. Without any of those it is
+ * a private project of the caller's, a write. Anything else, a templated
+ * value included, is the worst case. An absent privacy setting is the
+ * workspace default; this treats it as a write.
+ */
+export function asanaCreateProjectCategory(input: Record<string, unknown>): ActionCategory {
+  if (present(input.team) || present(input.requested_roles)) return 'modify_settings';
+  return !present(input.privacy_setting) || input.privacy_setting === 'private' ? 'write_data' : 'modify_settings';
+}
+
+/** Asana `create_team`: a secret team is visible only to its members (the
+ * caller); any other visibility, a templated one included, lets the
+ * organization see or join it. Absent is Asana's default, treated as a write. */
+export function asanaCreateTeamCategory(input: Record<string, unknown>): ActionCategory {
+  return !present(input.visibility) || input.visibility === 'secret' ? 'write_data' : 'modify_settings';
+}
+
+/** `duplicate_project` parts that copy only content, never who has access. */
+const ASANA_DUPLICATE_CONTENT_PARTS: ReadonlySet<unknown> = new Set(['notes', 'forms', 'allocations', 'task_assignee',
+  'task_attachments', 'task_dates', 'task_dependencies', 'task_followers', 'task_notes', 'task_projects',
+  'task_subtasks', 'task_tags', 'task_templates', 'task_type_default']);
+
+/** Asana `duplicate_project`: copying `members` or `permissions` grants the
+ * original's people access to the copy. A list of content parts only is a
+ * write; anything else (those two, an unknown part, a templated value or a
+ * non-list) is the worst case. */
+export function asanaDuplicateProjectCategory(input: Record<string, unknown>): ActionCategory {
+  if (!present(input.include)) return 'write_data';
+  return Array.isArray(input.include) && input.include.every(part => ASANA_DUPLICATE_CONTENT_PARTS.has(part))
+    ? 'write_data' : 'modify_settings';
+}
+
 /** The vendored core HTTP piece (#961). */
 export const HTTP_PIECE = '@activepieces/piece-http';
 
@@ -648,7 +683,7 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
     'enum_option', 'portfolio', 'item', 'goal', 'allocation', 'access_request', 'target', 'project_template',
     'name', 'title', 'notes', 'html_notes', 'assignee', 'due_on', 'due_at', 'start_on', 'completed', 'archived',
     'privacy_setting', 'owner', 'visibility', 'access_level', 'text', 'html_text', 'is_pinned', 'completed_since',
-    'limit', 'offset'],
+    'include', 'requested_roles', 'limit', 'offset'],
   categories: {
     read_data: ['get_allocation', 'get_attachment', 'get_current_user', 'get_custom_field', 'get_goal', 'get_job',
       'get_membership', 'get_portfolio', 'get_project', 'get_project_brief', 'get_project_task_counts', 'get_section',
@@ -665,14 +700,17 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
     // comment notifies the task's followers, a status update the project's
     // members, an access request the owner.
     send_message: ['add_task_comment', 'update_comment', 'create_status_update', 'create_access_request'],
-    // Workspace content under the caller's own access. Followers are
-    // collaborators drawn from the workspace; none of these grants a person
-    // access to a project, team or workspace.
-    write_data: ['add_goal_supporting_relationship', 'add_portfolio_item', 'add_project_followers', 'add_tag_to_task',
+    // Workspace content under the caller's own access; none of these grants a
+    // person access to a project, team or workspace. Task followers
+    // (`add_task_followers`, and `followers` on `create_project_task` and
+    // `create_subtask`) only get the task's notifications: a follower who
+    // cannot see the project gains that one task, not the project, so these
+    // stay writes. Project followers are different (below).
+    write_data: ['add_goal_supporting_relationship', 'add_portfolio_item', 'add_tag_to_task',
       'add_task_dependencies', 'add_task_followers', 'add_task_to_project', 'create_allocation', 'create_custom_field',
-      'create_custom_field_enum_option', 'create_project', 'create_project_brief', 'create_project_task',
-      'create_section', 'create_subtask', 'create_tag', 'create_task', 'create_team', 'duplicate_project',
-      'duplicate_task', 'instantiate_project_template', 'move_section', 'move_task_to_section', 'reject_access_request',
+      'create_custom_field_enum_option', 'create_project_brief', 'create_project_task',
+      'create_section', 'create_subtask', 'create_tag', 'create_task',
+      'duplicate_task', 'move_section', 'move_task_to_section', 'reject_access_request',
       'remove_portfolio_item', 'remove_project_followers', 'remove_tag_from_task', 'remove_task_dependencies',
       'remove_task_followers', 'remove_task_from_project', 'reorder_custom_field_enum_option', 'set_task_parent',
       'update_allocation', 'update_custom_field', 'update_custom_field_enum_option', 'update_project_brief',
@@ -682,12 +720,20 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
       'delete_membership', 'delete_project', 'delete_project_brief', 'delete_section', 'delete_status_update',
       'delete_tag', 'delete_task', 'remove_project_members', 'remove_user_from_team', 'remove_user_from_workspace'],
     // Who can see or do what: granting a person access to a project, team or
-    // workspace. `update_project` and `update_team` sit here at their worst
-    // case (privacy, owner, visibility) and narrow by input.
-    modify_settings: ['add_project_members', 'add_user_to_team', 'add_user_to_workspace', 'approve_access_request',
-      'create_membership', 'update_project', 'update_team'],
+    // workspace. `add_project_followers` makes a follower who is not yet a
+    // member a member (upstream's own description). The project and team
+    // creates, `duplicate_project`, `update_project` and `update_team` sit
+    // here at their worst case (team, privacy, owner, visibility, copied
+    // members or permissions) and narrow by input.
+    modify_settings: ['add_project_followers', 'add_project_members', 'add_user_to_team', 'add_user_to_workspace',
+      'approve_access_request', 'create_membership', 'create_project', 'create_team', 'duplicate_project',
+      'instantiate_project_template', 'update_project', 'update_team'],
   },
   categoryFromInput: {
+    create_project: { props: ['team', 'privacy_setting'], category: asanaCreateProjectCategory },
+    instantiate_project_template: { props: ['team', 'privacy_setting', 'requested_roles'], category: asanaCreateProjectCategory },
+    create_team: { props: ['visibility'], category: asanaCreateTeamCategory },
+    duplicate_project: { props: ['include'], category: asanaDuplicateProjectCategory },
     update_project: { props: ['privacy_setting', 'owner', 'archived'], category: asanaUpdateProjectCategory },
     update_team: { props: ['visibility', 'endorsed'], category: asanaUpdateTeamCategory },
   },

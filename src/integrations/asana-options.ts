@@ -1,13 +1,16 @@
 import type {JarvisConfig} from "../config/types";
 import {freshAsanaConnection} from "./asana-refresh";
 import {asanaGid, asanaRequest} from "../workflows/runtime/managed-asana";
+/** An error in the request itself (a bad workspace or offset), reported as 400. */
+export class AsanaOptionsInputError extends Error {}
+const input=<T>(read:()=>T):T=>{try{return read();}catch(error){throw new AsanaOptionsInputError(error instanceof Error ? error.message : "Invalid Asana request.");}};
 /** One explicit page, fixed URL and fields; never follow the provider's next-page URL. */
 export async function asanaOptions(config:JarvisConfig,query:URLSearchParams,request:typeof fetch=fetch) {
-  const workspace=asanaGid(query.get("workspace"));
+  const workspace=input(()=>asanaGid(query.get("workspace")));
   const offset=query.get("offset");
-  if(offset && offset.length>4096)throw new Error("Invalid Asana pagination offset.");
+  if(offset && offset.length>4096)throw new AsanaOptionsInputError("Invalid Asana pagination offset.");
   const c=await freshAsanaConnection(config,request);
-  if(!c.workspaces.some(w=>w.id===workspace))throw new Error("Choose a connected Asana workspace.");
+  if(!c.workspaces.some(w=>w.id===workspace))throw new AsanaOptionsInputError("Choose a connected Asana workspace.");
   const params=new URLSearchParams({limit:"100",archived:"false",opt_fields:"name"});
   if(offset)params.set("offset",offset);
   const page=await asanaRequest(c.access_token,"/workspaces/"+encodeURIComponent(workspace)+"/projects?"+params,"GET",undefined,request);

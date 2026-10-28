@@ -248,8 +248,9 @@ const ASANA_072_BY_UPSTREAM: Record<string, string[]> = {
 };
 /** Where Jarvis departs from upstream's label: messages to people, and access grants. */
 const SENDS = ["add_task_comment", "update_comment", "create_status_update", "create_access_request"];
-const ACCESS = ["add_project_members", "add_user_to_team", "add_user_to_workspace", "approve_access_request",
-  "create_membership", "update_project", "update_team"];
+const ACCESS = ["add_project_followers", "add_project_members", "add_user_to_team", "add_user_to_workspace",
+  "approve_access_request", "create_membership", "create_project", "create_team", "duplicate_project",
+  "instantiate_project_template", "update_project", "update_team"];
 const expectedCategory = (upstream: string, name: string) =>
   SENDS.includes(name) ? "send_message" : ACCESS.includes(name) ? "modify_settings"
     : upstream === "READ" || upstream === "SEARCH" ? "read_data" : upstream === "DESTRUCTIVE" ? "delete_data" : "write_data";
@@ -283,6 +284,34 @@ test("a project or team update narrows from its worst case only when its input s
   expect(category("update_team", { team: "1", endorsed: true })).toBe("modify_settings");
   for (const action of ["update_project", "update_team"])
     expect(AUTHORITY_REQUIREMENTS[category(action)]).toBe(AUTHORITY_REQUIREMENTS.modify_settings);
+});
+test("creating or copying a project or team is a write only when it shares nothing with anyone else", () => {
+  const category = (action: string, input?: Record<string, unknown>) => resolveGovernedPieceAction(ASANA, action, input)!.category;
+  for (const action of ["create_project", "instantiate_project_template"]) {
+    expect(category(action)).toBe("modify_settings");
+    expect(category(action, { workspace: "1", project_template: "2", name: "Q4" })).toBe("write_data");
+    expect(category(action, { name: "Q4", privacy_setting: "private" })).toBe("write_data");
+    expect(category(action, { name: "Q4", privacy_setting: "public_to_workspace" })).toBe("modify_settings");
+    expect(category(action, { name: "Q4", privacy_setting: "{{trigger.privacy}}" })).toBe("modify_settings");
+    expect(category(action, { name: "Q4", privacy_setting: "private", team: "3" })).toBe("modify_settings");
+    expect(category(action, { name: "Q4", team: "{{trigger.team}}" })).toBe("modify_settings");
+  }
+  expect(category("instantiate_project_template", { name: "Q4", requested_roles: [{ gid: "1", value: "a@b.c" }] })).toBe("modify_settings");
+  expect(category("create_team")).toBe("modify_settings");
+  expect(category("create_team", { organization: "1", name: "Ops" })).toBe("write_data");
+  expect(category("create_team", { name: "Ops", visibility: "secret" })).toBe("write_data");
+  for (const visibility of ["public", "request_to_join", "{{trigger.visibility}}"])
+    expect(category("create_team", { name: "Ops", visibility })).toBe("modify_settings");
+  expect(category("duplicate_project")).toBe("modify_settings");
+  expect(category("duplicate_project", { project: "1", name: "Copy" })).toBe("write_data");
+  expect(category("duplicate_project", { project: "1", name: "Copy", include: [] })).toBe("write_data");
+  expect(category("duplicate_project", { project: "1", name: "Copy", include: ["notes", "task_followers"] })).toBe("write_data");
+  for (const include of [["members"], ["notes", "permissions"], ["{{trigger.part}}"], "{{trigger.parts}}", "members"])
+    expect(category("duplicate_project", { project: "1", name: "Copy", include })).toBe("modify_settings");
+  // Task followers only get that task's notifications, so they stay writes.
+  for (const action of ["add_task_followers", "create_project_task", "create_subtask"])
+    expect(category(action, { task: "1", followers: ["a@b.c"] })).toBe("write_data");
+  expect(category("add_project_followers", { project: "1", followers: ["a@b.c"] })).toBe("modify_settings");
 });
 test("prepared qualification, which passes no settings, is judged on the piece alone; a trigger never gets the grant", () => {
   const source = new JarvisAsanaConnectionSource(config);

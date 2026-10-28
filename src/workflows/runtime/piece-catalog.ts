@@ -896,7 +896,7 @@ export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
       for (const field of action.inputSchema?.fields ?? []) {
         if (field.sourceType === 'DROPDOWN') {field.type='string';field.placeholder='Asana ID or workflow variable';delete field.options;}
         if (field.name === 'due_on') {field.placeholder='YYYY-MM-DD';field.description='Hosted Asana requires a date as YYYY-MM-DD.';}
-        if (field.name === 'tags') {field.type='json';field.sourceType='ARRAY';field.placeholder='[]';field.description='Managed Asana does not support tags yet. Leave empty.';delete field.options;}
+        if (field.name === 'tags') {field.type='json';field.sourceType='ARRAY';field.placeholder='[]';field.description='Tag IDs or exact tag names. The hosted Jarvis Asana connection does not support tags yet: leave this empty when using it.';delete field.options;}
       }
     }
     const task = {gid:'123456', resource_type:'task', name:'Example task', notes:'Task description', completed:false, due_on:'2026-10-30', due_at:null, start_on:null, assignee:{gid:'123', name:'Owner'}, projects:[{gid:'456',name:'Project'}], workspace:{gid:'789',name:'Workspace'}, permalink_url:'https://app.asana.com/0/456/123456'};

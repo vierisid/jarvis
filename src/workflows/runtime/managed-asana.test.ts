@@ -28,7 +28,11 @@ test("bad destinations and unsupported or ambiguous input fail before dispatch",
     ["update_task",{task:"1"}],["update_task",{task:"1",due_on:"2026-02-30"}],["update_task",{task:"1",completed:"false"}],
     ["update_task",{task:"1",notes:"plain",html_notes:"<body>html</body>"}],["add_task_comment",{task:"1"}],
     ["list_project_tasks",{project:"1",limit:101}],
+    // Well-formed input for an action outside the five: only the action check refuses it.
+    ["delete_task",{task:"1"}],["get_project",{task:"1"}],
   ] as Array<[string,Record<string,unknown>]>) await expect(runManagedAsanaAction(action,{auth,...input},request)).rejects.toThrow();
+  expect(calls).toBe(0);
+  await expect(runManagedAsanaAction("delete_task",{auth,task:"1"},request)).rejects.toThrow("has not been enabled for the managed connection");
   expect(calls).toBe(0);
 });
 test("provider failures are bounded, sanitized and never automatically retried",async()=>{
