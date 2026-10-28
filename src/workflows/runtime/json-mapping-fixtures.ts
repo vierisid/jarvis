@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { digest } from './effect-context';
 import { evaluateWorkflowExpression, workflowInterpolationText } from './safe-expression';
+import { prepareSubmission, submissionConfig } from './form-submission';
 
 const JSON_PIECE = '@activepieces/piece-json';
 const SHEETS = '@activepieces/piece-google-sheets';
@@ -36,7 +37,8 @@ function prepare(saved: any, fixture: any) {
   check(object(fixture) && Array.isArray(fixture.cases) && fixture.cases.length > 0 && fixture.cases.length <= 40, 'supply 1-40 cases');
   check(JSON.stringify({saved, fixture}).length <= 200_000, 'input exceeds 200 KB');
   const graph = structuredClone(saved), nodes = new Map<string, any>();
-  check(graph?.type === 'PIECE_TRIGGER' && graph.settings?.pieceName === 'webhook' && Object.keys(graph.settings.input ?? {}).length === 0, 'requires a plain webhook');
+  check(graph?.type === 'PIECE_TRIGGER' && graph.settings?.pieceName === 'webhook'
+    && Object.keys(graph.settings.input ?? {}).every(key => key === 'request_id_field'), 'requires a plain or request-ID-only webhook');
   const scan = (node: any) => {
     if (!node) return;
     check(nodes.size < 40 && typeof node.name === 'string' && !nodes.has(node.name), 'graph too large or duplicate node');
@@ -74,19 +76,28 @@ function prepare(saved: any, fixture: any) {
       node.settings.input[key] = value; substitutions.push(name + '.' + key);
     }
   }
-  return {graph, substitutions};
+  const admission = submissionConfig(graph.settings.input);
+  return {graph, substitutions, admission, nodes};
 }
 
 /** Executes only allowlisted pure JSON actions, with no network-capable actions loaded. */
 async function runCases(saved: any, fixture: any) {
-  const {graph, substitutions} = prepare(saved, fixture);
+  const {graph, substitutions, admission, nodes} = prepare(saved, fixture);
   const {json} = createRequire(import.meta.url)(JSON_PIECE);
   const cases = [];
   for (const c of fixture.cases) {
     check(typeof c.name === 'string' && Object.hasOwn(c, 'payload') && Array.isArray(c.expectedRows)
       && ['SUCCEEDED','REJECTED','FAILED','UNCERTAIN'].includes(c.expectedStatus), 'each case needs payload, expectedRows and expectedStatus');
     check(c.sheetsOutcome === undefined || ['success','failure','uncertain'].includes(c.sheetsOutcome), 'invalid sheetsOutcome');
+    check(c.sheetsOutcomes === undefined || object(c.sheetsOutcomes), 'sheetsOutcomes must map step names to outcomes');
+    for (const [name,outcome] of Object.entries(c.sheetsOutcomes ?? {})) {
+      check(nodes.get(name)?.settings?.pieceName === SHEETS && ['success','failure','uncertain'].includes(String(outcome)), 'invalid Sheets step outcome');
+    }
+    const deliveries = c.deliveries ?? 1;
+    check(Number.isInteger(deliveries) && deliveries >= 1 && deliveries <= 20, 'deliveries must be 1-20');
     const scope: Record<string, any> = {trigger: c.payload}, steps: string[] = [], rows: any[] = [], requests: any[] = [];
+    const rowsByStep: Record<string, any[]> = {}, requestsByStep: Record<string, number> = {};
+    const admitted = new Set<string>(); let duplicateDeliveries = 0, rejectedDeliveries = 0;
     let returned: any, status = 'SUCCEEDED', error: string | undefined;
     const visit = async (node: any): Promise<void> => {
       if (!node) return;
@@ -124,11 +135,14 @@ async function runCases(saved: any, fixture: any) {
           check(input.value_input_option === 'RAW', 'RAW required for value-preservation fixtures');
           check(Array.isArray(input.values) && input.values.every((row: any) => Array.isArray(row) && row.every((v: any) => v === null || ['string','boolean'].includes(typeof v) || typeof v === 'number' && Number.isFinite(v))), 'values must be a typed 2D array');
           // This is the inspected append request shape; transport is a mock.
-          requests.push({spreadsheetId: input.spreadsheet_id, range: "'" + String(input.worksheet_title).replace(/'/g,"''") + "'!" + input.range,
+          requests.push({step: node.name, spreadsheetId: input.spreadsheet_id, range: "'" + String(input.worksheet_title).replace(/'/g,"''") + "'!" + input.range,
             valueInputOption: input.value_input_option, insertDataOption: 'INSERT_ROWS', requestBody: {majorDimension: 'ROWS', values: input.values}});
-          if (c.sheetsOutcome === 'failure') throw Error('Mock Sheets rejected append');
+          requestsByStep[node.name] = (requestsByStep[node.name] ?? 0) + 1;
+          const outcome = c.sheetsOutcomes?.[node.name] ?? c.sheetsOutcome;
+          if (outcome === 'failure') throw Error('Mock Sheets rejected append: ' + node.name);
           rows.push(...input.values);
-          if (c.sheetsOutcome === 'uncertain') { status = 'UNCERTAIN'; throw Error('Mock Sheets response lost after append'); }
+          (rowsByStep[node.name] ??= []).push(...input.values);
+          if (outcome === 'uncertain') { status = 'UNCERTAIN'; throw Error('Mock Sheets response lost after append: ' + node.name); }
           scope[node.name] = {updatedRange: 'Fixture!A1:C1', updatedRows: input.values.length};
         } else {
           returned = input.result;
@@ -138,8 +152,19 @@ async function runCases(saved: any, fixture: any) {
       }
       await visit(node.nextAction);
     };
-    try { await visit(graph.nextAction); }
-    catch (e) { if (status !== 'UNCERTAIN') status = 'FAILED'; error = e instanceof Error ? e.message : String(e); }
+    // Concurrent same-case deliveries share a synthetic admission set. This
+    // uses production normalization but does not claim to test SQLite locking.
+    await Promise.all(Array.from({length: deliveries}, async () => {
+      if (admission) {
+        let prepared;
+        try { prepared = prepareSubmission(c.payload, admission); }
+        catch (e) { rejectedDeliveries++; status = 'REJECTED'; error = (e as Error).message; return; }
+        if (admitted.has(prepared.key)) { duplicateDeliveries++; return; }
+        admitted.add(prepared.key); scope.trigger = prepared.data;
+      } else check(deliveries === 1, 'multiple deliveries require request-ID admission');
+      try { await visit(graph.nextAction); }
+      catch (e) { if (status !== 'UNCERTAIN') status = 'FAILED'; error = e instanceof Error ? e.message : String(e); }
+    }));
     check(status === c.expectedStatus, c.name + ': expected ' + c.expectedStatus + ', observed ' + status + (error ? ': ' + error : ''));
     check(isDeepStrictEqual(rows, c.expectedRows), c.name + ': typed row values differ: ' + JSON.stringify(rows));
     if (c.expectedSteps !== undefined) check(isDeepStrictEqual(steps, c.expectedSteps), c.name + ': executed steps differ');
@@ -147,6 +172,12 @@ async function runCases(saved: any, fixture: any) {
     if (c.expectedIssues !== undefined) check(isDeepStrictEqual(returned?.issues, c.expectedIssues), c.name + ': rejection issues differ');
     if (c.expectedError !== undefined) check(error?.includes(c.expectedError), c.name + ': expected error not observed');
     if (c.expectedRequests !== undefined) check(requests.length === c.expectedRequests, c.name + ': request count differs');
+    if (c.expectedDuplicateDeliveries !== undefined) check(duplicateDeliveries === c.expectedDuplicateDeliveries, c.name + ': duplicate delivery count differs');
+    if (c.expectedAdmissionRejections !== undefined) check(rejectedDeliveries === c.expectedAdmissionRejections, c.name + ': admission rejection count differs');
+    for (const [step,expected] of Object.entries(c.expectedRowsByStep ?? {}))
+      check(isDeepStrictEqual(rowsByStep[step] ?? [], expected), c.name + ': rows differ for ' + step);
+    for (const [step,expected] of Object.entries(c.expectedRequestsByStep ?? {}))
+      check((requestsByStep[step] ?? 0) === expected, c.name + ': request count differs for ' + step);
     // Assert arbitrary structured results without guessing the domain meaning
     // of a status string or treating a completed rejection branch as a failure.
     for (const assertion of c.assertions ?? []) {
@@ -160,12 +191,12 @@ async function runCases(saved: any, fixture: any) {
       }
       check(actual !== undefined && isDeepStrictEqual(JSON.parse(JSON.stringify(actual)),assertion.equals), c.name + ': output assertion differs at ' + assertion.step + '.' + assertion.path.join('.'));
     }
-    cases.push({name: c.name, passed: true, status, steps, rows, requests, ...(returned === undefined ? {} : {result: returned}), ...(error ? {error} : {})});
+    cases.push({name: c.name, passed: true, status, steps, rows, rowsByStep, requests, duplicateDeliveries, rejectedDeliveries, ...(returned === undefined ? {} : {result: returned}), ...(error ? {error} : {})});
   }
   return {passed: true, definitionDigest: digest(saved), cases, substitutions, externalActions: 0,
     jsonConnectorVersion: '0.1.14',
-    scope: 'Saved-graph component fixtures: actual pinned JSON connector actions (including JSONata), production template expressions, first-match routing and mocked Sheets append requests. Not an end-to-end test.',
-    limitations: 'No live accounts, provider transport, durable worker/receipts, Authority or webhook HTTP rejection response tested. Unknown writes are reported as uncertain; retry recovery is not simulated.',
+    scope: 'Saved-graph component fixtures: actual pinned JSON connector actions (including JSONata), production template expressions and ID normalization, in-memory admission, first-match routing and per-step mocked Sheets append requests. Not an end-to-end test.',
+    limitations: 'No live accounts, provider transport, durable worker/receipts, Authority or webhook HTTP rejection response tested. Duplicate deliveries use a synthetic in-memory claim, not durable recovery. Unknown writes are reported as uncertain; receipt replay/retry recovery is not simulated.',
     configuration: 'Setup substituted only in memory. Saved graph, credentials, activation and workflow runs are unchanged.'};
 }
 
