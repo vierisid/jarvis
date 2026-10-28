@@ -652,10 +652,37 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
       'clickup_delete_time_entry'],
   },
 }, {
-  // Trello: only the managed actions are named; any other action falls back to `modify_settings`.
+  // Trello: every action of the installed 0.8.1 bundle (0.7.1 has the same
+  // set; `trello-connection.test.ts` pins the list and the engine test checks
+  // it against the installed package), so a workflow on the user's own Trello
+  // connection keeps running at the default level. The managed `jarvis:trello`
+  // connection is narrower still: `managed-trello.ts` runs only five of these.
+  // Only `custom_api_call` and an action added upstream fall back to `modify_settings`.
   catalogId: 'trello', pieceName: '@activepieces/piece-trello', unknownActionCategory: 'modify_settings',
-  targetProps: ['board_id','list_id','card_id','cardId','name','description','position'],
-  categories: {read_data: ['list_boards','list_lists','get_card'], write_data: ['create_card','move_card']},
+  targetProps: ['board_id','list_id','card_id','cardId','source_card_id','checklist_id','checkitem_id',
+    'comment_id','attachment_id','label_id','member_id','custom_field_id','org_id','name','description','position'],
+  categories: {
+    read_data: ['get_board','get_card','get_card_ai','get_card_attachment','get_card_attachments','get_custom_field',
+      'get_list','get_member','get_my_member','list_board_custom_fields','list_board_labels','list_board_memberships',
+      'list_board_members','list_boards','list_card_activity','list_card_attachments_ai','list_card_checklists',
+      'list_card_comments','list_card_custom_field_values','list_card_members','list_cards_in_board',
+      'list_cards_in_list','list_card_votes','list_custom_field_options','list_lists','list_organization_boards',
+      'search_cards','search_members'],
+    // A comment notifies the card's members, like a ClickUp task comment.
+    send_message: ['add_comment_to_card','update_comment'],
+    // Board content under the caller's own access. Card members are assignees
+    // drawn from the board; none of these changes who can see the board.
+    write_data: ['add_card_attachment','add_card_attachment_from_url','add_checklist_item','add_checklist_to_card',
+      'add_label_to_card','add_member_to_card','add_reaction_to_comment','copy_card','create_board',
+      'create_board_custom_field','create_board_label','create_card','create_card_ai','create_custom_field_option',
+      'create_list','move_all_cards_in_list','move_card','move_list_to_board','remove_label_from_card',
+      'remove_member_from_card','rename_list','set_card_custom_field_value','set_checklist_item_state','update_board',
+      'update_card','update_card_ai','update_checklist','update_checklist_item','update_label','vote_on_card'],
+    // Every delete, and the archives upstream labels DESTRUCTIVE (a bulk list archive among them).
+    delete_data: ['archive_all_cards_in_list','archive_board','archive_card','archive_list','delete_board',
+      'delete_card','delete_card_ai','delete_card_attachment','delete_checklist','delete_checklist_item',
+      'delete_comment','delete_custom_field','delete_label','remove_card_vote'],
+  },
 }];
 
 /** Every adapter: the verified catalog pieces, the vendored core pieces, then the managed ones. */

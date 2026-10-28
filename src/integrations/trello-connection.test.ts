@@ -8,6 +8,27 @@ import {trelloStatus,readTrelloConnection} from './trello-connection';
 import {trelloOptions} from './trello-options';
 import {JarvisTrelloConnectionSource} from '../workflows/credentials/trello-source';
 import {CredentialResolver} from '../workflows/credentials/adapter';
+import {MANAGED_PIECE_ADAPTERS, resolveGovernedPieceAction} from '../workflows/runtime/piece-effects';
+/** Every action of the installed @activepieces/piece-trello 0.8.1 bundle (0.7.1 has the same set), read
+ * statically from its `actions:` array (custom_api_call is added by the framework and stays unmapped).
+ * The engine test checks the installed package against the adapter too. */
+const TRELLO_081_ACTIONS = [
+  'add_card_attachment', 'add_card_attachment_from_url', 'add_checklist_item', 'add_checklist_to_card',
+  'add_comment_to_card', 'add_label_to_card', 'add_member_to_card', 'add_reaction_to_comment',
+  'archive_all_cards_in_list', 'archive_board', 'archive_card', 'archive_list', 'copy_card', 'create_board',
+  'create_board_custom_field', 'create_board_label', 'create_card', 'create_card_ai', 'create_custom_field_option',
+  'create_list', 'delete_board', 'delete_card', 'delete_card_ai', 'delete_card_attachment', 'delete_checklist',
+  'delete_checklist_item', 'delete_comment', 'delete_custom_field', 'delete_label', 'get_board', 'get_card',
+  'get_card_ai', 'get_card_attachment', 'get_card_attachments', 'get_custom_field', 'get_list', 'get_member',
+  'get_my_member', 'list_board_custom_fields', 'list_board_labels', 'list_board_memberships', 'list_board_members',
+  'list_boards', 'list_card_activity', 'list_card_attachments_ai', 'list_card_checklists', 'list_card_comments',
+  'list_card_custom_field_values', 'list_card_members', 'list_cards_in_board', 'list_cards_in_list',
+  'list_card_votes', 'list_custom_field_options', 'list_lists', 'list_organization_boards', 'move_all_cards_in_list',
+  'move_card', 'move_list_to_board', 'remove_card_vote', 'remove_label_from_card', 'remove_member_from_card',
+  'rename_list', 'search_cards', 'search_members', 'set_card_custom_field_value', 'set_checklist_item_state',
+  'update_board', 'update_card', 'update_card_ai', 'update_checklist', 'update_checklist_item', 'update_comment',
+  'update_label', 'vote_on_card',
+];
 let dir:string;
 const doc=()=>({version:1,provider:'trello',status:'connected',generation:randomUUID(),access_token:'PRIVATE',settings:{api_key:'PUBLIC'},account:{id:'a'.repeat(24),label:'Owner'},workspaces:[],connected_at:new Date().toISOString()});
 const write=(value:unknown)=>writeFileSync(join(dir,'connections/trello.json'),JSON.stringify(value));
@@ -38,4 +59,14 @@ test('board/list pickers use fixed read endpoints and reject stale account selec
 for(const [status,expected] of [[401,409],[403,409],[429,429],[500,502]])test('actionable provider failure '+status,async()=>{
   try{await trelloOptions(config(),new URLSearchParams(),(async()=>new Response('SENSITIVE',{status})) as unknown as typeof fetch);throw Error('expected rejection');}
   catch(e){expect(e).toMatchObject({status:expected});expect(String(e)).not.toContain('SENSITIVE');}
+});
+test('the Trello adapter names every action of the installed bundle, and nothing else', () => {
+  const adapter=MANAGED_PIECE_ADAPTERS.find(a=>a.pieceName==='@activepieces/piece-trello')!;
+  const mapped=Object.values(adapter.categories).flat() as string[];
+  expect(TRELLO_081_ACTIONS).toHaveLength(74);
+  expect([...mapped].sort()).toEqual([...TRELLO_081_ACTIONS].sort());
+  for(const name of TRELLO_081_ACTIONS.filter(name=>/^(delete|archive)_/.test(name)))expect(resolveGovernedPieceAction('@activepieces/piece-trello',name)!.category).toBe('delete_data');
+  for(const name of ['list_boards','get_card','search_cards'])expect(resolveGovernedPieceAction('@activepieces/piece-trello',name)!.category).toBe('read_data');
+  expect(resolveGovernedPieceAction('@activepieces/piece-trello','add_comment_to_card')!.category).toBe('send_message');
+  expect(resolveGovernedPieceAction('@activepieces/piece-trello','custom_api_call')).toMatchObject({category:'modify_settings',known:false});
 });

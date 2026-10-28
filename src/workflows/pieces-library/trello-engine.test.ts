@@ -1,7 +1,7 @@
 /** Published piece metadata/read actions plus the managed send adapter in the
  * real engine. Provider URLs in disposable package/engine copies target a
  * local fixture; no live Trello calls or account credentials are used.
- * Run JARVIS_TEST_TRELLO_ENGINE=1 bun test this-file (installs pinned 0.7.1). */
+ * Run JARVIS_TEST_TRELLO_ENGINE=1 bun test this-file (installs 0.8.1, the version the catalog installs). */
 import {afterAll, beforeAll, expect, test} from 'bun:test';
 import {mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
 import {join} from 'node:path';
@@ -22,6 +22,7 @@ import {EmergencyController} from '../../authority/emergency';
 import {WorkflowEventBuffer} from '../runtime/event-buffer';
 import {buildSandboxServiceBackends} from '../runtime/service-backends';
 import {buildPieceCatalog} from '../runtime/piece-catalog';
+import {resolveGovernedPieceAction} from '../runtime/piece-effects';
 import {SandboxApi} from '../sandbox-api/server';
 import {workflowLogsBase} from '../sandbox-api/config';
 import {buildEngineBundle} from '../runner/engine-runtime/build';
@@ -38,7 +39,7 @@ beforeAll(async()=>{
  if(!gate)return;
  dir=mkdtempSync(join(tmpdir(),'jarvis-trello-engine-'));
  initWorkflowDb(join(dir,'db.sqlite'));
- writeFileSync(join(dir,'package.json'),JSON.stringify({private:true,dependencies:{[piece]:'0.7.1'}}));
+ writeFileSync(join(dir,'package.json'),JSON.stringify({private:true,dependencies:{[piece]:'0.8.1'}}));
  const install=spawnSync('bun',['install','--silent','--backend','copy'],{cwd:dir,encoding:'utf8'});
  if(install.status!==0)throw new Error('npm install failed: '+install.stderr);
  const board='a'.repeat(24),list='b'.repeat(24),card='c'.repeat(24),done='d'.repeat(24);
@@ -78,11 +79,16 @@ test.skipIf(!gate)('published Trello metadata and boards → lists → create �
  expect(failures).toEqual([]);
  const metadata=catalog.get(piece)!;
  expect(metadata.auth?.type).toBe('BASIC_AUTH');
+ // Every action the installed package declares is in the governed table, so
+ // an upstream addition fails here instead of falling to modify_settings.
+ const actions=Object.keys(metadata.actions);
+ expect(actions.length).toBeGreaterThan(70);
+ expect(actions.filter(name=>name!=='custom_api_call'&&!resolveGovernedPieceAction(piece,name)!.known)).toEqual([]);
  for(const name of ['list_boards','list_lists','create_card','get_card','move_card']) {
    expect(metadata.actions[name]?.requireAuth).toBe(true);expect(metadata.actions[name]?.outputSample).toBeDefined();
  }
  expect(metadata.actions.create_card?.outputSample).toMatchObject({idList:'b'.repeat(24)});
- const step=(name:string,actionName:string,input:Record<string,unknown>,nextAction?:any)=>({name,type:'PIECE' as const,settings:{pieceName:piece,pieceVersion:'0.7.1',actionName,input:{auth:'{{connections.jarvis:trello}}',...input}},...(nextAction?{nextAction}:{})});
+ const step=(name:string,actionName:string,input:Record<string,unknown>,nextAction?:any)=>({name,type:'PIECE' as const,settings:{pieceName:piece,pieceVersion:'0.8.1',actionName,input:{auth:'{{connections.jarvis:trello}}',...input}},...(nextAction?{nextAction}:{})});
  const move=step('move','move_card',{card_id:'{{read.id}}',list_id:'{{lists.lists[1].id}}'});
  const read=step('read','get_card',{cardId:'{{create.id}}'},move);
  const create=step('create','create_card',{board_id:'{{boards.boards[0].id}}',list_id:'{{lists.lists[0].id}}',name:'Sandbox card'},read);
