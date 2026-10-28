@@ -1,7 +1,8 @@
 /** Published piece metadata/read actions plus the managed send adapter in the
  * real engine. Provider URLs in disposable package/engine copies target a
  * local fixture; no live Slack calls or account credentials are used.
- * Run JARVIS_TEST_SLACK_ENGINE=1 bun test this-file (installs pinned 0.23.1). */
+ * Gated on JARVIS_TEST_ENGINE_BUILD=1 like the other engine tests; CI runs it
+ * in test.yml's engine step. It installs the pinned 0.23.1 from npm. */
 import {afterAll, beforeAll, expect, test} from 'bun:test';
 import {mkdtempSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync} from 'node:fs';
 import {join} from 'node:path';
@@ -29,7 +30,8 @@ import {EngineRuntime} from '../runner/engine-runtime/engine-runtime';
 import {EngineFlowExecutor} from '../runner/engine-runtime/engine-flow-executor';
 import {createRunFlowHandler} from '../runner/handler';
 import {Worker} from '../queue/worker';
-const gate=process.env.JARVIS_TEST_SLACK_ENGINE==='1';
+import {resolveGovernedPieceAction} from '../runtime/piece-effects';
+const gate=process.env.JARVIS_TEST_ENGINE_BUILD==='1';
 const piece='@activepieces/piece-slack';
 let dir:string, api:SandboxApi, runtime:EngineRuntime, provider:ReturnType<typeof Bun.serve>;
 let runId:string|undefined;
@@ -80,6 +82,11 @@ test.skipIf(!gate)('published Slack metadata and channel lookup, message and thr
  expect(failures).toEqual([]);
  const metadata=catalog.get(piece)!;
  expect(metadata.auth?.type).toBe('OAUTH2');
+ // Every action the installed package declares is in the governed table, so
+ // an upstream addition fails here instead of falling to delete_data.
+ const actions=Object.keys(metadata.actions);
+ expect(actions.length).toBeGreaterThan(40);
+ expect(actions.filter(name=>name!=='custom_api_call'&&!resolveGovernedPieceAction(piece,name)!.known)).toEqual([]);
  for(const name of ['send_channel_message','slack_post_message','slack_get_channel_info','slack_find_channel']) expect(metadata.actions[name]?.requireAuth).toBe(true);
  expect(metadata.actions.slack_post_message?.outputSample).toMatchObject({channel:'C0123456789',ts:'1710304378.475129'});
  expect(metadata.actions.slack_find_channel?.outputSample).toMatchObject({id:'C0123456789'});
