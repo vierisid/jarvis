@@ -2489,6 +2489,20 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    '/api/integrations/github/options': {
+      GET: async (req: Request) => {
+        const {githubOptions, GitHubOptionsError} = await import('../integrations/github-options');
+        try { return json(await githubOptions(ctx.config, new URL(req.url).searchParams)); }
+        catch (error) { return json({error: error instanceof GitHubOptionsError ? error.message : 'Could not load GitHub choices.'}, error instanceof GitHubOptionsError ? error.status : 502); }
+      },
+    },
+    '/api/integrations/github': {
+      GET: async () => {
+        const { githubStatus } = await import('../integrations/github-connection');
+        return json(githubStatus(ctx.config));
+      },
+    },
+
     // --- Google Auth Management ---
     '/api/auth/google/status': {
       GET: async () => {
