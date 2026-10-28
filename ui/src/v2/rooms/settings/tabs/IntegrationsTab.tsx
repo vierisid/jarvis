@@ -3,6 +3,7 @@ import { ClickUpConnection } from "../../../integrations/ClickUpConnection";
 import { MailchimpConnection } from "../../../integrations/MailchimpConnection";
 import { GitHubConnection } from "../../../integrations/GitHubConnection";
 import { TrelloConnection } from "../../../integrations/TrelloConnection";
+import { TypeformConnection } from "../../../integrations/TypeformConnection";
 import type { SettingsHook } from "../useSettingsData";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
 
@@ -334,6 +335,7 @@ export function IntegrationsTab({
       <ClickUpConnection optional />
       <GitHubConnection optional />
       <TrelloConnection optional />
+      <TypeformConnection optional />
     </div>
   );
 }

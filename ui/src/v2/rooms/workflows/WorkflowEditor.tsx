@@ -20,6 +20,7 @@ import { MailchimpConnection } from "../../integrations/MailchimpConnection";
 import { TrelloConnection } from "../../integrations/TrelloConnection";
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSampleDraftText } from "./useSampleDraftText";
+import { TypeformConnection, useTypeformStatus } from "../../integrations/TypeformConnection";
 import { ClickUpConnection, useClickUpStatus } from "../../integrations/ClickUpConnection";
 import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
 import { GitHubConnection, useGitHubStatus } from "../../integrations/GitHubConnection";
@@ -3748,8 +3749,10 @@ function ConnectionPicker({
   // the dropdown reflect the user's choice on re-open.
   const m = /^\{\{connections\.([^}]+)\}\}$/.exec(currentValue.trim());
   const currentExternalId = m ? m[1]! : "";
-  // ClickUp and GitHub may also offer the hosted connection; without it
-  // (self-hosted, or not connected) the picker reads exactly as for any other piece.
+  // ClickUp may also offer the hosted connection; without it (self-hosted, or
+  // not connected) the picker reads exactly as for any other piece.
+  const isTypeform = pieceName === "@activepieces/piece-typeform";
+  const managedTypeform = useTypeformStatus(isTypeform)?.connected === true;
   const isClickUp = pieceName === "@activepieces/piece-clickup";
   const managedClickUp = useClickUpStatus(isClickUp)?.connected === true;
   const isGitHub = pieceName === "@activepieces/piece-github";
@@ -3757,6 +3760,8 @@ function ConnectionPicker({
   return (
     <div className="wf-props__connection">
       {isGitHub && <GitHubConnection optional onPick={onPick} currentValue={currentValue} />}
+      {isTypeform && <><TypeformConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedTypeform && <p className="wf-props__hint">Read workspaces, forms and responses. Use a form ID or workflow variable. Recent responses may take up to 30 minutes to appear. Form editing and instant submission triggers are not supported yet.</p>}</>}
       {pieceName === "@activepieces/piece-mailchimp" && <MailchimpConnection onPick={onPick} currentValue={currentValue} />}
       {isClickUp && <ClickUpConnection optional onPick={onPick} currentValue={currentValue} />}
       {pieceName === "@activepieces/piece-trello" && <TrelloConnection onPick={onPick} currentValue={currentValue} />}
@@ -3764,7 +3769,7 @@ function ConnectionPicker({
         {authDisplayName}
         <span className="wf-props__connection-type">({authType})</span>
       </label>
-      {matching.length === 0 && !managedClickUp && !managedGitHub && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" ? (
+      {matching.length === 0 && !managedTypeform && !managedClickUp && !managedGitHub && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.

@@ -21,6 +21,7 @@
  * Imported BY THE ENGINE BUNDLE: keep it pure. `fetch` only, no node built-ins.
  */
 
+import {managedTypeformInput, runManagedTypeformAction} from './managed-typeform';
 import { HTTP_PIECE, isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { documentInput, applyDocument, documentFields, type DecisionDocument } from './decision-document';
 import {managedMailchimpInput, managedMailchimpIssue, runManagedMailchimpAction} from './managed-mailchimp';
@@ -199,6 +200,7 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
 export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParams, governance: PieceAuthorizeResponse, execute: () => Promise<unknown>): Promise<unknown> {
   if ('dispatch' in governance && governance.dispatch === 'completed') return governance.result;
   if ('dispatch' in governance && (governance.dispatch === 'held' || governance.dispatch === 'approval_required')) throw new Error('Piece is waiting for authorization');
+  const typeform = params.piece === "@activepieces/piece-typeform" ? managedTypeformInput(params.input) : null;
   const mailchimp = params.piece === '@activepieces/piece-mailchimp' && managedMailchimpInput(params.input);
   if (mailchimp) {
     // Recheck after an approval document has applied edits.
@@ -227,6 +229,9 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   } else if (github) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('GitHub dispatch was not authorized');
     raw = await runManagedGitHubAction(String(params.action), github);
+  } else if (typeform) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Typeform dispatch was not authorized');
+    raw = await runManagedTypeformAction(String(params.action), typeform);
   } else raw = await execute();
   // Gmail 0.17 returns a Gaxios response, including transport configuration.
   // Keep its data envelope for expressions, but never persist request headers

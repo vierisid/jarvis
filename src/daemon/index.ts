@@ -5009,6 +5009,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisGitHubConnectionSource(jarvisConfig.daemon.data_dir));
       const { JarvisTrelloConnectionSource } = await import("../workflows/credentials/trello-source");
       credentialResolver.register(new JarvisTrelloConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisTypeformConnectionSource } = await import("../workflows/credentials/typeform-source");
+      credentialResolver.register(new JarvisTypeformConnectionSource(jarvisConfig));
       logWithTimestamp(
         "Workflow credential resolver: registered jarvis:google source",
       );
