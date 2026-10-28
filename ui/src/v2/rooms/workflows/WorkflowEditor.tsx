@@ -20,6 +20,7 @@ import { MailchimpConnection } from "../../integrations/MailchimpConnection";
 import { TrelloConnection } from "../../integrations/TrelloConnection";
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSampleDraftText } from "./useSampleDraftText";
+import { CalendlyConnection, useCalendlyStatus } from "../../integrations/CalendlyConnection";
 import { ClickUpConnection, useClickUpStatus } from "../../integrations/ClickUpConnection";
 import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
 import { GitHubConnection, useGitHubStatus } from "../../integrations/GitHubConnection";
@@ -3748,8 +3749,10 @@ function ConnectionPicker({
   // the dropdown reflect the user's choice on re-open.
   const m = /^\{\{connections\.([^}]+)\}\}$/.exec(currentValue.trim());
   const currentExternalId = m ? m[1]! : "";
-  // ClickUp and GitHub may also offer the hosted connection; without it
-  // (self-hosted, or not connected) the picker reads exactly as for any other piece.
+  // ClickUp may also offer the hosted connection; without it (self-hosted, or
+  // not connected) the picker reads exactly as for any other piece.
+  const isCalendly = pieceName === "@activepieces/piece-calendly";
+  const managedCalendly = useCalendlyStatus(isCalendly)?.connected === true;
   const isClickUp = pieceName === "@activepieces/piece-clickup";
   const managedClickUp = useClickUpStatus(isClickUp)?.connected === true;
   const isGitHub = pieceName === "@activepieces/piece-github";
@@ -3757,14 +3760,16 @@ function ConnectionPicker({
   return (
     <div className="wf-props__connection">
       {isGitHub && <GitHubConnection optional onPick={onPick} currentValue={currentValue} />}
+      {isCalendly && <><CalendlyConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedCalendly && <p className="wf-props__hint">Read your meetings, invitees and event types, or create a single-use booking link. Leave User and Organization empty to use your account. Use an event URI, ID or workflow variable. Cancellation and instant booking triggers are not supported yet.</p>}</>}
       {pieceName === "@activepieces/piece-mailchimp" && <MailchimpConnection onPick={onPick} currentValue={currentValue} />}
       {isClickUp && <ClickUpConnection optional onPick={onPick} currentValue={currentValue} />}
       {pieceName === "@activepieces/piece-trello" && <TrelloConnection onPick={onPick} currentValue={currentValue} />}
       <label className="wf-props__field-label">
-        {authDisplayName}
-        <span className="wf-props__connection-type">({authType})</span>
+        {managedCalendly ? "Calendly account" : authDisplayName}
+        {!managedCalendly && <span className="wf-props__connection-type">({authType})</span>}
       </label>
-      {matching.length === 0 && !managedClickUp && !managedGitHub && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" ? (
+      {matching.length === 0 && !managedCalendly && !managedClickUp && !managedGitHub && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.
