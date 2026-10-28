@@ -65,7 +65,6 @@ export const PIECE_JARVIS_SOURCES: readonly string[] = [
   "workflows/runtime/http-egress.ts",
   "workflows/runtime/piece-effects.ts",
   "workflows/runtime/lead-batch.ts",
-  "workflows/runtime/hubspot-contact.ts",
 ];
 
 /**
@@ -122,6 +121,10 @@ function pieceHash(pieceDir: string): string {
   // that this list covers every such import).
   for (const rel of PIECE_JARVIS_SOURCES) {
     hasher.update(rel).update('\0').update(readFileSync(resolve(SRC_ROOT, rel))).update('\0');
+  }
+  // The batch contract imports this helper transitively, outside the vendored tree.
+  if (basename(pieceDir) === 'batch') {
+    hasher.update(readFileSync(resolve(SRC_ROOT, 'workflows/runtime/hubspot-contact.ts'))).update('\0');
   }
   const pkgPath = resolve(pieceDir, "package.json");
   if (existsSync(pkgPath)) {
