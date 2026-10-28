@@ -8,6 +8,9 @@ export function workflowSafeguards(trigger: unknown) {
     const s = node.settings ?? {};
     const input = s.input && typeof s.input === 'object' && !Array.isArray(s.input) ? s.input : {};
     const add=(kind:string,coverage:string,limits:string)=>safeguards.push({node:node.name,kind,coverage,limits});
+    if (String(s.pieceName).endsWith('jarvis-batch') && s.actionName === 'update_leads') {
+      add('lead-batch-outcomes','Update existing contacts only; isolate record failures; durable submission snapshot and per-record receipts across timer slices, restarts and versions. Collect updated/rejected/failed/uncertain references, send one deduplicated dashboard summary, then finalize_batch fails a partial run.', 'Maximum 1000 records / 1 MB. Mapped properties are required and scalar or string arrays. Same submission ID cannot change data, mapping or account. No create/upsert. Terminal outcomes never automatically replay; uncertain dispatch requires review. Resume unfinished records using the same submission. Summary delivery is receipt protected, not guaranteed after an uncertain delivery.');
+    }
     if (String(s.pieceName).endsWith('jarvis-onboarding') && s.actionName === 'create_resources') {
       add('customer-resource-outcomes','Independent ClickUp task and Drive folder creation with all-settled collection. Durable per-workflow/customer receipts across runs, versions and restarts. Retry explicit rejections only; reuse completed resources, fence uncertain writes. Return both outcomes and one deduplicated dashboard summary key.', 'OAuth2 accounts only; customer mapping/list/parent remain setup. No automatic reconciliation or eventual-delivery guarantee for uncertain writes. Concurrent processing waits for the owner or needs retry after its lease. Changed configuration requires review. Summary updates once when outcomes change.');
     }
