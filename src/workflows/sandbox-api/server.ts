@@ -1,3 +1,4 @@
+import {createSubflowRoute,type SubflowFn} from './routes/jarvis-subflow';
 /**
  * SandboxApi server: the HTTP+WS endpoint surface that the activepieces engine
  * subprocess talks back to. Implements the contracts upstream's engine expects:
@@ -93,6 +94,8 @@ import { json, err, type RouteContext, type RouteHandler } from "./routes/shared
 import { runWithOrigin } from "../../llm/origin.ts";
 
 export interface SandboxApiServices {
+  subflowCall?: SubflowFn;
+  subflowResult?: SubflowFn;
   meetingBriefs?: MeetingBriefsFn;
   weeklyReport?: WeeklyReportFn;
   approvalRefund?: ApprovalRefundFn;
@@ -298,6 +301,8 @@ export class SandboxApi {
       { path: '/v1/jarvis/reports/weekly', method: 'POST', handler: createWeeklyReportRoute(this.services) },
       { path: '/v1/jarvis/refunds/approval', method: 'POST', handler: createApprovalRefundRoute(this.services) },
       { path: '/v1/jarvis/imports/contacts', method: 'POST', handler: createContactImportRoute(this.services) },
+      {path:'/v1/jarvis/subflows/call',method:'POST',handler:createSubflowRoute(this.services,'call')},
+      {path:'/v1/jarvis/subflows/result',method:'POST',handler:createSubflowRoute(this.services,'result')},
       { path: '/v1/jarvis/batches/leads', method: 'POST', handler: createLeadBatchRoute(this.services) },
       { path: '/v1/jarvis/onboarding/resources', method: 'POST', handler: createOnboardingRoute(this.services) },
       { path: '/v1/jarvis/sales/followups', method: 'POST', handler: createSalesFollowupsRoute(this.services) },

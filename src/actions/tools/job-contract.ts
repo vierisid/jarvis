@@ -167,6 +167,7 @@ function pieceKind(pieceName: string, actionName: string | undefined): Kind | nu
   if (samePiece('jarvis-report', pieceName) && actionName === 'weekly_operating_report') return { effect: 'write_data' };
   if (samePiece('jarvis-refund', pieceName) && actionName === 'approval_refund') return { effect: 'make_payment' };
   if (samePiece('jarvis-import', pieceName) && actionName === 'resumable_contact_import') return { effect: 'write_data' };
+  if (samePiece('jarvis-subflow',pieceName)) return {effect:actionName==='call'?'spawn_agent':null};
   if (samePiece('jarvis-batch', pieceName) && actionName === 'update_leads') return { effect: 'write_data' };
   if (samePiece('jarvis-batch', pieceName) && actionName === 'finalize_batch') return { effect: null };
   if (samePiece('jarvis-onboarding', pieceName) && actionName === 'create_resources') return { effect: 'write_data' };

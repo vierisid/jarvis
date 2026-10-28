@@ -264,6 +264,12 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
       }
       if (REPORT_REQUIRED.every(k=>!emptyInput(input[k]))) try { reportSetup(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
     }
+    if (!root && isPiece('jarvis-subflow') && settings.actionName === 'call' && object(input)) {
+      if (!emptyInput(input.outputSchema)) try {parseOutputSchema(input.outputSchema);} catch(e) {issue(node,'settings.input.outputSchema','INPUT_TYPE',(e as Error).message);}
+      if (!emptyInput(input.timeoutSeconds) && (!Number.isInteger(input.timeoutSeconds)||Number(input.timeoutSeconds)<1||Number(input.timeoutSeconds)>86400)) issue(node,'settings.input.timeoutSeconds','INPUT_TYPE','Child timeout must be 1-86400 seconds');
+      runtime(node,'settings.input.invocationKey','piece-input','Persist child invocation and validated output across parent retries; refuse changed payload/configuration under the same key');
+      runtime(node,'settings.input.flow','workflow-binding','Pin child version, apply Authority, validate returned JSON, preserve absolute deadline and expose failure/timeout explicitly');
+    }
     if (!root && isPiece('jarvis-batch') && settings.actionName === BATCH_ACTION && object(input)) {
       const graphError=batchGraphError(raw); if(graphError) issue(node,'nextAction','INPUT_TYPE',graphError);
       if (object(trigger) && trigger.settings?.pieceName === 'webhook' && Object.values(trigger.settings.input ?? {}).some(v=>!emptyInput(v))) issue(node,'trigger.settings.input','INPUT_TYPE','Lead batch owns submission admission; do not add webhook admission that prevents incomplete batch resumption');
