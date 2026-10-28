@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { runManagedDropboxAction } from "./managed-dropbox";
+import { executeAuthorizedPiece } from "./piece-effect-guard";
 import {
   tracksPieceCompletion,
   resolveGovernedPieceAction,
@@ -113,4 +114,31 @@ test("a response over 1 MiB is refused even when it is valid JSON", async () => 
     await runManagedDropboxAction("search_dropbox", { auth, query: "Example" },
       (async () => new Response(small)) as unknown as typeof fetch),
   ).toHaveProperty("has_more", false);
+});
+test("a managed Dropbox step runs only after an authorized dispatch", async () => {
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls++;
+    return Response.json({ metadata: { ".tag": "folder", id: "id:1", name: "Example" } });
+  }) as unknown as typeof fetch;
+  try {
+    const params = {
+      apiUrl: "http://unused",
+      engineToken: "test",
+      piece: "@activepieces/piece-dropbox",
+      action: "create_new_dropbox_folder",
+      stepName: "step",
+      executionPath: [],
+      input: { auth, path: "/Example" },
+    };
+    await expect(
+      executeAuthorizedPiece(params, { governed: false }, async () => {
+        throw new Error("must not run");
+      }),
+    ).rejects.toThrow("Dropbox dispatch was not authorized");
+    expect(calls).toBe(0);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

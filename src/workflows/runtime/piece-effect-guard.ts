@@ -199,6 +199,7 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
     raw = await runManagedGitHubAction(String(params.action), github);
   } else {
     const dropbox = params.piece === "@activepieces/piece-dropbox" ? managedDropboxInput(params.input) : null;
+    if (dropbox && (!governance.governed || governance.dispatch !== 'authorized')) throw new Error('Dropbox dispatch was not authorized');
     raw = dropbox ? await runManagedDropboxAction(String(params.action), dropbox) : await execute();
   }
   // Gmail 0.17 returns a Gaxios response, including transport configuration.
