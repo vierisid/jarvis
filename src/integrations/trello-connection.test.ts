@@ -99,7 +99,7 @@ test('a Trello card update that archives the card is gated as the archive it is'
     expect(resolve({card_id:'c',closed:'{{trigger.archive}}'}).category).toBe('delete_data');
     expect(resolve({card_id:'c'}).category).toBe('write_data');
     expect(resolve({card_id:'c',closed:false}).category).toBe('write_data');
-    expect(resolve({card_id:'c',closed:null}).category).toBe('write_data');
+    expect(resolve({card_id:'c',closed:null}).category).toBe('delete_data');
   }
   expect(resolveGovernedPieceAction('@activepieces/piece-trello','archive_card',{card_id:'c',archived:false})!.category).toBe('delete_data');
 });

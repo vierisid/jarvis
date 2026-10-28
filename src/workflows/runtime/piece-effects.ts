@@ -697,12 +697,12 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
 /**
  * A Trello card update archives the card when its `closed` checkbox is on.
  * Left out or off (off restores an archived card) it is an ordinary write;
- * any other value, including one the projection could not read as a plain
- * false, is gated as the archive.
+ * any other value, including a null (upstream forwards it to Trello) or one
+ * the projection could not read as a plain false, is gated as the archive.
  */
 function trelloUpdateCardCategory(input: Record<string, unknown>): ActionCategory {
   const closed = input.closed;
-  return closed === undefined || closed === null || closed === false ? 'write_data' : 'delete_data';
+  return closed === undefined || closed === false ? 'write_data' : 'delete_data';
 }
 
 /** Every adapter: the verified catalog pieces, the vendored core pieces, then the managed ones. */
