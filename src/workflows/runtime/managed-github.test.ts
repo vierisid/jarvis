@@ -60,7 +60,8 @@ test('network/provider failures and oversized or broken bodies do not retry or l
     let calls = 0;
     try {await runManagedGitHubAction('github_create_issue', input, fake(async () => {calls++;
       if (failure === 'network') throw Error('PRIVATE');
-      if (failure === 'large') return new Response('x'.repeat(1048577));
+      // Valid JSON just over the 1 MiB cap, so only the cap can refuse it.
+      if (failure === 'large') return Response.json({...rawIssue, body: 'x'.repeat(1048576)}, {status: 201});
       if (failure === 'stream') return new Response(new ReadableStream({start(c) {c.error(Error('PRIVATE'));}}));
       return new Response('PRIVATE', {status: Number(failure) || 200});
     })); throw Error('expected failure');} catch(e) {expect(String(e)).toContain('GitHub'); expect(String(e)).not.toContain('PRIVATE');}
@@ -81,4 +82,23 @@ test('authority binds credentials, blocks unsupported actions and suppresses com
 });
 test('readiness rejects managed triggers and unsupported mutations', () => {
   expect(JSON.stringify(compileWorkflow({name: 'trigger', type: 'PIECE', settings: {pieceName: params.piece, triggerName: 'new_issue', input: {auth: '{{connections.jarvis:github}}'}}}))).toContain('MANAGED_GITHUB');
+});
+test('an update GitHub normalises (empty body to null, trimmed title) is confirmed, a different value is not', async () => {
+  const patch = (reply: (sent: Record<string, unknown>) => Record<string, unknown>) => fake(async (_url, init) =>
+    Response.json(init.method === 'PATCH' ? {...rawIssue, ...reply(JSON.parse(init.body))} : rawIssue));
+  expect(await runManagedGitHubAction('update_issue', {...input, title: undefined, state: undefined, body: ''}, patch(() => ({body: null})))).toMatchObject({body: {body: null}});
+  expect(await runManagedGitHubAction('update_issue', {...input, title: '  Fixed  ', state: undefined}, patch(() => ({title: 'Fixed'})))).toMatchObject({body: {title: 'Fixed'}});
+  await expect(runManagedGitHubAction('update_issue', {...input, title: undefined, state: undefined, body: 'New'}, patch(() => ({body: null})))).rejects.toThrow('confirm every');
+  await expect(runManagedGitHubAction('update_issue', {...input, title: 'Fixed', state: undefined}, patch(() => ({title: 'Other'})))).rejects.toThrow('confirm every');
+});
+test('find refuses a title whose search would exceed GitHub query limit, before any request', async () => {
+  const repository = {owner: 'o'.repeat(39), repo: 'r'.repeat(100)};
+  const fits = 'a'.repeat(256 - `repo:${repository.owner}/${repository.repo} is:issue in:title "" state:closed`.length);
+  expect(managedGitHubIssue('find_issue', {...input, repository, title: fits, state: 'closed'})).toBeNull();
+  expect(managedGitHubIssue('find_issue', {...input, repository, title: fits + 'a', state: 'closed'})).toContain('shorter title');
+  await expect(runManagedGitHubAction('find_issue', {...input, repository, title: fits + 'a', state: 'closed'}, fake(async () => {throw Error('must not call');}))).rejects.toThrow('shorter title');
+  expect(managedGitHubIssue('find_issue', {...input, repository, title: '{{trigger.title}}', state: 'closed'}, false)).toBeNull();
+  await runManagedGitHubAction('find_issue', {...input, repository, title: fits, state: 'closed'}, fake(async url => {
+    expect(new URL(url).searchParams.get('q')!.length).toBe(256); return Response.json({total_count: 0, items: [], incomplete_results: false});
+  }));
 });

@@ -32,7 +32,20 @@ export function managedGitHubIssue(action: unknown, input: Record<string, unknow
   }
   if (action === 'update_issue' && !['title','body','state'].some(k => input[k] !== undefined)) return 'Choose at least one issue field to update.';
   if (action === 'find_issue' && !dynamic(input.title) && /["\\\r\n:]/.test(String(input.title))) return 'Search by a plain title without quotes, backslashes, newlines or query operators.';
+  if (action === 'find_issue' && !dynamic(input.title) && !dynamic(input.repository) && !dynamic(input.state)
+    && issueSearchQuery(githubRepository(input.repository)!, String(input.title), input.state).length > GITHUB_SEARCH_QUERY_LIMIT) return `Search by a shorter title. The GitHub search for this repository fits a title of up to ${GITHUB_SEARCH_QUERY_LIMIT - issueSearchQuery(githubRepository(input.repository)!, '', input.state).length} characters.`;
   return null;
+}
+/** GitHub search refuses a query over 256 characters; the whole query is held to it, qualifiers included. */
+const GITHUB_SEARCH_QUERY_LIMIT = 256;
+function issueSearchQuery(repo: {owner: string; repo: string}, title: string, state: unknown): string {
+  return `repo:${repo.owner}/${repo.repo} is:issue in:title "${title}"` + (state === 'all' ? '' : ` state:${state}`);
+}
+/** GitHub stores an empty body as null and trims a title, so a confirmed value is compared the same way. */
+function confirmed(key: string, sent: unknown, got: unknown): boolean {
+  if (key === 'body') return (sent ?? '') === (got ?? '');
+  if (key === 'title') return typeof sent === 'string' && typeof got === 'string' && sent.trim() === got.trim();
+  return sent === got;
 }
 export interface GitHubAuth {access_token: string}
 export class GitHubRequestError extends Error {constructor(message: string, readonly status: number) {super(message);}}
@@ -80,7 +93,7 @@ export async function runManagedGitHubAction(action: string, input: Record<strin
   const repo = githubRepository(input.repository)!, repository = repo.owner + '/' + repo.repo;
   const auth = input.auth as GitHubAuth, base = 'repos/' + repository + '/issues', number = Number(input.issue_number);
   if (action === 'find_issue') {
-    const q = `repo:${repository} is:issue in:title "${input.title}"` + (input.state === 'all' ? '' : ` state:${input.state}`);
+    const q = issueSearchQuery(repo, String(input.title), input.state);
     const raw = object(await githubJson('search/issues?' + new URLSearchParams({q, per_page: '1'}), auth, {}, request));
     if (!Array.isArray(raw.items) || raw.items.length > 1 || typeof raw.total_count !== 'number' || !Number.isSafeInteger(raw.total_count) || raw.total_count < raw.items.length || typeof raw.incomplete_results !== 'boolean') throw new GitHubRequestError('GitHub returned invalid search results.', 502);
     if (raw.incomplete_results) throw new GitHubRequestError('GitHub search was incomplete. Try again before using the result.', 502);
@@ -96,7 +109,7 @@ export async function runManagedGitHubAction(action: string, input: Record<strin
   if (action === 'update_issue') {
     const body = Object.fromEntries(['title','body','state'].filter(k => input[k] !== undefined).map(k => [k, input[k]]));
     const updated = issue(await githubJson(base + '/' + number, auth, {method: 'PATCH', body: JSON.stringify(body)}, request), repository, number);
-    if (Object.entries(body).some(([k,v]) => updated[k] !== v)) throw new GitHubRequestError('GitHub did not confirm every issue change. Check the issue before trying again.', 502);
+    if (Object.entries(body).some(([k,v]) => !confirmed(k, v, updated[k]))) throw new GitHubRequestError('GitHub did not confirm every issue change. Check the issue before trying again.', 502);
     return {status: 200, body: updated};
   }
   const raw = object(await githubJson(base + '/' + number + '/comments', auth, {method: 'POST', body: JSON.stringify({body: input.comment})}, request));
