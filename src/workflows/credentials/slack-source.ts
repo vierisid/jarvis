@@ -1,4 +1,5 @@
 import { SLACK_CONNECTION, SLACK_PIECE, readSlackConnection } from "../../integrations/slack-connection";
+import { MANAGED_SLACK_ACTIONS } from "../runtime/managed-slack";
 import { credentialFingerprint, type JarvisConnectionSource, type ManagedPieceDetails, type ResolvedConnection } from "./adapter";
 
 /** Read through the atomically delivered file. Disconnects need no daemon restart. */
@@ -6,9 +7,15 @@ export class JarvisSlackConnectionSource implements JarvisConnectionSource {
   readonly id = "slack";
   /** Only Slack steps may name jarvis:slack, and only as their auth (readiness and the credential route). */
   readonly pieceNames: readonly string[] = [SLACK_PIECE];
-  /** The piece's custom API call base URL is https://slack.com/api in the pinned 0.23.1 bundle. */
+  /**
+   * Only the managed Slack actions (managed-slack.ts) may be handed the token,
+   * at readiness and at the credential route, so a graph that skipped readiness
+   * cannot reach it from a trigger hook or a custom API call either. The host
+   * (the piece's custom API call base URL is https://slack.com/api in the pinned
+   * 0.23.1 bundle) still bounds the token should a custom API call ever be qualified.
+   */
   readonly pieceDetails: Readonly<Record<string, ManagedPieceDetails>> = {
-    [SLACK_PIECE]: { displayName: "Slack", apiHosts: ["slack.com"] },
+    [SLACK_PIECE]: { displayName: "Slack", actions: MANAGED_SLACK_ACTIONS, apiHosts: ["slack.com"] },
   };
   constructor(private readonly dataDir: string) {}
   canResolve(externalId: string) { return externalId === SLACK_CONNECTION; }
