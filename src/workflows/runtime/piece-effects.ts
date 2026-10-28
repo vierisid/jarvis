@@ -667,12 +667,32 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
     // Sending a campaign delivers email to a whole audience.
     send_email: ['send_campaign'],
     // Audience, subscriber, tag and draft campaign changes under the account.
+    // add_member_to_list with status `pending` makes Mailchimp send the address
+    // an opt-in email, and create_custom_event can start a customer journey that
+    // emails the contact. Both stay writes: the mail is Mailchimp's own
+    // confirmation or a journey the account owner built, and the step names no
+    // recipient or content, as a send does (upstream classifies both WRITE).
     write_data: ['add_subscriber_to_tag', 'remove_subscriber_from_tag', 'add_member_to_list', 'add_note_to_subscriber',
-      'update_member_in_list', 'unsubscribe_email', 'create_campaign', 'create_audience', 'create_tag', 'create_custom_event'],
-    // archive_subscriber is DELETE /lists/{id}/members/{hash}.
-    delete_data: ['archive_subscriber'],
+      'create_campaign', 'create_audience', 'create_tag', 'create_custom_event'],
+    // archive_subscriber is DELETE /lists/{id}/members/{hash}; upstream labels
+    // it and unsubscribe_email DESTRUCTIVE. A status update can unsubscribe or
+    // clean a member, so blind it is that; its input narrows it (`categoryFromInput`).
+    delete_data: ['archive_subscriber', 'unsubscribe_email', 'update_member_in_list'],
+  },
+  categoryFromInput: {
+    update_member_in_list: { props: ['status'], category: mailchimpMemberStatusCategory },
   },
 }];
+
+/**
+ * A Mailchimp member update by its new status. Subscribed, pending and
+ * transactional keep the member reachable, an ordinary write; unsubscribed and
+ * cleaned remove them from the audience's mail, as unsubscribe_email does. Any
+ * other value, an unresolved expression among them, is gated as the removal.
+ */
+function mailchimpMemberStatusCategory(input: Record<string, unknown>): ActionCategory {
+  return input.status === 'subscribed' || input.status === 'pending' || input.status === 'transactional' ? 'write_data' : 'delete_data';
+}
 
 /** Every adapter: the verified catalog pieces, the vendored core pieces, then the managed ones. */
 export const ALL_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [...GOVERNED_PIECE_ADAPTERS, ...CORE_PIECE_ADAPTERS, ...MANAGED_PIECE_ADAPTERS];

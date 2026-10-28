@@ -87,12 +87,18 @@ test('readiness rejects unsupported managed triggers, however the binding is spe
 // Every action of the pinned 0.5.10 bundle (no custom_api_call); the gated engine test checks the installed package.
 const MAILCHIMP_0510_ACTIONS: Record<string, string> = {
   find_subscriber: 'read_data', find_campaign: 'read_data', get_campaign_report: 'read_data', find_customer: 'read_data', find_tag: 'read_data',
-  send_campaign: 'send_email', archive_subscriber: 'delete_data',
+  send_campaign: 'send_email', archive_subscriber: 'delete_data', unsubscribe_email: 'delete_data',
+  // Blind, a status update is the unsubscribe it can be; its status narrows it (below).
+  update_member_in_list: 'delete_data',
   add_subscriber_to_tag: 'write_data', remove_subscriber_from_tag: 'write_data', add_member_to_list: 'write_data', add_note_to_subscriber: 'write_data',
-  update_member_in_list: 'write_data', unsubscribe_email: 'write_data', create_campaign: 'write_data', create_audience: 'write_data',
-  create_tag: 'write_data', create_custom_event: 'write_data',
+  create_campaign: 'write_data', create_audience: 'write_data', create_tag: 'write_data', create_custom_event: 'write_data',
 };
-test('every 0.5.10 action is governed by category: a campaign send is an email send, archiving a delete', () => {
+test('a member update is a write only for a status that keeps the member reachable', () => {
+  const category = (status: unknown) => resolveGovernedPieceAction(params.piece, 'update_member_in_list', {list_id: 'audience1', email: 'user@example.com', status});
+  for (const status of ['subscribed', 'pending', 'transactional']) expect(category(status)).toMatchObject({category: 'write_data', byInput: true, categoryProps: ['status']});
+  for (const status of ['unsubscribed', 'cleaned', 'Subscribed', '{{trigger.status}}', '', null, undefined, 1]) expect(category(status)).toMatchObject({category: 'delete_data', byInput: true});
+});
+test('every 0.5.10 action is governed by category: a campaign send is an email send, archiving or unsubscribing a delete', () => {
   for (const [action, category] of Object.entries(MAILCHIMP_0510_ACTIONS)) {
     expect({action, ...resolveGovernedPieceAction(params.piece, action)}).toMatchObject({action, category, known: true});
     // Changes are tracked so an uncertain send or write is not repeated; reads never are.
