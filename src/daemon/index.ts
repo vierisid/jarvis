@@ -3,6 +3,7 @@ import { registerReconciliation } from '../brief/registrations/reconciliation';
 import { registerOnboarding } from '../brief/registrations/onboarding';
 import { ConnectedWorkspace } from '../brief/connected-workspace';
 import { MIN_BUN_VERSION, versionAtLeast } from '../util/bun-minimum.ts';
+import { mailchimpStatus } from "../integrations/mailchimp-connection";
 import { githubStatus } from '../integrations/github-connection';
 import { trelloStatus } from "../integrations/trello-connection";
 import { clickUpStatus } from '../integrations/clickup-connection';
@@ -4757,6 +4758,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       devices: () => sidecarManager.listSidecars(),
       google: () => connectedGoogle(jarvisConfig),
       clickup: () => clickUpStatus(jarvisConfig),
+      mailchimp: () => mailchimpStatus(jarvisConfig),
       github: () => githubStatus(jarvisConfig),
       trello: () => trelloStatus(jarvisConfig),
       channels: () => {
@@ -5001,6 +5003,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisGoogleConnectionSource(() => googleAuth));
       const { JarvisClickUpConnectionSource } = await import("../workflows/credentials/clickup-source");
       credentialResolver.register(new JarvisClickUpConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisMailchimpConnectionSource } = await import("../workflows/credentials/mailchimp-source");
+      credentialResolver.register(new JarvisMailchimpConnectionSource(jarvisConfig.daemon.data_dir));
       const { JarvisGitHubConnectionSource } = await import("../workflows/credentials/github-source");
       credentialResolver.register(new JarvisGitHubConnectionSource(jarvisConfig.daemon.data_dir));
       const { JarvisTrelloConnectionSource } = await import("../workflows/credentials/trello-source");

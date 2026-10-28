@@ -313,7 +313,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "11"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts
+export const CATALOG_SCHEMA_VERSION = "12"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -903,6 +903,25 @@ export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
         id: 'task_example', name: 'Example task', url: 'https://app.clickup.com/t/task_example',
         status: {status: 'to do', type: 'open'}, list: {id: 'list_example', name: 'Sandbox'},
       };
+    }
+  }
+  if (entry.name === '@activepieces/piece-mailchimp') {
+    const subscriber = {id: 'b58996c504c5638798eb6b511e6f49af', list_id: 'audience1', email_address: 'user@example.com', status: 'subscribed'};
+    const campaign = {id: 'campaign1', status: 'sent', settings: {title: 'Newsletter', subject_line: 'Latest news'}};
+    const samples: Record<string, unknown> = {
+      find_subscriber: {success: true, found: true, total_matches: 1, subscribers: [subscriber], primary_subscriber: subscriber},
+      add_subscriber_to_tag: {success: true, data: {list_id: 'audience1', email_address: 'user@example.com', tag_name: 'Customer', status: 'active', automations_suppressed: true}},
+      remove_subscriber_from_tag: {success: true, data: {list_id: 'audience1', email_address: 'user@example.com', tag_name: 'Customer', status: 'inactive', automations_suppressed: true}},
+      find_campaign: {success: true, query: 'Newsletter', results: [{campaign}], total_items: 1, has_more: false},
+      get_campaign_report: {success: true, report: {id: 'campaign1', campaign_title: 'Newsletter', emails_sent: 100, opens: {unique_opens: 30, open_rate: 0.3}, clicks: {unique_clicks: 5, click_rate: 0.05}, bounces: {hard_bounces: 0, soft_bounces: 0}}, summary: {campaign_title: 'Newsletter', emails_sent: 100, unique_opens: 30, unique_clicks: 5, open_rate: 0.3, click_rate: 0.05}},
+    };
+    for (const [name, sample] of Object.entries(samples)) {
+      const action = entry.actions[name];
+      if (!action) continue;
+      if (action.outputSample === undefined) action.outputSample = sample;
+      for (const field of action.inputSchema?.fields ?? []) {
+        if (field.sourceType === 'DROPDOWN') {field.type = 'string'; field.placeholder = 'ID or workflow variable'; delete field.options;}
+      }
     }
   }
   if (entry.name === '@activepieces/piece-github') {

@@ -157,6 +157,7 @@ export const VERSION_PIN: Record<
   string,
   { versionRange: string; vettedVersion: string; reason: string }
 > = {
+  mailchimp: {versionRange: "0.5.10", vettedVersion: "0.5.10", reason: "Five managed subscriber, tag and reporting actions qualified against 0.5.10; review before upgrading"},
   clickup: {versionRange: "0.9.1", vettedVersion: "0.9.1", reason: "Governed action table (MANAGED_PIECE_ADAPTERS) and task outputs mapped against 0.9.1; review before upgrading"},
   // github 0.6 line never made it to npm even though it was in the
   // monorepo's package.json; npm tops out at 0.6.7. Force the working 0.7.

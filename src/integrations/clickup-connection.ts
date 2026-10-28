@@ -27,7 +27,7 @@ const MAX_CONNECTION_BYTES = 65536;
  * could change before the read, so the open never blocks, the descriptor must
  * be a regular file, and no more than the cap is read.
  */
-function readBounded(path: string): string {
+export function readBounded(path: string): string {
   const fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
   try {
     if (!fstatSync(fd).isFile()) throw new Error("not a regular file");
