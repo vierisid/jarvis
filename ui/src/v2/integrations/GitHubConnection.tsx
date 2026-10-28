@@ -7,6 +7,23 @@ export interface GitHubStatus {
   account: {id: string; label: string} | null; workspaces: Array<{id: string; name: string}>;
   generation: string | null;
 }
+/** The managed GitHub connection's status, re-read when the window regains
+ * focus; null until known, and on any failure (callers then fall back to the
+ * manual connections, which work on every install). */
+export function useGitHubStatus(enabled = true): GitHubStatus | null {
+  const [status, setStatus] = useState<GitHubStatus | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let live = true;
+    const load = () => fetch("/api/integrations/github")
+      .then(r => r.ok ? r.json() as Promise<GitHubStatus> : null)
+      .then(next => { if (live) setStatus(next); }, () => { if (live) setStatus(null); });
+    void load();
+    window.addEventListener("focus", load);
+    return () => { live = false; window.removeEventListener("focus", load); };
+  }, [enabled]);
+  return enabled ? status : null;
+}
 export function GitHubConnection({onPick, currentValue, optional = false, appearance = "inline"}: {
   onPick?: (value: string) => void; currentValue?: string; optional?: boolean;
   appearance?: "inline" | "onboarding";

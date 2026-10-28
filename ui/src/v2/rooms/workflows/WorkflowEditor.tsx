@@ -18,7 +18,7 @@ import React, { createContext, useCallback, useContext, useEffect, useLayoutEffe
 import { useSampleDraftText } from "./useSampleDraftText";
 import { ClickUpConnection, useClickUpStatus } from "../../integrations/ClickUpConnection";
 import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
-import { GitHubConnection } from "../../integrations/GitHubConnection";
+import { GitHubConnection, useGitHubStatus } from "../../integrations/GitHubConnection";
 import { GitHubRepository } from "../../integrations/GitHubRepository";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { WorkflowEditorEnvironment, WorkflowPortal, useWorkflowRequest } from "./WorkflowEditorEnvironment";
@@ -3737,20 +3737,21 @@ function ConnectionPicker({
   // the dropdown reflect the user's choice on re-open.
   const m = /^\{\{connections\.([^}]+)\}\}$/.exec(currentValue.trim());
   const currentExternalId = m ? m[1]! : "";
-  // ClickUp may also offer the hosted connection; without it (self-hosted, or
-  // not connected) the picker reads exactly as for any other piece.
+  // ClickUp and GitHub may also offer the hosted connection; without it
+  // (self-hosted, or not connected) the picker reads exactly as for any other piece.
   const isClickUp = pieceName === "@activepieces/piece-clickup";
   const managedClickUp = useClickUpStatus(isClickUp)?.connected === true;
   const isGitHub = pieceName === "@activepieces/piece-github";
+  const managedGitHub = useGitHubStatus(isGitHub)?.connected === true;
   return (
     <div className="wf-props__connection">
-      {isGitHub && <GitHubConnection onPick={onPick} currentValue={currentValue} />}
+      {isGitHub && <GitHubConnection optional onPick={onPick} currentValue={currentValue} />}
       {isClickUp && <ClickUpConnection optional onPick={onPick} currentValue={currentValue} />}
       <label className="wf-props__field-label">
         {authDisplayName}
         <span className="wf-props__connection-type">({authType})</span>
       </label>
-      {matching.length === 0 && !managedClickUp && !isGitHub ? (
+      {matching.length === 0 && !managedClickUp && !managedGitHub ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.

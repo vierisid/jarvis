@@ -381,6 +381,9 @@ describe("managed GitHub is scoped to GitHub steps", () => {
     const [issue] = bindingIssues(empty(code({ conn: ref })));
     expect(issue!.message).toBe("Managed connection jarvis:github can only be used by GitHub steps");
     expect(issue!.allowedPieces).toEqual([GITHUB]);
+    // With no host declared, a full-URL custom call is told to use a path and offered no host.
+    const [call] = bindingIssues(empty(githubCall("https://api.github.com/user")));
+    expect(call!.message).toBe("A custom API call with managed connection jarvis:github must use a path under the GitHub API");
   });
   // The connection scope only: the managed GitHub action list still refuses a custom API call at dispatch.
   test("a GitHub step auth, or a custom API call by path, passes the connection scope and resolves", async () => {

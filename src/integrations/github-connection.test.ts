@@ -1,5 +1,6 @@
 import {afterEach,beforeEach,expect,test} from 'bun:test';
-import {mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
+import {closeSync,constants,mkdtempSync,mkdirSync,openSync,writeFileSync,writeSync,rmSync} from 'node:fs';
+import {spawnSync} from 'node:child_process';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomUUID} from 'node:crypto';
@@ -19,7 +20,8 @@ test('read-through OAUTH2 credentials bind reconnect and disconnect; status reve
   expect(githubStatus(config())).toMatchObject({connected:true,connect_url:'https://app.usejarvis.dev/account?integration=github'});
   expect(JSON.stringify(githubStatus(config()))).not.toContain('PRIVATE');
   expect(await source.resolve('jarvis:github')).toMatchObject({type:'OAUTH2',value:{access_token:'PRIVATE',jarvis_managed:'github'}});
-  expect(await resolver.resolve({projectId:'p',pieceName:'@activepieces/piece-clickup',externalId:'jarvis:github'})).toBeNull();
+  // Which steps may name it is the credential route's check (managed-connection-scope.test.ts).
+  expect(source.pieceNames).toEqual(['@activepieces/piece-github']); expect(source.pieceDetails['@activepieces/piece-github']!.apiHosts).toEqual([]);
   const before=source.identity('jarvis:github');write(doc());expect(source.identity('jarvis:github')).not.toBe(before);
   write({version:1,provider:'github',status:'disconnected',generation:randomUUID()});expect(await source.resolve('jarvis:github')).toBeNull();
 });
@@ -41,4 +43,21 @@ test('repository choices reject malformed IDs and account changes during retriev
 for(const [status,expected] of [[401,409],[403,409],[429,429],[500,502]])test('safe provider failure '+status,async()=>{
  try{await githubOptions(config(),new URLSearchParams(),(async()=>new Response('SENSITIVE',{status})) as unknown as typeof fetch);throw Error('expected rejection');}
  catch(e){expect(e).toMatchObject({status:expected});expect(String(e)).not.toContain('SENSITIVE');}
+});
+test.skipIf(process.platform === 'win32')('a FIFO at the connection path is refused without blocking the daemon', () => {
+  const path=join(dir,'connections/github.json');
+  rmSync(path); expect(spawnSync('mkfifo', [path]).status).toBe(0);
+  expect(readGitHubConnection(dir)).toBeNull();
+  // A FIFO holding a valid document and then EOF reads like the file itself, so only the regular-file check refuses it.
+  const keep=openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  try {
+    const writer=openSync(path, constants.O_WRONLY);
+    writeSync(writer, JSON.stringify(doc())); closeSync(writer);
+    expect(readGitHubConnection(dir)).toBeNull();
+  } finally { closeSync(keep); }
+});
+test('a file at exactly the cap is read, one byte over is refused', () => {
+  const body=JSON.stringify(doc());
+  writeFileSync(join(dir,'connections/github.json'), body + ' '.repeat(65536 - body.length)); expect(readGitHubConnection(dir)).not.toBeNull();
+  writeFileSync(join(dir,'connections/github.json'), body + ' '.repeat(65537 - body.length)); expect(readGitHubConnection(dir)).toBeNull();
 });
