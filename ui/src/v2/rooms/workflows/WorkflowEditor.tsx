@@ -15,7 +15,7 @@ import { SlackChannelPicker } from "../../integrations/SlackChannelPicker";
  * Stage 3 lights all of those up.
  */
 
-import { SlackConnection } from "../../integrations/SlackConnection";
+import { SlackConnection, useSlackStatus } from "../../integrations/SlackConnection";
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSampleDraftText } from "./useSampleDraftText";
 import { ClickUpConnection, useClickUpStatus } from "../../integrations/ClickUpConnection";
@@ -3741,15 +3741,17 @@ function ConnectionPicker({
   // not connected) the picker reads exactly as for any other piece.
   const isClickUp = pieceName === "@activepieces/piece-clickup";
   const managedClickUp = useClickUpStatus(isClickUp)?.connected === true;
+  const isSlack = pieceName === "@activepieces/piece-slack";
+  const managedSlack = useSlackStatus(isSlack)?.connected === true;
   return (
     <div className="wf-props__connection">
       {isClickUp && <ClickUpConnection optional onPick={onPick} currentValue={currentValue} />}
-      {pieceName === "@activepieces/piece-slack" && <SlackConnection onPick={onPick} currentValue={currentValue} />}
+      {isSlack && <SlackConnection optional onPick={onPick} currentValue={currentValue} />}
       <label className="wf-props__field-label">
         {authDisplayName}
         <span className="wf-props__connection-type">({authType})</span>
       </label>
-      {matching.length === 0 && !managedClickUp && pieceName !== "@activepieces/piece-slack" ? (
+      {matching.length === 0 && !managedClickUp && !managedSlack ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.

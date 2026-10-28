@@ -7,6 +7,21 @@ export interface SlackStatus {
   account: {id: string; label: string} | null; workspaces: Array<{id: string; name: string}>;
   generation: string | null;
 }
+/** Status only, for callers that need to know whether the managed account is connected. */
+export function useSlackStatus(enabled = true): SlackStatus | null {
+  const [status, setStatus] = useState<SlackStatus | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let live = true;
+    const load = () => fetch("/api/integrations/slack")
+      .then(r => r.ok ? r.json() as Promise<SlackStatus> : null)
+      .then(next => { if (live) setStatus(next); }, () => { if (live) setStatus(null); });
+    void load();
+    window.addEventListener("focus", load);
+    return () => { live = false; window.removeEventListener("focus", load); };
+  }, [enabled]);
+  return enabled ? status : null;
+}
 export function SlackConnection({onPick, currentValue, optional = false, appearance = "inline"}: {
   onPick?: (value: string) => void; currentValue?: string; optional?: boolean;
   appearance?: "inline" | "onboarding";
