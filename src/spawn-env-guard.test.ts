@@ -166,6 +166,15 @@ const EXEMPT: Record<string, Exemption> = {
     },
   },
 
+  'workflows/runtime/json-mapping-fixtures.ts': {
+    reason:
+      'The fixture subprocess deliberately receives an empty environment, stricter than ' +
+      'sanitizedEnv(): JSONata fixtures need no daemon variables, proxy settings or home path. ' +
+      'The executable is process.execPath and --no-env-file disables dotenv loading. ' +
+      'A separate AST assertion below pins the empty literal and launch arguments.',
+    calls: { validateJsonMappingFixtures: 1 },
+  },
+
   'workflows/runner/engine-runtime/spawn.ts': {
     reason:
       'The engine gets its OWN curated allowlist (ENGINE_ENV_PASSTHROUGH, pinned by a test ' +
@@ -1093,6 +1102,30 @@ describe('the guard parses and reaches every file it scans', () => {
     }
     expect(missed).toEqual([]);
   }, 30_000); // re-parses the largest file per area: ~1.5s on one throttled core
+});
+
+test('JSON mapping fixtures inherit no environment and cannot load dotenv files', () => {
+  const source = ts.createSourceFile('json-mapping-fixtures.ts',
+    readFileSync(join(SRC, 'workflows/runtime/json-mapping-fixtures.ts'), 'utf8'),
+    ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const calls: ts.CallExpression[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && node.expression.getText(source) === 'Bun.spawn') calls.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  expect(calls).toHaveLength(1);
+  const [command, options] = calls[0]!.arguments;
+  expect(command && ts.isArrayLiteralExpression(command)).toBe(true);
+  if (!command || !ts.isArrayLiteralExpression(command)) throw new Error('Expected a fixed argv array');
+  expect(command.elements[0]!.getText(source)).toBe('process.execPath');
+  expect(command.elements[1] && ts.isStringLiteral(command.elements[1]) && command.elements[1].text).toBe('--no-env-file');
+  expect(options && ts.isObjectLiteralExpression(options)).toBe(true);
+  if (!options || !ts.isObjectLiteralExpression(options)) throw new Error('Expected inline spawn options');
+  expect(options.properties.some(ts.isSpreadAssignment)).toBe(false);
+  const env = options.properties.filter((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText(source) === 'env');
+  expect(env).toHaveLength(1);
+  expect(ts.isObjectLiteralExpression(env[0]!.initializer) && env[0]!.initializer.properties.length).toBe(0);
 });
 
 // ---------------------------------------------------------------------------
