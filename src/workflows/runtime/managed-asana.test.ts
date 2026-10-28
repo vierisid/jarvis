@@ -1,5 +1,5 @@
 import {expect,test} from "bun:test";
-import {runManagedAsanaAction,MANAGED_ASANA_ACTIONS} from "./managed-asana";
+import {runManagedAsanaAction,MANAGED_ASANA_ACTIONS,ASANA_TASK_FIELDS} from "./managed-asana";
 import {resolveGovernedPieceAction,tracksPieceCompletion} from "./piece-effects";
 import {executeAuthorizedPiece} from "./piece-effect-guard";
 const auth={access_token:"PRIVATE",jarvis_managed:"asana"};
@@ -46,4 +46,15 @@ test("reads and writes are governed and completed writes replay without provider
   let calls=0;const params={piece:"@activepieces/piece-asana",action:"create_task",input:{auth}} as any;
   expect(await executeAuthorizedPiece(params,{dispatch:"completed",result:{gid:"1"}} as any,async()=>{calls++;})).toEqual({gid:"1"});
   await expect(executeAuthorizedPiece(params,{dispatch:"held"} as any,async()=>{calls++;})).rejects.toThrow("waiting");expect(calls).toBe(0);
+});
+test("gids are opaque strings, encoded into fixed paths",async()=>{
+  const calls:URL[]=[];
+  const request=(async(url:string)=>{calls.push(new URL(url));return Response.json({data:{gid:"task_ab-1",name:"Task"}});}) as unknown as typeof fetch;
+  expect(await runManagedAsanaAction("get_task",{auth,task:"task_ab-1"},request)).toEqual({gid:"task_ab-1",name:"Task"});
+  await runManagedAsanaAction("get_task",{auth,task:"a/b?c"},request);
+  expect(calls[1]!.pathname).toBe("/api/1.0/tasks/a%2Fb%3Fc");
+  expect(calls[1]!.searchParams.get("opt_fields")).toBe(ASANA_TASK_FIELDS);
+  for(const task of ["","1".repeat(65),"1\n2",".",".."])await expect(runManagedAsanaAction("get_task",{auth,task},request)).rejects.toThrow();
+  expect(calls).toHaveLength(2);
+  await expect(runManagedAsanaAction("get_task",{auth,task:"1"},(async()=>Response.json({data:{gid:"bad\u0000"}})) as unknown as typeof fetch)).rejects.toThrow("invalid resource");
 });

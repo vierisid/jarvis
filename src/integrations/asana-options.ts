@@ -10,7 +10,7 @@ export async function asanaOptions(config:JarvisConfig,query:URLSearchParams,req
   if(!c.workspaces.some(w=>w.id===workspace))throw new Error("Choose a connected Asana workspace.");
   const params=new URLSearchParams({limit:"100",archived:"false",opt_fields:"name"});
   if(offset)params.set("offset",offset);
-  const page=await asanaRequest(c.access_token,"/workspaces/"+workspace+"/projects?"+params,"GET",undefined,request);
+  const page=await asanaRequest(c.access_token,"/workspaces/"+encodeURIComponent(workspace)+"/projects?"+params,"GET",undefined,request);
   if(!Array.isArray(page.data) || page.data.length>100)throw new Error("Asana returned invalid project choices.");
   const options=page.data.map((p:any)=>({value:asanaGid(p.gid),label:typeof p.name==="string" ? p.name.slice(0,200) : asanaGid(p.gid)}));
   if(page.next_page!=null && (typeof page.next_page.offset!=="string" || !page.next_page.offset || page.next_page.offset.length>4096))throw new Error("Asana returned invalid project pagination.");

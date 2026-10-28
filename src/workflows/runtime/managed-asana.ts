@@ -5,10 +5,17 @@ export const ASANA_STORY_FIELDS = "created_at,created_by.name,resource_subtype,t
 export function managedAsanaInput(input: unknown): Record<string, unknown> | null {
   return (input as {auth?:{jarvis_managed?:unknown}} | null)?.auth?.jarvis_managed === "asana" ? input as Record<string,unknown> : null;
 }
+/** Asana documents gids as opaque strings; same rule as hosting's adapter. Encode before use in a path. */
+// eslint-disable-next-line no-control-regex
+const ASANA_GID = /^[^\x00-\x1f\x7f-\x9f]{1,64}$/;
+function validGid(value: unknown): value is string {
+  return typeof value === "string" && ASANA_GID.test(value) && !/^\.+$/.test(value);
+}
 export function asanaGid(value: unknown): string {
-  if (typeof value !== "string" || !/^[0-9]{1,64}$/.test(value)) throw new Error("Enter a valid Asana ID.");
+  if (!validGid(value)) throw new Error("Enter a valid Asana ID.");
   return value;
 }
+const gidPath = (value: unknown) => encodeURIComponent(asanaGid(value));
 const present = (value: unknown) => value !== undefined && value !== null && value !== "";
 function text(value: unknown, label: string, max = 65536): string {
   if (typeof value !== "string" || !value.trim() || value.length > max) throw new Error("Enter a valid " + label + ".");
@@ -72,14 +79,14 @@ export async function runManagedAsanaAction(action:string,input:Record<string,un
     if(present(input.assignee))data.assignee=input.assignee==="me" ? "me" : asanaGid(input.assignee);
     if(present(input.due_on))data.due_on=date(input.due_on);
   } else if(action==="list_project_tasks") {
-    path="/projects/"+asanaGid(input.project)+"/tasks";
+    path="/projects/"+gidPath(input.project)+"/tasks";
     const limit=input.limit ?? 100;
     if(typeof limit!=="number" || !Number.isInteger(limit) || limit<1 || limit>100)throw new Error("Choose an Asana result limit from 1 to 100.");
     query.set("limit",String(limit));
     if(present(input.offset))query.set("offset",text(input.offset,"pagination offset",4096));
     if(present(input.completed_since))query.set("completed_since",input.completed_since==="now" ? "now" : dateTime(input.completed_since));
   } else {
-    path="/tasks/"+asanaGid(input.task);
+    path="/tasks/"+gidPath(input.task);
     if(action==="update_task") {
       method="PUT";data={};
       exclusive(input,"notes","html_notes");exclusive(input,"due_on","due_at");
@@ -107,5 +114,5 @@ export async function runManagedAsanaAction(action:string,input:Record<string,un
   return result.data;
 }
 function validResource(value:unknown):boolean {
-  return !!value && typeof value==="object" && !Array.isArray(value) && typeof (value as any).gid==="string" && /^[0-9]{1,64}$/.test((value as any).gid);
+  return !!value && typeof value==="object" && !Array.isArray(value) && validGid((value as any).gid);
 }

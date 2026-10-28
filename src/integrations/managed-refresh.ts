@@ -74,6 +74,20 @@ export function createManagedTokenRefresher<T extends ManagedRefreshConnection>(
       Date.parse(expiry) > Date.now() + 60000
     );
   }
+  /** A still-valid access token for this exact grant: the shared cache first, then the delivered file. */
+  function storedToken(config: JarvisConfig, key: string): T | null {
+    const live = readConnection(config.daemon.data_dir);
+    if (!live || grantKey(live) !== key) return null;
+    const saved = cached(config, live);
+    if (saved?.reconnect) return null;
+    if (usable(saved?.access_token, saved?.expires_at))
+      return {
+        ...live,
+        access_token: saved!.access_token!,
+        expires_at: saved!.expires_at!,
+      };
+    return usable(live.access_token, live.expires_at) ? live : null;
+  }
   /** Refresh through the configured hosting origin, never a URL chosen by a workflow. */
   async function fresh(
     config: JarvisConfig,
@@ -169,6 +183,15 @@ export function createManagedTokenRefresher<T extends ManagedRefreshConnection>(
       if (response.status === 409 && result.reconnect === true) {
         save(config, { key, reconnect: true });
         throw new Error(`Reconnect ${name} in your account page.`);
+      }
+      // 429 (renewed under 30s ago) or 409 without reconnect (a stale token):
+      // another process may hold the fresh token, so re-read what is stored.
+      if (
+        response.status === 429 ||
+        (response.status === 409 && result.reconnect !== true)
+      ) {
+        const renewed = storedToken(config, key);
+        if (renewed) return renewed;
       }
       if (!response.ok)
         throw new Error(`Could not renew ${name} access. Try again shortly.`);

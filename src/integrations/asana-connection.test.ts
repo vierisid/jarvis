@@ -15,6 +15,7 @@ import { readAsanaConnection, asanaStatus } from "./asana-connection";
 import {
   freshAsanaConnection,
   asanaNeedsReconnect,
+  asanaGrantKey,
 } from "./asana-refresh";
 import { JarvisAsanaConnectionSource } from "../workflows/credentials/asana-source";
 import { managedConnectionMisuse } from "../workflows/credentials/adapter";
@@ -195,4 +196,47 @@ test("revocation requests reconnect, transient failures preserve the binding, re
     }) as unknown as typeof fetch),
   ).rejects.toThrow("not configured");
   expect(calls).toBe(0);
+});
+test("a 429 or a stale 409 uses the token another process renewed, and fails only when none is valid", async () => {
+  const c = doc();
+  write(c);
+  const cache = join(dir, "connections/asana-access.json");
+  const otherProcess = (expiresIn: number) =>
+    writeFileSync(
+      cache,
+      JSON.stringify({
+        key: asanaGrantKey(c),
+        access_token: "OTHER_ACCESS",
+        expires_at: new Date(Date.now() + expiresIn).toISOString(),
+      }),
+    );
+  const replies: Array<[number, Record<string, unknown>]> = [
+    [429, { error: "refreshed too recently" }],
+    [409, { error: "stale refresh token; re-read the stored one" }],
+  ];
+  for (const [status, body] of replies) {
+    rmSync(cache, { force: true });
+    let calls = 0;
+    const renewedElsewhere = (async () => {
+      calls++;
+      otherProcess(3600000);
+      return Response.json(body, { status });
+    }) as unknown as typeof fetch;
+    const result = await freshAsanaConnection(config, renewedElsewhere);
+    expect(result.access_token).toBe("OTHER_ACCESS");
+    expect(result.refresh_token).toBe("PRIVATE_REFRESH");
+    expect(calls).toBe(1);
+    expect(asanaNeedsReconnect(config, c)).toBe(false);
+    for (const prepare of [
+      () => rmSync(cache, { force: true }),
+      () => otherProcess(30000),
+    ]) {
+      prepare();
+      await expect(
+        freshAsanaConnection(config, (async () =>
+          Response.json(body, { status })) as unknown as typeof fetch),
+      ).rejects.toThrow("Try again shortly");
+      expect(asanaNeedsReconnect(config, c)).toBe(false);
+    }
+  }
 });
