@@ -20,6 +20,38 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
+  // w8-16: reusable child workflows.
+  'w8-16': {
+    "bare": "ae9045d81a5058a78209a4ce5e2243ed2dd2d64ffb89708452fb9bbf6e0ec6b6",
+    "production": "ae35704d9832fd418fb93c3f1e6bcc31d7b44e519f3ef1c1a0d4f05e4e2b5fb5",
+    "hosted production": "9b31628a12174c74149ef84707855e96ad90cc434fc2e9b6310c252dd9624f04",
+    "tool names only": "349a36b9684b78e6da5a310fc8a5dc133618078e9290ba216385aec03b10e1bf"
+},
+
+  // w8-15: durable lead batches.
+  'w8-15': {
+    "bare": "ae9045d81a5058a78209a4ce5e2243ed2dd2d64ffb89708452fb9bbf6e0ec6b6",
+    "production": "ae35704d9832fd418fb93c3f1e6bcc31d7b44e519f3ef1c1a0d4f05e4e2b5fb5",
+    "hosted production": "9b31628a12174c74149ef84707855e96ad90cc434fc2e9b6310c252dd9624f04",
+    "tool names only": "349a36b9684b78e6da5a310fc8a5dc133618078e9290ba216385aec03b10e1bf"
+},
+
+  // w8-14: independent customer onboarding.
+  'w8-14': {
+    "bare": "ae9045d81a5058a78209a4ce5e2243ed2dd2d64ffb89708452fb9bbf6e0ec6b6",
+    "production": "ae35704d9832fd418fb93c3f1e6bcc31d7b44e519f3ef1c1a0d4f05e4e2b5fb5",
+    "hosted production": "9b31628a12174c74149ef84707855e96ad90cc434fc2e9b6310c252dd9624f04",
+    "tool names only": "349a36b9684b78e6da5a310fc8a5dc133618078e9290ba216385aec03b10e1bf"
+},
+
+  // w8-13: exclusive support routing.
+  'w8-13': {
+    "bare": "ae9045d81a5058a78209a4ce5e2243ed2dd2d64ffb89708452fb9bbf6e0ec6b6",
+    "production": "ae35704d9832fd418fb93c3f1e6bcc31d7b44e519f3ef1c1a0d4f05e4e2b5fb5",
+    "hosted production": "9b31628a12174c74149ef84707855e96ad90cc434fc2e9b6310c252dd9624f04",
+    "tool names only": "349a36b9684b78e6da5a310fc8a5dc133618078e9290ba216385aec03b10e1bf"
+},
+
   // w8-12: workflow-meeting-briefs capabilities.
   'w8-12': {
     'bare': '2cb75d3294bf28ccb48093c7f9f7181846f2fab22a362dc18c337c970daa7644',
