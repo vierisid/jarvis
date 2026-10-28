@@ -24,6 +24,7 @@
 import {managedDropboxInput, runManagedDropboxAction} from './managed-dropbox';
 import { HTTP_PIECE, isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { documentInput, applyDocument, documentFields, type DecisionDocument } from './decision-document';
+import {managedMailchimpInput, managedMailchimpIssue, runManagedMailchimpAction} from './managed-mailchimp';
 import {managedGitHubInput, managedGitHubIssue, runManagedGitHubAction} from './managed-github';
 import {managedTrelloInput, managedTrelloIssue, runManagedTrelloAction} from './managed-trello';
 
@@ -100,6 +101,11 @@ export interface AuthorizePieceDispatchParams {
 }
 
 export async function authorizePieceDispatch(params: AuthorizePieceDispatchParams): Promise<PieceAuthorizeResponse> {
+  const mailchimp = params.piece === '@activepieces/piece-mailchimp' && managedMailchimpInput(params.input);
+  if (mailchimp) {
+    const issue = managedMailchimpIssue(params.action, mailchimp);
+    if (issue) throw new Error(issue);
+  }
   const github = params.piece === '@activepieces/piece-github' && managedGitHubInput(params.input);
   if (github) {
     const issue = managedGitHubIssue(params.action, github);
@@ -133,7 +139,8 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
   const tracked = tracksPieceCompletion(params.piece, params.action, governed ? body.input : params.input);
   if (tracked) {
     const auth = (params.input as { auth?: { access_token?: unknown; type?: unknown } } | null)?.auth;
-    const token = trello ? JSON.stringify((trello.auth as {username:string;password:string})) : auth?.access_token;
+    const token = trello ? JSON.stringify((trello.auth as {username:string;password:string}))
+      : mailchimp ? JSON.stringify((mailchimp.auth as {access_token:string;server_prefix:string})) : auth?.access_token;
     if (auth?.type !== 'CUSTOM_AUTH' && typeof token === 'string') {
       const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical(token))));
       body.credentialDigest = Array.from(hash).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -193,6 +200,12 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
 export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParams, governance: PieceAuthorizeResponse, execute: () => Promise<unknown>): Promise<unknown> {
   if ('dispatch' in governance && governance.dispatch === 'completed') return governance.result;
   if ('dispatch' in governance && (governance.dispatch === 'held' || governance.dispatch === 'approval_required')) throw new Error('Piece is waiting for authorization');
+  const mailchimp = params.piece === '@activepieces/piece-mailchimp' && managedMailchimpInput(params.input);
+  if (mailchimp) {
+    // Recheck after an approval document has applied edits.
+    const issue = managedMailchimpIssue(params.action, mailchimp);
+    if (issue) throw new Error(issue);
+  }
   const github = params.piece === '@activepieces/piece-github' && managedGitHubInput(params.input);
   if (github) {
     // Recheck after an approval document has applied edits.
@@ -210,6 +223,9 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   if (trello) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Trello dispatch was not authorized');
     raw = await runManagedTrelloAction(String(params.action), trello);
+  } else if (mailchimp) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Mailchimp dispatch was not authorized');
+    raw = await runManagedMailchimpAction(String(params.action), mailchimp);
   } else if (github) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('GitHub dispatch was not authorized');
     raw = await runManagedGitHubAction(String(params.action), github);
