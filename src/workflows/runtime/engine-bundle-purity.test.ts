@@ -1,6 +1,6 @@
 /**
- * The two daemon source files compiled INTO the engine bundle must keep
- * type-only imports (#634).
+ * Daemon sources compiled INTO the engine bundle may only import values
+ * from other registered, checked sources (#634).
  *
  * WHY THIS IS A TEST AND NOT A COMMENT. `runner/engine-runtime/build.ts` holds
  * `PATCHED_VENDOR_SOURCES`, the explicit cache-invalidation registry for
@@ -27,20 +27,22 @@
  * the suite enforces.
  *
  * SCOPE, stated because it is narrower than "the bundle is pure": this checks
- * the two files the registry names, not their transitive graph, because with
- * type-only imports there is no runtime graph to walk. If a value import is
- * ever genuinely needed, the fix is to add the dependency to
- * `PATCHED_VENDOR_SOURCES` and exempt the file here with a reason -- not to
- * delete this test.
+ * the governed-piece sources and permits imports only within that checked
+ * set. A new dependency must be registered in `PATCHED_VENDOR_SOURCES` AND
+ * included here, so its imports receive the same checks.
  */
 
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import ts from 'typescript';
+import { PATCHED_VENDOR_SOURCES } from '../runner/engine-runtime/build';
 
-/** Relative to this directory. Mirrors `PATCHED_VENDOR_SOURCES`' two entries. */
-const BUNDLED_DAEMON_SOURCES = ['piece-effects.ts', 'piece-effect-guard.ts', 'decision-document.ts', 'managed-typeform.ts'];
+/** Relative to this directory. All must also be cache-invalidation inputs.
+ * managed-github and managed-trello are the engine's fetch-only send adapters;
+ * checking them here prevents a future dependency from silently escaping the
+ * bundle hash. */
+const BUNDLED_DAEMON_SOURCES = ['piece-effects.ts', 'piece-effect-guard.ts', 'decision-document.ts', 'managed-github.ts', 'managed-trello.ts', 'managed-typeform.ts'];
 
 /**
  * A value import of ANOTHER registered source is fine, and is the one shape
@@ -49,7 +51,7 @@ const BUNDLED_DAEMON_SOURCES = ['piece-effects.ts', 'piece-effect-guard.ts', 'de
  * that file's content, so the bundle hash follows it. What this guard is for is
  * a value import that reaches OUTSIDE the registry.
  */
-const REGISTERED_SPECIFIERS = new Set(['./piece-effects', './piece-effect-guard', './decision-document', './managed-typeform']);
+const REGISTERED_SPECIFIERS = new Set(BUNDLED_DAEMON_SOURCES.map(file => './' + file.replace(/\.ts$/u, '')));
 
 const reachesOutsideTheRegistry = (specifier: string): boolean =>
   !REGISTERED_SPECIFIERS.has(specifier.replace(/^['"]|['"]$/gu, '').replace(/\.ts$/u, ''));
@@ -89,9 +91,16 @@ function valueImportsOf(file: string): string[] {
   return offenders;
 }
 
-describe('#634: the engine bundle\'s daemon sources stay type-only', () => {
+describe('#634: the engine bundle\'s daemon sources stay within the checked registry', () => {
+  test('every permitted runtime dependency is included in the bundle hash', () => {
+    const registeredSources: readonly string[] = PATCHED_VENDOR_SOURCES;
+    for (const file of BUNDLED_DAEMON_SOURCES) {
+      expect(registeredSources).toContain('../../runtime/' + file);
+    }
+  });
+
   for (const file of BUNDLED_DAEMON_SOURCES) {
-    test(`${file} has no value imports`, () => {
+    test(`${file} has no unregistered value imports`, () => {
       expect(valueImportsOf(file)).toEqual([]);
     });
   }

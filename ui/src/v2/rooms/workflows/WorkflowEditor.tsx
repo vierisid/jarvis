@@ -1,3 +1,4 @@
+import { TrelloCardLocation } from "../../integrations/TrelloCardLocation";
 /**
  * WorkflowEditor (Phase 4 stage 2).
  *
@@ -14,11 +15,14 @@
  * Stage 3 lights all of those up.
  */
 
+import { TrelloConnection } from "../../integrations/TrelloConnection";
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSampleDraftText } from "./useSampleDraftText";
 import { TypeformConnection, useTypeformStatus } from "../../integrations/TypeformConnection";
 import { ClickUpConnection, useClickUpStatus } from "../../integrations/ClickUpConnection";
 import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
+import { GitHubConnection, useGitHubStatus } from "../../integrations/GitHubConnection";
+import { GitHubRepository } from "../../integrations/GitHubRepository";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { WorkflowEditorEnvironment, WorkflowPortal, useWorkflowRequest } from "./WorkflowEditorEnvironment";
 import { BriefTabs } from "../../../brief/components/controls/Choices";
@@ -3379,8 +3383,13 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const clickUpStatus = useClickUpStatus(piece?.name === "@activepieces/piece-clickup");
   const clickUpLocation = piece?.name === "@activepieces/piece-clickup" && ["create_task", "update_task", "get_task_by_name"].includes(subName ?? "")
     && !!clickUpStatus?.connected && step.settings?.input?.auth === "{{connections." + clickUpStatus.external_id + "}}";
-  const selectedSchema = selectedSubAction?.inputSchema ?? null;
-  const rawSchema = clickUpLocation && selectedSchema ? {...selectedSchema,fields:selectedSchema.fields.filter(f=>!['workspace_id','space_id','list_id'].includes(f.name))} : selectedSchema;
+  const managedTrello = piece?.name === "@activepieces/piece-trello" && step.settings?.input?.auth === "{{connections.jarvis:trello}}";
+  const trelloLocation = managedTrello && ['create_card','move_card','list_lists'].includes(subName ?? '');
+  const managedGitHub = piece?.name === "@activepieces/piece-github" && ["{{connections.jarvis:github}}", "{{connections['jarvis:github']}}"].includes(String(step.settings?.input?.auth));
+  const githubRepository = managedGitHub && ['github_create_issue','getIssueInformation','update_issue','find_issue','createCommentOnAIssue'].includes(subName ?? '');
+  const baseSchema = selectedSubAction?.inputSchema ?? null;
+  const selectedSchema = managedTrello && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["labels","member_id"].includes(f.name))} : managedGitHub && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['labels','assignees','milestone','state_reason', ...(githubRepository ? ['repository'] : [])].includes(f.name))} : baseSchema;
+  const rawSchema = clickUpLocation && selectedSchema ? {...selectedSchema,fields:selectedSchema.fields.filter(f=>!['workspace_id','space_id','list_id'].includes(f.name))} : trelloLocation && selectedSchema ? {...selectedSchema, fields:selectedSchema.fields.filter(f=>!['board_id','list_id'].includes(f.name))} : selectedSchema;
   // ClickUp 0.9.1 declares `custom_fields` on Create Task as a required
   // dynamic prop even when a list has none. "Use standard task fields" saves
   // an empty schema and value with check_required_custom_fields, so ClickUp
@@ -3495,6 +3504,8 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         />
       ) : null}
 
+      {githubRepository && <GitHubRepository input={step.settings?.input ?? {}} onChange={onSetInput} />}
+      {trelloLocation && <TrelloCardLocation input={step.settings?.input ?? {}} onChange={onSetInput} boardOnly={subName === "list_lists"} />}
       {clickUpLocation && <ClickUpTaskLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {clickUpCreate && <div className="wf-props__hint" role="note">
         {standardFields ? <p>Using standard task fields. ClickUp will reject the task if this list requires custom fields.</p>
@@ -3738,16 +3749,20 @@ function ConnectionPicker({
   const managedTypeform = useTypeformStatus(isTypeform)?.connected === true;
   const isClickUp = pieceName === "@activepieces/piece-clickup";
   const managedClickUp = useClickUpStatus(isClickUp)?.connected === true;
+  const isGitHub = pieceName === "@activepieces/piece-github";
+  const managedGitHub = useGitHubStatus(isGitHub)?.connected === true;
   return (
     <div className="wf-props__connection">
+      {isGitHub && <GitHubConnection optional onPick={onPick} currentValue={currentValue} />}
       {isTypeform && <><TypeformConnection optional onPick={onPick} currentValue={currentValue} />
         {managedTypeform && <p className="wf-props__hint">Read workspaces, forms and responses. Use a form ID or workflow variable. Recent responses may take up to 30 minutes to appear. Form editing and instant submission triggers are not supported yet.</p>}</>}
       {isClickUp && <ClickUpConnection optional onPick={onPick} currentValue={currentValue} />}
+      {pieceName === "@activepieces/piece-trello" && <TrelloConnection onPick={onPick} currentValue={currentValue} />}
       <label className="wf-props__field-label">
         {authDisplayName}
         <span className="wf-props__connection-type">({authType})</span>
       </label>
-      {matching.length === 0 && !managedClickUp && !managedTypeform ? (
+      {matching.length === 0 && !managedTypeform && !managedClickUp && !managedGitHub && pieceName !== "@activepieces/piece-trello" ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.

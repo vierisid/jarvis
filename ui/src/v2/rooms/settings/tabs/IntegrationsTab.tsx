@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ClickUpConnection } from "../../../integrations/ClickUpConnection";
+import { GitHubConnection } from "../../../integrations/GitHubConnection";
+import { TrelloConnection } from "../../../integrations/TrelloConnection";
 import { TypeformConnection } from "../../../integrations/TypeformConnection";
 import type { SettingsHook } from "../useSettingsData";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
@@ -326,9 +328,12 @@ export function IntegrationsTab({
           </>
         )}
       </section>
-      {/* Its own block, independent of how Google is connected; renders
-          nothing unless hosting offers ClickUp or it is already connected. */}
-      <ClickUpConnection optional /><TypeformConnection optional />
+      {/* Their own blocks, independent of how Google is connected; each renders
+          nothing unless hosting offers it or it is already connected. */}
+      <ClickUpConnection optional />
+      <GitHubConnection optional />
+      <TrelloConnection optional />
+      <TypeformConnection optional />
     </div>
   );
 }
