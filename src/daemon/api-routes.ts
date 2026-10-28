@@ -2511,6 +2511,19 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         return json(githubStatus(ctx.config));
       },
     },
+    '/api/integrations/trello/options': {
+      GET: async (req: Request) => {
+        const {trelloOptions, TrelloOptionsError} = await import('../integrations/trello-options');
+        try { return json(await trelloOptions(ctx.config, new URL(req.url).searchParams)); }
+        catch (error) { return json({error: error instanceof TrelloOptionsError ? error.message : 'Could not load Trello choices.'}, error instanceof TrelloOptionsError ? error.status : 502); }
+      },
+    },
+    '/api/integrations/trello': {
+      GET: async () => {
+        const { trelloStatus } = await import('../integrations/trello-connection');
+        return json(trelloStatus(ctx.config));
+      },
+    },
 
     // --- Google Auth Management ---
     '/api/auth/google/status': {

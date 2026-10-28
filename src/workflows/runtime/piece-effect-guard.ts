@@ -25,6 +25,7 @@ import {managedDropboxInput, runManagedDropboxAction} from './managed-dropbox';
 import { HTTP_PIECE, isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { documentInput, applyDocument, documentFields, type DecisionDocument } from './decision-document';
 import {managedGitHubInput, managedGitHubIssue, runManagedGitHubAction} from './managed-github';
+import {managedTrelloInput, managedTrelloIssue, runManagedTrelloAction} from './managed-trello';
 
 export const PIECE_AUTHORIZE_PATH = '/v1/jarvis/pieces/authorize';
 export const PIECE_RECEIPT_PATH = '/v1/jarvis/pieces/receipt';
@@ -104,6 +105,11 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
     const issue = managedGitHubIssue(params.action, github);
     if (issue) throw new Error(issue);
   }
+  const trello = params.piece === '@activepieces/piece-trello' && managedTrelloInput(params.input);
+  if (trello) {
+    const issue = managedTrelloIssue(params.action, trello);
+    if (issue) throw new Error(issue);
+  }
   const governed = isGovernedPiece(params.piece) && typeof params.action === 'string' && params.action.length > 0;
   const url = `${params.apiUrl.replace(/\/+$/u, '')}${PIECE_AUTHORIZE_PATH}`;
   const editable = documentInput(params.piece, params.action, params.input);
@@ -127,7 +133,7 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
   const tracked = tracksPieceCompletion(params.piece, params.action, governed ? body.input : params.input);
   if (tracked) {
     const auth = (params.input as { auth?: { access_token?: unknown; type?: unknown } } | null)?.auth;
-    const token = auth?.access_token;
+    const token = trello ? JSON.stringify((trello.auth as {username:string;password:string})) : auth?.access_token;
     if (auth?.type !== 'CUSTOM_AUTH' && typeof token === 'string') {
       const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical(token))));
       body.credentialDigest = Array.from(hash).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -193,14 +199,25 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
     const issue = managedGitHubIssue(params.action, github);
     if (issue) throw new Error(issue);
   }
+  const trello = params.piece === '@activepieces/piece-trello' && managedTrelloInput(params.input);
+  if (trello) {
+    // Recheck after an approval document has applied edits.
+    const issue = managedTrelloIssue(params.action, trello);
+    if (issue) throw new Error(issue);
+  }
+  const dropbox = params.piece === '@activepieces/piece-dropbox' ? managedDropboxInput(params.input) : null;
   let raw: unknown;
-  if (github) {
+  if (trello) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Trello dispatch was not authorized');
+    raw = await runManagedTrelloAction(String(params.action), trello);
+  } else if (github) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('GitHub dispatch was not authorized');
     raw = await runManagedGitHubAction(String(params.action), github);
+  } else if (dropbox) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Dropbox dispatch was not authorized');
+    raw = await runManagedDropboxAction(String(params.action), dropbox);
   } else {
-    const dropbox = params.piece === "@activepieces/piece-dropbox" ? managedDropboxInput(params.input) : null;
-    if (dropbox && (!governance.governed || governance.dispatch !== 'authorized')) throw new Error('Dropbox dispatch was not authorized');
-    raw = dropbox ? await runManagedDropboxAction(String(params.action), dropbox) : await execute();
+    raw = await execute();
   }
   // Gmail 0.17 returns a Gaxios response, including transport configuration.
   // Keep its data envelope for expressions, but never persist request headers
