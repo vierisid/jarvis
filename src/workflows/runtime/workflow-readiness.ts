@@ -1,3 +1,4 @@
+import {managedGitHubIssue} from './managed-github';
 import { validateCronExpression } from '../../lib/cron-scheduler';
 import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from './piece-catalog';
 import { evaluateWorkflowExpression, workflowExpressionReferences } from './safe-expression';
@@ -218,6 +219,11 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     const input = settings.input === undefined ? {} : settings.input;
     if (!object(input)) issue(node, 'settings.input', 'INPUT_TYPE', 'Expected an input object');
     const pieceName = typeof settings.pieceName === 'string' ? settings.pieceName : '';
+    if (pieceName === '@activepieces/piece-github' && object(input)
+      && ["{{connections.jarvis:github}}", "{{connections['jarvis:github']}}"].includes(String(input.auth))) {
+      const reason = managedGitHubIssue(root ? settings.triggerName : settings.actionName, input, false);
+      if (reason) issue(node, 'settings.input', 'MANAGED_GITHUB', reason);
+    }
     // Only input values are templated; source code and labels are not expressions.
     // A connection is checked against the step's piece, and only a piece step
     // has one: a CODE step's `settings.pieceName` is ignored by the engine, so

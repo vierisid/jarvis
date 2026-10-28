@@ -295,6 +295,7 @@ export const PATCHED_VENDOR_SOURCES = [
   // the old table -- a stale bundle that silently governs the wrong actions.
   '../../runtime/piece-effects.ts',
   '../../runtime/piece-effect-guard.ts',
+  '../../runtime/managed-github.ts',
   '../../runtime/managed-dropbox.ts',
   // The egress guard the engine's file-property download goes through (#961).
   '../../runtime/http-egress.ts',

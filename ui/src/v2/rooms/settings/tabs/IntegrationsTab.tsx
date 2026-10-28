@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ClickUpConnection } from "../../../integrations/ClickUpConnection";
+import { GitHubConnection } from "../../../integrations/GitHubConnection";
 import { DropboxConnection } from "../../../integrations/DropboxConnection";
 import type { SettingsHook } from "../useSettingsData";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
@@ -326,9 +327,11 @@ export function IntegrationsTab({
           </>
         )}
       </section>
-      {/* Its own block, independent of how Google is connected; renders
-          nothing unless hosting offers ClickUp or it is already connected. */}
-      <ClickUpConnection optional /><DropboxConnection optional />
+      {/* Their own blocks, independent of how Google is connected; each renders
+          nothing unless hosting offers it or it is already connected. */}
+      <ClickUpConnection optional />
+      <GitHubConnection optional />
+      <DropboxConnection optional />
     </div>
   );
 }
