@@ -1,8 +1,8 @@
-import { ClickUpConnection } from "../../v2/integrations/ClickUpConnection";
-import { GitHubConnection } from "../../v2/integrations/GitHubConnection";
 import React, { Component, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 import type { ComponentType, ReactNode } from 'react';
 import { useTheme } from '../../v2/shell/useTheme.ts';
+import { ClickUpConnection } from '../../v2/integrations/ClickUpConnection';
+import { GitHubConnection } from '../../v2/integrations/GitHubConnection';
 import type { Session } from './session.ts';
 import './host.css';
 

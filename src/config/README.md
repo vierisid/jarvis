@@ -93,6 +93,12 @@ usejarvis_billing:
 - `GET /api/billing` serves the parsed summary and the links to the UI, and
   never the endpoint, instance id or secret.
 
+### The `usejarvis_integrations` block (hosted installs only)
+
+`page_url` is the account page where a person connects a hosted integration
+(an https URL without credentials, or it is ignored). Not a secret. Re-read
+on SIGHUP and `POST /api/config/reload` (`reloadUsejarvisIntegrationsBlock`).
+
 All user-owned sections (personality, voice, stt/tts, authority, channels,
 onboarding, ... — see `USER_OWNED_SECTIONS` in `types.ts`) persist to the
 vault DB settings store instead:

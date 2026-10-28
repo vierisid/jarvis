@@ -3,8 +3,8 @@ import { registerReconciliation } from '../brief/registrations/reconciliation';
 import { registerOnboarding } from '../brief/registrations/onboarding';
 import { ConnectedWorkspace } from '../brief/connected-workspace';
 import { MIN_BUN_VERSION, versionAtLeast } from '../util/bun-minimum.ts';
-import { githubStatus } from "../integrations/github-connection";
-import { clickUpStatus } from "../integrations/clickup-connection";
+import { githubStatus } from '../integrations/github-connection';
+import { clickUpStatus } from '../integrations/clickup-connection';
 import { connectedGoogle } from '../brief/connected-workspace-runtime';
 import { registerConnections } from '../brief/registrations/connections';
 import { WorkflowContext } from '../brief/workflow-context';
@@ -862,15 +862,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // voice intent, pebble toggle — schedule the section's appliers.
     const { SettingsReloadCoordinator } = await import('./settings-reload.ts');
     const { setSectionSavedListener } = await import('./user-settings.ts');
-    const { reloadUsejarvisAiBlock, reloadUsejarvisBillingBlock } = await import('../config/loader.ts');
+    const { reloadUsejarvisAiBlock, reloadUsejarvisBillingBlock, reloadUsejarvisIntegrationsBlock } = await import('../config/loader.ts');
     settingsReload = new SettingsReloadCoordinator(jarvisConfig, {
       // File-authoritative SYSTEM sections are re-read on every reloadAll so
       // a provisioner rotation of the usejarvis_ai key (or un-hosting) takes
       // effect on SIGHUP / POST /api/config/reload without a restart. Same
-      // for the billing read's block.
+      // for the billing read's block and the hosted integrations link.
       reloadSystemSections: async (cfg) => {
         await reloadUsejarvisAiBlock(cfg);
         await reloadUsejarvisBillingBlock(cfg);
+        await reloadUsejarvisIntegrationsBlock(cfg);
       },
     });
     setSectionSavedListener((section) => settingsReload?.sectionChanged(section));

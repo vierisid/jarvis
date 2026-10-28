@@ -1,10 +1,18 @@
 import { GITHUB_CONNECTION, GITHUB_PIECE, readGitHubConnection } from "../../integrations/github-connection";
-import { credentialFingerprint, type JarvisConnectionSource, type ResolvedConnection } from "./adapter";
+import { credentialFingerprint, type JarvisConnectionSource, type ManagedPieceDetails, type ResolvedConnection } from "./adapter";
 
 /** Read through the atomically delivered file. Disconnects need no daemon restart. */
 export class JarvisGitHubConnectionSource implements JarvisConnectionSource {
   readonly id = "github";
-  readonly pieceNames = [GITHUB_PIECE];
+  /** Only GitHub steps may name jarvis:github, and only as their auth (readiness and the credential route). */
+  readonly pieceNames: readonly string[] = [GITHUB_PIECE];
+  /**
+   * No API host: a custom API call may only name a path under the piece's base
+   * URL, and the managed action list (managed-github.ts) refuses it at dispatch anyway.
+   */
+  readonly pieceDetails: Readonly<Record<string, ManagedPieceDetails>> = {
+    [GITHUB_PIECE]: { displayName: "GitHub", apiHosts: [] },
+  };
   constructor(private readonly dataDir: string) {}
   canResolve(externalId: string) { return externalId === GITHUB_CONNECTION; }
   identity(externalId: string) {

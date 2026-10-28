@@ -126,7 +126,6 @@ export function IntegrationsTab({
 
   return (
     <div>
-      <GitHubConnection optional />
       <section className="v2-set__section">
         <div className="v2-set__section-head">
           <div>
@@ -164,7 +163,6 @@ export function IntegrationsTab({
              off to the account page — which then opens the system browser,
              because Google refuses OAuth inside an embedded webview. */
           <>
-      <ClickUpConnection optional />
             {g.is_authenticated ? (
               <>
                 <p className="v2-set__hint">
@@ -328,6 +326,10 @@ export function IntegrationsTab({
           </>
         )}
       </section>
+      {/* Their own blocks, independent of how Google is connected; each renders
+          nothing unless hosting offers it or it is already connected. */}
+      <ClickUpConnection optional />
+      <GitHubConnection optional />
     </div>
   );
 }
