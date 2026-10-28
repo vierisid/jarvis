@@ -76,7 +76,8 @@ const GMAIL_TRACKED_SENDS: ReadonlySet<unknown> = new Set(['send_email', 'gmail_
 export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
   return (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
-    || (piece === CLICKUP_PIECE && clickUpTracked(action))
+    || (piece === MAILCHIMP_PIECE && managedPieceChanges(MAILCHIMP_PIECE, action))
+    || (piece === CLICKUP_PIECE && managedPieceChanges(CLICKUP_PIECE, action))
     || (piece === '@activepieces/piece-gmail' && GMAIL_TRACKED_SENDS.has(action))
     || (piece === '@activepieces/piece-slack' && (action === 'send_channel_message' || action === 'slack_post_message'))
     // #961: an HTTP request that is not a read is a send whose outcome the
@@ -86,11 +87,12 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
 }
 
 const CLICKUP_PIECE = '@activepieces/piece-clickup';
-/** Every ClickUp action that changes the account (write, send or delete). None
- * parks its flow, so each one can be tracked; a read never is. */
-function clickUpTracked(action: unknown): boolean {
-  const categories = MANAGED_PIECE_ADAPTERS.find(a => a.pieceName === CLICKUP_PIECE)!.categories;
-  return typeof action === 'string' && (['write_data', 'send_message', 'delete_data'] as const)
+const MAILCHIMP_PIECE = '@activepieces/piece-mailchimp';
+/** Every ClickUp or Mailchimp action that changes the account (write, send or
+ * delete). None parks its flow, so each one can be tracked; a read never is. */
+function managedPieceChanges(pieceName: string, action: unknown): boolean {
+  const categories = MANAGED_PIECE_ADAPTERS.find(a => a.pieceName === pieceName)!.categories;
+  return typeof action === 'string' && (['write_data', 'send_message', 'send_email', 'delete_data'] as const)
     .some(category => categories[category]?.includes(action));
 }
 
@@ -696,6 +698,35 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
     update_card: { props: ['closed'], category: trelloUpdateCardCategory },
     update_card_ai: { props: ['closed'], category: trelloUpdateCardCategory },
   },
+}, {
+  // Mailchimp, a community piece made governed by the managed `jarvis:mailchimp`
+  // connection. Every action of the pinned 0.5.10 bundle is named (it has no
+  // `custom_api_call`; `managed-mailchimp.test.ts` pins the list and the engine
+  // test checks it against the installed package), so a workflow on the
+  // user's own connection keeps its reads and writes at the default level.
+  // The managed connection itself is further limited to MANAGED_MAILCHIMP_ACTIONS.
+  catalogId: 'mailchimp', pieceName: '@activepieces/piece-mailchimp', unknownActionCategory: 'modify_settings',
+  targetProps: ['list_id', 'email', 'email_address', 'subscriber_hash', 'tag_name', 'campaign_id', 'store_id', 'name', 'query'],
+  categories: {
+    read_data: ['find_subscriber', 'find_campaign', 'get_campaign_report', 'find_customer', 'find_tag'],
+    // Sending a campaign delivers email to a whole audience.
+    send_email: ['send_campaign'],
+    // Audience, subscriber, tag and draft campaign changes under the account.
+    // add_member_to_list with status `pending` makes Mailchimp send the address
+    // an opt-in email, and create_custom_event can start a customer journey that
+    // emails the contact. Both stay writes: the mail is Mailchimp's own
+    // confirmation or a journey the account owner built, and the step names no
+    // recipient or content, as a send does (upstream classifies both WRITE).
+    write_data: ['add_subscriber_to_tag', 'remove_subscriber_from_tag', 'add_member_to_list', 'add_note_to_subscriber',
+      'create_campaign', 'create_audience', 'create_tag', 'create_custom_event'],
+    // archive_subscriber is DELETE /lists/{id}/members/{hash}; upstream labels
+    // it and unsubscribe_email DESTRUCTIVE. A status update can unsubscribe or
+    // clean a member, so blind it is that; its input narrows it (`categoryFromInput`).
+    delete_data: ['archive_subscriber', 'unsubscribe_email', 'update_member_in_list'],
+  },
+  categoryFromInput: {
+    update_member_in_list: { props: ['status'], category: mailchimpMemberStatusCategory },
+  },
 }];
 
 /**
@@ -707,6 +738,16 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
 function trelloUpdateCardCategory(input: Record<string, unknown>): ActionCategory {
   const closed = input.closed;
   return closed === undefined || closed === false ? 'write_data' : 'delete_data';
+}
+
+/**
+ * A Mailchimp member update by its new status. Subscribed, pending and
+ * transactional keep the member reachable, an ordinary write; unsubscribed and
+ * cleaned remove them from the audience's mail, as unsubscribe_email does. Any
+ * other value, an unresolved expression among them, is gated as the removal.
+ */
+function mailchimpMemberStatusCategory(input: Record<string, unknown>): ActionCategory {
+  return input.status === 'subscribed' || input.status === 'pending' || input.status === 'transactional' ? 'write_data' : 'delete_data';
 }
 
 /** Every adapter: the verified catalog pieces, the vendored core pieces, then the managed ones. */

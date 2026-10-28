@@ -295,6 +295,7 @@ export const PATCHED_VENDOR_SOURCES = [
   // the old table -- a stale bundle that silently governs the wrong actions.
   '../../runtime/piece-effects.ts',
   '../../runtime/piece-effect-guard.ts',
+  '../../runtime/managed-mailchimp.ts',
   '../../runtime/managed-github.ts',
   '../../runtime/managed-trello.ts',
   '../../runtime/managed-typeform.ts',
