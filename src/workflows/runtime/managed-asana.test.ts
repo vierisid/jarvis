@@ -42,8 +42,28 @@ test("provider failures are bounded, sanitized and never automatically retried",
 test("reads and writes are governed and completed writes replay without provider dispatch",async()=>{
   for(const name of MANAGED_ASANA_ACTIONS){expect(resolveGovernedPieceAction("@activepieces/piece-asana",name)?.known).toBe(true);expect(tracksPieceCompletion("@activepieces/piece-asana",name)).toBe(["create_task","update_task","add_task_comment"].includes(name));}
   expect(resolveGovernedPieceAction("@activepieces/piece-asana","add_task_comment")?.category).toBe("send_message");
-  expect(resolveGovernedPieceAction("@activepieces/piece-asana","delete_task")?.category).toBe("modify_settings");
+  expect(resolveGovernedPieceAction("@activepieces/piece-asana","delete_task")?.category).toBe("delete_data");
+  expect(resolveGovernedPieceAction("@activepieces/piece-asana","custom_api_call")).toMatchObject({category:"modify_settings",known:false});
   let calls=0;const params={piece:"@activepieces/piece-asana",action:"create_task",input:{auth}} as any;
   expect(await executeAuthorizedPiece(params,{dispatch:"completed",result:{gid:"1"}} as any,async()=>{calls++;})).toEqual({gid:"1"});
   await expect(executeAuthorizedPiece(params,{dispatch:"held"} as any,async()=>{calls++;})).rejects.toThrow("waiting");expect(calls).toBe(0);
+});
+test("a valid JSON answer over the 1 MiB cap is refused; one just under it is read",async()=>{
+  const body=(size:number)=>{const head='{"data":{"gid":"1","notes":"',tail='"}}';return head+"x".repeat(size-head.length-tail.length)+tail;};
+  const under=await runManagedAsanaAction("get_task",{auth,task:"1"},(async()=>new Response(body(1048576))) as unknown as typeof fetch) as Record<string,unknown>;
+  expect(String(under.notes).length).toBeGreaterThan(1048000);
+  await expect(runManagedAsanaAction("get_task",{auth,task:"1"},(async()=>new Response(body(1048577))) as unknown as typeof fetch)).rejects.toThrow("invalid response");
+});
+test("only the requested fields reach the step output",async()=>{
+  const request=(async(url:string)=>Response.json(url.includes("/projects/")
+    ?{data:[{gid:"12",name:"Task",extra:"PRIVATE",assignee:{gid:"3",name:"Owner",email:"PRIVATE"}}],next_page:null}
+    :url.includes("/stories")?{data:{gid:"9",text:"Hi",created_by:{gid:"3",name:"Owner",photo:"PRIVATE"},extra:"PRIVATE"}}
+    :{data:{gid:"12",resource_type:"task",name:"Task",projects:[{gid:"2",name:"P",team:"PRIVATE"}],custom_fields:"PRIVATE"}})) as unknown as typeof fetch;
+  const outputs=[await runManagedAsanaAction("get_task",{auth,task:"12"},request),
+    await runManagedAsanaAction("list_project_tasks",{auth,project:"2"},request),
+    await runManagedAsanaAction("add_task_comment",{auth,task:"12",text:"Hi"},request)];
+  expect(outputs).toEqual([{gid:"12",resource_type:"task",name:"Task",projects:[{gid:"2",name:"P"}]},
+    {data:[{gid:"12",name:"Task",assignee:{gid:"3",name:"Owner"}}],next_offset:null},
+    {gid:"9",text:"Hi",created_by:{gid:"3",name:"Owner"}}]);
+  expect(JSON.stringify(outputs)).not.toContain("PRIVATE");
 });

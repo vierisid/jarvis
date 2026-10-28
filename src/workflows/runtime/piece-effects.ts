@@ -74,8 +74,7 @@ const GMAIL_TRACKED_SENDS: ReadonlySet<unknown> = new Set(['send_email', 'gmail_
  * (#953 made these reachable at the default level).
  */
 export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
-  return (piece === '@activepieces/piece-asana' && ['create_task', 'update_task', 'add_task_comment'].includes(String(action)))
-    || (piece === CLICKUP_PIECE && clickUpTracked(action))
+  return ((piece === ASANA_PIECE || piece === CLICKUP_PIECE) && managedTracked(piece, action))
     || (piece === '@activepieces/piece-gmail' && GMAIL_TRACKED_SENDS.has(action))
     || (piece === '@activepieces/piece-slack' && (action === 'send_channel_message' || action === 'slack_post_message'))
     // #961: an HTTP request that is not a read is a send whose outcome the
@@ -85,12 +84,32 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
 }
 
 const CLICKUP_PIECE = '@activepieces/piece-clickup';
-/** Every ClickUp action that changes the account (write, send or delete). None
- * parks its flow, so each one can be tracked; a read never is. */
-function clickUpTracked(action: unknown): boolean {
-  const categories = MANAGED_PIECE_ADAPTERS.find(a => a.pieceName === CLICKUP_PIECE)!.categories;
-  return typeof action === 'string' && (['write_data', 'send_message', 'delete_data'] as const)
+const ASANA_PIECE = '@activepieces/piece-asana';
+/** Every ClickUp or Asana action that changes the account (write, send,
+ * delete or an access change). None parks its flow, so each one can be
+ * tracked; a read never is. */
+function managedTracked(piece: string, action: unknown): boolean {
+  const categories = MANAGED_PIECE_ADAPTERS.find(a => a.pieceName === piece)!.categories;
+  return typeof action === 'string' && (['write_data', 'send_message', 'delete_data', 'modify_settings'] as const)
     .some(category => categories[category]?.includes(action));
+}
+
+const present = (value: unknown) => value !== undefined && value !== null && value !== '';
+
+/**
+ * Asana `update_project`: a privacy or owner change decides who can see the
+ * project, and archiving hides it (as a Trello archive, gated as a deletion).
+ * A plain field edit is a write. `archived: false` restores, a write too.
+ */
+export function asanaUpdateProjectCategory(input: Record<string, unknown>): ActionCategory {
+  if (present(input.privacy_setting) || present(input.owner)) return 'modify_settings';
+  if (present(input.archived) && input.archived !== false) return 'delete_data';
+  return 'write_data';
+}
+
+/** Asana `update_team`: visibility or endorsement is a team setting; a rename or description is a write. */
+export function asanaUpdateTeamCategory(input: Record<string, unknown>): ActionCategory {
+  return present(input.visibility) || present(input.endorsed) ? 'modify_settings' : 'write_data';
 }
 
 /** The vendored core HTTP piece (#961). */
@@ -616,9 +635,61 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
+  // Asana: every action of the pinned 0.7.2 bundle (`asana-connection.test.ts`
+  // pins the list and the engine test checks it against the installed
+  // package), so a workflow on the user's own Asana connection keeps running
+  // at the default level. The managed `jarvis:asana` connection is narrower
+  // still: `managed-asana.ts` runs only five of these. Only `custom_api_call`
+  // and an action added upstream fall back to `modify_settings`.
   catalogId: 'asana', pieceName: '@activepieces/piece-asana', unknownActionCategory: 'modify_settings',
-  targetProps: ['workspace', 'project', 'task', 'name', 'notes', 'html_notes', 'assignee', 'due_on', 'due_at', 'start_on', 'completed', 'text', 'html_text', 'is_pinned', 'completed_since', 'limit', 'offset'],
-  categories: {read_data: ['get_task', 'list_project_tasks'], write_data: ['create_task', 'update_task'], send_message: ['add_task_comment']},
+  targetProps: ['workspace', 'organization', 'team', 'project', 'section', 'task', 'parent', 'story', 'tag', 'user',
+    'member', 'members', 'followers', 'membership', 'status_update', 'project_brief', 'attachment', 'custom_field',
+    'enum_option', 'portfolio', 'item', 'goal', 'allocation', 'access_request', 'target', 'project_template',
+    'name', 'title', 'notes', 'html_notes', 'assignee', 'due_on', 'due_at', 'start_on', 'completed', 'archived',
+    'privacy_setting', 'owner', 'visibility', 'access_level', 'text', 'html_text', 'is_pinned', 'completed_since',
+    'limit', 'offset'],
+  categories: {
+    read_data: ['get_allocation', 'get_attachment', 'get_current_user', 'get_custom_field', 'get_goal', 'get_job',
+      'get_membership', 'get_portfolio', 'get_project', 'get_project_brief', 'get_project_task_counts', 'get_section',
+      'get_status_update', 'get_story', 'get_tag', 'get_task', 'get_team', 'get_team_membership', 'get_time_period',
+      'get_user', 'get_workspace', 'get_workspace_membership', 'list_access_requests', 'list_allocations',
+      'list_assigned_tasks', 'list_attachments', 'list_custom_fields', 'list_custom_types', 'list_favorites',
+      'list_goal_relationships', 'list_goals', 'list_memberships', 'list_portfolio_items', 'list_portfolios',
+      'list_projects', 'list_project_tasks', 'list_project_templates', 'list_reactions', 'list_sections',
+      'list_section_tasks', 'list_status_updates', 'list_subtasks', 'list_tags', 'list_tag_tasks',
+      'list_task_dependencies', 'list_task_projects', 'list_task_stories', 'list_task_tags', 'list_task_templates',
+      'list_team_memberships', 'list_teams', 'list_time_periods', 'list_time_tracking_entries', 'list_users',
+      'list_user_teams', 'list_workspace_memberships', 'list_workspaces', 'search_tasks', 'search_workspace_objects'],
+    // Content that lands in front of other people, including an edit of it: a
+    // comment notifies the task's followers, a status update the project's
+    // members, an access request the owner.
+    send_message: ['add_task_comment', 'update_comment', 'create_status_update', 'create_access_request'],
+    // Workspace content under the caller's own access. Followers are
+    // collaborators drawn from the workspace; none of these grants a person
+    // access to a project, team or workspace.
+    write_data: ['add_goal_supporting_relationship', 'add_portfolio_item', 'add_project_followers', 'add_tag_to_task',
+      'add_task_dependencies', 'add_task_followers', 'add_task_to_project', 'create_allocation', 'create_custom_field',
+      'create_custom_field_enum_option', 'create_project', 'create_project_brief', 'create_project_task',
+      'create_section', 'create_subtask', 'create_tag', 'create_task', 'create_team', 'duplicate_project',
+      'duplicate_task', 'instantiate_project_template', 'move_section', 'move_task_to_section', 'reject_access_request',
+      'remove_portfolio_item', 'remove_project_followers', 'remove_tag_from_task', 'remove_task_dependencies',
+      'remove_task_followers', 'remove_task_from_project', 'reorder_custom_field_enum_option', 'set_task_parent',
+      'update_allocation', 'update_custom_field', 'update_custom_field_enum_option', 'update_project_brief',
+      'update_section', 'update_tag', 'update_task', 'update_user', 'upload_attachment'],
+    // Every delete, and the removals upstream labels DESTRUCTIVE.
+    delete_data: ['delete_allocation', 'delete_attachment', 'delete_comment', 'delete_custom_field',
+      'delete_membership', 'delete_project', 'delete_project_brief', 'delete_section', 'delete_status_update',
+      'delete_tag', 'delete_task', 'remove_project_members', 'remove_user_from_team', 'remove_user_from_workspace'],
+    // Who can see or do what: granting a person access to a project, team or
+    // workspace. `update_project` and `update_team` sit here at their worst
+    // case (privacy, owner, visibility) and narrow by input.
+    modify_settings: ['add_project_members', 'add_user_to_team', 'add_user_to_workspace', 'approve_access_request',
+      'create_membership', 'update_project', 'update_team'],
+  },
+  categoryFromInput: {
+    update_project: { props: ['privacy_setting', 'owner', 'archived'], category: asanaUpdateProjectCategory },
+    update_team: { props: ['visibility', 'endorsed'], category: asanaUpdateTeamCategory },
+  },
 }, {
   catalogId: 'clickup', pieceName: '@activepieces/piece-clickup', unknownActionCategory: 'modify_settings',
   targetProps: ['workspace_id', 'space_id', 'folder_id', 'list_id', 'task_id', 'task_name', 'name', 'status_id',

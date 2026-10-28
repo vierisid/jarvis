@@ -101,10 +101,23 @@ export async function runManagedAsanaAction(action:string,input:Record<string,un
   const result=await asanaRequest(token,path+"?"+query,method,data,request);
   if(action==="list_project_tasks") {
     if(!Array.isArray(result.data) || result.data.some((t:unknown)=>!validResource(t)) || (result.next_page != null && (typeof result.next_page.offset!=="string" || !result.next_page.offset || result.next_page.offset.length>4096))) throw new Error("Asana returned an invalid task page.");
-    return {data:result.data,next_offset:result.next_page?.offset ?? null};
+    return {data:result.data.map((t:Record<string,unknown>)=>project(t,ASANA_TASK_FIELDS)),next_offset:result.next_page?.offset ?? null};
   }
   if(!validResource(result.data))throw new Error("Asana returned an invalid resource. Check the task before trying again.");
-  return result.data;
+  return project(result.data,action==="add_task_comment"?ASANA_STORY_FIELDS:ASANA_TASK_FIELDS);
+}
+/** Only the fields asked for in opt_fields (and a related object's gid, name and type) reach the step output. */
+function project(value:Record<string,unknown>,fields:string):Record<string,unknown> {
+  const out:Record<string,unknown>={};
+  const keep=new Set(["gid","resource_type",...fields.split(",").map(f=>f.split(".")[0]!)]);
+  const related=(v:unknown):unknown=>{
+    if(!v || typeof v!=="object" || Array.isArray(v))return v;
+    const r:Record<string,unknown>={};
+    for(const k of ["gid","name","resource_type"])if(k in (v as Record<string,unknown>))r[k]=(v as Record<string,unknown>)[k];
+    return r;
+  };
+  for(const [k,v] of Object.entries(value)) if(keep.has(k)) out[k]=Array.isArray(v)?v.map(related):related(v);
+  return out;
 }
 function validResource(value:unknown):boolean {
   return !!value && typeof value==="object" && !Array.isArray(value) && typeof (value as any).gid==="string" && /^[0-9]{1,64}$/.test((value as any).gid);

@@ -18,6 +18,12 @@ import {
 } from "./asana-refresh";
 import { JarvisAsanaConnectionSource } from "../workflows/credentials/asana-source";
 import { managedConnectionMisuse } from "../workflows/credentials/adapter";
+import {
+  MANAGED_PIECE_ADAPTERS,
+  resolveGovernedPieceAction,
+  tracksPieceCompletion,
+} from "../workflows/runtime/piece-effects";
+import { AUTHORITY_REQUIREMENTS } from "../roles/authority";
 let dir: string, config: JarvisConfig;
 const doc = () => ({
   version: 1 as const,
@@ -195,4 +201,92 @@ test("revocation requests reconnect, transient failures preserve the binding, re
     }) as unknown as typeof fetch),
   ).rejects.toThrow("not configured");
   expect(calls).toBe(0);
+});
+
+const ASANA = "@activepieces/piece-asana";
+/** Every action of the pinned @activepieces/piece-asana 0.7.2 bundle, keyed by
+ * the `classification` upstream gives it (custom_api_call is added by the
+ * framework and stays unmapped). The engine test checks the installed package
+ * against the adapter too. */
+const ASANA_072_BY_UPSTREAM: Record<string, string[]> = {
+ READ: [
+   'get_allocation', 'get_attachment', 'get_current_user', 'get_custom_field', 'get_goal', 'get_job',
+   'get_membership', 'get_portfolio', 'get_project', 'get_project_brief', 'get_project_task_counts', 'get_section',
+   'get_status_update', 'get_story', 'get_tag', 'get_task', 'get_team', 'get_team_membership', 'get_time_period',
+   'get_user', 'get_workspace', 'get_workspace_membership',
+ ],
+ SEARCH: [
+   'list_access_requests', 'list_allocations', 'list_assigned_tasks', 'list_attachments', 'list_custom_fields',
+   'list_custom_types', 'list_favorites', 'list_goal_relationships', 'list_goals', 'list_memberships',
+   'list_portfolio_items', 'list_portfolios', 'list_project_tasks', 'list_project_templates', 'list_projects',
+   'list_reactions', 'list_section_tasks', 'list_sections', 'list_status_updates', 'list_subtasks', 'list_tag_tasks',
+   'list_tags', 'list_task_dependencies', 'list_task_projects', 'list_task_stories', 'list_task_tags',
+   'list_task_templates', 'list_team_memberships', 'list_teams', 'list_time_periods', 'list_time_tracking_entries',
+   'list_user_teams', 'list_users', 'list_workspace_memberships', 'list_workspaces', 'search_tasks',
+   'search_workspace_objects',
+ ],
+ WRITE: [
+   'add_goal_supporting_relationship', 'add_portfolio_item', 'add_project_followers', 'add_project_members',
+   'add_tag_to_task', 'add_task_comment', 'add_task_dependencies', 'add_task_followers', 'add_task_to_project',
+   'add_user_to_team', 'add_user_to_workspace', 'approve_access_request', 'create_access_request',
+   'create_allocation', 'create_custom_field', 'create_custom_field_enum_option', 'create_membership',
+   'create_project', 'create_project_brief', 'create_project_task', 'create_section', 'create_status_update',
+   'create_subtask', 'create_tag', 'create_task', 'create_team', 'duplicate_project', 'duplicate_task',
+   'instantiate_project_template', 'move_section', 'move_task_to_section', 'reject_access_request',
+   'remove_portfolio_item', 'remove_project_followers', 'remove_tag_from_task', 'remove_task_dependencies',
+   'remove_task_followers', 'remove_task_from_project', 'reorder_custom_field_enum_option', 'set_task_parent',
+   'update_allocation', 'update_comment', 'update_custom_field', 'update_custom_field_enum_option', 'update_project',
+   'update_project_brief', 'update_section', 'update_tag', 'update_task', 'update_team', 'update_user',
+   'upload_attachment',
+ ],
+ DESTRUCTIVE: [
+   'delete_allocation', 'delete_attachment', 'delete_comment', 'delete_custom_field', 'delete_membership',
+   'delete_project', 'delete_project_brief', 'delete_section', 'delete_status_update', 'delete_tag', 'delete_task',
+   'remove_project_members', 'remove_user_from_team', 'remove_user_from_workspace',
+ ],
+};
+/** Where Jarvis departs from upstream's label: messages to people, and access grants. */
+const SENDS = ["add_task_comment", "update_comment", "create_status_update", "create_access_request"];
+const ACCESS = ["add_project_members", "add_user_to_team", "add_user_to_workspace", "approve_access_request",
+  "create_membership", "update_project", "update_team"];
+const expectedCategory = (upstream: string, name: string) =>
+  SENDS.includes(name) ? "send_message" : ACCESS.includes(name) ? "modify_settings"
+    : upstream === "READ" || upstream === "SEARCH" ? "read_data" : upstream === "DESTRUCTIVE" ? "delete_data" : "write_data";
+test("the Asana adapter names every action of the pinned bundle, each in the category it should have", () => {
+  const all = Object.values(ASANA_072_BY_UPSTREAM).flat();
+  expect(all).toHaveLength(125);
+  const adapter = MANAGED_PIECE_ADAPTERS.find((a) => a.pieceName === ASANA)!;
+  expect((Object.values(adapter.categories).flat() as string[]).sort()).toEqual([...all].sort());
+  const table = Object.fromEntries(Object.entries(ASANA_072_BY_UPSTREAM).flatMap(([upstream, names]) =>
+    names.map((name) => [name, expectedCategory(upstream, name)])));
+  expect(Object.fromEntries(all.map((name) => [name, resolveGovernedPieceAction(ASANA, name)!.category as string]))).toEqual(table);
+  expect(all.filter((name) => !resolveGovernedPieceAction(ASANA, name)!.known)).toEqual([]);
+  for (const name of ["custom_api_call", "added_upstream_later"])
+    expect(resolveGovernedPieceAction(ASANA, name)).toMatchObject({ category: "modify_settings", known: false });
+  // A completion receipt for every change, never for a read.
+  for (const name of all)
+    expect(`${name}: ${tracksPieceCompletion(ASANA, name)}`).toBe(`${name}: ${table[name] !== "read_data"}`);
+});
+test("a project or team update narrows from its worst case only when its input says it is a plain edit", () => {
+  const category = (action: string, input?: Record<string, unknown>) => resolveGovernedPieceAction(ASANA, action, input)!.category;
+  expect(category("update_project")).toBe("modify_settings");
+  expect(category("update_project", { project: "1", name: "Renamed", notes: "x" })).toBe("write_data");
+  expect(category("update_project", { project: "1", archived: false })).toBe("write_data");
+  expect(category("update_project", { project: "1", archived: true })).toBe("delete_data");
+  expect(category("update_project", { project: "1", archived: "{{x}}" })).toBe("delete_data");
+  expect(category("update_project", { project: "1", archived: false, privacy_setting: "public_to_workspace" })).toBe("modify_settings");
+  expect(category("update_project", { project: "1", owner: "2" })).toBe("modify_settings");
+  expect(category("update_team")).toBe("modify_settings");
+  expect(category("update_team", { team: "1", name: "Renamed" })).toBe("write_data");
+  expect(category("update_team", { team: "1", visibility: "secret" })).toBe("modify_settings");
+  expect(category("update_team", { team: "1", endorsed: true })).toBe("modify_settings");
+  for (const action of ["update_project", "update_team"])
+    expect(AUTHORITY_REQUIREMENTS[category(action)]).toBe(AUTHORITY_REQUIREMENTS.modify_settings);
+});
+test("prepared qualification, which passes no settings, is judged on the piece alone; a trigger never gets the grant", () => {
+  const source = new JarvisAsanaConnectionSource(config);
+  expect(managedConnectionMisuse(source, ASANA, "settings.input.auth")).toBeNull();
+  expect(managedConnectionMisuse(source, "@activepieces/piece-http", "settings.input.auth")).not.toBeNull();
+  for (const settings of [{ triggerName: "new_task" }, { triggerName: "new_task", actionName: "get_task" }, null, "get_task"])
+    expect(managedConnectionMisuse(source, ASANA, "settings.input.auth", settings)).not.toBeNull();
 });

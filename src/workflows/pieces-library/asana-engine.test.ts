@@ -195,6 +195,12 @@ test.skipIf(!gate)(
     const metadata = catalog.get(piece)!;
     expect(metadata.auth?.type).toBe("OAUTH2");
     if (process.env.ASANA_CATALOG_FIXTURE) writeFileSync(process.env.ASANA_CATALOG_FIXTURE,JSON.stringify(metadata));
+    // Every action the installed package declares is in the governed table, so
+    // an upstream addition fails here instead of falling to modify_settings.
+    const actions = Object.keys(metadata.actions);
+    expect(actions.length).toBeGreaterThan(120);
+    expect(actions.filter((name) => name !== "custom_api_call" && !resolveGovernedPieceAction(piece, name)!.known)).toEqual([]);
+    expect(Object.keys(metadata.triggers ?? {})).toEqual([]);
     for (const name of [
       "create_task", "get_task", "update_task", "list_project_tasks", "add_task_comment",
     ]) {
