@@ -190,7 +190,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       "Composed flows are DISABLED; publishing enables and requires confirmation. Draft-only limits are not future bans.",
       "create needs empty: true and a blank-canvas request.",
       "CODE is REFUSED without per-flow user permission; no tool action grants it.",
-      "validate_fixtures: refund/onboarding/batch/subflow/ClickUp with fixture_input; offline mocks. Disclose limits.",
+      "validate_fixtures: supported saved graphs with fixture_input; offline mocks. Disclose limits.",
       "Page get/fixtures to nextCursor:null; structure is not testing.",
       ...(hasLibrary ? [deps.installLibraryPiece ? "Install required Library connectors by default under software-install Authority; false opts out. Account connection is separate." : "Relay suggestedInstalls from the Library page; retry after installation, never unchanged."] : []),
     ].join("\n"),
@@ -257,7 +257,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
         description: "Display name for compose/create.",
         required: false,
       },
-      fixture_input: { type: "object", description: "ClickUp mocks: {setup:{step:{emptyInput:value}},cases:[{name,payload,expectedSteps,expectedTaskCount,expectedPriority?,expectedDescription?,deliveries?,loseReply?,expectedRejection?}]}. Invalid-ID rejection only; auth mocked; saved graph unchanged.", required: false },
+      fixture_input: { type: "object", description: "Offline {setup:{step:{input:value}},cases:[{name,payload,...expectations}]}. ClickUp: expectedSteps, expectedTaskCount. JSON/Sheets: expectedRows, expectedStatus, sheetsOutcome, assertions. See workflow fixture guide; no saved changes.", required: false },
       payload: {
         type: "object",
         description: "run: trigger input.",
@@ -386,6 +386,10 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           if (!draft) throw new Error("No saved draft to validate");
           const validation=compileWorkflow(draft.trigger,{pieces:deps.pieceRegistry,phase:'composition'});
           if (!validation.ready) throw new Error('Saved draft has structural errors; fix them before fixture validation');
+          if (draft.trigger.nextAction?.settings?.pieceName === '@activepieces/piece-json') {
+            const {validateJsonMappingFixtures}=await import('../../workflows/runtime/json-mapping-fixtures');
+            return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,...await validateJsonMappingFixtures(draft.trigger,params.fixture_input)},params),'local synthetic JSON mapping fixture results');
+          }
           if (draft.trigger.nextAction?.settings?.pieceName === '@jarvispieces/piece-jarvis-subflow') {
             const {validateSubflowFixtures}=await import('../../workflows/runtime/subflow-fixtures');
             const childId=draft.trigger.nextAction?.settings?.input?.flow;

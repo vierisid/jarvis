@@ -1,0 +1,118 @@
+{
+  "name": "trigger",
+  "type": "PIECE_TRIGGER",
+  "displayName": "Receive product JSON",
+  "settings": {
+    "pieceName": "webhook",
+    "input": {}
+  },
+  "nextAction": {
+    "name": "step_1",
+    "type": "PIECE",
+    "displayName": "Setup required: payload paths, field policies and column mapping",
+    "settings": {
+      "pieceName": "@activepieces/piece-json",
+      "actionName": "run_jsonata_query",
+      "input": {
+        "json": null,
+        "query": "$"
+      }
+    },
+    "nextAction": {
+      "name": "step_2",
+      "type": "PIECE",
+      "displayName": "Validate products and build typed rows with field states",
+      "settings": {
+        "pieceName": "@activepieces/piece-json",
+        "actionName": "run_jsonata_query",
+        "input": {
+          "json": {
+            "payload": "{{trigger}}",
+            "config": "{{step_1}}"
+          },
+          "query": "(\n$c := config;\n$pathOK := function($p){$type($p) = 'array' ? $count($p[$type($) != 'string']) = 0 : false};\n$get := function($o,$p){$reduce($p,function($v,$k){$type($v) = 'object' ? $lookup($v,$k) : $nothing},$o)};\n$fieldsOK := $type($c.fields) = 'array' and $count($c.fields) > 0 ? $count($c.fields[ $not($type(name) = 'string' and name != '' and $pathOK(path) and $count(path) > 0 and type in ['number','boolean','string'] and $type(required) = 'boolean' and $type(allowNull) = 'boolean' and $type(allowEmpty) = 'boolean') ]) = 0 : false;\n$columnsOK := $type($c.columns) = 'array' and $count($c.columns) > 0 ? $count($c.columns[$not(field in $c.fields.name and kind in ['value','state'])]) = 0 : false;\n$coverageOK := $fieldsOK and $columnsOK ? $count($filter($c.fields,function($f){$count($c.columns[field = $f.name and kind = 'value']) != 1 or $count($c.columns[field = $f.name and kind = 'state']) != 1})) = 0 : false;\n$knownTypes := $fieldsOK ? $count($c.fields[name = 'price' and type = 'number']) = 1 and $count($c.fields[name = 'stock' and type = 'number']) = 1 and $count($c.fields[name = 'active' and type = 'boolean']) = 1 : false;\n$configOK := $type($c) = 'object' and $pathOK($c.recordsPath) and $c.mode in ['single','array'] and $fieldsOK and $columnsOK and $coverageOK and $knownTypes and $count($distinct($c.fields.name)) = $count($c.fields);\n$configOK ? (\n$source := $get(payload,$c.recordsPath);\n$shapeOK := $c.mode = 'array' ? $type($source) = 'array' : $type($source) = 'object';\n$shapeOK ? (\n$records := $c.mode = 'array' ? $source : [$source];\n$results := [$map($records,function($record,$index){(\n$objectOK := $type($record) = 'object';\n$states := [$map($c.fields,function($f){(\n$v := $get($record,$f.path);\n$s := $not($exists($v)) ? 'missing' : $type($v) = 'null' ? 'null' : ($type($v) = 'string' and $v = '') ? 'empty' : 'value';\n$valid := $objectOK and ($s = 'missing' ? $not($f.required) : $s = 'null' ? $f.allowNull : $s = 'empty' ? $f.allowEmpty : $type($v) = $f.type);\n$merge([{'field':$f.name,'state':$s,'actualType':$exists($v) ? $type($v) : 'missing','expectedType':$f.type,'valid':$valid,'issue':$valid ? '' : ($s = 'value' ? 'invalid_type_no_coercion' : 'disallowed_' & $s)},$exists($v) ? {'value':$v} : {}])\n)})];\n$valid := $objectOK and $count($states[valid = false]) = 0;\n$row := [$map($c.columns,function($col){(\n$state := $states[field = $col.field];\n$col.kind = 'state' ? $state.state : ($state.state = 'value' ? $state.value : '')\n)})];\n{'index':$index,'valid':$valid,'recordType':$type($record),'fields':$states,'issues':[$states[valid = false]],'row':$valid ? $row : null}\n)})];\n{'status':'validated','records':$results,'rows':[$map($results[valid = true],function($r){$r.row})],'validCount':$count($results[valid = true]),'invalidCount':$count($results[valid = false]),'columnMapping':$c.columns}\n) : {'status':'rejected_payload_shape','records':[],'rows':[],'validCount':0,'invalidCount':0,'issues':['Configured records path is missing, null or has the wrong container type']}\n) : {'status':'setup_required','records':[],'rows':[],'validCount':0,'invalidCount':0,'issues':['Configure step_1.json with recordsPath (array of exact object-key segments; [] means root), mode (single or array), fields and columns. Each field needs name, path, type, required, allowNull and allowEmpty. Include logical price:number, stock:number and active:boolean with actual payload paths. No numeric coercion, sign or integer restriction is applied. Each field requires exactly one value column and one state column, in the chosen order; columns entries are {field,kind:value|state}. Missing/null/empty cells use an empty value cell plus their distinct mandatory state cell. Configure Sheets destination and bind its values to step_2.rows only after approving the column order.']}\n)"
+        }
+      },
+      "nextAction": {
+        "name": "router_1",
+        "type": "ROUTER",
+        "displayName": "Append only validated records",
+        "settings": {
+          "executionType": "EXECUTE_FIRST_MATCH",
+          "branches": [
+            {
+              "branchName": "Valid rows",
+              "branchType": "CONDITION",
+              "conditions": [
+                [
+                  {
+                    "firstValue": "{{step_2.status}}",
+                    "operator": "TEXT_EXACTLY_MATCHES",
+                    "secondValue": "validated"
+                  },
+                  {
+                    "firstValue": "{{step_2.validCount}}",
+                    "operator": "NUMBER_IS_GREATER_THAN",
+                    "secondValue": "0"
+                  }
+                ]
+              ]
+            },
+            {
+              "branchName": "Setup required or no valid rows",
+              "branchType": "FALLBACK"
+            }
+          ]
+        },
+        "children": [
+          {
+            "name": "step_3",
+            "type": "PIECE",
+            "displayName": "Setup required: append typed rows to selected Google Sheet",
+            "settings": {
+              "pieceName": "@activepieces/piece-google-sheets",
+              "actionName": "sheets_append_values",
+              "input": {
+                "spreadsheet_id": "",
+                "worksheet_title": "",
+                "range": "",
+                "values": null,
+                "value_input_option": "RAW"
+              }
+            },
+            "nextAction": {
+              "name": "step_4",
+              "type": "PIECE",
+              "displayName": "Return append receipt and per-record validation",
+              "settings": {
+                "pieceName": "@jarvispieces/piece-jarvis-subflow",
+                "actionName": "return_result",
+                "input": {
+                  "result": {
+                    "status": "appended",
+                    "validation": "{{step_2}}",
+                    "appendReceipt": "{{step_3}}",
+                    "failurePolicy": "Completed appends reuse durable receipts. Failed or uncertain writes require review of the original run; do not blindly retry.",
+                    "testing": "Draft structure only; no live service, account reads, or webhook HTTP end-to-end test performed. Local saved-graph fixtures have not been executed through this composition tool surface."
+                  }
+                }
+              }
+            }
+          },
+          {
+            "name": "step_5",
+            "type": "PIECE",
+            "displayName": "Return setup requirements or rejected-record details without writes",
+            "settings": {
+              "pieceName": "@jarvispieces/piece-jarvis-subflow",
+              "actionName": "return_result",
+              "input": {
+                "result": "{{step_2}}"
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

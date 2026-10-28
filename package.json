@@ -63,6 +63,7 @@
     "dev:local": "bun --no-env-file run scripts/integration/dev.ts"
   },
   "dependencies": {
+    "@activepieces/piece-json": "0.1.14",
     "@codemirror/autocomplete": "^6.20.1",
     "@codemirror/commands": "^6.10.3",
     "@codemirror/lang-css": "^6.3.1",
