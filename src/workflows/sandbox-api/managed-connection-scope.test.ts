@@ -444,6 +444,8 @@ describe("managed Mailchimp is scoped to Mailchimp steps", () => {
   const find = (input: Record<string, unknown> = { auth: ref }, nextAction?: any): any => ({
     name: "find", type: "PIECE", settings: { pieceName: MAILCHIMP, actionName: "find_subscriber", input }, ...(nextAction ? { nextAction } : {}),
   });
+  const mailchimpTrigger = (extra: Record<string, unknown> = {}): any => ({ name: "trigger", type: "PIECE_TRIGGER",
+    settings: { pieceName: MAILCHIMP, triggerName: "subscribe", input: { auth: ref }, ...extra } });
   const mailchimpCall = (url: string): any => ({ name: "call", type: "PIECE",
     settings: { pieceName: MAILCHIMP, actionName: "custom_api_call", input: { auth: ref, method: "GET", url: { url } } } });
   const refused: Array<[string, any]> = [
@@ -453,6 +455,12 @@ describe("managed Mailchimp is scoped to Mailchimp steps", () => {
     ["a Mailchimp step next to a CODE step that reads the token", empty(find(undefined, code({ token: "{{connections['jarvis:mailchimp'].access_token}}" })))],
     // No fixed host: even the account's own data center is only reachable as a path.
     ["a Mailchimp custom API call to a full URL", empty(mailchimpCall("https://us1.api.mailchimp.com/3.0/ping"))],
+    // Only the five managed actions get the token, so not even a path is reachable.
+    ["a Mailchimp custom API call by path", empty(mailchimpCall("/ping"))],
+    ["a Mailchimp action outside the managed actions", empty({ name: "send", type: "PIECE", settings: { pieceName: MAILCHIMP, actionName: "send_campaign", input: { auth: ref } } })],
+    ["a Mailchimp step that also carries a triggerName", empty({ name: "find", type: "PIECE", settings: { pieceName: MAILCHIMP, actionName: "find_subscriber", triggerName: "subscribe", input: { auth: ref } } })],
+    ["a Mailchimp trigger", mailchimpTrigger()],
+    ["a Mailchimp trigger that also carries a managed actionName", mailchimpTrigger({ actionName: "find_subscriber" })],
   ];
   for (const [label, trigger] of refused) {
     test(`${label} is not ready and the route refuses it`, async () => {
@@ -466,13 +474,25 @@ describe("managed Mailchimp is scoped to Mailchimp steps", () => {
     const [issue] = bindingIssues(empty(code({ conn: ref })));
     expect(issue!.message).toBe("Managed connection jarvis:mailchimp can only be used by Mailchimp steps");
     expect(issue!.allowedPieces).toEqual([MAILCHIMP]);
+    const [call] = bindingIssues(empty(mailchimpCall("/ping")));
+    expect(call!.message).toBe("This Mailchimp connection does not support this action or trigger yet");
   });
-  test("a Mailchimp step auth, or a custom API call by path, passes the connection scope and resolves", async () => {
-    for (const trigger of [empty(find()), empty(mailchimpCall("/ping"))]) {
+  test("a trigger hook of a Mailchimp trigger is refused the token", async () => {
+    for (const trigger of [mailchimpTrigger(), mailchimpTrigger({ actionName: "find_subscriber" })]) {
+      const flow = createFlow({});
+      const version = createDraftVersion({ flowId: flow.id, displayName: "Hook", trigger });
+      const response = await fetchFor(triggerHookRunId("poll", flow.id, version), "jarvis:mailchimp");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(MAILCHIMP_TOKEN);
+    }
+  });
+  test("every managed Mailchimp action's auth passes the connection scope and resolves", async () => {
+    for (const actionName of ["find_subscriber", "add_subscriber_to_tag", "remove_subscriber_from_tag", "find_campaign", "get_campaign_report"]) {
+      const trigger = empty({ name: "step", type: "PIECE", settings: { pieceName: MAILCHIMP, actionName, input: { auth: ref } } });
       expect(bindingIssues(trigger)).toEqual([]);
       const response = await fetchFor(runOf(trigger), "jarvis:mailchimp");
       expect(response.status).toBe(200);
-      expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: MAILCHIMP, value: { access_token: MAILCHIMP_TOKEN, server_prefix: "us1" } });
+      expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: MAILCHIMP, value: { access_token: MAILCHIMP_TOKEN, server_prefix: "us1", jarvis_managed: "mailchimp" } });
     }
   });
 });

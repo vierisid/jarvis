@@ -1,4 +1,5 @@
 import { MAILCHIMP_CONNECTION, MAILCHIMP_PIECE, readMailchimpConnection } from "../../integrations/mailchimp-connection";
+import { MANAGED_MAILCHIMP_ACTIONS } from "../runtime/managed-mailchimp";
 import { credentialFingerprint, type JarvisConnectionSource, type ManagedPieceDetails, type ResolvedConnection } from "./adapter";
 
 /** Read through the atomically delivered file. Disconnects need no daemon restart. */
@@ -7,11 +8,13 @@ export class JarvisMailchimpConnectionSource implements JarvisConnectionSource {
   /** Only Mailchimp steps may name jarvis:mailchimp, and only as their auth (readiness and the credential route). */
   readonly pieceNames: readonly string[] = [MAILCHIMP_PIECE];
   /**
-   * The pinned 0.5.10 piece has no custom API call, and its host depends on the
-   * account's data center, so no fixed host is listed: a path is all it may use.
+   * Only the managed actions (managed-mailchimp.ts) may be handed the token, at
+   * readiness and at the credential route, so a graph that skipped readiness
+   * cannot reach it from a trigger, a trigger hook or any other action. The
+   * host depends on the account's data center, so none is listed.
    */
   readonly pieceDetails: Readonly<Record<string, ManagedPieceDetails>> = {
-    [MAILCHIMP_PIECE]: { displayName: "Mailchimp", apiHosts: [] },
+    [MAILCHIMP_PIECE]: { displayName: "Mailchimp", actions: MANAGED_MAILCHIMP_ACTIONS, apiHosts: [] },
   };
   constructor(private readonly dataDir: string) {}
   canResolve(externalId: string) { return externalId === MAILCHIMP_CONNECTION; }
