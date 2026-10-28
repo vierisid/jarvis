@@ -20,6 +20,8 @@ import React, { createContext, useCallback, useContext, useEffect, useLayoutEffe
 import { useSampleDraftText } from "./useSampleDraftText";
 import { ClickUpConnection, useClickUpStatus } from "../../integrations/ClickUpConnection";
 import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
+import { GitHubConnection, useGitHubStatus } from "../../integrations/GitHubConnection";
+import { GitHubRepository } from "../../integrations/GitHubRepository";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { WorkflowEditorEnvironment, WorkflowPortal, useWorkflowRequest } from "./WorkflowEditorEnvironment";
 import { BriefTabs } from "../../../brief/components/controls/Choices";
@@ -3380,10 +3382,13 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const clickUpStatus = useClickUpStatus(piece?.name === "@activepieces/piece-clickup");
   const clickUpLocation = piece?.name === "@activepieces/piece-clickup" && ["create_task", "update_task", "get_task_by_name"].includes(subName ?? "")
     && !!clickUpStatus?.connected && step.settings?.input?.auth === "{{connections." + clickUpStatus.external_id + "}}";
+  const managedGitHub = piece?.name === "@activepieces/piece-github" && ["{{connections.jarvis:github}}", "{{connections['jarvis:github']}}"].includes(String(step.settings?.input?.auth));
+  const githubRepository = managedGitHub && ['github_create_issue','getIssueInformation','update_issue','find_issue','createCommentOnAIssue'].includes(subName ?? '');
   const managedSlack = piece?.name === "@activepieces/piece-slack" && step.settings?.input?.auth === "{{connections.jarvis:slack}}";
   const slackChannel = managedSlack && ['send_channel_message', 'slack_post_message', 'slack_get_channel_info'].includes(subName ?? '');
   const baseSchema = selectedSubAction?.inputSchema ?? null;
-  const selectedSchema = managedSlack && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["sendAsUser","sendAsBot","file","username","profilePicture","iconEmoji","mentionOriginFlow","onlyBotChannels","info"].includes(f.name))} : baseSchema;
+  const selectedSchema = managedGitHub && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['labels','assignees','milestone','state_reason', ...(githubRepository ? ['repository'] : [])].includes(f.name))}
+    : managedSlack && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["sendAsUser","sendAsBot","file","username","profilePicture","iconEmoji","mentionOriginFlow","onlyBotChannels","info"].includes(f.name))} : baseSchema;
   const rawSchema = clickUpLocation && selectedSchema ? {...selectedSchema,fields:selectedSchema.fields.filter(f=>!['workspace_id','space_id','list_id'].includes(f.name))} : slackChannel && selectedSchema ? {...selectedSchema, fields:selectedSchema.fields.filter(f=>f.name !== "channel")} : selectedSchema;
   // ClickUp 0.9.1 declares `custom_fields` on Create Task as a required
   // dynamic prop even when a list has none. "Use standard task fields" saves
@@ -3499,6 +3504,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         />
       ) : null}
 
+      {githubRepository && <GitHubRepository input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {slackChannel && <SlackChannelPicker value={String(step.settings?.input?.channel ?? "")} onChange={value => onSetInput("channel", value)} />}
       {clickUpLocation && <ClickUpTaskLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {clickUpCreate && <div className="wf-props__hint" role="note">
@@ -3737,21 +3743,24 @@ function ConnectionPicker({
   // the dropdown reflect the user's choice on re-open.
   const m = /^\{\{connections\.([^}]+)\}\}$/.exec(currentValue.trim());
   const currentExternalId = m ? m[1]! : "";
-  // ClickUp may also offer the hosted connection; without it (self-hosted, or
-  // not connected) the picker reads exactly as for any other piece.
+  // ClickUp and GitHub may also offer the hosted connection; without it
+  // (self-hosted, or not connected) the picker reads exactly as for any other piece.
   const isClickUp = pieceName === "@activepieces/piece-clickup";
   const managedClickUp = useClickUpStatus(isClickUp)?.connected === true;
+  const isGitHub = pieceName === "@activepieces/piece-github";
+  const managedGitHub = useGitHubStatus(isGitHub)?.connected === true;
   const isSlack = pieceName === "@activepieces/piece-slack";
   const managedSlack = useSlackStatus(isSlack)?.connected === true;
   return (
     <div className="wf-props__connection">
+      {isGitHub && <GitHubConnection optional onPick={onPick} currentValue={currentValue} />}
       {isClickUp && <ClickUpConnection optional onPick={onPick} currentValue={currentValue} />}
       {isSlack && <SlackConnection optional onPick={onPick} currentValue={currentValue} />}
       <label className="wf-props__field-label">
         {authDisplayName}
         <span className="wf-props__connection-type">({authType})</span>
       </label>
-      {matching.length === 0 && !managedClickUp && !managedSlack ? (
+      {matching.length === 0 && !managedClickUp && !managedGitHub && !managedSlack ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.

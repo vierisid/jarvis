@@ -7,6 +7,7 @@ import type { ConnectedRow, ConnectedWorkspaceSnapshot, ConnectionSetupAction } 
 export interface ConnectedWorkspaceSources {
   devices?: () => Pick<SidecarInfo, 'id' | 'name' | 'status' | 'connected'>[];
   clickup?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
+  github?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   slack?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   google?: () => { mode: 'self' | 'managed' | 'none' | 'unavailable'; authenticated: boolean; reconnect: boolean; canSetup: boolean };
   channels?: () => Partial<Record<'telegram' | 'discord', { enabled: boolean; connected: boolean; authentication?: 'verified' | 'rejected' | 'unknown' }>>;
@@ -91,6 +92,22 @@ export class ConnectedWorkspace {
             row.evidence = c.connected ? 'stored_grant' : 'none';
             if (c.configured) offer(row, {id: 'setup:clickup', label: 'ClickUp',
               target: {kind: 'hosted_integration', provider: 'clickup'}, verifies: {kind: 'native_service', serviceId: 'clickup'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
+      if (this.sources.github) {
+        const row = base('native:github', 'native_service', 'github', 'GitHub');
+        try {
+          const c = this.sources.github();
+          if (c.configured || c.connected) {
+            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('GitHub: ' + c.account.label) : 'GitHub';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:github', label: 'GitHub',
+              target: {kind: 'hosted_integration', provider: 'github'}, verifies: {kind: 'native_service', serviceId: 'github'}});
             rows.push(row);
           }
         } catch { row.status = 'unavailable'; rows.push(row); }

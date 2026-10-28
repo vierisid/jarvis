@@ -1,3 +1,4 @@
+import {managedGitHubIssue} from './managed-github';
 import {managedSlackIssue} from './managed-slack';
 import { validateCronExpression } from '../../lib/cron-scheduler';
 import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from './piece-catalog';
@@ -219,6 +220,11 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     const input = settings.input === undefined ? {} : settings.input;
     if (!object(input)) issue(node, 'settings.input', 'INPUT_TYPE', 'Expected an input object');
     const pieceName = typeof settings.pieceName === 'string' ? settings.pieceName : '';
+    if (pieceName === '@activepieces/piece-github' && object(input)
+      && ["{{connections.jarvis:github}}", "{{connections['jarvis:github']}}"].includes(String(input.auth))) {
+      const reason = managedGitHubIssue(root ? settings.triggerName : settings.actionName, input, false);
+      if (reason) issue(node, 'settings.input', 'MANAGED_GITHUB', reason);
+    }
     if (pieceName === '@activepieces/piece-slack' && object(input)
       && ["{{connections.jarvis:slack}}", "{{connections['jarvis:slack']}}"].includes(String(input.auth))) {
       const reason = managedSlackIssue(root ? settings.triggerName : settings.actionName, input, false);

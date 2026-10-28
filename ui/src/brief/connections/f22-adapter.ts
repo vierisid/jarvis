@@ -34,7 +34,7 @@ export interface F22Action {
   label: string;
   target:
     | { kind: "google"; flow: "oauth" | "manual_client" | "hosted_browser" }
-    | { kind: "hosted_integration"; provider: "clickup" | "slack" }
+    | { kind: "hosted_integration"; provider: "clickup" | "github" | "slack" }
     | { kind: "channel"; channel: "telegram" | "discord" }
     | { kind: "device"; flow: "enrollment" | "hosted_sign_in" }
     | {

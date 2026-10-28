@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ClickUpConnection } from "../../../integrations/ClickUpConnection";
+import { GitHubConnection } from "../../../integrations/GitHubConnection";
 import { SlackConnection } from "../../../integrations/SlackConnection";
 import type { SettingsHook } from "../useSettingsData";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
@@ -326,9 +327,10 @@ export function IntegrationsTab({
           </>
         )}
       </section>
-      {/* Its own block, independent of how Google is connected; renders
-          nothing unless hosting offers ClickUp or Slack or it is already connected. */}
+      {/* Their own blocks, independent of how Google is connected; each renders
+          nothing unless hosting offers it or it is already connected. */}
       <ClickUpConnection optional />
+      <GitHubConnection optional />
       <SlackConnection optional />
     </div>
   );

@@ -23,6 +23,7 @@
 
 import { HTTP_PIECE, isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { documentInput, applyDocument, documentFields, type DecisionDocument } from './decision-document';
+import {managedGitHubInput, managedGitHubIssue, runManagedGitHubAction} from './managed-github';
 import {managedSlackInput, managedSlackIssue, sendManagedSlackMessage} from './managed-slack';
 
 export const PIECE_AUTHORIZE_PATH = '/v1/jarvis/pieces/authorize';
@@ -98,6 +99,11 @@ export interface AuthorizePieceDispatchParams {
 }
 
 export async function authorizePieceDispatch(params: AuthorizePieceDispatchParams): Promise<PieceAuthorizeResponse> {
+  const github = params.piece === '@activepieces/piece-github' && managedGitHubInput(params.input);
+  if (github) {
+    const issue = managedGitHubIssue(params.action, github);
+    if (issue) throw new Error(issue);
+  }
   const slack = params.piece === '@activepieces/piece-slack' && managedSlackInput(params.input);
   if (slack) {
     const issue = managedSlackIssue(params.action, slack);
@@ -186,6 +192,12 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
 export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParams, governance: PieceAuthorizeResponse, execute: () => Promise<unknown>): Promise<unknown> {
   if ('dispatch' in governance && governance.dispatch === 'completed') return governance.result;
   if ('dispatch' in governance && (governance.dispatch === 'held' || governance.dispatch === 'approval_required')) throw new Error('Piece is waiting for authorization');
+  const github = params.piece === '@activepieces/piece-github' && managedGitHubInput(params.input);
+  if (github) {
+    // Recheck after an approval document has applied edits.
+    const issue = managedGitHubIssue(params.action, github);
+    if (issue) throw new Error(issue);
+  }
   const slack = params.piece === '@activepieces/piece-slack' && managedSlackInput(params.input);
   if (slack) {
     // Recheck after an approval document has applied edits.
@@ -193,7 +205,10 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
     if (issue) throw new Error(issue);
   }
   let raw: unknown;
-  if (slack) {
+  if (github) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('GitHub dispatch was not authorized');
+    raw = await runManagedGitHubAction(String(params.action), github);
+  } else if (slack) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Slack dispatch was not authorized');
     if (params.action === 'slack_post_message' || params.action === 'send_channel_message') raw = await sendManagedSlackMessage(slack);
     else {
