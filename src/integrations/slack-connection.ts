@@ -1,6 +1,6 @@
-import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
+import { readConnectionFile } from "./connection-file";
 
 export const SLACK_PIECE = "@activepieces/piece-slack";
 export const SLACK_CONNECTION = "jarvis:slack";
@@ -14,9 +14,8 @@ export interface SlackConnection {
 type SlackConnectionFile = Omit<SlackConnection, "scopes"> & {settings?: {scopes?: unknown}};
 export function readSlackConnection(dataDir: string): SlackConnection | null {
   try {
-    const path = join(dataDir, "connections", "slack.json");
-    if (statSync(path).size > 65536) return null;
-    const v = JSON.parse(readFileSync(path, "utf8")) as SlackConnectionFile;
+    // One bounded descriptor read: a FIFO at this path must not block the daemon.
+    const v = JSON.parse(readConnectionFile(join(dataDir, "connections", "slack.json"))) as SlackConnectionFile;
     const granted = v.settings?.scopes;
     const scopes = typeof granted === "string" ? granted.split(",") : null;
     if (v.version !== 1 || v.provider !== "slack" || v.status !== "connected"

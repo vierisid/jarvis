@@ -1,5 +1,6 @@
 import {afterEach,beforeEach,expect,test} from 'bun:test';
-import {mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
+import {closeSync,constants,mkdtempSync,mkdirSync,openSync,writeFileSync,writeSync,rmSync} from 'node:fs';
+import {spawnSync} from 'node:child_process';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomUUID} from 'node:crypto';
@@ -28,6 +29,15 @@ test('read-through credentials bind reconnect and disconnect; public metadata ha
 test('rejects foreign, malformed, oversized and over-scoped documents',()=>{
  for(const v of [null,{}, {...doc(),provider:'clickup'},{...doc(),workspaces:[]},{...doc(),settings:{scopes:'chat:write'}},{...doc(),settings:{scopes:['channels:read','groups:read','chat:write']}},{...doc(),settings:undefined},{...doc(),settings:undefined,scopes:['channels:read','groups:read','chat:write']},{...doc(),account:{id:'bad',label:'Bot'}}]) {write(v);expect(readSlackConnection(dir)).toBeNull();}
  writeFileSync(join(dir,'connections/slack.json'),'x'.repeat(65537));expect(readSlackConnection(dir)).toBeNull();
+});
+test.skipIf(process.platform === 'win32')('a FIFO at the connection path is refused without blocking the daemon',()=>{
+ const path=join(dir,'connections/slack.json');rmSync(path);
+ expect(spawnSync('mkfifo',[path]).status).toBe(0);
+ expect(readSlackConnection(dir)).toBeNull();
+ // A FIFO holding a valid document reads like the file, so only the regular-file check refuses it.
+ const keep=openSync(path,constants.O_RDONLY|constants.O_NONBLOCK);
+ try {const writer=openSync(path,constants.O_WRONLY);writeSync(writer,JSON.stringify(doc()));closeSync(writer);expect(readSlackConnection(dir)).toBeNull();}
+ finally {closeSync(keep);}
 });
 test('channel chooser follows one bounded page, lists joined channels only and forwards no token',async()=>{
  let calls=0;
