@@ -1,3 +1,4 @@
+import {managedNotionIssue} from './managed-notion';
 import {managedMailchimpIssue} from './managed-mailchimp';
 import {managedGitHubIssue} from './managed-github';
 import {managedTrelloIssue} from './managed-trello';
@@ -232,6 +233,11 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
       && ["{{connections.jarvis:github}}", "{{connections['jarvis:github']}}"].includes(String(input.auth))) {
       const reason = managedGitHubIssue(root ? settings.triggerName : settings.actionName, input, false);
       if (reason) issue(node, 'settings.input', 'MANAGED_GITHUB', reason);
+    }
+    if (pieceName === '@activepieces/piece-notion' && object(input)
+      && ["{{connections.jarvis:notion}}", "{{connections['jarvis:notion']}}"].includes(String(input.auth))) {
+      const reason = managedNotionIssue(root ? settings.triggerName : settings.actionName, input, false);
+      if (reason) issue(node, 'settings.input', 'MANAGED_NOTION', reason);
     }
     if (pieceName === '@activepieces/piece-trello' && object(input)
       && ["{{connections.jarvis:trello}}", "{{connections['jarvis:trello']}}"].includes(String(input.auth))) {

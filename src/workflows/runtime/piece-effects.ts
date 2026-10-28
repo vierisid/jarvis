@@ -74,7 +74,8 @@ const GMAIL_TRACKED_SENDS: ReadonlySet<unknown> = new Set(['send_email', 'gmail_
  * (#953 made these reachable at the default level).
  */
 export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
-  return (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
+  return (piece === '@activepieces/piece-notion' && ['createPage','append_to_page'].includes(String(action)))
+    || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
     || (piece === MAILCHIMP_PIECE && managedPieceChanges(MAILCHIMP_PIECE, action))
     || (piece === CLICKUP_PIECE && managedPieceChanges(CLICKUP_PIECE, action))
@@ -335,7 +336,7 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
     pieceName: '@activepieces/piece-notion',
     unknownActionCategory: 'delete_data',
     targetProps: ['database_id', 'page_id', 'pageId', 'block_id', 'item_id', 'database_item_id',
-      'archived_item_id', 'parent_page_id', 'new_parent_page_id', 'title', 'comment_text', 'url', 'method'],
+      'archived_item_id', 'parent_page_id', 'new_parent_page_id', 'title', 'content', 'comment_text', 'url', 'method'],
     categories: {
       read_data: ['list_databases', 'notion-find-database-item', 'list_database_pages',
         'getPageOrBlockChildren', 'retrieve_database', 'get_page_comments', 'find_page', 'notion_get_page',

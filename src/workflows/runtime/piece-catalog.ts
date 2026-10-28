@@ -313,7 +313,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "12"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts
+export const CATALOG_SCHEMA_VERSION = "13-notion"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -859,13 +859,18 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
   // The piece's auth.type comes from upstream's PropertyType -- map it
   // to our AppConnectionType vocabulary so the editor + connection
   // listing share one name space.
-  if (m.auth && typeof m.auth === "object" && typeof m.auth.type === "string") {
-    const projected = projectAuthType(m.auth.type);
+  // Recent pieces advertise multiple auth methods. Project the first supported method;
+  // saved connections keep their own concrete credential type in the resolver.
+  const auth = (Array.isArray(m.auth) ? m.auth : [m.auth]).find(a =>
+    a && typeof a === "object" && typeof a.type === "string" && projectAuthType(a.type)
+  );
+  if (auth) {
+    const projected = projectAuthType(auth.type);
     if (projected) {
       out.auth = {
         type: projected,
-        ...(typeof m.auth.displayName === "string" ? { displayName: m.auth.displayName } : {}),
-        ...(typeof m.auth.description === "string" ? { description: m.auth.description } : {}),
+        ...(typeof auth.displayName === "string" ? { displayName: auth.displayName } : {}),
+        ...(typeof auth.description === "string" ? { description: auth.description } : {}),
       };
     }
   }
@@ -890,6 +895,89 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
  * on-disk caches re-project.
  */
 export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
+  if (entry.name === "@activepieces/piece-notion") {
+    const id = "11111111-1111-4111-8111-111111111111";
+    const page = {
+      object: "page",
+      id,
+      url: "https://www.notion.so/" + id.replaceAll("-", ""),
+      created_time: "2026-10-28T10:00:00.000Z",
+      last_edited_time: "2026-10-28T10:00:00.000Z",
+      archived: false,
+      parent: { type: "page_id", page_id: id },
+      properties: {
+        title: {
+          type: "title",
+          title: [
+            {
+              type: "text",
+              plain_text: "Meeting notes",
+              text: { content: "Meeting notes" },
+            },
+          ],
+        },
+      },
+    };
+    const block = {
+      object: "block",
+      id,
+      type: "paragraph",
+      has_children: false,
+      paragraph: {
+        rich_text: [
+          { type: "text", plain_text: "Notes", text: { content: "Notes" } },
+        ],
+      },
+    };
+    const samples: Record<string, unknown> = {
+      createPage: page,
+      append_to_page: {
+        object: "list",
+        results: [block],
+        has_more: false,
+        next_cursor: null,
+      },
+      notion_get_block_children: [block],
+      find_page: {
+        success: true,
+        searchTerm: "Meeting",
+        exactMatch: false,
+        totalFound: 1,
+        returned: 1,
+        pages: [{ ...page, title: "Meeting notes" }],
+        summary: {
+          searchTerm: "Meeting",
+          matchType: "partial match",
+          totalFound: 1,
+          returned: 1,
+          hasMore: false,
+        },
+        message: "Returned 1 matching pages.",
+      },
+    };
+    for (const [name, sample] of Object.entries(samples)) {
+      const action = entry.actions[name];
+      if (!action) continue;
+      action.outputSample = sample;
+      for (const field of action.inputSchema?.fields ?? []) {
+        if (field.name === "pageId") {
+          field.type = "string";
+          field.placeholder = "Shared page ID or workflow variable";
+          delete field.options;
+        }
+        if (field.name === "content")
+          field.description =
+            "Managed Jarvis connections write plain text (up to 20,000 characters). Markdown syntax is stored literally.";
+        if (field.name === "markdown")
+          field.description =
+            "Managed Jarvis connections return block JSON. Leave Markdown off.";
+        if (field.name === "depth")
+          field.description =
+            "Managed Jarvis connections support depth 1 to 3, with bounded content reads.";
+      }
+    }
+  }
+
   // ClickUp 0.9.1 returns a task directly for these actions, not an HTTP envelope.
   // These stable fields let the picker wire task outputs into downstream steps.
   if (entry.name === '@activepieces/piece-clickup') {

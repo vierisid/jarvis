@@ -1,3 +1,4 @@
+import { managedNotionInput, managedNotionIssue, runManagedNotionAction } from './managed-notion';
 /**
  * Engine-side half of the governed-piece adapter.
  *
@@ -100,6 +101,11 @@ export interface AuthorizePieceDispatchParams {
 }
 
 export async function authorizePieceDispatch(params: AuthorizePieceDispatchParams): Promise<PieceAuthorizeResponse> {
+  const notion = params.piece === '@activepieces/piece-notion' && managedNotionInput(params.input);
+  if (notion) {
+    const issue = managedNotionIssue(params.action, notion);
+    if (issue) throw new Error(issue);
+  }
   const mailchimp = params.piece === '@activepieces/piece-mailchimp' && managedMailchimpInput(params.input);
   if (mailchimp) {
     const issue = managedMailchimpIssue(params.action, mailchimp);
@@ -199,6 +205,11 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
 export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParams, governance: PieceAuthorizeResponse, execute: () => Promise<unknown>): Promise<unknown> {
   if ('dispatch' in governance && governance.dispatch === 'completed') return governance.result;
   if ('dispatch' in governance && (governance.dispatch === 'held' || governance.dispatch === 'approval_required')) throw new Error('Piece is waiting for authorization');
+  const notion = params.piece === '@activepieces/piece-notion' && managedNotionInput(params.input);
+  if (notion) {
+    const issue = managedNotionIssue(params.action, notion);
+    if (issue) throw new Error(issue);
+  }
   const mailchimp = params.piece === '@activepieces/piece-mailchimp' && managedMailchimpInput(params.input);
   if (mailchimp) {
     // Recheck after an approval document has applied edits.
@@ -218,7 +229,10 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
     if (issue) throw new Error(issue);
   }
   let raw: unknown;
-  if (trello) {
+  if (notion) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Notion dispatch was not authorized');
+    raw = await runManagedNotionAction(String(params.action), notion);
+  } else if (trello) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Trello dispatch was not authorized');
     raw = await runManagedTrelloAction(String(params.action), trello);
   } else if (mailchimp) {
