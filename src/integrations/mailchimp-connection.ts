@@ -1,6 +1,6 @@
-import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
+import { readBounded } from "./clickup-connection";
 
 export const MAILCHIMP_PIECE = "@activepieces/piece-mailchimp";
 export const MAILCHIMP_CONNECTION = "jarvis:mailchimp";
@@ -22,9 +22,8 @@ export interface MailchimpConnection {
 type MailchimpConnectionFile = Omit<MailchimpConnection, "server_prefix"> & {settings?: {server_prefix?: unknown}};
 export function readMailchimpConnection(dataDir: string): MailchimpConnection | null {
   try {
-    const path = join(dataDir, "connections", "mailchimp.json");
-    if (statSync(path).size > 65536) return null;
-    const v = JSON.parse(readFileSync(path, "utf8")) as MailchimpConnectionFile;
+    // One bounded, non-blocking descriptor read: a FIFO cannot stall the daemon.
+    const v = JSON.parse(readBounded(join(dataDir, "connections", "mailchimp.json"))) as MailchimpConnectionFile;
     const serverPrefix = v.settings?.server_prefix;
     if (v.version !== 1 || v.provider !== "mailchimp" || v.status !== "connected"
       || typeof v.generation !== "string" || !/^[a-f0-9-]{36}$/.test(v.generation)

@@ -1,5 +1,6 @@
 import {afterEach,beforeEach,expect,test} from 'bun:test';
-import {mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,rmSync,openSync,writeSync,closeSync,constants} from 'node:fs';
+import {spawnSync} from 'node:child_process';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomUUID} from 'node:crypto';
@@ -46,4 +47,12 @@ test('pickers reject missing and non-string IDs instead of coercing them into ch
 for(const [status,expected] of [[401,409],[403,409],[429,429],[500,502]])test('actionable provider failure '+status,async()=>{
   try{await mailchimpOptions(config(),new URLSearchParams({kind:"audiences"}),(async()=>new Response('SENSITIVE',{status})) as unknown as typeof fetch);throw Error('expected rejection');}
   catch(e){expect(e).toMatchObject({status:expected});expect(String(e)).not.toContain('SENSITIVE');}
+});
+test.skipIf(process.platform === 'win32')('a FIFO holding a valid document is refused without blocking the daemon',()=>{
+  const path=join(dir,'connections/mailchimp.json');rmSync(path);
+  expect(spawnSync('mkfifo',[path]).status).toBe(0);
+  expect(readMailchimpConnection(dir)).toBeNull();
+  const keep=openSync(path,constants.O_RDONLY|constants.O_NONBLOCK);
+  try{const writer=openSync(path,constants.O_WRONLY);writeSync(writer,JSON.stringify(doc()));closeSync(writer);expect(readMailchimpConnection(dir)).toBeNull();}
+  finally{closeSync(keep);}
 });

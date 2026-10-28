@@ -26,7 +26,9 @@ import {EngineRuntime} from '../runner/engine-runtime/engine-runtime';
 import {EngineFlowExecutor} from '../runner/engine-runtime/engine-flow-executor';
 import {createRunFlowHandler} from '../runner/handler';
 import {Worker} from '../queue/worker';
-const gate = process.env.JARVIS_TEST_MAILCHIMP_ENGINE === '1';
+import {resolveGovernedPieceAction} from '../runtime/piece-effects';
+// test.yml runs this with the other engine suites; the standalone workflow sets its own flag.
+const gate = process.env.JARVIS_TEST_MAILCHIMP_ENGINE === '1' || process.env.JARVIS_TEST_ENGINE_BUILD === '1';
 const piece = '@activepieces/piece-mailchimp';
 let dir: string, api: SandboxApi, runtime: EngineRuntime, provider: ReturnType<typeof Bun.serve>;
 let runId: string | undefined;
@@ -76,6 +78,11 @@ test.skipIf(!gate)('published Mailchimp metadata and subscriber → tag → sear
  const {catalog, failures} = await buildPieceCatalog({runtime, pieceRoots: [join(dir, 'node_modules/@activepieces')], projectId: DEFAULT_IDS.project, pieceTimeoutMs: 30000, overallTimeoutMs: 45000});
  expect(failures).toEqual([]); const metadata = catalog.get(piece)!;
  expect(metadata.auth?.type).toBe('OAUTH2');
+ // Every action the installed package declares is in the governed table, so
+ // an upstream addition fails here instead of falling to modify_settings.
+ const actions = Object.keys(metadata.actions);
+ expect(actions.length).toBeGreaterThanOrEqual(17);
+ expect(actions.filter(name => !resolveGovernedPieceAction(piece, name)!.known)).toEqual([]);
  for (const name of ['find_subscriber','add_subscriber_to_tag','remove_subscriber_from_tag','find_campaign','get_campaign_report']) {
   expect(metadata.actions[name]?.requireAuth).toBe(true); expect(metadata.actions[name]?.outputSample).toBeDefined();
  }

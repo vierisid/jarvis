@@ -3,6 +3,7 @@ import {createHash} from 'node:crypto';
 import {mailchimpSubscriberHash, managedMailchimpIssue, runManagedMailchimpAction} from './managed-mailchimp';
 import {authorizePieceDispatch, executeAuthorizedPiece} from './piece-effect-guard';
 import {compileWorkflow} from './workflow-readiness';
+import {resolveGovernedPieceAction, tracksPieceCompletion} from './piece-effects';
 const input = {auth: {access_token: 'SECRET', server_prefix: 'us1', jarvis_managed: 'mailchimp'}, list_id: 'audience1', email: 'USER@example.com', tag_name: 'Customer'};
 const fake = (fn: (...args: any[]) => Promise<Response>) => fn as unknown as typeof fetch;
 
@@ -74,6 +75,24 @@ test('authority digest binds token and server without revealing either secret', 
   expect(first).toMatch(/^[a-f0-9]{64}$/); expect(JSON.stringify(sent)).not.toContain('SECRET');
   await authorizePieceDispatch({...params, input: {...input, auth: {...input.auth, server_prefix: 'us2'}}, fetchImpl}); expect(sent.credentialDigest).not.toBe(first);
 });
-test('readiness rejects unsupported managed triggers', () => {
-  expect(JSON.stringify(compileWorkflow({name: 'trigger', type: 'PIECE', settings: {pieceName: params.piece, triggerName: 'new_subscriber', input: {auth: '{{connections.jarvis:mailchimp}}'}}}))).toContain('MANAGED_MAILCHIMP');
+test('readiness rejects unsupported managed triggers, however the binding is spelled', () => {
+  for (const auth of ['{{connections.jarvis:mailchimp}}', "{{connections['jarvis:mailchimp']}}", ' {{connections.jarvis:mailchimp}}']) {
+    expect(JSON.stringify(compileWorkflow({name: 'trigger', type: 'PIECE', settings: {pieceName: params.piece, triggerName: 'subscribe', input: {auth}}}))).toContain('MANAGED_MAILCHIMP');
+  }
+});
+// Every action of the pinned 0.5.10 bundle (no custom_api_call); the gated engine test checks the installed package.
+const MAILCHIMP_0510_ACTIONS: Record<string, string> = {
+  find_subscriber: 'read_data', find_campaign: 'read_data', get_campaign_report: 'read_data', find_customer: 'read_data', find_tag: 'read_data',
+  send_campaign: 'send_email', archive_subscriber: 'delete_data',
+  add_subscriber_to_tag: 'write_data', remove_subscriber_from_tag: 'write_data', add_member_to_list: 'write_data', add_note_to_subscriber: 'write_data',
+  update_member_in_list: 'write_data', unsubscribe_email: 'write_data', create_campaign: 'write_data', create_audience: 'write_data',
+  create_tag: 'write_data', create_custom_event: 'write_data',
+};
+test('every 0.5.10 action is governed by category: a campaign send is an email send, archiving a delete', () => {
+  for (const [action, category] of Object.entries(MAILCHIMP_0510_ACTIONS)) {
+    expect({action, ...resolveGovernedPieceAction(params.piece, action)}).toMatchObject({action, category, known: true});
+    // Changes are tracked so an uncertain send or write is not repeated; reads never are.
+    expect(tracksPieceCompletion(params.piece, action)).toBe(category !== 'read_data');
+  }
+  for (const action of ['custom_api_call', 'added_upstream']) expect(resolveGovernedPieceAction(params.piece, action)).toMatchObject({category: 'modify_settings', known: false});
 });

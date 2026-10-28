@@ -219,8 +219,10 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     const input = settings.input === undefined ? {} : settings.input;
     if (!object(input)) issue(node, 'settings.input', 'INPUT_TYPE', 'Expected an input object');
     const pieceName = typeof settings.pieceName === 'string' ? settings.pieceName : '';
+    // Any auth that names the managed account, not only the two exact spellings:
+    // a binding with text around it must not skip the action allowlist.
     if (pieceName === '@activepieces/piece-mailchimp' && object(input)
-      && ["{{connections.jarvis:mailchimp}}", "{{connections['jarvis:mailchimp']}}"].includes(String(input.auth))) {
+      && typeof input.auth === 'string' && input.auth.includes('jarvis:mailchimp')) {
       const reason = managedMailchimpIssue(root ? settings.triggerName : settings.actionName, input, false);
       if (reason) issue(node, 'settings.input', 'MANAGED_MAILCHIMP', reason);
     }
