@@ -74,7 +74,8 @@ const GMAIL_TRACKED_SENDS: ReadonlySet<unknown> = new Set(['send_email', 'gmail_
  * (#953 made these reachable at the default level).
  */
 export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
-  return (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
+  return (piece === '@activepieces/piece-airtable' && ['create_record_ai','update_record_ai'].includes(String(action)))
+    || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
     || (piece === MAILCHIMP_PIECE && managedPieceChanges(MAILCHIMP_PIECE, action))
     || (piece === CLICKUP_PIECE && managedPieceChanges(CLICKUP_PIECE, action))
@@ -701,6 +702,17 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
       'clickup_delete_checklist', 'clickup_delete_comment', 'clickup_delete_folder', 'clickup_delete_list',
       'clickup_delete_space', 'clickup_delete_space_tag', 'clickup_delete_task_dependency', 'clickup_delete_task',
       'clickup_delete_time_entry'],
+  },
+}, {
+  // All actions in Airtable 0.9.2. The managed connection permits only four record actions.
+  catalogId:'airtable', pieceName:'@activepieces/piece-airtable', unknownActionCategory:'modify_settings',
+  targetProps:['base','tableId','recordId','searchField','searchValue','limitToView','fields','base_id','table_id_or_name','record_id'],
+  categories:{
+    read_data:['airtable_find_record','airtable_get_record_by_id','airtable_find_base','airtable_find_table_by_id','airtable_find_table','airtable_get_base_schema','get_record','list_records','list_bases','get_base_schema_ai','get_current_user','search_records','list_record_comments'],
+    write_data:['airtable_create_record','airtable_update_record','airtable_upload_file_to_column','create_record_ai','update_record_ai','upload_attachment_ai','upsert_records'],
+    delete_data:['airtable_clean_record','airtable_delete_record','delete_record_ai','delete_records_batch'],
+    send_message:['airtable_add_comment_to_record','add_comment_to_record_ai'],
+    modify_settings:['airtable_create_base','airtable_create_table','create_table_ai','create_base_ai','update_table','create_field','update_field'],
   },
 }, {
   // Trello: every action of the installed 0.8.1 bundle (0.7.1 has the same

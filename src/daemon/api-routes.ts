@@ -2482,6 +2482,19 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         catch (error) { return json({error: error instanceof ClickUpOptionsError ? error.message : 'Could not load ClickUp choices.'}, error instanceof ClickUpOptionsError ? error.status : 502); }
       },
     },
+    '/api/integrations/airtable/options': {
+      GET: async (req: Request) => {
+        const {airtableOptions,AirtableOptionsError}=await import('../integrations/airtable-options');
+        try {return json(await airtableOptions(ctx.config,new URL(req.url).searchParams));}
+        catch(error){return json({error:error instanceof AirtableOptionsError?error.message:'Could not load Airtable choices.'},error instanceof AirtableOptionsError?error.status:502);}
+      },
+    },
+    '/api/integrations/airtable': {
+      GET: async () => {
+        const {airtableStatus} = await import('../integrations/airtable-connection');
+        return json(airtableStatus(ctx.config));
+      },
+    },
     '/api/integrations/clickup': {
       GET: async () => {
         const { clickUpStatus } = await import('../integrations/clickup-connection');
