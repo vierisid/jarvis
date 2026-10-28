@@ -315,6 +315,12 @@ const REVIEWED_STEP_OUTPUT_READERS = [
   'actions/tools/job-contract.ts',
   'actions/tools/manage-workflow.ts',
   'actions/tools/workflow-composer.ts',
+  // Draft edits read the authoring snapshot inside a transaction and hash it for
+  // concurrency control. The internal version never goes directly to a model:
+  // manage-workflow returns a framed status/readiness projection; definition
+  // readback retains versionForModel and framing. The regression in
+  // workflow-draft-update.test.ts pins hostile captured data at that boundary.
+  'actions/tools/workflow-draft-update.ts',
   'awareness/prepared-dry-run.ts',
   'awareness/prepared-qualification.ts',
   'awareness/suggestion-composer.ts',

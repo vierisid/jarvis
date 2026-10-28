@@ -23,6 +23,8 @@ export type ToolParameter = {
    * Prefer this over listing the options in the description.
    */
   enum?: string[];
+  /** JSON Schema for array elements; execution still validates nested values. */
+  items?: Record<string, unknown>;
 };
 
 export type ToolResult = {
