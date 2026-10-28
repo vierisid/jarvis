@@ -5,7 +5,7 @@ import type { ComposeDeps } from './workflow-composer';
 export type PlanningPolicy = 'baseline-v1' | 'deterministic-first-v1';
 export const PLANNING_POLICIES: readonly PlanningPolicy[] = ['baseline-v1', 'deterministic-first-v1'];
 /** Bump with any change to the composer's own prompt text; a test pins the text to this version. */
-export const COMPOSER_PROMPT_VERSION = 'w8-12';
+export const COMPOSER_PROMPT_VERSION = 'w8-15';
 // Production keeps the baseline prompt until a hosted comparison promotes
 // deterministic-first (Q-03); the evaluation passes a policy explicitly.
 export const DEFAULT_PLANNING_POLICY: PlanningPolicy = 'baseline-v1';
