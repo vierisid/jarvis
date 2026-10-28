@@ -289,14 +289,22 @@ test("creating or copying a project or team is a write only when it shares nothi
   const category = (action: string, input?: Record<string, unknown>) => resolveGovernedPieceAction(ASANA, action, input)!.category;
   for (const action of ["create_project", "instantiate_project_template"]) {
     expect(category(action)).toBe("modify_settings");
-    expect(category(action, { workspace: "1", project_template: "2", name: "Q4" })).toBe("write_data");
     expect(category(action, { name: "Q4", privacy_setting: "private" })).toBe("write_data");
     expect(category(action, { name: "Q4", privacy_setting: "public_to_workspace" })).toBe("modify_settings");
     expect(category(action, { name: "Q4", privacy_setting: "{{trigger.privacy}}" })).toBe("modify_settings");
-    expect(category(action, { name: "Q4", privacy_setting: "private", team: "3" })).toBe("modify_settings");
     expect(category(action, { name: "Q4", team: "{{trigger.team}}" })).toBe("modify_settings");
   }
+  expect(category("create_project", { workspace: "1", name: "Q4" })).toBe("write_data");
+  expect(category("create_project", { name: "Q4", privacy_setting: "private", team: "3" })).toBe("modify_settings");
+  // A template with no team lands in the template's own team, so only an
+  // explicitly private project with no requested roles shares nothing.
+  expect(category("instantiate_project_template", { workspace: "1", project_template: "2", name: "Q4" })).toBe("modify_settings");
+  expect(category("instantiate_project_template", { project_template: "2", name: "Q4", team: "3" })).toBe("modify_settings");
+  expect(category("instantiate_project_template", { project_template: "2", name: "Q4", privacy_setting: "private", team: "3" })).toBe("write_data");
   expect(category("instantiate_project_template", { name: "Q4", requested_roles: [{ gid: "1", value: "a@b.c" }] })).toBe("modify_settings");
+  expect(category("instantiate_project_template", { name: "Q4", privacy_setting: "private", requested_roles: [{ gid: "1", value: "a@b.c" }] })).toBe("modify_settings");
+  expect(category("instantiate_project_template", { name: "Q4", privacy_setting: "private", requested_roles: "{{trigger.roles}}" })).toBe("modify_settings");
+  expect(category("instantiate_project_template", { name: "Q4", privacy_setting: "private", requested_roles: [] })).toBe("write_data");
   expect(category("create_team")).toBe("modify_settings");
   expect(category("create_team", { organization: "1", name: "Ops" })).toBe("write_data");
   expect(category("create_team", { name: "Ops", visibility: "secret" })).toBe("write_data");

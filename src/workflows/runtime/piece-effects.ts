@@ -118,16 +118,30 @@ export function asanaUpdateTeamCategory(input: Record<string, unknown>): ActionC
 }
 
 /**
- * Asana `create_project` and `instantiate_project_template`: the new project
- * is shared with a team, and a privacy setting other than private opens it to
- * the workspace; template roles put people on it. Without any of those it is
- * a private project of the caller's, a write. Anything else, a templated
- * value included, is the worst case. An absent privacy setting is the
- * workspace default; this treats it as a write.
+ * Asana `create_project`: the new project is shared with a team, and a
+ * privacy setting other than private opens it to the workspace. Without
+ * either it is a private project of the caller's, a write. Anything else, a
+ * templated value included, is the worst case. An absent privacy setting is
+ * the workspace default; this treats it as a write.
  */
 export function asanaCreateProjectCategory(input: Record<string, unknown>): ActionCategory {
-  if (present(input.team) || present(input.requested_roles)) return 'modify_settings';
+  if (present(input.team)) return 'modify_settings';
   return !present(input.privacy_setting) || input.privacy_setting === 'private' ? 'write_data' : 'modify_settings';
+}
+
+/**
+ * Asana `instantiate_project_template`: the new project always lands in a
+ * team (a left-out team is the template's own, upstream's "Leave empty to use
+ * the template's team"), so with no privacy setting, or any but private, it
+ * is shared with that team; template roles put people on it. Only an
+ * explicitly private project with no requested roles (left out or an empty
+ * list) is the caller's alone, a write. Anything else, a templated value
+ * included, is the worst case.
+ */
+export function asanaInstantiateProjectTemplateCategory(input: Record<string, unknown>): ActionCategory {
+  const roles = input.requested_roles;
+  const noRoles = !present(roles) || (Array.isArray(roles) && roles.length === 0);
+  return input.privacy_setting === 'private' && noRoles ? 'write_data' : 'modify_settings';
 }
 
 /** Asana `create_team`: a secret team is visible only to its members (the
@@ -783,7 +797,7 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
   },
   categoryFromInput: {
     create_project: { props: ['team', 'privacy_setting'], category: asanaCreateProjectCategory },
-    instantiate_project_template: { props: ['team', 'privacy_setting', 'requested_roles'], category: asanaCreateProjectCategory },
+    instantiate_project_template: { props: ['privacy_setting', 'requested_roles'], category: asanaInstantiateProjectTemplateCategory },
     create_team: { props: ['visibility'], category: asanaCreateTeamCategory },
     duplicate_project: { props: ['include'], category: asanaDuplicateProjectCategory },
     update_project: { props: ['privacy_setting', 'owner', 'archived'], category: asanaUpdateProjectCategory },
