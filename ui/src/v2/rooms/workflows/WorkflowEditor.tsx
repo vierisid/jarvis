@@ -20,6 +20,8 @@ import { ClickUpConnection, useClickUpStatus } from "../../integrations/ClickUpC
 import { AsanaConnection, useAsanaStatus } from "../../integrations/AsanaConnection";
 import { AsanaTaskLocation } from "../../integrations/AsanaTaskLocation";
 import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
+import { GitHubConnection, useGitHubStatus } from "../../integrations/GitHubConnection";
+import { GitHubRepository } from "../../integrations/GitHubRepository";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { WorkflowEditorEnvironment, WorkflowPortal, useWorkflowRequest } from "./WorkflowEditorEnvironment";
 import { BriefTabs } from "../../../brief/components/controls/Choices";
@@ -3383,8 +3385,12 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const asanaStatus = useAsanaStatus(piece?.name === "@activepieces/piece-asana");
   const asanaLocation = piece?.name === "@activepieces/piece-asana" && ["create_task", "list_project_tasks"].includes(subName ?? "")
     && !!asanaStatus?.connected && step.settings?.input?.auth === "{{connections." + asanaStatus.external_id + "}}";
-  const baseSchema = selectedSubAction?.inputSchema ?? null;
-  const selectedSchema = asanaLocation && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["workspace","project"].includes(f.name))} : baseSchema;
+  const subSchema = selectedSubAction?.inputSchema ?? null;
+  const asanaSchema = asanaLocation && subSchema ? {...subSchema, fields:subSchema.fields.filter(f=>!["workspace","project"].includes(f.name))} : subSchema;
+  const managedGitHub = piece?.name === "@activepieces/piece-github" && ["{{connections.jarvis:github}}", "{{connections['jarvis:github']}}"].includes(String(step.settings?.input?.auth));
+  const githubRepository = managedGitHub && ['github_create_issue','getIssueInformation','update_issue','find_issue','createCommentOnAIssue'].includes(subName ?? '');
+  const baseSchema = asanaSchema;
+  const selectedSchema = managedGitHub && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['labels','assignees','milestone','state_reason', ...(githubRepository ? ['repository'] : [])].includes(f.name))} : baseSchema;
   const rawSchema = clickUpLocation && selectedSchema ? {...selectedSchema,fields:selectedSchema.fields.filter(f=>!['workspace_id','space_id','list_id'].includes(f.name))} : selectedSchema;
   // ClickUp 0.9.1 declares `custom_fields` on Create Task as a required
   // dynamic prop even when a list has none. "Use standard task fields" saves
@@ -3500,6 +3506,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         />
       ) : null}
 
+      {githubRepository && <GitHubRepository input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {asanaLocation && <AsanaTaskLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {clickUpLocation && <ClickUpTaskLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {clickUpCreate && <div className="wf-props__hint" role="note">
@@ -3738,14 +3745,17 @@ function ConnectionPicker({
   // the dropdown reflect the user's choice on re-open.
   const m = /^\{\{connections\.([^}]+)\}\}$/.exec(currentValue.trim());
   const currentExternalId = m ? m[1]! : "";
-  // ClickUp may also offer the hosted connection; without it (self-hosted, or
-  // not connected) the picker reads exactly as for any other piece.
+  // ClickUp and GitHub may also offer the hosted connection; without it
+  // (self-hosted, or not connected) the picker reads exactly as for any other piece.
   const isClickUp = pieceName === "@activepieces/piece-clickup";
   const isAsana = pieceName === "@activepieces/piece-asana";
   const managedAsana = useAsanaStatus(isAsana)?.connected === true;
   const managedClickUp = useClickUpStatus(isClickUp)?.connected === true;
+  const isGitHub = pieceName === "@activepieces/piece-github";
+  const managedGitHub = useGitHubStatus(isGitHub)?.connected === true;
   return (
     <div className="wf-props__connection">
+      {isGitHub && <GitHubConnection optional onPick={onPick} currentValue={currentValue} />}
       {isClickUp && <ClickUpConnection optional onPick={onPick} currentValue={currentValue} />}
       {isAsana && <><AsanaConnection optional onPick={onPick} currentValue={currentValue} />
         {managedAsana && <p className="wf-props__hint">This account supports creating, reading and updating tasks, listing project tasks and adding comments. Use Asana IDs or workflow variables. Tags are not supported yet.</p>}</>}
@@ -3753,7 +3763,7 @@ function ConnectionPicker({
         {authDisplayName}
         <span className="wf-props__connection-type">({authType})</span>
       </label>
-      {matching.length === 0 && !managedClickUp && !managedAsana ? (
+      {matching.length === 0 && !managedClickUp && !managedGitHub && !managedAsana ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.

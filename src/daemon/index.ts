@@ -3,6 +3,7 @@ import { registerReconciliation } from '../brief/registrations/reconciliation';
 import { registerOnboarding } from '../brief/registrations/onboarding';
 import { ConnectedWorkspace } from '../brief/connected-workspace';
 import { MIN_BUN_VERSION, versionAtLeast } from '../util/bun-minimum.ts';
+import { githubStatus } from '../integrations/github-connection';
 import { clickUpStatus } from '../integrations/clickup-connection';
 import { connectedGoogle } from '../brief/connected-workspace-runtime';
 import { registerConnections } from '../brief/registrations/connections';
@@ -4755,6 +4756,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       devices: () => sidecarManager.listSidecars(),
       google: () => connectedGoogle(jarvisConfig),
       clickup: () => clickUpStatus(jarvisConfig),
+      github: () => githubStatus(jarvisConfig),
       channels: () => {
         const status = channelService.getChannelStatus();
         return Object.fromEntries((['telegram', 'discord'] as const).map(name => [name, {
@@ -4999,6 +5001,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisClickUpConnectionSource(jarvisConfig.daemon.data_dir));
       const { JarvisAsanaConnectionSource } = await import("../workflows/credentials/asana-source");
       credentialResolver.register(new JarvisAsanaConnectionSource(jarvisConfig));
+      const { JarvisGitHubConnectionSource } = await import("../workflows/credentials/github-source");
+      credentialResolver.register(new JarvisGitHubConnectionSource(jarvisConfig.daemon.data_dir));
       logWithTimestamp(
         "Workflow credential resolver: registered jarvis:google source",
       );

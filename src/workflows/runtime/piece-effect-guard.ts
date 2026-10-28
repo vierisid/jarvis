@@ -24,6 +24,7 @@
 import {managedAsanaInput, runManagedAsanaAction} from './managed-asana';
 import { HTTP_PIECE, isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { documentInput, applyDocument, documentFields, type DecisionDocument } from './decision-document';
+import {managedGitHubInput, managedGitHubIssue, runManagedGitHubAction} from './managed-github';
 
 export const PIECE_AUTHORIZE_PATH = '/v1/jarvis/pieces/authorize';
 export const PIECE_RECEIPT_PATH = '/v1/jarvis/pieces/receipt';
@@ -98,6 +99,11 @@ export interface AuthorizePieceDispatchParams {
 }
 
 export async function authorizePieceDispatch(params: AuthorizePieceDispatchParams): Promise<PieceAuthorizeResponse> {
+  const github = params.piece === '@activepieces/piece-github' && managedGitHubInput(params.input);
+  if (github) {
+    const issue = managedGitHubIssue(params.action, github);
+    if (issue) throw new Error(issue);
+  }
   const governed = isGovernedPiece(params.piece) && typeof params.action === 'string' && params.action.length > 0;
   const url = `${params.apiUrl.replace(/\/+$/u, '')}${PIECE_AUTHORIZE_PATH}`;
   const editable = documentInput(params.piece, params.action, params.input);
@@ -181,8 +187,19 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
 export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParams, governance: PieceAuthorizeResponse, execute: () => Promise<unknown>): Promise<unknown> {
   if ('dispatch' in governance && governance.dispatch === 'completed') return governance.result;
   if ('dispatch' in governance && (governance.dispatch === 'held' || governance.dispatch === 'approval_required')) throw new Error('Piece is waiting for authorization');
+  const github = params.piece === '@activepieces/piece-github' && managedGitHubInput(params.input);
+  if (github) {
+    // Recheck after an approval document has applied edits.
+    const issue = managedGitHubIssue(params.action, github);
+    if (issue) throw new Error(issue);
+  }
   const asana = params.piece === "@activepieces/piece-asana" ? managedAsanaInput(params.input) : null;
-  const raw = asana ? await runManagedAsanaAction(String(params.action), asana) : await execute();
+  let raw: unknown;
+  if (github) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('GitHub dispatch was not authorized');
+    raw = await runManagedGitHubAction(String(params.action), github);
+  } else if (asana) raw = await runManagedAsanaAction(String(params.action), asana);
+  else raw = await execute();
   // Gmail 0.17 returns a Gaxios response, including transport configuration.
   // Keep its data envelope for expressions, but never persist request headers
   // (which can contain the OAuth bearer) as a completion receipt or step output.
