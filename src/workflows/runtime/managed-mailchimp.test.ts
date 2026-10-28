@@ -33,13 +33,17 @@ test('provider/network failures do not retry or disclose response bodies', async
   for (const failure of ['network','429','401','403','404','500','json','large','stream']) {
     let calls = 0;
     const request = fake(async () => {calls++; if (failure === 'network') throw Error('PRIVATE');
-      if (failure === 'large') return new Response('x'.repeat(1048577));
+      if (failure === 'large') return Response.json({id: 'x', padding: 'x'.repeat(1048577)});
       if (failure === 'stream') return new Response(new ReadableStream({start(c) {c.error(Error('PRIVATE'));}}));
       return new Response('PRIVATE', {status: Number(failure) || 200});});
     try {await runManagedMailchimpAction('add_subscriber_to_tag', input, request); throw Error('expected failure');}
     catch (e) {expect(String(e)).toContain('Mailchimp'); expect(String(e)).not.toContain('PRIVATE');}
     expect(calls).toBe(1);
   }
+});
+test('a valid JSON reply over 1 MiB is refused, not parsed', async () => {
+  const raw = {id: mailchimpSubscriberHash(input.email), email_address: 'user@example.com', list_id: 'audience1', status: 'subscribed', padding: 'x'.repeat(1048577)};
+  await expect(runManagedMailchimpAction('find_subscriber', input, fake(async () => Response.json(raw)))).rejects.toThrow('invalid response');
 });
 test('invalid data-center prefix cannot cause an outbound request', async () => {
   await expect(runManagedMailchimpAction('find_subscriber', {...input, auth: {...input.auth, server_prefix: 'us1.evil.test'}}, fake(async () => {throw Error('must not call');}))).rejects.toThrow('Reconnect');
