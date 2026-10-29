@@ -81,7 +81,7 @@ function tmpDir(): string {
 function fakeProcess(
   procRoot: string,
   pid: number,
-  opts: { env: Record<string, string>; argv: string[]; startTicks?: string },
+  opts: { env: Record<string, string>; argv: string[]; startTicks?: string; state?: string },
 ): void {
   const dir = resolve(procRoot, String(pid));
   mkdirSync(dir, { recursive: true });
@@ -96,7 +96,7 @@ function fakeProcess(
   // and parens, which is what breaks naive field splitting. `tokens` holds
   // everything from field 3 (state) on, so field 22 is tokens[19].
   const tokens = Array.from({ length: 50 }, (_, i) => String(i + 3));
-  tokens[0] = "S";
+  tokens[0] = opts.state ?? "S";
   tokens[19] = opts.startTicks ?? "1000";
   writeFileSync(resolve(dir, "stat"), `${pid} (bun (smol)) ${tokens.join(" ")}\n`);
 }
@@ -313,6 +313,85 @@ describe("reaping", () => {
       { pid: 1234, signal: "SIGTERM" },
       { pid: 1234, signal: "SIGKILL" },
     ]);
+  });
+
+  /**
+   * A process that has taken SIGTERM releases its memory early in its exit,
+   * so its environ and cmdline read empty while it is still running and not
+   * yet a zombie. It no longer looks like an engine, but it has not gone
+   * either -- and "reaped" has to mean gone. Modelled by emptying the
+   * fixture's environ/cmdline on SIGTERM and removing the entry a little
+   * later, which is what the kernel shows from outside.
+   */
+  function dyingSlowly(procRoot: string, pid: number, exitAfterMs: number | null) {
+    const calls: Array<{ pid: number; signal: NodeJS.Signals | 0 }> = [];
+    const dir = resolve(procRoot, String(pid));
+    let exitScheduled = false;
+    const kill = (p: number, signal: NodeJS.Signals | 0): void => {
+      if (signal !== 0) calls.push({ pid: p, signal });
+      if (p !== pid || !existsSync(dir)) {
+        const err = new Error("gone") as NodeJS.ErrnoException;
+        err.code = "ESRCH";
+        throw err;
+      }
+      if (signal === "SIGTERM" || signal === "SIGKILL") {
+        writeFileSync(resolve(dir, "environ"), "");
+        writeFileSync(resolve(dir, "cmdline"), "");
+        const stat = readFileSync(resolve(dir, "stat"), "utf8");
+        writeFileSync(resolve(dir, "stat"), stat.replace(") S ", ") R "));
+        if (exitAfterMs !== null && !exitScheduled) {
+          exitScheduled = true;
+          setTimeout(() => rmSync(dir, { recursive: true, force: true }), exitAfterMs);
+        }
+      }
+    };
+    return { calls, kill };
+  }
+
+  test("does not report an engine reaped while it is still exiting", async () => {
+    const procRoot = tmpDir();
+    fakeProcess(procRoot, 1234, { env: engineEnv(), argv: ["bun", "--smol", BUNDLE] });
+    const { kill, calls } = dyingSlowly(procRoot, 1234, 150);
+
+    const { reaped, survived } = await reapOrphanedEngines({ procRoot, kill, graceMs: 2_000 });
+    expect(reaped.map((e) => e.pid)).toEqual([1234]);
+    expect(survived).toEqual([]);
+    // The verdict waited for the exit to finish...
+    expect(existsSync(resolve(procRoot, "1234"))).toBe(false);
+    // ...and a process already on its way out is not signalled again.
+    expect(calls).toEqual([{ pid: 1234, signal: "SIGTERM" }]);
+  });
+
+  test("a zombie counts as gone", async () => {
+    const procRoot = tmpDir();
+    fakeProcess(procRoot, 1234, { env: engineEnv(), argv: ["bun", "--smol", BUNDLE] });
+    const { kill } = dyingSlowly(procRoot, 1234, null);
+    const zombie = (p: number, signal: NodeJS.Signals | 0): void => {
+      kill(p, signal);
+      if (signal === "SIGTERM") {
+        const stat = resolve(procRoot, "1234", "stat");
+        writeFileSync(stat, readFileSync(stat, "utf8").replace(") R ", ") Z "));
+      }
+    };
+
+    const started = Date.now();
+    const { reaped } = await reapOrphanedEngines({ procRoot, kill: zombie, graceMs: 2_000 });
+    expect(reaped.map((e) => e.pid)).toEqual([1234]);
+    // Nothing to wait for: a zombie is not waited out to the grace deadline.
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  test("an engine that never finishes exiting is reported as survived", async () => {
+    const procRoot = tmpDir();
+    fakeProcess(procRoot, 1234, { env: engineEnv(), argv: ["bun", "--smol", BUNDLE] });
+    const { kill, calls } = dyingSlowly(procRoot, 1234, null);
+
+    const { reaped, survived } = await reapOrphanedEngines({ procRoot, kill, graceMs: 100 });
+    expect(reaped).toEqual([]);
+    expect(survived.map((e) => e.pid)).toEqual([1234]);
+    // Still never escalated: it stopped being identifiably ours, and only
+    // that ever earns a signal.
+    expect(calls).toEqual([{ pid: 1234, signal: "SIGTERM" }]);
   });
 
   test("re-checks identity before signalling, so a recycled pid is spared", async () => {
@@ -615,10 +694,13 @@ child.stdout.once("data", () => {
     });
 
     /**
-     * Running, as opposed to gone OR a zombie. A reaped orphan is reparented
-     * to a subreaper that may not have called wait() yet, and a zombie still
-     * answers `kill(pid, 0)` -- it holds no memory, no timers and no sockets,
-     * so treating it as alive would fail this test for the wrong reason.
+     * Running, as opposed to gone, a zombie, or dead-and-being-released. A
+     * reaped orphan is reparented to a subreaper that may not have called
+     * wait() yet, and a zombie still answers `kill(pid, 0)` -- it holds no
+     * memory, no timers and no sockets, so treating it as alive would fail
+     * this test for the wrong reason. The same goes for `X`: once the
+     * subreaper's wait() has collected it, the entry stays readable as `X`
+     * for the moment it takes the kernel to unhash it.
      */
     const alive = (): boolean => {
       try {
@@ -628,7 +710,8 @@ child.stdout.once("data", () => {
       }
       try {
         const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-        return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0] !== "Z";
+        const state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0];
+        return state !== "Z" && state !== "X"; // zombie, or collected and being released
       } catch {
         return false;
       }
@@ -771,7 +854,8 @@ setTimeout(() => process.exit(0), 60000);
         }
         try {
           const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-          return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0] !== "Z";
+          const state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0];
+          return state !== "Z" && state !== "X"; // zombie, or collected and being released
         } catch {
           return false;
         }

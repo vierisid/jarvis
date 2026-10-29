@@ -90,7 +90,11 @@ export interface ReapOptions {
   procRoot?: string;
   /** Signal sender. Tests substitute a recorder. Default `process.kill`. */
   kill?: (pid: number, signal: NodeJS.Signals | 0) => void;
-  /** Milliseconds between SIGTERM and SIGKILL. Default 2000. */
+  /**
+   * Milliseconds between SIGTERM and SIGKILL, and again after SIGKILL for a
+   * signalled process to finish exiting before it is reported as survived.
+   * Default 2000.
+   */
   graceMs?: number;
   /** Log sink for what was reclaimed. Default: silent. */
   log?: (line: string) => void;
@@ -280,6 +284,27 @@ function stillOurs(
 }
 
 /**
+ * Is the process we identified as `e` still running, i.e. the same process
+ * (same start time), not a zombie, and not already collected by whoever
+ * reaps it (`X`, readable for the moment it takes to be unhashed)? Used only for a pid we
+ * have already signalled, which may have stopped matching `identifyEngine`
+ * part-way through its own exit. Where procfs gave no start time we cannot
+ * tell this process from a stranger wearing its pid, so this says no.
+ */
+function stillExiting(procRoot: string, e: FoundEngine): boolean {
+  if (e.startTicks === null) return false;
+  let stat: string;
+  try {
+    stat = readFileSync(resolve(procRoot, String(e.pid), "stat"), "utf8");
+  } catch {
+    return false; // gone
+  }
+  const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+  if (fields[19] !== e.startTicks) return false; // a new process on that pid
+  return fields[0] !== "Z" && fields[0] !== "X";
+}
+
+/**
  * Kill every engine whose owner is gone: SIGTERM, a grace window, then
  * SIGKILL for whatever ignored it (a bundle predating the lifecycle shim
  * will, every time).
@@ -311,31 +336,50 @@ export async function reapOrphanedEngines(
   // else with the same uid -- another agent's bun, on this machine.
   const ours = (e: FoundEngine): boolean => stillOurs(procRoot, ourUid, kill, e);
 
+  // "No longer ours" is not "gone". A process that has taken the signal and
+  // is part-way through exiting releases its memory first, and from then on
+  // its environ and cmdline read as empty or fail -- so it stops matching
+  // `identifyEngine` while it is still running, not yet a zombie, for as long
+  // as the rest of its teardown takes (milliseconds on a contended CPU). One
+  // we signalled therefore counts as still here until its pid is gone, a
+  // zombie, or dead and being released (`X`). This check only ever delays the verdict; it never decides who
+  // gets a signal, which stays with `ours`.
+  const signalled = new Set<number>();
+  const pending = (e: FoundEngine): boolean =>
+    ours(e) || (signalled.has(e.pid) && stillExiting(procRoot, e));
+  const settle = async (deadline: number): Promise<void> => {
+    while (orphans.some(pending) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  };
+
   for (const e of orphans) {
     if (!ours(e)) continue;
+    signalled.add(e.pid);
     try {
       kill(e.pid, "SIGTERM");
     } catch {
       /* exited between the check and now */
     }
   }
-  const deadline = Date.now() + graceMs;
-  while (orphans.some(ours) && Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 50));
-  }
+  await settle(Date.now() + graceMs);
   for (const e of orphans) {
     if (!ours(e)) continue;
+    signalled.add(e.pid);
     try {
       kill(e.pid, "SIGKILL");
     } catch {
       /* raced with its own exit */
     }
   }
+  // SIGKILL is not instant either: give whatever it reached the same window
+  // to finish exiting before it is reported on.
+  if (orphans.some(pending)) await settle(Date.now() + graceMs);
 
   // Report what actually went, not what we aimed at: a process in
   // uninterruptible sleep survives even SIGKILL, and a caller that fails a
   // build on "engines were leaked" deserves the truth.
-  const survived = orphans.filter(ours);
+  const survived = orphans.filter(pending);
   const reaped = orphans.filter((e) => !survived.includes(e));
   if (log) {
     for (const e of reaped) {
