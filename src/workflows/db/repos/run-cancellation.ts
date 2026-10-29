@@ -34,17 +34,29 @@ function retireRunWaits(runId: string, ts: number, canceled: boolean): string[] 
   // effects alone: cleanup cannot certify rollback or replace their receipts.
   for (const effect of listWorkflowEffects(runId)) {
     if (effect.status !== 'pending') continue;
-    effect.status = 'blocked'; effect.finishedAt = ts;
-    effect.error = canceled ? 'Workflow canceled before dispatch' : 'Workflow ended before dispatch';
-    effect.outcome = { status: 'blocked', code: canceled ? 'WORKFLOW_CANCELED' : 'WORKFLOW_FINISHED',
-      message: effect.error, effect: 'not_started' };
+    effect.finishedAt = ts;
+    if (effect.partial) {
+      // Resumable work that already ran slices: earlier slices had effects, so
+      // neither the record nor the approval receipt may say nothing started.
+      // Blocked, as the boundary records a typed stop, with an outcome that
+      // says earlier slices may have had effects.
+      effect.status = 'blocked';
+      effect.error = canceled ? 'Workflow canceled between slices; earlier slices ran' : 'Workflow ended between slices; earlier slices ran';
+      effect.outcome = { status: 'blocked', code: canceled ? 'WORKFLOW_CANCELED' : 'WORKFLOW_FINISHED',
+        message: effect.error, effect: 'may_have_occurred' };
+    } else {
+      effect.status = 'blocked';
+      effect.error = canceled ? 'Workflow canceled before dispatch' : 'Workflow ended before dispatch';
+      effect.outcome = { status: 'blocked', code: canceled ? 'WORKFLOW_CANCELED' : 'WORKFLOW_FINISHED',
+        message: effect.error, effect: 'not_started' };
+    }
     saveWorkflowEffect(effect);
     if (effect.approvalId) {
       const denied = db.run(`UPDATE approval_requests SET status='denied', decided_at=?, decided_by=?
         WHERE id=? AND execution_mode='workflow' AND status='pending'`,
       [ts, canceled ? 'workflow-cancellation' : 'workflow-completion', effect.approvalId]);
-      const receipted = db.run(`UPDATE approval_requests SET status='executed', executed_at=?, execution_result=?, execution_outcome='blocked'
-        WHERE id=? AND execution_mode='workflow' AND status='approved'`, [ts, effect.error, effect.approvalId]);
+      const receipted = db.run(`UPDATE approval_requests SET status='executed', executed_at=?, execution_result=?, execution_outcome=?
+        WHERE id=? AND execution_mode='workflow' AND status='approved'`, [ts, effect.error, effect.partial ? 'failed' : 'blocked', effect.approvalId]);
       if (denied.changes > 0 || receipted.changes > 0) closed.push(effect.approvalId);
     }
   }

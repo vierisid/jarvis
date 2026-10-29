@@ -55,6 +55,7 @@ function snapshot(runId: string) {
   return { run, effects, evidenceVersion };
 }
 function effectStatus(effect: WorkflowEffect): 'unknown' | 'not_started' | 'completed' {
+  if (effect.status === 'pending' && effect.partial) return 'unknown';
   if (effect.status === 'pending' || effect.status === 'blocked' && !effect.outcome) return 'not_started';
   if (effect.outcome && effect.outcome.status !== 'succeeded') return effect.outcome.effect === 'not_started' ? 'not_started' : 'unknown';
   // These are dispatch authorizations, not execution receipts (legacy pieces / delegates).

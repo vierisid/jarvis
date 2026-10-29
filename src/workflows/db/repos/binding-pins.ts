@@ -1,4 +1,5 @@
 import { MEETING_ACCOUNTS } from '../../meeting-accounts';
+import { importAccountFields, isImportStep } from '../../import-accounts';
 import { REPORT_ACCOUNTS, isReportStep } from '../../report-accounts';
 import { SALES_ACCOUNTS, isSalesStep } from '../../sales-accounts';
 /**
@@ -112,6 +113,13 @@ export function connectionBindings(trigger: unknown): Map<string, ConnectionRefe
 /** Each connection one step names, with where it names it, by the same rule as `connectionBindings`. */
 export function nodeConnectionReferences(node: FlowTriggerNode): Array<[externalId: string, path: string]> {
   const out: Array<[string, string]> = [];
+  if (isImportStep(node.settings)) {
+    // The source account is named only by an OAuth2 source.
+    for (const field of importAccountFields(node.settings?.input)) {
+      const id = node.settings?.input?.[field];
+      if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
+    }
+  }
   if (isReportStep(node.settings)) {
     for (const field of Object.keys(REPORT_ACCOUNTS)) {
       const id = node.settings?.input?.[field];

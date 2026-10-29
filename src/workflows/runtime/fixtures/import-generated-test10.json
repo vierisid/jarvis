@@ -1,0 +1,29 @@
+{
+  "name": "trigger",
+  "type": "EMPTY",
+  "displayName": "Start or resume contact import",
+  "settings": {},
+  "nextAction": {
+    "name": "step_1",
+    "type": "PIECE",
+    "displayName": "Import pages with durable HubSpot upserts",
+    "settings": {
+      "pieceName": "@jarvispieces/piece-jarvis-import",
+      "actionName": "resumable_contact_import",
+      "input": {
+        "importId": "",
+        "sourceUrl": "",
+        "sourceAuth": null,
+        "sourceConnection": "",
+        "hubspotConnection": "",
+        "hubspotPortalId": "",
+        "itemsPath": "",
+        "nextCursorPath": "next_cursor",
+        "cursorParameter": "",
+        "idPath": "",
+        "emailPath": "",
+        "propertyMapping": null
+      }
+    }
+  }
+}

@@ -1,5 +1,7 @@
 import { MEETING_ACCOUNTS, meetingSetup } from './meeting-briefs';
 import { MANAGED_HUBSPOT_REFUSAL } from '../meeting-accounts';
+import { IMPORT_REQUIRED, importSetup } from './contact-import';
+import { IMPORT_ACCOUNTS, IMPORT_PIECE, importAccountFields, isImportStep, managedImportRefusal } from '../import-accounts';
 import { REPORT_REQUIRED, reportSetup } from './weekly-report';
 import { REPORT_ACCOUNTS, REPORT_PIECE, isReportStep, managedReportRefusal, type ReportAccountField } from '../report-accounts';
 import { SALES_ACCOUNTS, SALES_REQUIRED, SALES_PIECE, isSalesStep, salesSetup } from './sales-followups';
@@ -267,6 +269,25 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     expressions(input, node, 'settings.input', scope, type === 'PIECE' || type === 'PIECE_TRIGGER' ? pieceName : '');
     stepSettings = {};
     const isPiece = (short: string) => pieceName === short || pieceName === `@jarvispieces/piece-${short}`;
+    if (!root && isImportStep(settings) && pieceName !== IMPORT_PIECE) issue(node, 'settings.pieceName', 'PIECE', `Use the full piece name ${IMPORT_PIECE}`);
+    if (!root && isImportStep(settings) && object(input)) {
+      for (const field of importAccountFields(input)) {
+        const provider = IMPORT_ACCOUNTS[field], id = input[field];
+        if (field === 'sourceConnection' && emptyInput(id)) needsSetup(node,`settings.input.${field}`,'Select the source OAuth2 account');
+        if (!emptyInput(id)) {
+          if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node,`settings.input.${field}`,'CONNECTION_BINDING','Select a saved account reference');
+          // No managed-connection exemption covers the import; the import backend refuses a jarvis: id at run time too.
+          else if (id.startsWith('jarvis:')) issue(node, `settings.input.${field}`, 'CONNECTION_BINDING', managedImportRefusal(field));
+          else if (context.phase !== 'composition') {
+            const refusal=context.connection?.(id,provider,`settings.input.${field}`,settings,type) ?? (context.connection ? null : 'Connection inventory unavailable');
+            const reason = typeof refusal === 'string' || refusal === null ? refusal : refusal.message;
+            if (reason) issue(node,`settings.input.${field}`,'CONNECTION_BINDING',reason);
+            else runtime(node,`settings.input.${field}`,'connection','Recheck pinned import account before each operation');
+          }
+        }
+      }
+      if (IMPORT_REQUIRED.every(k=>!emptyInput(input[k])) && (input.sourceAuth !== 'oauth2' || !emptyInput(input.sourceConnection))) try { importSetup(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
+    }
     if (!root && isReportStep(settings) && pieceName !== REPORT_PIECE) issue(node, 'settings.pieceName', 'PIECE', `Use the full piece name ${REPORT_PIECE}`);
     if (!root && isReportStep(settings) && object(input)) {
       for (const [field, provider] of Object.entries(REPORT_ACCOUNTS)) {

@@ -32,6 +32,7 @@ import { GitHubRepository } from "../../integrations/GitHubRepository";
 import { MEETING_ACCOUNT_FIELDS } from "../../../../../src/workflows/meeting-accounts";
 import { SALES_ACCOUNT_FIELDS } from "../../../../../src/workflows/sales-accounts";
 import { REPORT_ACCOUNT_FIELDS } from "../../../../../src/workflows/report-accounts";
+import { IMPORT_ACCOUNT_FIELDS, IMPORT_ACTION, IMPORT_PIECE, importAccountFields } from "../../../../../src/workflows/import-accounts";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { WorkflowEditorEnvironment, WorkflowPortal, useWorkflowRequest } from "./WorkflowEditorEnvironment";
 import { BriefTabs } from "../../../brief/components/controls/Choices";
@@ -3415,7 +3416,10 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const meetingAccounts = piece?.name === '@jarvispieces/piece-jarvis-context' && subName === 'meeting_briefs'
     ? MEETING_ACCOUNT_FIELDS
     : piece?.name === '@jarvispieces/piece-jarvis-sales' && subName === 'draft_followups' ? SALES_ACCOUNT_FIELDS
-      : piece?.name === '@jarvispieces/piece-jarvis-report' && subName === 'weekly_operating_report' ? REPORT_ACCOUNT_FIELDS : [];
+      : piece?.name === '@jarvispieces/piece-jarvis-report' && subName === 'weekly_operating_report' ? REPORT_ACCOUNT_FIELDS
+        : piece?.name === IMPORT_PIECE && subName === IMPORT_ACTION
+          // The source account is asked for only when the source uses OAuth2.
+          ? IMPORT_ACCOUNT_FIELDS.filter(([field]) => importAccountFields(formInput).includes(field)) : [];
 
   const formWebhook = detectedTriggerKind === 'webhook' && ('submission_id_field' in formInput || 'submission_email_field' in formInput);
   const schema = detectedTriggerKind === 'schedule' && step.settings?.pieceName === 'schedule' ? {fields:[
