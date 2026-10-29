@@ -12,7 +12,13 @@ import {workflowEffectId,type WorkflowEffectBoundary} from './effect-boundary';
 import {getWorkflowEffect,saveWorkflowEffect} from '../db/repos/workflow-effect';
 import type {CredentialResolver} from '../credentials/adapter';
 import {ConnectionCredentialError,OAUTH2_TYPES} from '../credentials/pasted-oauth2';
-export function createContactImportService(deps:{effects:WorkflowEffectBoundary;credentials:CredentialResolver;request?:ImportRequest;now?:()=>number}){
+/** How long one daemon call keeps working before it yields to a timer that
+ * resumes at once, well inside the 45s import lease that every save renews. */
+export const IMPORT_CALL_BUDGET_MS=20_000;
+export interface ImportCallBudget {ms:number;operations:number}
+export function createContactImportService(deps:{effects:WorkflowEffectBoundary;credentials:CredentialResolver;request?:ImportRequest;now?:()=>number;
+  /** Per-call work budget; tests narrow it to one operation per call. */
+  budget?:()=>ImportCallBudget}){
   return async(input:Record<string,unknown>,ctx:WorkflowEffectContext)=>{
     const setup=importSetup(input),{run,version,stepName,executionPath}=resolveEffectContext(ctx,IMPORT_PIECE,IMPORT_ACTION);
     const saved=walkFlowNodes(version.trigger).find(n=>n.name===stepName);
@@ -25,13 +31,19 @@ export function createContactImportService(deps:{effects:WorkflowEffectBoundary;
     for(const field of fields){
       const externalId=setup[field];
       if(saved.settings?.input?.[field]!==externalId)throw Error('Import account must match the saved workflow step');
+      // Defense in depth, unreachable while the check above holds: the pins
+      // name every account field of a saved import step, so the graph binds an
+      // id the saved step names. Kept so a change to either rule fails closed.
       if(!connectionBindings(version.trigger).has(externalId))throw Error('Import account is not bound to this workflow');
       if(externalId.startsWith('jarvis:'))throw Error(managedImportRefusal(field));
     }
     const identities=Object.fromEntries(fields.map(field=>[field,currentConnectionIdentity(ctx.projectId,setup[field],deps.credentials)]));
     const clock=deps.now??Date.now,key=digest(['contact-import-v1',ctx.projectId,run.flowId,setup.importId]);
     const park=(result:{complete:boolean;resumeAt?:number})=>{if(result.complete)return result;const wait=createWaitpoint({flowRunId:ctx.runId,projectId:ctx.projectId,stepName,type:'TIMER',resumeDateTime:new Date(result.resumeAt!).toISOString()});return {...result,waitpointId:wait.id};};
-    const acquired=acquireImport(key,digest([setup,identities]),randomUUID(),clock);
+    // The lock holds the configuration only. Account identities (credential
+    // generations included) are not part of it: a reconnect must not strand the
+    // import. The slice re-verifies the HubSpot portal when they change.
+    const acquired=acquireImport(key,digest(setup),randomUUID(),clock),accounts=digest(identities);
     if('busyUntil'in acquired)return park({complete:false,resumeAt:acquired.busyUntil});
     try {
     const previous=getWorkflowEffect(workflowEffectId(ctx.runId,stepName,executionPath,'contact-import'));
@@ -71,15 +83,30 @@ export function createContactImportService(deps:{effects:WorkflowEffectBoundary;
           if(typeof resolved.value.access_token!=='string'||!resolved.value.access_token)throw Error('Connect the selected import accounts securely');
           tokens[field==='hubspotConnection'?'hubspot':'source']=resolved.value.access_token;
         }
-        check();
-        try{return await importSlice(setup,acquired.store,deps.request??importTransport(setup,tokens,()=>{check();acquired.store.check();}),clock(),clock,ctx.runId);}
-        catch(e){
-          // A resumable stop is a typed block, not an uncertain dispatch. It says
-          // not_started only when no earlier slice of this run ran and the
-          // stopping request itself had no effect.
-          if(!(e instanceof ImportStop))throw e;
-          const ran=!!getWorkflowEffect(workflowEffectId(ctx.runId,stepName,executionPath,'contact-import'))?.partial;
-          throw new ActionOutcomeError({status:'blocked',code:e.code,message:e.message,effect:e.unexecuted&&!ran?'not_started':'may_have_occurred'});
+        // One call works through as many operations (lookups, writes, page
+        // fetches and checkpoints) as fit its budget, each still one reserved,
+        // checkpointed slice. It yields to a timer only for a real delay
+        // (Retry-After, backoff, a busy lease) or when the budget is spent, and
+        // then resumes at once.
+        const base=deps.request??importTransport(setup,tokens,()=>{check();acquired.store.check();});
+        let dispatched=0;const request:ImportRequest=(...args)=>{dispatched++;return base(...args);};
+        const budget=deps.budget?.()??{ms:IMPORT_CALL_BUDGET_MS,operations:Infinity},started=Date.now();
+        for(let operations=0;;){
+          const before=dispatched;check();
+          try{
+            const now=clock(),result=await importSlice(setup,acquired.store,request,now,clock,ctx.runId,accounts);
+            operations++;
+            if(result.complete||result.resumeAt!==undefined&&result.resumeAt>now+1)return result;
+            if(operations>=budget.operations||Date.now()-started>=budget.ms)return {...result,resumeAt:clock()};
+          }catch(e){
+            // A resumable stop is a typed block, not an uncertain dispatch. It
+            // says not_started only when no earlier slice of this run, and no
+            // earlier request of this call, ran, and the stopping request
+            // itself had no effect.
+            if(!(e instanceof ImportStop))throw e;
+            const ran=before>0||!!getWorkflowEffect(workflowEffectId(ctx.runId,stepName,executionPath,'contact-import'))?.partial;
+            throw new ActionOutcomeError({status:'blocked',code:e.code,message:e.message,effect:e.unexecuted&&!ran?'not_started':'may_have_occurred'});
+          }
         }
       }});
     if(reply.approval)return {approval:reply.approval};

@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {initWorkflowDb,closeWorkflowDb,getWorkflowDb} from '../db';
 import {acquireImport} from '../db/repos/contact-import';
-import {importSlice,importSetup,importDigest,retryDeadline,ImportStop,MAX_IMPORT_PAGES_PER_RUN,MAX_RETRY_AFTER_MS,type ImportRequest} from './contact-import';
+import {importSlice,importSetup,importDigest,retryDeadline,sameImportValue,ImportRefusal,ImportStop,MAX_IMPORT_PAGES_PER_RUN,MAX_RETRY_AFTER_MS,type ImportRequest} from './contact-import';
 import {publicImportAddress} from './import-transport';
 import {importFixtureSetup as setup,importFixtureProvider} from './import-fixtures';
 let dir:string,now:number,seq:number;
@@ -191,4 +191,69 @@ test('a far Retry-After after three retries is the typed stop, not an exhausted 
  expect(progress().retries).toBe(3);
  const stop=await tick(async()=>({status:429,retryAfter:'172800',body:null}),'run-1').catch(e=>e);
  expect(stop).toBeInstanceOf(ImportStop);expect(stop.code).toBe('IMPORT_RETRY_AFTER_TOO_LONG');expect(stop.unexecuted).toBe(true);expect(progress().retries).toBe(3);
+});
+
+const stored=()=>JSON.parse((getWorkflowDb().query('SELECT progress FROM workflow_contact_import').get() as any).progress);
+test('each deterministic stop names its reason',async()=>{
+ const cases=[['cursorCycle','Source cursor cycle detected'],['missingCursor','explicitly return next_cursor'],['changedIdentity','Source identity changed']] as const;
+ for(const [option,message] of cases){for(const t of ['workflow_contact_import','workflow_import_contact','workflow_import_cursor'])getWorkflowDb().run('DELETE FROM '+t);
+  const f=importFixtureProvider();f.options[option]=true;
+  if(option==='changedIdentity'){f.options.changedIdentity=false;await finish(f.request);for(const t of ['workflow_contact_import','workflow_import_cursor'])getWorkflowDb().run('DELETE FROM '+t);f.options.changedIdentity=true;}
+  await expect(finish(f.request)).rejects.toThrow(message);}
+});
+test('a stop left in the write phase reconciles by lookup in a new run before any write',async()=>{
+ const f=importFixtureProvider();let refuse=true;
+ const request:ImportRequest=async(provider,url,method,body)=>method==='POST'&&refuse?{status:401,body:null}:f.request(provider,url,method,body);
+ for(let i=0;i<3;i++)await tick(request,'r1');
+ await expect(tick(request,'r1')).rejects.toThrow('HTTP 401');expect(stored()).toMatchObject({phase:'write',method:'POST'});
+ refuse=false;const before=f.calls.length;await tick(request,'r2');
+ expect(f.calls.slice(before)).toEqual([{provider:'hubspot',url:expect.stringContaining('idProperty=email'),method:'GET'}]);
+ expect((await finish(request,'r2')).contacts).toBe(2);expect(f.creates).toBe(2);
+});
+test('HubSpot normalizing the values it stores still confirms an update by contact ID, without a write loop',async()=>{
+ const f=importFixtureProvider();f.contacts.set('alice@example.com',{id:'99',properties:{email:'alice@example.com',firstname:'Old'}});
+ // HubSpot's reply: values in its own spelling, and an update reply without the email.
+ const request:ImportRequest=async(provider,url,method,body)=>{
+  const r=await f.request(provider,url,method,body);if(provider!=='hubspot'||!r.body||!(r.body as any).properties)return r;
+  const {email,...rest}=(r.body as any).properties;const properties=Object.fromEntries(Object.entries(rest).map(([k,v])=>[k,String(v).toUpperCase()+' ']));
+  return {...r,body:{...(r.body as any),properties:method==='PATCH'?properties:{...properties,email}}};
+ };
+ expect((await finish(request)).contacts).toBe(2);expect(f.calls.filter(c=>c.method==='PATCH')).toHaveLength(1);expect(f.creates).toBe(1);
+ expect(sameImportValue('42.0','42')).toBe(true);expect(sameImportValue(' Rome ','rome')).toBe(true);expect(sameImportValue(null,'')).toBe(false);expect(sameImportValue('43','42')).toBe(false);
+});
+test('an update reply naming another contact is not confirmed; the lookup confirms the right one',async()=>{
+ const f=importFixtureProvider();f.contacts.set('alice@example.com',{id:'99',properties:{email:'alice@example.com',firstname:'Old'}});
+ const request:ImportRequest=async(provider,url,method,body)=>{const r=await f.request(provider,url,method,body);return method==='PATCH'?{...r,body:{...(r.body as any),id:'100'}}:r;};
+ expect((await finish(request)).contacts).toBe(2);
+ expect((getWorkflowDb().query("SELECT contact_id FROM workflow_import_contact WHERE source_id='1'").get() as any).contact_id).toBe('99');
+});
+test('a refused request or oversized reply is a typed stop that clears the reservation and resumes in a new run',async()=>{
+ const f=importFixtureProvider();let refuse:'source'|'write'|null='source';
+ const request:ImportRequest=async(provider,url,method,body)=>{
+  if(refuse==='source'&&provider==='source')throw new ImportRefusal('Import source must resolve to a public HTTPS address',true);
+  if(refuse==='write'&&method==='POST'){await f.request(provider,url,method,body);throw new ImportRefusal('Import provider response exceeds 2 MiB',false);}
+  return f.request(provider,url,method,body);
+ };
+ await tick(request,'r1');const stop=await tick(request,'r1').then(()=>null,e=>e);
+ expect(stop).toBeInstanceOf(ImportStop);expect(stop).toMatchObject({code:'IMPORT_REFUSED',unexecuted:true});expect(stored()).toMatchObject({inFlight:false,error:'Import source must resolve to a public HTTPS address',stoppedRun:'r1'});
+ refuse='write';await tick(request,'r2');await tick(request,'r2');const write=await tick(request,'r2').then(()=>null,e=>e);
+ expect(write).toMatchObject({code:'IMPORT_REFUSED',unexecuted:false});expect(stored()).toMatchObject({inFlight:false,phase:'reconcile'});expect(f.creates).toBe(1);
+ refuse=null;expect((await finish(request,'r3')).contacts).toBe(2);expect(f.creates).toBe(2);expect(f.calls.filter(c=>c.method==='POST')).toHaveLength(2);
+});
+test('a changed account digest re-verifies the HubSpot portal before continuing, keeping progress',async()=>{
+ const f=importFixtureProvider();const t=(request:ImportRequest,accounts:string)=>{const a=acquireImport('job',importDigest(setup),'owner-'+(++seq),()=>now);if('busyUntil'in a)throw Error('Busy');return importSlice(setup,{...a.store,runLive:()=>false},request,now,()=>now,'r1',accounts).finally(()=>a.release());};
+ for(let i=0;i<5;i++)await t(f.request,'gen-1');expect(f.creates).toBe(1);
+ const accountCalls=()=>f.calls.filter(c=>c.url.includes('account-info')).length;expect(accountCalls()).toBe(1);
+ await t(f.request,'gen-2');expect(accountCalls()).toBe(2);expect(stored()).toMatchObject({contacts:1,accounts:'gen-2'});
+ for(let i=0;i<40&&!(stored().complete);i++)await t(f.request,'gen-2');expect(f.creates).toBe(2);expect(f.calls.filter(c=>c.method==='POST')).toHaveLength(2);
+ const other:ImportRequest=async(provider,url,method,body)=>url.includes('account-info')?{status:200,body:{portalId:43}}:f.request(provider,url,method,body);
+ for(const t2 of ['workflow_contact_import','workflow_import_contact','workflow_import_cursor'])getWorkflowDb().run('DELETE FROM '+t2);
+ for(let i=0;i<5;i++)await t(f.request,'gen-1');const n=f.calls.length;
+ await expect(t(other,'gen-3')).rejects.toThrow('portal verification failed');expect(f.calls).toHaveLength(n);
+});
+test('a create reply for another email is not confirmed; the lookup confirms the created contact',async()=>{
+ const f=importFixtureProvider();let once=true;
+ const request:ImportRequest=async(provider,url,method,body)=>{const r=await f.request(provider,url,method,body);if(method==='POST'&&once){once=false;return {...r,body:{id:'777',properties:{email:'someone@else.example'}}};}return r;};
+ expect((await finish(request)).contacts).toBe(2);expect(f.creates).toBe(2);
+ expect((getWorkflowDb().query("SELECT contact_id FROM workflow_import_contact WHERE source_id='1'").get() as any).contact_id).toBe('1');
 });

@@ -38,7 +38,9 @@ function retireRunWaits(runId: string, ts: number, canceled: boolean): string[] 
     if (effect.partial) {
       // Resumable work that already ran slices: earlier slices had effects, so
       // neither the record nor the approval receipt may say nothing started.
-      effect.status = 'failed';
+      // Blocked, as the boundary records a typed stop, with an outcome that
+      // says earlier slices may have had effects.
+      effect.status = 'blocked';
       effect.error = canceled ? 'Workflow canceled between slices; earlier slices ran' : 'Workflow ended between slices; earlier slices ran';
       effect.outcome = { status: 'blocked', code: canceled ? 'WORKFLOW_CANCELED' : 'WORKFLOW_FINISHED',
         message: effect.error, effect: 'may_have_occurred' };

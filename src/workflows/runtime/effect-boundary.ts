@@ -628,9 +628,12 @@ export class WorkflowEffectBoundary {
       // a lost completion receipt must not leave a send with no audit row.
       if (input.externalDispatch) { log(true); return { result }; }
       if (input.deferCompletion?.(result)) {
+        // One audit row when the work first runs, and one when it completes;
+        // the slices between are recorded on the effect, not the trail.
+        const first=!record.partial;
         record.status='pending'; record.result=null;
         record.partial={slices:(record.partial?.slices??0)+1,at:Date.now()};
-        saveWorkflowEffect(record); log(true); return {result};
+        saveWorkflowEffect(record); if(first) log(true); return {result};
       }
       if (verification) record.outcome = { status: 'succeeded', verification };
       // NOT bounded and NOT defanged, deliberately: this is replay and

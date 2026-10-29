@@ -6,7 +6,7 @@ import {initWorkflowDb,closeWorkflowDb,DEFAULT_IDS} from '../db';
 import {setEncryptionKey} from '../db/encryption';
 import {createFlow,getFlow,setPublishedVersion,updateFlowStatus,listFlows} from '../db/repos/flow';
 import {createDraftVersion,getLatestDraft,lockVersion,updateDraftVersion} from '../db/repos/flow-version';
-import {createFlowRun,getFlowRun,listRuns} from '../db/repos/flow-run';
+import {createFlowRun,getFlowRun,listRuns,updateRun} from '../db/repos/flow-run';
 import {enqueue} from '../db/repos/job-queue';
 import {listWaitpointsByFlowRun} from '../db/repos/waitpoint';
 import {upsertConnection} from '../db/repos/app-connection';
@@ -36,8 +36,14 @@ import {importFixtureSetup as setup,importFixtureProvider} from './import-fixtur
 import {workflowSafeguards} from './workflow-safeguards';
 import {cancelFlowRun} from '../db/repos/run-cancellation';
 import {listWorkflowEffects} from '../db/repos/workflow-effect';
+import {getRunRecovery} from './recovery';
+import {otherSteps} from './run-failure';
+import {walkFlowNodes} from '../db/flow-graph';
+import type {ImportRequest} from './contact-import';
 let dir:string,api:SandboxApi,runtime:EngineRuntime,worker:Worker,catalog:PieceCatalog,authority:AuthorityEngine,approvals:ApprovalManager;
 let services:ReturnType<typeof buildSandboxServiceBackends>,now=Date.now(),provider=importFixtureProvider(),resolver:CredentialResolver,tokenDown=false;
+/** Most tests below step one operation per call, to reach each slice boundary; the throughput test uses the production budget. */
+let budget={ms:20_000,operations:1},audit:AuditTrail;
 const runIds:string[]=[];
 beforeAll(async()=>{
  dir=mkdtempSync(join(tmpdir(),'jarvis-import-engine-'));initWorkflowDb(join(dir,'db'));setEncryptionKey(Buffer.alloc(32,79));
@@ -45,8 +51,8 @@ beforeAll(async()=>{
  const installed=join(dir,'node_modules',IMPORT_PIECE);mkdirSync(dirname(installed),{recursive:true});symlinkSync(join(path,'dist'),installed,'dir');
  upsertConnection({externalId:'fixture-hubspot',displayName:'Fixture HubSpot',type:'OAUTH2',pieceName:'@activepieces/piece-hubspot',pieceVersion:'0.12.1',value:{access_token:'synthetic-hubspot'}});
  authority=new AuthorityEngine({default_level:10,governed_categories:[],overrides:[],context_rules:[],learning:{enabled:false,suggest_threshold:10},emergency_state:'normal'});approvals=new ApprovalManager();
- services=buildSandboxServiceBackends({credentialResolver:resolver=new CredentialResolver({tokenTransport:async()=>{if(tokenDown)throw Error('token endpoint unreachable');return {status:200,body:{access_token:'synthetic-hubspot',expires_in:3600}};}}),authorityEngine:authority,approvalManager:approvals,emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
-  importNow:()=>now,importRequest:(...args)=>provider.request(...args),llmManager:{chat:async()=>{throw Error('No model execution');}} as any,channelService:{sendWorkflowNotification:async()=>{throw Error('No notifications');}} as any,wsService:{} as any});
+ services=buildSandboxServiceBackends({credentialResolver:resolver=new CredentialResolver({tokenTransport:async()=>{if(tokenDown)throw Error('token endpoint unreachable');return {status:200,body:{access_token:'synthetic-hubspot',expires_in:3600}};}}),authorityEngine:authority,approvalManager:approvals,emergencyController:new EmergencyController(),auditTrail:audit=new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
+  importNow:()=>now,importBudget:()=>budget,importRequest:(...args)=>provider.request(...args),llmManager:{chat:async()=>{throw Error('No model execution');}} as any,channelService:{sendWorkflowNotification:async()=>{throw Error('No notifications');}} as any,wsService:{} as any});
  api=new SandboxApi({services});await api.start({port:0});runtime=new EngineRuntime({api,pool:true,bundlePath:bundle.bundlePath,expectedDigest:bundle.digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code')});
  const handle=await runtime.acquire({runId:'import-metadata',projectId:DEFAULT_IDS.project});
  try{catalog=new PieceCatalog([metadataToCatalogEntry(await handle.extractPieceMetadata({pieceName:IMPORT_PIECE,pieceVersion:'0.0.1'}))]);configureWorkflowReadiness({pieces:catalog});if(process.env.JARVIS_IMPORT_CATALOG_EXPORT)writeFileSync(process.env.JARVIS_IMPORT_CATALOG_EXPORT,JSON.stringify(catalog.list()));}finally{await handle.release();}
@@ -54,7 +60,7 @@ beforeAll(async()=>{
 },120_000);
 afterAll(async()=>{await runtime?.shutdown();await api?.stop();closeWorkflowDb();setEncryptionKey(null);for(const id of runIds)rmSync(join(workflowLogsBase(),id+'.bin'),{force:true});if(dir)rmSync(dir,{recursive:true,force:true});});
 function graph(configured=true):any{return {name:'trigger',type:'EMPTY',settings:{},nextAction:{name:'import_contacts',type:'PIECE',settings:{pieceName:IMPORT_PIECE,actionName:IMPORT_ACTION,input:configured?setup:Object.fromEntries([...IMPORT_REQUIRED,'sourceConnection'].map(k=>[k,k==='propertyMapping'?null:'']))}}};}
-function reset(){now=Date.now();provider=importFixtureProvider();authority.updateConfig({...authority.getConfig(),overrides:[],governed_categories:[]});}
+function reset(){now=Date.now();provider=importFixtureProvider();budget={ms:20_000,operations:1};authority.updateConfig({...authority.getConfig(),overrides:[],governed_categories:[]});}
 function fixture(trigger=graph()){const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Import fixture',trigger});expect(versionReadiness(flow.id,version.id).issues).toEqual([]);lockVersion(version.id);setPublishedVersion(flow.id,version.id);updateFlowStatus(flow.id,'ENABLED');return {flow,version};}
 async function begin(f:ReturnType<typeof fixture>){const run=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id});runIds.push(run.id);enqueue({jobType:RUN_FLOW,payload:{runId:run.id,flowVersionId:f.version.id,projectId:DEFAULT_IDS.project,triggerPayload:{}},flowId:f.flow.id,flowRunId:run.id});await worker.drain();return getFlowRun(run.id)!;}
 async function finish(id:string){for(let i=0;i<80;i++){const run=getFlowRun(id)!;if(run.status!=='PAUSED')return run;const waits=listWaitpointsByFlowRun(id,false).filter(w=>w.type==='TIMER');expect(waits).toHaveLength(1);now=Math.max(now+1,Date.parse(waits[0]!.resumeDateTime!));expect(new TimerWaitpointScheduler().tick(now)).toBe(1);await worker.drain();}throw Error('Import did not finish');}
@@ -84,6 +90,8 @@ test('approval stays open during timer slices and closes only after confirmed co
  const first=await services.contactImport!({...setup},ctx) as any;const id=first.approval.approvalId;approvals.approve(id,'fixture');let completed=false;
  for(let i=0;i<40;i++){const r=await services.contactImport!({...setup},ctx) as any;expect(r.approval).toBeUndefined();if(r.complete){completed=true;break;}expect(approvals.getRequest(id)?.status).toBe('approved');now=Math.max(now+1,r.resumeAt);}
  expect(completed).toBe(true);expect(approvals.getRequest(id)?.status).toBe('executed');expect(provider.creates).toBe(2);
+ // Many slices, few audit rows: the approval decision, the first slice and the completion.
+ expect(audit.query({agentId:`workflow:${run.id}`}).length).toBeLessThanOrEqual(3);
 });
 
 test('edited inputs and changed account bindings cannot dispatch provider requests',async()=>{
@@ -119,7 +127,7 @@ test('canceling between slices never receipts already-run import work as not sta
  for(let i=0;i<4;i++){const r=await services.contactImport!({...setup},ctx) as any;expect(r.complete).toBe(false);now=Math.max(now+1,r.resumeAt);}
  expect(provider.creates).toBe(1);cancelFlowRun(run.id);
  const effect=listWorkflowEffects(run.id).find(e=>e.route==='contact-import')!;
- expect((effect.outcome as {effect?:string}|undefined)?.effect).toBe('may_have_occurred');expect(effect.status).not.toBe('blocked');
+ expect((effect.outcome as {effect?:string}|undefined)?.effect).toBe('may_have_occurred');expect(effect.status).toBe('blocked');
  expect(approvals.getRequest(id)?.execution_outcome).toBe('failed');
 },60000);
 
@@ -246,4 +254,67 @@ test('a HubSpot token whose refresh cannot reach the provider fails as temporary
   expect(listRunConnectionBindings(ctx.runId).find(b=>b.externalId==='fixture-hubspot')?.credentialFailure?.code).toBe('CONNECTION_REFRESH_UNREACHABLE');
   expect(provider.calls).toHaveLength(0);
  } finally {tokenDown=false;hubspotRow({access_token:'synthetic-hubspot'});}
+},60000);
+
+const ctxOf=(runId:string)=>({runId,projectId:DEFAULT_IDS.project,stepName:'import_contacts',executionPath:[] as Array<[string,number]>});
+const newRun=(f:ReturnType<typeof fixture>)=>{const run=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'});runIds.push(run.id);return run.id;};
+test('a reconnect keeps the checkpoint: the portal is verified again and done contacts are not written again; another portal is refused',async()=>{
+ reset();const f=fixture();const a=newRun(f);
+ for(let i=0;i<40&&provider.creates<1;i++){const r=await services.contactImport!({...setup},ctxOf(a)) as any;now=Math.max(now+1,r.resumeAt);}
+ expect(provider.creates).toBe(1);const accountChecks=()=>provider.calls.filter(c=>c.url.includes('account-info')).length;expect(accountChecks()).toBe(1);
+ updateRun(a,{status:'FAILED'});
+ // The token expires; a new run is told to reconnect, and the person reconnects (a new credential generation).
+ // Each credential change is accepted by enabling the workflow again, which re-pins its bindings.
+ hubspotRow({access_token:'synthetic-hubspot',claimed_at:Math.floor(Date.now()/1000)-7200,expires_in:3600});pinFlowBindings(f.flow.id);
+ const expired=newRun(f);
+ try{await expect(services.contactImport!({...setup},ctxOf(expired))).rejects.toThrow('Reconnect the selected HubSpot account');}
+ finally{hubspotRow({access_token:'reconnected-hubspot'});pinFlowBindings(f.flow.id);updateRun(expired,{status:'FAILED'});}
+ const b=newRun(f);budget={ms:20_000,operations:Infinity};const done=await services.contactImport!({...setup},ctxOf(b)) as any;
+ expect(done.complete).toBe(true);expect(accountChecks()).toBe(2);expect(provider.creates).toBe(2);expect(provider.calls.filter(c=>c.method==='POST')).toHaveLength(2);
+ // The same import reconnected to a different HubSpot portal stops before reading or writing anything else.
+ reset();const g=fixture(graph());const c=newRun(g);
+ for(let i=0;i<40&&provider.creates<1;i++){const r=await services.contactImport!({...setup},ctxOf(c)) as any;now=Math.max(now+1,r.resumeAt);}
+ updateRun(c,{status:'FAILED'});hubspotRow({access_token:'another-portal'});pinFlowBindings(g.flow.id);
+ const base=provider;provider={...base,request:async(p,url,method,body)=>new URL(url).pathname==='/account-info/v3/details'?{status:200,body:{portalId:43}}:base.request(p,url,method,body)} as typeof provider;
+ try{const n=base.calls.length;await expect(services.contactImport!({...setup},ctxOf(newRun(g)))).rejects.toThrow('portal verification failed');expect(base.calls).toHaveLength(n);}
+ finally{provider=base;hubspotRow({access_token:'synthetic-hubspot'});}
+},60000);
+test('a run that ended between slices reads as unknown in recovery and as dispatched to the failure card',async()=>{
+ reset();provider.options.throttle=true;const f=fixture();const run=newRun(f);
+ for(let i=0;i<2;i++){const r=await services.contactImport!({...setup},ctxOf(run)) as any;expect(r.complete).toBe(false);}
+ const effect=listWorkflowEffects(run).find(e=>e.route==='contact-import')!;expect(effect.status).toBe('pending');expect(effect.partial).toBeDefined();
+ updateRun(run,{status:'FAILED'});
+ expect(getRunRecovery(run)!.effects.find(e=>e.effectId===effect.id)!.status).toBe('unknown');
+ expect(otherSteps(getFlowRun(run)!,[effect],walkFlowNodes(f.version.trigger))).toBe('yes');
+},60000);
+test('the real timer scheduler finishes a multi-contact page in one call, with audit rows that do not grow per operation',async()=>{
+ reset();budget={ms:20_000,operations:Infinity};
+ const contacts=new Map<string,any>(),calls:string[]=[];let creates=0;
+ const request:ImportRequest=async(p,url,method,body:any)=>{
+  calls.push(method+' '+p);const u=new URL(url);
+  if(u.pathname==='/account-info/v3/details')return {status:200,body:{portalId:42}};
+  if(p==='source')return {status:200,body:{items:Array.from({length:25},(_,i)=>({id:String(i),email:`c${i}@example.com`,name:'N'+i})),next_cursor:null}};
+  const email=method==='POST'?body.properties.email:decodeURIComponent(u.pathname.split('/').at(-1)!);
+  if(method==='GET')return contacts.has(email)?{status:200,body:contacts.get(email)}:{status:404,body:{}};
+  const contact={id:String(++creates),properties:{...body.properties,email}};contacts.set(email,contact);return {status:200,body:contact};
+ };
+ provider={...provider,request} as typeof provider;
+ const f=fixture(),run=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id});runIds.push(run.id);
+ const scheduler=new TimerWaitpointScheduler(25);scheduler.start();worker.start();
+ try{
+  enqueue({jobType:RUN_FLOW,payload:{runId:run.id,flowVersionId:f.version.id,projectId:DEFAULT_IDS.project,triggerPayload:{}},flowId:f.flow.id,flowRunId:run.id});
+  for(let i=0;i<400&&!['SUCCEEDED','FAILED','INTERNAL_ERROR','STOPPED'].includes(getFlowRun(run.id)!.status);i++)await Bun.sleep(50);
+ }finally{scheduler.stop();await worker.stop();}
+ expect(getFlowRun(run.id)!.status).toBe('SUCCEEDED');expect(creates).toBe(25);expect(calls.filter(c=>c.startsWith('POST'))).toHaveLength(25);
+ expect(listWaitpointsByFlowRun(run.id).filter(w=>w.type==='TIMER').length).toBeLessThanOrEqual(1);
+ // 52 provider operations; one audit row when the import first runs and one when it completes, at most.
+ expect(audit.query({agentId:`workflow:${run.id}`}).length).toBeLessThanOrEqual(2);
+},60000);
+
+test('a stop later in the same call is not receipted as not started: earlier requests of the call ran',async()=>{
+ reset();budget={ms:20_000,operations:Infinity};const f=fixture(),run=newRun(f),base=provider;
+ provider={...base,request:async(p,url,method,body)=>p==='source'&&new URL(url).searchParams.get('cursor')==='page2'?{status:429,retryAfter:'172800',body:null}:base.request(p,url,method,body)} as typeof provider;
+ try{await expect(services.contactImport!({...setup},ctxOf(run))).rejects.toThrow('more than 24 hours');}finally{provider=base;}
+ expect(base.creates).toBe(1);
+ expect(listWorkflowEffects(run).find(e=>e.route==='contact-import')!.outcome).toMatchObject({code:'IMPORT_RETRY_AFTER_TOO_LONG',effect:'may_have_occurred'});
 },60000);

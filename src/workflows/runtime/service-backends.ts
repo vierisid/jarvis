@@ -139,6 +139,7 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
   reportNow?: () => number;
   importRequest?: ImportRequest;
   importNow?: () => number;
+  importBudget?: () => import('./import-service').ImportCallBudget;
   salesFetch?: typeof fetch;
   salesNow?: () => number;
   /** F-14 enrollment is explicitly enabled only with the F-12 queue. */
@@ -1268,7 +1269,7 @@ export function buildSandboxServiceBackends(
     credentialResolver: opts.credentialResolver,
     meetingBriefs: cancellableWorkflowService(meetingBriefs),
     weeklyReport: cancellableWorkflowService(createWeeklyReportService({effects,credentials:opts.credentialResolver,fetchImpl:opts.reportFetch,now:opts.reportNow})),
-    contactImport: cancellableWorkflowService(createContactImportService({effects,credentials:opts.credentialResolver,request:opts.importRequest,now:opts.importNow})),
+    contactImport: cancellableWorkflowService(createContactImportService({effects,credentials:opts.credentialResolver,request:opts.importRequest,now:opts.importNow,budget:opts.importBudget})),
     salesFollowups: cancellableWorkflowService(createSalesFollowupsService({effects,credentials:opts.credentialResolver,fetchImpl:opts.salesFetch,now:opts.salesNow})),
     pieceAuthorize: cancellableWorkflowService(pieceAuthorize),
     pieceReceipt: (ctx, id, result) => recordPieceCompletion(ctx, id, result, opts),
