@@ -646,7 +646,8 @@ export function buildSandboxServiceBackends(
             //
             // Every browser action needs a dashboard click and the originating
             // registry's live guard; Authority overrides cannot auto-approve it.
-            ...(browserReview ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review browser action' }, reviewRegistry: registry } : {}),
+            ...(browserReview ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review browser action' }, reviewRegistry: registry,
+              reviewSubject: registry.get(call.toolCall.name)?.reviewSubject?.(call.toolCall.arguments) ?? {} } : {}),
             ...(gate.confirm || workflowBrowserRead(call.toolCall.name)
               ? { aboveLevelFloor: browserReview || workflowBrowserRead(call.toolCall.name) ? 'read_data' as const : gate.floorCategory } : {}),
             // The target names who asked, so the card and the record are bound

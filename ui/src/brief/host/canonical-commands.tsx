@@ -12,6 +12,25 @@ import './host.css';
 
 const labels: Record<DecisionAction, string> = { accept_intent: 'Accept next step', reject_intent: 'Reject next step',
   approve_permission: 'Grant permission', reject_permission: 'Deny permission', execute_once: 'Execute once', close_without_running: 'Close without running', inspect: 'Inspect' };
+/**
+ * A browser permission card's heading names what the call will do, from the
+ * subject captured when the card was raised: the element a click lands on and
+ * the page's origin when known. The generic kind of action is its subtitle.
+ */
+export function browserCardTitle(r: Pick<QueuedDecision, 'review'>): { heading: string; kind: string } | null {
+  const review = r.review;
+  if (!review?.toolName.startsWith('browser_')) return null;
+  const on = review.origin ? ` on ${review.origin}` : '';
+  switch (review.toolName) {
+    case 'browser_click': return { heading: `Click ${review.element ?? 'an element'}${on}`, kind: 'Interact with the browser' };
+    case 'browser_scroll': return { heading: `Scroll the page${on}`, kind: 'Scroll the browser page' };
+    case 'browser_navigate': return { heading: review.origin ? `Open ${review.origin}` : 'Open a browser page', kind: 'Open a browser page' };
+    case 'browser_snapshot': return { heading: `Read the page${on}`, kind: 'Read the browser page' };
+    case 'browser_screenshot': return { heading: `View the page${on}`, kind: 'View the browser' };
+    default: return null;
+  }
+}
+
 /** Non-document F12 decisions retain their own action and result contract. */
 export function PendingDecisions({ http, read, enabled, changed, selection, navigate }: { selection?: string; navigate?(route: BriefRoute): void; http: HostTransport; read(): Promise<QueuedDecision[]>; enabled: boolean; changed(): void }) {
   const [rows, setRows] = useState<QueuedDecision[] | null>(null), [message, setMessage] = useState(''), [pending, setPending] = useState(false), [epoch, refresh] = useState(0);
@@ -50,8 +69,7 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
   };
   if (!enabled) return null;
   const row = rows?.find(r => r.decisionId === selected) ?? rows?.[0];
-  const title = (r: QueuedDecision) => ({ browser_navigate: 'Open a browser page', browser_snapshot: 'Read the browser page',
-    browser_screenshot: 'View the browser', browser_click: 'Interact with the browser', browser_scroll: 'Scroll the browser page' }[r.review?.toolName ?? ''] ?? r.title);
+  const title = (r: QueuedDecision) => browserCardTitle(r)?.heading ?? r.title;
   const actions = row?.supportedActions.filter(a => a !== 'inspect') ?? [];
   const primary = actions.find(a => ['approve_permission', 'accept_intent', 'execute_once'].includes(a));
   return <section className="brief-host-pending" aria-label="Other decisions">
@@ -60,22 +78,25 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
         {rows?.map(item => <button key={item.decisionId} className="brief-decision-choice" type="button"
           aria-pressed={item.decisionId === row.decisionId} disabled={pending} onClick={() => select(item.decisionId)}>
           <span><strong>{title(item)}</strong></span><span className="brief-decision-recipient">{item.workflow ? 'Workflow request' : 'Jarvis request'}</span>
-          <span className="brief-decision-hint">{item.review?.origin ?? (item.kind === 'permission' ? 'Your permission is needed to continue.' : item.state.replaceAll('_', ' '))}</span>
+          <span className="brief-decision-hint">{browserCardTitle(item)?.kind ?? (item.kind === 'permission' ? 'Your permission is needed to continue.' : item.state.replaceAll('_', ' '))}</span>
           <small>{item.decisionId === row.decisionId ? 'Selected' : 'Review request'}</small>
         </button>)}
       </nav>
       <article className="brief-decision-paper" aria-label="Selected request">
         <header className="brief-decision-title"><h2 className="brief-type-hero-heading">{title(row)}</h2>
+          {browserCardTitle(row) && <p className="brief-decision-subtitle">{browserCardTitle(row)!.kind}</p>}
           <span className="brief-decision-badge">{actions.length ? 'Needs your review' : row.state.replaceAll('_', ' ')}</span></header>
         <div className="brief-decision-context"><span>{row.workflow ? 'Workflow request' : 'Jarvis request'}</span>
           {row.run && navigate && <BriefButton size="sm" onClick={() => navigate({ room: 'workflow-runs', selection: { flowId: row.run!.flowId, versionId: row.run!.versionId, runId: row.run!.runId } })}>Open workflow</BriefButton>}</div>
         <div className="brief-decision-document">
           {row.review?.origin && <p><strong>Website</strong><br />{row.review.origin}</p>}
+          {row.review?.element && <p><strong>Element</strong><br />{row.review.element}</p>}
           {row.review?.target && <p><strong>Computer</strong><br />{row.review.target}</p>}
           <p>{row.kind === 'permission' ? 'Jarvis needs your permission for this action before it can continue.' : row.title}</p>
+          {browserCardTitle(row) && <p>{row.title}</p>}
           {row.review?.toolName.startsWith('browser_') && <p>The browser uses a separate Jarvis profile. If the site asks you to sign in, complete sign-in in that browser before starting a new run.</p>}
           {row.kind === 'permission' && <p>Allowing this request does not change your Authority settings or confirm that the workflow has completed.</p>}
-          <details className="brief-host-request-details"><summary>Request details</summary><p>{row.title}</p>
+          <details className="brief-host-request-details"><summary>Request details</summary>{!browserCardTitle(row) && <p>{row.title}</p>}
             {row.review?.reason && row.review.reason !== row.title && <p>{row.review.reason}</p>}</details>
         </div>
         <footer className="brief-decision-bottom"><div className="brief-decision-actions">

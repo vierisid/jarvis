@@ -65,6 +65,8 @@ export interface EffectInvocation {
   confirmation?: { confirm: 'always'; intent: string };
   /** Process-bound browser review; never reconstructed after restart. */
   reviewRegistry?: ToolRegistry;
+  /** Display only: what a reviewed browser call acts on, for its card. Never matched on. */
+  reviewSubject?: { origin?: string; element?: string };
   prepare: () => { arguments: Record<string, unknown>; target: Record<string, unknown>; bindings?: Record<string, unknown> };
   validateTarget?: (args: Record<string, unknown>, target: Record<string, unknown>) => void;
   /**
@@ -514,6 +516,7 @@ export class WorkflowEffectBoundary {
               // the decision: `approvalNeedsClick` reads it, so voice and
               // auto-approval cannot satisfy this card.
               ...(input.confirmation ? { confirm: input.confirmation.confirm } : {}),
+              ...(input.reviewSubject && Object.keys(input.reviewSubject).length ? { reviewSubject: input.reviewSubject } : {}),
               ...(intent ? { intent } : {}) }), executionMode: 'workflow',
             ...(input.reviewRegistry ? { toolRegistry: input.reviewRegistry } : {}) });
           record.approvalId = request.id;

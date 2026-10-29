@@ -135,3 +135,17 @@ test('permission cards preserve selection and settle only the selected request o
   await click('Deny permission'); expect(writes[1].body.action).toBe('reject_permission');
   transport.stop();
 });
+
+test('a browser click card leads with what will be clicked and where, with the generic action as subtitle', async () => {
+  const row = { decisionId: 'approval:c', revision: 'r', kind: 'permission', state: 'pending', title: 'Review browser_click on element [5]. Business effect unknown.',
+    review: { toolName: 'browser_click', reason: 'Approval required', origin: 'https://mail.example', element: 'button "Send" [5]' },
+    supportedActions: ['approve_permission', 'reject_permission', 'inspect'] };
+  const transport = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Commands.PendingDecisions http={transport} read={async () => [row as any]} enabled changed={() => {}} />));
+  expect(host.querySelector('article h2')?.textContent).toBe('Click button "Send" [5] on https://mail.example');
+  expect(host.querySelector('.brief-decision-subtitle')?.textContent).toBe('Interact with the browser');
+  expect(host.querySelector('.brief-decision-document')?.textContent).toContain('Business effect unknown');
+  expect(host.querySelector('details')?.textContent).not.toContain('Business effect unknown');
+  transport.stop();
+});
+
