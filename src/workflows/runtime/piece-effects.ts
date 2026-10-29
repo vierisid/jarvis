@@ -606,6 +606,14 @@ const SHEETS_APPEND_ADAPTER: GovernedPieceAdapter = {
   categories: { write_data: ['insert_row', 'sheets_append_values', 'sheets_add_row'] },
 };
 
+/**
+ * Adapters that govern only some of a piece's actions, outside the verified
+ * set. Their other actions resolve to null and stay community steps. Exported
+ * for the job contract, which must judge a governed action the way the
+ * runtime does.
+ */
+export const PARTIAL_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [SHEETS_APPEND_ADAPTER];
+
 const BY_PIECE_NAME = new Map<string, GovernedPieceAdapter>();
 const ACTION_CATEGORY = new Map<string, Map<string, ActionCategory>>();
 for (const adapter of ALL_PIECE_ADAPTERS) {
