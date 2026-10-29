@@ -181,6 +181,7 @@ test("only the four reviewed actions may resolve the managed credential", async 
   grant.expires_at = new Date(Date.now() + 3600000).toISOString();
   writeFileSync(join(dir, "connections/todoist.json"), JSON.stringify(grant));
   const source = new JarvisTodoistConnectionSource(config);
+  expect(source.pieceDetails["@activepieces/piece-todoist"].apiHosts).toEqual(["api.todoist.com"]);
   expect(
     managedConnectionMisuse(
       source,

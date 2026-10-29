@@ -17,7 +17,7 @@ export class JarvisTodoistConnectionSource implements JarvisConnectionSource {
   readonly pieceDetails = {
     [TODOIST_PIECE]: {
       displayName: "Todoist",
-      apiHosts: ["api.todoist.app"],
+      apiHosts: ["api.todoist.com"],
       actions: MANAGED_TODOIST_ACTIONS,
     },
   };
