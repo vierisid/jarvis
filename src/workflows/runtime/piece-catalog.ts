@@ -313,7 +313,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "15"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts
+export const CATALOG_SCHEMA_VERSION = "16"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: managed Todoist task and completion output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -892,6 +892,14 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
  * on-disk caches re-project.
  */
 export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
+  if (entry.name === '@activepieces/piece-todoist') {
+    const task = {id:'6X7rM8997g3RQmvh', content:'Example task', description:'Task details', project_id:'6X7rM8997g3RQmvp', section_id:null, parent_id:null, labels:['work'], priority:1, checked:false, due:{date:'2026-10-30',string:'tomorrow',is_recurring:false,timezone:null}};
+    for (const name of ['create_task','update_task','find_task']) if (entry.actions[name]) entry.actions[name]!.outputSample = task;
+    if (entry.actions.mark_task_completed) {
+      entry.actions.mark_task_completed.outputSample = {success:true,task_id:task.id,completed:true,recurrence_advanced:false};
+      entry.actions.mark_task_completed.description += ' With the hosted Jarvis connection, completed is false and recurrence_advanced is true for a recurring task. Do not repeat completion for the same occurrence.';
+    }
+  }
   if (entry.name === '@activepieces/piece-asana') {
     for (const action of Object.values(entry.actions)) {
       if (action.name !== 'create_task') continue;
