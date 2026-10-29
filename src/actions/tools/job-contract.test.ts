@@ -390,10 +390,15 @@ describe('rechecking a stored contract', () => {
     setCronTimezone('America/New_York');
     try {
       expect(recheckJobContract(good(), CONTRACT)!.violations).toContain('job contract: the schedule timezone is America/New_York; the job asks for Europe/Rome');
+      // A zone on the step counts only when a person chose it; otherwise it fires in Jarvis's zone.
       const explicit = good();
       (explicit.settings!.input as Record<string, unknown>).timezone = 'Europe/Rome';
+      expect(recheckJobContract(explicit, CONTRACT)!.violations).toContain('job contract: the schedule timezone is America/New_York; the job asks for Europe/Rome');
+      (explicit.settings as Record<string, unknown>).chosenTimezone = 'Europe/Rome';
       expect(recheckJobContract(explicit, CONTRACT)!.violations).toEqual([]);
       (explicit.settings!.input as Record<string, unknown>).timezone = 'UTC';
+      expect(recheckJobContract(explicit, CONTRACT)!.violations).toContain('job contract: the schedule timezone is America/New_York; the job asks for Europe/Rome');
+      (explicit.settings as Record<string, unknown>).chosenTimezone = 'UTC';
       expect(recheckJobContract(explicit, CONTRACT)!.violations).toContain('job contract: the schedule timezone is UTC; the job asks for Europe/Rome');
     } finally { setCronTimezone('Europe/Rome'); }
   });

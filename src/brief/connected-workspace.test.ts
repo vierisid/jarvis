@@ -150,3 +150,21 @@ test('real Telegram 401 observation overrides its still-active polling flag and 
     await (adapter as any).getUpdates(); expect(adapter.authenticationState()).toBe('rejected');
   } finally { await adapter.disconnect(); globalThis.fetch = originalFetch; }
 });
+
+
+test('managed ClickUp shows its stored grant and routes setup without exposing credentials or other scopes', () => {
+  sources.clickup = () => ({configured:true, connected:true, account:{id:'7',label:'owner@example.test'}});
+  expect(row('native:clickup')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'7',setupActionId:'setup:clickup'});
+  expect(provider.read().setup.find(s => s.id === 'setup:clickup')?.target).toEqual({kind:'hosted_integration',provider:'clickup'});
+  sources.clickup = () => ({configured:true,connected:false,account:null});
+  expect(row('native:clickup').status).toBe('disconnected');
+  expect(new ConnectedWorkspace(db,sources,'other','other',()=>true).read().rows.some(r=>r.sourceId==='native:clickup')).toBe(false);
+});
+
+test('managed Asana shows its stored grant and routes setup to its own hosted integration', () => {
+  sources.asana = () => ({configured:true, connected:true, account:{id:'8',label:'owner@example.test'}});
+  expect(row('native:asana')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'8',setupActionId:'setup:asana'});
+  expect(provider.read().setup.find(s => s.id === 'setup:asana')?.target).toEqual({kind:'hosted_integration',provider:'asana'});
+  sources.asana = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:asana')).toBe(false);
+});

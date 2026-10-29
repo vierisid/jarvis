@@ -1,5 +1,6 @@
 import { configureWorkflowReadiness } from '../db/repos/flow-readiness';
 import { PieceCatalog } from '../runtime/piece-catalog';
+import { setCronTimezone } from '../../lib/cron-scheduler';
 /**
  * Tests for the workflow API route handlers. Invokes handlers directly with
  * synthesized Request objects so we don't need to bring up Bun.serve.
@@ -339,6 +340,31 @@ describe("#598: flow metadata is validated and bounded on the way in", () => {
 });
 
 describe("workflow API: piece catalog", () => {
+  test("the schedule piece pre-fills Jarvis's time zone, not UTC, for a new step", async () => {
+    const zoneField = { name: "timezone", label: "Timezone", type: "enum" as const, required: true, default: "UTC",
+      options: [{ value: "UTC", label: "(GMT) UTC" }, { value: "Europe/Rome", label: "(GMT+01:00) Europe, Rome" }] };
+    const reg = new PieceCatalog([{ name: "@activepieces/piece-schedule", displayName: "Schedule", description: "", actions: {}, triggers: {
+      every_day: { name: "every_day", displayName: "Every Day", description: "", inputSchema: { fields: [zoneField] } },
+    } }]);
+    const r = createWorkflowRoutes({ pieceRegistry: reg });
+    const read = async () => {
+      const { body } = await callJson(r["/api/workflows/pieces"]?.GET, plainReq("GET", "http://x/api/workflows/pieces"));
+      return (body as Array<{ triggers: Array<{ inputSchema: { fields: Array<{ name: string; default?: unknown; options?: Array<{ value: string }> }> } }> }>)[0]!
+        .triggers[0]!.inputSchema.fields.find(f => f.name === "timezone")!;
+    };
+    setCronTimezone("Europe/Rome");
+    try {
+      expect((await read()).default).toBe("Europe/Rome");
+      // A configured zone the piece does not list is offered rather than left unselectable.
+      setCronTimezone("America/Argentina/Ushuaia");
+      const field = await read();
+      expect(field.default).toBe("America/Argentina/Ushuaia");
+      expect(field.options?.[0]?.value).toBe("America/Argentina/Ushuaia");
+    } finally { setCronTimezone(null); }
+    // The catalog itself is not rewritten.
+    expect(reg.get("@activepieces/piece-schedule")?.triggers?.every_day?.inputSchema?.fields[0]?.default).toBe("UTC");
+  });
+
   test("returns [] when no registry is wired", async () => {
     const r = createWorkflowRoutes();
     const get = r["/api/workflows/pieces"]?.GET;

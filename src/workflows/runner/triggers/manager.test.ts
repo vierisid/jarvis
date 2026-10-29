@@ -1218,10 +1218,10 @@ for (const action of ['pause', 'stop']) test(`F10 review R2: ${action} cleans en
 });
 
 
-test('an explicit schedule zone stays registered across refreshes', async () => {
+for (const chosen of [false, true]) test(`a schedule zone ${chosen ? 'a person chose' : 'nobody chose (advisory warning)'} stays a registered subscription across refreshes`, async () => {
   setCronTimezone('America/New_York');
   const { flowId, versionId } = publishFlowWithTrigger('explicit zone receipt', {
-    name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: '@activepieces/piece-schedule', triggerName: 'cron_expression', input: { cronExpression: '30 2 * * *', timezone: 'UTC' } },
+    name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: '@activepieces/piece-schedule', triggerName: 'cron_expression', ...(chosen ? { chosenTimezone: 'UTC' } : {}), input: { cronExpression: '30 2 * * *', timezone: 'UTC' } },
   });
   const cron = new FakeCronScheduler(), hooks: string[] = []; let schedules = 0;
   const tm = new TriggerManager({ eventBus: new WorkflowEventBus(), log: silent, enableRetryDelaysMs: [],
@@ -1234,7 +1234,8 @@ test('an explicit schedule zone stays registered across refreshes', async () => 
   try {
     await tm.refresh(flowId);
     expect(tm.list()).toEqual([expect.objectContaining({ flowId })]);
-    expect(tm.list()[0]?.warning).toBeUndefined();
+    if (chosen) expect(tm.list()[0]?.warning).toBeUndefined();
+    else expect(tm.list()[0]?.warning).toContain('This schedule names UTC');
     expect(tm.registrationState(flowId, versionId)).toBe('registered');
     await tm.refresh(flowId); await tm.refresh(flowId);
     expect(schedules).toBe(1); expect(hooks).toEqual(['ON_ENABLE']);

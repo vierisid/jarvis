@@ -3,6 +3,12 @@ import { registerReconciliation } from '../brief/registrations/reconciliation';
 import { registerOnboarding } from '../brief/registrations/onboarding';
 import { ConnectedWorkspace } from '../brief/connected-workspace';
 import { MIN_BUN_VERSION, versionAtLeast } from '../util/bun-minimum.ts';
+import { mailchimpStatus } from "../integrations/mailchimp-connection";
+import { githubStatus } from '../integrations/github-connection';
+import { trelloStatus } from "../integrations/trello-connection";
+import { asanaStatus } from '../integrations/asana-connection';
+import { slackStatus } from "../integrations/slack-connection";
+import { clickUpStatus } from '../integrations/clickup-connection';
 import { connectedGoogle } from '../brief/connected-workspace-runtime';
 import { registerConnections } from '../brief/registrations/connections';
 import { WorkflowContext } from '../brief/workflow-context';
@@ -78,6 +84,7 @@ import { hostedRealtimeIncluded, warmRealtimeGateFor } from './realtime-gate.ts'
 import { resolveRealtimeVoice } from "../config/realtime.ts";
 import { pebbleHotkeyRequestKey, resolvePebbleHotkeys, shouldCloseBeforeSpawn } from "../config/pebble-hotkeys.ts";
 import { isHostedInstall, realtimeEnablement } from "./usejarvis-ai.ts";
+import { configureHostedDashboard } from './hosted-dashboard';
 import { REALTIME_NAV_TOOLS } from "./realtime-nav-tools.ts";
 import { EventReactor } from "./event-reactor.ts";
 import { EventCoalescer } from "./event-coalescer.ts";
@@ -610,6 +617,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
   }
 
   const localIntegration = localIntegrationEnabled(jarvisConfig);
+  configureHostedDashboard(jarvisConfig);
   if (localIntegration) console.log("[Daemon] Local development: connected dashboard, real providers, persistent local data");
 
   // Resolve the bench debug gate once, before any service starts: it refuses a
@@ -858,15 +866,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // voice intent, pebble toggle — schedule the section's appliers.
     const { SettingsReloadCoordinator } = await import('./settings-reload.ts');
     const { setSectionSavedListener } = await import('./user-settings.ts');
-    const { reloadUsejarvisAiBlock, reloadUsejarvisBillingBlock } = await import('../config/loader.ts');
+    const { reloadUsejarvisAiBlock, reloadUsejarvisBillingBlock, reloadUsejarvisIntegrationsBlock } = await import('../config/loader.ts');
     settingsReload = new SettingsReloadCoordinator(jarvisConfig, {
       // File-authoritative SYSTEM sections are re-read on every reloadAll so
       // a provisioner rotation of the usejarvis_ai key (or un-hosting) takes
       // effect on SIGHUP / POST /api/config/reload without a restart. Same
-      // for the billing read's block.
+      // for the billing read's block and the hosted integrations link.
       reloadSystemSections: async (cfg) => {
         await reloadUsejarvisAiBlock(cfg);
         await reloadUsejarvisBillingBlock(cfg);
+        await reloadUsejarvisIntegrationsBlock(cfg);
       },
     });
     setSectionSavedListener((section) => settingsReload?.sectionChanged(section));
@@ -4750,6 +4759,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const briefConnections = new ConnectedWorkspace(getDb(), {
       devices: () => sidecarManager.listSidecars(),
       google: () => connectedGoogle(jarvisConfig),
+      clickup: () => clickUpStatus(jarvisConfig),
+      mailchimp: () => mailchimpStatus(jarvisConfig),
+      github: () => githubStatus(jarvisConfig),
+      trello: () => trelloStatus(jarvisConfig),
+      asana: () => asanaStatus(jarvisConfig),
+      slack: () => slackStatus(jarvisConfig),
       channels: () => {
         const status = channelService.getChannelStatus();
         return Object.fromEntries((['telegram', 'discord'] as const).map(name => [name, {
@@ -4990,6 +5005,20 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         "../workflows/credentials/google-source.ts"
       );
       credentialResolver.register(new JarvisGoogleConnectionSource(() => googleAuth));
+      const { JarvisClickUpConnectionSource } = await import("../workflows/credentials/clickup-source");
+      credentialResolver.register(new JarvisClickUpConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisMailchimpConnectionSource } = await import("../workflows/credentials/mailchimp-source");
+      credentialResolver.register(new JarvisMailchimpConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisAsanaConnectionSource } = await import("../workflows/credentials/asana-source");
+      credentialResolver.register(new JarvisAsanaConnectionSource(jarvisConfig));
+      const { JarvisGitHubConnectionSource } = await import("../workflows/credentials/github-source");
+      credentialResolver.register(new JarvisGitHubConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisDropboxConnectionSource } = await import("../workflows/credentials/dropbox-source");
+      credentialResolver.register(new JarvisDropboxConnectionSource(jarvisConfig));
+      const { JarvisTrelloConnectionSource } = await import("../workflows/credentials/trello-source");
+      credentialResolver.register(new JarvisTrelloConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisSlackConnectionSource } = await import("../workflows/credentials/slack-source");
+      credentialResolver.register(new JarvisSlackConnectionSource(jarvisConfig.daemon.data_dir));
       logWithTimestamp(
         "Workflow credential resolver: registered jarvis:google source",
       );

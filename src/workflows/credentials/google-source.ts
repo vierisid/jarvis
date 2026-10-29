@@ -20,14 +20,37 @@
 import type { GoogleAuth } from "../../integrations/google-auth";
 import type {
   JarvisConnectionSource,
+  ManagedPieceDetails,
   ResolvedConnection,
 } from "./adapter";
 import { credentialFingerprint } from "./adapter";
 
 export const JARVIS_GOOGLE_PREFIX = "jarvis:google";
 
+/** The Google pieces that use Jarvis's own Google grant. */
+export const JARVIS_GOOGLE_PIECES: readonly string[] = [
+  "@activepieces/piece-gmail",
+  "@activepieces/piece-google-calendar",
+  "@activepieces/piece-google-drive",
+  "@activepieces/piece-google-sheets",
+];
+
+/**
+ * Names and API hosts of those pieces. The hosts are each piece's custom API
+ * call base URL in the installed piece bundles (gmail.googleapis.com/gmail/v1,
+ * www.googleapis.com/calendar/v3 and /drive/v3, sheets.googleapis.com/v4).
+ */
+export const JARVIS_GOOGLE_PIECE_DETAILS: Readonly<Record<string, ManagedPieceDetails>> = {
+  "@activepieces/piece-gmail": { displayName: "Gmail", apiHosts: ["gmail.googleapis.com"] },
+  "@activepieces/piece-google-calendar": { displayName: "Google Calendar", apiHosts: ["www.googleapis.com"] },
+  "@activepieces/piece-google-drive": { displayName: "Google Drive", apiHosts: ["www.googleapis.com"] },
+  "@activepieces/piece-google-sheets": { displayName: "Google Sheets", apiHosts: ["sheets.googleapis.com"] },
+};
+
 export class JarvisGoogleConnectionSource implements JarvisConnectionSource {
   readonly id = "google";
+  readonly pieceNames = JARVIS_GOOGLE_PIECES;
+  readonly pieceDetails = JARVIS_GOOGLE_PIECE_DETAILS;
 
   private readonly getAuth: () => GoogleAuth | null;
 

@@ -71,7 +71,7 @@ test('unconfirmed and oversized memory writes have no effect', async () => {
   expect((await route(request(fact.id, { reason: 'x'.repeat(21000) }))).status).toBe(413);
   expect(getFact(fact.id)?.object).toBe('Tea');
 });
-test('host descriptor never supplies release permission and remains unavailable without an owner', async () => {
+test('host descriptor remains unavailable without an owner', async () => {
   const routes = createBriefRoutes(caps, json);
   expect((await routes['/api/brief/host'].GET()).status).toBe(501);
 });

@@ -20,20 +20,19 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
-  // w8-8a: drops the in-loop install instruction (the composer never installs).
-  // A letter, not w8-9: later stacked branches already use w8-9 onward.
-  'w8-8a': {
-    'bare': 'c4fa0424ca7ec17c4e69d08e0ed949973acf665bf8e43ec68bc9d1c5169a430f',
-    'hosted production': 'ae98cd619e48ea7d0f3ae001cb2f68283097c670a56540431905245eba077d24',
-    'production': '4f83c793137941fc5dcc3fab0fa02b85b621fb1159c08d5de2100e250cd2b3e4',
-    'tool names only': '6f65546fc25ae2ba93da6751adc0c1c56f3d1cef58231b1fe457eb5d7943eaef',
+  // w8-9: deferred setup, connector continuation and form processing; the composer never installs.
+  'w8-9': {
+    bare: '0e5ea5dffb6128bb806328d5cb23715f9a1ba256ca8ef3842d480baa71130901',
+    production: '9b78e90b24a95a83548b061a83a2d44e8e5aa8d91176ff3ffc9f5df066ab560e',
+    'hosted production': 'aa07ed478ff210e49b2b967b274ab21fdeb489d98c115454767f582b8d217de2',
+    'tool names only': 'dba35e1b068c4ecbb581c43b1eff267575cd35b392a9a631edbc60d2a3528aa6',
   },
-  // w8-8: deferred setup, connector continuation and form processing.
+  // w8-8: a schedule names a time zone only when the job contract does; a bare time is Jarvis's zone.
   'w8-8': {
-    'bare': '2e7622eb199df8f1ea33d8a77d686b34e1282028823f818719132b07b4949b80',
-    'hosted production': '8efd7c5dd6ee559f9758e716de4c70665ff3e64bd16f0a91e47bf923fc7492f6',
-    'production': '546b58cc39e2a413ef9702b53b22c4ce7544b6bd2df3ec0a95fcf57a2367d469',
-    'tool names only': 'a2ec151afbc98276e6d31d667a2cd1bf3c91eddd055d5748ba7ab5dd1a46c78c',
+    bare: '0b7e8cc85a1f50a5411c050a7b2286a8236ad400367feed39f04f57c6ae56496',
+    production: 'ced53dbe7a008e923abc9694e3f52d44fde5156e7503b3a1d1923a635a7df466',
+    'hosted production': '9dec78536da3bcd905dc0c854bfcb767fda12073e9c9e5ce9a12c8222d586fda',
+    'tool names only': 'c35f5d375dfacfa242c841699cc31103ee6726ed71208f53be69e2c2ab0de478',
   },
   // w8-7: inspect browser fallback before refusing missing connector setup.
   'w8-7': {
