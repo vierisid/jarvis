@@ -1,6 +1,7 @@
 import { CredentialResolver } from '../credentials/adapter';
 import { WorkflowEventBuffer } from './event-buffer';
 import { fileURLToPath } from 'node:url';
+import { sanitizedEnv } from '../../util/subprocess-env';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -168,7 +169,7 @@ async function execute(saved:any) {
 
 export async function validateDurableScheduleFixtures(saved:any){
   validate(saved);
-  const child=Bun.spawn([process.execPath,'--no-env-file',fileURLToPath(import.meta.url)],{env:{},stdin:new Blob([JSON.stringify(saved)]),stdout:'pipe',stderr:'ignore'});
+  const child=Bun.spawn([process.execPath,'--no-env-file',fileURLToPath(import.meta.url)],{env:sanitizedEnv(),stdin:new Blob([JSON.stringify(saved)]),stdout:'pipe',stderr:'ignore'});
   let timedOut=false;const timer=setTimeout(()=>{timedOut=true;child.kill();},30_000);
   try {
     const chunks:Uint8Array[]=[];let size=0;const reader=child.stdout.getReader();
