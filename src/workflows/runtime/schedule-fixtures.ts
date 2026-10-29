@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { CronScheduler, cronWallTimeKey, validateCronExpression, validateCronTimezone } from '../../lib/cron-scheduler';
+import { CronScheduler, cronWallTimeKey, validateCronExpression, validateCronTimezone, validateCronDstPolicy } from '../../lib/cron-scheduler';
 import { scheduleTriggerPayload } from './schedule-payload';
 import { resolveFixtureValue } from './json-mapping-fixtures';
 import { digest } from './effect-context';
@@ -15,7 +15,7 @@ function prepare(saved: any, fixture: any) {
   check(saved?.type === 'PIECE_TRIGGER' && saved.settings?.pieceName === 'schedule', 'requires built-in schedule');
   const input = saved.settings.input ?? {}, expression = input.cron_expression || input.cronExpression || input.expression;
   check(typeof expression === 'string' && !expression.startsWith('@'), 'requires a configured five-field cron');
-  validateCronExpression(expression); validateCronTimezone(input.timezone);
+  validateCronExpression(expression); validateCronTimezone(input.timezone); validateCronDstPolicy(input.dst_policy);
   const node = saved.nextAction;
   check(node?.type === 'PIECE' && ['@jarvispieces/piece-jarvis-notify','jarvis-notify'].includes(node.settings?.pieceName)
     && node.settings.actionName === 'notify' && !node.nextAction && !node.firstLoopAction && !node.children?.length
@@ -31,17 +31,17 @@ function prepare(saved: any, fixture: any) {
     check(c.notificationOutcome === undefined || ['success','failure','uncertain'].includes(c.notificationOutcome), 'invalid notificationOutcome');
     check(c.expectedKey === undefined || typeof c.expectedKey === 'string', 'expectedKey must be a string');
   }
-  return {node, expression, timezone: input.timezone};
+  return {node, expression, timezone: input.timezone, dstPolicy: input.dst_policy};
 }
 
 async function runCases(saved: any, fixture: any) {
-  const {node,expression,timezone} = prepare(saved,fixture);
+  const {node,expression,timezone,dstPolicy} = prepare(saved,fixture);
   // Fixed local implementation only. No account binding or daemon URL is used.
   const { sendNotification } = await import('../activepieces/packages/pieces/jarvis/notify/src/lib/actions/send-notification');
   const cases = [];
   for (const c of fixture.cases) {
     const at = instant(c.scheduledFor), executedAt = instant(c.executedAt ?? c.scheduledFor);
-    const matches = CronScheduler.matchesIn(expression, new Date(at), timezone);
+    const matches = CronScheduler.matchesIn(expression, new Date(at), timezone, dstPolicy);
     check(matches === c.expectedMatch, c.name + ': schedule match differs');
     let request: any, status = 'NOT_SCHEDULED', error: string | undefined;
     let trigger: ReturnType<typeof scheduleTriggerPayload> | undefined;
@@ -81,6 +81,10 @@ async function runCases(saved: any, fixture: any) {
 
 /** Isolated, bounded runner: no credentials or real network. */
 export async function validateScheduleFixtures(saved: any, fixture: any) {
+  if (fixture?.suite === 'dst_daily' || fixture === undefined && saved?.settings?.input?.dst_policy === 'skip_missing_first_repeated') {
+    const {validateDurableScheduleFixtures} = await import('./schedule-durable-fixtures');
+    return validateDurableScheduleFixtures(saved);
+  }
   prepare(saved, fixture);
   const child = Bun.spawn([process.execPath,'--no-env-file',fileURLToPath(import.meta.url)], {
     env:{},stdin:new Blob([JSON.stringify({saved,fixture})]),stdout:'pipe',stderr:'ignore',

@@ -512,6 +512,13 @@ export function buildSandboxServiceBackends(
           throw new DeliveryFailedError({ status: 'error', code: 'DELIVERY_FAILED', effect: 'not_started',
             message: `Not sent on any channel: ${report.failed.map(f => `${f.channel} (${f.error})`).join('; ')}` }, report);
         }
+        // A keyed notification cannot turn an unconfirmed send into a completed
+        // identity. Persist an unknown effect for Needs you; keep the identity
+        // reserved across restarts and refuse any automatic repeat.
+        if (identity && report.unknown.length > 0) {
+          throw new DeliveryFailedError({status:'unknown',code:'NOTIFICATION_UNCONFIRMED',effect:'may_have_occurred',
+            message:'Notification delivery is unconfirmed. Review the original outcome in Needs you; automatic resend is blocked.'},report);
+        }
         if (identity) completeIdentity(identity,owner);
         return report;
       },

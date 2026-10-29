@@ -637,3 +637,9 @@ test('a saved malformed extraction schema cannot publish or queue a manual run',
   expect(getFlow(flow.id)?.status).toBe('DISABLED');expect(getFlow(flow.id)?.published_version_id).toBeNull();
   expect(getWorkflowDb().query('SELECT count(*) AS n FROM flow_run').get()).toEqual({n:0});
 });
+
+test('built-in schedule validates explicit DST policy',()=>{
+ const g=cron();g.settings.input.dst_policy='skip_missing_first_repeated';
+ expect(compileWorkflow(g,{phase:'composition'}).issues.filter(x=>x.code==='DST_POLICY')).toEqual([]);
+ g.settings.input.dst_policy='guess';expect(compileWorkflow(g,{phase:'composition'}).issues.some(x=>x.code==='DST_POLICY')).toBe(true);
+});

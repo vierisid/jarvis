@@ -1,0 +1,29 @@
+{
+  "name": "trigger",
+  "type": "PIECE_TRIGGER",
+  "displayName": "Daily 02:30 Europe/Rome, skip missing times",
+  "settings": {
+    "pieceName": "schedule",
+    "input": {
+      "cron_expression": "30 2 * * *",
+      "timezone": "Europe/Rome",
+      "dst_policy": "skip_missing_first_repeated"
+    }
+  },
+  "nextAction": {
+    "name": "step_1",
+    "type": "PIECE",
+    "displayName": "Notify once per scheduled date; review unconfirmed delivery",
+    "settings": {
+      "pieceName": "@jarvispieces/piece-jarvis-notify",
+      "actionName": "notify",
+      "input": {
+        "message": "Daily operations check.",
+        "channels": [
+          "dashboard"
+        ],
+        "idempotencyKey": "daily-operations:Europe/Rome:{{trigger.scheduledDate}}"
+      }
+    }
+  }
+}
