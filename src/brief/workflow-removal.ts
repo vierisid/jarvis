@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { workflowFileBase, workflowLogsBase } from '../workflows/sandbox-api/config';
+import { workflowTriggerLabel } from './workflow-trigger-label';
 import type { Database } from 'bun:sqlite';
 import { DEFAULT_IDS, getWorkflowDb } from '../workflows/db';
 import { getFlow, updateFlowStatus, parseFlowMetadata, type FlowRow } from '../workflows/db/repos/flow';
@@ -75,7 +76,7 @@ export class WorkflowRemoval {
         agentIds: version.agentIds, connectionIds: version.connectionIds, notes: version.notes }, state.generation]),
       name: (version?.displayName || 'Untitled workflow').slice(0, 4000),
       description: typeof metadata?.description === 'string' ? metadata.description.slice(0, 4000) : '',
-      trigger: version?.trigger.type === 'EMPTY' ? 'Manual' : version?.trigger.type ?? 'Unknown',
+      trigger: workflowTriggerLabel(version?.trigger),
       activation: f.status, publication: f.published_version_id ? 'published' : 'unpublished',
       readiness: { state: ready ? 'ready' : 'blocked', reason: ready ? null : 'Workflow setup or permission needs review before enabling' },
       latestRun: last ? { runId: last.id, label: last.status } : null };
