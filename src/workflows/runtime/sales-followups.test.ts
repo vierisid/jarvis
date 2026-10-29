@@ -260,12 +260,12 @@ test('endless empty pages with fresh cursors stop at the page limit',async()=>{
   await expect(run(async(p,path,body)=>path.endsWith('/search')?{total:0,results:[],paging:{next:{after:String(++pages)}}}:base(p,path,body))).rejects.toThrow('Page limit exceeded');
   expect(pages).toBe(100);expect(drafts).toHaveLength(0);
 });
-test('stage IDs are sent lowercase to HubSpot search but matched exactly on the deal',async()=>{
+test('stage IDs are sent as configured and lowercase to HubSpot search but matched exactly on the deal',async()=>{
   const drafts:any[]=[],searches:any[]=[],mixed=deal(1,{dealstage:'OpenStage'}),base=request([mixed],{drafts});
-  const r=await processSalesFollowups({...setup,openStageIds:['OpenStage']},async(p,path,body)=>{
-    if(path==='/crm/v3/pipelines/deals')return {results:[{stages:[{id:'OpenStage',metadata:{isClosed:'false'}}]}]};
+  const r=await processSalesFollowups({...setup,openStageIds:['OpenStage','open']},async(p,path,body)=>{
+    if(path==='/crm/v3/pipelines/deals')return {results:[{stages:[{id:'OpenStage',metadata:{isClosed:'false'}},{id:'open',metadata:{isClosed:'false'}}]}]};
     if(path.endsWith('/search')){searches.push(body);return {total:1,results:[mixed]};}
     return base(p,path,body);
   },salesLedger('run'),'fixture',()=>now);
-  expect(searches[0].filterGroups[0].filters[0].values).toEqual(['openstage']);expect(r.counts.drafted).toBe(1);
+  expect(searches[0].filterGroups[0].filters[0].values).toEqual(['OpenStage','openstage','open']);expect(r.counts.drafted).toBe(1);
 });

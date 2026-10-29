@@ -103,9 +103,10 @@ async function openDeals(request: SalesRequest,s: SalesSetup,properties: string[
   const rows: Obj[]=[],seen=new Set<string>();let after: string|undefined;
   const tooMany=()=>Error(`More than ${SALES_DEAL_LIMIT} deals are in the selected open stages; discovery is incomplete. Narrow the selected stages.`);
   for(let n=0;n<100;n++) {
-    const data=await request('hubspot','/crm/v3/objects/deals/search',{filterGroups:[{filters:[{propertyName:'dealstage',operator:'IN',values:[...new Set(s.openStageIds.map(v=>v.toLowerCase()))]}]}],
+    const data=await request('hubspot','/crm/v3/objects/deals/search',{filterGroups:[{filters:[{propertyName:'dealstage',operator:'IN',values:[...new Set(s.openStageIds.flatMap(v=>[v,v.toLowerCase()]))]}]}],
       properties,sorts:[{propertyName:'hs_object_id',direction:'ASCENDING'}],limit:100,...(after?{after}:{})});
-    // HubSpot requires lowercase IN values; eligible() still compares the deal's actual stage with the configured IDs.
+    // Each stage ID is sent as configured and lowercased, so it matches whether HubSpot compares enumeration values exactly or requires lowercase IN values.
+    // eligible() still compares the deal's actual stage exactly with the configured IDs.
     const items=data.results;
     if(!Array.isArray(items)||items.some(x=>!x||typeof x!=='object'||Array.isArray(x)))throw Error('Invalid provider result page');
     if(typeof data.total==='number'&&data.total>SALES_DEAL_LIMIT)throw tooMany();
