@@ -6,6 +6,7 @@ import { openRoom } from '../../v2/router';
 /** Current, working setup surfaces. No new credential form or universal OAuth flow. */
 export function openLegacyConnectionSetup(action: ConnectionSetupAction, rowId: string | null): void {
   switch (action.target.kind) {
+    case 'hosted_integration': requestSettingsTab('integrations'); openRoom('settings'); return;
     case 'google': requestSettingsTab('integrations'); openRoom('settings'); return;
     case 'channel': requestSettingsTab('channels'); openRoom('settings'); return;
     case 'device': requestSettingsTab('sidecar'); openRoom('settings'); return;

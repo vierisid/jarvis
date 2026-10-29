@@ -209,11 +209,38 @@ for (const failure of ['label', 'notification']) test(`lost ${failure} response 
   if (failure === 'label') expect(listWorkflowEffects(first!.id).some(e => e.status === 'dispatching')).toBe(true);
   loseLabelReply = loseNotificationReply = false; updateFlowStatus(f.flow.id, 'DISABLED'); await manager.refresh(f.flow.id);
 }, 45_000);
-test('missing message IDs and isolated step previews cannot reach effects', async () => {
+test('a manual run naming no message runs unclaimed, and a step needing the message fails before Gmail is called', async () => {
   const f = await fixture(); reply = response('support', false, true); const before = stats();
-  for (const payload of [{}, { id: 'buffer-only', payload: {} }, { payload: { id: ' ' } }]) expect((await f.manual(payload)).status).toBe('FAILED');
-  expect((await f.manual({ payload: { id: 'preview' } }, { stepNameToTest: 'label_support' })).status).toBe('FAILED');
-  expect(stats()).toEqual(before); updateFlowStatus(f.flow.id, 'DISABLED'); await manager.refresh(f.flow.id);
+  const empty = await f.manual({});
+  expect(empty.failedStep?.name).toBe('classify'); expect(empty.failedStep?.errorMessage).toContain('absent value');
+  expect(stats()).toEqual(before);
+  for (const payload of [{ id: 'buffer-only', payload: { subject: 'Fixture', snippet: 'Fixture' } }, { payload: { id: '', subject: 'Fixture', snippet: 'Fixture' } }]) {
+    const run = await f.manual(payload);
+    expect(run.status).toBe('FAILED'); expect(run.failedStep?.name).toBe('label_support');
+    expect(run.failedStep?.errorMessage).toContain('absent value');
+  }
+  // Classified twice, but no label request and no alert: the label step needs a message.
+  expect(stats().map((n,i) => n-before[i]!)).toEqual([2,0,0]);
+  expect(getWorkflowDb().query('SELECT COUNT(*) AS n FROM workflow_trigger_fire WHERE flow_id = ?').get(f.flow.id)).toEqual({ n: 0 });
+  expect((await f.send('after-manual'))?.status).toBe('SUCCEEDED');
+  expect(stats().map((n,i) => n-before[i]!)).toEqual([3,1,1]);
+  updateFlowStatus(f.flow.id, 'DISABLED'); await manager.refresh(f.flow.id);
+}, 45_000);
+test('malformed message IDs and previews of tracked effects cannot reach effects', async () => {
+  const f = await fixture(); reply = response('support', false, true); const before = stats();
+  expect((await f.manual({ payload: { id: ' ' } })).status).toBe('FAILED');
+  for (const step of ['label_support', 'notify_support', 'route_classification']) {
+    const run = await f.manual({ payload: { id: 'preview' } }, { stepNameToTest: step });
+    expect(run.status).toBe('FAILED'); expect(run.failedStep?.errorMessage).toContain('tracked send or change');
+  }
+  expect(stats()).toEqual(before);
+  // Previewing the classifier changes nothing and claims nothing: the message is still processed once.
+  const preview = await f.manual({ payload: { id: 'preview', subject: 'Fixture', snippet: 'Fixture' } }, { stepNameToTest: 'classify' });
+  expect(preview.failedStep).toBeNull(); expect(preview.status).toBe('SUCCEEDED');
+  expect(stats().map((n,i) => n-before[i]!)).toEqual([1,0,0]);
+  expect((await f.send('preview'))?.status).toBe('SUCCEEDED');
+  expect(stats().map((n,i) => n-before[i]!)).toEqual([2,1,1]);
+  updateFlowStatus(f.flow.id, 'DISABLED'); await manager.refresh(f.flow.id);
 }, 45_000);
 
 test('discovery builds a full disabled triage draft with deferred labels/accounts and no effects', async () => {

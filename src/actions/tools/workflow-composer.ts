@@ -81,6 +81,7 @@ import {
 import type { FlowTriggerNode } from "../../workflows/db/repos/flow-version.ts";
 import { WORKFLOW_EVENT_TYPES } from "../../workflows/runtime/event-types.ts";
 import { compileWorkflow } from '../../workflows/runtime/workflow-readiness';
+import { canonicalZone, CHOSEN_TIMEZONE_KEY, statedScheduleZone, withScheduleZoneDefault } from "../../workflows/runner/triggers/schedule-zone.ts";
 
 export interface ComposedFlow {
   displayName: string;
@@ -161,8 +162,8 @@ export interface ComposeOk {
 
 /**
  * A community-library piece the composer thinks would satisfy the request if
- * it were installed. When installation capability is available, the composer
- * resolves these dependencies before returning questions to the caller.
+ * it were installed. Surfaced on `ComposeFail` so the calling agent can offer
+ * the install to the user; no production caller lets the composer install.
  */
 export interface SuggestedInstall {
   /** Library catalog id (e.g. "discord"). */
@@ -326,13 +327,19 @@ export interface ComposeDeps {
   /**
    * Optional community-library index. When present (and the tool loop is
    * active), the composer exposes a `search_library` tool so the model can
-   * find an installable piece when nothing installed fits. Interactive callers
-   * can also supply installLibraryPiece; other callers report the missing dependency.
+   * find an installable piece when nothing installed fits. It
+   * reports the missing dependency as suggestedInstalls.
    */
   library?: ComposerLibraryEntry[];
-  /** Interactive callers may install catalog entries and refresh pieceRegistry.
-   * Absent for background composition and host-managed libraries. Never grants credentials. */
+  /** Installs a catalog entry and refreshes pieceRegistry. composePersistedFlow
+   * uses it only for approved preinstalls and removes it before the tool loop
+   * runs, so in production the loop never offers install_library_piece; only
+   * tests hand it to composeFlow directly. Never grants credentials. */
   installLibraryPiece?: (id: string, signal?: AbortSignal) => Promise<void>;
+  /** Per-install bound for composePersistedFlow's preinstalls (default five
+   * minutes). On expiry the signal passed to installLibraryPiece is aborted
+   * and the install is reported as failed, so the journal always finishes. */
+  installTimeoutMs?: number;
   /**
    * Optional inventory of the machines a step can execute on: the enrolled
    * sidecars plus the brain's own host. When present the composer (a) renders
@@ -606,7 +613,6 @@ async function composeWithTools(
   const rolesText = renderSpecialistRoles(deps.specialistRoles);
   const hasLibrary = (deps.library?.length ?? 0) > 0;
   const canInstall = hasLibrary && !!deps.installLibraryPiece;
-  const installationErrors: string[] = [];
   const installAttempts = new Set<string>();
   const toolDefs = buildComposerToolDefs(toolSpecs !== null, hasLibrary, canInstall);
   const envText = composerExecutionEnvironment(deps.executionTargets ?? []);
@@ -717,7 +723,6 @@ async function composeWithTools(
       if (call.name === "install_library_piece") {
         const result = await installComposerPiece(call.arguments, deps, installAttempts, req.signal);
         req.signal?.throwIfAborted();
-        if (result.startsWith("Error:")) installationErrors.push(result);
         messages.push(toolResult(call, wrapUntrusted(result, "workflow library installation")));
         continue;
       }
@@ -751,32 +756,10 @@ async function composeWithTools(
           continue;
         }
 
-        const failure = blockedResult(call.arguments, deps.library, lastRaw);
-        // Do available setup work before asking the user for information. The
-        // outer tool's Authority gate grants installation capability; this
-        // path never grants it or bypasses an explicit no-install request.
-        const pending = canInstall ? [...new Set((failure.suggestedInstalls ?? []).map(s => s.id))]
-          .filter(id => !installAttempts.has(id) && !deps.pieceRegistry.get(deps.library!.find(e => e.id === id)!.npmPackage))
-          .slice(0, Math.max(0, 3 - installAttempts.size)) : [];
-        if (pending.length) {
-          const discoveries: string[] = [];
-          for (const id of pending) {
-            const result = await installComposerPiece({ id }, deps, installAttempts, req.signal);
-            req.signal?.throwIfAborted();
-            if (result.startsWith("Error:")) installationErrors.push(result);
-            discoveries.push(result);
-            const piece = deps.pieceRegistry.get(deps.library!.find(e => e.id === id)!.npmPackage);
-            if (piece) discoveries.push(renderPieceDetails(piece));
-          }
-          messages.push(toolResult(call, wrapUntrusted(discoveries.join("\n\n"), "workflow setup discovery")));
-          messages.push({ role: "user", content: "Required connector setup was attempted under the existing installation authority. Reassess using these actual schemas. If configuration is missing, submit the complete disabled graph with empty/null inputs for later setup; do not ask them to install a connector that is now available. Preserve the original request and do not run any workflow actions." });
-          continue;
-        }
-        if (installationErrors.length) {
-          failure.errors.push(...installationErrors);
-          failure.capabilityGaps = [...(failure.capabilityGaps ?? []), ...installationErrors];
-        }
-        return failure;
+        // No installation happens here: manage_workflow installs only the
+        // entries an approval card named, before composing, and relays the
+        // rest as suggestedInstalls.
+        return blockedResult(call.arguments, deps.library, lastRaw);
       }
       // Piece metadata/output samples and library descriptions are outside data.
       // This is a prompt message, not a tool-registry return: no later cap may
@@ -1104,9 +1087,9 @@ function renderPrimitiveDetails(name: "schedule" | "webhook"): string {
   if (name === "schedule") {
     return [
       "schedule (built-in trigger primitive): fires the flow on a cron schedule.",
-      "  Use as the trigger node: type='PIECE_TRIGGER', settings={ pieceName: 'schedule', input: { cron_expression: '<5-field cron>', timezone: '<IANA timezone>' } }.",
+      "  Use as the trigger node: type='PIECE_TRIGGER', settings={ pieceName: 'schedule', input: { cron_expression: '<5-field cron>' } }.",
       "  - input.cron_expression: string, REQUIRED; 5-field cron, e.g. '0 8 * * *' for 8am daily, '*/15 * * * *' for every 15 minutes.",
-      "  - input.timezone: string, optional IANA timezone (for example Europe/Rome). Always set it when the request names a timezone. The scheduler uses this zone including daylight-saving changes; omitted uses Jarvis's configured timezone.",
+      "  - input.timezone: string, optional IANA timezone (for example Europe/Rome). Set it to exactly the job contract's trigger.timezone when the contract names one; a zone the contract does not name is not used, so otherwise omit it. The scheduler uses that zone including daylight-saving changes; omitted, the schedule runs in Jarvis's configured time zone, which is what a bare time like '9am' means.",
       "  No triggerName needed. No declared output -- downstream steps should not reference {{trigger.<field>}}.",
     ].join("\n");
   }
@@ -1202,7 +1185,7 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
     "  - Give every node a short human-readable displayName describing its work, such as 'Summarize the notes' or 'Review before sending'. Keep machine names separate from these canvas labels.",
     "  - Step names MUST match /^[a-zA-Z_][a-zA-Z0-9_]*$/ (identifier-style; no spaces or dashes).",
     "  - Use type='EMPTY' for manual / on-demand flows. Use type='PIECE_TRIGGER' for scheduled, webhook, or event-driven.",
-    "  - For schedule triggers: pieceName='schedule', input.cron_expression='<5-field cron>' (e.g. '0 8 * * *' for 8am daily), plus input.timezone for the requested IANA timezone (e.g. 'Europe/Rome').",
+    "  - For schedule triggers: pieceName='schedule', input.cron_expression='<5-field cron>' (e.g. '0 8 * * *' for 8am daily); add input.timezone (IANA, e.g. 'Europe/Rome') only when the job contract names trigger.timezone, and then use exactly that zone; a bare time means Jarvis's time zone, so write no zone.",
     "  - For webhook triggers: pieceName='webhook', input.secret optional. Form processing uses paired input.submission_id_field / input.submission_email_field with known payload paths: trims all strings, lowercases/validates email, rejects invalid IDs/emails before queuing, and atomically accepts each ID once per workflow, across restarts and manual runs. Use an inspected Sheets append with RAW values; leave unknown payload paths as empty strings and unknown destination/column values null for editor setup; never invent them. Failed accepted submissions require review, never a blind append retry.",
     "  - For event triggers: pieceName='jarvis-trigger', triggerName='on_event', input.eventType='<event type>'.",
     "  - For action steps, type MUST be 'PIECE' and settings MUST include pieceName + actionName.",
@@ -1252,7 +1235,7 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
     "## Hard rules",
     "  - Preserve the original request. A disabled draft still needs the requested processing graph. Do not replace missing normalization, validation, writes or deduplication with a notification explaining their absence. Missing user inputs may remain empty/null in a saved disabled draft. Only unsupported functionality calls for report_blocked with evidence-backed capabilityGaps. Do not weaken the request to save a scaffold.",
     "  - Build deterministic transformations and validation with inspected actions where available. Missing destination/account configuration does not prove transformations are unsupported. A partial candidate can remain in composition diagnostics; it must not be presented as a completed workflow.",
-    "  - Duplicate prevention must match the requested scope. For form webhooks, get_piece_details(webhook) describes persistent submission-ID admission. For Gmail, inspect get_piece_details(jarvis-trigger): on_event with observer.email_received has built-in persistent message-ID admission, including manual runs. These identities survive restarts, republishing and history pruning for the lifetime of the workflow. Do not report missing atomic storage for these supported paths. Other triggers still need an inspected cross-run identity capability. Effect receipts alone are per run/step, not arbitrary cross-run deduplication.",
+    "  - Duplicate prevention must match the requested scope. For form webhooks, get_piece_details(webhook) describes persistent submission-ID admission. For Gmail, inspect get_piece_details(jarvis-trigger): on_event with observer.email_received has built-in persistent message-ID admission, including manual runs that carry a payload.id (a manual run without one runs unclaimed). These identities survive restarts, republishing and history pruning for the lifetime of the workflow. Do not report missing atomic storage for these supported paths. Other triggers still need an inspected cross-run identity capability. Effect receipts alone are per run/step, not arbitrary cross-run deduplication.",
     "  - Invoice/PDF processing: inspect Gmail new_attachment, Drive uploads, Sheets appends and jarvis-ask. Gmail new_attachment has durable per-workflow admission by SHA-256 of stored attachment bytes, including repeated/concurrent polls, manual runs and identical PDFs resent under another message/name. Use that trigger for one run per attachment, not once-per-message on_event (which would collapse multiple attachments). Its label must be the user's actual selected Invoice label; leave unknown label/auth as deferred setup, never invent IDs. Filter PDF extension and MIME type. Drive upload_gdrive_file/drive_upload_file/drive_upload_from_url and tracked Sheets appends persist completion receipts; completed steps reuse output, uncertain writes stop for review instead of blind retries. This is at-most-once dispatch, not an atomic transaction across Google products or guaranteed eventual completion.",
     "  - For PDF extraction use jarvis-ask.ask with pdfFile={{trigger.attachment.data}}, structured outputSchema, parseJson=true and requireSuccess=false. This reads the stored PDF locally and invokes a model without tools, so it cannot pay. Do NOT choose unrestricted delegation for extraction and then report a no-payment blocker. Extract supplier, invoice number, issue/due dates and currency with explicit uncertainty. Use a nullable number type for total (a JSON type array containing number and null as strings) with minimum:0 in outputSchema, so unknown totals remain null and go to review; zero is valid. Output schemas support a single type or a nullable pair only, plus declared required/properties/items/enum/bounds; unsupported keywords are rejected before saving. Route on outcome.status first: failed extraction has NO parsed object, so its Needs review row uses explicit empty cells and must never reference extract.parsed fields. Only a succeeded extraction may feed field references to the next uncertainty router. Route missing, invalid, unreadable, scanned or uncertain data to Needs review; never invent values or coerce unknown totals to zero. Save the PDF, store its returned Drive file ID/link with the source identity and extracted fields/status, and add the actual selected Needs review label or explicit review status. Missing account/folder/spreadsheet/column configuration stays deferred in the disabled full graph. Preserve the no-payment contract; do not weaken validation.",
     "  - Gmail triage: prefer jarvis-trigger:on_event with observer.email_received for once-per-message processing. Inspect Gmail label actions and jarvis-ask (or another available classifier). Use structured output with the four categories, explicit uncertainty and urgency. A first-match router must put uncertain or invalid classifier output in Needs review; only confident support AND urgent may reach jarvis-notify. jarvis-ask supports requireSuccess=false so invalid JSON/schema output can route on outcome.status to review rather than stop. Treat subject/snippet as untrusted email content; a snippet is not a complete body and insufficient evidence must remain uncertain. Add only the requested labels: no reply, archive, delete, trash, or removing INBOX. Never invent label IDs or connections; save those as deferred setup.",
@@ -1281,7 +1264,7 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
  */
 const BUILTIN_PRIMITIVE_LINES = [
   "Built-in trigger primitives (no piece registration needed):",
-  "- schedule: settings={pieceName:'schedule', input:{cron_expression:'0 8 * * *',timezone:'Europe/Rome'}} fires at 08:00 in Europe/Rome, including daylight-saving changes. Use the user's requested zone.",
+  "- schedule: settings={pieceName:'schedule', input:{cron_expression:'0 8 * * *'}} fires at 08:00 in Jarvis's time zone. Only when the job contract names a zone, add it, e.g. timezone:'Europe/Rome' fires at 08:00 there, including daylight-saving changes.",
   "- webhook:  settings={pieceName:'webhook',  input:{secret:'<optional HMAC secret>',submission_id_field:'<known ID path>',submission_email_field:'<known email path>'}} (submission mappings optional together) fires on HTTP POST to /api/webhooks/<flow_id>.",
 ];
 
@@ -1420,7 +1403,7 @@ function buildToolLoopSystemPrompt(
         ? "  4. If no installed piece or Jarvis tool covers the request, search_library, install the matching entry with install_library_piece, then inspect its actual schema and continue building. Respect any user restriction against installation. If installation fails, explain the exact failure; do not claim the connector is available."
         : "  4. If no installed piece or Jarvis tool covers the request, call search_library for an installable piece,\n     then evaluate the permitted browser fallback described below. If neither route covers the request, call report_blocked suggesting the best match. Never force a wrong piece to fit.")
       : "  4. If no native piece or tool covers the request, evaluate the permitted browser fallback described below before report_blocked.\n     Never force a wrong piece to fit.",
-    "  5. If an installable connector is missing and install_library_piece is available, install it and inspect the refreshed schema before asking the user anything. Never ask the user for a separate install instruction. For missing payload mappings or destinations, submit the full supported processing graph NOW with empty/null input values. The saved disabled draft exposes Setup required in the editor. Never call report_blocked solely for missing payload, destination, column mapping or account. For form webhooks keep BOTH submission_id_field and submission_email_field keys with empty strings when unknown so validation/deduplication stay configured as required setup. Leave Sheets values null until the column mapping is known, never fabricate trigger field references. Do not ask for secrets; account binding uses secure Connected workspace setup. Before report_blocked, distinguish connector setup from platform capability. Missing account/calendar selection stays as deferred setup. If an installed connector lacks required functionality (for example complete pagination), inspect a permitted browser-agent route; do not stop at native setup alone. If it can cover the job, save that disabled draft with explicit runtime access/completeness checks. Otherwise explain why that alternative is unavailable or prohibited too. Never relax the user's constraints or a supplied job contract to make a graph pass.",
+    "  5. For missing payload mappings or destinations, submit the full supported processing graph NOW with empty/null input values. The saved disabled draft exposes Setup required in the editor. Never call report_blocked solely for missing payload, destination, column mapping or account. For form webhooks keep BOTH submission_id_field and submission_email_field keys with empty strings when unknown so validation/deduplication stay configured as required setup. Leave Sheets values null until the column mapping is known, never fabricate trigger field references. Do not ask for secrets; account binding uses secure Connected workspace setup. Before report_blocked, distinguish connector setup from platform capability. Missing account/calendar selection stays as deferred setup. If an installed connector lacks required functionality (for example complete pagination), inspect a permitted browser-agent route; do not stop at native setup alone. If it can cover the job, save that disabled draft with explicit runtime access/completeness checks. Otherwise explain why that alternative is unavailable or prohibited too. Never relax the user's constraints or a supplied job contract to make a graph pass.",
     "  Keep detail lookups targeted -- fetch the pieces you shortlisted, not the whole catalog.",
     "",
     envText,
@@ -1530,7 +1513,7 @@ function renderPieceBlockLines(
 ): string[] {
   const lines: string[] = [`- ${label} (${piece.displayName}): ${piece.description}`];
   if (shortPieceName(piece.name) === 'jarvis-trigger') lines.push(
-    "    Runtime reliability for on_event / observer.email_received: message identity is payload.id, not the envelope id. A durable atomic claim creates one run per workflow/message across repeated or concurrent event/poll deliveries. Claims survive restart, republishing and 30-day history cleanup for the workflow lifetime; manual runs share the claim. A new run cannot repeat an accepted message, including after failure. Isolated step previews are refused; test the complete flow. Missing message IDs fail before effects.",
+    "    Runtime reliability for on_event / observer.email_received: message identity is payload.id, not the envelope id. A durable atomic claim creates one run per workflow/message across repeated or concurrent event/poll deliveries. Claims survive restart, republishing and 30-day history cleanup for the workflow lifetime; manual runs with a payload.id share the claim; a manual run without one runs unclaimed. A new run cannot repeat an accepted message, including after failure. A step preview of a Gmail label/send or jarvis-notify (or a branch holding one) is refused; other steps can be previewed. A live delivery without a message ID is recorded as blocked and never runs.",
     "    Google observer access must be configured separately, and Gmail action account bindings must match that mailbox. No mailbox or credentials are invented. Save the disabled graph first; finish account/label setup before activation.");
   if (shortPieceName(piece.name) === 'jarvis-notify') lines.push(
     "    Runtime reliability: optional idempotencyKey (nonempty string, max 256 chars) atomically deduplicates notifications per workflow across runs/versions/branches. Use a stable business identity such as qualified-contact:{{upsert.id}}, not a submission ID, for one alert per contact. Same key after completion returns deduplicated=true; uncertain dispatch never resends and holds the key until the user resolves that effect (manage_workflow resolve_effect: mark_done dedupes later alerts, release lets the next one send). Without this key only run/step deduplication applies. Durable run/step dispatch claim before sending; completed receipts replay without sending again. Uncertain sends are blocked from automatic replay and need review. With observer.email_received admission, duplicate deliveries/manual reruns cannot create another alert. No eventual-delivery guarantee.");
@@ -1548,7 +1531,8 @@ function renderPieceBlockLines(
   if (piece.auth) lines.push(`    Connection required: ${piece.auth.type}. Use only a real supplied auth binding; otherwise leave auth unset in the disabled draft and report the connection requirement.`);
   for (const trigger of Object.values(piece.triggers ?? {})) {
     lines.push(`    trigger ${trigger.name}: ${trigger.description}`);
-    lines.push(...renderSchemaLines(trigger.inputSchema, 6));
+    // The schedule piece's zone defaults to Jarvis's, as in the editor, not the piece's UTC.
+    lines.push(...renderSchemaLines(withScheduleZoneDefault(piece.name, trigger.inputSchema) ?? undefined, 6));
     // Triggers carry the upstream-native `sampleData`; some pieces
     // also set `outputSample` (Jarvis extension). Either is a valid
     // hint -- prefer sampleData when present.
@@ -1715,9 +1699,28 @@ function acceptComposedFlow(
   ...args: Parameters<typeof validateComposedFlow>
 ): ValidationOk | ValidationFail {
   const validation = validateComposedFlow(...args);
+  if (validation.ok) markComposedScheduleZone(validation.flow.trigger, contract);
   if (!validation.ok || !contract) return validation;
   const { violations, report } = checkJobContract(validation.flow.trigger, contract);
   return violations.length ? { ok: false, errors: violations } : { ...validation, report };
+}
+
+/**
+ * Record a composed schedule's zone as chosen (schedule-zone.ts) only when the
+ * job contract names that same zone. The model may write a zone out of habit
+ * (UTC, its own guess), and background composers have no person's request at
+ * all, so a zone in the graph is not evidence anyone chose it; the contract is
+ * the caller's explicit statement. Unmarked, the schedule runs in Jarvis's
+ * zone and the trigger list warns. A marker the model wrote itself is replaced.
+ */
+function markComposedScheduleZone(trigger: FlowTriggerNode, contract: JobContract | undefined): void {
+  if (trigger.type !== "PIECE_TRIGGER" || !trigger.settings) return;
+  const settings = trigger.settings as Record<string, unknown>;
+  delete settings[CHOSEN_TIMEZONE_KEY];
+  const piece = typeof settings.pieceName === "string" ? settings.pieceName : "";
+  if (piece !== "schedule" && !/(^|\/)piece-schedule$/.test(piece)) return;
+  const zone = statedScheduleZone(settings), wanted = canonicalZone(contract?.trigger?.timezone);
+  if (typeof zone === "string" && wanted !== null && canonicalZone(zone) === wanted) settings[CHOSEN_TIMEZONE_KEY] = zone;
 }
 
 function accepted(validation: ValidationOk, rawResponse: string): ComposeOk {

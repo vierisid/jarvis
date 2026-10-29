@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 import { CalendarDays, Check } from "lucide-react";
 import { Button } from "../../../v2/ui/Button";
 import "./google.css";
@@ -27,6 +27,8 @@ export interface GoogleViewProps {
   onBack: () => void;
   onSkip: () => void;
   onContinue: () => void;
+  /** Host-owned optional connections, before shared navigation. */
+  additionalConnections?: ReactNode;
 }
 
 function feedback(connection: GoogleConnectionState): string {
@@ -42,7 +44,7 @@ function feedback(connection: GoogleConnectionState): string {
 }
 
 /** Intent-only view. No OAuth, timers, storage, external windows or setup writes. */
-export function GoogleView({ model, onConnect, onCancel, onBack, onSkip, onContinue }: GoogleViewProps) {
+export function GoogleView({ model, onConnect, onCancel, onBack, onSkip, onContinue, additionalConnections }: GoogleViewProps) {
   const headingId = useId();
   const feedbackId = useId();
   const { connection } = model;
@@ -95,6 +97,7 @@ export function GoogleView({ model, onConnect, onCancel, onBack, onSkip, onConti
           <p role="alert" aria-atomic="true">{connection.state === "error" ? message : ""}</p>
         </div>
 
+        {additionalConnections}
         <div className="on-google__actions">
           <Button className="on-google__control on-google__back" aria-disabled={busy} onClick={() => { if (!busy) onBack(); }}>Back</Button>
           <Button className="on-google__control on-google__skip" aria-disabled={busy} onClick={() => { if (!busy) onSkip(); }}>Skip for now</Button>

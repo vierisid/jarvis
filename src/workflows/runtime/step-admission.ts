@@ -43,6 +43,9 @@ export const IN_RUN_STEP_PIECES: ReadonlySet<string> = new Set([
  * governed categories say; each dispatch is audited and obeys Pause and Kill.
  */
 export function isCommunityPiece(pieceName: string): boolean {
+  // A partly governed piece (Sheets append, HubSpot contact upsert) is not a
+  // community piece: its ungoverned actions are audited and badged one by one
+  // through isCommunityAction below.
   return !isGovernedPiece(pieceName) && !pieceName.startsWith(JARVIS_PIECE_PREFIX) && !IN_RUN_STEP_PIECES.has(pieceName);
 }
 

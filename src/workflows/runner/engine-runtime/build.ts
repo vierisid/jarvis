@@ -47,6 +47,7 @@ import { fileURLToPath } from "node:url";
 import { builtinModules } from "node:module";
 import { UPSTREAM_PIN_SHA, UPSTREAM_PIN_TAG } from "../../activepieces/upstream-pin";
 import { ENGINE_LIFECYCLE_SHIM } from "./engine-lifecycle";
+import { ENGINE_TLS_GUARD_SHIM } from "./engine-tls-guard";
 import { sanitizedEnv } from "../../../util/subprocess-env";
 import { BUN_INSTALL_ARGS, SANITIZED_INSTALL_HINT } from "../../../util/sanitized-install";
 import { sha256OfFile } from "./bundle-integrity";
@@ -295,6 +296,12 @@ export const PATCHED_VENDOR_SOURCES = [
   '../../runtime/piece-effects.ts',
   '../../runtime/hubspot-contact.ts',
   '../../runtime/piece-effect-guard.ts',
+  '../../runtime/managed-mailchimp.ts',
+  '../../runtime/managed-asana.ts',
+  '../../runtime/managed-github.ts',
+  '../../runtime/managed-dropbox.ts',
+  '../../runtime/managed-trello.ts',
+  '../../runtime/managed-slack.ts',
   // The egress guard the engine's file-property download goes through (#961).
   '../../runtime/http-egress.ts',
   '../../runtime/decision-document.ts',
@@ -419,7 +426,9 @@ export const ENGINE_ESBUILD_CONFIG = {
     // orphan watchdog, and its handler must be registered before upstream's
     // run-progress listener (which flushes but never exits) so the flush runs
     // inside a window that ends in an exit. See engine-lifecycle.ts.
-    return { js: `${ENGINE_LIFECYCLE_SHIM}\n${ENGINE_REQUEST_BASE_SHIM}` };
+    // The TLS guard runs before any piece module loads, so no piece can turn
+    // certificate verification off for the whole process. See engine-tls-guard.ts.
+    return { js: `${ENGINE_LIFECYCLE_SHIM}\n${ENGINE_TLS_GUARD_SHIM}\n${ENGINE_REQUEST_BASE_SHIM}` };
   },
 } as const;
 

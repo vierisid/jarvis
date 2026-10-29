@@ -111,6 +111,7 @@ import type { PieceLookup } from "../runtime/piece-catalog";
 import { isCommunityAction, isCommunityPiece } from "../runtime/step-admission";
 import { CATALOG, excludedReason, findCatalogEntry, sharedBuildCatalog, withdrawnPiece } from "../pieces-library/catalog";
 import { piecesManagedByHost } from "../pieces-library/shared";
+import { withScheduleZoneDefault } from "../runner/triggers/schedule-zone";
 import {
   installPiece,
   withLibraryLock,
@@ -919,7 +920,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
                   name: t.name,
                   displayName: t.displayName,
                   description: t.description,
-                  inputSchema: t.inputSchema ?? null,
+                  // The schedule piece pre-fills Jarvis's zone, not UTC (schedule-zone.ts).
+                  inputSchema: withScheduleZoneDefault(p.name, t.inputSchema),
                   // Triggers carry the upstream-native `sampleData`.
                   ...(t.sampleData !== undefined ? { sampleData: t.sampleData } : {}),
                   // And, for symmetry / future-proofing, the action-side
