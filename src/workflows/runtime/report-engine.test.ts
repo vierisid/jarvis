@@ -1,3 +1,8 @@
+import quarterlyGraph from './fixtures/quarterly-report-generated.json';
+import {quarterlyFixtureRequest,quarterlyFixtureSetup,quarterlyFixtureCases} from './quarterly-report-fixtures';
+import {claimFire,pruneFires,fireForRun} from '../db/repos/trigger-fire';
+import {scheduleTriggerPayload} from './schedule-payload';
+import {QUARTERLY_ACTION} from './quarterly-report';
 import {REPORT_ACTION,REPORT_PIECE,REPORT_REQUIRED} from './weekly-report';
 import {reportFixtureSetup,reportFixtureNow,reportFixtureRequest,type ReportFixtureOptions} from './report-fixtures';
 /** The saved builder graph runs through the real worker/engine with synthetic providers only. */
@@ -40,7 +45,7 @@ let now=reportFixtureNow;
 beforeAll(async()=>{
   dir=mkdtempSync(join(tmpdir(),'jarvis-report-engine-'));initWorkflowDb(join(dir,'fixture.db'));setEncryptionKey(Buffer.alloc(32,78));
   const bundle=await buildEngineBundle();
-  for(const name of ['report']) {
+  for(const name of ['report','notify']) {
     const path=join(import.meta.dir,'../activepieces/packages/pieces/jarvis',name);await buildPiece(path);
     const meta=JSON.parse(readFileSync(join(path,'package.json'),'utf8'));versions[meta.name]=meta.version;
     const installed=join(dir,'node_modules',meta.name);mkdirSync(dirname(installed),{recursive:true});symlinkSync(join(path,'dist'),installed,'dir');
@@ -54,7 +59,7 @@ beforeAll(async()=>{
       expect(['api.stripe.com','api.hubapi.com','www.googleapis.com','docs.googleapis.com']).toContain(u.hostname);expect(init.headers.Authorization).toBe('Bearer synthetic-'+provider);expect(init.redirect).toBe('error');
       return Response.json(await request(provider,u.pathname+u.search,init.body?JSON.parse(init.body):undefined));
     }) as typeof fetch,llmManager:{chat:async()=>{throw Error('No model tools or delegate may execute');}} as any,
-    channelService:{sendWorkflowNotification:async()=>{throw Error('No external notifications');}} as any,wsService:{broadcastNotificationToDashboard:()=>{throw Error('Report must not send notifications');}} as any});
+    channelService:{sendWorkflowNotification:async()=>{throw Error('No external notifications');}} as any,wsService:{broadcastNotificationToDashboard:(value:any)=>{if(!quarterlyNotifications)throw Error('Weekly report must not send notifications');quarterlyNotifications.push(value);return 1;}} as any});
   api=new SandboxApi({services});await api.start({port:0});runtime=new EngineRuntime({api,pool:true,bundlePath:bundle.bundlePath,expectedDigest:bundle.digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code')});
   const handle=await runtime.acquire({runId:'report-metadata',projectId:DEFAULT_IDS.project});
   try {const entries=[];for(const[pieceName,pieceVersion]of Object.entries(versions))entries.push(metadataToCatalogEntry(await handle.extractPieceMetadata({pieceName,pieceVersion})));catalog=new PieceCatalog(entries);configureWorkflowReadiness({pieces:catalog});if(process.env.JARVIS_REPORT_CATALOG_EXPORT)writeFileSync(process.env.JARVIS_REPORT_CATALOG_EXPORT,JSON.stringify(entries));}
@@ -63,6 +68,7 @@ beforeAll(async()=>{
 },120_000);
 afterAll(async()=>{await runtime?.shutdown();await api?.stop();closeWorkflowDb();setEncryptionKey(null);for(const id of runIds)rmSync(join(workflowLogsBase(),id+'.bin'),{force:true});if(dir)rmSync(dir,{recursive:true,force:true});});
 
+let quarterlyNotifications:any[]|undefined;
 let request=reportFixtureRequest();
 const setup={...reportFixtureSetup,dealStageIds:'won'};
 const missing=Object.fromEntries(REPORT_REQUIRED.map(k=>[k,'']));
@@ -106,4 +112,65 @@ test('actual model-generated saved Test 9 graph executes with complete and unava
  expect((await run(flow.id,draft.id)).status).toBe('SUCCEEDED');expect(writes).toHaveLength(2);
  const another=createFlow(),version=createDraftVersion({flowId:another.id,displayName:'Same model graph; source failure',trigger:g});lockVersion(version.id);setPublishedVersion(another.id,version.id);updateFlowStatus(another.id,'ENABLED');
  reset({writes,failStripe:true});expect((await run(another.id,version.id)).status).toBe('SUCCEEDED');expect(writes).toHaveLength(4);expect(JSON.stringify(writes.at(-1))).toContain('Unavailable');
+},60000);
+
+function quarterFixture(configured=true){
+ const g=structuredClone(quarterlyGraph) as any;
+ for(const n of [g.nextAction,g.nextAction.nextAction])n.settings.pieceVersion=versions[n.settings.pieceName];
+ if(configured)Object.assign(g.nextAction.settings.input,{...quarterlyFixtureSetup,dealStageIds:'won'});
+ return g;
+}
+function quarterFlow(){
+ const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Quarter fixture',trigger:quarterFixture()});
+ expect(versionReadiness(flow.id,version.id).issues).toEqual([]);
+ lockVersion(version.id);setPublishedVersion(flow.id,version.id);updateFlowStatus(flow.id,'ENABLED');return {flow,version};
+}
+function admitQuarter(f:ReturnType<typeof quarterFlow>,at='2026-10-05T07:00:00Z',payloadAt=at){
+ const time=Date.parse(at),claim=claimFire({flowId:f.flow.id,flowVersionId:f.version.id,source:'schedule',dedupeKey:at,scheduledFor:time,observedAt:time},()=>{
+  const run=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id});runIds.push(run.id);
+  enqueue({jobType:RUN_FLOW,payload:{runId:run.id,flowVersionId:f.version.id,projectId:DEFAULT_IDS.project,payload:scheduleTriggerPayload({timezone:'Europe/Rome'},undefined,Date.parse(payloadAt))},flowId:f.flow.id,flowRunId:run.id});return {runId:run.id};
+ });return claim;
+}
+test('quarterly saved graph uses real engine and retains occurrence through SQLite reopen before worker dispatch',async()=>{
+ reset();quarterlyNotifications=[];const at='2026-10-05T07:00:00Z',calls:string[]=[];
+ request=quarterlyFixtureRequest(quarterlyFixtureSetup,at,'complete',calls);const f=quarterFlow(),claim=admitQuarter(f);expect(claim.outcome).toBe('started');
+ closeWorkflowDb();initWorkflowDb(join(dir,'fixture.db'));setEncryptionKey(Buffer.alloc(32,78));configureWorkflowReadiness({pieces:catalog});now=Date.parse('2027-01-05T08:00:00Z');pruneFires(now);if(claim.outcome==='started')expect(fireForRun(claim.runId)?.scheduledFor).toBe(Date.parse(at));
+ await worker.drain();if(claim.outcome!=='started')throw Error('No run');const run=getFlowRun(claim.runId)!;
+ if(run.status!=='SUCCEEDED')throw Error(JSON.stringify({failed:run.failedStep,steps:run.steps}));expect(run.status).toBe('SUCCEEDED');expect(JSON.stringify(run.steps)).toContain('2026-Q3');expect(JSON.stringify(run.steps)).not.toContain('2026-Q4');expect(quarterlyNotifications).toHaveLength(1);
+ expect(admitQuarter(f).outcome).toBe('duplicate');await worker.drain();expect(quarterlyNotifications).toHaveLength(1);expect(calls.filter(p=>p.includes('/objects/deals'))).toHaveLength(3);quarterlyNotifications=undefined;
+},60000);
+test('quarterly missing coverage sends explicit unavailable summary, never a false successful data report',async()=>{
+ reset();quarterlyNotifications=[];request=quarterlyFixtureRequest(quarterlyFixtureSetup,'2026-10-05T07:00:00Z','page_failure');const f=quarterFlow(),claim=admitQuarter(f);await worker.drain();if(claim.outcome!=='started')throw Error('No run');
+ const run=getFlowRun(claim.runId)!;if(run.status!=='SUCCEEDED')throw Error(JSON.stringify({failed:run.failedStep,steps:run.steps}));expect(run.status).toBe('SUCCEEDED');expect(JSON.stringify(run.steps)).toContain('Unavailable');expect(JSON.stringify(run.steps)).toContain('"complete":false');expect(quarterlyNotifications).toHaveLength(1);quarterlyNotifications=undefined;
+},60000);
+test('quarterly Authority denial and mismatched occurrence prevent all provider reads',async()=>{
+ for(const badClock of [false,true]){
+  reset();quarterlyNotifications=[];const calls:string[]=[];request=quarterlyFixtureRequest(quarterlyFixtureSetup,'2026-10-05T07:00:00Z','complete',calls);const f=quarterFlow();
+  if(!badClock)authority.addOverride({action:'read_data',allowed:false});
+  const claim=admitQuarter(f,'2026-10-05T07:00:00Z',badClock?'2027-01-04T08:00:00Z':'2026-10-05T07:00:00Z');await worker.drain();if(claim.outcome!=='started')throw Error('No run');
+  expect(getFlowRun(claim.runId)!.status).toBe('FAILED');expect(calls).toHaveLength(0);expect(quarterlyNotifications).toHaveLength(0);
+ }quarterlyNotifications=undefined;
+},60000);
+test('quarterly actual metadata supports four deferred fields and public saved graph fixtures',async()=>{
+ reset();let turn=0;const tool=createManageWorkflowTool({pieceRegistry:catalog,llm:{chat:async()=>{throw Error('Use discovery');},chatTools:async()=>turn++===0?{content:'',tool_calls:[{id:'inspect',name:'get_piece_details',arguments:{pieceName:REPORT_PIECE}}]}:{content:'',tool_calls:[{id:'save',name:'submit_flow',arguments:{displayName:'Generated quarterly report draft',trigger:quarterFixture(false)}}]}}});
+ const raw=String(await tool.execute({action:'compose',name:'Generated quarterly report draft',description:'First Monday each quarter at 09:00 Europe/Rome, summarize HubSpot closed deals for previous complete quarter versus quarter before. Separate currencies, zero baselines. Leave stage/date selections setup required. Disabled unpublished; local fixtures only.',contract:{trigger:{kind:'schedule',timezone:'Europe/Rome'}}}));expect(raw).toContain('"ok":true');
+ const f=listFlows().find(f=>getLatestDraft(f.id)?.displayName==='Generated quarterly report draft')!,v=getLatestDraft(f.id)!;
+ expect(f.status).toBe('DISABLED');expect(f.published_version_id).toBeNull();expect(listRuns({flowId:f.id})).toHaveLength(0);
+ expect(compileWorkflow(v.trigger,{pieces:catalog,phase:'composition'}).setupIssues).toHaveLength(4);expect(versionReadiness(f.id,v.id).ready).toBe(false);
+ const result=String(await tool.execute({action:'validate_fixtures',flow:f.id,fixture_input:{cases:[quarterlyFixtureCases[4]]}}));expect(result).toContain('"passed":true');expect(result).toContain('2026-Q3');
+},60000);
+
+test('quarterly account binding changes and required approval stop before provider reads',async()=>{
+ const at='2026-10-05T07:00:00Z',calls:string[]=[];reset();request=quarterlyFixtureRequest(quarterlyFixtureSetup,at,'complete',calls);
+ const f=quarterFlow();pinFlowBindings(f.flow.id);
+ upsertConnection({externalId:'fixture-hubspot',displayName:'Changed',type:'OAUTH2',pieceName:'@activepieces/piece-hubspot',pieceVersion:'0.0.1',value:{access_token:'changed'}});
+ try{const claim=admitQuarter(f);await worker.drain();if(claim.outcome!=='started')throw Error('No run');expect(getFlowRun(claim.runId)!.status).toBe('FAILED');expect(calls).toHaveLength(0);}
+ finally{upsertConnection({externalId:'fixture-hubspot',displayName:'Fixture',type:'OAUTH2',pieceName:'@activepieces/piece-hubspot',pieceVersion:'0.0.1',value:{access_token:'synthetic-hubspot'}});}
+ reset();request=quarterlyFixtureRequest(quarterlyFixtureSetup,at,'complete',calls);authority.setGovernedCategories(['read_data']);const pendingFlow=quarterFlow();
+ const claim=claimFire({flowId:pendingFlow.flow.id,flowVersionId:pendingFlow.version.id,source:'schedule',scheduledFor:Date.parse(at)},()=>{
+  const run=createFlowRun({flowId:pendingFlow.flow.id,flowVersionId:pendingFlow.version.id,status:'RUNNING'});runIds.push(run.id);return {runId:run.id};
+ });if(claim.outcome!=='started')throw Error('No run');
+ const input={...quarterlyFixtureSetup,dealStageIds:'won',scheduledFor:at};const ctx={runId:claim.runId,projectId:DEFAULT_IDS.project,stepName:'report',executionPath:[] as Array<[string,number]>};
+ const approval=await services.quarterlyReport!(input,ctx) as any;expect(approval.approval).toBeDefined();expect(calls).toHaveLength(0);
+ approvals.approve(approval.approval.approvalId,'fixture');const result=await services.quarterlyReport!(input,ctx) as any;expect(result.complete).toBe(true);expect(calls.length).toBeGreaterThan(0);
 },60000);

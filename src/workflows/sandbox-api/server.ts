@@ -35,7 +35,7 @@ import { DefaultWorkerHandlers } from "./worker-handlers";
 import { DEFAULT_IDS } from "../db/schema";
 import { createConnectionsRoute } from "./routes/connections";
 import { createMeetingBriefsRoute, type MeetingBriefsFn } from './routes/jarvis-meetings';
-import { createWeeklyReportRoute, type WeeklyReportFn } from './routes/jarvis-report';
+import { createWeeklyReportRoute, createQuarterlyReportRoute, type WeeklyReportFn } from './routes/jarvis-report';
 import { createApprovalRefundRoute, type ApprovalRefundFn } from './routes/jarvis-refund';
 import { createContactImportRoute, type ContactImportFn } from './routes/jarvis-import';
 import { createLeadBatchRoute, type LeadBatchFn } from './routes/jarvis-batch';
@@ -98,6 +98,7 @@ export interface SandboxApiServices {
   subflowResult?: SubflowFn;
   meetingBriefs?: MeetingBriefsFn;
   weeklyReport?: WeeklyReportFn;
+  quarterlyReport?: WeeklyReportFn;
   approvalRefund?: ApprovalRefundFn;
   contactImport?: ContactImportFn;
   leadBatch?: LeadBatchFn;
@@ -299,6 +300,7 @@ export class SandboxApi {
       },
       { path: '/v1/jarvis/context/meeting-briefs', method: 'POST', handler: createMeetingBriefsRoute(this.services) },
       { path: '/v1/jarvis/reports/weekly', method: 'POST', handler: createWeeklyReportRoute(this.services) },
+      { path: '/v1/jarvis/reports/quarterly', method: 'POST', handler: createQuarterlyReportRoute(this.services) },
       { path: '/v1/jarvis/refunds/approval', method: 'POST', handler: createApprovalRefundRoute(this.services) },
       { path: '/v1/jarvis/imports/contacts', method: 'POST', handler: createContactImportRoute(this.services) },
       {path:'/v1/jarvis/subflows/call',method:'POST',handler:createSubflowRoute(this.services,'call')},

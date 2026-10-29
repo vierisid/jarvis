@@ -410,6 +410,10 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           if (!draft) throw new Error("No saved draft to validate");
           const validation=compileWorkflow(draft.trigger,{pieces:deps.pieceRegistry,phase:'composition'});
           if (!validation.ready) throw new Error('Saved draft has structural errors; fix them before fixture validation');
+          if (draft.trigger.nextAction?.settings?.pieceName === '@jarvispieces/piece-jarvis-report' && draft.trigger.nextAction.settings.actionName === 'quarterly_hubspot_report') {
+            const {validateQuarterlyFixtures}=await import('../../workflows/runtime/quarterly-report-fixtures');
+            return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,...await validateQuarterlyFixtures(draft.trigger,params.fixture_input)},params),'local synthetic quarterly fixture results');
+          }
           if (draft.trigger.settings?.pieceName === 'schedule') {
             const {validateScheduleFixtures}=await import('../../workflows/runtime/schedule-fixtures');
             return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,...await validateScheduleFixtures(draft.trigger,params.fixture_input)},params),'local synthetic schedule fixture results');

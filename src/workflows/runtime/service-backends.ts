@@ -4,6 +4,7 @@ import { createLeadBatchService } from './batch-service';
 import { createOnboardingService } from './onboarding-service';
 import { createSalesFollowupsService } from './sales-service';
 import { createWeeklyReportService } from './report-service';
+import { createQuarterlyReportService } from './quarterly-report-service';
 import { createRefundService } from './refund-service';
 import { createContactImportService } from './import-service';
 import type { ImportRequest } from './contact-import';
@@ -1161,6 +1162,7 @@ export function buildSandboxServiceBackends(
     subflowResult: cancellableWorkflowService(returnSubflowResult),
     credentialResolver: opts.credentialResolver,
     meetingBriefs: cancellableWorkflowService(meetingBriefs),
+    quarterlyReport: cancellableWorkflowService(createQuarterlyReportService({effects,credentials:opts.credentialResolver,fetchImpl:opts.reportFetch})),
     weeklyReport: cancellableWorkflowService(createWeeklyReportService({effects,credentials:opts.credentialResolver,fetchImpl:opts.reportFetch,now:opts.reportNow})),
     approvalRefund: cancellableWorkflowService(createRefundService({effects,credentials:opts.credentialResolver,fetchImpl:opts.refundFetch,now:opts.refundNow})),
     contactImport: cancellableWorkflowService(createContactImportService({effects,credentials:opts.credentialResolver,request:opts.importRequest,now:opts.importNow})),

@@ -1,0 +1,14 @@
+{
+  "name": "trigger", "displayName": "First Monday of each quarter at 09:00 Rome", "type": "PIECE_TRIGGER",
+  "settings": { "pieceName": "schedule", "input": { "cron_expression": "0 9 1-7 1,4,7,10 1", "timezone": "Europe/Rome" } },
+  "nextAction": {
+    "name": "report", "displayName": "Compare closed deals across complete quarters", "type": "PIECE",
+    "settings": { "pieceName": "@jarvispieces/piece-jarvis-report", "pieceVersion": "0.0.1", "actionName": "quarterly_hubspot_report",
+      "input": { "hubspotConnection": "", "hubspotPortalId": "", "dealDateProperty": "", "dealStageIds": "", "timezone": "Europe/Rome", "scheduledFor": "{{trigger.scheduledFor}}" } },
+    "nextAction": {
+      "name": "summary", "displayName": "Send one quarterly dashboard summary", "type": "PIECE",
+      "settings": { "pieceName": "@jarvispieces/piece-jarvis-notify", "pieceVersion": "0.0.1", "actionName": "notify",
+        "input": { "message": "{{report.summary}}", "idempotencyKey": "{{report.notificationKey}}", "channels": ["dashboard"], "priority": "normal" } }
+    }
+  }
+}
