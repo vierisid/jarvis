@@ -25,6 +25,10 @@ export const DEFAULT_IDS = {
 } as const;
 
 const STATEMENTS: string[] = [
+  `CREATE TABLE IF NOT EXISTS workflow_weekly_report (
+    identity TEXT PRIMARY KEY, owner TEXT NOT NULL, state TEXT NOT NULL,
+    document_id TEXT, result TEXT, created INTEGER NOT NULL
+  )`,
   // Daily contact claims and draft receipts survive restarts and run-history cleanup.
   `CREATE TABLE IF NOT EXISTS workflow_sales_followup (
     identity TEXT PRIMARY KEY, owner TEXT NOT NULL, state TEXT NOT NULL,

@@ -31,6 +31,7 @@ import { GitHubConnection, useGitHubStatus } from "../../integrations/GitHubConn
 import { GitHubRepository } from "../../integrations/GitHubRepository";
 import { MEETING_ACCOUNT_FIELDS } from "../../../../../src/workflows/meeting-accounts";
 import { SALES_ACCOUNT_FIELDS } from "../../../../../src/workflows/sales-accounts";
+import { REPORT_ACCOUNT_FIELDS } from "../../../../../src/workflows/report-accounts";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { WorkflowEditorEnvironment, WorkflowPortal, useWorkflowRequest } from "./WorkflowEditorEnvironment";
 import { BriefTabs } from "../../../brief/components/controls/Choices";
@@ -3413,7 +3414,8 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const formInput = step.settings?.input ?? {};
   const meetingAccounts = piece?.name === '@jarvispieces/piece-jarvis-context' && subName === 'meeting_briefs'
     ? MEETING_ACCOUNT_FIELDS
-    : piece?.name === '@jarvispieces/piece-jarvis-sales' && subName === 'draft_followups' ? SALES_ACCOUNT_FIELDS : [];
+    : piece?.name === '@jarvispieces/piece-jarvis-sales' && subName === 'draft_followups' ? SALES_ACCOUNT_FIELDS
+      : piece?.name === '@jarvispieces/piece-jarvis-report' && subName === 'weekly_operating_report' ? REPORT_ACCOUNT_FIELDS : [];
 
   const formWebhook = detectedTriggerKind === 'webhook' && ('submission_id_field' in formInput || 'submission_email_field' in formInput);
   const schema = detectedTriggerKind === 'schedule' && step.settings?.pieceName === 'schedule' ? {fields:[
@@ -3750,9 +3752,13 @@ function AdvancedSettings(props: {
  * here would duplicate the OAuth redirect handling already in that
  * panel and isn't worth the complexity.
  */
+/** The credential kind a saved-account picker offers: a Stripe account is a secret key, the others are OAuth. */
+export function accountPickerAuthType(provider: string): PieceCatalogAuth["type"] {
+  return provider === '@activepieces/piece-stripe' ? 'SECRET_TEXT' : 'OAUTH2';
+}
 export function MeetingAccountPickers({connections,input,onSetInput,fields=MEETING_ACCOUNT_FIELDS}: {connections:ConnectionMeta[];input:Record<string,unknown>;onSetInput:(field:string,value:string)=>void;fields?:ReadonlyArray<readonly [string,string,string]>}) {
   return <>{fields.map(([field,provider,label]) =>
-    <ConnectionPicker key={field} pieceName={provider} pieceDisplayName={label} authDisplayName={`${label} account`} authType="OAUTH2"
+    <ConnectionPicker key={field} pieceName={provider} pieceDisplayName={label} authDisplayName={`${label} account`} authType={accountPickerAuthType(provider)}
       connections={connections} currentValue={input[field] ? `{{connections.${input[field]}}}` : ''}
       onPick={template=>onSetInput(field,template ? template.slice(14,-2) : '')} />)}</>;
 }

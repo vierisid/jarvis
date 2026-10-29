@@ -20,6 +20,14 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
+  // w8-15: verified weekly Stripe and HubSpot Google Docs reports. Tool-result text
+  // (jarvis-report details), so these shapes match w8-14.
+  'w8-15': {
+    bare: '310abe10f6b3e4312877dd63e3d913a931a4f1ec85039f711ddd503ae5bdfc81',
+    production: 'be2c1c21b357ef8006c9e6013aa4731e71ecd0e17d8593b6f78b70c0ff8bebd0',
+    'hosted production': '80eb7d677570c54fa6fd94a7ac6abad604f7e98e2e0108f08b899e9f16ee5331',
+    'tool names only': 'd9a6d28fa4d0dab04d9ce67793ae31f60d0ec11fbcdd017193cc3b8092ac170f',
+  },
   // w8-14: draft-only sales follow-ups and an empty schedule cron left for setup. Both
   // are tool-result text (schedule and jarvis-sales details), so these shapes match w8-13.
   'w8-14': {
