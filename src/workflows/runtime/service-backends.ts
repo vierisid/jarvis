@@ -1,5 +1,3 @@
-import { workflowBrowserRead, workflowBrowserReview } from '../../authority/ui-intent';
-import { runAsReviewed } from '../../actions/tools/reviewed-call-scope';
 import { withWorkflowMemory } from '../../vault/memory-use-context';
 import { documentInput, projectDocument } from './decision-document';
 /**
@@ -13,6 +11,9 @@ import { documentInput, projectDocument } from './decision-document';
  * Lives outside `adapters/` so the eventual K3 deletion of the legacy
  * adapters doesn't have to thread through this file.
  */
+import { workflowBrowserRead, workflowBrowserReview } from '../../authority/ui-intent';
+import { runAsReviewed } from '../../actions/tools/reviewed-call-scope';
+import type { ApprovalManager } from '../../authority/approval';
 
 import type { LLMManager } from "../../llm/manager";
 import type { ToolRegistry } from "../../actions/tools/registry";
@@ -629,7 +630,7 @@ export function buildSandboxServiceBackends(
         if (gate.confirm === 'always' && !browserReview) {
           return refuse(`Unsupported workflow capability: ${call.toolCall.name} requires the user's explicit confirmation, which a delegated agent cannot ask for; call it as a flow step so the approval is raised by the step that names it.`);
         }
-        let browserExecution: ReturnType<import('../../authority/approval').ApprovalManager['getUiExecution']> = null;
+        let browserExecution: ReturnType<ApprovalManager['getUiExecution']> = null;
         // Set once the call is dispatched; read by `validateTarget` below.
         let dispatched = false;
         try {

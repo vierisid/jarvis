@@ -22,7 +22,6 @@ export function AttentionRoutes({ snapshot, navigation, roomAvailable, markRead 
   return <section className="brief-attention-feed" aria-label="Notifications">
     <h2 className="brief-type-section-heading">Notifications</h2>
     {view.status !== "ready" ? <p role="status">Notifications are {view.status}. Open Authority, task recovery or device settings to inspect their current state.</p>
-      : view.items.length === 0 ? <p>No pending notifications.</p>
       : <ul>{view.items.map(item => <li className="brief-attention-item" key={attentionKey(item)}>
         <h3>{item.title}</h3>
         {item.text && <p>{item.text}</p>}
