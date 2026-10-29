@@ -27,3 +27,18 @@ test('requires both mappings, rejects unsafe/overlapping paths and leaves ordina
   }
   expect(() => submissionConfig({ submission_id_field: 'id' })).toThrow();
 });
+test('a rejection never names the configured field paths, so an unsigned caller cannot learn the mapping', async () => {
+  const nested = { idField: 'form.id', emailField: 'form.email' };
+  for (const payload of [{}, { form: 'flat' }, { form: { email: 'me@example.com' } }, { form: { id: 'a1', email: 'bad' } }]) {
+    let message = '';
+    try { prepareSubmission(payload, nested); } catch (error) { message = (error as Error).message; }
+    expect(message).toMatch(/^Submission/);
+    expect(message).not.toContain('form.');
+  }
+  const { WebhookManager } = await import('../runner/triggers/webhook');
+  const webhooks = new WebhookManager();
+  webhooks.register('flow-fixture', undefined, undefined, nested);
+  const response = await webhooks.handleRequest('flow-fixture', new Request('http://localhost/api/webhooks/flow-fixture', { method: 'POST', body: '{}' }));
+  expect(response.status).toBe(422);
+  expect(JSON.stringify(await response.json())).not.toContain('form.');
+});
