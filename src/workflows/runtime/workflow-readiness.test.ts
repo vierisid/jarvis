@@ -623,3 +623,15 @@ test('form webhook mapping can be incomplete in drafts but must be safe and comp
     expect(compileWorkflow({ name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'webhook', input: { submission_id_field: 'id', submission_email_field: 'email' } } }, { pieces, phase }).ready).toBe(true);
   }
 });
+
+test('monday managed readiness uses the same static contract as its engine without weakening manual accounts',()=>{
+  const schema=propsToInputSchema({workspace_id:{type:'SHORT_TEXT',displayName:'Workspace',required:true},column_values:{type:'DYNAMIC',displayName:'Columns',required:true}} as any);
+  const pieces=new PieceCatalog([{name:'@activepieces/piece-monday',displayName:'monday.com',description:'',actions:{monday_create_item:{name:'monday_create_item',displayName:'Create item',description:'',inputSchema:schema}}}]);
+  const node:any={name:'item',type:'PIECE',settings:{pieceName:'@activepieces/piece-monday',actionName:'monday_create_item',input:{auth:'{{connections.jarvis:monday}}',board_id:'100',item_name:'New item',column_values:{text:'Hello'}}}};
+  const check=()=>compileWorkflow(graph(node),{pieces});
+  expect(check().issues.filter(i=>i.path.includes('workspace_id')||i.path.includes('column_values'))).toEqual([]);
+  delete node.settings.input.board_id;
+  expect(check().issues.some(i=>i.path.endsWith('board_id'))).toBe(true);
+  node.settings.input.auth='{{connections.manual}}';
+  expect(check().issues.some(i=>i.path.endsWith('workspace_id'))).toBe(true);
+});

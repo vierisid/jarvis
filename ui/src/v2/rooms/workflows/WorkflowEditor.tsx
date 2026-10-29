@@ -1,3 +1,4 @@
+import { mondayInputSchema } from "../../../../../src/workflows/runtime/managed-monday-inputs";
 import { TrelloCardLocation } from "../../integrations/TrelloCardLocation";
 import { MailchimpLocation } from "../../integrations/MailchimpLocation";
 import { MailchimpConnection } from "../../integrations/MailchimpConnection";
@@ -24,6 +25,8 @@ import React, { createContext, useCallback, useContext, useEffect, useLayoutEffe
 import { useSampleDraftText } from "./useSampleDraftText";
 import { ClickUpConnection, useClickUpStatus } from "../../integrations/ClickUpConnection";
 import { AsanaConnection, useAsanaStatus } from "../../integrations/AsanaConnection";
+import { MondayConnection, useMondayStatus } from "../../integrations/MondayConnection";
+import { MondayBoardLocation } from "../../integrations/MondayBoardLocation";
 import { AsanaTaskLocation } from "../../integrations/AsanaTaskLocation";
 import { DropboxConnection, useDropboxStatus } from "../../integrations/DropboxConnection";
 import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
@@ -3395,8 +3398,10 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const githubRepository = managedGitHub && ['github_create_issue','getIssueInformation','update_issue','find_issue','createCommentOnAIssue'].includes(subName ?? '');
   const managedSlack = piece?.name === "@activepieces/piece-slack" && ["{{connections.jarvis:slack}}", "{{connections['jarvis:slack']}}"].includes(String(step.settings?.input?.auth));
   const slackChannel = managedSlack && ['send_channel_message', 'slack_post_message', 'slack_get_channel_info'].includes(subName ?? '');
+  const managedMonday = piece?.name === "@activepieces/piece-monday" && ["{{connections.jarvis:monday}}", "{{connections['jarvis:monday']}}"].includes(String(step.settings?.input?.auth));
+  const mondayLocation = managedMonday;
   const baseSchema = asanaSchema;
-  const selectedSchema = managedTrello && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["labels","member_id"].includes(f.name))} : managedMailchimp && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['fields','include_fields','exclude_fields', ...(mailchimpLocation ? ['list_id','campaign_id'] : [])].includes(f.name))}
+  const selectedSchema = managedMonday && mondayInputSchema(subName ?? "") ? {...mondayInputSchema(subName ?? "")!, fields:mondayInputSchema(subName ?? "")!.fields.filter(f=>!["board_id","group_id"].includes(f.name)).map(f=>({...f,options:f.options?[...f.options]:undefined}))} : managedTrello && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["labels","member_id"].includes(f.name))} : managedMailchimp && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['fields','include_fields','exclude_fields', ...(mailchimpLocation ? ['list_id','campaign_id'] : [])].includes(f.name))}
     : managedGitHub && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['labels','assignees','milestone','state_reason', ...(githubRepository ? ['repository'] : [])].includes(f.name))}
     : managedSlack && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["sendAsUser","sendAsBot","file","username","profilePicture","iconEmoji","mentionOriginFlow","onlyBotChannels","info"].includes(f.name))} : baseSchema;
   const rawSchema = clickUpLocation && selectedSchema ? {...selectedSchema,fields:selectedSchema.fields.filter(f=>!['workspace_id','space_id','list_id'].includes(f.name))} : trelloLocation && selectedSchema ? {...selectedSchema, fields:selectedSchema.fields.filter(f=>!['board_id','list_id'].includes(f.name))} : slackChannel && selectedSchema ? {...selectedSchema, fields:selectedSchema.fields.filter(f=>f.name !== "channel")} : selectedSchema;
@@ -3523,6 +3528,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
 
       {githubRepository && <GitHubRepository input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {trelloLocation && <TrelloCardLocation input={step.settings?.input ?? {}} onChange={onSetInput} boardOnly={subName === "list_lists"} />}
+      {mondayLocation && <MondayBoardLocation key={subName} input={step.settings?.input ?? {}} onChange={onSetInput} creating={subName === "monday_create_item"} columns={["monday_create_item","monday_update_column_values_of_item"].includes(subName ?? "")} />}
       {asanaLocation && <AsanaTaskLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {mailchimpLocation && <MailchimpLocation key={subName} input={step.settings?.input ?? {}} onChange={onSetInput} campaign={subName === "get_campaign_report"} />}
       {slackChannel && <SlackChannelPicker value={String(step.settings?.input?.channel ?? "")} onChange={value => onSetInput("channel", value)} />}
@@ -3770,6 +3776,8 @@ function ConnectionPicker({
   // ClickUp and GitHub may also offer the hosted connection; without it
   // (self-hosted, or not connected) the picker reads exactly as for any other piece.
   const isClickUp = pieceName === "@activepieces/piece-clickup";
+  const isMonday = pieceName === "@activepieces/piece-monday";
+  const managedMonday = useMondayStatus(isMonday)?.connected === true;
   const isAsana = pieceName === "@activepieces/piece-asana";
   const managedAsana = useAsanaStatus(isAsana)?.connected === true;
   const isDropbox = pieceName === "@activepieces/piece-dropbox";
@@ -3787,14 +3795,16 @@ function ConnectionPicker({
       {isDropbox && <><DropboxConnection optional onPick={onPick} currentValue={currentValue} />
         {managedDropbox && <p className="wf-props__hint">This account supports file-name search, folder listings, basic metadata and creating folders in Dropbox home. Use / for the home folder. Advanced search filters and metadata options are unavailable.</p>}</>}
       {pieceName === "@activepieces/piece-trello" && <TrelloConnection onPick={onPick} currentValue={currentValue} />}
+      {isMonday && <><MondayConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedMonday && <p className="wf-props__hint">This account supports creating, reading and renaming items, updating supported columns and posting plain text updates. Choose a board for every action. Board changes, files, deletion and triggers are not enabled.</p>}</>}
       {isAsana && <><AsanaConnection optional onPick={onPick} currentValue={currentValue} />
         {managedAsana && <p className="wf-props__hint">This account supports creating, reading and updating tasks, listing project tasks and adding comments. Use Asana IDs or workflow variables. Tags are not supported yet.</p>}</>}
       {isSlack && <SlackConnection optional onPick={onPick} currentValue={currentValue} />}
       <label className="wf-props__field-label">
-        {authDisplayName}
-        <span className="wf-props__connection-type">({authType})</span>
+        {managedMonday ? "monday.com account" : authDisplayName}
+        {!managedMonday && <span className="wf-props__connection-type">({authType})</span>}
       </label>
-      {matching.length === 0 && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana ? (
+      {matching.length === 0 && !managedMonday && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.
