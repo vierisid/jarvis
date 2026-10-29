@@ -81,7 +81,7 @@ import {
 import type { FlowTriggerNode } from "../../workflows/db/repos/flow-version.ts";
 import { WORKFLOW_EVENT_TYPES } from "../../workflows/runtime/event-types.ts";
 import { compileWorkflow } from '../../workflows/runtime/workflow-readiness';
-import { CHOSEN_TIMEZONE_KEY, markScheduleZoneChosen, statedScheduleZone } from "../../workflows/runner/triggers/schedule-zone.ts";
+import { canonicalZone, CHOSEN_TIMEZONE_KEY, statedScheduleZone, withScheduleZoneDefault } from "../../workflows/runner/triggers/schedule-zone.ts";
 
 export interface ComposedFlow {
   displayName: string;
@@ -1467,7 +1467,8 @@ function renderPieceBlockLines(
   if (piece.auth) lines.push(`    Connection required: ${piece.auth.type}. Use only a real supplied auth binding; otherwise leave auth unset in the disabled draft and report the connection requirement.`);
   for (const trigger of Object.values(piece.triggers ?? {})) {
     lines.push(`    trigger ${trigger.name}: ${trigger.description}`);
-    lines.push(...renderSchemaLines(trigger.inputSchema, 6));
+    // The schedule piece's zone defaults to Jarvis's, as in the editor, not the piece's UTC.
+    lines.push(...renderSchemaLines(withScheduleZoneDefault(piece.name, trigger.inputSchema) ?? undefined, 6));
     // Triggers carry the upstream-native `sampleData`; some pieces
     // also set `outputSample` (Jarvis extension). Either is a valid
     // hint -- prefer sampleData when present.
@@ -1637,21 +1638,21 @@ function acceptComposedFlow(
 }
 
 /**
- * Record a composed schedule's zone as chosen (schedule-zone.ts), so it is
- * honoured rather than treated as a default. The composer only creates new
- * flows and is told to write a zone only when the request names one, so a
- * zone on the built-in schedule came from the request. The dashboard schedule
- * piece requires a zone, so one there may be filler: it counts only when the
- * job contract names that zone. A marker the model wrote itself is replaced.
+ * Record a composed schedule's zone as chosen (schedule-zone.ts) only when the
+ * job contract names that same zone. The model may write a zone out of habit
+ * (UTC, its own guess), and background composers have no person's request at
+ * all, so a zone in the graph is not evidence anyone chose it; the contract is
+ * the caller's explicit statement. Unmarked, the schedule runs in Jarvis's
+ * zone and the trigger list warns. A marker the model wrote itself is replaced.
  */
 function markComposedScheduleZone(trigger: FlowTriggerNode, contract: JobContract | undefined): void {
   if (trigger.type !== "PIECE_TRIGGER" || !trigger.settings) return;
   const settings = trigger.settings as Record<string, unknown>;
-  const piece = typeof settings.pieceName === "string" ? settings.pieceName : "";
-  if (piece === "schedule") return markScheduleZoneChosen(settings);
   delete settings[CHOSEN_TIMEZONE_KEY];
-  const zone = statedScheduleZone(settings);
-  if (/(^|\/)piece-schedule$/.test(piece) && typeof zone === "string" && zone === contract?.trigger?.timezone) settings[CHOSEN_TIMEZONE_KEY] = zone;
+  const piece = typeof settings.pieceName === "string" ? settings.pieceName : "";
+  if (piece !== "schedule" && !/(^|\/)piece-schedule$/.test(piece)) return;
+  const zone = statedScheduleZone(settings), wanted = canonicalZone(contract?.trigger?.timezone);
+  if (typeof zone === "string" && wanted !== null && canonicalZone(zone) === wanted) settings[CHOSEN_TIMEZONE_KEY] = zone;
 }
 
 function accepted(validation: ValidationOk, rawResponse: string): ComposeOk {

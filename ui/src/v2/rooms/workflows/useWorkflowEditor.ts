@@ -38,6 +38,7 @@ import {
   removeStep,
   reorderChain as treeReorderChain,
   withStepInput,
+  withoutChosenZone,
   type ConnectionHandle,
 } from "./tree";
 
@@ -1022,8 +1023,10 @@ export function useWorkflowEditor(flowId: string | null) {
           }
         }
 
+        const changed = target.settings?.pieceName !== pieceName
+          || (isTrigger ? target.settings?.triggerName : target.settings?.actionName) !== actionName;
         const settings: NonNullable<FlowStepNode["settings"]> = {
-          ...(target.settings ?? {}),
+          ...(changed ? withoutChosenZone(target.settings) : (target.settings ?? {})),
           pieceName,
           input: seed,
         };

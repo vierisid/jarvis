@@ -28,7 +28,7 @@ Source: `src/workflows/runner/triggers/manager.ts` (live deliveries),
   `Europe/Rome`, following its daylight-saving rules) is used only when it was
   chosen on purpose: the step's `settings.chosenTimezone` names the same zone.
   The editor records that when a person picks a zone, and the composer when
-  the request names one (UTC included). Any other schedule -- no zone, or a
+  the job contract names that zone (UTC included). Any other schedule -- no zone, or a
   zone a default put there (the dashboard schedule piece pre-fills one; its
   hourly triggers hard-code UTC) -- runs in Jarvis's configured time zone (the
   `timezone` config key), else this machine's. Schedules saved before steps
@@ -65,6 +65,9 @@ workflow is turned off, switched to another trigger, or refused at
 registration, so that time is never reported as missed. The live schedule
 starts where the check stopped, two minutes back, so a time in between runs
 late rather than being lost; one the previous process already ran is a repeat.
+In a chosen zone the occurrence's identity also names the zone
+(`America/New_York@2026-10-07T09:00`), so after a person picks a zone, its
+09:00 is not taken for a repeat of 09:00 in Jarvis's zone the same day.
 A chosen zone is part of the watch identity, so choosing or changing one
 starts a new watch rather than recording past times in the new zone as missed.
 A schedule running in Jarvis's zone keeps the expression alone as its watch,

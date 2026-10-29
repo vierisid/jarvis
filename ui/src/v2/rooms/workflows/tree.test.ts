@@ -21,6 +21,7 @@ import {
   setRouterExecutionType,
   applySchemaDefaults,
   withStepInput,
+  withoutChosenZone,
 } from "./tree";
 import type { FlowStepNode } from "./useWorkflowEditor";
 
@@ -455,6 +456,15 @@ describe("schedule time zone: pre-filled vs chosen", () => {
       const cleared = withStepInput({ ...scheduleStep(piece), settings: picked }, "timezone", undefined);
       expect(cleared).not.toHaveProperty("chosenTimezone");
     }
+  });
+
+  test("a record left on a step that is no longer a schedule trigger, or whose piece was replaced, is cleared", () => {
+    const stale = { name: "trigger", type: "PIECE_TRIGGER" as const, settings: { pieceName: "webhook", chosenTimezone: "UTC", input: { timezone: "UTC" } } };
+    expect(withStepInput(stale, "secret", "s")).not.toHaveProperty("chosenTimezone");
+    expect(withStepInput({ ...stale, type: "EMPTY" }, "timezone", "UTC")).not.toHaveProperty("chosenTimezone");
+    const replaced = withoutChosenZone({ pieceName: "schedule", chosenTimezone: "UTC", input: { timezone: "UTC" } });
+    expect(replaced).toEqual({ pieceName: "schedule", input: { timezone: "UTC" } });
+    expect(withoutChosenZone(undefined)).toEqual({});
   });
 
   test("other inputs and other steps never write the record", () => {

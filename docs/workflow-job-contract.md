@@ -75,8 +75,10 @@ it (`settings.chosenTimezone` names the same zone); otherwise in Jarvis's
 configured time zone (`src/workflows/runner/triggers/schedule-zone.ts`). The
 check compares the zone the saved graph actually fires in with the one the job
 asks for, so an unchosen zone on a step does not satisfy it. The composer
-records a zone it writes on the built-in schedule as chosen, and one on the
-dashboard schedule piece only when the contract names that zone.
+records a zone it writes as chosen only when the contract's `trigger.timezone`
+names that same zone: a model may write a zone out of habit, and background
+composers have no person's request at all. A zone written without one stays
+unmarked, runs in Jarvis's zone and is flagged in the trigger list.
 
 ## The check and the repair loop
 

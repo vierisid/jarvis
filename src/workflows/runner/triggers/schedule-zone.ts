@@ -33,6 +33,12 @@ function inputOf(settings: unknown): Record<string, unknown> | null {
   return input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : null;
 }
 
+/** The canonical IANA name of `zone`, or null when it is not a time zone. */
+export function canonicalZone(zone: unknown): string | null {
+  if (typeof zone !== "string" || !zone.trim()) return null;
+  try { return new Intl.DateTimeFormat("en-US", { timeZone: zone.trim() }).resolvedOptions().timeZone; } catch { return null; }
+}
+
 /** The zone the step names in `input.timezone`, chosen or not; undefined when it names none. */
 export function statedScheduleZone(settings: unknown): unknown {
   const zone = inputOf(settings)?.timezone;
@@ -52,24 +58,16 @@ export function effectiveScheduleZone(settings: unknown): string {
 }
 
 /**
- * Record that the zone in `settings.input.timezone` was chosen on purpose, or
- * clear the record when the step names no zone. Mutates `settings`.
- */
-export function markScheduleZoneChosen(settings: Record<string, unknown>): void {
-  const zone = statedScheduleZone(settings);
-  if (typeof zone === "string") settings[CHOSEN_TIMEZONE_KEY] = zone;
-  else delete settings[CHOSEN_TIMEZONE_KEY];
-}
-
-/**
  * A schedule names `statedZone` but runs in Jarvis's zone, because nobody
  * chose it: say so where the trigger list shows it, unless it fires at the
  * same moments in both zones (hourly between whole-hour zones). Its next
  * firing times, now and half a year on (the other side of daylight saving),
  * are read in the stated zone: half-hour zones and schedules tied to an hour,
  * a day or a date differ there. Callers pass only a zone that is not used.
+ * `pickable` is false for a trigger with no zone to pick (the schedule
+ * piece's hourly and every-few-minutes triggers hard-code UTC).
  */
-export function scheduleZoneWarning(expression: string, statedZone: unknown, now = Date.now()): string | undefined {
+export function scheduleZoneWarning(expression: string, statedZone: unknown, now = Date.now(), pickable = true): string | undefined {
   if (statedZone === undefined || statedZone === null || statedZone === "" || expression.trim().startsWith("@")) return undefined;
   const actual = defaultScheduleZone();
   let stated: string;
@@ -81,7 +79,7 @@ export function scheduleZoneWarning(expression: string, statedZone: unknown, now
   const year = 366 * 24 * 60 * 60_000;
   const upcoming = [now, now + year / 2].flatMap((from) => CronScheduler.occurrencesBetween(expression, from, from + year, 8));
   if (upcoming.every((o) => CronScheduler.matchesIn(expression, new Date(o.at), stated))) return undefined;
-  return `This schedule names ${stated}, but nobody chose that zone for it, so it runs in Jarvis's time zone (${actual}): "${expression}" fires at that time in ${actual}. Pick the zone in the editor to use it.`;
+  return `This schedule names ${stated}, but nobody chose that zone for it, so it runs in Jarvis's time zone (${actual}): "${expression}" fires at that time in ${actual}.${pickable ? " Pick the zone in the editor to use it." : ""}`;
 }
 
 /** The bundled schedule piece (`@activepieces/piece-schedule`). */

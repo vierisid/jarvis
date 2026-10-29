@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { composeFlow } from "./workflow-composer";
+import { setCronTimezone } from "../../lib/cron-scheduler";
+import { chosenScheduleZone, scheduleZoneWarning, statedScheduleZone } from "../../workflows/runner/triggers/schedule-zone";
 import { sampleCatalog } from "../../workflows/runtime/test-fixtures";
 import { PieceCatalog, type PieceCatalogEntry, type PieceLookup } from "../../workflows/runtime/piece-catalog";
 import type {
@@ -1609,13 +1611,14 @@ describe("tool-loop composer", () => {
     ]);
     const result = await composeFlow({ llm, pieceRegistry: makeRegistry() }, {
       name: 'Weekday priorities', description: 'Every weekday at 09:00 Europe/Rome, notify me. No AI step.',
+      contract: { trigger: { kind: 'schedule', timezone: 'Europe/Rome' } },
     });
     expect(llm.toolTurns[1]!.messages.at(-1)!.content).toContain('input.timezone');
     expect(llm.toolTurns[1]!.messages.at(-1)!.content).toContain('daylight-saving');
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.flow.trigger.settings?.input).toEqual({ cron_expression: '0 9 * * 1-5', timezone: 'Europe/Rome' });
-      // The zone came from the request, so it is recorded as chosen and honoured.
+      // The contract names the zone the graph uses, so it is recorded as chosen and honoured.
       expect((result.flow.trigger.settings as Record<string, unknown>).chosenTimezone).toBe('Europe/Rome');
       expect(result.flow.trigger.nextAction?.settings?.input?.message).toBe('Choose your three priorities for today.');
       expect(result.flow.trigger.nextAction?.nextAction).toBeUndefined();
@@ -1635,10 +1638,57 @@ describe("tool-loop composer", () => {
     expect(system).toContain("only when the request names a time zone");
   });
 
+  test('a zone the model writes without a contract naming it stays unchosen: it runs in Jarvis\'s zone, warned', async () => {
+    setCronTimezone('Europe/Rome');
+    try {
+      for (const contract of [undefined, { trigger: { kind: 'schedule' as const } }, { trigger: { kind: 'schedule' as const, timezone: 'America/New_York' } }]) {
+        const flow = validFlowArgs();
+        Object.assign(flow.trigger, { type: 'PIECE_TRIGGER', settings: { pieceName: 'schedule', input: { cron_expression: '0 9 * * 1-5', timezone: 'UTC' } } });
+        const llm = new StubToolLlm([{ tool_calls: [tc('1', 'submit_flow', flow)] }, { tool_calls: [tc('b', 'report_blocked', { reason: 'x' })] }]);
+        const result = await composeFlow({ llm, pieceRegistry: makeRegistry() }, { name: 'x', description: 'Remind me every weekday at 9', ...(contract ? { contract } : {}) });
+        if (contract?.trigger.timezone) { expect(result.ok).toBe(false); continue; } // the contract check refuses UTC for New York
+        expect(result.ok).toBe(true);
+        if (!result.ok) continue;
+        expect(result.flow.trigger.settings).not.toHaveProperty('chosenTimezone');
+        expect(chosenScheduleZone(result.flow.trigger.settings)).toBeUndefined();
+        expect(scheduleZoneWarning('0 9 * * 1-5', statedScheduleZone(result.flow.trigger.settings))).toContain('This schedule names UTC');
+      }
+      // With the contract naming the zone (spelt differently), it is chosen.
+      const flow = validFlowArgs();
+      Object.assign(flow.trigger, { type: 'PIECE_TRIGGER', settings: { pieceName: 'schedule', input: { cron_expression: '0 9 * * 1-5', timezone: 'UTC' } } });
+      const llm = new StubToolLlm([{ tool_calls: [tc('1', 'submit_flow', flow)] }]);
+      const result = await composeFlow({ llm, pieceRegistry: makeRegistry() }, { name: 'x', description: 'Every weekday at 9 UTC',
+        contract: { trigger: { kind: 'schedule', timezone: 'utc' } } });
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(chosenScheduleZone(result.flow.trigger.settings)).toBe('UTC');
+    } finally { setCronTimezone(null); }
+  });
+
+  test('the schedule piece\'s details give Jarvis\'s zone as the timezone default, not UTC', async () => {
+    const registry = new PieceCatalog([...makeRegistry().list(), { name: '@activepieces/piece-schedule', displayName: 'Schedule', description: 'Schedules', actions: {}, triggers: {
+      every_day: { name: 'every_day', displayName: 'Every Day', description: 'Daily', inputSchema: { fields: [
+        { name: 'timezone', label: 'Timezone', type: 'enum', required: true, default: 'UTC', options: [{ value: 'UTC', label: 'UTC' }, { value: 'Europe/Rome', label: 'Rome' }] },
+      ] } },
+    } } as PieceCatalogEntry]);
+    setCronTimezone('Europe/Rome');
+    try {
+      const llm = new StubToolLlm([
+        { tool_calls: [tc('1', 'get_piece_details', { pieceName: '@activepieces/piece-schedule' })] },
+        { tool_calls: [tc('b', 'report_blocked', { reason: 'x' })] },
+      ]);
+      await composeFlow({ llm, pieceRegistry: registry }, { name: 'x', description: 'x' });
+      const details = llm.toolTurns[1]!.messages.at(-1)!.content;
+      expect(details).toContain('timezone');
+      expect(details).toContain('Europe/Rome');
+      expect(details).not.toMatch(/default[^\n]*UTC/i);
+    } finally { setCronTimezone(null); }
+  });
+
   test('a composed schedule without a zone, or with a model-written record, is not marked chosen', async () => {
     for (const settings of [
       { pieceName: 'schedule', input: { cron_expression: '0 9 * * 1-5' } },
       { pieceName: 'schedule', chosenTimezone: 'UTC', input: { cron_expression: '0 9 * * 1-5' } },
+      { pieceName: 'schedule', chosenTimezone: 'UTC', input: { cron_expression: '0 9 * * 1-5', timezone: 'UTC' } },
     ]) {
       const flow = validFlowArgs();
       Object.assign(flow.trigger, { type: 'PIECE_TRIGGER', settings });
