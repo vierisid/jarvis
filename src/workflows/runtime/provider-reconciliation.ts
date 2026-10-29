@@ -1,5 +1,5 @@
 /** Q-07: read back exact receipts only. A missing message is never proof of no send. */
-import { getConnection, getConnectionByExternalId } from '../db/repos/app-connection';
+import { getConnection, getConnectionByExternalId, type AppConnection } from '../db/repos/app-connection';
 import { getFlowVersion } from '../db/repos/flow-version';
 import type { WorkflowEffect } from '../db/repos/workflow-effect';
 import { walkFlowNodes } from '../db/flow-graph';
@@ -28,8 +28,26 @@ export function captureProviderBinding(input: {
     const token = connection?.value.access_token;
     if (!connection || connection.type !== 'OAUTH2' || connection.status !== 'ACTIVE' || typeof token !== 'string'
       || digest(token) !== input.credentialDigest) return undefined;
-    return { connectionId: connection.id, credentialDigest: input.credentialDigest };
+    return { connectionId: connection.id, credentialDigest: input.credentialDigest, credentialGeneration: connection.credentialGeneration };
   } catch { return undefined; }
+}
+
+/**
+ * Whether the stored row still holds the credential a binding was taken
+ * against. A token refresh keeps the row's credential generation, so a
+ * refreshed token still matches; a person replacing the credential (another
+ * account, perhaps) advances it, and a deleted and re-created row has another
+ * id. A binding recorded without a generation can only compare the token
+ * digest, as it did when it was recorded: it never matches another account,
+ * and a refresh since then reads as a change.
+ */
+export function providerBindingHolds(binding: NonNullable<WorkflowEffect['providerBinding']>,
+  connection: AppConnection | null, projectId: string, piece: string): connection is AppConnection {
+  if (!connection || connection.id !== binding.connectionId || connection.projectId !== projectId || connection.pieceName !== piece
+    || connection.type !== 'OAUTH2' || connection.status !== 'ACTIVE') return false;
+  if (binding.credentialGeneration !== undefined) return connection.credentialGeneration === binding.credentialGeneration;
+  const token = connection.value.access_token;
+  return typeof token === 'string' && digest(token) === binding.credentialDigest;
 }
 
 function object(value: unknown): Record<string, unknown> | null {

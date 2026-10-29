@@ -25,8 +25,14 @@ export interface WorkflowEffect {
    * succeeded; the service was not called again.
    */
   replayRefusal?: { outcome: ActionOutcome; at: number };
-  /** Q-07: native connection identity at dispatch; no credential is retained. */
-  providerBinding?: { connectionId: string; credentialDigest: string };
+  /**
+   * Q-07: native connection identity at dispatch; no credential is retained.
+   * `credentialDigest` is the token the engine resolved when the effect was
+   * recorded. `credentialGeneration` is the row's credential generation then:
+   * a token refresh keeps it, a person replacing the credential advances it.
+   * A binding recorded before it existed has no generation.
+   */
+  providerBinding?: { connectionId: string; credentialDigest: string; credentialGeneration?: number };
   /**
    * #1039: the step is waiting for a place in its flow's card budget, since
    * `since`. Kept when it waits again, so it keeps its place in the queue.

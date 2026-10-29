@@ -1,5 +1,5 @@
 /** Real builder/storage/worker/engine with local Gmail and model fixtures. No Google calls. */
-import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { afterAll, beforeAll, expect, spyOn, test } from 'bun:test';
 import { dirname, join } from 'node:path';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -9,7 +9,8 @@ import { createFlow, getFlow, listFlows, setPublishedVersion, updateFlowStatus }
 import { createDraftVersion, getLatestDraft, lockVersion, updateDraftVersion } from '../db/repos/flow-version';
 import { createFlowRun, getFlowRun, listRuns, updateRun } from '../db/repos/flow-run';
 import { enqueue } from '../db/repos/job-queue';
-import { upsertConnection } from '../db/repos/app-connection';
+import * as appConnections from '../db/repos/app-connection';
+import { getConnectionByExternalId, replaceRefreshedConnectionValue, updateConnectionById, upsertConnection } from '../db/repos/app-connection';
 import { configureWorkflowReadiness, versionReadiness } from '../db/repos/flow-readiness';
 import { pruneFires, FIRE_RETENTION_MS } from '../db/repos/trigger-fire';
 import { listWorkflowEffects } from '../db/repos/workflow-effect';
@@ -42,6 +43,9 @@ let provider:ReturnType<typeof Bun.serve>;
 let reply='', loseReply=false, unconfirmed=false, loseNotification=false, refuse=0, dashboardClosed=false;
 // stopOnMissing: a PATCH that finds no contact stops its run first. hold: the first PATCH for holdEmail waits on it.
 let stopOnMissing=false, hold:Promise<void>|null=null, holdEmail='';
+// skew: how far the credential resolver's clock runs ahead. beforeAuthorize runs after the engine fetched its credential.
+let skew=0, beforeAuthorize:(()=>void)|null=null;
+const bearers:string[]=[];
 const contacts = new Map<string,{id:string;properties:Record<string,any>}>();
 const calls:Array<{method:string;email:string}> = [], notifications:string[] = [], runIds:string[]=[];
 const versions:Record<string,string>={};
@@ -82,17 +86,20 @@ beforeAll(async()=>{
     const installed=join(dir,'node_modules',meta.name); mkdirSync(dirname(installed),{recursive:true}); symlinkSync(join(path,'dist'),installed,'dir');
   }
   upsertConnection({externalId:'fixture-hubspot',displayName:'Fixture',type:'OAUTH2',pieceName:HUBSPOT,pieceVersion:'0.12.1',value:{access_token:'synthetic-only'}});
-  const services=buildSandboxServiceBackends({credentialResolver:new CredentialResolver(),
+  const services=buildSandboxServiceBackends({credentialResolver:new CredentialResolver({now:()=>Date.now()+skew,
+      tokenTransport:async()=>({status:200,body:{access_token:'refreshed-token',expires_in:3600}})}),
     authorityEngine:new AuthorityEngine({default_level:10,governed_categories:[],overrides:[],context_rules:[],learning:{enabled:false,suggest_threshold:10},emergency_state:'normal'}),
     emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
     hubspotFetch: (async(url:any,init:any)=>{
       expect(new URL(String(url)).origin).toBe('https://api.hubapi.com');
-      expect(init.headers.Authorization).toBe('Bearer synthetic-only');
+      bearers.push(init.headers.Authorization);
       const fixtureUrl=new URL(String(url)); fixtureUrl.protocol='http:';fixtureUrl.host='127.0.0.1:'+provider.port;
       return fetch(fixtureUrl,init);
     }) as typeof fetch,
     llmManager:{chat:async()=>({content:reply,finish_reason:'end_turn',tool_calls:[],usage:{input_tokens:1,output_tokens:1}})} as any,
     channelService:{} as any,wsService:{broadcastNotificationToDashboard:(text:string)=>{if(dashboardClosed)return 0;notifications.push(text);if(loseNotification)throw Error('Lost notification reply');return 1;}} as any});
+  const authorize=services.pieceAuthorize!;
+  services.pieceAuthorize=(async(...args:Parameters<typeof authorize>)=>{beforeAuthorize?.();return authorize(...args);}) as typeof authorize;
   api=new SandboxApi({services}); await api.start({port:0});
   runtime=new EngineRuntime({api,pool:true,bundlePath:bundle.bundlePath,expectedDigest:bundle.digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code')});
   const handle=await runtime.acquire({runId:'lead-fixture-metadata',projectId:DEFAULT_IDS.project});
@@ -103,9 +110,9 @@ beforeAll(async()=>{
 },120_000);
 afterAll(async()=>{await manager?.stop();await runtime?.shutdown();await api?.stop();provider?.stop(true);closeWorkflowDb();setEncryptionKey(null);
   for(const id of runIds)rmSync(join(workflowLogsBase(),id+'.bin'),{force:true}); if(dir)rmSync(dir,{recursive:true,force:true});});
-function graph(configured=true):any {
+function graph(configured=true,connection='fixture-hubspot'):any {
   const action=(name:string,pieceName:string,actionName:string,input:object)=>({name,type:'PIECE',settings:{pieceName,pieceVersion:versions[pieceName],actionName,input}});
-  const upsert=(name:string,properties:object)=>action(name,HUBSPOT,'create-or-update-contact',{...(configured?{auth:'{{connections.fixture-hubspot}}'}:{}),email:configured?'{{trigger.email}}':'',objectProperties:configured?properties:null});
+  const upsert=(name:string,properties:object)=>action(name,HUBSPOT,'create-or-update-contact',{...(configured?{auth:'{{connections.'+connection+'}}'}:{}),email:configured?'{{trigger.email}}':'',objectProperties:configured?properties:null});
   const condition=(firstValue:string,operator:string,secondValue?:string)=>({firstValue,operator,...(secondValue===undefined?{}:{secondValue})});
   const route=(name:string,conditions:any[][],yes:any,no:any=null)=>({name,type:'ROUTER',settings:{executionType:'EXECUTE_FIRST_MATCH',branches:[{branchName:'Match',branchType:'CONDITION',conditions},{branchName:'Otherwise',branchType:'FALLBACK'}]},children:[yes,no]});
   const review=upsert('review',{qualification_status:'Needs review'});
@@ -118,9 +125,9 @@ function graph(configured=true):any {
   const first:any=upsert('upsert',{firstname:'{{trigger.name}}'});first.nextAction=classify;
   return {name:'trigger',type:'PIECE_TRIGGER',settings:{pieceName:'webhook',input:{submission_id_field:configured?'id':'',submission_email_field:configured?'email':''}},nextAction:first};
 }
-async function fixture(){
-  loseReply=unconfirmed=loseNotification=dashboardClosed=stopOnMissing=false;refuse=0;hold=null;
-  const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Lead fixture',trigger:graph()});
+async function fixture(connection?:string){
+  loseReply=unconfirmed=loseNotification=dashboardClosed=stopOnMissing=false;refuse=0;hold=null;skew=0;beforeAuthorize=null;
+  const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Lead fixture',trigger:graph(true,connection)});
   expect(versionReadiness(flow.id,version.id).issues).toEqual([]);
   lockVersion(version.id);setPublishedVersion(flow.id,version.id);updateFlowStatus(flow.id,'ENABLED');await manager.refresh(flow.id);
   const submit=async(id:string,email=flow.id.toLowerCase()+'@example.com',name='Alice')=>{
@@ -200,6 +207,68 @@ test('uncertain notification never repeats on a later submission',async()=>{
   const first=await f.send('one');loseNotification=false;await f.send('two');expect(notifications.length-before).toBe(1);
   // The key stays consumed, and the record says why: the send may have arrived.
   expect(listWorkflowEffects(first.id).find(e=>e.provenance.piece===native('notify'))?.outcome).toMatchObject({status:'unknown',code:'DELIVERY_UNCERTAIN',effect:'may_have_occurred'});
+},45_000);
+
+// #954: the stored HubSpot row the engine resolved may be refreshed, expire or be replaced before dispatch.
+const hubspotRow=(externalId:string,value:Record<string,unknown>)=>upsertConnection({externalId,displayName:externalId,type:'OAUTH2',pieceName:HUBSPOT,pieceVersion:'0.12.1',
+  value:{claimed_at:Math.round(Date.now()/1000),expires_in:3600,...value}});
+const refreshDetails={refresh_token:'refresh-1',client_id:'client',client_secret:'secret',token_url:'https://token.example.test/oauth'};
+const contactEffect=(runId:string)=>listWorkflowEffects(runId).find(e=>e.provenance.piece===HUBSPOT)!;
+// Rewrites the row the first time the dispatch reads it: after the engine resolved its token, before the upsert.
+function onDispatchRead(externalId:string,change:(row:appConnections.AppConnection)=>void){
+  const read=appConnections.getConnection;let seen=0;
+  const spy=spyOn(appConnections,'getConnection').mockImplementation(id=>{
+    const row=read(id);if(row?.externalId===externalId && seen++===0)change(row);return read(id);});
+  return {spy,seen:()=>seen};
+}
+test('a stored HubSpot token that nears expiry before dispatch is refreshed and the upsert sends the fresh one',async()=>{
+  hubspotRow('hubspot-near-expiry',{access_token:'near-expiry',...refreshDetails});
+  const f=await fixture('hubspot-near-expiry');reply=answer(10);const start=bearers.length;
+  // The engine fetched the token with an hour left; by dispatch it is inside the refresh window.
+  beforeAuthorize=()=>{skew=50*60_000;};
+  try {
+    const run=await f.send('one');expect(run.status).toBe('SUCCEEDED');
+    expect(bearers.slice(start).length).toBeGreaterThan(0);
+    expect(new Set(bearers.slice(start))).toEqual(new Set(['Bearer refreshed-token']));
+    expect(getConnectionByExternalId(DEFAULT_IDS.project,HUBSPOT,'hubspot-near-expiry')!.value.access_token).toBe('refreshed-token');
+    expect(contactEffect(run.id).status).toBe('succeeded');
+  } finally { skew=0;beforeAuthorize=null; }
+},45_000);
+test('an expired stored HubSpot token without refresh details asks to reconnect before any write and leaves the contact unclaimed',async()=>{
+  hubspotRow('hubspot-no-refresh',{access_token:'pasted-only'});
+  const f=await fixture('hubspot-no-refresh');reply=answer(10);const before=notifications.length;
+  const email=f.flow.id.toLowerCase()+'@example.com';
+  beforeAuthorize=()=>{skew=61*60_000;};
+  try {
+    const run=await f.send('one');expect(run.status).toBe('FAILED');
+    const effect=contactEffect(run.id);
+    expect(effect.outcome).toMatchObject({status:'blocked',code:'CONNECTION_EXPIRED',effect:'not_started'});
+    expect(effect.outcome!.status!=='succeeded' && effect.outcome!.message).toContain('Reconnect the selected HubSpot account (hubspot-no-refresh)');
+    expect(calls.filter(c=>c.email===email)).toEqual([]);
+    expect(getWorkflowDb().query('SELECT COUNT(*) AS n FROM workflow_effect_identity WHERE owner=?').get(effect.id)).toEqual({n:0});
+    expect(notifications.length).toBe(before);
+  } finally { skew=0;beforeAuthorize=null; }
+},45_000);
+test('a token another run refreshed between the engine fetch and dispatch is the same account and is sent',async()=>{
+  hubspotRow('hubspot-refreshed-meanwhile',{access_token:'before-refresh',...refreshDetails});
+  const f=await fixture('hubspot-refreshed-meanwhile');reply=answer(10);const start=bearers.length;
+  const hook=onDispatchRead('hubspot-refreshed-meanwhile',row=>expect(replaceRefreshedConnectionValue(row.projectId,row.id,row.value,
+    {...row.value,access_token:'refreshed-meanwhile',claimed_at:Math.round(Date.now()/1000)})).toBe('stored'));
+  try {
+    const run=await f.send('one');expect(hook.seen()).toBeGreaterThan(0);expect(run.status).toBe('SUCCEEDED');
+    expect(new Set(bearers.slice(start))).toEqual(new Set(['Bearer refreshed-meanwhile']));
+  } finally { hook.spy.mockRestore(); }
+},45_000);
+test('a HubSpot credential a person replaced between the engine fetch and dispatch is refused before any write',async()=>{
+  hubspotRow('hubspot-switched',{access_token:'first-account'});
+  const f=await fixture('hubspot-switched');reply=answer(10);const before=notifications.length;
+  const email=f.flow.id.toLowerCase()+'@example.com';
+  const hook=onDispatchRead('hubspot-switched',row=>{updateConnectionById(row.projectId,row.id,{value:{access_token:'second-account'}});});
+  try {
+    const run=await f.send('one');expect(hook.seen()).toBeGreaterThan(0);expect(run.status).toBe('FAILED');
+    expect(JSON.stringify(contactEffect(run.id))).toContain('HubSpot connection changed before dispatch');
+    expect(calls.filter(c=>c.email===email)).toEqual([]);expect(notifications.length).toBe(before);
+  } finally { hook.spy.mockRestore(); }
 },45_000);
 
 test('a definite provider refusal records not started and releases the contact for a later submission',async()=>{

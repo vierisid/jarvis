@@ -46,6 +46,7 @@ import type { EventsPollFn } from "../sandbox-api/routes/jarvis-events";
 import type { WorkflowsStartFn } from "../sandbox-api/routes/jarvis-workflows";
 import type { SandboxApiServices } from "../sandbox-api/server";
 import type { CredentialResolver } from "../credentials/adapter";
+import { ConnectionCredentialError } from "../credentials/pasted-oauth2";
 import { WorkflowEventBuffer } from "./event-buffer";
 import { cancellableWorkflowService } from "./cancellation";
 import { closeEffectApproval, WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
@@ -57,7 +58,7 @@ import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceActionName, reprojectPieceInput,
   resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion, PIECE_ABOVE_LEVEL_ASKS, PIECE_ABOVE_LEVEL_FLOOR } from './piece-effects';
 import { assertRecipientFactsCurrent, recipientAddresses, recipientFactPins, type FactPin } from './fact-bindings';
-import { captureProviderBinding } from './provider-reconciliation';
+import { captureProviderBinding, providerBindingHolds } from './provider-reconciliation';
 import { recordPieceCompletion } from './piece-completion';
 import { defangPieceProjection } from './piece-effect-receipt';
 import { getFlowInProject } from '../db/repos/flow';
@@ -1103,10 +1104,30 @@ export function buildSandboxServiceBackends(
       execute: async (args, checkpoint) => {
         checkpoint();
         if (contact) {
+          // The row the engine resolved, still holding the same account's
+          // credential: a token refresh since then keeps it, a person
+          // replacing the credential does not.
           const connection = getConnection(providerBinding!.connectionId);
-          const token = connection?.value.access_token;
-          if (!connection || connection.status !== 'ACTIVE' || connection.projectId !== ctx.projectId || typeof token !== 'string' || digest(token) !== providerBinding!.credentialDigest)
+          if (!providerBindingHolds(providerBinding!, connection, ctx.projectId, req.piece))
             throw new Error('HubSpot connection changed before dispatch');
+          // A stored OAuth2 token about to expire is refreshed here (#954), as
+          // the engine's connection route does, only once the binding held.
+          // A failure is before any HubSpot call and before the contact is
+          // claimed, so a later submission can still write it.
+          let token: unknown;
+          try {
+            token = (await opts.credentialResolver.fresh({ type: connection.type, value: connection.value,
+              pieceName: connection.pieceName, status: connection.status,
+              stored: { id: connection.id, projectId: connection.projectId, externalId: connection.externalId, generation: connection.credentialGeneration } })).value.access_token;
+          } catch (error) {
+            if (!(error instanceof ConnectionCredentialError)) throw error;
+            throw new ActionOutcomeError({ status: 'blocked', code: error.code,
+              message: `Reconnect the selected HubSpot account (${connection.externalId}): ${error.message}`, effect: 'not_started' });
+          }
+          if (typeof token !== 'string' || !token)
+            throw new ActionOutcomeError({ status: 'blocked', code: 'CONNECTION_EXPIRED',
+              message: `Reconnect the selected HubSpot account (${connection.externalId}): it holds no access token`, effect: 'not_started' });
+          checkpoint();
           const values = hubspotContactInput(args);
           const identity = digest(['hubspot-contact-v1',ctx.projectId,connection.id,values.email]);
           const owner = workflowEffectId(ctx.runId,ctx.stepName!,ctx.executionPath ?? [],route);

@@ -4,6 +4,10 @@ import { initWorkflowDb, closeWorkflowDb } from '../db';
 import { claimIdentity, completeIdentity } from '../db/repos/effect-identity';
 import { HubspotNotStartedError, hubspotContactInput, upsertHubspotContact } from './hubspot-contact';
 import { isGovernedPiece, tracksPieceCompletion } from './piece-effects';
+import { setEncryptionKey } from '../db/encryption';
+import { getConnection, replaceRefreshedConnectionValue, updateConnectionById, upsertConnection } from '../db/repos/app-connection';
+import { providerBindingHolds } from './provider-reconciliation';
+import { digest } from './effect-context';
 
 beforeEach(() => initWorkflowDb(':memory:'));
 afterEach(() => closeWorkflowDb());
@@ -111,4 +115,24 @@ test('readback reports actual invoice admission and write coverage with limits',
   expect(report.safeguards.map(s=>s.kind)).toEqual(['attachment-admission','effect-receipt']);
   expect(report.safeguards[0]!.limits).toContain('Different PDF bytes');
   expect(workflowSafeguards({name:'bad',type:'PIECE',settings:{pieceName:'webhook',input:'invalid'}}).safeguards).toEqual([]);
+});
+test('a provider binding holds across a token refresh, never across a replaced credential, and an older digest-only binding still compares its token', () => {
+  setEncryptionKey(Buffer.alloc(32, 68));
+  try {
+    const HUBSPOT = '@activepieces/piece-hubspot';
+    const row = upsertConnection({ externalId: 'hs', displayName: 'HubSpot', type: 'OAUTH2', pieceName: HUBSPOT, pieceVersion: '0.12.1', value: { access_token: 'one' } });
+    const pinned = { connectionId: row.id, credentialDigest: digest('one'), credentialGeneration: row.credentialGeneration };
+    const legacy = { connectionId: row.id, credentialDigest: digest('one') };
+    const holds = (binding: typeof legacy) => providerBindingHolds(binding, getConnection(row.id), row.projectId, HUBSPOT);
+    expect(holds(pinned)).toBe(true); expect(holds(legacy)).toBe(true);
+    expect(providerBindingHolds(pinned, getConnection(row.id), 'another-project', HUBSPOT)).toBe(false);
+    expect(providerBindingHolds(pinned, getConnection(row.id), row.projectId, '@activepieces/piece-gmail')).toBe(false);
+    // A refresh keeps the generation: the same account.
+    replaceRefreshedConnectionValue(row.projectId, row.id, { access_token: 'one' }, { access_token: 'two' });
+    expect(holds(pinned)).toBe(true);
+    // A digest-only binding cannot tell a refresh from another account, so it refuses rather than pass one.
+    expect(holds(legacy)).toBe(false);
+    updateConnectionById(row.projectId, row.id, { value: { access_token: 'other-account' } });
+    expect(holds(pinned)).toBe(false);
+  } finally { setEncryptionKey(null); }
 });
