@@ -251,7 +251,7 @@ function CanvasHeader({
         >
           {saving ? "Saving…" : "Save changes"}
         </BriefButton>
-        <span className="brief-canvas-feedback" role="status">
+        <span className="brief-canvas-feedback" role={message?.tone === 'warn' ? 'alert' : 'status'} data-tone={message?.tone}>
           {editor.loading
             ? "Loading workflow…"
             : editor.error

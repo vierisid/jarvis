@@ -109,6 +109,18 @@ test("version pin rejects another latest draft before the hook can edit it", asy
   expect(editor.draftTrigger).toBeNull();
   expect(fixture.requests.every((r) => r.method === "GET")).toBe(true);
 });
+test('a stale save retains local edits, and reload takes the latest authoring revision', async () => {
+  await mount();
+  const newer = fixture.snapshot(); newer.version.displayName = 'Changed elsewhere';
+  await fixture.request(`/api/workflows/meeting/versions/${fixture.versionId}`, { method: 'PATCH', body: JSON.stringify({ ...newer.version, uiMeta: newer.uiMeta }) });
+  await React.act(async () => editor.setVersionDisplayName('My unsaved name'));
+  await React.act(async () => { expect((await editor.save()).ok).toBe(false); });
+  expect(editor.dirty).toBe(true); expect(editor.version?.displayName).toBe('My unsaved name');
+  expect(fixture.snapshot().version.displayName).toBe('Changed elsewhere');
+  await React.act(async () => editor.reload());
+  expect(editor.version?.displayName).toBe('Changed elsewhere'); expect(editor.dirty).toBe(false);
+});
+
 test("real graph edits serialize branch, loop, nested orphan settings and positions", async () => {
   await mount();
   expect(editor.allSteps.map((s) => s.step.type)).toContain("LOOP_ON_ITEMS");

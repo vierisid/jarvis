@@ -65,6 +65,17 @@
   margin-left: auto;
   color: var(--brief-secondary);
 }
+.brief-root .brief-canvas-feedback[data-tone="warn"] {
+  flex-basis: 100%;
+  margin: 8px 0 0;
+  padding: 12px;
+  border: 1px solid var(--brief-card-edge);
+  border-radius: 8px;
+  color: var(--brief-ink);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
 .brief-root .brief-workflow-canvas .wf-editor__body {
   flex: 1;
   min-height: 0;

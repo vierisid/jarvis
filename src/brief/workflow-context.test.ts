@@ -41,6 +41,20 @@ beforeEach(() => {
 afterEach(() => { setEncryptionKey(null); closeWorkflowDb(); rmSync(directory, { recursive: true, force: true }); });
 const command = (requestId = 'fixture-request', payload: unknown = {}) => ({ brief: { scopeId: DEFAULT_IDS.project, versionId, requestId }, payload });
 function run() { return createFlowRun({ flowId, flowVersionId: versionId }); }
+test('an inspectable empty configuration is empty, not a retrieval failure', () => {
+  const context = service.selection(flowId, versionId).context;
+  expect(Object.values(context.groups).every(group => group.status === 'empty')).toBe(true);
+});
+test('current draft configuration is inspectable without substituting it for historical run evidence', () => {
+  const draft = createDraftVersion({ flowId, displayName: 'Editable', trigger: { name: 'trigger', type: 'EMPTY', settings: {} } });
+  const configured = service.selection(flowId, draft.id);
+  expect(configured.canvas.status).toBe('ready');
+  expect(Object.values(configured.context.groups).every(group => group.status === 'empty')).toBe(true);
+  const r = createFlowRun({ flowId, flowVersionId: draft.id });
+  const historical = service.selection(flowId, draft.id, r.id);
+  expect(historical.canvas.status).toBe('unavailable');
+  expect(historical.context.groups.rules.status).toBe('unavailable');
+});
 function progressWriter(runId: string) {
   const registry = new SandboxRegistry();
   registry.register({ sandboxId: 'fixture', runId, projectId: DEFAULT_IDS.project, engineToken: 'fixture',
@@ -280,7 +294,7 @@ test('recorded connections come from the Q-05 run bindings, identity only', () =
   expect(bindings.data.map(e => [e.source?.id, e.availability])).toEqual([['conn-1', 'available'], ['jarvis:google', 'available'], ['conn-2', 'stale']]);
   const raw = JSON.stringify(bindings);
   expect(raw).not.toContain('fixture-secret'); expect(raw).not.toContain('fixture-grant');
-  expect(service.selection(flowId, versionId).context.groups.bindings.status).toBe('unavailable');
+  expect(service.selection(flowId, versionId).context.groups.bindings.status).toBe('empty');
 });
 test('additive schema upgrades twice without inventing run evidence or deleting request outcomes', () => {
   const result = service.start(flowId, command()); createSchema(db); createSchema(db);
@@ -381,7 +395,7 @@ test('configured preparation references are scoped to their exact version and ne
   expect(JSON.stringify(c.groups.goal)).toContain(goal.id); expect(c.groups.memory.status).toBe('ready');
   expect(JSON.stringify(c.groups.memory)).toContain('missing');
   const other = lockVersion(createDraftVersion({ flowId, displayName: 'Other', trigger: { name: 'trigger', type: 'EMPTY', settings: {} } }).id);
-  expect(service.selection(flowId, other.id).context.groups.goal.status).toBe('unavailable');
+  expect(service.selection(flowId, other.id).context.groups.goal.status).toBe('empty');
   const r = run(); expect(service.selection(flowId, versionId, r.id).context.groups.goal.status).toBe('unavailable');
 });
 test('connection inspection never decrypts secrets or reads labels, even if the credential cannot be decrypted', () => {
@@ -477,7 +491,7 @@ test('configured context shows Q-05 pin drift for a connection and the computer,
   // A version with no computer step does not claim the pinned computer drifted.
   const plain = createDraftVersion({ flowId, displayName: 'No computer', trigger: { name: 'trigger', type: 'EMPTY', settings: { input: { auth: '{{connections.fixture-account}}' } } } });
   db.run("UPDATE flow_version SET state='LOCKED' WHERE id=?", [plain.id]);
-  expect(service.selection(flowId, plain.id).context.groups.target.status).toBe('unavailable');
+  expect(service.selection(flowId, plain.id).context.groups.target.status).toBe('empty');
   // An explicit target naming the pinned computer stays authoritative over the drift entry.
   const named = createDraftVersion({ flowId, displayName: 'Named', trigger: { name: 'trigger', type: 'EMPTY', settings: { input: { sidecarId: 'laptop' } },
     nextAction: { name: 'read', type: 'PIECE', settings: { pieceName: TOOL, actionName: 'invoke', input: { toolName: 'read_file', params: { path: '/tmp/report.csv' } } } } } });

@@ -84,8 +84,9 @@ export class WorkflowContext {
     if (size.n > LIMIT.sourceBytes) throw new WorkflowInspectionError('source_too_large', 413);
     return this.db.query<Version, [string, string]>('SELECT id,flow_id,state,trigger,connection_ids,updated FROM flow_version WHERE id=? AND flow_id=?').get(versionId, flowId);
   }
-  private nodes(v: Version | null): Record<string, unknown>[] | null {
-    if (!v || v.state !== 'LOCKED') return null;
+  private nodes(v: Version | null, configured = false): Record<string, unknown>[] | null {
+    // Current configuration can describe a draft. Run evidence must still be immutable.
+    if (!v || (!configured && v.state !== 'LOCKED')) return null;
     const pending: unknown[] = [boundedJson(v.trigger)], result: Record<string, unknown>[] = [], names = new Set<string>();
     while (pending.length) {
       const node = pending.pop();
@@ -129,7 +130,7 @@ export class WorkflowContext {
       if (!v && !r) throw new WorkflowInspectionError('not_found', 404);
       const recordedVersion = r ? this.db.query<{ was_locked: number }, [string]>('SELECT was_locked FROM workflow_run_inspection_versions WHERE run_id=?').get(r.id) : null;
       const historical = !r || (recordedVersion ? recordedVersion.was_locked === 1 : !!v && v.updated < r.created);
-      const nodes = this.nodes(historical ? v : null), context = this.context(flowId, versionId, r, v, nodes);
+      const nodes = this.nodes(historical ? v : null, !r), context = this.context(flowId, versionId, r, v, nodes);
       const canvas = nodes ? ready({ nodes: nodes.map(n => {
         const settings = object(n.settings) ? n.settings : {};
         return { id: String(n.name), type: safeName(n.type, 'UNKNOWN'), title: `Step ${n.name}`,
@@ -245,8 +246,8 @@ export class WorkflowContext {
       // Include restricted entries as well as typed references in the group cap.
       if (rows[group].length > LIMIT.rows) throw new WorkflowInspectionError('context_capacity', 413);
       projected[group] = rows[group].length ? ready(rows[group])
-        : missing(r ? 'No retained evidence recorded for this context group; current configuration was not substituted.'
-        : !nodes ? 'Immutable configured context is unavailable.' : 'No explicit configured reference is available.');
+        : r ? missing('No retained evidence recorded for this context group; current configuration was not substituted.')
+        : !nodes ? missing('Immutable configured context is unavailable.') : { status: 'empty' };
     }
     return { scopeId: this.projectId, flowId, versionId, basis: r ? 'recorded' : 'configured', runId: r?.id ?? null,
       runLabel: r ? runLabel(r) : null, asOf: r?.updated ?? v?.updated ?? null, groups: projected };
