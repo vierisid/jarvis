@@ -221,7 +221,6 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       "Composed flows are DISABLED; publish enables them and requires user confirmation. Draft-only limits do not ban future actions.",
       "create requires empty: true for an explicitly blank canvas; otherwise compose.",
       "CODE steps: publish/enable/run are REFUSED without user permission for that flow; no tool action grants it. Never bypass.",
-      "An uncertain write (HubSpot contact, keyed notification) fences later items until resolved: get_run shows recovery.effects[].identityUnresolved. After the user checked the provider, resolve_effect { run_id, effect_id, resolution: mark_done if it happened | release if it did not, note }; the user approves it. Never guess.",
       ...(hasLibrary ? [deps.installLibraryPiece ? "A missing Library connector returns setup.continueWith with install; call it so the user approves that install under software-install Authority. install_missing:false opts out. Account connection is separate." : "Relay suggestedInstalls from the Library page; retry after installation, never unchanged."] : []),
     ].join("\n"),
     category: "automation",
@@ -294,12 +293,15 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       },
       run_id: {
         type: "string",
-        description: "get_run/resolve_effect: ID from run/list_runs; for resolve_effect, the run that owns the uncertain effect.",
+        description: "get_run: ID from run/list_runs.",
         required: false,
       },
-      effect_id: { type: "string", description: "resolve_effect: the uncertain effect (wfe_...) named by the blocked run's error or get_run recovery.", required: false },
-      resolution: { type: "string", enum: ["mark_done", "release"], description: "resolve_effect: mark_done = the user confirmed the write happened (later items dedupe/update); release = it did not (the next item writes once).", required: false },
-      note: { type: "string", description: "resolve_effect: what the user checked, for the audit receipt.", required: false },
+      // resolve_effect: the system prompt's tool guide (roles/tool-guide.ts)
+      // explains these, and a blocked run's error names the effect, so the
+      // schema stays short (#504 budget).
+      effect_id: { type: "string", description: "resolve_effect: wfe_ ID", required: false },
+      resolution: { type: "string", enum: ["mark_done", "release"], description: "resolve_effect: happened or not", required: false },
+      note: { type: "string", description: "resolve_effect: what the user checked", required: false },
       description: {
         type: "string",
         description:
