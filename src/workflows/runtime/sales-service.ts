@@ -32,6 +32,7 @@ export function createSalesFollowupsService(deps: {effects:WorkflowEffectBoundar
           tokens[field.replace('Connection','') as keyof typeof tokens]=resolved.value.access_token;
         }
         const result=await processSalesFollowups(s,salesTransport(tokens,check,deps.fetchImpl),salesLedger(ctx.runId),digest([ctx.projectId,run.flowId]),deps.now,check);
+        // One summary per run, not per day: a later run the same day can save new drafts or report uncertain ones, so it is never suppressed.
         return {...result,notificationKey:`sales-summary:${ctx.runId}`};
       }});
     return reply.approval?{approval:reply.approval}:reply.result;

@@ -52,7 +52,7 @@ beforeAll(async()=>{
     salesNow:()=>now,salesFetch:(async(url:any,init:any)=>{
       const u=new URL(String(url)),provider=u.hostname==='gmail.googleapis.com'?'gmail':'hubspot';
       expect(['gmail.googleapis.com','api.hubapi.com']).toContain(u.hostname);expect(init.headers.Authorization).toBe('Bearer synthetic-'+provider);expect(init.redirect).toBe('error');
-      expect(init.method).toBe(u.pathname==='/gmail/v1/users/me/drafts'?'POST':'GET');
+      expect(init.method).toBe(['/gmail/v1/users/me/drafts','/crm/v3/objects/deals/search'].includes(u.pathname)?'POST':'GET');
       return Response.json(await salesFixtureRequest(deals,{...options,drafts,calls})(provider,u.pathname+u.search,init.body?JSON.parse(init.body):undefined));
     }) as typeof fetch,llmManager:{chat:async()=>{throw Error('No model tools or delegate may execute');}} as any,
     channelService:{sendWorkflowNotification:async()=>{throw Error('No external notifications');}} as any,wsService:{broadcastNotificationToDashboard:(text:string)=>{notifications.push(text);return 1;}} as any});
