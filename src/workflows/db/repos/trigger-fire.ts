@@ -70,7 +70,11 @@ function rowToFire(row: FireRow): TriggerFire {
 function detailJson(detail?: Record<string, unknown> | null): string | null {
   if (!detail) return null;
   const json = JSON.stringify(detail);
-  return json.length <= DETAIL_MAX ? json : JSON.stringify({ truncated: true, reason: String(detail.reason ?? "").slice(0, 500) });
+  if (json.length <= DETAIL_MAX) return json;
+  // A long reason is cut; the short identity fields a later delivery matches on are kept.
+  const kept = Object.fromEntries((["signature", "deliveryKey"] as const)
+    .filter(name => typeof detail[name] === "string" && (detail[name] as string).length <= 600).map(name => [name, detail[name]]));
+  return JSON.stringify({ truncated: true, reason: String(detail.reason ?? "").slice(0, 500), ...kept });
 }
 
 /** A bearer capability (a waitpoint id) never goes into a readable column as itself. */
@@ -114,6 +118,37 @@ function releaseUnstartedEmailKey(flowId: string, key: string): void {
     WHERE flow_id = ? AND source IN ('event', 'poll') AND dedupe_key = ? AND (outcome != 'started'
       OR (started_at IS NULL AND EXISTS (SELECT 1 FROM flow_run r WHERE r.id = workflow_trigger_fire.run_id
         AND r.status NOT IN ('QUEUED', 'RUNNING', 'PAUSED', 'SUCCEEDED') AND ${RUN_NEVER_BEGAN})))`, [flowId, key]);
+}
+
+/**
+ * A run refused by its readiness recheck at dispatch, before any step or
+ * effect: it never processed the email it was started for, so that email's
+ * key is given up, kept in the delivery's detail, and a later delivery or
+ * manual run can still process the message once. A run with any step or
+ * effect keeps its key.
+ */
+export function releaseRefusedEmailRun(runId: string): void {
+  db().run(`UPDATE workflow_trigger_fire SET detail = json_set(COALESCE(detail, '{}'), '$.deliveryKey', dedupe_key), dedupe_key = NULL
+    WHERE run_id = ? AND source IN ('event', 'poll') AND dedupe_key LIKE 'event:email:%'
+      AND EXISTS (SELECT 1 FROM flow_run r WHERE r.id = workflow_trigger_fire.run_id AND r.status = 'FAILED'
+        AND COALESCE(r.steps, '{}') = '{}' AND COALESCE(r.steps_count, 0) = 0
+        AND NOT EXISTS (SELECT 1 FROM workflow_effect e WHERE e.run_id = r.id))`, [runId]);
+}
+
+/**
+ * A repeat of a refusal already recorded under this signature, counted on
+ * that row; null when it is new. Any earlier row of the workflow matches, not
+ * only the latest, so the same email re-emitted between others still folds.
+ */
+export function repeatOfRefusal(flowId: string, signature: string): TriggerFire | null {
+  return db().transaction((): TriggerFire | null => {
+    const existing = db().query<{ id: string }, [string, string]>(
+      `SELECT id FROM workflow_trigger_fire WHERE flow_id = ? AND outcome = 'blocked' AND json_extract(detail, '$.signature') = ?
+        ORDER BY observed_at DESC, rowid DESC LIMIT 1`).get(flowId, signature);
+    if (!existing) return null;
+    db().run(`UPDATE workflow_trigger_fire SET repeats = repeats + 1, last_repeat_at = ? WHERE id = ?`, [Date.now(), existing.id]);
+    return getFire(existing.id);
+  }).immediate();
 }
 
 /**

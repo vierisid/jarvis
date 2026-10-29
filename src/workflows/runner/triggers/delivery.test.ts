@@ -14,10 +14,10 @@ import { createDraftVersion, lockVersion, updateDraftVersion } from "../../db/re
 import { createFlowRun, getFlowRun, listRuns, updateRun } from "../../db/repos/flow-run";
 import { cancelFlowRun } from "../../db/repos/run-cancellation";
 import { claimNextJob, enqueue, queueStats } from "../../db/repos/job-queue";
-import { configureWorkflowReadiness } from "../../db/repos/flow-readiness";
+import { configureWorkflowReadiness, WorkflowReadinessError } from "../../db/repos/flow-readiness";
 import { pinFlowBindings } from "../../db/repos/binding-pins";
 import { deleteConnection, upsertConnection } from "../../db/repos/app-connection";
-import { claimFire, listFlowFires, pageFlowFires, pruneFires, recordFire, FIRE_RETENTION_MS } from "../../db/repos/trigger-fire";
+import { claimFire, listFlowFires, pageFlowFires, pruneFires, recordFire, repeatOfRefusal, FIRE_RETENTION_MS } from "../../db/repos/trigger-fire";
 import { PieceCatalog } from "../../runtime/piece-catalog";
 import { WorkflowEventBus } from "../../runtime/event-bus";
 import { WorkflowEventBuffer } from "../../runtime/event-buffer";
@@ -1080,5 +1080,97 @@ describe("Gmail message admission", () => {
       expect(listFlowFires(flowId).find(f => f.outcome === "blocked")).toMatchObject({ dedupeKey: null,
         detail: expect.objectContaining({ deliveryKey: "event:email:legacy-1" }) });
     } finally { await d.stop(); }
+  });
+
+  test("an email refused by the dispatch readiness recheck keeps no claim: a manual run with its ID processes it once", async () => {
+    seen.length = 0;
+    const { flowId, versionId } = emailFlow();
+    const d = await daemon(Date.now());
+    try {
+      d.bus.publish("observer.email_received", { id: "pinned-1", subject: "Support" });
+      const live = runsOf(flowId)[0]!;
+      // The saved selections change between enqueue and dispatch.
+      getWorkflowDb().run("INSERT INTO workflow_composition_ingredients (flow_id, ingredients) VALUES (?, 'unreadable')", [flowId]);
+      await drain();
+      expect(getFlowRun(live.id)?.status).toBe("FAILED");
+      expect(seen).toHaveLength(0);
+      expect(listFlowFires(flowId).find(f => f.runId === live.id)).toMatchObject({ dedupeKey: null,
+        detail: expect.objectContaining({ deliveryKey: "event:email:pinned-1" }) });
+      getWorkflowDb().run("DELETE FROM workflow_composition_ingredients WHERE flow_id = ?", [flowId]);
+      const manual = manualRun(flowId, versionId, { payload: { id: "pinned-1", subject: "Support" } });
+      await drain();
+      expect(getFlowRun(manual)?.status).toBe("SUCCEEDED");
+      expect(seen).toHaveLength(1);
+      d.bus.publish("observer.email_received", { id: "pinned-1", subject: "Support" });
+      const again = manualRun(flowId, versionId, { payload: { id: "pinned-1" } });
+      await drain();
+      expect(seen).toHaveLength(1);
+      expect(getFlowRun(again)?.failedStep?.errorMessage).toContain("already accepted");
+    } finally { await d.stop(); }
+  });
+
+  test("a manual run refused by the readiness recheck just before the engine gives its message back", async () => {
+    seen.length = 0;
+    const { flowId, versionId } = emailFlow();
+    let refuse = true;
+    const worker = () => new Worker({ log: silent, handlers: { [RUN_FLOW]: createRunFlowHandler({ executor: { execute: async (ctx) => {
+      // The engine executor rechecks pins after acquiring a runtime, after the claim.
+      if (refuse) throw new WorkflowReadinessError({ ready: false, runtimeChecks: [], issues: [{ node: "trigger", path: "ingredients", code: "INGREDIENT", message: "Pin changed" }] });
+      seen.push(ctx.payload); return { steps: {}, stepsCount: 0 };
+    } } }) } }).drain();
+    const refused = manualRun(flowId, versionId, { payload: { id: "engine-1" } });
+    await worker();
+    expect(getFlowRun(refused)?.status).toBe("FAILED");
+    expect(keys(flowId)).toEqual([]);
+    refuse = false;
+    const manual = manualRun(flowId, versionId, { payload: { id: "engine-1" } });
+    await worker();
+    expect(getFlowRun(manual)?.status).toBe("SUCCEEDED");
+    expect(seen).toHaveLength(1);
+    expect(keys(flowId)).toEqual(["event:email:engine-1"]);
+  });
+
+  test("the same email refused the same way is recorded once, and a fixed setup still admits it", async () => {
+    seen.length = 0;
+    setEncryptionKey(Buffer.alloc(32, 0x63));
+    const account = () => upsertConnection({ externalId: "account", pieceName: "private-piece", displayName: "S", pieceVersion: "1", type: "SECRET_TEXT", value: { secret_text: "x" } });
+    const connection = account();
+    const { flowId } = emailFlow({ name: "send", type: "PIECE", settings: { pieceName: "private-piece", actionName: "send", input: { auth: "{{connections.account}}" } } });
+    const d = await daemon(Date.now());
+    try {
+      deleteConnection(connection.id);
+      // The observer re-emits unread mail after a restart; another email arrives in between.
+      for (const id of ["unread-1", "unread-2", "unread-1", "unread-1"]) d.bus.publish("observer.email_received", { id, subject: "Support" });
+      expect(runsOf(flowId)).toHaveLength(2);
+      const refusals = listFlowFires(flowId).filter(f => f.outcome === "blocked");
+      expect(refusals).toHaveLength(2);
+      expect(refusals.find(f => f.detail?.deliveryKey === "event:email:unread-1")?.repeats).toBe(2);
+      account();
+      pinFlowBindings(flowId);
+      d.bus.publish("observer.email_received", { id: "unread-1", subject: "Support" });
+      const processed = runsOf(flowId).find(r => r.status === "QUEUED")!.id;
+      await drain();
+      expect(getFlowRun(processed)?.status).toBe("SUCCEEDED");
+      expect(seen).toHaveLength(1);
+    } finally { await d.stop(); }
+  });
+
+  test("Test from here is judged on the preview scope frozen on the run, not only the job payload", async () => {
+    seen.length = 0;
+    const { flowId, versionId } = emailFlow({ name: "label", type: "PIECE", settings: { pieceName: "@activepieces/piece-gmail",
+      actionName: "gmail_add_label_to_email", input: { message_id: "{{trigger.payload.id}}" } } });
+    const run = createFlowRun({ flowId, flowVersionId: versionId, triggeredBy: "dashboard", stepNameToTest: "label" });
+    enqueue({ jobType: RUN_FLOW, payload: { runId: run.id, payload: {} }, flowRunId: run.id, flowId, flowVersionId: versionId, maxAttempts: 1 });
+    await drain();
+    expect(getFlowRun(run.id)?.status).toBe("FAILED");
+    expect(getFlowRun(run.id)?.failedStep?.errorMessage).toContain('"label" is a tracked send or change');
+    expect(seen).toHaveLength(0);
+  });
+
+  test("a refusal with a long reason keeps the email key and signature a repeat folds on", () => {
+    const { flowId } = emailFlow();
+    recordFire({ flowId, source: "event", outcome: "blocked", detail: { reason: "x".repeat(3000), signature: "sig-long", deliveryKey: "event:email:long-1" } });
+    expect(listFlowFires(flowId)[0]?.detail).toMatchObject({ truncated: true, signature: "sig-long", deliveryKey: "event:email:long-1" });
+    expect(repeatOfRefusal(flowId, "sig-long")?.repeats).toBe(1);
   });
 });

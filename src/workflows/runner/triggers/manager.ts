@@ -57,8 +57,8 @@ import { ungrantedCodeSteps } from "../../db/repos/flow-code-steps";
 import { createFlowRun, updateRun } from "../../db/repos/flow-run";
 import { enqueue, countQueued } from "../../db/repos/job-queue";
 import {
-  claimFire, clearScheduleWatch, DELAYED_AFTER_MS, getScheduleWatch, latestScheduledFire, pruneFires, recordBlocked,
-  recordFire, repeatOf, setScheduleWatch, type FireSource,
+  claimFire, clearScheduleWatch, DELAYED_AFTER_MS, fireDigest, getScheduleWatch, latestScheduledFire, pruneFires, recordBlocked,
+  recordFire, repeatOf, repeatOfRefusal, setScheduleWatch, type FireSource,
 } from "../../db/repos/trigger-fire";
 import { RUN_FLOW } from "../handler";
 import { DEFAULT_IDS } from "../../db/schema";
@@ -828,6 +828,18 @@ export class TriggerManager {
     const { flowId, versionId, source } = opts;
     const signature = JSON.stringify([versionId, error.readiness]);
     const carriesInput = opts.payload !== undefined && source !== "schedule";
+    // An email refused here ran nothing, so it keeps no claim on its message:
+    // once setup is fixed, a redelivery or manual run processes it once. The
+    // same email refused the same way again (the observer re-emits unread mail
+    // after a restart) is counted on the first refusal, not run and failed again.
+    const emailKey = carriesInput && opts.dedupeKey?.startsWith("event:email:") === true ? opts.dedupeKey : null;
+    const emailRefusal = emailKey ? fireDigest(JSON.stringify([versionId, error.readiness, emailKey])) : null;
+    const folded = emailRefusal ? repeatOfRefusal(flowId, emailRefusal) : null;
+    if (folded) {
+      this.tellUntold(flowId, signature);
+      this.log(`flow ${flowId}: readiness refused ${source} again for the same email (${folded.id}): ${error.message}`);
+      return { outcome: "blocked", fireId: folded.id, reason: error.message };
+    }
     let runId: string | undefined;
     const fresh = this.liveRefusals.get(flowId) !== signature;
     if (carriesInput || fresh) {
@@ -840,12 +852,9 @@ export class TriggerManager {
     // first notice reached nobody.
     if (fresh && runId) this.tell(signature, { flowId, runId, message: error.message });
     else this.tellUntold(flowId, signature);
-    // An email refused here ran nothing, so it keeps no claim on its message:
-    // once setup is fixed, a redelivery or manual run processes it once.
-    const releasesKey = opts.dedupeKey?.startsWith("event:email:") === true;
-    const detail = { reason: error.message, code: error.code, ...(releasesKey ? { deliveryKey: opts.dedupeKey } : {}) };
+    const detail = { reason: error.message, code: error.code, ...(emailKey ? { deliveryKey: emailKey, signature: emailRefusal } : {}) };
     const fire = carriesInput
-      ? recordFire({ flowId, flowVersionId: versionId, source, dedupeKey: releasesKey ? null : opts.dedupeKey, scheduledFor: opts.scheduledFor,
+      ? recordFire({ flowId, flowVersionId: versionId, source, dedupeKey: emailKey ? null : opts.dedupeKey, scheduledFor: opts.scheduledFor,
           lateMs: opts.lateMs, outcome: "blocked", runId, detail })
       : recordBlocked({ flowId, flowVersionId: versionId, source, signature, scheduledFor: opts.scheduledFor,
           lateMs: opts.lateMs, runId, detail });
@@ -1291,16 +1300,17 @@ function shiftedDetail(occurrence: CronOccurrence | undefined): { detail?: Recor
   return occurrence?.shifted ? { detail: { reason: "This time did not exist when clocks moved forward; it ran right after the change." } } : {};
 }
 
-/**
- * An event's delivery key: the stable key its publisher gave it (an email's
- * message id, a commitment and its due time), else the poll item's own key.
- * Without one, the event is not deduplicated.
- */
+/** The event type an on_event trigger subscribes to, when it names one. */
 function eventTypeOf(trigger: TriggerNode | null | undefined): string | undefined {
   const eventType = (trigger?.settings?.input as Record<string, unknown> | undefined)?.eventType;
   return typeof eventType === "string" && eventType ? eventType : undefined;
 }
 
+/**
+ * An event's delivery key: the stable key its publisher gave it (an email's
+ * message id, a commitment and its due time), else the poll item's own key.
+ * Without one, the event is not deduplicated.
+ */
 function eventItemKey(payload: Record<string, unknown>, eventType?: string): string | undefined {
   if ((eventType ?? payload.eventType) === "observer.email_received") return prepareEmailEvent(payload).key;
   const inner = payload.payload && typeof payload.payload === "object" ? (payload.payload as Record<string, unknown>) : undefined;
