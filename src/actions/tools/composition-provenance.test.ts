@@ -20,6 +20,14 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
+  // w8-8a: drops the in-loop install instruction (the composer never installs).
+  // A letter, not w8-9: later stacked branches already use w8-9 onward.
+  'w8-8a': {
+    'bare': 'c4fa0424ca7ec17c4e69d08e0ed949973acf665bf8e43ec68bc9d1c5169a430f',
+    'hosted production': 'ae98cd619e48ea7d0f3ae001cb2f68283097c670a56540431905245eba077d24',
+    'production': '4f83c793137941fc5dcc3fab0fa02b85b621fb1159c08d5de2100e250cd2b3e4',
+    'tool names only': '6f65546fc25ae2ba93da6751adc0c1c56f3d1cef58231b1fe457eb5d7943eaef',
+  },
   // w8-8: deferred setup, connector continuation and form processing.
   'w8-8': {
     'bare': '2e7622eb199df8f1ea33d8a77d686b34e1282028823f818719132b07b4949b80',
