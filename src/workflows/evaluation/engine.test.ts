@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initWorkflowDb, closeWorkflowDb } from '../db';
@@ -33,6 +33,33 @@ test('Jarvis composer, engine and outer worker check actual effects and detect a
     const actual = await engine.execute(wrong, task.scenarios);
     expect(actual[0]!.status).toBe('SUCCEEDED');
     expect(actual[0]!.checks.find(c => c.name.includes('destinations'))!.pass).toBe(false);
+  } finally {
+    await engine?.close();
+    closeWorkflowDb();
+    if (previous === undefined) delete process.env.JARVIS_WORKFLOW_DATA_DIR;
+    else process.env.JARVIS_WORKFLOW_DATA_DIR = previous;
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 120_000);
+
+test('Gmail scenarios without a message ID run as distinct messages through the email admission check', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'jarvis-quality-email-'));
+  const previous = process.env.JARVIS_WORKFLOW_DATA_DIR;
+  process.env.JARVIS_WORKFLOW_DATA_DIR = directory;
+  initWorkflowDb(':memory:');
+  const { createEvaluationEngine, scenarioPayload } = await import('./engine');
+  let engine: Awaited<ReturnType<typeof createEvaluationEngine>> | undefined;
+  try {
+    const task = loadTasks('development', 'founder').tasks.find(t => t.id === 'dev-invoice-email-alert')!;
+    expect(task.scenarios.length).toBeGreaterThan(1);
+    expect(task.scenarios.every(s => !Object.hasOwn(s.payload.payload as object, 'id'))).toBe(true);
+    const kept = { id: 'x', payload: { eventType: 'observer.email_received', payload: { id: 'real' } }, notifications: [] };
+    expect(scenarioPayload(kept as any)).toBe(kept.payload);
+    const reference = JSON.parse(readFileSync(join(import.meta.dir, 'tasks/founder-development-1.reference.json'), 'utf8'));
+    engine = await createEvaluationEngine();
+    const results = await engine.execute(reference.answers['dev-invoice-email-alert'].graph, task.scenarios);
+    expect(results.map(r => r.status)).toEqual(task.scenarios.map(() => 'SUCCEEDED'));
+    expect(results.every(r => r.checks.every(c => c.pass))).toBe(true);
   } finally {
     await engine?.close();
     closeWorkflowDb();

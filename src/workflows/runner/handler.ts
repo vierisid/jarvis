@@ -1,5 +1,8 @@
 import { prepareSubmission, submissionConfig } from '../runtime/form-submission';
-import { claimSubmissionRun } from '../db/repos/trigger-fire';
+import { lacksEmailMessageId, prepareEmailEvent, unclaimedEmailEvent } from '../runtime/event-types';
+import { claimEmailRun, claimSubmissionRun, fireForRun, releaseRefusedEmailRun } from '../db/repos/trigger-fire';
+import { applyInputOverrides, walkFlowNodes } from '../db/flow-graph';
+import { tracksPieceCompletion } from '../runtime/piece-effects';
 /**
  * RUN_FLOW worker handler. Bridges the queue to flow execution:
  *   1. Claim a RUN_FLOW job (the worker has already done that for us).
@@ -18,9 +21,9 @@ import { claimSubmissionRun } from '../db/repos/trigger-fire';
 
 import type { Job } from "../db/repos/job-queue";
 import type { JobHandler } from "../queue/worker";
-import { getFlowRun, updateRun, type FlowRun } from "../db/repos/flow-run";
+import { ensureRunExecutionConfig, getFlowRun, updateRun, type FlowRun } from "../db/repos/flow-run";
 import { cancelFlowRun, getRunCancellation } from "../db/repos/run-cancellation";
-import { assertRunIngredientsReady } from "../db/repos/flow-readiness";
+import { assertRunIngredientsReady, WorkflowReadinessError } from "../db/repos/flow-readiness";
 import { watchRunCancellation, withRunCancellation } from "../runtime/cancellation";
 import { signalRunEnded } from "../runtime/cancellation-signals";
 import {
@@ -290,6 +293,32 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
           } catch (error) { throw new FlowExecutionError((error as Error).message, { name: 'trigger', displayName: 'Validate form submission' }); }
         }
       }
+      const triggerSettings = version.trigger.settings;
+      if (!resuming && ['jarvis-trigger', '@jarvispieces/piece-jarvis-trigger'].includes(String(triggerSettings?.pieceName))
+        && triggerSettings?.triggerName === 'on_event' && triggerSettings.input?.eventType === 'observer.email_received') {
+        try {
+          // Judged on the run's frozen configuration, the one the executor runs:
+          // the preview scope recorded on the run, and its input override, which
+          // can turn an untracked step (an HTTP GET) into a tracked one (a POST).
+          const config = ensureRunExecutionConfig(run.id, typed.payload);
+          const tested = config.stepNameToTest;
+          const overrides = config.sampleInputOverride;
+          const previewed = overrides && Object.keys(overrides).length > 0 ? applyInputOverrides(version.trigger, overrides) : version.trigger;
+          const effect = tested ? trackedEffectUnder(previewed, tested) : null;
+          if (effect) throw Error(`"${effect}" is a tracked send or change, and a preview of it would act outside this email workflow's once-per-message check. Test the complete workflow with a message payload instead.`);
+          // A preview of any other step, or a manual run naming no message,
+          // cannot repeat a message: it runs without a claim. A live delivery
+          // always carries its message ID; one that does not is refused.
+          const live = fireForRun(run.id);
+          if (tested || (!(live && (live.source === 'event' || live.source === 'poll')) && lacksEmailMessageId(payload))) {
+            payload = unclaimedEmailEvent(payload);
+          } else {
+            const prepared = prepareEmailEvent(payload);
+            claimEmailRun(run.flowId, version.id, prepared.key, run.id);
+            payload = prepared.data;
+          }
+        } catch (error) { throw new FlowExecutionError((error as Error).message, { name: 'trigger', displayName: 'Check Gmail message identity' }); }
+      }
       const result = await withRunCancellation(runId, () => opts.executor.execute({
         run,
         version,
@@ -357,6 +386,13 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
           failedStep: { name: "<engine>", displayName: "engine", errorMessage },
           finishTime: ts,
         });
+        // Refused by a readiness recheck at dispatch (here or just before the
+        // engine call), so nothing ran: the email it was started for keeps no
+        // claim, and once setup is fixed a redelivery or manual run processes it.
+        if (e instanceof WorkflowReadinessError && !resuming) {
+          try { releaseRefusedEmailRun(runId); }
+          catch (releaseError) { console.warn(`[run-flow ${runId}] could not release the refused email: ${(releaseError as Error).message}`); }
+        }
       }
       throw e;
     } finally {
@@ -373,4 +409,22 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
       } catch (hookError) { console.error(`[run-flow ${runId}] run-ended hook failed:`, hookError); }
     }
   };
+}
+
+/**
+ * The tracked effect a step preview would run, or null: the step itself, or
+ * one inside a router or loop being previewed (its body runs too, not the
+ * steps after it). Tracked effects are the completion-receipt sends and
+ * changes plus jarvis-notify; another step may be previewed.
+ */
+function trackedEffectUnder(trigger: FlowVersion['trigger'], stepName: string): string | null {
+  const step = walkFlowNodes(trigger).find(node => node.name === stepName);
+  if (!step) return null;
+  for (const node of walkFlowNodes({ ...step, nextAction: undefined })) {
+    const piece = String(node.settings?.pieceName ?? '');
+    const full = piece.startsWith('@') ? piece : piece.startsWith('jarvis-') ? `@jarvispieces/piece-${piece}` : `@activepieces/piece-${piece}`;
+    const action = node.settings?.actionName;
+    if ((full === '@jarvispieces/piece-jarvis-notify' && action === 'notify') || tracksPieceCompletion(full, action, node.settings?.input)) return node.name;
+  }
+  return null;
 }
