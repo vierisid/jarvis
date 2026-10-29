@@ -1,4 +1,5 @@
 import { MEETING_ACCOUNTS, meetingSetup } from './meeting-briefs';
+import { MANAGED_HUBSPOT_REFUSAL } from '../meeting-accounts';
 import { parseOutputSchema } from './llm-output-contract';
 import { submissionConfig } from './form-submission';
 import {managedMailchimpIssue} from './managed-mailchimp';
@@ -47,7 +48,7 @@ export interface ReadinessContext {
    * the step names the connection; `settings` are the step's settings (with a
    * preview's input override applied).
    */
-  connection?: (externalId: string, pieceName: string, path: string, settings: Record<string, unknown>) => string | ConnectionRefusal | null;
+  connection?: (externalId: string, pieceName: string, path: string, settings: Record<string, unknown>, nodeType?: unknown) => string | ConnectionRefusal | null;
   workflow?: (id: string) => string | null;
   tool?: (name: string) => { params: Array<{ name: string; type: string; required: boolean; enum?: string[] }> } | null;
   roles?: () => ReadonlySet<string>;
@@ -269,12 +270,12 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         if (!emptyInput(id)) {
           if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node, `settings.input.${field}`, 'CONNECTION_BINDING', 'Select a saved account reference');
           // Jarvis manages no HubSpot account; the meeting backend refuses a jarvis: id here at run time.
-          else if (field === 'hubspotConnection' && id.startsWith('jarvis:')) issue(node, `settings.input.${field}`, 'CONNECTION_BINDING', 'Select a saved HubSpot account; a Jarvis-managed connection cannot read HubSpot');
+          else if (field === 'hubspotConnection' && id.startsWith('jarvis:')) issue(node, `settings.input.${field}`, 'CONNECTION_BINDING', MANAGED_HUBSPOT_REFUSAL);
           else if (context.phase !== 'composition') {
             // Checked against the provider piece this field reads with, at its own
             // path: a managed connection is accepted here only by the narrow
             // meeting exemption in managedConnectionMisuse.
-            const refusal = context.connection?.(id, provider, `settings.input.${field}`, settings) ?? (context.connection ? null : 'Connection inventory unavailable');
+            const refusal = context.connection?.(id, provider, `settings.input.${field}`, settings, type) ?? (context.connection ? null : 'Connection inventory unavailable');
             const reason = typeof refusal === 'string' || refusal === null ? refusal : refusal.message;
             if (reason) issue(node,`settings.input.${field}`,'CONNECTION_BINDING',reason);
             else runtime(node,`settings.input.${field}`,'connection','Recheck the pinned provider account before every read');

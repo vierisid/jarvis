@@ -19,6 +19,12 @@ const text = (v: unknown, label: string, max = 512): string => {
   if (typeof v !== 'string' || !v.trim() || v.length > max || /[\r\n\x00]/.test(v)) throw Error(`Invalid or missing ${label}`);
   return v.trim();
 };
+/** An id placed in a Calendar URL path: '.' or '..' would normalise the URL to another path. */
+const segment = (v: unknown, label: string): string => {
+  const s = text(v, label);
+  if (s === '.' || s === '..') throw Error(`Invalid or missing ${label}`);
+  return s;
+};
 const email = (v: unknown, allowBraces = false) => {
   const s = text(v, 'email', 254).toLowerCase();
   // Braces are valid in a local part but would break the Gmail {..} OR group, so only
@@ -50,7 +56,7 @@ export function meetingSetup(v: RecordValue): MeetingSetup {
     return id;
   };
   return { calendarConnection: account('calendarConnection'), gmailConnection: account('gmailConnection'), hubspotConnection: account('hubspotConnection'),
-    calendarId: text(v.calendarId, 'calendar ID'), ownerEmail: email(v.ownerEmail), internalDomains, hubspotPortalId, recentDays, timezone };
+    calendarId: segment(v.calendarId, 'calendar ID'), ownerEmail: email(v.ownerEmail), internalDomains, hubspotPortalId, recentDays, timezone };
 }
 const unsetTimezone = (v: RecordValue) => v.timezone === undefined || v.timezone === null || (typeof v.timezone === 'string' && !v.timezone.trim());
 /**
@@ -85,7 +91,7 @@ function eventMeeting(event: RecordValue, setup: MeetingSetup, now: number) {
     .filter(e => e !== setup.ownerEmail && !setup.internalDomains.includes(e.split('@')[1]!)))].sort();
   if (!external.length) return null;
   if (external.length > 50) throw Error('Meeting exceeds 50 external attendees; no partial brief produced');
-  const eventId = text(event.id, 'event ID'), title = text(event.summary ?? 'Untitled meeting', 'meeting title', 2000);
+  const eventId = segment(event.id, 'event ID'), title = text(event.summary ?? 'Untitled meeting', 'meeting title', 2000);
   const source = new URL(text(event.htmlLink, 'calendar source'));
   if (source.protocol !== 'https:' || !['calendar.google.com', 'www.google.com'].includes(source.hostname)) throw Error('Invalid calendar source link');
   const fingerprint = hash([eventId, start, external, title, event.updated ?? null]);
@@ -98,7 +104,7 @@ export function parseMeetingGuard(raw: unknown): MeetingGuard {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('Invalid meeting guard');
   const v = raw as RecordValue;
   if (!/^[a-f0-9]{64}$/.test(v.fingerprint)) throw Error('Invalid meeting fingerprint');
-  return { setup: meetingSetup(v.setup ?? {}), eventId: text(v.eventId, 'event ID'), start: timestamp(v.start), fingerprint: v.fingerprint };
+  return { setup: meetingSetup(v.setup ?? {}), eventId: segment(v.eventId, 'event ID'), start: timestamp(v.start), fingerprint: v.fingerprint };
 }
 /** Exhaust continuation tokens. Limit/cycle/malformed responses fail, never claim completeness. */
 async function pages(load: (cursor?: string) => Promise<RecordValue>, field: string, hubspot = false): Promise<RecordValue[]> {

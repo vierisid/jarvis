@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { getCronTimezone, setCronTimezone } from '../../lib/cron-scheduler';
-import { fitBrief, meetingSetup, meetingSetupMatches, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, MEETING_BRIEF_LIMIT, type MeetingRequest } from './meeting-briefs';
+import { fitBrief, meetingSetup, meetingSetupMatches, parseMeetingGuard, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, MEETING_BRIEF_LIMIT, type MeetingRequest } from './meeting-briefs';
 import { fixtureNow, fixtureSetup, fixtureEvent, fixtureRequest } from './meeting-fixtures';
 test('all pages and source links, timezone and stable occurrence/start identity',async()=>{
   const result=await prepareMeetingBriefs(fixtureSetup,fixtureRequest(),fixtureNow);
@@ -15,6 +15,14 @@ for(const [name,extra] of Object.entries({cancelled:{status:'cancelled'},allDay:
 test('inclusive 30 minute boundary and expanded recurring occurrence identity',async()=>{
   const events=[fixtureEvent({id:'series_20261023',recurringEventId:'series',start:{dateTime:'2026-10-23T09:30:00Z'}})];
   expect((await prepareMeetingBriefs(fixtureSetup,fixtureRequest(events),fixtureNow)).meetings[0]!.eventId).toBe('series_20261023');
+});
+test('a calendar or event ID of . or .. is refused, so no Calendar URL normalises to another path',async()=>{
+  for(const id of ['.','..',' .. ']){
+    expect(()=>meetingSetup({...fixtureSetup,internalDomains:'example.com',calendarId:id})).toThrow('calendar ID');
+    expect(()=>parseMeetingGuard({setup:{...fixtureSetup,internalDomains:'example.com'},eventId:id,start:'2026-01-01T00:00:00Z',fingerprint:'a'.repeat(64)})).toThrow('event ID');
+    await expect(prepareMeetingBriefs(fixtureSetup,fixtureRequest([fixtureEvent({id})]),fixtureNow)).rejects.toThrow('event ID');
+  }
+  expect(parseMeetingGuard({setup:{...fixtureSetup,internalDomains:'example.com'},eventId:'..x',start:'2026-01-01T00:00:00Z',fingerprint:'a'.repeat(64)}).eventId).toBe('..x');
 });
 test('unknown attendees, pagination cycles and unavailable source fail, not empty success',async()=>{
   await expect(prepareMeetingBriefs(fixtureSetup,fixtureRequest([fixtureEvent({attendeesOmitted:true})]),fixtureNow)).rejects.toThrow('omitted');

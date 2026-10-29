@@ -34,6 +34,7 @@ import { createManageWorkflowTool } from '../../actions/tools/manage-workflow';
 
 
 import { fixtureNow, fixtureSetup, fixtureEvent, fixtureRequest } from './meeting-fixtures';
+import { MANAGED_HUBSPOT_REFUSAL } from '../meeting-accounts';
 const native=(name:string)=>'@jarvispieces/piece-jarvis-'+name;
 let authority:AuthorityEngine;
 let approvals:ApprovalManager,services:ReturnType<typeof buildSandboxServiceBackends>;
@@ -248,11 +249,15 @@ test('jarvis:google is accepted as the Calendar account by readiness and by the 
 test('the run itself refuses jarvis:google as the HubSpot account and a non-Google managed id as the Calendar account, before any read',async()=>{
  await withManagedSource('other',async()=>{
   await withManagedSource('google',async()=>{
-   for(const [override,message] of [[{hubspotConnection:'jarvis:google'},'Managed connection jarvis:google can only be used by'],[{calendarConnection:'jarvis:other'},'Managed connection jarvis:other can only be a step']] as const){
-    const f=await unchecked(override),before=[calls.length,notifications.length];
+   for(const [override,message] of [[{hubspotConnection:'jarvis:google'},MANAGED_HUBSPOT_REFUSAL],[{calendarConnection:'jarvis:other'},'Managed connection jarvis:other can only be a step']] as const){
+    const refusedId=Object.values(override)[0]!;
+    const f=await unchecked(override),before=[calls.length,notifications.length];resolvedIds.length=0;
     const result=await f.run();expect(result.status).toBe('FAILED');
     expect(String((result as any).failedStep?.errorMessage)).toContain(message);
     expect([calls.length,notifications.length]).toEqual(before);
+    // Refused before the credential is resolved or the run's binding recorded.
+    expect(resolvedIds).not.toContain(refusedId);
+    expect(listRunConnectionBindings(result.id).map(b=>b.externalId)).not.toContain(refusedId);
    }
   });
  });

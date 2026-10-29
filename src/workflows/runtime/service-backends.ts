@@ -1,7 +1,7 @@
 import { MEETING_ACCOUNTS, meetingSetup, meetingSetupMatches, parseMeetingGuard, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, type MeetingSetup } from './meeting-briefs';
 import { connectionBindings, enforceRunConnectionBinding, recordRunCredentialOutcome } from '../db/repos/binding-pins';
 import { walkFlowNodes } from '../db/flow-graph';
-import { MEETING_ACCOUNT_LABELS } from '../meeting-accounts';
+import { isMeetingBriefsStep, MANAGED_HUBSPOT_REFUSAL, MEETING_ACCOUNT_LABELS } from '../meeting-accounts';
 import { withWorkflowMemory } from '../../vault/memory-use-context';
 import { documentInput, projectDocument } from './decision-document';
 /**
@@ -434,8 +434,7 @@ export function buildSandboxServiceBackends(
     const run = getFlowRun(ctx.runId);
     const version = run && getFlowVersion(run.flowVersionId);
     const step = version && walkFlowNodes(version.trigger).find(node =>
-      String(node.settings?.pieceName).endsWith('jarvis-context') && node.settings?.actionName === 'meeting_briefs'
-      && meetingSetupMatches(node.settings.input as any ?? {}, setup));
+      isMeetingBriefsStep(node.type, node.settings) && meetingSetupMatches(node.settings?.input as any ?? {}, setup));
     if (!version || !step) throw Error('Meeting configuration must match a saved meeting preparation step');
     const fields = (Object.keys(MEETING_ACCOUNTS) as Array<keyof typeof MEETING_ACCOUNTS>)
       .filter(field => providers.includes(field.replace('Connection','') as 'calendar'));
@@ -443,15 +442,17 @@ export function buildSandboxServiceBackends(
     for (const field of fields) {
       const pieceName = MEETING_ACCOUNTS[field], externalId = setup[field];
       if (!connectionBindings(version.trigger).has(externalId)) throw Error('Meeting account is not bound to this workflow');
-      const refusal = enforceRunConnectionBinding(ctx.runId, ctx.projectId, externalId, opts.credentialResolver);
-      if (refusal) throw Error(refusal);
-      // The readiness rule, before anything is resolved: a managed connection
-      // only by the meeting exemption (jarvis:google for Calendar and Gmail).
+      // The readiness rule, before the binding is checked or anything is
+      // resolved: a managed connection only by the meeting exemption
+      // (jarvis:google for Calendar and Gmail), so a refused id writes nothing.
       if (externalId.startsWith('jarvis:')) {
+        if (field === 'hubspotConnection') throw Error(MANAGED_HUBSPOT_REFUSAL);
         const source = managedSourceFor(opts.credentialResolver.list(), externalId);
-        const misuse = source ? managedConnectionMisuse(source, pieceName, `settings.input.${field}`, step.settings) : 'Managed connection source is unavailable';
+        const misuse = source ? managedConnectionMisuse(source, pieceName, `settings.input.${field}`, step.settings, step.type) : 'Managed connection source is unavailable';
         if (misuse) throw Error(misuse);
       }
+      const refusal = enforceRunConnectionBinding(ctx.runId, ctx.projectId, externalId, opts.credentialResolver);
+      if (refusal) throw Error(refusal);
       let resolved = await opts.credentialResolver.resolve({projectId:ctx.projectId,pieceName,externalId});
       if (resolved?.pieceName && resolved.pieceName !== pieceName) throw Error('Meeting account belongs to a different provider');
       if (!resolved || resolved.type !== 'OAUTH2' || resolved.status && resolved.status !== 'ACTIVE')

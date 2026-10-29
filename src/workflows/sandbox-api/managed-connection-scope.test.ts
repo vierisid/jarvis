@@ -796,6 +796,12 @@ describe("the meeting preparation step may name managed Google only as its Calen
     expect(at(empty(meeting({ gmailConnection: "jarvis:google" })), "gmailConnection")).toEqual([]);
   });
 
+  test("readiness refuses jarvis:google on a CODE node that carries the meeting step's settings", () => {
+    const spoof = { ...meeting({ calendarConnection: "jarvis:google", gmailConnection: "jarvis:google" }), type: "CODE" };
+    expect(at(empty(spoof), "calendarConnection").length).toBeGreaterThan(0);
+    expect(at(empty(spoof), "gmailConnection").length).toBeGreaterThan(0);
+  });
+
   test("readiness refuses jarvis:google as the HubSpot account", () => {
     expect(at(empty(meeting({ hubspotConnection: "jarvis:google" })), "hubspotConnection").length).toBeGreaterThan(0);
   });
@@ -815,10 +821,15 @@ describe("the meeting preparation step may name managed Google only as its Calen
 
   test("the exemption covers exactly the two account inputs of meeting_briefs, each with its own provider", () => {
     const settings = meeting({}).settings;
-    expect(managedConnectionMisuse(google(), CALENDAR, "settings.input.calendarConnection", settings)).toBeNull();
-    expect(managedConnectionMisuse(google(), GMAIL, "settings.input.gmailConnection", settings)).toBeNull();
-    expect(managedConnectionMisuse(google(), "jarvis-context", "settings.input.calendarConnection", { ...settings, pieceName: "jarvis-context" })).not.toBeNull();
-    const refused: Array<[label: string, piece: string, path: string, settings: unknown]> = [
+    expect(managedConnectionMisuse(google(), CALENDAR, "settings.input.calendarConnection", settings, "PIECE")).toBeNull();
+    expect(managedConnectionMisuse(google(), GMAIL, "settings.input.gmailConnection", settings, "PIECE")).toBeNull();
+    expect(managedConnectionMisuse(google(), CALENDAR, "settings.input.calendarConnection", { ...settings, pieceName: "jarvis-context" }, "PIECE")).toBeNull();
+    expect(managedConnectionMisuse(google(), "jarvis-context", "settings.input.calendarConnection", { ...settings, pieceName: "jarvis-context" }, "PIECE")).not.toBeNull();
+    const refused: Array<[label: string, piece: string, path: string, settings: unknown, nodeType?: unknown]> = [
+      ["a CODE node carrying the meeting step's settings", CALENDAR, "settings.input.calendarConnection", settings, "CODE"],
+      ["a caller that does not say the node type", CALENDAR, "settings.input.calendarConnection", settings, undefined],
+      ["a piece whose name only ends in jarvis-context", CALENDAR, "settings.input.calendarConnection", { ...settings, pieceName: "@evil/piece-jarvis-context" }],
+      ["a spoofed Gmail account on such a piece", GMAIL, "settings.input.gmailConnection", { ...settings, pieceName: "@evil/piece-jarvis-context" }],
       ["the HubSpot account", "@activepieces/piece-hubspot", "settings.input.hubspotConnection", settings],
       ["any other input of the step", CALENDAR, "settings.input.calendarId", settings],
       ["a nested path", CALENDAR, "settings.input.calendarConnection.id", settings],
@@ -829,13 +840,13 @@ describe("the meeting preparation step may name managed Google only as its Calen
       ["a trigger", CALENDAR, "settings.input.calendarConnection", { ...settings, triggerName: "meeting_briefs" }],
       ["a caller without the step's settings", CALENDAR, "settings.input.calendarConnection", undefined],
     ];
-    for (const [label, piece, path, stepSettings] of refused) {
-      expect([label, managedConnectionMisuse(google(), piece, path, stepSettings)]).not.toEqual([label, null]);
+    for (const [label, piece, path, stepSettings, nodeType = "PIECE"] of refused) {
+      expect([label, managedConnectionMisuse(google(), piece, path, stepSettings, label.includes("node type") ? undefined : nodeType)]).not.toEqual([label, null]);
     }
   });
 
   test("a source that is not the managed Google one gets no exemption, even when it serves Calendar", () => {
     const other = { id: "other", pieceNames: [CALENDAR, GMAIL], canResolve: (id: string) => id === "jarvis:other", resolve: async () => null };
-    expect(managedConnectionMisuse(other, CALENDAR, "settings.input.calendarConnection", meeting({}).settings)).not.toBeNull();
+    expect(managedConnectionMisuse(other, CALENDAR, "settings.input.calendarConnection", meeting({}).settings, "PIECE")).not.toBeNull();
   });
 });
