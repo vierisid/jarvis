@@ -30,7 +30,7 @@ import { JarvisContextProviderAdapter } from "../adapters/context-provider";
 import { LlmOnlyAgentDelegator } from "../adapters/agent-delegator";
 import { DEFAULT_MAX_ITERATIONS, M7AgentDelegator, type DelegationContinuation } from "../adapters/m7-agent-delegator";
 import { getChildRun } from '../db/repos/child-run';
-import { getDelegation, saveDelegation } from "../db/repos/delegation";
+import { delegationId, getDelegation, saveDelegation } from "../db/repos/delegation";
 import { JarvisWorkflowRunnerAdapter } from "../adapters/workflow-runner";
 import type { LlmChatFn, LlmChatRequest, LlmChatResponse } from "../sandbox-api/routes/jarvis-llm";
 import type { SystemPromptParts } from "../../roles/prompt-builder";
@@ -534,7 +534,7 @@ export function buildSandboxServiceBackends(
     });
     if (reply.approval) return { finalMessage: '', toolCalls: [], status: 'approval_required', approval: reply.approval };
     const resolved = resolveEffectContext(ctx, AGENT_PIECE, 'delegate');
-    const id = 'wfd_' + digest([resolved.run.id, resolved.stepName, resolved.executionPath]);
+    const id = delegationId(resolved.run.id, resolved.stepName, resolved.executionPath);
     const continuation: DelegationContinuation = {
       identity: { id, runId: resolved.run.id, stepName: resolved.stepName, executionPath: resolved.executionPath,
         versionDigest: resolved.versionDigest },
