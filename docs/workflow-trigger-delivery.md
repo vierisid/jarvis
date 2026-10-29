@@ -23,18 +23,27 @@ Source: `src/workflows/runner/triggers/manager.ts` (live deliveries),
 - **A missed schedule is skipped and shown.** A time that came and went while
   Jarvis was off, asleep or stalled for more than two minutes is recorded as
   missed and never run late.
-- **Schedules run in Jarvis's configured time zone** (the `timezone` config
-  key). A schedule that states another zone fires at that wall-clock time in
-  Jarvis's zone, and the trigger list carries a warning saying so, unless it
-  fires at the same moments in both zones (an hourly schedule between
-  whole-hour zones). The warning compares the next firing times, now and half
-  a year on, so half-hour zones and schedules tied to an hour, a day or a date
-  are caught.
+- **A schedule runs in the zone a person chose for it, else in Jarvis's.** A
+  schedule step's own zone (`settings.input.timezone`, an IANA name such as
+  `Europe/Rome`, following its daylight-saving rules) is used only when it was
+  chosen on purpose: the step's `settings.chosenTimezone` names the same zone.
+  The editor records that when a person picks a zone, and the composer when
+  the job contract names that zone (UTC included). Any other schedule -- no zone, or a
+  zone a default put there (the dashboard schedule piece pre-fills one; its
+  hourly triggers hard-code UTC) -- runs in Jarvis's configured time zone (the
+  `timezone` config key), else this machine's. Schedules saved before steps
+  could carry a zone have no record, so none moves on upgrade. The editor
+  pre-fills Jarvis's zone for a new schedule piece step. A step that names a
+  zone that is not used carries a warning in the trigger list saying where it
+  fires, unless it fires at the same moments in both zones (an hourly schedule
+  between whole-hour zones); the warning compares the next firing times, now
+  and half a year on (`src/workflows/runner/triggers/schedule-zone.ts`). A
+  chosen zone that is not a real one is refused.
 
 ## Schedules
 
 The scheduler hands each occurrence to the workflow with its wall-clock minute
-in Jarvis's zone (`2026-11-01T01:30`), which is the occurrence's identity:
+in that schedule's zone (`2026-11-01T01:30`), which is the occurrence's identity:
 
 | Case | What happens |
 | --- | --- |
@@ -56,6 +65,13 @@ workflow is turned off, switched to another trigger, or refused at
 registration, so that time is never reported as missed. The live schedule
 starts where the check stopped, two minutes back, so a time in between runs
 late rather than being lost; one the previous process already ran is a repeat.
+In a chosen zone the occurrence's identity also names the zone
+(`America/New_York@2026-10-07T09:00`), so after a person picks a zone, its
+09:00 is not taken for a repeat of 09:00 in Jarvis's zone the same day.
+A chosen zone is part of the watch identity, so choosing or changing one
+starts a new watch rather than recording past times in the new zone as missed.
+A schedule running in Jarvis's zone keeps the expression alone as its watch,
+as before, so an upgrade neither reports false missed times nor fires twice.
 
 Editing the trigger of the draft an enabled, unpublished workflow runs replaces
 its schedule. Saving a step of that draft leaves the trigger registered.

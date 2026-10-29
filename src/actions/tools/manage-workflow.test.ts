@@ -1,3 +1,4 @@
+import { getWorkflowComposition } from '../../workflows/db/repos/workflow-composition';
 import { configureWorkflowReadiness } from '../../workflows/db/repos/flow-readiness';
 import { PieceCatalog } from '../../workflows/runtime/piece-catalog';
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -6,12 +7,12 @@ import { join } from "node:path";
 import { closeWorkflowDb, initWorkflowDb } from "../../workflows/db/index.ts";
 import { findActiveJobForRun, getJob, queueStats } from "../../workflows/db/repos/job-queue.ts";
 import { getFlowRun } from "../../workflows/db/repos/flow-run.ts";
-import { getFlow, updateFlowMetadata } from "../../workflows/db/repos/flow.ts";
+import { createFlow, getFlow, updateFlowMetadata } from "../../workflows/db/repos/flow.ts";
 import { Worker } from "../../workflows/queue/worker.ts";
 import { createRunFlowHandler, FlowExecutionError, RUN_FLOW } from "../../workflows/runner/handler.ts";
 import { asLimit, createManageWorkflowTool } from "./manage-workflow.ts";
 import type { ToolDefinition } from "./registry.ts";
-import { getFlowVersion, getLatestDraft, setSampleDataEntry } from "../../workflows/db/repos/flow-version.ts";
+import { createDraftVersion, getFlowVersion, getLatestDraft, setSampleDataEntry } from "../../workflows/db/repos/flow-version.ts";
 import { updateRun } from "../../workflows/db/repos/flow-run.ts";
 import {
   UNTRUSTED_CLOSE,
@@ -440,6 +441,46 @@ describe("manage_workflow tool", () => {
 
 describe("manage_workflow: compose", () => {
   const makeReg = () => sampleCatalog();
+
+  test("chat installs a missing connector and saves a disabled draft blocked on account binding", async () => {
+    const registry = sampleCatalog();
+    configureWorkflowReadiness({ pieces: registry });
+    const installed: string[] = [];
+    let turn = 0;
+    const name = "@activepieces/piece-google-calendar";
+    const llm: ComposerLlmClient = {
+      chat: async () => { throw new Error("Unexpected one-shot fallback"); },
+      chatTools: async () => ({ content: "", tool_calls: ++turn === 1
+        ? [{ id: "install", name: "install_library_piece", arguments: { id: "google-calendar" } }]
+        : [{ id: "submit", name: "submit_flow", arguments: { displayName: "Calendar fixture", trigger: {
+          name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "schedule", input: { cron_expression: "0 8 * * 1-5", timezone: "Europe/Rome" } },
+          nextAction: { name: "calendar", type: "PIECE", settings: { pieceName: name, actionName: "events", input: {} } },
+        } } }], }),
+    };
+    const t = createManageWorkflowTool({ llm, pieceRegistry: registry,
+      library: [{ id: "google-calendar", npmPackage: name, displayName: "Google Calendar", description: "Calendar fixture" }],
+      installLibraryPiece: async id => { installed.push(id); registry.upsert({ name, displayName: "Google Calendar", description: "fixture",
+        auth: { type: "OAUTH2" }, actions: { events: { name: "events", displayName: "List events", description: "fixture" } },
+      }); },
+    });
+    expect(t.authorityGate?.({ action: 'compose', name: 'Calendar fixture', install_missing: true })).toMatchObject({ actionCategory: 'install_software' });
+    expect(t.authorityGate?.({ action: 'create', name: 'Calendar fixture', install_missing: true })).toMatchObject({ actionCategory: 'install_software' });
+    expect(t.authorityGate?.({ action: 'compose', name: 'Calendar fixture' })).toBeNull();
+    const saved = await callFrom(t, "compose", { name: "Calendar fixture", description: "Save a disabled calendar draft", install_missing: true }) as {
+      ok: boolean; flow: { id: string; status: string }; versionId: string; compositionRecordId: string; readiness: { ready: boolean; issues: { code: string }[] };
+    };
+    expect(saved.ok).toBe(true);
+    expect(installed).toEqual(["google-calendar"]);
+    expect(getWorkflowComposition(saved.compositionRecordId)?.specification.provenance?.installedPieces).toEqual([
+      { id: 'google-calendar', name, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) },
+    ]);
+    expect(saved.flow.status).toBe("DISABLED");
+    expect(saved.readiness.ready).toBe(false);
+    expect(saved.readiness.issues.some(i => i.code === "CONNECTION_BINDING")).toBe(true);
+    expect(getFlow(saved.flow.id)?.published_version_id).toBeNull();
+    await expect(t.execute({ action: "enable", flow: saved.flow.id })).rejects.toThrow();
+    expect(await callFrom(t, "list_runs", { flow: saved.flow.id })).toEqual([]);
+  });
 
   test("compose creates a flow when the LLM returns a valid JSON tree", async () => {
     const llm = new StubLlm(
@@ -1300,4 +1341,25 @@ describe("#844: manage_workflow acts in one project, for reads by id as well as 
     expect(getWorkflowComposition(recordId, OTHER_PROJECT)?.id).toBe(recordId);
     expect(getWorkflowComposition(recordId, DEFAULT_IDS.project)).toBeNull();
   });
+});
+
+
+test('get recomputes saved draft readiness without publishing, enabling or running', async () => {
+  const flow = createFlow();
+  const version = createDraftVersion({ flowId: flow.id, displayName: 'Weekday reminder', trigger: {
+    name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'schedule', input: { cron_expression: '0 9 * * 1-5', timezone: 'Europe/Rome' } },
+    nextAction: { name: 'notify', type: 'PIECE', settings: { pieceName: 'jarvis-notify', actionName: 'notify', input: { message: 'Choose your three priorities for today.', channels: ['dashboard'] } } },
+  } });
+  expect(version.valid).toBe(false); // Stored creation hint is not a readiness assessment.
+  const out = await call('get', { flow: flow.id }) as any;
+  expect(out.latestDraft.valid).toBe(true);
+  expect(out.latestDraft.readiness).toEqual({ ready: true, issues: [], runtimeChecks: [] });
+  expect(getFlow(flow.id)).toMatchObject({ status: 'DISABLED', published_version_id: null });
+  expect(getFlowVersion(version.id)).toEqual(version);
+  expect(queueStats().queued).toBe(0);
+  // Removing a dependency must invalidate the read, even though the graph hasn't changed.
+  configureWorkflowReadiness({ pieces: new PieceCatalog([]) });
+  const unavailable = await call('get', { flow: flow.id }) as any;
+  expect(unavailable.latestDraft.valid).toBe(false);
+  expect(unavailable.latestDraft.readiness.issues).toContainEqual(expect.objectContaining({ code: 'PIECE' }));
 });

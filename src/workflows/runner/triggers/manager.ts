@@ -65,6 +65,7 @@ import { toUpstreamFlowVersion } from "../engine-runtime/flow-version-adapter";
 import { graphDigest } from "../../runtime/continuation";
 import { emergencyHold, PAUSED_REASON } from "../../runtime/emergency-hold";
 import { triggerHookRunId } from "./hook-run-id";
+import { chosenScheduleZone, scheduleZoneWarning, statedScheduleZone } from "./schedule-zone";
 
 interface TriggerNode {
   type: string;
@@ -121,33 +122,6 @@ const triggerDigest = (trigger: unknown): string =>
 /** The bundled schedule piece is a schedule, not a poll: its occurrences can be missed. */
 const isSchedulePiece = (pieceName: unknown): boolean =>
   typeof pieceName === "string" && /(^|\/)piece-schedule$/.test(pieceName);
-
-/** The zone schedules actually run in: Jarvis's configured one, else this machine's. */
-function scheduleZone(): string {
-  return getCronTimezone() ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
-}
-
-/**
- * Schedules run in Jarvis's configured time zone (an owner decision, Q-06). A
- * schedule that states another zone fires at that wall-clock time in Jarvis's
- * zone instead; say so where the trigger list shows it, unless it fires at the
- * same moments in both zones (hourly between whole-hour zones). Its next
- * firing times, now and half a year on (the other side of daylight saving),
- * are read in the stated zone: half-hour zones and schedules tied to an hour,
- * a day or a date differ there.
- */
-export function scheduleZoneWarning(expression: string, statedZone: unknown, now = Date.now()): string | undefined {
-  if (typeof statedZone !== "string" || !statedZone.trim() || expression.trim().startsWith("@")) return undefined;
-  let stated: string;
-  try { stated = new Intl.DateTimeFormat("en-US", { timeZone: statedZone.trim() }).resolvedOptions().timeZone; }
-  catch { return `This schedule names an unknown time zone "${statedZone}"; it runs in ${scheduleZone()}.`; }
-  const actual = scheduleZone();
-  if (stated === actual) return undefined;
-  const year = 366 * 24 * 60 * 60_000;
-  const upcoming = [now, now + year / 2].flatMap((from) => CronScheduler.occurrencesBetween(expression, from, from + year, 8));
-  if (upcoming.every((o) => CronScheduler.matchesIn(expression, new Date(o.at), stated))) return undefined;
-  return `This schedule says ${stated}, but schedules run in Jarvis's time zone (${actual}): "${expression}" fires at that time in ${actual}.`;
-}
 
 export interface TriggerManagerDeps {
   /**
@@ -487,16 +461,18 @@ export class TriggerManager {
       this.log(`flow ${flowId}: schedule trigger missing cron expression; skipping`);
       return;
     }
-    const warning = scheduleZoneWarning(expression, input.timezone);
+    // A zone is used only when a person chose it (schedule-zone.ts); one that is not used is shown.
+    const timezone = chosenScheduleZone(trigger.settings);
+    const warning = timezone ? undefined : scheduleZoneWarning(expression, statedScheduleZone(trigger.settings));
     if (warning) this.log(`flow ${flowId}: ${warning}`);
     const generation = workflowRemovalState(flowId).generation;
     try {
-      const dueAfter = this.catchUpMissed(flowId, versionId, expression);
+      const dueAfter = this.catchUpMissed(flowId, versionId, expression, timezone);
       this.cron.schedule(
         `flow:${flowId}`,
         expression,
-        (occurrence?: CronOccurrence) => this.fireSchedule(flowId, versionId, occurrence, { cronExpression: expression }, generation),
-        { onMissed: (missed, older) => this.recordMissed(flowId, versionId, missed, "Jarvis was asleep or too busy at that time", older), dueAfter },
+        (occurrence?: CronOccurrence) => this.fireSchedule(flowId, versionId, zonedOccurrence(occurrence, timezone), { cronExpression: expression, ...(timezone ? { timezone } : {}) }, generation),
+        { onMissed: (missed, older) => this.recordMissed(flowId, versionId, missed.map((o) => zonedOccurrence(o, timezone)), "Jarvis was asleep or too busy at that time", older), dueAfter, timezone },
       );
       this.subs.set(flowId, {
         generation,
@@ -632,21 +608,29 @@ export class TriggerManager {
 
     let cronTearDown: (() => void) | null = null;
     let webhookTearDown: (() => void) | null = null;
-    const pureSchedule = isSchedulePiece((version.trigger as unknown as TriggerNode | null)?.settings?.pieceName);
-    const warning = pureSchedule && schedule?.cronExpression ? scheduleZoneWarning(schedule.cronExpression, schedule.timezone) : undefined;
+    const triggerSettings = (version.trigger as unknown as TriggerNode | null)?.settings;
+    const pureSchedule = isSchedulePiece(triggerSettings?.pieceName);
+    // The engine reports the piece's zone, which may be a default nobody chose
+    // (the prop pre-fills UTC; the hourly triggers hard-code it). Use it only
+    // when it is the zone a person chose for the step; otherwise run in
+    // Jarvis's zone and say so. A poll's cadence always runs in Jarvis's zone.
+    const chosen = pureSchedule ? chosenScheduleZone(triggerSettings) : undefined;
+    const zone = chosen !== undefined && chosen === schedule?.timezone ? chosen : undefined;
+    const warning = pureSchedule && schedule?.cronExpression && !zone ? scheduleZoneWarning(schedule.cronExpression, schedule.timezone, Date.now(),
+      Object.hasOwn(triggerSettings?.input ?? {}, "timezone")) : undefined;
     if (warning) this.log(`flow ${flow.id}: ${warning}`);
     if (schedule?.cronExpression) {
       const expression = schedule.cronExpression;
       try {
-        const dueAfter = pureSchedule ? this.catchUpMissed(flow.id, version.id, expression) : undefined;
+        const dueAfter = pureSchedule ? this.catchUpMissed(flow.id, version.id, expression, zone) : undefined;
         this.cron.schedule(
           `flow:${flow.id}`,
           expression,
-          (occurrence?: CronOccurrence) => { void this.fireEngineTrigger(flow.id, version.id, "cron", occurrence, pureSchedule, generation); },
+          (occurrence?: CronOccurrence) => { void this.fireEngineTrigger(flow.id, version.id, "cron", zonedOccurrence(occurrence, zone), pureSchedule, generation); },
           // A missed poll of an event source is not a missed run; a missed
           // occurrence of the schedule piece is.
           pureSchedule
-            ? { onMissed: (missed, older) => this.recordMissed(flow.id, version.id, missed, "Jarvis was asleep or too busy at that time", older), dueAfter }
+            ? { onMissed: (missed, older) => this.recordMissed(flow.id, version.id, missed.map((o) => zonedOccurrence(o, zone)), "Jarvis was asleep or too busy at that time", older), dueAfter, ...(zone ? { timezone: zone } : {}) }
             : {},
         );
         cronTearDown = () => this.cron.cancel(`flow:${flow.id}`);
@@ -998,21 +982,24 @@ export class TriggerManager {
    * its key, never a second run. Undefined for a schedule that was not being
    * watched: it starts from its registration minute.
    */
-  private catchUpMissed(flowId: string, versionId: string, expression: string): number | undefined {
+  private catchUpMissed(flowId: string, versionId: string, expression: string, timezone?: string): number | undefined {
     const now = Date.now();
     let dueAfter: number | undefined;
     try {
       const watch = getScheduleWatch(flowId);
-      if (watch && watch.expression === expression) {
+      // Keep old zone-less watch keys compatible. An explicit zone change starts a new watch.
+      const watchKey = timezone ? JSON.stringify([expression, timezone]) : expression;
+      if (watch && watch.expression === watchKey) {
         const since = Math.max(watch.watchedSince, latestScheduledFire(flowId) ?? 0, now - CRON_MISSED_LOOKBACK_MS);
         dueAfter = now - CRON_GRACE_MS;
-        const owed = CronScheduler.occurrencesBetween(expression, since, now - CRON_GRACE_MS, 100_000);
+        const owed = CronScheduler.occurrencesBetween(expression, since, now - CRON_GRACE_MS, 100_000, timezone ?? getCronTimezone())
+          .map((o) => zonedOccurrence(o, timezone));
         const listed = owed.slice(-CRON_MISSED_LISTED);
         const older = owed.slice(0, owed.length - listed.length);
         this.recordMissed(flowId, versionId, listed.map((o) => ({ ...o, lateMs: now - o.at })), "The schedule was not running at that time",
           older.length ? { count: older.length, from: older[0]!.at, through: older[older.length - 1]!.at } : undefined);
       }
-      setScheduleWatch(flowId, expression, now);
+      setScheduleWatch(flowId, watchKey, now);
     } catch (e) {
       this.log(`flow ${flowId}: could not check for missed schedule times: ${(e as Error).message}`);
     }
@@ -1288,6 +1275,19 @@ interface LiveStart {
 }
 
 /** Why a schedule ran at a time it does not name: the spring-forward jump skipped its own. */
+/**
+ * An occurrence's delivery key is its wall-clock minute. In a chosen zone the
+ * key names the zone (`America/New_York@2026-10-07T09:00`), so 09:00 there is
+ * not taken for a repeat of 09:00 in Jarvis's zone the same day after a person
+ * picks the zone. A schedule in Jarvis's zone keeps the bare key it always
+ * had, so an upgrade neither repeats nor loses a time.
+ */
+function zonedOccurrence<T extends { key: string }>(occurrence: T, zone: string | undefined): T;
+function zonedOccurrence<T extends { key: string }>(occurrence: T | undefined, zone: string | undefined): T | undefined;
+function zonedOccurrence<T extends { key: string }>(occurrence: T | undefined, zone: string | undefined): T | undefined {
+  return occurrence && zone ? { ...occurrence, key: `${zone}@${occurrence.key}` } : occurrence;
+}
+
 function shiftedDetail(occurrence: CronOccurrence | undefined): { detail?: Record<string, unknown> } {
   return occurrence?.shifted ? { detail: { reason: "This time did not exist when clocks moved forward; it ran right after the change." } } : {};
 }

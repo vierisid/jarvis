@@ -164,7 +164,7 @@ export function collectExecutionTargets(): ExecutionTarget[] {
         // SidecarInfo.platform carries GOARCH, not an OS. See ExecutionTarget.
         arch: s.platform ?? null,
         connected: s.connected,
-        ...(s.capabilities ? { capabilities: [...s.capabilities] } : {}),
+        ...(s.capabilities ? { capabilities: s.capabilities.filter(capability => !s.unavailable_capabilities?.some(unavailable => unavailable.name === capability)) } : {}),
       });
     }
   } catch {

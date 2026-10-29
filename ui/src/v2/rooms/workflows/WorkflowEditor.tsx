@@ -62,7 +62,7 @@ import {
   type PieceCatalogEntry,
   type PieceInputField,
 } from "./useWorkflowEditor";
-import { flattenSteps, pathToStep } from "./tree";
+import { flattenSteps, pathToStep, withoutChosenZone } from "./tree";
 import { buildVariableRows, type VariableRow } from "./variable-rows";
 import { TRIGGER_KINDS, detectTriggerKind } from "./trigger-kinds";
 import { fetchFlowsForPicker, type FlowPickerEntry } from "./flow-picker-data";
@@ -985,7 +985,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
             }})}
             onAddInputKey={(key) => editor.updateStepInput(selectedStep.name, key, "")}
             onRemoveInputKey={(key) => {
-              const settings = selectedStep.settings ?? {};
+              const settings = key === "timezone" ? withoutChosenZone(selectedStep.settings) : (selectedStep.settings ?? {});
               const input = { ...(settings.input ?? {}) };
               delete input[key];
               editor.updateStep(selectedStep.name, { settings: { ...settings, input } });

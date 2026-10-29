@@ -70,6 +70,15 @@ describe('validating a contract', () => {
     expect(refuse({ recipients: Array.from({ length: 21 }, (_, i) => `r${i}`) })).toContain('1 to 20');
   });
 
+  test('notification contracts reject invented channels without silently substituting one', () => {
+    for (const channel of ['in_app', 'email', 'typo']) {
+      expect(refuse({ outputs: [{ notify: { channels: [channel] } }] })).toContain('Native Jarvis in-app notifications use dashboard');
+    }
+    for (const channel of ['dashboard', 'desktop', 'telegram', 'discord', 'voice']) {
+      expect(refuse({ outputs: [{ notify: { channels: [channel] } }] })).toBeNull();
+    }
+  });
+
   test('a contract no graph can keep is refused, naming why', () => {
     const unmet = (value: unknown) => expect(refuse(value)).toStartWith('Job contract cannot be met: ');
     expect(refuse({ outputs: [{ tool: 'write_file' }], forbidden: { tools: ['write_file'] } }))
@@ -93,10 +102,8 @@ describe('validating a contract', () => {
     expect(refuse({ outputs: [{ piece: 'gmail', action: 'gmail_send_draft' }], recipients: ['ana@example.com'] }))
       .toBe('Job contract cannot be met: it requires gmail gmail_send_draft, which does not state who receives it, and limits recipients');
     expect(refuse({ trigger: { kind: 'schedule', cron: '0 9 * * *', every: 'week' } })).toBe('Job contract cannot be met: its cron "0 9 * * *" does not run once every week');
-    // Every schedule runs in Jarvis's time zone, so a job set in another one would run at the wrong hour.
     expect(scheduleTimeZone()).toBe('Europe/Rome');
-    expect(refuse({ trigger: { kind: 'schedule', cron: '0 9 * * 1', timezone: 'America/New_York' } }))
-      .toBe("Job contract cannot be met: schedules run in Europe/Rome, Jarvis's time zone; the job asks for America/New_York");
+    expect(refuse({ trigger: { kind: 'schedule', cron: '0 9 * * 1', timezone: 'America/New_York' } })).toBeNull();
   });
 
   test('a contract some graph can keep is accepted', () => {
@@ -364,8 +371,17 @@ describe('rechecking a stored contract', () => {
       .toContain(`job contract: step "${edited.name}" sends to telegram, which the job does not allow`);
     setCronTimezone('America/New_York');
     try {
-      expect(recheckJobContract(good(), CONTRACT)).toEqual({ verified: [], review: [],
-        violations: ["Job contract cannot be met: schedules run in America/New_York, Jarvis's time zone; the job asks for Europe/Rome"] });
+      expect(recheckJobContract(good(), CONTRACT)!.violations).toContain('job contract: the schedule timezone is America/New_York; the job asks for Europe/Rome');
+      // A zone on the step counts only when a person chose it; otherwise it fires in Jarvis's zone.
+      const explicit = good();
+      (explicit.settings!.input as Record<string, unknown>).timezone = 'Europe/Rome';
+      expect(recheckJobContract(explicit, CONTRACT)!.violations).toContain('job contract: the schedule timezone is America/New_York; the job asks for Europe/Rome');
+      (explicit.settings as Record<string, unknown>).chosenTimezone = 'Europe/Rome';
+      expect(recheckJobContract(explicit, CONTRACT)!.violations).toEqual([]);
+      (explicit.settings!.input as Record<string, unknown>).timezone = 'UTC';
+      expect(recheckJobContract(explicit, CONTRACT)!.violations).toContain('job contract: the schedule timezone is America/New_York; the job asks for Europe/Rome');
+      (explicit.settings as Record<string, unknown>).chosenTimezone = 'UTC';
+      expect(recheckJobContract(explicit, CONTRACT)!.violations).toContain('job contract: the schedule timezone is UTC; the job asks for Europe/Rome');
     } finally { setCronTimezone('Europe/Rome'); }
   });
 });

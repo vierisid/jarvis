@@ -1,4 +1,5 @@
-import { snapshotComposition } from './composition-provenance';
+import { PieceCatalog } from '../../workflows/runtime/piece-catalog';
+import { fingerprint, snapshotComposition } from './composition-provenance';
 import { createCompositionJournal } from "../../workflows/db/repos/workflow-composition";
 import { composeFlow, jobSpecification, type ComposeDeps, type ComposeRequest, type ComposeResult } from "./workflow-composer";
 import { getWorkflowDb } from '../../workflows/db/index';
@@ -21,6 +22,21 @@ export async function composePersistedFlow(deps: ComposeDeps, input: ComposeRequ
     onJournal?.(record.id);
     return record;
   }).immediate();
+  // Install only explicitly requested Library entries into the frozen discovery
+  // catalog. Unrelated concurrent refreshes must not change a repair's contracts.
+  if (deps.installLibraryPiece) snapshot.deps.installLibraryPiece = async (id, signal) => {
+    request.signal?.throwIfAborted();
+    const entry = snapshot.deps.library?.find(candidate => candidate.id === id);
+    if (!entry) throw new Error('Unknown Library entry');
+    await deps.installLibraryPiece!(id, signal);
+    const actual = deps.pieceRegistry.get(entry.npmPackage);
+    if (!actual) throw new Error('Installed piece metadata is unavailable');
+    const metadata = JSON.parse(JSON.stringify(actual));
+    journal.recordInstalledPiece({ id, name: actual.name, version: actual.version, sha256: fingerprint(metadata) });
+    request.signal?.throwIfAborted();
+    signal?.throwIfAborted();
+    (snapshot.deps.pieceRegistry as PieceCatalog).upsert(metadata);
+  };
   try {
     const result = await composeFlow({ ...snapshot.deps, onCandidate(candidate) {
       request.signal?.throwIfAborted();
