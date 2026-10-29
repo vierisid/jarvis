@@ -1,3 +1,4 @@
+import { validateCronDstPolicy, type CronDstPolicy } from '../../../lib/cron-scheduler';
 import { scheduleTriggerPayload } from '../../runtime/schedule-payload';
 import { gmailAttachmentKey, isGmailAttachmentTrigger } from '../../runtime/gmail-attachment';
 import { prepareEmailEvent } from '../../runtime/event-types';
@@ -467,12 +468,14 @@ export class TriggerManager {
     const generation = workflowRemovalState(flowId).generation;
     try {
       const timezone = input.timezone as string | undefined;
-      const dueAfter = this.catchUpMissed(flowId, versionId, expression, timezone);
+      validateCronDstPolicy(input.dst_policy);
+      const dstPolicy = input.dst_policy;
+      const dueAfter = this.catchUpMissed(flowId, versionId, expression, timezone, dstPolicy);
       this.cron.schedule(
         `flow:${flowId}`,
         expression,
         (occurrence?: CronOccurrence) => this.fireSchedule(flowId, versionId, occurrence, { cronExpression: expression, ...(timezone ? { timezone } : {}) }, generation),
-        { onMissed: (missed, older) => this.recordMissed(flowId, versionId, missed, "Jarvis was asleep or too busy at that time", older), dueAfter, timezone },
+        { onMissed: (missed, older) => this.recordMissed(flowId, versionId, missed, "Jarvis was asleep or too busy at that time", older), dueAfter, timezone, dstPolicy },
       );
       this.subs.set(flowId, {
         generation,
@@ -971,17 +974,17 @@ export class TriggerManager {
    * its key, never a second run. Undefined for a schedule that was not being
    * watched: it starts from its registration minute.
    */
-  private catchUpMissed(flowId: string, versionId: string, expression: string, timezone?: string): number | undefined {
+  private catchUpMissed(flowId: string, versionId: string, expression: string, timezone?: string, dstPolicy?: CronDstPolicy): number | undefined {
     const now = Date.now();
     let dueAfter: number | undefined;
     try {
       const watch = getScheduleWatch(flowId);
       // Keep old zone-less watch keys compatible. An explicit zone change starts a new watch.
-      const watchKey = timezone ? JSON.stringify([expression, timezone]) : expression;
+      const watchKey = dstPolicy ? JSON.stringify([expression, timezone ?? getCronTimezone(), dstPolicy]) : timezone ? JSON.stringify([expression, timezone]) : expression;
       if (watch && watch.expression === watchKey) {
         const since = Math.max(watch.watchedSince, latestScheduledFire(flowId) ?? 0, now - CRON_MISSED_LOOKBACK_MS);
         dueAfter = now - CRON_GRACE_MS;
-        const owed = CronScheduler.occurrencesBetween(expression, since, now - CRON_GRACE_MS, 100_000, timezone ?? getCronTimezone());
+        const owed = CronScheduler.occurrencesBetween(expression, since, now - CRON_GRACE_MS, 100_000, timezone ?? getCronTimezone(), dstPolicy);
         const listed = owed.slice(-CRON_MISSED_LISTED);
         const older = owed.slice(0, owed.length - listed.length);
         this.recordMissed(flowId, versionId, listed.map((o) => ({ ...o, lateMs: now - o.at })), "The schedule was not running at that time",

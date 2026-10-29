@@ -3378,6 +3378,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const schema = detectedTriggerKind === 'schedule' && step.settings?.pieceName === 'schedule' ? {fields:[
     {name:'cron_expression',label:'Schedule (cron)',type:'string' as const,required:true,description:'Choose the execution time before running. For weekdays, use minute hour * * 1-5. For the last weekday of each month at 17:00, use 0 17 LW * *.'},
     {name:'timezone',label:'Timezone',type:'string' as const,required:true},
+    {name:'dst_policy',label:'Daylight-saving policy',type:'string' as const,required:false,description:'skip_missing_first_repeated skips nonexistent local times and uses only the first repeated time, including after restart. Omitted or shift_missing_once retains legacy spring shifting.'},
   ]} : requestWebhook ? { fields: [
     { name: 'request_id_field', label: 'Request ID field', type: 'string' as const, required: true, description: 'Stable request ID path. Repeated requests are accepted once; no email is required.' },
     ...Object.keys(formInput).filter(key => !['request_id_field', 'secret'].includes(key)).map(key => ({ name: key, label: key, type: 'string' as const, required: false })),
