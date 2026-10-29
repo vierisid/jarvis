@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { GOAL_CREATE_EVENT, takeGoalCreation } from './create-request';
 import {
   AlertTriangle,
   Calendar,
@@ -75,6 +76,11 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
   const [healthFilter, setHealthFilter] = useState<GoalHealth | "all">("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  useEffect(() => {
+    const open = () => { if (takeGoalCreation()) setCreateOpen(true); };
+    open(); window.addEventListener(GOAL_CREATE_EVENT, open);
+    return () => window.removeEventListener(GOAL_CREATE_EVENT, open);
+  }, []);
   const [toast, setToast] = useState<{ text: string; tone: "ok" | "warn" } | null>(null);
 
   useEffect(() => {
