@@ -38,7 +38,7 @@ import { createManageWorkflowTool } from '../../actions/tools/manage-workflow';
 
 import { createWorkflowFile } from '../db/repos/workflow-file';
 import { gmailAttachmentKey } from './gmail-attachment';
-import { claimAttachmentRun, releaseAttachmentClaim } from '../db/repos/trigger-fire';
+import { claimAttachmentRun, releaseAttachmentClaim, releaseRefusedEmailRun } from '../db/repos/trigger-fire';
 import { checkJobContract } from '../../actions/tools/job-contract';
 import { digest } from './effect-context';
 import { updateRun } from '../db/repos/flow-run';
@@ -308,6 +308,52 @@ for (const retry of ['redelivery', 'manual run'] as const) test(`a polled attach
   // The content is now held by the run that processed it.
   const after = stats(); await f.poll(); expect(stats()).toEqual(after); await f.stop();
 }, 60000);
+
+test('the same attachment refused the same way at readiness is recorded once, not run and failed again', async () => {
+  const f = await fixture(), before = stats();
+  const drive = () => upsertConnection({ externalId: 'fixture-drive', displayName: 'Fixture', type: 'OAUTH2', pieceName: DRIVE, pieceVersion: versions[DRIVE]!, value: { access_token: 'synthetic-only' } });
+  const connectionId = () => getWorkflowDb().query<{ id: string }, []>("SELECT id FROM app_connection WHERE external_id = 'fixture-drive'").get()!.id;
+  incoming = [item('Invoice INV-15 EUR 15.00')];
+  // Setup breaks while each poll is in flight, so the same content is refused twice.
+  for (let i = 0; i < 2; i++) {
+    if (i > 0) { drive(); pinFlowBindings(f.flow.id); }
+    const id = connectionId(); onPoll = () => deleteConnection(id);
+    await f.poll();
+  }
+  expect(stats()).toEqual(before);
+  const refused = listFlowFires(f.flow.id).filter(fire => fire.source === 'poll');
+  expect(refused).toEqual([expect.objectContaining({ outcome: 'blocked', dedupeKey: null, repeats: 1,
+    detail: expect.objectContaining({ deliveryKey: expect.stringMatching(/^attachment:v1:/), signature: expect.any(String) }) })]);
+  expect(listRuns({ flowId: f.flow.id })).toHaveLength(1);
+  // Once setup is fixed, the content is still processed once.
+  drive(); pinFlowBindings(f.flow.id); await f.poll();
+  expect(stats().map((n, i) => n - before[i]!)).toEqual([1, 1, 0, 1]);
+  const after = stats(); await f.poll(); expect(stats()).toEqual(after); await f.stop();
+}, 60000);
+
+test('an attachment step preview is judged on the preview scope frozen on the run, not only the job payload', async () => {
+  const f = await fixture(), before = stats();
+  const run = createFlowRun({ flowId: f.flow.id, flowVersionId: f.version.id, triggeredBy: 'dashboard', stepNameToTest: 'upload' }); runIds.push(run.id);
+  enqueue({ jobType: RUN_FLOW, payload: { runId: run.id, payload: {} }, flowRunId: run.id, flowId: f.flow.id, flowVersionId: f.version.id, maxAttempts: 1 });
+  await worker.drain();
+  expect(getFlowRun(run.id)?.status).toBe('FAILED');
+  expect(getFlowRun(run.id)?.failedStep?.errorMessage).toContain('isolated step previews');
+  expect(stats()).toEqual(before); await f.stop();
+}, 60000);
+
+for (const evidence of ['none', 'a step', 'an effect row'] as const)
+  test(`an attachment run refused at dispatch readiness with ${evidence} ${evidence === 'none' ? 'gives up' : 'keeps'} its content key`, async () => {
+    const f = await fixture(); const bytes = pdf('Dispatch ' + evidence); const file = createWorkflowFile({ projectId: DEFAULT_IDS.project, flowId: f.flow.id, type: 'FLOW_STEP_FILE', fileName: 'd.pdf', size: bytes.length, data: bytes });
+    const key = gmailAttachmentKey({ message: { id: 'd' }, attachment: { data: '/v1/step-files/' + file.id } }, f.flow.id, DEFAULT_IDS.project);
+    const run = createFlowRun({ flowId: f.flow.id, flowVersionId: f.version.id }); runIds.push(run.id);
+    claimAttachmentRun(f.flow.id, f.version.id, key, run.id);
+    updateRun(run.id, { status: 'FAILED', finishTime: Date.now(),
+      ...(evidence === 'a step' ? { steps: { only_pdf: { status: 'SUCCEEDED', output: {} } }, stepsCount: 1 } : {}) });
+    if (evidence === 'an effect row') getWorkflowDb().run("INSERT INTO workflow_effect (id, run_id, status, record) VALUES (?, ?, 'unknown', '{}')", ['effect-' + run.id, run.id]);
+    releaseRefusedEmailRun(run.id);
+    expect(listFlowFires(f.flow.id).filter(fire => fire.runId === run.id).map(fire => fire.dedupeKey)).toEqual([evidence === 'none' ? null : key]);
+    await f.stop();
+  }, 60000);
 
 test('a polled attachment whose queued run was canceled before it began is processed once by the next delivery', async () => {
   const f = await fixture(), before = stats();

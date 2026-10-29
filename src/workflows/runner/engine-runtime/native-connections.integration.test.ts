@@ -13,7 +13,8 @@ import { WorkflowEventBus } from '../../runtime/event-bus';
 import { getFlow } from '../../db/repos/flow';
 import { EngineFlowExecutor } from './engine-flow-executor';
 import { CredentialResolver } from "../../credentials/adapter";
-import { closeWorkflowDb, DEFAULT_IDS, initWorkflowDb } from "../../db";
+import { closeWorkflowDb, DEFAULT_IDS, getWorkflowDb, initWorkflowDb } from "../../db";
+import { graphDigest } from "../../runtime/continuation";
 import { setEncryptionKey } from "../../db/encryption";
 import { createFlow } from "../../db/repos/flow";
 import { createFlowRun, getFlowRun } from "../../db/repos/flow-run";
@@ -24,6 +25,7 @@ import { buildEngineBundle, ENGINE_BUILD_PATHS, findCachedBundle } from "./build
 import { buildPiece } from "./build-pieces";
 import { EngineRuntime } from "./engine-runtime";
 import { toUpstreamFlowVersion } from "./flow-version-adapter";
+import { triggerHookRunId } from "../triggers/hook-run-id";
 
 const PIECE = "@activepieces/piece-native-lookup-fixture";
 const SCHEDULE = '@activepieces/piece-schedule';
@@ -120,7 +122,7 @@ describe("native credential engine integration", () => {
     mkdirSync(dirname(scheduleInstalled), { recursive: true });
     symlinkSync(join(scheduleDir, 'dist'), scheduleInstalled, 'dir');
     const resolver = new CredentialResolver();
-    resolver.register({ id: "fixture", canResolve: id => id === "jarvis:fixture",
+    resolver.register({ id: "fixture", pieceNames: [PIECE], canResolve: id => id === "jarvis:fixture",
       resolve: async () => ({ type: "OAUTH2", value: { access_token: TOKEN } }) });
     api = new SandboxApi({ services: { credentialResolver: resolver } });
     await api.start({ port: 0 });
@@ -171,6 +173,8 @@ describe("native credential engine integration", () => {
     lockVersion(version.id);
     const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, environment: "TESTING" });
     runIds.push(run.id);
+    // The graph the RUN_FLOW handler records before the engine starts.
+    getWorkflowDb().run("UPDATE flow_run SET graph_digest = ? WHERE id = ?", [graphDigest(trigger), run.id]);
     const handle = await runtime!.acquire({ runId: run.id, projectId: DEFAULT_IDS.project });
     try {
       const result = await handle.executeFlow({ flowVersion: getFlowVersion(version.id)!, timeoutInSeconds: 15 });
@@ -259,7 +263,9 @@ describe("native credential engine integration", () => {
           input: { auth: "{{connections['jarvis:fixture']}}", endpoint: `http://127.0.0.1:${provider!.port}/check`, form: value },
         },
       } });
-      const handle = await runtime!.acquire({ runId: version.id, projectId: DEFAULT_IDS.project });
+      // A poll hook's run id, as the trigger manager mints it: the credential
+      // route reads the flow and version back out of it to scope the managed connection.
+      const handle = await runtime!.acquire({ runId: triggerHookRunId('poll', flow.id, version), projectId: DEFAULT_IDS.project });
       try {
         const execution = handle.executeTriggerHook('RUN', { flowVersion: toUpstreamFlowVersion(version), timeoutInSeconds: 15 });
         if (allowed) {

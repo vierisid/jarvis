@@ -29,7 +29,7 @@ for (const attack of attacks) test(`${attack.id}: source-selected account cannot
   }
   let managedCalls = 0;
   const resolver = new CredentialResolver();
-  resolver.register({ id: 'fixture', canResolve: id => id === 'jarvis:fixture', resolve: async () => {
+  resolver.register({ id: 'fixture', pieceNames: [], canResolve: id => id === 'jarvis:fixture', resolve: async () => {
     managedCalls++; return { type: 'OAUTH2', value: { access_token: ownSecret } };
   } });
   api = new SandboxApi({ services: { credentialResolver: resolver } });

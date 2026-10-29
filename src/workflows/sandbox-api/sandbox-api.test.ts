@@ -13,7 +13,8 @@ import { SandboxRegistry } from "./sandbox-registry";
 import { SandboxApi } from "./server";
 import { CredentialResolver } from "../credentials/adapter";
 import { DEFAULT_IDS } from "../db/schema";
-import { closeWorkflowDb, initWorkflowDb } from "../db";
+import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from "../db";
+import { graphDigest } from "../runtime/continuation";
 import { _clearStoreForTests } from "../db/repos/store-entry";
 import { createFlow, setPublishedVersion, updateFlowStatus } from "../db/repos/flow";
 import { createDraftVersion, lockVersion } from "../db/repos/flow-version";
@@ -368,6 +369,7 @@ describe("SandboxApi routes (B2: connections, store, flows)", () => {
     // Stub Jarvis source so jarvis:test resolves to a fake OAuth2 connection.
     resolver.register({
       id: "test",
+      pieceNames: ["test-piece"],
       canResolve: (e) => e === "jarvis:test",
       resolve: async () => ({
         type: "OAUTH2",
@@ -388,7 +390,18 @@ describe("SandboxApi routes (B2: connections, store, flows)", () => {
   });
 
   test("GET /v1/worker/app-connections/:externalId resolves a Jarvis source", async () => {
-    const r = await authedFetch("/v1/worker/app-connections/jarvis%3Atest");
+    // Only for a run whose graph names it as the auth of a step of the source's piece.
+    expect((await authedFetch("/v1/worker/app-connections/jarvis%3Atest")).status).toBe(403);
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: "Managed source", trigger: { name: "trigger", type: "EMPTY",
+      nextAction: { name: "send", type: "PIECE", settings: { pieceName: "test-piece", actionName: "send", input: { auth: "{{connections.jarvis:test}}" } } } } as any });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "RUNNING" });
+    // The graph the RUN_FLOW handler records before the engine starts.
+    getWorkflowDb().run("UPDATE flow_run SET graph_digest = ? WHERE id = ?", [graphDigest(version.trigger), run.id]);
+    const id = { ...sampleIdentity(), runId: run.id };
+    const { token } = await signer.mint(id);
+    registry.register({ ...id, engineToken: token, expiresAt: Date.now() + 60_000, terminatedAt: null });
+    const r = await fetch(`${api.baseUrl}/v1/worker/app-connections/jarvis%3Atest`, { headers: { Authorization: `Bearer ${token}` } });
     expect(r.status).toBe(200);
     const body = (await r.json()) as { externalId: string; status: string; value: { type?: string; access_token?: string } };
     expect(body.externalId).toBe("jarvis:test");
@@ -641,11 +654,11 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
     expect(refused.status).toBe(403);
     expect(await refused.text()).not.toContain("abc");
     // The other flow's own trigger hook still reads it.
-    const owner = await authedFetchForRun(`/v1/step-files/${foreign.id}`, {}, triggerHookRunId("poll", other.id));
+    const owner = await authedFetchForRun(`/v1/step-files/${foreign.id}`, {}, triggerHookRunId("poll", other.id, { id: "version", trigger: null }));
     expect(owner.status).toBe(200);
     expect(await owner.text()).toBe("abc");
     // Same flow: a file written by this flow's poll hook is read by its run.
-    const upload = await authedFetchForRun("/v1/step-files", { method: "POST", body: stepFileForm(testFlowId, "trigger") }, triggerHookRunId("poll", testFlowId));
+    const upload = await authedFetchForRun("/v1/step-files", { method: "POST", body: stepFileForm(testFlowId, "trigger") }, triggerHookRunId("poll", testFlowId, { id: "version", trigger: null }));
     const { url } = (await upload.json()) as { url: string };
     const same = await authedFetchForRun(url);
     expect(same.status).toBe(200);
@@ -699,7 +712,7 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
   test("POST /v1/step-files binds a trigger hook run to the flow its run id names", async () => {
     // Poll triggers (e.g. a mail trigger saving attachments) write step files
     // from a hook sandbox that has no flow_run row.
-    const hookRunId = triggerHookRunId("poll", testFlowId);
+    const hookRunId = triggerHookRunId("poll", testFlowId, { id: "version", trigger: null });
     const ok = await authedFetchForRun("/v1/step-files", { method: "POST", body: stepFileForm(testFlowId, "trigger") }, hookRunId);
     expect(ok.status).toBe(200);
     // Hooks upload under the piece's trigger name, which is often hyphenated.
@@ -710,7 +723,7 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
     expect(wrong.status).toBe(403);
     // A hook run id naming a flow in another project binds to nothing.
     const foreign = createFlow({ projectId: "proj_foreign_hook" });
-    const cross = await authedFetchForRun("/v1/step-files", { method: "POST", body: stepFileForm(foreign.id, "trigger") }, triggerHookRunId("poll", foreign.id));
+    const cross = await authedFetchForRun("/v1/step-files", { method: "POST", body: stepFileForm(foreign.id, "trigger") }, triggerHookRunId("poll", foreign.id, { id: "version", trigger: null }));
     expect(cross.status).toBe(403);
   });
 

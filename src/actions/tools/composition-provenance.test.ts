@@ -20,26 +20,33 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
-  // w8-10: invoice extraction, schema validation and complete readback.
+  // w8-11: invoice extraction, schema validation and complete readback.
+  'w8-11': {
+    bare: '75efb1295411133d02534d3b1f92363370d634aad4ddadf11df132a929544d79',
+    production: 'cbed103e2327dbfc97961cacbd1e0c32d6c044cda703b7b48dfb449e2da15f82',
+    'hosted production': '478b71ed5780ee2a5f0e16b39fd59389f6cb52918334ba5295a4665cf5ce7f2d',
+    'tool names only': '4ef91135e7dcff0980a28318bc721e5e7af84c75864d36ab04edb66aa2aa5575',
+  },
+  // w8-10: Gmail triage, persistent message admission covering manual runs only when they carry a payload.id.
   'w8-10': {
-    'bare': '7d67902a5b5322f09f6674087300adede90f760c32a838ff63a1c5c52d697cd7',
-    'hosted production': '00295869f68756af263c3a3887438caa2ad821f91f93603f2246d51898fb36a1',
-    'production': '03c9c503659f663adb6d7a1180506ba1cdac5acfe968c623ddd226d24da66f72',
-    'tool names only': '1754937b5fb64635cf361c4ccd1a882c41a2cfac7c2be872040ab2ea73901c49',
+    bare: '21cc6e0220440ff1fe3217a63b8d483c8bdfc737d03aa28af57d321dbe9e836e',
+    production: '1088d9babdd3a8d10b38cf87f1435e498e95d6263d89bb35d337496840cf247e',
+    'hosted production': 'f6283bdb24ca178b75917cfd6784ce7cf5141ce67d6d094cfa31f198eabcbd31',
+    'tool names only': 'b317e86b850c113b217af53300694a222880ed1325e61f21cd7283c1df802024',
   },
-  // w8-9: Gmail triage and persistent message admission.
+  // w8-9: deferred setup, connector continuation and form processing; the composer never installs.
   'w8-9': {
-    'bare': '729110a19aba46318acfa836345686c035b28e4b0772efab9cb62bf6a8c31dbe',
-    'hosted production': 'eb363935d5a05f3d08716a2f91562fd661e6fddcd2f7db8bb8cbf7a6bedc1908',
-    'production': '49c0da151a101f4d160d47186220d41d6485fdf35caa5121a36801ea126f822b',
-    'tool names only': 'f6c257d486170b6613aabd712775fa598f29d76b808aba78dc56f21f242113d8',
+    bare: '0e5ea5dffb6128bb806328d5cb23715f9a1ba256ca8ef3842d480baa71130901',
+    production: '9b78e90b24a95a83548b061a83a2d44e8e5aa8d91176ff3ffc9f5df066ab560e',
+    'hosted production': 'aa07ed478ff210e49b2b967b274ab21fdeb489d98c115454767f582b8d217de2',
+    'tool names only': 'dba35e1b068c4ecbb581c43b1eff267575cd35b392a9a631edbc60d2a3528aa6',
   },
-  // w8-8: deferred setup, connector continuation and form processing.
+  // w8-8: a schedule names a time zone only when the job contract does; a bare time is Jarvis's zone.
   'w8-8': {
-    'bare': '2e7622eb199df8f1ea33d8a77d686b34e1282028823f818719132b07b4949b80',
-    'hosted production': '8efd7c5dd6ee559f9758e716de4c70665ff3e64bd16f0a91e47bf923fc7492f6',
-    'production': '546b58cc39e2a413ef9702b53b22c4ce7544b6bd2df3ec0a95fcf57a2367d469',
-    'tool names only': 'a2ec151afbc98276e6d31d667a2cd1bf3c91eddd055d5748ba7ab5dd1a46c78c',
+    bare: '0b7e8cc85a1f50a5411c050a7b2286a8236ad400367feed39f04f57c6ae56496',
+    production: 'ced53dbe7a008e923abc9694e3f52d44fde5156e7503b3a1d1923a635a7df466',
+    'hosted production': '9dec78536da3bcd905dc0c854bfcb767fda12073e9c9e5ce9a12c8222d586fda',
+    'tool names only': 'c35f5d375dfacfa242c841699cc31103ee6726ed71208f53be69e2c2ab0de478',
   },
   // w8-7: inspect browser fallback before refusing missing connector setup.
   'w8-7': {

@@ -1,7 +1,7 @@
 import { prepareSubmission, submissionConfig } from '../runtime/form-submission';
 import { lacksEmailMessageId, prepareEmailEvent, unclaimedEmailEvent } from '../runtime/event-types';
 import { gmailAttachmentKey, isGmailAttachmentTrigger } from '../runtime/gmail-attachment';
-import { claimAttachmentRun, claimEmailRun, claimSubmissionRun, fireForRun, releaseAttachmentClaim } from '../db/repos/trigger-fire';
+import { claimAttachmentRun, claimEmailRun, claimSubmissionRun, fireForRun, releaseAttachmentClaim, releaseRefusedEmailRun } from '../db/repos/trigger-fire';
 import { applyInputOverrides, walkFlowNodes } from '../db/flow-graph';
 import { tracksPieceCompletion } from '../runtime/piece-effects';
 /**
@@ -22,9 +22,9 @@ import { tracksPieceCompletion } from '../runtime/piece-effects';
 
 import type { Job } from "../db/repos/job-queue";
 import type { JobHandler } from "../queue/worker";
-import { getFlowRun, updateRun, type FlowRun } from "../db/repos/flow-run";
+import { ensureRunExecutionConfig, getFlowRun, updateRun, type FlowRun } from "../db/repos/flow-run";
 import { cancelFlowRun, getRunCancellation } from "../db/repos/run-cancellation";
-import { assertRunIngredientsReady } from "../db/repos/flow-readiness";
+import { assertRunIngredientsReady, WorkflowReadinessError } from "../db/repos/flow-readiness";
 import { watchRunCancellation, withRunCancellation } from "../runtime/cancellation";
 import { signalRunEnded } from "../runtime/cancellation-signals";
 import {
@@ -300,10 +300,12 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
       if (!resuming && ['jarvis-trigger', '@jarvispieces/piece-jarvis-trigger'].includes(String(triggerSettings?.pieceName))
         && triggerSettings?.triggerName === 'on_event' && triggerSettings.input?.eventType === 'observer.email_received') {
         try {
-          const tested = typed.payload.stepNameToTest;
-          // Judged on the graph the preview runs: its input override can turn an
-          // untracked step (an HTTP GET) into a tracked one (a POST).
-          const overrides = typed.payload.sampleInputOverride;
+          // Judged on the run's frozen configuration, the one the executor runs:
+          // the preview scope recorded on the run, and its input override, which
+          // can turn an untracked step (an HTTP GET) into a tracked one (a POST).
+          const config = ensureRunExecutionConfig(run.id, typed.payload);
+          const tested = config.stepNameToTest;
+          const overrides = config.sampleInputOverride;
           const previewed = overrides && Object.keys(overrides).length > 0 ? applyInputOverrides(version.trigger, overrides) : version.trigger;
           const effect = tested ? trackedEffectUnder(previewed, tested) : null;
           if (effect) throw Error(`"${effect}" is a tracked send or change, and a preview of it would act outside this email workflow's once-per-message check. Test the complete workflow with a message payload instead.`);
@@ -322,7 +324,9 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
       }
       if (!resuming && isGmailAttachmentTrigger(triggerSettings)) {
         try {
-          if (typed.payload.stepNameToTest || typed.payload.executeTrigger) throw Error('Test the complete attachment workflow with an emitted attachment payload; isolated step previews and trigger reexecution bypass attachment admission.');
+          // The preview scope is the run's frozen one, as for email admission.
+          const config = ensureRunExecutionConfig(run.id, typed.payload);
+          if (config.stepNameToTest || typed.payload.executeTrigger) throw Error('Test the complete attachment workflow with an emitted attachment payload; isolated step previews and trigger reexecution bypass attachment admission.');
           claimAttachmentRun(run.flowId, version.id, gmailAttachmentKey(payload, run.flowId, run.projectId), run.id);
         } catch (error) { throw new FlowExecutionError((error as Error).message, { name: 'trigger', displayName: 'Check attachment identity' }); }
       }
@@ -400,6 +404,14 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
           failedStep: { name: "<engine>", displayName: "engine", errorMessage },
           finishTime: ts,
         });
+        // Refused by a readiness recheck at dispatch (here or just before the
+        // engine call), so nothing ran: the email or attachment it was started
+        // for keeps no claim, and once setup is fixed a redelivery or manual
+        // run processes it.
+        if (e instanceof WorkflowReadinessError && !resuming) {
+          try { releaseRefusedEmailRun(runId); }
+          catch (releaseError) { console.warn(`[run-flow ${runId}] could not release the refused email: ${(releaseError as Error).message}`); }
+        }
       }
       throw e;
     } finally {

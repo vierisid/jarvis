@@ -260,6 +260,7 @@ export function buildToolGuide({ hasSidecars, piecesManaged, machines }: ToolGui
   lines.push('');
   lines.push('Primary action: `compose { name, description }` builds a draft flow from a plain-English description.');
   lines.push('Preserve the complete original job on every retry. Inspect actual schemas and unknown choices before filling contract fields; never invent action names, account IDs or calendar IDs. Native Jarvis notifications use channel dashboard, never in_app.');
+  lines.push("When the person names a time zone for a schedule, put it in contract.trigger.timezone; a schedule uses its own zone only when the contract names it. A bare time (\"at 9\") means Jarvis's zone: write no zone.");
   lines.push('A missing connector does not prove the job impossible. If the user permits AI/browser work, inspect a browser-agent alternative and verify registered tools, a connected computer, role permissions and account access. Never assume login or impose connector-only restrictions the user did not request.');
   lines.push('Contract constraints govern future workflow execution. A request not to execute real actions while drafting is satisfied by a disabled draft; do not turn it into a ban on the requested future reads or notifications. Preserve every required output, not a diagnostic-only scaffold.');
 
@@ -267,14 +268,15 @@ export function buildToolGuide({ hasSidecars, piecesManaged, machines }: ToolGui
   lines.push('DISABLED draft or returns setup questions or concrete errors. Continue setup through continue_setup;');
   lines.push('other errors need a targeted repair that preserves the original request. Do not weaken requirements.');
   if (!piecesManaged) {
-    lines.push('Required Library connectors are installed by compose by default under software-install Authority. Do not stop to ask for a separate install instruction. Set install_missing:false only if the user forbids installation.');
-    lines.push('If installation fails, suggestedInstalls and the actual failure identify the remaining dependency; do not repeatedly retry it.');
+    lines.push('When a Library connector is missing, compose returns setup.status needs_installation with setup.continueWith.install naming it. Call that continueWith as given: the user approves installing exactly those connectors on a software-install card. Nothing is installed when nothing is missing. Set install_missing:false only if the user forbids installation.');
+    lines.push('If the install card is denied, say which connectors were not installed and that the workflow stays Setup required; do not retry the install. If installation fails, installationErrors and suggestedInstalls identify the remaining dependency; do not repeatedly retry it.');
   }
   lines.push('Save the full disabled processing graph even when payload paths, destination, column mapping or account are unknown. Leave inputs empty/null for Setup required in the editor; configuration alone must not block saving. Never invent values or substitute diagnostic steps.');
   lines.push('When setup is returned without a saved draft, ask its nextQuestion directly and keep the compositionRecordId. On the answer call continue_setup { composition_id, answers }. It retains the original job and earlier answers; never ask the user to repeat the workflow prompt or tell you to continue.');
+  lines.push('Once a draft is saved, its remaining fields are set in the workflow editor (setup.editor): continue_setup refuses answers and installs for a saved draft and only rechecks readiness. Point the user to the editor instead.');
   lines.push('For invoice PDFs, inspect Gmail new_attachment, Drive upload receipts, Sheets append receipts and jarvis-ask pdfFile. Attachment-byte admission prevents repeated runs, while Ask extracts without tools or payment authority. Keep missing labels, account bindings and destinations as setup in a full disabled draft.');
   lines.push('For Gmail once-per-message workflows, inspect jarvis-trigger:on_event observer.email_received and jarvis-notify runtime guarantees. Built-in persistent email admission and notification dispatch receipts cover duplicate delivery/replay; do not claim missing storage without inspecting these contracts. Keep uncertain classifications in Needs review and alert only on confident urgent support.');
-  lines.push('Guide account connection through secure Connected workspace setup and selection in the workflow. Never request credentials in chat. Recheck with continue_setup after setup; keep the workflow disabled and do not run external actions while drafting.');
+  lines.push('Guide account connection through secure Connected workspace setup and selection in the workflow. Never request credentials in chat. Recheck with continue_setup { composition_id } after setup; keep the workflow disabled and do not run external actions while drafting.');
   lines.push('Do not surface raw error JSON to the user, translate it. After a successful compose, summarize what was');
   lines.push('built and confirm with the user before calling `publish` (which locks the draft and enables it).');
   lines.push('');

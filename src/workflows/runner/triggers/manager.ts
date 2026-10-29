@@ -58,8 +58,8 @@ import { ungrantedCodeSteps } from "../../db/repos/flow-code-steps";
 import { createFlowRun, updateRun } from "../../db/repos/flow-run";
 import { enqueue, countQueued } from "../../db/repos/job-queue";
 import {
-  claimFire, clearScheduleWatch, DELAYED_AFTER_MS, getScheduleWatch, isRetainedKey, latestScheduledFire, pruneFires, recordBlocked,
-  recordFire, repeatOf, setScheduleWatch, type FireSource,
+  claimFire, clearScheduleWatch, DELAYED_AFTER_MS, fireDigest, getScheduleWatch, isRetainedKey, latestScheduledFire, pruneFires, recordBlocked,
+  recordFire, repeatOf, repeatOfRefusal, setScheduleWatch, type FireSource,
 } from "../../db/repos/trigger-fire";
 import { RUN_FLOW } from "../handler";
 import { DEFAULT_IDS } from "../../db/schema";
@@ -68,6 +68,7 @@ import { toUpstreamFlowVersion } from "../engine-runtime/flow-version-adapter";
 import { graphDigest } from "../../runtime/continuation";
 import { emergencyHold, PAUSED_REASON } from "../../runtime/emergency-hold";
 import { triggerHookRunId } from "./hook-run-id";
+import { chosenScheduleZone, scheduleZoneWarning, statedScheduleZone } from "./schedule-zone";
 
 interface TriggerNode {
   type: string;
@@ -463,15 +464,18 @@ export class TriggerManager {
       this.log(`flow ${flowId}: schedule trigger missing cron expression; skipping`);
       return;
     }
+    // A zone is used only when a person chose it (schedule-zone.ts); one that is not used is shown.
+    const timezone = chosenScheduleZone(trigger.settings);
+    const warning = timezone ? undefined : scheduleZoneWarning(expression, statedScheduleZone(trigger.settings));
+    if (warning) this.log(`flow ${flowId}: ${warning}`);
     const generation = workflowRemovalState(flowId).generation;
     try {
-      const timezone = input.timezone as string | undefined;
       const dueAfter = this.catchUpMissed(flowId, versionId, expression, timezone);
       this.cron.schedule(
         `flow:${flowId}`,
         expression,
-        (occurrence?: CronOccurrence) => this.fireSchedule(flowId, versionId, occurrence, { cronExpression: expression, ...(timezone ? { timezone } : {}) }, generation),
-        { onMissed: (missed, older) => this.recordMissed(flowId, versionId, missed, "Jarvis was asleep or too busy at that time", older), dueAfter, timezone },
+        (occurrence?: CronOccurrence) => this.fireSchedule(flowId, versionId, zonedOccurrence(occurrence, timezone), { cronExpression: expression, ...(timezone ? { timezone } : {}) }, generation),
+        { onMissed: (missed, older) => this.recordMissed(flowId, versionId, missed.map((o) => zonedOccurrence(o, timezone)), "Jarvis was asleep or too busy at that time", older), dueAfter, timezone },
       );
       this.subs.set(flowId, {
         generation,
@@ -479,6 +483,7 @@ export class TriggerManager {
         versionId,
         kind: "cron",
         triggerDigest: triggerDigest(trigger),
+        ...(warning ? { warning } : {}),
         teardown: () => this.cron.cancel(`flow:${flowId}`),
       });
     } catch (e) {
@@ -568,7 +573,7 @@ export class TriggerManager {
     if (!schedule && !listeners) {
       try {
         const handle = await engine.acquire({
-          runId: triggerHookRunId('enable', flow.id),
+          runId: triggerHookRunId('enable', flow.id, version),
           projectId: flow.project_id,
         });
         try {
@@ -608,20 +613,30 @@ export class TriggerManager {
 
     let cronTearDown: (() => void) | null = null;
     let webhookTearDown: (() => void) | null = null;
-    const pureSchedule = isSchedulePiece((version.trigger as unknown as TriggerNode | null)?.settings?.pieceName);
+    const triggerSettings = (version.trigger as unknown as TriggerNode | null)?.settings;
+    const pureSchedule = isSchedulePiece(triggerSettings?.pieceName);
+    // The engine reports the piece's zone, which may be a default nobody chose
+    // (the prop pre-fills UTC; the hourly triggers hard-code it). Use it only
+    // when it is the zone a person chose for the step; otherwise run in
+    // Jarvis's zone and say so. A poll's cadence always runs in Jarvis's zone.
+    const chosen = pureSchedule ? chosenScheduleZone(triggerSettings) : undefined;
+    const zone = chosen !== undefined && chosen === schedule?.timezone ? chosen : undefined;
+    const warning = pureSchedule && schedule?.cronExpression && !zone ? scheduleZoneWarning(schedule.cronExpression, schedule.timezone, Date.now(),
+      Object.hasOwn(triggerSettings?.input ?? {}, "timezone")) : undefined;
+    if (warning) this.log(`flow ${flow.id}: ${warning}`);
     if (schedule?.cronExpression) {
       const expression = schedule.cronExpression;
       try {
-        const dueAfter = pureSchedule ? this.catchUpMissed(flow.id, version.id, expression, schedule.timezone) : undefined;
+        const dueAfter = pureSchedule ? this.catchUpMissed(flow.id, version.id, expression, zone) : undefined;
         this.cron.schedule(
           `flow:${flow.id}`,
           expression,
-          (occurrence?: CronOccurrence) => { void this.fireEngineTrigger(flow.id, version.id, "cron", occurrence, pureSchedule, generation); },
+          (occurrence?: CronOccurrence) => { void this.fireEngineTrigger(flow.id, version.id, "cron", zonedOccurrence(occurrence, zone), pureSchedule, generation); },
           // A missed poll of an event source is not a missed run; a missed
           // occurrence of the schedule piece is.
           pureSchedule
-            ? { onMissed: (missed, older) => this.recordMissed(flow.id, version.id, missed, "Jarvis was asleep or too busy at that time", older), dueAfter, timezone: schedule.timezone }
-            : { timezone: schedule.timezone },
+            ? { onMissed: (missed, older) => this.recordMissed(flow.id, version.id, missed.map((o) => zonedOccurrence(o, zone)), "Jarvis was asleep or too busy at that time", older), dueAfter, ...(zone ? { timezone: zone } : {}) }
+            : {},
         );
         cronTearDown = () => this.cron.cancel(`flow:${flow.id}`);
       } catch (e) {
@@ -648,7 +663,7 @@ export class TriggerManager {
     const noSubscription = !cronTearDown && !webhookTearDown;
     // ON_ENABLE already owns engine state, even if every local subscription
     // failed. Keep its teardown so pause/stop clears state and runs ON_DISABLE.
-    // Surface a failed registration in `list()`.
+    // A failed registration outranks the advisory zone warning in `list()`.
     const failure = noSubscription ? 'No trigger subscription could be registered; the flow is not firing.'
       : schedule?.cronExpression && !cronTearDown ? 'Cron registration failed; only webhook delivery is active.' : undefined;
     const sub: ActiveSub = {
@@ -657,7 +672,7 @@ export class TriggerManager {
       versionId: version.id,
       kind: "engine",
       triggerDigest: triggerDigest(version.trigger),
-      ...(failure ? { warning: failure, incomplete: true as const } : {}),
+      ...(failure ? { warning: failure, incomplete: true as const } : warning ? { warning } : {}),
       teardown: () => this.teardownEngineTrigger(flow.id, version.id, cronTearDown, webhookTearDown),
     };
     this.subs.set(flow.id, sub);
@@ -734,7 +749,7 @@ export class TriggerManager {
     if (!version) return;
     try {
       const handle = await this.engineRuntime.acquire({
-        runId: triggerHookRunId('disable', flowId),
+        runId: triggerHookRunId('disable', flowId, version),
         projectId: flow?.project_id ?? DEFAULT_IDS.project,
       });
       try {
@@ -829,6 +844,20 @@ export class TriggerManager {
     const { flowId, versionId, source } = opts;
     const signature = JSON.stringify([versionId, error.readiness]);
     const carriesInput = opts.payload !== undefined && source !== "schedule";
+    // An email or attachment refused here ran nothing, so it keeps no claim on
+    // its message or content: once setup is fixed, a redelivery or manual run
+    // processes it once. The same email or attachment refused the same way
+    // again (the observer re-emits unread mail after a restart, a poll sees
+    // the attachment again) is counted on the first refusal, not run and
+    // failed again.
+    const retainedKey = carriesInput && isRetainedKey(opts.dedupeKey) ? opts.dedupeKey! : null;
+    const retainedRefusal = retainedKey ? fireDigest(JSON.stringify([versionId, error.readiness, retainedKey])) : null;
+    const folded = retainedRefusal ? repeatOfRefusal(flowId, retainedRefusal) : null;
+    if (folded) {
+      this.tellUntold(flowId, signature);
+      this.log(`flow ${flowId}: readiness refused ${source} again for the same ${retainedKey!.startsWith("event:email:") ? "email" : "attachment"} (${folded.id}): ${error.message}`);
+      return { outcome: "blocked", fireId: folded.id, reason: error.message };
+    }
     let runId: string | undefined;
     const fresh = this.liveRefusals.get(flowId) !== signature;
     if (carriesInput || fresh) {
@@ -841,13 +870,9 @@ export class TriggerManager {
     // first notice reached nobody.
     if (fresh && runId) this.tell(signature, { flowId, runId, message: error.message });
     else this.tellUntold(flowId, signature);
-    // An email or attachment refused here ran nothing, so it keeps no claim on
-    // its message or content: once setup is fixed, a redelivery or manual run
-    // processes it once.
-    const releasesKey = isRetainedKey(opts.dedupeKey);
-    const detail = { reason: error.message, code: error.code, ...(releasesKey ? { deliveryKey: opts.dedupeKey } : {}) };
+    const detail = { reason: error.message, code: error.code, ...(retainedKey ? { deliveryKey: retainedKey, signature: retainedRefusal } : {}) };
     const fire = carriesInput
-      ? recordFire({ flowId, flowVersionId: versionId, source, dedupeKey: releasesKey ? null : opts.dedupeKey, scheduledFor: opts.scheduledFor,
+      ? recordFire({ flowId, flowVersionId: versionId, source, dedupeKey: retainedKey ? null : opts.dedupeKey, scheduledFor: opts.scheduledFor,
           lateMs: opts.lateMs, outcome: "blocked", runId, detail })
       : recordBlocked({ flowId, flowVersionId: versionId, source, signature, scheduledFor: opts.scheduledFor,
           lateMs: opts.lateMs, runId, detail });
@@ -1005,7 +1030,8 @@ export class TriggerManager {
       if (watch && watch.expression === watchKey) {
         const since = Math.max(watch.watchedSince, latestScheduledFire(flowId) ?? 0, now - CRON_MISSED_LOOKBACK_MS);
         dueAfter = now - CRON_GRACE_MS;
-        const owed = CronScheduler.occurrencesBetween(expression, since, now - CRON_GRACE_MS, 100_000, timezone ?? getCronTimezone());
+        const owed = CronScheduler.occurrencesBetween(expression, since, now - CRON_GRACE_MS, 100_000, timezone ?? getCronTimezone())
+          .map((o) => zonedOccurrence(o, timezone));
         const listed = owed.slice(-CRON_MISSED_LISTED);
         const older = owed.slice(0, owed.length - listed.length);
         this.recordMissed(flowId, versionId, listed.map((o) => ({ ...o, lateMs: now - o.at })), "The schedule was not running at that time",
@@ -1133,7 +1159,7 @@ export class TriggerManager {
     let items: unknown[];
     try {
       const handle = await engine.acquire({
-        runId: triggerHookRunId('poll', flowId),
+        runId: triggerHookRunId('poll', flowId, version),
         projectId: getFlow(flowId)?.project_id ?? DEFAULT_IDS.project,
       });
       try {
@@ -1298,8 +1324,27 @@ interface LiveStart {
 }
 
 /** Why a schedule ran at a time it does not name: the spring-forward jump skipped its own. */
+/**
+ * An occurrence's delivery key is its wall-clock minute. In a chosen zone the
+ * key names the zone (`America/New_York@2026-10-07T09:00`), so 09:00 there is
+ * not taken for a repeat of 09:00 in Jarvis's zone the same day after a person
+ * picks the zone. A schedule in Jarvis's zone keeps the bare key it always
+ * had, so an upgrade neither repeats nor loses a time.
+ */
+function zonedOccurrence<T extends { key: string }>(occurrence: T, zone: string | undefined): T;
+function zonedOccurrence<T extends { key: string }>(occurrence: T | undefined, zone: string | undefined): T | undefined;
+function zonedOccurrence<T extends { key: string }>(occurrence: T | undefined, zone: string | undefined): T | undefined {
+  return occurrence && zone ? { ...occurrence, key: `${zone}@${occurrence.key}` } : occurrence;
+}
+
 function shiftedDetail(occurrence: CronOccurrence | undefined): { detail?: Record<string, unknown> } {
   return occurrence?.shifted ? { detail: { reason: "This time did not exist when clocks moved forward; it ran right after the change." } } : {};
+}
+
+/** The event type an on_event trigger subscribes to, when it names one. */
+function eventTypeOf(trigger: TriggerNode | null | undefined): string | undefined {
+  const eventType = (trigger?.settings?.input as Record<string, unknown> | undefined)?.eventType;
+  return typeof eventType === "string" && eventType ? eventType : undefined;
 }
 
 /**
@@ -1307,11 +1352,6 @@ function shiftedDetail(occurrence: CronOccurrence | undefined): { detail?: Recor
  * message id, a commitment and its due time), else the poll item's own key.
  * Without one, the event is not deduplicated.
  */
-function eventTypeOf(trigger: TriggerNode | null | undefined): string | undefined {
-  const eventType = (trigger?.settings?.input as Record<string, unknown> | undefined)?.eventType;
-  return typeof eventType === "string" && eventType ? eventType : undefined;
-}
-
 function eventItemKey(payload: Record<string, unknown>, eventType?: string): string | undefined {
   if ((eventType ?? payload.eventType) === "observer.email_received") return prepareEmailEvent(payload).key;
   const inner = payload.payload && typeof payload.payload === "object" ? (payload.payload as Record<string, unknown>) : undefined;
