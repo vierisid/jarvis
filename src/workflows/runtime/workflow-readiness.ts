@@ -3,6 +3,7 @@ import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from '.
 import { evaluateWorkflowExpression, workflowExpressionReferences } from './safe-expression';
 import { emptyInput, inputIssue } from './input-validation';
 import { declaredDependencies } from './code-step-manifest';
+import { chosenScheduleZone, statedScheduleZone } from '../runner/triggers/schedule-zone';
 
 export interface ReadinessIssue {
   node: string;
@@ -251,8 +252,12 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
           if (typeof cron !== 'string') throw new Error('Schedule requires a static cron expression');
           validateCronExpression(cron);
         } catch (error) { issue(node, 'settings.input.cron_expression', 'CRON', (error as Error).message); }
-        if (input && Object.hasOwn(input, 'timezone')) {
-          try { validateCronTimezone(input.timezone); }
+        // An empty zone means Jarvis's. A zone nobody chose is not used (the
+        // trigger list warns), so a saved schedule is not refused for one;
+        // a chosen zone, or any zone a composition writes, must be real.
+        const stated = statedScheduleZone(settings);
+        if (stated !== undefined && (context.phase === 'composition' || chosenScheduleZone(settings) !== undefined)) {
+          try { validateCronTimezone(stated); }
           catch (error) { issue(node, 'settings.input.timezone', 'TIMEZONE', (error as Error).message); }
         }
       } else if (!(root && pieceName === 'webhook')) {

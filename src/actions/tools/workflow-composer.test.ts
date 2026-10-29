@@ -1615,8 +1615,37 @@ describe("tool-loop composer", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.flow.trigger.settings?.input).toEqual({ cron_expression: '0 9 * * 1-5', timezone: 'Europe/Rome' });
+      // The zone came from the request, so it is recorded as chosen and honoured.
+      expect((result.flow.trigger.settings as Record<string, unknown>).chosenTimezone).toBe('Europe/Rome');
       expect(result.flow.trigger.nextAction?.settings?.input?.message).toBe('Choose your three priorities for today.');
       expect(result.flow.trigger.nextAction?.nextAction).toBeUndefined();
+    }
+  });
+
+  test('schedule discovery tells the model to name a zone only when the request does', async () => {
+    const llm = new StubToolLlm([
+      { tool_calls: [tc('1', 'get_piece_details', { pieceName: 'schedule' })] },
+      { tool_calls: [tc('2', 'submit_flow', validFlowArgs())] },
+    ]);
+    await composeFlow({ llm, pieceRegistry: makeRegistry() }, { name: 'x', description: 'x' });
+    const details = llm.toolTurns[1]!.messages.at(-1)!.content;
+    expect(details).toContain('Set it only when the request names a time zone');
+    expect(details).not.toContain("timezone: '<IANA timezone>'");
+    const system = llm.toolTurns[0]!.messages[0]!.content;
+    expect(system).toContain("only when the request names a time zone");
+  });
+
+  test('a composed schedule without a zone, or with a model-written record, is not marked chosen', async () => {
+    for (const settings of [
+      { pieceName: 'schedule', input: { cron_expression: '0 9 * * 1-5' } },
+      { pieceName: 'schedule', chosenTimezone: 'UTC', input: { cron_expression: '0 9 * * 1-5' } },
+    ]) {
+      const flow = validFlowArgs();
+      Object.assign(flow.trigger, { type: 'PIECE_TRIGGER', settings });
+      const llm = new StubToolLlm([{ tool_calls: [tc('1', 'submit_flow', flow)] }]);
+      const result = await composeFlow({ llm, pieceRegistry: makeRegistry() }, { name: 'x', description: 'Every weekday at 9, notify me' });
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.flow.trigger.settings).not.toHaveProperty('chosenTimezone');
     }
   });
 

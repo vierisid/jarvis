@@ -20,6 +20,13 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
+  // w8-8: a schedule names a time zone only when the request does; a bare time is Jarvis's zone.
+  'w8-8': {
+    bare: '631169cec05f6437c6dfeb928cca6dff6f18b9e6c3470f2c07f390bc1ed3bc58',
+    production: 'b2b70ff8843683382b2e1de60c4d0d708eeb379b151311f0ebb4141b19e08e12',
+    'hosted production': 'ce0d295f7d72f1e3aa7b41db4eeddbdf50640917fbeffc628756d0fac926048b',
+    'tool names only': '762577bbebae67cf6073c8b447ff16b9fb59ac7bd18502001dde75b866caf5a3',
+  },
   // w8-7: inspect browser fallback before refusing missing connector setup.
   'w8-7': {
     bare: '79604471f26e16b11f4deb6edbe2cab47ef1f00db537552f941868629d3d0398',

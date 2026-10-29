@@ -70,10 +70,13 @@ judging each required step by the same rules the check applies to a graph:
 - its cron does not run at its stated cadence;
 - it names an invalid time zone.
 
-A schedule may carry its own IANA timezone in `settings.input.timezone`.
-Contract checking compares the saved graph's effective zone against the requested
-zone. Legacy schedules without that field use Jarvis's configured timezone;
-explicit zones remain stable when that default changes.
+A schedule fires in its own `settings.input.timezone` only when a person chose
+it (`settings.chosenTimezone` names the same zone); otherwise in Jarvis's
+configured time zone (`src/workflows/runner/triggers/schedule-zone.ts`). The
+check compares the zone the saved graph actually fires in with the one the job
+asks for, so an unchosen zone on a step does not satisfy it. The composer
+records a zone it writes on the built-in schedule as chosen, and one on the
+dashboard schedule piece only when the contract names that zone.
 
 ## The check and the repair loop
 

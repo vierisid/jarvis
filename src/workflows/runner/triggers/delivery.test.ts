@@ -26,6 +26,8 @@ import { createWorkflowRoutes } from "../../api/routes";
 import { Worker } from "../../queue/worker";
 import { createRunFlowHandler, RUN_FLOW } from "../handler";
 import { TriggerManager } from "./manager";
+import { scheduleZoneWarning } from "./schedule-zone";
+import { getScheduleWatch, setScheduleWatch } from "../../db/repos/trigger-fire";
 import { EmergencyController, setActiveEmergencyController } from "../../../authority/emergency";
 
 const silent = () => undefined;
@@ -59,6 +61,9 @@ function publish(trigger: Record<string, unknown>): { flowId: string; versionId:
 }
 const schedule = (expression: string, input: Record<string, unknown> = {}) =>
   publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "schedule", input: { cron_expression: expression, ...input } } });
+/** A built-in schedule whose zone a person chose (the editor or composer records `chosenTimezone`). */
+const chosenSchedule = (expression: string, timezone: string) =>
+  publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "schedule", chosenTimezone: timezone, input: { cron_expression: expression, timezone } } });
 const webhook = (input: Record<string, unknown> = {}, next?: Record<string, unknown>) =>
   publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "webhook", input }, ...(next ? { nextAction: next } : {}) });
 
@@ -146,7 +151,7 @@ describe("schedules, in Jarvis's configured time zone", () => {
     ['2026-10-23T06:59:00Z', '2026-10-23T07:00:10Z', '2026-10-24T07:00:10Z', '2026-10-26T08:00:10Z'],
   ])('an explicit Rome weekday schedule survives DST, weekends and restart from %s', async (start, friday, saturday, monday) => {
     setCronTimezone('UTC');
-    const { flowId } = schedule('0 9 * * 1-5', { timezone: 'Europe/Rome' });
+    const { flowId } = chosenSchedule('0 9 * * 1-5', 'Europe/Rome');
     let d = await daemon(at(start));
     expect(d.manager.list()[0]?.warning).toBeUndefined();
     d.tick(flowId, friday);
@@ -165,9 +170,92 @@ describe("schedules, in Jarvis's configured time zone", () => {
     await d.stop();
   });
 
+  test("a schedule that names a zone nobody chose fires in Jarvis's zone, and says so", async () => {
+    setCronTimezone("Europe/Rome");
+    const { flowId } = schedule("0 9 * * *", { timezone: "UTC" });
+    const d = await daemon(at("2026-10-07T06:59:00Z"));
+    expect(d.manager.list()).toEqual([expect.objectContaining({ flowId,
+      warning: 'This schedule names UTC, but nobody chose that zone for it, so it runs in Jarvis\'s time zone (Europe/Rome): "0 9 * * *" fires at that time in Europe/Rome. Pick the zone in the editor to use it.' })]);
+    d.tick(flowId, "2026-10-07T07:00:10Z"); // 09:00 in Rome
+    expect(runsOf(flowId)).toHaveLength(1);
+    expect(listFlowFires(flowId)[0]).toMatchObject({ dedupeKey: "2026-10-07T09:00" });
+    await d.stop();
+  });
+
+  test("a zone a person chose is honoured, UTC included, with no warning", async () => {
+    setCronTimezone("Europe/Rome");
+    const { flowId } = chosenSchedule("0 9 * * *", "UTC");
+    const d = await daemon(at("2026-10-07T06:59:00Z"));
+    expect(d.manager.list()[0]?.warning).toBeUndefined();
+    d.tick(flowId, "2026-10-07T07:00:10Z"); // 09:00 in Rome, 07:00 UTC
+    expect(runsOf(flowId)).toHaveLength(0);
+    d.tick(flowId, "2026-10-07T09:00:10Z"); // 09:00 UTC
+    expect(runsOf(flowId)).toHaveLength(1);
+    expect(listFlowFires(flowId)[0]).toMatchObject({ dedupeKey: "2026-10-07T09:00" });
+    await d.stop();
+  });
+
+  test("a record naming another zone than the step's does not make the step's zone chosen", async () => {
+    setCronTimezone("Europe/Rome");
+    const { flowId } = publish({ name: "trigger", type: "PIECE_TRIGGER",
+      settings: { pieceName: "schedule", chosenTimezone: "America/New_York", input: { cron_expression: "0 9 * * *", timezone: "UTC" } } });
+    const d = await daemon(at("2026-10-07T06:59:00Z"));
+    expect(d.manager.list()[0]?.warning).toContain("This schedule names UTC");
+    d.tick(flowId, "2026-10-07T07:00:10Z");
+    expect(runsOf(flowId)).toHaveLength(1);
+    await d.stop();
+  });
+
+  test.each([[""], [null]])("an empty zone (%p) runs in Jarvis's zone, unwarned", async (timezone) => {
+    setCronTimezone("Europe/Rome");
+    const { flowId } = schedule("0 9 * * *", { timezone });
+    const d = await daemon(at("2026-10-07T06:59:00Z"));
+    expect(d.manager.list()).toEqual([expect.objectContaining({ flowId })]);
+    expect(d.manager.list()[0]?.warning).toBeUndefined();
+    d.tick(flowId, "2026-10-07T07:00:10Z");
+    expect(runsOf(flowId)).toHaveLength(1);
+    await d.stop();
+  });
+
+  test("on upgrade, a schedule saved with the UTC default keeps its times and its watch: nothing false is missed, nothing fires twice", async () => {
+    setCronTimezone("Europe/Rome");
+    const { flowId } = schedule("0 9 * * *", { timezone: "UTC" });
+    // What the previous release left: a watch keyed by the bare expression,
+    // last seen after the 09:00 Rome run of 6 October (07:00 UTC).
+    setScheduleWatch(flowId, "0 9 * * *", at("2026-10-06T07:30:00Z"));
+    let d = await daemon(at("2026-10-07T06:59:30Z"));
+    expect(listFlowFires(flowId).filter(f => f.outcome === "missed")).toHaveLength(0);
+    expect(getScheduleWatch(flowId)?.expression).toBe("0 9 * * *");
+    d.tick(flowId, "2026-10-07T07:00:10Z"); // 09:00 Rome
+    expect(runsOf(flowId)).toHaveLength(1);
+    finishAll(flowId);
+    await d.stop();
+    // Restarting inside the minute repeats nothing; a day off is one honest miss.
+    d = await daemon(at("2026-10-07T07:00:40Z"));
+    d.tick(flowId, "2026-10-07T07:00:50Z");
+    expect(runsOf(flowId)).toHaveLength(1);
+    await d.stop();
+    d = await daemon(at("2026-10-08T08:00:00Z"));
+    expect(listFlowFires(flowId).filter(f => f.outcome === "missed").map(f => f.dedupeKey)).toEqual(["2026-10-08T09:00"]);
+    expect(runsOf(flowId)).toHaveLength(1);
+    await d.stop();
+  });
+
+  test("choosing a zone starts a new watch rather than recording past times in it as missed", async () => {
+    setCronTimezone("Europe/Rome");
+    const { flowId } = chosenSchedule("0 9 * * *", "America/New_York");
+    setScheduleWatch(flowId, "0 9 * * *", at("2026-10-05T12:00:00Z"));
+    const d = await daemon(at("2026-10-07T12:00:00Z"));
+    expect(listFlowFires(flowId)).toHaveLength(0);
+    expect(getScheduleWatch(flowId)?.expression).toBe(JSON.stringify(["0 9 * * *", "America/New_York"]));
+    d.tick(flowId, "2026-10-07T13:00:10Z"); // 09:00 New York
+    expect(runsOf(flowId)).toHaveLength(1);
+    await d.stop();
+  });
+
   test('different workflow zones coexist without changing the default schedule', async () => {
     setCronTimezone('UTC');
-    const rome = schedule('0 9 * * 1-5', { timezone: 'Europe/Rome' });
+    const rome = chosenSchedule('0 9 * * 1-5', 'Europe/Rome');
     const utc = schedule('0 9 * * 1-5');
     const d = await daemon(at('2026-10-21T06:59:00Z'));
     d.tick(rome.flowId, '2026-10-21T07:00:10Z');
@@ -540,19 +628,48 @@ describe("events", () => {
 
 describe("through the engine, as production runs triggers", () => {
   const onEvent = (eventType: string) => publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "jarvis-trigger", triggerName: "on_event", input: { eventType } } });
-  const pieceSchedule = (expression: string, timezone: string) => ({
-    ...publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "@activepieces/piece-schedule", triggerName: "cron_expression", input: { cronExpression: expression, timezone } } }),
+  /** The dashboard schedule piece; `chosen` when a person picked its zone rather than leaving the pre-filled one. */
+  const pieceSchedule = (expression: string, timezone: string, chosen = false) => ({
+    ...publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "@activepieces/piece-schedule", triggerName: "cron_expression",
+      ...(chosen ? { chosenTimezone: timezone } : {}), input: { cronExpression: expression, timezone } } }),
     enable: { listeners: [], scheduleOptions: { cronExpression: expression, timezone } },
   });
 
   test('engine schedule honors its persisted explicit zone', async () => {
     setCronTimezone('UTC');
-    const p = pieceSchedule('0 9 * * 1-5', 'Europe/Rome');
+    const p = pieceSchedule('0 9 * * 1-5', 'Europe/Rome', true);
     const stub = stubEngine({ enable: p.enable, poll: () => [{ date: 'fixture' }] });
     const d = await daemon(at('2026-10-26T07:59:00Z'), stub.engine);
     await d.poll(p.flowId, '2026-10-26T08:00:10Z');
     expect(runsOf(p.flowId)).toHaveLength(1);
     expect(d.manager.list()[0]?.warning).toBeUndefined();
+    await d.stop();
+  });
+
+  test("a schedule piece step left at its pre-filled UTC fires at Jarvis's wall time, and says so", async () => {
+    setCronTimezone("Europe/Rome");
+    const p = pieceSchedule("0 9 * * *", "UTC");
+    const { engine } = stubEngine({ enable: p.enable, poll: () => [{ firedAt: Date.now() }] });
+    const d = await daemon(at("2026-10-07T06:59:00Z"), engine);
+    expect(d.manager.list()[0]?.warning).toContain("This schedule names UTC, but nobody chose that zone for it");
+    await d.poll(p.flowId, "2026-10-07T07:00:10Z"); // 09:00 in Rome
+    expect(runsOf(p.flowId)).toHaveLength(1);
+    await d.poll(p.flowId, "2026-10-07T09:00:10Z"); // 09:00 UTC: nothing
+    expect(runsOf(p.flowId)).toHaveLength(1);
+    expect(getScheduleWatch(p.flowId)?.expression).toBe("0 9 * * *");
+    await d.stop();
+  });
+
+  test("a schedule piece step whose UTC a person chose fires at 09:00 UTC", async () => {
+    setCronTimezone("Europe/Rome");
+    const p = pieceSchedule("0 9 * * *", "UTC", true);
+    const { engine } = stubEngine({ enable: p.enable, poll: () => [{ firedAt: Date.now() }] });
+    const d = await daemon(at("2026-10-07T06:59:00Z"), engine);
+    expect(d.manager.list()[0]?.warning).toBeUndefined();
+    await d.poll(p.flowId, "2026-10-07T07:00:10Z");
+    expect(runsOf(p.flowId)).toHaveLength(0);
+    await d.poll(p.flowId, "2026-10-07T09:00:10Z");
+    expect(runsOf(p.flowId)).toHaveLength(1);
     await d.stop();
   });
 
@@ -576,7 +693,7 @@ describe("through the engine, as production runs triggers", () => {
 
   test("the dashboard's schedule piece keeps the schedule rules: the explicit zone, the spring-forward time, overlap and missed times", async () => {
     setCronTimezone("UTC");
-    const { flowId, enable } = pieceSchedule("30 2 * * *", "America/New_York");
+    const { flowId, enable } = pieceSchedule("30 2 * * *", "America/New_York", true);
     const { engine } = stubEngine({ enable, poll: () => [{ firedAt: Date.now() }] });
     let d = await daemon(at("2026-03-08T06:58:30Z"), engine); // 01:58:30 EST
     expect(d.manager.list()[0]?.warning).toBeUndefined();
@@ -748,6 +865,21 @@ describe("Pause and Kill (Q-08)", () => {
     expect(runsOf(flowId)).toHaveLength(0);
     expect(listFlowFires(flowId)[0]).toMatchObject({ label: "skipped", detail: { reason: "Jarvis was stopped with Kill, so this did not run." } });
     await d.stop();
+  });
+});
+
+describe("the time-zone warning", () => {
+  test("compares when the schedule actually fires in the two zones", () => {
+    setCronTimezone("UTC");
+    expect(scheduleZoneWarning("0 * * * *", "Asia/Kolkata")).toContain("This schedule names Asia/Kolkata"); // :00 UTC is :30 there
+    expect(scheduleZoneWarning("*/15 * * * *", "Asia/Kolkata")).toBeUndefined();
+    setCronTimezone("Europe/Rome");
+    expect(scheduleZoneWarning("0 * * * *", "UTC")).toBeUndefined();
+    // Mondays begin two hours apart, and a two-hourly schedule lines up only in summer.
+    expect(scheduleZoneWarning("0 * * * 1", "UTC", at("2026-10-04T21:00:00Z"))).toContain("This schedule names UTC");
+    expect(scheduleZoneWarning("0 */2 * * *", "UTC", at("2026-07-01T00:00:00Z"))).toContain("This schedule names UTC");
+    expect(scheduleZoneWarning("0 9 * * *", "Europe/Rome")).toBeUndefined();
+    expect(scheduleZoneWarning("0 9 * * *", "Mars/Olympus")).toBe('This schedule names an unknown time zone "Mars/Olympus"; it runs in Europe/Rome.');
   });
 });
 

@@ -19,6 +19,8 @@ import {
   reorderChain,
   setLoopItems,
   setRouterExecutionType,
+  applySchemaDefaults,
+  withStepInput,
 } from "./tree";
 import type { FlowStepNode } from "./useWorkflowEditor";
 
@@ -431,5 +433,34 @@ describe("pathToStep", () => {
   test("returns [] for the trigger itself, null for unknown", () => {
     expect(pathToStep(fixture(), "trigger")).toEqual([]);
     expect(pathToStep(fixture(), "ghost")).toBeNull();
+  });
+});
+
+describe("schedule time zone: pre-filled vs chosen", () => {
+  const zoneSchema = { fields: [{ name: "timezone", label: "Timezone", type: "enum" as const, required: true, default: "Europe/Rome" }] };
+  const scheduleStep = (pieceName: string, settings: Record<string, unknown> = {}): FlowStepNode =>
+    ({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName, triggerName: "every_day", input: {}, ...settings } });
+
+  test("a new schedule step is pre-filled with the zone the catalog gives (Jarvis's), not marked chosen", () => {
+    const input = applySchemaDefaults({}, zoneSchema);
+    expect(input).toEqual({ timezone: "Europe/Rome" });
+    const step = scheduleStep("@activepieces/piece-schedule", { input });
+    expect(step.settings).not.toHaveProperty("chosenTimezone");
+  });
+
+  test("picking a zone records it as chosen, UTC included; clearing it removes the record", () => {
+    for (const piece of ["@activepieces/piece-schedule", "schedule"]) {
+      const picked = withStepInput(scheduleStep(piece, { input: { timezone: "Europe/Rome" } }), "timezone", "UTC");
+      expect(picked).toMatchObject({ chosenTimezone: "UTC", input: { timezone: "UTC" } });
+      const cleared = withStepInput({ ...scheduleStep(piece), settings: picked }, "timezone", undefined);
+      expect(cleared).not.toHaveProperty("chosenTimezone");
+    }
+  });
+
+  test("other inputs and other steps never write the record", () => {
+    expect(withStepInput(scheduleStep("@activepieces/piece-schedule"), "hour_of_the_day", 9)).not.toHaveProperty("chosenTimezone");
+    expect(withStepInput({ name: "step_1", type: "PIECE", settings: { pieceName: "some-piece", actionName: "a", input: {} } }, "timezone", "UTC"))
+      .not.toHaveProperty("chosenTimezone");
+    expect(withStepInput(scheduleStep("@jarvispieces/piece-jarvis-trigger"), "timezone", "UTC")).not.toHaveProperty("chosenTimezone");
   });
 });

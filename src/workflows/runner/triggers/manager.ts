@@ -65,6 +65,7 @@ import { toUpstreamFlowVersion } from "../engine-runtime/flow-version-adapter";
 import { graphDigest } from "../../runtime/continuation";
 import { emergencyHold, PAUSED_REASON } from "../../runtime/emergency-hold";
 import { triggerHookRunId } from "./hook-run-id";
+import { chosenScheduleZone, scheduleZoneWarning, statedScheduleZone } from "./schedule-zone";
 
 interface TriggerNode {
   type: string;
@@ -460,9 +461,12 @@ export class TriggerManager {
       this.log(`flow ${flowId}: schedule trigger missing cron expression; skipping`);
       return;
     }
+    // A zone is used only when a person chose it (schedule-zone.ts); one that is not used is shown.
+    const timezone = chosenScheduleZone(trigger.settings);
+    const warning = timezone ? undefined : scheduleZoneWarning(expression, statedScheduleZone(trigger.settings));
+    if (warning) this.log(`flow ${flowId}: ${warning}`);
     const generation = workflowRemovalState(flowId).generation;
     try {
-      const timezone = input.timezone as string | undefined;
       const dueAfter = this.catchUpMissed(flowId, versionId, expression, timezone);
       this.cron.schedule(
         `flow:${flowId}`,
@@ -476,6 +480,7 @@ export class TriggerManager {
         versionId,
         kind: "cron",
         triggerDigest: triggerDigest(trigger),
+        ...(warning ? { warning } : {}),
         teardown: () => this.cron.cancel(`flow:${flowId}`),
       });
     } catch (e) {
@@ -603,11 +608,20 @@ export class TriggerManager {
 
     let cronTearDown: (() => void) | null = null;
     let webhookTearDown: (() => void) | null = null;
-    const pureSchedule = isSchedulePiece((version.trigger as unknown as TriggerNode | null)?.settings?.pieceName);
+    const triggerSettings = (version.trigger as unknown as TriggerNode | null)?.settings;
+    const pureSchedule = isSchedulePiece(triggerSettings?.pieceName);
+    // The engine reports the piece's zone, which may be a default nobody chose
+    // (the prop pre-fills UTC; the hourly triggers hard-code it). Use it only
+    // when it is the zone a person chose for the step; otherwise run in
+    // Jarvis's zone and say so. A poll's cadence always runs in Jarvis's zone.
+    const chosen = pureSchedule ? chosenScheduleZone(triggerSettings) : undefined;
+    const zone = chosen !== undefined && chosen === schedule?.timezone ? chosen : undefined;
+    const warning = pureSchedule && schedule?.cronExpression && !zone ? scheduleZoneWarning(schedule.cronExpression, schedule.timezone) : undefined;
+    if (warning) this.log(`flow ${flow.id}: ${warning}`);
     if (schedule?.cronExpression) {
       const expression = schedule.cronExpression;
       try {
-        const dueAfter = pureSchedule ? this.catchUpMissed(flow.id, version.id, expression, schedule.timezone) : undefined;
+        const dueAfter = pureSchedule ? this.catchUpMissed(flow.id, version.id, expression, zone) : undefined;
         this.cron.schedule(
           `flow:${flow.id}`,
           expression,
@@ -615,8 +629,8 @@ export class TriggerManager {
           // A missed poll of an event source is not a missed run; a missed
           // occurrence of the schedule piece is.
           pureSchedule
-            ? { onMissed: (missed, older) => this.recordMissed(flow.id, version.id, missed, "Jarvis was asleep or too busy at that time", older), dueAfter, timezone: schedule.timezone }
-            : { timezone: schedule.timezone },
+            ? { onMissed: (missed, older) => this.recordMissed(flow.id, version.id, missed, "Jarvis was asleep or too busy at that time", older), dueAfter, ...(zone ? { timezone: zone } : {}) }
+            : {},
         );
         cronTearDown = () => this.cron.cancel(`flow:${flow.id}`);
       } catch (e) {
@@ -643,7 +657,7 @@ export class TriggerManager {
     const noSubscription = !cronTearDown && !webhookTearDown;
     // ON_ENABLE already owns engine state, even if every local subscription
     // failed. Keep its teardown so pause/stop clears state and runs ON_DISABLE.
-    // Surface a failed registration in `list()`.
+    // A failed registration outranks the advisory zone warning in `list()`.
     const failure = noSubscription ? 'No trigger subscription could be registered; the flow is not firing.'
       : schedule?.cronExpression && !cronTearDown ? 'Cron registration failed; only webhook delivery is active.' : undefined;
     const sub: ActiveSub = {
@@ -652,7 +666,7 @@ export class TriggerManager {
       versionId: version.id,
       kind: "engine",
       triggerDigest: triggerDigest(version.trigger),
-      ...(failure ? { warning: failure, incomplete: true as const } : {}),
+      ...(failure ? { warning: failure, incomplete: true as const } : warning ? { warning } : {}),
       teardown: () => this.teardownEngineTrigger(flow.id, version.id, cronTearDown, webhookTearDown),
     };
     this.subs.set(flow.id, sub);

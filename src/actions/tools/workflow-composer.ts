@@ -81,6 +81,7 @@ import {
 import type { FlowTriggerNode } from "../../workflows/db/repos/flow-version.ts";
 import { WORKFLOW_EVENT_TYPES } from "../../workflows/runtime/event-types.ts";
 import { compileWorkflow } from '../../workflows/runtime/workflow-readiness';
+import { CHOSEN_TIMEZONE_KEY, markScheduleZoneChosen, statedScheduleZone } from "../../workflows/runner/triggers/schedule-zone.ts";
 
 export interface ComposedFlow {
   displayName: string;
@@ -1049,9 +1050,9 @@ function renderPrimitiveDetails(name: "schedule" | "webhook"): string {
   if (name === "schedule") {
     return [
       "schedule (built-in trigger primitive): fires the flow on a cron schedule.",
-      "  Use as the trigger node: type='PIECE_TRIGGER', settings={ pieceName: 'schedule', input: { cron_expression: '<5-field cron>', timezone: '<IANA timezone>' } }.",
+      "  Use as the trigger node: type='PIECE_TRIGGER', settings={ pieceName: 'schedule', input: { cron_expression: '<5-field cron>' } }.",
       "  - input.cron_expression: string, REQUIRED; 5-field cron, e.g. '0 8 * * *' for 8am daily, '*/15 * * * *' for every 15 minutes.",
-      "  - input.timezone: string, optional IANA timezone (for example Europe/Rome). Always set it when the request names a timezone. The scheduler uses this zone including daylight-saving changes; omitted uses Jarvis's configured timezone.",
+      "  - input.timezone: string, optional IANA timezone (for example Europe/Rome). Set it only when the request names a time zone, and then always. The scheduler uses that zone including daylight-saving changes; omitted, the schedule runs in Jarvis's configured time zone, which is what a bare time like '9am' means.",
       "  No triggerName needed. No declared output -- downstream steps should not reference {{trigger.<field>}}.",
     ].join("\n");
   }
@@ -1143,7 +1144,7 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
     "  - Give every node a short human-readable displayName describing its work, such as 'Summarize the notes' or 'Review before sending'. Keep machine names separate from these canvas labels.",
     "  - Step names MUST match /^[a-zA-Z_][a-zA-Z0-9_]*$/ (identifier-style; no spaces or dashes).",
     "  - Use type='EMPTY' for manual / on-demand flows. Use type='PIECE_TRIGGER' for scheduled, webhook, or event-driven.",
-    "  - For schedule triggers: pieceName='schedule', input.cron_expression='<5-field cron>' (e.g. '0 8 * * *' for 8am daily), plus input.timezone for the requested IANA timezone (e.g. 'Europe/Rome').",
+    "  - For schedule triggers: pieceName='schedule', input.cron_expression='<5-field cron>' (e.g. '0 8 * * *' for 8am daily); add input.timezone (IANA, e.g. 'Europe/Rome') only when the request names a time zone.",
     "  - For webhook triggers: pieceName='webhook', input.secret optional.",
     "  - For event triggers: pieceName='jarvis-trigger', triggerName='on_event', input.eventType='<event type>'.",
     "  - For action steps, type MUST be 'PIECE' and settings MUST include pieceName + actionName.",
@@ -1215,7 +1216,7 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
  */
 const BUILTIN_PRIMITIVE_LINES = [
   "Built-in trigger primitives (no piece registration needed):",
-  "- schedule: settings={pieceName:'schedule', input:{cron_expression:'0 8 * * *',timezone:'Europe/Rome'}} fires at 08:00 in Europe/Rome, including daylight-saving changes. Use the user's requested zone.",
+  "- schedule: settings={pieceName:'schedule', input:{cron_expression:'0 8 * * *'}} fires at 08:00 in Jarvis's time zone. Only when the user names a zone, add it, e.g. timezone:'Europe/Rome' fires at 08:00 there, including daylight-saving changes.",
   "- webhook:  settings={pieceName:'webhook',  input:{secret:'<optional HMAC secret>'}} fires on HTTP POST to /api/webhooks/<flow_id>.",
 ];
 
@@ -1629,9 +1630,28 @@ function acceptComposedFlow(
   ...args: Parameters<typeof validateComposedFlow>
 ): ValidationOk | ValidationFail {
   const validation = validateComposedFlow(...args);
+  if (validation.ok) markComposedScheduleZone(validation.flow.trigger, contract);
   if (!validation.ok || !contract) return validation;
   const { violations, report } = checkJobContract(validation.flow.trigger, contract);
   return violations.length ? { ok: false, errors: violations } : { ...validation, report };
+}
+
+/**
+ * Record a composed schedule's zone as chosen (schedule-zone.ts), so it is
+ * honoured rather than treated as a default. The composer only creates new
+ * flows and is told to write a zone only when the request names one, so a
+ * zone on the built-in schedule came from the request. The dashboard schedule
+ * piece requires a zone, so one there may be filler: it counts only when the
+ * job contract names that zone. A marker the model wrote itself is replaced.
+ */
+function markComposedScheduleZone(trigger: FlowTriggerNode, contract: JobContract | undefined): void {
+  if (trigger.type !== "PIECE_TRIGGER" || !trigger.settings) return;
+  const settings = trigger.settings as Record<string, unknown>;
+  const piece = typeof settings.pieceName === "string" ? settings.pieceName : "";
+  if (piece === "schedule") return markScheduleZoneChosen(settings);
+  delete settings[CHOSEN_TIMEZONE_KEY];
+  const zone = statedScheduleZone(settings);
+  if (/(^|\/)piece-schedule$/.test(piece) && typeof zone === "string" && zone === contract?.trigger?.timezone) settings[CHOSEN_TIMEZONE_KEY] = zone;
 }
 
 function accepted(validation: ValidationOk, rawResponse: string): ComposeOk {
