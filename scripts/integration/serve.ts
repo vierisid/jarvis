@@ -7,6 +7,7 @@ import html from '../../ui/local-integration.html';
 import { initWorkflowDb, getWorkflowDb, DEFAULT_IDS } from '../../src/workflows/db';
 import { DEFAULT_CONFIG } from '../../src/config/types';
 import { createApiRoutes, setCorsOrigin, type ApiContext } from '../../src/daemon/api-routes';
+import { configureHostedDashboard } from '../../src/daemon/hosted-dashboard';
 import { createWorkflowRoutes } from '../../src/workflows/api/routes';
 import { createOnboardingAssembly } from '../../src/onboarding-next/runtime/assembly';
 import { createOnboardingRuntime } from '../../src/onboarding-next/runtime/runtime';
@@ -65,7 +66,7 @@ import { createFact } from '../../src/vault/facts';
 import { createWorkItem } from '../../src/goals/work-items';
 import { createFlow } from '../../src/workflows/db/repos/flow';
 import { createDraftVersion } from '../../src/workflows/db/repos/flow-version';
-import { saveUserSection } from '../../src/daemon/user-settings';
+import { saveUserSection, loadUserSection } from '../../src/daemon/user-settings';
 import { registerChatState } from '../../src/brief/registrations/chat-state';
 import { registerNavigationCompatibility } from '../../src/brief/registrations/navigation-compatibility';
 import { registerReconciliation } from '../../src/brief/registrations/reconciliation';
@@ -74,6 +75,11 @@ import { registerOnboarding } from '../../src/brief/registrations/onboarding';
 const supplied = process.env.LOCAL_INTEGRATION_DIR;
 if (!supplied || !process.env.HOME || resolve(process.env.HOME) !== join(resolve(supplied), 'home')) throw Error('Use a dedicated integration HOME');
 const directory = resolve(supplied); mkdirSync(directory, { recursive: true }); mkdirSync(join(directory, 'home'), { recursive: true });
+// Exercises the normal, prebuilt production entry against isolated real routes.
+// Hosted identity and model replies are synthetic; this is not fleet acceptance.
+const hostedUi = process.env.LOCAL_INTEGRATION_UI === 'hosted';
+const productionUi = resolve(import.meta.dir, '../../ui/dist');
+if (hostedUi && !existsSync(join(productionUi, 'index.html'))) throw Error('Run bun run build:ui first');
 process.env.JARVIS_HOME = join(directory, 'home', '.jarvis');
 process.env.JARVIS_SECRETS_DIR = join(directory, 'secrets');
 for (const key of ['PROFILE_SETTINGS', 'WORKFLOW_REMOVAL']) process.env[`JARVIS_BRIEF_${key}`] = '1';
@@ -88,6 +94,7 @@ const port = Number(process.env.LOCAL_INTEGRATION_PORT ?? 3198), origin = `http:
 setCorsOrigin(origin);
 initWorkflowDb(join(directory, 'vault.sqlite'));
 const db = getWorkflowDb(), config = structuredClone(DEFAULT_CONFIG), catalog = new PieceCatalog(sampleCatalog().list().map(entry => ({ ...entry, name: '@jarvispieces/piece-' + entry.name })));
+if (hostedUi) { config.daemon.listen = 'unix:/synthetic/hosted.sock'; configureHostedDashboard(config); }
 config.daemon.port = port;
 config.onboarding = { setup_completed_at: 42, tutorial_completed_at: null };
 configureWorkflowReadiness({ pieces: catalog });
@@ -112,7 +119,7 @@ const attachments = new BriefAttachmentProvider(db), goals = new GoalMeasurement
 const forget = new MemoryForget(db, () => true), memory = new MemoryStream(db, usage, forget, () => true), context = new WorkflowContext(db, DEFAULT_IDS.project, () => true);
 const removal = new WorkflowRemoval(db); removal.start({ refresh: async () => {} });
 const profile = new ProfileSettings(config); // No TTS service: the real provider reports restart_required.
-const connections = new ConnectedWorkspace(db, { devices: () => [], google: () => ({ mode: 'none', authenticated: false, reconnect: false, canSetup: false }), channels: () => ({}), pieces: () => catalog, hosted: () => false }, DEFAULT_IDS.project, DEFAULT_IDS.user, () => true);
+const connections = new ConnectedWorkspace(db, { devices: () => [], google: () => ({ mode: 'none', authenticated: false, reconnect: false, canSetup: false }), channels: () => ({}), pieces: () => catalog, hosted: () => hostedUi }, DEFAULT_IDS.project, DEFAULT_IDS.user, () => true);
 const approvalManager = new ApprovalManager(), audit = new AuditTrail(), deferred = new DeferredExecutor(approvalManager, audit);
 deferred.setToolRegistry(new ToolRegistry());
 const authority = new AuthorityEngine({ default_level: config.authority.default_level, governed_categories: [], overrides: [], context_rules: [], learning: { ...config.authority.learning }, emergency_state: 'normal' }), emergency = new EmergencyController(); setActiveEmergencyController(emergency);
@@ -175,10 +182,12 @@ if (!existsSync(join(directory, 'seeded'))) {
   createFact(createEntity('person', 'Local Owner').id, 'preferred_editor', 'Notepad', { source: 'manual' });
   createWorkItem({ title: 'Review the local integration report', goalId: goal.id });
   const flow = createFlow(); createDraftVersion({ flowId: flow.id, displayName: 'Existing local draft', trigger: { name: 'trigger', type: 'EMPTY' } });
-  saveUserSection('onboarding', { setup_completed_at: 42, tutorial_completed_at: null });
+  saveUserSection('onboarding', { setup_completed_at: 42, tutorial_completed_at: hostedUi ? 42 : null,
+    ...(hostedUi ? { setup_skipped_profile: true } : {}) });
   writeFileSync(join(directory, 'seeded'), 'Only synthetic local data.');
 }
 if (!existsSync(join(directory, 'opportunity-seeded'))) { const suggestion = seedOpportunity(); prepared.ensure(suggestion); await prepared.idle(); writeFileSync(join(directory, 'opportunity-seeded'), suggestion); }
+if (hostedUi) config.onboarding = loadUserSection('onboarding') as typeof config.onboarding;
 const raw = { ...createApiRoutes(ctx), ...createWorkflowRoutes({ pieceRegistry: catalog, briefCapabilities: capabilities, briefWorkflowContext: context, sharedPiecesDir: null }) } as Record<string, Record<string, (req: Request) => Response | Promise<Response>>>;
 const routes: Record<string, any> = {};
 for (const [path, handlers] of Object.entries(raw)) routes[path] = Object.fromEntries(Object.entries(handlers).map(([method, handle]) => [method, async (req: Request) => {
@@ -187,7 +196,7 @@ for (const [path, handlers] of Object.entries(raw)) routes[path] = Object.fromEn
   try { return await handle(req); } catch (error) { console.error(path, error); return Response.json({ error: 'Local integration service unavailable' }, { status: 503 }); }
 }]));
 routes['/__local/session/:key'] = { GET: (req: Request & { params: { key: string } }) => req.params.key === bootstrap
-  ? new Response(null, { status: 302, headers: { Location: '/?brief=1#/brief/today', 'Set-Cookie': `${PANEL_SESSION_COOKIE}=${sessions.create('local-enrolled-device').id}; HttpOnly; SameSite=Strict; Path=/` } })
+  ? new Response(null, { status: 302, headers: { Location: hostedUi ? '/' : '/?brief=1#/brief/today', 'Set-Cookie': `${PANEL_SESSION_COOKIE}=${sessions.create('local-enrolled-device').id}; HttpOnly; SameSite=Strict; Path=/` } })
   : new Response(null, { status: 404 }) };
 const localSockets = new Set<import('bun').ServerWebSocket<{ sessionId: string }>>(), localActionResults: unknown[] = [];
 routes['/__local/room-action'] = { POST: (req: Request) => {
@@ -198,9 +207,12 @@ routes['/__local/room-action'] = { POST: (req: Request) => {
   return Response.json({ resultId });
 } };
 routes['/__local/state'] = { GET: (req: Request) => authorize(req) ? Response.json({ modelCalls, localActionResults, flows: db.query('SELECT id,status FROM flow').all(), runs: db.query('SELECT id,status FROM flow_run').all(), sockets: server.pendingWebSockets, capabilities: capabilities.snapshot() }) : new Response(null, { status: 401 }) };
-routes['/'] = html;
+routes['/'] = hostedUi ? () => new Response(Bun.file(join(productionUi, 'index.html'))) : html;
 const server = Bun.serve<{ sessionId: string }>({ hostname: '127.0.0.1', port, routes, development: false,
   fetch(req, server) {
+    const pathname = new URL(req.url).pathname;
+    if (hostedUi && req.method === 'GET' && /^\/[\w.-]+\.(js|css|svg)$/.test(pathname))
+      return new Response(Bun.file(join(productionUi, pathname.slice(1))));
     if (new URL(req.url).pathname === '/ws' && authorize(req)) {
       const id = getCookie(req, PANEL_SESSION_COOKIE)!;
       if (server.upgrade(req, { data: { sessionId: id } })) return;

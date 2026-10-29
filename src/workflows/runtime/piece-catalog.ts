@@ -315,7 +315,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "9"; // v9: retain reliability metadata and auth alternatives
+export const CATALOG_SCHEMA_VERSION = "16"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -802,11 +802,7 @@ export interface RawPieceMetadata {
   auth?: RawPieceAuth | RawPieceAuth[] | null;
 }
 
-export interface RawPieceAuth {
-  type?: string;
-  displayName?: string;
-  description?: string;
-}
+interface RawPieceAuth { type?: string; displayName?: string; description?: string }
 
 export interface RawActionOrTrigger {
   aiMetadata?: { description?: unknown; idempotent?: unknown };
@@ -858,20 +854,25 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
   // projection above piece-agnostic and gives the next "Jarvis tweak"
   // a single named home.
   enrichJarvisCatalogEntry(out);
-  // Newer community pieces declare alternative authentication methods as an
-  // array. Keep the first supported method as the connection picker's default;
-  // an array must never erase the requirement for a real account binding.
-  const authChoices = Array.isArray(m.auth) ? m.auth : [m.auth];
-  for (const auth of authChoices) {
-    if (!auth || typeof auth !== 'object' || typeof auth.type !== 'string') continue;
+  // Project piece.auth into the catalog's auth shape. We only forward
+  // it when the upstream type is one of AppConnectionType's variants;
+  // anything else (NO_AUTH, malformed) is treated as "no auth needed."
+  // The piece's auth.type comes from upstream's PropertyType -- map it
+  // to our AppConnectionType vocabulary so the editor + connection
+  // listing share one name space.
+  // Newer community pieces (including Slack 0.23.1) declare several auth
+  // methods. The picker lists accounts across methods; use the first supported
+  // method for its setup label instead of hiding authentication entirely.
+  const auth = Array.isArray(m.auth) ? m.auth.find(a => a && typeof a.type === 'string' && projectAuthType(a.type)) : m.auth;
+  if (auth && typeof auth === "object" && typeof auth.type === "string") {
     const projected = projectAuthType(auth.type);
-    if (!projected) continue;
-    out.auth = {
-      type: projected,
-      ...(typeof auth.displayName === 'string' ? { displayName: auth.displayName } : {}),
-      ...(typeof auth.description === 'string' ? { description: auth.description } : {}),
-    };
-    break;
+    if (projected) {
+      out.auth = {
+        type: projected,
+        ...(typeof auth.displayName === "string" ? { displayName: auth.displayName } : {}),
+        ...(typeof auth.description === "string" ? { description: auth.description } : {}),
+      };
+    }
   }
   return out;
 }
@@ -894,6 +895,107 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
  * on-disk caches re-project.
  */
 export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
+  if (entry.name === '@activepieces/piece-asana') {
+    for (const action of Object.values(entry.actions)) {
+      if (action.name !== 'create_task') continue;
+      for (const field of action.inputSchema?.fields ?? []) {
+        if (field.sourceType === 'DROPDOWN') {field.type='string';field.placeholder='Asana ID or workflow variable';delete field.options;}
+        if (field.name === 'due_on') {field.placeholder='YYYY-MM-DD';field.description='The hosted Jarvis Asana connection requires the date as YYYY-MM-DD.';}
+        if (field.name === 'tags') {field.type='json';field.sourceType='ARRAY';field.placeholder='[]';field.description='Tag IDs or exact tag names. The hosted Jarvis Asana connection does not support tags yet: leave this empty when using it.';delete field.options;}
+      }
+    }
+    const task = {gid:'123456', resource_type:'task', name:'Example task', notes:'Task description', completed:false, due_on:'2026-10-30', due_at:null, start_on:null, assignee:{gid:'123', name:'Owner'}, projects:[{gid:'456',name:'Project'}], workspace:{gid:'789',name:'Workspace'}, permalink_url:'https://app.asana.com/0/456/123456'};
+    const samples: Record<string,unknown> = {
+      create_task:task, get_task:task, update_task:task,
+      list_project_tasks:{data:[task],next_offset:null},
+      add_task_comment:{gid:'654321',resource_type:'story',resource_subtype:'comment_added',type:'comment',text:'Task comment',created_at:'2026-10-27T12:00:00Z',created_by:{gid:'123',name:'Owner'},target:{gid:'123456',name:'Example task'},is_pinned:false},
+    };
+    for (const [name,sample] of Object.entries(samples)) if (entry.actions[name]) entry.actions[name]!.outputSample=sample;
+  }
+  if (entry.name === '@activepieces/piece-dropbox') {
+    const listPath = entry.actions.list_dropbox_folder?.inputSchema?.fields.find(field => field.name === 'path');
+    if (listPath) listPath.placeholder = '/ for Dropbox home, /folder or a workflow variable';
+    const filenameOnly = entry.actions.search_dropbox?.inputSchema?.fields.find(field => field.name === 'filename_only');
+    if (filenameOnly) filenameOnly.description = (filenameOnly.description ? filenameOnly.description + ' ' : '') + 'The hosted Jarvis Dropbox connection always matches file names only.';
+    const item = {'.tag': 'folder', id: 'id:example', name: 'Example', path_lower: '/example', path_display: '/Example'};
+    const samples: Record<string, unknown> = {
+      create_new_dropbox_folder: {metadata: item}, get_dropbox_file_metadata: item,
+      list_dropbox_folder: {entries: [item], cursor: 'example', has_more: false},
+      search_dropbox: {matches: [{metadata: {'.tag': 'metadata', metadata: item}}], has_more: false},
+    };
+    for (const [name, sample] of Object.entries(samples)) if (entry.actions[name]) entry.actions[name]!.outputSample = sample;
+  }
+
+  // ClickUp 0.9.1 returns a task directly for these actions, not an HTTP envelope.
+  // These stable fields let the picker wire task outputs into downstream steps.
+  if (entry.name === '@activepieces/piece-clickup') {
+    for (const name of ['create_task', 'get_list_task', 'get_task_by_name', 'update_task']) {
+      const action = entry.actions[name];
+      for (const field of action?.inputSchema?.fields ?? []) {
+        if (field.sourceType === 'DROPDOWN') {field.type = 'string'; field.placeholder = 'Value, ID or workflow variable'; delete field.options;}
+        if (field.sourceType === 'MULTI_SELECT_DROPDOWN') {field.type = 'json'; field.sourceType = 'ARRAY'; field.placeholder = '[]'; field.description = (field.description ?? '') + ' Enter an array of ClickUp user IDs.'; delete field.options;}
+      }
+      if (action && action.outputSample === undefined) action.outputSample = {
+        id: 'task_example', name: 'Example task', url: 'https://app.clickup.com/t/task_example',
+        status: {status: 'to do', type: 'open'}, list: {id: 'list_example', name: 'Sandbox'},
+      };
+    }
+  }
+  if (entry.name === '@activepieces/piece-mailchimp') {
+    const subscriber = {id: 'b58996c504c5638798eb6b511e6f49af', list_id: 'audience1', email_address: 'user@example.com', status: 'subscribed'};
+    const campaign = {id: 'campaign1', status: 'sent', settings: {title: 'Newsletter', subject_line: 'Latest news'}};
+    const samples: Record<string, unknown> = {
+      find_subscriber: {success: true, found: true, total_matches: 1, subscribers: [subscriber], primary_subscriber: subscriber},
+      add_subscriber_to_tag: {success: true, data: {list_id: 'audience1', email_address: 'user@example.com', tag_name: 'Customer', status: 'active', automations_suppressed: true}},
+      remove_subscriber_from_tag: {success: true, data: {list_id: 'audience1', email_address: 'user@example.com', tag_name: 'Customer', status: 'inactive', automations_suppressed: true}},
+      find_campaign: {success: true, query: 'Newsletter', results: [{campaign}], total_items: 1, has_more: false},
+      get_campaign_report: {success: true, report: {id: 'campaign1', campaign_title: 'Newsletter', emails_sent: 100, opens: {unique_opens: 30, open_rate: 0.3}, clicks: {unique_clicks: 5, click_rate: 0.05}, bounces: {hard_bounces: 0, soft_bounces: 0}}, summary: {campaign_title: 'Newsletter', emails_sent: 100, unique_opens: 30, unique_clicks: 5, open_rate: 0.3, click_rate: 0.05}},
+    };
+    for (const [name, sample] of Object.entries(samples)) {
+      const action = entry.actions[name];
+      if (!action) continue;
+      if (action.outputSample === undefined) action.outputSample = sample;
+      for (const field of action.inputSchema?.fields ?? []) {
+        if (field.sourceType === 'DROPDOWN') {field.type = 'string'; field.placeholder = 'ID or workflow variable'; delete field.options;}
+      }
+    }
+  }
+  if (entry.name === '@activepieces/piece-github') {
+    const issue = {id: 1, number: 42, title: 'Example issue', body: 'Description', state: 'open', html_url: 'https://github.com/owner/repo/issues/42', url: 'https://api.github.com/repos/owner/repo/issues/42'};
+    const samples: Record<string, unknown> = {
+      github_create_issue: {status: 201, body: issue}, getIssueInformation: {status: 200, body: issue}, update_issue: {status: 200, body: issue},
+      createCommentOnAIssue: {status: 201, body: {id: 2, body: 'Comment', issue_url: issue.url, html_url: issue.html_url + '#issuecomment-2'}},
+      find_issue: {found: true, result: [issue], total_count: 1, has_more: false},
+    };
+    for (const [name, sample] of Object.entries(samples)) {
+      const action = entry.actions[name]; if (!action) continue;
+      if (action.outputSample === undefined) action.outputSample = sample;
+      for (const field of action.inputSchema?.fields ?? []) {
+        if (field.name === 'repository') {field.type = 'json'; field.placeholder = '{"owner":"owner","repo":"repo"}'; delete field.options;}
+        if (field.name === 'issue_number') {field.type = 'number'; delete field.options;}
+      }
+    }
+  }
+  if (entry.name === '@activepieces/piece-trello') {
+    const board = {id:'aaaaaaaaaaaaaaaaaaaaaaaa',name:'Jarvis sandbox',closed:false};
+    const list = {id:'bbbbbbbbbbbbbbbbbbbbbbbb',name:'To do',idBoard:board.id,closed:false};
+    const card = {id:'cccccccccccccccccccccccc',name:'Example task',desc:'',idBoard:board.id,idList:list.id,closed:false,url:'https://trello.com/c/abcd1234'};
+    for (const [name,sample] of Object.entries({list_boards:{boards:[board],count:1},list_lists:{lists:[list],count:1},get_card:card,create_card:card,move_card:card})) {
+      const action=entry.actions[name];if(action && action.outputSample===undefined)action.outputSample=sample;
+    }
+  }
+  if (entry.name === '@activepieces/piece-slack') {
+    const channel = {id: 'C0123456789', name: 'jarvis-sandbox', is_member: true, is_archived: false};
+    const find = entry.actions.slack_find_channel, info = entry.actions.slack_get_channel_info;
+    if (find && find.outputSample === undefined) find.outputSample = channel;
+    if (info && info.outputSample === undefined) info.outputSample = {ok: true, channel};
+    for (const name of ['send_channel_message', 'slack_post_message']) {
+      const action = entry.actions[name];
+      if (action && action.outputSample === undefined) action.outputSample = {
+        ok: true, channel: 'C0123456789', ts: '1710304378.475129', message: {text: 'Example message', ts: '1710304378.475129'},
+      };
+    }
+  }
   if (entry.name !== JARVIS_ON_EVENT_TRIGGER.piece) return;
   const onEvent = entry.triggers?.[JARVIS_ON_EVENT_TRIGGER.trigger];
   if (onEvent) {

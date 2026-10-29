@@ -28,6 +28,7 @@ afterEach(() => {
 function stubSource(id: string, externalId: string, value: ResolvedConnection | null): JarvisConnectionSource {
   return {
     id,
+    pieceNames: [],
     canResolve: (eid) => eid === externalId,
     resolve: async () => value,
   };
@@ -122,6 +123,7 @@ describe("CredentialResolver", () => {
     let calls = 0;
     const dummy: JarvisConnectionSource = {
       id: "dummy",
+      pieceNames: [],
       canResolve: (id) => id === `${JARVIS_PREFIX}custom`,
       resolve: async () => {
         calls++;

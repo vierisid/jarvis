@@ -32,6 +32,8 @@
 #      resolves, under the policy in pieces-library/license-policy.ts. A
 #      denied package fails the run here, every week, whether or not the
 #      catalog changed, before the next hosted build would refuse the tree.
+#      The catalog PR still opens, but titled "(review needed)" whatever the
+#      verdict, with the denied packages at the top of its body.
 #
 # Four jobs, split by what each one handles and what it may write (#686).
 # Everything this workflow reads from outside -- the activepieces monorepo,
@@ -50,8 +52,9 @@
 #             artifact of those files and four step outputs.
 #   licenses  installs the regenerated catalog as the shared build does
 #             (--ignore-scripts, so no package code runs) and scans it. Read
-#             only, and nothing waits on it: the PR still opens, and this
-#             job's failure is what says the hosted build would refuse.
+#             only. Its failure fails the run, which is what says the hosted
+#             build would refuse; the PR still opens, but not as "(safe)",
+#             and its body lists the problems (an artifact of plain lines).
 #   publish   holds the write scopes: it copies the two generated files into
 #             its own checkout, opens the PR with RELEASE_PR_TOKEN and keeps
 #             the review issue current with GITHUB_TOKEN. It installs nothing
@@ -137,7 +140,7 @@ jobs:
             oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 \
             bun run scripts/inspect-verified-pieces.ts /out/inspection.json
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verified-inspection
           path: ${{ runner.temp }}/inspection/inspection.json
@@ -174,7 +177,7 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: verified-inspection
           path: ${{ runner.temp }}/inspection
@@ -225,7 +228,7 @@ jobs:
             src/workflows/pieces-library/verified-manifests-generated.ts \
             "$RUNNER_TEMP/catalog-sync/"
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: catalog-sync
           path: ${{ runner.temp }}/catalog-sync
@@ -234,8 +237,10 @@ jobs:
 
   # Step 5 of the header (#971). Reads the regenerated catalog from the
   # generate job's artifact: TypeScript, imported here, in a job as read-only
-  # as the one that produced it. publish does not need this job, so a
-  # violation never holds the catalog PR back; it fails the run instead.
+  # as the one that produced it. publish waits for this job but runs whatever
+  # it concludes: a violation fails the run and marks the catalog PR as
+  # needing review (the e04ca6df bump went out as "(safe)" while this job
+  # failed, and the next hosted build refused the tree).
   licenses:
     needs: generate
     runs-on: ubuntu-latest
@@ -257,7 +262,7 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: catalog-sync
           path: ${{ runner.temp }}/catalog-sync
@@ -267,12 +272,27 @@ jobs:
 
       # Installs into a fresh directory, the way scripts/build-shared-runtime.ts
       # installs the hosted tree, then applies the same gate. Exit 1 names
-      # every denied package and the chain that installed it.
+      # every denied package and the chain that installed it. --problems
+      # writes the same lines, one each, for the catalog PR body.
       - name: License-check the shared pieces tree
-        run: bun run scripts/check-piece-licenses.ts --install "$RUNNER_TEMP/license-scan" --summary-md "$GITHUB_STEP_SUMMARY"
+        run: bun run scripts/check-piece-licenses.ts --install "$RUNNER_TEMP/license-scan" --summary-md "$GITHUB_STEP_SUMMARY" --problems "$RUNNER_TEMP/license-problems/license-problems.txt"
 
+      # Even (above all) when the scan failed. Plain text, never run: publish
+      # only pastes it into the PR body.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: license-problems
+          path: ${{ runner.temp }}/license-problems/license-problems.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+  # Waits for licenses, and runs on its failure too: a denied package must
+  # not hold the catalog PR back, only stop it reading as "(safe)". A
+  # cancelled run publishes nothing.
   publish:
-    needs: generate
+    needs: [generate, licenses]
+    if: ${{ !cancelled() && needs.generate.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # GITHUB_TOKEN only reads the checkout and keeps the review issue. The
@@ -312,7 +332,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: catalog-sync
           path: ${{ runner.temp }}/catalog-sync
@@ -348,6 +368,48 @@ jobs:
           fi
           echo "number=$number" >> "$GITHUB_OUTPUT"
           printf '\n%s\n' "Held verified pieces, and how to clear them: #${number}" >> "$PR_BODY"
+
+      # The problem lines, if the scan got that far. Missing is fine: the
+      # next step says the check did not finish.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.generate.outputs.has_changes == 'true' && needs.licenses.result != 'success'
+        continue-on-error: true
+        with:
+          name: license-problems
+          path: ${{ runner.temp }}/license-problems
+
+      # Ahead of the verdict the sync script wrote, so a reviewer reads it
+      # first. The lines are the scan's own, one per problem, already free of
+      # newlines and workflow commands; each goes in a code span.
+      - name: Put the license problems at the top of the PR body
+        if: needs.generate.outputs.has_changes == 'true' && needs.licenses.result != 'success'
+        env:
+          PR_BODY: ${{ runner.temp }}/catalog-sync/catalog-pr-body.md
+          PROBLEMS: ${{ runner.temp }}/license-problems/license-problems.txt
+          LICENSES_RESULT: ${{ needs.licenses.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## License check failed (#971): not safe to merge"
+            echo
+            echo "The license scan of the shared pieces tree did not pass (licenses job: ${LICENSES_RESULT}). A denied package makes the next hosted shared build refuse the whole tree, so review it (a reviewed entry in src/workflows/pieces-library/license-policy.ts, or hold the piece back) before merging. Run: ${RUN_URL}"
+            echo
+            if [ -s "$PROBLEMS" ]; then
+              # A backtick would end the code span early. The scan already
+              # caps the file (50 lines of at most 300 characters, no bidi
+              # controls); head is the backstop that keeps the verdict below
+              # inside the 65536-character PR body.
+              head -n 50 "$PROBLEMS" | tr '`' "'" | while IFS= read -r line; do
+                printf -- '- `%s`\n' "$line"
+              done
+            else
+              echo "The scan did not get as far as listing problems; see the licenses job in the run."
+            fi
+            echo
+            cat "$PR_BODY"
+          } > "$PR_BODY.new"
+          mv "$PR_BODY.new" "$PR_BODY"
 
       # Open (or update) a PR with the catalog diff. peter-evans's
       # create-pull-request handles the branch creation, push, and PR
@@ -385,7 +447,7 @@ jobs:
         with:
           token: ${{ secrets.RELEASE_PR_TOKEN }}
           commit-message: "chore: refresh pieces catalog"
-          title: "${{ needs.generate.outputs.verdict == 'safe' && 'chore: refresh pieces catalog (safe)' || 'chore: refresh pieces catalog (review needed)' }}"
+          title: "${{ needs.generate.outputs.verdict == 'safe' && needs.licenses.result == 'success' && 'chore: refresh pieces catalog (safe)' || 'chore: refresh pieces catalog (review needed)' }}"
           body-path: ${{ runner.temp }}/catalog-sync/catalog-pr-body.md
           branch: chore/sync-pieces-catalog
           add-paths: |

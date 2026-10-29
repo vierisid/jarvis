@@ -1214,6 +1214,28 @@ function resolveBrowserTarget(
 }
 
 /**
+ * What a reviewed browser call acts on, for its approval card: the page
+ * origin (the URL to open, or the last one Chrome reported for the local
+ * browser) and, for a click, the element as the last snapshot showed it.
+ * Display only, never a binding: the guard above is what holds the call to
+ * the reviewed page. A remote target's page is not known here.
+ */
+function browserReviewSubject(tool: 'browser_navigate' | 'browser_click' | 'browser_scroll') {
+  return (params: Record<string, unknown>): { origin?: string; element?: string } => {
+    const remote = typeof params.target === 'string' && params.target.trim() !== '';
+    const url = tool === 'browser_navigate' ? (typeof params.url === 'string' ? params.url : null) : remote ? null : browser.lastKnownPageUrl();
+    const origin = url ? pageOrigin(url) : null;
+    const subject: { origin?: string; element?: string } = origin && /^https?:\/\//.test(origin) ? { origin: forCard(origin, 120) } : {};
+    if (tool === 'browser_click' && typeof params.element_id === 'number') {
+      const label = remote ? null : browser.snapshotElementLabel(params.element_id);
+      // Already one escaped literal (`elementCardLabel`); forCard would not escape a quote.
+      subject.element = `${label ?? 'element'} [${params.element_id}]`;
+    }
+    return subject;
+  };
+}
+
+/**
  * Bind a reviewed browser call to the surface it was reviewed on (#602).
  *
  * #495 bound an approval to the reviewed snapshot so that what the user
@@ -1427,6 +1449,7 @@ function reportSkippedPlaybook(tool: string, target: string, read: SidecarPageRe
 export const browserNavigateTool: ToolDefinition = {
   name: 'browser_navigate',
   captureApprovalGuard: browserCallGuard('browser_navigate'),
+  reviewSubject: browserReviewSubject('browser_navigate'),
   description: 'Navigate the browser to a URL. Returns page text content and a list of interactive elements with [id] numbers you can reference in browser_click and browser_type. Optionally specify a "target" sidecar to use a remote browser. By default the browser opens visibly so the user can watch and interact; set "headless" to true to run it hidden in the background (useful for research, or when the user is focused on something else and a popping browser window would be intrusive).',
   category: 'browser',
   parameters: {
@@ -1508,6 +1531,7 @@ export const browserSnapshotTool: ToolDefinition = {
 export const browserClickTool: ToolDefinition = {
   name: 'browser_click',
   captureApprovalGuard: browserCallGuard('browser_click', { bindDocument: true }),
+  reviewSubject: browserReviewSubject('browser_click'),
   description: 'Click an interactive element on the page by its [id] from the last browser_navigate or browser_snapshot. The [id]s expire: scrolling, a paging key, or the page replacing or moving the element retires them, and this refuses rather than clicking the wrong place - take a fresh browser_snapshot when it says so. Supports right-click (button: "right", opens context menus) and double-click (double: true).',
   category: 'browser',
   parameters: {
@@ -1833,6 +1857,7 @@ export const browserUploadFileTool: ToolDefinition = {
 export const browserScrollTool: ToolDefinition = {
   name: 'browser_scroll',
   captureApprovalGuard: browserCallGuard('browser_scroll'),
+  reviewSubject: browserReviewSubject('browser_scroll'),
   description: 'Scroll the page up or down. Use this when you need to see content below the fold. Scrolling RETIRES every element [id] from the last snapshot, because their positions have moved: take a browser_snapshot afterwards and use the fresh [id]s.',
   category: 'browser',
   parameters: {

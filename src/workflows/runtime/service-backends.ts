@@ -1,5 +1,3 @@
-import { workflowBrowserRead, workflowBrowserReview } from '../../authority/ui-intent';
-import { runAsReviewed } from '../../actions/tools/reviewed-call-scope';
 import { withWorkflowMemory } from '../../vault/memory-use-context';
 import { documentInput, projectDocument } from './decision-document';
 /**
@@ -13,6 +11,9 @@ import { documentInput, projectDocument } from './decision-document';
  * Lives outside `adapters/` so the eventual K3 deletion of the legacy
  * adapters doesn't have to thread through this file.
  */
+import { workflowBrowserRead, workflowBrowserReview } from '../../authority/ui-intent';
+import { runAsReviewed } from '../../actions/tools/reviewed-call-scope';
+import type { ApprovalManager } from '../../authority/approval';
 
 import type { LLMManager } from "../../llm/manager";
 import type { ToolRegistry } from "../../actions/tools/registry";
@@ -30,7 +31,7 @@ import { JarvisContextProviderAdapter } from "../adapters/context-provider";
 import { LlmOnlyAgentDelegator } from "../adapters/agent-delegator";
 import { DEFAULT_MAX_ITERATIONS, M7AgentDelegator, type DelegationContinuation } from "../adapters/m7-agent-delegator";
 import { getChildRun } from '../db/repos/child-run';
-import { getDelegation, saveDelegation } from "../db/repos/delegation";
+import { delegationId, getDelegation, saveDelegation } from "../db/repos/delegation";
 import { JarvisWorkflowRunnerAdapter } from "../adapters/workflow-runner";
 import type { LlmChatFn, LlmChatRequest, LlmChatResponse } from "../sandbox-api/routes/jarvis-llm";
 import type { SystemPromptParts } from "../../roles/prompt-builder";
@@ -534,7 +535,7 @@ export function buildSandboxServiceBackends(
     });
     if (reply.approval) return { finalMessage: '', toolCalls: [], status: 'approval_required', approval: reply.approval };
     const resolved = resolveEffectContext(ctx, AGENT_PIECE, 'delegate');
-    const id = 'wfd_' + digest([resolved.run.id, resolved.stepName, resolved.executionPath]);
+    const id = delegationId(resolved.run.id, resolved.stepName, resolved.executionPath);
     const continuation: DelegationContinuation = {
       identity: { id, runId: resolved.run.id, stepName: resolved.stepName, executionPath: resolved.executionPath,
         versionDigest: resolved.versionDigest },
@@ -629,7 +630,7 @@ export function buildSandboxServiceBackends(
         if (gate.confirm === 'always' && !browserReview) {
           return refuse(`Unsupported workflow capability: ${call.toolCall.name} requires the user's explicit confirmation, which a delegated agent cannot ask for; call it as a flow step so the approval is raised by the step that names it.`);
         }
-        let browserExecution: ReturnType<import('../../authority/approval').ApprovalManager['getUiExecution']> = null;
+        let browserExecution: ReturnType<ApprovalManager['getUiExecution']> = null;
         // Set once the call is dispatched; read by `validateTarget` below.
         let dispatched = false;
         try {
@@ -646,7 +647,8 @@ export function buildSandboxServiceBackends(
             //
             // Every browser action needs a dashboard click and the originating
             // registry's live guard; Authority overrides cannot auto-approve it.
-            ...(browserReview ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review browser action' }, reviewRegistry: registry } : {}),
+            ...(browserReview ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review browser action' }, reviewRegistry: registry,
+              reviewSubject: registry.get(call.toolCall.name)?.reviewSubject?.(call.toolCall.arguments) ?? {} } : {}),
             ...(gate.confirm || workflowBrowserRead(call.toolCall.name)
               ? { aboveLevelFloor: browserReview || workflowBrowserRead(call.toolCall.name) ? 'read_data' as const : gate.floorCategory } : {}),
             // The target names who asked, so the card and the record are bound
