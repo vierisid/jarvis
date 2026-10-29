@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { getCronTimezone, setCronTimezone } from '../../lib/cron-scheduler';
-import { meetingSetup, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, MEETING_BRIEF_LIMIT, type MeetingRequest } from './meeting-briefs';
+import { meetingSetup, meetingSetupMatches, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, MEETING_BRIEF_LIMIT, type MeetingRequest } from './meeting-briefs';
 import { fixtureNow, fixtureSetup, fixtureEvent, fixtureRequest } from './meeting-fixtures';
 test('all pages and source links, timezone and stable occurrence/start identity',async()=>{
   const result=await prepareMeetingBriefs(fixtureSetup,fixtureRequest(),fixtureNow);
@@ -69,14 +69,19 @@ test('Gmail threads are read as metadata only, never full bodies',async()=>{
 });
 const twoMeetings=()=>[fixtureEvent(),fixtureEvent({id:'occurrence-2',summary:'Long history',start:{dateTime:'2026-10-23T09:20:00Z'},attendees:[{email:'owner@example.com',self:true},{email:'big@external.test'}]})];
 test('an oversized brief is truncated oldest-first, never dropped, and keeps its notification key',async()=>{
-  const result=await prepareMeetingBriefs(fixtureSetup,fixtureRequest(twoMeetings(),{oversized:'big@external.test'}),fixtureNow);
+  const paths:string[]=[];const base=fixtureRequest(twoMeetings(),{oversized:'big@external.test'});
+  const result=await prepareMeetingBriefs(fixtureSetup,async(provider,path,body)=>{paths.push(path);return base(provider,path,body);},fixtureNow);
   expect(result).not.toHaveProperty('failed');
   expect(result.meetings.map(m=>m.eventId)).toEqual(['occurrence-1','occurrence-2']);expect(result.meetings[0]!.brief).toContain('Discuss pilot timing');
   const long=result.meetings[1]!;expect(long.title).toBe('Long history');expect(long.brief.length).toBeLessThanOrEqual(MEETING_BRIEF_LIMIT);
-  const omitted=/(\d+) older message excerpts from (\d+) conversations omitted to fit the 24,000 character brief limit; open the meeting or Gmail for the full history\./.exec(long.brief);
-  expect(omitted).not.toBeNull();const n=Number(omitted![1]);expect(n).toBeGreaterThan(0);expect(n).toBeLessThan(30);
+  const omitted=/(\d+) older message excerpts? from (\d+) conversations? and (\d+) older conversations not read omitted to fit the 24,000 character brief limit; open the meeting or Gmail for the full history\./.exec(long.brief);
+  expect(omitted).not.toBeNull();const dropped=Number(omitted![1]),unread=Number(omitted![3]);expect(unread).toBeGreaterThan(0);
+  const n=dropped+unread;expect(n).toBeLessThan(30);
   // Newest conversations survive; exactly the n oldest (b29 downwards) are gone.
   for(let i=0;i<30;i++)expect(long.brief.includes('#all/b'+i+'\n')).toBe(i<30-n);
+  // Once the brief was full, the remaining (older) listed threads were counted, never read.
+  const reads=paths.filter(p=>/\/threads\/b\d+\?/.test(p));expect(reads).toHaveLength(30-unread);
+  for(let i=30-unread;i<30;i++)expect(reads.some(p=>p.includes('/threads/b'+i+'?'))).toBe(false);
   const again=await prepareMeetingBriefs(fixtureSetup,fixtureRequest(twoMeetings(),{oversized:'big@external.test'}),fixtureNow);
   expect(again.meetings[1]!.brief).toBe(long.brief);
   const later=await prepareMeetingBriefs(fixtureSetup,fixtureRequest(twoMeetings()),fixtureNow);
@@ -131,4 +136,47 @@ test('transport only reads Gmail threads as metadata with the brief headers',asy
   await request('gmail','/gmail/v1/users/me/threads/abc?format=metadata&metadataHeaders=From&metadataHeaders=Subject');
   await request('gmail','/gmail/v1/users/me/threads?q=x&maxResults=100&includeSpamTrash=false&pageToken=two');
   expect(count).toBe(2);
+});
+const bigThreads=(count:number,messages:number,snippet:number):MeetingRequest=>async(provider,path,body)=>{
+  if(provider==='calendar')return fixtureRequest()(provider,path,body);
+  if(provider==='hubspot')return {results:[]};
+  if(path.includes('/threads?'))return {threads:Array.from({length:count},(_,i)=>({id:'f'+i.toString(16)}))};
+  const id=/threads\/([a-f0-9]+)\?/.exec(path)![1]!,age=parseInt(id.slice(1),16);
+  return {id,messages:Array.from({length:messages},(_,j)=>({internalDate:String(fixtureNow-1000-age*60_000-j),snippet:'x'.repeat(snippet),
+    payload:{headers:[{name:'From',value:'customer@external.test'},{name:'To',value:'owner@example.com'},{name:'Subject',value:'S'}]}}))};
+};
+test('an over-budget brief stops reading Gmail threads once full and stays fast (perf guard)',async()=>{
+  let reads=0;const request=bigThreads(5000,1,1000);
+  const started=performance.now();
+  const m=(await prepareMeetingBriefs(fixtureSetup,async(provider,path,body)=>{if(/\/threads\/[a-f0-9]+\?/.test(path))reads++;return request(provider,path,body);},fixtureNow)).meetings[0]!;
+  expect(performance.now()-started).toBeLessThan(2000);
+  expect(reads).toBeLessThan(40);expect(m.brief.length).toBeLessThanOrEqual(MEETING_BRIEF_LIMIT);
+  const omitted=/(\d+) older message excerpts? from (\d+) conversations? and (\d+) older conversations not read omitted/.exec(m.brief)!;
+  expect(Number(omitted[3])).toBe(5000-reads);expect(Number(omitted[1])+Number(omitted[3])).toBe(5000-(m.brief.match(/#all\//g)?.length ?? 0));
+});
+test('fitting thousands of excerpts is linear, not one re-render per dropped excerpt (perf guard)',async()=>{
+  // One thread is read whole however full the brief is, so its 5000 messages all reach the fit.
+  const started=performance.now();
+  const m=(await prepareMeetingBriefs(fixtureSetup,bigThreads(1,5000,200),fixtureNow)).meetings[0]!;
+  expect(performance.now()-started).toBeLessThan(2000);
+  expect(m.brief.length).toBeLessThanOrEqual(MEETING_BRIEF_LIMIT);
+  const omitted=/(\d+) older message excerpts from 1 conversation omitted to fit/.exec(m.brief)!;
+  const kept=m.brief.split('\n').filter(l=>l.endsWith('x'.repeat(200))).length;
+  expect(kept).toBeGreaterThan(0);expect(Number(omitted[1])+kept).toBe(5000);
+});
+test('a saved step without a timezone still matches its run setup after Jarvis changes timezone',()=>{
+  const previous=getCronTimezone();
+  try{
+    setCronTimezone('America/New_York');
+    const saved={...fixtureSetup,internalDomains:'example.com',timezone:''},setup=meetingSetup(saved);
+    expect(meetingSetupMatches(saved,setup)).toBe(true);
+    setCronTimezone('Asia/Tokyo');
+    expect(meetingSetupMatches(saved,setup)).toBe(true);
+    expect(meetingSetupMatches({...saved,timezone:null},setup)).toBe(true);
+    // A timezone the step names itself is part of its configuration.
+    expect(meetingSetupMatches({...saved,timezone:'Asia/Tokyo'},setup)).toBe(false);
+    expect(meetingSetupMatches({...saved,timezone:'America/New_York'},setup)).toBe(true);
+    expect(meetingSetupMatches({...saved,calendarId:'other@example.com'},setup)).toBe(false);
+    expect(meetingSetupMatches({...saved,ownerEmail:''},setup)).toBe(false);
+  }finally{setCronTimezone(previous);}
 });

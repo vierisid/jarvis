@@ -1,4 +1,4 @@
-import { MEETING_ACCOUNTS } from '../../runtime/meeting-briefs';
+import { MEETING_ACCOUNTS } from '../../meeting-accounts';
 /**
  * Q-05: the bindings a workflow was enabled against, and the checks that stop
  * work when one of them changes.

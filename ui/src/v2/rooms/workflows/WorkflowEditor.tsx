@@ -16,6 +16,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSampleDraftText } from "./useSampleDraftText";
+import { MEETING_ACCOUNT_FIELDS } from "../../../../../src/workflows/meeting-accounts";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { WorkflowEditorEnvironment, WorkflowPortal, useWorkflowRequest } from "./WorkflowEditorEnvironment";
 import { BriefTabs } from "../../../brief/components/controls/Choices";
@@ -3359,7 +3360,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const selectedSubAction: PieceCatalogActionOrTrigger | undefined = subList.find((s) => s.name === subName);
   const formInput = step.settings?.input ?? {};
   const meetingAccounts = piece?.name === '@jarvispieces/piece-jarvis-context' && subName === 'meeting_briefs'
-    ? [['calendarConnection','@activepieces/piece-google-calendar','Google Calendar'],['gmailConnection','@activepieces/piece-gmail','Gmail'],['hubspotConnection','@activepieces/piece-hubspot','HubSpot']] as const : [];
+    ? MEETING_ACCOUNT_FIELDS : [];
 
   const formWebhook = detectedTriggerKind === 'webhook' && ('submission_id_field' in formInput || 'submission_email_field' in formInput);
   const schema = formWebhook ? { fields: [
@@ -3682,7 +3683,7 @@ function AdvancedSettings(props: {
  * panel and isn't worth the complexity.
  */
 export function MeetingAccountPickers({connections,input,onSetInput}: {connections:ConnectionMeta[];input:Record<string,unknown>;onSetInput:(field:string,value:string)=>void}) {
-  return <>{([['calendarConnection','@activepieces/piece-google-calendar','Google Calendar'],['gmailConnection','@activepieces/piece-gmail','Gmail'],['hubspotConnection','@activepieces/piece-hubspot','HubSpot']] as const).map(([field,provider,label]) =>
+  return <>{MEETING_ACCOUNT_FIELDS.map(([field,provider,label]) =>
     <ConnectionPicker key={field} pieceName={provider} pieceDisplayName={label} authDisplayName={`${label} account`} authType="OAUTH2"
       connections={connections} currentValue={input[field] ? `{{connections.${input[field]}}}` : ''}
       onPick={template=>onSetInput(field,template ? template.slice(14,-2) : '')} />)}</>;

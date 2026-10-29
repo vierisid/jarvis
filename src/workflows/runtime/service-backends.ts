@@ -1,6 +1,7 @@
-import { MEETING_ACCOUNTS, meetingSetup, parseMeetingGuard, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, type MeetingSetup } from './meeting-briefs';
+import { MEETING_ACCOUNTS, meetingSetup, meetingSetupMatches, parseMeetingGuard, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, type MeetingSetup } from './meeting-briefs';
 import { connectionBindings, enforceRunConnectionBinding } from '../db/repos/binding-pins';
 import { walkFlowNodes } from '../db/flow-graph';
+import { MEETING_ACCOUNT_LABELS } from '../meeting-accounts';
 import { HUBSPOT_CLAIM_WAIT_MS, HubspotNotStartedError, HubspotWriteRefusedError, hubspotContactInput, isHubspotContact, upsertHubspotContact } from './hubspot-contact';
 import { getConnection } from '../db/repos/app-connection';
 import { claimIdentity, completeIdentity, IdentityUnresolvedError, releaseIdentity } from '../db/repos/effect-identity';
@@ -49,6 +50,7 @@ import type { EventsPollFn } from "../sandbox-api/routes/jarvis-events";
 import type { WorkflowsStartFn } from "../sandbox-api/routes/jarvis-workflows";
 import type { SandboxApiServices } from "../sandbox-api/server";
 import type { CredentialResolver } from "../credentials/adapter";
+import { ConnectionCredentialError } from "../credentials/pasted-oauth2";
 import { WorkflowEventBuffer } from "./event-buffer";
 import { cancellableWorkflowService } from "./cancellation";
 import { closeEffectApproval, WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
@@ -421,30 +423,46 @@ export function buildSandboxServiceBackends(
     },
     ...(opts.sendDesktop ? { sendDesktop: opts.sendDesktop } : {}),
   };
-  const meetingRequest = async (setup: MeetingSetup, ctx: WorkflowEffectContext, checkpoint: () => void) => {
+  /**
+   * The fixed read transport for one meeting step. `providers` limits which
+   * saved accounts it resolves, refreshes and pin-checks: the freshness
+   * recheck before delivery reads Calendar only.
+   */
+  const meetingRequest = async (setup: MeetingSetup, ctx: WorkflowEffectContext, checkpoint: () => void,
+    providers: ReadonlyArray<'calendar'|'gmail'|'hubspot'> = ['calendar','gmail','hubspot']) => {
     const run = getFlowRun(ctx.runId);
     const version = run && getFlowVersion(run.flowVersionId);
-    if (!version || !walkFlowNodes(version.trigger).some(node => {
-      if (!String(node.settings?.pieceName).endsWith('jarvis-context') || node.settings?.actionName !== 'meeting_briefs') return false;
-      try { return digest(meetingSetup(node.settings.input as any)) === digest(setup); } catch { return false; }
-    })) throw Error('Meeting configuration must match a saved meeting preparation step');
+    if (!version || !walkFlowNodes(version.trigger).some(node =>
+      String(node.settings?.pieceName).endsWith('jarvis-context') && node.settings?.actionName === 'meeting_briefs'
+      && meetingSetupMatches(node.settings.input as any ?? {}, setup)))
+      throw Error('Meeting configuration must match a saved meeting preparation step');
+    const fields = (Object.keys(MEETING_ACCOUNTS) as Array<keyof typeof MEETING_ACCOUNTS>)
+      .filter(field => providers.includes(field.replace('Connection','') as 'calendar'));
     const tokens = {} as Record<'calendar'|'gmail'|'hubspot',string>;
-    for (const [field, pieceName] of Object.entries(MEETING_ACCOUNTS)) {
-      const externalId = setup[field as keyof typeof MEETING_ACCOUNTS];
+    for (const field of fields) {
+      const pieceName = MEETING_ACCOUNTS[field], externalId = setup[field];
       if (!connectionBindings(version.trigger).has(externalId)) throw Error('Meeting account is not bound to this workflow');
       const refusal = enforceRunConnectionBinding(ctx.runId, ctx.projectId, externalId, opts.credentialResolver);
       if (refusal) throw Error(refusal);
-      const resolved = await opts.credentialResolver.resolve({projectId:ctx.projectId,pieceName,externalId});
+      let resolved = await opts.credentialResolver.resolve({projectId:ctx.projectId,pieceName,externalId});
       const managedGoogle = externalId === 'jarvis:google' || externalId.startsWith('jarvis:google:');
       if (externalId.startsWith('jarvis:') && (!managedGoogle || field === 'hubspotConnection')) throw Error('Meeting account belongs to a different provider');
       if (resolved?.pieceName && resolved.pieceName !== pieceName) throw Error('Meeting account belongs to a different provider');
-      if (!resolved || resolved.type !== 'OAUTH2' || resolved.status && resolved.status !== 'ACTIVE' || typeof resolved.value.access_token !== 'string')
+      if (!resolved || resolved.type !== 'OAUTH2' || resolved.status && resolved.status !== 'ACTIVE')
         throw Error('Connect the selected meeting account securely before running');
+      // A stored OAuth2 token is refreshed when it is about to expire, only
+      // after the run's binding check passed (as the engine's connection route does).
+      try { resolved = await opts.credentialResolver.fresh(resolved); }
+      catch (error) {
+        if (!(error instanceof ConnectionCredentialError)) throw error;
+        throw Error(`Reconnect the selected ${MEETING_ACCOUNT_LABELS[field]} account (${externalId}): ${error.message}`);
+      }
+      if (typeof resolved.value.access_token !== 'string') throw Error('Connect the selected meeting account securely before running');
       tokens[field.replace('Connection','') as keyof typeof tokens] = resolved.value.access_token;
     }
     return meetingTransport(tokens, () => {
       checkpoint();
-      for (const field of Object.keys(MEETING_ACCOUNTS) as Array<keyof typeof MEETING_ACCOUNTS>) {
+      for (const field of fields) {
         const refusal = enforceRunConnectionBinding(ctx.runId,ctx.projectId,setup[field],opts.credentialResolver);
         if (refusal) throw Error(refusal);
       }
@@ -491,7 +509,7 @@ export function buildSandboxServiceBackends(
         // A stale result must not consume the key, so a later poll can prepare it anew.
         if (args.meetingGuard) {
           const currentGuard = parseMeetingGuard(args.meetingGuard);
-          if (!await meetingStillCurrent(currentGuard, await meetingRequest(currentGuard.setup,ctx,checkpoint),opts.meetingNow?.() ?? Date.now()))
+          if (!await meetingStillCurrent(currentGuard, await meetingRequest(currentGuard.setup,ctx,checkpoint,['calendar']),opts.meetingNow?.() ?? Date.now()))
             return {delivered:[],failed:[],unknown:[],skipped:'Meeting changed, cancelled, declined or outside the upcoming window'};
         }
         const notifyKey = typeof args.idempotencyKey === 'string' ? args.idempotencyKey : null;

@@ -2,11 +2,8 @@
 import { createHash } from 'node:crypto';
 import { getCronTimezone } from '../../lib/cron-scheduler';
 
-export const MEETING_ACCOUNTS = {
-  calendarConnection: '@activepieces/piece-google-calendar',
-  gmailConnection: '@activepieces/piece-gmail',
-  hubspotConnection: '@activepieces/piece-hubspot',
-} as const;
+import { MEETING_ACCOUNTS } from '../meeting-accounts';
+export { MEETING_ACCOUNTS };
 export interface MeetingSetup {
   calendarConnection: string; gmailConnection: string; hubspotConnection: string;
   calendarId: string; ownerEmail: string; internalDomains: string[];
@@ -54,6 +51,20 @@ export function meetingSetup(v: RecordValue): MeetingSetup {
   };
   return { calendarConnection: account('calendarConnection'), gmailConnection: account('gmailConnection'), hubspotConnection: account('hubspotConnection'),
     calendarId: text(v.calendarId, 'calendar ID'), ownerEmail: email(v.ownerEmail), internalDomains, hubspotPortalId, recentDays, timezone };
+}
+const unsetTimezone = (v: RecordValue) => v.timezone === undefined || v.timezone === null || (typeof v.timezone === 'string' && !v.timezone.trim());
+/**
+ * Whether `setup` (as a run resolved it) is what the saved step configures. A
+ * saved step that leaves the timezone empty follows Jarvis's timezone, which
+ * is read when the run prepares; a change to it later (during an approval
+ * wait) is not a different configuration, so only a timezone the step names
+ * itself is compared.
+ */
+export function meetingSetupMatches(saved: RecordValue, setup: MeetingSetup): boolean {
+  let expected: MeetingSetup;
+  try { expected = meetingSetup(saved); } catch { return false; }
+  const comparable = (s: MeetingSetup) => JSON.stringify(unsetTimezone(saved) ? { ...s, timezone: null } : s);
+  return comparable(expected) === comparable(setup);
 }
 const GMAIL_THREAD_HEADERS = ['From', 'To', 'Cc', 'Subject'];
 const query = (params: Record<string, string>) => new URLSearchParams(params).toString();
@@ -134,8 +145,8 @@ export async function prepareMeetingBriefs(setup: MeetingSetup, request: Meeting
     lines.push('', `Recent Gmail conversations (${setup.recentDays} days):`);
     const searchable = m.external.filter(e => !unsearchable(e));
     for (const e of m.external.filter(unsearchable)) lines.push(`${clean(e, 254)}: Gmail not searched; the address contains { or }, which a Gmail search cannot express.`);
-    const conversations: { id: string; excerpts: { date: number; line: (max: number) => string }[] }[] = [];
-    let threadIds: string[] = [];
+    const conversations: Conversation[] = [];
+    let threadIds: string[] = [], unread = 0;
     if (searchable.length) {
       const addresses = searchable.map(e => `from:"${e}" to:"${e}"`).join(' ');
       const after = Math.floor((now - setup.recentDays * 86400_000) / 1000), before = Math.ceil(now / 1000);
@@ -143,15 +154,20 @@ export async function prepareMeetingBriefs(setup: MeetingSetup, request: Meeting
         q: `{${addresses}} after:${after} before:${before}`, maxResults: '100', includeSpamTrash: 'false', ...(cursor ? { pageToken: cursor } : {}),
       })), 'threads');
       threadIds = [...new Set(threads.map(t => text(t.id, 'thread ID')))];
+      if (threadIds.some(id => !/^[a-f0-9]+$/i.test(id))) throw Error('Invalid Gmail thread ID');
       if (!threadIds.length) lines.push('No matching recent conversations.');
     }
-    for (const id of threadIds) {
-      if (!/^[a-f0-9]+$/i.test(id)) throw Error('Invalid Gmail thread ID');
+    // Gmail lists threads newest first. Once what was read already fills the
+    // brief, every later thread is older than anything kept, so it is counted
+    // as omitted instead of read.
+    let size = lines.reduce((n, l) => n + l.length + 1, 0);
+    for (const [index, id] of threadIds.entries()) {
+      if (size > MEETING_BRIEF_LIMIT) { unread = threadIds.length - index; break; }
       // Headers and snippet are all a brief uses: metadata keeps message bodies out
       // of the daemon and long quoted threads under the response size limit.
       const thread = await request('gmail', `/gmail/v1/users/me/threads/${id}?format=metadata&` + GMAIL_THREAD_HEADERS.map(h => `metadataHeaders=${h}`).join('&'));
       if (thread.id !== id || !Array.isArray(thread.messages)) throw Error('Incomplete Gmail thread');
-      const excerpts: { date: number; line: (max: number) => string }[] = [];
+      const excerpts: Excerpt[] = [];
       for (const message of thread.messages) {
         const date = Number(message.internalDate);
         if (!Number.isFinite(date)) throw Error('Missing Gmail message date');
@@ -163,48 +179,81 @@ export async function prepareMeetingBriefs(setup: MeetingSetup, request: Meeting
         if (!participants.some(e => m.external.includes(e))) continue;
         const prefix = `${new Date(date).toISOString()} | ${clean(header('subject'), 200)} | ${clean(header('from'), 254)}: `, snippet = message.snippet;
         excerpts.push({ date, line: max => prefix + clean(snippet, max) });
+        size += prefix.length + clean(snippet).length + 1;
       }
-      if (excerpts.length) conversations.push({ id, excerpts });
+      if (excerpts.length) { conversations.push({ id, excerpts }); size += threadLink(setup.ownerEmail, id).length + 1; }
     }
-    if (threadIds.length && !conversations.length) lines.push('No matching recent messages after exact participant and date filtering.');
-    const brief = fitBrief(lines, conversations, setup.ownerEmail);
+    if (threadIds.length && !conversations.length && !unread) lines.push('No matching recent messages after exact participant and date filtering.');
+    const brief = fitBrief(lines, conversations, unread, setup.ownerEmail);
     meetings.push({ eventId: m.eventId, start: m.start, title: m.title, brief, notificationKey, guard });
   }
   const order = (a: { start: string; eventId: string }, b: { start: string; eventId: string }) => a.start.localeCompare(b.start) || a.eventId.localeCompare(b.eventId);
   return { complete: true, meetings: meetings.sort(order) };
 }
+type Excerpt = { date: number; line: (max: number) => string };
+type Conversation = { id: string; excerpts: Excerpt[] };
+const threadLink = (ownerEmail: string, id: string) => `https://mail.google.com/mail/u/?authuser=${encodeURIComponent(ownerEmail)}#all/${id}`;
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+/** What was left out, or null when nothing was. */
+function omittedLine(dropped: number, droppedThreads: number, unread: number): string | null {
+  const parts = [...(dropped ? [`${plural(dropped, 'older message excerpt')} from ${plural(droppedThreads, 'conversation')}`] : []),
+    ...(unread ? [`${plural(unread, 'older conversation')} not read`] : [])];
+  return parts.length ? `${parts.join(' and ')} omitted to fit the ${MEETING_BRIEF_LIMIT.toLocaleString('en-US')} character brief limit; open the meeting or Gmail for the full history.` : null;
+}
+const SHORTENED = 'Remaining snippet shortened to fit the brief limit.';
+const SNIPPETS = 'Email excerpts are snippets; open the source links for full conversations.';
 /**
  * Render a brief within MEETING_BRIEF_LIMIT, deterministically. Drops the oldest
  * excerpts first (keeping the newest), then shortens the newest snippet, then drops
- * it, and only as a last resort cuts the fixed context. Always says what was left out.
+ * it, and only as a last resort cuts the fixed context. Always says what was left out
+ * (`unread` counts listed conversations that were never read because the brief was full).
+ * Linear in the number of excerpts: sizes are kept as running totals and the brief is
+ * rendered once.
  */
-function fitBrief(head: string[], conversations: { id: string; excerpts: { date: number; line: (max: number) => string }[] }[], ownerEmail: string): string {
-  const all = conversations.flatMap((c, t) => c.excerpts.map((e, i) => ({ ...e, t, i })));
+function fitBrief(head: string[], conversations: Conversation[], unread: number, ownerEmail: string): string {
+  const all = conversations.flatMap((c, t) => c.excerpts.map((e, i) => ({ date: e.date, line: e.line, text: e.line(1000), t, i })));
   // Oldest first; ties broken by thread then message order so the result never depends on timing.
   const byAge = [...all].sort((a, b) => a.date - b.date || a.t - b.t || a.i - b.i);
-  const render = (dropped: Set<typeof all[number]>, max: number) => {
-    const lines = [...head];
-    conversations.forEach((c, t) => {
-      const kept = all.filter(e => e.t === t && !dropped.has(e));
-      if (!kept.length) return;
-      lines.push(...kept.map(e => e.line(max)), `https://mail.google.com/mail/u/?authuser=${encodeURIComponent(ownerEmail)}#all/${c.id}`);
-    });
-    if (dropped.size) {
-      const threads = new Set([...dropped].map(e => e.t)).size;
-      lines.push(`${dropped.size} older message excerpt${dropped.size === 1 ? '' : 's'} from ${threads} conversation${threads === 1 ? '' : 's'} omitted to fit the ${MEETING_BRIEF_LIMIT.toLocaleString('en-US')} character brief limit; open the meeting or Gmail for the full history.`);
+  const links = conversations.map(c => threadLink(ownerEmail, c.id));
+  const kept = conversations.map(c => c.excerpts.length);
+  const dropped = new Set<typeof all[number]>();
+  let droppedThreads = 0, max = 1000;
+  // Joined length of the variable part: every kept excerpt and each link with a kept excerpt, one newline each.
+  let body = all.reduce((n, e) => n + e.text.length + 1, 0) + links.reduce((n, l, t) => n + (kept[t] ? l.length + 1 : 0), 0);
+  const headSize = head.reduce((n, l) => n + l.length + 1, 0);
+  const length = () => {
+    const omitted = omittedLine(dropped.size, droppedThreads, unread);
+    return headSize + body + (omitted ? omitted.length + 1 : 0) + (max < 1000 ? SHORTENED.length + 1 : 0) + SNIPPETS.length;
+  };
+  const drop = (e: typeof all[number]) => {
+    dropped.add(e); body -= (max < 1000 && e === byAge.at(-1) ? e.line(max) : e.text).length + 1;
+    // The omitted line counts every conversation that lost an excerpt; a link goes with its last one.
+    if (kept[e.t] === conversations[e.t]!.excerpts.length) droppedThreads++;
+    if (--kept[e.t]! === 0) body -= links[e.t]!.length + 1;
+  };
+  const render = () => {
+    // `all` is in thread order, so each thread's kept excerpts are followed by its link in one pass.
+    const lines = [...head]; let thread = -1;
+    for (const e of all) {
+      if (dropped.has(e)) continue;
+      if (e.t !== thread) { if (thread >= 0) lines.push(links[thread]!); thread = e.t; }
+      lines.push(max < 1000 ? e.line(max) : e.text);
     }
-    if (max < 1000) lines.push('Remaining snippet shortened to fit the brief limit.');
-    lines.push('Email excerpts are snippets; open the source links for full conversations.');
+    if (thread >= 0) lines.push(links[thread]!);
+    const omitted = omittedLine(dropped.size, droppedThreads, unread);
+    if (omitted) lines.push(omitted);
+    if (max < 1000) lines.push(SHORTENED);
+    lines.push(SNIPPETS);
     return lines.join('\n');
   };
-  const dropped = new Set<typeof all[number]>();
-  let brief = render(dropped, 1000);
-  for (const e of byAge.slice(0, -1)) { if (brief.length <= MEETING_BRIEF_LIMIT) return brief; dropped.add(e); brief = render(dropped, 1000); }
-  if (brief.length <= MEETING_BRIEF_LIMIT) return brief;
-  if (byAge.length) {
-    brief = render(dropped, 100); if (brief.length <= MEETING_BRIEF_LIMIT) return brief;
-    dropped.add(byAge.at(-1)!); brief = render(dropped, 1000); if (brief.length <= MEETING_BRIEF_LIMIT) return brief;
+  for (const e of byAge.slice(0, -1)) { if (length() <= MEETING_BRIEF_LIMIT) break; drop(e); }
+  if (length() > MEETING_BRIEF_LIMIT && byAge.length) {
+    const newest = byAge.at(-1)!;
+    body += newest.line(100).length - newest.text.length; max = 100;
+    if (length() > MEETING_BRIEF_LIMIT) { drop(newest); max = 1000; }
   }
+  const brief = render();
+  if (brief.length <= MEETING_BRIEF_LIMIT) return brief;
   const notice = `\nBrief cut at the ${MEETING_BRIEF_LIMIT.toLocaleString('en-US')} character limit; open the meeting, HubSpot or Gmail for the full context.`;
   return brief.slice(0, MEETING_BRIEF_LIMIT - notice.length) + notice;
 }
@@ -226,12 +275,13 @@ function gmailReadAllowed(path: string): boolean {
     && headers.length > 0 && headers.every(h => GMAIL_THREAD_HEADERS.includes(h));
 }
 /** Closed allowlist applies even to the injectable fixture transport. */
-export function meetingTransport(tokens: Record<RequestProvider, string>, checkpoint: () => void, fetchImpl: typeof fetch = fetch): MeetingRequest {
+export function meetingTransport(tokens: Partial<Record<RequestProvider, string>>, checkpoint: () => void, fetchImpl: typeof fetch = fetch): MeetingRequest {
   return async (provider, path, body) => {
     const allowed = provider === 'calendar' ? /^\/calendar\/v3\/calendars\/[^/?]+\/events(?:\/[^/?]+)?(?:\?|$)/.test(path) && !body
       : provider === 'gmail' ? gmailReadAllowed(path) && !body
       : path === '/crm/v3/objects/contacts/search' && !!body;
     if (!allowed) throw Error('Meeting preparation only permits declared read endpoints');
+    if (typeof tokens[provider] !== 'string') throw Error(`No ${provider} account was resolved for this read`);
     const host = provider === 'calendar' ? 'https://www.googleapis.com' : provider === 'gmail' ? 'https://gmail.googleapis.com' : 'https://api.hubapi.com';
     checkpoint();
     const response = await fetchImpl(host + path, { method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${tokens[provider]}`, 'Content-Type': 'application/json' },

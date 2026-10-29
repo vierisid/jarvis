@@ -221,6 +221,8 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         const id = input[field];
         if (!emptyInput(id)) {
           if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node, `settings.input.${field}`, 'CONNECTION_BINDING', 'Select a saved account reference');
+          // Jarvis manages no HubSpot account; the meeting backend refuses a jarvis: id here at run time.
+          else if (field === 'hubspotConnection' && id.startsWith('jarvis:')) issue(node, `settings.input.${field}`, 'CONNECTION_BINDING', 'Select a saved HubSpot account; a Jarvis-managed connection cannot read HubSpot');
           else if (context.phase !== 'composition') {
             const reason = context.connection?.(id, provider) ?? (context.connection ? null : 'Connection inventory unavailable');
             if (reason) issue(node,`settings.input.${field}`,'CONNECTION_BINDING',reason);
