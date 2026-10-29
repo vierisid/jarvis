@@ -74,7 +74,8 @@ const GMAIL_TRACKED_SENDS: ReadonlySet<unknown> = new Set(['send_email', 'gmail_
  * (#953 made these reachable at the default level).
  */
 export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
-  return (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
+  return (piece === '@activepieces/piece-linear' && ['linear_create_issue', 'linear_update_issue', 'linear_create_comment'].includes(String(action)))
+    || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
     || (piece === MAILCHIMP_PIECE && managedPieceChanges(MAILCHIMP_PIECE, action))
     || (piece === CLICKUP_PIECE && managedPieceChanges(CLICKUP_PIECE, action))
@@ -667,6 +668,10 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
+  catalogId: 'linear', pieceName: '@activepieces/piece-linear', unknownActionCategory: 'modify_settings',
+  targetProps: ['team_id', 'issue_id', 'title', 'description', 'state_id', 'priority_id', 'assignee_id', 'labels', 'project_id', 'cycle_id', 'parent_id', 'template_id', 'due_date', 'estimate', 'body', 'user_id', 'term', 'include_comments', 'include_archived', 'limit', 'cursor'],
+  categories: {read_data: ['linear_get_issue', 'linear_search_issues'], write_data: ['linear_create_issue', 'linear_update_issue', 'linear_create_comment']},
+}, {
   catalogId: 'clickup', pieceName: '@activepieces/piece-clickup', unknownActionCategory: 'modify_settings',
   targetProps: ['workspace_id', 'space_id', 'folder_id', 'list_id', 'task_id', 'task_name', 'name', 'status_id',
     'add_assignee', 'rem_assignee', 'destination_list_id', 'channel_id', 'message_id', 'comment_id',

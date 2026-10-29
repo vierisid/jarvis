@@ -313,7 +313,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "12"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts
+export const CATALOG_SCHEMA_VERSION = "13"; // v12: managed Mailchimp outputs; v13: Linear issue and comment output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -859,13 +859,14 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
   // The piece's auth.type comes from upstream's PropertyType -- map it
   // to our AppConnectionType vocabulary so the editor + connection
   // listing share one name space.
-  if (m.auth && typeof m.auth === "object" && typeof m.auth.type === "string") {
-    const projected = projectAuthType(m.auth.type);
+  const auth = m.auth;
+  if (auth && typeof auth === "object" && typeof auth.type === "string") {
+    const projected = projectAuthType(auth.type);
     if (projected) {
       out.auth = {
         type: projected,
-        ...(typeof m.auth.displayName === "string" ? { displayName: m.auth.displayName } : {}),
-        ...(typeof m.auth.description === "string" ? { description: m.auth.description } : {}),
+        ...(typeof auth.displayName === "string" ? { displayName: auth.displayName } : {}),
+        ...(typeof auth.description === "string" ? { description: auth.description } : {}),
       };
     }
   }
@@ -890,6 +891,18 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
  * on-disk caches re-project.
  */
 export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
+  if (entry.name === '@activepieces/piece-linear') {
+    const issue = {id:'11111111-1111-4111-8111-111111111111',identifier:'ENG-123',title:'Fix login timeout',url:'https://linear.app/example/issue/ENG-123',priority:2};
+    const samples:Record<string,unknown> = {
+      linear_get_issue: {...issue,team_id:'22222222-2222-4222-8222-222222222222',team_name:'Engineering',team_key:'ENG'},
+      linear_search_issues:{items:[issue],count:1,total_count:1,has_next_page:false,end_cursor:'cursor'},
+      linear_create_issue:{success:true,lastSyncId:1,issue},
+      linear_update_issue:{success:true,lastSyncId:1,issue},
+      linear_create_comment:{success:true,lastSyncId:1,comment:{id:'33333333-3333-4333-8333-333333333333',body:'Ready for review',url:'https://linear.app/example/issue/ENG-123#comment'}},
+    };
+    for(const [name,sample] of Object.entries(samples))if(entry.actions[name])entry.actions[name]!.outputSample=sample;
+  }
+
   // ClickUp 0.9.1 returns a task directly for these actions, not an HTTP envelope.
   // These stable fields let the picker wire task outputs into downstream steps.
   if (entry.name === '@activepieces/piece-clickup') {
