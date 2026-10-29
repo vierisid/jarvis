@@ -263,7 +263,7 @@ export class ToolRegistry {
       return await observeToolExecution(name, () => withExecutionScope(killFence, () => {
         assertCurrentMemoryContext();
         return tool.execute(params);
-      }));
+      }), params.action);
     } catch (error) {
       if (error instanceof ActionOutcomeError) throw error;
       // #630. The fence above is NOT the only place cancellation is raised, and

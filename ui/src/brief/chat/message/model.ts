@@ -1,4 +1,5 @@
 /** Structural F-04/F-06 view port. The existing owner retains transport/history. */
+import { workflowProgressLabels, workflowProgressSummaries } from '../../../../../src/brief/workflow-progress-labels';
 export interface ReadingPosition { top: number; atBottom: boolean }
 export interface Activity {
   activityId: string; conversationId: string; turnId: string; requestId: string;
@@ -85,6 +86,7 @@ export function threadItems(binding: MessageBinding): ThreadItem[] {
 
 // F-06's public summaries. Unknown future labels use a safe generic, never raw tool data.
 const publicSummaries = new Set([
+  ...workflowProgressSummaries,
   "Reading a file.", "File read finished.", "File could not be read.",
   "Listing files.", "File listing finished.", "Files could not be listed.",
   "Searching the web.", "Web search finished.", "Web search could not finish.",
@@ -101,6 +103,7 @@ export function activityText(activity: Activity) {
     : activity.phase === "failed" ? "Activity could not finish." : activity.phase === "completed" ? "Activity finished." : "Activity in progress.";
 }
 export function activityCategory(activity: Activity) {
+  if (workflowProgressSummaries.has(activity.summary)) return { label: (workflowProgressLabels.validate_fixtures as readonly string[]).includes(activity.summary) ? "Validation" : "Workflow", tone: "tool" };
   if (activity.refs.some(ref => ref.kind === "goal")) return { label: "Goal", tone: "goal" };
   if (activity.refs.some(ref => ref.kind === "fact")) return { label: "Memory", tone: "memory" };
   return { label: activity.kind === "agent" ? "Agent" : activity.kind === "task" ? "Task" : "Tool", tone: "tool" };
