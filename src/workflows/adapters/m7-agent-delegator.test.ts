@@ -528,7 +528,8 @@ describe("browser task completion", () => {
       expect(out.outcome).toEqual({ status: "succeeded" });
       expect(out.finalMessage).toBe("No meetings today");
     }
-    for (const message of ["```json\n" + report + "\n```\n```json\n" + report + "\n```", "Before " + report + " after"])
+    for (const message of ["```json\n" + report + "\n```\n```json\n" + report + "\n```", "Before " + report + " after",
+      "Note {x} then " + report, report + " then {y}", "Note } then " + report])
       expect((await run(message)).outcome).toMatchObject({ code: "BROWSER_TASK_UNCONFIRMED" });
   });
   test("the report is never read from tool output", async () => {

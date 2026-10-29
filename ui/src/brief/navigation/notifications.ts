@@ -2,6 +2,7 @@ import type { NotificationItem } from "../../hooks/useNotificationCenter";
 import type { BriefRoute } from "../contracts";
 import { destination, type Resolution, type RoomAvailability } from "./destinations";
 import type { NavigationCompatibility } from "./controller";
+import { isBriefCapabilityEnabled } from "../../../../src/brief/capabilities";
 
 export type AttentionItem = NotificationItem & {
   source: "approval" | "clarifier" | "repeat-back" | "system" | "failure" | "update";
@@ -26,6 +27,11 @@ export const fromNotificationCenter = (items: readonly NotificationItem[]): Atte
 export function dashboardAttentionItems(items: readonly NotificationItem[], decisionsShown: boolean): AttentionItem[] {
   return fromNotificationCenter(items.filter(item => item.kind !== "clarifier" && item.kind !== "repeat-back"
     && !(decisionsShown && item.kind === "approval")));
+}
+
+/** The dashboard's Notifications snapshot, given the host's current capabilities. */
+export function dashboardAttentionSnapshot(connected: boolean, items: readonly NotificationItem[], capabilities: unknown): AttentionSnapshot {
+  return connected ? { status: "ready", items: dashboardAttentionItems(items, isBriefCapabilityEnabled(capabilities, "decisions")) } : { status: "unavailable" };
 }
 
 /** The notice the dashboard toasts: the newest unread one Jarvis sent on its own, never a client warning. */

@@ -57,13 +57,9 @@ export function saveDelegation(checkpoint: DelegationCheckpoint): void {
  * position: inside a loop the failing iteration is the last one to have run.
  */
 export function latestDelegation(runId: string, stepName: string): DelegationCheckpoint | null {
-  const rows = getWorkflowDb().query('SELECT record FROM workflow_delegation WHERE run_id = ? ORDER BY updated_at DESC, rowid DESC')
-    .all(runId) as Array<{ record: string }>;
-  for (const row of rows) {
-    const checkpoint = JSON.parse(row.record) as DelegationCheckpoint;
-    if (checkpoint.runId === runId && checkpoint.stepName === stepName) return checkpoint;
-  }
-  return null;
+  const row = getWorkflowDb().query(`SELECT record FROM workflow_delegation WHERE run_id = ? AND json_extract(record, '$.stepName') = ?
+    ORDER BY updated_at DESC, rowid DESC LIMIT 1`).get(runId, stepName) as { record: string } | null;
+  return row ? JSON.parse(row.record) as DelegationCheckpoint : null;
 }
 
 /** A run that will never resume has no use for its conversations. */

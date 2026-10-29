@@ -222,20 +222,14 @@ export function parseBrowserTaskReport(message: string): Record<string, unknown>
   if (whole) return whole;
   const fences = [...text.matchAll(/```[a-zA-Z]*[ \t]*\r?\n([\s\S]*?)```/g)];
   if (fences.length > 0) return fences.length === 1 ? asObject(fences[0]![1]!.trim()) : undefined;
-  if (text.endsWith("}")) {
-    // Leading prose, trailing object: the earliest opening brace that parses to the end is the outermost object.
-    for (let i = text.indexOf("{"), tries = 0; i > 0 && tries < 64; i = text.indexOf("{", i + 1), tries++) {
-      const trailing = asObject(text.slice(i));
-      if (trailing) return trailing;
-    }
-  }
-  if (text.startsWith("{")) {
-    // Leading object, trailing prose: the latest closing brace that parses from the start.
-    for (let j = text.lastIndexOf("}"), tries = 0; j > 0 && tries < 64; j = text.lastIndexOf("}", j - 1), tries++) {
-      const leading = asObject(text.slice(0, j + 1));
-      if (leading) return leading;
-    }
-  }
+  // One object at an exact end of the message, with prose only on the other
+  // side: the object must span from its first brace to the end (or from the
+  // start to its last brace), and the prose must hold no other brace, so
+  // `prose {a} prose {b}` is no report. Fails closed on anything else.
+  const first = text.indexOf("{"), last = text.lastIndexOf("}");
+  if (first < 0 || last < first) return undefined;
+  if (first > 0 && last === text.length - 1 && !text.slice(0, first).includes("}")) return asObject(text.slice(first));
+  if (first === 0 && last < text.length - 1 && !text.slice(last + 1).includes("{")) return asObject(text.slice(0, last + 1));
   return undefined;
 }
 
