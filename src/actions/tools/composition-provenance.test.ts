@@ -22,10 +22,10 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
   // w8-13: workflow-meeting-briefs capabilities.
   'w8-13': {
-    'bare': '75d37749c4342afff3675c73ab78b7afc25d1c2f3e61d0ee3bd2c4e00eaecb26',
-    'hosted production': 'b3740b6cf1a4852ec9b119b3a638b303a985504a26370454ea6af5c6ce6cccb9',
-    'production': '71495e17f831d14b27510d090954839e75abbd80fbda3fc18f1783988552e902',
-    'tool names only': '176ac1bb741eab9fcc6b765c4faa99865aa3427ee9da12c42549fbf3f772f4e8',
+    'bare': '115e53a59263d3e024a58783242c0b0956a0dc781800a793c06805c88cd67648',
+    'hosted production': '877f31e5c11c2e6d67c7b422fb234baf7201f92992ca8bd7a2668921e66f5602',
+    'production': 'f7cfb46dc15b9bc0de237bd910f829518069de9a1639feecc5fbfa03c4c2e265',
+    'tool names only': '2b225e8da520f125c630d854295be16bb91c8e286ebbfd31c5ccd9f296d41cda',
   },
   // w8-12: uncertain HubSpot/notification identities name the resolve_effect action.
   'w8-12': {
