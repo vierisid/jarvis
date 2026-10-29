@@ -1,15 +1,8 @@
 /** Qualified HubSpot reads and Gmail draft creation. No sending or browser surface. */
 import { createHash } from 'node:crypto';
 import { getCronTimezone } from '../../lib/cron-scheduler';
-
-export const SALES_PIECE = '@jarvispieces/piece-jarvis-sales';
-export const SALES_ACTION = 'draft_followups';
-/** One rule for every check (pins, readiness, safeguards): any spelling of the sales piece is the sales step.
- * Only the canonical name runs; readiness refuses the short name instead of passing it to fail at run time. */
-export function isSalesStep(settings: {pieceName?: unknown; actionName?: unknown} | undefined): boolean {
-  return (settings?.pieceName === SALES_PIECE || settings?.pieceName === 'jarvis-sales') && settings?.actionName === SALES_ACTION;
-}
-export const SALES_ACCOUNTS = { hubspotConnection: '@activepieces/piece-hubspot', gmailConnection: '@activepieces/piece-gmail' } as const;
+import { SALES_ACCOUNTS } from '../sales-accounts';
+export { SALES_PIECE, SALES_ACTION, SALES_ACCOUNTS, isSalesStep } from '../sales-accounts';
 export const SALES_REQUIRED = ['crmProvider','hubspotConnection','gmailConnection','ownerEmail','senderName','openStageIds','inactivityProperty','replyLookbackDays'] as const;
 export interface SalesSetup {
   crmProvider: 'hubspot'; hubspotConnection: string; gmailConnection: string; ownerEmail: string; senderName: string;

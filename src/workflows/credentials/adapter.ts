@@ -24,6 +24,8 @@ import type { AppConnectionStatus, AppConnectionType } from "../db/repos/app-con
 import { getConnectionByExternalId, getUniqueConnectionByExternalId } from "../db/repos/app-connection";
 import type { EgressPolicy } from "../runtime/http-egress";
 import { guardedTokenTransport, PastedOAuth2Refresher, type TokenTransport } from "./pasted-oauth2";
+import { isMeetingBriefsStep, MEETING_ACCOUNTS } from "../meeting-accounts";
+import { isSalesFollowupsStep, SALES_ACCOUNTS } from "../sales-accounts";
 
 /** Prefix that marks a connection as "managed by Jarvis itself". */
 export const JARVIS_PREFIX = "jarvis:";
@@ -46,6 +48,22 @@ export interface ResolvedConnection {
 export interface JarvisConnectionSource {
   /** Lower-cased externalId suffix this source claims, e.g. "google", "telegram". */
   readonly id: string;
+  /**
+   * The pieces whose steps may use this source's credential, by full piece
+   * name. Only a step of one of these pieces may name the connection, and only
+   * as its `auth`: readiness refuses any other reference, and so does the
+   * engine's credential route for the run's own graph. Without this a CODE or
+   * HTTP step could read the token and use it outside the governed pieces.
+   */
+  readonly pieceNames: readonly string[];
+  /**
+   * What people call each of `pieceNames` (readiness messages name the piece
+   * that way), and the hosts its own API lives on. A custom API call step of
+   * one of these pieces sends the credential to the URL it is given, so with
+   * this source's connection it may only reach these hosts. A piece without
+   * hosts here may use a custom API call only with a path under its base URL.
+   */
+  readonly pieceDetails?: Readonly<Record<string, ManagedPieceDetails>>;
   /** True if this source can resolve `externalId`. */
   canResolve(externalId: string): boolean;
   /**
@@ -62,6 +80,123 @@ export interface JarvisConnectionSource {
    * A source without it is one fixed identity.
    */
   identity?(externalId: string): string | null;
+}
+
+export interface ManagedPieceDetails {
+  /** When present, only these qualified actions may use this managed grant. Triggers are refused. */
+  actions?: readonly string[];
+  displayName: string;
+  /** Host names (with a port only when not the default) its custom API call may reach. */
+  apiHosts: readonly string[];
+}
+
+/** The registered source that owns a `jarvis:` external id, if any. */
+export function managedSourceFor(sources: readonly JarvisConnectionSource[] | undefined, externalId: string): JarvisConnectionSource | undefined {
+  return sources?.find(candidate => candidate.canResolve(externalId));
+}
+
+/** "A, B or C" from display names, falling back to the piece name. */
+function pieceList(source: JarvisConnectionSource): string {
+  const names = source.pieceNames.map(name => source.pieceDetails?.[name]?.displayName ?? name);
+  if (names.length <= 1) return names[0] ?? 'no';
+  return `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}`;
+}
+
+const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+
+/**
+ * Whether a custom API call URL can only reach `hosts`. The vendored action
+ * (pieces-common createCustomApiCallAction) sends a value that starts with
+ * `http://` or `https://` as it is and joins anything else under the piece's
+ * base URL, so a path is always safe. A templated URL is judged by its text
+ * before the first `{{`: it must already fix an https host from the list, or
+ * already rule out that the evaluated value starts with `http://`/`https://`.
+ */
+export function customApiUrlStaysOnHosts(url: string, hosts: readonly string[]): boolean {
+  const cut = url.indexOf('{{');
+  const literal = cut < 0 ? url : url.slice(0, cut);
+  if (/^https?:\/\//.test(literal)) {
+    // With an expression, the host must end before it does.
+    const authority = cut < 0 ? url : /^https:\/\/[^/?#\\]*[/?#\\]/.exec(literal)?.[0];
+    if (!authority || !authority.startsWith('https://')) return false;
+    try { return hosts.includes(new URL(authority).host); } catch { return false; }
+  }
+  return cut < 0 || !('http://'.startsWith(literal) || 'https://'.startsWith(literal));
+}
+
+/**
+ * The meeting account inputs a managed Google connection may fill, by the
+ * provider piece each one reads with. HubSpot is deliberately absent.
+ */
+const MEETING_MANAGED_PATHS: ReadonlyMap<string, string> = new Map([
+  ['settings.input.calendarConnection', MEETING_ACCOUNTS.calendarConnection],
+  ['settings.input.gmailConnection', MEETING_ACCOUNTS.gmailConnection],
+]);
+
+/**
+ * Owner-approved exemption (#1186): the native jarvis-context meeting_briefs
+ * step names its Calendar and Gmail accounts as literal ids at
+ * `settings.input.calendarConnection` / `gmailConnection` and the brain reads
+ * them itself, so `jarvis:google` may be named at exactly those two paths of
+ * that action. `pieceName` is then the provider piece the field reads with
+ * (Google Calendar or Gmail), which the source must serve, and `nodeType` must
+ * say the step is a PIECE node. HubSpot, any other path, piece, action, node
+ * type or a trigger stays refused by the rule below.
+ */
+function meetingAccountExempt(source: JarvisConnectionSource, pieceName: string, path: string, settings: unknown, nodeType: unknown): boolean {
+  const provider = MEETING_MANAGED_PATHS.get(path);
+  return provider !== undefined && provider === pieceName && source.id === 'google' && source.pieceNames.includes(provider)
+    && isMeetingBriefsStep(nodeType, settings);
+}
+
+/**
+ * Owner-approved exemption (#1187), the same narrow rule as the meeting one:
+ * the native jarvis-sales draft_followups step names its Gmail account as a
+ * literal id at `settings.input.gmailConnection` and the brain reads it
+ * itself, so `jarvis:google` may be named at exactly that path of that
+ * action, read as the Gmail piece, which the source must serve, on a PIECE
+ * node. The HubSpot account, any other path, piece, action, node type or a
+ * trigger stays refused by the rule below.
+ */
+function salesAccountExempt(source: JarvisConnectionSource, pieceName: string, path: string, settings: unknown, nodeType: unknown): boolean {
+  const provider = SALES_ACCOUNTS.gmailConnection;
+  return path === 'settings.input.gmailConnection' && provider === pieceName && source.id === 'google' && source.pieceNames.includes(provider)
+    && isSalesFollowupsStep(nodeType, settings);
+}
+
+/**
+ * Why a step may not name a managed connection, or null when it may: it must
+ * be a step of one of the source's pieces, naming it as that step's `auth`,
+ * and a custom API call step must stay on the piece's own API hosts.
+ * `settings` is the step's settings, when the caller has them, and `nodeType`
+ * the step's node type (only the meeting and sales exemptions read it).
+ */
+export function managedConnectionMisuse(source: JarvisConnectionSource, pieceName: string, path: string, settings?: unknown, nodeType?: unknown): string | null {
+  if (meetingAccountExempt(source, pieceName, path, settings, nodeType) || salesAccountExempt(source, pieceName, path, settings, nodeType)) return null;
+  if (!source.pieceNames.includes(pieceName)) {
+    return `Managed connection jarvis:${source.id} can only be used by ${pieceList(source)} steps`;
+  }
+  if (path !== 'settings.input.auth') return `Managed connection jarvis:${source.id} can only be a step's auth`;
+  // Judged only with the step's settings: a caller without them (prepared
+  // qualification) is told about the piece alone, and readiness and the run's
+  // scope check, which always pass them, refuse any other action or a trigger.
+  // A trigger is refused by its `triggerName` whatever stray `actionName` it
+  // also carries, since the engine runs a trigger by its trigger name.
+  const allowed = source.pieceDetails?.[pieceName]?.actions;
+  if (allowed && settings !== undefined && (!record(settings) || settings.triggerName !== undefined
+    || typeof settings.actionName !== 'string' || !allowed.includes(settings.actionName))) {
+    return `This ${source.pieceDetails?.[pieceName]?.displayName ?? pieceName} connection does not support this action or trigger yet`;
+  }
+  if (record(settings) && settings.actionName === 'custom_api_call') {
+    const details = source.pieceDetails?.[pieceName];
+    const hosts = details?.apiHosts ?? [];
+    const url = record(settings.input) && record(settings.input.url) ? settings.input.url.url : undefined;
+    if (typeof url !== 'string' || !customApiUrlStaysOnHosts(url, hosts)) {
+      return `A custom API call with managed connection jarvis:${source.id} must use a path under the ${details?.displayName ?? pieceName} API`
+        + (hosts.length ? ` or an https URL on ${hosts.join(', ')}` : '');
+    }
+  }
+  return null;
 }
 
 /** A credential fingerprint for binding pins: never the credential itself. */

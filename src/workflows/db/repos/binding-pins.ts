@@ -1,5 +1,5 @@
-import { MEETING_ACCOUNTS } from '../../runtime/meeting-briefs';
-import { SALES_ACCOUNTS, isSalesStep } from '../../runtime/sales-followups';
+import { MEETING_ACCOUNTS } from '../../meeting-accounts';
+import { SALES_ACCOUNTS, isSalesStep } from '../../sales-accounts';
 /**
  * Q-05: the bindings a workflow was enabled against, and the checks that stop
  * work when one of them changes.
@@ -435,7 +435,8 @@ export function machinePinForRun(runId: string): MachinePin | undefined {
   return pins?.versionId === run.flow_version_id ? pins.machine ?? undefined : undefined;
 }
 
-function runBinding(runId: string, externalId: string): RunConnectionBinding | null {
+/** What this run is bound to for one connection, or null before its first fetch. */
+export function runBinding(runId: string, externalId: string): RunConnectionBinding | null {
   const row = getWorkflowDb().query<{ record: string }, [string, string]>(
     'SELECT record FROM workflow_run_connection_binding WHERE run_id = ? AND external_id = ?').get(runId, externalId);
   return row ? JSON.parse(row.record) as RunConnectionBinding : null;

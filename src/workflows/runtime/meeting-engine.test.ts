@@ -1,5 +1,5 @@
 import { ApprovalManager } from '../../authority/approval';
-import { pinFlowBindings } from '../db/repos/binding-pins';
+import { listRunConnectionBindings, pinFlowBindings } from '../db/repos/binding-pins';
 /** Saved builder graph through the real worker/engine. Only synthetic provider transport. */
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { dirname, join } from 'node:path';
@@ -17,6 +17,7 @@ import { AuthorityEngine } from '../../authority/engine';
 import { AuditTrail } from '../../authority/audit';
 import { EmergencyController } from '../../authority/emergency';
 import { CredentialResolver } from '../credentials/adapter';
+import { getCronTimezone, setCronTimezone } from '../../lib/cron-scheduler';
 import { SandboxApi } from '../sandbox-api/server';
 import { workflowLogsBase } from '../sandbox-api/config';
 import { EngineRuntime } from '../runner/engine-runtime/engine-runtime';
@@ -33,12 +34,15 @@ import { createManageWorkflowTool } from '../../actions/tools/manage-workflow';
 
 
 import { fixtureNow, fixtureSetup, fixtureEvent, fixtureRequest } from './meeting-fixtures';
+import { MANAGED_HUBSPOT_REFUSAL } from '../meeting-accounts';
 const native=(name:string)=>'@jarvispieces/piece-jarvis-'+name;
 let authority:AuthorityEngine;
 let approvals:ApprovalManager,services:ReturnType<typeof buildSandboxServiceBackends>;
 let dir:string,api:SandboxApi,runtime:EngineRuntime,worker:Worker,catalog:PieceCatalog;
 const versions:Record<string,string>={},notifications:string[]=[],runIds:string[]=[],calls:string[]=[];
-let events:any[]=[fixtureEvent()],changed:any,fail:string|undefined,loseNotification=false;
+let tokenCalls=0,tokenDown=false;const resolvedIds:string[]=[];let resolver:CredentialResolver;
+class RecordingResolver extends CredentialResolver { override async resolve(input:Parameters<CredentialResolver['resolve']>[0]){resolvedIds.push(input.externalId);return super.resolve(input);} }
+let events:any[]=[fixtureEvent()],changed:any,fail:string|undefined,oversized:string|undefined,loseNotification=false;
 beforeAll(async()=>{
  dir=mkdtempSync(join(tmpdir(),'jarvis-meeting-engine-'));initWorkflowDb(join(dir,'fixture.db'));setEncryptionKey(Buffer.alloc(32,76));
  const bundle=await buildEngineBundle();
@@ -50,14 +54,14 @@ beforeAll(async()=>{
  for(const [suffix,piece] of [['calendar','google-calendar'],['gmail','gmail'],['hubspot','hubspot']])upsertConnection({externalId:'fixture-'+suffix,displayName:'Fixture',type:'OAUTH2',pieceName:'@activepieces/piece-'+piece,pieceVersion:'0.0.1',value:{access_token:'synthetic-'+suffix}});
  authority=new AuthorityEngine({default_level:10,governed_categories:[],overrides:[],context_rules:[],learning:{enabled:false,suggest_threshold:10},emergency_state:'normal'});
  approvals=new ApprovalManager();
- services=buildSandboxServiceBackends({credentialResolver:new CredentialResolver(),authorityEngine:authority,approvalManager:approvals,emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
+ services=buildSandboxServiceBackends({credentialResolver:resolver=new RecordingResolver({tokenTransport:async()=>{tokenCalls++;if(tokenDown)throw Error('token endpoint unreachable');return {status:200,body:{access_token:'synthetic-calendar',expires_in:3600}};}}),authorityEngine:authority,approvalManager:approvals,emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
  meetingNow:()=>fixtureNow,meetingFetch:(async(url:any,init:any)=>{
   const u=new URL(String(url));const provider=u.hostname==='www.googleapis.com'?'calendar':u.hostname==='gmail.googleapis.com'?'gmail':'hubspot';
   expect(['www.googleapis.com','gmail.googleapis.com','api.hubapi.com']).toContain(u.hostname);
   expect(init.headers.Authorization).toBe('Bearer synthetic-'+provider);expect(init.redirect).toBe('error');
   expect(init.method).toBe(provider==='hubspot'?'POST':'GET');if(provider==='hubspot')expect(u.pathname).toBe('/crm/v3/objects/contacts/search');
   calls.push(init.method+' '+u.pathname);
-  return Response.json(await fixtureRequest(events,{changed,fail})(provider,u.pathname+u.search,init.body?JSON.parse(init.body):undefined));
+  return Response.json(await fixtureRequest(events,{changed,fail,oversized})(provider,u.pathname+u.search,init.body?JSON.parse(init.body):undefined));
  }) as typeof fetch,llmManager:{chat:async()=>{throw Error('No LLM may execute');}} as any,channelService:{sendWorkflowNotification:async()=>{throw Error('No external notification');}} as any,
  wsService:{broadcastNotificationToDashboard:(text:string)=>{notifications.push(text);if(loseNotification)throw Error('Unknown delivery');return 1;}} as any});
  api=new SandboxApi({services});await api.start({port:0});runtime=new EngineRuntime({api,pool:true,bundlePath:bundle.bundlePath,expectedDigest:bundle.digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code')});
@@ -65,13 +69,13 @@ beforeAll(async()=>{
  worker=new Worker({log:()=>{},handlers:{[RUN_FLOW]:createRunFlowHandler({executor:new EngineFlowExecutor(runtime)})}});
 },120_000);
 afterAll(async()=>{await runtime?.shutdown();await api?.stop();closeWorkflowDb();setEncryptionKey(null);for(const id of runIds)rmSync(join(workflowLogsBase(),id+'.bin'),{force:true});if(dir)rmSync(dir,{recursive:true,force:true});});
-function graph(configured=true):any {
- const input=configured?{...fixtureSetup,internalDomains:'example.com'}:{calendarConnection:'',gmailConnection:'',hubspotConnection:'',calendarId:'',ownerEmail:'',internalDomains:'',hubspotPortalId:'',recentDays:30,timezone:'Europe/Rome'};
+function graph(configured=true,override:Record<string,unknown>={}):any {
+ const input=configured?{...fixtureSetup,internalDomains:'example.com',...override}:{calendarConnection:'',gmailConnection:'',hubspotConnection:'',calendarId:'',ownerEmail:'',internalDomains:'',hubspotPortalId:'',recentDays:30,timezone:'Europe/Rome'};
  return {name:'trigger',type:'PIECE_TRIGGER',settings:{pieceName:'schedule',input:{cron_expression:'*/10 * * * *',timezone:'Europe/Rome'}},nextAction:{name:'prepare',type:'PIECE',settings:{pieceName:native('context'),pieceVersion:versions[native('context')],actionName:'meeting_briefs',input},nextAction:{name:'each_meeting',type:'LOOP_ON_ITEMS',settings:{items:'{{prepare.meetings}}'},firstLoopAction:{name:'notify',type:'PIECE',settings:{pieceName:native('notify'),pieceVersion:versions[native('notify')],actionName:'notify',input:{message:'{{each_meeting.item.brief}}',meetingGuard:'{{each_meeting.item.guard}}',idempotencyKey:'{{each_meeting.item.notificationKey}}',channels:['dashboard'],priority:'normal'}}}}}};
 }
-async function fixture() {
- events=[fixtureEvent()];changed=undefined;fail=undefined;loseNotification=false;authority.updateConfig({...authority.getConfig(),overrides:[],governed_categories:[]});
- const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Meeting fixture',trigger:graph()});
+async function fixture(override:Record<string,unknown>={}) {
+ events=[fixtureEvent()];changed=undefined;fail=undefined;oversized=undefined;loseNotification=false;authority.updateConfig({...authority.getConfig(),overrides:[],governed_categories:[]});
+ const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Meeting fixture',trigger:graph(true,override)});
  expect(versionReadiness(flow.id,version.id).issues).toEqual([]);lockVersion(version.id);setPublishedVersion(flow.id,version.id);updateFlowStatus(flow.id,'ENABLED');
  return {flow,version,run:()=>run(flow.id,version.id)};
 }
@@ -87,6 +91,16 @@ test('rescheduled start gets one new alert, returning to original start does not
 },60_000);
 test('late reschedule suppresses stale brief without consuming identity',async()=>{
  const f=await fixture(),n=notifications.length;changed=fixtureEvent({status:'cancelled'});expect((await f.run()).status).toBe('SUCCEEDED');expect(notifications.length).toBe(n);changed=undefined;expect((await f.run()).status).toBe('SUCCEEDED');expect(notifications.length).toBe(n+1);
+},60_000);
+test('oversized brief is delivered truncated under its own key, once; later polls deduplicate',async()=>{
+ const f=await fixture(),n=notifications.length;oversized='big@external.test';
+ events=[fixtureEvent(),fixtureEvent({id:'occurrence-2',summary:'Long history',start:{dateTime:'2026-10-23T09:20:00Z'},attendees:[{email:'owner@example.com',self:true},{email:'big@external.test'}]})];
+ const first=await f.run();expect(first.status).toBe('SUCCEEDED');expect(notifications.length).toBe(n+2);
+ const sent=notifications.slice(n);expect(sent.filter(t=>t.includes('Customer planning'))).toHaveLength(1);
+ const long=sent.filter(t=>t.includes('Long history'));expect(long).toHaveLength(1);
+ expect(long[0]).toMatch(/\d+ older message excerpts? from \d+ conversations? and \d+ older conversations not read omitted to fit the 24,000 character brief limit; open the meeting or Gmail for the full history\./);
+ expect((await f.run()).status).toBe('SUCCEEDED');expect(notifications.length).toBe(n+2);
+ oversized=undefined;expect((await f.run()).status).toBe('SUCCEEDED');expect(notifications.length).toBe(n+2);
 },60_000);
 test('source failure fails run and sends no brief',async()=>{
  const f=await fixture(),n=notifications.length;fail='gmail';expect((await f.run()).status).toBe('FAILED');expect(notifications.length).toBe(n);
@@ -149,4 +163,102 @@ test('approval wait rechecks Calendar before delivery and leaves stale key uncon
  changed=fixtureEvent({status:'cancelled'});approvals.approve(pending.approval!.approvalId,'fixture');
  const result=await services.notify!(req,notifyCtx) as any;expect(result.skipped).toContain('changed');expect(notifications.length).toBe(n);
  changed=undefined;authority.setGovernedCategories([]);expect((await f.run()).status).toBe('SUCCEEDED');expect(notifications.length).toBe(n+1);
+},60_000);
+const calendarRow=(value:Record<string,unknown>)=>upsertConnection({externalId:'fixture-calendar',displayName:'Fixture',type:'OAUTH2',pieceName:'@activepieces/piece-google-calendar',pieceVersion:'0.0.1',value});
+test('a stored Calendar token about to expire is refreshed before the meeting reads',async()=>{
+ calendarRow({access_token:'stale-calendar',refresh_token:'refresh',client_id:'client',client_secret:'secret',token_url:'https://oauth2.example.test/token',claimed_at:Math.floor(Date.now()/1000)-3500,expires_in:3600});
+ try {
+  const f=await fixture(),n=notifications.length,before=tokenCalls;
+  // The fixture transport only answers 'Bearer synthetic-calendar', which only the refresh hands out.
+  expect((await f.run()).status).toBe('SUCCEEDED');expect(tokenCalls).toBeGreaterThan(before);expect(notifications.length).toBe(n+1);
+ } finally {calendarRow({access_token:'synthetic-calendar'});}
+},60_000);
+test('an expired Calendar token that cannot be refreshed fails the run with a reconnect message, before any read',async()=>{
+ calendarRow({access_token:'synthetic-calendar',claimed_at:Math.floor(Date.now()/1000)-7200,expires_in:3600});
+ try {
+  const f=await fixture(),before=[calls.length,notifications.length];
+  const result=await f.run();expect(result.status).toBe('FAILED');expect((result as any).failedStep?.errorMessage).toContain('Reconnect the selected Google Calendar account');
+  expect(listRunConnectionBindings(result.id).find(b=>b.externalId==='fixture-calendar')?.credentialFailure?.code).toBe('CONNECTION_EXPIRED');
+  expect([calls.length,notifications.length]).toEqual(before);
+ } finally {calendarRow({access_token:'synthetic-calendar'});}
+},60_000);
+test('the freshness recheck before delivery resolves only the Calendar account',async()=>{
+ const f=await fixture(),n=notifications.length;resolvedIds.length=0;
+ expect((await f.run()).status).toBe('SUCCEEDED');expect(notifications.length).toBe(n+1);
+ const count=(id:string)=>resolvedIds.filter(r=>r===id).length;
+ // Preparation reads all three; the recheck reads Calendar again and nothing else.
+ expect([count('fixture-calendar'),count('fixture-gmail'),count('fixture-hubspot')]).toEqual([2,1,1]);
+},60_000);
+test('a Jarvis timezone change during the approval wait does not fail a step that follows it',async()=>{
+ const previous=getCronTimezone();
+ try {
+  setCronTimezone('America/New_York');
+  const f=await fixture({timezone:''}),n=notifications.length;
+  const execution=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'});runIds.push(execution.id);
+  const ctx={runId:execution.id,projectId:DEFAULT_IDS.project,stepName:'prepare',executionPath:[] as Array<[string,number]>};
+  const prepared=await services.meetingBriefs!({...fixtureSetup,internalDomains:'example.com',timezone:''},ctx) as any;const item=prepared.meetings[0];
+  expect(item.guard.setup.timezone).toBe('America/New_York');
+  authority.setGovernedCategories(['send_message']);
+  const notifyCtx={...ctx,stepName:'notify',executionPath:[['each_meeting',0]] as Array<[string,number]>};
+  const req={message:item.brief,meetingGuard:item.guard,channels:['dashboard'],priority:'normal' as const};
+  const pending=await services.notify!(req,notifyCtx);expect(pending.approval).toBeDefined();
+  setCronTimezone('Asia/Tokyo');approvals.approve(pending.approval!.approvalId,'fixture');
+  const result=await services.notify!(req,notifyCtx) as any;expect(result.skipped).toBeUndefined();expect(notifications.length).toBe(n+1);
+ } finally {authority.setGovernedCategories([]);setCronTimezone(previous);}
+},60_000);
+test('readiness refuses a Jarvis-managed id for the HubSpot account',()=>{
+ for(const phase of ['composition','activation'] as const){
+  const issues=compileWorkflow(graph(true,{hubspotConnection:'jarvis:hubspot'}),{pieces:catalog,phase,connection:()=>null} as any).issues;
+  expect(issues.some((i:any)=>i.code==='CONNECTION_BINDING'&&String(i.path).endsWith('hubspotConnection'))).toBe(true);
+ }
+ expect(compileWorkflow(graph(),{pieces:catalog,phase:'composition'}).issues.some((i:any)=>i.code==='CONNECTION_BINDING')).toBe(false);
+});
+test('an expired Calendar token whose refresh cannot reach the provider fails as temporary, not as reconnect',async()=>{
+ calendarRow({access_token:'synthetic-calendar',refresh_token:'refresh',client_id:'client',client_secret:'secret',token_url:'https://oauth2.example.test/token',claimed_at:Math.floor(Date.now()/1000)-7200,expires_in:3600});
+ tokenDown=true;
+ try {
+  const f=await fixture(),before=[calls.length,notifications.length];
+  const result=await f.run();expect(result.status).toBe('FAILED');
+  const message=String((result as any).failedStep?.errorMessage);
+  expect(message).toContain('which is usually temporary. Start a new run later.');expect(message).not.toContain('Reconnect');
+  expect(listRunConnectionBindings(result.id).find(b=>b.externalId==='fixture-calendar')?.credentialFailure?.code).toBe('CONNECTION_REFRESH_UNREACHABLE');
+  expect([calls.length,notifications.length]).toEqual(before);
+ } finally {tokenDown=false;calendarRow({access_token:'synthetic-calendar'});}
+},60_000);
+/** A managed source standing in for jarvis:google (and one that is not Google), registered on both the run's resolver and readiness. */
+async function withManagedSource<T>(id:string,body:()=>Promise<T>):Promise<T>{
+ resolver.register({id,pieceNames:['@activepieces/piece-gmail','@activepieces/piece-google-calendar'],canResolve:(ext:string)=>ext==='jarvis:'+id,
+  resolve:async()=>({type:'OAUTH2',value:{access_token:'synthetic-calendar'}}),identity:()=>'grant-'+id} as any);
+ configureWorkflowReadiness({pieces:catalog,credentials:resolver});
+ try {return await body();} finally {resolver.unregister(id);configureWorkflowReadiness({pieces:catalog});}
+}
+/** A draft that never went through readiness, run as it is. */
+async function unchecked(override:Record<string,unknown>){
+ events=[fixtureEvent()];changed=undefined;fail=undefined;oversized=undefined;loseNotification=false;
+ const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Meeting fixture',trigger:graph(true,override)});
+ return {version,run:()=>run(flow.id,version.id)};
+}
+test('jarvis:google is accepted as the Calendar account by readiness and by the run, and reads Calendar with it',async()=>{
+ await withManagedSource('google',async()=>{
+  const f=await fixture({calendarConnection:'jarvis:google'}),n=notifications.length;
+  const result=await f.run();expect(result.status).toBe('SUCCEEDED');expect(notifications.length).toBe(n+1);
+  // fixture() asserts the version has no readiness issue.
+  await fixture({gmailConnection:'jarvis:google'});
+ });
+},60_000);
+test('the run itself refuses jarvis:google as the HubSpot account and a non-Google managed id as the Calendar account, before any read',async()=>{
+ await withManagedSource('other',async()=>{
+  await withManagedSource('google',async()=>{
+   for(const [override,message] of [[{hubspotConnection:'jarvis:google'},MANAGED_HUBSPOT_REFUSAL],[{calendarConnection:'jarvis:other'},'Managed connection jarvis:other can only be a step']] as const){
+    const refusedId=Object.values(override)[0]!;
+    const f=await unchecked(override),before=[calls.length,notifications.length];resolvedIds.length=0;
+    const result=await f.run();expect(result.status).toBe('FAILED');
+    expect(String((result as any).failedStep?.errorMessage)).toContain(message);
+    expect([calls.length,notifications.length]).toEqual(before);
+    // Refused before the credential is resolved or the run's binding recorded.
+    expect(resolvedIds).not.toContain(refusedId);
+    expect(listRunConnectionBindings(result.id).map(b=>b.externalId)).not.toContain(refusedId);
+   }
+  });
+ });
 },60_000);

@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { CATALOG, sharedBuildCatalog, sharedBuildExclusions, type CatalogEntry } from "./catalog";
 import { EXCLUDED, SHARED_BUILD_EXCLUDED } from "./catalog-overrides";
-import { checkSharedTreeLicenses, sharedPiecesPackageJson } from "./shared-build";
+import { checkSharedTreeLicenses, PROBLEMS_MAX_LINE_CHARS, PROBLEMS_MAX_LINES, problemsFileText, sharedPiecesPackageJson } from "./shared-build";
 
 const made: string[] = [];
 afterEach(() => {
@@ -168,6 +168,34 @@ describe("checkSharedTreeLicenses", () => {
   test("a piece the tree holds but the catalog does not list gets no upstream MIT", () => {
     const { dir } = sharedTree("MIT");
     expect(checkSharedTreeLicenses(dir, []).ok).toBe(false);
+  });
+});
+
+describe("problemsFileText (the catalog PR body section)", () => {
+  test("one line per problem, empty when there are none", () => {
+    expect(problemsFileText([])).toBe("");
+    expect(problemsFileText(["a", "b"])).toBe("a\nb\n");
+  });
+
+  test("drops line separators and bidi controls", () => {
+    const bad = "x\u2028y\u2029z\u202ereversed\u2066i\u2069\u200f";
+    expect(problemsFileText([bad])).toBe("xyzreversedi\n");
+  });
+
+  test("caps each line and the number of lines, so the verdict below is never cut off", () => {
+    const long = "p".repeat(PROBLEMS_MAX_LINE_CHARS * 3);
+    const out = problemsFileText([long]).trimEnd();
+    expect(out.length).toBe(PROBLEMS_MAX_LINE_CHARS);
+    expect(out.endsWith("...")).toBe(true);
+    const many = Array.from({ length: 700 }, (_, i) => `problem ${i} ` + "q".repeat(1000));
+    const lines = problemsFileText(many).trimEnd().split("\n");
+    expect(lines.length).toBe(PROBLEMS_MAX_LINES);
+    expect(lines.at(-1)).toBe(`... and ${700 - (PROBLEMS_MAX_LINES - 1)} more problem(s); see the licenses job in the run`);
+    expect(lines.every((l) => l.length <= PROBLEMS_MAX_LINE_CHARS)).toBe(true);
+    expect(problemsFileText(many).length).toBeLessThan(20_000);
+    // Exactly the cap is not truncated.
+    expect(problemsFileText(many.slice(0, PROBLEMS_MAX_LINES)).trimEnd().split("\n").length).toBe(PROBLEMS_MAX_LINES);
+    expect(problemsFileText(many.slice(0, PROBLEMS_MAX_LINES))).not.toContain("more problem(s)");
   });
 });
 
