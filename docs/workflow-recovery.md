@@ -10,8 +10,9 @@ These actions use a completion protocol in addition to the existing Authority
 boundary: every Gmail send that returns once sent (`send_email`,
 `gmail_send_email`, `reply_to_email`, `gmail_reply_to_thread`,
 `gmail_send_draft`, `gmail_forward_message`; the last four since #953 made Gmail
-sends reachable at the default level), and Slack `send_channel_message` /
-`slack_post_message`. Gmail `request_approval_in_mail` is not tracked: it sends
+sends reachable at the default level), Gmail `gmail_add_label_to_email` (a
+change, not a send), and Slack `send_channel_message` / `slack_post_message`.
+Gmail `request_approval_in_mail` is not tracked: it sends
 and then parks the flow, and its step re-runs on resume to read the decision. Identity is the existing tuple
 (run, step, loop path, route), with route `piece-dispatch`. The whole input digest
 and pinned graph bind its approval. A connection-token digest also binds these
@@ -119,6 +120,7 @@ Provider read-back is intentionally narrower than completion tracking:
 | Connector | Supported receipt lookup |
 | --- | --- |
 | Gmail 0.17.0 send aliases | Exact message ID in the saved send result (`data.id` or direct `id`); GET message with `format=minimal`, matching ID and SENT label |
+| Gmail `gmail_add_label_to_email` | None. Its result is the labeled (usually incoming) message, not a send receipt, so the SENT check cannot confirm it; an uncertain label change needs inspection of that message's labels |
 | Slack 0.21.0 send aliases | Exact channel + timestamp from a successful post; GET conversations.history with identical oldest/latest timestamp; native OAuth bot mode, top-level messages, no file upload |
 
 Both require the listed exact connector version, a literal native `OAUTH2`

@@ -33,7 +33,7 @@ function field(data: Record<string, unknown>, path: string): { parent: Record<st
   const parts = path.split('.'); let parent = data;
   for (const part of parts.slice(0, -1)) {
     const next = parent[part];
-    if (!next || typeof next !== 'object' || Array.isArray(next)) throw Error(`Missing submission field: ${path}`);
+    if (!next || typeof next !== 'object' || Array.isArray(next)) throw Error('Submission is missing a required field');
     parent = next as Record<string, unknown>;
   }
   const key = parts.at(-1)!;

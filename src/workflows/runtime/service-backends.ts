@@ -2,11 +2,6 @@ import { MEETING_ACCOUNTS, meetingSetup, meetingSetupMatches, parseMeetingGuard,
 import { connectionBindings, enforceRunConnectionBinding, recordRunCredentialOutcome } from '../db/repos/binding-pins';
 import { walkFlowNodes } from '../db/flow-graph';
 import { MEETING_ACCOUNT_LABELS } from '../meeting-accounts';
-import { HUBSPOT_CLAIM_WAIT_MS, HubspotNotStartedError, HubspotWriteRefusedError, hubspotContactInput, isHubspotContact, upsertHubspotContact } from './hubspot-contact';
-import { getConnection } from '../db/repos/app-connection';
-import { claimIdentity, completeIdentity, IdentityUnresolvedError, releaseIdentity } from '../db/repos/effect-identity';
-import { workflowBrowserRead, workflowBrowserReview } from '../../authority/ui-intent';
-import { runAsReviewed } from '../../actions/tools/reviewed-call-scope';
 import { withWorkflowMemory } from '../../vault/memory-use-context';
 import { documentInput, projectDocument } from './decision-document';
 /**
@@ -20,6 +15,12 @@ import { documentInput, projectDocument } from './decision-document';
  * Lives outside `adapters/` so the eventual K3 deletion of the legacy
  * adapters doesn't have to thread through this file.
  */
+import { HUBSPOT_CLAIM_WAIT_MS, HubspotNotStartedError, HubspotWriteRefusedError, hubspotContactInput, isHubspotContact, upsertHubspotContact } from './hubspot-contact';
+import { getConnection } from '../db/repos/app-connection';
+import { claimIdentity, completeIdentity, IdentityUnresolvedError, releaseIdentity } from '../db/repos/effect-identity';
+import { workflowBrowserRead, workflowBrowserReview } from '../../authority/ui-intent';
+import { runAsReviewed } from '../../actions/tools/reviewed-call-scope';
+import type { ApprovalManager } from '../../authority/approval';
 
 import type { LLMManager } from "../../llm/manager";
 import type { ToolRegistry } from "../../actions/tools/registry";
@@ -37,7 +38,7 @@ import { JarvisContextProviderAdapter } from "../adapters/context-provider";
 import { LlmOnlyAgentDelegator } from "../adapters/agent-delegator";
 import { DEFAULT_MAX_ITERATIONS, M7AgentDelegator, type DelegationContinuation } from "../adapters/m7-agent-delegator";
 import { getChildRun } from '../db/repos/child-run';
-import { getDelegation, saveDelegation } from "../db/repos/delegation";
+import { delegationId, getDelegation, saveDelegation } from "../db/repos/delegation";
 import { JarvisWorkflowRunnerAdapter } from "../adapters/workflow-runner";
 import type { LlmChatFn, LlmChatRequest, LlmChatResponse } from "../sandbox-api/routes/jarvis-llm";
 import type { SystemPromptParts } from "../../roles/prompt-builder";
@@ -62,7 +63,7 @@ import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceActionName, reprojectPieceInput,
   resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion, PIECE_ABOVE_LEVEL_ASKS, PIECE_ABOVE_LEVEL_FLOOR } from './piece-effects';
 import { assertRecipientFactsCurrent, recipientAddresses, recipientFactPins, type FactPin } from './fact-bindings';
-import { captureProviderBinding } from './provider-reconciliation';
+import { captureProviderBinding, providerBindingHolds } from './provider-reconciliation';
 import { recordPieceCompletion } from './piece-completion';
 import { defangPieceProjection } from './piece-effect-receipt';
 import { getFlowInProject } from '../db/repos/flow';
@@ -681,7 +682,7 @@ export function buildSandboxServiceBackends(
     });
     if (reply.approval) return { finalMessage: '', toolCalls: [], status: 'approval_required', approval: reply.approval };
     const resolved = resolveEffectContext(ctx, AGENT_PIECE, 'delegate');
-    const id = 'wfd_' + digest([resolved.run.id, resolved.stepName, resolved.executionPath]);
+    const id = delegationId(resolved.run.id, resolved.stepName, resolved.executionPath);
     const continuation: DelegationContinuation = {
       identity: { id, runId: resolved.run.id, stepName: resolved.stepName, executionPath: resolved.executionPath,
         versionDigest: resolved.versionDigest },
@@ -776,7 +777,7 @@ export function buildSandboxServiceBackends(
         if (gate.confirm === 'always' && !browserReview) {
           return refuse(`Unsupported workflow capability: ${call.toolCall.name} requires the user's explicit confirmation, which a delegated agent cannot ask for; call it as a flow step so the approval is raised by the step that names it.`);
         }
-        let browserExecution: ReturnType<import('../../authority/approval').ApprovalManager['getUiExecution']> = null;
+        let browserExecution: ReturnType<ApprovalManager['getUiExecution']> = null;
         // Set once the call is dispatched; read by `validateTarget` below.
         let dispatched = false;
         try {
@@ -793,7 +794,8 @@ export function buildSandboxServiceBackends(
             //
             // Every browser action needs a dashboard click and the originating
             // registry's live guard; Authority overrides cannot auto-approve it.
-            ...(browserReview ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review browser action' }, reviewRegistry: registry } : {}),
+            ...(browserReview ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review browser action' }, reviewRegistry: registry,
+              reviewSubject: registry.get(call.toolCall.name)?.reviewSubject?.(call.toolCall.arguments) ?? {} } : {}),
             ...(gate.confirm || workflowBrowserRead(call.toolCall.name)
               ? { aboveLevelFloor: browserReview || workflowBrowserRead(call.toolCall.name) ? 'read_data' as const : gate.floorCategory } : {}),
             // The target names who asked, so the card and the record are bound
@@ -1152,7 +1154,7 @@ export function buildSandboxServiceBackends(
     if (contact && digest(contact) !== req.inputDigest) throw new Error('HubSpot contact input digest mismatch');
     const input = contact ?? document ?? projected;
     const providerBinding = tracked ? captureProviderBinding({ projectId: ctx.projectId, versionId: run.flowVersionId,
-      stepName: ctx.stepName!, piece: req.piece, credentialDigest: req.credentialDigest }) : undefined;
+      stepName: ctx.stepName!, piece: req.piece, credentialDigest: req.credentialDigest, runId: ctx.runId }) : undefined;
     if (contact && !providerBinding) throw new Error('HubSpot contact upsert requires a saved, active HubSpot 0.12.1 OAuth connection; choose it in setup');
     const reply = await effects.invoke({ context: ctx, piece: req.piece, action: req.action,
       externalDispatch: tracked && !contact, providerBinding,
@@ -1182,10 +1184,34 @@ export function buildSandboxServiceBackends(
       execute: async (args, checkpoint) => {
         checkpoint();
         if (contact) {
+          // The row the engine resolved, still holding the same account's
+          // credential: a token refresh since then keeps it, a person
+          // replacing the credential does not.
           const connection = getConnection(providerBinding!.connectionId);
-          const token = connection?.value.access_token;
-          if (!connection || connection.status !== 'ACTIVE' || connection.projectId !== ctx.projectId || typeof token !== 'string' || digest(token) !== providerBinding!.credentialDigest)
+          if (!providerBindingHolds(providerBinding!, connection, ctx.projectId, req.piece))
             throw new Error('HubSpot connection changed before dispatch');
+          // A stored OAuth2 token about to expire is refreshed here (#954), as
+          // the engine's connection route does, only once the binding held.
+          // A failure is before any HubSpot call and before the contact is
+          // claimed, so a later submission can still write it.
+          let token: unknown;
+          try {
+            token = (await opts.credentialResolver.fresh({ type: connection.type, value: connection.value,
+              pieceName: connection.pieceName, status: connection.status,
+              stored: { id: connection.id, projectId: connection.projectId, externalId: connection.externalId, generation: connection.credentialGeneration } })).value.access_token;
+          } catch (error) {
+            if (!(error instanceof ConnectionCredentialError)) throw error;
+            // Only an expired or refused credential needs a person to reconnect; the others pass.
+            const account = `the selected HubSpot account (${connection.externalId})`;
+            const message = error.code === 'CONNECTION_EXPIRED' ? `Reconnect ${account}: ${error.message}`
+              : error.code === 'CONNECTION_REFRESH_UNREACHABLE' ? `Nothing was sent: Jarvis could not refresh ${account} just now, which is usually temporary. Start a new run later. ${error.message}`
+              : `Nothing was sent: ${account} changed while Jarvis refreshed it. Start a new run. ${error.message}`;
+            throw new ActionOutcomeError({ status: 'blocked', code: error.code, message, effect: 'not_started' });
+          }
+          if (typeof token !== 'string' || !token)
+            throw new ActionOutcomeError({ status: 'blocked', code: 'CONNECTION_EXPIRED',
+              message: `Reconnect the selected HubSpot account (${connection.externalId}): it holds no access token`, effect: 'not_started' });
+          checkpoint();
           const values = hubspotContactInput(args);
           const identity = digest(['hubspot-contact-v1',ctx.projectId,connection.id,values.email]);
           const owner = workflowEffectId(ctx.runId,ctx.stepName!,ctx.executionPath ?? [],route);
