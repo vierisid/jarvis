@@ -282,7 +282,8 @@ export function buildToolGuide({ hasSidecars, piecesManaged, machines }: ToolGui
   lines.push('The tool rejects `create` without `empty: true` (or a `description`) -- this is intentional, to stop weak models from');
   lines.push('picking `create` just because the verb matches. If you pass `description`, the call silently reroutes to `compose`.');
   lines.push('Use `run { flow, payload? }` to trigger an existing flow; `flow` accepts display name or id.');
-  lines.push('Sub-actions: compose / continue_setup / create / list / get / run / enable / disable / publish / delete / list_runs / get_run.');
+  lines.push('Sub-actions: compose / continue_setup / create / list / get / run / enable / disable / publish / delete / list_runs / get_run / resolve_effect.');
+  lines.push('An uncertain HubSpot contact write or keyed notification fences later items until resolved. After the user checks the provider, call resolve_effect { run_id, effect_id, resolution: mark_done (it happened) or release (it did not), note }; the user approves it.');
   lines.push('');
   lines.push('### delegate_task');
   lines.push('Send a task to a specialist sub-agent (research analyst, software engineer, etc.). The specialist works independently and returns results.');

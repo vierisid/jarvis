@@ -2,7 +2,7 @@ import { workflowSafeguards } from './workflow-safeguards';
 import { beforeEach, afterEach, test, expect } from 'bun:test';
 import { initWorkflowDb, closeWorkflowDb } from '../db';
 import { claimIdentity, completeIdentity } from '../db/repos/effect-identity';
-import { hubspotContactInput, upsertHubspotContact } from './hubspot-contact';
+import { HubspotNotStartedError, hubspotContactInput, upsertHubspotContact } from './hubspot-contact';
 import { isGovernedPiece, tracksPieceCompletion } from './piece-effects';
 
 beforeEach(() => initWorkflowDb(':memory:'));
@@ -78,6 +78,32 @@ test('a killed operation cannot reach the provider', async () => {
   const f=fixture([]);
   await expect(upsertHubspotContact({email:'alice@example.com',objectProperties:{firstname:'Alice'}},'synthetic',()=>{throw Error('Stopped');},f.fetchImpl)).rejects.toThrow();
   expect(f.calls).toHaveLength(0);
+});
+test('a checkpoint refusal after a definite 404 is not started: no POST, no reconciling read', async () => {
+  const f=fixture([404]);let n=0;const refusal=Error('run is STOPPED');
+  const error=await upsertHubspotContact({email:'alice@example.com',objectProperties:{firstname:'Alice'}},'synthetic',()=>{if(n++>0)throw refusal;},f.fetchImpl).catch(e=>e);
+  expect(error).toBeInstanceOf(HubspotNotStartedError);expect(error.refusal).toBe(refusal);
+  expect(f.calls.map(c=>c.method)).toEqual(['PATCH']);
+});
+test('a checkpoint refusal after a 409 create conflict is not started', async () => {
+  const f=fixture([404,409]);let n=0;
+  await expect(upsertHubspotContact({email:'alice@example.com',objectProperties:{firstname:'Alice'}},'synthetic',()=>{if(n++>1)throw Error('Stopped');},f.fetchImpl)).rejects.toBeInstanceOf(HubspotNotStartedError);
+  expect(f.calls.map(c=>c.method)).toEqual(['PATCH','POST']);
+});
+test('a checkpoint refusal after an uncertain write stays unconfirmed', async () => {
+  const f=fixture([404,500]);let n=0;
+  const error=await upsertHubspotContact({email:'alice@example.com',objectProperties:{firstname:'Alice'}},'synthetic',()=>{if(n++>1)throw Error('Stopped');},f.fetchImpl).catch(e=>e);
+  expect(error).not.toBeInstanceOf(HubspotNotStartedError);expect(error.message).toContain('unconfirmed');
+  expect(f.calls.map(c=>c.method)).toEqual(['PATCH','POST']);
+});
+test('a failed read-only lookup is not started, whatever the failure', async () => {
+  const reset=(async()=>{throw Object.assign(Error('socket hang up'),{code:'ECONNRESET'});}) as unknown as typeof fetch;
+  const bad=(async()=>new Response('not json',{status:200})) as unknown as typeof fetch;
+  for (const fetchImpl of [reset, bad, fixture([500]).fetchImpl, fixture([404,409,503]).fetchImpl])
+    await expect(upsertHubspotContact({email:'alice@example.com',objectProperties:{}},'synthetic',()=>{},fetchImpl)).rejects.toBeInstanceOf(HubspotNotStartedError);
+  const f=fixture([404,500,404]);
+  await expect(upsertHubspotContact({email:'alice@example.com',objectProperties:{}},'synthetic',()=>{},f.fetchImpl)).rejects.toThrow('unconfirmed');
+  expect(f.calls.map(c=>c.method)).toEqual(['GET','POST','GET']);
 });
 
 test('readback reports actual invoice admission and write coverage with limits',()=>{

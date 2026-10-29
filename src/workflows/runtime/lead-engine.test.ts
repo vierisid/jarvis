@@ -7,7 +7,7 @@ import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS, getWorkflowDb } from '../
 import { setEncryptionKey } from '../db/encryption';
 import { createFlow, getFlow, listFlows, setPublishedVersion, updateFlowStatus } from '../db/repos/flow';
 import { createDraftVersion, getLatestDraft, lockVersion, updateDraftVersion } from '../db/repos/flow-version';
-import { createFlowRun, getFlowRun, listRuns } from '../db/repos/flow-run';
+import { createFlowRun, getFlowRun, listRuns, updateRun } from '../db/repos/flow-run';
 import { enqueue } from '../db/repos/job-queue';
 import { upsertConnection } from '../db/repos/app-connection';
 import { configureWorkflowReadiness, versionReadiness } from '../db/repos/flow-readiness';
@@ -32,13 +32,16 @@ import { WorkflowEventBus } from './event-bus';
 import { PieceCatalog, metadataToCatalogEntry } from './piece-catalog';
 import { compileWorkflow } from './workflow-readiness';
 import { createManageWorkflowTool } from '../../actions/tools/manage-workflow';
+import { decideRunRecovery, getRunRecovery } from './recovery';
 
 
 const HUBSPOT = '@activepieces/piece-hubspot';
 const native = (name:string) => '@jarvispieces/piece-jarvis-'+name;
 let dir:string, api:SandboxApi, runtime:EngineRuntime, manager:TriggerManager, worker:Worker, catalog:PieceCatalog;
 let provider:ReturnType<typeof Bun.serve>;
-let reply='', loseReply=false, unconfirmed=false, loseNotification=false;
+let reply='', loseReply=false, unconfirmed=false, loseNotification=false, refuse=0, dashboardClosed=false;
+// stopOnMissing: a PATCH that finds no contact stops its run first. hold: the first PATCH for holdEmail waits on it.
+let stopOnMissing=false, hold:Promise<void>|null=null, holdEmail='';
 const contacts = new Map<string,{id:string;properties:Record<string,any>}>();
 const calls:Array<{method:string;email:string}> = [], notifications:string[] = [], runIds:string[]=[];
 const versions:Record<string,string>={};
@@ -50,7 +53,10 @@ beforeAll(async()=>{
     const url=new URL(req.url), body=req.method==='GET'?null:await req.json();
     const email=req.method==='POST'?body.properties.email:decodeURIComponent(url.pathname.split('/').at(-1)!);
     calls.push({method:req.method,email});
+    if(hold && req.method==='PATCH' && email===holdEmail) { const gate=hold; hold=null; await gate; }
     const existing=contacts.get(email);
+    if(stopOnMissing && req.method==='PATCH' && !existing) for(const run of listRuns({status:'RUNNING'})) updateRun(run.id,{status:'STOPPED'});
+    if(refuse && req.method!=='GET') return Response.json({}, {status:refuse});
     if(req.method==='GET') return existing && !unconfirmed ? Response.json(existing) : Response.json({}, {status:404});
     if(req.method==='PATCH') {
       if(!existing) return Response.json({}, {status:404});
@@ -86,7 +92,7 @@ beforeAll(async()=>{
       return fetch(fixtureUrl,init);
     }) as typeof fetch,
     llmManager:{chat:async()=>({content:reply,finish_reason:'end_turn',tool_calls:[],usage:{input_tokens:1,output_tokens:1}})} as any,
-    channelService:{} as any,wsService:{broadcastNotificationToDashboard:(text:string)=>{notifications.push(text);if(loseNotification)throw Error('Lost notification reply');return 1;}} as any});
+    channelService:{} as any,wsService:{broadcastNotificationToDashboard:(text:string)=>{if(dashboardClosed)return 0;notifications.push(text);if(loseNotification)throw Error('Lost notification reply');return 1;}} as any});
   api=new SandboxApi({services}); await api.start({port:0});
   runtime=new EngineRuntime({api,pool:true,bundlePath:bundle.bundlePath,expectedDigest:bundle.digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code')});
   const handle=await runtime.acquire({runId:'lead-fixture-metadata',projectId:DEFAULT_IDS.project});
@@ -113,7 +119,7 @@ function graph(configured=true):any {
   return {name:'trigger',type:'PIECE_TRIGGER',settings:{pieceName:'webhook',input:{submission_id_field:configured?'id':'',submission_email_field:configured?'email':''}},nextAction:first};
 }
 async function fixture(){
-  loseReply=unconfirmed=loseNotification=false;
+  loseReply=unconfirmed=loseNotification=dashboardClosed=stopOnMissing=false;refuse=0;hold=null;
   const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Lead fixture',trigger:graph()});
   expect(versionReadiness(flow.id,version.id).issues).toEqual([]);
   lockVersion(version.id);setPublishedVersion(flow.id,version.id);updateFlowStatus(flow.id,'ENABLED');await manager.refresh(flow.id);
@@ -159,11 +165,85 @@ test('unconfirmed contact write fences future submissions and sends nothing',asy
   loseReply=unconfirmed=false;expect((await f.send('two')).status).toBe('FAILED');
   expect(calls.length).toBe(count);expect(notifications.length).toBe(before);
 },45_000);
+// The person checked the provider and resolves the uncertain effect that holds the identity.
+const resolve=(runId:string,piece:string,action:'mark_done'|'release')=>decideRunRecovery(runId,{requestId:action+'_'+runId,
+  revision:getRunRecovery(runId)!.revision,action,effectId:listWorkflowEffects(runId).find(e=>e.provenance.piece===piece)!.id});
+for(const resolution of ['release','mark_done'] as const)
+  test('an unconfirmed contact write blocks the next submission until '+resolution+', then the next writes once',async()=>{
+    const f=await fixture();loseReply=unconfirmed=true;reply=answer(10);const before=notifications.length;
+    const email=f.flow.id.toLowerCase()+'@example.com';
+    const first=await f.send('one');expect(first.status).toBe('FAILED');
+    loseReply=unconfirmed=false;const blocked=await f.send('two');expect(blocked.status).toBe('FAILED');
+    const fence=listWorkflowEffects(blocked.id).find(e=>e.provenance.piece===HUBSPOT)!;
+    expect(fence.outcome).toMatchObject({code:'IDENTITY_UNRESOLVED',effect:'not_started'});
+    // The refusal names the real action and the run that holds the identity.
+    expect(fence.outcome!.status!=='succeeded' && fence.outcome!.message).toContain('in run '+first.id);
+    expect(getRunRecovery(first.id)!.effects.find(e=>e.stepName==='upsert')).toMatchObject({identityUnresolved:true});
+    const count=calls.length;
+    await resolve(first.id,HUBSPOT,resolution);
+    expect((await f.send('three')).status).toBe('SUCCEEDED');
+    expect(calls.slice(count).filter(c=>c.email===email && c.method!=='GET').map(c=>c.method)).toEqual(['PATCH']);
+    expect(notifications.length-before).toBe(1);
+  },45_000);
+for(const [resolution,alerts] of [['mark_done',1],['release',2]] as const)
+  test('an uncertain notification after '+resolution+': the next submission '+(alerts===1?'dedupes':'alerts once'),async()=>{
+    const f=await fixture();loseNotification=true;reply=answer(10);const before=notifications.length;
+    const first=await f.send('one');loseNotification=false;expect(first.status).toBe('FAILED');
+    expect((await f.send('two')).status).toBe('FAILED');expect(notifications.length-before).toBe(1);
+    await resolve(first.id,native('notify'),resolution);
+    const third=await f.send('three');expect(third.status).toBe('SUCCEEDED');
+    expect(notifications.length-before).toBe(alerts);
+    if(alerts===1) expect(JSON.stringify(third.steps)).toContain('"deduplicated":true');
+  },45_000);
 test('uncertain notification never repeats on a later submission',async()=>{
   const f=await fixture();loseNotification=true;reply=answer(10);const before=notifications.length;
-  await f.send('one');loseNotification=false;await f.send('two');expect(notifications.length-before).toBe(1);
+  const first=await f.send('one');loseNotification=false;await f.send('two');expect(notifications.length-before).toBe(1);
+  // The key stays consumed, and the record says why: the send may have arrived.
+  expect(listWorkflowEffects(first.id).find(e=>e.provenance.piece===native('notify'))?.outcome).toMatchObject({status:'unknown',code:'DELIVERY_UNCERTAIN',effect:'may_have_occurred'});
 },45_000);
 
+test('a definite provider refusal records not started and releases the contact for a later submission',async()=>{
+  const f=await fixture();refuse=429;reply=answer(10);const before=notifications.length;
+  const first=await f.send('one');expect(first.status).toBe('FAILED');
+  expect(listWorkflowEffects(first.id).find(e=>e.provenance.piece===HUBSPOT)?.outcome).toMatchObject({code:'PROVIDER_REFUSED',effect:'not_started'});
+  refuse=0;expect((await f.send('two')).status).toBe('SUCCEEDED');
+  expect(contacts.get(f.flow.id.toLowerCase()+'@example.com')?.properties.firstname).toBe('Alice');
+  expect(notifications.length-before).toBe(1);
+},45_000);
+test('a notification sent on no channel leaves its identity for a later submission',async()=>{
+  const f=await fixture();dashboardClosed=true;reply=answer(10);const before=notifications.length;
+  expect((await f.send('one')).status).toBe('FAILED');expect(notifications.length).toBe(before);
+  dashboardClosed=false;expect((await f.send('two')).status).toBe('SUCCEEDED');
+  expect(notifications.length-before).toBe(1);
+},45_000);
+
+test('a run stopped between a missing-contact PATCH and its POST records not started and releases the contact',async()=>{
+  const f=await fixture();stopOnMissing=true;reply=answer(10);const before=notifications.length;
+  const email=f.flow.id.toLowerCase()+'@example.com';
+  const first=await f.send('one');expect(first.status).not.toBe('SUCCEEDED');
+  const effect=listWorkflowEffects(first.id).find(e=>e.provenance.piece===HUBSPOT)!;
+  expect(effect.outcome).toMatchObject({status:'blocked',code:'RUN_NOT_RUNNING',effect:'not_started'});
+  expect(calls.filter(c=>c.email===email).map(c=>c.method)).toEqual(['PATCH']);
+  expect(getWorkflowDb().query('SELECT COUNT(*) AS n FROM workflow_effect_identity WHERE owner=?').get(effect.id)).toEqual({n:0});
+  stopOnMissing=false;expect((await f.send('two')).status).toBe('SUCCEEDED');
+  expect(contacts.get(email)?.properties.firstname).toBe('Alice');expect(notifications.length-before).toBe(1);
+},45_000);
+test('a second submission for the same contact waits out a write slower than two seconds and then updates it',async()=>{
+  const f=await fixture();reply=answer(10);const before=notifications.length;
+  const email=f.flow.id.toLowerCase()+'@example.com';let release!:()=>void;
+  holdEmail=email;hold=new Promise<void>(resolve=>{release=resolve;});
+  const deliveries=[await f.submit('one',email,'First'),await f.submit('two',email,'Second')];
+  const drained=Promise.all([worker.drain(),worker.drain()]);
+  // Both upserts are in flight at once: one holds the contact inside the provider, the other waits on its claim.
+  const dispatching=()=>deliveries.every(d=>listWorkflowEffects(d.runId).some(e=>e.provenance.piece===HUBSPOT && e.status==='dispatching'));
+  for(const deadline=Date.now()+30_000;!dispatching();) { if(Date.now()>deadline) throw Error('upserts never overlapped'); await Bun.sleep(25); }
+  expect(hold).toBeNull();
+  await Bun.sleep(2_500);release();await drained;
+  for(const delivery of deliveries) expect(getFlowRun(delivery.runId)?.status).toBe('SUCCEEDED');
+  expect(calls.filter(c=>c.email===email).map(c=>c.method)).toEqual(['PATCH','POST','PATCH']);
+  expect(['First','Second']).toContain(contacts.get(email)!.properties.firstname);
+  expect(notifications.length-before).toBe(1);
+},60_000);
 test('concurrent distinct submissions share one contact and alert',async()=>{
   const f=await fixture();reply=answer(10);const before=notifications.length;
   const deliveries=await Promise.all([f.submit('one'),f.submit('two')]);

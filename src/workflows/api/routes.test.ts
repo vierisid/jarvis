@@ -444,6 +444,31 @@ describe("workflow API: piece catalog says which pieces skip approval (#955)", (
   });
 });
 
+describe("workflow API: a partly governed piece badges only its ungoverned actions (#955)", () => {
+  test("the HubSpot contact upsert is gated; its other actions are marked", async () => {
+    const action = (name: string) => ({ name, displayName: name, description: "", props: {} });
+    const reg = new (await import("../runtime/piece-catalog")).PieceCatalog([{ name: "@activepieces/piece-hubspot", displayName: "HubSpot", description: "",
+      actions: { "create-or-update-contact": action("create-or-update-contact"), "create-deal": action("create-deal") }, triggers: {} } as any]);
+    const get = createWorkflowRoutes({ pieceRegistry: reg })["/api/workflows/pieces"]?.GET;
+    const { body } = await callJson(get, plainReq("GET", "http://x/api/workflows/pieces"));
+    const piece = (body as Array<{ notApprovalGated?: boolean; actions: Array<{ name: string; notApprovalGated?: boolean }> }>)[0]!;
+    expect(piece.notApprovalGated).toBeUndefined();
+    expect(Object.fromEntries(piece.actions.map((a) => [a.name, a.notApprovalGated ?? false]))).toEqual({ "create-or-update-contact": false, "create-deal": true });
+  });
+  test("Sheets append actions are gated; its other actions are marked", async () => {
+    const action = (name: string) => ({ name, displayName: name, description: "", props: {} });
+    const names = ["insert_row", "sheets_append_values", "sheets_add_row", "update_row", "delete_row"];
+    const reg = new (await import("../runtime/piece-catalog")).PieceCatalog([{ name: "@activepieces/piece-google-sheets", displayName: "Google Sheets", description: "",
+      actions: Object.fromEntries(names.map((n) => [n, action(n)])), triggers: {} } as any]);
+    const get = createWorkflowRoutes({ pieceRegistry: reg })["/api/workflows/pieces"]?.GET;
+    const { body } = await callJson(get, plainReq("GET", "http://x/api/workflows/pieces"));
+    const piece = (body as Array<{ notApprovalGated?: boolean; actions: Array<{ name: string; notApprovalGated?: boolean }> }>)[0]!;
+    expect(piece.notApprovalGated).toBeUndefined();
+    expect(Object.fromEntries(piece.actions.map((a) => [a.name, a.notApprovalGated ?? false]))).toEqual({
+      insert_row: false, sheets_append_values: false, sheets_add_row: false, update_row: true, delete_row: true });
+  });
+});
+
 describe("workflow API: flows", () => {
   test("POST /api/workflows creates a flow + initial draft version", async () => {
     const post = routes["/api/workflows"]?.POST;
@@ -1633,6 +1658,8 @@ describe("#729: the flow, version and run routes share one project scope", () =>
     { name: "run GET", route: "/api/workflow-runs/:runId", method: "GET", kind: "run" },
     { name: "run effects", route: "/api/workflow-runs/:runId/effects", method: "GET", kind: "run" },
     { name: "run cancel", route: "/api/workflow-runs/:runId/cancel", method: "POST", kind: "run" },
+    { name: "run recovery POST", route: "/api/workflow-runs/:runId/recovery", method: "POST", body: {}, kind: "run" },
+    { name: "effect identity POST", route: "/api/workflow-runs/:runId/effects/:effectId/identity", method: "POST", body: { resolution: "release" }, kind: "run" },
     { name: "run waitpoints", route: "/api/workflow-runs/:runId/waitpoints", method: "GET", kind: "run" },
   ];
 
@@ -1664,11 +1691,13 @@ describe("#729: the flow, version and run routes share one project scope", () =>
       runs: db.query("SELECT * FROM flow_run WHERE flow_id = ? ORDER BY id").all(flowId),
       cancellations: db.query("SELECT * FROM workflow_run_cancellation").all(),
       jobs: db.query("SELECT COUNT(*) AS n FROM workflow_job").get(),
+      identities: db.query("SELECT * FROM workflow_effect_identity").all(),
+      receipts: db.query("SELECT * FROM workflow_recovery_receipt").all(),
     };
   }
 
   function paramsFor(call: Call, ids: { flowId: string; versionId: string; runId: string }): Record<string, string> {
-    if (call.kind === "run") return { runId: ids.runId };
+    if (call.kind === "run") return { runId: ids.runId, effectId: "wfe_" + "0".repeat(64) };
     if (call.kind === "version") return { id: ids.flowId, versionId: ids.versionId, stepName: "trigger" };
     return { id: ids.flowId };
   }

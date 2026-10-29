@@ -30,5 +30,8 @@ export const AUTHORITY_SCOPE_NOTE =
 /** An action step whose piece the daemon reports as not approval-gated. Triggers are not covered. */
 export function stepNotApprovalGated(step: FlowStepNode, catalog: readonly PieceCatalogEntry[]): boolean {
   if (step.type !== "PIECE" || !step.settings?.pieceName || !step.settings.actionName) return false;
-  return catalog.find((p) => p.name === step.settings?.pieceName)?.notApprovalGated === true;
+  const piece = catalog.find((p) => p.name === step.settings?.pieceName);
+  if (piece?.notApprovalGated === true) return true;
+  // A partly governed piece marks only its ungoverned actions.
+  return piece?.actions.find((a) => a.name === step.settings?.actionName)?.notApprovalGated === true;
 }

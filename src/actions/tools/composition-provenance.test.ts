@@ -20,12 +20,19 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
-  // w8-12: workflow-meeting-briefs capabilities.
+  // w8-13: workflow-meeting-briefs capabilities.
+  'w8-13': {
+    'bare': '75d37749c4342afff3675c73ab78b7afc25d1c2f3e61d0ee3bd2c4e00eaecb26',
+    'hosted production': 'b3740b6cf1a4852ec9b119b3a638b303a985504a26370454ea6af5c6ce6cccb9',
+    'production': '71495e17f831d14b27510d090954839e75abbd80fbda3fc18f1783988552e902',
+    'tool names only': '176ac1bb741eab9fcc6b765c4faa99865aa3427ee9da12c42549fbf3f772f4e8',
+  },
+  // w8-12: uncertain HubSpot/notification identities name the resolve_effect action.
   'w8-12': {
-    'bare': '4a964ac49bfc6d4a98803d4f66a3814102c484cf97f737fad0a39b14454e1b34',
-    'hosted production': '6c47387ec3c61553f7dfb819229bcc545b3003fdc4264f754234d4aa387d3352',
-    'production': '64d200bf3c97cd0590b2022b09dbe8ee684c88e8f607b2f88964b17a093d8d4b',
-    'tool names only': '8bf4785b75a2a8a5638e32ef9e051f4ebeab47e0fd3c71f54d61154d0a3c1ba2',
+    'bare': 'f53c04b4feec4d4aad915c1d075f3f24e797fb08ee26afc171a6d87de7a6e8c8',
+    'hosted production': '54c33d8b90786d338137d3116fe119400e225a27ccd944567d0b9a1678eef181',
+    'production': 'dc09e05675aae70b839b29c2d236eab2d2d75699883b269b1800a95a3aed3146',
+    'tool names only': '77a3c5a89ed6ebd1df03cb4c7c610595cf66dc5dedf048947cff4f08e63af900',
   },
   // w8-11: HubSpot contact coordination and qualified lead notifications.
   'w8-11': {
