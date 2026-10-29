@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { getCronTimezone, setCronTimezone } from '../../lib/cron-scheduler';
-import { meetingSetup, meetingSetupMatches, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, MEETING_BRIEF_LIMIT, type MeetingRequest } from './meeting-briefs';
+import { fitBrief, meetingSetup, meetingSetupMatches, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, MEETING_BRIEF_LIMIT, type MeetingRequest } from './meeting-briefs';
 import { fixtureNow, fixtureSetup, fixtureEvent, fixtureRequest } from './meeting-fixtures';
 test('all pages and source links, timezone and stable occurrence/start identity',async()=>{
   const result=await prepareMeetingBriefs(fixtureSetup,fixtureRequest(),fixtureNow);
@@ -179,4 +179,48 @@ test('a saved step without a timezone still matches its run setup after Jarvis c
     expect(meetingSetupMatches({...saved,calendarId:'other@example.com'},setup)).toBe(false);
     expect(meetingSetupMatches({...saved,ownerEmail:''},setup)).toBe(false);
   }finally{setCronTimezone(previous);}
+});
+test('a long thread whose older messages interleave with the next thread does not stop reading early',async()=>{
+  // f0's newest message is the newest overall, but most of it is older than f1's only message.
+  const hour=3600_000,reads:string[]=[];
+  const request:MeetingRequest=async(provider,path,body)=>{
+    if(provider==='calendar')return fixtureRequest()(provider,path,body);
+    if(provider==='hubspot')return {results:[]};
+    if(path.includes('/threads?'))return {threads:[{id:'f0'},{id:'f1'},{id:'f2'},{id:'f3'}]};
+    const id=/threads\/([a-f0-9]+)\?/.exec(path)![1]!;reads.push(id);
+    const msg=(age:number,snippet:string)=>({internalDate:String(fixtureNow-age),snippet,payload:{headers:[{name:'From',value:'customer@external.test'},{name:'Subject',value:'S'}]}});
+    if(id==='f0')return {id,messages:Array.from({length:100},(_,i)=>msg((i+1)*hour,'a'.repeat(400)))};
+    if(id==='f1')return {id,messages:[msg(1.5*hour,'NEWER-THAN-MOST-OF-F0')]};
+    return {id,messages:[msg(200*hour,'OLDEST')]};
+  };
+  const m=(await prepareMeetingBriefs(fixtureSetup,request,fixtureNow)).meetings[0]!;
+  // f1 is read and kept; f2 is read, found older than everything kept, and f3 is then counted unread.
+  expect(reads).toEqual(['f0','f1','f2']);expect(m.brief).toContain('NEWER-THAN-MOST-OF-F0');expect(m.brief).toContain('#all/f1\n');
+  expect(m.brief).not.toContain('OLDEST');expect(m.brief).toMatch(/older message excerpts from 2 conversations and 1 older conversation not read omitted/);
+  expect(m.brief.length).toBeLessThanOrEqual(MEETING_BRIEF_LIMIT);
+});
+test('transport refuses a provider whose account was not resolved, before any fetch',async()=>{
+  let count=0;const request=meetingTransport({calendar:'t'},()=>{},(async()=>{count++;return Response.json({id:'abc',messages:[]});}) as any);
+  await expect(request('gmail','/gmail/v1/users/me/threads/abc?format=metadata&metadataHeaders=From')).rejects.toThrow('No gmail account was resolved');
+  await expect(request('hubspot','/crm/v3/objects/contacts/search',{filterGroups:[]})).rejects.toThrow('No hubspot account was resolved');
+  expect(count).toBe(0);
+  await request('calendar','/calendar/v3/calendars/primary/events/abc');expect(count).toBe(1);
+});
+test('fitBrief output is exact at the limit, including the link of a conversation that lost its last excerpt',()=>{
+  const ex=(date:number,text:string)=>({date,line:()=>text});
+  const [A,B,C]=['a','b','c'].map(c=>c.repeat(300)) as [string,string,string];
+  const conversations=[{id:'a',excerpts:[ex(1,A),ex(3,C)]},{id:'b',excerpts:[ex(2,B)]}];
+  const link=(id:string)=>'https://mail.google.com/mail/u/?authuser=o%40x.io#all/'+id;
+  const tail='omitted to fit the 24,000 character brief limit; open the meeting or Gmail for the full history.';
+  const snippets='Email excerpts are snippets; open the source links for full conversations.';
+  const full=['H',A,C,link('a'),B,link('b'),snippets].join('\n');
+  expect(fitBrief(['H'],conversations,0,'o@x.io',full.length)).toBe(full);
+  // Dropping only the oldest (aaaa) keeps both links.
+  const one=['H',C,link('a'),B,link('b'),'1 older message excerpt from 1 conversation '+tail,snippets].join('\n');
+  expect(fitBrief(['H'],conversations,0,'o@x.io',full.length-1)).toBe(one);expect(fitBrief(['H'],conversations,0,'o@x.io',one.length)).toBe(one);
+  // Dropping bbbb too removes b's link; this fits exactly at its own length.
+  const two=['H',C,link('a'),'2 older message excerpts from 2 conversations '+tail,snippets].join('\n');
+  expect(fitBrief(['H'],conversations,0,'o@x.io',one.length-1)).toBe(two);expect(fitBrief(['H'],conversations,0,'o@x.io',two.length)).toBe(two);
+  const unread=['H',C,link('a'),'2 older message excerpts from 2 conversations and 3 older conversations not read '+tail,snippets].join('\n');
+  expect(fitBrief(['H'],conversations,3,'o@x.io',unread.length)).toBe(unread);
 });

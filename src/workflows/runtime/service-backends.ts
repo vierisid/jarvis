@@ -1,5 +1,5 @@
 import { MEETING_ACCOUNTS, meetingSetup, meetingSetupMatches, parseMeetingGuard, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, type MeetingSetup } from './meeting-briefs';
-import { connectionBindings, enforceRunConnectionBinding } from '../db/repos/binding-pins';
+import { connectionBindings, enforceRunConnectionBinding, recordRunCredentialOutcome } from '../db/repos/binding-pins';
 import { walkFlowNodes } from '../db/flow-graph';
 import { MEETING_ACCOUNT_LABELS } from '../meeting-accounts';
 import { HUBSPOT_CLAIM_WAIT_MS, HubspotNotStartedError, HubspotWriteRefusedError, hubspotContactInput, isHubspotContact, upsertHubspotContact } from './hubspot-contact';
@@ -50,7 +50,7 @@ import type { EventsPollFn } from "../sandbox-api/routes/jarvis-events";
 import type { WorkflowsStartFn } from "../sandbox-api/routes/jarvis-workflows";
 import type { SandboxApiServices } from "../sandbox-api/server";
 import type { CredentialResolver } from "../credentials/adapter";
-import { ConnectionCredentialError } from "../credentials/pasted-oauth2";
+import { ConnectionCredentialError, OAUTH2_TYPES } from "../credentials/pasted-oauth2";
 import { WorkflowEventBuffer } from "./event-buffer";
 import { cancellableWorkflowService } from "./cancellation";
 import { closeEffectApproval, WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
@@ -455,8 +455,15 @@ export function buildSandboxServiceBackends(
       try { resolved = await opts.credentialResolver.fresh(resolved); }
       catch (error) {
         if (!(error instanceof ConnectionCredentialError)) throw error;
-        throw Error(`Reconnect the selected ${MEETING_ACCOUNT_LABELS[field]} account (${externalId}): ${error.message}`);
+        // Typed on the run's binding, as the engine's connection route records it, for the failure card.
+        recordRunCredentialOutcome(ctx.runId, externalId, { code: error.code, message: error.message });
+        // Only an expired or refused credential needs a person to reconnect; the others pass.
+        const account = `the selected ${MEETING_ACCOUNT_LABELS[field]} account (${externalId})`;
+        throw Error(error.code === 'CONNECTION_EXPIRED' ? `Reconnect ${account}: ${error.message}`
+          : error.code === 'CONNECTION_REFRESH_UNREACHABLE' ? `Nothing was read: Jarvis could not refresh ${account} just now, which is usually temporary. Start a new run later. ${error.message}`
+          : `Nothing was read: ${account} changed while Jarvis refreshed it. Start a new run. ${error.message}`);
       }
+      if (resolved.stored && OAUTH2_TYPES.has(resolved.type)) recordRunCredentialOutcome(ctx.runId, externalId, null);
       if (typeof resolved.value.access_token !== 'string') throw Error('Connect the selected meeting account securely before running');
       tokens[field.replace('Connection','') as keyof typeof tokens] = resolved.value.access_token;
     }

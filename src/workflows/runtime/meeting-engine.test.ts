@@ -1,5 +1,5 @@
 import { ApprovalManager } from '../../authority/approval';
-import { pinFlowBindings } from '../db/repos/binding-pins';
+import { listRunConnectionBindings, pinFlowBindings } from '../db/repos/binding-pins';
 /** Saved builder graph through the real worker/engine. Only synthetic provider transport. */
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { dirname, join } from 'node:path';
@@ -39,7 +39,7 @@ let authority:AuthorityEngine;
 let approvals:ApprovalManager,services:ReturnType<typeof buildSandboxServiceBackends>;
 let dir:string,api:SandboxApi,runtime:EngineRuntime,worker:Worker,catalog:PieceCatalog;
 const versions:Record<string,string>={},notifications:string[]=[],runIds:string[]=[],calls:string[]=[];
-let tokenCalls=0;const resolvedIds:string[]=[];
+let tokenCalls=0,tokenDown=false;const resolvedIds:string[]=[];
 class RecordingResolver extends CredentialResolver { override async resolve(input:Parameters<CredentialResolver['resolve']>[0]){resolvedIds.push(input.externalId);return super.resolve(input);} }
 let events:any[]=[fixtureEvent()],changed:any,fail:string|undefined,oversized:string|undefined,loseNotification=false;
 beforeAll(async()=>{
@@ -53,7 +53,7 @@ beforeAll(async()=>{
  for(const [suffix,piece] of [['calendar','google-calendar'],['gmail','gmail'],['hubspot','hubspot']])upsertConnection({externalId:'fixture-'+suffix,displayName:'Fixture',type:'OAUTH2',pieceName:'@activepieces/piece-'+piece,pieceVersion:'0.0.1',value:{access_token:'synthetic-'+suffix}});
  authority=new AuthorityEngine({default_level:10,governed_categories:[],overrides:[],context_rules:[],learning:{enabled:false,suggest_threshold:10},emergency_state:'normal'});
  approvals=new ApprovalManager();
- services=buildSandboxServiceBackends({credentialResolver:new RecordingResolver({tokenTransport:async()=>{tokenCalls++;return {status:200,body:{access_token:'synthetic-calendar',expires_in:3600}};}}),authorityEngine:authority,approvalManager:approvals,emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
+ services=buildSandboxServiceBackends({credentialResolver:new RecordingResolver({tokenTransport:async()=>{tokenCalls++;if(tokenDown)throw Error('token endpoint unreachable');return {status:200,body:{access_token:'synthetic-calendar',expires_in:3600}};}}),authorityEngine:authority,approvalManager:approvals,emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
  meetingNow:()=>fixtureNow,meetingFetch:(async(url:any,init:any)=>{
   const u=new URL(String(url));const provider=u.hostname==='www.googleapis.com'?'calendar':u.hostname==='gmail.googleapis.com'?'gmail':'hubspot';
   expect(['www.googleapis.com','gmail.googleapis.com','api.hubapi.com']).toContain(u.hostname);
@@ -177,6 +177,7 @@ test('an expired Calendar token that cannot be refreshed fails the run with a re
  try {
   const f=await fixture(),before=[calls.length,notifications.length];
   const result=await f.run();expect(result.status).toBe('FAILED');expect((result as any).failedStep?.errorMessage).toContain('Reconnect the selected Google Calendar account');
+  expect(listRunConnectionBindings(result.id).find(b=>b.externalId==='fixture-calendar')?.credentialFailure?.code).toBe('CONNECTION_EXPIRED');
   expect([calls.length,notifications.length]).toEqual(before);
  } finally {calendarRow({access_token:'synthetic-calendar'});}
 },60_000);
@@ -211,3 +212,15 @@ test('readiness refuses a Jarvis-managed id for the HubSpot account',()=>{
  }
  expect(compileWorkflow(graph(),{pieces:catalog,phase:'composition'}).issues.some((i:any)=>i.code==='CONNECTION_BINDING')).toBe(false);
 });
+test('an expired Calendar token whose refresh cannot reach the provider fails as temporary, not as reconnect',async()=>{
+ calendarRow({access_token:'synthetic-calendar',refresh_token:'refresh',client_id:'client',client_secret:'secret',token_url:'https://oauth2.example.test/token',claimed_at:Math.floor(Date.now()/1000)-7200,expires_in:3600});
+ tokenDown=true;
+ try {
+  const f=await fixture(),before=[calls.length,notifications.length];
+  const result=await f.run();expect(result.status).toBe('FAILED');
+  const message=String((result as any).failedStep?.errorMessage);
+  expect(message).toContain('which is usually temporary. Start a new run later.');expect(message).not.toContain('Reconnect');
+  expect(listRunConnectionBindings(result.id).find(b=>b.externalId==='fixture-calendar')?.credentialFailure?.code).toBe('CONNECTION_REFRESH_UNREACHABLE');
+  expect([calls.length,notifications.length]).toEqual(before);
+ } finally {tokenDown=false;calendarRow({access_token:'synthetic-calendar'});}
+},60_000);
