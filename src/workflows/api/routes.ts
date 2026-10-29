@@ -108,7 +108,7 @@ import { pastedOAuth2Status, stampOAuth2Claim } from "../credentials/pasted-oaut
 import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers/manager";
 import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
 import type { PieceLookup } from "../runtime/piece-catalog";
-import { isCommunityPiece } from "../runtime/step-admission";
+import { isCommunityAction, isCommunityPiece } from "../runtime/step-admission";
 import { CATALOG, excludedReason, findCatalogEntry, sharedBuildCatalog, withdrawnPiece } from "../pieces-library/catalog";
 import { piecesManagedByHost } from "../pieces-library/shared";
 import { withScheduleZoneDefault } from "../runner/triggers/schedule-zone";
@@ -908,6 +908,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               displayName: a.displayName,
               description: a.description,
               inputSchema: a.inputSchema ?? null,
+              // A partly governed piece badges only its ungoverned actions.
+              ...(!isCommunityPiece(p.name) && isCommunityAction(p.name, a.name) ? { notApprovalGated: true } : {}),
               // Optional declared output sample (Jarvis extension to AP).
               // Surfaced to the dashboard so the variable picker can show
               // field-level rows for actions that have never been run yet.
@@ -2256,7 +2258,23 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         if (!scopedRun(req, runId)) return err('run not found', 404);
         const read = await readWriteBody(req, 8192);
         if ('error' in read) return read.error;
-        const receipt = await decideRunRecovery(runId, read.body, { authority: opts.recoveryAuthority });
+        const receipt = await decideRunRecovery(runId, read.body, { authority: opts.recoveryAuthority, via: 'dashboard' });
+        return ok({ receipt, recovery: getRunRecovery(runId) });
+      }),
+    },
+    // Resolve the cross-run identity (HubSpot contact, notification
+    // idempotencyKey) an uncertain effect still holds, after checking the
+    // provider: mark_done if the write happened, release if it did not. The
+    // same audited recovery receipt as the route above; never runs anything.
+    "/api/workflow-runs/:runId/effects/:effectId/identity": {
+      POST: req => trapErrors(async () => {
+        const { runId, effectId } = (req as RequestWithParams<{ runId: string; effectId: string }>).params;
+        if (!scopedRun(req, runId)) return err('run not found', 404);
+        const read = await readWriteBody(req, 8192);
+        if ('error' in read) return read.error;
+        const { resolution, ...rest } = read.body;
+        if (resolution !== 'mark_done' && resolution !== 'release') return err('resolution must be mark_done or release', 400);
+        const receipt = await decideRunRecovery(runId, { ...rest, action: resolution, effectId }, { via: 'dashboard' });
         return ok({ receipt, recovery: getRunRecovery(runId) });
       }),
     },

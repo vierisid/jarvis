@@ -1,3 +1,4 @@
+import { parseOutputSchema } from './llm-output-contract';
 import { submissionConfig } from './form-submission';
 import {managedMailchimpIssue} from './managed-mailchimp';
 import {managedGitHubIssue} from './managed-github';
@@ -261,6 +262,14 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     expressions(input, node, 'settings.input', scope, type === 'PIECE' || type === 'PIECE_TRIGGER' ? pieceName : '');
     stepSettings = {};
     const isPiece = (short: string) => pieceName === short || pieceName === `@jarvispieces/piece-${short}`;
+    if (!root && isPiece('jarvis-ask') && settings.actionName === 'ask' && !emptyInput(input?.outputSchema)) {
+      const declared = staticInput(input.outputSchema);
+      if (!declared.known) runtime(node, 'settings.input.outputSchema', 'piece-input', 'Validate the resolved output schema before model dispatch');
+      else {
+        try { parseOutputSchema(typeof declared.value === 'string' ? JSON.parse(declared.value) : declared.value); }
+        catch (error) { issue(node, 'settings.input.outputSchema', 'OUTPUT_SCHEMA', (error as Error).message); }
+      }
+    }
     if (!root && isPiece('jarvis-tool') && settings.actionName === 'invoke' && object(input) && context.phase !== 'composition') {
       const name = staticInput(input.toolName);
       if (!name.known && context.tool) runtime(node, 'settings.input', 'tool-input', 'Resolve the tool identity and validate its parameters at governed tool dispatch');
@@ -298,6 +307,16 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         validateCronExpression(input.cronExpression);
         validateCronTimezone(input.timezone);
       } catch (error) { issue(node, 'settings.input.cronExpression', 'CRON', (error as Error).message); }
+    }
+    // Explicit null keeps an intentionally deferred scope visible. Omission still
+    // means the connector's documented default (all labels / root folder).
+    if (input?.label === null && root && pieceName === '@activepieces/piece-gmail' && settings.triggerName === 'new_attachment')
+      needsSetup(node, 'settings.input.label', 'Select the Gmail label before processing attachments');
+    if (pieceName === '@activepieces/piece-hubspot' && settings.actionName === 'create-or-update-contact' && input?.objectProperties === null)
+      needsSetup(node, 'settings.input.objectProperties', 'Select HubSpot contact property mappings, including the intended qualification/review field');
+    if (pieceName === '@activepieces/piece-google-drive') {
+      const folder = settings.actionName === 'upload_gdrive_file' ? 'parentFolder' : settings.actionName === 'drive_upload_file' ? 'parent_folder_id' : null;
+      if (folder && input?.[folder] === null) needsSetup(node, `settings.input.${folder}`, 'Select the destination Drive folder');
     }
     if (type === 'PIECE' || type === 'PIECE_TRIGGER') {
       if (root && pieceName === 'schedule') {

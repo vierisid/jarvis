@@ -41,6 +41,8 @@ export const notifyAction = createAction({
     unknown: [],
   },
   props: {
+    idempotencyKey: Property.ShortText({ displayName: 'Notification identity', required: false,
+      description: 'Optional stable identity, e.g. qualified-contact:{{upsert.id}}. Consumed once per workflow across runs, versions and branches. Repeated keys suppress delivery; uncertain delivery requires review. Use a different explicit key only for a genuinely new notification.' }),
     message: Property.LongText({
       displayName: "Message",
       description:
@@ -86,6 +88,8 @@ export const notifyAction = createAction({
       throw new Error("jarvis-notify: message is required and must be a non-empty string");
     }
     const body: Record<string, unknown> = { message };
+    const identity = context.propsValue['idempotencyKey'];
+    if (identity !== undefined && identity !== null) body.idempotencyKey = identity;
     const channels = context.propsValue["channels"];
     if (Array.isArray(channels) && channels.length > 0) body["channels"] = channels;
     const priority = context.propsValue["priority"];

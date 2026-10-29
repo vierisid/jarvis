@@ -175,6 +175,8 @@ export interface PieceCatalogActionOrTrigger {
   description: string;
   inputSchema: PieceInputSchema | null;
   requireAuth?: boolean;
+  /** Set by the daemon on an ungoverned action of a partly governed piece (#955). */
+  notApprovalGated?: boolean;
   /**
    * Optional declared output for the action or trigger. Used by the
    * variable picker to surface field-level rows even before the step has

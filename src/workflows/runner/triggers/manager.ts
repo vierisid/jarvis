@@ -1,3 +1,4 @@
+import { gmailAttachmentKey, isGmailAttachmentTrigger } from '../../runtime/gmail-attachment';
 import { prepareEmailEvent } from '../../runtime/event-types';
 import { submissionConfig } from '../../runtime/form-submission';
 import { workflowRemovalState, workflowTriggerCurrent } from '../../db/repos/workflow-removal-state';
@@ -57,7 +58,7 @@ import { ungrantedCodeSteps } from "../../db/repos/flow-code-steps";
 import { createFlowRun, updateRun } from "../../db/repos/flow-run";
 import { enqueue, countQueued } from "../../db/repos/job-queue";
 import {
-  claimFire, clearScheduleWatch, DELAYED_AFTER_MS, fireDigest, getScheduleWatch, latestScheduledFire, pruneFires, recordBlocked,
+  claimFire, clearScheduleWatch, DELAYED_AFTER_MS, fireDigest, getScheduleWatch, isRetainedKey, latestScheduledFire, pruneFires, recordBlocked,
   recordFire, repeatOf, repeatOfRefusal, setScheduleWatch, type FireSource,
 } from "../../db/repos/trigger-fire";
 import { RUN_FLOW } from "../handler";
@@ -843,16 +844,18 @@ export class TriggerManager {
     const { flowId, versionId, source } = opts;
     const signature = JSON.stringify([versionId, error.readiness]);
     const carriesInput = opts.payload !== undefined && source !== "schedule";
-    // An email refused here ran nothing, so it keeps no claim on its message:
-    // once setup is fixed, a redelivery or manual run processes it once. The
-    // same email refused the same way again (the observer re-emits unread mail
-    // after a restart) is counted on the first refusal, not run and failed again.
-    const emailKey = carriesInput && opts.dedupeKey?.startsWith("event:email:") === true ? opts.dedupeKey : null;
-    const emailRefusal = emailKey ? fireDigest(JSON.stringify([versionId, error.readiness, emailKey])) : null;
-    const folded = emailRefusal ? repeatOfRefusal(flowId, emailRefusal) : null;
+    // An email or attachment refused here ran nothing, so it keeps no claim on
+    // its message or content: once setup is fixed, a redelivery or manual run
+    // processes it once. The same email or attachment refused the same way
+    // again (the observer re-emits unread mail after a restart, a poll sees
+    // the attachment again) is counted on the first refusal, not run and
+    // failed again.
+    const retainedKey = carriesInput && isRetainedKey(opts.dedupeKey) ? opts.dedupeKey! : null;
+    const retainedRefusal = retainedKey ? fireDigest(JSON.stringify([versionId, error.readiness, retainedKey])) : null;
+    const folded = retainedRefusal ? repeatOfRefusal(flowId, retainedRefusal) : null;
     if (folded) {
       this.tellUntold(flowId, signature);
-      this.log(`flow ${flowId}: readiness refused ${source} again for the same email (${folded.id}): ${error.message}`);
+      this.log(`flow ${flowId}: readiness refused ${source} again for the same ${retainedKey!.startsWith("event:email:") ? "email" : "attachment"} (${folded.id}): ${error.message}`);
       return { outcome: "blocked", fireId: folded.id, reason: error.message };
     }
     let runId: string | undefined;
@@ -867,9 +870,9 @@ export class TriggerManager {
     // first notice reached nobody.
     if (fresh && runId) this.tell(signature, { flowId, runId, message: error.message });
     else this.tellUntold(flowId, signature);
-    const detail = { reason: error.message, code: error.code, ...(emailKey ? { deliveryKey: emailKey, signature: emailRefusal } : {}) };
+    const detail = { reason: error.message, code: error.code, ...(retainedKey ? { deliveryKey: retainedKey, signature: retainedRefusal } : {}) };
     const fire = carriesInput
-      ? recordFire({ flowId, flowVersionId: versionId, source, dedupeKey: emailKey ? null : opts.dedupeKey, scheduledFor: opts.scheduledFor,
+      ? recordFire({ flowId, flowVersionId: versionId, source, dedupeKey: retainedKey ? null : opts.dedupeKey, scheduledFor: opts.scheduledFor,
           lateMs: opts.lateMs, outcome: "blocked", runId, detail })
       : recordBlocked({ flowId, flowVersionId: versionId, source, signature, scheduledFor: opts.scheduledFor,
           lateMs: opts.lateMs, runId, detail });
@@ -1191,7 +1194,16 @@ export class TriggerManager {
         ? (item as Record<string, unknown>)
         : { value: item };
       try {
-        const itemKey = pureSchedule ? undefined : this.deliveryKey(flowId, versionId, "poll", payload, eventTypeOf(version.trigger as unknown as TriggerNode | null));
+        // An attachment without a usable identity still starts a run, so the
+        // run's admission check fails it visibly instead of dropping the item
+        // after the source cursor has moved past it.
+        const attachment = !pureSchedule && isGmailAttachmentTrigger(version.trigger.settings);
+        let attachmentKey: string | undefined;
+        if (attachment) {
+          try { attachmentKey = gmailAttachmentKey(payload, flowId, getFlow(flowId)!.project_id); } catch { attachmentKey = undefined; }
+        }
+        const itemKey = pureSchedule ? undefined : attachment ? attachmentKey
+          : this.deliveryKey(flowId, versionId, "poll", payload, eventTypeOf(version.trigger as unknown as TriggerNode | null));
         if (itemKey === null) continue;
         const result = this.startRun({
           flowId, versionId, generation, kind: "engine", source: fireSource, payload, executeTrigger: false,

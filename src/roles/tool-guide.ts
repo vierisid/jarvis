@@ -274,6 +274,7 @@ export function buildToolGuide({ hasSidecars, piecesManaged, machines }: ToolGui
   lines.push('Save the full disabled processing graph even when payload paths, destination, column mapping or account are unknown. Leave inputs empty/null for Setup required in the editor; configuration alone must not block saving. Never invent values or substitute diagnostic steps.');
   lines.push('When setup is returned without a saved draft, ask its nextQuestion directly and keep the compositionRecordId. On the answer call continue_setup { composition_id, answers }. It retains the original job and earlier answers; never ask the user to repeat the workflow prompt or tell you to continue.');
   lines.push('Once a draft is saved, its remaining fields are set in the workflow editor (setup.editor): continue_setup refuses answers and installs for a saved draft and only rechecks readiness. Point the user to the editor instead.');
+  lines.push('For invoice PDFs, inspect Gmail new_attachment, Drive upload receipts, Sheets append receipts and jarvis-ask pdfFile. Attachment-byte admission prevents repeated runs, while Ask extracts without tools or payment authority. Keep missing labels, account bindings and destinations as setup in a full disabled draft.');
   lines.push('For Gmail once-per-message workflows, inspect jarvis-trigger:on_event observer.email_received and jarvis-notify runtime guarantees. Built-in persistent email admission and notification dispatch receipts cover duplicate delivery/replay; do not claim missing storage without inspecting these contracts. Keep uncertain classifications in Needs review and alert only on confident urgent support.');
   lines.push('Guide account connection through secure Connected workspace setup and selection in the workflow. Never request credentials in chat. Recheck with continue_setup { composition_id } after setup; keep the workflow disabled and do not run external actions while drafting.');
   lines.push('Do not surface raw error JSON to the user, translate it. After a successful compose, summarize what was');
@@ -283,7 +284,8 @@ export function buildToolGuide({ hasSidecars, piecesManaged, machines }: ToolGui
   lines.push('The tool rejects `create` without `empty: true` (or a `description`) -- this is intentional, to stop weak models from');
   lines.push('picking `create` just because the verb matches. If you pass `description`, the call silently reroutes to `compose`.');
   lines.push('Use `run { flow, payload? }` to trigger an existing flow; `flow` accepts display name or id.');
-  lines.push('Sub-actions: compose / continue_setup / create / list / get / run / enable / disable / publish / delete / list_runs / get_run.');
+  lines.push('Sub-actions: compose / continue_setup / create / list / get / run / enable / disable / publish / delete / list_runs / get_run / resolve_effect.');
+  lines.push('An uncertain HubSpot contact write or keyed notification fences later items until resolved. After the user checks the provider, call resolve_effect { run_id, effect_id, resolution: mark_done (it happened) or release (it did not), note }; the user approves it.');
   lines.push('');
   lines.push('### delegate_task');
   lines.push('Send a task to a specialist sub-agent (research analyst, software engineer, etc.). The specialist works independently and returns results.');

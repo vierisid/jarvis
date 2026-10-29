@@ -21,6 +21,8 @@
 import type { Server } from "bun";
 import { WorkflowCancellationError } from "../runtime/cancellation";
 import { ActionOutcomeError } from '../../actions/action-outcome';
+import { PIECE_AUTHORIZE_IDLE_TIMEOUT_S } from "../runtime/hubspot-contact";
+import { PIECE_AUTHORIZE_PATH } from "../runtime/piece-effect-guard";
 
 // We don't attach per-connection state to upgrades on this server (yet --
 // socket.io will own that in B4), so the Bun.Server generic gets `unknown`.
@@ -336,7 +338,12 @@ export class SandboxApi {
     this.server = Bun.serve({
       hostname: host,
       port,
-      fetch: (req) => this.dispatch(req),
+      fetch: (req, server) => {
+        // A HubSpot contact upsert runs inside its authorize request and may
+        // first wait for a competing write of the same contact.
+        if (req.method === "POST" && new URL(req.url).pathname === PIECE_AUTHORIZE_PATH) server.timeout(req, PIECE_AUTHORIZE_IDLE_TIMEOUT_S);
+        return this.dispatch(req);
+      },
     });
 
     await this.workerRpc.start();

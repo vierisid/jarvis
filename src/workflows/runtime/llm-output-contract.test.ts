@@ -28,7 +28,7 @@ describe('output schema declarations', () => {
     ['references', { $ref: '#/x' }, 'unsupported schema keyword "$ref"'],
     ['a nested unsupported keyword, with its path', { type: 'object', properties: { a: { type: 'string', format: 'email' } } }, '"format" at /properties/a'],
     ['a missing type', { properties: {} }, '"type" must be one of'],
-    ['a type list', { type: ['string', 'null'] }, '"type" must be one of'],
+    ['a non-nullable type list', { type: ['string', 'number'] }, '"type" must be one of'],
     ['properties on a non-object', { type: 'array', properties: {} }, '"properties" applies to object only'],
     ['items on a non-array', { type: 'object', items: { type: 'string' } }, '"items" applies to array only'],
     ['a schema-valued additionalProperties', { type: 'object', additionalProperties: { type: 'string' } }, '"additionalProperties" must be true or false'],
@@ -191,5 +191,27 @@ describe('LLM output evaluation', () => {
     expect(message).not.toContain('syntheticWrongTypeValue');
     expect(evaluateLlmOutput({ text: 'not json', outputSchema: schema }).outcome).toMatchObject({ code: 'INVALID_JSON_OUTPUT' });
     expect(evaluateLlmOutput({ text: '{"total":3}', outputSchema: schema })).toEqual({ outcome: { status: 'succeeded' }, parsed: { total: 3 } });
+  });
+});
+
+
+describe('nullable extraction fields', () => {
+  test('keeps null distinct from zero and enforces numeric bounds and types', () => {
+    const schema = parseOutputSchema({ type: 'object', required: ['total'], properties: { total: { type: ['number', 'null'], minimum: 0 } } });
+    expect(parseOutputSchema(schema)).toEqual(schema);
+    for (const total of [null, 0, 1.25]) expect(validateOutput({ total }, schema)).toEqual([]);
+    for (const total of [-1, '0', false, {}, []]) expect(validateOutput({ total }, schema).length).toBeGreaterThan(0);
+    expect(validateOutput({}, schema)).toContain('missing required property "total" at /');
+  });
+  test('nullable containers and enums still validate their non-null values', () => {
+    const schema = parseOutputSchema({ type: ['null', 'array'], minItems: 1, items: { type: ['string', 'null'], minLength: 2, enum: ['ok', null] } });
+    expect(validateOutput(null, schema)).toEqual([]);
+    expect(validateOutput(['ok', null], schema)).toEqual([]);
+    for (const value of [[], ['x'], [1]]) expect(validateOutput(value, schema).length).toBeGreaterThan(0);
+    const object = parseOutputSchema({ type: ['object', 'null'], required: ['id'] });
+    expect(validateOutput(null, object)).toEqual([]);
+    expect(validateOutput({}, object).length).toBe(1);
+    expect(() => parseOutputSchema({ type: ['string', 'null'], minimum: 0 })).toThrow();
+    for (const type of [[], ['null'], ['null','null'], ['number','string'], ['number','null','string'], ['unknown','null']]) expect(() => parseOutputSchema({ type })).toThrow();
   });
 });
