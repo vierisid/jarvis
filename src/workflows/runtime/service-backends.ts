@@ -50,7 +50,7 @@ import type { AgentDelegateFn } from "../sandbox-api/routes/jarvis-agent";
 import type { EventsPollFn } from "../sandbox-api/routes/jarvis-events";
 import type { WorkflowsStartFn } from "../sandbox-api/routes/jarvis-workflows";
 import type { SandboxApiServices } from "../sandbox-api/server";
-import type { CredentialResolver } from "../credentials/adapter";
+import { managedConnectionMisuse, managedSourceFor, type CredentialResolver } from "../credentials/adapter";
 import { ConnectionCredentialError, OAUTH2_TYPES } from "../credentials/pasted-oauth2";
 import { WorkflowEventBuffer } from "./event-buffer";
 import { cancellableWorkflowService } from "./cancellation";
@@ -433,10 +433,10 @@ export function buildSandboxServiceBackends(
     providers: ReadonlyArray<'calendar'|'gmail'|'hubspot'> = ['calendar','gmail','hubspot']) => {
     const run = getFlowRun(ctx.runId);
     const version = run && getFlowVersion(run.flowVersionId);
-    if (!version || !walkFlowNodes(version.trigger).some(node =>
+    const step = version && walkFlowNodes(version.trigger).find(node =>
       String(node.settings?.pieceName).endsWith('jarvis-context') && node.settings?.actionName === 'meeting_briefs'
-      && meetingSetupMatches(node.settings.input as any ?? {}, setup)))
-      throw Error('Meeting configuration must match a saved meeting preparation step');
+      && meetingSetupMatches(node.settings.input as any ?? {}, setup));
+    if (!version || !step) throw Error('Meeting configuration must match a saved meeting preparation step');
     const fields = (Object.keys(MEETING_ACCOUNTS) as Array<keyof typeof MEETING_ACCOUNTS>)
       .filter(field => providers.includes(field.replace('Connection','') as 'calendar'));
     const tokens = {} as Record<'calendar'|'gmail'|'hubspot',string>;
@@ -445,9 +445,14 @@ export function buildSandboxServiceBackends(
       if (!connectionBindings(version.trigger).has(externalId)) throw Error('Meeting account is not bound to this workflow');
       const refusal = enforceRunConnectionBinding(ctx.runId, ctx.projectId, externalId, opts.credentialResolver);
       if (refusal) throw Error(refusal);
+      // The readiness rule, before anything is resolved: a managed connection
+      // only by the meeting exemption (jarvis:google for Calendar and Gmail).
+      if (externalId.startsWith('jarvis:')) {
+        const source = managedSourceFor(opts.credentialResolver.list(), externalId);
+        const misuse = source ? managedConnectionMisuse(source, pieceName, `settings.input.${field}`, step.settings) : 'Managed connection source is unavailable';
+        if (misuse) throw Error(misuse);
+      }
       let resolved = await opts.credentialResolver.resolve({projectId:ctx.projectId,pieceName,externalId});
-      const managedGoogle = externalId === 'jarvis:google' || externalId.startsWith('jarvis:google:');
-      if (externalId.startsWith('jarvis:') && (!managedGoogle || field === 'hubspotConnection')) throw Error('Meeting account belongs to a different provider');
       if (resolved?.pieceName && resolved.pieceName !== pieceName) throw Error('Meeting account belongs to a different provider');
       if (!resolved || resolved.type !== 'OAUTH2' || resolved.status && resolved.status !== 'ACTIVE')
         throw Error('Connect the selected meeting account securely before running');

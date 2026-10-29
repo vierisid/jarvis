@@ -24,6 +24,7 @@ import type { AppConnectionStatus, AppConnectionType } from "../db/repos/app-con
 import { getConnectionByExternalId, getUniqueConnectionByExternalId } from "../db/repos/app-connection";
 import type { EgressPolicy } from "../runtime/http-egress";
 import { guardedTokenTransport, PastedOAuth2Refresher, type TokenTransport } from "./pasted-oauth2";
+import { MEETING_ACCOUNTS } from "../meeting-accounts";
 
 /** Prefix that marks a connection as "managed by Jarvis itself". */
 export const JARVIS_PREFIX = "jarvis:";
@@ -123,12 +124,38 @@ export function customApiUrlStaysOnHosts(url: string, hosts: readonly string[]):
 }
 
 /**
+ * The meeting account inputs a managed Google connection may fill, by the
+ * provider piece each one reads with. HubSpot is deliberately absent.
+ */
+const MEETING_MANAGED_PATHS: ReadonlyMap<string, string> = new Map([
+  ['settings.input.calendarConnection', MEETING_ACCOUNTS.calendarConnection],
+  ['settings.input.gmailConnection', MEETING_ACCOUNTS.gmailConnection],
+]);
+
+/**
+ * Owner-approved exemption (#1186): the native jarvis-context meeting_briefs
+ * step names its Calendar and Gmail accounts as literal ids at
+ * `settings.input.calendarConnection` / `gmailConnection` and the brain reads
+ * them itself, so `jarvis:google` may be named at exactly those two paths of
+ * that action. `pieceName` is then the provider piece the field reads with
+ * (Google Calendar or Gmail), which the source must serve. HubSpot, any other
+ * path, piece, action or a trigger stays refused by the rule below.
+ */
+function meetingAccountExempt(source: JarvisConnectionSource, pieceName: string, path: string, settings: unknown): boolean {
+  const provider = MEETING_MANAGED_PATHS.get(path);
+  return provider !== undefined && provider === pieceName && source.id === 'google' && source.pieceNames.includes(provider)
+    && record(settings) && settings.triggerName === undefined && settings.actionName === 'meeting_briefs'
+    && (settings.pieceName === '@jarvispieces/piece-jarvis-context' || settings.pieceName === 'jarvis-context');
+}
+
+/**
  * Why a step may not name a managed connection, or null when it may: it must
  * be a step of one of the source's pieces, naming it as that step's `auth`,
  * and a custom API call step must stay on the piece's own API hosts.
  * `settings` is the step's settings, when the caller has them.
  */
 export function managedConnectionMisuse(source: JarvisConnectionSource, pieceName: string, path: string, settings?: unknown): string | null {
+  if (meetingAccountExempt(source, pieceName, path, settings)) return null;
   if (!source.pieceNames.includes(pieceName)) {
     return `Managed connection jarvis:${source.id} can only be used by ${pieceList(source)} steps`;
   }

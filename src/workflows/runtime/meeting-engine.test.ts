@@ -39,7 +39,7 @@ let authority:AuthorityEngine;
 let approvals:ApprovalManager,services:ReturnType<typeof buildSandboxServiceBackends>;
 let dir:string,api:SandboxApi,runtime:EngineRuntime,worker:Worker,catalog:PieceCatalog;
 const versions:Record<string,string>={},notifications:string[]=[],runIds:string[]=[],calls:string[]=[];
-let tokenCalls=0,tokenDown=false;const resolvedIds:string[]=[];
+let tokenCalls=0,tokenDown=false;const resolvedIds:string[]=[];let resolver:CredentialResolver;
 class RecordingResolver extends CredentialResolver { override async resolve(input:Parameters<CredentialResolver['resolve']>[0]){resolvedIds.push(input.externalId);return super.resolve(input);} }
 let events:any[]=[fixtureEvent()],changed:any,fail:string|undefined,oversized:string|undefined,loseNotification=false;
 beforeAll(async()=>{
@@ -53,7 +53,7 @@ beforeAll(async()=>{
  for(const [suffix,piece] of [['calendar','google-calendar'],['gmail','gmail'],['hubspot','hubspot']])upsertConnection({externalId:'fixture-'+suffix,displayName:'Fixture',type:'OAUTH2',pieceName:'@activepieces/piece-'+piece,pieceVersion:'0.0.1',value:{access_token:'synthetic-'+suffix}});
  authority=new AuthorityEngine({default_level:10,governed_categories:[],overrides:[],context_rules:[],learning:{enabled:false,suggest_threshold:10},emergency_state:'normal'});
  approvals=new ApprovalManager();
- services=buildSandboxServiceBackends({credentialResolver:new RecordingResolver({tokenTransport:async()=>{tokenCalls++;if(tokenDown)throw Error('token endpoint unreachable');return {status:200,body:{access_token:'synthetic-calendar',expires_in:3600}};}}),authorityEngine:authority,approvalManager:approvals,emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
+ services=buildSandboxServiceBackends({credentialResolver:resolver=new RecordingResolver({tokenTransport:async()=>{tokenCalls++;if(tokenDown)throw Error('token endpoint unreachable');return {status:200,body:{access_token:'synthetic-calendar',expires_in:3600}};}}),authorityEngine:authority,approvalManager:approvals,emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
  meetingNow:()=>fixtureNow,meetingFetch:(async(url:any,init:any)=>{
   const u=new URL(String(url));const provider=u.hostname==='www.googleapis.com'?'calendar':u.hostname==='gmail.googleapis.com'?'gmail':'hubspot';
   expect(['www.googleapis.com','gmail.googleapis.com','api.hubapi.com']).toContain(u.hostname);
@@ -223,4 +223,37 @@ test('an expired Calendar token whose refresh cannot reach the provider fails as
   expect(listRunConnectionBindings(result.id).find(b=>b.externalId==='fixture-calendar')?.credentialFailure?.code).toBe('CONNECTION_REFRESH_UNREACHABLE');
   expect([calls.length,notifications.length]).toEqual(before);
  } finally {tokenDown=false;calendarRow({access_token:'synthetic-calendar'});}
+},60_000);
+/** A managed source standing in for jarvis:google (and one that is not Google), registered on both the run's resolver and readiness. */
+async function withManagedSource<T>(id:string,body:()=>Promise<T>):Promise<T>{
+ resolver.register({id,pieceNames:['@activepieces/piece-gmail','@activepieces/piece-google-calendar'],canResolve:(ext:string)=>ext==='jarvis:'+id,
+  resolve:async()=>({type:'OAUTH2',value:{access_token:'synthetic-calendar'}}),identity:()=>'grant-'+id} as any);
+ configureWorkflowReadiness({pieces:catalog,credentials:resolver});
+ try {return await body();} finally {resolver.unregister(id);configureWorkflowReadiness({pieces:catalog});}
+}
+/** A draft that never went through readiness, run as it is. */
+async function unchecked(override:Record<string,unknown>){
+ events=[fixtureEvent()];changed=undefined;fail=undefined;oversized=undefined;loseNotification=false;
+ const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Meeting fixture',trigger:graph(true,override)});
+ return {version,run:()=>run(flow.id,version.id)};
+}
+test('jarvis:google is accepted as the Calendar account by readiness and by the run, and reads Calendar with it',async()=>{
+ await withManagedSource('google',async()=>{
+  const f=await fixture({calendarConnection:'jarvis:google'}),n=notifications.length;
+  const result=await f.run();expect(result.status).toBe('SUCCEEDED');expect(notifications.length).toBe(n+1);
+  // fixture() asserts the version has no readiness issue.
+  await fixture({gmailConnection:'jarvis:google'});
+ });
+},60_000);
+test('the run itself refuses jarvis:google as the HubSpot account and a non-Google managed id as the Calendar account, before any read',async()=>{
+ await withManagedSource('other',async()=>{
+  await withManagedSource('google',async()=>{
+   for(const [override,message] of [[{hubspotConnection:'jarvis:google'},'Managed connection jarvis:google can only be used by'],[{calendarConnection:'jarvis:other'},'Managed connection jarvis:other can only be a step']] as const){
+    const f=await unchecked(override),before=[calls.length,notifications.length];
+    const result=await f.run();expect(result.status).toBe('FAILED');
+    expect(String((result as any).failedStep?.errorMessage)).toContain(message);
+    expect([calls.length,notifications.length]).toEqual(before);
+   }
+  });
+ });
 },60_000);

@@ -271,6 +271,9 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
           // Jarvis manages no HubSpot account; the meeting backend refuses a jarvis: id here at run time.
           else if (field === 'hubspotConnection' && id.startsWith('jarvis:')) issue(node, `settings.input.${field}`, 'CONNECTION_BINDING', 'Select a saved HubSpot account; a Jarvis-managed connection cannot read HubSpot');
           else if (context.phase !== 'composition') {
+            // Checked against the provider piece this field reads with, at its own
+            // path: a managed connection is accepted here only by the narrow
+            // meeting exemption in managedConnectionMisuse.
             const refusal = context.connection?.(id, provider, `settings.input.${field}`, settings) ?? (context.connection ? null : 'Connection inventory unavailable');
             const reason = typeof refusal === 'string' || refusal === null ? refusal : refusal.message;
             if (reason) issue(node,`settings.input.${field}`,'CONNECTION_BINDING',reason);

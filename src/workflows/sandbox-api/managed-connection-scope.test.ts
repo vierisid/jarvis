@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { CredentialResolver } from "../credentials/adapter";
+import { CredentialResolver, managedConnectionMisuse, managedSourceFor } from "../credentials/adapter";
 import { JarvisGoogleConnectionSource } from "../credentials/google-source";
 import { JarvisClickUpConnectionSource } from "../credentials/clickup-source";
 import { JarvisMailchimpConnectionSource } from "../credentials/mailchimp-source";
@@ -779,5 +779,63 @@ describe("managed Slack is scoped to Slack steps", () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: SLACK, value: { access_token: SLACK_TOKEN } });
     }
+  });
+});
+
+describe("the meeting preparation step may name managed Google only as its Calendar or Gmail account", () => {
+  const CONTEXT = "@jarvispieces/piece-jarvis-context";
+  const CALENDAR = "@activepieces/piece-google-calendar";
+  const meeting = (input: Record<string, unknown>, settings: Record<string, unknown> = {}): any => ({
+    name: "prepare", type: "PIECE", settings: { pieceName: CONTEXT, actionName: "meeting_briefs", input, ...settings },
+  });
+  const at = (trigger: unknown, field: string) => bindingIssues(trigger).filter(i => i.path === `settings.input.${field}`);
+  const google = () => managedSourceFor(credentials.list(), "jarvis:google")!;
+
+  test("readiness accepts jarvis:google as the Calendar account and as the Gmail account", () => {
+    expect(at(empty(meeting({ calendarConnection: "jarvis:google" })), "calendarConnection")).toEqual([]);
+    expect(at(empty(meeting({ gmailConnection: "jarvis:google" })), "gmailConnection")).toEqual([]);
+  });
+
+  test("readiness refuses jarvis:google as the HubSpot account", () => {
+    expect(at(empty(meeting({ hubspotConnection: "jarvis:google" })), "hubspotConnection").length).toBeGreaterThan(0);
+  });
+
+  test("readiness refuses another managed connection as the Calendar account", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "meeting-scope-"));
+    try {
+      mkdirSync(join(dataDir, "connections"));
+      writeFileSync(join(dataDir, "connections", "clickup.json"), JSON.stringify({ version: 1, provider: "clickup", status: "connected",
+        generation: crypto.randomUUID(), access_token: "synthetic-clickup", account: { id: "7", label: "owner" },
+        workspaces: [{ id: "8", name: "Sandbox" }], connected_at: new Date().toISOString() }));
+      credentials.register(new JarvisClickUpConnectionSource(dataDir));
+      const [issue] = at(empty(meeting({ calendarConnection: "jarvis:clickup" })), "calendarConnection");
+      expect(issue!.message).toBe("Managed connection jarvis:clickup can only be used by ClickUp steps");
+    } finally { credentials.unregister("clickup"); rmSync(dataDir, { recursive: true, force: true }); }
+  });
+
+  test("the exemption covers exactly the two account inputs of meeting_briefs, each with its own provider", () => {
+    const settings = meeting({}).settings;
+    expect(managedConnectionMisuse(google(), CALENDAR, "settings.input.calendarConnection", settings)).toBeNull();
+    expect(managedConnectionMisuse(google(), GMAIL, "settings.input.gmailConnection", settings)).toBeNull();
+    expect(managedConnectionMisuse(google(), "jarvis-context", "settings.input.calendarConnection", { ...settings, pieceName: "jarvis-context" })).not.toBeNull();
+    const refused: Array<[label: string, piece: string, path: string, settings: unknown]> = [
+      ["the HubSpot account", "@activepieces/piece-hubspot", "settings.input.hubspotConnection", settings],
+      ["any other input of the step", CALENDAR, "settings.input.calendarId", settings],
+      ["a nested path", CALENDAR, "settings.input.calendarConnection.id", settings],
+      ["the Calendar account read as Gmail", GMAIL, "settings.input.calendarConnection", settings],
+      ["the Gmail account read as Calendar", CALENDAR, "settings.input.gmailConnection", settings],
+      ["another jarvis-context action", CALENDAR, "settings.input.calendarConnection", { ...settings, actionName: "lookup" }],
+      ["another piece's step", CALENDAR, "settings.input.calendarConnection", { ...settings, pieceName: CALENDAR }],
+      ["a trigger", CALENDAR, "settings.input.calendarConnection", { ...settings, triggerName: "meeting_briefs" }],
+      ["a caller without the step's settings", CALENDAR, "settings.input.calendarConnection", undefined],
+    ];
+    for (const [label, piece, path, stepSettings] of refused) {
+      expect([label, managedConnectionMisuse(google(), piece, path, stepSettings)]).not.toEqual([label, null]);
+    }
+  });
+
+  test("a source that is not the managed Google one gets no exemption, even when it serves Calendar", () => {
+    const other = { id: "other", pieceNames: [CALENDAR, GMAIL], canResolve: (id: string) => id === "jarvis:other", resolve: async () => null };
+    expect(managedConnectionMisuse(other, CALENDAR, "settings.input.calendarConnection", meeting({}).settings)).not.toBeNull();
   });
 });
