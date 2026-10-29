@@ -2482,6 +2482,18 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         catch (error) { return json({error: error instanceof ClickUpOptionsError ? error.message : 'Could not load ClickUp choices.'}, error instanceof ClickUpOptionsError ? error.status : 502); }
       },
     },
+    '/api/integrations/todoist': {
+      GET: async () => { const {todoistStatus} = await import('../integrations/todoist-connection'); return json(todoistStatus(ctx.config)); },
+    },
+    '/api/integrations/todoist/options': {
+      GET: async (req: Request) => {
+        const q = new URL(req.url).searchParams, kind = q.get('kind');
+        if (kind !== 'projects' && kind !== 'sections') return json({error: 'Choose projects or sections.'}, 400);
+        const {todoistOptions} = await import('../integrations/todoist-options');
+        try { return json(await todoistOptions(ctx.config, kind, q.get('project_id'), q.get('cursor'))); }
+        catch { return json({error: 'Could not load Todoist choices. Check your connection or enter an ID.'}, 502); }
+      },
+    },
     '/api/integrations/asana/options': {
       GET: async (req: Request) => {
         const {asanaOptions, AsanaOptionsInputError} = await import('../integrations/asana-options');

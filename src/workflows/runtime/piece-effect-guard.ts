@@ -21,6 +21,7 @@
  * Imported BY THE ENGINE BUNDLE: keep it pure. `fetch` only, no node built-ins.
  */
 
+import {managedTodoistInput, runManagedTodoistAction} from './managed-todoist';
 import {managedAsanaInput, runManagedAsanaAction} from './managed-asana';
 import {managedDropboxInput, runManagedDropboxAction} from './managed-dropbox';
 import { HTTP_PIECE, isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
@@ -225,6 +226,7 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
     const issue = managedTrelloIssue(params.action, trello);
     if (issue) throw new Error(issue);
   }
+  const todoist = params.piece === "@activepieces/piece-todoist" ? managedTodoistInput(params.input) : null;
   const asana = params.piece === "@activepieces/piece-asana" ? managedAsanaInput(params.input) : null;
   const dropbox = params.piece === '@activepieces/piece-dropbox' ? managedDropboxInput(params.input) : null;
   const slack = params.piece === '@activepieces/piece-slack' && managedSlackInput(params.input);
@@ -243,6 +245,9 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   } else if (github) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('GitHub dispatch was not authorized');
     raw = await runManagedGitHubAction(String(params.action), github);
+  } else if (todoist) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Todoist dispatch was not authorized');
+    raw = await runManagedTodoistAction(String(params.action), todoist);
   } else if (asana) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Asana dispatch was not authorized');
     raw = await runManagedAsanaAction(String(params.action), asana);

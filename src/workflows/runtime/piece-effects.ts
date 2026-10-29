@@ -74,7 +74,8 @@ const GMAIL_TRACKED_SENDS: ReadonlySet<unknown> = new Set(['send_email', 'gmail_
  * (#953 made these reachable at the default level).
  */
 export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
-  return (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
+  return (piece === '@activepieces/piece-todoist' && ['create_task', 'update_task', 'mark_task_completed'].includes(String(action)))
+    || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
     || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE) && managedPieceChanges(piece, action))
@@ -747,6 +748,10 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
+  catalogId: 'todoist', pieceName: '@activepieces/piece-todoist', unknownActionCategory: 'modify_settings',
+  targetProps: ['task_id', 'project_id', 'section_id', 'name', 'content', 'description', 'labels', 'priority', 'due_date'],
+  categories: {read_data: ['find_task'], write_data: ['create_task', 'update_task', 'mark_task_completed']},
+}, {
   // Asana: every action of the pinned 0.7.2 bundle (`asana-connection.test.ts`
   // pins the list and the engine test checks it against the installed
   // package), so a workflow on the user's own Asana connection keeps running

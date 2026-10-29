@@ -5009,6 +5009,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisClickUpConnectionSource(jarvisConfig.daemon.data_dir));
       const { JarvisMailchimpConnectionSource } = await import("../workflows/credentials/mailchimp-source");
       credentialResolver.register(new JarvisMailchimpConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisTodoistConnectionSource } = await import("../workflows/credentials/todoist-source");
+      credentialResolver.register(new JarvisTodoistConnectionSource(jarvisConfig));
       const { JarvisAsanaConnectionSource } = await import("../workflows/credentials/asana-source");
       credentialResolver.register(new JarvisAsanaConnectionSource(jarvisConfig));
       const { JarvisGitHubConnectionSource } = await import("../workflows/credentials/github-source");
