@@ -204,3 +204,30 @@ test('the run itself refuses a managed account outside the sales exemption, befo
     });
   });
 },60_000);
+
+/** Calls the sales service directly for a RUNNING run of `trigger`, as the engine route would. */
+async function direct(trigger:any,request:Record<string,unknown>){
+  const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Sales direct',trigger});
+  const execution=createFlowRun({flowId:flow.id,flowVersionId:version.id,status:'RUNNING'});runIds.push(execution.id);
+  const ctx={runId:execution.id,projectId:DEFAULT_IDS.project,stepName:'prepare',executionPath:[] as Array<[string,number]>};
+  deals=[salesFixtureDeal()];options={};now=salesFixtureNow;resolvedIds.length=0;
+  const before=[calls.length,drafts.length,notifications.length];
+  const error=await services.salesFollowups!(request,ctx).then(()=>null,(e:Error)=>e);
+  return {error,before,after:[calls.length,drafts.length,notifications.length],bindings:listRunConnectionBindings(execution.id).map(b=>b.externalId)};
+}
+test('a request naming jarvis:google as Gmail is refused when the saved step names another Gmail account, even if jarvis:google is bound elsewhere',async()=>{
+  await withManagedSource('google',async()=>{
+    const g=graph();
+    // jarvis:google is bound by a real Gmail step's auth, so the bound-id check and the sales exemption alone would pass.
+    g.nextAction.nextAction={name:'mail',type:'PIECE',settings:{pieceName:'@activepieces/piece-gmail',actionName:'send_email',input:{auth:'{{connections.jarvis:google}}'}},nextAction:g.nextAction.nextAction};
+    const r=await direct(g,{...setup,gmailConnection:'jarvis:google'});
+    expect(r.error?.message).toContain('must match the saved workflow step');
+    expect(r.after).toEqual(r.before);expect(resolvedIds).toEqual([]);expect(r.bindings).toEqual([]);
+  });
+},60_000);
+test('the run refuses a CODE node carrying the sales step settings, before any resolve or binding row',async()=>{
+  const g=graph();g.nextAction.type='CODE';
+  const r=await direct(g,{...setup});
+  expect(r.error?.message).toBe('Sales configuration must match a saved sales follow-up step');
+  expect(r.after).toEqual(r.before);expect(resolvedIds).toEqual([]);expect(r.bindings).toEqual([]);
+},60_000);

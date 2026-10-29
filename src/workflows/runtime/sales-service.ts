@@ -32,6 +32,8 @@ export function createSalesFollowupsService(deps: {effects:WorkflowEffectBoundar
         // (jarvis:google as the Gmail account of the saved step), so a refused id writes nothing.
         for(const field of fields){
           const externalId=s[field];
+          // The saved step itself must name this account: a graph may bind the same id elsewhere (another step's auth).
+          if(saved.settings?.input?.[field]!==externalId)throw Error('Sales account must match the saved workflow step');
           if(!connectionBindings(version.trigger).has(externalId))throw Error('Sales account is not bound to this workflow');
           if(externalId.startsWith('jarvis:')){
             if(field==='hubspotConnection')throw Error(MANAGED_HUBSPOT_REFUSAL);
