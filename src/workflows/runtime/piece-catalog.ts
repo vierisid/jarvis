@@ -313,7 +313,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "13"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts
+export const CATALOG_SCHEMA_VERSION = "14"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -892,6 +892,20 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
  * on-disk caches re-project.
  */
 export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
+  if (entry.name === '@activepieces/piece-dropbox') {
+    const listPath = entry.actions.list_dropbox_folder?.inputSchema?.fields.find(field => field.name === 'path');
+    if (listPath) listPath.placeholder = '/ for Dropbox home, /folder or a workflow variable';
+    const filenameOnly = entry.actions.search_dropbox?.inputSchema?.fields.find(field => field.name === 'filename_only');
+    if (filenameOnly) filenameOnly.description = (filenameOnly.description ? filenameOnly.description + ' ' : '') + 'The hosted Jarvis Dropbox connection always matches file names only.';
+    const item = {'.tag': 'folder', id: 'id:example', name: 'Example', path_lower: '/example', path_display: '/Example'};
+    const samples: Record<string, unknown> = {
+      create_new_dropbox_folder: {metadata: item}, get_dropbox_file_metadata: item,
+      list_dropbox_folder: {entries: [item], cursor: 'example', has_more: false},
+      search_dropbox: {matches: [{metadata: {'.tag': 'metadata', metadata: item}}], has_more: false},
+    };
+    for (const [name, sample] of Object.entries(samples)) if (entry.actions[name]) entry.actions[name]!.outputSample = sample;
+  }
+
   // ClickUp 0.9.1 returns a task directly for these actions, not an HTTP envelope.
   // These stable fields let the picker wire task outputs into downstream steps.
   if (entry.name === '@activepieces/piece-clickup') {

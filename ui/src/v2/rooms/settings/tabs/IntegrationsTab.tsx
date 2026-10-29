@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ClickUpConnection } from "../../../integrations/ClickUpConnection";
 import { MailchimpConnection } from "../../../integrations/MailchimpConnection";
 import { GitHubConnection } from "../../../integrations/GitHubConnection";
+import { DropboxConnection } from "../../../integrations/DropboxConnection";
 import { TrelloConnection } from "../../../integrations/TrelloConnection";
 import { SlackConnection } from "../../../integrations/SlackConnection";
 import type { SettingsHook } from "../useSettingsData";
@@ -334,6 +335,7 @@ export function IntegrationsTab({
           nothing unless hosting offers it or it is already connected. */}
       <ClickUpConnection optional />
       <GitHubConnection optional />
+      <DropboxConnection optional />
       <TrelloConnection optional />
       <SlackConnection optional />
     </div>

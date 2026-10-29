@@ -157,6 +157,7 @@ export const VERSION_PIN: Record<
   string,
   { versionRange: string; vettedVersion: string; reason: string }
 > = {
+  dropbox: {versionRange: "0.9.2", vettedVersion: "0.9.2", reason: "Governed action table (MANAGED_PIECE_ADAPTERS), managed action contracts and outputs mapped against 0.9.2; review before upgrading"},
   mailchimp: {versionRange: "0.5.10", vettedVersion: "0.5.10", reason: "Five managed subscriber, tag and reporting actions qualified against 0.5.10; review before upgrading"},
   slack: {versionRange: "0.23.1", vettedVersion: "0.23.1", reason: "Managed bot connection actions qualified against 0.23.1; review before upgrading"},
   clickup: {versionRange: "0.9.1", vettedVersion: "0.9.1", reason: "Governed action table (MANAGED_PIECE_ADAPTERS) and task outputs mapped against 0.9.1; review before upgrading"},
