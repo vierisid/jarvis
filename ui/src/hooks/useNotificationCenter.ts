@@ -32,6 +32,8 @@ export type NotificationItem = {
   tone: "ok" | "neutral" | "warn" | "accent";
   /** True when the row hasn't been opened/marked-read yet. */
   unread: boolean;
+  /** A system notice Jarvis sent on its own, as opposed to a client warning. */
+  proactive?: boolean;
 };
 
 export interface NotificationCenterInput {
@@ -156,6 +158,7 @@ export function useNotificationCenter({
         timestamp: n.timestamp ?? Date.now(),
         tone: n.level === "warning" ? "warn" : "neutral",
         unread: !readSet.has(n.id),
+        ...(n.source === "proactive" ? { proactive: true } : {}),
       });
     }
 

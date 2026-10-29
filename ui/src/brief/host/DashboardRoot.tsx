@@ -17,7 +17,8 @@ import { useBilling } from '../../v2/billing/useBilling';
 import type { BriefRoute, BriefShellPort } from '../contracts';
 import { useNotificationCenter } from '../../hooks/useNotificationCenter';
 import { AttentionRoutes } from '../navigation/AttentionRoutes';
-import { fromNotificationCenter } from '../navigation/notifications';
+import { dashboardAttentionItems, dashboardToastNotice } from '../navigation/notifications';
+import { isBriefCapabilityEnabled } from '../../../../src/brief/capabilities';
 import { ViewHost } from '../../onboarding-next/host/ViewHost';
 import { createSession, type Session } from '../../onboarding-next/host/session';
 import { createTransport } from '../../onboarding-next/host/transport';
@@ -162,7 +163,7 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
     if (owner.roomNavRequest && !owner.roomActionRequests.some(request => request.ts === owner.roomNavRequest?.ts))
       void host.navigation.intent(owner.roomNavRequest.key, false);
   }, [owner.roomNavRequest?.ts]);
-  const attention = <><AttentionRoutes snapshot={owner.isConnected ? { status: 'ready', items: fromNotificationCenter(notices.items.filter(item => !['approval', 'clarifier', 'repeat-back'].includes(item.kind))) } : { status: 'unavailable' }}
+  const attention = <><AttentionRoutes snapshot={owner.isConnected ? { status: 'ready', items: dashboardAttentionItems(notices.items, isBriefCapabilityEnabled(host.capabilities(), 'decisions')) } : { status: 'unavailable' }}
     navigation={host.navigation} roomAvailable={host.available} markRead={identity => notices.markRead(identity.id)} />
     <section aria-label="Voice confirmations">{owner.clarifiers.map(item => <ClarifierCard key={item.id} {...item}
       onConfirm={() => void resolveAttention('clarifier', item.id, 'confirm')} onCancel={() => void resolveAttention('clarifier', item.id, 'cancel')} />)}
@@ -200,8 +201,8 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
         </section>
       </LiveDataProvider>)}
     </BriefHost>
-    {route.room !== 'needs-you' && notices.items.find(item => item.kind === 'system' && item.unread) && (() => {
-      const notice = notices.items.find(item => item.kind === 'system' && item.unread)!;
+    {route.room !== 'needs-you' && dashboardToastNotice(notices.items) && (() => {
+      const notice = dashboardToastNotice(notices.items)!;
       return <aside className="brief-root brief-host-toast" role="status" aria-label="New Jarvis notification"><strong>{notice.title}</strong><p>{notice.text}</p>
         <button onClick={() => void host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'needs-you', selection: {} } }, message: null }))}>View notifications</button>
         <button onClick={() => notices.markRead(notice.id)}>Dismiss</button></aside>;
