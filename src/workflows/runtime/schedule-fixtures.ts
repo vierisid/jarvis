@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { sanitizedEnv } from '../../util/subprocess-env';
 import { CronScheduler, cronWallTimeKey, validateCronExpression, validateCronTimezone, validateCronDstPolicy } from '../../lib/cron-scheduler';
 import { scheduleTriggerPayload } from './schedule-payload';
 import { resolveFixtureValue } from './json-mapping-fixtures';
@@ -87,7 +88,7 @@ export async function validateScheduleFixtures(saved: any, fixture: any) {
   }
   prepare(saved, fixture);
   const child = Bun.spawn([process.execPath,'--no-env-file',fileURLToPath(import.meta.url)], {
-    env:{},stdin:new Blob([JSON.stringify({saved,fixture})]),stdout:'pipe',stderr:'ignore',
+    env:sanitizedEnv(),stdin:new Blob([JSON.stringify({saved,fixture})]),stdout:'pipe',stderr:'ignore',
   });
   let timedOut = false;
   const timer = setTimeout(()=>{timedOut=true;child.kill();},10_000);
