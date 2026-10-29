@@ -56,8 +56,8 @@ export function GoalCard({ handoff, onReviewDraft, onPlanUnplanned }: { handoff:
           {rec && <BriefButton size="sm" variant="primary" className="brief-goal-accept" state={handoff.pending ? "pending" : handoff.accepted ? "success" : "idle"} stateLabels={{ pending: "Adding…", success: "Added to Today" }} aria-disabled={handoff.locked || undefined} onClick={handoff.accept}>Add to Today</BriefButton>}
           <BriefButton ref={back} size="sm" variant="text" onClick={() => changeView(null)}>Back to goal</BriefButton>
         </div>
-        <div className={`brief-goal-feedback brief-type-utility${handoff.accepted || handoff.pending ? " brief-sr-only" : ""}`} role="status" aria-live="polite">{handoff.message}</div>
-        {handoff.locked && !handoff.accepted && !handoff.pending && binding.refresh && <BriefButton size="sm" variant="text" onClick={binding.refresh}>Refresh recommendation</BriefButton>}
+        {rec && <div className={`brief-goal-feedback brief-type-utility${handoff.accepted || handoff.pending ? " brief-sr-only" : ""}`} role="status" aria-live="polite">{handoff.message}</div>}
+        {rec && handoff.locked && !handoff.accepted && !handoff.pending && binding.refresh && <BriefButton size="sm" variant="text" onClick={binding.refresh}>Refresh recommendation</BriefButton>}
       </> : <>
         <div className="brief-goal-drivers">{goal.drivers.map(driver => {
           const value = cardProgress(driver.progress, driver.fraction);

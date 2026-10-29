@@ -320,6 +320,7 @@ function AddConnectionForm({
   const [valueText, setValueText] = useState(setup && !["OAUTH2", "PLATFORM_OAUTH2", "CLOUD_OAUTH2"].includes(setup.authType) ? '{}' : '{"access_token": ""}');
   const [submitting, setSubmitting] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
+  const [administratorSetup, setAdministratorSetup] = useState(false);
 
   const handleSubmit = async (): Promise<void> => {
     let value: Record<string, unknown>;
@@ -349,8 +350,13 @@ function AddConnectionForm({
     }
   };
 
+  if (setup && ["OAUTH2", "PLATFORM_OAUTH2", "CLOUD_OAUTH2"].includes(setup.authType) && !administratorSetup) {
+    return <OAuthSetupGuide pieceName={setup.pieceName} onAdministratorSetup={() => setAdministratorSetup(true)} />;
+  }
+
   return (
     <div className="wf-conn__form">
+      {setup && administratorSetup ? <p role="note">Administrator credential setup. Use a provider-authorized token with the permissions required by this connector. Saving credentials does not verify account access. Never paste credentials in chat.</p> : null}
       <div className="wf-conn__form-row">
         <label>
           External id
@@ -419,4 +425,16 @@ function AddConnectionForm({
       </div>
     </div>
   );
+}
+
+export function OAuthSetupGuide({ pieceName, onAdministratorSetup }: { pieceName: string; onAdministratorSetup(): void }) {
+  const sheets = pieceName === '@activepieces/piece-google-sheets';
+  return <section className="wf-conn__form" aria-labelledby="oauth-setup-heading">
+    <h4 id="oauth-setup-heading">{sheets ? 'Connect Google Sheets' : 'Connect an account'}</h4>
+    <p>Browser sign-in for this connector is not available on this self-hosted instance yet. Installing a connector does not connect an account.</p>
+    {sheets ? <p>The Google sign-in in Settings grants read-only Gmail and Calendar access. It cannot authorize writing to Google Sheets.</p> : null}
+    <p>Keep your workflow as a draft. Ask your instance administrator to configure an authorized connection for this connector, then return here and refresh to select it.</p>
+    {sheets ? <p>For spreadsheet writes, the administrator needs a Google OAuth grant with Sheets write access and access to the destination spreadsheet. A Gmail or Calendar grant is not sufficient.</p> : null}
+    <Button variant="ghost" size="sm" onClick={onAdministratorSetup}>Administrator credential setup</Button>
+  </section>;
 }

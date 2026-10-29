@@ -33,6 +33,14 @@ async function open(){await click(".brief-goal-next");}
 const feedback=()=>host.querySelector(".brief-goal-feedback")?.textContent;
 const tick=async(ms=10)=>React.act(async()=>new Promise(resolve=>setTimeout(resolve,ms)));
 
+test('an empty recommendation explains the empty state without asking to refresh or add nonexistent work', async () => {
+  binding = { ...binding, recommendation: { status: 'empty' } };
+  await render(); await open();
+  expect(host.textContent).toContain('No new step');
+  expect(host.textContent).not.toContain('Refresh');
+  expect(host.querySelector('.brief-goal-accept')).toBeNull();
+});
+
 test("measurement and recommendation gates are independent and never mix fixtures into live",()=>{
   const provider={readiness:()=>"ready" as const};
   expect(goalView("live",binding).state.status).toBe("unavailable");
