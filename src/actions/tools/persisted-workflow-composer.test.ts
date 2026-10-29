@@ -212,3 +212,19 @@ test("approved preinstalls run before composing and the composer loop gets no in
   expect(tools).not.toContain("install_library_piece");
   expect(getWorkflowComposition(result.compositionRecordId)!.specification.provenance!.installedPieces!.map(p => p.id)).toEqual(["fixture-calendar"]);
 });
+
+test("a stalled preinstall is stopped at its bound, reported as failed, and the journal still finishes", async () => {
+  const library = [{ id: "fixture-calendar", npmPackage: "@activepieces/piece-fixture-calendar", displayName: "Fixture Calendar", description: "fixture" }];
+  let received: AbortSignal | undefined;
+  const llm: ComposerLlmClient = { chat: async () => { throw new Error("unused"); }, chatTools: async () =>
+    ({ content: "", tool_calls: [{ id: "submit", name: "submit_flow", arguments: JSON.parse(valid) }] }) };
+  // Never settles and ignores its signal: the bound alone must end the wait.
+  const result = await composePersistedFlow({ pieceRegistry: sampleCatalog(), llm, library, installTimeoutMs: 20,
+    installLibraryPiece: (_id, signal) => { received = signal; return new Promise<void>(() => {}); } },
+    request, undefined, undefined, ["fixture-calendar"]);
+  expect(result.ok).toBe(true);
+  expect(result.installedPieces).toBeUndefined();
+  expect(result.installationErrors).toEqual([expect.stringMatching(/^Could not install fixture-calendar: installation timed out/)]);
+  expect(received?.aborted).toBe(true);
+  expect(getWorkflowComposition(result.compositionRecordId)!.state).toBe("VALIDATED");
+});

@@ -335,6 +335,10 @@ export interface ComposeDeps {
    * runs, so in production the loop never offers install_library_piece; only
    * tests hand it to composeFlow directly. Never grants credentials. */
   installLibraryPiece?: (id: string, signal?: AbortSignal) => Promise<void>;
+  /** Per-install bound for composePersistedFlow's preinstalls (default five
+   * minutes). On expiry the signal passed to installLibraryPiece is aborted
+   * and the install is reported as failed, so the journal always finishes. */
+  installTimeoutMs?: number;
   /**
    * Optional inventory of the machines a step can execute on: the enrolled
    * sidecars plus the brain's own host. When present the composer (a) renders

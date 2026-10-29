@@ -14,19 +14,15 @@ export interface WorkflowCompositionRecord extends CompositionCandidate {
 /**
  * Journals this process opened and has not finished. A COMPOSING row that is
  * not here was left by a crash or an earlier process: its outcome is unknown
- * and nothing will ever finish it.
+ * and nothing will ever finish it. Membership alone decides liveness: every
+ * phase of a live attempt is bounded (composition by its budget, each
+ * preinstall by its timeout), so a live journal always reaches finish().
  */
 const LIVE_JOURNALS = new Set<string>();
-/**
- * A live journal that has not checkpointed for this long is treated as stuck.
- * Composition's own budget is three minutes, and connector installs before it
- * each update the row, so a healthy attempt never comes close.
- */
-export const COMPOSITION_STALE_MS = 15 * 60_000;
 
 /** True while a COMPOSING record is still being worked on by this process. */
-export function compositionInProgress(record: Pick<WorkflowCompositionRecord, "id" | "state" | "updated">, now = Date.now()): boolean {
-  return record.state === "COMPOSING" && LIVE_JOURNALS.has(record.id) && now - record.updated < COMPOSITION_STALE_MS;
+export function compositionInProgress(record: Pick<WorkflowCompositionRecord, "id" | "state">): boolean {
+  return record.state === "COMPOSING" && LIVE_JOURNALS.has(record.id);
 }
 
 /** Commit the immutable specification before any provider call. The journal

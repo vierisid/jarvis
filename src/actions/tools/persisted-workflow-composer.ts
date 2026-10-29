@@ -36,6 +36,9 @@ export async function composePersistedFlow(deps: ComposeDeps, input: ComposeRequ
     const entry = snapshot.deps.library?.find(candidate => candidate.id === id);
     if (!entry) throw new Error('Unknown Library entry');
     await deps.installLibraryPiece!(id, signal);
+    // An install that finished after its bound expired is not this
+    // composition's: neither journaled nor added to its catalog.
+    signal?.throwIfAborted();
     const actual = deps.pieceRegistry.get(entry.npmPackage);
     if (!actual) throw new Error('Installed piece metadata is unavailable');
     const metadata = JSON.parse(JSON.stringify(actual));
@@ -54,7 +57,7 @@ export async function composePersistedFlow(deps: ComposeDeps, input: ComposeRequ
         const entry = snapshot.deps.library?.find(candidate => candidate.id === id);
         if (entry && snapshot.deps.pieceRegistry.get(entry.npmPackage)) { alreadyInstalledPieces.push(id); continue; }
         try {
-          await install(id, request.signal);
+          await boundedInstall(install, id, deps.installTimeoutMs ?? PREINSTALL_TIMEOUT_MS, request.signal);
           installedPieces.push(id);
         } catch (error) {
           request.signal?.throwIfAborted();
@@ -83,5 +86,34 @@ export async function composePersistedFlow(deps: ComposeDeps, input: ComposeRequ
       try { Object.assign(error, { installedPieces: [...installedPieces] }); } catch { /* frozen error */ }
     }
     throw error;
+  }
+}
+
+/** Default bound on one approved preinstall, lock wait included. */
+export const PREINSTALL_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * One install, bounded: on timeout or caller cancellation its signal is
+ * aborted (the production installer kills its bun install child) and this
+ * rejects at once, even if the installer ignores the signal. The journal is
+ * live for the whole preinstall phase, so an unbounded install would hold
+ * the setup chain forever.
+ */
+async function boundedInstall(install: (id: string, signal?: AbortSignal) => Promise<void>, id: string, timeoutMs: number, outer?: AbortSignal): Promise<void> {
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(outer!.reason);
+  outer?.addEventListener('abort', onAbort, { once: true });
+  const timer = setTimeout(() => controller.abort(new Error(`installation timed out after ${Math.round(timeoutMs / 1000)}s and was stopped`)), timeoutMs);
+  try {
+    outer?.throwIfAborted();
+    const aborted = new Promise<never>((_, reject) => {
+      controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true });
+    });
+    const running = install(id, controller.signal);
+    running.catch(() => { /* reported through the race, or after it lost */ });
+    await Promise.race([running, aborted]);
+  } finally {
+    clearTimeout(timer);
+    outer?.removeEventListener('abort', onAbort);
   }
 }
