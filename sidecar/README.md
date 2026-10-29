@@ -112,6 +112,11 @@ owns only its own keys). A token can also arrive from the dashboard as a
 wrong-URL token used to be persisted blind and then fail invisibly in the
 reconnect loop.
 
+Browser: the sidecar auto-detects a Chromium-based browser to drive. On
+Windows, if detection picks the wrong browser, set `browser.executable_path`
+to an installed Chrome and give it a dedicated `browser.profile_dir` in
+`sidecar.yaml` (keys defined in `sidecar/types.go`).
+
 ## Layout
 
 The package is flat Go at the top level — ~150 files in `package main` — so

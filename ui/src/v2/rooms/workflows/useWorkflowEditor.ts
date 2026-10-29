@@ -37,6 +37,8 @@ import {
   parseSourceHandle,
   removeStep,
   reorderChain as treeReorderChain,
+  withStepInput,
+  withoutChosenZone,
   type ConnectionHandle,
 } from "./tree";
 
@@ -56,6 +58,7 @@ export interface FlowStepNode {
   displayName?: string;
   settings?: {
     pieceName?: string;
+    propertySettings?: Record<string, {schema?: unknown}>;
     triggerName?: string;
     actionName?: string;
     input?: Record<string, unknown>;
@@ -73,6 +76,12 @@ export interface FlowStepNode {
      * this flag, so the editor treats it as the more flexible Router.
      */
     routerKind?: "if" | "router";
+    /**
+     * Schedule triggers: the zone a person picked for this step. The brain
+     * uses `input.timezone` only while it equals this; otherwise the schedule
+     * runs in Jarvis's zone. Written by `withStepInput` (tree.ts).
+     */
+    chosenTimezone?: string;
     /**
      * PIECE / CODE: per-step error-handling toggles consumed by the engine
      * at `src/workflows/activepieces/.../helper/error-handling.ts`.
@@ -468,9 +477,7 @@ export function useWorkflowEditor(flowId: string | null) {
   const updateStepInput = useCallback(
     (stepName: string, key: string, value: unknown): void => {
       mutateAnyStep(stepName, (target) => {
-        const settings = target.settings ? { ...target.settings } : {};
-        settings.input = { ...(settings.input ?? {}), [key]: value };
-        target.settings = settings;
+        target.settings = withStepInput(target, key, value);
       });
     },
     [mutateAnyStep],
@@ -1016,8 +1023,10 @@ export function useWorkflowEditor(flowId: string | null) {
           }
         }
 
+        const changed = target.settings?.pieceName !== pieceName
+          || (isTrigger ? target.settings?.triggerName : target.settings?.actionName) !== actionName;
         const settings: NonNullable<FlowStepNode["settings"]> = {
-          ...(target.settings ?? {}),
+          ...(changed ? withoutChosenZone(target.settings) : (target.settings ?? {})),
           pieceName,
           input: seed,
         };

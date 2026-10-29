@@ -853,6 +853,61 @@ environment (the dashboard and keychain hold LLM keys) keeps it out of that file
 either way, and nothing short of a sandbox keeps the daemon's files from what it
 runs.
 
+### Workflow credential encryption
+
+Workflow connection credentials (`app_connection.value`) are encrypted with
+AES-256-GCM. The key comes from `JARVIS_WORKFLOW_ENCRYPTION_KEY` (64 hex
+characters), else `JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE`, else
+`<data dir>/workflow-encryption.key` (created 0600 on first use). Source of
+truth: `src/workflows/db/encryption.ts`.
+
+What this protects: a database file or archive that travels without the key.
+It does not protect against anyone who can read the data directory, since on a
+default install the key sits beside the database. Losing the key is
+unrecoverable. `jarvis export --full` includes the key file; a key supplied only
+through the environment is never captured, so escrow it separately.
+
+New writes use the row-bound `enc1a:` envelope: the ciphertext authenticates
+only against the row identity it was written for (`id`, `project_id`,
+`piece_name`, `external_id`), so copying a value to another row fails to
+decrypt. Reads still accept older `enc1:` values and legacy plaintext rows,
+which releases v0.6.0 through v0.13.7 wrote.
+
+`scripts/migrate-native-credentials.ts` converts existing rows offline, from a
+source checkout. Its modes:
+
+- `inventory`: read-only counts; needs no key.
+- `bind`: re-wraps plaintext and `enc1:` rows as `enc1a:`. Reverse it with
+  `rollback-binding`.
+- `apply` / `rollback`: the older plaintext to `enc1:` conversion and its
+  reversal. `rollback` restores plaintext.
+
+Before any write mode, back up the database with a consistent SQLite snapshot
+(copying only `jarvis.db` can miss data still in its WAL), confirm the key the
+deployment actually uses, and stop the daemon and its supervisor; the script
+holds the daemon and data-directory locks and refuses to run beside a live
+daemon. Pass the existing key with `--key-file` or by inheriting
+`JARVIS_WORKFLOW_ENCRYPTION_KEY`, never both; the script never generates or
+rotates a key. Write modes take `--recovery <new file>`: an encrypted journal
+(mode 0600) that is written before any row changes and lets the matching
+rollback restore the exact original values. Keep it and the key until you are
+sure the conversion is good. All rows convert in one transaction, so a failure
+changes nothing.
+
+```sh
+bun scripts/migrate-native-credentials.ts inventory --db <jarvis.db>
+bun scripts/migrate-native-credentials.ts bind --db <jarvis.db> --data-dir <data dir> \
+  --deployment-version <deployed commit or version> --recovery <new journal path>
+```
+
+Run the script with `--help` for the full usage. Conversion re-encrypts
+live values only; old SQLite pages, WAL files, snapshots and earlier backups
+can still hold plaintext, so restrict and encrypt them.
+
+After `bind`, set `JARVIS_REQUIRE_ENCRYPTED_CREDENTIALS=1` to refuse plaintext
+rows. The daemon refuses to start with it set while any readable plaintext row
+remains; unsetting it undoes that and changes no data.
+
 ## Quick reference
 
 | | Single machine | LAN via IP | VPS + domain |
