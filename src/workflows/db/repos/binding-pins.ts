@@ -421,7 +421,8 @@ export function machinePinForRun(runId: string): MachinePin | undefined {
   return pins?.versionId === run.flow_version_id ? pins.machine ?? undefined : undefined;
 }
 
-function runBinding(runId: string, externalId: string): RunConnectionBinding | null {
+/** What this run is bound to for one connection, or null before its first fetch. */
+export function runBinding(runId: string, externalId: string): RunConnectionBinding | null {
   const row = getWorkflowDb().query<{ record: string }, [string, string]>(
     'SELECT record FROM workflow_run_connection_binding WHERE run_id = ? AND external_id = ?').get(runId, externalId);
   return row ? JSON.parse(row.record) as RunConnectionBinding : null;

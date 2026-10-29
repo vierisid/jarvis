@@ -45,6 +45,7 @@ let reply='', loseReply=false, unconfirmed=false, loseNotification=false, refuse
 let stopOnMissing=false, hold:Promise<void>|null=null, holdEmail='';
 // skew: how far the credential resolver's clock runs ahead. beforeAuthorize runs after the engine fetched its credential.
 let skew=0, beforeAuthorize:(()=>void)|null=null;
+let tokenAnswer:{status:number;body:unknown}={status:200,body:{access_token:'refreshed-token',expires_in:3600}};
 const bearers:string[]=[];
 const contacts = new Map<string,{id:string;properties:Record<string,any>}>();
 const calls:Array<{method:string;email:string}> = [], notifications:string[] = [], runIds:string[]=[];
@@ -87,7 +88,7 @@ beforeAll(async()=>{
   }
   upsertConnection({externalId:'fixture-hubspot',displayName:'Fixture',type:'OAUTH2',pieceName:HUBSPOT,pieceVersion:'0.12.1',value:{access_token:'synthetic-only'}});
   const services=buildSandboxServiceBackends({credentialResolver:new CredentialResolver({now:()=>Date.now()+skew,
-      tokenTransport:async()=>({status:200,body:{access_token:'refreshed-token',expires_in:3600}})}),
+      tokenTransport:async()=>tokenAnswer}),
     authorityEngine:new AuthorityEngine({default_level:10,governed_categories:[],overrides:[],context_rules:[],learning:{enabled:false,suggest_threshold:10},emergency_state:'normal'}),
     emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
     hubspotFetch: (async(url:any,init:any)=>{
@@ -249,7 +250,7 @@ test('an expired stored HubSpot token without refresh details asks to reconnect 
     expect(notifications.length).toBe(before);
   } finally { skew=0;beforeAuthorize=null; }
 },45_000);
-test('a token another run refreshed between the engine fetch and dispatch is the same account and is sent',async()=>{
+test('a token another run refreshed after the step was authorized, as the dispatch reads the row, is the same account and is sent',async()=>{
   hubspotRow('hubspot-refreshed-meanwhile',{access_token:'before-refresh',...refreshDetails});
   const f=await fixture('hubspot-refreshed-meanwhile');reply=answer(10);const start=bearers.length;
   const hook=onDispatchRead('hubspot-refreshed-meanwhile',row=>expect(replaceRefreshedConnectionValue(row.projectId,row.id,row.value,
@@ -258,6 +259,41 @@ test('a token another run refreshed between the engine fetch and dispatch is the
     const run=await f.send('one');expect(hook.seen()).toBeGreaterThan(0);expect(run.status).toBe('SUCCEEDED');
     expect(new Set(bearers.slice(start))).toEqual(new Set(['Bearer refreshed-meanwhile']));
   } finally { hook.spy.mockRestore(); }
+},45_000);
+// Rewrites the row once the engine fetched it and before the step is authorized (the binding capture).
+const beforeCapture=(externalId:string,change:(row:appConnections.AppConnection)=>void)=>{
+  beforeAuthorize=()=>{beforeAuthorize=null;change(getConnectionByExternalId(DEFAULT_IDS.project,HUBSPOT,externalId)!);};
+};
+test('a token another run refreshed before the step was authorized is the same account and is sent',async()=>{
+  hubspotRow('hubspot-refreshed-before-capture',{access_token:'engine-token',...refreshDetails});
+  const f=await fixture('hubspot-refreshed-before-capture');reply=answer(10);const start=bearers.length;
+  beforeCapture('hubspot-refreshed-before-capture',row=>expect(replaceRefreshedConnectionValue(row.projectId,row.id,row.value,
+    {...row.value,access_token:'refreshed-before-capture',claimed_at:Math.round(Date.now()/1000)})).toBe('stored'));
+  const run=await f.send('one');expect(run.status).toBe('SUCCEEDED');
+  expect(new Set(bearers.slice(start))).toEqual(new Set(['Bearer refreshed-before-capture']));
+},45_000);
+test('a HubSpot credential a person replaced before the step was authorized is refused before any write',async()=>{
+  hubspotRow('hubspot-switched-before-capture',{access_token:'first-account'});
+  const f=await fixture('hubspot-switched-before-capture');reply=answer(10);const before=notifications.length;
+  const email=f.flow.id.toLowerCase()+'@example.com';
+  beforeCapture('hubspot-switched-before-capture',row=>{updateConnectionById(row.projectId,row.id,{value:{access_token:'second-account'}});});
+  const run=await f.send('one');expect(run.status).toBe('FAILED');
+  expect(calls.filter(c=>c.email===email)).toEqual([]);expect(notifications.length).toBe(before);
+},45_000);
+test('a HubSpot token endpoint that cannot be reached for an expired token says the failure is temporary, not to reconnect',async()=>{
+  hubspotRow('hubspot-unreachable',{access_token:'expiring',...refreshDetails});
+  const f=await fixture('hubspot-unreachable');reply=answer(10);
+  const email=f.flow.id.toLowerCase()+'@example.com';
+  beforeAuthorize=()=>{skew=61*60_000;tokenAnswer={status:503,body:{}};};
+  try {
+    const run=await f.send('one');expect(run.status).toBe('FAILED');
+    const effect=contactEffect(run.id);
+    expect(effect.outcome).toMatchObject({status:'blocked',code:'CONNECTION_REFRESH_UNREACHABLE',effect:'not_started'});
+    const message=effect.outcome!.status!=='succeeded' ? effect.outcome!.message : '';
+    expect(message).toContain('usually temporary');expect(message).not.toContain('Reconnect');
+    expect(calls.filter(c=>c.email===email)).toEqual([]);
+    expect(getWorkflowDb().query('SELECT COUNT(*) AS n FROM workflow_effect_identity WHERE owner=?').get(effect.id)).toEqual({n:0});
+  } finally { skew=0;beforeAuthorize=null;tokenAnswer={status:200,body:{access_token:'refreshed-token',expires_in:3600}}; }
 },45_000);
 test('a HubSpot credential a person replaced between the engine fetch and dispatch is refused before any write',async()=>{
   hubspotRow('hubspot-switched',{access_token:'first-account'});

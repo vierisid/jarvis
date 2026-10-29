@@ -3,15 +3,24 @@ import { getConnection, getConnectionByExternalId, type AppConnection } from '..
 import { getFlowVersion } from '../db/repos/flow-version';
 import type { WorkflowEffect } from '../db/repos/workflow-effect';
 import { walkFlowNodes } from '../db/flow-graph';
+import { runBinding } from '../db/repos/binding-pins';
 import { digest } from './effect-context';
 import { tracksPieceCompletion } from './piece-effects';
 
 export type ProviderEvidence = { outcome: 'confirmed' | 'inconclusive' | 'unsupported' | 'blocked'; reason: string; reference?: string };
 
 /** Bind a native OAuth connection to the credential the engine actually resolved.
- * Managed/dynamic credentials deliberately have no lookup adapter yet. */
+ * Managed/dynamic credentials deliberately have no lookup adapter yet.
+ *
+ * The engine's token must be the one the row holds, with one exception for
+ * the HubSpot contact upsert, which dispatches with the row's own (refreshed)
+ * token rather than the engine's: another run may have refreshed the row
+ * after this run's engine fetched it. That is accepted only when this run was
+ * handed this row's credential and the row is still at the credential
+ * generation the run was bound to, so the same account. A person replacing
+ * the credential advances the generation and is refused as before. */
 export function captureProviderBinding(input: {
-  projectId: string; versionId: string; stepName: string; piece: string; credentialDigest?: string;
+  projectId: string; versionId: string; stepName: string; piece: string; credentialDigest?: string; runId?: string;
 }): WorkflowEffect['providerBinding'] {
   if (!input.credentialDigest) return undefined;
   const version = getFlowVersion(input.versionId);
@@ -26,8 +35,12 @@ export function captureProviderBinding(input: {
   try {
     const connection = getConnectionByExternalId(input.projectId, input.piece, externalId);
     const token = connection?.value.access_token;
-    if (!connection || connection.type !== 'OAUTH2' || connection.status !== 'ACTIVE' || typeof token !== 'string'
-      || digest(token) !== input.credentialDigest) return undefined;
+    if (!connection || connection.type !== 'OAUTH2' || connection.status !== 'ACTIVE' || typeof token !== 'string') return undefined;
+    if (digest(token) !== input.credentialDigest) {
+      const bound = input.piece === '@activepieces/piece-hubspot' && input.runId ? runBinding(input.runId, externalId) : null;
+      if (!bound || bound.refusal || bound.handedOut !== true || bound.identity?.kind !== 'native'
+        || bound.identity.connectionId !== connection.id || bound.identity.generation !== connection.credentialGeneration) return undefined;
+    }
     return { connectionId: connection.id, credentialDigest: input.credentialDigest, credentialGeneration: connection.credentialGeneration };
   } catch { return undefined; }
 }

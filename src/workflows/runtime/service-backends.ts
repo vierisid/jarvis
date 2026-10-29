@@ -1074,7 +1074,7 @@ export function buildSandboxServiceBackends(
     if (contact && digest(contact) !== req.inputDigest) throw new Error('HubSpot contact input digest mismatch');
     const input = contact ?? document ?? projected;
     const providerBinding = tracked ? captureProviderBinding({ projectId: ctx.projectId, versionId: run.flowVersionId,
-      stepName: ctx.stepName!, piece: req.piece, credentialDigest: req.credentialDigest }) : undefined;
+      stepName: ctx.stepName!, piece: req.piece, credentialDigest: req.credentialDigest, runId: ctx.runId }) : undefined;
     if (contact && !providerBinding) throw new Error('HubSpot contact upsert requires a saved, active HubSpot 0.12.1 OAuth connection; choose it in setup');
     const reply = await effects.invoke({ context: ctx, piece: req.piece, action: req.action,
       externalDispatch: tracked && !contact, providerBinding,
@@ -1121,8 +1121,12 @@ export function buildSandboxServiceBackends(
               stored: { id: connection.id, projectId: connection.projectId, externalId: connection.externalId, generation: connection.credentialGeneration } })).value.access_token;
           } catch (error) {
             if (!(error instanceof ConnectionCredentialError)) throw error;
-            throw new ActionOutcomeError({ status: 'blocked', code: error.code,
-              message: `Reconnect the selected HubSpot account (${connection.externalId}): ${error.message}`, effect: 'not_started' });
+            // Only an expired or refused credential needs a person to reconnect; the others pass.
+            const account = `the selected HubSpot account (${connection.externalId})`;
+            const message = error.code === 'CONNECTION_EXPIRED' ? `Reconnect ${account}: ${error.message}`
+              : error.code === 'CONNECTION_REFRESH_UNREACHABLE' ? `Nothing was sent: Jarvis could not refresh ${account} just now, which is usually temporary. Start a new run later. ${error.message}`
+              : `Nothing was sent: ${account} changed while Jarvis refreshed it. Start a new run. ${error.message}`;
+            throw new ActionOutcomeError({ status: 'blocked', code: error.code, message, effect: 'not_started' });
           }
           if (typeof token !== 'string' || !token)
             throw new ActionOutcomeError({ status: 'blocked', code: 'CONNECTION_EXPIRED',

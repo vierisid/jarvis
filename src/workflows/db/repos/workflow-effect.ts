@@ -26,11 +26,13 @@ export interface WorkflowEffect {
    */
   replayRefusal?: { outcome: ActionOutcome; at: number };
   /**
-   * Q-07: native connection identity at dispatch; no credential is retained.
-   * `credentialDigest` is the token the engine resolved when the effect was
-   * recorded. `credentialGeneration` is the row's credential generation then:
-   * a token refresh keeps it, a person replacing the credential advances it.
-   * A binding recorded before it existed has no generation.
+   * Q-07: the native connection the engine resolved when the effect was
+   * recorded; no credential is retained. Recovery's provider readback checks
+   * the row against it. A dispatch checks the binding it captures on that
+   * call, not this stored copy. `credentialDigest` is the engine's token;
+   * `credentialGeneration` is the row's credential generation then (a token
+   * refresh keeps it, a person replacing the credential advances it). A
+   * binding recorded before the generation existed has none.
    */
   providerBinding?: { connectionId: string; credentialDigest: string; credentialGeneration?: number };
   /**
