@@ -2482,6 +2482,22 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         catch (error) { return json({error: error instanceof ClickUpOptionsError ? error.message : 'Could not load ClickUp choices.'}, error instanceof ClickUpOptionsError ? error.status : 502); }
       },
     },
+    '/api/integrations/asana/options': {
+      GET: async (req: Request) => {
+        const {asanaOptions, AsanaOptionsInputError} = await import('../integrations/asana-options');
+        try { return json(await asanaOptions(ctx.config, new URL(req.url).searchParams)); }
+        catch(error) { return json({error:error instanceof Error ? error.message : 'Could not load Asana projects.'}, error instanceof AsanaOptionsInputError ? 400 : 502); }
+      },
+    },
+    '/api/integrations/asana': {
+      GET: async () => {
+        const {asanaStatus, readAsanaConnection} = await import('../integrations/asana-connection');
+        const {asanaNeedsReconnect} = await import('../integrations/asana-refresh');
+        const status = asanaStatus(ctx.config), c = readAsanaConnection(ctx.config.daemon.data_dir);
+        const reconnect = !!c && asanaNeedsReconnect(ctx.config, c);
+        return json({...status, connected: status.connected && !reconnect, reconnect});
+      },
+    },
     '/api/integrations/dropbox': {
       GET: async () => {
         const {dropboxStatus, readDropboxConnection} = await import('../integrations/dropbox-connection');

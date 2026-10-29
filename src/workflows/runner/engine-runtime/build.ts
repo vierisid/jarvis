@@ -296,6 +296,7 @@ export const PATCHED_VENDOR_SOURCES = [
   '../../runtime/piece-effects.ts',
   '../../runtime/piece-effect-guard.ts',
   '../../runtime/managed-mailchimp.ts',
+  '../../runtime/managed-asana.ts',
   '../../runtime/managed-github.ts',
   '../../runtime/managed-dropbox.ts',
   '../../runtime/managed-trello.ts',

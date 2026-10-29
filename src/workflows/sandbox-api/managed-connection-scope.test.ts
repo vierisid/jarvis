@@ -11,10 +11,11 @@ import { CredentialResolver } from "../credentials/adapter";
 import { JarvisGoogleConnectionSource } from "../credentials/google-source";
 import { JarvisClickUpConnectionSource } from "../credentials/clickup-source";
 import { JarvisMailchimpConnectionSource } from "../credentials/mailchimp-source";
+import { JarvisAsanaConnectionSource } from "../credentials/asana-source";
+import type { JarvisConfig } from "../../config/types";
 import { JarvisGitHubConnectionSource } from "../credentials/github-source";
 import { JarvisTrelloConnectionSource } from "../credentials/trello-source";
 import { JarvisDropboxConnectionSource } from "../credentials/dropbox-source";
-import type { JarvisConfig } from "../../config/types";
 import { JarvisSlackConnectionSource } from "../credentials/slack-source";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -36,6 +37,7 @@ const GMAIL = "@activepieces/piece-gmail";
 const HTTP = "@activepieces/piece-http";
 const SLACK = "@activepieces/piece-slack";
 const CLICKUP = "@activepieces/piece-clickup";
+const ASANA = "@activepieces/piece-asana";
 const MAILCHIMP = "@activepieces/piece-mailchimp";
 const GITHUB = "@activepieces/piece-github";
 const TRELLO = "@activepieces/piece-trello";
@@ -107,6 +109,20 @@ const pieces = new PieceCatalog([
     ] } },
   }, triggers: {
     new_message: { name: "new_message", displayName: "", description: "" },
+  } },
+  { name: ASANA, displayName: "Asana", description: "", auth: { type: "OAUTH2" }, actions: {
+    get_task: { name: "get_task", displayName: "", description: "", inputSchema: { fields: [
+      { name: "task", label: "", type: "string", required: false },
+    ] } },
+    delete_task: { name: "delete_task", displayName: "", description: "", inputSchema: { fields: [
+      { name: "task", label: "", type: "string", required: false },
+    ] } },
+    custom_api_call: { name: "custom_api_call", displayName: "", description: "", inputSchema: { fields: [
+      { name: "url", label: "", type: "json", required: false },
+      { name: "method", label: "", type: "string", required: false },
+    ] } },
+  }, triggers: {
+    new_task: { name: "new_task", displayName: "", description: "" },
   } },
   { name: GITHUB, displayName: "GitHub", description: "", auth: { type: "OAUTH2" }, actions: {
     github_create_issue: { name: "github_create_issue", displayName: "", description: "", inputSchema: { fields: [
@@ -389,6 +405,54 @@ describe("managed ClickUp is scoped to ClickUp steps", () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: CLICKUP, value: { access_token: CLICKUP_TOKEN } });
     }
+  });
+});
+
+describe("managed Asana is scoped to its five qualified Asana actions", () => {
+  const ASANA_TOKEN = "synthetic-managed-asana-access-token";
+  const ref = "{{connections.jarvis:asana}}";
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "asana-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    writeFileSync(join(dataDir, "connections", "asana.json"), JSON.stringify({ version: 1, provider: "asana", status: "connected",
+      generation: crypto.randomUUID(), access_token: ASANA_TOKEN, refresh_token: "synthetic-refresh",
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(), account: { id: "7", label: "owner" },
+      workspaces: [{ id: "8", name: "Sandbox" }], connected_at: new Date().toISOString(),
+      refresh: { url: "https://app.usejarvis.dev/api/integrations/asana/refresh", instance_id: crypto.randomUUID(), secret: "a".repeat(64) } }));
+    credentials.register(new JarvisAsanaConnectionSource({ daemon: { data_dir: dataDir },
+      usejarvis_integrations: { page_url: "https://app.usejarvis.dev/account" } } as JarvisConfig));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const step = (actionName: string, input: Record<string, unknown> = { auth: ref, task: "12" }): any => ({
+    name: "asana", type: "PIECE", settings: { pieceName: ASANA, actionName, input },
+  });
+  const asanaCall = (url: string): any => step("custom_api_call", { auth: ref, method: "GET", url: { url } });
+  // A trigger whose settings also carry a stray actionName of a qualified action.
+  const asanaTrigger = (): any => ({ name: "trigger", type: "PIECE_TRIGGER",
+    settings: { pieceName: ASANA, triggerName: "new_task", actionName: "get_task", input: { auth: ref } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["an Asana action outside the qualified five", empty(step("delete_task"))],
+    ["an Asana custom API call, even on app.asana.com", empty(asanaCall("https://app.asana.com/api/1.0/users/me"))],
+    ["an Asana custom API call with a relative path", empty(asanaCall("/users/me"))],
+    ["an Asana trigger that carries a stray actionName", asanaTrigger()],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is not ready and the route refuses it`, async () => {
+      expect(bindingIssues(trigger).length).toBeGreaterThan(0);
+      const response = await fetchFor(runOf(trigger), "jarvis:asana");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(ASANA_TOKEN);
+    });
+  }
+  test("a qualified Asana step auth is ready and resolves", async () => {
+    const trigger = empty(step("get_task"));
+    expect(bindingIssues(trigger)).toEqual([]);
+    const response = await fetchFor(runOf(trigger), "jarvis:asana");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: ASANA, value: { access_token: ASANA_TOKEN, jarvis_managed: "asana" } });
   });
 });
 
