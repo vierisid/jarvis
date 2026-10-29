@@ -615,10 +615,11 @@ child.stdout.once("data", () => {
     });
 
     /**
-     * Running, as opposed to gone OR a zombie. A reaped orphan is reparented
+     * Running, as opposed to gone, a zombie (Z), or dead (X). A reaped orphan is reparented
      * to a subreaper that may not have called wait() yet, and a zombie still
      * answers `kill(pid, 0)` -- it holds no memory, no timers and no sockets,
      * so treating it as alive would fail this test for the wrong reason.
+     * Linux may then briefly report X before removing the proc entry.
      */
     const alive = (): boolean => {
       try {
@@ -628,7 +629,8 @@ child.stdout.once("data", () => {
       }
       try {
         const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-        return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0] !== "Z";
+        const state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0];
+        return state !== "Z" && state !== "X";
       } catch {
         return false;
       }
@@ -771,7 +773,8 @@ setTimeout(() => process.exit(0), 60000);
         }
         try {
           const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-          return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0] !== "Z";
+          const state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0];
+          return state !== "Z" && state !== "X";
         } catch {
           return false;
         }
