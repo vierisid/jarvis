@@ -65,6 +65,8 @@ export interface EffectInvocation {
   confirmation?: { confirm: 'always'; intent: string };
   /** Process-bound browser review; never reconstructed after restart. */
   reviewRegistry?: ToolRegistry;
+  /** Display only: what a reviewed browser call acts on, for its card. Never matched on. */
+  reviewSubject?: { origin?: string; element?: string };
   prepare: () => { arguments: Record<string, unknown>; target: Record<string, unknown>; bindings?: Record<string, unknown> };
   validateTarget?: (args: Record<string, unknown>, target: Record<string, unknown>) => void;
   /**
@@ -507,13 +509,15 @@ export class WorkflowEffectBoundary {
             toolName: input.toolName, toolArguments: record.arguments, actionCategory: decision.actionCategory,
             urgency: decision.actionCategory === 'make_payment' ? 'urgent' : 'normal', reason: decision.reason,
             // `stepName` here is a label too: the context is read back only for
-            // `target`, `confirm` and `intent`, and nothing matches on it.
+            // `target`, `confirm`, `intent` and `reviewSubject` (the Brief card
+            // shows it, display only), and nothing matches on it.
             context: canonicalJson({ effectId: id, runId: record.runId, versionId: record.versionId,
               stepName: stepLabel, executionPath: record.executionPath, target: record.target,
               // Mandatory review has to be visible in the context, not only in
               // the decision: `approvalNeedsClick` reads it, so voice and
               // auto-approval cannot satisfy this card.
               ...(input.confirmation ? { confirm: input.confirmation.confirm } : {}),
+              ...(input.reviewSubject && Object.keys(input.reviewSubject).length ? { reviewSubject: input.reviewSubject } : {}),
               ...(intent ? { intent } : {}) }), executionMode: 'workflow',
             ...(input.reviewRegistry ? { toolRegistry: input.reviewRegistry } : {}) });
           record.approvalId = request.id;

@@ -68,7 +68,7 @@ for (const kind of ['email', 'calendar'] as const) test(`F14 review R3: real ${k
   const installed = join(directory, 'node_modules', piece); mkdirSync(dirname(installed), { recursive: true });
   symlinkSync(join(fixture, 'dist'), installed, 'dir');
   const credentials = new CredentialResolver();
-  credentials.register({ id: 'fixture', canResolve: id => id === 'jarvis:fixture',
+  credentials.register({ id: 'fixture', pieceNames: [piece], canResolve: id => id === 'jarvis:fixture',
     resolve: async () => ({ type: 'OAUTH2', value: { access_token: 'ENGINE_ONLY_SECRET' } }) });
   const manager = new ApprovalManager(), audit = new AuditTrail();
   const deps = { approvalManager: manager, deferredExecutor: new DeferredExecutor(manager, audit) };

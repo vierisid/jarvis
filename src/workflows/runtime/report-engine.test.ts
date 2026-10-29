@@ -13,7 +13,7 @@ import {createFlowRun,getFlowRun,listRuns} from '../db/repos/flow-run';
 import {enqueue} from '../db/repos/job-queue';
 import {upsertConnection} from '../db/repos/app-connection';
 import {configureWorkflowReadiness,versionReadiness} from '../db/repos/flow-readiness';
-import {pinFlowBindings} from '../db/repos/binding-pins';
+import {listRunConnectionBindings,pinFlowBindings} from '../db/repos/binding-pins';
 import {AuthorityEngine} from '../../authority/engine';
 import {AuditTrail} from '../../authority/audit';
 import {EmergencyController} from '../../authority/emergency';
@@ -36,7 +36,8 @@ import {createManageWorkflowTool} from '../../actions/tools/manage-workflow';
 let dir:string,api:SandboxApi,runtime:EngineRuntime,worker:Worker,catalog:PieceCatalog,authority:AuthorityEngine,approvals:ApprovalManager;
 let services:ReturnType<typeof buildSandboxServiceBackends>;
 const versions:Record<string,string>={},runIds:string[]=[];
-let now=reportFixtureNow;
+let now=reportFixtureNow,tokenCalls=0,tokenDown=false;
+let resolver:CredentialResolver;
 beforeAll(async()=>{
   dir=mkdtempSync(join(tmpdir(),'jarvis-report-engine-'));initWorkflowDb(join(dir,'fixture.db'));setEncryptionKey(Buffer.alloc(32,78));
   const bundle=await buildEngineBundle();
@@ -48,7 +49,7 @@ beforeAll(async()=>{
   for(const name of ['stripe','hubspot','google'])upsertConnection({externalId:'fixture-'+name,displayName:'Fixture',type:name==='stripe'?'SECRET_TEXT':'OAUTH2',pieceName:'@activepieces/piece-'+(name==='google'?'google-docs':name),pieceVersion:'0.0.1',value:name==='stripe'?{secret_text:'synthetic-'+name}:{access_token:'synthetic-'+name}});
   authority=new AuthorityEngine({default_level:10,governed_categories:[],overrides:[],context_rules:[],learning:{enabled:false,suggest_threshold:10},emergency_state:'normal'});
   approvals=new ApprovalManager();
-  services=buildSandboxServiceBackends({credentialResolver:new CredentialResolver(),authorityEngine:authority,approvalManager:approvals,emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
+  services=buildSandboxServiceBackends({credentialResolver:resolver=new CredentialResolver({tokenTransport:async()=>{tokenCalls++;if(tokenDown)throw Error('token endpoint unreachable');return {status:200,body:{access_token:'synthetic-google',expires_in:3600}};}}),authorityEngine:authority,approvalManager:approvals,emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
     reportNow:()=>now,reportFetch:(async(url:any,init:any)=>{
       const u=new URL(String(url)),provider=u.hostname==='api.stripe.com'?'stripe':u.hostname==='api.hubapi.com'?'hubspot':'google';
       expect(['api.stripe.com','api.hubapi.com','www.googleapis.com','docs.googleapis.com']).toContain(u.hostname);expect(init.headers.Authorization).toBe('Bearer synthetic-'+provider);expect(init.redirect).toBe('error');
@@ -106,4 +107,65 @@ test('actual model-generated saved Test 9 graph executes with complete and unava
  expect((await run(flow.id,draft.id)).status).toBe('SUCCEEDED');expect(writes).toHaveLength(2);
  const another=createFlow(),version=createDraftVersion({flowId:another.id,displayName:'Same model graph; source failure',trigger:g});lockVersion(version.id);setPublishedVersion(another.id,version.id);updateFlowStatus(another.id,'ENABLED');
  reset({writes,failStripe:true});expect((await run(another.id,version.id)).status).toBe('SUCCEEDED');expect(writes).toHaveLength(4);expect(JSON.stringify(writes.at(-1))).toContain('Unavailable');
+},60000);
+
+const googleRow=(value:Record<string,unknown>)=>upsertConnection({externalId:'fixture-google',displayName:'Fixture',type:'OAUTH2',pieceName:'@activepieces/piece-google-docs',pieceVersion:'0.0.1',value});
+test('a stored Google Docs token about to expire is refreshed before the report runs',async()=>{
+ googleRow({access_token:'stale-google',refresh_token:'refresh',client_id:'client',client_secret:'secret',token_url:'https://oauth2.example.test/token',claimed_at:Math.floor(Date.now()/1000)-3500,expires_in:3600});
+ try {
+  // The fixture fetch only accepts 'Bearer synthetic-google', which only the refresh hands out.
+  const writes:any[]=[];reset({writes});const f=fixture(),before=tokenCalls;
+  expect((await f.run()).status).toBe('SUCCEEDED');expect(tokenCalls).toBeGreaterThan(before);expect(writes).toHaveLength(2);
+ } finally {googleRow({access_token:'synthetic-google'});}
+},60000);
+test('an expired Google Docs token that cannot be refreshed fails with a reconnect message, before any read',async()=>{
+ googleRow({access_token:'synthetic-google',claimed_at:Math.floor(Date.now()/1000)-7200,expires_in:3600});
+ try {
+  const calls:string[]=[];reset({calls});const f=fixture();const result=await f.run();
+  expect(result.status).toBe('FAILED');expect(String((result as any).failedStep?.errorMessage)).toContain('Reconnect the selected Google Docs account (fixture-google)');
+  expect(listRunConnectionBindings(result.id).find(b=>b.externalId==='fixture-google')?.credentialFailure?.code).toBe('CONNECTION_EXPIRED');
+  expect(calls).toHaveLength(0);
+ } finally {googleRow({access_token:'synthetic-google'});}
+},60000);
+test('an expired Google Docs token whose refresh cannot reach the provider fails as temporary, not as reconnect',async()=>{
+ googleRow({access_token:'synthetic-google',refresh_token:'refresh',client_id:'client',client_secret:'secret',token_url:'https://oauth2.example.test/token',claimed_at:Math.floor(Date.now()/1000)-7200,expires_in:3600});
+ tokenDown=true;
+ try {
+  const calls:string[]=[];reset({calls});const f=fixture();const result=await f.run();expect(result.status).toBe('FAILED');
+  const message=String((result as any).failedStep?.errorMessage);
+  expect(message).toContain('which is usually temporary. Start a new run later.');expect(message).not.toContain('Reconnect');
+  expect(listRunConnectionBindings(result.id).find(b=>b.externalId==='fixture-google')?.credentialFailure?.code).toBe('CONNECTION_REFRESH_UNREACHABLE');
+  expect(calls).toHaveLength(0);
+ } finally {tokenDown=false;googleRow({access_token:'synthetic-google'});}
+},60000);
+test('readiness refuses a Jarvis-managed id for every report account',()=>{
+ for(const field of ['stripeConnection','hubspotConnection','googleConnection']) for(const phase of ['composition','activation'] as const){
+  const g=graph();g.nextAction.settings.input={...setup,[field]:'jarvis:google'};
+  const issues=compileWorkflow(g,{pieces:catalog,phase,connection:()=>null} as any).issues;
+  expect(issues.some((i:any)=>i.code==='CONNECTION_BINDING'&&i.path===`settings.input.${field}`&&String(i.message).includes('Jarvis-managed'))).toBe(true);
+ }
+ expect(compileWorkflow(graph(),{pieces:catalog,phase:'composition'}).issues.some((i:any)=>i.code==='CONNECTION_BINDING')).toBe(false);
+});
+/** A locked version whose saved report step is `node`, never published (readiness would refuse it), and a running execution of it. */
+function direct(node:any){
+ const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Direct report',trigger:{...graph(),nextAction:node}});lockVersion(version.id);
+ const execution=createFlowRun({flowId:flow.id,flowVersionId:version.id,status:'RUNNING'});runIds.push(execution.id);
+ return {runId:execution.id,projectId:DEFAULT_IDS.project,stepName:'report',executionPath:[] as Array<[string,number]>};
+}
+test('the report backend refuses a Jarvis-managed Google account at run time, with no exemption, before resolving anything',async()=>{
+ const calls:string[]=[];reset({calls});
+ resolver.register({id:'google',pieceNames:['@activepieces/piece-google-docs'],canResolve:(ext:string)=>ext==='jarvis:google',resolve:async()=>{throw Error('a managed account must not be resolved');}} as any);
+ try {
+  const input={...setup,googleConnection:'jarvis:google'};
+  const ctx=direct({name:'report',type:'PIECE',settings:{pieceName:REPORT_PIECE,actionName:REPORT_ACTION,input}});
+  await expect(services.weeklyReport!(input,ctx)).rejects.toThrow('Select a saved Google Docs account; a Jarvis-managed connection cannot be used by the weekly report');
+  expect(calls).toHaveLength(0);
+ } finally {resolver.unregister('google');}
+},60000);
+test('the report backend refuses a saved step that is not a PIECE action node',async()=>{
+ const calls:string[]=[];reset({calls});
+ for(const node of [{name:'report',type:'CODE',settings:{pieceName:REPORT_PIECE,actionName:REPORT_ACTION,input:setup}},{name:'report',type:'PIECE',settings:{pieceName:REPORT_PIECE,actionName:REPORT_ACTION,triggerName:'x',input:setup}}]){
+  await expect(services.weeklyReport!({...setup},direct(node))).rejects.toThrow('Report configuration must match a saved weekly report step');
+ }
+ expect(calls).toHaveLength(0);
 },60000);

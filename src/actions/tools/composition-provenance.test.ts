@@ -20,40 +20,63 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
-  // w8-12: workflow-meeting-briefs capabilities.
+  // w8-15: verified weekly Stripe and HubSpot Google Docs reports. Tool-result text
+  // (jarvis-report details), so these shapes match w8-14.
+  'w8-15': {
+    bare: '310abe10f6b3e4312877dd63e3d913a931a4f1ec85039f711ddd503ae5bdfc81',
+    production: 'be2c1c21b357ef8006c9e6013aa4731e71ecd0e17d8593b6f78b70c0ff8bebd0',
+    'hosted production': '80eb7d677570c54fa6fd94a7ac6abad604f7e98e2e0108f08b899e9f16ee5331',
+    'tool names only': 'd9a6d28fa4d0dab04d9ce67793ae31f60d0ec11fbcdd017193cc3b8092ac170f',
+  },
+  // w8-14: draft-only sales follow-ups and an empty schedule cron left for setup. Both
+  // are tool-result text (schedule and jarvis-sales details), so these shapes match w8-13.
+  'w8-14': {
+    bare: '310abe10f6b3e4312877dd63e3d913a931a4f1ec85039f711ddd503ae5bdfc81',
+    production: 'be2c1c21b357ef8006c9e6013aa4731e71ecd0e17d8593b6f78b70c0ff8bebd0',
+    'hosted production': '80eb7d677570c54fa6fd94a7ac6abad604f7e98e2e0108f08b899e9f16ee5331',
+    'tool names only': 'd9a6d28fa4d0dab04d9ce67793ae31f60d0ec11fbcdd017193cc3b8092ac170f',
+  },
+  // w8-13: read-only meeting briefs with reschedule-safe dashboard notifications.
+  'w8-13': {
+    bare: '310abe10f6b3e4312877dd63e3d913a931a4f1ec85039f711ddd503ae5bdfc81',
+    production: 'be2c1c21b357ef8006c9e6013aa4731e71ecd0e17d8593b6f78b70c0ff8bebd0',
+    'hosted production': '80eb7d677570c54fa6fd94a7ac6abad604f7e98e2e0108f08b899e9f16ee5331',
+    'tool names only': 'd9a6d28fa4d0dab04d9ce67793ae31f60d0ec11fbcdd017193cc3b8092ac170f',
+  },
+  // w8-12: HubSpot contact coordination, keyed lead notifications and resolve_effect for uncertain identities.
   'w8-12': {
-    'bare': '2cb75d3294bf28ccb48093c7f9f7181846f2fab22a362dc18c337c970daa7644',
-    'hosted production': '76c60995e2e5af8079cb51ad6af3e264b1ba77d5ad017a098331cf1c9f380ff1',
-    'production': '3ffe8ff4ff3c0cd4561ab478dac950daf3aa285213b0ec268b2bfa02e059fbe9',
-    'tool names only': '63de2acdd9b8e59ec723525a53091a8165fec872a738ac48f9c30b0685d63e13',
+    bare: 'b7d8e23f84b712632c305e25bbb2f6621212d35cf2667f1c38a9c2f584a75525',
+    production: '9cecfe12f86ec7cf1807d657fc2d5d3ca1c3898e863e7026f9fa25569aebd421',
+    'hosted production': '5c31d8a82984ac9baf5dae74d054c4833f489ea82c641d84d7406138a3540c4b',
+    'tool names only': '5c4739f7a173b7ad9644a5cc1034bf560eee1d67b38735f504ab730e521d7053',
   },
-  // w8-11: HubSpot contact coordination and qualified lead notifications.
+  // w8-11: invoice extraction, schema validation and complete readback.
   'w8-11': {
-    'bare': '0607884f6f9ba78094b4bd40cf7747fd2bdda3ca35a6941a0e49ac92782a4be5',
-    'hosted production': '89ca16182f441794efd6f24d5b4cba3f2f65c7afd1db21ef17a4fe550b2969e3',
-    'production': '889e642ed640de1588234aedffd7d7de3a7f433aee32f546017d196752095c48',
-    'tool names only': '3d369e555ab2afe1e1f3f266eae7cd9874d2d7441069234984b65daaf88fddb7',
+    bare: '75efb1295411133d02534d3b1f92363370d634aad4ddadf11df132a929544d79',
+    production: 'cbed103e2327dbfc97961cacbd1e0c32d6c044cda703b7b48dfb449e2da15f82',
+    'hosted production': '478b71ed5780ee2a5f0e16b39fd59389f6cb52918334ba5295a4665cf5ce7f2d',
+    'tool names only': '4ef91135e7dcff0980a28318bc721e5e7af84c75864d36ab04edb66aa2aa5575',
   },
-  // w8-10: invoice extraction, schema validation and complete readback.
+  // w8-10: Gmail triage, persistent message admission covering manual runs only when they carry a payload.id.
   'w8-10': {
-    'bare': '05263df749ecb38946893d74e1d4c189f65f8d730d45d41f28a917b708e70082',
-    'hosted production': 'cb230bd1dd945e1aa339b5ddf7f6466047da42bf5d6f66d816906f1465c41544',
-    'production': 'a0b0107f99d23e9569400d79daed03f121074d84a9fbef7f49365179ddadaa3f',
-    'tool names only': 'e20bb23dc1a02fa9e0299331498dbc04ae6dada072b46665290f8cf130b0b9c9',
+    bare: '21cc6e0220440ff1fe3217a63b8d483c8bdfc737d03aa28af57d321dbe9e836e',
+    production: '1088d9babdd3a8d10b38cf87f1435e498e95d6263d89bb35d337496840cf247e',
+    'hosted production': 'f6283bdb24ca178b75917cfd6784ce7cf5141ce67d6d094cfa31f198eabcbd31',
+    'tool names only': 'b317e86b850c113b217af53300694a222880ed1325e61f21cd7283c1df802024',
   },
-  // w8-9: Gmail triage and persistent message admission.
+  // w8-9: deferred setup, connector continuation and form processing; the composer never installs.
   'w8-9': {
-    'bare': '57d4704c8577c6fda9da6c11c64b8cb0524acac0ffc23624a2fc9890b65fdaec',
-    'hosted production': '03bde7f6f985268d83e1e482adf981ec539566971d6e58cd453c7978072d44c6',
-    'production': '96de39d26ed372d1fc3aa871106d1a4206a75fe80c5b32175de0a8f7b004803f',
-    'tool names only': '0ae7d1e35a57b0b531036d328115cba3ba710a28cdffd11dbfe06b4105df60aa',
+    bare: '0e5ea5dffb6128bb806328d5cb23715f9a1ba256ca8ef3842d480baa71130901',
+    production: '9b78e90b24a95a83548b061a83a2d44e8e5aa8d91176ff3ffc9f5df066ab560e',
+    'hosted production': 'aa07ed478ff210e49b2b967b274ab21fdeb489d98c115454767f582b8d217de2',
+    'tool names only': 'dba35e1b068c4ecbb581c43b1eff267575cd35b392a9a631edbc60d2a3528aa6',
   },
-  // w8-8: deferred setup, connector continuation and form processing.
+  // w8-8: a schedule names a time zone only when the job contract does; a bare time is Jarvis's zone.
   'w8-8': {
-    'bare': '2e7622eb199df8f1ea33d8a77d686b34e1282028823f818719132b07b4949b80',
-    'hosted production': '8efd7c5dd6ee559f9758e716de4c70665ff3e64bd16f0a91e47bf923fc7492f6',
-    'production': '546b58cc39e2a413ef9702b53b22c4ce7544b6bd2df3ec0a95fcf57a2367d469',
-    'tool names only': 'a2ec151afbc98276e6d31d667a2cd1bf3c91eddd055d5748ba7ab5dd1a46c78c',
+    bare: '0b7e8cc85a1f50a5411c050a7b2286a8236ad400367feed39f04f57c6ae56496',
+    production: 'ced53dbe7a008e923abc9694e3f52d44fde5156e7503b3a1d1923a635a7df466',
+    'hosted production': '9dec78536da3bcd905dc0c854bfcb767fda12073e9c9e5ce9a12c8222d586fda',
+    'tool names only': 'c35f5d375dfacfa242c841699cc31103ee6726ed71208f53be69e2c2ab0de478',
   },
   // w8-7: inspect browser fallback before refusing missing connector setup.
   'w8-7': {

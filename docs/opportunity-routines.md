@@ -89,37 +89,13 @@ bunx tsc --noEmit
 ```
 
 The JSON report includes every case, false proposals, misses, denominators, corpus
-hashes and Wilson intervals. To reproduce the comparison with the audited base:
-
-```sh
-git show c78fbe1849a4c940304e54049e96f3c770aba48f:src/awareness/job-hypotheses.ts > /tmp/q11-baseline.ts
-bun -e 'import { routineEvaluationReport } from "./src/awareness/evaluation/routine-evaluation.ts"; import * as baseline from "/tmp/q11-baseline.ts"; const report = routineEvaluationReport(baseline); report.policy = "baseline-job-v1"; console.log(JSON.stringify(report, null, 2));'
-```
-
-You can see this change in the evaluation report, then inspect the `hold-call` case
-and its proposal. The `structured hypotheses reference every role` test provides a
+hashes and Wilson intervals.
+The `structured hypotheses reference every role` test provides a
 reproducible service-level example; lifecycle tests exercise real SQLite, sidecar
 ingestion, capture expiry, restart, delivery, feedback and suppression.
 
-## Integration and rollback
+## Turning it off
 
-Q-11 is based directly on main `c78fbe18`. The roadmap specifies no merge or enable
-prerequisite. Q-09/Q-10 and the older Q-06/Q-08/Q-07 stack remain separate unmerged
-PRs. No UI, delivery, proposal lifecycle, goal ranking, hosting or execution changes
-are part of this card. The deployed runtime was not identified or exercised.
-
-Q-13 PR #737 has an exhaustive `Record<JobKind, JobConstraint[]>` for the original
-three kinds. When combining that branch with Q-11, its owner/integrator must add
-`meeting_followup`, `expense_reconciliation` and `support_triage`, each with
-`review_before_effects`, and rerun qualification tests. F-09 PR #766 already rejects
-kinds with no constraints. This PR does not enable those prepared integrations or
-claim that their current branches already compile with the expanded union.
-
-Discovery follows existing awareness enablement; there is no new flag and this PR
-is left unmerged. For immediate containment, disable awareness with its existing
-setting. To roll back breadth while retaining the stricter safety rules, remove the
-three added catalog entries from `ROUTINES`, keeping the v2 phase, privacy and
-recurrence guards. Preserve the additive column, old/new hypotheses, dismissals,
-user work and compatibility readers; never erase evidence or replay effects. A full
-revert to the old cue-only policy also loses the new precision guards and is not the
-recommended rollback.
+Discovery follows the existing awareness setting; there is no separate flag.
+Disabling awareness stops it. Existing hypotheses, dismissals and user work are
+retained.

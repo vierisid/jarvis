@@ -1,3 +1,7 @@
+import { TrelloCardLocation } from "../../integrations/TrelloCardLocation";
+import { MailchimpLocation } from "../../integrations/MailchimpLocation";
+import { MailchimpConnection } from "../../integrations/MailchimpConnection";
+import { SlackChannelPicker } from "../../integrations/SlackChannelPicker";
 /**
  * WorkflowEditor (Phase 4 stage 2).
  *
@@ -14,8 +18,20 @@
  * Stage 3 lights all of those up.
  */
 
+import { TrelloConnection } from "../../integrations/TrelloConnection";
+import { SlackConnection, useSlackStatus } from "../../integrations/SlackConnection";
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSampleDraftText } from "./useSampleDraftText";
+import { ClickUpConnection, useClickUpStatus } from "../../integrations/ClickUpConnection";
+import { AsanaConnection, useAsanaStatus } from "../../integrations/AsanaConnection";
+import { AsanaTaskLocation } from "../../integrations/AsanaTaskLocation";
+import { DropboxConnection, useDropboxStatus } from "../../integrations/DropboxConnection";
+import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
+import { GitHubConnection, useGitHubStatus } from "../../integrations/GitHubConnection";
+import { GitHubRepository } from "../../integrations/GitHubRepository";
+import { MEETING_ACCOUNT_FIELDS } from "../../../../../src/workflows/meeting-accounts";
+import { SALES_ACCOUNT_FIELDS } from "../../../../../src/workflows/sales-accounts";
+import { REPORT_ACCOUNT_FIELDS } from "../../../../../src/workflows/report-accounts";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { WorkflowEditorEnvironment, WorkflowPortal, useWorkflowRequest } from "./WorkflowEditorEnvironment";
 import { BriefTabs } from "../../../brief/components/controls/Choices";
@@ -49,7 +65,7 @@ import {
   type PieceCatalogEntry,
   type PieceInputField,
 } from "./useWorkflowEditor";
-import { flattenSteps, pathToStep } from "./tree";
+import { flattenSteps, pathToStep, withoutChosenZone } from "./tree";
 import { buildVariableRows, type VariableRow } from "./variable-rows";
 import { TRIGGER_KINDS, detectTriggerKind } from "./trigger-kinds";
 import { fetchFlowsForPicker, type FlowPickerEntry } from "./flow-picker-data";
@@ -958,9 +974,14 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
             onSetTriggerKind={(kind) => editor.setTriggerKind(kind)}
             onSetErrorHandling={(patch) => editor.setStepErrorHandling(selectedStep.name, patch)}
             onSetInput={(key, value) => editor.updateStepInput(selectedStep.name, key, value)}
+            onUseStandardClickUpFields={() => editor.updateStep(selectedStep.name, {settings: {
+              ...selectedStep.settings,
+              input: {...selectedStep.settings?.input, custom_fields: {}, check_required_custom_fields: true},
+              propertySettings: {...selectedStep.settings?.propertySettings, custom_fields: {schema: {}}},
+            }})}
             onAddInputKey={(key) => editor.updateStepInput(selectedStep.name, key, "")}
             onRemoveInputKey={(key) => {
-              const settings = selectedStep.settings ?? {};
+              const settings = key === "timezone" ? withoutChosenZone(selectedStep.settings) : (selectedStep.settings ?? {});
               const input = { ...(settings.input ?? {}) };
               delete input[key];
               editor.updateStep(selectedStep.name, { settings: { ...settings, input } });
@@ -3296,6 +3317,7 @@ interface PropertiesPanelProps {
   onSetTriggerKind: (kind: "manual" | "schedule" | "webhook" | "event") => void;
   onSetErrorHandling: (patch: { continueOnFailure?: boolean; retryOnFailure?: boolean }) => void;
   onSetInput: (key: string, value: unknown) => void;
+  onUseStandardClickUpFields: () => void;
   onAddInputKey: (key: string) => void;
   onRemoveInputKey: (key: string) => void;
   /** Commit a new display name for this step. Called by EditableStepName in the panel header. */
@@ -3357,13 +3379,43 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const subName = isTrigger ? step.settings?.triggerName : step.settings?.actionName;
   const subList = isTrigger ? piece?.triggers ?? [] : piece?.actions ?? [];
   const selectedSubAction: PieceCatalogActionOrTrigger | undefined = subList.find((s) => s.name === subName);
+  // The workspace/Space/List chooser reads through the managed connection, so
+  // it replaces the piece's own id fields only for a step that uses that
+  // connection while it exists. Every other ClickUp step keeps the id fields.
+  const clickUpStatus = useClickUpStatus(piece?.name === "@activepieces/piece-clickup");
+  const clickUpLocation = piece?.name === "@activepieces/piece-clickup" && ["create_task", "update_task", "get_task_by_name"].includes(subName ?? "")
+    && !!clickUpStatus?.connected && step.settings?.input?.auth === "{{connections." + clickUpStatus.external_id + "}}";
+  const asanaStatus = useAsanaStatus(piece?.name === "@activepieces/piece-asana");
+  const asanaLocation = piece?.name === "@activepieces/piece-asana" && ["create_task", "list_project_tasks"].includes(subName ?? "")
+    && !!asanaStatus?.connected && step.settings?.input?.auth === "{{connections." + asanaStatus.external_id + "}}";
+  const subSchema = selectedSubAction?.inputSchema ?? null;
+  const asanaSchema = asanaLocation && subSchema ? {...subSchema, fields:subSchema.fields.filter(f=>!["workspace","project"].includes(f.name))} : subSchema;
+  const managedTrello = piece?.name === "@activepieces/piece-trello" && step.settings?.input?.auth === "{{connections.jarvis:trello}}";
+  const trelloLocation = managedTrello && ['create_card','move_card','list_lists'].includes(subName ?? '');
+  const managedMailchimp = piece?.name === "@activepieces/piece-mailchimp" && ["{{connections.jarvis:mailchimp}}", "{{connections['jarvis:mailchimp']}}"].includes(String(step.settings?.input?.auth));
+  const mailchimpLocation = managedMailchimp && ['find_subscriber','add_subscriber_to_tag','remove_subscriber_from_tag','get_campaign_report'].includes(subName ?? '');
+  const managedGitHub = piece?.name === "@activepieces/piece-github" && ["{{connections.jarvis:github}}", "{{connections['jarvis:github']}}"].includes(String(step.settings?.input?.auth));
+  const githubRepository = managedGitHub && ['github_create_issue','getIssueInformation','update_issue','find_issue','createCommentOnAIssue'].includes(subName ?? '');
+  const managedSlack = piece?.name === "@activepieces/piece-slack" && ["{{connections.jarvis:slack}}", "{{connections['jarvis:slack']}}"].includes(String(step.settings?.input?.auth));
+  const slackChannel = managedSlack && ['send_channel_message', 'slack_post_message', 'slack_get_channel_info'].includes(subName ?? '');
+  const baseSchema = asanaSchema;
+  const selectedSchema = managedTrello && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["labels","member_id"].includes(f.name))} : managedMailchimp && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['fields','include_fields','exclude_fields', ...(mailchimpLocation ? ['list_id','campaign_id'] : [])].includes(f.name))}
+    : managedGitHub && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['labels','assignees','milestone','state_reason', ...(githubRepository ? ['repository'] : [])].includes(f.name))}
+    : managedSlack && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["sendAsUser","sendAsBot","file","username","profilePicture","iconEmoji","mentionOriginFlow","onlyBotChannels","info"].includes(f.name))} : baseSchema;
+  const rawSchema = clickUpLocation && selectedSchema ? {...selectedSchema,fields:selectedSchema.fields.filter(f=>!['workspace_id','space_id','list_id'].includes(f.name))} : trelloLocation && selectedSchema ? {...selectedSchema, fields:selectedSchema.fields.filter(f=>!['board_id','list_id'].includes(f.name))} : slackChannel && selectedSchema ? {...selectedSchema, fields:selectedSchema.fields.filter(f=>f.name !== "channel")} : selectedSchema;
+  // ClickUp 0.9.1 declares `custom_fields` on Create Task as a required
+  // dynamic prop even when a list has none. "Use standard task fields" saves
+  // an empty schema and value with check_required_custom_fields, so ClickUp
+  // itself rejects the task if the list does require custom fields.
+  const clickUpCreate = piece?.name === "@activepieces/piece-clickup" && subName === "create_task";
+  const standardFields = clickUpCreate && JSON.stringify(step.settings?.propertySettings?.custom_fields?.schema) === "{}"
+    && JSON.stringify(step.settings?.input?.custom_fields) === "{}" && step.settings?.input?.check_required_custom_fields === true;
+  const managedSchema = standardFields && rawSchema ? {...rawSchema, fields: rawSchema.fields.filter(f => !["custom_fields", "check_required_custom_fields"].includes(f.name))} : rawSchema;
   const formInput = step.settings?.input ?? {};
   const meetingAccounts = piece?.name === '@jarvispieces/piece-jarvis-context' && subName === 'meeting_briefs'
-    ? [['calendarConnection','@activepieces/piece-google-calendar','Google Calendar'],['gmailConnection','@activepieces/piece-gmail','Gmail'],['hubspotConnection','@activepieces/piece-hubspot','HubSpot']] as const
-    : piece?.name === '@jarvispieces/piece-jarvis-sales' && subName === 'draft_followups'
-      ? [['hubspotConnection','@activepieces/piece-hubspot','HubSpot'],['gmailConnection','@activepieces/piece-gmail','Gmail']] as const
-      : piece?.name === '@jarvispieces/piece-jarvis-report' && subName === 'weekly_operating_report'
-        ? [['stripeConnection','@activepieces/piece-stripe','Stripe'],['hubspotConnection','@activepieces/piece-hubspot','HubSpot'],['googleConnection','@activepieces/piece-google-docs','Google Docs']] as const : [];
+    ? MEETING_ACCOUNT_FIELDS
+    : piece?.name === '@jarvispieces/piece-jarvis-sales' && subName === 'draft_followups' ? SALES_ACCOUNT_FIELDS
+      : piece?.name === '@jarvispieces/piece-jarvis-report' && subName === 'weekly_operating_report' ? REPORT_ACCOUNT_FIELDS : [];
 
   const formWebhook = detectedTriggerKind === 'webhook' && ('submission_id_field' in formInput || 'submission_email_field' in formInput);
   const schema = detectedTriggerKind === 'schedule' && step.settings?.pieceName === 'schedule' ? {fields:[
@@ -3373,7 +3425,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
     { name: 'submission_id_field', label: 'Submission ID field', type: 'string' as const, required: true, description: 'The field path containing the unique submission ID, for example form.id.' },
     { name: 'submission_email_field', label: 'Email field', type: 'string' as const, required: true, description: 'The field path containing the email address, for example form.email.' },
     ...Object.keys(formInput).filter(key => !['submission_id_field', 'submission_email_field', 'secret'].includes(key)).map(key => ({ name: key, label: key, type: 'string' as const, required: false })),
-  ] } : selectedSubAction?.inputSchema ?? null;
+  ] } : managedSchema;
 
   const [newKey, setNewKey] = useState("");
   const [tab, setTab] = useState("Configure");
@@ -3480,6 +3532,18 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         />
       ) : null}
 
+      {githubRepository && <GitHubRepository input={step.settings?.input ?? {}} onChange={onSetInput} />}
+      {trelloLocation && <TrelloCardLocation input={step.settings?.input ?? {}} onChange={onSetInput} boardOnly={subName === "list_lists"} />}
+      {asanaLocation && <AsanaTaskLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
+      {mailchimpLocation && <MailchimpLocation key={subName} input={step.settings?.input ?? {}} onChange={onSetInput} campaign={subName === "get_campaign_report"} />}
+      {slackChannel && <SlackChannelPicker value={String(step.settings?.input?.channel ?? "")} onChange={value => onSetInput("channel", value)} />}
+      {clickUpLocation && <ClickUpTaskLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
+      {clickUpCreate && <div className="wf-props__hint" role="note">
+        {standardFields ? <p>Using standard task fields. ClickUp will reject the task if this list requires custom fields.</p>
+          : <><p>Start with standard task fields. Lists with required custom fields need a separately configured field schema.</p>
+            <Button variant="ghost" size="sm" disabled={!!step.settings?.input?.custom_fields && JSON.stringify(step.settings.input.custom_fields) !== "{}"}
+              onClick={props.onUseStandardClickUpFields}>Use standard task fields</Button></>}
+      </div>}
       {meetingAccounts.length ? <MeetingAccountPickers fields={meetingAccounts} connections={connections} input={formInput} onSetInput={onSetInput} /> : null}
 
       {!isLoop && !isRouter ? (
@@ -3688,7 +3752,7 @@ function AdvancedSettings(props: {
  * here would duplicate the OAuth redirect handling already in that
  * panel and isn't worth the complexity.
  */
-export function MeetingAccountPickers({connections,input,onSetInput,fields=[['calendarConnection','@activepieces/piece-google-calendar','Google Calendar'],['gmailConnection','@activepieces/piece-gmail','Gmail'],['hubspotConnection','@activepieces/piece-hubspot','HubSpot']]}: {connections:ConnectionMeta[];input:Record<string,unknown>;onSetInput:(field:string,value:string)=>void;fields?:ReadonlyArray<readonly [string,string,string]>}) {
+export function MeetingAccountPickers({connections,input,onSetInput,fields=MEETING_ACCOUNT_FIELDS}: {connections:ConnectionMeta[];input:Record<string,unknown>;onSetInput:(field:string,value:string)=>void;fields?:ReadonlyArray<readonly [string,string,string]>}) {
   return <>{fields.map(([field,provider,label]) =>
     <ConnectionPicker key={field} pieceName={provider} pieceDisplayName={label} authDisplayName={`${label} account`} authType={provider === '@activepieces/piece-stripe' ? 'SECRET_TEXT' : 'OAUTH2'}
       connections={connections} currentValue={input[field] ? `{{connections.${input[field]}}}` : ''}
@@ -3723,18 +3787,39 @@ function ConnectionPicker({
   // the dropdown reflect the user's choice on re-open.
   const m = /^\{\{connections\.([^}]+)\}\}$/.exec(currentValue.trim());
   const currentExternalId = m ? m[1]! : "";
+  // ClickUp and GitHub may also offer the hosted connection; without it
+  // (self-hosted, or not connected) the picker reads exactly as for any other piece.
+  const isClickUp = pieceName === "@activepieces/piece-clickup";
+  const isAsana = pieceName === "@activepieces/piece-asana";
+  const managedAsana = useAsanaStatus(isAsana)?.connected === true;
+  const isDropbox = pieceName === "@activepieces/piece-dropbox";
+  const managedDropbox = useDropboxStatus(isDropbox)?.connected === true;
+  const managedClickUp = useClickUpStatus(isClickUp)?.connected === true;
+  const isGitHub = pieceName === "@activepieces/piece-github";
+  const managedGitHub = useGitHubStatus(isGitHub)?.connected === true;
+  const isSlack = pieceName === "@activepieces/piece-slack";
+  const managedSlack = useSlackStatus(isSlack)?.connected === true;
   return (
     <div className="wf-props__connection">
+      {isGitHub && <GitHubConnection optional onPick={onPick} currentValue={currentValue} />}
+      {pieceName === "@activepieces/piece-mailchimp" && <MailchimpConnection onPick={onPick} currentValue={currentValue} />}
+      {isClickUp && <ClickUpConnection optional onPick={onPick} currentValue={currentValue} />}
+      {isDropbox && <><DropboxConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedDropbox && <p className="wf-props__hint">This account supports file-name search, folder listings, basic metadata and creating folders in Dropbox home. Use / for the home folder. Advanced search filters and metadata options are unavailable.</p>}</>}
+      {pieceName === "@activepieces/piece-trello" && <TrelloConnection onPick={onPick} currentValue={currentValue} />}
+      {isAsana && <><AsanaConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedAsana && <p className="wf-props__hint">This account supports creating, reading and updating tasks, listing project tasks and adding comments. Use Asana IDs or workflow variables. Tags are not supported yet.</p>}</>}
+      {isSlack && <SlackConnection optional onPick={onPick} currentValue={currentValue} />}
       <label className="wf-props__field-label">
         {authDisplayName}
         <span className="wf-props__connection-type">({authType})</span>
       </label>
-      {matching.length === 0 ? (
+      {matching.length === 0 && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.
         </p>
-      ) : (
+      ) : matching.length > 0 ? (
         <select
           value={currentExternalId}
           onChange={(e) => {
@@ -3749,7 +3834,7 @@ function ConnectionPicker({
             </option>
           ))}
         </select>
-      )}
+      ) : null}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 /**
- * Daemon sources compiled INTO the engine bundle may import runtime values
- * only from other registered, guarded sources (#634).
+ * Daemon sources compiled INTO the engine bundle may only import values
+ * from other registered, checked sources (#634).
  *
  * WHY THIS IS A TEST AND NOT A COMMENT. `runner/engine-runtime/build.ts` holds
  * `PATCHED_VENDOR_SOURCES`, the explicit cache-invalidation registry for
@@ -26,27 +26,33 @@
  * `spawn-env-guard.test.ts`: a property argued in prose becomes an invariant
  * the suite enforces.
  *
- * SCOPE: every permitted sibling is checked by this same guard. A new value
- * dependency must be registered in `PATCHED_VENDOR_SOURCES` and included
- * below, so its own imports cannot pull in unregistered daemon dependencies.
- * `piece-executor-gate.drift.test.ts` independently checks that registration.
+ * SCOPE, stated because it is narrower than "the bundle is pure": this checks
+ * the governed-piece sources and permits imports only within that checked
+ * set. A new dependency must be registered in `PATCHED_VENDOR_SOURCES` AND
+ * included here, so its imports receive the same checks.
  */
 
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import ts from 'typescript';
+import { PATCHED_VENDOR_SOURCES } from '../runner/engine-runtime/build';
 
-/** Relative to this directory. Each source is also covered by the bundle hash. */
-const BUNDLED_DAEMON_SOURCES = ['piece-effects.ts', 'piece-effect-guard.ts', 'decision-document.ts', 'hubspot-contact.ts'];
+/** Relative to this directory. All must also be cache-invalidation inputs.
+ * managed-github, managed-trello, managed-mailchimp, managed-slack, managed-dropbox and managed-asana are the
+ * engine's fetch-only send adapters, and hubspot-contact is the HubSpot
+ * contact input validation the adapter table uses; checking them here
+ * prevents a future dependency from silently escaping the bundle hash. */
+const BUNDLED_DAEMON_SOURCES = ['piece-effects.ts', 'piece-effect-guard.ts', 'decision-document.ts', 'hubspot-contact.ts', 'managed-github.ts', 'managed-trello.ts', 'managed-mailchimp.ts', 'managed-slack.ts', 'managed-dropbox.ts', 'managed-asana.ts'];
 
 /**
- * A value import of ANOTHER registered source is fine: the guard uses the
- * adapter table, approved documents and HubSpot input validation. The bundle
- * hash already covers these sources. Derive the allowed imports from the
- * files we check so allowing a sibling also guards its dependencies.
+ * A value import of ANOTHER registered source is fine, and is the one shape
+ * that exists today: `piece-effect-guard.ts` imports `isGovernedPiece` and
+ * `sanitizePieceInput` from `piece-effects.ts`. The registry already covers
+ * that file's content, so the bundle hash follows it. What this guard is for is
+ * a value import that reaches OUTSIDE the registry.
  */
-const REGISTERED_SPECIFIERS = new Set(BUNDLED_DAEMON_SOURCES.map(file => `./${file.replace(/\.ts$/u, '')}`));
+const REGISTERED_SPECIFIERS = new Set(BUNDLED_DAEMON_SOURCES.map(file => './' + file.replace(/\.ts$/u, '')));
 
 const reachesOutsideTheRegistry = (specifier: string): boolean =>
   !REGISTERED_SPECIFIERS.has(specifier.replace(/^['"]|['"]$/gu, '').replace(/\.ts$/u, ''));
@@ -86,7 +92,14 @@ function valueImportsOf(file: string): string[] {
   return offenders;
 }
 
-describe('#634: the engine bundle\'s daemon sources stay within the registered runtime', () => {
+describe('#634: the engine bundle\'s daemon sources stay within the checked registry', () => {
+  test('every permitted runtime dependency is included in the bundle hash', () => {
+    const registeredSources: readonly string[] = PATCHED_VENDOR_SOURCES;
+    for (const file of BUNDLED_DAEMON_SOURCES) {
+      expect(registeredSources).toContain('../../runtime/' + file);
+    }
+  });
+
   for (const file of BUNDLED_DAEMON_SOURCES) {
     test(`${file} has no unregistered value imports`, () => {
       expect(valueImportsOf(file)).toEqual([]);
@@ -117,13 +130,11 @@ describe('#634: the engine bundle\'s daemon sources stay within the registered r
     // A value import of the SIBLING registered source is allowed, because the
     // registry already carries that file's content into the bundle hash. This
     // is the shape `piece-effect-guard.ts` actually uses.
-    for (const specifier of REGISTERED_SPECIFIERS) {
-      writeFileSync(join(import.meta.dir, 'sibling.ts'), `import * as sibling from '${specifier}';\nvoid sibling;\n`);
-      try {
-        expect(valueImportsOf('sibling.ts')).toEqual([]);
-      } finally {
-        rmSync(join(import.meta.dir, 'sibling.ts'));
-      }
+    writeFileSync(join(import.meta.dir, 'sibling.ts'), `import { isGovernedPiece } from './piece-effects';\nvoid isGovernedPiece;\n`);
+    try {
+      expect(valueImportsOf('sibling.ts')).toEqual([]);
+    } finally {
+      rmSync(join(import.meta.dir, 'sibling.ts'));
     }
     // And the two forms that are genuinely erased are NOT reported, so the
     // guard does not block the imports these files are allowed to have.

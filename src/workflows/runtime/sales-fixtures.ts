@@ -4,18 +4,22 @@ export const salesFixtureSetup:SalesSetup={crmProvider:'hubspot',hubspotConnecti
 export const salesFixtureDeal=(n=1,properties:Record<string,unknown>={})=>({id:String(n),archived:false,properties:{dealname:`Project ${n}`,dealstage:'open',last_activity:new Date(salesFixtureNow-8*86400_000).toISOString(),...properties}});
 export interface SalesFixtureOptions {
   drafts?:any[];calls?:string[];replied?:string[];failContact?:string;unknownDraft?:boolean;cycle?:boolean;
-  multipleContacts?:boolean;changedDeal?:any;owner?:string;pageTwoReply?:boolean;badSender?:boolean;
+  multipleContacts?:boolean;changedDeal?:any;owner?:string;pageTwoReply?:boolean;badSender?:boolean;searches?:any[];searchTotal?:number;
 }
 export function salesFixtureRequest(deals:any[]=[salesFixtureDeal()],options:SalesFixtureOptions={}):SalesRequest {
   return async(provider,path,body)=>{
     options.calls?.push(`${provider} ${body?'POST':'GET'} ${path}`);
-    const u=new URL('https://fixture.invalid'+path),cursor=u.searchParams.get('after');
+    const u=new URL('https://fixture.invalid'+path);
     if(path==='/gmail/v1/users/me/profile')return {emailAddress:options.owner ?? 'owner@example.com'};
     if(path==='/crm/v3/properties/deals/last_activity')return {name:'last_activity',type:'datetime'};
     if(path==='/crm/v3/pipelines/deals')return {results:[{stages:[{id:'open',metadata:{isClosed:'false'}},{id:'closedwon',metadata:{isClosed:'true'}}]}]};
-    if(u.pathname==='/crm/v3/objects/deals') {
-      if(options.cycle)return {results:[],paging:{next:{after:'same'}}};
-      return !cursor ? {results:deals.slice(0,1),...(deals.length>1?{paging:{next:{after:'next'}}}:{})}:{results:deals.slice(1)};
+    if(path==='/crm/v3/objects/deals/search'&&body) {
+      options.searches?.push(body);
+      if(options.cycle)return {total:1,results:[],paging:{next:{after:'same'}}};
+      // HubSpot applies the stage filter server-side.
+      const stages:string[]=body.filterGroups?.[0]?.filters?.find((f:any)=>f.propertyName==='dealstage'&&f.operator==='IN')?.values ?? [];
+      const open=deals.filter(d=>stages.includes(d.properties?.dealstage));
+      return !body.after ? {total:options.searchTotal ?? open.length,results:open.slice(0,1),...(open.length>1?{paging:{next:{after:'next'}}}:{})}:{total:open.length,results:open.slice(1)};
     }
     const assoc=/^\/crm\/v4\/objects\/deals\/(\d+)\/associations\/contacts$/.exec(u.pathname);
     if(assoc)return options.multipleContacts?{results:[{toObjectId:assoc[1]},{toObjectId:'999'}]}:{results:[{toObjectId:assoc[1]}]};
