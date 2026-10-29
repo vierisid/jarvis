@@ -33,10 +33,16 @@ function inputOf(settings: unknown): Record<string, unknown> | null {
   return input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : null;
 }
 
-/** The canonical IANA name of `zone`, or null when it is not a time zone. */
+/** Names of UTC itself. Bun's Intl keeps them apart (`Etc/UTC` stays `Etc/UTC`), so they are folded here. */
+const UTC_ALIASES = new Set(["utc", "etc/utc", "etc/uct", "uct", "gmt", "etc/gmt", "etc/gmt0", "etc/gmt+0", "etc/gmt-0", "gmt0", "gmt+0", "gmt-0",
+  "etc/greenwich", "greenwich", "universal", "etc/universal", "zulu", "etc/zulu"]);
+
+/** The canonical IANA name of `zone` (every alias of UTC is `UTC`), or null when it is not a time zone. */
 export function canonicalZone(zone: unknown): string | null {
   if (typeof zone !== "string" || !zone.trim()) return null;
-  try { return new Intl.DateTimeFormat("en-US", { timeZone: zone.trim() }).resolvedOptions().timeZone; } catch { return null; }
+  let name: string;
+  try { name = new Intl.DateTimeFormat("en-US", { timeZone: zone.trim() }).resolvedOptions().timeZone; } catch { return null; }
+  return UTC_ALIASES.has(name.toLowerCase()) ? "UTC" : name;
 }
 
 /** The zone the step names in `input.timezone`, chosen or not; undefined when it names none. */

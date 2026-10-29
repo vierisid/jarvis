@@ -31,7 +31,7 @@ import { BOUNDED_TOOL_NAMES } from '../../workflows/runtime/effect-capabilities'
 import { ALL_PIECE_ADAPTERS, GOVERNED_PIECE_ADAPTERS, resolveGovernedPieceAction } from '../../workflows/runtime/piece-effects';
 import { PIECE_NOTIFY_CHANNELS } from '../../workflows/jarvis-pieces/types';
 import { walkFlowNodes } from '../../workflows/db/flow-graph';
-import { chosenScheduleZone } from '../../workflows/runner/triggers/schedule-zone';
+import { canonicalZone, chosenScheduleZone } from '../../workflows/runner/triggers/schedule-zone';
 import type { FlowTriggerNode } from '../../workflows/db/repos/flow-version';
 
 export type ContractValue = string | number | boolean | string[];
@@ -146,10 +146,8 @@ function cadence(cron: string): ContractCadence | null {
   if (dom === '*' && one(dow)) return 'week';
   return one(dom) && dow === '*' ? 'month' : null;
 }
-/** The canonical IANA name, or null for an unknown zone. */
-function zoneName(zone: string): string | null {
-  try { return new Intl.DateTimeFormat('en-US', { timeZone: zone }).resolvedOptions().timeZone; } catch { return null; }
-}
+/** The canonical IANA name (every alias of UTC is UTC), or null for an unknown zone. */
+const zoneName = (zone: string): string | null => canonicalZone(zone);
 /** Where a schedule runs unless a person chose its zone: Jarvis's configured one, else this machine's. */
 export function scheduleTimeZone(): string {
   return zoneName(getCronTimezone() ?? Intl.DateTimeFormat().resolvedOptions().timeZone) ?? 'UTC';

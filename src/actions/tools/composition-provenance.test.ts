@@ -20,12 +20,12 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
-  // w8-8: a schedule names a time zone only when the request does; a bare time is Jarvis's zone.
+  // w8-8: a schedule names a time zone only when the job contract does; a bare time is Jarvis's zone.
   'w8-8': {
-    bare: '631169cec05f6437c6dfeb928cca6dff6f18b9e6c3470f2c07f390bc1ed3bc58',
-    production: 'b2b70ff8843683382b2e1de60c4d0d708eeb379b151311f0ebb4141b19e08e12',
-    'hosted production': 'ce0d295f7d72f1e3aa7b41db4eeddbdf50640917fbeffc628756d0fac926048b',
-    'tool names only': '762577bbebae67cf6073c8b447ff16b9fb59ac7bd18502001dde75b866caf5a3',
+    bare: '0b7e8cc85a1f50a5411c050a7b2286a8236ad400367feed39f04f57c6ae56496',
+    production: 'ced53dbe7a008e923abc9694e3f52d44fde5156e7503b3a1d1923a635a7df466',
+    'hosted production': '9dec78536da3bcd905dc0c854bfcb767fda12073e9c9e5ce9a12c8222d586fda',
+    'tool names only': 'c35f5d375dfacfa242c841699cc31103ee6726ed71208f53be69e2c2ab0de478',
   },
   // w8-7: inspect browser fallback before refusing missing connector setup.
   'w8-7': {

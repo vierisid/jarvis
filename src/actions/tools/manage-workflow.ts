@@ -271,7 +271,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       contract: {
         type: "object",
         description:
-          "compose: explicit future-run constraints, known schemas only. trigger {kind,cron,every,timezone,eventType,piece,trigger}; sources/outputs [{notify:{channels}}|{tool,params}|{piece,action,target}]; recipients; forbidden {effects,pieces,actions,tools,channels,agents}; review. Unknown choices stay in description.",
+          "compose: explicit future-run constraints, known schemas only. trigger {kind,cron,every,timezone,eventType,piece,trigger}; timezone only when the person names one (a bare time is Jarvis's zone: omit it); sources/outputs [{notify:{channels}}|{tool,params}|{piece,action,target}]; recipients; forbidden {effects,pieces,actions,tools,channels,agents}; review. Unknown choices stay in description.",
         required: false,
       },
       limit: {

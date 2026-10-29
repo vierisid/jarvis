@@ -1052,7 +1052,7 @@ function renderPrimitiveDetails(name: "schedule" | "webhook"): string {
       "schedule (built-in trigger primitive): fires the flow on a cron schedule.",
       "  Use as the trigger node: type='PIECE_TRIGGER', settings={ pieceName: 'schedule', input: { cron_expression: '<5-field cron>' } }.",
       "  - input.cron_expression: string, REQUIRED; 5-field cron, e.g. '0 8 * * *' for 8am daily, '*/15 * * * *' for every 15 minutes.",
-      "  - input.timezone: string, optional IANA timezone (for example Europe/Rome). Set it only when the request names a time zone, and then always. The scheduler uses that zone including daylight-saving changes; omitted, the schedule runs in Jarvis's configured time zone, which is what a bare time like '9am' means.",
+      "  - input.timezone: string, optional IANA timezone (for example Europe/Rome). Set it to exactly the job contract's trigger.timezone when the contract names one; a zone the contract does not name is not used, so otherwise omit it. The scheduler uses that zone including daylight-saving changes; omitted, the schedule runs in Jarvis's configured time zone, which is what a bare time like '9am' means.",
       "  No triggerName needed. No declared output -- downstream steps should not reference {{trigger.<field>}}.",
     ].join("\n");
   }
@@ -1144,7 +1144,7 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
     "  - Give every node a short human-readable displayName describing its work, such as 'Summarize the notes' or 'Review before sending'. Keep machine names separate from these canvas labels.",
     "  - Step names MUST match /^[a-zA-Z_][a-zA-Z0-9_]*$/ (identifier-style; no spaces or dashes).",
     "  - Use type='EMPTY' for manual / on-demand flows. Use type='PIECE_TRIGGER' for scheduled, webhook, or event-driven.",
-    "  - For schedule triggers: pieceName='schedule', input.cron_expression='<5-field cron>' (e.g. '0 8 * * *' for 8am daily); add input.timezone (IANA, e.g. 'Europe/Rome') only when the request names a time zone.",
+    "  - For schedule triggers: pieceName='schedule', input.cron_expression='<5-field cron>' (e.g. '0 8 * * *' for 8am daily); add input.timezone (IANA, e.g. 'Europe/Rome') only when the job contract names trigger.timezone, and then use exactly that zone; a bare time means Jarvis's time zone, so write no zone.",
     "  - For webhook triggers: pieceName='webhook', input.secret optional.",
     "  - For event triggers: pieceName='jarvis-trigger', triggerName='on_event', input.eventType='<event type>'.",
     "  - For action steps, type MUST be 'PIECE' and settings MUST include pieceName + actionName.",
@@ -1216,7 +1216,7 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
  */
 const BUILTIN_PRIMITIVE_LINES = [
   "Built-in trigger primitives (no piece registration needed):",
-  "- schedule: settings={pieceName:'schedule', input:{cron_expression:'0 8 * * *'}} fires at 08:00 in Jarvis's time zone. Only when the user names a zone, add it, e.g. timezone:'Europe/Rome' fires at 08:00 there, including daylight-saving changes.",
+  "- schedule: settings={pieceName:'schedule', input:{cron_expression:'0 8 * * *'}} fires at 08:00 in Jarvis's time zone. Only when the job contract names a zone, add it, e.g. timezone:'Europe/Rome' fires at 08:00 there, including daylight-saving changes.",
   "- webhook:  settings={pieceName:'webhook',  input:{secret:'<optional HMAC secret>'}} fires on HTTP POST to /api/webhooks/<flow_id>.",
 ];
 

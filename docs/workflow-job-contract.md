@@ -79,6 +79,9 @@ records a zone it writes as chosen only when the contract's `trigger.timezone`
 names that same zone: a model may write a zone out of habit, and background
 composers have no person's request at all. A zone written without one stays
 unmarked, runs in Jarvis's zone and is flagged in the trigger list.
+The chat tool is told to put a zone the person names into
+`contract.trigger.timezone`, and to write none for a bare time. Every name of
+UTC (`UTC`, `Etc/UTC`, `GMT`, `Zulu`, ...) counts as the same zone.
 
 ## The check and the repair loop
 
