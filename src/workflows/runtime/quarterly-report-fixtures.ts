@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { sanitizedEnv } from '../../util/subprocess-env';
 import { CronScheduler, cronWallTimeKey, validateCronExpression } from '../../lib/cron-scheduler';
 import { scheduleTriggerPayload } from './schedule-payload';
 import { resolveFixtureValue } from './json-mapping-fixtures';
@@ -123,7 +124,7 @@ export async function runQuarterlyFixtures(saved:any,fixture:any={}) {
 
 export async function validateQuarterlyFixtures(saved:any,fixture:any={}) {
   prepare(saved,fixture);
-  const child=Bun.spawn([process.execPath,'--no-env-file',fileURLToPath(import.meta.url)],{env:{},stdin:new Blob([JSON.stringify({saved,fixture})]),stdout:'pipe',stderr:'ignore'});
+  const child=Bun.spawn([process.execPath,'--no-env-file',fileURLToPath(import.meta.url)],{env:sanitizedEnv(),stdin:new Blob([JSON.stringify({saved,fixture})]),stdout:'pipe',stderr:'ignore'});
   let timeout=false;const timer=setTimeout(()=>{timeout=true;child.kill();},15000);
   try {
     const reader=child.stdout.getReader(),chunks:Uint8Array[]=[];let size=0;
