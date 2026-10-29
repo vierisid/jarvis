@@ -21,7 +21,7 @@ export function localIntegrationEnabled(config: JarvisConfig, env: Record<string
   return true;
 }
 
-/** Separate output keeps ordinary dev and production builds inactive. */
+/** Separate output cannot confer local-integration authorization on production. */
 export function buildLocalIntegrationUi(repoRoot: string): string {
   const out = join(repoRoot, 'ui', 'dist-local-integration');
   const result = Bun.spawnSync([process.execPath, '--no-env-file', 'build', 'ui/local-integration.html', 'ui/pebble.html', '--outdir', out], {

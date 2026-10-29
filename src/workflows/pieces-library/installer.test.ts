@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   installPiece,
+  runPiecesBunInstall,
   withLibraryLock,
   readManifest,
   synthesizePackageJson,
@@ -140,6 +141,31 @@ describe("synthesizePackageJson", () => {
 });
 
 describe("installPiece", () => {
+  test("an abort stops the install: the bun install step gets the signal and the call rejects with its reason", async () => {
+    const controller = new AbortController();
+    let received: AbortSignal | undefined, entered!: () => void;
+    const started = new Promise<void>(r => { entered = r; });
+    const pending = installPiece("gmail", { base, signal: controller.signal, runBunInstall: (_cwd, signal) => {
+      received = signal; entered();
+      return new Promise((_, reject) => signal!.addEventListener("abort", () => reject(signal!.reason), { once: true }));
+    } });
+    await started;
+    controller.abort(new Error("fixture timeout"));
+    await expect(pending).rejects.toThrow("fixture timeout");
+    expect(received).toBe(controller.signal);
+    await expect(installPiece("gmail", { base, signal: controller.signal, runBunInstall: async () => { throw new Error("must not run"); } }))
+      .rejects.toThrow("fixture timeout");
+  });
+
+  test("the real bun install child is killed on abort, and never started when already aborted", async () => {
+    writeFileSync(join(base, "package.json"), "{}");
+    const controller = new AbortController();
+    const running = runPiecesBunInstall(base, "fixture", controller.signal);
+    controller.abort(new Error("fixture stop"));
+    await expect(running).rejects.toThrow("fixture stop");
+    await expect(runPiecesBunInstall(base, "fixture", controller.signal)).rejects.toThrow("fixture stop");
+  });
+
   test("unknown catalog id throws", async () => {
     await expect(installPiece("not-a-real-piece", { base })).rejects.toThrow(/not in the catalog/);
   });

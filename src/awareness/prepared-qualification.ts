@@ -26,7 +26,7 @@ import { getFlowRun } from '../workflows/db/repos/flow-run.ts';
 import { versionReadiness } from '../workflows/db/repos/flow-readiness.ts';
 import { getWorkflowComposition } from '../workflows/db/repos/workflow-composition.ts';
 import { listWorkflowEffects } from '../workflows/db/repos/workflow-effect.ts';
-import type { CredentialResolver } from '../workflows/credentials/adapter.ts';
+import { managedConnectionMisuse, managedSourceFor, type CredentialResolver } from '../workflows/credentials/adapter.ts';
 import { digest } from '../workflows/runtime/effect-context.ts';
 import { BOUNDED_TOOL_NAMES, GATED_TOOL_NAMES, boundedToolCapability, toolEffectCapability } from '../workflows/runtime/effect-capabilities.ts';
 import { governedPieceToolDefinition, PIECE_ABOVE_LEVEL_ASKS, PIECE_ABOVE_LEVEL_FLOOR, PIECE_TOOL_CATEGORY, resolveGovernedPieceAction } from '../workflows/runtime/piece-effects.ts';
@@ -761,8 +761,11 @@ export function liveQualificationServices(options: {
       // row's identity. `updated` is left out: a token refresh rewrites it
       // without changing which account the binding reaches.
       if (externalId.startsWith('jarvis:')) {
-        const ready = options.credentials?.list().some(source => source.canResolve(externalId)) ?? false;
-        return { revision: ready ? externalId : null, reason: ready ? null : 'Managed connection source is unavailable' };
+        const source = managedSourceFor(options.credentials?.list(), externalId);
+        if (!source) return { revision: null, reason: 'Managed connection source is unavailable' };
+        // Only a step of the source's own pieces may use it. Readiness also
+        // requires it to be that step's auth; this fact only names the piece.
+        return { revision: externalId, reason: managedConnectionMisuse(source, pieceName, 'settings.input.auth') };
       }
       const rows = getWorkflowDb().query<{ id: string; piece_name: string; status: string }, [string, string]>(
         'SELECT id, piece_name, status FROM app_connection WHERE project_id = ? AND external_id = ? LIMIT 2').all(projectId, externalId);

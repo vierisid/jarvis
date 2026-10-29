@@ -1,22 +1,34 @@
 import {randomUUID} from 'node:crypto';
-import {IMPORT_ACCOUNTS,IMPORT_ACTION,IMPORT_PIECE,ImportStop,importSetup,importSlice,type ImportRequest} from './contact-import';
+import {ImportStop,importSetup,importSlice,type ImportRequest} from './contact-import';
+import {IMPORT_ACCOUNTS,IMPORT_ACCOUNT_LABELS,IMPORT_ACTION,IMPORT_PIECE,importAccountFields,isContactImportStep,managedImportRefusal} from '../import-accounts';
 import {ActionOutcomeError} from '../../actions/action-outcome';
 import {importTransport} from './import-transport';
 import {acquireImport} from '../db/repos/contact-import';
-import {connectionBindings,currentConnectionIdentity,enforceRunConnectionBinding} from '../db/repos/binding-pins';
+import {connectionBindings,currentConnectionIdentity,enforceRunConnectionBinding,recordRunCredentialOutcome} from '../db/repos/binding-pins';
 import {createWaitpoint} from '../db/repos/waitpoint';
 import {walkFlowNodes} from '../db/flow-graph';
 import {digest,resolveEffectContext,type WorkflowEffectContext} from './effect-context';
 import {workflowEffectId,type WorkflowEffectBoundary} from './effect-boundary';
 import {getWorkflowEffect,saveWorkflowEffect} from '../db/repos/workflow-effect';
 import type {CredentialResolver} from '../credentials/adapter';
+import {ConnectionCredentialError,OAUTH2_TYPES} from '../credentials/pasted-oauth2';
 export function createContactImportService(deps:{effects:WorkflowEffectBoundary;credentials:CredentialResolver;request?:ImportRequest;now?:()=>number}){
   return async(input:Record<string,unknown>,ctx:WorkflowEffectContext)=>{
     const setup=importSetup(input),{run,version,stepName,executionPath}=resolveEffectContext(ctx,IMPORT_PIECE,IMPORT_ACTION);
-    const saved=walkFlowNodes(version.trigger).find(n=>n.name===stepName)!;
+    const saved=walkFlowNodes(version.trigger).find(n=>n.name===stepName);
+    if(!saved||!isContactImportStep(saved.type,saved.settings))throw Error('Import configuration must match a saved contact import step');
     if(digest(importSetup(saved.settings?.input??{}))!==digest(setup))throw Error('Import setup must match the saved workflow');
-    const accounts={hubspotConnection:IMPORT_ACCOUNTS.hubspotConnection,...(setup.sourceAuth==='oauth2'?{sourceConnection:IMPORT_ACCOUNTS.sourceConnection}:{})};
-    const identities=Object.fromEntries(Object.keys(accounts).map(field=>[field,currentConnectionIdentity(ctx.projectId,String(setup[field]),deps.credentials)]));
+    const fields=importAccountFields(setup);
+    // The readiness rule, for every account before any binding is checked,
+    // identity read or credential resolved: the saved step itself names it,
+    // and no managed connection is accepted (no exemption covers the import).
+    for(const field of fields){
+      const externalId=setup[field];
+      if(saved.settings?.input?.[field]!==externalId)throw Error('Import account must match the saved workflow step');
+      if(!connectionBindings(version.trigger).has(externalId))throw Error('Import account is not bound to this workflow');
+      if(externalId.startsWith('jarvis:'))throw Error(managedImportRefusal(field));
+    }
+    const identities=Object.fromEntries(fields.map(field=>[field,currentConnectionIdentity(ctx.projectId,setup[field],deps.credentials)]));
     const clock=deps.now??Date.now,key=digest(['contact-import-v1',ctx.projectId,run.flowId,setup.importId]);
     const park=(result:{complete:boolean;resumeAt?:number})=>{if(result.complete)return result;const wait=createWaitpoint({flowRunId:ctx.runId,projectId:ctx.projectId,stepName,type:'TIMER',resumeDateTime:new Date(result.resumeAt!).toISOString()});return {...result,waitpointId:wait.id};};
     const acquired=acquireImport(key,digest([setup,identities]),randomUUID(),clock);
@@ -37,11 +49,26 @@ export function createContactImportService(deps:{effects:WorkflowEffectBoundary;
       prepare:()=>({arguments:setup,target:{source:setup.sourceUrl,account:setup.hubspotConnection,importId:setup.importId,effect:'Read selected API pages and upsert contacts by primary email. No deletion, messages or payments.'}}),
       execute:async(_args,checkpoint)=>{
         const tokens:{source?:string;hubspot:string}={hubspot:''};
-        const check=()=>{checkpoint();for(const field of Object.keys(accounts)){const refusal=enforceRunConnectionBinding(ctx.runId,ctx.projectId,String(setup[field]),deps.credentials);if(refusal)throw Error(refusal);}};
-        for(const [field,pieceName]of Object.entries(accounts)){
-          const id=String(setup[field]);check();if(id.startsWith('jarvis:')||!connectionBindings(version.trigger).has(id))throw Error('Select a saved import account');
-          const resolved=await deps.credentials.resolve({projectId:ctx.projectId,pieceName,externalId:id});
-          if(!resolved||resolved.pieceName!==pieceName||resolved.status&&resolved.status!=='ACTIVE'||resolved.type!=='OAUTH2'||typeof resolved.value.access_token!=='string'||!resolved.value.access_token)throw Error('Connect the selected import accounts securely');
+        const check=()=>{checkpoint();for(const field of fields){const refusal=enforceRunConnectionBinding(ctx.runId,ctx.projectId,setup[field],deps.credentials);if(refusal)throw Error(refusal);}};
+        for(const field of fields){
+          const pieceName=IMPORT_ACCOUNTS[field],externalId=setup[field];
+          check();let resolved=await deps.credentials.resolve({projectId:ctx.projectId,pieceName,externalId});
+          if(!resolved||resolved.pieceName!==pieceName||resolved.status&&resolved.status!=='ACTIVE'||resolved.type!=='OAUTH2')throw Error('Connect the selected import accounts securely');
+          // A stored OAuth2 token is refreshed when it is about to expire, only
+          // after the run's binding check passed (as the engine's connection route does).
+          try{resolved=await deps.credentials.fresh(resolved);}
+          catch(error){
+            if(!(error instanceof ConnectionCredentialError))throw error;
+            // Typed on the run's binding, as the engine's connection route records it, for the failure card.
+            recordRunCredentialOutcome(ctx.runId,externalId,{code:error.code,message:error.message});
+            // Only an expired or refused credential needs a person to reconnect; the others pass.
+            const account=`the selected ${IMPORT_ACCOUNT_LABELS[field]} account (${externalId})`;
+            throw Error(error.code==='CONNECTION_EXPIRED'?`Reconnect ${account}: ${error.message}`
+              :error.code==='CONNECTION_REFRESH_UNREACHABLE'?`Nothing was imported in this step: Jarvis could not refresh ${account} just now, which is usually temporary. Start a new run later to resume from the checkpoint. ${error.message}`
+              :`Nothing was imported in this step: ${account} changed while Jarvis refreshed it. Start a new run to resume from the checkpoint. ${error.message}`);
+          }
+          if(resolved.stored&&OAUTH2_TYPES.has(resolved.type))recordRunCredentialOutcome(ctx.runId,externalId,null);
+          if(typeof resolved.value.access_token!=='string'||!resolved.value.access_token)throw Error('Connect the selected import accounts securely');
           tokens[field==='hubspotConnection'?'hubspot':'source']=resolved.value.access_token;
         }
         check();

@@ -146,6 +146,7 @@ import { GoalValidationError, number as goalNumber, keys as goalKeys, record as 
 import { createSuggestionFeedbackRoutes } from '../awareness/suggestion-feedback-routes.ts';
 import { approvalIntentFields } from '../authority/approval-delivery.ts';
 import { createBriefRoutes } from '../brief/routes.ts';
+import { hostedDashboardDefault } from './hosted-dashboard';
 import { createBriefCapabilities } from '../brief/registrations/index.ts';
 import type { BriefCapabilities } from '../brief/capabilities.ts';
 import type { BriefConversationProvider } from '../brief/conversations.ts';
@@ -440,7 +441,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
   return {
     ...createOpportunityRoutes(json),
-    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations, ctx.briefAttachments, ctx.briefWorkflowComposition, ctx.briefPreparedOpportunities, ctx.briefOpportunityActivation, ctx.briefDecisions, ctx.briefRecommendations, ctx.briefDecisionDocuments, ctx.briefGoalMeasurements, ctx.briefOutcomes, ctx.briefMemoryStream, ctx.briefMemoryUsage, ctx.briefMemoryForget, ctx.briefWorkflowRemoval, ctx.briefWorkflowContext, ctx.briefConnections, ctx.briefProfileSettings, { generation: crypto.randomUUID(), installMode: () => isHostedInstall(ctx.config) ? 'hosted' : 'self' }),
+    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations, ctx.briefAttachments, ctx.briefWorkflowComposition, ctx.briefPreparedOpportunities, ctx.briefOpportunityActivation, ctx.briefDecisions, ctx.briefRecommendations, ctx.briefDecisionDocuments, ctx.briefGoalMeasurements, ctx.briefOutcomes, ctx.briefMemoryStream, ctx.briefMemoryUsage, ctx.briefMemoryForget, ctx.briefWorkflowRemoval, ctx.briefWorkflowContext, ctx.briefConnections, ctx.briefProfileSettings, { generation: crypto.randomUUID(), installMode: () => isHostedInstall(ctx.config) ? 'hosted' : 'self', dashboard: () => hostedDashboardDefault(ctx.config) }),
     // --- Health ---
     '/api/health': {
       GET: () => json(ctx.healthMonitor.getHealth()),
@@ -1177,8 +1178,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     },
 
     // ── Onboarding ──────────────────────────────────────────────────
-    // Status + reset endpoints powering the v2 onboarding gate. See
-    // `docs/ONBOARDING_PLAN.md`. Reset is intentionally available on
+    // Status + reset endpoints powering the v2 onboarding gate. Reset is
+    // intentionally available on
     // demand (not behind a build flag) so users can replay the tour
     // after a Jarvis update or when swapping LLM providers.
 
@@ -2471,6 +2472,99 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             { headers: { ...CORS, 'Content-Type': 'text/html' }, status: 500 }
           );
         }
+      },
+    },
+
+    '/api/integrations/clickup/options': {
+      GET: async (req: Request) => {
+        const {clickUpOptions, ClickUpOptionsError} = await import('../integrations/clickup-options');
+        try { return json({options: await clickUpOptions(ctx.config, new URL(req.url).searchParams)}); }
+        catch (error) { return json({error: error instanceof ClickUpOptionsError ? error.message : 'Could not load ClickUp choices.'}, error instanceof ClickUpOptionsError ? error.status : 502); }
+      },
+    },
+    '/api/integrations/asana/options': {
+      GET: async (req: Request) => {
+        const {asanaOptions, AsanaOptionsInputError} = await import('../integrations/asana-options');
+        try { return json(await asanaOptions(ctx.config, new URL(req.url).searchParams)); }
+        catch(error) { return json({error:error instanceof Error ? error.message : 'Could not load Asana projects.'}, error instanceof AsanaOptionsInputError ? 400 : 502); }
+      },
+    },
+    '/api/integrations/asana': {
+      GET: async () => {
+        const {asanaStatus, readAsanaConnection} = await import('../integrations/asana-connection');
+        const {asanaNeedsReconnect} = await import('../integrations/asana-refresh');
+        const status = asanaStatus(ctx.config), c = readAsanaConnection(ctx.config.daemon.data_dir);
+        const reconnect = !!c && asanaNeedsReconnect(ctx.config, c);
+        return json({...status, connected: status.connected && !reconnect, reconnect});
+      },
+    },
+    '/api/integrations/dropbox': {
+      GET: async () => {
+        const {dropboxStatus, readDropboxConnection} = await import('../integrations/dropbox-connection');
+        const {dropboxNeedsReconnect} = await import('../integrations/dropbox-refresh');
+        const status = dropboxStatus(ctx.config), c = readDropboxConnection(ctx.config.daemon.data_dir);
+        const reconnect = !!c && dropboxNeedsReconnect(ctx.config, c);
+        return json({...status, connected: status.connected && !reconnect, reconnect});
+      },
+    },
+    '/api/integrations/clickup': {
+      GET: async () => {
+        const { clickUpStatus } = await import('../integrations/clickup-connection');
+        return json(clickUpStatus(ctx.config));
+      },
+    },
+
+    '/api/integrations/github/options': {
+      GET: async (req: Request) => {
+        const {githubOptions, GitHubOptionsError} = await import('../integrations/github-options');
+        try { return json(await githubOptions(ctx.config, new URL(req.url).searchParams)); }
+        catch (error) { return json({error: error instanceof GitHubOptionsError ? error.message : 'Could not load GitHub choices.'}, error instanceof GitHubOptionsError ? error.status : 502); }
+      },
+    },
+    '/api/integrations/github': {
+      GET: async () => {
+        const { githubStatus } = await import('../integrations/github-connection');
+        return json(githubStatus(ctx.config));
+      },
+    },
+    '/api/integrations/trello/options': {
+      GET: async (req: Request) => {
+        const {trelloOptions, TrelloOptionsError} = await import('../integrations/trello-options');
+        try { return json(await trelloOptions(ctx.config, new URL(req.url).searchParams)); }
+        catch (error) { return json({error: error instanceof TrelloOptionsError ? error.message : 'Could not load Trello choices.'}, error instanceof TrelloOptionsError ? error.status : 502); }
+      },
+    },
+    '/api/integrations/trello': {
+      GET: async () => {
+        const { trelloStatus } = await import('../integrations/trello-connection');
+        return json(trelloStatus(ctx.config));
+      },
+    },
+    '/api/integrations/mailchimp/options': {
+      GET: async (req: Request) => {
+        const {mailchimpOptions, MailchimpOptionsError} = await import('../integrations/mailchimp-options');
+        try { return json(await mailchimpOptions(ctx.config, new URL(req.url).searchParams)); }
+        catch (error) { return json({error: error instanceof MailchimpOptionsError ? error.message : 'Could not load Mailchimp choices.'}, error instanceof MailchimpOptionsError ? error.status : 502); }
+      },
+    },
+    '/api/integrations/mailchimp': {
+      GET: async () => {
+        const { mailchimpStatus } = await import('../integrations/mailchimp-connection');
+        return json(mailchimpStatus(ctx.config));
+      },
+    },
+
+    '/api/integrations/slack/options': {
+      GET: async (req: Request) => {
+        const {slackOptions, SlackOptionsError} = await import('../integrations/slack-options');
+        try { return json(await slackOptions(ctx.config, new URL(req.url).searchParams)); }
+        catch (error) { return json({error: error instanceof SlackOptionsError ? error.message : 'Could not load Slack choices.'}, error instanceof SlackOptionsError ? error.status : 502); }
+      },
+    },
+    '/api/integrations/slack': {
+      GET: async () => {
+        const { slackStatus } = await import('../integrations/slack-connection');
+        return json(slackStatus(ctx.config));
       },
     },
 

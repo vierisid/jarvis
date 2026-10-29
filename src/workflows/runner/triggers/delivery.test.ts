@@ -12,10 +12,12 @@ import { setEncryptionKey } from "../../db/encryption";
 import { createFlow, getFlow, setPublishedVersion, updateFlowStatus } from "../../db/repos/flow";
 import { createDraftVersion, lockVersion, updateDraftVersion } from "../../db/repos/flow-version";
 import { createFlowRun, getFlowRun, listRuns, updateRun } from "../../db/repos/flow-run";
-import { claimNextJob, queueStats } from "../../db/repos/job-queue";
-import { configureWorkflowReadiness } from "../../db/repos/flow-readiness";
+import { cancelFlowRun } from "../../db/repos/run-cancellation";
+import { claimNextJob, enqueue, queueStats } from "../../db/repos/job-queue";
+import { configureWorkflowReadiness, WorkflowReadinessError } from "../../db/repos/flow-readiness";
+import { pinFlowBindings } from "../../db/repos/binding-pins";
 import { deleteConnection, upsertConnection } from "../../db/repos/app-connection";
-import { claimFire, listFlowFires, pageFlowFires, pruneFires, recordFire, FIRE_RETENTION_MS } from "../../db/repos/trigger-fire";
+import { claimFire, listFlowFires, pageFlowFires, pruneFires, recordFire, releaseRefusedEmailRun, repeatOfRefusal, FIRE_RETENTION_MS } from "../../db/repos/trigger-fire";
 import { PieceCatalog } from "../../runtime/piece-catalog";
 import { WorkflowEventBus } from "../../runtime/event-bus";
 import { WorkflowEventBuffer } from "../../runtime/event-buffer";
@@ -26,6 +28,8 @@ import { createWorkflowRoutes } from "../../api/routes";
 import { Worker } from "../../queue/worker";
 import { createRunFlowHandler, RUN_FLOW } from "../handler";
 import { TriggerManager } from "./manager";
+import { scheduleZoneWarning } from "./schedule-zone";
+import { getScheduleWatch, setScheduleWatch } from "../../db/repos/trigger-fire";
 import { EmergencyController, setActiveEmergencyController } from "../../../authority/emergency";
 
 const silent = () => undefined;
@@ -37,7 +41,11 @@ beforeEach(() => {
     { name: "jarvis-trigger", displayName: "", description: "", actions: {}, triggers: { on_event: { name: "on_event", displayName: "", description: "" } } },
     { name: "private-piece", displayName: "", description: "", auth: { type: "SECRET_TEXT" }, actions: { send: { name: "send", displayName: "", description: "" } } },
     { name: "note-piece", displayName: "", description: "", actions: { add: { name: "add", displayName: "", description: "" } } },
-    { name: "@activepieces/piece-schedule", displayName: "", description: "", actions: {}, triggers: { cron_expression: { name: "cron_expression", displayName: "", description: "" } } },
+    { name: "jarvis-ask", displayName: "", description: "", actions: { ask: { name: "ask", displayName: "", description: "" } } },
+    { name: "jarvis-notify", displayName: "", description: "", actions: { notify: { name: "notify", displayName: "", description: "" } } },
+    { name: "@activepieces/piece-gmail", displayName: "", description: "", actions: { gmail_add_label_to_email: { name: "gmail_add_label_to_email", displayName: "", description: "" } } },
+    { name: "@activepieces/piece-http", displayName: "", description: "", actions: { send_request: { name: "send_request", displayName: "", description: "" } } },
+    { name: "@activepieces/piece-schedule", displayName: "", description: "", actions: {}, triggers: { cron_expression: { name: "cron_expression", displayName: "", description: "" }, every_hour: { name: "every_hour", displayName: "", description: "" } } },
   ]) });
 });
 afterEach(() => {
@@ -59,6 +67,9 @@ function publish(trigger: Record<string, unknown>): { flowId: string; versionId:
 }
 const schedule = (expression: string, input: Record<string, unknown> = {}) =>
   publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "schedule", input: { cron_expression: expression, ...input } } });
+/** A built-in schedule whose zone a person chose (the editor or composer records `chosenTimezone`). */
+const chosenSchedule = (expression: string, timezone: string) =>
+  publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "schedule", chosenTimezone: timezone, input: { cron_expression: expression, timezone } } });
 const webhook = (input: Record<string, unknown> = {}, next?: Record<string, unknown>) =>
   publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "webhook", input }, ...(next ? { nextAction: next } : {}) });
 
@@ -146,7 +157,7 @@ describe("schedules, in Jarvis's configured time zone", () => {
     ['2026-10-23T06:59:00Z', '2026-10-23T07:00:10Z', '2026-10-24T07:00:10Z', '2026-10-26T08:00:10Z'],
   ])('an explicit Rome weekday schedule survives DST, weekends and restart from %s', async (start, friday, saturday, monday) => {
     setCronTimezone('UTC');
-    const { flowId } = schedule('0 9 * * 1-5', { timezone: 'Europe/Rome' });
+    const { flowId } = chosenSchedule('0 9 * * 1-5', 'Europe/Rome');
     let d = await daemon(at(start));
     expect(d.manager.list()[0]?.warning).toBeUndefined();
     d.tick(flowId, friday);
@@ -165,9 +176,116 @@ describe("schedules, in Jarvis's configured time zone", () => {
     await d.stop();
   });
 
+  test("a schedule that names a zone nobody chose fires in Jarvis's zone, and says so", async () => {
+    setCronTimezone("Europe/Rome");
+    const { flowId } = schedule("0 9 * * *", { timezone: "UTC" });
+    const d = await daemon(at("2026-10-07T06:59:00Z"));
+    expect(d.manager.list()).toEqual([expect.objectContaining({ flowId,
+      warning: 'This schedule names UTC, but nobody chose that zone for it, so it runs in Jarvis\'s time zone (Europe/Rome): "0 9 * * *" fires at that time in Europe/Rome. Pick the zone in the editor to use it.' })]);
+    d.tick(flowId, "2026-10-07T07:00:10Z"); // 09:00 in Rome
+    expect(runsOf(flowId)).toHaveLength(1);
+    expect(listFlowFires(flowId)[0]).toMatchObject({ dedupeKey: "2026-10-07T09:00" });
+    await d.stop();
+  });
+
+  test("a zone a person chose is honoured, UTC included, with no warning", async () => {
+    setCronTimezone("Europe/Rome");
+    const { flowId } = chosenSchedule("0 9 * * *", "UTC");
+    const d = await daemon(at("2026-10-07T06:59:00Z"));
+    expect(d.manager.list()[0]?.warning).toBeUndefined();
+    d.tick(flowId, "2026-10-07T07:00:10Z"); // 09:00 in Rome, 07:00 UTC
+    expect(runsOf(flowId)).toHaveLength(0);
+    d.tick(flowId, "2026-10-07T09:00:10Z"); // 09:00 UTC
+    expect(runsOf(flowId)).toHaveLength(1);
+    expect(listFlowFires(flowId)[0]).toMatchObject({ dedupeKey: "UTC@2026-10-07T09:00" });
+    await d.stop();
+  });
+
+  test("a record naming another zone than the step's does not make the step's zone chosen", async () => {
+    setCronTimezone("Europe/Rome");
+    const { flowId } = publish({ name: "trigger", type: "PIECE_TRIGGER",
+      settings: { pieceName: "schedule", chosenTimezone: "America/New_York", input: { cron_expression: "0 9 * * *", timezone: "UTC" } } });
+    const d = await daemon(at("2026-10-07T06:59:00Z"));
+    expect(d.manager.list()[0]?.warning).toContain("This schedule names UTC");
+    d.tick(flowId, "2026-10-07T07:00:10Z");
+    expect(runsOf(flowId)).toHaveLength(1);
+    await d.stop();
+  });
+
+  test.each([[""], [null]])("an empty zone (%p) runs in Jarvis's zone, unwarned", async (timezone) => {
+    setCronTimezone("Europe/Rome");
+    const { flowId } = schedule("0 9 * * *", { timezone });
+    const d = await daemon(at("2026-10-07T06:59:00Z"));
+    expect(d.manager.list()).toEqual([expect.objectContaining({ flowId })]);
+    expect(d.manager.list()[0]?.warning).toBeUndefined();
+    d.tick(flowId, "2026-10-07T07:00:10Z");
+    expect(runsOf(flowId)).toHaveLength(1);
+    await d.stop();
+  });
+
+  test("on upgrade, a schedule saved with the UTC default keeps its times and its watch: nothing false is missed, nothing fires twice", async () => {
+    setCronTimezone("Europe/Rome");
+    const { flowId } = schedule("0 9 * * *", { timezone: "UTC" });
+    // What the previous release left: a watch keyed by the bare expression,
+    // last seen after the 09:00 Rome run of 6 October (07:00 UTC).
+    setScheduleWatch(flowId, "0 9 * * *", at("2026-10-06T07:30:00Z"));
+    let d = await daemon(at("2026-10-07T06:59:30Z"));
+    expect(listFlowFires(flowId).filter(f => f.outcome === "missed")).toHaveLength(0);
+    expect(getScheduleWatch(flowId)?.expression).toBe("0 9 * * *");
+    d.tick(flowId, "2026-10-07T07:00:10Z"); // 09:00 Rome
+    expect(runsOf(flowId)).toHaveLength(1);
+    finishAll(flowId);
+    await d.stop();
+    // Restarting inside the minute repeats nothing; a day off is one honest miss.
+    d = await daemon(at("2026-10-07T07:00:40Z"));
+    d.tick(flowId, "2026-10-07T07:00:50Z");
+    expect(runsOf(flowId)).toHaveLength(1);
+    await d.stop();
+    d = await daemon(at("2026-10-08T08:00:00Z"));
+    expect(listFlowFires(flowId).filter(f => f.outcome === "missed").map(f => f.dedupeKey)).toEqual(["2026-10-08T09:00"]);
+    expect(runsOf(flowId)).toHaveLength(1);
+    await d.stop();
+  });
+
+  test("choosing a western zone the same day runs its 09:00 too: it is not a repeat of 09:00 in Jarvis's zone", async () => {
+    setCronTimezone("Europe/Rome");
+    const { flowId } = schedule("0 9 * * *", { timezone: "UTC" });
+    const d = await daemon(at("2026-10-07T06:59:00Z"));
+    d.tick(flowId, "2026-10-07T07:00:10Z"); // 09:00 Rome
+    expect(runsOf(flowId)).toHaveLength(1);
+    finishAll(flowId);
+    // Later that morning a person picks New York in the editor and publishes.
+    const v = createDraftVersion({ flowId, displayName: "Delivery" });
+    updateDraftVersion(v.id, { trigger: { name: "trigger", type: "PIECE_TRIGGER",
+      settings: { pieceName: "schedule", chosenTimezone: "America/New_York", input: { cron_expression: "0 9 * * *", timezone: "America/New_York" } } } });
+    lockVersion(v.id);
+    setPublishedVersion(flowId, v.id);
+    setSystemTime(new Date(at("2026-10-07T10:00:00Z")));
+    await d.manager.refresh(flowId);
+    d.tick(flowId, "2026-10-07T13:00:10Z"); // 09:00 New York
+    expect(runsOf(flowId)).toHaveLength(2);
+    expect(listFlowFires(flowId).map(f => [f.label, f.dedupeKey])).toEqual([
+      ["queued", "America/New_York@2026-10-07T09:00"],
+      ["completed", "2026-10-07T09:00"],
+    ]);
+    await d.stop();
+  });
+
+  test("choosing a zone starts a new watch rather than recording past times in it as missed", async () => {
+    setCronTimezone("Europe/Rome");
+    const { flowId } = chosenSchedule("0 9 * * *", "America/New_York");
+    setScheduleWatch(flowId, "0 9 * * *", at("2026-10-05T12:00:00Z"));
+    const d = await daemon(at("2026-10-07T12:00:00Z"));
+    expect(listFlowFires(flowId)).toHaveLength(0);
+    expect(getScheduleWatch(flowId)?.expression).toBe(JSON.stringify(["0 9 * * *", "America/New_York"]));
+    d.tick(flowId, "2026-10-07T13:00:10Z"); // 09:00 New York
+    expect(runsOf(flowId)).toHaveLength(1);
+    await d.stop();
+  });
+
   test('different workflow zones coexist without changing the default schedule', async () => {
     setCronTimezone('UTC');
-    const rome = schedule('0 9 * * 1-5', { timezone: 'Europe/Rome' });
+    const rome = chosenSchedule('0 9 * * 1-5', 'Europe/Rome');
     const utc = schedule('0 9 * * 1-5');
     const d = await daemon(at('2026-10-21T06:59:00Z'));
     d.tick(rome.flowId, '2026-10-21T07:00:10Z');
@@ -540,19 +658,59 @@ describe("events", () => {
 
 describe("through the engine, as production runs triggers", () => {
   const onEvent = (eventType: string) => publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "jarvis-trigger", triggerName: "on_event", input: { eventType } } });
-  const pieceSchedule = (expression: string, timezone: string) => ({
-    ...publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "@activepieces/piece-schedule", triggerName: "cron_expression", input: { cronExpression: expression, timezone } } }),
+  /** The dashboard schedule piece; `chosen` when a person picked its zone rather than leaving the pre-filled one. */
+  const pieceSchedule = (expression: string, timezone: string, chosen = false) => ({
+    ...publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "@activepieces/piece-schedule", triggerName: "cron_expression",
+      ...(chosen ? { chosenTimezone: timezone } : {}), input: { cronExpression: expression, timezone } } }),
     enable: { listeners: [], scheduleOptions: { cronExpression: expression, timezone } },
   });
 
   test('engine schedule honors its persisted explicit zone', async () => {
     setCronTimezone('UTC');
-    const p = pieceSchedule('0 9 * * 1-5', 'Europe/Rome');
+    const p = pieceSchedule('0 9 * * 1-5', 'Europe/Rome', true);
     const stub = stubEngine({ enable: p.enable, poll: () => [{ date: 'fixture' }] });
     const d = await daemon(at('2026-10-26T07:59:00Z'), stub.engine);
     await d.poll(p.flowId, '2026-10-26T08:00:10Z');
     expect(runsOf(p.flowId)).toHaveLength(1);
     expect(d.manager.list()[0]?.warning).toBeUndefined();
+    await d.stop();
+  });
+
+  test("a schedule piece step left at its pre-filled UTC fires at Jarvis's wall time, and says so", async () => {
+    setCronTimezone("Europe/Rome");
+    const p = pieceSchedule("0 9 * * *", "UTC");
+    const { engine } = stubEngine({ enable: p.enable, poll: () => [{ firedAt: Date.now() }] });
+    const d = await daemon(at("2026-10-07T06:59:00Z"), engine);
+    expect(d.manager.list()[0]?.warning).toContain("This schedule names UTC, but nobody chose that zone for it");
+    await d.poll(p.flowId, "2026-10-07T07:00:10Z"); // 09:00 in Rome
+    expect(runsOf(p.flowId)).toHaveLength(1);
+    await d.poll(p.flowId, "2026-10-07T09:00:10Z"); // 09:00 UTC: nothing
+    expect(runsOf(p.flowId)).toHaveLength(1);
+    expect(getScheduleWatch(p.flowId)?.expression).toBe("0 9 * * *");
+    await d.stop();
+  });
+
+  test("the piece's hourly trigger, UTC hard-coded with no zone to pick, is warned without being told to pick one", async () => {
+    setCronTimezone("Asia/Kolkata");
+    const p = publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "@activepieces/piece-schedule", triggerName: "every_hour", input: { run_on_weekends: true } } });
+    const { engine } = stubEngine({ enable: { listeners: [], scheduleOptions: { cronExpression: "0 * * * *", timezone: "UTC" } }, poll: () => [{}] });
+    const d = await daemon(at("2026-10-07T06:59:00Z"), engine);
+    const warning = d.manager.list()[0]?.warning;
+    expect(warning).toContain("This schedule names UTC");
+    expect(warning).not.toContain("Pick the zone");
+    await d.stop();
+  });
+
+  test("a schedule piece step whose UTC a person chose fires at 09:00 UTC", async () => {
+    setCronTimezone("Europe/Rome");
+    const p = pieceSchedule("0 9 * * *", "UTC", true);
+    const { engine } = stubEngine({ enable: p.enable, poll: () => [{ firedAt: Date.now() }] });
+    const d = await daemon(at("2026-10-07T06:59:00Z"), engine);
+    expect(d.manager.list()[0]?.warning).toBeUndefined();
+    await d.poll(p.flowId, "2026-10-07T07:00:10Z");
+    expect(runsOf(p.flowId)).toHaveLength(0);
+    await d.poll(p.flowId, "2026-10-07T09:00:10Z");
+    expect(runsOf(p.flowId)).toHaveLength(1);
     await d.stop();
   });
 
@@ -576,22 +734,22 @@ describe("through the engine, as production runs triggers", () => {
 
   test("the dashboard's schedule piece keeps the schedule rules: the explicit zone, the spring-forward time, overlap and missed times", async () => {
     setCronTimezone("UTC");
-    const { flowId, enable } = pieceSchedule("30 2 * * *", "America/New_York");
+    const { flowId, enable } = pieceSchedule("30 2 * * *", "America/New_York", true);
     const { engine } = stubEngine({ enable, poll: () => [{ firedAt: Date.now() }] });
     let d = await daemon(at("2026-03-08T06:58:30Z"), engine); // 01:58:30 EST
     expect(d.manager.list()[0]?.warning).toBeUndefined();
     d.tick(flowId, "2026-03-08T06:59:10Z"); // 01:59 EST
     await d.poll(flowId, "2026-03-08T07:00:10Z"); // 03:00 EDT: 02:30 never existed
-    expect(listFlowFires(flowId)[0]).toMatchObject({ source: "schedule", dedupeKey: "2026-03-08T02:30", outcome: "started",
+    expect(listFlowFires(flowId)[0]).toMatchObject({ source: "schedule", dedupeKey: "America/New_York@2026-03-08T02:30", outcome: "started",
       detail: { reason: expect.stringContaining("did not exist when clocks moved forward") } });
     await d.poll(flowId, "2026-03-09T06:30:10Z"); // the next 02:30, with the first run still queued
     expect(runsOf(flowId)).toHaveLength(1);
     await d.stop();
     d = await daemon(at("2026-03-10T07:00:00Z"), engine); // off through the 02:30 after that
     expect(listFlowFires(flowId).map(f => [f.label, f.dedupeKey])).toEqual([
-      ["missed", "2026-03-10T02:30"],
-      ["skipped", "2026-03-09T02:30"],
-      ["delayed", "2026-03-08T02:30"],
+      ["missed", "America/New_York@2026-03-10T02:30"],
+      ["skipped", "America/New_York@2026-03-09T02:30"],
+      ["delayed", "America/New_York@2026-03-08T02:30"],
     ]);
     await d.stop();
   });
@@ -751,6 +909,24 @@ describe("Pause and Kill (Q-08)", () => {
   });
 });
 
+describe("the time-zone warning", () => {
+  test("compares when the schedule actually fires in the two zones", () => {
+    setCronTimezone("UTC");
+    expect(scheduleZoneWarning("0 * * * *", "Asia/Kolkata")).toContain("This schedule names Asia/Kolkata"); // :00 UTC is :30 there
+    expect(scheduleZoneWarning("*/15 * * * *", "Asia/Kolkata")).toBeUndefined();
+    setCronTimezone("Europe/Rome");
+    expect(scheduleZoneWarning("0 * * * *", "UTC")).toBeUndefined();
+    // Mondays begin two hours apart, and a two-hourly schedule lines up only in summer.
+    expect(scheduleZoneWarning("0 * * * 1", "UTC", at("2026-10-04T21:00:00Z"))).toContain("This schedule names UTC");
+    expect(scheduleZoneWarning("0 */2 * * *", "UTC", at("2026-07-01T00:00:00Z"))).toContain("This schedule names UTC");
+    expect(scheduleZoneWarning("0 9 * * *", "Europe/Rome")).toBeUndefined();
+    // A trigger with no zone to pick (the piece's hourly ones hard-code UTC) is not told to pick one.
+    expect(scheduleZoneWarning("0 * * * 1", "UTC", at("2026-10-04T21:00:00Z"))).toContain("Pick the zone in the editor");
+    expect(scheduleZoneWarning("0 * * * 1", "UTC", at("2026-10-04T21:00:00Z"), false)).not.toContain("Pick the zone");
+    expect(scheduleZoneWarning("0 9 * * *", "Mars/Olympus")).toBe('This schedule names an unknown time zone "Mars/Olympus"; it runs in Europe/Rome.');
+  });
+});
+
 describe("the delivery ledger", () => {
   test.each(['api', 'chat'])('project checks precede cancellation and history access through %s', async (surface) => {
     const projectId = 'proj_delivery_other';
@@ -846,4 +1022,340 @@ test("email identities survive history pruning and both trigger delivery paths",
     expect(claim.fire.runId).toBe(original.id);
     expect(dispatched).toBe(false);
   } finally { await d.stop(); }
+});
+
+describe("Gmail message admission", () => {
+  const emailFlow = (next?: Record<string, unknown>) => publish({ name: "trigger", type: "PIECE_TRIGGER", settings: {
+    pieceName: "jarvis-trigger", triggerName: "on_event", input: { eventType: "observer.email_received" } }, ...(next ? { nextAction: next } : {}) });
+  const seen: Array<Record<string, unknown>> = [];
+  const drain = () => new Worker({ log: silent, handlers: { [RUN_FLOW]: createRunFlowHandler({ executor: { execute: async (ctx) => {
+    seen.push(ctx.payload); return { steps: {}, stepsCount: 0 };
+  } } }) } }).drain();
+  const manualRun = (flowId: string, versionId: string, payload: Record<string, unknown>, extra: Record<string, unknown> = {}) => {
+    const run = createFlowRun({ flowId, flowVersionId: versionId, triggeredBy: "dashboard" });
+    enqueue({ jobType: RUN_FLOW, payload: { runId: run.id, payload, ...extra }, flowRunId: run.id, flowId, flowVersionId: versionId, maxAttempts: 1 });
+    return run.id;
+  };
+  const keys = (flowId: string) => listFlowFires(flowId).map(f => f.dedupeKey).filter(Boolean);
+
+  test("a manual run without a message ID runs unclaimed and leaves real message keys to their deliveries", async () => {
+    seen.length = 0;
+    const { flowId, versionId } = emailFlow();
+    const d = await daemon(Date.now());
+    try {
+      const bare = manualRun(flowId, versionId, {});
+      // A caller-supplied ledger key without a message ID claims nothing.
+      const spoofed = manualRun(flowId, versionId, { eventType: "observer.email_received", payload: { subject: "Test", _eventKey: "email:real-1" } });
+      await drain();
+      expect(getFlowRun(bare)?.status).toBe("SUCCEEDED");
+      expect(getFlowRun(spoofed)?.status).toBe("SUCCEEDED");
+      expect(JSON.stringify(seen)).not.toContain("_eventKey");
+      expect(keys(flowId)).toEqual([]);
+      d.bus.publish("observer.email_received", { id: "real-1", subject: "Support" });
+      expect(runsOf(flowId).filter(r => r.triggeredBy === "trigger:event")).toHaveLength(1);
+      await drain();
+      expect(keys(flowId)).toEqual(["event:email:real-1"]);
+      // A malformed ID is still refused rather than run unclaimed.
+      const padded = manualRun(flowId, versionId, { payload: { id: " real-1" } });
+      await drain();
+      expect(getFlowRun(padded)?.status).toBe("FAILED");
+    } finally { await d.stop(); }
+  });
+
+  test("a live delivery without a message ID is never run unclaimed and leaves a visible record", async () => {
+    const { flowId } = emailFlow();
+    const d = await daemon(Date.now());
+    try {
+      d.bus.publish("observer.email_received", { subject: "No id" });
+      expect(runsOf(flowId)).toHaveLength(0);
+      expect(listFlowFires(flowId)).toEqual([expect.objectContaining({ source: "event", outcome: "blocked", dedupeKey: null,
+        detail: expect.objectContaining({ reason: expect.stringContaining("message ID") }) })]);
+    } finally { await d.stop(); }
+  });
+
+  test("a polled email without a message ID leaves a visible record", async () => {
+    setCronTimezone("UTC");
+    const polls = [[{ id: "9", eventType: "observer.email_received", payload: { subject: "No id" }, timestamp: 1, _dedupe_key: "9" }]];
+    const { engine } = stubEngine({ enable: { listeners: [], scheduleOptions: { cronExpression: "* * * * *" } }, poll: () => polls.shift() ?? [] });
+    const { flowId } = emailFlow();
+    const d = await daemon(at("2026-10-07T09:00:00Z"), engine);
+    try {
+      await d.poll(flowId, "2026-10-07T09:00:10Z");
+      expect(runsOf(flowId)).toHaveLength(0);
+      expect(listFlowFires(flowId)).toEqual([expect.objectContaining({ source: "poll", outcome: "blocked", dedupeKey: null,
+        detail: expect.objectContaining({ reason: expect.stringContaining("message ID") }) })]);
+    } finally { await d.stop(); }
+  });
+
+  for (const retry of ["redelivery", "manual run"] as const) test(`an email refused at readiness is processed once by a ${retry} after setup is fixed`, async () => {
+    seen.length = 0;
+    setEncryptionKey(Buffer.alloc(32, 0x63));
+    const account = () => upsertConnection({ externalId: "account", pieceName: "private-piece", displayName: "S", pieceVersion: "1", type: "SECRET_TEXT", value: { secret_text: "x" } });
+    const connection = account();
+    const { flowId, versionId } = emailFlow({ name: "send", type: "PIECE", settings: { pieceName: "private-piece", actionName: "send", input: { auth: "{{connections.account}}" } } });
+    const d = await daemon(Date.now());
+    try {
+      deleteConnection(connection.id);
+      d.bus.publish("observer.email_received", { id: "fix-me", subject: "Support" });
+      expect(listFlowFires(flowId)).toEqual([expect.objectContaining({ outcome: "blocked", dedupeKey: null,
+        detail: expect.objectContaining({ deliveryKey: "event:email:fix-me" }) })]);
+      account();
+      // The owner checks the new connection and accepts it, as enabling again does.
+      pinFlowBindings(flowId);
+      const processed = retry === "redelivery"
+        ? (d.bus.publish("observer.email_received", { id: "fix-me", subject: "Support" }), runsOf(flowId).find(r => r.status === "QUEUED")!.id)
+        : manualRun(flowId, versionId, { payload: { id: "fix-me", subject: "Support" } });
+      await drain();
+      expect(getFlowRun(processed)?.status).toBe("SUCCEEDED");
+      expect(seen).toHaveLength(1);
+      d.bus.publish("observer.email_received", { id: "fix-me", subject: "Support" });
+      const again = manualRun(flowId, versionId, { payload: { id: "fix-me" } });
+      await drain();
+      expect(seen).toHaveLength(1);
+      expect(getFlowRun(again)?.failedStep?.errorMessage).toContain("already accepted");
+    } finally { await d.stop(); }
+  });
+
+  test("Test from here runs a step that changes nothing, and refuses a tracked effect or a branch holding one", async () => {
+    seen.length = 0;
+    const step = (name: string, pieceName: string, actionName: string, input: Record<string, unknown> = {}) =>
+      ({ name, type: "PIECE", settings: { pieceName, actionName, input } });
+    const label = { ...step("label", "@activepieces/piece-gmail", "gmail_add_label_to_email", { message_id: "{{trigger.payload.id}}" }),
+      nextAction: { name: "route", type: "ROUTER", settings: { executionType: "EXECUTE_FIRST_MATCH", branches: [
+        { branchName: "Urgent", branchType: "CONDITION", conditions: [[{ firstValue: "{{classify.urgent}}", operator: "BOOLEAN_IS_TRUE" }]] },
+        { branchName: "Otherwise", branchType: "FALLBACK" },
+      ] }, children: [step("alert", "jarvis-notify", "notify", { message: "x" }), null] } };
+    const { flowId, versionId } = emailFlow({ ...step("classify", "jarvis-ask", "ask", { prompt: "x" }), nextAction: label });
+    const preview = (stepNameToTest: string, payload: Record<string, unknown> = {}) => manualRun(flowId, versionId, payload, { stepNameToTest });
+    const classify = preview("classify", { payload: { id: "real-2" } });
+    const labelRun = preview("label", { payload: { id: "real-2" } });
+    const routeRun = preview("route");
+    const alertRun = preview("alert");
+    await drain();
+    expect(getFlowRun(classify)?.status).toBe("SUCCEEDED");
+    for (const [run, name] of [[labelRun, "label"], [routeRun, "alert"], [alertRun, "alert"]] as const) {
+      expect(getFlowRun(run)?.status).toBe("FAILED");
+      expect(getFlowRun(run)?.failedStep?.errorMessage).toContain(`"${name}" is a tracked send or change`);
+    }
+    expect(seen).toHaveLength(1);
+    // The preview claimed nothing: the message is still processed once when it arrives.
+    expect(keys(flowId)).toEqual([]);
+    const full = manualRun(flowId, versionId, { payload: { id: "real-2" } });
+    await drain();
+    expect(getFlowRun(full)?.status).toBe("SUCCEEDED");
+    expect(keys(flowId)).toEqual(["event:email:real-2"]);
+  });
+
+  test("a message held by a run that has not begun is refused without claiming it was processed", async () => {
+    const { flowId, versionId } = emailFlow();
+    const d = await daemon(Date.now());
+    try {
+      d.bus.publish("observer.email_received", { id: "queued-1" });
+      const live = runsOf(flowId)[0]!;
+      // The live run is still queued (its job not due yet) when a manual run arrives.
+      getWorkflowDb().run("UPDATE workflow_job SET scheduled_at = ? WHERE flow_run_id = ?", [Date.now() + 3_600_000, live.id]);
+      const manual = manualRun(flowId, versionId, { payload: { id: "queued-1" } });
+      await drain();
+      const message = getFlowRun(manual)?.failedStep?.errorMessage ?? "";
+      expect(message).toContain(`belongs to run ${live.id}`);
+      expect(message).toContain("has not begun");
+      expect(message).not.toContain("already accepted");
+    } finally { await d.stop(); }
+  });
+
+  for (const stop of ["turned off", "cancel"] as const) for (const retry of ["redelivery", "manual run"] as const)
+    test(`a queued delivery stopped (${stop}) before it began gives its message up to a ${retry}, processed once`, async () => {
+      seen.length = 0;
+      const { flowId, versionId } = emailFlow();
+      const d = await daemon(Date.now());
+      try {
+        d.bus.publish("observer.email_received", { id: "stopped-1", subject: "Support" });
+        const live = runsOf(flowId)[0]!;
+        // Kill stops a queued run with the same cancelFlowRun call as cancel.
+        if (stop === "cancel") cancelFlowRun(live.id);
+        else {
+          updateFlowStatus(flowId, "DISABLED");
+          await drain();
+          setSystemTime(new Date(Date.now() + 1000));
+          updateFlowStatus(flowId, "ENABLED");
+        }
+        await drain();
+        expect(getFlowRun(live.id)?.status).toBe("STOPPED");
+        expect(seen).toHaveLength(0);
+        const processed = retry === "redelivery"
+          ? (d.bus.publish("observer.email_received", { id: "stopped-1", subject: "Support" }), runsOf(flowId).find(r => r.status === "QUEUED")!.id)
+          : manualRun(flowId, versionId, { payload: { id: "stopped-1", subject: "Support" } });
+        await drain();
+        expect(getFlowRun(processed)?.status).toBe("SUCCEEDED");
+        expect(seen).toHaveLength(1);
+        d.bus.publish("observer.email_received", { id: "stopped-1", subject: "Support" });
+        const again = manualRun(flowId, versionId, { payload: { id: "stopped-1" } });
+        await drain();
+        expect(seen).toHaveLength(1);
+        expect(getFlowRun(again)?.failedStep?.errorMessage).toContain("already accepted");
+      } finally { await d.stop(); }
+    });
+
+  for (const evidence of ["executed with no recorded start", "an effect row"] as const)
+    test(`a stopped delivery whose run left ${evidence} keeps its message`, async () => {
+      seen.length = 0;
+      const { flowId, versionId } = emailFlow();
+      const d = await daemon(Date.now());
+      try {
+        d.bus.publish("observer.email_received", { id: "kept-1" });
+        const live = runsOf(flowId)[0]!;
+        if (evidence === "an effect row") {
+          getWorkflowDb().run("INSERT INTO workflow_effect (id, run_id, status, record) VALUES ('effect-1', ?, 'unknown', '{}')", [live.id]);
+          cancelFlowRun(live.id);
+        } else {
+          // The run executed, but recording when it began failed (non-fatal); it was then stopped.
+          getWorkflowDb().run("CREATE TRIGGER no_start BEFORE UPDATE OF started_at ON workflow_trigger_fire BEGIN SELECT RAISE(ABORT, 'disk full'); END");
+          await drain();
+          getWorkflowDb().run("DROP TRIGGER no_start");
+          expect(listFlowFires(flowId).find(f => f.runId === live.id)?.startedAt ?? null).toBeNull();
+          expect(seen).toHaveLength(1);
+          updateRun(live.id, { status: "STOPPED", finishTime: Date.now() });
+        }
+        d.bus.publish("observer.email_received", { id: "kept-1" });
+        const manual = manualRun(flowId, versionId, { payload: { id: "kept-1" } });
+        await drain();
+        expect(runsOf(flowId).filter(r => r.triggeredBy === "trigger:event")).toHaveLength(1);
+        expect(getFlowRun(manual)?.failedStep?.errorMessage).toContain("already accepted");
+        expect(seen).toHaveLength(evidence === "an effect row" ? 0 : 1);
+      } finally { await d.stop(); }
+    });
+
+  test("Test from here judges a step by the input it will run with: an HTTP GET overridden to a POST is refused", async () => {
+    seen.length = 0;
+    const { flowId, versionId } = emailFlow({ name: "fetch", type: "PIECE",
+      settings: { pieceName: "@activepieces/piece-http", actionName: "send_request", input: { method: "GET", url: "https://example.test" } } });
+    const plain = manualRun(flowId, versionId, {}, { stepNameToTest: "fetch" });
+    const posted = manualRun(flowId, versionId, {}, { stepNameToTest: "fetch",
+      sampleInputOverride: { fetch: { method: "POST", url: "https://example.test", body: { data: "x" } } } });
+    await drain();
+    expect(getFlowRun(plain)?.status).toBe("SUCCEEDED");
+    expect(getFlowRun(posted)?.status).toBe("FAILED");
+    expect(getFlowRun(posted)?.failedStep?.errorMessage).toContain('"fetch" is a tracked send or change');
+    expect(seen).toHaveLength(1);
+  });
+
+  test("an email key held by a delivery that started nothing, from before this rule, is given up to the next delivery", async () => {
+    const { flowId } = emailFlow();
+    recordFire({ flowId, source: "event", dedupeKey: "event:email:legacy-1", outcome: "blocked", detail: { reason: "Readiness refused" } });
+    const d = await daemon(Date.now());
+    try {
+      d.bus.publish("observer.email_received", { id: "legacy-1" });
+      d.bus.publish("observer.email_received", { id: "legacy-1" });
+      expect(runsOf(flowId)).toHaveLength(1);
+      expect(listFlowFires(flowId).find(f => f.outcome === "blocked")).toMatchObject({ dedupeKey: null,
+        detail: expect.objectContaining({ deliveryKey: "event:email:legacy-1" }) });
+    } finally { await d.stop(); }
+  });
+
+  test("an email refused by the dispatch readiness recheck keeps no claim: a manual run with its ID processes it once", async () => {
+    seen.length = 0;
+    const { flowId, versionId } = emailFlow();
+    const d = await daemon(Date.now());
+    try {
+      d.bus.publish("observer.email_received", { id: "pinned-1", subject: "Support" });
+      const live = runsOf(flowId)[0]!;
+      // The saved selections change between enqueue and dispatch.
+      getWorkflowDb().run("INSERT INTO workflow_composition_ingredients (flow_id, ingredients) VALUES (?, 'unreadable')", [flowId]);
+      await drain();
+      expect(getFlowRun(live.id)?.status).toBe("FAILED");
+      expect(seen).toHaveLength(0);
+      expect(listFlowFires(flowId).find(f => f.runId === live.id)).toMatchObject({ dedupeKey: null,
+        detail: expect.objectContaining({ deliveryKey: "event:email:pinned-1" }) });
+      getWorkflowDb().run("DELETE FROM workflow_composition_ingredients WHERE flow_id = ?", [flowId]);
+      const manual = manualRun(flowId, versionId, { payload: { id: "pinned-1", subject: "Support" } });
+      await drain();
+      expect(getFlowRun(manual)?.status).toBe("SUCCEEDED");
+      expect(seen).toHaveLength(1);
+      d.bus.publish("observer.email_received", { id: "pinned-1", subject: "Support" });
+      const again = manualRun(flowId, versionId, { payload: { id: "pinned-1" } });
+      await drain();
+      expect(seen).toHaveLength(1);
+      expect(getFlowRun(again)?.failedStep?.errorMessage).toContain("already accepted");
+    } finally { await d.stop(); }
+  });
+
+  test("a manual run refused by the readiness recheck just before the engine gives its message back", async () => {
+    seen.length = 0;
+    const { flowId, versionId } = emailFlow();
+    let refuse = true;
+    const worker = () => new Worker({ log: silent, handlers: { [RUN_FLOW]: createRunFlowHandler({ executor: { execute: async (ctx) => {
+      // The engine executor rechecks pins after acquiring a runtime, after the claim.
+      if (refuse) throw new WorkflowReadinessError({ ready: false, runtimeChecks: [], issues: [{ node: "trigger", path: "ingredients", code: "INGREDIENT", message: "Pin changed" }] });
+      seen.push(ctx.payload); return { steps: {}, stepsCount: 0 };
+    } } }) } }).drain();
+    const refused = manualRun(flowId, versionId, { payload: { id: "engine-1" } });
+    await worker();
+    expect(getFlowRun(refused)?.status).toBe("FAILED");
+    expect(keys(flowId)).toEqual([]);
+    refuse = false;
+    const manual = manualRun(flowId, versionId, { payload: { id: "engine-1" } });
+    await worker();
+    expect(getFlowRun(manual)?.status).toBe("SUCCEEDED");
+    expect(seen).toHaveLength(1);
+    expect(keys(flowId)).toEqual(["event:email:engine-1"]);
+  });
+
+  test("the same email refused the same way is recorded once, and a fixed setup still admits it", async () => {
+    seen.length = 0;
+    setEncryptionKey(Buffer.alloc(32, 0x63));
+    const account = () => upsertConnection({ externalId: "account", pieceName: "private-piece", displayName: "S", pieceVersion: "1", type: "SECRET_TEXT", value: { secret_text: "x" } });
+    const connection = account();
+    const { flowId } = emailFlow({ name: "send", type: "PIECE", settings: { pieceName: "private-piece", actionName: "send", input: { auth: "{{connections.account}}" } } });
+    const d = await daemon(Date.now());
+    try {
+      deleteConnection(connection.id);
+      // The observer re-emits unread mail after a restart; another email arrives in between.
+      for (const id of ["unread-1", "unread-2", "unread-1", "unread-1"]) d.bus.publish("observer.email_received", { id, subject: "Support" });
+      expect(runsOf(flowId)).toHaveLength(2);
+      const refusals = listFlowFires(flowId).filter(f => f.outcome === "blocked");
+      expect(refusals).toHaveLength(2);
+      expect(refusals.find(f => f.detail?.deliveryKey === "event:email:unread-1")?.repeats).toBe(2);
+      account();
+      pinFlowBindings(flowId);
+      d.bus.publish("observer.email_received", { id: "unread-1", subject: "Support" });
+      const processed = runsOf(flowId).find(r => r.status === "QUEUED")!.id;
+      await drain();
+      expect(getFlowRun(processed)?.status).toBe("SUCCEEDED");
+      expect(seen).toHaveLength(1);
+    } finally { await d.stop(); }
+  });
+
+  test("Test from here is judged on the preview scope frozen on the run, not only the job payload", async () => {
+    seen.length = 0;
+    const { flowId, versionId } = emailFlow({ name: "label", type: "PIECE", settings: { pieceName: "@activepieces/piece-gmail",
+      actionName: "gmail_add_label_to_email", input: { message_id: "{{trigger.payload.id}}" } } });
+    const run = createFlowRun({ flowId, flowVersionId: versionId, triggeredBy: "dashboard", stepNameToTest: "label" });
+    enqueue({ jobType: RUN_FLOW, payload: { runId: run.id, payload: {} }, flowRunId: run.id, flowId, flowVersionId: versionId, maxAttempts: 1 });
+    await drain();
+    expect(getFlowRun(run.id)?.status).toBe("FAILED");
+    expect(getFlowRun(run.id)?.failedStep?.errorMessage).toContain('"label" is a tracked send or change');
+    expect(seen).toHaveLength(0);
+  });
+
+  test("a refusal with a long reason keeps the email key and signature a repeat folds on", () => {
+    const { flowId } = emailFlow();
+    recordFire({ flowId, source: "event", outcome: "blocked", detail: { reason: "x".repeat(3000), signature: "sig-long", deliveryKey: "event:email:long-1" } });
+    expect(listFlowFires(flowId)[0]?.detail).toMatchObject({ truncated: true, signature: "sig-long", deliveryKey: "event:email:long-1" });
+    expect(repeatOfRefusal(flowId, "sig-long")?.repeats).toBe(1);
+  });
+
+  for (const evidence of ["none", "a step", "an effect row"] as const)
+    test(`a run refused at dispatch readiness with ${evidence} ${evidence === "none" ? "gives up" : "keeps"} its email key`, async () => {
+      const { flowId } = emailFlow();
+      const d = await daemon(Date.now());
+      try {
+        d.bus.publish("observer.email_received", { id: "guard-1" });
+        const live = runsOf(flowId)[0]!;
+        updateRun(live.id, { status: "FAILED", finishTime: Date.now(),
+          ...(evidence === "a step" ? { steps: { classify: { status: "SUCCEEDED", output: {} } }, stepsCount: 1 } : {}) });
+        if (evidence === "an effect row") getWorkflowDb().run("INSERT INTO workflow_effect (id, run_id, status, record) VALUES ('effect-guard', ?, 'unknown', '{}')", [live.id]);
+        releaseRefusedEmailRun(live.id);
+        expect(keys(flowId)).toEqual(evidence === "none" ? [] : ["event:email:guard-1"]);
+      } finally { await d.stop(); }
+    });
 });

@@ -11,15 +11,23 @@ import { lookupProviderReceipt, pieceCompletionReceipt, providerReceipt, type Pr
 import { activeEmergencyState } from '../../authority/emergency';
 import type { AuthorityEngine } from '../../authority/engine';
 import { boundedReceiptText } from '../../roles/untrusted';
+import { ownsUnresolvedIdentity, resolveIdentity } from '../db/repos/effect-identity';
 
 export class RecoveryError extends Error {
   constructor(message: string, public status = 400) { super(message); }
 }
-export type RecoveryChoice = { requestId: string; revision: string; action: 'reconcile' | 'inspect'; effectId?: string; note?: string };
+/** `mark_done` and `release` resolve the cross-run identity (a HubSpot contact,
+ * a notification idempotencyKey) an uncertain effect still holds: the person
+ * checked the provider and says the write happened, or that it did not. */
+export type IdentityResolution = 'mark_done' | 'release';
+export type RecoveryChoice = { requestId: string; revision: string; action: 'reconcile' | 'inspect' | IdentityResolution; effectId?: string; note?: string };
 export type RecoveryReceipt = {
   id: string; runId: string; flowId: string; versionId: string; requestId: string;
   action: RecoveryChoice['action']; effectId: string | null; actor: 'user'; createdAt: number;
-  evidenceVersion: string; choiceDigest: string; evidence: ProviderEvidence | { outcome: 'inspected'; reason: string };
+  /** Where the person decided: the dashboard, or an approved manage_workflow card. */
+  via?: 'dashboard' | 'manage_workflow';
+  evidenceVersion: string; choiceDigest: string;
+  evidence: ProviderEvidence | { outcome: 'inspected'; reason: string } | { outcome: 'identity_marked_done' | 'identity_released'; reason: string | null };
   /** Identity of the exact effect/receipt checked, independent of later run progress. */
   effectEvidenceVersion?: string;
 };
@@ -27,7 +35,9 @@ export type RecoveryProjection = {
   runId: string; flowId: string; versionId: string; revision: string;
   state: 'unknown' | 'blocked' | 'recoverable'; needsAttention: boolean;
   canReplay: false; newRunRequired: true; reason: string;
-  effects: Array<{ effectId: string; stepName: string; status: 'unknown' | 'not_started' | 'completed'; lookupSupported: boolean; providerEvidence?: ProviderEvidence }>;
+  effects: Array<{ effectId: string; stepName: string; status: 'unknown' | 'not_started' | 'completed'; lookupSupported: boolean; providerEvidence?: ProviderEvidence;
+    /** This uncertain effect still holds a cross-run identity that fences later items; resolve it with mark_done or release. */
+    identityUnresolved?: true }>;
   untrackedSteps: Array<{ stepName: string; executionPath: Array<[string, number]> | null; status: 'unknown' }>;
   receipts: RecoveryReceipt[];
 };
@@ -121,7 +131,8 @@ export function getRunRecovery(runId: string): RecoveryProjection | null {
     // cannot undo that historical fact. Keep every attempt in the audit history.
     const evidence = (applicable.findLast(r => r.evidence.outcome === 'confirmed') ?? applicable.at(-1))?.evidence as ProviderEvidence | undefined;
     return { effectId: effect.id, stepName: effect.stepName, status: evidence?.outcome === 'confirmed' ? 'completed' as const : effectStatus(effect),
-      lookupSupported: !!(providerReceipt(lookupCandidate(effect, run)) && effect.providerBinding), ...(evidence ? { providerEvidence: evidence } : {}) };
+      lookupSupported: !!(providerReceipt(lookupCandidate(effect, run)) && effect.providerBinding), ...(evidence ? { providerEvidence: evidence } : {}),
+      ...(ownsUnresolvedIdentity(effect.id) ? { identityUnresolved: true as const } : {}) };
   });
   const untracked = untrackedSteps(run, effects);
   const uncertain = !effects.length || untracked.length > 0 || projected.some(e => e.status === 'unknown');
@@ -162,11 +173,23 @@ export function validateRecoveryChoice(value: Record<string, unknown>): Recovery
     if (typeof value.effectId !== 'string' || !/^wfe_[a-f0-9]{64}$/.test(value.effectId) || value.note !== undefined) throw new RecoveryError('Reconcile requires only an effectId');
   } else if (value.action === 'inspect') {
     if (typeof value.note !== 'string' || !value.note.trim() || value.note.length > 2000 || value.effectId !== undefined) throw new RecoveryError('Inspection requires a note of 1–2000 characters');
-  } else throw new RecoveryError('Choose reconcile or inspect; recovery never executes a run');
+  } else if (value.action === 'mark_done' || value.action === 'release') {
+    if (typeof value.effectId !== 'string' || !/^wfe_[a-f0-9]{64}$/.test(value.effectId)) throw new RecoveryError('mark_done and release require an effectId');
+    if (value.note !== undefined && (typeof value.note !== 'string' || !value.note.trim() || value.note.length > 2000)) throw new RecoveryError('A note must be 1-2000 characters');
+  } else throw new RecoveryError('Choose reconcile, inspect, mark_done or release; recovery never executes a run');
   return value as RecoveryChoice;
 }
 
-export async function decideRunRecovery(runId: string, raw: Record<string, unknown>, deps: { authority?: AuthorityEngine; fetchImpl?: typeof fetch } = {}): Promise<RecoveryReceipt> {
+/** Why an effect's identity cannot be resolved, or null when it can: only an
+ * effect whose outcome may have occurred, and that is no longer dispatching. */
+function identityRefusal(effect: WorkflowEffect): string | null {
+  if (effect.status === 'dispatching' || effect.status === 'pending') return 'This effect is still dispatching; wait for its outcome before resolving it';
+  if (effect.status === 'succeeded' || effect.outcome?.status === 'succeeded') return 'This effect completed; its identity is already settled';
+  if (effect.outcome?.effect !== 'may_have_occurred') return 'This effect did not start; nothing is uncertain to resolve';
+  return ownsUnresolvedIdentity(effect.id) ? null : 'This effect holds no unresolved identity; it was already resolved';
+}
+
+export async function decideRunRecovery(runId: string, raw: Record<string, unknown>, deps: { authority?: AuthorityEngine; fetchImpl?: typeof fetch; via?: RecoveryReceipt['via'] } = {}): Promise<RecoveryReceipt> {
   const choice = validateRecoveryChoice(raw);
   const choiceDigest = digest(choice);
   const duplicate = () => {
@@ -183,6 +206,13 @@ export async function decideRunRecovery(runId: string, raw: Record<string, unkno
   let effectVersion: string | undefined;
   if (choice.action === 'inspect') {
     evidence = { outcome: 'inspected', reason: boundedReceiptText(choice.note!.trim(), 2000) };
+  } else if (choice.action === 'mark_done' || choice.action === 'release') {
+    const effect = effects.find(e => e.id === choice.effectId);
+    if (!effect) throw new RecoveryError('Effect does not belong to this run', 404);
+    const refusal = identityRefusal(effect);
+    if (refusal) throw new RecoveryError(refusal, 409);
+    evidence = { outcome: choice.action === 'mark_done' ? 'identity_marked_done' : 'identity_released',
+      reason: choice.note ? boundedReceiptText(choice.note.trim(), 2000) : null };
   } else {
     const effect = effects.find(e => e.id === choice.effectId);
     if (!effect) throw new RecoveryError('Effect does not belong to this run', 404);
@@ -196,14 +226,21 @@ export async function decideRunRecovery(runId: string, raw: Record<string, unkno
     try { checkpoint(); evidence = await lookupProviderReceipt(lookupCandidate(effect, run), checkpoint, deps.fetchImpl); }
     catch { evidence = { outcome: 'blocked', reason: 'Provider lookup held by current Authority or emergency policy. No action was replayed.' }; }
   }
+  // Immediate: an identity resolution and a competing claim of that identity
+  // (or a second resolution) must not interleave between check and write.
   return getWorkflowDb().transaction(() => {
     const repeated = duplicate(); if (repeated) return repeated;
     if (getRunRecovery(runId)?.revision !== choice.revision) throw new RecoveryError('Recovery evidence changed; refresh before deciding', 409);
+    if (choice.action === 'mark_done' || choice.action === 'release') {
+      const effect = listWorkflowEffects(runId).find(e => e.id === choice.effectId);
+      const refusal = effect ? identityRefusal(effect) : 'Effect does not belong to this run';
+      if (refusal || !resolveIdentity(choice.effectId!, choice.action)) throw new RecoveryError(refusal ?? 'This effect holds no unresolved identity', 409);
+    }
     const receipt: RecoveryReceipt = { id: apId(), runId, flowId: run.flowId, versionId: run.flowVersionId,
-      requestId: choice.requestId, action: choice.action, effectId: choice.effectId ?? null, actor: 'user', createdAt: Date.now(),
+      requestId: choice.requestId, action: choice.action, effectId: choice.effectId ?? null, actor: 'user', ...(deps.via ? { via: deps.via } : {}), createdAt: Date.now(),
       evidenceVersion, choiceDigest, evidence, ...(effectVersion ? { effectEvidenceVersion: effectVersion } : {}) };
     getWorkflowDb().run('INSERT INTO workflow_recovery_receipt (id,run_id,request_id,record) VALUES (?,?,?,?)',
       [receipt.id, runId, choice.requestId, JSON.stringify(receipt)]);
     return receipt;
-  })();
+  }).immediate();
 }

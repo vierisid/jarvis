@@ -17,7 +17,7 @@ import { useBilling } from '../../v2/billing/useBilling';
 import type { BriefRoute, BriefShellPort } from '../contracts';
 import { useNotificationCenter } from '../../hooks/useNotificationCenter';
 import { AttentionRoutes } from '../navigation/AttentionRoutes';
-import { fromNotificationCenter } from '../navigation/notifications';
+import { dashboardAttentionSnapshot, dashboardToastNotice } from '../navigation/notifications';
 import { ViewHost } from '../../onboarding-next/host/ViewHost';
 import { createSession, type Session } from '../../onboarding-next/host/session';
 import { createTransport } from '../../onboarding-next/host/transport';
@@ -36,10 +36,21 @@ import { LiveDataProvider } from '../../v2/shell/LiveDataContext';
 import type { RoomKey } from '../../v2/router';
 import { InputHost, inputDialog } from './InputDialog';
 import './host.css';
+import { resolveHostedEntry, useHostedEntry } from './hosted-entry';
 
 /** A distinct local bundle supplies integration=true. URL/storage never supply it. */
 export function DashboardRoot({ integration = false }: { integration?: boolean }) {
   const [href, setHref] = useState(() => window.location.href), current = useRef(href);
+  const [devtools] = useState(isDevToolsEnabled);
+  const internalEntry = resolveReleaseEntry(href, 'off', devtools);
+  const reviewing = devtools && internalEntry.kind !== 'legacy';
+  // Document-start choice, from the URL the document opened on: navigation must
+  // never swap the mounted root (and its socket and drafts) for the loading screen.
+  // A reloaded Brief maintenance link also needs the descriptor, so a hosted Brief
+  // install keeps the room inside Brief instead of stranding the tab on legacy.
+  const [startsInMaintenance] = useState(() => !integration && !reviewing && maintenanceRoom(href) !== null);
+  const [needsHostedEntry] = useState(() => !integration && !reviewing && (startsInMaintenance || resolveReleaseEntry(href, 'released').kind !== 'legacy'));
+  const hosted = useHostedEntry(needsHostedEntry);
   const guard = useRef<DashboardOwner | null>(null), epoch = useRef(0);
   useEffect(() => {
     const changed = (event: Event) => {
@@ -57,24 +68,38 @@ export function DashboardRoot({ integration = false }: { integration?: boolean }
     window.addEventListener('hashchange', changed); window.addEventListener('popstate', changed); window.addEventListener('beforeunload', unload);
     return () => { window.removeEventListener('hashchange', changed); window.removeEventListener('popstate', changed); window.removeEventListener('beforeunload', unload); };
   }, []);
-  const entry = integration ? resolveBriefEntry(href) : resolveReleaseEntry(href, 'off', isDevToolsEnabled());
+  const initialDescriptor = needsHostedEntry && hosted.state.status === 'ready' ? hosted.state.descriptor : null;
+  const entry = integration ? resolveBriefEntry(href) : reviewing ? internalEntry : resolveHostedEntry(href, initialDescriptor);
   const legacy = <AppShellV2 sharedRoomActions />;
   const lastRoute = useRef<BriefRoute>({ room: 'today', selection: {} });
   if (entry.kind === 'brief') lastRoute.current = entry.route;
-  const retained = integration || isDevToolsEnabled() ? maintenanceRoom(href) : null;
+  const hostedBrief = initialDescriptor?.installMode === 'hosted' && initialDescriptor.dashboard === 'brief';
+  // Brief's maintenance links keep the Brief owner mounted, as in local integration.
+  const retained = integration || devtools || hostedBrief ? maintenanceRoom(href) : null;
+  // A maintenance link already rendered legacy before the hosted default; a failed
+  // read keeps that rather than blocking a self-hosted maintenance room on reconnect.
+  const fallback = startsInMaintenance && hosted.state.status === 'unavailable';
+  if (needsHostedEntry && hosted.state.status !== 'ready' && !fallback) return <main className="brief-root brief-foundation">
+    <h1>{hosted.state.status === 'unavailable' ? 'Dashboard unavailable' : 'Opening your workspace…'}</h1>
+    {hosted.state.status === 'unavailable' && <><p>Your saved work is retained.</p><button onClick={hosted.retry}>Reconnect</button></>}
+  </main>;
+  if (entry.kind === 'moved' && !reviewing && !integration) return <main className="brief-root brief-foundation">
+    <h1>This view is not part of Brief</h1><p>Your saved work is retained.</p><a href="#/brief/today">Open your dashboard</a>
+  </main>;
   return <RoomActionBusProvider><ConfirmHost /><InputHost />{entry.kind === 'brief' || retained
-    ? <ConnectedDashboard route={entry.kind === 'brief' ? entry.route : lastRoute.current} retained={retained} integration={integration} legacy={legacy} installGuard={owner => { guard.current = owner; }} />
+    ? <ConnectedDashboard route={entry.kind === 'brief' ? entry.route : lastRoute.current} retained={retained} integration={integration} initialDescriptor={initialDescriptor} legacy={legacy} installGuard={owner => { guard.current = owner; }} />
     : <DashboardEntry legacy={legacy} />}</RoomActionBusProvider>;
 }
-export function ConnectedDashboard({ route, retained = null, integration = false, legacy, installGuard = () => {} }: {
-  route: BriefRoute; retained?: RoomKey | null; integration?: boolean; legacy: ReactNode; installGuard?(owner: DashboardOwner | null): void;
+export function ConnectedDashboard({ route, retained = null, integration = false, initialDescriptor = null, legacy, installGuard = () => {} }: {
+  route: BriefRoute; retained?: RoomKey | null; integration?: boolean; initialDescriptor?: HostDescriptor | null; legacy: ReactNode; installGuard?(owner: DashboardOwner | null): void;
 }) {
-  const [descriptor, setDescriptor] = useState<HostDescriptor | null>(null), [error, setError] = useState(false), [attempt, retry] = useState(0);
+  const [descriptor, setDescriptor] = useState<HostDescriptor | null>(initialDescriptor), [error, setError] = useState(false), [attempt, retry] = useState(0);
   useEffect(() => {
+    if (initialDescriptor) return;
     const http = createHostTransport(); setError(false);
     void http.json('/api/brief/host').then(value => { if (!http.signal.aborted) setDescriptor(readHost(value)); }).catch(() => { if (!http.signal.aborted) setError(true); });
     return () => http.stop();
-  }, [attempt]);
+  }, [attempt, initialDescriptor]);
   if (!descriptor) return <main className="brief-root brief-foundation"><h1>{error ? 'Dashboard unavailable' : 'Opening your workspace…'}</h1>
     {error && <><p>Your saved work is retained.</p><button onClick={() => retry(n => n + 1)}>Reconnect</button></>}</main>;
   return <OwnedDashboard key={JSON.stringify([descriptor.scopeId, descriptor.generation])} {...{ descriptor, route, retained, integration, legacy, installGuard }} />;
@@ -162,7 +187,7 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
     if (owner.roomNavRequest && !owner.roomActionRequests.some(request => request.ts === owner.roomNavRequest?.ts))
       void host.navigation.intent(owner.roomNavRequest.key, false);
   }, [owner.roomNavRequest?.ts]);
-  const attention = <><AttentionRoutes snapshot={owner.isConnected ? { status: 'ready', items: fromNotificationCenter(notices.items.filter(item => !['approval', 'clarifier', 'repeat-back'].includes(item.kind))) } : { status: 'unavailable' }}
+  const attention = <><AttentionRoutes snapshot={dashboardAttentionSnapshot(owner.isConnected, notices.items, host.capabilities())}
     navigation={host.navigation} roomAvailable={host.available} markRead={identity => notices.markRead(identity.id)} />
     <section aria-label="Voice confirmations">{owner.clarifiers.map(item => <ClarifierCard key={item.id} {...item}
       onConfirm={() => void resolveAttention('clarifier', item.id, 'confirm')} onCancel={() => void resolveAttention('clarifier', item.id, 'cancel')} />)}
@@ -200,8 +225,8 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
         </section>
       </LiveDataProvider>)}
     </BriefHost>
-    {route.room !== 'needs-you' && notices.items.find(item => item.kind === 'system' && item.unread) && (() => {
-      const notice = notices.items.find(item => item.kind === 'system' && item.unread)!;
+    {route.room !== 'needs-you' && dashboardToastNotice(notices.items) && (() => {
+      const notice = dashboardToastNotice(notices.items)!;
       return <aside className="brief-root brief-host-toast" role="status" aria-label="New Jarvis notification"><strong>{notice.title}</strong><p>{notice.text}</p>
         <button onClick={() => void host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'needs-you', selection: {} } }, message: null }))}>View notifications</button>
         <button onClick={() => notices.markRead(notice.id)}>Dismiss</button></aside>;

@@ -10,7 +10,7 @@ import {createFlowRun,getFlowRun,listRuns} from '../db/repos/flow-run';
 import {enqueue} from '../db/repos/job-queue';
 import {listWaitpointsByFlowRun} from '../db/repos/waitpoint';
 import {upsertConnection} from '../db/repos/app-connection';
-import {pinFlowBindings} from '../db/repos/binding-pins';
+import {listRunConnectionBindings,nodeConnectionReferences,pinFlowBindings} from '../db/repos/binding-pins';
 import {configureWorkflowReadiness,versionReadiness} from '../db/repos/flow-readiness';
 import {AuthorityEngine} from '../../authority/engine';
 import {AuditTrail} from '../../authority/audit';
@@ -37,7 +37,7 @@ import {workflowSafeguards} from './workflow-safeguards';
 import {cancelFlowRun} from '../db/repos/run-cancellation';
 import {listWorkflowEffects} from '../db/repos/workflow-effect';
 let dir:string,api:SandboxApi,runtime:EngineRuntime,worker:Worker,catalog:PieceCatalog,authority:AuthorityEngine,approvals:ApprovalManager;
-let services:ReturnType<typeof buildSandboxServiceBackends>,now=Date.now(),provider=importFixtureProvider();
+let services:ReturnType<typeof buildSandboxServiceBackends>,now=Date.now(),provider=importFixtureProvider(),resolver:CredentialResolver,tokenDown=false;
 const runIds:string[]=[];
 beforeAll(async()=>{
  dir=mkdtempSync(join(tmpdir(),'jarvis-import-engine-'));initWorkflowDb(join(dir,'db'));setEncryptionKey(Buffer.alloc(32,79));
@@ -45,7 +45,7 @@ beforeAll(async()=>{
  const installed=join(dir,'node_modules',IMPORT_PIECE);mkdirSync(dirname(installed),{recursive:true});symlinkSync(join(path,'dist'),installed,'dir');
  upsertConnection({externalId:'fixture-hubspot',displayName:'Fixture HubSpot',type:'OAUTH2',pieceName:'@activepieces/piece-hubspot',pieceVersion:'0.12.1',value:{access_token:'synthetic-hubspot'}});
  authority=new AuthorityEngine({default_level:10,governed_categories:[],overrides:[],context_rules:[],learning:{enabled:false,suggest_threshold:10},emergency_state:'normal'});approvals=new ApprovalManager();
- services=buildSandboxServiceBackends({credentialResolver:new CredentialResolver(),authorityEngine:authority,approvalManager:approvals,emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
+ services=buildSandboxServiceBackends({credentialResolver:resolver=new CredentialResolver({tokenTransport:async()=>{if(tokenDown)throw Error('token endpoint unreachable');return {status:200,body:{access_token:'synthetic-hubspot',expires_in:3600}};}}),authorityEngine:authority,approvalManager:approvals,emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
   importNow:()=>now,importRequest:(...args)=>provider.request(...args),llmManager:{chat:async()=>{throw Error('No model execution');}} as any,channelService:{sendWorkflowNotification:async()=>{throw Error('No notifications');}} as any,wsService:{} as any});
  api=new SandboxApi({services});await api.start({port:0});runtime=new EngineRuntime({api,pool:true,bundlePath:bundle.bundlePath,expectedDigest:bundle.digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code')});
  const handle=await runtime.acquire({runId:'import-metadata',projectId:DEFAULT_IDS.project});
@@ -180,4 +180,70 @@ test('an overlapping run on the same import is refused as not started while the 
  expect(approvals.getRequest(b.approval.approvalId)?.execution_outcome).toBe('blocked');
  for(let i=0;i<40;i++){const next=await services.contactImport!({...setup},ctxFor(runA.id)) as any;if(next.complete)break;now=Math.max(now+1,next.resumeAt);}
  expect(provider.creates).toBe(2);expect(approvals.getRequest(a.approval.approvalId)?.status).toBe('executed');
+},60000);
+
+const hubspotRow=(value:Record<string,unknown>)=>upsertConnection({externalId:'fixture-hubspot',displayName:'Fixture HubSpot',type:'OAUTH2',pieceName:'@activepieces/piece-hubspot',pieceVersion:'0.12.1',value});
+/** A locked version whose saved import step is `node`, never published (readiness would refuse it), and a running execution of it. */
+function direct(node:any){
+ const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Direct import',trigger:{...graph(),nextAction:node}});lockVersion(version.id);
+ const execution=createFlowRun({flowId:flow.id,flowVersionId:version.id,status:'RUNNING'});runIds.push(execution.id);
+ return {runId:execution.id,projectId:DEFAULT_IDS.project,stepName:'import_contacts',executionPath:[] as Array<[string,number]>};
+}
+test('readiness refuses a Jarvis-managed id for each import account and the short piece name',()=>{
+ for(const field of ['hubspotConnection','sourceConnection']) for(const phase of ['composition','activation'] as const){
+  const g=graph();g.nextAction.settings.input={...setup,sourceAuth:'oauth2',sourceConnection:'fixture-source',[field]:'jarvis:google'};
+  const issues=compileWorkflow(g,{pieces:catalog,phase,connection:()=>null} as any).issues;
+  expect(issues.some((i:any)=>i.code==='CONNECTION_BINDING'&&i.path===`settings.input.${field}`&&String(i.message).includes('Jarvis-managed'))).toBe(true);
+ }
+ // An anonymous source names no source account, whatever the field holds.
+ const anonymous=graph();anonymous.nextAction.settings.input={...setup,sourceConnection:'jarvis:google'};
+ expect(compileWorkflow(anonymous,{pieces:catalog,phase:'composition'}).issues.some((i:any)=>i.code==='CONNECTION_BINDING')).toBe(false);
+ expect(compileWorkflow(graph(),{pieces:catalog,phase:'composition'}).issues.some((i:any)=>i.code==='CONNECTION_BINDING')).toBe(false);
+ const short=graph();short.nextAction.settings.pieceName='jarvis-import';
+ expect(compileWorkflow(short,{pieces:catalog,phase:'composition'}).issues.some((i:any)=>i.code==='PIECE'&&i.path==='settings.pieceName'&&String(i.message).includes(`Use the full piece name ${IMPORT_PIECE}`))).toBe(true);
+});
+test('the import step binds its source account only for an OAuth2 source',()=>{
+ const node=(input:any)=>({name:'import_contacts',type:'PIECE',settings:{pieceName:IMPORT_PIECE,actionName:IMPORT_ACTION,input}}) as any;
+ expect(nodeConnectionReferences(node({...setup,sourceConnection:'fixture-source'}))).toEqual([['fixture-hubspot','settings.input.hubspotConnection']]);
+ expect(nodeConnectionReferences(node({...setup,sourceAuth:'oauth2',sourceConnection:'fixture-source'}))).toEqual([['fixture-hubspot','settings.input.hubspotConnection'],['fixture-source','settings.input.sourceConnection']]);
+});
+test('the import backend refuses a Jarvis-managed account at run time, with no exemption, before resolving anything',async()=>{
+ reset();
+ resolver.register({id:'google',pieceNames:['@activepieces/piece-hubspot','@activepieces/piece-http-oauth2'],canResolve:(ext:string)=>ext==='jarvis:google',resolve:async()=>{throw Error('a managed account must not be resolved');}} as any);
+ try {
+  for(const [field,label] of [['hubspotConnection','HubSpot'],['sourceConnection','Source API']] as const){
+   const input={...setup,sourceAuth:'oauth2',sourceConnection:'fixture-source',[field]:'jarvis:google'};
+   const ctx=direct({name:'import_contacts',type:'PIECE',settings:{pieceName:IMPORT_PIECE,actionName:IMPORT_ACTION,input}});
+   await expect(services.contactImport!(input,ctx)).rejects.toThrow(`Select a saved ${label} account; a Jarvis-managed connection cannot be used by the contact import`);
+  }
+  expect(provider.calls).toHaveLength(0);
+ } finally {resolver.unregister('google');}
+},60000);
+test('the import backend refuses a saved step that is not a PIECE action node',async()=>{
+ reset();
+ for(const node of [{name:'import_contacts',type:'CODE',settings:{pieceName:IMPORT_PIECE,actionName:IMPORT_ACTION,input:setup}},
+  {name:'import_contacts',type:'PIECE',settings:{pieceName:IMPORT_PIECE,actionName:IMPORT_ACTION,triggerName:'x',input:setup}}]){
+  await expect(services.contactImport!({...setup},direct(node))).rejects.toThrow('Import configuration must match a saved contact import step');
+ }
+ expect(provider.calls).toHaveLength(0);
+},60000);
+test('an expired HubSpot token that cannot be refreshed fails with a reconnect message, before any provider call',async()=>{
+ hubspotRow({access_token:'synthetic-hubspot',claimed_at:Math.floor(Date.now()/1000)-7200,expires_in:3600});
+ try {
+  reset();const f=fixture(),ctx={runId:createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'}).id,projectId:DEFAULT_IDS.project,stepName:'import_contacts',executionPath:[] as Array<[string,number]>};runIds.push(ctx.runId);
+  await expect(services.contactImport!({...setup},ctx)).rejects.toThrow('Reconnect the selected HubSpot account (fixture-hubspot)');
+  expect(listRunConnectionBindings(ctx.runId).find(b=>b.externalId==='fixture-hubspot')?.credentialFailure?.code).toBe('CONNECTION_EXPIRED');
+  expect(provider.calls).toHaveLength(0);
+ } finally {hubspotRow({access_token:'synthetic-hubspot'});}
+},60000);
+test('a HubSpot token whose refresh cannot reach the provider fails as temporary, not as reconnect',async()=>{
+ hubspotRow({access_token:'synthetic-hubspot',refresh_token:'refresh',client_id:'client',client_secret:'secret',token_url:'https://oauth2.example.test/token',claimed_at:Math.floor(Date.now()/1000)-7200,expires_in:3600});
+ tokenDown=true;
+ try {
+  reset();const f=fixture(),ctx={runId:createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'}).id,projectId:DEFAULT_IDS.project,stepName:'import_contacts',executionPath:[] as Array<[string,number]>};runIds.push(ctx.runId);
+  const error=await services.contactImport!({...setup},ctx).then(()=>null,e=>e as Error);
+  expect(String(error?.message)).toContain('which is usually temporary. Start a new run later to resume from the checkpoint.');expect(String(error?.message)).not.toContain('Reconnect');
+  expect(listRunConnectionBindings(ctx.runId).find(b=>b.externalId==='fixture-hubspot')?.credentialFailure?.code).toBe('CONNECTION_REFRESH_UNREACHABLE');
+  expect(provider.calls).toHaveLength(0);
+ } finally {tokenDown=false;hubspotRow({access_token:'synthetic-hubspot'});}
 },60000);

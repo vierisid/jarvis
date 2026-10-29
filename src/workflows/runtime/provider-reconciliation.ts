@@ -1,17 +1,26 @@
 /** Q-07: read back exact receipts only. A missing message is never proof of no send. */
-import { getConnection, getConnectionByExternalId } from '../db/repos/app-connection';
+import { getConnection, getConnectionByExternalId, type AppConnection } from '../db/repos/app-connection';
 import { getFlowVersion } from '../db/repos/flow-version';
 import type { WorkflowEffect } from '../db/repos/workflow-effect';
 import { walkFlowNodes } from '../db/flow-graph';
+import { runBinding } from '../db/repos/binding-pins';
 import { digest } from './effect-context';
-import { tracksPieceCompletion } from './piece-effects';
+import { isGmailTrackedSend, tracksPieceCompletion } from './piece-effects';
 
 export type ProviderEvidence = { outcome: 'confirmed' | 'inconclusive' | 'unsupported' | 'blocked'; reason: string; reference?: string };
 
 /** Bind a native OAuth connection to the credential the engine actually resolved.
- * Managed/dynamic credentials deliberately have no lookup adapter yet. */
+ * Managed/dynamic credentials deliberately have no lookup adapter yet.
+ *
+ * The engine's token must be the one the row holds, with one exception for
+ * the HubSpot contact upsert, which dispatches with the row's own (refreshed)
+ * token rather than the engine's: another run may have refreshed the row
+ * after this run's engine fetched it. That is accepted only when this run was
+ * handed this row's credential and the row is still at the credential
+ * generation the run was bound to, so the same account. A person replacing
+ * the credential advances the generation and is refused as before. */
 export function captureProviderBinding(input: {
-  projectId: string; versionId: string; stepName: string; piece: string; credentialDigest?: string;
+  projectId: string; versionId: string; stepName: string; piece: string; credentialDigest?: string; runId?: string;
 }): WorkflowEffect['providerBinding'] {
   if (!input.credentialDigest) return undefined;
   const version = getFlowVersion(input.versionId);
@@ -26,10 +35,32 @@ export function captureProviderBinding(input: {
   try {
     const connection = getConnectionByExternalId(input.projectId, input.piece, externalId);
     const token = connection?.value.access_token;
-    if (!connection || connection.type !== 'OAUTH2' || connection.status !== 'ACTIVE' || typeof token !== 'string'
-      || digest(token) !== input.credentialDigest) return undefined;
-    return { connectionId: connection.id, credentialDigest: input.credentialDigest };
+    if (!connection || connection.type !== 'OAUTH2' || connection.status !== 'ACTIVE' || typeof token !== 'string') return undefined;
+    if (digest(token) !== input.credentialDigest) {
+      const bound = input.piece === '@activepieces/piece-hubspot' && input.runId ? runBinding(input.runId, externalId) : null;
+      if (!bound || bound.refusal || bound.handedOut !== true || bound.identity?.kind !== 'native'
+        || bound.identity.connectionId !== connection.id || bound.identity.generation !== connection.credentialGeneration) return undefined;
+    }
+    return { connectionId: connection.id, credentialDigest: input.credentialDigest, credentialGeneration: connection.credentialGeneration };
   } catch { return undefined; }
+}
+
+/**
+ * Whether the stored row still holds the credential a binding was taken
+ * against. A token refresh keeps the row's credential generation, so a
+ * refreshed token still matches; a person replacing the credential (another
+ * account, perhaps) advances it, and a deleted and re-created row has another
+ * id. A binding recorded without a generation can only compare the token
+ * digest, as it did when it was recorded: it never matches another account,
+ * and a refresh since then reads as a change.
+ */
+export function providerBindingHolds(binding: NonNullable<WorkflowEffect['providerBinding']>,
+  connection: AppConnection | null, projectId: string, piece: string): connection is AppConnection {
+  if (!connection || connection.id !== binding.connectionId || connection.projectId !== projectId || connection.pieceName !== piece
+    || connection.type !== 'OAUTH2' || connection.status !== 'ACTIVE') return false;
+  if (binding.credentialGeneration !== undefined) return connection.credentialGeneration === binding.credentialGeneration;
+  const token = connection.value.access_token;
+  return typeof token === 'string' && digest(token) === binding.credentialDigest;
 }
 
 function object(value: unknown): Record<string, unknown> | null {
@@ -46,7 +77,7 @@ export function pieceCompletionReceipt(effect: WorkflowEffect): { provider: 'gma
     if (effect.arguments.draft === true || typeof result.id !== 'string' || !/^[a-f0-9]{1,128}$/i.test(result.id)) return null;
     return { provider: 'gmail', id: result.id };
   }
-  // Only Gmail and Slack have a readback; other tracked writes (including HTTP and Sheets) has none.
+  // Only Gmail and Slack have completion evidence; other tracked writes (including HTTP and Sheets) have none.
   if (effect.provenance.piece !== '@activepieces/piece-slack') return null;
   if (result.ok !== true || typeof result.ts !== 'string' || !/^\d{1,20}\.\d{1,10}$/.test(result.ts)
     || typeof result.channel !== 'string' || !/^[A-Z0-9]{1,80}$/.test(result.channel)) return null;
@@ -55,6 +86,10 @@ export function pieceCompletionReceipt(effect: WorkflowEffect): { provider: 'gma
 
 export function providerReceipt(effect: WorkflowEffect): ReturnType<typeof pieceCompletionReceipt> {
   const receipt = pieceCompletionReceipt(effect);
+  // A Gmail label change completes with the labeled message, usually an incoming
+  // one: proof the change finished, but no send receipt, so the SENT readback
+  // cannot confirm it. It has no lookup.
+  if (receipt?.provider === 'gmail' && !isGmailTrackedSend(effect.provenance.action)) return null;
   if (receipt?.provider === 'slack' && (effect.arguments.file || effect.arguments.threadTs || effect.arguments.sendAsUser === true
     || effect.provenance.action === 'send_channel_message' && effect.arguments.sendAsBot !== true)) return null;
   return receipt;

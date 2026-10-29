@@ -1,9 +1,7 @@
 import {createHash} from 'node:crypto';
 import {hubspotContactInput} from './hubspot-contact';
 
-export const IMPORT_PIECE='@jarvispieces/piece-jarvis-import';
-export const IMPORT_ACTION='resumable_contact_import';
-export const IMPORT_ACCOUNTS={hubspotConnection:'@activepieces/piece-hubspot',sourceConnection:'@activepieces/piece-http-oauth2'} as const;
+export {IMPORT_PIECE,IMPORT_ACTION,IMPORT_ACCOUNTS,isImportStep} from '../import-accounts';
 export const IMPORT_REQUIRED=['importId','sourceUrl','sourceAuth','hubspotConnection','hubspotPortalId','itemsPath','nextCursorPath','cursorParameter','idPath','emailPath','propertyMapping'] as const;
 export interface ImportSetup extends Record<string,unknown> {
   importId:string;sourceUrl:string;sourceAuth:'none'|'oauth2';sourceConnection:string;hubspotConnection:string;hubspotPortalId:string;
