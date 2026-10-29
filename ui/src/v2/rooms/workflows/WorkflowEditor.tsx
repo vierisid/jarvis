@@ -29,6 +29,7 @@ import { DropboxConnection, useDropboxStatus } from "../../integrations/DropboxC
 import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
 import { GitHubConnection, useGitHubStatus } from "../../integrations/GitHubConnection";
 import { GitHubRepository } from "../../integrations/GitHubRepository";
+import { MEETING_ACCOUNT_FIELDS } from "../../../../../src/workflows/meeting-accounts";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { WorkflowEditorEnvironment, WorkflowPortal, useWorkflowRequest } from "./WorkflowEditorEnvironment";
 import { BriefTabs } from "../../../brief/components/controls/Choices";
@@ -3409,6 +3410,9 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
     && JSON.stringify(step.settings?.input?.custom_fields) === "{}" && step.settings?.input?.check_required_custom_fields === true;
   const managedSchema = standardFields && rawSchema ? {...rawSchema, fields: rawSchema.fields.filter(f => !["custom_fields", "check_required_custom_fields"].includes(f.name))} : rawSchema;
   const formInput = step.settings?.input ?? {};
+  const meetingAccounts = piece?.name === '@jarvispieces/piece-jarvis-context' && subName === 'meeting_briefs'
+    ? MEETING_ACCOUNT_FIELDS : [];
+
   const formWebhook = detectedTriggerKind === 'webhook' && ('submission_id_field' in formInput || 'submission_email_field' in formInput);
   const schema = formWebhook ? { fields: [
     { name: 'submission_id_field', label: 'Submission ID field', type: 'string' as const, required: true, description: 'The field path containing the unique submission ID, for example form.id.' },
@@ -3533,6 +3537,8 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
             <Button variant="ghost" size="sm" disabled={!!step.settings?.input?.custom_fields && JSON.stringify(step.settings.input.custom_fields) !== "{}"}
               onClick={props.onUseStandardClickUpFields}>Use standard task fields</Button></>}
       </div>}
+      {meetingAccounts.length ? <MeetingAccountPickers connections={connections} input={formInput} onSetInput={onSetInput} /> : null}
+
       {!isLoop && !isRouter ? (
         <div className="wf-props__inputs">
           {/* No "Inputs" section title: the panel only has one
@@ -3550,7 +3556,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
             </>
           ) : schema ? (
             <SchemaInputs
-              schema={schema}
+              schema={meetingAccounts.length ? {...schema, fields:schema.fields.filter(f=>!meetingAccounts.some(([field])=>field===f.name))} : schema}
               input={(step.settings?.input ?? {}) as Record<string, unknown>}
               onSetInput={onSetInput}
             />
@@ -3739,6 +3745,13 @@ function AdvancedSettings(props: {
  * here would duplicate the OAuth redirect handling already in that
  * panel and isn't worth the complexity.
  */
+export function MeetingAccountPickers({connections,input,onSetInput}: {connections:ConnectionMeta[];input:Record<string,unknown>;onSetInput:(field:string,value:string)=>void}) {
+  return <>{MEETING_ACCOUNT_FIELDS.map(([field,provider,label]) =>
+    <ConnectionPicker key={field} pieceName={provider} pieceDisplayName={label} authDisplayName={`${label} account`} authType="OAUTH2"
+      connections={connections} currentValue={input[field] ? `{{connections.${input[field]}}}` : ''}
+      onPick={template=>onSetInput(field,template ? template.slice(14,-2) : '')} />)}</>;
+}
+
 function ConnectionPicker({
   pieceName,
   pieceDisplayName,

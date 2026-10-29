@@ -1,3 +1,7 @@
+import { MEETING_ACCOUNTS, meetingSetup, meetingSetupMatches, parseMeetingGuard, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, type MeetingSetup } from './meeting-briefs';
+import { connectionBindings, enforceRunConnectionBinding, recordRunCredentialOutcome } from '../db/repos/binding-pins';
+import { walkFlowNodes } from '../db/flow-graph';
+import { isMeetingBriefsStep, MANAGED_HUBSPOT_REFUSAL, MEETING_ACCOUNT_LABELS } from '../meeting-accounts';
 import { withWorkflowMemory } from '../../vault/memory-use-context';
 import { documentInput, projectDocument } from './decision-document';
 /**
@@ -46,8 +50,8 @@ import type { AgentDelegateFn } from "../sandbox-api/routes/jarvis-agent";
 import type { EventsPollFn } from "../sandbox-api/routes/jarvis-events";
 import type { WorkflowsStartFn } from "../sandbox-api/routes/jarvis-workflows";
 import type { SandboxApiServices } from "../sandbox-api/server";
-import type { CredentialResolver } from "../credentials/adapter";
-import { ConnectionCredentialError } from "../credentials/pasted-oauth2";
+import { managedConnectionMisuse, managedSourceFor, type CredentialResolver } from "../credentials/adapter";
+import { ConnectionCredentialError, OAUTH2_TYPES } from "../credentials/pasted-oauth2";
 import { WorkflowEventBuffer } from "./event-buffer";
 import { cancellableWorkflowService } from "./cancellation";
 import { closeEffectApproval, WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
@@ -125,6 +129,8 @@ async function claimSettledIdentity(identity: string, owner: string, once: boole
 export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependencies {
   /** Test transport injection; production always uses the fixed HubSpot host. */
   hubspotFetch?: typeof fetch;
+  meetingFetch?: typeof fetch;
+  meetingNow?: () => number;
   /** F-14 enrollment is explicitly enabled only with the F-12 queue. */
   decisionDocumentsEnabled?: boolean;
   credentialResolver: CredentialResolver;
@@ -418,9 +424,80 @@ export function buildSandboxServiceBackends(
     },
     ...(opts.sendDesktop ? { sendDesktop: opts.sendDesktop } : {}),
   };
+  /**
+   * The fixed read transport for one meeting step. `providers` limits which
+   * saved accounts it resolves, refreshes and pin-checks: the freshness
+   * recheck before delivery reads Calendar only.
+   */
+  const meetingRequest = async (setup: MeetingSetup, ctx: WorkflowEffectContext, checkpoint: () => void,
+    providers: ReadonlyArray<'calendar'|'gmail'|'hubspot'> = ['calendar','gmail','hubspot']) => {
+    const run = getFlowRun(ctx.runId);
+    const version = run && getFlowVersion(run.flowVersionId);
+    const step = version && walkFlowNodes(version.trigger).find(node =>
+      isMeetingBriefsStep(node.type, node.settings) && meetingSetupMatches(node.settings?.input as any ?? {}, setup));
+    if (!version || !step) throw Error('Meeting configuration must match a saved meeting preparation step');
+    const fields = (Object.keys(MEETING_ACCOUNTS) as Array<keyof typeof MEETING_ACCOUNTS>)
+      .filter(field => providers.includes(field.replace('Connection','') as 'calendar'));
+    const tokens = {} as Record<'calendar'|'gmail'|'hubspot',string>;
+    for (const field of fields) {
+      const pieceName = MEETING_ACCOUNTS[field], externalId = setup[field];
+      if (!connectionBindings(version.trigger).has(externalId)) throw Error('Meeting account is not bound to this workflow');
+      // The readiness rule, before the binding is checked or anything is
+      // resolved: a managed connection only by the meeting exemption
+      // (jarvis:google for Calendar and Gmail), so a refused id writes nothing.
+      if (externalId.startsWith('jarvis:')) {
+        if (field === 'hubspotConnection') throw Error(MANAGED_HUBSPOT_REFUSAL);
+        const source = managedSourceFor(opts.credentialResolver.list(), externalId);
+        const misuse = source ? managedConnectionMisuse(source, pieceName, `settings.input.${field}`, step.settings, step.type) : 'Managed connection source is unavailable';
+        if (misuse) throw Error(misuse);
+      }
+      const refusal = enforceRunConnectionBinding(ctx.runId, ctx.projectId, externalId, opts.credentialResolver);
+      if (refusal) throw Error(refusal);
+      let resolved = await opts.credentialResolver.resolve({projectId:ctx.projectId,pieceName,externalId});
+      if (resolved?.pieceName && resolved.pieceName !== pieceName) throw Error('Meeting account belongs to a different provider');
+      if (!resolved || resolved.type !== 'OAUTH2' || resolved.status && resolved.status !== 'ACTIVE')
+        throw Error('Connect the selected meeting account securely before running');
+      // A stored OAuth2 token is refreshed when it is about to expire, only
+      // after the run's binding check passed (as the engine's connection route does).
+      try { resolved = await opts.credentialResolver.fresh(resolved); }
+      catch (error) {
+        if (!(error instanceof ConnectionCredentialError)) throw error;
+        // Typed on the run's binding, as the engine's connection route records it, for the failure card.
+        recordRunCredentialOutcome(ctx.runId, externalId, { code: error.code, message: error.message });
+        // Only an expired or refused credential needs a person to reconnect; the others pass.
+        const account = `the selected ${MEETING_ACCOUNT_LABELS[field]} account (${externalId})`;
+        throw Error(error.code === 'CONNECTION_EXPIRED' ? `Reconnect ${account}: ${error.message}`
+          : error.code === 'CONNECTION_REFRESH_UNREACHABLE' ? `Nothing was read: Jarvis could not refresh ${account} just now, which is usually temporary. Start a new run later. ${error.message}`
+          : `Nothing was read: ${account} changed while Jarvis refreshed it. Start a new run. ${error.message}`);
+      }
+      if (resolved.stored && OAUTH2_TYPES.has(resolved.type)) recordRunCredentialOutcome(ctx.runId, externalId, null);
+      if (typeof resolved.value.access_token !== 'string') throw Error('Connect the selected meeting account securely before running');
+      tokens[field.replace('Connection','') as keyof typeof tokens] = resolved.value.access_token;
+    }
+    return meetingTransport(tokens, () => {
+      checkpoint();
+      for (const field of fields) {
+        const refusal = enforceRunConnectionBinding(ctx.runId,ctx.projectId,setup[field],opts.credentialResolver);
+        if (refusal) throw Error(refusal);
+      }
+    }, opts.meetingFetch);
+  };
+  const meetingBriefs: NonNullable<SandboxApiServices['meetingBriefs']> = async (input, ctx) => {
+    const setup = meetingSetup(input);
+    const reply = await effects.invoke({context:ctx,piece:'@jarvispieces/piece-jarvis-context',action:'meeting_briefs',
+      route:'meeting-briefs',toolName:'workflow_meeting_briefs',category:'read_data',toolCategory:'context',request:{...setup},
+      prepare:()=>({arguments:{...setup},target:{calendar:setup.calendarId,accounts:Object.keys(MEETING_ACCOUNTS).map(k=>setup[k as keyof typeof MEETING_ACCOUNTS])}}),
+      execute:async(args,checkpoint)=>prepareMeetingBriefs(meetingSetup(args),await meetingRequest(meetingSetup(args),ctx,checkpoint),opts.meetingNow?.() ?? Date.now())});
+    return reply.approval ? {approval:reply.approval} : reply.result;
+  };
   const notify: NotifyFn = async (req, ctx) => {
+    const guard = req.meetingGuard == null ? null : parseMeetingGuard(req.meetingGuard);
+    if (guard) {
+      if (req.channels.length !== 1 || req.channels[0] !== 'dashboard') throw Error('Meeting briefs only notify the dashboard');
+      req = {...req, meetingGuard:guard, idempotencyKey:meetingNotificationKey(guard)};
+    }
     const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-notify', action: 'notify',
-      route: 'notify', toolName: 'workflow_notify', category: 'send_message', toolCategory: 'notification', request: { ...req },
+      route: 'notify', toolName: 'workflow_notify', category: 'send_message', ...(guard ? {categories:['read_data','send_message'] as ActionCategory[]} : {}), toolCategory: 'notification', request: { ...req },
       prepare: () => {
         const requested = req.channels.length ? req.channels : ['auto'];
         const channels = new Set<string>();
@@ -442,6 +519,13 @@ export function buildSandboxServiceBackends(
           target: { channels: [...channels], recipients, ...(fallback.fallback ? { fallback: fallback.fallback } : {}) } };
       },
       execute: async (args, checkpoint) => {
+        // Re-read after any approval wait and immediately before claiming delivery.
+        // A stale result must not consume the key, so a later poll can prepare it anew.
+        if (args.meetingGuard) {
+          const currentGuard = parseMeetingGuard(args.meetingGuard);
+          if (!await meetingStillCurrent(currentGuard, await meetingRequest(currentGuard.setup,ctx,checkpoint,['calendar']),opts.meetingNow?.() ?? Date.now()))
+            return {delivered:[],failed:[],unknown:[],skipped:'Meeting changed, cancelled, declined or outside the upcoming window'};
+        }
         const notifyKey = typeof args.idempotencyKey === 'string' ? args.idempotencyKey : null;
         const currentRun = getFlowRun(ctx.runId);
         const identity = notifyKey && currentRun ? digest(['workflow-notify-v1',ctx.projectId,currentRun.flowId,notifyKey]) : null;
@@ -1172,6 +1256,7 @@ export function buildSandboxServiceBackends(
 
   const services: SandboxApiServices = {
     credentialResolver: opts.credentialResolver,
+    meetingBriefs: cancellableWorkflowService(meetingBriefs),
     pieceAuthorize: cancellableWorkflowService(pieceAuthorize),
     pieceReceipt: (ctx, id, result) => recordPieceCompletion(ctx, id, result, opts),
     llmChat: cancellableWorkflowService(llmChat),

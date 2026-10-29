@@ -35,6 +35,7 @@ import { WorkerRpcServer } from "./worker-rpc";
 import { DefaultWorkerHandlers } from "./worker-handlers";
 import { DEFAULT_IDS } from "../db/schema";
 import { createConnectionsRoute } from "./routes/connections";
+import { createMeetingBriefsRoute, type MeetingBriefsFn } from './routes/jarvis-meetings';
 import {
   deleteStoreEntryRoute,
   getStoreEntryRoute,
@@ -88,6 +89,7 @@ import { json, err, type RouteContext, type RouteHandler } from "./routes/shared
 import { runWithOrigin } from "../../llm/origin.ts";
 
 export interface SandboxApiServices {
+  meetingBriefs?: MeetingBriefsFn;
   credentialResolver: CredentialResolver;
   /**
    * URL prefix used to mint resumeUrl values for waitpoints. Engine pieces
@@ -282,6 +284,7 @@ export class SandboxApi {
         method: "POST",
         handler: createJarvisNotifyRoute(this.services),
       },
+      { path: '/v1/jarvis/context/meeting-briefs', method: 'POST', handler: createMeetingBriefsRoute(this.services) },
       {
         path: "/v1/jarvis/context/vault-search",
         method: "POST",

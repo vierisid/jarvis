@@ -1,0 +1,18 @@
+import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { GlobalRegistrator } from '@happy-dom/global-registrator';
+let React: typeof import('react'), createRoot: typeof import('react-dom/client').createRoot;
+let Pickers: typeof import('./WorkflowEditor').MeetingAccountPickers;
+beforeAll(async()=>{GlobalRegistrator.register();(globalThis as any).IS_REACT_ACT_ENVIRONMENT=true;React=await import('react');({createRoot}=await import('react-dom/client'));({MeetingAccountPickers:Pickers}=await import('./WorkflowEditor'));});
+afterAll(()=>GlobalRegistrator.unregister());
+test('meeting setup selects saved accounts by provider, stores only reference and restores selection',async()=>{
+ const host=document.createElement('div');document.body.append(host);const root=createRoot(host),writes:Array<[string,string]>=[];
+ const connections=['google-calendar','gmail','hubspot'].map((name,i)=>({id:String(i),externalId:'saved-'+i,pieceName:'@activepieces/piece-'+name,displayName:'Account '+i,status:'ACTIVE'})) as any;
+ connections.push({...connections[0],id:'revoked',externalId:'revoked',status:'MISSING'});
+ await React.act(async()=>root.render(<Pickers connections={connections} input={{calendarConnection:'saved-0'}} onSetInput={(k,v)=>writes.push([k,v])}/>));
+ try{
+  const selects=host.querySelectorAll('select');expect(selects.length).toBe(3);expect(selects[0]!.value).toBe('saved-0');expect(selects[0]!.options.length).toBe(2);
+  expect(selects[1]!.textContent).not.toContain('Account 0');
+  await React.act(async()=>{selects[1]!.value='saved-1';selects[1]!.dispatchEvent(new Event('change',{bubbles:true}));});
+  expect(writes).toEqual([['gmailConnection','saved-1']]);expect(JSON.stringify(writes)).not.toContain('{{connections');
+ }finally{await React.act(async()=>root.unmount());host.remove();}
+});

@@ -1,3 +1,4 @@
+import { MEETING_ACCOUNTS } from '../../meeting-accounts';
 /**
  * Q-05: the bindings a workflow was enabled against, and the checks that stop
  * work when one of them changes.
@@ -109,6 +110,12 @@ export function connectionBindings(trigger: unknown): Map<string, ConnectionRefe
 /** Each connection one step names, with where it names it, by the same rule as `connectionBindings`. */
 export function nodeConnectionReferences(node: FlowTriggerNode): Array<[externalId: string, path: string]> {
   const out: Array<[string, string]> = [];
+  if (String(node.settings?.pieceName).endsWith('jarvis-context') && node.settings?.actionName === 'meeting_briefs') {
+    for (const field of Object.keys(MEETING_ACCOUNTS)) {
+      const id = node.settings?.input?.[field];
+      if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
+    }
+  }
   const pending: Array<[unknown, string]> = [[node.settings?.input, 'settings.input']];
   for (let visits = 0; pending.length && visits < 20_000; visits++) {
     const [value, path] = pending.pop()!;
