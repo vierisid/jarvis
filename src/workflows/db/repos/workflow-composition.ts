@@ -11,6 +11,24 @@ export interface WorkflowCompositionRecord extends CompositionCandidate {
   updated: number;
 }
 
+/**
+ * Journals this process opened and has not finished. A COMPOSING row that is
+ * not here was left by a crash or an earlier process: its outcome is unknown
+ * and nothing will ever finish it.
+ */
+const LIVE_JOURNALS = new Set<string>();
+/**
+ * A live journal that has not checkpointed for this long is treated as stuck.
+ * Composition's own budget is three minutes, and connector installs before it
+ * each update the row, so a healthy attempt never comes close.
+ */
+export const COMPOSITION_STALE_MS = 15 * 60_000;
+
+/** True while a COMPOSING record is still being worked on by this process. */
+export function compositionInProgress(record: Pick<WorkflowCompositionRecord, "id" | "state" | "updated">, now = Date.now()): boolean {
+  return record.state === "COMPOSING" && LIVE_JOURNALS.has(record.id) && now - record.updated < COMPOSITION_STALE_MS;
+}
+
 /** Commit the immutable specification before any provider call. The journal
  * captures its DB handle: a late completion must never write to a replacement
  * database after shutdown. Each checkpoint is a short autocommit, with no
@@ -22,6 +40,7 @@ export function createCompositionJournal(specification: WorkflowJobSpecification
   const now = Date.now();
   db.run(`INSERT INTO workflow_composition (id, project_id, specification, state, created, updated)
     VALUES (?, ?, ?, 'COMPOSING', ?, ?)`, [id, projectId, JSON.stringify(specification), now, now]);
+  LIVE_JOURNALS.add(id);
   return {
     id,
     recordInstalledPiece(piece: NonNullable<NonNullable<WorkflowJobSpecification['provenance']>['installedPieces']>[number]) {
@@ -36,6 +55,7 @@ export function createCompositionJournal(specification: WorkflowJobSpecification
         candidate.previousGraph === null ? null : JSON.stringify(candidate.previousGraph), JSON.stringify(candidate.errors), Date.now(), id]);
     },
     finish(state: "VALIDATED" | "FAILED", errors: string[]) {
+      LIVE_JOURNALS.delete(id);
       db.run(`UPDATE workflow_composition SET state = ?, errors = ?, updated = ? WHERE id = ? AND state = 'COMPOSING'`,
         [state, JSON.stringify(errors), Date.now(), id]);
     },

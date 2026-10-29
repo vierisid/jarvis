@@ -82,6 +82,9 @@ test('a missing connector is offered by name and installed only by a continue_se
   const card = gate(f.tool, first.setup.continueWith);
   expect(card).toMatchObject({ actionCategory: 'install_software', confirm: 'above_level' });
   expect(card!.intent).toContain('Install Library connector Google Sheets (google-sheets)');
+  // The card names the stored workflow, not the raw composition ID.
+  expect(card!.intent).toContain('to set up workflow: Submission processor');
+  expect(card!.intent).not.toContain(first.compositionRecordId);
   const result = await call(f.tool, first.setup.continueWith);
   expect(f.installed).toEqual(['google-sheets']);
   expect(result.installedConnectors).toEqual(['google-sheets']);
@@ -143,9 +146,11 @@ test('install is refused before anything runs when it is not one this call may i
   expect(noInstall.setup.continueWith.install).toBeUndefined();
   // Following continueWith with install added keeps install_missing: false, so no card.
   expect(gate(f.tool, { ...noInstall.setup.continueWith, install: 'google-sheets' })).toBeNull();
-  // Dropping it raises a card the gate cannot know is moot; the refusal says nothing was installed.
+  // Dropping it raises no card either: the gate reads the stored setup, and
+  // the action refuses, saying nothing was installed.
   const dropped = { action: 'continue_setup', composition_id: noInstall.compositionRecordId, install: 'google-sheets' };
-  expect(gate(f.tool, dropped)).toMatchObject({ actionCategory: 'install_software' });
+  expect(gate(f.tool, dropped)).toBeNull();
+  expect(gate(f.tool, { ...dropped, install_missing: true })).toMatchObject({ actionCategory: 'install_software' });
   await expect(f.tool.execute(dropped)).rejects.toThrow('Nothing was installed, even if an install was just approved');
   expect(f.installed).toEqual([]);
   expect(f.turns()).toBe(1);
@@ -184,7 +189,9 @@ test('a preinstall that is already installed is reported as already installed, n
   f.registry.upsert(piece);
   const first = await call(f.tool, { action: 'compose', name: 'Submission processor', description: 'Build disabled draft' });
   const params = { action: 'continue_setup', composition_id: first.compositionRecordId, install: 'google-sheets' };
-  expect(gate(f.tool, params)).toMatchObject({ actionCategory: 'install_software' });
+  // Nothing will be installed, so no install card is raised.
+  expect(gate(f.tool, params)).toBeNull();
+  expect(gate(f.tool, { action: 'compose', name: 'Again', description: 'x', install: 'google-sheets' })).toBeNull();
   const result = await call(f.tool, params);
   expect(f.installed).toEqual([]);
   expect(result.alreadyInstalledConnectors).toEqual(['google-sheets']);
@@ -240,6 +247,35 @@ test('setup continuation preserves the original request and answers, then saves 
   expect(f.installed).toEqual(['google-sheets']);
 });
 
+test('answers or installs sent after the draft is saved are refused, pointing to the editor, and raise no card', async () => {
+  const f = setup();
+  f.registry.upsert(piece);
+  f.complete();
+  const saved = await call(f.tool, { action: 'compose', name: 'Submission processor', description: 'Trim, validate, append once.' });
+  expect(saved.ok).toBe(true);
+  expect(saved.setup.status).toBe('needs_configuration');
+  expect(saved.setup.editor).toEqual({ flowId: saved.flow.id, versionId: saved.versionId });
+  // A saved draft is configured in the editor, so no continueWith is offered.
+  expect(saved.setup.continueWith).toBeUndefined();
+  expect(saved.setup.nextStep).toContain('workflow editor (setup.editor)');
+  expect(saved.setup.recheckWith).toEqual({ action: 'continue_setup', composition_id: saved.compositionRecordId });
+  const turns = f.turns();
+  const before = getFlowVersion(saved.versionId)!.trigger;
+  await expect(f.tool.execute({ action: 'continue_setup', composition_id: saved.compositionRecordId, answers: { spreadsheet: 'other' } }))
+    .rejects.toThrow(/draft is already saved.*workflow editor \(setup\.editor\)/);
+  // An install into a saved draft installs nothing, so no card is raised for it.
+  f.registry.remove(name);
+  const install = { action: 'continue_setup', composition_id: saved.compositionRecordId, install: 'google-sheets' };
+  expect(gate(f.tool, install)).toBeNull();
+  await expect(f.tool.execute(install)).rejects.toThrow('nothing was installed or changed');
+  expect(f.installed).toEqual([]);
+  expect(f.turns()).toBe(turns);
+  expect(getFlowVersion(saved.versionId)!.trigger).toEqual(before);
+  // Recheck without answers still reports readiness for the same draft.
+  const recheck = await call(f.tool, saved.setup.recheckWith);
+  expect(recheck).toMatchObject({ ok: true, flow: { id: saved.flow.id }, setup: { status: 'needs_configuration' } });
+});
+
 test('explicit no-install stays disabled and is retained across setup continuation', async () => {
   const f = setup();
   expect(f.tool.authorityGate?.({ action: 'compose', install_missing: false })).toBeNull();
@@ -287,6 +323,42 @@ test('concurrent setup continuation does not start a second model attempt', asyn
   finally { release(); await continuing; }
 });
 
+
+test('a COMPOSING journal left by a crash does not block the chain', async () => {
+  const f = setup();
+  const initial = await call(f.tool, { action: 'compose', name: 'Submission processor', description: 'Preserve this job' });
+  // A crash leaves the row COMPOSING with no live attempt in this process.
+  getWorkflowDb().run(`UPDATE workflow_composition SET state = 'COMPOSING' WHERE id = ?`, [initial.compositionRecordId]);
+  const resumed = await call(f.tool, { action: 'continue_setup', composition_id: initial.compositionRecordId, answers: { idField: 'id' } });
+  expect(resumed.compositionRecordId).not.toBe(initial.compositionRecordId);
+  expect(getWorkflowComposition(resumed.compositionRecordId)!.specification.context?.workflowSetup).toMatchObject({ answers: { idField: 'id' } });
+});
+
+test('a live journal that stopped checkpointing past the stale window does not block the chain', async () => {
+  const registry = new PieceCatalog([]);
+  let hold = false, release!: () => void, entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  let calls = 0;
+  const tool = createManageWorkflowTool({ pieceRegistry: registry, llm: {
+    chat: async () => { throw Error('Use tools'); }, chatTools: async () => {
+      calls++;
+      if (hold) { hold = false; entered(); await waiting; }
+      return { content: '', tool_calls: [blocked()] };
+    },
+  } });
+  const initial = await call(tool, { action: 'compose', name: 'Submission processor', description: 'Preserve this job' });
+  hold = true;
+  const continuing = call(tool, { action: 'continue_setup', composition_id: initial.compositionRecordId, answers: { idField: 'id' } });
+  await started;
+  try {
+    getWorkflowDb().run(`UPDATE workflow_composition SET updated = ? WHERE state = 'COMPOSING'`, [Date.now() - 16 * 60_000]);
+    const before = calls;
+    const second = await call(tool, { action: 'continue_setup', composition_id: initial.compositionRecordId });
+    expect(second.ok).toBe(false);
+    expect(calls).toBeGreaterThan(before);
+  } finally { release(); await continuing; }
+});
 
 test('setup answers and the original request survive database restart', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'jarvis-setup-'));

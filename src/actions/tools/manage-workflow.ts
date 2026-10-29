@@ -27,7 +27,7 @@ import type { PieceLookup } from "../../workflows/runtime/piece-catalog.ts";
 import type { ComposerLlmClient } from "./workflow-composer.ts";
 import { composePersistedFlow } from "./persisted-workflow-composer.ts";
 import { recheckJobContract, type JobContract } from "./job-contract.ts";
-import { getWorkflowComposition, latestSetupComposition, composedFlowId } from "../../workflows/db/repos/workflow-composition.ts";
+import { getWorkflowComposition, latestSetupComposition, composedFlowId, compositionInProgress } from "../../workflows/db/repos/workflow-composition.ts";
 
 /**
  * Minimal tool-registry shape the composer surfaces in its planner prompt.
@@ -319,10 +319,11 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
      * Kept total and dependency-free -- it switches on `params.action` and
      * nothing else. A gate that throws is caught at the call site and
      * escalated to confirm: 'always', so a DB read in here would turn a
-     * transient error into a mandatory card. The one exception is `enable`
+     * transient error into a mandatory card. The exceptions are `enable`
      * and `publish` (Q-05): whether they accept a changed connection or
-     * computer is only known from the flow's pins, and there a card on a
-     * failed read is the safe side.
+     * computer is only known from the flow's pins, and `continue_setup` with
+     * `install`: whether it installs anything is only known from the stored
+     * setup. In both a card on a failed read is the safe side.
      */
     authorityGate: (params) => {
       const action = String(params.action ?? "");
@@ -331,23 +332,41 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
         case "continue_setup":
         case "create":
         {
-          // Raised only when this call names connectors to install: the
+          // Raised only when this call will actually install a connector: the
           // composer itself never installs (it reports what is missing as
           // setup.continueWith.install), so a compose that needs nothing new
           // asks for nothing. The card lists exactly the entries the action
           // installs: both read `install` through requestedInstalls, and an
-          // unparseable value is refused by the action before it acts. A
-          // stored no-install setup is not visible here; see actContinueSetup.
+          // unparseable value is refused by the action before it acts. An
+          // entry the catalog already has is skipped by the action, so it is
+          // left off the card, and no card is raised when none remain.
           if (action === "create" && !(typeof params.description === "string" && params.description.trim())) return null;
           let ids: string[];
           try { ids = requestedInstalls(params.install); } catch { return null; }
           if (!ids.length || params.install_missing === false || !deps.installLibraryPiece || !hasLibrary) return null;
-          const labels = ids.map(id => {
+          let workflowName = typeof params.name === "string" && params.name.trim() ? params.name : undefined;
+          if (action === "continue_setup") {
+            // The stored setup decides what the action does: it refuses
+            // installs into a saved draft, an unknown or completed setup, or
+            // one started with install_missing: false that this call does not
+            // override. None of those install anything, so none raise a card.
+            // A failed read throws, and the caller escalates to a card.
+            const chain = setupChain(String(params.composition_id ?? ""), deps.callerProjectId?.() ?? DEFAULT_IDS.project);
+            if (!chain || chain.flowId || chain.current.state === "VALIDATED") return null;
+            if (params.install_missing === undefined && chain.installMissing === false) return null;
+            workflowName = chain.current.specification.name;
+          }
+          const pending = ids.filter(id => {
+            const entry = deps.library!.find(e => e.id === id);
+            return !entry || !deps.pieceRegistry?.get(entry.npmPackage);
+          });
+          if (!pending.length) return null;
+          const labels = pending.map(id => {
             const entry = deps.library!.find(e => e.id === id);
             return entry ? `${forCard(entry.displayName, 80)} (${forCard(id, 80)})` : forCard(id, 80);
           });
           return { actionCategory: "install_software", confirm: "above_level",
-            intent: `Install Library connector${ids.length > 1 ? "s" : ""} ${labels.join(", ")} to set up workflow: ${forCard(params.name ?? params.composition_id)}` };
+            intent: `Install Library connector${pending.length > 1 ? "s" : ""} ${labels.join(", ")} ${workflowName ? `to set up workflow: ${forCard(workflowName)}` : "for workflow setup"}` };
         }
         case "enable":
         case "publish": {
@@ -1342,21 +1361,44 @@ function setupReadiness(flowId: string, versionId: string, compositionId: string
     editor: { flowId, versionId }, nextQuestion: readiness.issues.some(i => i.code === "CONNECTION_BINDING")
       ? ACCOUNT_SETUP_GUIDANCE : readiness.issues[0]?.message,
     accountSetup: ACCOUNT_SETUP_GUIDANCE,
-    continueWith: { action: "continue_setup", composition_id: compositionId },
+    nextStep: SAVED_DRAFT_GUIDANCE,
+    recheckWith: { action: "continue_setup", composition_id: compositionId },
   } } : {}) };
 }
 
-async function actContinueSetup(compositionId: string, rawAnswers: unknown, installOption: unknown, deps: ManageWorkflowDeps, project: string, preinstall: string[] = []): Promise<Record<string, unknown>> {
+/**
+ * The draft exists, so setup answers and connector installs are no longer
+ * collected through chat: the remaining fields are the draft's own inputs, set
+ * in the workflow editor. continue_setup then only rechecks readiness.
+ */
+const SAVED_DRAFT_GUIDANCE = "The draft is saved. Set the remaining fields in the workflow editor (setup.editor) and install connectors from the Library page; continue_setup only rechecks readiness and does not accept answers or installs for a saved draft.";
+
+/** Where a setup chain stands: its latest attempt and the draft it saved, if any. Null when not found in this project. */
+function setupChain(compositionId: string, project: string) {
   const requested = getWorkflowComposition(compositionId, project);
-  if (!requested) throw new Error("Workflow setup not found in this project");
+  if (!requested) return null;
   const root = (requested.specification.context?.workflowSetup as Record<string, unknown> | undefined)?.rootCompositionId;
   const rootId = typeof root === "string" ? root : requested.id;
-  if (!getWorkflowComposition(rootId, project)) throw new Error("Workflow setup not found in this project");
+  if (!getWorkflowComposition(rootId, project)) return null;
   const current = latestSetupComposition(rootId, project)!;
-  if (current.state === "COMPOSING") throw new Error("This workflow setup is already being prepared; wait for its current result");
-  const existingId = composedFlowId(current.id, project);
-  if (existingId) {
-    const flow = getFlowInProject(project, existingId)!;
+  const prior = current.specification.context?.workflowSetup as Record<string, unknown> | undefined;
+  return { rootId, current, prior, installMissing: prior?.installMissing !== false, flowId: composedFlowId(current.id, project) };
+}
+
+async function actContinueSetup(compositionId: string, rawAnswers: unknown, installOption: unknown, deps: ManageWorkflowDeps, project: string, preinstall: string[] = []): Promise<Record<string, unknown>> {
+  const chain = setupChain(compositionId, project);
+  if (!chain) throw new Error("Workflow setup not found in this project");
+  const { rootId, current, prior } = chain;
+  // A journal left COMPOSING by a crash or an earlier process, or one that
+  // stopped checkpointing long ago, no longer blocks the chain.
+  if (compositionInProgress(current)) throw new Error("This workflow setup is already being prepared; wait for its current result");
+  if (chain.flowId) {
+    // Answers and installs are never silently dropped: a saved draft is
+    // configured in the editor, so say so instead of returning ok.
+    if (rawAnswers !== undefined || preinstall.length) {
+      throw new Error(`This workflow's draft is already saved (flow ${chain.flowId}); continue_setup does not apply answers or installs to it, and nothing was installed or changed. Set these fields in the workflow editor (setup.editor) and install connectors from the Library page; call continue_setup with only composition_id to recheck readiness.`);
+    }
+    const flow = getFlowInProject(project, chain.flowId)!;
     const version = getLatestDraft(flow.id) ?? (flow.published_version_id ? getFlowVersion(flow.published_version_id) : null);
     if (!version) throw new Error("The saved workflow no longer has a version");
     return { ok: true, flow: summarizeFlow(flow), versionId: version.id, compositionRecordId: current.id,
@@ -1364,16 +1406,13 @@ async function actContinueSetup(compositionId: string, rawAnswers: unknown, inst
   }
   if (current.state === "VALIDATED") throw new Error("This setup already completed but its draft is unavailable; inspect the workflow list before starting another");
   if (rawAnswers !== undefined && (!rawAnswers || typeof rawAnswers !== "object" || Array.isArray(rawAnswers))) throw new Error("Setup answers must be a JSON object containing non-secret configuration");
-  const prior = current.specification.context?.workflowSetup as Record<string, unknown> | undefined;
   const answers = { ...(prior?.answers as Record<string, unknown> ?? {}), ...(rawAnswers as Record<string, unknown> ?? {}) };
   if (JSON.stringify(answers).length > 16000) throw new Error("Setup answers exceed 16,000 characters; provide a small redacted sample");
   const install = installOption === undefined ? prior?.installMissing !== false : installOption !== false;
-  // The Authority gate reads only this call's params, never the stored
-  // setup, so a continue_setup that names `install` without repeating the
-  // setup's install_missing: false still raises an install card. That card is
-  // refused here, before anything is installed. Such a setup's continueWith
-  // never offers `install` and carries install_missing: false, so following
-  // it raises no card.
+  // A setup started with install_missing: false installs nothing unless this
+  // call overrides it. The Authority gate reads the same stored setup and
+  // raises no card for it; the refusal says so in case a card was raised
+  // anyway (a failed read in the gate escalates to one).
   if (preinstall.length && !install) throw new Error("Nothing was installed, even if an install was just approved: this setup was started with install_missing: false. Ask the user whether connectors may now be installed; if so, continue_setup with install_missing: true and install");
   return actCompose(current.specification.name, current.specification.description, deps, project, current.specification.contract, install,
     { ...current.specification.context, workflowSetup: { rootCompositionId: rootId, previousCompositionId: current.id, answers, installMissing: install } }, preinstall);
