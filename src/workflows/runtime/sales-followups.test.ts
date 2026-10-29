@@ -86,7 +86,7 @@ test('date rollover before dispatch stops draft and records review',async()=>{
 });
 test('transport excludes send, draft update, arbitrary hosts, mutations and redirects',async()=>{
   const calls:any[]=[];const req=salesTransport({hubspot:'synthetic',gmail:'synthetic'},()=>{},(async(url:any,init:any)=>{calls.push({url,init});return Response.json({id:'d',message:{id:'m'}});}) as typeof fetch);
-  for(const [provider,path,body] of [['gmail','/gmail/v1/users/me/drafts/send',{}],['gmail','/gmail/v1/users/me/messages/send',{}],['gmail','/gmail/v1/users/me/drafts/1',{}],['hubspot','/crm/v3/objects/deals/1',{}],['gmail','https://evil.invalid',undefined],['gmail','/gmail/v1/users/me/threads/abc?format=full',{}]] as const)
+  for(const [provider,path,body] of [['gmail','/gmail/v1/users/me/drafts/send',{}],['gmail','/gmail/v1/users/me/messages/send',{}],['gmail','/gmail/v1/users/me/drafts/1',{}],['hubspot','/crm/v3/objects/deals/1',{}],['gmail','https://evil.invalid',undefined],['gmail','/gmail/v1/users/me/threads/abc?format=full',{}],['hubspot','/crm/v3/objects/deals?limit=100',undefined],['hubspot','/crm/v3/objects/contacts?limit=100',undefined]] as const)
     await expect(req(provider,path,body)).rejects.toThrow('only permit');
   expect(calls).toHaveLength(0);await req('gmail','/gmail/v1/users/me/drafts',{message:{raw:'eA'}});expect(calls[0].init.redirect).toBe('error');expect(calls[0].init.method).toBe('POST');
   // The deal search is the only HubSpot POST, and only with search fields.
@@ -229,10 +229,43 @@ test('ambiguous draft failures keep the contact claimed',async()=>{
   }
 });
 test('a stop at the transport checkpoint before the draft request frees the claim and stops the run',async()=>{
+  class BindingStop extends Error {}
   const drafts:any[]=[];let armed=false;
-  const check=()=>{if(armed)throw Error('Account binding changed');};
+  const check=()=>{if(armed)throw new BindingStop('Account binding changed');};
   const transport=overFetch(request([deal()],{drafts}),()=>undefined,check);
   const req:SalesRequest=(p,path,body)=>{if(path==='/gmail/v1/users/me/drafts')armed=true;return transport(p,path,body);};
-  await expect(processSalesFollowups(setup,req,salesLedger('run'),'fixture',()=>now,check)).rejects.toThrow('Account binding changed');
+  const stopped=await processSalesFollowups(setup,req,salesLedger('run'),'fixture',()=>now,check).catch(e=>e);
+  expect(stopped).toBeInstanceOf(BindingStop);expect(stopped.message).toBe('Account binding changed');
   expect(drafts).toHaveLength(0);expect(states()).toEqual([]);
+});
+test('a stop at the transport checkpoint after the draft response keeps the claim',async()=>{
+  const drafts:any[]=[],base=request([deal()],{drafts});let armed=false;
+  const check=()=>{if(armed)throw Error('Run canceled');};
+  const req=salesTransport({hubspot:'synthetic',gmail:'synthetic'},check,(async(url:any,init:any)=>{
+    const u=new URL(String(url)),path=u.pathname+u.search;
+    const data=await base(u.hostname==='gmail.googleapis.com'?'gmail':'hubspot',path,init.body?JSON.parse(init.body):undefined);
+    if(path==='/gmail/v1/users/me/drafts')armed=true; // The draft request has been answered; only the post-read checkpoint stops.
+    return Response.json(data);
+  }) as typeof fetch);
+  await expect(processSalesFollowups(setup,req,salesLedger('run'),'fixture',()=>now,check)).rejects.toThrow('Run canceled');
+  expect(drafts).toHaveLength(1);expect(states()).toEqual(['claimed']);
+});
+test('a discovery stop keeps its own error type',async()=>{
+  class Refusal extends Error {}
+  const transport=overFetch(request([deal()]),()=>undefined,()=>{throw new Refusal('Authority denied');});
+  const error=await run(transport).catch(e=>e);expect(error).toBeInstanceOf(Refusal);expect(error.message).toBe('Authority denied');
+});
+test('endless empty pages with fresh cursors stop at the page limit',async()=>{
+  const drafts:any[]=[],base=request([deal()],{drafts});let pages=0;
+  await expect(run(async(p,path,body)=>path.endsWith('/search')?{total:0,results:[],paging:{next:{after:String(++pages)}}}:base(p,path,body))).rejects.toThrow('Page limit exceeded');
+  expect(pages).toBe(100);expect(drafts).toHaveLength(0);
+});
+test('stage IDs are sent lowercase to HubSpot search but matched exactly on the deal',async()=>{
+  const drafts:any[]=[],searches:any[]=[],mixed=deal(1,{dealstage:'OpenStage'}),base=request([mixed],{drafts});
+  const r=await processSalesFollowups({...setup,openStageIds:['OpenStage']},async(p,path,body)=>{
+    if(path==='/crm/v3/pipelines/deals')return {results:[{stages:[{id:'OpenStage',metadata:{isClosed:'false'}}]}]};
+    if(path.endsWith('/search')){searches.push(body);return {total:1,results:[mixed]};}
+    return base(p,path,body);
+  },salesLedger('run'),'fixture',()=>now);
+  expect(searches[0].filterGroups[0].filters[0].values).toEqual(['openstage']);expect(r.counts.drafted).toBe(1);
 });

@@ -36,6 +36,9 @@ const hash = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).dige
 /** Proof that a request created nothing: refused before it left this process, or definitely rejected by the provider.
  * Any other failure of a draft request is uncertain, because Gmail may have saved the draft. */
 export class SalesRequestNotApplied extends Error {}
+/** A stop (governance, cancellation, binding) raised before a request left this process keeps its own error type and is only marked. */
+const stoppedBeforeSend=new WeakSet<object>();
+const notApplied=(error: unknown)=>error instanceof SalesRequestNotApplied||(typeof error==='object'&&error!==null&&stoppedBeforeSend.has(error));
 /** 4xx answers that mean Gmail did not create the draft. 408 and 409 are excluded: the request may have been applied. */
 const DEFINITE_DRAFT_REJECTIONS=new Set([400,401,403,404,422,429]);
 /** HubSpot search returns at most 10,000 rows per query; this cap keeps discovery well inside it. */
@@ -100,8 +103,9 @@ async function openDeals(request: SalesRequest,s: SalesSetup,properties: string[
   const rows: Obj[]=[],seen=new Set<string>();let after: string|undefined;
   const tooMany=()=>Error(`More than ${SALES_DEAL_LIMIT} deals are in the selected open stages; discovery is incomplete. Narrow the selected stages.`);
   for(let n=0;n<100;n++) {
-    const data=await request('hubspot','/crm/v3/objects/deals/search',{filterGroups:[{filters:[{propertyName:'dealstage',operator:'IN',values:s.openStageIds}]}],
+    const data=await request('hubspot','/crm/v3/objects/deals/search',{filterGroups:[{filters:[{propertyName:'dealstage',operator:'IN',values:[...new Set(s.openStageIds.map(v=>v.toLowerCase()))]}]}],
       properties,sorts:[{propertyName:'hs_object_id',direction:'ASCENDING'}],limit:100,...(after?{after}:{})});
+    // HubSpot requires lowercase IN values; eligible() still compares the deal's actual stage with the configured IDs.
     const items=data.results;
     if(!Array.isArray(items)||items.some(x=>!x||typeof x!=='object'||Array.isArray(x)))throw Error('Invalid provider result page');
     if(typeof data.total==='number'&&data.total>SALES_DEAL_LIMIT)throw tooMany();
@@ -240,7 +244,7 @@ export async function processSalesFollowups(s: SalesSetup,request: SalesRequest,
       } catch(error) {
         // Refused before any draft request, or definitely rejected by Gmail: the claim is freed, so it does not consume the contact for today.
         // An uncertain draft request keeps its claim and never unlocks automatically.
-        if(error instanceof SalesRequestNotApplied)dispatched=false;
+        if(notApplied(error))dispatched=false;
         if(claimed&&key&&!dispatched){claimed=false;ledger.release(key);}
         checkpoint(); // Propagate emergency/authority/account changes instead of swallowing them.
         const result: SalesResult={dealId,status:dispatched?'unknown':'review',detail:dispatched?'Draft creation may have succeeded. Inspect Gmail before any manual retry.':safeText((error as Error).message,300)};
@@ -255,14 +259,14 @@ export async function processSalesFollowups(s: SalesSetup,request: SalesRequest,
 export function salesTransport(tokens: {hubspot:string;gmail:string},checkpoint: ()=>void,fetchImpl: typeof fetch=fetch): SalesRequest {
   return async(provider,path,body)=>{
     const read=provider==='hubspot'
-      ? /^\/crm\/v3\/objects\/(deals|contacts)(?:\/\d+)?\?[^#]*$/.test(path)||/^\/crm\/v4\/objects\/deals\/\d+\/associations\/contacts\?[^#]*$/.test(path)||/^\/crm\/v3\/properties\/deals\/[a-zA-Z][a-zA-Z0-9_]*$/.test(path)||path==='/crm/v3/pipelines/deals'
+      ? /^\/crm\/v3\/objects\/(deals|contacts)\/\d+\?[^#]*$/.test(path)||/^\/crm\/v4\/objects\/deals\/\d+\/associations\/contacts\?[^#]*$/.test(path)||/^\/crm\/v3\/properties\/deals\/[a-zA-Z][a-zA-Z0-9_]*$/.test(path)||path==='/crm/v3/pipelines/deals'
       : path==='/gmail/v1/users/me/profile'||/^\/gmail\/v1\/users\/me\/threads(?:\/[a-f0-9]+)?\?[^#]*$/i.test(path);
     const draft=provider==='gmail'&&path==='/gmail/v1/users/me/drafts'&&body&&Object.keys(body).join()==='message'&&Object.keys(body.message ?? {}).join()==='raw'&&typeof body.message.raw==='string';
     // The deal search is a read sent as POST; only search fields are accepted.
     const search=provider==='hubspot'&&path==='/crm/v3/objects/deals/search'&&body&&Object.keys(body).every(k=>['filterGroups','properties','sorts','limit','after'].includes(k));
     if(!(read&&!body)&&!draft&&!search)throw new SalesRequestNotApplied('Sales follow-ups only permit declared reads and creation of unsent drafts');
     // A governance or account-binding stop here means nothing was sent.
-    try{checkpoint();}catch(error){throw new SalesRequestNotApplied((error as Error).message);}
+    try{checkpoint();}catch(error){if(typeof error==='object'&&error!==null)stoppedBeforeSend.add(error);throw error;}
     const response=await fetchImpl((provider==='gmail'?'https://gmail.googleapis.com':'https://api.hubapi.com')+path,{
       method:body?'POST':'GET',headers:{Authorization:`Bearer ${tokens[provider]}`,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),redirect:'error',signal:AbortSignal.timeout(15000)});
     if(!response.ok){
