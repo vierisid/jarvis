@@ -178,6 +178,35 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
   // and "ask the user to install it from the Library page" would be a
   // dead-end instruction.
   const hasLibrary = (deps.library?.length ?? 0) > 0;
+  /**
+   * What a compose / continue_setup / create call would install: its
+   * `install` IDs the catalog does not already have, narrowed by a pin. Null
+   * when the call installs nothing at all. The stored setup decides a
+   * continue_setup: it installs nothing into a saved draft, an unknown or
+   * completed setup, one with a live attempt (refused), or one started with
+   * install_missing: false that this call does not override. A failed read
+   * throws, and the caller escalates the gate to a card.
+   */
+  const plannedInstalls = (params: Record<string, unknown>): { pending: string[]; workflowName?: string } | null => {
+    const action = String(params.action ?? "");
+    if (action === "create" && !(typeof params.description === "string" && params.description.trim())) return null;
+    let ids: string[];
+    try { ids = requestedInstalls(params.install); } catch { return null; }
+    if (!ids.length || params.install_missing === false || !deps.installLibraryPiece || !hasLibrary) return null;
+    let workflowName = typeof params.name === "string" && params.name.trim() ? params.name : undefined;
+    if (action === "continue_setup") {
+      const chain = setupChain(String(params.composition_id ?? ""), deps.callerProjectId?.() ?? DEFAULT_IDS.project);
+      if (!chain || chain.flowId || chain.current.state === "VALIDATED" || compositionInProgress(chain.current)) return null;
+      if (params.install_missing === undefined && chain.installMissing === false) return null;
+      workflowName = chain.current.specification.name;
+    }
+    const pin = Array.isArray(params.pinned_installs) ? params.pinned_installs : null;
+    const pending = ids.filter(id => {
+      const entry = deps.library!.find(e => e.id === id);
+      return (!entry || !deps.pieceRegistry?.get(entry.npmPackage)) && (!pin || pin.includes(id));
+    });
+    return { pending, ...(workflowName ? { workflowName } : {}) };
+  };
   return {
     name: "manage_workflow",
     description: [
@@ -325,6 +354,20 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
      * `install`: whether it installs anything is only known from the stored
      * setup. In both a card on a failed read is the safe side.
      */
+    /**
+     * Pins which Library entries this call may install, as `pinned_installs`,
+     * before the gate runs, so the card and the action agree: an entry that
+     * was installed when the card was raised, then uninstalled while it
+     * waited, is not installed under a card that did not name it. Always
+     * overwritten here; on a path that does not freeze, a model-supplied pin
+     * can only narrow what execute installs, never widen it.
+     */
+    freezeArguments: (params) => {
+      const action = String(params.action ?? "");
+      if (action !== "compose" && action !== "continue_setup" && action !== "create") return params;
+      const { pinned_installs: _ignored, ...unpinned } = params;
+      return { ...params, pinned_installs: plannedInstalls(unpinned)?.pending ?? [] };
+    },
     authorityGate: (params) => {
       const action = String(params.action ?? "");
       switch (action) {
@@ -332,41 +375,19 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
         case "continue_setup":
         case "create":
         {
-          // Raised only when this call will actually install a connector: the
-          // composer itself never installs (it reports what is missing as
-          // setup.continueWith.install), so a compose that needs nothing new
-          // asks for nothing. The card lists exactly the entries the action
-          // installs: both read `install` through requestedInstalls, and an
-          // unparseable value is refused by the action before it acts. An
-          // entry the catalog already has is skipped by the action, so it is
-          // left off the card, and no card is raised when none remain.
-          if (action === "create" && !(typeof params.description === "string" && params.description.trim())) return null;
-          let ids: string[];
-          try { ids = requestedInstalls(params.install); } catch { return null; }
-          if (!ids.length || params.install_missing === false || !deps.installLibraryPiece || !hasLibrary) return null;
-          let workflowName = typeof params.name === "string" && params.name.trim() ? params.name : undefined;
-          if (action === "continue_setup") {
-            // The stored setup decides what the action does: it refuses
-            // installs into a saved draft, an unknown or completed setup, or
-            // one started with install_missing: false that this call does not
-            // override. None of those install anything, so none raise a card.
-            // A failed read throws, and the caller escalates to a card.
-            const chain = setupChain(String(params.composition_id ?? ""), deps.callerProjectId?.() ?? DEFAULT_IDS.project);
-            if (!chain || chain.flowId || chain.current.state === "VALIDATED") return null;
-            if (params.install_missing === undefined && chain.installMissing === false) return null;
-            workflowName = chain.current.specification.name;
-          }
-          const pending = ids.filter(id => {
-            const entry = deps.library!.find(e => e.id === id);
-            return !entry || !deps.pieceRegistry?.get(entry.npmPackage);
-          });
-          if (!pending.length) return null;
-          const labels = pending.map(id => {
+          // Raised only when this call will actually install a connector:
+          // the composer itself never installs (it reports what is missing
+          // as setup.continueWith.install), so a compose that needs nothing
+          // new asks for nothing. The card names exactly the entries the
+          // action may install: pinned_installs, frozen before this gate runs.
+          const planned = plannedInstalls(params);
+          if (!planned?.pending.length) return null;
+          const labels = planned.pending.map(id => {
             const entry = deps.library!.find(e => e.id === id);
             return entry ? `${forCard(entry.displayName, 80)} (${forCard(id, 80)})` : forCard(id, 80);
           });
           return { actionCategory: "install_software", confirm: "above_level",
-            intent: `Install Library connector${pending.length > 1 ? "s" : ""} ${labels.join(", ")} ${workflowName ? `to set up workflow: ${forCard(workflowName)}` : "for workflow setup"}` };
+            intent: `Install Library connector${planned.pending.length > 1 ? "s" : ""} ${labels.join(", ")} ${planned.workflowName ? `to set up workflow: ${forCard(planned.workflowName)}` : "for workflow setup"}` };
         }
         case "enable":
         case "publish": {
@@ -1347,7 +1368,10 @@ function approvedInstalls(params: Record<string, unknown>, deps: ManageWorkflowD
   if (!deps.installLibraryPiece || !deps.library?.length) throw new Error("Library installation is not available here; the user can install connectors from the Library page");
   const unknown = ids.filter(id => !deps.library!.some(e => e.id === id));
   if (unknown.length) throw new Error(`Unknown Library ID: ${unknown.join(", ")}. Use the IDs from setup.continueWith.install.`);
-  return ids;
+  // A pin (frozen when the card was raised) narrows the install to what the
+  // card named; an entry that became missing since then is not installed.
+  const pin = Array.isArray(params.pinned_installs) ? params.pinned_installs : null;
+  return pin ? ids.filter(id => pin.includes(id)) : ids;
 }
 
 
@@ -1385,7 +1409,10 @@ function setupChain(compositionId: string, project: string) {
   return { rootId, current, prior, installMissing: prior?.installMissing !== false, flowId: composedFlowId(current.id, project) };
 }
 
-async function actContinueSetup(compositionId: string, rawAnswers: unknown, installOption: unknown, deps: ManageWorkflowDeps, project: string, preinstall: string[] = []): Promise<Record<string, unknown>> {
+async function actContinueSetup(compositionId: string, givenAnswers: unknown, installOption: unknown, deps: ManageWorkflowDeps, project: string, preinstall: string[] = []): Promise<Record<string, unknown>> {
+  // Models send null or {} for an unused optional parameter: neither is an answer.
+  const rawAnswers = givenAnswers === null || (typeof givenAnswers === "object" && !Array.isArray(givenAnswers) && !Object.keys(givenAnswers as object).length)
+    ? undefined : givenAnswers;
   const chain = setupChain(compositionId, project);
   if (!chain) throw new Error("Workflow setup not found in this project");
   const { rootId, current, prior } = chain;

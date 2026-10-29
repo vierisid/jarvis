@@ -274,6 +274,10 @@ test('answers or installs sent after the draft is saved are refused, pointing to
   // Recheck without answers still reports readiness for the same draft.
   const recheck = await call(f.tool, saved.setup.recheckWith);
   expect(recheck).toMatchObject({ ok: true, flow: { id: saved.flow.id }, setup: { status: 'needs_configuration' } });
+  // Models send null or {} for an unused optional parameter: still a recheck.
+  for (const answers of [null, {}]) {
+    expect(await call(f.tool, { ...saved.setup.recheckWith, answers })).toMatchObject({ ok: true, flow: { id: saved.flow.id } });
+  }
 });
 
 test('explicit no-install stays disabled and is retained across setup continuation', async () => {
@@ -334,13 +338,13 @@ test('a COMPOSING journal left by a crash does not block the chain', async () =>
   expect(getWorkflowComposition(resumed.compositionRecordId)!.specification.context?.workflowSetup).toMatchObject({ answers: { idField: 'id' } });
 });
 
-test('a live journal that stopped checkpointing past the stale window does not block the chain', async () => {
+test('a live attempt blocks the chain however long it runs, and raises no install card meanwhile', async () => {
   const registry = new PieceCatalog([]);
   let hold = false, release!: () => void, entered!: () => void;
   const started = new Promise<void>(resolve => { entered = resolve; });
   const waiting = new Promise<void>(resolve => { release = resolve; });
   let calls = 0;
-  const tool = createManageWorkflowTool({ pieceRegistry: registry, llm: {
+  const tool = createManageWorkflowTool({ pieceRegistry: registry, library: [entry], installLibraryPiece: async () => {}, llm: {
     chat: async () => { throw Error('Use tools'); }, chatTools: async () => {
       calls++;
       if (hold) { hold = false; entered(); await waiting; }
@@ -352,12 +356,42 @@ test('a live journal that stopped checkpointing past the stale window does not b
   const continuing = call(tool, { action: 'continue_setup', composition_id: initial.compositionRecordId, answers: { idField: 'id' } });
   await started;
   try {
-    getWorkflowDb().run(`UPDATE workflow_composition SET updated = ? WHERE state = 'COMPOSING'`, [Date.now() - 16 * 60_000]);
+    // Long past any time window: liveness is this process's own record.
+    getWorkflowDb().run(`UPDATE workflow_composition SET updated = ? WHERE state = 'COMPOSING'`, [Date.now() - 24 * 60 * 60_000]);
     const before = calls;
-    const second = await call(tool, { action: 'continue_setup', composition_id: initial.compositionRecordId });
-    expect(second.ok).toBe(false);
-    expect(calls).toBeGreaterThan(before);
+    const install = { action: 'continue_setup', composition_id: initial.compositionRecordId, install: 'google-sheets' };
+    expect(gate(tool, install)).toBeNull();
+    await expect(tool.execute({ action: 'continue_setup', composition_id: initial.compositionRecordId })).rejects.toThrow('already being prepared');
+    await expect(tool.execute(install)).rejects.toThrow('already being prepared');
+    expect(calls).toBe(before);
   } finally { release(); await continuing; }
+  expect((await call(tool, { action: 'list' })).flows).toHaveLength(0);
+});
+
+test('the action installs only what the card named, even if another entry goes missing while the card waits', async () => {
+  const otherName = '@activepieces/piece-fixture-other';
+  const other = { id: 'fixture-other', npmPackage: otherName, displayName: 'Fixture Other', description: 'Fixture' };
+  const registry = new PieceCatalog([{ name: otherName, displayName: 'Other', description: '', actions: {} }]);
+  configureWorkflowReadiness({ pieces: registry });
+  const installed: string[] = [];
+  const tool = createManageWorkflowTool({ pieceRegistry: registry, library: [entry, other], installLibraryPiece: async id => {
+    installed.push(id); if (id === entry.id) registry.upsert(piece);
+  }, llm: { chat: async () => { throw Error('Use tools'); }, chatTools: async () => ({ content: '', tool_calls: [blocked()] }) } });
+  const params = { action: 'compose', name: 'Submission processor', description: 'Build disabled draft', install: 'google-sheets,fixture-other' };
+  const frozen = tool.freezeArguments!(params);
+  expect(frozen.pinned_installs).toEqual(['google-sheets']);
+  // A model cannot widen the pin: freezing overwrites it.
+  expect(tool.freezeArguments!({ ...params, pinned_installs: ['fixture-other'] }).pinned_installs).toEqual(['google-sheets']);
+  const card = gate(tool, frozen)!;
+  expect(card.intent).toContain('Google Sheets (google-sheets)');
+  expect(card.intent).not.toContain('fixture-other');
+  registry.remove(otherName);
+  await call(tool, frozen);
+  expect(installed).toEqual(['google-sheets']);
+  // Nothing left to install: no card, and the frozen call installs nothing.
+  const again = tool.freezeArguments!({ ...params, install: 'google-sheets' });
+  expect(again.pinned_installs).toEqual([]);
+  expect(gate(tool, again)).toBeNull();
 });
 
 test('setup answers and the original request survive database restart', async () => {
