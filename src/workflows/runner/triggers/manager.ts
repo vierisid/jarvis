@@ -568,7 +568,7 @@ export class TriggerManager {
     if (!schedule && !listeners) {
       try {
         const handle = await engine.acquire({
-          runId: triggerHookRunId('enable', flow.id),
+          runId: triggerHookRunId('enable', flow.id, version),
           projectId: flow.project_id,
         });
         try {
@@ -743,7 +743,7 @@ export class TriggerManager {
     if (!version) return;
     try {
       const handle = await this.engineRuntime.acquire({
-        runId: triggerHookRunId('disable', flowId),
+        runId: triggerHookRunId('disable', flowId, version),
         projectId: flow?.project_id ?? DEFAULT_IDS.project,
       });
       try {
@@ -1119,7 +1119,7 @@ export class TriggerManager {
     let items: unknown[];
     try {
       const handle = await engine.acquire({
-        runId: triggerHookRunId('poll', flowId),
+        runId: triggerHookRunId('poll', flowId, version),
         projectId: getFlow(flowId)?.project_id ?? DEFAULT_IDS.project,
       });
       try {

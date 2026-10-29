@@ -239,7 +239,7 @@ test('connection bindings are project-scoped, unique, active and matched to the 
   updateDraftVersion(version.id, { trigger: graph(action) });
   const credentials = new CredentialResolver();
   let resolutions = 0;
-  credentials.register({ id: 'fake', canResolve: id => id === 'jarvis:fake', resolve: async () => { resolutions++; return null; } });
+  credentials.register({ id: 'fake', pieceNames: ['auth'], canResolve: id => id === 'jarvis:fake', resolve: async () => { resolutions++; return null; } });
   configureWorkflowReadiness({ pieces, credentials });
   const result = versionReadiness(flow.id, version.id);
   expect(result.ready).toBe(true);
@@ -294,7 +294,7 @@ test('one-shot and tool-loop composition both feed readiness errors back for rep
 
 test('R2: UI connection IDs are opaque bindings, never expression roots', () => {
   const credentials = new CredentialResolver();
-  credentials.register({ id: 'managed', canResolve: id => id === 'jarvis:fake', resolve: async () => null });
+  credentials.register({ id: 'managed', pieceNames: ['auth'], canResolve: id => id === 'jarvis:fake', resolve: async () => null });
   configureWorkflowReadiness({ pieces, credentials });
   for (const externalId of ['my-gmail', '123', 'account:work', 'jarvis:fake']) {
     if (!externalId.startsWith('jarvis:')) upsertConnection({ externalId, pieceName: 'auth', displayName: 'Fake', pieceVersion: '1', type: 'SECRET_TEXT', value: { secret_text: 'synthetic' } });

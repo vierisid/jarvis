@@ -10,9 +10,6 @@
  *   1. URL query trigger     — `?onboarding=reset[&scope=...]`
  *   2. Settings → General    — debug section dropdown
  *   3. Voice room action     — "replay onboarding" / "reset onboarding"
- *
- * See `docs/ONBOARDING_PLAN.md` § "Test reset (developer flag)" for the
- * gate semantics.
  */
 
 import {
