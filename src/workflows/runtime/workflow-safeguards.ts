@@ -8,6 +8,8 @@ export function workflowSafeguards(trigger: unknown) {
     const s = node.settings ?? {};
     const input = s.input && typeof s.input === 'object' && !Array.isArray(s.input) ? s.input : {};
     const add=(kind:string,coverage:string,limits:string)=>safeguards.push({node:node.name,kind,coverage,limits});
+    if (s.pieceName === 'schedule')
+      add('scheduled-occurrence','IANA timezone cron; LW selects the last Monday-Friday date of the month, ignoring holidays. Persisted scheduledFor, occurrenceKey, scheduledDate and scheduledMonth refer to trigger admission, not the delayed worker clock. Duplicate occurrence admission is recorded once.', 'A stopped host does not guarantee catch-up: occurrences older than the existing two-minute grace are marked missed. Worker delay after admission preserves the original date. Calendar fixtures do not prove transport delivery.');
     if (String(s.pieceName).endsWith('jarvis-subflow') && s.actionName === 'call') {
       add('reusable-child-result','Actual worker child run with Authority, pinned version, durable invocation identity and explicit structured return. Parent waits, validates output schema and receives succeeded/failed/invalid_output/timeout/uncertain. Completed results are retained across parent runs and restart.', 'Key is scoped to parent workflow and call-step name; use stable request identity, not run ID. Same key with changed payload/schema/timeout is refused. 32 KiB JSON payload/result, timeout 1-86400 seconds. Failed/timed-out/uncertain child invocations are not automatically rerun. Cancellation cannot undo external actions already dispatched by a child. Handle outcome explicitly.');
     }

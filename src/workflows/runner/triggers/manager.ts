@@ -1,3 +1,4 @@
+import { scheduleTriggerPayload } from '../../runtime/schedule-payload';
 import { gmailAttachmentKey, isGmailAttachmentTrigger } from '../../runtime/gmail-attachment';
 import { prepareEmailEvent } from '../../runtime/event-types';
 import { submissionConfig } from '../../runtime/form-submission';
@@ -1012,7 +1013,7 @@ export class TriggerManager {
       }
       const result = this.startRun({
         flowId, versionId, generation, kind: "cron", source: "schedule",
-        payload: { ...payload, firedAt: Date.now(), scheduledFor: new Date(at).toISOString() },
+        payload: scheduleTriggerPayload(payload, occurrence),
         dedupeKey: occurrence?.key, scheduledFor: at, lateMs: occurrence?.lateMs, ...shiftedDetail(occurrence),
       });
       if (result.outcome === "started" && (occurrence?.lateMs ?? 0) > DELAYED_AFTER_MS) {

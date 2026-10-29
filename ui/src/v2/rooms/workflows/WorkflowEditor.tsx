@@ -3376,7 +3376,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const requestWebhook = detectedTriggerKind === 'webhook' && 'request_id_field' in formInput;
   const formWebhook = detectedTriggerKind === 'webhook' && ('submission_id_field' in formInput || 'submission_email_field' in formInput);
   const schema = detectedTriggerKind === 'schedule' && step.settings?.pieceName === 'schedule' ? {fields:[
-    {name:'cron_expression',label:'Schedule (cron)',type:'string' as const,required:true,description:'Choose the execution time before running. For weekdays, use minute hour * * 1-5.'},
+    {name:'cron_expression',label:'Schedule (cron)',type:'string' as const,required:true,description:'Choose the execution time before running. For weekdays, use minute hour * * 1-5. For the last weekday of each month at 17:00, use 0 17 LW * *.'},
     {name:'timezone',label:'Timezone',type:'string' as const,required:true},
   ]} : requestWebhook ? { fields: [
     { name: 'request_id_field', label: 'Request ID field', type: 'string' as const, required: true, description: 'Stable request ID path. Repeated requests are accepted once; no email is required.' },
