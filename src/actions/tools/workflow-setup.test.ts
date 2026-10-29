@@ -271,15 +271,28 @@ test('answers or installs sent after the draft is saved are refused, pointing to
   expect(f.installed).toEqual([]);
   expect(f.turns()).toBe(turns);
   expect(getFlowVersion(saved.versionId)!.trigger).toEqual(before);
-  // Recheck without answers still reports readiness for the same draft (with
-  // its connector back: a missing piece fails validation, not setup).
-  f.registry.upsert(piece);
+  // Recheck without answers still reports readiness for the same draft.
   const recheck = await call(f.tool, saved.setup.recheckWith);
   expect(recheck).toMatchObject({ ok: true, flow: { id: saved.flow.id }, setup: { status: 'needs_configuration' } });
   // Models send null or {} for an unused optional parameter: still a recheck.
   for (const answers of [null, {}]) {
     expect(await call(f.tool, { ...saved.setup.recheckWith, answers })).toMatchObject({ ok: true, flow: { id: saved.flow.id } });
   }
+});
+
+test('a saved draft with a genuine structural error reports needs_repair, not setup', async () => {
+  const f = setup();
+  f.registry.upsert(piece);
+  f.complete();
+  const saved = await call(f.tool, { action: 'compose', name: 'Submission processor', description: 'Trim, validate, append once.' });
+  expect(saved.setup.status).toBe('needs_configuration');
+  // An action the installed connector does not have is a graph error, not a missing connector.
+  const broken = structuredClone(getFlowVersion(saved.versionId)!.trigger) as any;
+  let node = broken; while (node && node.settings?.pieceName !== piece.name) node = node.nextAction;
+  node.settings.actionName = 'no_such_action';
+  updateDraftVersion(saved.versionId, { trigger: broken });
+  const recheck = await call(f.tool, saved.setup.recheckWith);
+  expect(recheck).toMatchObject({ ok: true, setup: { status: 'needs_repair', label: 'Validation failed' } });
 });
 
 test('explicit no-install stays disabled and is retained across setup continuation', async () => {

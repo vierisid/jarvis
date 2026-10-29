@@ -1433,9 +1433,14 @@ const ACCOUNT_SETUP_GUIDANCE = "Use Connected workspace for secure connector acc
 
 function setupReadiness(flowId: string, versionId: string, compositionId: string) {
   const readiness = versionReadiness(flowId, versionId);
-  const structureValid = compileWorkflow(getFlowVersion(versionId)?.trigger, { pieces: workflowReadinessServices()?.pieces, phase: 'composition' }).ready;
+  const structure = compileWorkflow(getFlowVersion(versionId)?.trigger, { pieces: workflowReadinessServices()?.pieces, phase: 'composition' });
+  const structureValid = structure.ready;
+  // A missing (uninstalled) connector is a setup gap: install it from the
+  // Library page. Only a genuine structural error needs the graph repaired.
+  const state = structure.issues.some(i => i.code !== "PIECE")
+    ? { status: "needs_repair", label: "Validation failed" } : { status: "needs_configuration", label: "Setup required" };
   const full = { validation: { structureValid, readyToRun: readiness.ready }, readiness, ...(!readiness.ready ? { setup: {
-    status: structureValid ? "needs_configuration" : "needs_repair", label: structureValid ? "Setup required" : "Validation failed", fields: readiness.issues,
+    ...state, fields: readiness.issues,
     editor: { flowId, versionId }, nextQuestion: readiness.issues.some(i => i.code === "CONNECTION_BINDING")
       ? ACCOUNT_SETUP_GUIDANCE : readiness.issues[0]?.message,
     accountSetup: ACCOUNT_SETUP_GUIDANCE,
@@ -1446,7 +1451,7 @@ function setupReadiness(flowId: string, versionId: string, compositionId: string
   return { ...validationSummary(flowId, versionId),
     validationReport: { action: "get", flow: flowId, version_id: versionId, view: "validation" },
     definition: { action: "get", flow: flowId, version_id: versionId, view: "definition" },
-    ...(!readiness.ready ? { setup: { status: structureValid ? "needs_configuration" : "needs_repair", label: structureValid ? "Setup required" : "Validation failed",
+    ...(!readiness.ready ? { setup: { ...state,
       issueCount: readiness.issues.length, editor: { flowId, versionId }, accountSetup: ACCOUNT_SETUP_GUIDANCE,
       nextStep: SAVED_DRAFT_GUIDANCE,
       recheckWith: { action: "continue_setup", composition_id: compositionId },
