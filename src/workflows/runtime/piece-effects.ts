@@ -74,7 +74,8 @@ const GMAIL_TRACKED_SENDS: ReadonlySet<unknown> = new Set(['send_email', 'gmail_
  * (#953 made these reachable at the default level).
  */
 export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
-  return (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
+  return (piece === '@activepieces/piece-monday' && ['monday_create_item','monday_update_item_name','monday_update_column_values_of_item','monday_create_update'].includes(String(action)))
+    || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
     || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE) && managedPieceChanges(piece, action))
@@ -748,6 +749,10 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
+  catalogId: 'monday', pieceName: '@activepieces/piece-monday', unknownActionCategory: 'modify_settings',
+  targetProps: ['board_id','group_id','item_id','item_name','name','column_values','column_ids','body'],
+  categories: {read_data: ['monday_get_item_column_values'], write_data: ['monday_create_item','monday_update_item_name','monday_update_column_values_of_item','monday_create_update']},
+}, {
   // Asana: every action of the pinned 0.7.2 bundle (`asana-connection.test.ts`
   // pins the list and the engine test checks it against the installed
   // package), so a workflow on the user's own Asana connection keeps running

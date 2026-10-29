@@ -315,7 +315,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "16"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata
+export const CATALOG_SCHEMA_VERSION = "17"; // v16: retain action aiMetadata; v17: managed monday.com item output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -895,6 +895,16 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
  * on-disk caches re-project.
  */
 export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
+  if (entry.name === '@activepieces/piece-monday') {
+    const samples: Record<string,unknown> = {
+      monday_create_item: {data:{create_item:{id:'1234567890'}}},
+      monday_get_item_column_values: {id:'1234567890',name:'Example item'},
+      monday_update_item_name: {data:{change_multiple_column_values:{id:'1234567890',name:'Updated item'}}},
+      monday_update_column_values_of_item: {data:{change_multiple_column_values:{id:'1234567890',name:'Example item'}}},
+      monday_create_update: {data:{create_update:{id:'9876543210'}}},
+    };
+    for (const [name,sample] of Object.entries(samples)) if(entry.actions[name]) entry.actions[name]!.outputSample=sample;
+  }
   if (entry.name === '@activepieces/piece-asana') {
     for (const action of Object.values(entry.actions)) {
       if (action.name !== 'create_task') continue;
