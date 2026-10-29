@@ -1,4 +1,5 @@
 import { hubspotContactInput, isHubspotContact } from './hubspot-contact';
+import {managedWebflowInput, runManagedWebflowAction} from './managed-webflow';
 /**
  * Engine-side half of the governed-piece adapter.
  *
@@ -241,7 +242,10 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
     if (issue) throw new Error(issue);
   }
   let raw: unknown;
-  if (trello) {
+  if (managedWebflowInput(String(params.piece), params.input)) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Webflow dispatch was not authorized');
+    raw = await runManagedWebflowAction(String(params.action), params.input);
+  } else if (trello) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Trello dispatch was not authorized');
     raw = await runManagedTrelloAction(String(params.action), trello);
   } else if (mailchimp) {

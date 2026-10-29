@@ -1,3 +1,6 @@
+import {webflowInputSchema} from "../../../../../src/workflows/runtime/managed-webflow-inputs";
+import {WebflowConnection, useWebflowStatus} from "../../integrations/WebflowConnection";
+import {WebflowCollectionLocation} from "../../integrations/WebflowCollectionLocation";
 import { TrelloCardLocation } from "../../integrations/TrelloCardLocation";
 import { MailchimpLocation } from "../../integrations/MailchimpLocation";
 import { MailchimpConnection } from "../../integrations/MailchimpConnection";
@@ -3396,7 +3399,11 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const githubRepository = managedGitHub && ['github_create_issue','getIssueInformation','update_issue','find_issue','createCommentOnAIssue'].includes(subName ?? '');
   const managedSlack = piece?.name === "@activepieces/piece-slack" && ["{{connections.jarvis:slack}}", "{{connections['jarvis:slack']}}"].includes(String(step.settings?.input?.auth));
   const slackChannel = managedSlack && ['send_channel_message', 'slack_post_message', 'slack_get_channel_info'].includes(subName ?? '');
-  const baseSchema = asanaSchema;
+  const webflowStatus = useWebflowStatus(piece?.name === "@activepieces/piece-webflow");
+  const webflowLocation = piece?.name === "@activepieces/piece-webflow" && ["create_collection_item","update_collection_item","get_collection_item","find_collection_item"].includes(subName ?? "")
+    && ["{{connections.jarvis:webflow}}", "{{connections['jarvis:webflow']}}"].includes(String(step.settings?.input?.auth));
+  const webflowSchema = webflowLocation ? webflowInputSchema(subName ?? "") : null;
+  const baseSchema = webflowSchema ? {...webflowSchema,fields:webflowSchema.fields.filter(f=>!["site_id","collection_id","collection_fields"].includes(f.name)).map(f=>({...f,options:f.options?[...f.options]:undefined}))} : asanaSchema;
   const selectedSchema = managedTrello && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["labels","member_id"].includes(f.name))} : managedMailchimp && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['fields','include_fields','exclude_fields', ...(mailchimpLocation ? ['list_id','campaign_id'] : [])].includes(f.name))}
     : managedGitHub && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['labels','assignees','milestone','state_reason', ...(githubRepository ? ['repository'] : [])].includes(f.name))}
     : managedSlack && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["sendAsUser","sendAsBot","file","username","profilePicture","iconEmoji","mentionOriginFlow","onlyBotChannels","info"].includes(f.name))} : baseSchema;
@@ -3527,6 +3534,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
 
       {githubRepository && <GitHubRepository input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {trelloLocation && <TrelloCardLocation input={step.settings?.input ?? {}} onChange={onSetInput} boardOnly={subName === "list_lists"} />}
+      {webflowLocation && <WebflowCollectionLocation key={step.name} action={subName ?? ""} status={webflowStatus} input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {asanaLocation && <AsanaTaskLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {mailchimpLocation && <MailchimpLocation key={subName} input={step.settings?.input ?? {}} onChange={onSetInput} campaign={subName === "get_campaign_report"} />}
       {slackChannel && <SlackChannelPicker value={String(step.settings?.input?.channel ?? "")} onChange={value => onSetInput("channel", value)} />}
@@ -3783,6 +3791,8 @@ function ConnectionPicker({
   // ClickUp and GitHub may also offer the hosted connection; without it
   // (self-hosted, or not connected) the picker reads exactly as for any other piece.
   const isClickUp = pieceName === "@activepieces/piece-clickup";
+  const isWebflow = pieceName === "@activepieces/piece-webflow";
+  const managedWebflow = useWebflowStatus(isWebflow)?.connected === true;
   const isAsana = pieceName === "@activepieces/piece-asana";
   const managedAsana = useAsanaStatus(isAsana)?.connected === true;
   const isDropbox = pieceName === "@activepieces/piece-dropbox";
@@ -3800,6 +3810,7 @@ function ConnectionPicker({
       {isDropbox && <><DropboxConnection optional onPick={onPick} currentValue={currentValue} />
         {managedDropbox && <p className="wf-props__hint">This account supports file-name search, folder listings, basic metadata and creating folders in Dropbox home. Use / for the home folder. Advanced search filters and metadata options are unavailable.</p>}</>}
       {pieceName === "@activepieces/piece-trello" && <TrelloConnection onPick={onPick} currentValue={currentValue} />}
+      {isWebflow && <><WebflowConnection optional onPick={onPick} currentValue={currentValue} /><p className="wf-props__hint">Find and read CMS items, and create or update drafts in the primary language. Publishing, archiving, media uploads and reference fields are not available.</p></>}
       {isAsana && <><AsanaConnection optional onPick={onPick} currentValue={currentValue} />
         {managedAsana && <p className="wf-props__hint">This account supports creating, reading and updating tasks, listing project tasks and adding comments. Use Asana IDs or workflow variables. Tags are not supported yet.</p>}</>}
       {isSlack && <SlackConnection optional onPick={onPick} currentValue={currentValue} />}
@@ -3807,7 +3818,7 @@ function ConnectionPicker({
         {authDisplayName}
         <span className="wf-props__connection-type">({authType})</span>
       </label>
-      {matching.length === 0 && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana ? (
+      {matching.length === 0 && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana && !managedWebflow ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.

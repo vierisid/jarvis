@@ -168,3 +168,11 @@ test('managed Asana shows its stored grant and routes setup to its own hosted in
   sources.asana = () => ({configured:false,connected:false,account:null});
   expect(provider.read().rows.some(r=>r.sourceId==='native:asana')).toBe(false);
 });
+
+test('managed Webflow shows its stored grant and routes setup to its own hosted integration', () => {
+  sources.webflow = () => ({configured:true, connected:true, account:{id:'8',label:'owner@example.test'}});
+  expect(row('native:webflow')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'8',setupActionId:'setup:webflow'});
+  expect(provider.read().setup.find(s => s.id === 'setup:webflow')?.target).toEqual({kind:'hosted_integration',provider:'webflow'});
+  sources.webflow = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:webflow')).toBe(false);
+});

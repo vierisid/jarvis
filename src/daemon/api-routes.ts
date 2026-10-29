@@ -2489,6 +2489,19 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         catch(error) { return json({error:error instanceof Error ? error.message : 'Could not load Asana projects.'}, error instanceof AsanaOptionsInputError ? 400 : 502); }
       },
     },
+    '/api/integrations/webflow': {
+      GET: async () => {
+        const {webflowStatus} = await import('../integrations/webflow-connection');
+        return json(webflowStatus(ctx.config));
+      },
+    },
+    '/api/integrations/webflow/options': {
+      GET: async (req: Request) => {
+        const {webflowOptions, WebflowOptionsInputError} = await import('../integrations/webflow-options');
+        try { return json(await webflowOptions(ctx.config, new URL(req.url).searchParams)); }
+        catch(error) { return json({error:error instanceof Error ? error.message : 'Could not load Webflow collections.'}, error instanceof WebflowOptionsInputError ? 400 : 502); }
+      },
+    },
     '/api/integrations/asana': {
       GET: async () => {
         const {asanaStatus, readAsanaConnection} = await import('../integrations/asana-connection');

@@ -157,6 +157,7 @@ export const VERSION_PIN: Record<
   string,
   { versionRange: string; vettedVersion: string; reason: string }
 > = {
+  webflow: {versionRange: "0.3.0", vettedVersion: "0.3.0", reason: "Managed v2 CMS draft actions qualified against 0.3.0; legacy v1 operations and other actions are not qualified"},
   asana: {versionRange: "0.7.2", vettedVersion: "0.7.2", reason: "Managed OAuth and five governed task actions qualified against the real engine; review before upgrading"},
   dropbox: {versionRange: "0.9.2", vettedVersion: "0.9.2", reason: "Governed action table (MANAGED_PIECE_ADAPTERS), managed action contracts and outputs mapped against 0.9.2; review before upgrading"},
   mailchimp: {versionRange: "0.5.10", vettedVersion: "0.5.10", reason: "Five managed subscriber, tag and reporting actions qualified against 0.5.10; review before upgrading"},
