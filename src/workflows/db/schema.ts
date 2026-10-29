@@ -34,7 +34,7 @@ const STATEMENTS: string[] = [
   )`,
   `CREATE TABLE IF NOT EXISTS workflow_import_contact (
     identity TEXT NOT NULL, source_id TEXT NOT NULL, hash TEXT NOT NULL,
-    contact_id TEXT NOT NULL, PRIMARY KEY(identity,source_id)
+    contact_id TEXT NOT NULL, source TEXT NOT NULL DEFAULT '', PRIMARY KEY(identity,source_id)
   )`,
   `CREATE TABLE IF NOT EXISTS workflow_weekly_report (
     identity TEXT PRIMARY KEY, owner TEXT NOT NULL, state TEXT NOT NULL,

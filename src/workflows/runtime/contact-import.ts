@@ -44,10 +44,17 @@ export interface ImportProgress {
   /** A provider deadline beyond MAX_RETRY_AFTER_MS that stopped a run. A new
    * run refuses to start before it. */
   retryAt?:number;
-  /** Digest of the account identities (credential generations included) the
-   * HubSpot portal was last verified with. A reconnect changes it, and the
-   * portal is verified again before the import continues. */
-  accounts?:string;
+  /** Digest of the HubSpot account identity (credential generation included)
+   * the portal was last verified with. A reconnect changes it, and the portal is
+   * verified again before the import continues where it was. */
+  hubspotAccount?:string;
+  /** Digest of the source account identity the cursor belongs to. A different
+   * source account (another tenant, say) restarts the walk from the first page;
+   * contacts already confirmed with the same content are skipped. */
+  sourceAccount?:string;
+  /** Where the import was, and its retry count, when a HubSpot reconnect sent
+   * it back to verify the portal: restored once the portal is verified. */
+  resume?:{phase:ImportProgress['phase'];retries:number};
   /** The HubSpot contact ID a lookup found for the current contact, which an
    * update must confirm. */
   contactId?:string;
@@ -58,7 +65,9 @@ export interface ImportStore {
   seenCursor(cursor:string|null):boolean;savePage(state:ImportProgress):void;
   /** Whether the flow run with this ID is queued, running or paused. */
   runLive(run:string):boolean;
-  record(id:string):{hash:string;contactId:string}|null;
+  record(id:string):{hash:string;contactId:string;source:string}|null;
+  /** Saves a restarted walk and forgets the cursors seen, in one transaction. */
+  resetPages(state:ImportProgress):void;
   finishContact(state:ImportProgress,contact:ImportContact,contactId:string):void;
 }
 export interface ImportResponse {status:number;retryAfter?:string|null;body:unknown}
@@ -105,18 +114,18 @@ function pageData(body:unknown,s:ImportSetup){
   const identities=new Map<string,string>();for(const r of page){if(identities.has(r.id)&&identities.get(r.id)!==r.hash)throw Error('Conflicting source identity in page');identities.set(r.id,r.hash);}
   return {page,next:next===''?null:next as string|null};
 }
-/** Whether HubSpot's stored value is the one we sent, allowing for its normalization:
- * surrounding space and case, and numbers in another spelling (42 and 42.0). */
+/** Whether HubSpot already holds the value we would send, exactly but for
+ * surrounding space. A lookup that finds any other value updates the contact:
+ * a dropped leading zero, a missing plus sign or a case correction is a change
+ * to apply, not a match. (A write is confirmed by its contact ID instead.) */
 export function sameImportValue(stored:unknown,sent:string):boolean {
-  if(stored===undefined||stored===null)return false;
-  const a=String(stored).trim(),b=sent.trim();
-  if(a===b||a.toLowerCase()===b.toLowerCase())return true;
-  const numeric=/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i;
-  return numeric.test(a)&&numeric.test(b)&&Number(a)===Number(b);
+  return stored!==undefined&&stored!==null&&String(stored).trim()===sent.trim();
 }
+/** The two account identities the slice compares with the ones it last ran with. */
+export interface ImportAccounts {hubspot:string;source:string}
 /** One bounded provider operation per slice. Progress, retry reservation and page
  * snapshot live in SQLite; timer waitpoints release the engine between slices. */
-export async function importSlice(s:ImportSetup,store:ImportStore,request:ImportRequest,now:number,clock:()=>number=()=>now,run?:string,accounts?:string):Promise<{complete:boolean;pages:number;contacts:number;resumeAt?:number}> {
+export async function importSlice(s:ImportSetup,store:ImportStore,request:ImportRequest,now:number,clock:()=>number=()=>now,run?:string,accounts?:ImportAccounts):Promise<{complete:boolean;pages:number;contacts:number;resumeAt?:number}> {
   const p=store.load();store.check();
   const result=(resumeAt?:number)=>({complete:p.complete,pages:p.pages,contacts:p.contacts,...(!p.complete?{resumeAt:resumeAt??now+1}: {})});
   const fail=(message:string,stop?:ImportStop):never=>{p.error=message;p.stoppedRun=run;p.inFlight=false;store.save(p);throw stop??Error(message);};
@@ -139,18 +148,40 @@ export async function importSlice(s:ImportSetup,store:ImportStore,request:Import
   }
   if(p.error){delete p.error;delete p.stoppedRun;delete p.retryAt;p.retries=0;p.notBefore=0;if(p.phase==='write')p.phase='reconcile';store.save(p);}
   if(p.pageRun!==run){p.pageRun=run;p.runPages=0;}
-  // A reconnected (or otherwise changed) account keeps the import's progress,
-  // but the HubSpot portal is verified again before anything else: a different
-  // portal stops the import. A contact in flight is looked up again first.
-  if(accounts!==undefined&&p.accounts!==accounts){p.accounts=accounts;if(!p.complete){p.phase='account';delete p.contactId;}store.save(p);}
   if(p.notBefore>now)return result(p.notBefore);
   // A process died after reserving a request. Count that attempt, and reconcile
   // a potentially committed write before any repeat. Do not reset the budget.
   if(p.inFlight){p.inFlight=false;p.retries++;if(p.phase==='write')p.phase='reconcile';else if(p.retries>3)return fail('Import retry budget exhausted after interruption');store.save(p);}
+  if(accounts){
+    // A different source account means a different source: its cursor and
+    // page mean nothing for it, so the walk restarts at the first page. A write
+    // of the old page's contact that may have happened is settled first (by
+    // lookup, HubSpot only). Contacts confirmed with the same content are then
+    // skipped by their receipts, without a HubSpot call.
+    const unsettled=!!p.page&&(p.phase==='write'||p.phase==='reconcile'||p.resume?.phase==='write'||p.resume?.phase==='reconcile');
+    if(p.sourceAccount===undefined){p.sourceAccount=accounts.source;store.save(p);}
+    else if(p.sourceAccount!==accounts.source&&!unsettled){
+      p.sourceAccount=accounts.source;p.cursor=null;p.page=null;p.next=null;p.index=0;p.pages=0;p.retries=0;delete p.contactId;
+      if(p.phase!=='account')p.phase='page';if(p.resume)p.resume={phase:'page',retries:0};store.resetPages(p);
+    }
+    // A reconnected HubSpot account keeps the import where it was, but the
+    // portal is verified again before anything else: a different portal stops
+    // the import. The phase and retry budget return once it is verified.
+    if(p.hubspotAccount===undefined){p.hubspotAccount=accounts.hubspot;store.save(p);}
+    else if(p.hubspotAccount!==accounts.hubspot){
+      p.hubspotAccount=accounts.hubspot;
+      if(p.phase!=='account'){p.resume={phase:p.phase,retries:p.retries};p.phase='account';p.retries=0;}
+      store.save(p);
+    }
+  }
   // The portal check comes first, even before settling a finished page.
   if(p.phase!=='account'&&p.page&&p.index>=p.page.length){p.cursor=p.next;p.page=null;p.index=0;p.pages++;p.runPages=(p.runPages??0)+1;p.complete=p.next===null;p.phase='page';p.retries=0;p.notBefore=0;store.save(p);return result();}
   let contact=p.page?.[p.index];
-  if(contact&&p.phase!=='account'){const receipt=store.record(contact.id);if(receipt){if(receipt.hash!==contact.hash)return fail('Source identity changed since its confirmed import');p.index++;p.phase='lookup';p.retries=0;store.save(p);return result();}}
+  // A receipt with this content skips the contact. Other content under the same
+  // source account means the source changed a confirmed record; under another
+  // source account it is a different record that happens to share the ID.
+  if(contact&&p.phase!=='account'){const receipt=store.record(contact.id);if(receipt&&receipt.hash===contact.hash){p.index++;p.phase='lookup';p.retries=0;store.save(p);return result();}
+    if(receipt&&receipt.source===(p.sourceAccount??''))return fail('Source identity changed since its confirmed import');}
   let url:string,method:'GET'|'POST'|'PATCH'='GET',body:unknown,provider:'source'|'hubspot';
   if(p.phase==='account'){provider='hubspot';url='https://api.hubapi.com/account-info/v3/details';}
   else if(!p.page){
@@ -205,7 +236,11 @@ export async function importSlice(s:ImportSetup,store:ImportStore,request:Import
   }
   if(p.phase==='account'){
     if(r.status!==200||!object(r.body)||String(r.body.portalId)!==s.hubspotPortalId)return fail('HubSpot portal verification failed');
-    p.phase='page';p.retries=0;store.save(p);return result();
+    // Back to where a reconnect interrupted it, with the retries it had spent; a
+    // write not yet confirmed is looked up first.
+    if(p.resume){p.phase=p.resume.phase==='write'?'reconcile':p.resume.phase==='account'?'page':p.resume.phase;p.retries=p.resume.retries;delete p.resume;}
+    else{p.phase='page';p.retries=0;}
+    store.save(p);return result();
   }
   if(provider==='source'){
     if(r.status!==200)return fail('Source refused page: HTTP '+r.status);

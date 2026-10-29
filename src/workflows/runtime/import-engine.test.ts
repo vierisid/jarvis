@@ -318,3 +318,37 @@ test('a stop later in the same call is not receipted as not started: earlier req
  expect(base.creates).toBe(1);
  expect(listWorkflowEffects(run).find(e=>e.route==='contact-import')!.outcome).toMatchObject({code:'IMPORT_RETRY_AFTER_TOO_LONG',effect:'may_have_occurred'});
 },60000);
+
+test('a reconnected source account restarts the walk at the first page; a HubSpot reconnect alone keeps the cursor',async()=>{
+ reset();const sourceRow=(token:string)=>upsertConnection({externalId:'fixture-source',displayName:'Fixture source',type:'OAUTH2',pieceName:'@activepieces/piece-http-oauth2',pieceVersion:'0.0.1',value:{access_token:token}});
+ sourceRow('tenant-a');const input={...setup,sourceAuth:'oauth2' as const,sourceConnection:'fixture-source'};
+ const g=graph();g.nextAction.settings.input=input;const f=fixture(g);const a=newRun(f);
+ for(let i=0;i<40&&provider.calls.filter(c=>c.provider==='source').length<2;i++){const r=await services.contactImport!({...input},ctxOf(a)) as any;now=Math.max(now+1,r.resumeAt);}
+ expect(provider.creates).toBe(1);expect(provider.calls.at(-1)!.url).toContain('cursor=page2');updateRun(a,{status:'FAILED'});
+ // HubSpot reconnected: the cursor is kept, and the portal is checked again.
+ hubspotRow({access_token:'hubspot-again'});pinFlowBindings(f.flow.id);const b=newRun(f);let n=provider.calls.length;
+ await services.contactImport!({...input},ctxOf(b));await services.contactImport!({...input},ctxOf(b));
+ expect(provider.calls.slice(n).map(c=>c.url.includes('account-info')?'account':c.provider==='source'?new URL(c.url).searchParams.get('cursor'):c.method)[0]).toBe('account');
+ expect(provider.calls.slice(n).some(c=>c.provider==='source'&&!c.url.includes('cursor='))).toBe(false);updateRun(b,{status:'FAILED'});
+ // The source reconnected as another tenant: back to its first page; alice (same content) is skipped, dave imported.
+ sourceRow('tenant-b');pinFlowBindings(f.flow.id);const base=provider;
+ provider={...base,request:async(p,url,method,body)=>{if(p!=='source')return base.request(p,url,method,body);base.calls.push({provider:p,url,method});
+  return {status:200,body:new URL(url).searchParams.get('cursor')===null?{items:[{id:'1',email:'alice@example.com',name:'Alice'}],next_cursor:'b2'}:{items:[{id:'2',email:'dave@example.com',name:'Dave'}],next_cursor:null}};}} as typeof provider;
+ try{
+  const c=newRun(f);n=base.calls.length;budget={ms:20_000,operations:Infinity};
+  expect((await services.contactImport!({...input},ctxOf(c)) as any).complete).toBe(true);
+  const after=base.calls.slice(n);expect(after.find(c=>c.provider==='source')!.url).toBe(setup.sourceUrl);
+  expect(after.some(c=>c.provider==='hubspot'&&c.url.includes('alice'))).toBe(false);expect(base.contacts.has('dave@example.com')).toBe(true);expect(base.contacts.has('bob@example.com')).toBe(false);
+  expect(base.creates).toBe(2);
+ }finally{provider=base;hubspotRow({access_token:'synthetic-hubspot'});}
+},60000);
+test('a first slice that died mid-dispatch still gets its one "started" audit row from the next slice',async()=>{
+ reset();const f=fixture(),run=newRun(f),base=provider;let reached!:()=>void;const hung=new Promise<void>(r=>{reached=r;});
+ provider={...base,request:async()=>{reached();return new Promise(()=>{});}} as typeof provider;
+ void services.contactImport!({...setup},ctxOf(run));await hung;provider=base;
+ expect(listWorkflowEffects(run).find(e=>e.route==='contact-import')!.status).toBe('dispatching');
+ now+=46_000;const r=await services.contactImport!({...setup},ctxOf(run)) as any;expect(r.complete).toBe(false);
+ expect(audit.query({agentId:`workflow:${run}`}).filter(e=>(e as any).executed===1||(e as any).executed===true)).toHaveLength(1);
+ await services.contactImport!({...setup},ctxOf(run));
+ expect(audit.query({agentId:`workflow:${run}`}).filter(e=>(e as any).executed===1||(e as any).executed===true)).toHaveLength(1);
+},60000);

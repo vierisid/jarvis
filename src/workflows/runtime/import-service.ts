@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import {ImportStop,importSetup,importSlice,type ImportRequest} from './contact-import';
+import {ImportStop,importSetup,importSlice,type ImportAccounts,type ImportRequest} from './contact-import';
 import {IMPORT_ACCOUNTS,IMPORT_ACCOUNT_LABELS,IMPORT_ACTION,IMPORT_PIECE,importAccountFields,isContactImportStep,managedImportRefusal} from '../import-accounts';
 import {ActionOutcomeError} from '../../actions/action-outcome';
 import {importTransport} from './import-transport';
@@ -42,8 +42,11 @@ export function createContactImportService(deps:{effects:WorkflowEffectBoundary;
     const park=(result:{complete:boolean;resumeAt?:number})=>{if(result.complete)return result;const wait=createWaitpoint({flowRunId:ctx.runId,projectId:ctx.projectId,stepName,type:'TIMER',resumeDateTime:new Date(result.resumeAt!).toISOString()});return {...result,waitpointId:wait.id};};
     // The lock holds the configuration only. Account identities (credential
     // generations included) are not part of it: a reconnect must not strand the
-    // import. The slice re-verifies the HubSpot portal when they change.
-    const acquired=acquireImport(key,digest(setup),randomUUID(),clock),accounts=digest(identities);
+    // import. The slice compares them with the ones it last ran with.
+    const acquired=acquireImport(key,digest(setup),randomUUID(),clock);
+    // Tracked apart: a HubSpot reconnect re-verifies the portal and continues,
+    // a different source account restarts the walk from the first page.
+    const accounts:ImportAccounts={hubspot:digest(identities.hubspotConnection??null),source:digest(identities.sourceConnection??null)};
     if('busyUntil'in acquired)return park({complete:false,resumeAt:acquired.busyUntil});
     try {
     const previous=getWorkflowEffect(workflowEffectId(ctx.runId,stepName,executionPath,'contact-import'));

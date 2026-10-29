@@ -48,6 +48,8 @@ export interface WorkflowEffect {
    * "never dispatched": an ending run must not receipt it as not_started.
    */
   partial?: { slices: number; at: number };
+  /** The "started" audit row of resumable work is written: once, whichever slice first completes. */
+  startLogged?: true;
 }
 export function getWorkflowEffect(id: string): WorkflowEffect | null {
   const row = getWorkflowDb().query('SELECT record FROM workflow_effect WHERE id = ?').get(id) as { record: string } | null;

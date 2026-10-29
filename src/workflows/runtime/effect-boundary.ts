@@ -629,9 +629,11 @@ export class WorkflowEffectBoundary {
       if (input.externalDispatch) { log(true); return { result }; }
       if (input.deferCompletion?.(result)) {
         // One audit row when the work first runs, and one when it completes;
-        // the slices between are recorded on the effect, not the trail.
-        const first=!record.partial;
-        record.status='pending'; record.result=null;
+        // the slices between are recorded on the effect, not the trail. Its own
+        // flag, not `partial`: a first slice that died mid-dispatch is counted
+        // as run but never logged, so the next completed slice logs it.
+        const first=!record.startLogged;
+        record.status='pending'; record.result=null; record.startLogged=true;
         record.partial={slices:(record.partial?.slices??0)+1,at:Date.now()};
         saveWorkflowEffect(record); if(first) log(true); return {result};
       }

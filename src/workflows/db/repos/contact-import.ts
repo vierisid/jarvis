@@ -17,7 +17,9 @@ export function acquireImport(key:string,config:string,owner:string,clock:()=>nu
     runLive(run){const row=db.query('SELECT status FROM flow_run WHERE id=?').get(run) as {status:string}|null;return !!row&&['QUEUED','RUNNING','PAUSED'].includes(row.status);},
     seenCursor(cursor){return !!db.query('SELECT 1 FROM workflow_import_cursor WHERE identity=? AND cursor=?').get(key,JSON.stringify(cursor));},
     savePage(p){db.transaction(()=>{save(p);db.run('INSERT INTO workflow_import_cursor(identity,cursor) VALUES(?,?)',[key,JSON.stringify(p.cursor)]);})();},
-    record(id){return db.query('SELECT hash,contact_id AS contactId FROM workflow_import_contact WHERE identity=? AND source_id=?').get(key,id) as {hash:string;contactId:string}|null;},
-    finishContact(p,c,id){db.transaction(()=>{save(p);db.run('INSERT INTO workflow_import_contact(identity,source_id,hash,contact_id) VALUES(?,?,?,?)',[key,c.id,c.hash,id]);})();}},
+    record(id){return db.query('SELECT hash,contact_id AS contactId,source FROM workflow_import_contact WHERE identity=? AND source_id=?').get(key,id) as {hash:string;contactId:string;source:string}|null;},
+    resetPages(p){db.transaction(()=>{save(p);db.run('DELETE FROM workflow_import_cursor WHERE identity=?',[key]);})();},
+    finishContact(p,c,id){db.transaction(()=>{save(p);db.run(`INSERT INTO workflow_import_contact(identity,source_id,hash,contact_id,source) VALUES(?,?,?,?,?)
+      ON CONFLICT(identity,source_id) DO UPDATE SET hash=excluded.hash,contact_id=excluded.contact_id,source=excluded.source`,[key,c.id,c.hash,id,p.sourceAccount??'']);})();}},
     release(){db.run('UPDATE workflow_contact_import SET lease_until=0 WHERE identity=? AND owner=?',[key,owner]);}};
 }

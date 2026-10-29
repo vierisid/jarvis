@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {initWorkflowDb,closeWorkflowDb,getWorkflowDb} from '../db';
 import {acquireImport} from '../db/repos/contact-import';
-import {importSlice,importSetup,importDigest,retryDeadline,sameImportValue,ImportRefusal,ImportStop,MAX_IMPORT_PAGES_PER_RUN,MAX_RETRY_AFTER_MS,type ImportRequest} from './contact-import';
+import {importSlice,importSetup,importDigest,retryDeadline,sameImportValue,ImportRefusal,ImportStop,MAX_IMPORT_PAGES_PER_RUN,MAX_RETRY_AFTER_MS,type ImportAccounts,type ImportRequest} from './contact-import';
 import {publicImportAddress} from './import-transport';
 import {importFixtureSetup as setup,importFixtureProvider} from './import-fixtures';
 let dir:string,now:number,seq:number;
@@ -219,7 +219,6 @@ test('HubSpot normalizing the values it stores still confirms an update by conta
   return {...r,body:{...(r.body as any),properties:method==='PATCH'?properties:{...properties,email}}};
  };
  expect((await finish(request)).contacts).toBe(2);expect(f.calls.filter(c=>c.method==='PATCH')).toHaveLength(1);expect(f.creates).toBe(1);
- expect(sameImportValue('42.0','42')).toBe(true);expect(sameImportValue(' Rome ','rome')).toBe(true);expect(sameImportValue(null,'')).toBe(false);expect(sameImportValue('43','42')).toBe(false);
 });
 test('an update reply naming another contact is not confirmed; the lookup confirms the right one',async()=>{
  const f=importFixtureProvider();f.contacts.set('alice@example.com',{id:'99',properties:{email:'alice@example.com',firstname:'Old'}});
@@ -240,16 +239,83 @@ test('a refused request or oversized reply is a typed stop that clears the reser
  expect(write).toMatchObject({code:'IMPORT_REFUSED',unexecuted:false});expect(stored()).toMatchObject({inFlight:false,phase:'reconcile'});expect(f.creates).toBe(1);
  refuse=null;expect((await finish(request,'r3')).contacts).toBe(2);expect(f.creates).toBe(2);expect(f.calls.filter(c=>c.method==='POST')).toHaveLength(2);
 });
-test('a changed account digest re-verifies the HubSpot portal before continuing, keeping progress',async()=>{
- const f=importFixtureProvider();const t=(request:ImportRequest,accounts:string)=>{const a=acquireImport('job',importDigest(setup),'owner-'+(++seq),()=>now);if('busyUntil'in a)throw Error('Busy');return importSlice(setup,{...a.store,runLive:()=>false},request,now,()=>now,'r1',accounts).finally(()=>a.release());};
- for(let i=0;i<5;i++)await t(f.request,'gen-1');expect(f.creates).toBe(1);
+/** One slice of run r1 with these account identities. */
+const sliceWith=(request:ImportRequest,hubspot:string,source='source-a')=>{const a=acquireImport('job',importDigest(setup),'owner-'+(++seq),()=>now);if('busyUntil'in a)throw Error('Busy');
+ return importSlice(setup,{...a.store,runLive:()=>false},request,now,()=>now,'r1',{hubspot,source} satisfies ImportAccounts).finally(()=>a.release());};
+test('a HubSpot reconnect re-verifies the portal and keeps the cursor; another portal stops',async()=>{
+ const f=importFixtureProvider();
+ for(let i=0;i<5;i++)await sliceWith(f.request,'gen-1');expect(f.creates).toBe(1);const before=stored();expect(before.cursor).toBe('page2');
  const accountCalls=()=>f.calls.filter(c=>c.url.includes('account-info')).length;expect(accountCalls()).toBe(1);
- await t(f.request,'gen-2');expect(accountCalls()).toBe(2);expect(stored()).toMatchObject({contacts:1,accounts:'gen-2'});
- for(let i=0;i<40&&!(stored().complete);i++)await t(f.request,'gen-2');expect(f.creates).toBe(2);expect(f.calls.filter(c=>c.method==='POST')).toHaveLength(2);
+ await sliceWith(f.request,'gen-2');expect(accountCalls()).toBe(2);
+ expect(stored()).toMatchObject({contacts:1,hubspotAccount:'gen-2',sourceAccount:'source-a',cursor:'page2',pages:before.pages,phase:before.phase});expect(stored().resume).toBeUndefined();
+ for(let i=0;i<40&&!(stored().complete);i++)await sliceWith(f.request,'gen-2');expect(f.creates).toBe(2);expect(f.calls.filter(c=>c.method==='POST')).toHaveLength(2);
+ expect(f.calls.filter(c=>c.provider==='source'&&!c.url.includes('cursor='))).toHaveLength(1);
  const other:ImportRequest=async(provider,url,method,body)=>url.includes('account-info')?{status:200,body:{portalId:43}}:f.request(provider,url,method,body);
  for(const t2 of ['workflow_contact_import','workflow_import_contact','workflow_import_cursor'])getWorkflowDb().run('DELETE FROM '+t2);
- for(let i=0;i<5;i++)await t(f.request,'gen-1');const n=f.calls.length;
- await expect(t(other,'gen-3')).rejects.toThrow('portal verification failed');expect(f.calls).toHaveLength(n);
+ for(let i=0;i<5;i++)await sliceWith(f.request,'gen-1');const n=f.calls.length;
+ await expect(sliceWith(other,'gen-3')).rejects.toThrow('portal verification failed');expect(f.calls).toHaveLength(n);
+});
+test('a write interrupted before a HubSpot reconnect is reconciled after the portal check, with its retry count kept',async()=>{
+ const f=importFixtureProvider();f.options.crashWrite=true;
+ await sliceWith(f.request,'gen-1');await sliceWith(f.request,'gen-1');await sliceWith(f.request,'gen-1');await expect(sliceWith(f.request,'gen-1')).rejects.toThrow('process died');expect(f.creates).toBe(1);
+ now+=30_001;await sliceWith(f.request,'gen-2');expect(f.calls.at(-1)!.url).toContain('account-info');
+ expect(stored()).toMatchObject({phase:'reconcile',retries:1});
+ const n=f.calls.length;await sliceWith(f.request,'gen-2');expect(f.calls[n]).toMatchObject({provider:'hubspot',method:'GET'});
+ for(let i=0;i<40&&!(stored().complete);i++)await sliceWith(f.request,'gen-2');expect(f.creates).toBe(2);expect(f.calls.filter(c=>c.method==='POST')).toHaveLength(2);
+});
+/** Another tenant of the same source API: alice with the same content under the same ID, and dave under bob's ID. */
+const tenantB=(f:ReturnType<typeof importFixtureProvider>):ImportRequest=>async(provider,url,method,body)=>{
+ if(provider!=='source')return f.request(provider,url,method,body);
+ f.calls.push({provider,url,method});const cursor=new URL(url).searchParams.get('cursor');
+ return {status:200,body:cursor===null?{items:[{id:'1',email:'alice@example.com',name:'Alice'}],next_cursor:'b2'}:{items:[{id:'2',email:'dave@example.com',name:'Dave'}],next_cursor:null}};
+};
+test('a different source account restarts from the first page, skipping contacts confirmed with the same content',async()=>{
+ const f=importFixtureProvider();
+ for(let i=0;i<5;i++)await sliceWith(f.request,'gen-1');expect(stored()).toMatchObject({cursor:'page2',pages:1});expect(f.creates).toBe(1);
+ expect(getWorkflowDb().query('SELECT COUNT(*) AS n FROM workflow_import_cursor').get()).toEqual({n:1});
+ // A confirmed receipt for ID 2 from the old source (bob), which tenant B uses for dave.
+ getWorkflowDb().run("INSERT INTO workflow_import_contact(identity,source_id,hash,contact_id,source) VALUES('job','2','bob-hash','55','source-a')");
+ const n=f.calls.length;await sliceWith(tenantB(f),'gen-1','source-b');
+ expect(f.calls.slice(n)).toEqual([{provider:'source',url:setup.sourceUrl,method:'GET'}]);expect(stored()).toMatchObject({sourceAccount:'source-b',pages:0});
+ for(let i=0;i<40&&!(stored().complete);i++)await sliceWith(tenantB(f),'gen-1','source-b');
+ const after=f.calls.slice(n);
+ // alice: skipped by her receipt, no HubSpot call; dave: imported although bob's receipt holds ID 2; bob is never read.
+ expect(after.some(c=>c.provider==='hubspot'&&c.url.includes('alice'))).toBe(false);expect(f.contacts.has('dave@example.com')).toBe(true);expect(f.contacts.has('bob@example.com')).toBe(false);
+ expect(f.creates).toBe(2);expect(f.calls.filter(c=>c.method==='POST')).toHaveLength(2);
+ expect(getWorkflowDb().query("SELECT source FROM workflow_import_contact WHERE source_id='2'").get()).toEqual({source:'source-b'});
+});
+test('under the same source account a confirmed record with other content still stops',async()=>{
+ const f=importFixtureProvider();
+ for(let i=0;i<5;i++)await sliceWith(f.request,'gen-1');for(let i=0;i<40&&!(stored().complete);i++)await sliceWith(f.request,'gen-1');
+ getWorkflowDb().run("UPDATE workflow_contact_import SET progress=json_set(progress,'$.complete',json('false'),'$.cursor',NULL,'$.page',NULL,'$.pages',0)");getWorkflowDb().run('DELETE FROM workflow_import_cursor');
+ f.options.changedIdentity=true;await expect((async()=>{for(let i=0;i<10;i++)await sliceWith(f.request,'gen-1');})()).rejects.toThrow('Source identity changed');
+});
+test('a source change waits for an uncertain write of the old page to be settled first',async()=>{
+ const f=importFixtureProvider();f.options.loseWrite=true;
+ for(let i=0;i<4;i++)await sliceWith(f.request,'gen-1');expect(stored()).toMatchObject({phase:'reconcile'});expect(f.creates).toBe(1);
+ now+=10_000;const n=f.calls.length;await sliceWith(tenantB(f),'gen-1','source-b');
+ expect(f.calls[n]).toMatchObject({provider:'hubspot',method:'GET'});expect(stored().sourceAccount).toBe('source-a');
+ const m=f.calls.length;await sliceWith(tenantB(f),'gen-1','source-b');expect(stored()).toMatchObject({sourceAccount:'source-b',cursor:null,next:'b2',pages:0});
+ expect(f.calls.slice(m)).toEqual([{provider:'source',url:setup.sourceUrl,method:'GET'}]);
+ expect(getWorkflowDb().query("SELECT contact_id FROM workflow_import_contact WHERE source_id='1'").get()).toEqual({contact_id:'1'});
+});
+test('a write decided before a HubSpot reconnect is looked up again after the portal check',async()=>{
+ const f=importFixtureProvider();
+ for(let i=0;i<3;i++)await sliceWith(f.request,'gen-1');expect(stored()).toMatchObject({phase:'write',method:'POST',inFlight:false});
+ await sliceWith(f.request,'gen-2');expect(f.calls.at(-1)!.url).toContain('account-info');expect(stored().phase).toBe('reconcile');
+ const n=f.calls.length;await sliceWith(f.request,'gen-2');expect(f.calls[n]).toMatchObject({provider:'hubspot',method:'GET'});
+});
+test('a lookup matches only the exact value: a dropped leading zero, a missing plus sign or a case correction is updated',async()=>{
+ for(const [sent,held] of [['02134','2134'],['+15551234567','15551234567'],['McDonald','mcdonald'],['1000','1e3']] as const){
+  for(const t of ['workflow_contact_import','workflow_import_contact','workflow_import_cursor'])getWorkflowDb().run('DELETE FROM '+t);
+  const f=importFixtureProvider();f.contacts.set('z@example.com',{id:'7',properties:{email:'z@example.com',firstname:held}});
+  const request:ImportRequest=async(provider,url,method,body)=>provider==='source'?{status:200,body:{items:[{id:'z',email:'z@example.com',name:sent}],next_cursor:null}}:f.request(provider,url,method,body);
+  expect((await finish(request)).contacts).toBe(1);expect(f.calls.filter(c=>c.method==='PATCH')).toHaveLength(1);expect(f.contacts.get('z@example.com')!.properties.firstname).toBe(sent);
+ }
+ expect(sameImportValue(' Alice ','Alice')).toBe(true);expect(sameImportValue(null,'')).toBe(false);
+ const f=importFixtureProvider();f.contacts.set('alice@example.com',{id:'9',properties:{email:'alice@example.com',firstname:'Alice'}});
+ for(const t of ['workflow_contact_import','workflow_import_contact','workflow_import_cursor'])getWorkflowDb().run('DELETE FROM '+t);
+ await finish(f.request);expect(f.calls.filter(c=>c.method==='PATCH'&&c.url.includes('alice'))).toHaveLength(0);
 });
 test('a create reply for another email is not confirmed; the lookup confirms the created contact',async()=>{
  const f=importFixtureProvider();let once=true;
