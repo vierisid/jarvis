@@ -20,6 +20,13 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
+  // w8-10: Gmail admission covers manual runs only when they carry a payload.id.
+  'w8-10': {
+    'bare': '6d59e9c75627ef44790fbdba86e488bd95361d58dde439d617577f73e18c40ac',
+    'hosted production': '58b80c386584ff6682e5b402d309924fb8cd428f28a1aa6446f4b2f454a314a0',
+    'production': '5f6c65c874a4501aa2b2524667ecea5281c63bb564580b4efd4c819d2694e23e',
+    'tool names only': 'b2dede5501aaa8274a1ecb8e7eafc25d6799626da1b2bff1822df89c82c0973f',
+  },
   // w8-9: Gmail triage and persistent message admission.
   'w8-9': {
     'bare': '729110a19aba46318acfa836345686c035b28e4b0772efab9cb62bf6a8c31dbe',
