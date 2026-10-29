@@ -25,6 +25,11 @@ export const DEFAULT_IDS = {
 } as const;
 
 const STATEMENTS: string[] = [
+  // Daily contact claims and draft receipts survive restarts and run-history cleanup.
+  `CREATE TABLE IF NOT EXISTS workflow_sales_followup (
+    identity TEXT PRIMARY KEY, owner TEXT NOT NULL, state TEXT NOT NULL,
+    result TEXT, created INTEGER NOT NULL
+  )`,
   // Cross-run contact/notification fences survive run-history cleanup. Keys are
   // scoped hashes, not credentials or personal data. No lease can expire an uncertain write.
   `CREATE TABLE IF NOT EXISTS workflow_effect_identity (

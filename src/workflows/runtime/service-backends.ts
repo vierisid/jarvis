@@ -1,4 +1,5 @@
 import { MEETING_ACCOUNTS, meetingSetup, meetingSetupMatches, parseMeetingGuard, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, type MeetingSetup } from './meeting-briefs';
+import { createSalesFollowupsService } from './sales-service';
 import { connectionBindings, enforceRunConnectionBinding, recordRunCredentialOutcome } from '../db/repos/binding-pins';
 import { walkFlowNodes } from '../db/flow-graph';
 import { isMeetingBriefsStep, MANAGED_HUBSPOT_REFUSAL, MEETING_ACCOUNT_LABELS } from '../meeting-accounts';
@@ -131,6 +132,8 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
   hubspotFetch?: typeof fetch;
   meetingFetch?: typeof fetch;
   meetingNow?: () => number;
+  salesFetch?: typeof fetch;
+  salesNow?: () => number;
   /** F-14 enrollment is explicitly enabled only with the F-12 queue. */
   decisionDocumentsEnabled?: boolean;
   credentialResolver: CredentialResolver;
@@ -1257,6 +1260,7 @@ export function buildSandboxServiceBackends(
   const services: SandboxApiServices = {
     credentialResolver: opts.credentialResolver,
     meetingBriefs: cancellableWorkflowService(meetingBriefs),
+    salesFollowups: cancellableWorkflowService(createSalesFollowupsService({effects,credentials:opts.credentialResolver,fetchImpl:opts.salesFetch,now:opts.salesNow})),
     pieceAuthorize: cancellableWorkflowService(pieceAuthorize),
     pieceReceipt: (ctx, id, result) => recordPieceCompletion(ctx, id, result, opts),
     llmChat: cancellableWorkflowService(llmChat),

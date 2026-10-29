@@ -1,0 +1,49 @@
+{
+  "name": "trigger",
+  "type": "PIECE_TRIGGER",
+  "displayName": "Weekdays at selected time (setup required)",
+  "settings": {
+    "pieceName": "schedule",
+    "input": {
+      "cron_expression": "",
+      "timezone": "Europe/Rome"
+    }
+  },
+  "nextAction": {
+    "name": "step_1",
+    "type": "PIECE",
+    "displayName": "Draft follow-ups for deals inactive seven days",
+    "settings": {
+      "pieceName": "@jarvispieces/piece-jarvis-sales",
+      "actionName": "draft_followups",
+      "input": {
+        "crmProvider": "",
+        "hubspotConnection": "",
+        "gmailConnection": "",
+        "ownerEmail": "",
+        "senderName": "",
+        "openStageIds": "",
+        "inactivityProperty": "",
+        "replyLookbackDays": null,
+        "inactivityDays": 7,
+        "timezone": "Europe/Rome"
+      }
+    },
+    "nextAction": {
+      "name": "step_2",
+      "type": "PIECE",
+      "displayName": "Deliver one batch summary",
+      "settings": {
+        "pieceName": "@jarvispieces/piece-jarvis-notify",
+        "actionName": "notify",
+        "input": {
+          "message": "{{step_1.summary}}",
+          "idempotencyKey": "{{step_1.notificationKey}}",
+          "channels": [
+            "dashboard"
+          ]
+        }
+      }
+    }
+  }
+}

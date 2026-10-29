@@ -850,3 +850,58 @@ describe("the meeting preparation step may name managed Google only as its Calen
     expect(managedConnectionMisuse(other, CALENDAR, "settings.input.calendarConnection", meeting({}).settings, "PIECE")).not.toBeNull();
   });
 });
+
+describe("the sales follow-up step may name managed Google only as its Gmail account", () => {
+  const SALES = "@jarvispieces/piece-jarvis-sales";
+  const HUBSPOT = "@activepieces/piece-hubspot";
+  const sales = (input: Record<string, unknown>, settings: Record<string, unknown> = {}): any => ({
+    name: "prepare", type: "PIECE", settings: { pieceName: SALES, actionName: "draft_followups", input, ...settings },
+  });
+  const at = (trigger: unknown, field: string) => bindingIssues(trigger).filter(i => i.path === `settings.input.${field}`);
+  const google = () => managedSourceFor(credentials.list(), "jarvis:google")!;
+
+  test("readiness accepts jarvis:google as the Gmail account", () => {
+    expect(at(empty(sales({ gmailConnection: "jarvis:google" })), "gmailConnection")).toEqual([]);
+  });
+
+  test("readiness refuses jarvis:google on a CODE node that carries the sales step's settings", () => {
+    const spoof = { ...sales({ gmailConnection: "jarvis:google" }), type: "CODE" };
+    expect(at(empty(spoof), "gmailConnection").length).toBeGreaterThan(0);
+  });
+
+  test("readiness refuses a managed id as the HubSpot account", () => {
+    for (const id of ["jarvis:google", "jarvis:hubspot"]) {
+      const [issue] = at(empty(sales({ hubspotConnection: id })), "hubspotConnection");
+      expect(issue!.message).toBe("Select a saved HubSpot account; a Jarvis-managed connection cannot read HubSpot");
+    }
+  });
+
+  test("the exemption covers exactly the Gmail account input of draft_followups, read as Gmail", () => {
+    const settings = sales({}).settings;
+    expect(managedConnectionMisuse(google(), GMAIL, "settings.input.gmailConnection", settings, "PIECE")).toBeNull();
+    expect(managedConnectionMisuse(google(), GMAIL, "settings.input.gmailConnection", { ...settings, pieceName: "jarvis-sales" }, "PIECE")).toBeNull();
+    expect(managedConnectionMisuse(google(), SALES, "settings.input.gmailConnection", settings, "PIECE")).not.toBeNull();
+    const refused: Array<[label: string, piece: string, path: string, settings: unknown, nodeType?: unknown]> = [
+      ["a CODE node carrying the sales step's settings", GMAIL, "settings.input.gmailConnection", settings, "CODE"],
+      ["a caller that does not say the node type", GMAIL, "settings.input.gmailConnection", settings, undefined],
+      ["a piece whose name only ends in jarvis-sales", GMAIL, "settings.input.gmailConnection", { ...settings, pieceName: "@evil/piece-jarvis-sales" }],
+      ["the HubSpot account", HUBSPOT, "settings.input.hubspotConnection", settings],
+      ["the HubSpot account read as Gmail", GMAIL, "settings.input.hubspotConnection", settings],
+      ["any other input of the step", GMAIL, "settings.input.ownerEmail", settings],
+      ["a nested path", GMAIL, "settings.input.gmailConnection.id", settings],
+      ["the Gmail account read as Calendar", "@activepieces/piece-google-calendar", "settings.input.gmailConnection", settings],
+      ["another jarvis-sales action", GMAIL, "settings.input.gmailConnection", { ...settings, actionName: "lookup" }],
+      ["another piece's step", GMAIL, "settings.input.gmailConnection", { ...settings, pieceName: GMAIL }],
+      ["a trigger", GMAIL, "settings.input.gmailConnection", { ...settings, triggerName: "draft_followups" }],
+      ["a caller without the step's settings", GMAIL, "settings.input.gmailConnection", undefined],
+    ];
+    for (const [label, piece, path, stepSettings, nodeType = "PIECE"] of refused) {
+      expect([label, managedConnectionMisuse(google(), piece, path, stepSettings, label.includes("node type") ? undefined : nodeType)]).not.toEqual([label, null]);
+    }
+  });
+
+  test("a source that is not the managed Google one gets no exemption, even when it serves Gmail", () => {
+    const other = { id: "other", pieceNames: [GMAIL], canResolve: (id: string) => id === "jarvis:other", resolve: async () => null };
+    expect(managedConnectionMisuse(other, GMAIL, "settings.input.gmailConnection", sales({}).settings, "PIECE")).not.toBeNull();
+  });
+});

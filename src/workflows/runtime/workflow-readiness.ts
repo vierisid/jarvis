@@ -1,5 +1,6 @@
 import { MEETING_ACCOUNTS, meetingSetup } from './meeting-briefs';
 import { MANAGED_HUBSPOT_REFUSAL } from '../meeting-accounts';
+import { SALES_ACCOUNTS, SALES_REQUIRED, SALES_PIECE, isSalesStep, salesSetup } from './sales-followups';
 import { parseOutputSchema } from './llm-output-contract';
 import { submissionConfig } from './form-submission';
 import {managedMailchimpIssue} from './managed-mailchimp';
@@ -264,6 +265,27 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     expressions(input, node, 'settings.input', scope, type === 'PIECE' || type === 'PIECE_TRIGGER' ? pieceName : '');
     stepSettings = {};
     const isPiece = (short: string) => pieceName === short || pieceName === `@jarvispieces/piece-${short}`;
+    if (!root && isSalesStep(settings) && pieceName !== SALES_PIECE) issue(node, 'settings.pieceName', 'PIECE', `Use the full piece name ${SALES_PIECE}`);
+    if (!root && isSalesStep(settings) && object(input)) {
+      for (const [field, provider] of Object.entries(SALES_ACCOUNTS)) {
+        const id = input[field];
+        if (!emptyInput(id)) {
+          if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node,`settings.input.${field}`,'CONNECTION_BINDING','Select a saved account reference');
+          // Jarvis manages no HubSpot account; the sales backend refuses a jarvis: id here at run time.
+          else if (field === 'hubspotConnection' && id.startsWith('jarvis:')) issue(node, `settings.input.${field}`, 'CONNECTION_BINDING', MANAGED_HUBSPOT_REFUSAL);
+          else if (context.phase !== 'composition') {
+            // Checked against the provider piece this field reads with, at its own
+            // path: a managed connection is accepted here only by the narrow
+            // sales exemption in managedConnectionMisuse (jarvis:google as Gmail).
+            const refusal=context.connection?.(id,provider,`settings.input.${field}`,settings,type) ?? (context.connection ? null : 'Connection inventory unavailable');
+            const reason = typeof refusal === 'string' || refusal === null ? refusal : refusal.message;
+            if (reason) issue(node,`settings.input.${field}`,'CONNECTION_BINDING',reason);
+            else runtime(node,`settings.input.${field}`,'connection','Recheck pinned sales account before each provider call');
+          }
+        }
+      }
+      if (SALES_REQUIRED.every(k=>!emptyInput(input[k]))) try { salesSetup(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
+    }
     if (!root && isPiece('jarvis-context') && settings.actionName === 'meeting_briefs' && object(input)) {
       for (const [field, provider] of Object.entries(MEETING_ACCOUNTS)) {
         const id = input[field];
@@ -325,7 +347,8 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
       if (!role.known || typeof role.value !== 'string' || !context.roles?.().has(role.value)) issue(node, 'settings.input.role', 'ROLE_BINDING', 'Select an existing specialist role before activation');
     }
     if (root && pieceName === '@activepieces/piece-schedule' && settings.triggerName === 'cron_expression') {
-      try {
+      if (emptyInput(input?.cronExpression)) needsSetup(node,'settings.input.cronExpression','Choose the schedule execution time before publishing or running');
+      else try {
         if (typeof input?.cronExpression !== 'string') throw new Error('Schedule requires a static cron expression');
         validateCronExpression(input.cronExpression);
         validateCronTimezone(input.timezone);
@@ -344,7 +367,8 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     if (type === 'PIECE' || type === 'PIECE_TRIGGER') {
       if (root && pieceName === 'schedule') {
         const cron = input?.cron_expression || input?.cronExpression || input?.expression;
-        try {
+        if (emptyInput(cron)) needsSetup(node,'settings.input.cron_expression','Choose the schedule execution time before publishing or running');
+        else try {
           if (typeof cron !== 'string') throw new Error('Schedule requires a static cron expression');
           validateCronExpression(cron);
         } catch (error) { issue(node, 'settings.input.cron_expression', 'CRON', (error as Error).message); }
