@@ -1107,7 +1107,9 @@ function renderPrimitiveDetails(name: "schedule" | "webhook"): string {
       "  Use as the trigger node: type='PIECE_TRIGGER', settings={ pieceName: 'schedule', input: { cron_expression: '<5-field cron>', timezone: '<IANA timezone>' } }.",
       "  - input.cron_expression: 5-field cron, e.g. '0 8 * * *' for 8am daily. If the user has not selected an execution time, set it to an empty string in the disabled draft: the editor reports Setup required and prevents publishing/running. NEVER substitute an every-minute placeholder. For each weekday use selected minute/hour followed by * * 1-5 once setup is complete.",
       "  - input.timezone: string, optional IANA timezone (for example Europe/Rome). Always set it when the request names a timezone. The scheduler uses this zone including daylight-saving changes; omitted uses Jarvis's configured timezone.",
-      "  No triggerName needed. No declared output -- downstream steps should not reference {{trigger.<field>}}.",
+      "  - Day-of-month LW selects the last Monday-Friday date, ignoring holidays. Example: 0 17 LW * * at Europe/Rome starts exactly once each month at 17:00. Do not schedule 26-31 plus a date guard when the user requests one monthly run.",
+      "  No triggerName needed. Output: scheduledFor (ISO instant), firedAt (admission epoch ms), occurrenceKey (local scheduled minute), scheduledDate (YYYY-MM-DD), scheduledMonth (YYYY-MM), cronExpression and configured timezone. These values are persisted at admission and survive worker delays/restart. Use {{trigger.scheduledMonth}} in monthly notification idempotency keys, never $millis(), $now() or the worker clock. A monthly reminder can be schedule -> jarvis-notify with channels=[dashboard] and idempotencyKey='month-close:Europe/Rome:{{trigger.scheduledMonth}}'.",
+      "  manage_workflow validate_fixtures supports a saved built-in schedule -> dashboard notify graph with fixture_input.cases [{name,scheduledFor:ISO,executedAt:ISO,expectedMatch:boolean,expectedKey?:string,notificationOutcome?:success|failure|uncertain}]. Test matching and nonmatching dates, leap/non-leap February, weekend month ends and execution delayed into the next day/month. The fixture uses the real matcher, persisted payload shape and expressions, with mocked notification transport; it is component coverage, not worker/Authority/durable-delivery proof.",
     ].join("\n");
   }
   return [
@@ -1289,7 +1291,7 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
  */
 const BUILTIN_PRIMITIVE_LINES = [
   "Built-in trigger primitives (no piece registration needed):",
-  "- schedule: settings={pieceName:'schedule', input:{cron_expression:'0 8 * * *',timezone:'Europe/Rome'}} fires at 08:00 in Europe/Rome, including daylight-saving changes. Use the user's requested zone.",
+  "- schedule: settings={pieceName:'schedule', input:{cron_expression:'0 8 * * *',timezone:'Europe/Rome'}} fires at 08:00 in Europe/Rome, including daylight-saving changes. Use the user's requested zone. LW in day-of-month means last Monday-Friday date: 0 17 LW * * starts once monthly. Use persisted trigger.scheduledMonth for monthly keys, not the worker clock.",
   "- webhook:  settings={pieceName:'webhook',  input:{secret:'<optional HMAC secret>',submission_id_field:'<known ID path>',submission_email_field:'<known email path>'}} (submission mappings optional together; alternatively input.request_id_field for persistent ID-only admission, empty string until setup) fires on HTTP POST to /api/webhooks/<flow_id>.",
 ];
 

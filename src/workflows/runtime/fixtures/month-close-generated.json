@@ -1,0 +1,29 @@
+{
+  "name": "trigger",
+  "type": "PIECE_TRIGGER",
+  "displayName": "Last weekday of each month at 17:00 Rome",
+  "settings": {
+    "pieceName": "schedule",
+    "input": {
+      "cron_expression": "0 17 LW * *",
+      "timezone": "Europe/Rome"
+    }
+  },
+  "nextAction": {
+    "name": "step_3",
+    "type": "PIECE",
+    "displayName": "Remind me to close the month",
+    "settings": {
+      "pieceName": "@jarvispieces/piece-jarvis-notify",
+      "actionName": "notify",
+      "input": {
+        "message": "Reminder: close the month.",
+        "channels": [
+          "dashboard"
+        ],
+        "priority": "normal",
+        "idempotencyKey": "month-close:Europe/Rome:{{trigger.scheduledMonth}}"
+      }
+    }
+  }
+}

@@ -2,7 +2,8 @@
  * CronScheduler — lightweight cron expression parser and scheduler
  *
  * Standard cron (5-field, minute resolution):
- *   "minute hour dayOfMonth month dayOfWeek" with `*`, `/`, `-`, and CSVs
+ *   "minute hour dayOfMonth month dayOfWeek" with `*`, `/`, `-`, and CSVs.
+ *   Day-of-month also accepts `LW`: the last Monday-Friday date (no holidays).
  *
  * Sub-minute extension:
  *   "@every <duration>" where <duration> is `<n>(s|m|h)` -- e.g. `@every 10s`,
@@ -148,6 +149,7 @@ function parseExpression(expression: string): {
   minutes: number[];
   hours: number[];
   daysOfMonth: number[];
+  lastWeekday: boolean;
   months: number[];
   daysOfWeek: number[];
 } {
@@ -161,7 +163,8 @@ function parseExpression(expression: string): {
   const parsed = {
     minutes: parseField(minField!, 0, 59),
     hours: parseField(hourField!, 0, 23),
-    daysOfMonth: parseField(domField!, 1, 31),
+    daysOfMonth: domField === 'LW' ? parseField('*', 1, 31) : parseField(domField!, 1, 31),
+    lastWeekday: domField === 'LW',
     months: parseField(monthField!, 1, 12),
     // Expand ranges/steps before folding the Sunday alias, so 1-7 and
     // 1-7/2 retain their ordinary cron meaning.
@@ -276,9 +279,23 @@ function addWallMinute(wc: WallClock): WallClock {
 
 type ParsedCron = ReturnType<typeof parseExpression>;
 
+function matchesDay(parsed: ParsedCron, wc: WallClock): boolean {
+  if (!parsed.months.includes(wc.month) || !parsed.daysOfWeek.includes(wc.dow)) return false;
+  if (!parsed.lastWeekday) return parsed.daysOfMonth.includes(wc.dom);
+  // Compute using the calendar components, not the host timezone or +24h.
+  const end = new Date(Date.UTC(wc.year, wc.month, 0));
+  const dow = end.getUTCDay();
+  const last = end.getUTCDate() - (dow === 0 ? 2 : dow === 6 ? 1 : 0);
+  return wc.dom === last;
+}
+
 function matchesWall(parsed: ParsedCron, wc: WallClock): boolean {
-  return parsed.minutes.includes(wc.minute) && parsed.hours.includes(wc.hour) && parsed.daysOfMonth.includes(wc.dom)
-    && parsed.months.includes(wc.month) && parsed.daysOfWeek.includes(wc.dow);
+  return parsed.minutes.includes(wc.minute) && parsed.hours.includes(wc.hour) && matchesDay(parsed, wc);
+}
+
+/** Scheduled local minute, independent of when its worker eventually executes. */
+export function cronWallTimeKey(date: Date, zone: string | null = cronTimezone): string {
+  return wallKey(wallClockIn(date, zone));
 }
 
 /**
@@ -415,7 +432,8 @@ export class CronScheduler {
   static nextRun(expression: string, from: Date = new Date(), limitMs?: number, zone: string | null = cronTimezone): Date | null {
     if (zone !== null) return CronScheduler.nextRunInTimezone(expression, from, zone, limitMs);
     try {
-      const { minutes, hours, daysOfMonth, months, daysOfWeek } = parseExpression(expression);
+      const parsed = parseExpression(expression);
+      const { minutes, hours, months } = parsed;
 
       // Start from the next minute
       const start = new Date(from);
@@ -444,7 +462,7 @@ export class CronScheduler {
           continue;
         }
 
-        if (!daysOfMonth.includes(dom) || !daysOfWeek.includes(dow)) {
+        if (!matchesDay(parsed, { minute, hour, dom, month, dow, year: candidate.getFullYear() })) {
           // Advance to next day
           candidate.setDate(candidate.getDate() + 1);
           candidate.setHours(0, 0, 0, 0);
@@ -500,7 +518,8 @@ export class CronScheduler {
    */
   private static nextRunInTimezone(expression: string, from: Date, zone: string, limitMs?: number): Date | null {
     try {
-      const { minutes, hours, daysOfMonth, months, daysOfWeek } = parseExpression(expression);
+      const parsed = parseExpression(expression);
+      const { minutes, hours } = parsed;
 
       // Start from the next whole minute.
       let ts = Math.floor(from.getTime() / 60_000) * 60_000 + 60_000;
@@ -509,7 +528,7 @@ export class CronScheduler {
 
       while (ts < limit && ++guard < 600_000) {
         const wc = wallClock(new Date(ts), zone);
-        if (!months.includes(wc.month) || !daysOfMonth.includes(wc.dom) || !daysOfWeek.includes(wc.dow)) {
+        if (!matchesDay(parsed, wc)) {
           ts = startOfNextLocalDay(ts, zone);
           continue;
         }

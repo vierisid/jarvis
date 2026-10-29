@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 /**
  * Q-06: real trigger delivery through the real queue. Schedules fire through
  * the real CronScheduler in Jarvis's configured time zone (daylight-saving
@@ -846,4 +849,27 @@ test("email identities survive history pruning and both trigger delivery paths",
     expect(claim.fire.runId).toBe(original.id);
     expect(dispatched).toBe(false);
   } finally { await d.stop(); }
+});
+
+
+test('last weekday admission and original monthly payload survive a SQLite reopen and delayed worker',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'jarvis-monthly-'));
+  closeWorkflowDb();initWorkflowDb(join(dir,'workflow.db'));setCronTimezone('UTC');
+  let d:Awaited<ReturnType<typeof daemon>>|undefined;
+  try {
+    const {flowId}=schedule('0 17 LW * *',{timezone:'Europe/Rome'});
+    d=await daemon(at('2027-02-25T15:59:00Z'));
+    d.tick(flowId,'2027-02-25T16:00:10Z');expect(runsOf(flowId)).toHaveLength(0);
+    d.tick(flowId,'2027-02-26T16:00:10Z');expect(runsOf(flowId)).toHaveLength(1);
+    await d.stop();d=undefined;closeWorkflowDb();initWorkflowDb(join(dir,'workflow.db'));
+    // Restart while the occurrence is still eligible: no second run is queued.
+    d=await daemon(at('2027-02-26T16:01:00Z'));d.tick(flowId,'2027-02-26T16:01:10Z');
+    expect(runsOf(flowId)).toHaveLength(1);await d.stop();d=undefined;
+    closeWorkflowDb();initWorkflowDb(join(dir,'workflow.db'));
+    setSystemTime(new Date('2027-03-01T09:00:00Z'));
+    const job=claimNextJob<{payload:Record<string,unknown>}>();
+    expect(job?.payload.payload).toMatchObject({scheduledFor:'2027-02-26T16:00:00.000Z',firedAt:at('2027-02-26T16:00:10Z'),
+      occurrenceKey:'2027-02-26T17:00',scheduledDate:'2027-02-26',scheduledMonth:'2027-02',timezone:'Europe/Rome'});
+    expect(claimNextJob()).toBeNull();
+  }finally{await d?.stop();closeWorkflowDb();rmSync(dir,{recursive:true,force:true});}
 });

@@ -410,6 +410,10 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           if (!draft) throw new Error("No saved draft to validate");
           const validation=compileWorkflow(draft.trigger,{pieces:deps.pieceRegistry,phase:'composition'});
           if (!validation.ready) throw new Error('Saved draft has structural errors; fix them before fixture validation');
+          if (draft.trigger.settings?.pieceName === 'schedule') {
+            const {validateScheduleFixtures}=await import('../../workflows/runtime/schedule-fixtures');
+            return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,...await validateScheduleFixtures(draft.trigger,params.fixture_input)},params),'local synthetic schedule fixture results');
+          }
           if (draft.trigger.nextAction?.settings?.pieceName === '@activepieces/piece-json') {
             const {validateJsonMappingFixtures}=await import('../../workflows/runtime/json-mapping-fixtures');
             return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,...await validateJsonMappingFixtures(draft.trigger,params.fixture_input)},params),'local synthetic JSON mapping fixture results');
