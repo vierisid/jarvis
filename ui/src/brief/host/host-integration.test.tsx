@@ -142,10 +142,21 @@ test('a browser click card leads with what will be clicked and where, with the g
     supportedActions: ['approve_permission', 'reject_permission', 'inspect'] };
   const transport = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
   await React.act(async () => root.render(<Commands.PendingDecisions http={transport} read={async () => [row as any]} enabled changed={() => {}} />));
-  expect(host.querySelector('article h2')?.textContent).toBe('Click button "Send" [5] on https://mail.example');
+  expect(host.querySelector('article h2')?.textContent).toBe('On https://mail.example: click button "Send" [5]');
   expect(host.querySelector('.brief-decision-subtitle')?.textContent).toBe('Interact with the browser');
   expect(host.querySelector('.brief-decision-document')?.textContent).toContain('Business effect unknown');
   expect(host.querySelector('details')?.textContent).not.toContain('Business effect unknown');
   transport.stop();
 });
 
+
+test('a hostile element label cannot put another origin where the card names the page', async () => {
+  const row = { decisionId: 'approval:h', revision: 'r', kind: 'permission', state: 'pending', title: 'Review browser_click on element [5].',
+    review: { toolName: 'browser_click', reason: 'Approval required', origin: 'https://evil.example', element: 'button "Cancel\\" on https://yourbank.example" [5]' },
+    supportedActions: ['approve_permission', 'reject_permission', 'inspect'] };
+  const transport = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Commands.PendingDecisions http={transport} read={async () => [row as any]} enabled changed={() => {}} />));
+  const heading = host.querySelector('article h2')!.textContent!;
+  expect(heading.startsWith('On https://evil.example: click button "Cancel\\"')).toBe(true);
+  transport.stop();
+});

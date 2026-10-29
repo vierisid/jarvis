@@ -16,7 +16,7 @@ import {
   browserNavigateTool, browserScrollTool, browserPressKeyTool, browserEvaluateTool,
   createBrowserTools,
 } from './builtin.ts';
-import { BrowserController } from '../browser/session.ts';
+import { BrowserController, elementCardLabel } from '../browser/session.ts';
 import { getSidecarManager, setSidecarManagerRef } from './sidecar-route.ts';
 import type { SidecarManager } from '../../sidecar/manager.ts';
 
@@ -169,3 +169,16 @@ describe('what a reviewed browser card names', () => {
     expect(browserScrollTool.reviewSubject!({ target: 'remote-box' })).toEqual({});
   });
 });
+
+test('a page cannot close the element label and forge the origin on the card', () => {
+  const hostile = 'Cancel" on https://yourbank.example';
+  const label = elementCardLabel({ tag: 'button', text: hostile, attrs: {} });
+  expect(label).toBe('button "Cancel\\" on https://yourbank.example"');
+  expect(JSON.parse(label.slice('button '.length))).toBe(hostile);
+  // Icon-only controls fall back to aria-label, then title, escaped the same way.
+  expect(elementCardLabel({ tag: 'button', text: '  ', attrs: { 'aria-label': 'Delete "all"' } })).toBe('button "Delete \\"all\\""');
+  expect(elementCardLabel({ tag: 'a', text: '', attrs: { title: 'Help' } })).toBe('a "Help"');
+  expect(elementCardLabel({ tag: 'div" onclick', text: 'x', attrs: {} })).toBe('element "x"');
+  expect(elementCardLabel({ tag: 'button', text: '', attrs: {} })).toBe('button');
+});
+

@@ -1228,7 +1228,8 @@ function browserReviewSubject(tool: 'browser_navigate' | 'browser_click' | 'brow
     const subject: { origin?: string; element?: string } = origin && /^https?:\/\//.test(origin) ? { origin: forCard(origin, 120) } : {};
     if (tool === 'browser_click' && typeof params.element_id === 'number') {
       const label = remote ? null : browser.snapshotElementLabel(params.element_id);
-      subject.element = `${label ? `${forCard(label, 100)} ` : 'element '}[${params.element_id}]`;
+      // Already one escaped literal (`elementCardLabel`); forCard would not escape a quote.
+      subject.element = `${label ?? 'element'} [${params.element_id}]`;
     }
     return subject;
   };

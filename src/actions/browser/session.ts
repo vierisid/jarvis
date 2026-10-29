@@ -16,6 +16,22 @@ import { parseKeyCombo, SUPPORTED_KEYS_HINT } from './keys.ts';
 import { checkNavigationUrl, isDrivableUrl, isLocalContentUrl, knownDevtoolsPorts, registerDevtoolsPort } from './url-policy.ts';
 import { BrowserRequestGuard } from './browser-request-guard.ts';
 import { checkUploadPath, pageOrigin, uploadTargetRefusal } from './upload-policy.ts';
+import { escapedLiteralForCard } from '../../util/card-text.ts';
+
+/**
+ * An element as an approval card names it: its tag, then its visible text
+ * (or, for an icon-only control, its aria-label or title) as ONE escaped
+ * literal. The text is the page's own, so it is escaped rather than trimmed of
+ * quotes: an inner `"` cannot close the literal and forge the rest of the
+ * card ("Cancel\" on https://bank"). The tag is the browser's tagName; anything
+ * that is not a plain tag name is shown as `element`.
+ */
+export function elementCardLabel(el: { tag?: unknown; text?: unknown; attrs?: Record<string, unknown> | null }): string {
+  const tag = typeof el.tag === 'string' && /^[a-z][a-z0-9-]{0,31}$/i.test(el.tag) ? el.tag.toLowerCase() : 'element';
+  const plain = (value: unknown) => typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+  const text = plain(el.text) || plain(el.attrs?.['aria-label']) || plain(el.attrs?.title);
+  return text ? `${tag} ${escapedLiteralForCard(text.length > 80 ? `${text.slice(0, 77)}...` : text)}` : tag;
+}
 
 export type PageElement = {
   id: number;
@@ -1355,8 +1371,7 @@ export class BrowserController {
 
     for (const el of data.elements) {
       this.elementCoords.set(el.id, { x: el.x, y: el.y });
-      const text = String(el.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
-      this.elementLabels.set(el.id, text ? `${el.tag} "${text}"` : String(el.tag));
+      this.elementLabels.set(el.id, elementCardLabel(el));
       // Which frame the element came from, from the marker the snapshot script
       // already sets. Not forgeable by the page: `iframe` is not in the
       // script's attribute allowlist, and the marker is written after that loop

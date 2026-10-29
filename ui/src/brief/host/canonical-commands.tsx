@@ -20,13 +20,15 @@ const labels: Record<DecisionAction, string> = { accept_intent: 'Accept next ste
 export function browserCardTitle(r: Pick<QueuedDecision, 'review'>): { heading: string; kind: string } | null {
   const review = r.review;
   if (!review?.toolName.startsWith('browser_')) return null;
-  const on = review.origin ? ` on ${review.origin}` : '';
+  // The browser-reported origin goes FIRST: the element label is page text,
+  // so nothing it says can sit where the origin is read.
+  const on = (action: string) => review.origin ? `On ${review.origin}: ${action}` : action.charAt(0).toUpperCase() + action.slice(1);
   switch (review.toolName) {
-    case 'browser_click': return { heading: `Click ${review.element ?? 'an element'}${on}`, kind: 'Interact with the browser' };
-    case 'browser_scroll': return { heading: `Scroll the page${on}`, kind: 'Scroll the browser page' };
+    case 'browser_click': return { heading: on(`click ${review.element ?? 'an element'}`), kind: 'Interact with the browser' };
+    case 'browser_scroll': return { heading: on('scroll the page'), kind: 'Scroll the browser page' };
     case 'browser_navigate': return { heading: review.origin ? `Open ${review.origin}` : 'Open a browser page', kind: 'Open a browser page' };
-    case 'browser_snapshot': return { heading: `Read the page${on}`, kind: 'Read the browser page' };
-    case 'browser_screenshot': return { heading: `View the page${on}`, kind: 'View the browser' };
+    case 'browser_snapshot': return { heading: on('read the page'), kind: 'Read the browser page' };
+    case 'browser_screenshot': return { heading: on('view the page'), kind: 'View the browser' };
     default: return null;
   }
 }

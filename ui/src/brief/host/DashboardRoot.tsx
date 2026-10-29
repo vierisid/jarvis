@@ -17,8 +17,7 @@ import { useBilling } from '../../v2/billing/useBilling';
 import type { BriefRoute, BriefShellPort } from '../contracts';
 import { useNotificationCenter } from '../../hooks/useNotificationCenter';
 import { AttentionRoutes } from '../navigation/AttentionRoutes';
-import { dashboardAttentionItems, dashboardToastNotice } from '../navigation/notifications';
-import { isBriefCapabilityEnabled } from '../../../../src/brief/capabilities';
+import { dashboardAttentionSnapshot, dashboardToastNotice } from '../navigation/notifications';
 import { ViewHost } from '../../onboarding-next/host/ViewHost';
 import { createSession, type Session } from '../../onboarding-next/host/session';
 import { createTransport } from '../../onboarding-next/host/transport';
@@ -163,7 +162,7 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
     if (owner.roomNavRequest && !owner.roomActionRequests.some(request => request.ts === owner.roomNavRequest?.ts))
       void host.navigation.intent(owner.roomNavRequest.key, false);
   }, [owner.roomNavRequest?.ts]);
-  const attention = <><AttentionRoutes snapshot={owner.isConnected ? { status: 'ready', items: dashboardAttentionItems(notices.items, isBriefCapabilityEnabled(host.capabilities(), 'decisions')) } : { status: 'unavailable' }}
+  const attention = <><AttentionRoutes snapshot={dashboardAttentionSnapshot(owner.isConnected, notices.items, host.capabilities())}
     navigation={host.navigation} roomAvailable={host.available} markRead={identity => notices.markRead(identity.id)} />
     <section aria-label="Voice confirmations">{owner.clarifiers.map(item => <ClarifierCard key={item.id} {...item}
       onConfirm={() => void resolveAttention('clarifier', item.id, 'confirm')} onCancel={() => void resolveAttention('clarifier', item.id, 'cancel')} />)}

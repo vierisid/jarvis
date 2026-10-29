@@ -509,7 +509,8 @@ export class WorkflowEffectBoundary {
             toolName: input.toolName, toolArguments: record.arguments, actionCategory: decision.actionCategory,
             urgency: decision.actionCategory === 'make_payment' ? 'urgent' : 'normal', reason: decision.reason,
             // `stepName` here is a label too: the context is read back only for
-            // `target`, `confirm` and `intent`, and nothing matches on it.
+            // `target`, `confirm`, `intent` and `reviewSubject` (the Brief card
+            // shows it, display only), and nothing matches on it.
             context: canonicalJson({ effectId: id, runId: record.runId, versionId: record.versionId,
               stepName: stepLabel, executionPath: record.executionPath, target: record.target,
               // Mandatory review has to be visible in the context, not only in
