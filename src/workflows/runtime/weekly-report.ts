@@ -19,8 +19,8 @@ export function reportSetup(v:Obj):ReportSetup {
     hubspotPortalId:required(v.hubspotPortalId,'HubSpot portal ID',/^\d+$/),dealDateProperty:required(v.dealDateProperty,'deal date property',/^[a-zA-Z][a-zA-Z0-9_]*$/),dealStageIds:[...new Set(stages.map(s=>required(s,'deal stage',/^\w+$/)))],
     googleEmail:required(v.googleEmail,'Google account email',/^[^\s@]+@[^\s@]+\.[^\s@]+$/).toLowerCase(),folderId:required(v.folderId,'destination folder ID',/^[a-zA-Z0-9_-]+$/),timezone:v.timezone} as ReportSetup;
 }
-function parts(t:number){return Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Rome',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(t).map(p=>[p.type,p.value]));}
-function midnight(civil:number):number {
+export function parts(t:number){return Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Rome',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(t).map(p=>[p.type,p.value]));}
+export function midnight(civil:number):number {
   let t=civil;
   for(let i=0;i<4;i++){const p=parts(t),shown=Date.UTC(+p.year!,+p.month!-1,+p.day!,+p.hour!,+p.minute!,+p.second!);if(shown===civil)return t;t+=civil-shown;}
   throw Error('Cannot resolve Rome midnight');
@@ -46,7 +46,7 @@ export function comparison(current:bigint,prior:bigint){
   const bps=(current-prior)*10000n/prior;
   return {delta,percentage:formatAmount(bps*10000n),label:'Percentage rounded toward zero to two decimals'};
 }
-function currency(v:unknown):string {if(typeof v!=='string'||! /^[a-zA-Z]{3}$/.test(v))throw Error('Missing currency');return v.toUpperCase();}
+export function currency(v:unknown):string {if(typeof v!=='string'||! /^[a-zA-Z]{3}$/.test(v))throw Error('Missing currency');return v.toUpperCase();}
 function stripeAmount(v:unknown,c:string):bigint {
   if(!Number.isSafeInteger(v))throw Error('Invalid Stripe minor-unit integer');
   // Stripe charge accounting units differ from ISO for ISK and UGX. Never infer an FX conversion.
@@ -55,8 +55,8 @@ function stripeAmount(v:unknown,c:string):bigint {
   if(!(Intl.supportedValuesOf('currency') as string[]).includes(c))throw Error('Unknown currency exponent');
   const exponent=zero.has(c)?0:three.has(c)?3:2;return BigInt(v as number)*10n**BigInt(6-exponent);
 }
-function add(t:Dataset['totals'],c:string,amount:bigint){const old=t[c]??{count:0,amount:'0'};t[c]={count:old.count+1,amount:formatAmount(decimal(old.amount)+amount)};}
-async function pages(request:ReportRequest,provider:'stripe'|'hubspot',path:string,coverage:Coverage):Promise<Obj[]> {
+export function add(t:Dataset['totals'],c:string,amount:bigint){const old=t[c]??{count:0,amount:'0'};t[c]={count:old.count+1,amount:formatAmount(decimal(old.amount)+amount)};}
+export async function pages(request:ReportRequest,provider:'stripe'|'hubspot',path:string,coverage:Coverage):Promise<Obj[]> {
   const rows=new Map<string,Obj>(),cursors=new Set<string>(),previousUnique=coverage.unique;let cursor:string|undefined;
   for(let page=0;page<200;page++){
     const data=await request(provider,path+(cursor?'&'+query({[provider==='stripe'?'starting_after':'after']:cursor}):''));coverage.pages++;
@@ -73,7 +73,7 @@ async function pages(request:ReportRequest,provider:'stripe'|'hubspot',path:stri
   }
   throw Error('Page limit reached; partial totals discarded');
 }
-function unavailable(d:Dataset,e:unknown){d.coverage.status='Unavailable';d.coverage.reason=errText(e);d.coverage.terminal=false;d.totals={};}
+export function unavailable(d:Dataset,e:unknown){d.coverage.status='Unavailable';d.coverage.reason=errText(e);d.coverage.terminal=false;d.totals={};}
 export async function collectWeeklyReport(s:ReportSetup,request:ReportRequest,now:number,checkpoint:()=>void=()=>{}){
   const weeks=reportWeeks(now),datasets:Dataset[]=[];
   const wrap=async(source:string,week:typeof weeks[number],url:string,fn:(d:Dataset)=>Promise<void>)=>{

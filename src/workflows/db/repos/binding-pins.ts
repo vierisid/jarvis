@@ -1,6 +1,7 @@
 import { MEETING_ACCOUNTS } from '../../runtime/meeting-briefs';
 import { REFUND_PIECE, REFUND_ACTION } from '../../runtime/refund';
 import { IMPORT_ACCOUNTS, IMPORT_PIECE, IMPORT_ACTION } from '../../runtime/contact-import';
+import { QUARTERLY_ACTION, QUARTERLY_ACCOUNTS } from '../../runtime/quarterly-report';
 import { REPORT_ACCOUNTS, REPORT_PIECE, REPORT_ACTION } from '../../runtime/weekly-report';
 import { BATCH_ACCOUNTS, BATCH_PIECE, BATCH_ACTION } from '../../runtime/lead-batch';
 import { ONBOARDING_ACCOUNTS, ONBOARDING_PIECE, ONBOARDING_ACTION } from '../../runtime/customer-onboarding';
@@ -127,8 +128,8 @@ export function nodeConnectionReferences(node: FlowTriggerNode): Array<[external
       if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
     }
   }
-  if (node.settings?.pieceName === REPORT_PIECE && node.settings?.actionName === REPORT_ACTION) {
-    for (const field of Object.keys(REPORT_ACCOUNTS)) {
+  if (node.settings?.pieceName === REPORT_PIECE && [REPORT_ACTION, QUARTERLY_ACTION].includes(node.settings?.actionName ?? '')) {
+    for (const field of Object.keys(node.settings?.actionName === QUARTERLY_ACTION ? QUARTERLY_ACCOUNTS : REPORT_ACCOUNTS)) {
       const id = node.settings?.input?.[field];
       if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
     }

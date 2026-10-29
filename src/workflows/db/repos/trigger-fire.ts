@@ -296,9 +296,11 @@ export function fireLabel(fire: TriggerFire, runStatus: string | null, now = Dat
   return runStatus.toLowerCase();
 }
 
-/** Prune ordinary history. Keep accepted form and email identities for the lifetime of the workflow. */
+/** Keep active schedules' occurrence evidence until their queued/paused work has finished. */
 export function pruneFires(now = Date.now()): number {
-  return db().run(`DELETE FROM workflow_trigger_fire WHERE observed_at < ? AND (NOT ((source = 'webhook' AND dedupe_key LIKE 'submission:v1:%') OR (source IN ('event', 'poll') AND (dedupe_key LIKE 'event:email:%' OR dedupe_key LIKE 'attachment:v1:%'))) OR dedupe_key IS NULL OR NOT EXISTS (SELECT 1 FROM flow WHERE flow.id = workflow_trigger_fire.flow_id))`, [now - FIRE_RETENTION_MS]).changes;
+  return db().run(`DELETE FROM workflow_trigger_fire WHERE observed_at < ?
+    AND NOT (source = 'schedule' AND EXISTS (SELECT 1 FROM flow_run r WHERE r.id = workflow_trigger_fire.run_id AND r.status IN ('QUEUED','RUNNING','PAUSED')))
+    AND (NOT ((source = 'webhook' AND dedupe_key LIKE 'submission:v1:%') OR (source IN ('event', 'poll') AND (dedupe_key LIKE 'event:email:%' OR dedupe_key LIKE 'attachment:v1:%'))) OR dedupe_key IS NULL OR NOT EXISTS (SELECT 1 FROM flow WHERE flow.id = workflow_trigger_fire.flow_id))`, [now - FIRE_RETENTION_MS]).changes;
 }
 
 export interface ScheduleWatch { flowId: string; expression: string; watchedSince: number }
