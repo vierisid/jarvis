@@ -312,6 +312,8 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     // means the connector's documented default (all labels / root folder).
     if (input?.label === null && root && pieceName === '@activepieces/piece-gmail' && settings.triggerName === 'new_attachment')
       needsSetup(node, 'settings.input.label', 'Select the Gmail label before processing attachments');
+    if (pieceName === '@activepieces/piece-hubspot' && settings.actionName === 'create-or-update-contact' && input?.objectProperties === null)
+      needsSetup(node, 'settings.input.objectProperties', 'Select HubSpot contact property mappings, including the intended qualification/review field');
     if (pieceName === '@activepieces/piece-google-drive') {
       const folder = settings.actionName === 'upload_gdrive_file' ? 'parentFolder' : settings.actionName === 'drive_upload_file' ? 'parent_folder_id' : null;
       if (folder && input?.[folder] === null) needsSetup(node, `settings.input.${folder}`, 'Select the destination Drive folder');

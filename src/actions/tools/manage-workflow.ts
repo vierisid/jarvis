@@ -1,3 +1,6 @@
+import { workflowSafeguards } from '../../workflows/runtime/workflow-safeguards';
+import { decideRunRecovery, getRunRecovery } from '../../workflows/runtime/recovery';
+import { randomUUID } from 'node:crypto';
 /**
  * Manage Workflow Tool — chat-driven workflow CRUD + run management.
  *
@@ -267,7 +270,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       action: {
         type: "string",
         description: "What to do.",
-        enum: ["compose", "continue_setup", "create", "list", "get", "run", "enable", "disable", "publish", "delete", "list_runs", "get_run"],
+        enum: ["compose", "continue_setup", "create", "list", "get", "run", "enable", "disable", "publish", "delete", "list_runs", "get_run", "resolve_effect"],
         required: true,
       },
       flow: {
@@ -293,6 +296,12 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
         description: "get_run: ID from run/list_runs.",
         required: false,
       },
+      // resolve_effect: the system prompt's tool guide (roles/tool-guide.ts)
+      // explains these, and a blocked run's error names the effect, so the
+      // schema stays short (#504 budget).
+      effect_id: { type: "string", description: "resolve_effect: wfe_ ID", required: false },
+      resolution: { type: "string", enum: ["mark_done", "release"], description: "resolve_effect: happened or not", required: false },
+      note: { type: "string", description: "resolve_effect: what the user checked", required: false },
       description: {
         type: "string",
         description:
@@ -411,6 +420,12 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
         case "delete":
           return { actionCategory: "delete_data", confirm: "above_level",
             intent: `Permanently delete workflow: ${forCard(params.flow)}` };
+        case "resolve_effect":
+          // A person's decision about an outside write the runtime cannot
+          // confirm: it reopens (release) or settles (mark_done) a fence that
+          // stops duplicates, so the model never takes it on its own.
+          return { actionCategory: "write_data", confirm: "always",
+            intent: `${params.resolution === "mark_done" ? "Mark done (it happened)" : params.resolution === "release" ? "Release (it did not happen)" : "Resolve"} the uncertain write ${forCard(params.effect_id)} of workflow run ${forCard(params.run_id)}` };
         default:
           // list / get / list_runs / get_run are reads; compose / create /
           // enable / disable / publish are writes the floor already covers.
@@ -518,6 +533,11 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           return framedForModel(
             actGetRun(project, requireString(params, "run_id")),
             "a workflow run's captured step output",
+          );
+        case "resolve_effect":
+          return framedForModel(
+            await actResolveEffect(project, params),
+            "a workflow recovery receipt",
           );
         case "continue_setup":
           return framedForModel(
@@ -1079,6 +1099,7 @@ function workflowDocumentPage(flow: FlowRow, params: Record<string, unknown>): R
     ...validationSummary(flow.id, version.id),
     structure: compileWorkflow(version.trigger, { pieces: workflowReadinessServices()?.pieces, phase: 'composition' }),
     readiness: versionReadiness(flow.id, version.id),
+    runtimeSafeguards: workflowSafeguards(version.trigger),
   };
   const text = JSON.stringify(document);
   const hash = createHash('sha256').update(flow.id + version.id + params.view + text).digest('hex');
@@ -1547,7 +1568,23 @@ function actGetRun(project: string, runId: string): Record<string, unknown> {
   // Through the run's FLOW's project, as the HTTP route does (#729).
   const run = getFlowRunInProject(project, runId);
   if (!run) throw new Error(`run not found: ${runId}`);
-  return summarizeRun(run, true);
+  const recovery = getRunRecovery(run.id);
+  return { ...summarizeRun(run, true), ...(recovery ? { recovery } : {}) };
+}
+
+/** The same audited recovery decision as the dashboard's, made after the
+ * person approved this call's card (see authorityGate). */
+async function actResolveEffect(project: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const runId = requireString(params, "run_id");
+  const run = getFlowRunInProject(project, runId);
+  if (!run) throw new Error(`run not found: ${runId}`);
+  const resolution = params.resolution;
+  if (resolution !== "mark_done" && resolution !== "release") throw new Error("resolve_effect: resolution must be mark_done or release");
+  const revision = getRunRecovery(run.id)?.revision;
+  if (!revision) throw new Error("resolve_effect: only a finished, incomplete run can be resolved");
+  const receipt = await decideRunRecovery(run.id, { requestId: "tool_" + randomUUID().replace(/-/g, ""), revision, action: resolution,
+    effectId: requireString(params, "effect_id"), ...(typeof params.note === "string" && params.note.trim() ? { note: params.note } : {}) }, { via: "manage_workflow" });
+  return { receipt };
 }
 
 function summarizeRun(run: FlowRun, includeSteps = false): Record<string, unknown> {

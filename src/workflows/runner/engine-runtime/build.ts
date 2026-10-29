@@ -294,6 +294,7 @@ export const PATCHED_VENDOR_SOURCES = [
   // either without registering them here would leave a cached engine running
   // the old table -- a stale bundle that silently governs the wrong actions.
   '../../runtime/piece-effects.ts',
+  '../../runtime/hubspot-contact.ts',
   '../../runtime/piece-effect-guard.ts',
   '../../runtime/managed-mailchimp.ts',
   '../../runtime/managed-asana.ts',
