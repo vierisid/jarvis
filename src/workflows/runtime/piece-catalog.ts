@@ -313,7 +313,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "13"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Dropbox action output contracts
+export const CATALOG_SCHEMA_VERSION = "14"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -797,12 +797,10 @@ export interface RawPieceMetadata {
    * CUSTOM_AUTH variants; we read it loosely here and project only the
    * fields the editor needs (`type`, `displayName`, `description`).
    */
-  auth?: {
-    type?: string;
-    displayName?: string;
-    description?: string;
-  } | null;
+  auth?: RawPieceAuth | RawPieceAuth[] | null;
 }
+
+interface RawPieceAuth { type?: string; displayName?: string; description?: string }
 
 export interface RawActionOrTrigger {
   requireAuth?: boolean;
@@ -859,13 +857,17 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
   // The piece's auth.type comes from upstream's PropertyType -- map it
   // to our AppConnectionType vocabulary so the editor + connection
   // listing share one name space.
-  if (m.auth && typeof m.auth === "object" && typeof m.auth.type === "string") {
-    const projected = projectAuthType(m.auth.type);
+  // Newer community pieces (including Slack 0.23.1) declare several auth
+  // methods. The picker lists accounts across methods; use the first supported
+  // method for its setup label instead of hiding authentication entirely.
+  const auth = Array.isArray(m.auth) ? m.auth.find(a => a && typeof a.type === 'string' && projectAuthType(a.type)) : m.auth;
+  if (auth && typeof auth === "object" && typeof auth.type === "string") {
+    const projected = projectAuthType(auth.type);
     if (projected) {
       out.auth = {
         type: projected,
-        ...(typeof m.auth.displayName === "string" ? { displayName: m.auth.displayName } : {}),
-        ...(typeof m.auth.description === "string" ? { description: m.auth.description } : {}),
+        ...(typeof auth.displayName === "string" ? { displayName: auth.displayName } : {}),
+        ...(typeof auth.description === "string" ? { description: auth.description } : {}),
       };
     }
   }
@@ -960,6 +962,18 @@ export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
     const card = {id:'cccccccccccccccccccccccc',name:'Example task',desc:'',idBoard:board.id,idList:list.id,closed:false,url:'https://trello.com/c/abcd1234'};
     for (const [name,sample] of Object.entries({list_boards:{boards:[board],count:1},list_lists:{lists:[list],count:1},get_card:card,create_card:card,move_card:card})) {
       const action=entry.actions[name];if(action && action.outputSample===undefined)action.outputSample=sample;
+    }
+  }
+  if (entry.name === '@activepieces/piece-slack') {
+    const channel = {id: 'C0123456789', name: 'jarvis-sandbox', is_member: true, is_archived: false};
+    const find = entry.actions.slack_find_channel, info = entry.actions.slack_get_channel_info;
+    if (find && find.outputSample === undefined) find.outputSample = channel;
+    if (info && info.outputSample === undefined) info.outputSample = {ok: true, channel};
+    for (const name of ['send_channel_message', 'slack_post_message']) {
+      const action = entry.actions[name];
+      if (action && action.outputSample === undefined) action.outputSample = {
+        ok: true, channel: 'C0123456789', ts: '1710304378.475129', message: {text: 'Example message', ts: '1710304378.475129'},
+      };
     }
   }
   if (entry.name !== JARVIS_ON_EVENT_TRIGGER.piece) return;
