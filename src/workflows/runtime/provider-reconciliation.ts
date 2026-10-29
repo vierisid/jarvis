@@ -43,13 +43,10 @@ export function pieceCompletionReceipt(effect: WorkflowEffect): { provider: 'gma
   const result = effect.provenance.piece === '@activepieces/piece-gmail' ? object(raw?.data) ?? raw : raw;
   if (!result) return null;
   if (effect.provenance.piece === '@activepieces/piece-gmail') {
-    // A label change returns the labeled message, usually an incoming one: it is
-    // no send receipt, and the SENT readback below cannot confirm it.
-    if (!isGmailTrackedSend(effect.provenance.action)) return null;
     if (effect.arguments.draft === true || typeof result.id !== 'string' || !/^[a-f0-9]{1,128}$/i.test(result.id)) return null;
     return { provider: 'gmail', id: result.id };
   }
-  // Only Gmail sends and Slack have a readback; other tracked writes (Gmail labels, HTTP, Sheets) have none.
+  // Only Gmail and Slack have completion evidence; other tracked writes (including HTTP and Sheets) have none.
   if (effect.provenance.piece !== '@activepieces/piece-slack') return null;
   if (result.ok !== true || typeof result.ts !== 'string' || !/^\d{1,20}\.\d{1,10}$/.test(result.ts)
     || typeof result.channel !== 'string' || !/^[A-Z0-9]{1,80}$/.test(result.channel)) return null;
@@ -58,6 +55,10 @@ export function pieceCompletionReceipt(effect: WorkflowEffect): { provider: 'gma
 
 export function providerReceipt(effect: WorkflowEffect): ReturnType<typeof pieceCompletionReceipt> {
   const receipt = pieceCompletionReceipt(effect);
+  // A Gmail label change completes with the labeled message, usually an incoming
+  // one: proof the change finished, but no send receipt, so the SENT readback
+  // cannot confirm it. It has no lookup.
+  if (receipt?.provider === 'gmail' && !isGmailTrackedSend(effect.provenance.action)) return null;
   if (receipt?.provider === 'slack' && (effect.arguments.file || effect.arguments.threadTs || effect.arguments.sendAsUser === true
     || effect.provenance.action === 'send_channel_message' && effect.arguments.sendAsBot !== true)) return null;
   return receipt;

@@ -17,7 +17,7 @@ import { claimNextJob, enqueue, queueStats } from "../../db/repos/job-queue";
 import { configureWorkflowReadiness, WorkflowReadinessError } from "../../db/repos/flow-readiness";
 import { pinFlowBindings } from "../../db/repos/binding-pins";
 import { deleteConnection, upsertConnection } from "../../db/repos/app-connection";
-import { claimFire, listFlowFires, pageFlowFires, pruneFires, recordFire, repeatOfRefusal, FIRE_RETENTION_MS } from "../../db/repos/trigger-fire";
+import { claimFire, listFlowFires, pageFlowFires, pruneFires, recordFire, releaseRefusedEmailRun, repeatOfRefusal, FIRE_RETENTION_MS } from "../../db/repos/trigger-fire";
 import { PieceCatalog } from "../../runtime/piece-catalog";
 import { WorkflowEventBus } from "../../runtime/event-bus";
 import { WorkflowEventBuffer } from "../../runtime/event-buffer";
@@ -1173,4 +1173,19 @@ describe("Gmail message admission", () => {
     expect(listFlowFires(flowId)[0]?.detail).toMatchObject({ truncated: true, signature: "sig-long", deliveryKey: "event:email:long-1" });
     expect(repeatOfRefusal(flowId, "sig-long")?.repeats).toBe(1);
   });
+
+  for (const evidence of ["none", "a step", "an effect row"] as const)
+    test(`a run refused at dispatch readiness with ${evidence} ${evidence === "none" ? "gives up" : "keeps"} its email key`, async () => {
+      const { flowId } = emailFlow();
+      const d = await daemon(Date.now());
+      try {
+        d.bus.publish("observer.email_received", { id: "guard-1" });
+        const live = runsOf(flowId)[0]!;
+        updateRun(live.id, { status: "FAILED", finishTime: Date.now(),
+          ...(evidence === "a step" ? { steps: { classify: { status: "SUCCEEDED", output: {} } }, stepsCount: 1 } : {}) });
+        if (evidence === "an effect row") getWorkflowDb().run("INSERT INTO workflow_effect (id, run_id, status, record) VALUES ('effect-guard', ?, 'unknown', '{}')", [live.id]);
+        releaseRefusedEmailRun(live.id);
+        expect(keys(flowId)).toEqual(evidence === "none" ? [] : ["event:email:guard-1"]);
+      } finally { await d.stop(); }
+    });
 });

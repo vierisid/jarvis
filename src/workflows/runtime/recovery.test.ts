@@ -324,7 +324,8 @@ test('a Gmail label change is tracked but has no send readback: its labeled mess
   await f.invoke(); expect(f.sends()).toBe(1);
   await expect(f.invoke()).resolves.toEqual(f.result); expect(f.sends()).toBe(1);
   f.fail(); let lookups = 0;
-  expect(getRunRecovery(f.run.id)!.effects[0]!.lookupSupported).toBe(false);
+  // Its saved result still proves the change completed.
+  expect(getRunRecovery(f.run.id)).toMatchObject({ state: 'recoverable', effects: [{ status: 'completed', lookupSupported: false }] });
   const r = await decideRunRecovery(f.run.id, f.choice('reconcile'), { authority: f.authority,
     fetchImpl: (async () => { lookups++; return Response.json({ id: 'a123', labelIds: ['SENT', 'INBOX'] }); }) as any });
   expect(r.evidence.outcome).toBe('unsupported'); expect(lookups).toBe(0);
