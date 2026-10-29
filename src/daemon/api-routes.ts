@@ -2489,6 +2489,15 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         catch(error) { return json({error:error instanceof Error ? error.message : 'Could not load Asana projects.'}, error instanceof AsanaOptionsInputError ? 400 : 502); }
       },
     },
+    '/api/integrations/figma': {
+      GET: async () => {
+        const {figmaStatus, readFigmaConnection} = await import('../integrations/figma-connection');
+        const {figmaNeedsReconnect} = await import('../integrations/figma-refresh');
+        const status = figmaStatus(ctx.config), c = readFigmaConnection(ctx.config.daemon.data_dir);
+        const reconnect = !!c && figmaNeedsReconnect(ctx.config, c);
+        return json({...status, connected: status.connected && !reconnect, reconnect});
+      },
+    },
     '/api/integrations/asana': {
       GET: async () => {
         const {asanaStatus, readAsanaConnection} = await import('../integrations/asana-connection');

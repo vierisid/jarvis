@@ -168,3 +168,11 @@ test('managed Asana shows its stored grant and routes setup to its own hosted in
   sources.asana = () => ({configured:false,connected:false,account:null});
   expect(provider.read().rows.some(r=>r.sourceId==='native:asana')).toBe(false);
 });
+
+test('managed Figma shows its stored grant and routes setup to its own hosted integration', () => {
+  sources.figma = () => ({configured:true, connected:true, account:{id:'8',label:'owner@example.test'}});
+  expect(row('native:figma')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'8',setupActionId:'setup:figma'});
+  expect(provider.read().setup.find(s => s.id === 'setup:figma')?.target).toEqual({kind:'hosted_integration',provider:'figma'});
+  sources.figma = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:figma')).toBe(false);
+});
