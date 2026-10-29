@@ -1,3 +1,4 @@
+import { submissionConfig } from './form-submission';
 import {managedMailchimpIssue} from './managed-mailchimp';
 import {managedGitHubIssue} from './managed-github';
 import {managedTrelloIssue} from './managed-trello';
@@ -30,6 +31,8 @@ export interface WorkflowReadiness {
   ready: boolean;
   issues: ReadinessIssue[];
   runtimeChecks: RuntimeCheck[];
+  /** Missing user configuration accepted only during disabled-draft composition. */
+  setupIssues?: ReadinessIssue[];
 }
 export interface ReadinessContext {
   pieces?: PieceLookup;
@@ -85,7 +88,7 @@ function staticInput(value: unknown): { known: boolean; value: unknown } {
  * Siblings remain isolated, and loop-body outputs stay within their loop.
  */
 export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}): WorkflowReadiness {
-  const issues: ReadinessIssue[] = [], runtimeChecks: RuntimeCheck[] = [];
+  const issues: ReadinessIssue[] = [], runtimeChecks: RuntimeCheck[] = [], setupIssues: ReadinessIssue[] = [];
   const seen = new Set<unknown>(), names = new Set<string>();
   let count = 0, inputVisits = 0, schemaVisits = 0, runtimeCount = 0, previewFound = false;
   const issue = (node: string, path: string, code: string, message: string, allowedPieces?: readonly string[]) => {
@@ -93,6 +96,11 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
   };
   // The settings of the piece step whose input is being read, for connection checks.
   let stepSettings: Record<string, unknown> = {};
+  const needsSetup = (node: string, path: string, message: string) => {
+    if (context.phase === 'composition') {
+      if (setupIssues.length < 100) setupIssues.push({ node, path, code: 'SETUP_REQUIRED', message });
+    } else issue(node, path, 'SETUP_REQUIRED', message);
+  };
   const runtime = (node: string, path: string, guard: RuntimeCheck['guard'], message: string) => {
     if (++runtimeCount === 501) issue(node, path, 'LIMIT', 'Graph exceeds 500 runtime checks');
     if (runtimeChecks.length < 500) runtimeChecks.push({ node, path, code: 'RUNTIME_CHECK', guard, message });
@@ -306,7 +314,15 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
           try { validateCronTimezone(stated); }
           catch (error) { issue(node, 'settings.input.timezone', 'TIMEZONE', (error as Error).message); }
         }
-      } else if (!(root && pieceName === 'webhook')) {
+      } else if (root && pieceName === 'webhook') {
+        if (object(input) && ('submission_id_field' in input || 'submission_email_field' in input)) {
+          for (const [key, label] of [['submission_id_field', 'Submission ID field'], ['submission_email_field', 'Email field']]) {
+            if (emptyInput(input[key!])) needsSetup(node, `settings.input.${key}`, `${label}: choose the field path in your form payload`);
+          }
+        }
+        try { submissionConfig(input, true); }
+        catch (error) { issue(node, 'settings.input.submission', 'INPUT', (error as Error).message); }
+      } else {
         const piece = context.pieces?.get(pieceName);
         if (!piece) issue(node, 'settings.pieceName', 'PIECE', context.pieces ? `Unknown piece "${pieceName}"` : 'Piece catalog is unavailable; readiness cannot be verified');
         else {
@@ -318,6 +334,10 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
             for (const field of sub.inputSchema?.fields ?? []) {
               const value = input[field.name];
               const path = `settings.input.${field.name}`;
+              if (field.required && emptyInput(value)) {
+                needsSetup(node, path, `${field.label || field.name}: fill in this required input`);
+                continue;
+              }
               if (field.sourceType === 'DYNAMIC' && (field.required || !emptyInput(value))) {
                 propertyObject(settings.propertySettings?.[field.name]?.schema, value, node, path);
               }
@@ -344,9 +364,10 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
                 }
               }
             }
-            if (piece.auth && sub.requireAuth !== false && context.phase !== 'composition') {
+            if (piece.auth && sub.requireAuth !== false) {
               if (typeof input.auth !== 'string' || !/^\{\{connections(?:\.[\w:-]+|\['[^']+'\])\}\}$/.test(input.auth)) {
-                issue(node, 'settings.input.auth', 'CONNECTION_BINDING', 'Select a saved connection for this authenticated action');
+                if (context.phase === 'composition') needsSetup(node, 'settings.input.auth', 'Select a saved connection for this authenticated action');
+                else issue(node, 'settings.input.auth', 'CONNECTION_BINDING', 'Select a saved connection for this authenticated action');
               }
             }
           }
@@ -405,5 +426,5 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
   }
   visit(trigger, new Set(), true);
   if (context.preview && !previewFound) issue(context.preview.stepName, 'graph', 'PREVIEW_STEP', 'The selected preview step does not exist');
-  return { ready: issues.length === 0, issues, runtimeChecks };
+  return { ready: issues.length === 0, issues, runtimeChecks, ...(setupIssues.length ? { setupIssues } : {}) };
 }

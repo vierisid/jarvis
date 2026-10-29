@@ -11,6 +11,20 @@ export interface WorkflowCompositionRecord extends CompositionCandidate {
   updated: number;
 }
 
+/**
+ * Journals this process opened and has not finished. A COMPOSING row that is
+ * not here was left by a crash or an earlier process: its outcome is unknown
+ * and nothing will ever finish it. Membership alone decides liveness: every
+ * phase of a live attempt is bounded (composition by its budget, each
+ * preinstall by its timeout), so a live journal always reaches finish().
+ */
+const LIVE_JOURNALS = new Set<string>();
+
+/** True while a COMPOSING record is still being worked on by this process. */
+export function compositionInProgress(record: Pick<WorkflowCompositionRecord, "id" | "state">): boolean {
+  return record.state === "COMPOSING" && LIVE_JOURNALS.has(record.id);
+}
+
 /** Commit the immutable specification before any provider call. The journal
  * captures its DB handle: a late completion must never write to a replacement
  * database after shutdown. Each checkpoint is a short autocommit, with no
@@ -22,6 +36,7 @@ export function createCompositionJournal(specification: WorkflowJobSpecification
   const now = Date.now();
   db.run(`INSERT INTO workflow_composition (id, project_id, specification, state, created, updated)
     VALUES (?, ?, ?, 'COMPOSING', ?, ?)`, [id, projectId, JSON.stringify(specification), now, now]);
+  LIVE_JOURNALS.add(id);
   return {
     id,
     recordInstalledPiece(piece: NonNullable<NonNullable<WorkflowJobSpecification['provenance']>['installedPieces']>[number]) {
@@ -36,6 +51,7 @@ export function createCompositionJournal(specification: WorkflowJobSpecification
         candidate.previousGraph === null ? null : JSON.stringify(candidate.previousGraph), JSON.stringify(candidate.errors), Date.now(), id]);
     },
     finish(state: "VALIDATED" | "FAILED", errors: string[]) {
+      LIVE_JOURNALS.delete(id);
       db.run(`UPDATE workflow_composition SET state = ?, errors = ?, updated = ? WHERE id = ? AND state = 'COMPOSING'`,
         [state, JSON.stringify(errors), Date.now(), id]);
     },
@@ -52,4 +68,21 @@ export function getWorkflowComposition(id: string, projectId: string = DEFAULT_I
     previousResponse: row.previous_response, previousGraph: row.previous_graph === null ? null : JSON.parse(row.previous_graph),
     errors: JSON.parse(row.errors), created: row.created, updated: row.updated,
   } : null;
+}
+
+
+/** Latest attempt in a setup chain, scoped to the caller's project. */
+export function latestSetupComposition(rootId: string, projectId: string): WorkflowCompositionRecord | null {
+  const row = getWorkflowDb().query<{ id: string }, [string, string]>(
+    `SELECT id FROM workflow_composition WHERE project_id = ?
+      AND json_extract(specification, '$.context.workflowSetup.rootCompositionId') = ?
+      ORDER BY created DESC, rowid DESC LIMIT 1`).get(projectId, rootId);
+  return getWorkflowComposition(row?.id ?? rootId, projectId);
+}
+
+/** Repeated setup completion returns its existing draft, never creates another. */
+export function composedFlowId(compositionId: string, projectId: string): string | null {
+  return getWorkflowDb().query<{ id: string }, [string, string]>(
+    `SELECT id FROM flow WHERE project_id = ? AND json_valid(metadata)
+      AND json_extract(metadata, '$.compositionRecordId') = ? LIMIT 1`).get(projectId, compositionId)?.id ?? null;
 }

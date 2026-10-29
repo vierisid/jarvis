@@ -81,6 +81,29 @@ const SEND_INPUT = {
   body: 'The invoice is attached.', sender_name: 'Jarvis',
 };
 
+test('Sheets append blocks uncertain replay and returns a persisted completion without another dispatch', async () => {
+  for (const action of ['insert_row', 'sheets_append_values', 'sheets_add_row']) {
+    const f = fixture('@activepieces/piece-google-sheets', action);
+    const input = { spreadsheet_id: 'fixture-sheet', worksheet_title: 'Submissions', values: [['one', 'me@example.test']] };
+    const authorized = await f.authorize(input) as { effectId: string };
+    expect(authorized).toMatchObject({ dispatch: 'authorized' });
+    await expect(f.authorize(input)).rejects.toThrow(/uncertain|replay is blocked/);
+    f.backends.pieceReceipt!(f.context, authorized.effectId, { updatedRange: 'Submissions!A2:B2', updatedRows: 1 });
+    expect(await f.authorize(input)).toMatchObject({ dispatch: 'completed', result: { updatedRows: 1 } });
+    await expect(f.authorize({ ...input, values: [['changed']] })).rejects.toThrow(/changed/);
+    expect(listWorkflowEffects(f.run.id)).toHaveLength(1);
+  }
+});
+
+test('other Sheets actions stay ungoverned community steps: audited and badged', async () => {
+  const sheets = '@activepieces/piece-google-sheets';
+  expect(isCommunityPiece(sheets)).toBe(true);
+  const f = fixture(COMMUNITY_PIECE, 'create_contact');
+  expect(await f.backends.pieceAuthorize!({ piece: sheets, action: 'clear_sheet', input: {} }, f.context)).toEqual({ governed: false });
+  expect((f.options.auditTrail as AuditTrail).query({ limit: 5 })).toEqual([
+    expect.objectContaining({ tool_name: `community piece ${sheets}/clear_sheet`, authority_decision: 'allowed' })]);
+});
+
 describe('governed piece adapters: the catalogue stays open', () => {
   test('a community piece is reported ungoverned and leaves no effect record', async () => {
     const f = fixture(COMMUNITY_PIECE, 'create_contact');

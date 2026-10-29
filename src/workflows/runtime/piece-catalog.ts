@@ -51,6 +51,8 @@ export const JARVIS_ON_EVENT_TRIGGER = {
 } as const;
 
 export interface PieceCatalogAction {
+  /** Author-declared guidance, not a runtime guarantee or authority grant. */
+  aiMetadata?: { description?: string; idempotent?: boolean };
   name: string;
   displayName: string;
   description: string;
@@ -313,7 +315,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "15"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts
+export const CATALOG_SCHEMA_VERSION = "16"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -803,6 +805,7 @@ export interface RawPieceMetadata {
 interface RawPieceAuth { type?: string; displayName?: string; description?: string }
 
 export interface RawActionOrTrigger {
+  aiMetadata?: { description?: unknown; idempotent?: unknown };
   requireAuth?: boolean;
   name?: string;
   displayName?: string;
@@ -1114,6 +1117,12 @@ function rawActionToCatalogAction(
     description: typeof raw.description === "string" ? raw.description : "",
   };
   if (typeof raw.requireAuth === 'boolean') out.requireAuth = raw.requireAuth;
+  if (raw.aiMetadata && typeof raw.aiMetadata === 'object') {
+    const metadata: NonNullable<PieceCatalogAction['aiMetadata']> = {};
+    if (typeof raw.aiMetadata.description === 'string') metadata.description = raw.aiMetadata.description.slice(0, 4000);
+    if (typeof raw.aiMetadata.idempotent === 'boolean') metadata.idempotent = raw.aiMetadata.idempotent;
+    if (Object.keys(metadata).length) out.aiMetadata = metadata;
+  }
   if (raw.props) {
     out.inputSchema = propsToInputSchema(raw.props);
   }

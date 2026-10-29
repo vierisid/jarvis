@@ -28,7 +28,7 @@ import { TOOL_ACTION_MAP } from '../../authority/tool-action-map';
 import { getCronTimezone } from '../../lib/cron-scheduler';
 import { VERIFIED_MANIFESTS } from '../../workflows/pieces-library/verified-manifests-generated';
 import { BOUNDED_TOOL_NAMES } from '../../workflows/runtime/effect-capabilities';
-import { ALL_PIECE_ADAPTERS, GOVERNED_PIECE_ADAPTERS, resolveGovernedPieceAction } from '../../workflows/runtime/piece-effects';
+import { ALL_PIECE_ADAPTERS, GOVERNED_PIECE_ADAPTERS, PARTIAL_PIECE_ADAPTERS, resolveGovernedPieceAction } from '../../workflows/runtime/piece-effects';
 import { PIECE_NOTIFY_CHANNELS } from '../../workflows/jarvis-pieces/types';
 import { walkFlowNodes } from '../../workflows/db/flow-graph';
 import { canonicalZone, chosenScheduleZone } from '../../workflows/runner/triggers/schedule-zone';
@@ -165,11 +165,15 @@ interface Kind {
 function pieceKind(pieceName: string, actionName: string | undefined): Kind | null {
   if (samePiece(pieceName, AGENT)) return { effect: 'spawn_agent', open: 'delegates to an agent, which chooses its own tools when it runs', agent: true };
   if (samePiece(pieceName, WORKFLOW)) return { effect: 'spawn_agent', open: 'starts another workflow, whose steps this check does not see' };
-  const adapter = ALL_PIECE_ADAPTERS.find(a => samePiece(pieceName, a.pieceName));
+  const ungoverned: Kind = { effect: null, open: `uses ${pieceName}${actionName ? ' ' + actionName : ''}, which Jarvis does not govern`, serviceOnly: true };
+  // A partial adapter (Google Sheets) governs only some actions: those are
+  // bounded as the runtime bounds them, the rest stay ungoverned.
+  const partial = PARTIAL_PIECE_ADAPTERS.find(a => samePiece(pieceName, a.pieceName));
+  const adapter = ALL_PIECE_ADAPTERS.find(a => samePiece(pieceName, a.pieceName)) ?? partial;
   if (adapter) {
-    if (!actionName) return null;
+    if (!actionName) return partial ? ungoverned : null;
     const governed = resolveGovernedPieceAction(adapter.pieceName, actionName);
-    if (!governed) return null;
+    if (!governed) return partial ? ungoverned : null;
     // An action decided by its input (an HTTP request's method, #961) is open
     // here: a contract names the step, not the value, so only the worst case bounds it.
     return OPEN_ACTIONS.has(actionName) || !governed.known || governed.byInput
@@ -177,7 +181,7 @@ function pieceKind(pieceName: string, actionName: string | undefined): Kind | nu
       : { effect: governed.category };
   }
   if (JARVIS_READS.some(p => samePiece(p, pieceName))) return { effect: 'read_data' };
-  return { effect: null, open: `uses ${pieceName}${actionName ? ' ' + actionName : ''}, which Jarvis does not govern`, serviceOnly: true };
+  return ungoverned;
 }
 function toolKind(toolName: string): Kind {
   const effect = Object.hasOwn(TOOL_ACTION_MAP, toolName) ? TOOL_ACTION_MAP[toolName]! : null;

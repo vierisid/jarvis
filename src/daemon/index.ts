@@ -5403,7 +5403,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             signal?.throwIfAborted();
             if (piecesManagedByHost(sharedRuntime.piecesDir)) throw new Error('This Library is managed by the host.');
             if (!composerLibrary.some(entry => entry.id === id)) throw new Error('Unknown Library entry.');
-            const result = await installPiece(id);
+            // The signal bounds the install (composePersistedFlow aborts it on
+            // timeout): it kills the bun install child, and a call still
+            // queued on the lock when it fires never starts.
+            const result = await installPiece(id, { signal });
+            // Finished anyway: the Library changed, so say so even if the
+            // composition that asked has stopped waiting.
             await onPieceLibraryChanged({ kind: 'installed', piece: result.piece });
           })
         : undefined;

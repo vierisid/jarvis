@@ -36,7 +36,7 @@ test('readiness preserves long node identities even when their prefix names anot
   } } };
   f.db.run('UPDATE flow_version SET trigger = ? WHERE id = ?', [JSON.stringify(graph), f.version.id]);
   const r = f.services.reader.read(f.owner, f.job); if (r.state !== 'saved') throw Error();
-  expect(r.missingBindings).toContainEqual(expect.objectContaining({ node: blocked, code: 'INPUT_TYPE' }));
+  expect(r.missingBindings).toContainEqual(expect.objectContaining({ node: blocked, code: 'SETUP_REQUIRED' }));
   expect(r.readiness.runtimeChecks.some(i => i.node === runtime)).toBe(true);
   expect(r.readiness.issues.some(i => i.node === prefix)).toBe(false);
   expect(r.nodeIds).toContain(blocked);

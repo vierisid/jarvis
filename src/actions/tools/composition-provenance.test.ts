@@ -20,6 +20,13 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
+  // w8-9: deferred setup, connector continuation and form processing; the composer never installs.
+  'w8-9': {
+    bare: '0e5ea5dffb6128bb806328d5cb23715f9a1ba256ca8ef3842d480baa71130901',
+    production: '9b78e90b24a95a83548b061a83a2d44e8e5aa8d91176ff3ffc9f5df066ab560e',
+    'hosted production': 'aa07ed478ff210e49b2b967b274ab21fdeb489d98c115454767f582b8d217de2',
+    'tool names only': 'dba35e1b068c4ecbb581c43b1eff267575cd35b392a9a631edbc60d2a3528aa6',
+  },
   // w8-8: a schedule names a time zone only when the job contract does; a bare time is Jarvis's zone.
   'w8-8': {
     bare: '0b7e8cc85a1f50a5411c050a7b2286a8236ad400367feed39f04f57c6ae56496',

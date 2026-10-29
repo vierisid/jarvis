@@ -91,6 +91,7 @@ export interface WorkflowEditorControls {
   saving: boolean;
   discard: () => void;
   arrange: () => void;
+  selectSetupStep: (name: string) => void;
   message: { tone: "ok" | "warn"; text: string } | null;
 }
 interface WorkflowEditorProps {
@@ -309,17 +310,8 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
   }, [editorUndo, editorCanUndo, workspace]);
 
   const onSave = async (): Promise<void> => {
-    if (editor.validationGaps.length > 0) {
-      const summary = editor.validationGaps
-        .slice(0, 6)
-        .map((g) => `  - ${g.stepDisplayName}: ${g.fieldLabel}`)
-        .join("\n");
-      const more = editor.validationGaps.length > 6 ? `\n  ...and ${editor.validationGaps.length - 6} more` : "";
-      const proceed = await confirmDialog(
-        `${editor.validationGaps.length} required field${editor.validationGaps.length === 1 ? "" : "s"} empty:\n\n${summary}${more}\n\nSave anyway? Runs will fail at the missing step.`,
-      );
-      if (!proceed) return;
-    }
+    // Saving partial setup is expected for disabled drafts. Server readiness
+    // still gates every run, publish and enable operation.
     const result = await editor.save();
     setActionMessage({ tone: result.ok ? "ok" : "warn", text: result.message });
     window.setTimeout(() => setActionMessage(null), 2500);
@@ -711,7 +703,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
   return (
     <CurrentFlowIdContext.Provider value={flowId}>
     <div ref={rootRef} className={`wf-editor${workspace ? " wf-editor--workspace" : ""}`} role={workspace ? "region" : "dialog"} aria-modal={workspace ? undefined : true} aria-label={workspace ? "Workflow editor" : undefined} aria-labelledby={workspace ? undefined : "wf-editor-title"}>
-      {renderHeader ? renderHeader({ editor, saving:workspaceSaving, save: async () => { if(saveLock.current)return; saveLock.current=true;setWorkspaceSaving(true);try {await onSave();} finally {saveLock.current=false;setWorkspaceSaving(false);} }, discard: onDiscard, message: actionMessage, arrange: () => { editor.clearStepPositions(); window.requestAnimationFrame(() => rfInstanceRef.current?.fitView({padding: 0.15, duration: 0})); } }) : (
+      {renderHeader ? renderHeader({ editor, selectSetupStep: name => { setSelectedStepName(name); setPopoverAnchor({ x: 0, y: 0 }); closeRunDetail(); }, saving:workspaceSaving, save: async () => { if(saveLock.current)return; saveLock.current=true;setWorkspaceSaving(true);try {await onSave();} finally {saveLock.current=false;setWorkspaceSaving(false);} }, discard: onDiscard, message: actionMessage, arrange: () => { editor.clearStepPositions(); window.requestAnimationFrame(() => rfInstanceRef.current?.fitView({padding: 0.15, duration: 0})); } }) : (
       <header className="wf-editor__header">
         <div className="wf-editor__title">
           {editor.version ? (
@@ -947,6 +939,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
 
       {selectedStep && (workspace || popoverAnchor) ? (
         <NodeSettingsPopover
+          key={workspace ? selectedStep.name : "popover"}
           anchor={popoverAnchor ?? { x: 0, y: 0 }}
           inline={workspace}
           open={!!popoverAnchor}
@@ -3414,7 +3407,14 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const clickUpCreate = piece?.name === "@activepieces/piece-clickup" && subName === "create_task";
   const standardFields = clickUpCreate && JSON.stringify(step.settings?.propertySettings?.custom_fields?.schema) === "{}"
     && JSON.stringify(step.settings?.input?.custom_fields) === "{}" && step.settings?.input?.check_required_custom_fields === true;
-  const schema = standardFields && rawSchema ? {...rawSchema, fields: rawSchema.fields.filter(f => !["custom_fields", "check_required_custom_fields"].includes(f.name))} : rawSchema;
+  const managedSchema = standardFields && rawSchema ? {...rawSchema, fields: rawSchema.fields.filter(f => !["custom_fields", "check_required_custom_fields"].includes(f.name))} : rawSchema;
+  const formInput = step.settings?.input ?? {};
+  const formWebhook = detectedTriggerKind === 'webhook' && ('submission_id_field' in formInput || 'submission_email_field' in formInput);
+  const schema = formWebhook ? { fields: [
+    { name: 'submission_id_field', label: 'Submission ID field', type: 'string' as const, required: true, description: 'The field path containing the unique submission ID, for example form.id.' },
+    { name: 'submission_email_field', label: 'Email field', type: 'string' as const, required: true, description: 'The field path containing the email address, for example form.email.' },
+    ...Object.keys(formInput).filter(key => !['submission_id_field', 'submission_email_field', 'secret'].includes(key)).map(key => ({ name: key, label: key, type: 'string' as const, required: false })),
+  ] } : managedSchema;
 
   const [newKey, setNewKey] = useState("");
   const [tab, setTab] = useState("Configure");
@@ -3540,10 +3540,14 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
               the sample-output editor below, so a section header would
               just be visual noise. */}
           {isTriggerStep && detectedTriggerKind === "webhook" ? (
-            <WebhookTriggerFields
-              secret={step.settings?.input?.["secret"]}
-              onSetSecret={(value) => (value ? onSetInput("secret", value) : onRemoveInputKey("secret"))}
-            />
+            <>
+              <WebhookTriggerFields
+                secret={step.settings?.input?.["secret"]}
+                onSetSecret={(value) => (value ? onSetInput("secret", value) : onRemoveInputKey("secret"))}
+              />
+              {formWebhook && schema ? <SchemaInputs schema={schema}
+                input={(step.settings?.input ?? {}) as Record<string, unknown>} onSetInput={onSetInput} /> : null}
+            </>
           ) : schema ? (
             <SchemaInputs
               schema={schema}
