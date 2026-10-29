@@ -1,6 +1,18 @@
 import { expect, test } from 'bun:test';
 import { BriefProgressProjector, MAX_TURN_ACTIVITIES } from './progress';
 import type { ExecutionActivity } from '../actions/progress-context';
+import { observeToolExecution, withExecutionProgress } from '../actions/progress-context';
+
+test('workflow operations keep useful static labels through the observer and reject unknown operation text', async () => {
+  const projector = new BriefProgressProjector(), rows: string[] = [];
+  await withExecutionProgress(event => { const row = projector.project(event); if (row) rows.push(row.summary); }, async () => {
+    await observeToolExecution('manage_workflow', async () => 'private result', 'get');
+    await observeToolExecution('manage_workflow', async () => null, 'validate_fixtures');
+    await observeToolExecution('manage_workflow', async () => null, 'SECRET operation');
+  });
+  expect(rows).toEqual(['Inspecting a saved workflow.', 'Workflow inspection returned.', 'Testing workflow fixtures.', 'Fixture validation returned.', 'Running a tool.', 'Tool returned.']);
+  expect(JSON.stringify(rows)).not.toContain('SECRET');
+});
 
 test('one stable row advances once, ignores duplicate/late starts, and never interpolates source text', () => {
   const projector = new BriefProgressProjector();

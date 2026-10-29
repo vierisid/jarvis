@@ -262,13 +262,19 @@ export class BriefChatTransport implements BriefProvider {
           ...(files.length ? { attachmentContent, untrustedSources: ['chat attachment'] } : {}),
           contextKey: `brief:${this.repository.workspaceId}:${turn.conversationId}` });
         let fullText = '';
+        let afterTool = false;
         let done = false;
         for await (const event of stream) {
           signal.throwIfAborted();
           if (event.type === 'text') {
-            fullText += event.text;
-            this.emit(this.repository.text(turn, event.text));
-          } else if (event.type === 'tool_call') progress('started');
+            if (!event.text) continue;
+            // A tool turn separates assistant paragraphs, not individual token chunks.
+            const separator = afterTool && fullText && !/\n\s*\n$/.test(fullText) && !/^\s*\n\s*\n/.test(event.text) ? '\n\n' : '';
+            const text = separator + event.text;
+            afterTool = false;
+            fullText += text;
+            this.emit(this.repository.text(turn, text));
+          } else if (event.type === 'tool_call') { afterTool = true; progress('started'); }
           else if (event.type === 'error') throw new Error('Model stream failed');
           else if (event.type === 'done') { done = true; break; }
         }

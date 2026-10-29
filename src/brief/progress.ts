@@ -1,5 +1,6 @@
 import type { ExecutionActivity } from '../actions/progress-context.ts';
 import type { BriefActivity, BriefEvidenceRef } from './contracts.ts';
+import { workflowProgressLabels, workflowProgressOperation } from './workflow-progress-labels';
 
 export const MAX_TURN_ACTIVITIES = 128;
 type Labels = readonly [started: string, completed: string, failed: string];
@@ -31,7 +32,9 @@ export class BriefProgressProjector {
     let entry = this.entries.get(key);
     if (!entry) {
       if (this.entries.size >= MAX_TURN_ACTIVITIES) return null;
-      const labels = event.kind === 'tool' && typeof event.toolName === 'string' && Object.hasOwn(tools, event.toolName) ? tools[event.toolName]! : generic[event.kind];
+      const operation = event.kind === 'tool' ? workflowProgressOperation(event.toolName ?? '', event.operation) : undefined;
+      const labels = operation ? workflowProgressLabels[operation]
+        : event.kind === 'tool' && typeof event.toolName === 'string' && Object.hasOwn(tools, event.toolName) ? tools[event.toolName]! : generic[event.kind];
       const refs: BriefEvidenceRef[] = [];
       for (const candidate of Array.isArray(event.refs) ? event.refs.slice(0, 4) : []) {
         if (!candidate || !['goal', 'fact', 'run'].includes(candidate.kind) || typeof candidate.id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(candidate.id)) continue;

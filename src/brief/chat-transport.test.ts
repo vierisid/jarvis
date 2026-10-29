@@ -58,6 +58,25 @@ function fixture(options: { concurrency?: number; tts?: TTSProvider; enabled?: b
   return { ...control, transport, conversations, frames, client, send, input, events };
 }
 
+test('tool turns separate paragraphs in streaming output and persisted history without splitting tokens', async () => {
+  const f = fixture(); const input = f.input('paragraphs'); const socket = f.client();
+  try {
+    await f.send(socket, 'brief_chat_send', input);
+    await until(() => f.inputs.has(input.turnId));
+    f.push(input.turnId, { type: 'text', text: 'I will check.' });
+    f.push(input.turnId, { type: 'tool_call', tool_call: { id: 'check', name: 'fixture', arguments: {} } });
+    f.push(input.turnId, { type: 'text', text: '' });
+    f.push(input.turnId, { type: 'text', text: 'Cre' });
+    f.push(input.turnId, { type: 'text', text: 'ated the draft.' });
+    f.push(input.turnId, done());
+    await f.transport.idle();
+    const content = f.transport.repository.conversations.messages(input.conversationId).items.at(-1)!.content;
+    expect(content).toBe('I will check.\n\nCreated the draft.');
+    const deltas = f.events(socket).filter(e => e.payload.kind === 'delta').map(e => (e.payload as { text: string }).text).join('');
+    expect(deltas).toBe(content);
+  } finally { f.transport.stop(); await f.transport.idle(); }
+});
+
 test('interleaved streams, tab switch and one cancel isolate text, progress, history and TTS', async () => {
   const spoken: string[] = [];
   const tts: TTSProvider = { async synthesize(text) { return Buffer.from(text); }, async *synthesizeStream(text) { spoken.push(text); yield Buffer.from(text); } };
