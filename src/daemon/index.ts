@@ -6,6 +6,7 @@ import { MIN_BUN_VERSION, versionAtLeast } from '../util/bun-minimum.ts';
 import { mailchimpStatus } from "../integrations/mailchimp-connection";
 import { githubStatus } from '../integrations/github-connection';
 import { trelloStatus } from "../integrations/trello-connection";
+import { webflowStatus } from '../integrations/webflow-connection';
 import { asanaStatus } from '../integrations/asana-connection';
 import { slackStatus } from "../integrations/slack-connection";
 import { clickUpStatus } from '../integrations/clickup-connection';
@@ -4764,6 +4765,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       github: () => githubStatus(jarvisConfig),
       trello: () => trelloStatus(jarvisConfig),
       asana: () => asanaStatus(jarvisConfig),
+      webflow: () => webflowStatus(jarvisConfig),
       slack: () => slackStatus(jarvisConfig),
       channels: () => {
         const status = channelService.getChannelStatus();
@@ -5011,6 +5013,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisMailchimpConnectionSource(jarvisConfig.daemon.data_dir));
       const { JarvisAsanaConnectionSource } = await import("../workflows/credentials/asana-source");
       credentialResolver.register(new JarvisAsanaConnectionSource(jarvisConfig));
+      const { JarvisWebflowConnectionSource } = await import("../workflows/credentials/webflow-source");
+      credentialResolver.register(new JarvisWebflowConnectionSource(jarvisConfig.daemon.data_dir));
       const { JarvisGitHubConnectionSource } = await import("../workflows/credentials/github-source");
       credentialResolver.register(new JarvisGitHubConnectionSource(jarvisConfig.daemon.data_dir));
       const { JarvisDropboxConnectionSource } = await import("../workflows/credentials/dropbox-source");

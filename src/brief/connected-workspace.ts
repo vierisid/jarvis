@@ -11,6 +11,7 @@ export interface ConnectedWorkspaceSources {
   trello?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   mailchimp?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   asana?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
+  webflow?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   slack?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   google?: () => { mode: 'self' | 'managed' | 'none' | 'unavailable'; authenticated: boolean; reconnect: boolean; canSetup: boolean };
   channels?: () => Partial<Record<'telegram' | 'discord', { enabled: boolean; connected: boolean; authentication?: 'verified' | 'rejected' | 'unknown' }>>;
@@ -159,6 +160,22 @@ export class ConnectedWorkspace {
             row.evidence = c.connected ? 'stored_grant' : 'none';
             if (c.configured) offer(row, {id: 'setup:asana', label: 'Asana',
               target: {kind: 'hosted_integration', provider: 'asana'}, verifies: {kind: 'native_service', serviceId: 'asana'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
+      if (this.sources.webflow) {
+        const row = base('native:webflow', 'native_service', 'webflow', 'Webflow');
+        try {
+          const c = this.sources.webflow();
+          if (c.configured || c.connected) {
+            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('Webflow: ' + c.account.label) : 'Webflow';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:webflow', label: 'Webflow',
+              target: {kind: 'hosted_integration', provider: 'webflow'}, verifies: {kind: 'native_service', serviceId: 'webflow'}});
             rows.push(row);
           }
         } catch { row.status = 'unavailable'; rows.push(row); }

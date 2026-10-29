@@ -43,7 +43,7 @@ import { PATCHED_VENDOR_SOURCES } from '../runner/engine-runtime/build';
  * engine's fetch-only send adapters, and hubspot-contact is the HubSpot
  * contact input validation the adapter table uses; checking them here
  * prevents a future dependency from silently escaping the bundle hash. */
-const BUNDLED_DAEMON_SOURCES = ['piece-effects.ts', 'piece-effect-guard.ts', 'decision-document.ts', 'hubspot-contact.ts', 'managed-github.ts', 'managed-trello.ts', 'managed-mailchimp.ts', 'managed-slack.ts', 'managed-dropbox.ts', 'managed-asana.ts'];
+const BUNDLED_DAEMON_SOURCES = ['piece-effects.ts', 'piece-effect-guard.ts', 'decision-document.ts', 'hubspot-contact.ts', 'managed-github.ts', 'managed-trello.ts', 'managed-mailchimp.ts', 'managed-slack.ts', 'managed-dropbox.ts', 'managed-asana.ts', 'managed-webflow.ts', 'managed-webflow-inputs.ts'];
 
 /**
  * A value import of ANOTHER registered source is fine, and is the one shape

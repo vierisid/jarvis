@@ -298,6 +298,8 @@ export const PATCHED_VENDOR_SOURCES = [
   '../../runtime/piece-effect-guard.ts',
   '../../runtime/managed-mailchimp.ts',
   '../../runtime/managed-asana.ts',
+  '../../runtime/managed-webflow.ts',
+  '../../runtime/managed-webflow-inputs.ts',
   '../../runtime/managed-github.ts',
   '../../runtime/managed-dropbox.ts',
   '../../runtime/managed-trello.ts',
