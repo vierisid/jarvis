@@ -1,3 +1,4 @@
+import type { ToolRegistry } from '../../actions/tools/registry';
 import { collectActionVerification } from '../../actions/action-verification';
 import type { ActionOutcome } from '../../actions/action-outcome';
 import { projectDocument } from './decision-document';
@@ -62,6 +63,10 @@ export interface EffectInvocation {
   documentReview?: boolean;
   /** A reviewed UI capability cannot be auto-allowed by category overrides. */
   confirmation?: { confirm: 'always'; intent: string };
+  /** Process-bound browser review; never reconstructed after restart. */
+  reviewRegistry?: ToolRegistry;
+  /** Display only: what a reviewed browser call acts on, for its card. Never matched on. */
+  reviewSubject?: { origin?: string; element?: string };
   prepare: () => { arguments: Record<string, unknown>; target: Record<string, unknown>; bindings?: Record<string, unknown> };
   validateTarget?: (args: Record<string, unknown>, target: Record<string, unknown>) => void;
   /**
@@ -504,14 +509,17 @@ export class WorkflowEffectBoundary {
             toolName: input.toolName, toolArguments: record.arguments, actionCategory: decision.actionCategory,
             urgency: decision.actionCategory === 'make_payment' ? 'urgent' : 'normal', reason: decision.reason,
             // `stepName` here is a label too: the context is read back only for
-            // `target`, `confirm` and `intent`, and nothing matches on it.
+            // `target`, `confirm`, `intent` and `reviewSubject` (the Brief card
+            // shows it, display only), and nothing matches on it.
             context: canonicalJson({ effectId: id, runId: record.runId, versionId: record.versionId,
               stepName: stepLabel, executionPath: record.executionPath, target: record.target,
               // Mandatory review has to be visible in the context, not only in
               // the decision: `approvalNeedsClick` reads it, so voice and
               // auto-approval cannot satisfy this card.
               ...(input.confirmation ? { confirm: input.confirmation.confirm } : {}),
-              ...(intent ? { intent } : {}) }), executionMode: 'workflow' });
+              ...(input.reviewSubject && Object.keys(input.reviewSubject).length ? { reviewSubject: input.reviewSubject } : {}),
+              ...(intent ? { intent } : {}) }), executionMode: 'workflow',
+            ...(input.reviewRegistry ? { toolRegistry: input.reviewRegistry } : {}) });
           record.approvalId = request.id;
           delete record.deferral;
           record.waitpointId = createWaitpoint({ flowRunId: record.runId, projectId: record.projectId,

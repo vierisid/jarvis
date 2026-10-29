@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { delegationId, saveDelegation, type DelegationCheckpoint } from '../db/repos/delegation';
+import { digest } from './effect-context';
+import { getFlowVersion } from '../db/repos/flow-version';
 import { closeWorkflowDb, initWorkflowDb } from '../db';
 import { createFlow } from '../db/repos/flow';
 import { createDraftVersion } from '../db/repos/flow-version';
@@ -174,4 +177,34 @@ describe('runFailure (Q-19)', () => {
     const failed = updateRun(run.id, { status: 'FAILED', failedStep: { name: 'notify', displayName: 'Tell me' } })!;
     expect(runFailure(failed)).toMatchObject({ effect: 'unknown', outcome: 'This step did nothing. Steps before it may already have run.' });
   });
+});
+
+
+test('delegated task failure is not hidden by successful spawn authorization', () => {
+  const { run, effect, fail } = setup();
+  effect('notify', { route: 'agent', status: 'succeeded', result: { dispatch: 'authorized' } });
+  saveDelegation({ id: delegationId(run.id, 'notify', []), runId: run.id, stepName: 'notify', executionPath: [],
+    versionDigest: digest(getFlowVersion(run.flowVersionId)!.trigger), roleId: 'test', goal: 'PRIVATE_GOAL',
+    messages: [], toolsUsed: [], tokensUsed: { input: 0, output: 0 }, sequence: 1, iteration: 0, taint: [], failedToolCalls: [],
+    status: 'completed', updatedAt: Date.now(), result: { status: 'completed', finalMessage: 'PRIVATE_ANSWER', toolCalls: [],
+      outcome: { status: 'error', code: 'REQUIRED_TOOL_NOT_COMPLETED', effect: 'may_have_occurred', message: 'Required tools did not finish' } } });
+  const result = runFailure(fail({ name: 'notify', displayName: 'Read Calendar' }))!;
+  expect(result.code).toBe('REQUIRED_TOOL_NOT_COMPLETED');
+  expect(result.headline).toContain('could not complete the tools required');
+  expect(JSON.stringify(result)).not.toContain('PRIVATE_');
+  expect(result.next).toContainEqual(expect.objectContaining({ step: 'review_authority' }));
+  expect(result.effect).toBe('unknown');
+});
+
+test('a delegate step inside a loop reads the failing iteration checkpoint', () => {
+  const { run, effect, fail } = setup();
+  effect('notify', { route: 'agent', status: 'succeeded', result: { dispatch: 'authorized' } });
+  const at = (iteration: number, outcome: NonNullable<DelegationCheckpoint['result']>['outcome'], updatedAt: number): DelegationCheckpoint => ({
+    id: delegationId(run.id, 'notify', [['loop', iteration]]), runId: run.id, stepName: 'notify', executionPath: [['loop', iteration]],
+    versionDigest: digest(getFlowVersion(run.flowVersionId)!.trigger), roleId: 'test', goal: 'g', messages: [], toolsUsed: [],
+    tokensUsed: { input: 0, output: 0 }, sequence: 1, iteration: 0, taint: [], failedToolCalls: [], status: 'completed', updatedAt,
+    result: { status: 'completed', finalMessage: '', toolCalls: [], ...(outcome ? { outcome } : {}) } });
+  saveDelegation(at(0, { status: 'succeeded' }, 1000));
+  saveDelegation(at(1, { status: 'blocked', code: 'BROWSER_SIGN_IN_REQUIRED', effect: 'may_have_occurred', message: 'Sign in' }, 2000));
+  expect(runFailure(fail({ name: 'notify', displayName: 'Read Calendar' }))!.code).toBe('BROWSER_SIGN_IN_REQUIRED');
 });

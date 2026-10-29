@@ -286,3 +286,16 @@ export function rawUiGate(toolName: string, params: Record<string, unknown>): To
     confirm: 'always',
   };
 }
+
+/** Workflow browser navigation can pause only with a live review guard.
+ * No durable screen identity is invented: restart/stale guards refuse dispatch.
+ */
+export function workflowBrowserReview(tool: { captureApprovalGuard?: unknown } | undefined, name: string): boolean {
+  return ['browser_navigate', 'browser_click', 'browser_scroll'].includes(name)
+    && typeof tool?.captureApprovalGuard === 'function';
+}
+
+/** Bounded browser reads can request permission above the agent's autonomous level. */
+export function workflowBrowserRead(name: string): boolean {
+  return name === 'browser_snapshot' || name === 'browser_screenshot';
+}

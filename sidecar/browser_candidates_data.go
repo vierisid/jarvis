@@ -114,3 +114,23 @@ func pickDarwinBrowser(exists func(string) bool, lookPath func(string) (string, 
 	}
 	return ""
 }
+
+// Prefer an installed browser the user already has running to an unrelated OS
+// URL-handler default. This selects the app only, never attaches to its profile.
+func pickRunningBrowser(candidates []string, running map[string]bool, defaultExe string, exists func(string) bool) string {
+	for _, p := range candidates {
+		name := strings.ToLower(filepath.Base(p))
+		if running[name] && exists(p) {
+			return p
+		}
+	}
+	if defaultExe != "" && exists(defaultExe) {
+		return defaultExe
+	}
+	for _, p := range candidates {
+		if exists(p) {
+			return p
+		}
+	}
+	return ""
+}

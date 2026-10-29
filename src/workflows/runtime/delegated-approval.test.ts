@@ -1,3 +1,4 @@
+import { currentReviewedExecution } from '../../actions/tools/reviewed-call-scope';
 import { stopUnfinishedRunsForKill } from './emergency-hold';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -62,11 +63,14 @@ type Turn = { call: string; args?: Record<string, unknown> } | 'finish';
 const WRITE_THEN_FINISH: Turn[] = [{ call: 'write_file', args: ARGS }, 'finish'];
 
 /** The run and version live in the database; everything in memory can be rebuilt on the same ids. */
-function createRun(input: Record<string, unknown> = {}, loop = false) {
+function createRun(input: Record<string, unknown> = {}, loop = false, notify = false) {
   const flow = createFlow({});
   const delegate: FlowTriggerNode = { name: 'delegate', type: 'PIECE', displayName: 'delegate', settings: { pieceName: PIECE,
     pieceVersion: '0.0.1', actionName: 'delegate', input: { goal: 'Save the note', maxIterations: 4, role: ROLE.id, ...input } } };
-  const version = createDraftVersion({ flowId: flow.id, displayName: 'Delegated routine', trigger: { name: 'trigger', type: 'EMPTY',
+  if (notify) delegate.nextAction = { name: 'notify', type: 'PIECE', displayName: 'Send agenda', settings: {
+    pieceName: '@jarvispieces/piece-jarvis-notify', pieceVersion: '0.0.1', actionName: 'notify',
+    input: { message: '{{delegate.finalMessage}}', channels: ['dashboard'], priority: 'normal' } } };
+  const version = createDraftVersion({ flowId: flow.id, displayName: 'Delegated routine' , trigger: { name: 'trigger', type: 'EMPTY',
     nextAction: loop ? { name: 'loop', type: 'LOOP_ON_ITEMS', settings: { items: '{{trigger.items}}' }, firstLoopAction: delegate } : delegate } });
   const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' });
   return { flow, version, run };
@@ -76,10 +80,12 @@ const delegationId = (runId: string, path: Array<[string, number]> = []) => 'wfd
 type Options = {
   /** What the model asks for, turn by turn; it finishes once every scripted call has a result. */
   script?: Turn[];
+  finalReport?: string;
   authority?: Partial<{ default_level: number; governed_categories: string[]; overrides: unknown[] }>;
   childLevel?: number;
   /** Behaviour of the synthetic tools. */
   writeThrows?: boolean;
+  browserGuard?: () => boolean;
   writeUnknown?: boolean;
   /** The write pauses the system and hits the boundary's fence while it runs. */
   writeInterrupts?: boolean;
@@ -104,6 +110,7 @@ type Options = {
 function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
   const script = opts.script ?? WRITE_THEN_FINISH;
   let effects = 0, llmCalls = 0;
+  const notifications: string[] = [];
   const writes: Array<Record<string, unknown>> = [];
   const registry = new ToolRegistry();
   registry.register({ name: 'write_file', category: 'file-ops', description: 'Synthetic write', parameters: {},
@@ -143,6 +150,15 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
     authorityGate: () => ({ actionCategory: 'control_app', intent: 'tap a widget' }),
     captureApprovalGuard: () => () => true,
     execute: async () => { effects++; return 'tapped'; } });
+  for (const name of ['browser_navigate', 'browser_click', 'browser_scroll']) registry.register({ name, category: 'browser', description: 'Synthetic browser navigation', parameters: {},
+    reviewSubject: () => ({ origin: 'https://calendar.example' }),
+    captureApprovalGuard: () => Object.assign(() => opts.browserGuard?.() ?? true, { reviewed: { remoteBrowserSnapshot: { sidecarId: 'test-computer', elemGen: 'reviewed-generation' } } }),
+    execute: async () => {
+      expect(currentReviewedExecution()?.remoteBrowserSnapshot).toEqual({ sidecarId: 'test-computer', elemGen: 'reviewed-generation' });
+      effects++; return 'Calendar page';
+    } });
+  registry.register({ name: 'browser_snapshot', category: 'browser', description: 'Synthetic bounded browser read', parameters: {},
+    execute: async () => { effects++; return 'Calendar snapshot'; } });
   const authority = new AuthorityEngine({ default_level: opts.authority?.default_level ?? 10,
     governed_categories: (opts.authority?.governed_categories ?? ['write_data']) as any, overrides: (opts.authority?.overrides ?? []) as any,
     context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' });
@@ -168,11 +184,11 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
       // The next scripted turn is the one after as many answered tool calls as the log holds.
       const answered = messages.filter(m => m.role === 'tool').length;
       const turn = script[answered];
-      if (!turn || turn === 'finish') return { content: 'Saved the note', finish_reason: 'end_turn', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 } };
+      if (!turn || turn === 'finish') return { content: opts.finalReport ?? (script.some(t => t !== 'finish' && t.call.startsWith('browser_')) ? JSON.stringify({ taskStatus: 'completed', finalMessage: 'Saved the note' }) : 'Saved the note'), finish_reason: 'end_turn', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 } };
       return { content: '', finish_reason: 'tool_use', tool_calls: [{ id: `call-${answered + 1}`, name: turn.call, arguments: turn.args ?? {} }],
         usage: { input_tokens: 1, output_tokens: 1 } };
     } } as any,
-    channelService: {} as any, wsService: {} as any });
+    channelService: {} as any, wsService: { broadcastNotificationToDashboard: (text: string) => { notifications.push(text); return 1; } } as any });
   const context = (path: Array<[string, number]> = []) => ({ runId: ids.run.id, projectId: DEFAULT_IDS.project, stepName: 'delegate', executionPath: path });
   const delegate = (extra: Record<string, unknown> = {}, path: Array<[string, number]> = []) =>
     services.agentDelegate!({ goal: 'Save the note', maxIterations: 4, role: ROLE.id, ...extra }, context(path));
@@ -181,7 +197,7 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
       headers: { 'X-Jarvis-Step-Name': 'delegate', 'X-Jarvis-Execution-Path': '[]' },
       body: JSON.stringify({ goal: 'Save the note', maxIterations: 4, role: ROLE.id, ...body }) }),
     claims: { runId: ids.run.id, projectId: DEFAULT_IDS.project, sandboxId: 'test' } as any, params: {} });
-  return { services, approvals, emergency, authority, auditTrail, delegate, route, effects: () => effects, llmCalls: () => llmCalls,
+  return { notifications, services, approvals, emergency, authority, auditTrail, delegate, route, effects: () => effects, llmCalls: () => llmCalls,
     writes };
 }
 
@@ -1309,5 +1325,132 @@ test.skipIf(engineSkip)('parent failure retires a required child approval on the
     expect(listWaitpointsByFlowRun(parent.run.id, false)).toHaveLength(0);
     expect(listWaitpointsByFlowRun(child.childRunId, false)).toHaveLength(0);
     expect(f.effects()).toBe(0);
+  } finally { await f.stop(); }
+}, 60_000);
+
+
+describe('workflow browser review', () => {
+  const options = { authority: { governed_categories: [] }, script: [{ call: 'browser_navigate', args: { url: 'https://calendar.example/', target: 'test-computer' } }, 'finish'] as Turn[] };
+  test('requires a dashboard click even with permissive Authority and dispatches only once', async () => {
+    const ids = createRun(); const f = backends(ids, options);
+    const parked = await f.delegate({ requiredTools: ['browser_navigate'] });
+    expect(parked.status).toBe('approval_required'); expect(f.effects()).toBe(0);
+    const card = f.approvals.getRequest(parked.approval!.approvalId)!;
+    expect(JSON.parse(card.context)).toMatchObject({ confirm: 'always', reviewSubject: { origin: 'https://calendar.example' } });
+    expect(JSON.parse(card.tool_arguments)).toEqual(options.script[0] && (options.script[0] as any).args);
+    f.approvals.approve(card.id, 'dashboard');
+    const done = await f.delegate({ requiredTools: ['browser_navigate'] });
+    expect(done.outcome).toEqual({ status: 'succeeded' }); expect(f.effects()).toBe(1);
+    await f.delegate({ requiredTools: ['browser_navigate'] }); expect(f.effects()).toBe(1);
+  });
+  test('stale browser guard blocks approved execution', async () => {
+    let current = true; const ids = createRun();
+    const f = backends(ids, { ...options, browserGuard: () => current });
+    const parked = await f.delegate(); f.approvals.approve(parked.approval!.approvalId, 'dashboard'); current = false;
+    await f.delegate(); expect(f.effects()).toBe(0);
+    expect(listWorkflowEffects(ids.run.id).at(-1)?.outcome).toMatchObject({ code: 'WORKFLOW_BROWSER_REVIEW_STALE', effect: 'not_started' });
+  });
+  test('restart cannot reconstruct an approved live browser binding', async () => {
+    const ids = createRun(); const f = backends(ids, options); const parked = await f.delegate();
+    f.approvals.approve(parked.approval!.approvalId, 'dashboard');
+    const resumed = backends(ids, options); await resumed.delegate(); expect(resumed.effects()).toBe(0);
+    expect(listWorkflowEffects(ids.run.id).at(-1)?.outcome).toMatchObject({ code: 'WORKFLOW_BROWSER_REVIEW_STALE' });
+  });
+  test('denying browser review never navigates', async () => {
+    const ids = createRun(); const f = backends(ids, options); const parked = await f.delegate();
+    f.approvals.deny(parked.approval!.approvalId, 'dashboard'); await f.delegate(); expect(f.effects()).toBe(0);
+  });
+});
+
+
+test.skipIf(engineSkip)('browser delegation pauses the real engine, then resumes once after dashboard approval', async () => {
+  const ids = createRun({ requiredTools: 'browser_navigate,browser_snapshot', requireSuccess: true });
+  updateRun(ids.run.id, { status: 'QUEUED' });
+  const f = await boot(ids, { childLevel: 3, authority: { default_level: 3, governed_categories: [] },
+    script: [{ call: 'browser_navigate', args: { url: 'https://calendar.example/', target: 'test-computer' } }, { call: 'browser_snapshot', args: { target: 'test-computer' } }, 'finish'] });
+  try {
+    enqueue({ jobType: 'RUN_FLOW', flowRunId: ids.run.id, maxAttempts: 1, payload: { runId: ids.run.id } });
+    await f.worker.drain();
+    expect(getFlowRun(ids.run.id)!.status).toBe('PAUSED'); expect(f.effects()).toBe(0);
+    f.approvals.approve(f.approvals.getPending()[0]!.id, 'dashboard');
+    expect(resumeResolvedWorkflowEffects()).toBe(1);
+    await f.worker.drain();
+    expect(getFlowRun(ids.run.id)!.status).toBe('PAUSED'); expect(f.effects()).toBe(1);
+    expect(f.approvals.getPending()[0]!.tool_name).toBe('browser_snapshot');
+    f.approvals.approve(f.approvals.getPending()[0]!.id, 'dashboard');
+    expect(resumeResolvedWorkflowEffects()).toBe(1); await f.worker.drain();
+    expect(getFlowRun(ids.run.id)!.status).toBe('SUCCEEDED'); expect(f.effects()).toBe(2);
+    expect(resumeResolvedWorkflowEffects()).toBe(0);
+  } finally { await f.stop(); }
+}, 60_000);
+
+
+test('each browser action pauses independently, including after outside content', async () => {
+  const ids = createRun();
+  const names = ['browser_navigate', 'browser_click', 'browser_scroll'];
+  const f = backends(ids, { taintGating: true, distinctChildren: true, authority: { governed_categories: [] },
+    script: [...names.map(call => ({ call, args: { target: 'test-computer' } })), 'finish'] });
+  for (let i = 0; i < names.length; i++) {
+    const paused = await f.delegate({ requiredTools: names });
+    expect(paused.status).toBe('approval_required'); expect(f.effects()).toBe(i);
+    expect(f.approvals.getRequest(paused.approval!.approvalId)!.tool_name).toBe(names[i]!);
+    f.approvals.approve(paused.approval!.approvalId, 'dashboard');
+  }
+  expect((await f.delegate({ requiredTools: names })).outcome).toEqual({ status: 'succeeded' });
+  expect(f.effects()).toBe(3);
+});
+
+
+test('browser review never lifts an explicit Authority denial', async () => {
+  const ids = createRun();
+  const f = backends(ids, { childLevel: 3, authority: { default_level: 3, overrides: [{ scope: 'action', target: 'control_app', policy: 'deny' }] },
+    profileFor: () => ({ denied_categories: ['control_app'] }),
+    script: [{ call: 'browser_navigate' }, 'finish'] });
+  await f.delegate(); expect(f.effects()).toBe(0); expect(f.approvals.getPending()).toHaveLength(0);
+});
+
+
+test('browser approval rechecks both browser access and UI control after the card waits', async () => {
+  const ids = createRun(); let profile: import('../../authority/engine').AuthorityProfile | null = null;
+  const f = backends(ids, { profileFor: () => profile, script: [{ call: 'browser_navigate' }, 'finish'] });
+  const parked = await f.delegate(); expect(parked.status).toBe('approval_required');
+  profile = { denied_categories: ['access_browser'] };
+  f.approvals.approve(parked.approval!.approvalId, 'dashboard');
+  await f.delegate(); expect(f.effects()).toBe(0);
+});
+
+
+test.skipIf(engineSkip)('a signed-out browser fails the real run and never reaches its notification step', async () => {
+  const ids = createRun({ requiredTools: 'browser_snapshot', requireSuccess: true }, false, true);
+  updateRun(ids.run.id, { status: 'QUEUED' });
+  const f = await boot(ids, { script: [{ call: 'browser_snapshot' }, 'finish'],
+    finalReport: JSON.stringify({ taskStatus: 'blocked', reason: 'sign_in_required', finalMessage: 'Sign in in the Jarvis browser.' }) });
+  try {
+    enqueue({ jobType: 'RUN_FLOW', flowRunId: ids.run.id, maxAttempts: 1, payload: { runId: ids.run.id } });
+    await f.worker.drain();
+    const run = getFlowRun(ids.run.id)!;
+    expect(run.status).toBe('FAILED');
+    expect(run.steps?.notify).toBeUndefined();
+    expect(f.notifications).toEqual([]);
+    expect(listWorkflowEffects(ids.run.id).some(e => e.route === 'notify')).toBe(false);
+    expect(getDelegation(delegationId(ids.run.id))?.result?.outcome).toMatchObject({ status: 'blocked', code: 'BROWSER_SIGN_IN_REQUIRED' });
+  } finally { await f.stop(); }
+}, 60_000);
+
+
+test.skipIf(engineSkip)('a completed browser agenda reaches the real notification piece once', async () => {
+  const ids = createRun({ requiredTools: 'browser_snapshot', requireSuccess: true }, false, true);
+  updateRun(ids.run.id, { status: 'QUEUED' });
+  const f = await boot(ids, { script: [{ call: 'browser_snapshot' }, 'finish'],
+    finalReport: JSON.stringify({ taskStatus: 'completed', finalMessage: 'No meetings today' }) });
+  try {
+    enqueue({ jobType: 'RUN_FLOW', flowRunId: ids.run.id, maxAttempts: 1, payload: { runId: ids.run.id } });
+    await f.worker.drain();
+    expect(getFlowRun(ids.run.id)!.status).toBe('SUCCEEDED');
+    const notify = listWorkflowEffects(ids.run.id).find(e => e.route === 'notify');
+    expect(notify?.status).toBe('succeeded');
+    expect(notify?.result).toMatchObject({ delivered: ['dashboard'], failed: [] });
+    expect(f.notifications).toEqual(['No meetings today']);
+    await f.worker.drain(); expect(f.notifications).toEqual(['No meetings today']);
   } finally { await f.stop(); }
 }, 60_000);

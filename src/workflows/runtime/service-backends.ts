@@ -11,6 +11,9 @@ import { documentInput, projectDocument } from './decision-document';
  * Lives outside `adapters/` so the eventual K3 deletion of the legacy
  * adapters doesn't have to thread through this file.
  */
+import { workflowBrowserRead, workflowBrowserReview } from '../../authority/ui-intent';
+import { runAsReviewed } from '../../actions/tools/reviewed-call-scope';
+import type { ApprovalManager } from '../../authority/approval';
 
 import type { LLMManager } from "../../llm/manager";
 import type { ToolRegistry } from "../../actions/tools/registry";
@@ -28,7 +31,7 @@ import { JarvisContextProviderAdapter } from "../adapters/context-provider";
 import { LlmOnlyAgentDelegator } from "../adapters/agent-delegator";
 import { DEFAULT_MAX_ITERATIONS, M7AgentDelegator, type DelegationContinuation } from "../adapters/m7-agent-delegator";
 import { getChildRun } from '../db/repos/child-run';
-import { getDelegation, saveDelegation } from "../db/repos/delegation";
+import { delegationId, getDelegation, saveDelegation } from "../db/repos/delegation";
 import { JarvisWorkflowRunnerAdapter } from "../adapters/workflow-runner";
 import type { LlmChatFn, LlmChatRequest, LlmChatResponse } from "../sandbox-api/routes/jarvis-llm";
 import type { SystemPromptParts } from "../../roles/prompt-builder";
@@ -532,7 +535,7 @@ export function buildSandboxServiceBackends(
     });
     if (reply.approval) return { finalMessage: '', toolCalls: [], status: 'approval_required', approval: reply.approval };
     const resolved = resolveEffectContext(ctx, AGENT_PIECE, 'delegate');
-    const id = 'wfd_' + digest([resolved.run.id, resolved.stepName, resolved.executionPath]);
+    const id = delegationId(resolved.run.id, resolved.stepName, resolved.executionPath);
     const continuation: DelegationContinuation = {
       identity: { id, runId: resolved.run.id, stepName: resolved.stepName, executionPath: resolved.executionPath,
         versionDigest: resolved.versionDigest },
@@ -613,73 +616,27 @@ export function buildSandboxServiceBackends(
           blockParkedEffect(reason);
           return { kind: 'denied' as const, reason };
         };
-        // The same rule as the direct tool piece: a category cannot describe
-        // what a script or a click sequence will do, so it is not approvable
-        // here either. The agent learns it was refused.
-        if (OPAQUE_TOOL_NAMES.has(call.toolCall.name)) {
+        // Browser navigation keeps the same click-only, live-surface review as
+        // chat. Other opaque code/UI capabilities remain unsupported here.
+        const browserReview = workflowBrowserReview(registry.get(call.toolCall.name), call.toolCall.name);
+        if (OPAQUE_TOOL_NAMES.has(call.toolCall.name) && !browserReview) {
           return refuse(`Unsupported workflow capability: ${call.toolCall.name} has opaque code/UI effects; use a typed governed adapter.`);
         }
-        // A gated tool is approvable only THROUGH its adapter, and the adapter
-        // runs in `toolsInvoke`, not here. Everything that makes run_skill
-        // reviewable comes from `toolEffectCapability`: the resolved sentence
-        // on the card, the skill's name and version in the target so a
-        // re-recorded skill cannot dispatch under the old approval, and the
-        // pinned sidecar. This path builds its own target from the principal
-        // and has no validateTarget, so a gated tool would get a card naming
-        // only the tool. Refuse it here rather than approve it unreviewed;
-        // a flow step is how a skill runs in a workflow.
         if (GATED_TOOL_NAMES.has(call.toolCall.name)) {
           return refuse(`Unsupported workflow capability: ${call.toolCall.name} is only approvable through its typed adapter; call it as a flow step, not from a delegated agent.`);
         }
-        // #638. The two checks above gate on SET MEMBERSHIP, and the sets do
-        // not cover this route's third case: a call whose approval has to stay
-        // bound to a live UI surface. `ui_act` is the live example -- it sits in
-        // `REVIEWED_UI_TOOLS` and in NONE of bounded/opaque/gated, so it passes
-        // both checks above, where `toolsInvoke` is closed for it because that
-        // route calls `toolEffectCapability` and this one never does.
-        //
-        // It was not reachable: `sub-agent-runner.ts` refuses any call whose
-        // gate says `confirm === 'always'` before a sub-agent's tool call ever
-        // reaches `governedTools`, and `rawUiGate` says exactly that for all 14
-        // members of the set. So this is defence in depth, not a plugged hole --
-        // but the thing standing between this route and an unbound UI approval
-        // was a gate in another subsystem, keyed on a different property, for a
-        // reason unrelated to binding, and nothing here said so.
-        //
-        // Asked as a predicate rather than by widening OPAQUE_TOOLS: the two
-        // sets then have to agree by hand, and they already disagree by exactly
-        // this one name. See `surfaceBoundRefusal` for why `rawUiGate` is the
-        // signal (it carries the `get_value` read carve-out, which must still
-        // be allowed here).
-        const unboundable = surfaceBoundRefusal(
-          registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
-        if (unboundable) return refuse(unboundable);
-        // And the subsystem rule that was only ever enforced upstream (#638).
-        // `sub-agent-runner.ts` refuses `confirm: 'always'` with "a sub-agent
-        // may not request a confirmation"; this route is reachable with a
-        // registry and a gate of its own, so it says the same thing itself.
-        //
-        // This closes the third producer of `'always'`, which the predicate
-        // above does not see: `resolveToolGate` manufactures
-        // `confirm: 'always'` when a tool's own `authorityGate` THROWS
-        // (tool-action-map.ts), for any tool, UI or not. The first draft of
-        // this change answered that by FORWARDING `confirmation` into the
-        // boundary instead, which was worse in two ways -- it is recomputed on
-        // every invoke while the stored approval context is frozen at
-        // creation, so a gate that throws only at resume made
-        // `effect-boundary.ts`'s "approval predates required UI review" fail an
-        // already-granted approval and park its waitpoint; and it labelled a
-        // non-UI tool's card as a UI effect. Denying is the answer the rest of
-        // the subsystem already gives, and it needs no new state to be right.
-        // (`gate` is computed at the top of this dispatch, for the audit row.)
-        if (gate.confirm === 'always') {
+        const unboundable = surfaceBoundRefusal(registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
+        if (unboundable && !browserReview) return refuse(unboundable);
+        if (gate.confirm === 'always' && !browserReview) {
           return refuse(`Unsupported workflow capability: ${call.toolCall.name} requires the user's explicit confirmation, which a delegated agent cannot ask for; call it as a flow step so the approval is raised by the step that names it.`);
         }
+        let browserExecution: ReturnType<ApprovalManager['getUiExecution']> = null;
         // Set once the call is dispatched; read by `validateTarget` below.
         let dispatched = false;
         try {
           const inner = await effects.invoke({ context: ctx, piece: AGENT_PIECE, action: 'delegate',
             route: `agent-tool:${call.sequence}`, toolName: call.toolCall.name, category: call.actionCategory,
+            ...(browserReview || workflowBrowserRead(call.toolCall.name) ? { categories: gate.categories } : {}),
             toolCategory: call.toolCategory, request: { toolName: call.toolCall.name, arguments: call.toolCall.arguments },
             // Judged as the sub-agent the gate judged it for, and never
             // concluded to need less than the gate required.
@@ -688,15 +645,12 @@ export function buildSandboxServiceBackends(
             // level shortfall; judge it here the same way, or the approval it
             // asked for could never be granted.
             //
-            // `confirm` is read for its FLOOR only, and deliberately not
-            // forwarded as `confirmation` (#638). `confirmation` makes a card
-            // click-only, which is the right shape for a `confirm: 'always'`
-            // gate -- but on this route `'always'` is now denied outright
-            // above, so the only values reaching here are `'above_level'` and
-            // absent, and forwarding would be dead code holding a live hazard
-            // (see the denial's comment). `toolsInvoke` does forward it,
-            // because it is the route that legitimately raises such a card.
-            ...(gate.confirm ? { aboveLevelFloor: gate.floorCategory } : {}),
+            // Every browser action needs a dashboard click and the originating
+            // registry's live guard; Authority overrides cannot auto-approve it.
+            ...(browserReview ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review browser action' }, reviewRegistry: registry,
+              reviewSubject: registry.get(call.toolCall.name)?.reviewSubject?.(call.toolCall.arguments) ?? {} } : {}),
+            ...(gate.confirm || workflowBrowserRead(call.toolCall.name)
+              ? { aboveLevelFloor: browserReview || workflowBrowserRead(call.toolCall.name) ? 'read_data' as const : gate.floorCategory } : {}),
             // The target names who asked, so the card and the record are bound
             // to the principal and not only to the tool.
             //
@@ -715,6 +669,13 @@ export function buildSandboxServiceBackends(
             // path under a different cwd, a file that became a shell rc or a
             // hook, #522) is not the call that was approved.
             validateTarget: (args, target) => {
+              if (browserReview && !dispatched) {
+                const effect = getWorkflowEffect(workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, `agent-tool:${call.sequence}`));
+                const approval = effect?.approvalId ? opts.approvalManager?.getRequest(effect.approvalId) : null;
+                browserExecution = approval ? opts.approvalManager?.getUiExecution(approval) ?? null : null;
+                if (!browserExecution) throw new ActionOutcomeError({ status: 'blocked', code: 'WORKFLOW_BROWSER_REVIEW_STALE', effect: 'not_started',
+                  message: 'The reviewed browser session changed or Jarvis restarted. Start a new run to review the current browser.' });
+              }
               const now = resolveToolGate(registry.get(call.toolCall.name), call.toolCall.name, args);
               if (severityRank(now.actionCategory) > severityRank(call.actionCategory)) {
                 throw new ActionOutcomeError({ status: 'blocked', code: 'EFFECT_CHANGED_AFTER_REVIEW', effect: 'not_started',
@@ -745,7 +706,9 @@ export function buildSandboxServiceBackends(
                 // sub-agent's. Suppressing nests inside that scope, which is the
                 // right way round: the innermost caller knows what happens to
                 // the value.
-                const run = () => withoutTemplateDelivery(() => registry.execute(call.toolCall.name, args));
+                const run = () => withoutTemplateDelivery(() => browserReview
+                  ? runAsReviewed(browserExecution!.reviewed, () => browserExecution!.registry.execute(call.toolCall.name, args))
+                  : registry.execute(call.toolCall.name, args));
                 // Inside the approval this call was dispatched under (#988),
                 // as the deferred executor runs an approved card: a spawn or
                 // stop sink the call reaches reads it instead of asking a

@@ -888,6 +888,7 @@ export class WebSocketService implements Service {
    */
   broadcastNotificationToDashboard(text: string, priority: 'urgent' | 'normal' | 'low'): number {
     const message: WSMessage = {
+      id: crypto.randomUUID(),
       type: 'chat',
       payload: {
         text,

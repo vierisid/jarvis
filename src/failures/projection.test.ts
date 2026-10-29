@@ -99,3 +99,12 @@ describe('detail and identity', () => {
     }
   });
 });
+
+
+test('browser sign-in failure keeps the setup instruction without claiming no earlier effect', () => {
+  const failure = projectFailure({ source: 'action', outcome: { status: 'blocked', code: 'BROWSER_SIGN_IN_REQUIRED',
+    effect: 'may_have_occurred', message: 'Private account details' } }, { label: 'Calendar step', sideEffects: true });
+  expect(failure.headline).toContain('sign-in is required in the Jarvis browser');
+  expect(failure.effect).toBe('unknown'); expect(failure.outcome).not.toContain('Nothing was done');
+  expect(failure.headline).not.toContain('Private account');
+});

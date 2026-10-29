@@ -331,8 +331,42 @@ export type SystemNotice = {
   id: string;
   title: string;
   text: string;
-  level: "warning";
+  level: "warning" | "info";
+  timestamp?: number;
+  /** Set on notices Jarvis sent on its own (heartbeat, reactor, opportunities); unset on client warnings. */
+  source?: "proactive";
 };
+
+const WARNING_NOTICE_LIMIT = 3;
+const PROACTIVE_NOTICE_LIMIT = 100;
+
+/**
+ * Adds a notice to the feed. Warnings (send failures, sidecar disconnects)
+ * keep only the latest few and replace one with the same text; proactive
+ * notices keep their own, larger budget, so a burst of warnings never evicts
+ * one the person has not read yet.
+ */
+export function addNotice(prev: SystemNotice[], notice: SystemNotice): SystemNotice[] {
+  const proactive = notice.source === "proactive";
+  const rest = prev.filter(item => proactive ? item.id !== notice.id : !(item.source !== "proactive" && item.text === notice.text));
+  let warnings = 0, proactives = 0;
+  return [notice, ...rest].filter(item => item.source === "proactive"
+    ? ++proactives <= PROACTIVE_NOTICE_LIMIT : ++warnings <= WARNING_NOTICE_LIMIT);
+}
+
+/**
+ * A proactive chat message as a notice. A leading bold line
+ * (`**Title**` as opportunity and awareness notices send it) becomes the
+ * title, and the remaining bold markers are dropped: the feed and the toast
+ * render plain text.
+ */
+export function proactiveNotice(id: string, text: string, urgent: boolean, timestamp?: number): SystemNotice {
+  const lead = /^\*\*(.+?)\*\*:?[ \t]*(?:\r?\n|$)/.exec(text.trim());
+  const plain = (value: string) => value.replace(/\*\*(.+?)\*\*/g, "$1").trim();
+  const title = lead ? plain(lead[1]!).replace(/:$/, "") : "";
+  return { id, title: title || "Jarvis notification", text: plain(lead ? text.trim().slice(lead[0].length) : text) || title,
+    level: urgent ? "warning" : "info", source: "proactive", ...(timestamp !== undefined ? { timestamp } : {}) };
+}
 
 export type ApprovalImpact = "read" | "write" | "destructive" | "external";
 
@@ -932,6 +966,10 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
 
   const handleMessage = useCallback((msg: WSMessage) => {
     if (msg.type === "chat" && msg.payload?.source) {
+      if (msg.payload.source === "proactive" && typeof msg.payload.text === "string" && msg.payload.text.trim()) {
+        const notice = proactiveNotice(msg.id || uuid(), msg.payload.text, msg.priority === "urgent", msg.timestamp);
+        setNotices(prev => addNotice(prev, notice));
+      }
       // Proactive message (heartbeat or reactor notification)
       setMessages((prev) => [
         ...prev,
@@ -1126,7 +1164,7 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
       } else if (payload.source === "sidecar_event" && payload.event?.type === "sidecar_disconnect") {
         const noticeMessage = createSidecarNotice(payload, msg.timestamp);
         if (noticeMessage.notice) {
-          setNotices((prev) => [noticeMessage.notice!, ...prev.filter((item) => item.text !== noticeMessage.notice!.text)].slice(0, 3));
+          setNotices((prev) => addNotice(prev, noticeMessage.notice!));
         }
         setMessages((prev) => [...prev, noticeMessage]);
       } else if (payload.source === "assistant_message" && payload.text) {
@@ -1431,7 +1469,7 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
           text: `Could not send your message: ${err instanceof Error ? err.message : String(err)}`,
           level: "warning",
         };
-        setNotices((prev) => [notice, ...prev.filter((item) => item.text !== notice.text)].slice(0, 3));
+        setNotices((prev) => addNotice(prev, notice));
       }
     },
     [cancelResponse, chat]
