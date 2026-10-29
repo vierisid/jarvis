@@ -67,18 +67,25 @@ export const PIECE_TOOL_CATEGORY = 'workflow-piece';
 const GMAIL_TRACKED_SENDS: ReadonlySet<unknown> = new Set(['send_email', 'gmail_send_email', 'reply_to_email',
   'gmail_reply_to_thread', 'gmail_send_draft', 'gmail_forward_message']);
 
+/** True for a Gmail action that sends mail and returns once sent (its result is a sent message). */
+export function isGmailTrackedSend(action: unknown): boolean {
+  return GMAIL_TRACKED_SENDS.has(action);
+}
+
 /**
  * Q-07's bounded completion-receipt protocol. These actions never park
- * themselves. Every Gmail send that returns once sent is tracked, so an engine
- * retry of a send whose outcome is unknown is refused instead of sending again
- * (#953 made these reachable at the default level).
+ * themselves. Every Gmail send that returns once sent is tracked, and so is
+ * adding a label to a message, so an engine retry of either whose outcome is
+ * unknown is refused instead of repeated (#953 made these reachable at the
+ * default level). Only the sends have a provider readback: a label change
+ * returns the labeled (incoming) message, which is not a send receipt.
  */
 export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
   return (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
     || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE) && managedPieceChanges(piece, action))
-    || (piece === '@activepieces/piece-gmail' && GMAIL_TRACKED_SENDS.has(action))
+    || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
     || (piece === '@activepieces/piece-google-sheets' && ['insert_row', 'sheets_append_values', 'sheets_add_row'].includes(String(action)))
     || (piece === '@activepieces/piece-slack' && (action === 'send_channel_message' || action === 'slack_post_message'))
     // #961: an HTTP request that is not a read is a send whose outcome the

@@ -49,7 +49,7 @@ interface FireRow {
 
 /** A start that ran past this is shown as delayed. */
 export const DELAYED_AFTER_MS = 60_000;
-/** Ordinary delivery history is pruned; form identities survive while the workflow exists. */
+/** Ordinary delivery history is pruned; form and email identities survive while the workflow exists. */
 export const FIRE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const DETAIL_MAX = 2_000;
 
@@ -70,7 +70,11 @@ function rowToFire(row: FireRow): TriggerFire {
 function detailJson(detail?: Record<string, unknown> | null): string | null {
   if (!detail) return null;
   const json = JSON.stringify(detail);
-  return json.length <= DETAIL_MAX ? json : JSON.stringify({ truncated: true, reason: String(detail.reason ?? "").slice(0, 500) });
+  if (json.length <= DETAIL_MAX) return json;
+  // A long reason is cut; the short identity fields a later delivery matches on are kept.
+  const kept = Object.fromEntries((["signature", "deliveryKey"] as const)
+    .filter(name => typeof detail[name] === "string" && (detail[name] as string).length <= 600).map(name => [name, detail[name]]));
+  return JSON.stringify({ truncated: true, reason: String(detail.reason ?? "").slice(0, 500), ...kept });
 }
 
 /** A bearer capability (a waitpoint id) never goes into a readable column as itself. */
@@ -87,6 +91,64 @@ export interface FireInput {
   observedAt?: number;
   lateMs?: number | null;
   detail?: Record<string, unknown> | null;
+}
+
+/** Email identities are shared only between their two event delivery paths. */
+function emailIdentity(input: Pick<FireInput, 'source' | 'dedupeKey'>): boolean {
+  return (input.source === 'event' || input.source === 'poll') && input.dedupeKey?.startsWith('event:email:') === true;
+}
+
+/**
+ * Evidence that a run never began: the handler had not reached it (no graph
+ * recorded, the fire never marked started), it recorded no step and it has no
+ * effect. Each part alone can mislead; a run that executed keeps its key.
+ */
+const RUN_NEVER_BEGAN = `r.graph_digest IS NULL AND COALESCE(r.steps, '{}') = '{}' AND COALESCE(r.steps_count, 0) = 0
+  AND NOT EXISTS (SELECT 1 FROM workflow_effect e WHERE e.run_id = r.id)`;
+
+/**
+ * A message's key belongs to the run that processes it. Two kinds of delivery
+ * give their key up, keeping it in their detail, so the message can still be
+ * processed once: one that started no run (refused at readiness before this
+ * rule, for one), and one whose run ended (stopped, canceled or failed) before
+ * it began, by the evidence above.
+ */
+function releaseUnstartedEmailKey(flowId: string, key: string): void {
+  db().run(`UPDATE workflow_trigger_fire SET detail = json_set(COALESCE(detail, '{}'), '$.deliveryKey', dedupe_key), dedupe_key = NULL
+    WHERE flow_id = ? AND source IN ('event', 'poll') AND dedupe_key = ? AND (outcome != 'started'
+      OR (started_at IS NULL AND EXISTS (SELECT 1 FROM flow_run r WHERE r.id = workflow_trigger_fire.run_id
+        AND r.status NOT IN ('QUEUED', 'RUNNING', 'PAUSED', 'SUCCEEDED') AND ${RUN_NEVER_BEGAN})))`, [flowId, key]);
+}
+
+/**
+ * A run refused by its readiness recheck at dispatch, before any step or
+ * effect: it never processed the email it was started for, so that email's
+ * key is given up, kept in the delivery's detail, and a later delivery or
+ * manual run can still process the message once. A run with any step or
+ * effect keeps its key.
+ */
+export function releaseRefusedEmailRun(runId: string): void {
+  db().run(`UPDATE workflow_trigger_fire SET detail = json_set(COALESCE(detail, '{}'), '$.deliveryKey', dedupe_key), dedupe_key = NULL
+    WHERE run_id = ? AND source IN ('event', 'poll') AND dedupe_key LIKE 'event:email:%'
+      AND EXISTS (SELECT 1 FROM flow_run r WHERE r.id = workflow_trigger_fire.run_id AND r.status = 'FAILED'
+        AND COALESCE(r.steps, '{}') = '{}' AND COALESCE(r.steps_count, 0) = 0
+        AND NOT EXISTS (SELECT 1 FROM workflow_effect e WHERE e.run_id = r.id))`, [runId]);
+}
+
+/**
+ * A repeat of a refusal already recorded under this signature, counted on
+ * that row; null when it is new. Any earlier row of the workflow matches, not
+ * only the latest, so the same email re-emitted between others still folds.
+ */
+export function repeatOfRefusal(flowId: string, signature: string): TriggerFire | null {
+  return db().transaction((): TriggerFire | null => {
+    const existing = db().query<{ id: string }, [string, string]>(
+      `SELECT id FROM workflow_trigger_fire WHERE flow_id = ? AND outcome = 'blocked' AND json_extract(detail, '$.signature') = ?
+        ORDER BY observed_at DESC, rowid DESC LIMIT 1`).get(flowId, signature);
+    if (!existing) return null;
+    db().run(`UPDATE workflow_trigger_fire SET repeats = repeats + 1, last_repeat_at = ? WHERE id = ?`, [Date.now(), existing.id]);
+    return getFire(existing.id);
+  }).immediate();
 }
 
 /**
@@ -140,9 +202,10 @@ export function recordBlocked(input: FireInput & { signature: string; runId?: st
  */
 export function repeatOf(input: { flowId: string; source: FireSource; dedupeKey: string; duplicateSince?: number }): TriggerFire | null {
   return db().transaction((): TriggerFire | null => {
-    const existing = db().query<FireRow, [string, string, string, number]>(
-      `SELECT * FROM workflow_trigger_fire WHERE flow_id = ? AND source = ? AND dedupe_key = ? AND observed_at >= ?`,
-    ).get(input.flowId, input.source, input.dedupeKey, input.duplicateSince ?? 0);
+    if (emailIdentity(input)) releaseUnstartedEmailKey(input.flowId, input.dedupeKey);
+    const existing = db().query<FireRow, [string, string, number, string, number]>(
+      `SELECT * FROM workflow_trigger_fire WHERE flow_id = ? AND (source = ? OR (? = 1 AND source IN ('event', 'poll'))) AND dedupe_key = ? AND observed_at >= ?`,
+    ).get(input.flowId, input.source, Number(emailIdentity(input)), input.dedupeKey, emailIdentity(input) ? 0 : input.duplicateSince ?? 0);
     if (!existing) return null;
     db().run(`UPDATE workflow_trigger_fire SET repeats = repeats + 1, last_repeat_at = ? WHERE id = ?`, [Date.now(), existing.id]);
     return getFire(existing.id);
@@ -167,9 +230,10 @@ export function claimFire(input: FireInput & { duplicateSince?: number }, start:
   const now = input.observedAt ?? Date.now();
   return db().transaction((): ClaimResult => {
     if (input.dedupeKey) {
-      const existing = db().query<FireRow, [string, string, string, number]>(
-        `SELECT * FROM workflow_trigger_fire WHERE flow_id = ? AND source = ? AND dedupe_key = ? AND observed_at >= ?`,
-      ).get(input.flowId, input.source, input.dedupeKey, input.duplicateSince ?? 0);
+      if (emailIdentity(input)) releaseUnstartedEmailKey(input.flowId, input.dedupeKey);
+      const existing = db().query<FireRow, [string, string, number, string, number]>(
+        `SELECT * FROM workflow_trigger_fire WHERE flow_id = ? AND (source = ? OR (? = 1 AND source IN ('event', 'poll'))) AND dedupe_key = ? AND observed_at >= ?`,
+      ).get(input.flowId, input.source, Number(emailIdentity(input)), input.dedupeKey, emailIdentity(input) ? 0 : input.duplicateSince ?? 0);
       if (existing) {
         db().run(`UPDATE workflow_trigger_fire SET repeats = repeats + 1, last_repeat_at = ? WHERE id = ?`, [now, existing.id]);
         return { outcome: "duplicate", fire: getFire(existing.id)! };
@@ -177,7 +241,7 @@ export function claimFire(input: FireInput & { duplicateSince?: number }, start:
     }
     const id = apId();
     // A key older than the duplicate window is released before it is reused.
-    if (input.dedupeKey && input.duplicateSince) {
+    if (input.dedupeKey && input.duplicateSince && !emailIdentity(input)) {
       db().run(`UPDATE workflow_trigger_fire SET dedupe_key = NULL WHERE flow_id = ? AND source = ? AND dedupe_key = ?`,
         [input.flowId, input.source, input.dedupeKey]);
     }
@@ -291,9 +355,9 @@ export function fireLabel(fire: TriggerFire, runStatus: string | null, now = Dat
   return runStatus.toLowerCase();
 }
 
-/** Prune ordinary history. Keep accepted form identities for the lifetime of the workflow. */
+/** Prune ordinary history. Keep accepted form and email identities for the lifetime of the workflow. */
 export function pruneFires(now = Date.now()): number {
-  return db().run(`DELETE FROM workflow_trigger_fire WHERE observed_at < ? AND (dedupe_key IS NULL OR source != 'webhook' OR dedupe_key NOT LIKE 'submission:v1:%' OR NOT EXISTS (SELECT 1 FROM flow WHERE flow.id = workflow_trigger_fire.flow_id))`, [now - FIRE_RETENTION_MS]).changes;
+  return db().run(`DELETE FROM workflow_trigger_fire WHERE observed_at < ? AND (NOT ((source = 'webhook' AND dedupe_key LIKE 'submission:v1:%') OR (source IN ('event', 'poll') AND dedupe_key LIKE 'event:email:%')) OR dedupe_key IS NULL OR NOT EXISTS (SELECT 1 FROM flow WHERE flow.id = workflow_trigger_fire.flow_id))`, [now - FIRE_RETENTION_MS]).changes;
 }
 
 export interface ScheduleWatch { flowId: string; expression: string; watchedSince: number }
@@ -326,5 +390,26 @@ export function claimSubmissionRun(flowId: string, versionId: string, key: strin
     if (previous) throw Error('This submission ID was already accepted. No new spreadsheet write was attempted. Inspect the original run if its outcome is uncertain.');
     claimFire({ flowId, flowVersionId: versionId, source: 'webhook', dedupeKey: key,
       detail: { delivery: 'form submission ID' } }, () => ({ runId }));
+  }).immediate();
+}
+
+/** A message belongs to one run, including manual runs and both event delivery paths.
+ * Keep the claim after failure or history cleanup; an uncertain effect needs review. */
+export function claimEmailRun(flowId: string, versionId: string, key: string, runId: string): void {
+  if (!key.startsWith('event:email:') || key.length <= 12) throw Error('Invalid email identity');
+  db().transaction(() => {
+    releaseUnstartedEmailKey(flowId, key);
+    const previous = db().query<{ run_id: string | null; started_at: number | null; status: string | null; unbegun: number | null }, [string, string]>(
+      `SELECT f.run_id, f.started_at, r.status, (${RUN_NEVER_BEGAN}) AS unbegun FROM workflow_trigger_fire f LEFT JOIN flow_run r ON r.id = f.run_id
+        WHERE f.flow_id = ? AND f.source IN ('event', 'poll') AND f.dedupe_key = ?`).get(flowId, key);
+    if (previous?.run_id === runId) return;
+    if (previous && previous.started_at === null && previous.status !== null && previous.unbegun === 1) {
+      throw Error(`This Gmail message already belongs to run ${previous.run_id ?? 'unknown'} of this workflow, which has not begun processing it (${(previous.status ?? 'missing').toLowerCase()}). Nothing was classified, labeled or notified by this run. Check that run instead of starting another.`);
+    }
+    if (previous) throw Error(`This Gmail message was already accepted by run ${previous.run_id ?? 'unknown'} of this workflow. No new classification, label or notification was attempted. Inspect the original run to reconcile an uncertain outcome.`);
+    const claimed = claimFire({ flowId, flowVersionId: versionId, source: 'event', dedupeKey: key,
+      detail: { delivery: 'Gmail message ID' } }, () => ({ runId }));
+    // Claimed as the run begins: it has started processing the message.
+    db().run('UPDATE workflow_trigger_fire SET started_at = ? WHERE id = ?', [Date.now(), claimed.fire.id]);
   }).immediate();
 }
