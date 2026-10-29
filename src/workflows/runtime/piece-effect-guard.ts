@@ -21,6 +21,7 @@
  * Imported BY THE ENGINE BUNDLE: keep it pure. `fetch` only, no node built-ins.
  */
 
+import {managedFigmaInput, runManagedFigmaAction} from './managed-figma';
 import {managedAsanaInput, runManagedAsanaAction} from './managed-asana';
 import {managedDropboxInput, runManagedDropboxAction} from './managed-dropbox';
 import { HTTP_PIECE, isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
@@ -234,7 +235,10 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
     if (issue) throw new Error(issue);
   }
   let raw: unknown;
-  if (trello) {
+  if (managedFigmaInput(String(params.piece), params.input)) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Figma dispatch was not authorized');
+    raw = await runManagedFigmaAction(String(params.action), params.input);
+  } else if (trello) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Trello dispatch was not authorized');
     raw = await runManagedTrelloAction(String(params.action), trello);
   } else if (mailchimp) {

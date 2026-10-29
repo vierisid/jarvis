@@ -315,7 +315,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "16"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata
+export const CATALOG_SCHEMA_VERSION = "17"; // Figma file/comment output contracts; preserves v16 aiMetadata. // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -895,6 +895,15 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
  * on-disk caches re-project.
  */
 export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
+  if (entry.name === '@activepieces/piece-figma') {
+    const comment = {id:'123456789012345678',file_key:'exampleFileKey',message:'Design feedback',created_at:'2026-10-29T12:00:00Z',user:{id:'123456789012345678',handle:'Designer'}};
+    const samples: Record<string,unknown> = {
+      get_file:{success:true,response_body:{name:'Example design',version:'123456789012345678',lastModified:'2026-10-29T12:00:00Z',document:{id:'0:0',type:'DOCUMENT',name:'Document',children:[]}}},
+      get_comments:{success:true,response_body:{comments:[comment]}},
+      post_comment:{success:true,request_body:{message:'Design feedback'},response_body:comment},
+    };
+    for (const [name,sample] of Object.entries(samples)) if (entry.actions[name]) entry.actions[name]!.outputSample=sample;
+  }
   if (entry.name === '@activepieces/piece-asana') {
     for (const action of Object.values(entry.actions)) {
       if (action.name !== 'create_task') continue;

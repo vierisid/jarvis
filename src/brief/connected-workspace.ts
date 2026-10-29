@@ -11,6 +11,7 @@ export interface ConnectedWorkspaceSources {
   trello?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   mailchimp?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   asana?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
+  figma?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   slack?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   google?: () => { mode: 'self' | 'managed' | 'none' | 'unavailable'; authenticated: boolean; reconnect: boolean; canSetup: boolean };
   channels?: () => Partial<Record<'telegram' | 'discord', { enabled: boolean; connected: boolean; authentication?: 'verified' | 'rejected' | 'unknown' }>>;
@@ -159,6 +160,22 @@ export class ConnectedWorkspace {
             row.evidence = c.connected ? 'stored_grant' : 'none';
             if (c.configured) offer(row, {id: 'setup:asana', label: 'Asana',
               target: {kind: 'hosted_integration', provider: 'asana'}, verifies: {kind: 'native_service', serviceId: 'asana'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
+      if (this.sources.figma) {
+        const row = base('native:figma', 'native_service', 'figma', 'Figma');
+        try {
+          const c = this.sources.figma();
+          if (c.configured || c.connected) {
+            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('Figma: ' + c.account.label) : 'Figma';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:figma', label: 'Figma',
+              target: {kind: 'hosted_integration', provider: 'figma'}, verifies: {kind: 'native_service', serviceId: 'figma'}});
             rows.push(row);
           }
         } catch { row.status = 'unavailable'; rows.push(row); }
