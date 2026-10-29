@@ -318,6 +318,8 @@ export const PATCHED_VENDOR_SOURCES = [
   'server/engine/src/lib/core/code/no-op-code-sandbox.ts',
   'server/engine/src/lib/variables/props-resolver.ts',
   'server/engine/src/lib/variables/props-processor.ts',
+  'server/engine/src/lib/variables/processors/file.ts',
+  'server/engine/src/lib/variables/processors/types.ts',
   'server/engine/src/lib/handler/piece-executor.ts',
   // Jarvis: a CODE step asks the daemon about Pause and Kill before it runs (Q-08).
   'server/engine/src/lib/handler/code-executor.ts',

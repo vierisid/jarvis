@@ -86,6 +86,7 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
     || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE) && managedPieceChanges(piece, action))
     || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
+    || (piece === '@activepieces/piece-google-drive' && ['upload_gdrive_file', 'drive_upload_file', 'drive_upload_from_url'].includes(String(action)))
     || (piece === '@activepieces/piece-google-sheets' && ['insert_row', 'sheets_append_values', 'sheets_add_row'].includes(String(action)))
     || (piece === '@activepieces/piece-slack' && (action === 'send_channel_message' || action === 'slack_post_message'))
     // #961: an HTTP request that is not a read is a send whose outcome the

@@ -20,6 +20,13 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
+  // w8-11: invoice extraction, schema validation and complete readback.
+  'w8-11': {
+    bare: '75efb1295411133d02534d3b1f92363370d634aad4ddadf11df132a929544d79',
+    production: 'cbed103e2327dbfc97961cacbd1e0c32d6c044cda703b7b48dfb449e2da15f82',
+    'hosted production': '478b71ed5780ee2a5f0e16b39fd59389f6cb52918334ba5295a4665cf5ce7f2d',
+    'tool names only': '4ef91135e7dcff0980a28318bc721e5e7af84c75864d36ab04edb66aa2aa5575',
+  },
   // w8-10: Gmail triage, persistent message admission covering manual runs only when they carry a payload.id.
   'w8-10': {
     bare: '21cc6e0220440ff1fe3217a63b8d483c8bdfc737d03aa28af57d321dbe9e836e',
