@@ -1,6 +1,7 @@
 import {managedMailchimpIssue} from './managed-mailchimp';
 import {managedGitHubIssue} from './managed-github';
 import {managedTrelloIssue} from './managed-trello';
+import {managedSlackIssue} from './managed-slack';
 import { validateCronExpression } from '../../lib/cron-scheduler';
 import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from './piece-catalog';
 import { evaluateWorkflowExpression, workflowExpressionReferences } from './safe-expression';
@@ -237,6 +238,11 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
       && ["{{connections.jarvis:trello}}", "{{connections['jarvis:trello']}}"].includes(String(input.auth))) {
       const reason = managedTrelloIssue(root ? settings.triggerName : settings.actionName, input, false);
       if (reason) issue(node, 'settings.input', 'MANAGED_TRELLO', reason);
+    }
+    if (pieceName === '@activepieces/piece-slack' && object(input)
+      && ["{{connections.jarvis:slack}}", "{{connections['jarvis:slack']}}"].includes(String(input.auth))) {
+      const reason = managedSlackIssue(root ? settings.triggerName : settings.actionName, input, false);
+      if (reason) issue(node, 'settings.input', 'MANAGED_SLACK', reason);
     }
     // Only input values are templated; source code and labels are not expressions.
     // A connection is checked against the step's piece, and only a piece step

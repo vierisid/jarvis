@@ -2498,6 +2498,15 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         return json({...status, connected: status.connected && !reconnect, reconnect});
       },
     },
+    '/api/integrations/dropbox': {
+      GET: async () => {
+        const {dropboxStatus, readDropboxConnection} = await import('../integrations/dropbox-connection');
+        const {dropboxNeedsReconnect} = await import('../integrations/dropbox-refresh');
+        const status = dropboxStatus(ctx.config), c = readDropboxConnection(ctx.config.daemon.data_dir);
+        const reconnect = !!c && dropboxNeedsReconnect(ctx.config, c);
+        return json({...status, connected: status.connected && !reconnect, reconnect});
+      },
+    },
     '/api/integrations/clickup': {
       GET: async () => {
         const { clickUpStatus } = await import('../integrations/clickup-connection');
@@ -2542,6 +2551,20 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: async () => {
         const { mailchimpStatus } = await import('../integrations/mailchimp-connection');
         return json(mailchimpStatus(ctx.config));
+      },
+    },
+
+    '/api/integrations/slack/options': {
+      GET: async (req: Request) => {
+        const {slackOptions, SlackOptionsError} = await import('../integrations/slack-options');
+        try { return json(await slackOptions(ctx.config, new URL(req.url).searchParams)); }
+        catch (error) { return json({error: error instanceof SlackOptionsError ? error.message : 'Could not load Slack choices.'}, error instanceof SlackOptionsError ? error.status : 502); }
+      },
+    },
+    '/api/integrations/slack': {
+      GET: async () => {
+        const { slackStatus } = await import('../integrations/slack-connection');
+        return json(slackStatus(ctx.config));
       },
     },
 

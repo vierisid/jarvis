@@ -1,0 +1,108 @@
+/** Published piece metadata/read actions plus the managed send adapter in the
+ * real engine. Provider URLs in disposable package/engine copies target a
+ * local fixture; no live Slack calls or account credentials are used.
+ * Gated on JARVIS_TEST_ENGINE_BUILD=1 like the other engine tests; CI runs it
+ * in test.yml's engine step. It installs the pinned 0.23.1 from npm. */
+import {afterAll, beforeAll, expect, test} from 'bun:test';
+import {mkdtempSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync} from 'node:fs';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import {spawnSync} from 'node:child_process';
+import {randomUUID,createHash} from 'node:crypto';
+import {initWorkflowDb, closeWorkflowDb, DEFAULT_IDS} from '../db';
+import {createFlow} from '../db/repos/flow';
+import {createDraftVersion} from '../db/repos/flow-version';
+import {createFlowRun,getFlowRun} from '../db/repos/flow-run';
+import {enqueue} from '../db/repos/job-queue';
+import {CredentialResolver} from '../credentials/adapter';
+import {JarvisSlackConnectionSource} from '../credentials/slack-source';
+import {AuthorityEngine} from '../../authority/engine';
+import {ApprovalManager} from '../../authority/approval';
+import {AuditTrail} from '../../authority/audit';
+import {EmergencyController} from '../../authority/emergency';
+import {WorkflowEventBuffer} from '../runtime/event-buffer';
+import {buildSandboxServiceBackends} from '../runtime/service-backends';
+import {buildPieceCatalog} from '../runtime/piece-catalog';
+import {SandboxApi} from '../sandbox-api/server';
+import {workflowLogsBase} from '../sandbox-api/config';
+import {buildEngineBundle} from '../runner/engine-runtime/build';
+import {EngineRuntime} from '../runner/engine-runtime/engine-runtime';
+import {EngineFlowExecutor} from '../runner/engine-runtime/engine-flow-executor';
+import {createRunFlowHandler} from '../runner/handler';
+import {Worker} from '../queue/worker';
+import {resolveGovernedPieceAction} from '../runtime/piece-effects';
+const gate=process.env.JARVIS_TEST_ENGINE_BUILD==='1';
+const piece='@activepieces/piece-slack';
+let dir:string, api:SandboxApi, runtime:EngineRuntime, provider:ReturnType<typeof Bun.serve>;
+let runId:string|undefined;
+const requests:Array<{method:string;path:string;body:unknown;auth:string|null}>=[];
+beforeAll(async()=>{
+ if(!gate)return;
+ dir=mkdtempSync(join(tmpdir(),'jarvis-slack-engine-'));
+ initWorkflowDb(join(dir,'db.sqlite'));
+ writeFileSync(join(dir,'package.json'),JSON.stringify({private:true,dependencies:{[piece]:'0.23.1'}}));
+ const install=spawnSync('bun',['install','--silent','--backend','copy'],{cwd:dir,encoding:'utf8'});
+ if(install.status!==0)throw new Error('npm install failed: '+install.stderr);
+ provider=Bun.serve({port:0,hostname:'127.0.0.1',async fetch(req){
+  const url=new URL(req.url),path=url.pathname;
+  const raw=req.method==='POST'?await req.text():'';
+  const body=raw?(req.headers.get('content-type')?.includes('application/json')?JSON.parse(raw):Object.fromEntries(new URLSearchParams(raw))):Object.fromEntries(url.searchParams);
+  requests.push({method:req.method,path,body,auth:req.headers.get('authorization')});
+  if(req.headers.get('authorization')!=='Bearer ENGINE_ONLY_SLACK')return Response.json({ok:false,error:'invalid_auth'});
+  const channel={id:'C123',name:'jarvis-sandbox',is_member:true,is_archived:false};
+  if(path==='/api/conversations.info')return Response.json({ok:true,channel});
+  if(path==='/api/conversations.list')return Response.json({ok:true,channels:[channel],response_metadata:{next_cursor:''}});
+  if(path==='/api/chat.postMessage')return Response.json({ok:true,channel:'C123',ts:'1710304378.'+String(requests.length).padStart(6,'0'),message:{text:body.text}});
+  return Response.json({ok:false,error:'unknown_method'});
+ }});
+ const bundleFile=join(dir,'node_modules',piece,'src/index.js');
+ const published=readFileSync(bundleFile,'utf8');
+ expect(published).toContain('https://slack.com/api/');
+ writeFileSync(bundleFile+'.fixture',published.replaceAll('https://slack.com/api',`http://127.0.0.1:${provider.port}/api`));
+ renameSync(bundleFile+'.fixture',bundleFile);
+ mkdirSync(join(dir,'connections'));
+ writeFileSync(join(dir,'connections/slack.json'),JSON.stringify({version:1,provider:'slack',status:'connected',generation:randomUUID(),access_token:'ENGINE_ONLY_SLACK',account:{id:'U123',label:'Jarvis bot'},workspaces:[{id:'T123',name:'Sandbox'}],settings:{scopes:'channels:read,chat:write,groups:read'},connected_at:new Date().toISOString()}));
+ const resolver=new CredentialResolver();resolver.register(new JarvisSlackConnectionSource(dir));
+ api=new SandboxApi({services:buildSandboxServiceBackends({credentialResolver:resolver,llmManager:{} as any,channelService:{} as any,wsService:{} as any,eventBuffer:new WorkflowEventBuffer(),approvalManager:new ApprovalManager(),auditTrail:new AuditTrail(),emergencyController:new EmergencyController(),authorityEngine:new AuthorityEngine({default_level:10,governed_categories:[],overrides:[],context_rules:[],learning:{enabled:false,suggest_threshold:10},emergency_state:'normal'})})});
+ await api.start({port:0});
+ const bundle=await buildEngineBundle();
+ const fixtureBundle=join(dir,'engine-fixture.cjs');
+ writeFileSync(fixtureBundle,readFileSync(bundle.bundlePath,'utf8').replaceAll('https://slack.com/api/chat.postMessage',`http://127.0.0.1:${provider.port}/api/chat.postMessage`));
+ const digest=createHash('sha256').update(readFileSync(fixtureBundle)).digest('hex');
+ runtime=new EngineRuntime({api,bundlePath:fixtureBundle,expectedDigest:digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code'),egressPolicy:'private-allowed'});
+},120000);
+afterAll(async()=>{
+ if(!gate)return;
+ await runtime?.shutdown();await api?.stop();provider?.stop(true);closeWorkflowDb();
+ if(runId)rmSync(join(workflowLogsBase(),runId+'.bin'),{force:true});
+ if(dir)rmSync(dir,{recursive:true,force:true});
+});
+test.skipIf(!gate)('published Slack metadata and channel lookup, message and threaded reply through the real engine',async()=>{
+ const {catalog,failures}=await buildPieceCatalog({runtime,pieceRoots:[join(dir,'node_modules/@activepieces')],projectId:DEFAULT_IDS.project,pieceTimeoutMs:30000,overallTimeoutMs:45000});
+ expect(failures).toEqual([]);
+ const metadata=catalog.get(piece)!;
+ expect(metadata.auth?.type).toBe('OAUTH2');
+ // Every action the installed package declares is in the governed table, so
+ // an upstream addition fails here instead of falling to delete_data.
+ const actions=Object.keys(metadata.actions);
+ expect(actions.length).toBeGreaterThan(40);
+ expect(actions.filter(name=>name!=='custom_api_call'&&!resolveGovernedPieceAction(piece,name)!.known)).toEqual([]);
+ for(const name of ['send_channel_message','slack_post_message','slack_get_channel_info','slack_find_channel']) expect(metadata.actions[name]?.requireAuth).toBe(true);
+ expect(metadata.actions.slack_post_message?.outputSample).toMatchObject({channel:'C0123456789',ts:'1710304378.475129'});
+ expect(metadata.actions.slack_find_channel?.outputSample).toMatchObject({id:'C0123456789'});
+ expect(metadata.actions.slack_get_channel_info?.outputSample).toMatchObject({channel:{id:'C0123456789'}});
+ const step=(name:string,actionName:string,input:Record<string,unknown>,nextAction?:any)=>({name,type:'PIECE' as const,settings:{pieceName:piece,pieceVersion:'0.23.1',actionName,input:{auth:'{{connections.jarvis:slack}}',...input}},...(nextAction?{nextAction}:{})});
+ const reply=step('reply','send_channel_message',{channel:'{{post.channel}}',text:'Thread reply',sendAsBot:true,threadTs:'{{post.ts}}'});
+ const post=step('post','slack_post_message',{channel:'{{info.channel.id}}',text:'Sandbox message'},reply);
+ const info=step('info','slack_get_channel_info',{channel:'{{find.id}}'},post);
+ const find=step('find','slack_find_channel',{name:'jarvis-sandbox'},info);
+ const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Slack qualification',trigger:{name:'trigger',type:'EMPTY',nextAction:find}});
+ const run=createFlowRun({flowId:flow.id,flowVersionId:version.id});runId=run.id;
+ const worker=new Worker({log:()=>{},handlers:{RUN_FLOW:createRunFlowHandler({executor:new EngineFlowExecutor(runtime,{terminalTimeoutMs:5000})})}});
+ enqueue({jobType:'RUN_FLOW',flowRunId:run.id,maxAttempts:1,payload:{runId:run.id}});await worker.drain();
+ const complete=getFlowRun(run.id)!;
+ expect({status:complete.status,steps:complete.steps}).toMatchObject({status:'SUCCEEDED'});
+ expect(requests.map(r=>r.path)).toEqual(['/api/conversations.list','/api/conversations.info','/api/chat.postMessage','/api/chat.postMessage']);
+ expect(requests[3]!.body).toMatchObject({channel:'C123',thread_ts:'1710304378.000003',text:'Thread reply'});
+ expect(JSON.stringify(complete.steps)).not.toContain('ENGINE_ONLY_SLACK');
+},90000);
