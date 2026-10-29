@@ -4,7 +4,7 @@ import { getFlowVersion } from '../db/repos/flow-version';
 import type { WorkflowEffect } from '../db/repos/workflow-effect';
 import { walkFlowNodes } from '../db/flow-graph';
 import { digest } from './effect-context';
-import { tracksPieceCompletion } from './piece-effects';
+import { isGmailTrackedSend, tracksPieceCompletion } from './piece-effects';
 
 export type ProviderEvidence = { outcome: 'confirmed' | 'inconclusive' | 'unsupported' | 'blocked'; reason: string; reference?: string };
 
@@ -43,10 +43,13 @@ export function pieceCompletionReceipt(effect: WorkflowEffect): { provider: 'gma
   const result = effect.provenance.piece === '@activepieces/piece-gmail' ? object(raw?.data) ?? raw : raw;
   if (!result) return null;
   if (effect.provenance.piece === '@activepieces/piece-gmail') {
+    // A label change returns the labeled message, usually an incoming one: it is
+    // no send receipt, and the SENT readback below cannot confirm it.
+    if (!isGmailTrackedSend(effect.provenance.action)) return null;
     if (effect.arguments.draft === true || typeof result.id !== 'string' || !/^[a-f0-9]{1,128}$/i.test(result.id)) return null;
     return { provider: 'gmail', id: result.id };
   }
-  // Only Gmail and Slack have a readback; other tracked writes (including HTTP and Sheets) has none.
+  // Only Gmail sends and Slack have a readback; other tracked writes (Gmail labels, HTTP, Sheets) have none.
   if (effect.provenance.piece !== '@activepieces/piece-slack') return null;
   if (result.ok !== true || typeof result.ts !== 'string' || !/^\d{1,20}\.\d{1,10}$/.test(result.ts)
     || typeof result.channel !== 'string' || !/^[A-Z0-9]{1,80}$/.test(result.channel)) return null;
