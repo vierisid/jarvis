@@ -1,7 +1,7 @@
 import {beforeEach,afterEach,expect,test} from 'bun:test';
 import {initWorkflowDb,closeWorkflowDb} from '../db';
 import {reportReceipt} from '../db/repos/weekly-report';
-import {collectWeeklyReport,saveWeeklyReport,reportSetup,reportWeeks,localMidnight,reportTransport,decimal,comparison,hubspotSearchBody,HUBSPOT_SEARCH_PATH,isReportStep,REPORT_PIECE,REPORT_ACTION,SOURCE_READ_BUDGET_MS,retryAfterMs,HUBSPOT_RETRY_MAX_WAIT_MS} from './weekly-report';
+import {collectWeeklyReport,saveWeeklyReport,reportSetup,reportWeeks,localMidnight,reportTransport,decimal,comparison,hubspotSearchBody,HUBSPOT_SEARCH_PATH,isReportStep,REPORT_PIECE,REPORT_ACTION,SOURCE_READ_BUDGET_MS,retryAfterMs,HUBSPOT_RETRY_MAX_WAIT_MS,reportRecoveryPath,replacementKey} from './weekly-report';
 import {nodeConnectionReferences} from '../db/repos/binding-pins';
 import {workflowSafeguards} from './workflow-safeguards';
 import {compileWorkflow} from './workflow-readiness';
@@ -29,8 +29,14 @@ test('source failure or cursor loops discard all partial totals but retain other
     const r=await collectWeeklyReport(setup,reportFixtureRequest(option),now);expect(r.partial).toBe(true);expect(r.datasets[0]!.coverage.status).toBe('Unavailable');expect(r.datasets[0]!.totals).toEqual({});expect(r.datasets[2]!.coverage.status).toBe('Complete');
   }
 });
-test('incomplete monetary fields make affected dataset unavailable, not zero',async()=>{
-  const r=await collectWeeklyReport(setup,reportFixtureRequest({missingAmount:true}),now);expect(r.datasets[2]!.coverage.status).toBe('Unavailable');expect(r.datasets[2]!.totals).toEqual({});
+test('HubSpot deals with no amount are excluded and counted per week, never zero and never making the week Unavailable',async()=>{
+  const r=await collectWeeklyReport(setup,reportFixtureRequest({missingAmount:true}),now),current=r.datasets[2]!,prior=r.datasets[5]!;
+  expect(current.coverage.status).toBe('Complete');expect(current.totals).toEqual({});expect(current.noAmount).toBe(1);expect(prior.noAmount).toBe(1);expect(r.partial).toBe(false);
+  expect(r.content).toContain('hubspot-deals | current | Excluded from totals: 1 deal with no amount not included');
+  // Only the amountless deal is excluded: the other deals of the week still count.
+  const mixed=await collectWeeklyReport(setup,reportFixtureRequest({deals:[deal(1,'2026-10-22T10:00:00Z',null as any),deal(2,'2026-10-22T11:00:00Z','5'),deal(3,'2026-10-23T11:00:00Z','')]}),now);
+  expect(mixed.datasets[2]!.totals).toEqual({EUR:{count:1,amount:'5'}});expect(mixed.datasets[2]!.noAmount).toBe(2);
+  expect(mixed.content).toContain('hubspot-deals | current | Excluded from totals: 2 deals with no amount not included');
 });
 test('both unavailable sources still produce an explicit honest report; complete empty differs',async()=>{
   const r=await collectWeeklyReport(setup,reportFixtureRequest({failStripe:true,failHubspot:true}),now);expect(r.datasets.every(d=>d.coverage.status==='Unavailable')).toBe(true);expect(r.comparisons.every(c=>c.status==='Unavailable')).toBe(true);
@@ -47,12 +53,60 @@ test('new Doc content and destination verified, successful weekly replay does no
   const out=await saveWeeklyReport(setup,r,req,ledger,'week');expect(out.documentId).toBe('doc1');expect(writes).toHaveLength(2);
   expect((await saveWeeklyReport(setup,r,req,reportReceipt('b'),'week')).documentId).toBe('doc1');expect(writes).toHaveLength(2);
 });
-test('uncertain document creation and wrong readback remain fenced across retries',async()=>{
-  for(const [key,options]of [['unknown',{unknownCreate:true}],['bad',{badContent:true}]] as const){
-    const writes:any[]=[],req=reportFixtureRequest({...options,writes}),r=await collectWeeklyReport(setup,req,now);
-    await expect(saveWeeklyReport(setup,r,req,reportReceipt('a'),key)).rejects.toThrow();const n=writes.length;
-    await expect(saveWeeklyReport(setup,r,req,reportReceipt('b'),key)).rejects.toThrow('unresolved');expect(writes).toHaveLength(n);
-  }
+test('wrong readback stays fenced across retries, naming the Doc to review',async()=>{
+  const writes:any[]=[],req=reportFixtureRequest({badContent:true,writes}),r=await collectWeeklyReport(setup,req,now);
+  await expect(saveWeeklyReport(setup,r,req,reportReceipt('a'),'bad')).rejects.toThrow();const n=writes.length;
+  await expect(saveWeeklyReport(setup,r,req,reportReceipt('b'),'bad')).rejects.toThrow('unresolved. Review the recorded attempt (Doc doc1, https://docs.google.com/document/d/doc1/edit)');expect(writes).toHaveLength(n);
+});
+test('a lost create reply is recovered by the Doc report key: an empty Doc is completed, no second Doc is created',async()=>{
+  const writes:any[]=[],req=reportFixtureRequest({unknownCreate:true,writes}),r=await collectWeeklyReport(setup,req,now);
+  const calls:string[]=[],second=reportFixtureRequest({writes,calls});
+  await expect(saveWeeklyReport(setup,r,req,reportReceipt('a'),'lost')).rejects.toThrow('Lost creation reply');expect(writes).toHaveLength(1);
+  // The same fixture Drive: the lost reply did create doc1.
+  const recovering=async(p:any,path:string,body?:any)=>{calls.push(`${p} ${path}`);return req(p,path,body);};
+  const out=await saveWeeklyReport(setup,r,recovering,reportReceipt('b'),'lost');
+  expect(calls).toContain(`google ${reportRecoveryPath('lost')}`);
+  expect(out.documentId).toBe('doc1');expect(out.documentVerified).toBe(true);expect(writes).toHaveLength(2);expect(writes.filter(w=>w.path.startsWith('/drive/v3/files'))).toHaveLength(1);
+  expect((await saveWeeklyReport(setup,r,second,reportReceipt('c'),'lost')).documentId).toBe('doc1');expect(writes).toHaveLength(2);
+});
+test('a lost create reply with no Doc found, or a found Doc that already has text, stays fenced and names what it found',async()=>{
+  const r=await collectWeeklyReport(setup,reportFixtureRequest(),now);
+  const transport=reportTransport({stripe:'x',hubspot:'x',google:'x'},()=>{},(async()=>new Response('{}',{status:503})) as any),fixture=reportFixtureRequest();
+  await expect(saveWeeklyReport(setup,r,async(p,path,body)=>body?transport(p,path,body):fixture(p,path,body),reportReceipt('a'),'none')).rejects.toThrow('HTTP 503');
+  await expect(saveWeeklyReport(setup,r,fixture,reportReceipt('b'),'none')).rejects.toThrow("Drive shows no document carrying this report's key yet");
+  const writes:any[]=[],req=reportFixtureRequest({unknownCreate:true,writes});
+  await expect(saveWeeklyReport(setup,r,req,reportReceipt('a'),'written')).rejects.toThrow('Lost creation reply');
+  // Something wrote into the Doc after the lost reply: Jarvis does not write into it again.
+  const dirty=async(p:any,path:string,body?:any)=>{const out=await req(p,path,body);return path==='/v1/documents/doc1'?{...out,body:{content:[{paragraph:{elements:[{textRun:{content:'earlier text'}}]}}]}}:out;};
+  await expect(saveWeeklyReport(setup,r,dirty,reportReceipt('b'),'written')).rejects.toThrow('(Doc doc1, https://docs.google.com/document/d/doc1/edit)');expect(writes).toHaveLength(1);
+  await expect(saveWeeklyReport(setup,r,req,reportReceipt('c'),'written')).rejects.toThrow('(Doc doc1,');expect(writes).toHaveLength(1);
+});
+test('a partial report leaves room for one replacement Doc that names it; a complete replacement closes the week',async()=>{
+  const writes:any[]=[],options:any={writes,failStripe:true},req=reportFixtureRequest(options);
+  const partial=await saveWeeklyReport(setup,await collectWeeklyReport(setup,req,now),req,reportReceipt('a'),'w');
+  expect(partial).toMatchObject({documentVerified:true,partial:true,weekClosed:false,documentId:'doc1'});expect(partial.content).toContain('This report is partial. A later run this week may create one replacement report');
+  options.failStripe=false;
+  const replacement=await saveWeeklyReport(setup,await collectWeeklyReport(setup,req,now),req,reportReceipt('b'),'w');
+  expect(replacement).toMatchObject({documentVerified:true,partial:false,weekClosed:true,documentId:'doc2',replaces:{documentId:'doc1',documentUrl:'https://docs.google.com/document/d/doc1/edit'}});
+  expect(replacement.title).toEndWith('(replacement)');expect(replacement.content).toContain('This report replaces the earlier partial report for this week: https://docs.google.com/document/d/doc1/edit (Doc doc1).');
+  expect(writes.filter(w=>w.body?.mimeType)).toHaveLength(2);
+  options.failStripe=true;const n=writes.length;
+  expect((await saveWeeklyReport(setup,await collectWeeklyReport(setup,req,now),req,reportReceipt('c'),'w')).documentId).toBe('doc2');expect(writes).toHaveLength(n);
+});
+test('a partial replacement also closes the week and says so; no third Doc',async()=>{
+  const writes:any[]=[],req=reportFixtureRequest({writes,failHubspot:true}),r=await collectWeeklyReport(setup,req,now);
+  expect((await saveWeeklyReport(setup,r,req,reportReceipt('a'),'p')).weekClosed).toBe(false);
+  const second=await saveWeeklyReport(setup,r,req,reportReceipt('b'),'p');
+  expect(second).toMatchObject({partial:true,weekClosed:true,documentId:'doc2',replaces:{documentId:'doc1'}});
+  expect(second.content).toContain('This replacement is also partial. The week is now closed: Jarvis will not create another report for it.');
+  const n=writes.length;expect((await saveWeeklyReport(setup,r,req,reportReceipt('c'),'p')).documentId).toBe('doc2');expect(writes).toHaveLength(n);
+  expect(reportReceipt('x').peek(replacementKey('p')).state).toBe('complete');
+});
+test('a complete report closes the week at once: a rerun returns its stored result',async()=>{
+  const writes:any[]=[],req=reportFixtureRequest({writes}),r=await collectWeeklyReport(setup,req,now);
+  const first=await saveWeeklyReport(setup,r,req,reportReceipt('a'),'c');expect(first).toMatchObject({partial:false,weekClosed:true});expect(first.content).not.toContain('partial report');
+  expect(await saveWeeklyReport(setup,r,req,reportReceipt('b'),'c')).toEqual(JSON.parse(JSON.stringify(first)));expect(writes).toHaveLength(2);
+  expect(reportReceipt('x').peek(replacementKey('c')).state).toBe('none');
 });
 test('concurrent weekly claims admit exactly one document',async()=>{
   const writes:any[]=[],req=reportFixtureRequest({writes}),r=await collectWeeklyReport(setup,req,now);
@@ -71,6 +125,17 @@ test('incomplete HubSpot date or currency invalidates the dataset and never assu
  for(const field of ['closedate','deal_currency_code']){
   const req=reportFixtureRequest({mutate:(p,path,r)=>p==='hubspot'&&path==='/crm/v3/objects/deals/search'?{...r,results:r.results.map((x:any)=>({...x,properties:{...x.properties,[field]:null}}))}:r});
   expect((await collectWeeklyReport(setup,req,now)).datasets[2]!.coverage.status).toBe('Unavailable');
+ }
+});
+test('a deal with no currency uses the portal company currency; with neither the week is Unavailable',async()=>{
+ const noCode=(p:string,path:string,r:any)=>p==='hubspot'&&path==='/crm/v3/objects/deals/search'?{...r,results:r.results.map((x:any)=>({...x,properties:{...x.properties,deal_currency_code:x.id==='1'?'':null}}))}:r;
+ const r=await collectWeeklyReport(setup,reportFixtureRequest({mutate:noCode,companyCurrency:'usd'}),now);
+ expect(r.datasets[2]!.coverage.status).toBe('Complete');expect(r.datasets[2]!.totals).toEqual({USD:{count:1,amount:'123.456789'}});expect(r.datasets[5]!.totals).toEqual({USD:{count:1,amount:'0'}});
+ // A deal that names its currency keeps it.
+ const named=await collectWeeklyReport(setup,reportFixtureRequest({companyCurrency:'usd'}),now);expect(named.datasets[2]!.totals).toEqual({EUR:{count:1,amount:'123.456789'}});
+ for(const companyCurrency of [undefined,'dollars']){
+  const none=await collectWeeklyReport(setup,reportFixtureRequest({mutate:noCode,companyCurrency}),now);
+  expect(none.datasets[2]!.coverage.status).toBe('Unavailable');expect(none.datasets[2]!.coverage.reason).toContain('company currency is unknown');
  }
 });
 test('wrong Google identity, folder or permission prevents document creation',async()=>{
@@ -247,7 +312,7 @@ test('source reads stop at the time budget; unfinished datasets are Unavailable 
   expect(status).toEqual(['stripe-payments/current/Complete','stripe-refunds/current/Complete','hubspot-deals/current/Unavailable','stripe-payments/prior/Unavailable','stripe-refunds/prior/Unavailable','hubspot-deals/prior/Unavailable']);
   for(const d of r.datasets.slice(2)){expect(d.coverage.reason).toContain('5-minute source read time budget ran out');expect(d.totals).toEqual({});}
   expect(r.partial).toBe(true);expect(r.content).toContain('stop at a 5-minute source read time budget');
-  expect((await saveWeeklyReport(setup,r,fixture,reportReceipt('budget'),'budget')).complete).toBe(true);
+  expect(await saveWeeklyReport(setup,r,fixture,reportReceipt('budget'),'budget')).toMatchObject({documentVerified:true,partial:true,weekClosed:false});
   // Within the budget nothing is affected.
   t=0;expect((await collectWeeklyReport(setup,reportFixtureRequest(),now,()=>{},()=>t+=1000)).partial).toBe(false);
 });
@@ -268,4 +333,61 @@ test('HubSpot 429 is retried a bounded number of times honouring Retry-After',as
   // Cancellation during the wait stops the retry and is known not to have been re-sent.
   let checks=0;const cancelled=reportTransport({stripe:'x',hubspot:'x',google:'x'},()=>{if(++checks>1)throw Error('Cancelled');},(async()=>limited('1')()) as any,0,async()=>{});
   await expect(cancelled('hubspot',HUBSPOT_SEARCH_PATH,hubspotSearchBody(setup,1000,2000))).rejects.toThrow('Cancelled');
+});
+
+// Surviving guards, each pinned against its mutant.
+const stripeRows=(f:(rows:any[],path:string)=>any[])=>(p:string,path:string,r:any)=>p==='stripe'&&path.startsWith('/v1/balance_transactions')&&Array.isArray(r.data)?{...r,data:f(r.data,path)}:r;
+test('a payment that is not paid or not captured makes payments Unavailable',async()=>{
+  for(const field of ['paid','captured']){
+    const r=await collectWeeklyReport(setup,reportFixtureRequest({mutate:stripeRows(rows=>rows.map(x=>x.type==='charge'?{...x,source:{...x.source,[field]:false}}:x))}),now);
+    expect(r.datasets[0]!.coverage.status).toBe('Unavailable');expect(r.datasets[0]!.coverage.reason).toContain('Successful captured payment cannot be confirmed');expect(r.datasets[1]!.coverage.status).toBe('Complete');
+  }
+});
+test('a three-decimal currency keeps its minor unit: BHD 1234 is 1.234',async()=>{
+  const r=await collectWeeklyReport(setup,reportFixtureRequest({mutate:stripeRows(rows=>rows.map(x=>x.currency==='jpy'?{...x,currency:'bhd',amount:Math.sign(x.amount)*1234}:x)),refundStatus:n=>n===3?'pending':'succeeded'}),now);
+  expect(r.datasets[0]!.totals.BHD).toEqual({count:1,amount:'1.234'});expect(r.datasets[1]!.excluded).toEqual({pending:{BHD:{count:1,amount:'1.234'}}});
+  expect(r.content).toContain('1 pending refund (BHD 1.234) not included');
+});
+test('a HubSpot search whose deals do not add up to its total is Unavailable',async()=>{
+  const r=await collectWeeklyReport(setup,reportFixtureRequest({mutate:(p,path,x)=>p==='hubspot'&&path===HUBSPOT_SEARCH_PATH?{...x,total:x.total+1}:x}),now);
+  expect(r.datasets[2]!.coverage.status).toBe('Unavailable');expect(r.datasets[2]!.coverage.reason).toContain('different number of deals than its total');
+});
+test('a Stripe continuation page with no rows is Unavailable, not the end',async()=>{
+  const r=await collectWeeklyReport(setup,reportFixtureRequest({mutate:(p,path,x)=>p==='stripe'&&path.startsWith('/v1/balance_transactions')&&path.includes('type=charge')&&!path.includes('starting_after')?{data:[],has_more:true}:x}),now);
+  expect(r.datasets[0]!.coverage.status).toBe('Unavailable');expect(r.datasets[0]!.coverage.reason).toContain('Empty continuation page');
+});
+test('a Stripe record that changes between pages is Unavailable',async()=>{
+  const r=await collectWeeklyReport(setup,reportFixtureRequest({overlap:true,mutate:stripeRows((rows,path)=>path.includes('starting_after')?rows.map(x=>x.id.endsWith('_1')?{...x,amount:x.amount*2}:x):rows)}),now);
+  expect(r.datasets[0]!.coverage.status).toBe('Unavailable');expect(r.datasets[0]!.coverage.reason).toContain('Record changed during pagination');
+});
+test('a different Stripe account than the one selected makes Stripe Unavailable',async()=>{
+  const r=await collectWeeklyReport(setup,reportFixtureRequest({mutate:(p,path,x)=>path==='/v1/account'?{id:'acct_other'}:x}),now);
+  for(const i of [0,1,3,4]){expect(r.datasets[i]!.coverage.status).toBe('Unavailable');expect(r.datasets[i]!.coverage.reason).toContain('Stripe account or live/test mode mismatch');}
+  expect(r.datasets[2]!.coverage.status).toBe('Complete');
+});
+test('a saved Doc outside the selected folder fails verification',async()=>{
+  const writes:any[]=[],req=reportFixtureRequest({writes,mutate:(p,path,x)=>/^\/drive\/v3\/files\/doc\d+\?/.test(path)?{...x,parents:['elsewhere']}:x}),r=await collectWeeklyReport(setup,req,now);
+  await expect(saveWeeklyReport(setup,r,req,reportReceipt('a'),'folder')).rejects.toThrow('could not be verified');
+});
+test('the transport refuses redirects and responses over 4 MB',async()=>{
+  const inits:any[]=[];
+  const ok=reportTransport({stripe:'x',hubspot:'x',google:'x'},()=>{},(async(_u:any,init:any)=>{inits.push(init);return Response.json({id:'acct_x'});}) as any);
+  await ok('stripe','/v1/account');expect(inits[0].redirect).toBe('error');
+  const big=reportTransport({stripe:'x',hubspot:'x',google:'x'},()=>{},(async()=>new Response('{"a":"'+'x'.repeat(4_000_000)+'"}')) as any);
+  await expect(big('stripe','/v1/account')).rejects.toThrow('Source response exceeds completeness limit');
+  const small=reportTransport({stripe:'x',hubspot:'x',google:'x'},()=>{},(async()=>new Response('{"a":"'+'x'.repeat(3_999_000)+'"}')) as any);
+  expect((await small('stripe','/v1/account')).a).toHaveLength(3_999_000);
+});
+test('the transport allows exactly the recovery search, and one insert into a Doc it found',async()=>{
+  const seen:string[]=[];
+  const req=reportTransport({stripe:'x',hubspot:'x',google:'x'},()=>{},(async(u:any)=>{seen.push(String(u));return Response.json(String(u).includes('/drive/v3/files?')?{files:[{id:'lost',mimeType:'application/vnd.google-apps.document',appProperties:{jarvisReport:'key'}},{id:'other',mimeType:'application/vnd.google-apps.document',appProperties:{jarvisReport:'not-key'}}]}:{documentId:'lost'});}) as any);
+  const body={requests:[{insertText:{location:{index:1},text:'report'}}]};
+  await expect(req('google','/v1/documents/lost:batchUpdate',body)).rejects.toThrow('scope');
+  for(const path of [reportRecoveryPath('key')+'&orderBy=name','/drive/v3/files?q=trashed%3Dfalse',reportRecoveryPath('key').replace('trashed%3Dfalse','trashed%3Dtrue')])await expect(req('google',path)).rejects.toThrow('scope');
+  expect(seen).toHaveLength(0);
+  await req('google',reportRecoveryPath('key'));
+  await expect(req('google','/v1/documents/other:batchUpdate',body)).rejects.toThrow('scope');
+  await req('google','/v1/documents/lost:batchUpdate',body);
+  await expect(req('google','/v1/documents/lost:batchUpdate',body)).rejects.toThrow('scope');
+  expect(()=>reportRecoveryPath("x' or name contains 'y")).toThrow('Invalid report key');
 });

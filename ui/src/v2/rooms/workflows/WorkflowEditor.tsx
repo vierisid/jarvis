@@ -3752,9 +3752,13 @@ function AdvancedSettings(props: {
  * here would duplicate the OAuth redirect handling already in that
  * panel and isn't worth the complexity.
  */
+/** The credential kind a saved-account picker offers: a Stripe account is a secret key, the others are OAuth. */
+export function accountPickerAuthType(provider: string): PieceCatalogAuth["type"] {
+  return provider === '@activepieces/piece-stripe' ? 'SECRET_TEXT' : 'OAUTH2';
+}
 export function MeetingAccountPickers({connections,input,onSetInput,fields=MEETING_ACCOUNT_FIELDS}: {connections:ConnectionMeta[];input:Record<string,unknown>;onSetInput:(field:string,value:string)=>void;fields?:ReadonlyArray<readonly [string,string,string]>}) {
   return <>{fields.map(([field,provider,label]) =>
-    <ConnectionPicker key={field} pieceName={provider} pieceDisplayName={label} authDisplayName={`${label} account`} authType={provider === '@activepieces/piece-stripe' ? 'SECRET_TEXT' : 'OAUTH2'}
+    <ConnectionPicker key={field} pieceName={provider} pieceDisplayName={label} authDisplayName={`${label} account`} authType={accountPickerAuthType(provider)}
       connections={connections} currentValue={input[field] ? `{{connections.${input[field]}}}` : ''}
       onPick={template=>onSetInput(field,template ? template.slice(14,-2) : '')} />)}</>;
 }

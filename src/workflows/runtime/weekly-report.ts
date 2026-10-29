@@ -40,7 +40,9 @@ export function reportWeeks(now:number,timezone:string){
 }
 const query=(v:Record<string,string>)=>new URLSearchParams(v).toString();
 export interface Coverage {source:string;period:string;status:'Complete'|'Unavailable';pages:number;unique:number;reason?:string;terminal:boolean;url:string}
-export interface Dataset {coverage:Coverage;totals:Record<string,{count:number;amount:string}>;excluded?:Record<string,Record<string,{count:number;amount:string}>>}
+export interface Dataset {coverage:Coverage;totals:Record<string,{count:number;amount:string}>;excluded?:Record<string,Record<string,{count:number;amount:string}>>;
+  /** HubSpot deals with no amount: kept out of totals and disclosed by count. */
+  noAmount?:number}
 /** Refund statuses that are reported but kept out of totals. Any other non-succeeded status makes refunds Unavailable. */
 export const EXCLUDED_REFUND_STATUSES=['pending','requires_action','failed','canceled'] as const;
 /** How each excluded status reads in the report: "1 pending refund", "2 refunds requiring customer action". */
@@ -157,7 +159,7 @@ async function searchDeals(request:ReportRequest,s:ReportSetup,start:number,end:
   };
   await range(start,end);return out;
 }
-function unavailable(d:Dataset,e:unknown){d.coverage.status='Unavailable';d.coverage.reason=errText(e);d.coverage.terminal=false;d.totals={};delete d.excluded;}
+function unavailable(d:Dataset,e:unknown){d.coverage.status='Unavailable';d.coverage.reason=errText(e);d.coverage.terminal=false;d.totals={};delete d.excluded;delete d.noAmount;}
 export async function collectWeeklyReport(s:ReportSetup,source:ReportRequest,now:number,checkpoint:()=>void=()=>{},clock:()=>number=Date.now){
   const weeks=reportWeeks(now,s.timezone),datasets:Dataset[]=[],deadline=clock()+SOURCE_READ_BUDGET_MS;
   // No source request starts after the budget; whatever is still being read is Unavailable, never partial.
@@ -166,10 +168,12 @@ export async function collectWeeklyReport(s:ReportSetup,source:ReportRequest,now
     const d:Dataset={coverage:{source,period:week.name,status:'Complete',pages:0,unique:0,terminal:false,url},totals:{}};
     try{checkpoint();await fn(d);}catch(e){checkpoint();unavailable(d,e);}datasets.push(d);
   };
-  let stripeError:unknown,hubspotError:unknown;
+  let stripeError:unknown,hubspotError:unknown,companyCurrency:string|undefined;
   try{const a=await request('stripe','/v1/account'),b=await request('stripe','/v1/balance');if(a.id!==s.stripeAccountId||b.livemode!==(s.stripeMode==='live'))throw Error('Stripe account or live/test mode mismatch');}catch(e){checkpoint();stripeError=e;}
   try{
     const account=await request('hubspot','/account-info/v3/details');if(String(account.portalId)!==s.hubspotPortalId)throw Error('HubSpot portal mismatch');
+    // A single-currency portal often leaves deal_currency_code empty: its deals are in the company currency.
+    companyCurrency=typeof account.companyCurrency==='string'&&/^[a-zA-Z]{3}$/.test(account.companyCurrency)?account.companyCurrency.toUpperCase():undefined;
     const property=await request('hubspot',`/crm/v3/properties/deals/${s.dealDateProperty}`);if(property.name!==s.dealDateProperty||property.type!=='datetime')throw Error('Select a HubSpot datetime date property');
     const pipelines=await request('hubspot','/crm/v3/pipelines/deals');const stages=pipelines.results?.flatMap((p:Obj)=>p.stages??[]);
     if(!Array.isArray(stages)||s.dealStageIds.some(id=>!stages.some((p:Obj)=>p.id===id)))throw Error('Selected deal stages unavailable');
@@ -198,7 +202,14 @@ export async function collectWeeklyReport(s:ReportSetup,source:ReportRequest,now
       const rows=await searchDeals(request,s,week.start,week.end,d.coverage),confirm=await searchDeals(request,s,week.start,week.end,d.coverage);
       if(confirm.size!==rows.size||[...rows].some(([id,r])=>JSON.stringify(confirm.get(id))!==JSON.stringify(r)))throw Error('Deals changed between the two complete reads; partial totals discarded');
       d.coverage.unique=rows.size;d.coverage.terminal=true;
-      for(const r of rows.values())add(d.totals,currency(r.properties.deal_currency_code),decimal(r.properties.amount));
+      for(const r of rows.values()){
+        const code=r.properties.deal_currency_code,amount=r.properties.amount;
+        // Never assumed: with neither a deal currency nor a known portal company currency the week is Unavailable.
+        const c=code==null||code===''?companyCurrency??(()=>{throw Error('Deal currency missing and the HubSpot company currency is unknown');})():currency(code);
+        // A deal with no amount is not zero: it is kept out of totals and disclosed by count.
+        if(amount==null||amount===''){d.noAmount=(d.noAmount??0)+1;continue;}
+        add(d.totals,c,decimal(amount));
+      }
     });
   }
   const comparisons:Obj[]=[];
@@ -213,36 +224,117 @@ export async function collectWeeklyReport(s:ReportSetup,source:ReportRequest,now
   const content=[title,`Observed at: ${new Date(now).toISOString()}`,`Reporting timezone: ${s.timezone}. Weeks are Monday 00:00 to next Monday 00:00 (exclusive).`,
     ...weeks.map(w=>`${w.name}: ${w.localStart} to ${w.localEnd}; UTC [${new Date(w.start).toISOString()}, ${new Date(w.end).toISOString()})`),
     `Stripe account ${s.stripeAccountId}, mode ${s.stripeMode}. Basis: balance transaction posting date, NOT PaymentIntent creation, capture timestamp or payout availability. Successful captured charge/payment and succeeded refund/payment_refund ledger entries only; pending, requiring customer action (requires_action), failed and canceled refunds are excluded from totals and listed per currency, and any other refund status makes refunds Unavailable; gross before Stripe fees, in Stripe BALANCE currency. Conversion may already have occurred in Stripe. Disputes, transfers, fees, refund reversals and other ledger types excluded.`,
-    `HubSpot portal ${s.hubspotPortalId}: current nonarchived deals in selected stages ${s.dealStageIds.join(',')}, dated by ${s.dealDateProperty}. This is current record state, not a historical pipeline snapshot. Amounts use original deal_currency_code. Deals come from HubSpot CRM search filtered to each week and read twice; a window that could reach the ${HUBSPOT_SEARCH_CAP}-result search cap is split, and more than ${HUBSPOT_DEAL_LIMIT} matching deals or ${HUBSPOT_SEARCH_REQUESTS} search requests per read marks the week Unavailable.`,
+    `HubSpot portal ${s.hubspotPortalId}: current nonarchived deals in selected stages ${s.dealStageIds.join(',')}, dated by ${s.dealDateProperty}. This is current record state, not a historical pipeline snapshot. Amounts use original deal_currency_code, or the portal company currency for a deal with none; deals with no amount are excluded from totals and counted. Deals come from HubSpot CRM search filtered to each week and read twice; a window that could reach the ${HUBSPOT_SEARCH_CAP}-result search cap is split, and more than ${HUBSPOT_DEAL_LIMIT} matching deals or ${HUBSPOT_SEARCH_REQUESTS} search requests per read marks the week Unavailable.`,
     `All Stripe and HubSpot reads together stop at a ${sourceBudgetText}; any dataset not complete by then is Unavailable. On a large account this budget is reached before the per-read page and request limits.`,
     'No FX or cross-source totals. Currency amounts are decimal strings, computed with exact scaled integers. Missing data is never zero. Complete empty datasets establish zero activity. Percentage N/A for zero/negative baselines as labelled.',
     '\nSOURCE COVERAGE',...datasets.map(({coverage:c})=>`${c.source} | ${c.period} | ${c.status}${c.reason?': '+c.reason:''} | pages ${c.pages}, unique records ${c.unique}, end confirmed ${c.terminal}. Source: ${c.url}`),
     '\nTOTALS BY SOURCE, PERIOD AND CURRENCY',...datasets.flatMap(d=>d.coverage.status==='Unavailable'?[`${d.coverage.source} | ${d.coverage.period} | Unavailable: ${d.coverage.reason}`]:[...Object.keys(d.totals).length?Object.entries(d.totals).map(([c,t])=>`${d.coverage.source} | ${d.coverage.period} | ${c} | count ${t.count} | amount ${t.amount}`):[`${d.coverage.source} | ${d.coverage.period} | 0 records; no currency inferred`],
-      ...d.excluded?[`${d.coverage.source} | ${d.coverage.period} | Excluded from totals: ${excludedRefundsText(d.excluded)}`]:[]]),
+      ...d.excluded?[`${d.coverage.source} | ${d.coverage.period} | Excluded from totals: ${excludedRefundsText(d.excluded)}`]:[],
+      ...d.noAmount?[`${d.coverage.source} | ${d.coverage.period} | Excluded from totals: ${d.noAmount} deal${d.noAmount===1?'':'s'} with no amount not included`]:[]]),
     '\nWEEK-OVER-WEEK COMPARISONS',...comparisons.map(c=>c.reason?`${c.source}: ${c.reason}`:c.note?`${c.source}: ${c.note}`:`${c.source} | ${c.currency} | current ${c.current.amount} (${c.current.count} records) | prior ${c.prior.amount} (${c.prior.count} records) | amount delta ${c.amountChange.delta} | ${c.amountChange.percentage===null?c.amountChange.label:c.amountChange.percentage+'%'} | count delta ${c.countChange.delta} | ${c.countChange.percentage===null?c.countChange.label:c.countChange.percentage+'%'}`)].join('\n');
   if(content.length>150000)throw Error('Report exceeds document limit');
   return {title,content,weeks,datasets,comparisons,partial:datasets.some(d=>d.coverage.status==='Unavailable')};
 }
-export interface ReportReceipt {claim(key:string):{state:'new'|'pending'|'complete';result?:Obj};created(key:string,id:string):void;finish(key:string,result:Obj):void;release(key:string):void}
+/** One weekly receipt slot as stored: a claim, the Doc it created when known, and the saved result once verified. */
+export interface ReceiptRow {state:'none'|'pending'|'complete';documentId?:string;result?:Obj}
+export interface ReportReceipt {
+  /** Read-only. */
+  peek(key:string):ReceiptRow;
+  claim(key:string):{state:'new'|'pending'|'complete';documentId?:string;result?:Obj};
+  created(key:string,id:string):void;
+  /** Takes over a pending claim whose create reply was lost, recording the Doc that Drive shows it created. */
+  adopt(key:string,id:string):void;
+  finish(key:string,result:Obj):void;
+  release(key:string):void;
+}
+export const reportDocUrl=(id:string)=>`https://docs.google.com/document/d/${id}/edit`;
+/** The one replacement a partial report allows in its week. */
+export const replacementKey=(key:string)=>`${key}:replacement`;
+export type WeekPlan={state:'closed';result:Obj}|{state:'pending';key:string;documentId?:string}|{state:'open';key:string};
+/**
+ * Read-only: what the week's receipts allow, before any source is read. A
+ * complete report closes the week. A partial one leaves room for exactly one
+ * replacement, which closes the week whether or not it is itself complete.
+ */
+export function weekPlan(receipt:Pick<ReportReceipt,'peek'>,key:string):WeekPlan {
+  const second=receipt.peek(replacementKey(key));
+  if(second.state==='complete')return {state:'closed',result:second.result!};
+  if(second.state==='pending')return {state:'pending',key:replacementKey(key),documentId:second.documentId};
+  const first=receipt.peek(key);
+  if(first.state==='pending')return {state:'pending',key,documentId:first.documentId};
+  if(first.state==='none')return {state:'open',key};
+  return first.result?.partial===true?{state:'open',key:replacementKey(key)}:{state:'closed',result:first.result!};
+}
+/** The fenced-attempt error, naming the Doc whenever it is known. */
+export function unresolvedReportError(documentId?:string,found?:string[]):Error {
+  const where=documentId?` (Doc ${documentId}, ${reportDocUrl(documentId)})`:found?.length?` (Drive shows ${found.length} documents carrying this report's key: ${found.join(', ')})`:' (Drive shows no document carrying this report\'s key yet)';
+  return Error(`Report creation is unresolved. Review the recorded attempt${where}; no duplicate document was created.`);
+}
+/** The one Drive search the report may run: the Doc a lost create reply made, by the key it stored on it. */
+export function reportRecoveryPath(key:string):string {
+  if(!/^[\w:-]{1,200}$/.test(key))throw Error('Invalid report key');
+  return '/drive/v3/files?'+query({q:`appProperties has { key='jarvisReport' and value='${key}' } and trashed=false`,fields:'files(id,name,mimeType,parents,trashed,appProperties)',supportsAllDrives:'true',includeItemsFromAllDrives:'true'});
+}
 /** Failures known to have happened before a request reached the provider, or that the provider rejected outright. */
 const notSent=new WeakSet<object>();
 const markNotSent=(e:unknown)=>{const error=e instanceof Error?e:Error(String(e));notSent.add(error);return error;};
 export const reportRequestNotSent=(e:unknown)=>typeof e==='object'&&e!==null&&notSent.has(e);
-export async function saveWeeklyReport(s:ReportSetup,report:Awaited<ReturnType<typeof collectWeeklyReport>>,request:ReportRequest,receipt:ReportReceipt,key:string){
+const textOf=(doc:Obj)=>(doc.body?.content??[]).flatMap((p:Obj)=>p.paragraph?.elements??[]).map((e:Obj)=>e.textRun?.content??'').join('');
+type Report=Awaited<ReturnType<typeof collectWeeklyReport>>;
+/** The title and content one slot writes: a replacement names the partial report it replaces, and every partial report says what it leaves open. */
+function slotReport(report:Report,replaces?:{documentId:string;documentUrl:string}):Report {
+  const title=replaces?`${report.title} (replacement)`:report.title;
+  const notes=replaces?[`This report replaces the earlier partial report for this week: ${replaces.documentUrl} (Doc ${replaces.documentId}).`,
+      ...report.partial?['This replacement is also partial. The week is now closed: Jarvis will not create another report for it.']:[]]
+    :report.partial?['This report is partial. A later run this week may create one replacement report; this document is not changed.']:[];
+  const content=[title,...notes,report.content.slice(report.content.indexOf('\n')+1)].join('\n');
+  if(content.length>150000)throw Error('Report exceeds document limit');
+  return {...report,title,content};
+}
+/** A pending claim with no recorded Doc: the Doc its lost create reply made, adopted when Drive shows exactly one, still empty. */
+async function recoverDocument(s:ReportSetup,request:ReportRequest,receipt:ReportReceipt,key:string,title:string):Promise<string> {
+  const found=await request('google',reportRecoveryPath(key));
+  if(!Array.isArray(found.files))throw Error('Malformed Drive search result');
+  const files=found.files.filter((f:Obj)=>f?.appProperties?.jarvisReport===key);
+  if(files.length!==1)throw unresolvedReportError(undefined,files.map((f:Obj)=>String(f.id)));
+  const f=files[0];if(typeof f.id!=='string'||!/^[\w-]+$/.test(f.id))throw Error('Drive returned an invalid document ID');
+  receipt.adopt(key,f.id);
+  const doc=await request('google',`/v1/documents/${f.id}`);
+  if(f.trashed||f.mimeType!=='application/vnd.google-apps.document'||!f.parents?.includes(s.folderId)||f.name!==title||doc.documentId!==f.id||!['','\n'].includes(textOf(doc)))throw unresolvedReportError(f.id);
+  return f.id;
+}
+/**
+ * Creates and verifies the week's report Doc in the slot `weekPlan` allows
+ * (`key` is the week's key), or returns the result that closed the week.
+ */
+export async function saveWeeklyReport(s:ReportSetup,report:Report,request:ReportRequest,receipt:ReportReceipt,key:string){
   const profile=await request('google','/drive/v3/about?fields=user(emailAddress)');if(profile.user?.emailAddress?.toLowerCase()!==s.googleEmail)throw Error('Selected Google account does not match configured email');
   const folder=await request('google',`/drive/v3/files/${s.folderId}?fields=id,mimeType,trashed,capabilities(canAddChildren)&supportsAllDrives=true`);
   if(folder.id!==s.folderId||folder.trashed||folder.mimeType!=='application/vnd.google-apps.folder'||folder.capabilities?.canAddChildren!==true)throw Error('Selected report folder is unavailable or not writable');
-  const claim=receipt.claim(key);if(claim.state==='complete')return claim.result!;if(claim.state==='pending')throw Error('Report creation is unresolved. Review the recorded attempt; no duplicate document was created.');
-  let file:Obj;
-  try{file=await request('google','/drive/v3/files?fields=id,name,mimeType,parents&supportsAllDrives=true',{name:report.title,mimeType:'application/vnd.google-apps.document',parents:[s.folderId],appProperties:{jarvisReport:key}});}
-  // A create that certainly never happened must not fence the week; an uncertain one stays fenced for review.
-  catch(e){if(reportRequestNotSent(e))receipt.release(key);throw e;}
-  if(typeof file.id!=='string'||! /^[\w-]+$/.test(file.id))throw Error('Document creation did not confirm its ID');receipt.created(key,file.id);
-  await request('google',`/v1/documents/${file.id}:batchUpdate`,{requests:[{insertText:{location:{index:1},text:report.content}}]});
-  const doc=await request('google',`/v1/documents/${file.id}`),meta=await request('google',`/drive/v3/files/${file.id}?fields=id,name,mimeType,parents,trashed&supportsAllDrives=true`);
-  const text=(doc.body?.content??[]).flatMap((p:Obj)=>p.paragraph?.elements??[]).map((e:Obj)=>e.textRun?.content??'').join('');
-  if(doc.documentId!==file.id||doc.title!==report.title||meta.name!==report.title||meta.trashed||meta.mimeType!=='application/vnd.google-apps.document'||!meta.parents?.includes(s.folderId)||(text!==report.content&&text!==report.content+'\n'))throw Error('Saved Google Doc content/title/destination could not be verified');
-  const result={complete:true,documentId:file.id,documentUrl:`https://docs.google.com/document/d/${file.id}/edit`,folderId:s.folderId,...report};receipt.finish(key,result);return result;
+  const plan=weekPlan(receipt,key);if(plan.state==='closed')return plan.result;
+  const slot=plan.key,first=slot===key?undefined:receipt.peek(key).result;
+  const replaces=first?{documentId:String(first.documentId),documentUrl:String(first.documentUrl)}:undefined,final=slotReport(report,replaces);
+  let id:string;
+  if(plan.state==='pending'){
+    if(plan.documentId)throw unresolvedReportError(plan.documentId);
+    id=await recoverDocument(s,request,receipt,slot,final.title);
+  }else{
+    const claim=receipt.claim(slot);
+    if(claim.state==='complete')return claim.result!;
+    if(claim.state==='pending')throw unresolvedReportError(claim.documentId);
+    let file:Obj;
+    try{file=await request('google','/drive/v3/files?fields=id,name,mimeType,parents&supportsAllDrives=true',{name:final.title,mimeType:'application/vnd.google-apps.document',parents:[s.folderId],appProperties:{jarvisReport:slot}});}
+    // A create that certainly never happened must not fence the week; an uncertain one stays fenced for review.
+    catch(e){if(reportRequestNotSent(e))receipt.release(slot);throw e;}
+    if(typeof file.id!=='string'||! /^[\w-]+$/.test(file.id))throw Error('Document creation did not confirm its ID');receipt.created(slot,file.id);id=file.id;
+  }
+  await request('google',`/v1/documents/${id}:batchUpdate`,{requests:[{insertText:{location:{index:1},text:final.content}}]});
+  const doc=await request('google',`/v1/documents/${id}`),meta=await request('google',`/drive/v3/files/${id}?fields=id,name,mimeType,parents,trashed&supportsAllDrives=true`);
+  const text=textOf(doc);
+  if(doc.documentId!==id||doc.title!==final.title||meta.name!==final.title||meta.trashed||meta.mimeType!=='application/vnd.google-apps.document'||!meta.parents?.includes(s.folderId)||(text!==final.content&&text!==final.content+'\n'))throw Error('Saved Google Doc content/title/destination could not be verified');
+  // documentVerified: the Doc was saved and read back. partial: some dataset was Unavailable. weekClosed: no later run this week creates another Doc.
+  const result={documentVerified:true,weekClosed:!final.partial||replaces!==undefined,...replaces?{replaces}:{},documentId:id,documentUrl:reportDocUrl(id),folderId:s.folderId,...final};
+  receipt.finish(slot,result);return result;
 }
 
 /** The report can read only declared sources, create a Doc, then insert text into that newly created ID. */
@@ -279,7 +371,10 @@ export function reportTransport(tokens:Record<ReportProvider,string>,checkpoint:
     const update=/^\/v1\/documents\/([\w-]+):batchUpdate$/.exec(u.pathname),id=update?.[1];
     const insert=provider==='google'&&id&&created.has(id)&&!written.has(id)&&body&&Object.keys(body).join()==='requests'&&body.requests?.length===1&&Object.keys(body.requests[0]).join()==='insertText'&&Object.keys(body.requests[0].insertText).sort().join()==='location,text'&&JSON.stringify(body.requests[0].insertText.location)==='{"index":1}'&&typeof body.requests[0].insertText.text==='string';
     const search=provider==='hubspot'&&u.pathname===HUBSPOT_SEARCH_PATH&&!u.search&&validSearchBody(body);
-    if(!(read&&!body)&&!create&&!insert&&!search)throw markNotSent(Error('Report operation is outside the read/create-new-document scope'));
+    // Exactly the Drive search for the Doc a lost create reply made, by the key the report stored on it.
+    const recoverKey=/^appProperties has \{ key='jarvisReport' and value='([\w:-]{1,200})' \} and trashed=false$/.exec(u.searchParams.get('q')??'')?.[1];
+    const recover=provider==='google'&&!body&&u.pathname==='/drive/v3/files'&&recoverKey!==undefined&&path===reportRecoveryPath(recoverKey);
+    if(!(read&&!body)&&!create&&!insert&&!search&&!recover)throw markNotSent(Error('Report operation is outside the read/create-new-document scope'));
     try{checkpoint();}catch(e){throw markNotSent(e);}if(insert)written.add(id!);
     // HubSpot limits search to a few requests per second per token.
     const pace=async()=>{if(!search)return;const wait=lastSearch+searchIntervalMs-Date.now();if(wait>0){await sleep(wait);try{checkpoint();}catch(e){throw markNotSent(e);}}lastSearch=Date.now();};
@@ -297,6 +392,9 @@ export function reportTransport(tokens:Record<ReportProvider,string>,checkpoint:
     const reader=response.body?.getReader();if(!reader)throw Error('Empty source response');let size=0;const chunks:Uint8Array[]=[];
     for(;;){const n=await reader.read();if(n.done)break;size+=n.value.length;if(size>4_000_000){await reader.cancel();throw Error('Source response exceeds completeness limit');}chunks.push(n.value);}
     checkpoint();const data=JSON.parse(Buffer.concat(chunks).toString('utf8'));if(!data||typeof data!=='object'||Array.isArray(data)||data.error)throw Error('Malformed provider response');
-    if(create&&typeof data.id==='string')created.add(data.id);return data;
+    if(create&&typeof data.id==='string')created.add(data.id);
+    // A recovered Doc may take the single insert a new one would, once.
+    if(recover&&Array.isArray(data.files))for(const f of data.files)if(f?.appProperties?.jarvisReport===recoverKey&&typeof f.id==='string'&&f.mimeType==='application/vnd.google-apps.document')created.add(f.id);
+    return data;
   };
 }

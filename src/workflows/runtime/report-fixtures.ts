@@ -1,7 +1,7 @@
 import type {ReportRequest,ReportSetup} from './weekly-report';
 export const reportFixtureNow=Date.parse('2026-10-26T09:00:00Z');
 export const reportFixtureSetup:ReportSetup={stripeConnection:'fixture-stripe',hubspotConnection:'fixture-hubspot',googleConnection:'fixture-google',stripeAccountId:'acct_fixture',stripeMode:'test',stripeDateBasis:'balance_posted',hubspotPortalId:'42',dealDateProperty:'closedate',dealStageIds:['won'],googleEmail:'owner@example.com',folderId:'folder',timezone:'Europe/Rome'};
-export interface ReportFixtureOptions {calls?:string[];writes?:any[];failStripe?:boolean;failHubspot?:boolean;cycle?:boolean;unknownCreate?:boolean;badContent?:boolean;modeMismatch?:boolean;overlap?:boolean;missingAmount?:boolean;empty?:boolean;refundStatus?:(n:number)=>string;deals?:any[];searches?:any[];mutate?: (provider:string,path:string,result:any)=>any}
+export interface ReportFixtureOptions {calls?:string[];writes?:any[];failStripe?:boolean;failHubspot?:boolean;cycle?:boolean;unknownCreate?:boolean;badContent?:boolean;modeMismatch?:boolean;overlap?:boolean;missingAmount?:boolean;companyCurrency?:string;empty?:boolean;refundStatus?:(n:number)=>string;deals?:any[];searches?:any[];mutate?: (provider:string,path:string,result:any)=>any}
 export function reportFixtureRequest(options:ReportFixtureOptions={}):ReportRequest {
   const docs=new Map<string,any>();let created=0;
   const base:ReportRequest=async(provider,path,body)=>{
@@ -20,7 +20,7 @@ export function reportFixtureRequest(options:ReportFixtureOptions={}):ReportRequ
     }
     if(provider==='hubspot'){
       if(options.failHubspot)throw Error('Fixture HubSpot unavailable');
-      if(u.pathname==='/account-info/v3/details')return {portalId:42};
+      if(u.pathname==='/account-info/v3/details')return {portalId:42,...options.companyCurrency?{companyCurrency:options.companyCurrency}:{}};
       if(u.pathname==='/crm/v3/properties/deals/closedate')return {name:'closedate',type:'datetime'};
       if(u.pathname==='/crm/v3/pipelines/deals')return {results:[{stages:[{id:'won'}]}]};
       // CRM search: stage IN, date GTE/LT, ascending hs_object_id, offset paging capped at 10,000 results.
@@ -37,6 +37,8 @@ export function reportFixtureRequest(options:ReportFixtureOptions={}):ReportRequ
     if(provider==='google'){
       if(u.pathname==='/drive/v3/about')return {user:{emailAddress:'owner@example.com'}};
       if(u.pathname==='/drive/v3/files/folder')return {id:'folder',mimeType:'application/vnd.google-apps.folder',capabilities:{canAddChildren:true}};
+      // The recovery search: Docs carrying the report key the create stored on them.
+      if(u.pathname==='/drive/v3/files'&&!body){const key=/value='([^']+)'/.exec(u.searchParams.get('q')??'')?.[1];return {files:[...docs.values()].filter(d=>d.meta.appProperties?.jarvisReport===key).map(d=>d.meta)};}
       if(u.pathname==='/drive/v3/files'&&body){const id='doc'+ ++created,meta={id,...body};docs.set(id,{meta,text:''});options.writes?.push({path,body});if(options.unknownCreate)throw Error('Lost creation reply');return meta;}
       const update=/^\/v1\/documents\/(doc\d+):batchUpdate$/.exec(u.pathname);
       if(update&&body){const doc=docs.get(update[1]!);if(!doc)throw Error('Unknown fixture doc');doc.text+=body.requests[0].insertText.text;options.writes?.push({path,body});return {documentId:update[1]};}

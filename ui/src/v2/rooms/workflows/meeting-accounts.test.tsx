@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 let React: typeof import('react'), createRoot: typeof import('react-dom/client').createRoot;
-let Pickers: typeof import('./WorkflowEditor').MeetingAccountPickers;
-beforeAll(async()=>{GlobalRegistrator.register();(globalThis as any).IS_REACT_ACT_ENVIRONMENT=true;React=await import('react');({createRoot}=await import('react-dom/client'));({MeetingAccountPickers:Pickers}=await import('./WorkflowEditor'));});
+let Pickers: typeof import('./WorkflowEditor').MeetingAccountPickers, authType: typeof import('./WorkflowEditor').accountPickerAuthType;
+import { REPORT_ACCOUNT_FIELDS } from '../../../../../src/workflows/report-accounts';
+beforeAll(async()=>{GlobalRegistrator.register();(globalThis as any).IS_REACT_ACT_ENVIRONMENT=true;React=await import('react');({createRoot}=await import('react-dom/client'));({MeetingAccountPickers:Pickers,accountPickerAuthType:authType}=await import('./WorkflowEditor'));});
 afterAll(()=>GlobalRegistrator.unregister());
 test('meeting setup selects saved accounts by provider, stores only reference and restores selection',async()=>{
  const host=document.createElement('div');document.body.append(host);const root=createRoot(host),writes:Array<[string,string]>=[];
@@ -31,8 +32,12 @@ test('sales setup reuses saved-account controls for HubSpot and Gmail only',asyn
 test('weekly report selects saved Stripe, HubSpot and Google Docs references separately',async()=>{
  const host=document.createElement('div');document.body.append(host);const root=createRoot(host),writes:Array<[string,string]>=[];
  const connections=['stripe','hubspot','google-docs','gmail'].map((name,i)=>({id:String(i),externalId:'saved-'+i,pieceName:'@activepieces/piece-'+name,displayName:'Account '+i,status:'ACTIVE'})) as any;
- await React.act(async()=>root.render(<Pickers fields={[["stripeConnection","@activepieces/piece-stripe","Stripe"],["hubspotConnection","@activepieces/piece-hubspot","HubSpot"],["googleConnection","@activepieces/piece-google-docs","Google Docs"]]} connections={connections} input={{googleConnection:'saved-2'}} onSetInput={(k,v)=>writes.push([k,v])}/>));
- try{const selects=host.querySelectorAll('select');expect(selects.length).toBe(3);expect(selects[2]!.value).toBe('saved-2');expect(host.textContent).not.toContain('Account 3');expect(host.textContent).toContain('SECRET_TEXT');
+ await React.act(async()=>root.render(<Pickers fields={REPORT_ACCOUNT_FIELDS} connections={connections} input={{googleConnection:'saved-2'}} onSetInput={(k,v)=>writes.push([k,v])}/>));
+ try{const selects=host.querySelectorAll('select');expect(selects.length).toBe(3);expect(selects[2]!.value).toBe('saved-2');expect(host.textContent).not.toContain('Account 3');
   await React.act(async()=>{selects[0]!.value='saved-0';selects[0]!.dispatchEvent(new Event('change',{bubbles:true}));});expect(writes).toEqual([['stripeConnection','saved-0']]);
  }finally{await React.act(async()=>root.unmount());host.remove();}
+});
+
+test('a Stripe account is picked as a secret key, the other report accounts as OAuth',()=>{
+ expect(REPORT_ACCOUNT_FIELDS.map(([,provider])=>authType(provider))).toEqual(['SECRET_TEXT','OAUTH2','OAUTH2']);
 });

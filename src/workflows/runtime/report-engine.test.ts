@@ -72,11 +72,17 @@ async function run(flowId:string,flowVersionId:string){const run=createFlowRun({
 function reset(options:ReportFixtureOptions={}){now=reportFixtureNow;authority.updateConfig({...authority.getConfig(),overrides:[],governed_categories:[]});request=reportFixtureRequest(options);}
 function fixture(){const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Report fixture',trigger:graph()});expect(versionReadiness(flow.id,version.id).issues).toEqual([]);lockVersion(version.id);setPublishedVersion(flow.id,version.id);updateFlowStatus(flow.id,'ENABLED');return {flow,version,run:()=>run(flow.id,version.id)};}
 test('real engine creates verified report across all pages and receipts survive DB reopen',async()=>{
- const writes:any[]=[];reset({writes});const f=fixture();expect((await f.run()).status).toBe('SUCCEEDED');expect(writes).toHaveLength(2);expect(JSON.stringify(writes)).toContain('123.456789');
+ const writes:any[]=[],calls:string[]=[];reset({writes,calls});const f=fixture();expect((await f.run()).status).toBe('SUCCEEDED');expect(writes).toHaveLength(2);expect(JSON.stringify(writes)).toContain('123.456789');
+ // A closed week returns its stored result before any source or Google read.
+ calls.length=0;expect((await f.run()).status).toBe('SUCCEEDED');expect(calls).toEqual([]);expect(writes).toHaveLength(2);
  closeWorkflowDb();initWorkflowDb(join(dir,'fixture.db'));setEncryptionKey(Buffer.alloc(32,78));configureWorkflowReadiness({pieces:catalog});expect((await f.run()).status).toBe('SUCCEEDED');expect(writes).toHaveLength(2);
 },60000);
 test('source errors yield explicit unavailable report, not bogus totals',async()=>{const writes:any[]=[];reset({writes,failStripe:true});const f=fixture();expect((await f.run()).status).toBe('SUCCEEDED');expect(JSON.stringify(writes)).toContain('Unavailable');expect(JSON.stringify(writes)).toContain('123.456789');},60000);
-test('unknown create and incorrect verification fail, with no repeated writes',async()=>{for(const option of [{unknownCreate:true},{badContent:true}]){const writes:any[]=[];reset({...option,writes});const f=fixture();expect((await f.run()).status).toBe('FAILED');const n=writes.length;expect((await f.run()).status).toBe('FAILED');expect(writes).toHaveLength(n);}},60000);
+test('incorrect verification fails, with no repeated writes, and names the Doc to review',async()=>{const writes:any[]=[];reset({badContent:true,writes});const f=fixture();expect((await f.run()).status).toBe('FAILED');const n=writes.length;const again=await f.run();expect(again.status).toBe('FAILED');expect(String((again as any).failedStep?.errorMessage)).toContain('(Doc doc1, https://docs.google.com/document/d/doc1/edit)');expect(writes).toHaveLength(n);},60000);
+test('a lost create reply is recovered through the transport by the Doc report key; no second Doc',async()=>{
+ const writes:any[]=[],options:ReportFixtureOptions={unknownCreate:true,writes};reset(options);const f=fixture();expect((await f.run()).status).toBe('FAILED');expect(writes).toHaveLength(1);
+ options.unknownCreate=false;expect((await f.run()).status).toBe('SUCCEEDED');expect(writes).toHaveLength(2);expect(writes[1].path).toBe('/v1/documents/doc1:batchUpdate');
+},60000);
 test('authority denial and changed pinned account stop before provider access',async()=>{
  const calls:string[]=[];reset({calls});let f=fixture();authority.addOverride({action:'write_data',allowed:false});expect((await f.run()).status).toBe('FAILED');expect(calls).toHaveLength(0);
  reset({calls});f=fixture();pinFlowBindings(f.flow.id);upsertConnection({externalId:'fixture-google',displayName:'Changed',type:'OAUTH2',pieceName:'@activepieces/piece-google-docs',pieceVersion:'0.0.1',value:{access_token:'changed'}});
@@ -168,4 +174,34 @@ test('the report backend refuses a saved step that is not a PIECE action node',a
   await expect(services.weeklyReport!({...setup},direct(node))).rejects.toThrow('Report configuration must match a saved weekly report step');
  }
  expect(calls).toHaveLength(0);
+},60000);
+
+/** Docs created so far, by create request, and the text inserted into each. */
+const created=(writes:any[])=>writes.filter(w=>w.body?.mimeType).map(w=>w.body.name);
+const inserted=(writes:any[])=>writes.filter(w=>w.body?.requests).map(w=>w.body.requests[0].insertText.text as string);
+test('a partial week allows one replacement Doc that names the first; a complete replacement closes the week',async()=>{
+ const writes:any[]=[],options:ReportFixtureOptions={writes,failStripe:true};reset(options);const f=fixture();
+ expect((await f.run()).status).toBe('SUCCEEDED');expect(created(writes)).toHaveLength(1);
+ options.failStripe=false;expect((await f.run()).status).toBe('SUCCEEDED');expect(created(writes)).toHaveLength(2);expect(created(writes)[1]).toEndWith('(replacement)');
+ expect(inserted(writes)[1]).toContain('This report replaces the earlier partial report for this week: https://docs.google.com/document/d/doc1/edit (Doc doc1).');expect(inserted(writes)[1]).not.toContain('also partial');
+ const n=writes.length;options.failStripe=true;expect((await f.run()).status).toBe('SUCCEEDED');expect(writes).toHaveLength(n);
+},60000);
+test('a partial replacement closes the week too and says so; no third Doc',async()=>{
+ const writes:any[]=[],calls:string[]=[],options:ReportFixtureOptions={writes,calls,failHubspot:true};reset(options);const f=fixture();
+ expect((await f.run()).status).toBe('SUCCEEDED');expect((await f.run()).status).toBe('SUCCEEDED');expect(created(writes)).toHaveLength(2);
+ expect(inserted(writes)[1]).toContain('Doc doc1');expect(inserted(writes)[1]).toContain('This replacement is also partial. The week is now closed');
+ // The closed week returns the replacement's stored result before any source is read.
+ options.failHubspot=false;const n=writes.length;calls.length=0;expect((await f.run()).status).toBe('SUCCEEDED');expect(writes).toHaveLength(n);expect(calls).toEqual([]);
+},60000);
+test('setup that differs from the saved step, such as another folder, is refused before any read',async()=>{
+ const calls:string[]=[];reset({calls});const f=fixture(),execution=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'});runIds.push(execution.id);
+ const ctx={runId:execution.id,projectId:DEFAULT_IDS.project,stepName:'report',executionPath:[] as Array<[string,number]>};
+ await expect(services.weeklyReport!({...setup,folderId:'other-folder'},ctx)).rejects.toThrow('Report setup must match saved workflow');expect(calls).toHaveLength(0);
+},60000);
+test('a resolved account of another provider is refused before any read',async()=>{
+ // Stored rows are looked up by provider, so only a misbehaving source could do this: the guard still holds.
+ const calls:string[]=[];reset({calls});const f=fixture(),original=resolver.resolve;
+ resolver.resolve=async(input)=>{const found=await original.call(resolver,input);return found&&input.externalId==='fixture-google'?{...found,pieceName:'@activepieces/piece-gmail'}:found;};
+ try{const result=await f.run();expect(result.status).toBe('FAILED');expect(String((result as any).failedStep?.errorMessage)).toContain('Report account provider mismatch');expect(calls).toHaveLength(0);}
+ finally{resolver.resolve=original;}
 },60000);

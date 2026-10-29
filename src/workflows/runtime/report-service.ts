@@ -1,4 +1,4 @@
-import {collectWeeklyReport,reportSetup,reportTransport,saveWeeklyReport,type ReportProvider} from './weekly-report';
+import {collectWeeklyReport,reportSetup,reportTransport,reportWeeks,saveWeeklyReport,unresolvedReportError,weekPlan,type ReportProvider} from './weekly-report';
 import {reportReceipt} from '../db/repos/weekly-report';
 import {connectionBindings,enforceRunConnectionBinding,recordRunCredentialOutcome} from '../db/repos/binding-pins';
 import {digest,resolveEffectContext,type WorkflowEffectContext} from './effect-context';
@@ -27,6 +27,12 @@ export function createWeeklyReportService(deps:{effects:WorkflowEffectBoundary;c
           if(!connectionBindings(version.trigger).has(externalId))throw Error('Report account not bound');
           if(externalId.startsWith('jarvis:'))throw Error(managedReportRefusal(field));
         }
+        // The week's receipts, read before any credential or source: a week a report closed
+        // returns its saved result, and an attempt with a known Doc waits for review.
+        const now=(deps.now??Date.now)(),receipt=reportReceipt(ctx.runId);
+        const key=digest(['weekly-report-v1',ctx.projectId,run.flowId,s,reportWeeks(now,s.timezone)[0]!.localStart]),plan=weekPlan(receipt,key);
+        if(plan.state==='closed')return plan.result;
+        if(plan.state==='pending'&&plan.documentId)throw unresolvedReportError(plan.documentId);
         for(const field of fields){
           const pieceName=REPORT_ACCOUNTS[field],externalId=s[field];
           check();let resolved=await deps.credentials.resolve({projectId:ctx.projectId,pieceName,externalId});
@@ -51,9 +57,8 @@ export function createWeeklyReportService(deps:{effects:WorkflowEffectBoundary;c
           if(typeof token!=='string'||!token)throw Error('Connect the selected report accounts securely before running');
           tokens[field.replace('Connection','') as ReportProvider]=token;
         }
-        const request=reportTransport(tokens,check,deps.fetchImpl),report=await collectWeeklyReport(s,request,(deps.now??Date.now)(),check);
-        check();const key=digest(['weekly-report-v1',ctx.projectId,run.flowId,s,report.weeks[0]!.localStart]);
-        return saveWeeklyReport(s,report,request,reportReceipt(ctx.runId),key);
+        const request=reportTransport(tokens,check,deps.fetchImpl),report=await collectWeeklyReport(s,request,now,check);
+        check();return saveWeeklyReport(s,report,request,receipt,key);
       }});
     return reply.approval?{approval:reply.approval}:reply.result;
   };
