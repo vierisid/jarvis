@@ -1,7 +1,7 @@
 import { getWorkflowDb } from '../index';
 
 export class IdentityUnresolvedError extends Error {
-  constructor(public owner:string) { super('Previous operation for this identity is unresolved; inspect original effect '+owner+' before retrying'); }
+  constructor(public owner:string) { super('An earlier write for this identity is unresolved (effect '+owner+'). Check the provider, then resolve that effect from its run recovery: mark_done if it happened, release if it did not.'); }
 }
 
 /** Atomically reserve an identity. Contacts can change after a confirmed write;
@@ -20,4 +20,23 @@ export function claimIdentity(identity: string, owner: string, once: boolean): '
 export function completeIdentity(identity: string, owner: string): void {
   if (getWorkflowDb().run('UPDATE workflow_effect_identity SET completed=1 WHERE identity=? AND owner=?',[identity,owner]).changes !== 1)
     throw new Error('Identity completion owner changed');
+}
+/** Give back a claim whose operation definitely did not happen (a provider
+ * refusal, or a notification sent on no channel). Never for an uncertain one. */
+export function releaseIdentity(identity: string, owner: string): void {
+  getWorkflowDb().run('DELETE FROM workflow_effect_identity WHERE identity=? AND owner=? AND completed=0', [identity, owner]);
+}
+/** Whether an effect still holds an unresolved (uncertain) identity claim. */
+export function ownsUnresolvedIdentity(owner: string): boolean {
+  return !!getWorkflowDb().query('SELECT 1 FROM workflow_effect_identity WHERE owner=? AND completed=0').get(owner);
+}
+/** An operator's resolution of an uncertain claim, after checking the provider:
+ * mark_done completes it (later items dedupe or update as after a confirmed
+ * write), release frees it (the next item writes once). Run it inside the
+ * caller's immediate transaction, after checking the owning effect is settled.
+ * False when no unresolved claim is owned by that effect. */
+export function resolveIdentity(owner: string, resolution: 'mark_done' | 'release'): boolean {
+  return getWorkflowDb().run(resolution === 'mark_done'
+    ? 'UPDATE workflow_effect_identity SET completed=1 WHERE owner=? AND completed=0'
+    : 'DELETE FROM workflow_effect_identity WHERE owner=? AND completed=0', [owner]).changes > 0;
 }

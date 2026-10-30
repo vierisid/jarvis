@@ -151,6 +151,7 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
     captureApprovalGuard: () => () => true,
     execute: async () => { effects++; return 'tapped'; } });
   for (const name of ['browser_navigate', 'browser_click', 'browser_scroll']) registry.register({ name, category: 'browser', description: 'Synthetic browser navigation', parameters: {},
+    reviewSubject: () => ({ origin: 'https://calendar.example' }),
     captureApprovalGuard: () => Object.assign(() => opts.browserGuard?.() ?? true, { reviewed: { remoteBrowserSnapshot: { sidecarId: 'test-computer', elemGen: 'reviewed-generation' } } }),
     execute: async () => {
       expect(currentReviewedExecution()?.remoteBrowserSnapshot).toEqual({ sidecarId: 'test-computer', elemGen: 'reviewed-generation' });
@@ -1335,7 +1336,7 @@ describe('workflow browser review', () => {
     const parked = await f.delegate({ requiredTools: ['browser_navigate'] });
     expect(parked.status).toBe('approval_required'); expect(f.effects()).toBe(0);
     const card = f.approvals.getRequest(parked.approval!.approvalId)!;
-    expect(JSON.parse(card.context)).toMatchObject({ confirm: 'always' });
+    expect(JSON.parse(card.context)).toMatchObject({ confirm: 'always', reviewSubject: { origin: 'https://calendar.example' } });
     expect(JSON.parse(card.tool_arguments)).toEqual(options.script[0] && (options.script[0] as any).args);
     f.approvals.approve(card.id, 'dashboard');
     const done = await f.delegate({ requiredTools: ['browser_navigate'] });

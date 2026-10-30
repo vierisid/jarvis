@@ -319,6 +319,18 @@ test('a persisted step receipt reconciles an uncertain dispatch without opening 
   expect(claimNextJob()).toBeNull(); expect(f.sends()).toBe(0);
 });
 
+test('a Gmail label change is tracked but has no send readback: its labeled message is never confirmed as a send', async () => {
+  const f = fixture(GMAIL, 'gmail_add_label_to_email');
+  await f.invoke(); expect(f.sends()).toBe(1);
+  await expect(f.invoke()).resolves.toEqual(f.result); expect(f.sends()).toBe(1);
+  f.fail(); let lookups = 0;
+  // Its saved result still proves the change completed.
+  expect(getRunRecovery(f.run.id)).toMatchObject({ state: 'recoverable', effects: [{ status: 'completed', lookupSupported: false }] });
+  const r = await decideRunRecovery(f.run.id, f.choice('reconcile'), { authority: f.authority,
+    fetchImpl: (async () => { lookups++; return Response.json({ id: 'a123', labelIds: ['SENT', 'INBOX'] }); }) as any });
+  expect(r.evidence.outcome).toBe('unsupported'); expect(lookups).toBe(0);
+});
+
 test('unverified connector versions retain completions but have no lookup adapter', async () => {
   const f = fixture();
   const trigger = structuredClone(f.version.trigger); trigger.nextAction!.settings!.pieceVersion = '9.9.9';

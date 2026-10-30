@@ -22,8 +22,14 @@ import { hubspotContactInput, isHubspotContact } from './hubspot-contact';
  * Imported BY THE ENGINE BUNDLE: keep it pure. `fetch` only, no node built-ins.
  */
 
+import {managedAsanaInput, runManagedAsanaAction} from './managed-asana';
+import {managedDropboxInput, runManagedDropboxAction} from './managed-dropbox';
 import { HTTP_PIECE, isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { documentInput, applyDocument, documentFields, type DecisionDocument } from './decision-document';
+import {managedMailchimpInput, managedMailchimpIssue, runManagedMailchimpAction} from './managed-mailchimp';
+import {managedGitHubInput, managedGitHubIssue, runManagedGitHubAction} from './managed-github';
+import {managedTrelloInput, managedTrelloIssue, runManagedTrelloAction} from './managed-trello';
+import {managedSlackInput, managedSlackIssue, sendManagedSlackMessage} from './managed-slack';
 
 export const PIECE_AUTHORIZE_PATH = '/v1/jarvis/pieces/authorize';
 export const PIECE_RECEIPT_PATH = '/v1/jarvis/pieces/receipt';
@@ -98,6 +104,26 @@ export interface AuthorizePieceDispatchParams {
 }
 
 export async function authorizePieceDispatch(params: AuthorizePieceDispatchParams): Promise<PieceAuthorizeResponse> {
+  const mailchimp = params.piece === '@activepieces/piece-mailchimp' && managedMailchimpInput(params.input);
+  if (mailchimp) {
+    const issue = managedMailchimpIssue(params.action, mailchimp);
+    if (issue) throw new Error(issue);
+  }
+  const github = params.piece === '@activepieces/piece-github' && managedGitHubInput(params.input);
+  if (github) {
+    const issue = managedGitHubIssue(params.action, github);
+    if (issue) throw new Error(issue);
+  }
+  const trello = params.piece === '@activepieces/piece-trello' && managedTrelloInput(params.input);
+  if (trello) {
+    const issue = managedTrelloIssue(params.action, trello);
+    if (issue) throw new Error(issue);
+  }
+  const slack = params.piece === '@activepieces/piece-slack' && managedSlackInput(params.input);
+  if (slack) {
+    const issue = managedSlackIssue(params.action, slack);
+    if (issue) throw new Error(issue);
+  }
   const governed = isGovernedPiece(params.piece) && typeof params.action === 'string' && params.action.length > 0;
   const url = `${params.apiUrl.replace(/\/+$/u, '')}${PIECE_AUTHORIZE_PATH}`;
   const contact = isHubspotContact(params.piece, params.action) ? hubspotContactInput(params.input) : null;
@@ -126,7 +152,8 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
   const tracked = tracksPieceCompletion(params.piece, params.action, governed ? body.input : params.input);
   if (tracked) {
     const auth = (params.input as { auth?: { access_token?: unknown; type?: unknown } } | null)?.auth;
-    const token = auth?.access_token;
+    const token = trello ? JSON.stringify((trello.auth as {username:string;password:string}))
+      : mailchimp ? JSON.stringify((mailchimp.auth as {access_token:string;server_prefix:string})) : auth?.access_token;
     if (auth?.type !== 'CUSTOM_AUTH' && typeof token === 'string') {
       const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical(token))));
       body.credentialDigest = Array.from(hash).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -187,7 +214,57 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
 export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParams, governance: PieceAuthorizeResponse, execute: () => Promise<unknown>): Promise<unknown> {
   if ('dispatch' in governance && governance.dispatch === 'completed') return governance.result;
   if ('dispatch' in governance && (governance.dispatch === 'held' || governance.dispatch === 'approval_required')) throw new Error('Piece is waiting for authorization');
-  const raw = await execute();
+  const mailchimp = params.piece === '@activepieces/piece-mailchimp' && managedMailchimpInput(params.input);
+  if (mailchimp) {
+    // Recheck after an approval document has applied edits.
+    const issue = managedMailchimpIssue(params.action, mailchimp);
+    if (issue) throw new Error(issue);
+  }
+  const github = params.piece === '@activepieces/piece-github' && managedGitHubInput(params.input);
+  if (github) {
+    // Recheck after an approval document has applied edits.
+    const issue = managedGitHubIssue(params.action, github);
+    if (issue) throw new Error(issue);
+  }
+  const trello = params.piece === '@activepieces/piece-trello' && managedTrelloInput(params.input);
+  if (trello) {
+    // Recheck after an approval document has applied edits.
+    const issue = managedTrelloIssue(params.action, trello);
+    if (issue) throw new Error(issue);
+  }
+  const asana = params.piece === "@activepieces/piece-asana" ? managedAsanaInput(params.input) : null;
+  const dropbox = params.piece === '@activepieces/piece-dropbox' ? managedDropboxInput(params.input) : null;
+  const slack = params.piece === '@activepieces/piece-slack' && managedSlackInput(params.input);
+  if (slack) {
+    // Recheck after an approval document has applied edits.
+    const issue = managedSlackIssue(params.action, slack);
+    if (issue) throw new Error(issue);
+  }
+  let raw: unknown;
+  if (trello) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Trello dispatch was not authorized');
+    raw = await runManagedTrelloAction(String(params.action), trello);
+  } else if (mailchimp) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Mailchimp dispatch was not authorized');
+    raw = await runManagedMailchimpAction(String(params.action), mailchimp);
+  } else if (github) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('GitHub dispatch was not authorized');
+    raw = await runManagedGitHubAction(String(params.action), github);
+  } else if (asana) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Asana dispatch was not authorized');
+    raw = await runManagedAsanaAction(String(params.action), asana);
+  } else if (dropbox) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Dropbox dispatch was not authorized');
+    raw = await runManagedDropboxAction(String(params.action), dropbox);
+  } else if (slack) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Slack dispatch was not authorized');
+    if (params.action === 'slack_post_message' || params.action === 'send_channel_message') raw = await sendManagedSlackMessage(slack);
+    else {
+      // SDK transport errors can carry the original authenticated request.
+      try { raw = await execute(); }
+      catch { throw new Error('Could not read Slack channel details. Check channel access or reconnect Slack.'); }
+    }
+  } else raw = await execute();
   // Gmail 0.17 returns a Gaxios response, including transport configuration.
   // Keep its data envelope for expressions, but never persist request headers
   // (which can contain the OAuth bearer) as a completion receipt or step output.

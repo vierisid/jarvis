@@ -1,8 +1,8 @@
-import { MEETING_ACCOUNTS } from '../../runtime/meeting-briefs';
+import { MEETING_ACCOUNTS } from '../../meeting-accounts';
+import { importAccountFields, isImportStep } from '../../import-accounts';
+import { REPORT_ACCOUNTS, isReportStep } from '../../report-accounts';
+import { SALES_ACCOUNTS, isSalesStep } from '../../sales-accounts';
 import { REFUND_PIECE, REFUND_ACTION } from '../../runtime/refund';
-import { IMPORT_ACCOUNTS, IMPORT_PIECE, IMPORT_ACTION } from '../../runtime/contact-import';
-import { REPORT_ACCOUNTS, REPORT_PIECE, REPORT_ACTION } from '../../runtime/weekly-report';
-import { SALES_ACCOUNTS, SALES_PIECE, SALES_ACTION } from '../../runtime/sales-followups';
 /**
  * Q-05: the bindings a workflow was enabled against, and the checks that stop
  * work when one of them changes.
@@ -118,20 +118,20 @@ export function nodeConnectionReferences(node: FlowTriggerNode): Array<[external
     const id = node.settings.input?.stripeConnection;
     if (typeof id === 'string' && id.trim()) out.push([id, 'settings.input.stripeConnection']);
   }
-  if (node.settings?.pieceName === IMPORT_PIECE && node.settings?.actionName === IMPORT_ACTION) {
-    for (const field of Object.keys(IMPORT_ACCOUNTS)) {
-      if (field === 'sourceConnection' && node.settings.input?.sourceAuth !== 'oauth2') continue;
+  if (isImportStep(node.settings)) {
+    // The source account is named only by an OAuth2 source.
+    for (const field of importAccountFields(node.settings?.input)) {
       const id = node.settings?.input?.[field];
       if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
     }
   }
-  if (node.settings?.pieceName === REPORT_PIECE && node.settings?.actionName === REPORT_ACTION) {
+  if (isReportStep(node.settings)) {
     for (const field of Object.keys(REPORT_ACCOUNTS)) {
       const id = node.settings?.input?.[field];
       if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
     }
   }
-  if (node.settings?.pieceName === SALES_PIECE && node.settings?.actionName === SALES_ACTION) {
+  if (isSalesStep(node.settings)) {
     for (const field of Object.keys(SALES_ACCOUNTS)) {
       const id = node.settings?.input?.[field];
       if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
@@ -455,7 +455,8 @@ export function machinePinForRun(runId: string): MachinePin | undefined {
   return pins?.versionId === run.flow_version_id ? pins.machine ?? undefined : undefined;
 }
 
-function runBinding(runId: string, externalId: string): RunConnectionBinding | null {
+/** What this run is bound to for one connection, or null before its first fetch. */
+export function runBinding(runId: string, externalId: string): RunConnectionBinding | null {
   const row = getWorkflowDb().query<{ record: string }, [string, string]>(
     'SELECT record FROM workflow_run_connection_binding WHERE run_id = ? AND external_id = ?').get(runId, externalId);
   return row ? JSON.parse(row.record) as RunConnectionBinding : null;

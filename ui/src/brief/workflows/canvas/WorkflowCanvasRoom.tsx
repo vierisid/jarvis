@@ -269,7 +269,7 @@ function CanvasHeader({
       </div>
       {needsSetup && <details className="brief-canvas-setup" open>
         <summary>Setup required</summary>
-        <p>Fill in these details when you’re ready. Save your progress at any time. Running and publishing stay unavailable until setup is complete.</p>
+        <p>Fill in these details when you're ready. Save your progress at any time. Running and publishing stay unavailable until setup is complete.</p>
         <ul>{setupSteps.map(({ name, gaps }) => <li key={name}>
           <BriefButton size="sm" onClick={() => selectSetupStep(name)}>{gaps[0]!.stepDisplayName}</BriefButton>
           <span>{gaps.map(gap => gap.fieldLabel).join(', ')}</span>

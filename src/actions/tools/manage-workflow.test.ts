@@ -61,8 +61,8 @@ const tool = createManageWorkflowTool();
  * schema drifting apart silently.
  */
 const FRAMED_ACTIONS = new Set([
-  "get", "list_runs", "get_run", "validate_fixtures",
-  "list", "create", "enable", "disable", "publish", "compose", "continue_setup",
+  "get", "list_runs", "get_run",
+  "list", "create", "enable", "disable", "publish", "compose", "continue_setup", "resolve_effect",
 ]);
 
 /**
@@ -489,7 +489,7 @@ describe("manage_workflow: compose", () => {
     const llm: ComposerLlmClient = {
       chat: async () => { throw new Error("Unexpected one-shot fallback"); },
       chatTools: async () => ({ content: "", tool_calls: ++turn === 1
-        ? [{ id: "install", name: "install_library_piece", arguments: { id: "google-calendar" } }]
+        ? [{ id: "missing", name: "report_blocked", arguments: { reason: "Calendar connector is not installed", suggestedPieces: [{ id: "google-calendar", reason: "Read events" }] } }]
         : [{ id: "submit", name: "submit_flow", arguments: { displayName: "Calendar fixture", trigger: {
           name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "schedule", input: { cron_expression: "0 8 * * 1-5", timezone: "Europe/Rome" } },
           nextAction: { name: "calendar", type: "PIECE", settings: { pieceName: name, actionName: "events", input: {} } },
@@ -501,12 +501,21 @@ describe("manage_workflow: compose", () => {
         auth: { type: "OAUTH2" }, actions: { events: { name: "events", displayName: "List events", description: "fixture" } },
       }); },
     });
-    expect(t.authorityGate?.({ action: 'compose', name: 'Calendar fixture', install_missing: true })).toMatchObject({ actionCategory: 'install_software' });
-    expect(t.authorityGate?.({ action: 'create', name: 'Calendar fixture', description: 'Build a calendar draft', install_missing: true })).toMatchObject({ actionCategory: 'install_software' });
-    expect(t.authorityGate?.({ action: 'compose', name: 'Calendar fixture' })).toMatchObject({ actionCategory: 'install_software' });
-    expect(t.authorityGate?.({ action: 'compose', install_missing: false })).toBeNull();
-    expect(t.authorityGate?.({ action: 'create', empty: true })).toBeNull();
-    const saved = await callFrom(t, "compose", { name: "Calendar fixture", description: "Save a disabled calendar draft", install_missing: true }) as {
+    // No card until a call names what it installs.
+    expect(t.authorityGate?.({ action: 'compose', name: 'Calendar fixture', install_missing: true })).toBeNull();
+    expect(t.authorityGate?.({ action: 'create', name: 'Calendar fixture', description: 'Build a calendar draft' })).toBeNull();
+    expect(t.authorityGate?.({ action: 'compose', install_missing: false, install: 'google-calendar' })).toBeNull();
+    expect(t.authorityGate?.({ action: 'create', empty: true, install: 'google-calendar' })).toBeNull();
+    const first = await callFrom(t, "compose", { name: "Calendar fixture", description: "Save a disabled calendar draft" }) as {
+      ok: boolean; setup: { status: string; continueWith: Record<string, unknown> };
+    };
+    expect(first.ok).toBe(false);
+    expect(installed).toEqual([]);
+    expect(first.setup.status).toBe("needs_installation");
+    expect(t.authorityGate?.(first.setup.continueWith)).toMatchObject({ actionCategory: 'install_software', confirm: 'above_level',
+      intent: expect.stringContaining('Google Calendar (google-calendar)') });
+    const { action, ...rest } = first.setup.continueWith;
+    const saved = await callFrom(t, String(action), rest) as {
       ok: boolean; flow: { id: string; status: string }; versionId: string; compositionRecordId: string; readiness: { ready: boolean; issues: { code: string }[] };
     };
     expect(saved.ok).toBe(true);

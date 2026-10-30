@@ -32,7 +32,6 @@ import {buildSandboxServiceBackends} from './service-backends';
 import {WorkflowEventBuffer} from './event-buffer';
 import {PieceCatalog,metadataToCatalogEntry} from './piece-catalog';
 import {compileWorkflow} from './workflow-readiness';
-import {createManageWorkflowTool} from '../../actions/tools/manage-workflow';
 import {REFUND_PIECE as IMPORT_PIECE,REFUND_ACTION as IMPORT_ACTION,REFUND_REQUIRED,REFUND_TTL} from './refund';
 import {refundFixtureSetup as setup,refundFixtureTicket as ticket,refundFixtureProvider,validateRefundFixtures} from './refund-fixtures';
 import {workflowSafeguards} from './workflow-safeguards';
@@ -86,9 +85,9 @@ test('different ticket IDs and overlapping deliveries cannot create duplicate re
  reset();const f=fixture(),first=await begin(f);expect(first.status).toBe('PAUSED');expect((await begin(f)).status).toBe('SUCCEEDED');expect((await begin(f,{...ticket,id:'another-ticket'})).status).toBe('SUCCEEDED');expect(records().find(r=>r.proposal.ticketId==='another-ticket')?.state).toBe('needs_review');
  approvals.approve(approvalFor(first.id).id,'dashboard');expect((await resume(first.id)).status).toBe('SUCCEEDED');expect(posts()).toHaveLength(1);
 },120000);
-test('disabled draft supports deferred setup, safeguards and local fixture tool',async()=>{
+test('disabled draft supports deferred setup, safeguards and local fixture suite',async()=>{
  reset();const f=createFlow(),v=createDraftVersion({flowId:f.id,displayName:'Refund setup',trigger:graph(false)});expect(compileWorkflow(v.trigger,{pieces:catalog,phase:'composition'}).ready).toBe(true);expect(versionReadiness(f.id,v.id).ready).toBe(false);expect(getFlow(f.id)?.status).toBe('DISABLED');expect(workflowSafeguards(v.trigger).safeguards).toHaveLength(3);
- const tool=createManageWorkflowTool({pieceRegistry:catalog});const out=await tool.execute({action:'validate_fixtures',flow:f.id});expect(String(out)).toContain('"passed":true');expect(listRuns({flowId:f.id})).toHaveLength(0);expect(posts()).toHaveLength(0);
+ expect((await validateRefundFixtures(graph())).passed).toBe(true);expect(listRuns({flowId:f.id})).toHaveLength(0);expect(posts()).toHaveLength(0);
  await expect(validateRefundFixtures({...graph(),nextAction:{...graph().nextAction,nextAction:{type:'CODE'}}})).rejects.toThrow();
 });
 test('lower Authority level requests human approval; explicit payment denial and changed account still block',async()=>{

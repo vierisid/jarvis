@@ -1,5 +1,3 @@
-import { getDelegation } from '../db/repos/delegation';
-import { digest } from './effect-context';
 /**
  * Q-19: a failed run as the person reads it, one projection that Runs and
  * Today both show. Derived on read from the run row and its effect records and
@@ -24,6 +22,8 @@ import { providerCode } from '../../failures/evidence';
 import { failureText, NOTHING_DONE, projectFailure, recoverySteps, type FailureEvidence, type FailureLinks, type UserFailure } from '../../failures/projection';
 import { getFlowRun, type FlowRun } from '../db/repos/flow-run';
 import { getFlowVersion } from '../db/repos/flow-version';
+import { latestDelegation } from '../db/repos/delegation';
+import { digest } from './effect-context';
 import { listWorkflowEffects, type WorkflowEffect } from '../db/repos/workflow-effect';
 import { walkFlowNodes } from '../db/flow-graph';
 import type { FlowTriggerNode } from '../db/repos/flow-version';
@@ -34,7 +34,10 @@ const ENDED_BADLY = new Set(['FAILED', 'TIMEOUT', 'INTERNAL_ERROR', 'QUOTA_EXCEE
 const JARVIS_PIECE_PREFIX = '@jarvispieces/';
 
 function dispatched(effect: WorkflowEffect): boolean {
-  if (effect.status === 'pending' || effect.status === 'blocked') return false;
+  // Resumable work that ran slices did dispatch, pending or stopped: a stop
+  // after them is blocked with an outcome that says effects may have occurred.
+  if (effect.status === 'pending') return !!effect.partial;
+  if (effect.status === 'blocked') return !!effect.outcome && effect.outcome.status !== 'succeeded' && effect.outcome.effect === 'may_have_occurred';
   return !(effect.outcome && effect.outcome.status !== 'succeeded' && effect.outcome.effect === 'not_started');
 }
 
@@ -129,7 +132,11 @@ function credentialFailureFor(run: FlowRun, node: FlowTriggerNode): RunConnectio
 export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: FlowTriggerNode[]): UserFailure | null {
   if (!ENDED_BADLY.has(run.status)) return null;
   const records = effects ?? listWorkflowEffects(run.id);
-  const graph = nodes ?? walkFlowNodes(getFlowVersion(run.flowVersionId)?.trigger);
+  // Loaded at most once per run: for the graph when the caller has none, and
+  // otherwise only when a delegation checkpoint has to be matched to it.
+  let version: ReturnType<typeof getFlowVersion> | undefined;
+  const loadVersion = () => (version ??= getFlowVersion(run.flowVersionId));
+  const graph = nodes ?? walkFlowNodes(loadVersion()?.trigger);
   const step = run.failedStep;
   const links: FailureLinks = { runId: run.id, flowId: run.flowId, ...(step ? { stepName: step.name } : {}) };
 
@@ -154,11 +161,13 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
   const label = `The step "${step.displayName}"`;
   const own = records.filter(effect => effect.stepName === step.name).sort((a, b) => a.createdAt - b.createdAt);
   const record = own.findLast(effect => failure(effect) !== null);
-  const checkpoint = getDelegation('wfd_' + digest([run.id, step.name, []]));
-  const delegated = checkpoint?.runId === run.id && checkpoint.stepName === step.name
-    && checkpoint.versionDigest === digest(getFlowVersion(run.flowVersionId)?.trigger)
-    ? checkpoint.result?.outcome : undefined;
-  const outcome = (record ? failure(record) : null) ?? (delegated && delegated.status !== 'succeeded' ? delegated : null);
+  // A delegate step's own outcome is in its checkpoint, not in the spawn's
+  // effect record; inside a loop, the latest iteration's checkpoint.
+  const recorded = record ? failure(record) : null;
+  const checkpoint = recorded ? null : latestDelegation(run.id, step.name);
+  const delegated = checkpoint?.result?.outcome && checkpoint.versionDigest === digest(loadVersion()?.trigger)
+    ? checkpoint.result.outcome : undefined;
+  const outcome = recorded ?? (delegated && delegated.status !== 'succeeded' ? delegated : null);
   let evidence: FailureEvidence;
   let sideEffects = true;
   const node = graph.find(n => n.name === step.name);
