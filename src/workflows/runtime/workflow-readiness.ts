@@ -1,6 +1,9 @@
 import { MEETING_ACCOUNTS, meetingSetup } from './meeting-briefs';
 import { MANAGED_HUBSPOT_REFUSAL } from '../meeting-accounts';
-import { REFUND_REQUIRED, REFUND_ACTION, refundSetup } from './refund';
+import { REFUND_REQUIRED, refundSetup } from './refund';
+import { walkFlowNodes } from '../db/flow-graph';
+import type { FlowTriggerNode } from '../db/repos/flow-version';
+import { REFUND_ACCOUNTS, REFUND_LOOP_REFUSAL, REFUND_PIECE, isRefundAction, managedRefundRefusal, type RefundAccountField } from '../refund-accounts';
 import { IMPORT_REQUIRED, importSetup } from './contact-import';
 import { IMPORT_ACCOUNTS, IMPORT_PIECE, importAccountFields, isImportStep, managedImportRefusal } from '../import-accounts';
 import { REPORT_REQUIRED, reportSetup } from './weekly-report';
@@ -99,6 +102,11 @@ function staticInput(value: unknown): { known: boolean; value: unknown } {
 export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}): WorkflowReadiness {
   const issues: ReadinessIssue[] = [], runtimeChecks: RuntimeCheck[] = [], setupIssues: ReadinessIssue[] = [];
   const seen = new Set<unknown>(), names = new Set<string>();
+  // Every node inside a loop body: a refund step there would propose once per iteration for one ticket.
+  const refundLoopBodies = new Set<unknown>();
+  for (const n of walkFlowNodes(object(trigger) ? trigger as FlowTriggerNode : null)) {
+    if (n.type === 'LOOP_ON_ITEMS' && n.firstLoopAction) for (const inner of walkFlowNodes(n.firstLoopAction)) refundLoopBodies.add(inner);
+  }
   let count = 0, inputVisits = 0, schemaVisits = 0, runtimeCount = 0, previewFound = false;
   const issue = (node: string, path: string, code: string, message: string, allowedPieces?: readonly string[]) => {
     if (issues.length < 100) issues.push({ node, path, code, message, ...(allowedPieces ? { allowedPieces: [...allowedPieces] } : {}) });
@@ -270,16 +278,24 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     expressions(input, node, 'settings.input', scope, type === 'PIECE' || type === 'PIECE_TRIGGER' ? pieceName : '');
     stepSettings = {};
     const isPiece = (short: string) => pieceName === short || pieceName === `@jarvispieces/piece-${short}`;
-    if (!root && isPiece('jarvis-refund') && settings.actionName === REFUND_ACTION && object(input)) {
-      const id=input.stripeConnection;
-      if (!emptyInput(id)) {
-        if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node,'settings.input.stripeConnection','CONNECTION_BINDING','Select a saved Stripe account');
-        else if (context.phase !== 'composition') {
-          const refusal=context.connection?.(id,'@activepieces/piece-stripe','settings.input.stripeConnection',settings,type) ?? (context.connection ? null : 'Connection inventory unavailable');
-          const reason = typeof refusal === 'string' || refusal === null ? refusal : refusal.message;
-          if(reason) issue(node,'settings.input.stripeConnection','CONNECTION_BINDING',reason);
+    if (!root && isRefundAction(settings) && pieceName !== REFUND_PIECE) issue(node, 'settings.pieceName', 'PIECE', `Use the full piece name ${REFUND_PIECE}`);
+    if (!root && isRefundAction(settings) && refundLoopBodies.has(raw)) issue(node, 'type', 'GRAPH', REFUND_LOOP_REFUSAL);
+    if (!root && isRefundAction(settings) && object(input)) {
+      for (const [field, provider] of Object.entries(REFUND_ACCOUNTS)) {
+        const id = input[field];
+        if (!emptyInput(id)) {
+          if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node,`settings.input.${field}`,'CONNECTION_BINDING','Select a saved Stripe account');
+          // No managed-connection exemption covers the refund; the refund backend refuses a jarvis: id at run time too.
+          else if (id.startsWith('jarvis:')) issue(node, `settings.input.${field}`, 'CONNECTION_BINDING', managedRefundRefusal(field as RefundAccountField));
+          else if (context.phase !== 'composition') {
+            const refusal=context.connection?.(id,provider,`settings.input.${field}`,settings,type) ?? (context.connection ? null : 'Connection inventory unavailable');
+            const reason = typeof refusal === 'string' || refusal === null ? refusal : refusal.message;
+            if (reason) issue(node,`settings.input.${field}`,'CONNECTION_BINDING',reason);
+          }
         }
       }
+      // The event supplies only the ticket; the runtime refuses any setup field that differs from the saved literal.
+      for (const k of [...REFUND_REQUIRED.filter(k=>k!=='ticket'),'amountMinorPath']) if (typeof input[k] === 'string' && input[k].includes('{{')) issue(node,`settings.input.${k}`,'INPUT_TYPE','Refund setup fields are fixed values; only the ticket maps the event');
       if(REFUND_REQUIRED.filter(k=>k!=='ticket').every(k=>!emptyInput(input[k]))) try {refundSetup(input);} catch(e){issue(node,'settings.input','INPUT_TYPE',(e as Error).message);}
       runtime(node,'settings.input','connection','Recheck pinned Stripe account and mode; exact amount approval expires after 48 hours. Refund dispatch requires durable approval and fresh payment state.');
     }

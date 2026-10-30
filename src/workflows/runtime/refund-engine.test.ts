@@ -36,6 +36,7 @@ import {REFUND_PIECE as IMPORT_PIECE,REFUND_ACTION as IMPORT_ACTION,REFUND_REQUI
 import {refundFixtureSetup as setup,refundFixtureTicket as ticket,refundFixtureProvider,validateRefundFixtures} from './refund-fixtures';
 import {workflowSafeguards} from './workflow-safeguards';
 import {acquireRefund} from '../db/repos/refund';
+import {REFUND_LOOP_REFUSAL,managedRefundRefusal} from '../refund-accounts';
 let dir:string,api:SandboxApi,runtime:EngineRuntime,worker:Worker,catalog:PieceCatalog,authority:AuthorityEngine,approvals:ApprovalManager;
 let services:ReturnType<typeof buildSandboxServiceBackends>,now=Date.now(),provider=refundFixtureProvider();
 const runIds:string[]=[];
@@ -187,4 +188,39 @@ test('after a human rejection the same ticket proposes again on its next event, 
  const again=await begin(f);expect(again.status).toBe('PAUSED');const b=approvalFor(again.id);expect(b.id).not.toBe(a.id);
  expect(JSON.parse(b.tool_arguments).ticketId).toBe('ticket-1');expect(JSON.parse(b.context).intent).toContain('Rejecting does not clear');expect(liveCards(since)).toBe(1);
  expect((await begin(f)).status).toBe('SUCCEEDED');expect(liveCards(since)).toBe(1);expect(posts()).toHaveLength(0);
+},120000);
+/** A saved version that skipped readiness, with a running run on it: what a hand-edited or older draft could hold. */
+function unchecked(trigger:any){
+ const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Refund unchecked',trigger});lockVersion(version.id);
+ const run=createFlowRun({flowId:flow.id,flowVersionId:version.id,status:'RUNNING'});runIds.push(run.id);
+ return (executionPath:Array<[string,number]>=[])=>({runId:run.id,projectId:DEFAULT_IDS.project,stepName:'refund_request',executionPath});
+}
+const refundRows=()=>(getWorkflowDb().query('SELECT COUNT(*) AS n FROM workflow_refund').get() as any).n;
+test('a Jarvis-managed Stripe connection is refused in readiness and before anything is resolved at run time',async()=>{
+ reset();const g=graph();g.nextAction.settings.input.stripeConnection='jarvis:stripe';
+ expect(compileWorkflow(g,{pieces:catalog,phase:'composition'}).issues.map(i=>i.message)).toContain(managedRefundRefusal('stripeConnection'));
+ const ctx=unchecked(g);
+ await expect(services.approvalRefund!({...setup,stripeConnection:'jarvis:stripe',ticket},ctx())).rejects.toThrow(managedRefundRefusal('stripeConnection'));
+ expect(provider.calls).toHaveLength(0);expect(refundRows()).toBe(0);
+},120000);
+test('setup must equal the saved step: an event-mapped ticket source cannot choose the request key',async()=>{
+ reset();const g=graph();g.nextAction.settings.input.ticketSource='{{trigger.src}}';
+ expect(compileWorkflow(g,{pieces:catalog,phase:'composition'}).issues.some(i=>i.path==='settings.input.ticketSource')).toBe(true);
+ const ctx=unchecked(g);
+ // The engine resolved the template from the event; the saved literal differs, so nothing is read or keyed.
+ await expect(services.approvalRefund!({...setup,ticketSource:'attacker-chosen',ticket:{...ticket,src:'attacker-chosen'}},ctx())).rejects.toThrow('Refund setup must match the saved workflow');
+ expect(provider.calls).toHaveLength(0);expect(refundRows()).toBe(0);
+ // A CODE node carrying the same settings is not a refund step.
+ reset();const code=graph();code.nextAction.type='CODE';
+ await expect(services.approvalRefund!({...setup,ticket},unchecked(code)())).rejects.toThrow('saved ticket refund step');
+ expect(provider.calls).toHaveLength(0);
+},120000);
+test('a refund step inside a loop is refused in readiness and at run time, so one ticket never raises two cards',async()=>{
+ reset();const since=Date.now(),inner=graph().nextAction;
+ const looped={...graph(),nextAction:{name:'each',type:'LOOP_ON_ITEMS',settings:{items:'{{trigger.items}}'},firstLoopAction:inner}};
+ expect(compileWorkflow(looped,{pieces:catalog,phase:'composition'}).issues.map(i=>i.message)).toContain(REFUND_LOOP_REFUSAL);
+ const ctx=unchecked(looped);
+ for(const i of [0,1])await expect(services.approvalRefund!({...setup,ticket},ctx([['each',i]]))).rejects.toThrow(REFUND_LOOP_REFUSAL);
+ expect(provider.calls).toHaveLength(0);expect(refundRows()).toBe(0);
+ expect(liveCards(since)).toBe(0);
 },120000);

@@ -1,6 +1,5 @@
 import {atPath} from './contact-import';
-export const REFUND_PIECE='@jarvispieces/piece-jarvis-refund';
-export const REFUND_ACTION='approval_refund';
+export {REFUND_PIECE,REFUND_ACTION} from '../refund-accounts';
 export const REFUND_REQUIRED=['stripeConnection','stripeAccountId','stripeMode','ticketSource','ticketIdPath','paymentIdPath','refundRequestedPath','refundRequestedValue','ticket'] as const;
 export const REFUND_TTL=48*60*60_000;
 export interface RefundSetup {stripeConnection:string;stripeAccountId:string;stripeMode:'test'|'live';ticketSource:string;ticketIdPath:string;paymentIdPath:string;refundRequestedPath:string;refundRequestedValue:string;amountMinorPath:string}
@@ -20,6 +19,8 @@ export function refundTicket(s:RefundSetup,ticket:unknown){
 }
 export interface RefundPayment {id:string;currency:string;amount:number;refunded:number;paid:boolean;captured:boolean;disputed:boolean;live:boolean}
 export interface RefundReceipt {id:string;charge:string;currency:string;amount:number;status:string;key:string}
+/** payment() and refunds() verify the Stripe account first. create() sends its POST with no read before it, so every
+ * account or token failure surfaces before dispatchApprovedRefund records the attempt. */
 export interface RefundProvider {payment(id:string):Promise<RefundPayment>;refunds(charge:string):Promise<RefundReceipt[]>;create(charge:string,amount:number,key:string):Promise<RefundReceipt>}
 export interface RefundProposal {ticketId:string;ticketSource:string;account:string;mode:'test'|'live';charge:string;currency:string;amount:number;refunded:number;expiresAt:number}
 export interface RefundState {proposal?:RefundProposal;approvalId?:string;originRun:string;state:'new'|'approval'|'dispatching'|'refunded'|'pending_provider'|'rejected'|'expired'|'needs_review';attemptedAt?:number;receipt?:RefundReceipt;reason?:string;retiredRuns?:string[];withdraw?:string[]}
@@ -50,7 +51,7 @@ export function refundMajorAmount(amount:number,currency:string){
 /** Ticket ID and source come from the event and setup: quoted, so they cannot rewrite the sentence. */
 const quoted=(v:string)=>JSON.stringify(v).replace(/[^\x20-\x7e]/g,c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0'));
 export function refundIntent(p:RefundProposal){
-  return `Refund ${refundMajorAmount(p.amount,p.currency)} (${p.amount} minor units ${p.currency.toUpperCase()}) from ${p.charge}, account ${p.account} (${p.mode}), for ${quoted(p.ticketSource)} ticket ${quoted(p.ticketId)}. Approve before ${new Date(p.expiresAt).toISOString()}. Rejecting does not clear the ticket's refund flag; a later event for this ticket proposes again.`;
+  return `Refund ${refundMajorAmount(p.amount,p.currency)} (${p.amount} minor units ${p.currency.toUpperCase()}) from ${p.charge}, account ${p.account} (${p.mode}), for ${quoted(p.ticketSource)} ticket ${quoted(p.ticketId)}. Approve before ${new Date(p.expiresAt).toISOString()}. Rejecting does not clear the ticket's refund flag; a later event for this ticket proposes again. If Stripe reports the refund as pending, Jarvis records it as pending and does not follow it up; check it in Stripe.`;
 }
 export function refundDecision(expiresAt:number,decision:{status:string;decided_at:number|null}|null,now:number):'approved'|'pending'|'rejected'|'expired' {
   if(decision?.status==='denied')return 'rejected';
@@ -84,6 +85,7 @@ export async function dispatchApprovedRefund(store:RefundStore,provider:RefundPr
     const matches=(await provider.refunds(p.charge)).filter(r=>r.key===key);checkpoint();
     return matches.length===1?finish(matches[0]!):save({...state,state:'needs_review',reason:'Previous refund dispatch remains uncertain; no second refund was sent'});
   }
+  // The account check (inside payment()) runs here, before the claim: a revoked token ends the request unattempted.
   const fresh=await provider.payment(p.charge);assertPayment(fresh,p.mode);
   const existing=await provider.refunds(p.charge);checkpoint();store.check();
   if(fresh.id!==p.charge||fresh.currency!==p.currency||fresh.refunded!==p.refunded||p.amount>fresh.amount-fresh.refunded||existing.some(r=>!['succeeded','failed','canceled'].includes(r.status)))return save({...state,state:'needs_review',reason:'Payment changed after approval; no refund sent'});

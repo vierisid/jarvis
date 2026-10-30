@@ -3,6 +3,7 @@ import { tracksPieceCompletion } from './piece-effects';
 import { isHubspotContact } from './hubspot-contact';
 import { isSalesStep } from './sales-followups';
 import { isImportStep } from '../import-accounts';
+import { isRefundAction } from '../refund-accounts';
 import { isReportStep, SOURCE_READ_BUDGET_MS, HUBSPOT_429_RETRIES, HUBSPOT_RETRY_MAX_WAIT_MS } from './weekly-report';
 /** Evidence of the installed runtime contract, not a claim a saved graph has run. */
 export function workflowSafeguards(trigger: unknown) {
@@ -11,9 +12,9 @@ export function workflowSafeguards(trigger: unknown) {
     const s = node.settings ?? {};
     const input = s.input && typeof s.input === 'object' && !Array.isArray(s.input) ? s.input : {};
     const add=(kind:string,coverage:string,limits:string)=>safeguards.push({node:node.name,kind,coverage,limits});
-    if (String(s.pieceName).endsWith('jarvis-refund') && s.actionName === 'approval_refund') {
+    if (isRefundAction(s)) {
       add('refund-approval','Mandatory human click on an immutable ticket/account/mode/charge/currency/integer-minor-unit amount. Durable workflow waitpoint and explicit 48-hour deadline; late approvals refused, rejection/expiry terminates without refund. Rejecting does not clear the refund flag on the ticket, so a later event for the same ticket proposes again (one live card per ticket). Changed ticket data supersedes an unattempted request and withdraws its card; a request that ended before dispatch frees its ticket and charge for a later delivery.', 'Ticket source, exact payment mapping, refund filter and Stripe account remain setup. A PaymentIntent must resolve to one captured charge. No fuzzy payment search.');
-      add('refund-identity','Persistent request identity across runs, flows, versions and restart; actual charge reservation across ticket IDs. Pre-dispatch ledger claim, stable Stripe idempotency/metadata key, full bounded refund-list reconciliation of lost responses. No automatic second POST.', 'At most one attempted or active Jarvis refund request per charge; additional or uncertain refunds require review. External changes after the final read are not atomic with Stripe. Pending provider refunds are recorded as pending, not succeeded. No eventual delivery guarantee.');
+      add('refund-identity','Persistent request identity across runs, flows, versions and restart; actual charge reservation across ticket IDs. Pre-dispatch ledger claim, stable Stripe idempotency/metadata key, full bounded refund-list reconciliation of lost responses. No automatic second POST.', 'At most one attempted or active Jarvis refund request per charge; additional or uncertain refunds require review. External changes after the final read are not atomic with Stripe. Pending provider refunds are recorded as pending, not succeeded, and are final for Jarvis: it does not poll them, so they need manual follow-up in Stripe. No eventual delivery guarantee.');
       add('refund-scope','Fixed Stripe account/payment/refund GETs and approved POST /refunds only. Fresh captured, undisputed, balance/currency/mode check; saved account pins and Authority enforced. Durable result/proposal/receipt records.', '200 pages/20000 refund records maximum; incomplete enumeration stops. Fixtures use synthetic providers only; fixture success never verifies live accounts.');
     }
     if (isImportStep(s)) {

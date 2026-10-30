@@ -1,20 +1,33 @@
 import {randomUUID} from 'node:crypto';
 import {ApprovalManager} from '../../authority/approval';
-import {REFUND_ACTION,REFUND_PIECE,refundSetup,refundTicket,proposeRefund,dispatchApprovedRefund,refundDecision,refundIntent,type RefundState} from './refund';
+import {refundSetup,refundTicket,proposeRefund,dispatchApprovedRefund,refundDecision,refundIntent,type RefundState} from './refund';
 import {refundTransport} from './refund-transport';
 import {acquireRefund,reserveRefundPayment,releaseRefundPayment} from '../db/repos/refund';
-import {currentConnectionIdentity,connectionBindings,enforceRunConnectionBinding} from '../db/repos/binding-pins';
+import {currentConnectionIdentity,connectionBindings,enforceRunConnectionBinding,recordRunCredentialOutcome} from '../db/repos/binding-pins';
 import {createWaitpoint} from '../db/repos/waitpoint';
 import {walkFlowNodes} from '../db/flow-graph';
 import {getWorkflowEffect,saveWorkflowEffect} from '../db/repos/workflow-effect';
 import {digest,resolveEffectContext,type WorkflowEffectContext} from './effect-context';
 import {workflowEffectId,type WorkflowEffectBoundary} from './effect-boundary';
 import type {CredentialResolver} from '../credentials/adapter';
+import {ConnectionCredentialError,OAUTH2_TYPES} from '../credentials/pasted-oauth2';
+import {REFUND_ACCOUNTS,REFUND_ACCOUNT_LABELS,REFUND_ACTION,REFUND_PIECE,REFUND_LOOP_REFUSAL,isRefundStep,managedRefundRefusal} from '../refund-accounts';
 export function createRefundService(deps:{effects:WorkflowEffectBoundary;credentials:CredentialResolver;fetchImpl?:typeof fetch;now?:()=>number}){
  return async(input:Record<string,unknown>,ctx:WorkflowEffectContext)=>{
-  const s=refundSetup(input),t=refundTicket(s,input.ticket),resolved=resolveEffectContext(ctx,REFUND_PIECE,REFUND_ACTION);
-  const node=walkFlowNodes(resolved.version.trigger).find(n=>n.name===ctx.stepName)!;
-  if(digest(refundSetup(node.settings?.input??{}))!==digest(s))throw Error('Refund setup must match the saved workflow');
+  const s=refundSetup(input),resolved=resolveEffectContext(ctx,REFUND_PIECE,REFUND_ACTION);
+  const saved=walkFlowNodes(resolved.version.trigger).find(n=>n.name===resolved.stepName);
+  if(!saved||!isRefundStep(saved.type,saved.settings))throw Error('Refund configuration must match a saved ticket refund step');
+  // Every setup field, the ticket source included, is the saved literal: the event supplies only the ticket.
+  if(digest(refundSetup(saved.settings?.input??{}))!==digest(s))throw Error('Refund setup must match the saved workflow');
+  // The request key names no loop iteration, so two iterations would raise two cards for one ticket.
+  if(resolved.executionPath.length)throw Error(REFUND_LOOP_REFUSAL);
+  // The readiness rule, before any binding is checked, identity read or credential resolved:
+  // the saved step itself names the account, and no managed connection is accepted (no exemption covers the refund).
+  const field='stripeConnection' as const;
+  if(saved.settings?.input?.[field]!==s[field])throw Error('Refund account must match the saved workflow step');
+  if(!connectionBindings(resolved.version.trigger).has(s[field]))throw Error('Refund account is not bound to this workflow');
+  if(s[field].startsWith('jarvis:'))throw Error(managedRefundRefusal(field));
+  const t=refundTicket(s,input.ticket);
   if(!t)return {status:'skipped',reason:'Ticket does not match the configured refund filter'};
   const clock=deps.now??Date.now,approvals=new ApprovalManager();approvals.expireDeadlines(clock());
   const binding=currentConnectionIdentity(ctx.projectId,s.stripeConnection,deps.credentials);
@@ -42,10 +55,28 @@ export function createRefundService(deps:{effects:WorkflowEffectBoundary;credent
    if(['refunded','pending_provider','rejected','expired','needs_review'].includes(state.state))return result(state);
    const provider=async(checkpoint:()=>void)=>{
     const check=()=>{checkpoint();store.check();const refusal=enforceRunConnectionBinding(ctx.runId,ctx.projectId,s.stripeConnection,deps.credentials);if(refusal)throw Error(refusal);};
-    check();if(s.stripeConnection.startsWith('jarvis:')||!connectionBindings(resolved.version.trigger).has(s.stripeConnection))throw Error('Select a saved Stripe account');
-    const c=await deps.credentials.resolve({projectId:ctx.projectId,pieceName:'@activepieces/piece-stripe',externalId:s.stripeConnection});
-    const token=c?.type==='SECRET_TEXT'?c.value.secret_text:c?.type==='OAUTH2'?c.value.access_token:null;
-    if(!c||c.pieceName!=='@activepieces/piece-stripe'||c.status&&c.status!=='ACTIVE'||typeof token!=='string'||!token)throw Error('Connect the selected Stripe account securely');
+    const pieceName=REFUND_ACCOUNTS[field],externalId=s[field];
+    check();let c=await deps.credentials.resolve({projectId:ctx.projectId,pieceName,externalId});
+    const usable=c?.type==='SECRET_TEXT'||c?.type==='OAUTH2';
+    if(!c||c.pieceName!==pieceName||!usable||c.status&&c.status!=='ACTIVE')throw Error('Connect the selected Stripe account securely');
+    // A stored OAuth2 token is refreshed when it is about to expire, only
+    // after the run's binding check passed (as the engine's connection route does).
+    try{c=await deps.credentials.fresh(c);}
+    catch(error){
+      if(!(error instanceof ConnectionCredentialError))throw error;
+      // Typed on the run's binding, as the engine's connection route records it, for the failure card.
+      recordRunCredentialOutcome(ctx.runId,externalId,{code:error.code,message:error.message});
+      // Only an expired or refused credential needs a person to reconnect; the others pass.
+      // An attempt already made stays at most once: this run only failed to read it back.
+      const account=`the selected ${REFUND_ACCOUNT_LABELS[field]} account (${externalId})`;
+      const outcome=store.load().attemptedAt===undefined?'Nothing was moved':'No refund was sent again and the earlier attempt was not rechecked';
+      throw Error(error.code==='CONNECTION_EXPIRED'?`Reconnect ${account}: ${error.message}`
+        :error.code==='CONNECTION_REFRESH_UNREACHABLE'?`${outcome}: Jarvis could not refresh ${account} just now, which is usually temporary. Start a new run later. ${error.message}`
+        :`${outcome}: ${account} changed while Jarvis refreshed it. Start a new run. ${error.message}`);
+    }
+    if(c.stored&&OAUTH2_TYPES.has(c.type))recordRunCredentialOutcome(ctx.runId,externalId,null);
+    const token=c.type==='SECRET_TEXT'?c.value.secret_text:c.type==='OAUTH2'?c.value.access_token:null;
+    if(typeof token!=='string'||!token)throw Error('Connect the selected Stripe account securely');
     return refundTransport(s,token,check,deps.fetchImpl);
    };
    const invocation={context:ctx,piece:REFUND_PIECE,action:REFUND_ACTION,toolCategory:'refunds'};
