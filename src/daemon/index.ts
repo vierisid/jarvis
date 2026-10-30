@@ -110,7 +110,7 @@ import { collectExecutionTargets } from "../actions/tools/sidecar-route.ts";
 import { ChannelService } from "./channel-service.ts";
 import { BackgroundAgentService } from "./background-agent-service.ts";
 import { AuthorityEngine } from "../authority/engine.ts";
-import { ApprovalManager, approvalNeedsClick, executionState, UNANSWERED_APPROVAL_TTL_MS, type ApprovalRequest } from "../authority/approval.ts";
+import { ApprovalManager, approvalNeedsClick, executionState, onApprovalDeadlineExpired, UNANSWERED_APPROVAL_TTL_MS, type ApprovalRequest } from "../authority/approval.ts";
 import { applyEmergencyState } from "./emergency-state.ts";
 import { AuditTrail } from "../authority/audit.ts";
 import { isUpdateAvailable, SIDECAR_LATEST_VERSION, SIDECAR_RECOMMENDED_VERSION } from "../sidecar/compat.ts";
@@ -4312,6 +4312,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     };
     expireUnanswered();
     setInterval(expireUnanswered, 10 * 60_000).unref?.();
+    // A workflow card past its explicit deadline leaves the dashboard the same way.
+    onApprovalDeadlineExpired(request => wsService.broadcastApprovalUpdate(request));
     // Phase 6.3.5b — let WS service resolve approvals from voice intents.
     wsService.setApprovalManager(approvalManager);
     wsService.setDeferredExecutor(deferredExecutor);

@@ -1,6 +1,8 @@
 import {randomUUID} from 'node:crypto';
+import {ActionOutcomeError} from '../../actions/action-outcome';
+import {WorkflowCancellationError} from './cancellation-error';
 import {ApprovalManager} from '../../authority/approval';
-import {refundSetup,refundTicket,proposeRefund,dispatchApprovedRefund,refundDecision,refundIntent,type RefundState} from './refund';
+import {refundOutcome,refundSetup,refundTicket,proposeRefund,dispatchApprovedRefund,refundDecision,refundIntent,type RefundState} from './refund';
 import {refundTransport} from './refund-transport';
 import {acquireRefund,reserveRefundPayment,releaseRefundPayment} from '../db/repos/refund';
 import {currentConnectionIdentity,connectionBindings,enforceRunConnectionBinding,recordRunCredentialOutcome} from '../db/repos/binding-pins';
@@ -32,7 +34,7 @@ export function createRefundService(deps:{effects:WorkflowEffectBoundary;credent
   const clock=deps.now??Date.now,approvals=new ApprovalManager();approvals.expireDeadlines(clock());
   const binding=currentConnectionIdentity(ctx.projectId,s.stripeConnection,deps.credentials);
   const key=digest(['refund-v1',ctx.projectId,s.stripeAccountId,s.stripeMode,s.ticketSource,t.ticketId]);
-  const acquired=acquireRefund(key,digest([s,t,binding]),randomUUID(),ctx.runId,clock);
+  const acquired=acquireRefund(key,digest([s,t]),digest(binding),randomUUID(),ctx.runId,clock);
   const park=(at:number)=>({waitpointId:createWaitpoint({flowRunId:ctx.runId,projectId:ctx.projectId,stepName:resolved.stepName,type:'TIMER',resumeDateTime:new Date(at).toISOString()}).id});
   if('busyUntil'in acquired)return park(acquired.busyUntil);
   try {
@@ -47,9 +49,15 @@ export function createRefundService(deps:{effects:WorkflowEffectBoundary;credent
     const failed=[...new Set(stale)].filter(a=>{try{approvals.deny(a,'refund-superseded');return false;}catch(e){console.warn('[refund] could not withdraw superseded approval '+a+'; retrying on the next invocation:',e);return true;}});
     if(failed.length)state.withdraw=failed;else delete state.withdraw;store.save(state);
    }
-   const result=(st:RefundState)=>{
+   // A request that needs review, or a refund Stripe left pending, fails the step with a typed outcome instead of a green run.
+   const settled=(st:RefundState)=>{
     // Ended before the pre-dispatch claim: the charge is free for another request again.
     if(st.attemptedAt===undefined&&['rejected','expired','needs_review'].includes(st.state))releaseRefundPayment(key);
+    const failure=refundOutcome(st);if(failure)throw new ActionOutcomeError(failure);
+    return st;
+   };
+   const result=(st:RefundState)=>{
+    settled(st);
     return {requestId:key,status:st.state,proposal:st.proposal,refund:st.receipt,reason:st.reason};
    };
    if(['refunded','pending_provider','rejected','expired','needs_review'].includes(state.state))return result(state);
@@ -79,9 +87,22 @@ export function createRefundService(deps:{effects:WorkflowEffectBoundary;credent
     if(typeof token!=='string'||!token)throw Error('Connect the selected Stripe account securely');
     return refundTransport(s,token,check,deps.fetchImpl);
    };
+   // A failure while no attempt is recorded means no POST was made (the claim is durable before the POST), so it says
+   // not_started and frees the charge. Only the stored state decides: if it cannot be read, the failure stays uncertain.
+   const preClaim=async<T>(work:()=>Promise<T>):Promise<T>=>{
+    try{return await work();}
+    catch(error){
+     if(error instanceof ActionOutcomeError&&error.outcome.effect!=='not_started')throw error;
+     let attempted=true;try{attempted=store.load().attemptedAt!==undefined;}catch{}
+     if(attempted)throw error;
+     releaseRefundPayment(key);
+     if(error instanceof ActionOutcomeError||error instanceof WorkflowCancellationError)throw error;
+     throw new ActionOutcomeError({status:'blocked',code:'REFUND_NOT_SENT',effect:'not_started',message:(error as Error).message+' No refund request was sent to Stripe.'});
+    }
+   };
    const invocation={context:ctx,piece:REFUND_PIECE,action:REFUND_ACTION,toolCategory:'refunds'};
    if(!state.proposal){
-    const read=await deps.effects.invoke({...invocation,route:'refund-proposal',toolName:'workflow_refund_proposal',category:'read_data',request:{...s,...t},prepare:()=>({arguments:{...s,...t},target:{account:s.stripeAccountId,payment:t.paymentId,effect:'Read exact payment and existing refunds to propose an amount; no payment mutation'}}),execute:async(_args,check)=>proposeRefund(s,t,await provider(check),clock())});
+    const read=await preClaim(()=>deps.effects.invoke({...invocation,route:'refund-proposal',toolName:'workflow_refund_proposal',category:'read_data',request:{...s,...t},prepare:()=>({arguments:{...s,...t},target:{account:s.stripeAccountId,payment:t.paymentId,effect:'Read exact payment and existing refunds to propose an amount; no payment mutation'}}),execute:(_args,check)=>preClaim(async()=>proposeRefund(s,t,await provider(check),clock()))}));
     if(read.approval)return {approval:read.approval};
     state.proposal=read.result as RefundState['proposal'];state.state='approval';store.save(state);
     // Reserve the actual charge, so different ticket IDs/PaymentIntent aliases cannot race.
@@ -104,20 +125,28 @@ export function createRefundService(deps:{effects:WorkflowEffectBoundary;credent
    if(state.originRun!==ctx.runId){
     if(state.attemptedAt===undefined)return {requestId:key,status:'duplicate',reason:'The original request owns the approval; no new refund or approval created'};
     // A new run may only reconcile a prior attempt. It can never make a second POST.
-    const read=await deps.effects.invoke({...invocation,route:'refund-reconcile',toolName:'workflow_refund_reconcile',category:'read_data',request:{key},prepare:()=>({arguments:{key},target:{effect:'Read prior refund receipt only'}}),execute:async(_args,check)=>dispatchApprovedRefund(store,await provider(check),key,clock(),check)});
+    const read=await deps.effects.invoke({...invocation,route:'refund-reconcile',toolName:'workflow_refund_reconcile',category:'read_data',request:{key},prepare:()=>({arguments:{key},target:{effect:'Read prior refund receipt only'}}),execute:async(_args,check)=>{
+     try{return settled(await dispatchApprovedRefund(store,await provider(check),key,clock(),check));}
+     catch(error){
+      // A reconnect must not strand an attempted request: if the changed connection cannot read the attempt back, it ends for review.
+      if(!acquired.bindingChanged||error instanceof ActionOutcomeError||error instanceof WorkflowCancellationError)throw error;
+      const ended=store.load();ended.state='needs_review';ended.reason='The Stripe connection changed after this refund was attempted and its result could not be read back';store.save(ended);
+      return settled(ended);
+     }
+    }});
     return read.approval?{approval:read.approval}:result(read.result as RefundState);
    }
    if(previous?.status==='dispatching'&&state.attemptedAt!==undefined){previous.status='pending';delete previous.error;delete previous.outcome;saveWorkflowEffect(previous);}
    const p=state.proposal!;
    const intent=refundIntent(p);
-   const reply=await deps.effects.invoke({...invocation,route:'approved-refund',toolName:'workflow_approved_refund',category:'make_payment',categories:['read_data','make_payment'],request:{...p,key},approvalRequired:true,approvalExpiresAt:p.expiresAt,aboveLevelFloor:'write_data',
+   const reply=await preClaim(()=>deps.effects.invoke({...invocation,route:'approved-refund',toolName:'workflow_approved_refund',category:'make_payment',categories:['read_data','make_payment'],request:{...p,key},approvalRequired:true,approvalExpiresAt:p.expiresAt,aboveLevelFloor:'write_data',
     confirmation:{confirm:'always',reason:'Explicit approval of this exact refund is required',intent},
     prepare:()=>({arguments:{...p,key},target:{...p,intent,effect:'Issue exactly one refund to the original payment method; no customer contact'}}),
-    execute:async(_args,check)=>{
+    execute:(_args,check)=>preClaim(async()=>{
       const a=getWorkflowEffect(effectId)?.approvalId;const decision=a?approvals.getRequest(a):null;
       if(refundDecision(p.expiresAt,decision,clock())!=='approved')throw Error('Refund approval is absent or late');
-      return dispatchApprovedRefund(store,await provider(check),key,clock(),check);
-    }});
+      return settled(await dispatchApprovedRefund(store,await provider(check),key,clock(),check));
+    })}));
    if(reply.approval){state=store.load();state.approvalId=reply.approval.approvalId;store.save(state);return {approval:reply.approval};}
    return result(reply.result as RefundState);
   } finally {acquired.release();}

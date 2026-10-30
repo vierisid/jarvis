@@ -114,3 +114,28 @@ test('oversized Stripe bodies are cut off while streaming, not buffered whole',a
  // 2 MiB is 8 chunks: the reader stops at the 9th, far short of the 64 on offer.
  expect(pulled).toBeLessThan(12);
 });
+const stagedDispatch=async()=>{
+ const f=refundFixtureProvider(),provider=refundTransport(setup,'synthetic',()=>{},f.fetchImpl);
+ const state={current:{originRun:'run',state:'approval',proposal:await proposeRefund(setup,refundTicket(setup,refundFixtureTicket)!,provider,1)} as RefundState};
+ const store:RefundStore={check(){},load:()=>structuredClone(state.current),save:s=>{state.current=structuredClone(s);}};
+ return {f,provider,state,store};
+};
+test('several refunds carrying the key on a restart readback go to review, not to a receipt',async()=>{
+ const {f,provider,state,store}=await stagedDispatch();state.current={...state.current,state:'dispatching',attemptedAt:2};
+ for(const id of ['re_dup1','re_dup2'])f.refunds.push({id,charge:'ch_fixture',amount:1200,currency:'eur',status:'succeeded',metadata:{jarvis_refund_key:'key'}});
+ const out=await dispatchApprovedRefund(store,provider,'key',3,()=>{});
+ expect(out.state).toBe('needs_review');expect(out.receipt).toBeUndefined();expect(f.calls.some(c=>c.method==='POST')).toBe(false);
+});
+test('currency drift after approval sends no POST',async()=>{
+ const {f,provider,store}=await stagedDispatch();f.payment.currency='usd';
+ expect((await dispatchApprovedRefund(store,provider,'key',2,()=>{})).state).toBe('needs_review');expect(f.calls.some(c=>c.method==='POST')).toBe(false);
+});
+test('a new unresolved refund after approval sends no POST',async()=>{
+ const {f,provider,store}=await stagedDispatch();f.refunds.push({id:'re_other',charge:'ch_fixture',amount:1,currency:'eur',status:'pending',metadata:{}});
+ expect((await dispatchApprovedRefund(store,provider,'key',2,()=>{})).state).toBe('needs_review');expect(f.calls.some(c=>c.method==='POST')).toBe(false);
+});
+test('a dispute after approval sends no POST and records no attempt',async()=>{
+ const {f,provider,state,store}=await stagedDispatch();f.payment.disputed=true;
+ await expect(dispatchApprovedRefund(store,provider,'key',2,()=>{})).rejects.toThrow('undisputed');
+ expect(state.current.attemptedAt).toBeUndefined();expect(f.calls.some(c=>c.method==='POST')).toBe(false);
+});

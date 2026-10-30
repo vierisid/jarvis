@@ -1,4 +1,5 @@
 import {atPath} from './contact-import';
+import type {ActionFailure} from '../../actions/action-outcome';
 export {REFUND_PIECE,REFUND_ACTION} from '../refund-accounts';
 export const REFUND_REQUIRED=['stripeConnection','stripeAccountId','stripeMode','ticketSource','ticketIdPath','paymentIdPath','refundRequestedPath','refundRequestedValue','ticket'] as const;
 export const REFUND_TTL=48*60*60_000;
@@ -52,6 +53,16 @@ export function refundMajorAmount(amount:number,currency:string){
 const quoted=(v:string)=>JSON.stringify(v).replace(/[^\x20-\x7e]/g,c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0'));
 export function refundIntent(p:RefundProposal){
   return `Refund ${refundMajorAmount(p.amount,p.currency)} (${p.amount} minor units ${p.currency.toUpperCase()}) from ${p.charge}, account ${p.account} (${p.mode}), for ${quoted(p.ticketSource)} ticket ${quoted(p.ticketId)}. Approve before ${new Date(p.expiresAt).toISOString()}. Rejecting does not clear the ticket's refund flag; a later event for this ticket proposes again. If Stripe reports the refund as pending, Jarvis records it as pending and does not follow it up; check it in Stripe.`;
+}
+/** The typed failure a state ends its step with, or null for one that may stay green (refunded, rejected, expired).
+ * Without a recorded attempt no POST was made, so only then does a review say not_started. */
+export function refundOutcome(st:RefundState):ActionFailure|null{
+  if(st.state==='pending_provider')return {status:'unknown',code:'REFUND_PENDING_PROVIDER',effect:'may_have_occurred',message:`Stripe accepted refund ${st.receipt?.id??''} as pending, so it has not finished. Check it in Stripe later; Jarvis does not follow it up and will not resend it.`};
+  if(st.state!=='needs_review')return null;
+  const why=st.reason??'Refund needs review';
+  return st.attemptedAt===undefined
+    ?{status:'blocked',code:'REFUND_NEEDS_REVIEW',effect:'not_started',message:`${why}. No refund request was sent to Stripe; review the payment before raising it again.`}
+    :{status:'unknown',code:'REFUND_NEEDS_REVIEW',effect:'may_have_occurred',message:`${why}. Stripe may or may not have refunded this payment: check Stripe before acting. Jarvis will not resend it.`};
 }
 export function refundDecision(expiresAt:number,decision:{status:string;decided_at:number|null}|null,now:number):'approved'|'pending'|'rejected'|'expired' {
   if(decision?.status==='denied')return 'rejected';
