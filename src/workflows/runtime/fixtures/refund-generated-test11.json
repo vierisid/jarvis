@@ -1,0 +1,30 @@
+{
+  "name": "trigger",
+  "type": "PIECE_TRIGGER",
+  "displayName": "Receive refund-request ticket",
+  "settings": {
+    "pieceName": "webhook",
+    "input": {}
+  },
+  "nextAction": {
+    "name": "step_1",
+    "type": "PIECE",
+    "displayName": "Propose exact refund and await approval for up to 48 hours",
+    "settings": {
+      "pieceName": "@jarvispieces/piece-jarvis-refund",
+      "actionName": "approval_refund",
+      "input": {
+        "stripeConnection": "",
+        "stripeAccountId": "",
+        "stripeMode": null,
+        "ticketSource": "",
+        "ticketIdPath": "",
+        "paymentIdPath": "",
+        "refundRequestedPath": "",
+        "refundRequestedValue": "",
+        "amountMinorPath": "",
+        "ticket": "{{trigger}}"
+      }
+    }
+  }
+}

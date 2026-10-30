@@ -1649,6 +1649,20 @@ describe("tool-loop composer", () => {
     expect(detailsResult.content).toContain("input.message");
   });
 
+  test('refund piece details render the native refund guidance, indented like its siblings', async () => {
+    const llm = new StubToolLlm([
+      { tool_calls: [tc('1', 'get_piece_details', { pieceName: 'jarvis-refund' })] },
+      { tool_calls: [tc('2', 'report_blocked', { reason: 'Stop after discovery' })] },
+    ]);
+    const registry = new PieceCatalog([{ name: '@jarvispieces/piece-jarvis-refund', displayName: 'Jarvis: Refunds', description: 'Refunds.',
+      actions: { approval_refund: { name: 'approval_refund', displayName: 'Refund', description: 'Refund.', inputSchema: { fields: [] } } }, triggers: {} } as never]);
+    await composeFlow({ llm, pieceRegistry: registry }, { name: 'Refunds', description: 'Refund tickets' });
+    const details = String(llm.toolTurns[1]!.messages.at(-1)!.content);
+    const line = details.split('\n').find(l => l.includes('approval-controlled ticket refunds'));
+    expect(line?.startsWith('    For approval-controlled')).toBe(true);
+    expect(line).toContain('Do not put it inside a loop');
+  });
+
   test('schedule discovery advertises timezone and preserves the weekday reminder graph', async () => {
     const flow = validFlowArgs();
     Object.assign(flow.trigger, { type: 'PIECE_TRIGGER', settings: { pieceName: 'schedule', input: { cron_expression: '0 9 * * 1-5', timezone: 'Europe/Rome' } } });

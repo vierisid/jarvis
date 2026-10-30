@@ -62,7 +62,7 @@ export interface EffectInvocation {
   /** Only the validated versioned piece document protocol can enroll a review. */
   documentReview?: boolean;
   /** A reviewed UI capability cannot be auto-allowed by category overrides. */
-  confirmation?: { confirm: 'always'; intent: string };
+  confirmation?: { confirm: 'always'; intent: string; reason?: string };
   /** Process-bound browser review; never reconstructed after restart. */
   reviewRegistry?: ToolRegistry;
   /** Display only: what a reviewed browser call acts on, for its card. Never matched on. */
@@ -99,6 +99,8 @@ export interface EffectInvocation {
   principal?: EffectPrincipal;
   /** The caller's gate already found this effect needs approval; the boundary never concludes otherwise. */
   approvalRequired?: boolean;
+  /** Trusted native action deadline, persisted with the exact review. */
+  approvalExpiresAt?: number;
   /** The engine owns this dispatch. Only its completion receipt can finish it. */
   externalDispatch?: boolean;
   /** Qualified native resumable work owns its own dispatch/checkpoint ledger.
@@ -386,7 +388,7 @@ export class WorkflowEffectBoundary {
       // A capability whose UI effect cannot be described is reviewed whatever
       // the category check concluded; the card carries the uncertainty.
       if (input.confirmation) return { ...decision, requiresApproval: true,
-        reason: `${decision.reason}; ${input.toolName} requires user review of uncertain UI effects` };
+        reason: `${decision.reason}; ${input.confirmation.reason ?? `${input.toolName} requires user review of uncertain UI effects`}` };
       // A gate that already required approval for this principal is never
       // overruled by a recomputation here that happens to be looser.
       if (input.approvalRequired && !decision.requiresApproval) {
@@ -522,7 +524,8 @@ export class WorkflowEffectBoundary {
               // auto-approval cannot satisfy this card.
               ...(input.confirmation ? { confirm: input.confirmation.confirm } : {}),
               ...(input.reviewSubject && Object.keys(input.reviewSubject).length ? { reviewSubject: input.reviewSubject } : {}),
-              ...(intent ? { intent } : {}) }), executionMode: 'workflow',
+              ...(intent ? { intent } : {}),
+              ...(input.approvalExpiresAt !== undefined ? { expiresAt: input.approvalExpiresAt } : {}) }), executionMode: 'workflow',
             ...(input.reviewRegistry ? { toolRegistry: input.reviewRegistry } : {}) });
           record.approvalId = request.id;
           delete record.deferral;

@@ -32,6 +32,7 @@ import { GitHubRepository } from "../../integrations/GitHubRepository";
 import { MEETING_ACCOUNT_FIELDS } from "../../../../../src/workflows/meeting-accounts";
 import { SALES_ACCOUNT_FIELDS } from "../../../../../src/workflows/sales-accounts";
 import { REPORT_ACCOUNT_FIELDS } from "../../../../../src/workflows/report-accounts";
+import { REFUND_ACCOUNT_FIELDS, REFUND_ACTION, REFUND_PIECE } from "../../../../../src/workflows/refund-accounts";
 import { IMPORT_ACCOUNT_FIELDS, IMPORT_ACTION, IMPORT_PIECE, importAccountFields } from "../../../../../src/workflows/import-accounts";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { WorkflowEditorEnvironment, WorkflowPortal, useWorkflowRequest } from "./WorkflowEditorEnvironment";
@@ -3417,6 +3418,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
     ? MEETING_ACCOUNT_FIELDS
     : piece?.name === '@jarvispieces/piece-jarvis-sales' && subName === 'draft_followups' ? SALES_ACCOUNT_FIELDS
       : piece?.name === '@jarvispieces/piece-jarvis-report' && subName === 'weekly_operating_report' ? REPORT_ACCOUNT_FIELDS
+        : piece?.name === REFUND_PIECE && subName === REFUND_ACTION ? REFUND_ACCOUNT_FIELDS
         : piece?.name === IMPORT_PIECE && subName === IMPORT_ACTION
           // The source account is asked for only when the source uses OAuth2.
           ? IMPORT_ACCOUNT_FIELDS.filter(([field]) => importAccountFields(formInput).includes(field)) : [];

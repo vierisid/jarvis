@@ -2,6 +2,7 @@ import { MEETING_ACCOUNTS } from '../../meeting-accounts';
 import { importAccountFields, isImportStep } from '../../import-accounts';
 import { REPORT_ACCOUNTS, isReportStep } from '../../report-accounts';
 import { SALES_ACCOUNTS, isSalesStep } from '../../sales-accounts';
+import { REFUND_ACCOUNTS, isRefundAction } from '../../refund-accounts';
 /**
  * Q-05: the bindings a workflow was enabled against, and the checks that stop
  * work when one of them changes.
@@ -113,6 +114,12 @@ export function connectionBindings(trigger: unknown): Map<string, ConnectionRefe
 /** Each connection one step names, with where it names it, by the same rule as `connectionBindings`. */
 export function nodeConnectionReferences(node: FlowTriggerNode): Array<[externalId: string, path: string]> {
   const out: Array<[string, string]> = [];
+  if (isRefundAction(node.settings)) {
+    for (const field of Object.keys(REFUND_ACCOUNTS)) {
+      const id = node.settings?.input?.[field];
+      if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
+    }
+  }
   if (isImportStep(node.settings)) {
     // The source account is named only by an OAuth2 source.
     for (const field of importAccountFields(node.settings?.input)) {
