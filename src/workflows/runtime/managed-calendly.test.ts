@@ -4,9 +4,22 @@ import {
   MANAGED_CALENDLY_ACTIONS,
 } from "./managed-calendly";
 import {
+  MANAGED_PIECE_ADAPTERS,
   resolveGovernedPieceAction,
   tracksPieceCompletion,
 } from "./piece-effects";
+/** Every action of the pinned @activepieces/piece-calendly 0.7.1 bundle, read
+ * from its `actions()` (custom_api_call is added by the framework and stays
+ * unmapped). The engine test checks the installed package against the adapter. */
+const CALENDLY_071_ACTIONS = [
+  "cancel_scheduled_event", "create_event_type", "create_one_off_event_type", "create_scheduling_link",
+  "create_share", "find_invitee_bookings", "find_user", "get_event_invitee", "get_event_type_availability",
+  "get_event_type", "get_organization_membership", "get_organization", "get_scheduled_event",
+  "get_user_availability_schedule", "get_user", "list_available_times", "list_event_invitees",
+  "list_event_type_hosts", "list_event_types", "list_organization_memberships", "list_scheduled_events",
+  "list_user_availability_schedules", "list_user_busy_times", "list_user_locations",
+  "update_event_type_availability", "update_event_type",
+];
 const auth = {
   jarvis_managed: "calendly",
   secret_text: "PRIVATE",
@@ -18,6 +31,21 @@ const empty = {
 };
 const fetcher = (v: unknown) =>
   (async () => Response.json(v)) as unknown as typeof fetch;
+test("the Calendly adapter names every action of the pinned bundle, and nothing else", () => {
+  const piece = "@activepieces/piece-calendly";
+  const adapter = MANAGED_PIECE_ADAPTERS.find((a) => a.pieceName === piece)!;
+  expect(CALENDLY_071_ACTIONS).toHaveLength(26);
+  expect((Object.values(adapter.categories).flat() as string[]).sort()).toEqual([...CALENDLY_071_ACTIONS].sort());
+  expect(resolveGovernedPieceAction(piece, "custom_api_call")).toMatchObject({category: "modify_settings", known: false});
+  expect(resolveGovernedPieceAction(piece, "cancel_scheduled_event")).toMatchObject({category: "delete_data", known: true});
+  expect(resolveGovernedPieceAction(piece, "list_user_busy_times")).toMatchObject({category: "read_data", known: true});
+  expect(resolveGovernedPieceAction(piece, "update_event_type")).toMatchObject({category: "write_data", known: true});
+  // Every change is tracked so a retry after a lost response is refused; reads never are.
+  expect(CALENDLY_071_ACTIONS.filter((a) => tracksPieceCompletion(piece, a)).sort()).toEqual(
+    ["cancel_scheduled_event", "create_event_type", "create_one_off_event_type", "create_scheduling_link",
+      "create_share", "update_event_type", "update_event_type_availability"]);
+  for (const action of MANAGED_CALENDLY_ACTIONS) expect(CALENDLY_071_ACTIONS).toContain(action);
+});
 test("five qualified actions have exact categories and only link writes need a receipt", () => {
   for (const name of MANAGED_CALENDLY_ACTIONS) {
     expect(

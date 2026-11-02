@@ -161,6 +161,16 @@ test('managed ClickUp shows its stored grant and routes setup without exposing c
   expect(new ConnectedWorkspace(db,sources,'other','other',()=>true).read().rows.some(r=>r.sourceId==='native:clickup')).toBe(false);
 });
 
+test('managed Calendly shows its stored grant and routes setup to its own hosted integration', () => {
+  sources.calendly = () => ({configured:true, connected:true, account:{id:'cal-1',label:'owner@example.test'}});
+  expect(row('native:calendly')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'cal-1',setupActionId:'setup:calendly'});
+  expect(provider.read().setup.find(s => s.id === 'setup:calendly')?.target).toEqual({kind:'hosted_integration',provider:'calendly'});
+  sources.calendly = () => ({configured:true,connected:false,account:null});
+  expect(row('native:calendly').status).toBe('disconnected');
+  sources.calendly = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:calendly')).toBe(false);
+});
+
 test('managed Asana shows its stored grant and routes setup to its own hosted integration', () => {
   sources.asana = () => ({configured:true, connected:true, account:{id:'8',label:'owner@example.test'}});
   expect(row('native:asana')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'8',setupActionId:'setup:asana'});

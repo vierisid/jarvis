@@ -234,11 +234,17 @@ test.skipIf(!gate)(
     expect(failures).toEqual([]);
     const metadata = catalog.get(piece)!;
     expect(metadata.auth?.type).toBe("SECRET_TEXT");
-    if (process.env.CALENDLY_CATALOG_FIXTURE)
-      writeFileSync(
-        process.env.CALENDLY_CATALOG_FIXTURE,
-        JSON.stringify(metadata),
-      );
+    // Every action the installed package declares is in the governed table, so
+    // an upstream addition fails here instead of falling to modify_settings.
+    const actions = Object.keys(metadata.actions);
+    expect(actions.length).toBeGreaterThan(25);
+    expect(
+      actions.filter(
+        (name) =>
+          name !== "custom_api_call" &&
+          !resolveGovernedPieceAction(piece, name)!.known,
+      ),
+    ).toEqual([]);
     for (const name of [
       "list_event_types",
       "create_scheduling_link",

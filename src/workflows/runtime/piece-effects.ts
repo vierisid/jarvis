@@ -758,9 +758,31 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
-  catalogId: 'calendly', pieceName: '@activepieces/piece-calendly', unknownActionCategory: 'modify_settings',
-  targetProps: ['scheduledEvent', 'eventType', 'user', 'organization', 'inviteeEmail', 'email', 'status', 'active', 'minStartTime', 'maxStartTime', 'sort', 'count', 'pageToken'],
-  categories: {read_data: ['list_scheduled_events', 'get_scheduled_event', 'list_event_invitees', 'list_event_types'], write_data:['create_scheduling_link']},
+  // Calendly: every action of the pinned 0.7.1 bundle (`managed-calendly.test.ts`
+  // pins the list and the engine test checks it against the installed
+  // package), so a workflow on the user's own Calendly token keeps running at
+  // the default level. The managed `jarvis:calendly` connection is narrower
+  // still: `managed-calendly.ts` runs only MANAGED_CALENDLY_ACTIONS. Only
+  // `custom_api_call` and an action added upstream fall back to `modify_settings`.
+  catalogId: 'calendly', pieceName: CALENDLY_PIECE, unknownActionCategory: 'modify_settings',
+  targetProps: ['scheduledEvent', 'eventType', 'invitee', 'user', 'organization', 'membership', 'schedule', 'owner',
+    'host', 'inviteeEmail', 'email', 'status', 'active', 'name', 'duration', 'startDate', 'endDate', 'startTime',
+    'endTime', 'minStartTime', 'maxStartTime', 'timezone', 'role', 'reason', 'sort', 'count', 'pageToken'],
+  categories: {
+    read_data: ['find_invitee_bookings', 'find_user', 'get_event_invitee', 'get_event_type',
+      'get_event_type_availability', 'get_organization', 'get_organization_membership', 'get_scheduled_event',
+      'get_user', 'get_user_availability_schedule', 'list_available_times', 'list_event_invitees',
+      'list_event_type_hosts', 'list_event_types', 'list_organization_memberships', 'list_scheduled_events',
+      'list_user_availability_schedules', 'list_user_busy_times', 'list_user_locations'],
+    // The user's own scheduling content: event types, their availability and
+    // booking links into them. None grants anyone access to the account; a
+    // link only lets its holder book a meeting the user already offers.
+    write_data: ['create_event_type', 'create_one_off_event_type', 'create_scheduling_link', 'create_share',
+      'update_event_type', 'update_event_type_availability'],
+    // Cancelling takes a booked meeting away from both sides (Calendly also
+    // emails the invitee), so it is gated as a deletion.
+    delete_data: ['cancel_scheduled_event'],
+  },
 }, {
   // Asana: every action of the pinned 0.7.2 bundle (`asana-connection.test.ts`
   // pins the list and the engine test checks it against the installed

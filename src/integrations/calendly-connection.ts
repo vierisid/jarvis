@@ -1,6 +1,6 @@
 import { calendlyNeedsReconnect } from "./calendly-refresh";
 /** Read the hosting-owned grant on every use. Refreshed access tokens are cached separately. */
-import { readManagedConnectionFile } from "./managed-connection-file";
+import { readConnectionFile } from "./connection-file";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
 
@@ -25,7 +25,7 @@ export function readCalendlyConnection(
 ): CalendlyConnection | null {
   try {
     const v = JSON.parse(
-      readManagedConnectionFile(join(dataDir, "connections", "calendly.json")),
+      readConnectionFile(join(dataDir, "connections", "calendly.json")),
     ) as CalendlyConnection;
     if (
       v.version !== 1 ||
