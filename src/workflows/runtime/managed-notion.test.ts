@@ -9,7 +9,7 @@ import {
   authorizePieceDispatch,
   executeAuthorizedPiece,
 } from "./piece-effect-guard";
-import { tracksPieceCompletion } from "./piece-effects";
+import { GOVERNED_PIECE_ADAPTERS, resolveGovernedPieceAction, tracksPieceCompletion } from "./piece-effects";
 const id = "11111111-1111-4111-8111-111111111111",
   child = "22222222-2222-4222-8222-222222222222";
 const input = {
@@ -229,4 +229,59 @@ test("multiple auth methods retain a connection picker and ordinary single-metho
       actions: {},
     }).auth,
   ).toBeUndefined();
+});
+
+const NOTION = "@activepieces/piece-notion";
+/** Every action of the pinned @activepieces/piece-notion 0.8.1 bundle, keyed by
+ * the `classification` upstream gives it. The engine test checks the installed
+ * package against the adapter too. */
+const NOTION_081_BY_UPSTREAM: Record<string, string[]> = {
+  SEARCH: ["list_databases", "notion-find-database-item", "list_database_pages", "find_page", "notion_search",
+    "notion_list_users", "notion_query_database", "notion_find_database_item"],
+  READ: ["getPageOrBlockChildren", "retrieve_database", "get_page_comments", "notion_get_page",
+    "notion_get_block_children", "notion_get_page_comments", "notion_get_user", "notion_get_database"],
+  WRITE: ["create_database_item", "update_database_item", "createPage", "append_to_page", "restore_database_item",
+    "add_comment", "notion_create_page", "notion_move_page", "notion_append_to_page", "notion_update_block",
+    "notion_add_comment", "notion_create_database", "notion_create_database_item", "notion_update_database_item",
+    "notion_restore_database_item"],
+  DESTRUCTIVE: ["archive_database_item", "notion_archive_page", "notion_delete_block",
+    "notion_update_database_schema", "notion_archive_database_item"],
+};
+/** Where Jarvis departs from upstream's label: comments notify people, and a move changes the page's sharing. */
+const SENDS = ["add_comment", "notion_add_comment"];
+const MOVES = ["notion_move_page"];
+const expectedCategory = (upstream: string, name: string) =>
+  SENDS.includes(name) ? "send_message" : MOVES.includes(name) ? "delete_data"
+    : upstream === "READ" || upstream === "SEARCH" ? "read_data" : upstream === "DESTRUCTIVE" ? "delete_data" : "write_data";
+test("the Notion adapter names every action of the pinned bundle, each in the category it should have", () => {
+  const all = Object.values(NOTION_081_BY_UPSTREAM).flat();
+  expect(all).toHaveLength(36);
+  const adapter = GOVERNED_PIECE_ADAPTERS.find((a) => a.pieceName === NOTION)!;
+  expect((Object.values(adapter.categories).flat() as string[]).filter((n) => n !== "custom_api_call").sort()).toEqual([...all].sort());
+  const table = Object.fromEntries(Object.entries(NOTION_081_BY_UPSTREAM).flatMap(([upstream, names]) =>
+    names.map((name) => [name, expectedCategory(upstream, name)])));
+  expect(Object.fromEntries(all.map((name) => [name, resolveGovernedPieceAction(NOTION, name)!.category as string]))).toEqual(table);
+  expect(all.filter((name) => !resolveGovernedPieceAction(NOTION, name)!.known)).toEqual([]);
+  expect(resolveGovernedPieceAction(NOTION, "custom_api_call")).toMatchObject({ category: "delete_data" });
+  expect(resolveGovernedPieceAction(NOTION, "added_upstream_later")).toMatchObject({ category: "delete_data", known: false });
+  // A completion receipt for every change, never for a read or a custom call that may be one.
+  for (const name of all)
+    expect(`${name}: ${tracksPieceCompletion(NOTION, name)}`).toBe(`${name}: ${table[name] !== "read_data"}`);
+  expect(tracksPieceCompletion(NOTION, "custom_api_call")).toBe(false);
+});
+test("archive or restore page narrows to a write only for an explicit restore", () => {
+  const category = (input?: Record<string, unknown>) => resolveGovernedPieceAction(NOTION, "notion_archive_page", input)!.category;
+  expect(category()).toBe("delete_data");
+  expect(category({ page_id: id, archived: true })).toBe("delete_data");
+  expect(category({ page_id: id, archived: "{{trigger.archived}}" })).toBe("delete_data");
+  expect(category({ page_id: id, archived: false })).toBe("write_data");
+});
+test("pages from API 2026-03-11 (in_trash, no archived) keep the advertised archived field", async () => {
+  const current = { ...page(), in_trash: false, created_time: "2026-10-28T10:00:00.000Z" };
+  const request = (async () => Response.json(list([current]))) as unknown as typeof fetch;
+  const found: any = await runManagedNotionAction("find_page", { ...input, title: "Notes" }, request);
+  expect(found.pages[0].archived).toBe(false);
+  const created: any = await runManagedNotionAction("createPage", input,
+    (async () => Response.json({ ...current, in_trash: true })) as unknown as typeof fetch);
+  expect(created.archived).toBe(true);
 });

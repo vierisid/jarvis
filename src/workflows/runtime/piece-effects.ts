@@ -82,7 +82,7 @@ export function isGmailTrackedSend(action: unknown): boolean {
  * returns the labeled (incoming) message, which is not a send receipt.
  */
 export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
-  return (piece === '@activepieces/piece-notion' && ['createPage','append_to_page'].includes(String(action)))
+  return (piece === NOTION_PIECE && notionTracked(action))
     || isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
@@ -176,6 +176,21 @@ export function asanaDuplicateProjectCategory(input: Record<string, unknown>): A
   if (!present(input.include)) return 'write_data';
   return Array.isArray(input.include) && input.include.every(part => ASANA_DUPLICATE_CONTENT_PARTS.has(part))
     ? 'write_data' : 'modify_settings';
+}
+
+const NOTION_PIECE = '@activepieces/piece-notion';
+/** Every Notion action that changes the workspace (write, send or delete),
+ * on the managed connection or the user's own. None parks its flow, so each
+ * one can be tracked. `custom_api_call` is left out: it may be a read. */
+function notionTracked(action: unknown): boolean {
+  const categories = GOVERNED_PIECE_ADAPTERS.find(a => a.pieceName === NOTION_PIECE)!.categories;
+  return typeof action === 'string' && action !== 'custom_api_call' && (['write_data', 'send_message', 'delete_data'] as const)
+    .some(category => categories[category]?.includes(action));
+}
+/** Notion `notion_archive_page` sets `archived`: false restores the page (a
+ * write); true, or anything not literally false, trashes it. */
+function notionArchivePageCategory(input: Record<string, unknown>): ActionCategory {
+  return input.archived === false ? 'write_data' : 'delete_data';
 }
 
 const DROPBOX_PIECE = '@activepieces/piece-dropbox';
@@ -426,22 +441,31 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
     pieceName: '@activepieces/piece-notion',
     unknownActionCategory: 'delete_data',
     targetProps: ['database_id', 'page_id', 'pageId', 'block_id', 'item_id', 'database_item_id',
-      'archived_item_id', 'parent_page_id', 'new_parent_page_id', 'title', 'content', 'comment_text', 'url', 'method'],
+      'archived_item_id', 'parent_page_id', 'new_parent_page_id', 'archived', 'title', 'content', 'comment_text', 'url', 'method'],
     categories: {
       read_data: ['list_databases', 'notion-find-database-item', 'list_database_pages',
         'getPageOrBlockChildren', 'retrieve_database', 'get_page_comments', 'find_page', 'notion_get_page',
         'notion_get_block_children', 'notion_get_page_comments', 'notion_search', 'notion_list_users',
         'notion_get_user', 'notion_get_database', 'notion_query_database', 'notion_find_database_item'],
       write_data: ['create_database_item', 'update_database_item', 'createPage', 'append_to_page',
-        'restore_database_item', 'add_comment', 'notion_create_page', 'notion_move_page',
-        'notion_append_to_page', 'notion_update_block', 'notion_add_comment', 'notion_create_database',
-        'notion_update_database_schema', 'notion_create_database_item', 'notion_update_database_item',
+        'restore_database_item', 'notion_create_page',
+        'notion_append_to_page', 'notion_update_block', 'notion_create_database',
+        'notion_create_database_item', 'notion_update_database_item',
         'notion_restore_database_item'],
+      // A comment notifies the page's participants, like an Asana or Trello comment.
+      send_message: ['add_comment', 'notion_add_comment'],
       // A Notion archive moves the page to the trash, where it ages out --
-      // unlike a Gmail archive, which only takes a label off.
+      // unlike a Gmail archive, which only takes a label off. A move takes the
+      // page out of its old parent and gives it the new parent's sharing, and a
+      // schema update can drop a property with its values (upstream labels it
+      // DESTRUCTIVE). Every action of the pinned 0.8.1 bundle is named
+      // (`managed-notion.test.ts` pins the list, the engine test checks it
+      // against the installed package).
       delete_data: ['archive_database_item', 'notion_archive_page', 'notion_delete_block',
-        'notion_archive_database_item', 'custom_api_call'],
+        'notion_archive_database_item', 'notion_move_page', 'notion_update_database_schema', 'custom_api_call'],
     },
+    // `archived: false` restores instead of trashing (`notionArchivePageCategory`).
+    categoryFromInput: { notion_archive_page: { props: ['archived'], category: notionArchivePageCategory } },
   },
   {
     catalogId: 'openai',
