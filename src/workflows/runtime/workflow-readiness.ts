@@ -1,3 +1,7 @@
+import {managedMailchimpIssue} from './managed-mailchimp';
+import {managedGitHubIssue} from './managed-github';
+import {managedTrelloIssue} from './managed-trello';
+import {managedSlackIssue} from './managed-slack';
 import { validateCronExpression } from '../../lib/cron-scheduler';
 import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from './piece-catalog';
 import { evaluateWorkflowExpression, workflowExpressionReferences } from './safe-expression';
@@ -218,6 +222,28 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     const input = settings.input === undefined ? {} : settings.input;
     if (!object(input)) issue(node, 'settings.input', 'INPUT_TYPE', 'Expected an input object');
     const pieceName = typeof settings.pieceName === 'string' ? settings.pieceName : '';
+    // Any auth that names the managed account, not only the two exact spellings:
+    // a binding with text around it must not skip the action allowlist.
+    if (pieceName === '@activepieces/piece-mailchimp' && object(input)
+      && typeof input.auth === 'string' && input.auth.includes('jarvis:mailchimp')) {
+      const reason = managedMailchimpIssue(root ? settings.triggerName : settings.actionName, input, false);
+      if (reason) issue(node, 'settings.input', 'MANAGED_MAILCHIMP', reason);
+    }
+    if (pieceName === '@activepieces/piece-github' && object(input)
+      && ["{{connections.jarvis:github}}", "{{connections['jarvis:github']}}"].includes(String(input.auth))) {
+      const reason = managedGitHubIssue(root ? settings.triggerName : settings.actionName, input, false);
+      if (reason) issue(node, 'settings.input', 'MANAGED_GITHUB', reason);
+    }
+    if (pieceName === '@activepieces/piece-trello' && object(input)
+      && ["{{connections.jarvis:trello}}", "{{connections['jarvis:trello']}}"].includes(String(input.auth))) {
+      const reason = managedTrelloIssue(root ? settings.triggerName : settings.actionName, input, false);
+      if (reason) issue(node, 'settings.input', 'MANAGED_TRELLO', reason);
+    }
+    if (pieceName === '@activepieces/piece-slack' && object(input)
+      && ["{{connections.jarvis:slack}}", "{{connections['jarvis:slack']}}"].includes(String(input.auth))) {
+      const reason = managedSlackIssue(root ? settings.triggerName : settings.actionName, input, false);
+      if (reason) issue(node, 'settings.input', 'MANAGED_SLACK', reason);
+    }
     // Only input values are templated; source code and labels are not expressions.
     // A connection is checked against the step's piece, and only a piece step
     // has one: a CODE step's `settings.pieceName` is ignored by the engine, so

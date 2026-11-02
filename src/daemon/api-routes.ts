@@ -2482,16 +2482,73 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         catch (error) { return json({error: error instanceof ClickUpOptionsError ? error.message : 'Could not load ClickUp choices.'}, error instanceof ClickUpOptionsError ? error.status : 502); }
       },
     },
-    '/api/integrations/intercom': {
+    '/api/integrations/dropbox': {
       GET: async () => {
-        const {intercomStatus} = await import('../integrations/intercom-connection');
-        return json(intercomStatus(ctx.config));
+        const {dropboxStatus, readDropboxConnection} = await import('../integrations/dropbox-connection');
+        const {dropboxNeedsReconnect} = await import('../integrations/dropbox-refresh');
+        const status = dropboxStatus(ctx.config), c = readDropboxConnection(ctx.config.daemon.data_dir);
+        const reconnect = !!c && dropboxNeedsReconnect(ctx.config, c);
+        return json({...status, connected: status.connected && !reconnect, reconnect});
       },
     },
     '/api/integrations/clickup': {
       GET: async () => {
         const { clickUpStatus } = await import('../integrations/clickup-connection');
         return json(clickUpStatus(ctx.config));
+      },
+    },
+
+    '/api/integrations/github/options': {
+      GET: async (req: Request) => {
+        const {githubOptions, GitHubOptionsError} = await import('../integrations/github-options');
+        try { return json(await githubOptions(ctx.config, new URL(req.url).searchParams)); }
+        catch (error) { return json({error: error instanceof GitHubOptionsError ? error.message : 'Could not load GitHub choices.'}, error instanceof GitHubOptionsError ? error.status : 502); }
+      },
+    },
+    '/api/integrations/github': {
+      GET: async () => {
+        const { githubStatus } = await import('../integrations/github-connection');
+        return json(githubStatus(ctx.config));
+      },
+    },
+    '/api/integrations/trello/options': {
+      GET: async (req: Request) => {
+        const {trelloOptions, TrelloOptionsError} = await import('../integrations/trello-options');
+        try { return json(await trelloOptions(ctx.config, new URL(req.url).searchParams)); }
+        catch (error) { return json({error: error instanceof TrelloOptionsError ? error.message : 'Could not load Trello choices.'}, error instanceof TrelloOptionsError ? error.status : 502); }
+      },
+    },
+    '/api/integrations/trello': {
+      GET: async () => {
+        const { trelloStatus } = await import('../integrations/trello-connection');
+        return json(trelloStatus(ctx.config));
+      },
+    },
+    '/api/integrations/mailchimp/options': {
+      GET: async (req: Request) => {
+        const {mailchimpOptions, MailchimpOptionsError} = await import('../integrations/mailchimp-options');
+        try { return json(await mailchimpOptions(ctx.config, new URL(req.url).searchParams)); }
+        catch (error) { return json({error: error instanceof MailchimpOptionsError ? error.message : 'Could not load Mailchimp choices.'}, error instanceof MailchimpOptionsError ? error.status : 502); }
+      },
+    },
+    '/api/integrations/mailchimp': {
+      GET: async () => {
+        const { mailchimpStatus } = await import('../integrations/mailchimp-connection');
+        return json(mailchimpStatus(ctx.config));
+      },
+    },
+
+    '/api/integrations/slack/options': {
+      GET: async (req: Request) => {
+        const {slackOptions, SlackOptionsError} = await import('../integrations/slack-options');
+        try { return json(await slackOptions(ctx.config, new URL(req.url).searchParams)); }
+        catch (error) { return json({error: error instanceof SlackOptionsError ? error.message : 'Could not load Slack choices.'}, error instanceof SlackOptionsError ? error.status : 502); }
+      },
+    },
+    '/api/integrations/slack': {
+      GET: async () => {
+        const { slackStatus } = await import('../integrations/slack-connection');
+        return json(slackStatus(ctx.config));
       },
     },
 

@@ -133,8 +133,16 @@ export function managedConnectionMisuse(source: JarvisConnectionSource, pieceNam
     return `Managed connection jarvis:${source.id} can only be used by ${pieceList(source)} steps`;
   }
   if (path !== 'settings.input.auth') return `Managed connection jarvis:${source.id} can only be a step's auth`;
+  // Judged only with the step's settings: a caller without them (prepared
+  // qualification) is told about the piece alone, and readiness and the run's
+  // scope check, which always pass them, refuse any other action or a trigger.
+  // A trigger is refused by its `triggerName` whatever stray `actionName` it
+  // also carries, since the engine runs a trigger by its trigger name.
   const allowed = source.pieceDetails?.[pieceName]?.actions;
-  if (allowed && (!record(settings) || settings.triggerName !== undefined || typeof settings.actionName !== 'string' || !allowed.includes(settings.actionName))) return `This ${source.pieceDetails?.[pieceName]?.displayName ?? pieceName} connection does not support this action or trigger yet`;
+  if (allowed && settings !== undefined && (!record(settings) || settings.triggerName !== undefined
+    || typeof settings.actionName !== 'string' || !allowed.includes(settings.actionName))) {
+    return `This ${source.pieceDetails?.[pieceName]?.displayName ?? pieceName} connection does not support this action or trigger yet`;
+  }
   if (record(settings) && settings.actionName === 'custom_api_call') {
     const details = source.pieceDetails?.[pieceName];
     const hosts = details?.apiHosts ?? [];

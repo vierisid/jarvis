@@ -13,4 +13,4 @@
 .on-host__connections { --on-setup-height: auto; height: auto; min-height: 100%; background: var(--bg, #fafbfc); }
 .on-host__connections > .on-google { overflow: visible; padding-bottom: 20px; }
 .on-host__connections .on-google__connection-feedback { min-block-size: 20px; }
-.on-host__clickup { margin-bottom: 36px; }
+.on-host__clickup { display: grid; gap: 20px; margin-bottom: 36px; }

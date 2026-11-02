@@ -1,6 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ClickUpConnection } from "../../../integrations/ClickUpConnection";
-import { IntercomConnection } from "../../../integrations/IntercomConnection";
+import { MailchimpConnection } from "../../../integrations/MailchimpConnection";
+import { GitHubConnection } from "../../../integrations/GitHubConnection";
+import { DropboxConnection } from "../../../integrations/DropboxConnection";
+import { TrelloConnection } from "../../../integrations/TrelloConnection";
+import { SlackConnection } from "../../../integrations/SlackConnection";
 import type { SettingsHook } from "../useSettingsData";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
 
@@ -126,6 +130,7 @@ export function IntegrationsTab({
 
   return (
     <div>
+      <MailchimpConnection optional />
       <section className="v2-set__section">
         <div className="v2-set__section-head">
           <div>
@@ -326,9 +331,13 @@ export function IntegrationsTab({
           </>
         )}
       </section>
-      {/* Its own block, independent of how Google is connected; renders
-          nothing unless hosting offers ClickUp or it is already connected. */}
-      <ClickUpConnection optional /><IntercomConnection optional />
+      {/* Their own blocks, independent of how Google is connected; each renders
+          nothing unless hosting offers it or it is already connected. */}
+      <ClickUpConnection optional />
+      <GitHubConnection optional />
+      <DropboxConnection optional />
+      <TrelloConnection optional />
+      <SlackConnection optional />
     </div>
   );
 }
