@@ -42,23 +42,42 @@ function mock(fn: (path: string, body: any) => unknown | Response) {
   }) as typeof fetch;
   return { calls, request };
 }
-test("four actions have read/write governance and write completion receipts", () => {
-  expect(MANAGED_TODOIST_ACTIONS).toHaveLength(4);
-  for (const action of MANAGED_TODOIST_ACTIONS) {
-    expect(
-      resolveGovernedPieceAction("@activepieces/piece-todoist", action)
-        ?.category,
-    ).toBe(action === "find_task" ? "read_data" : "write_data");
-    expect(tracksPieceCompletion("@activepieces/piece-todoist", action)).toBe(
-      action !== "find_task",
-    );
-  }
-  expect(
-    resolveGovernedPieceAction(
-      "@activepieces/piece-todoist",
-      "todoist_delete_task",
-    )?.category,
-  ).toBe("modify_settings");
+const TODOIST = "@activepieces/piece-todoist";
+/** Every action of the pinned @activepieces/piece-todoist 0.6.1 bundle, by the
+ * category Jarvis gates it at (custom_api_call is added by the framework and
+ * stays unmapped). The engine test checks the installed package against the
+ * adapter too. */
+const TODOIST_061: Record<string, string[]> = {
+  read_data: ["find_task", "todoist_find_task", "todoist_filter_tasks", "todoist_get_task",
+    "todoist_list_completed_tasks", "todoist_list_completed_tasks_by_due_date", "todoist_get_project",
+    "todoist_list_projects", "todoist_search_projects", "todoist_list_archived_projects", "todoist_get_section",
+    "todoist_list_sections", "todoist_search_sections", "todoist_list_archived_sections", "todoist_get_label",
+    "todoist_list_labels", "todoist_search_labels", "todoist_list_shared_labels", "todoist_get_comment",
+    "todoist_list_comments", "todoist_get_current_user", "todoist_get_productivity_stats",
+    "todoist_list_activity_log"],
+  send_message: ["todoist_create_task_comment", "todoist_create_project_comment"],
+  write_data: ["create_task", "update_task", "mark_task_completed", "todoist_create_task", "todoist_update_task",
+    "todoist_complete_task", "todoist_reopen_task", "todoist_move_task", "todoist_quick_add_task",
+    "todoist_create_project", "todoist_update_project", "todoist_unarchive_project", "todoist_create_section",
+    "todoist_update_section", "todoist_create_label", "todoist_update_label", "todoist_rename_shared_label"],
+  delete_data: ["todoist_delete_task", "todoist_delete_section", "todoist_delete_label",
+    "todoist_remove_shared_label"],
+};
+test("the Todoist adapter names every action of the pinned bundle, each in its category, and tracks every change", () => {
+  const all = Object.values(TODOIST_061).flat();
+  expect(all).toHaveLength(46);
+  const table = Object.fromEntries(Object.entries(TODOIST_061).flatMap(([category, names]) => names.map((name) => [name, category])));
+  expect(Object.fromEntries(all.map((name) => [name, resolveGovernedPieceAction(TODOIST, name)!.category as string]))).toEqual(table);
+  expect(all.filter((name) => !resolveGovernedPieceAction(TODOIST, name)!.known)).toEqual([]);
+  for (const name of ["custom_api_call", "added_upstream_later"])
+    expect(resolveGovernedPieceAction(TODOIST, name)).toMatchObject({ category: "modify_settings", known: false });
+  // A completion receipt for every change, never for a read.
+  for (const name of all)
+    expect(`${name}: ${tracksPieceCompletion(TODOIST, name)}`).toBe(`${name}: ${table[name] !== "read_data"}`);
+  // The managed connection runs four of them: one read and three writes.
+  expect([...MANAGED_TODOIST_ACTIONS].sort()).toEqual(["create_task", "find_task", "mark_task_completed", "update_task"]);
+  for (const action of MANAGED_TODOIST_ACTIONS)
+    expect(table[action]).toBe(action === "find_task" ? "read_data" : "write_data");
 });
 test("find follows bounded cursor pages and matches the exact title", async () => {
   const m = mock((path) =>

@@ -237,6 +237,12 @@ test.skipIf(!gate)(
         process.env.TODOIST_CATALOG_FIXTURE,
         JSON.stringify(metadata),
       );
+    // Every action the installed package declares is in the governed table, so
+    // an upstream addition fails here instead of falling to modify_settings.
+    const all = Object.keys(metadata.actions);
+    expect(all).toHaveLength(47);
+    expect(all.filter((name) => name !== "custom_api_call" && !resolveGovernedPieceAction(piece, name)!.known)).toEqual([]);
+    expect(Object.keys(metadata.triggers ?? {})).toEqual(["task_completed"]);
     const actions = [
       "create_task",
       "find_task",
