@@ -23,6 +23,7 @@ import { TrelloConnection } from "../../integrations/TrelloConnection";
 import { SlackConnection, useSlackStatus } from "../../integrations/SlackConnection";
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSampleDraftText } from "./useSampleDraftText";
+import { TypeformConnection, useTypeformStatus } from "../../integrations/TypeformConnection";
 import { AirtableConnection, useAirtableStatus } from "../../integrations/AirtableConnection";
 import { IntercomConnection, useIntercomStatus } from "../../integrations/IntercomConnection";
 import { CalendlyConnection, useCalendlyStatus } from "../../integrations/CalendlyConnection";
@@ -3805,6 +3806,8 @@ function ConnectionPicker({
   const currentExternalId = m ? m[1]! : "";
   // ClickUp may also offer the hosted connection; without it (self-hosted, or
   // not connected) the picker reads exactly as for any other piece.
+  const isTypeform = pieceName === "@activepieces/piece-typeform";
+  const managedTypeform = useTypeformStatus(isTypeform)?.connected === true;
   const isCalendly = pieceName === "@activepieces/piece-calendly";
   const managedCalendly = useCalendlyStatus(isCalendly)?.connected === true;
   // ClickUp and GitHub may also offer the hosted connection; without it
@@ -3826,6 +3829,8 @@ function ConnectionPicker({
   return (
     <div className="wf-props__connection">
       {isGitHub && <GitHubConnection optional onPick={onPick} currentValue={currentValue} />}
+      {isTypeform && <><TypeformConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedTypeform && <p className="wf-props__hint">Read workspaces, forms and responses. Use a form ID or workflow variable. Recent responses may take up to 30 minutes to appear. Form editing and instant submission triggers are not supported yet.</p>}</>}
       {isAirtable && <><AirtableConnection optional onPick={onPick} currentValue={currentValue} />
         {managedAirtable && <p className="wf-props__hint">Find, get, create and update records in existing tables. Deleting records, schema changes and triggers are not enabled.</p>}</>}
       {isCalendly && <><CalendlyConnection optional onPick={onPick} currentValue={currentValue} />
@@ -3844,7 +3849,7 @@ function ConnectionPicker({
         {managedCalendly ? "Calendly account" : authDisplayName}
         {!managedCalendly && <span className="wf-props__connection-type">({authType})</span>}
       </label>
-      {matching.length === 0 && !managedCalendly && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana && !managedIntercom && !managedAirtable ? (
+      {matching.length === 0 && !managedTypeform && !managedCalendly && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana && !managedIntercom && !managedAirtable ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.

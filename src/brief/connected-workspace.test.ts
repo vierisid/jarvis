@@ -189,6 +189,16 @@ test('managed Asana shows its stored grant and routes setup to its own hosted in
   expect(provider.read().rows.some(r=>r.sourceId==='native:asana')).toBe(false);
 });
 
+test('managed Typeform shows its stored grant, a reconnect as disconnected, and routes setup to its own hosted integration', () => {
+  sources.typeform = () => ({configured:true, connected:true, account:{id:'01TF',label:'owner@example.test'}});
+  expect(row('native:typeform')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'01TF',setupActionId:'setup:typeform'});
+  expect(provider.read().setup.find(s => s.id === 'setup:typeform')?.target).toEqual({kind:'hosted_integration',provider:'typeform'});
+  sources.typeform = () => ({configured:true, connected:false, account:{id:'01TF',label:'owner@example.test'}});
+  expect(row('native:typeform')).toMatchObject({status:'disconnected',evidence:'none'});
+  sources.typeform = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:typeform')).toBe(false);
+});
+
 test('managed Intercom shows its stored grant and routes setup to its own hosted integration', () => {
   sources.intercom = () => ({configured:true, connected:true, account:{id:'workspace:admin',label:'owner@example.test'}});
   expect(row('native:intercom')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'workspace:admin',setupActionId:'setup:intercom'});

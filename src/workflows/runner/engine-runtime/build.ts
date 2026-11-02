@@ -301,6 +301,7 @@ export const PATCHED_VENDOR_SOURCES = [
   '../../runtime/managed-github.ts',
   '../../runtime/managed-dropbox.ts',
   '../../runtime/managed-trello.ts',
+  '../../runtime/managed-typeform.ts',
   '../../runtime/managed-airtable.ts',
   '../../runtime/managed-slack.ts',
   '../../runtime/managed-intercom.ts',

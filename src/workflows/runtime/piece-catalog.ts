@@ -315,7 +315,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "19"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata; v17: Intercom contact, conversation, note and tag output contracts; v18: Calendly meeting and booking-link output contracts; v19: Airtable record output contracts
+export const CATALOG_SCHEMA_VERSION = "20"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata; v17: Intercom contact, conversation, note and tag output contracts; v18: Calendly meeting and booking-link output contracts; v19: Airtable record output contracts; v20: Typeform form and response output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -895,6 +895,20 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
  * on-disk caches re-project.
  */
 export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
+  if (entry.name === '@activepieces/piece-typeform') {
+    // Accept IDs/expressions without upstream dropdown calls or an editor credential leak.
+    for (const field of entry.actions.list_responses?.inputSchema?.fields ?? []) {
+      if (field.name === 'form_id') {field.type='string';field.placeholder='Form ID or workflow variable';delete field.options;}
+    }
+    const form={id:'form_1',title:'Customer feedback',type:'form',fields:[{id:'field_1',ref:'feedback',title:'Your feedback',type:'short_text'}]};
+    const samples:Record<string,unknown>={
+      get_form:form,
+      list_forms:{total_items:1,page_count:1,items:[{id:form.id,title:form.title,type:'form'}]},
+      list_workspaces:{total_items:1,page_count:1,items:[{id:'workspace_1',name:'Team workspace'}]},
+      list_responses:{total_items:1,page_count:1,items:[{response_id:'response_1',token:'response_1',response_type:'completed',submitted_at:'2026-10-28T10:00:00Z',answers:[{field:{id:'field_1',ref:'feedback',type:'short_text'},type:'text',text:'Useful service'}]}]},
+    };
+    for(const [name,sample] of Object.entries(samples))if(entry.actions[name])entry.actions[name]!.outputSample=sample;
+  }
   if(entry.name==='@activepieces/piece-airtable') {
     const record={id:'recAAAAAAAAAAAAAA',createdTime:'2026-10-28T10:00:00.000Z',fields:{Name:'Example record'}};
     for(const name of ['create_record_ai','update_record_ai','get_record','search_records']) {

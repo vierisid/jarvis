@@ -7,6 +7,7 @@ import { mailchimpStatus } from "../integrations/mailchimp-connection";
 import { githubStatus } from '../integrations/github-connection';
 import { trelloStatus } from "../integrations/trello-connection";
 import { asanaStatus } from '../integrations/asana-connection';
+import { typeformStatus } from '../integrations/typeform-connection';
 import { intercomStatus } from '../integrations/intercom-connection';
 import { calendlyStatus } from '../integrations/calendly-connection';
 import { slackStatus } from "../integrations/slack-connection";
@@ -4769,6 +4770,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       github: () => githubStatus(jarvisConfig),
       trello: () => trelloStatus(jarvisConfig),
       asana: () => asanaStatus(jarvisConfig),
+      typeform: () => typeformStatus(jarvisConfig),
       intercom: () => intercomStatus(jarvisConfig),
       calendly: () => calendlyStatus(jarvisConfig),
       slack: () => slackStatus(jarvisConfig),
@@ -5025,6 +5027,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisDropboxConnectionSource(jarvisConfig));
       const { JarvisTrelloConnectionSource } = await import("../workflows/credentials/trello-source");
       credentialResolver.register(new JarvisTrelloConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisTypeformConnectionSource } = await import("../workflows/credentials/typeform-source");
+      credentialResolver.register(new JarvisTypeformConnectionSource(jarvisConfig));
       const { JarvisAirtableConnectionSource } = await import("../workflows/credentials/airtable-source");
       credentialResolver.register(new JarvisAirtableConnectionSource(jarvisConfig));
       const { JarvisSlackConnectionSource } = await import("../workflows/credentials/slack-source");
