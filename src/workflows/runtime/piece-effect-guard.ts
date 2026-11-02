@@ -1,4 +1,6 @@
+import {managedAirtableInput, managedAirtableIssue, runManagedAirtableAction} from './managed-airtable';
 import { hubspotContactInput, isHubspotContact } from './hubspot-contact';
+import { managedNotionInput, managedNotionIssue, runManagedNotionAction } from './managed-notion';
 /**
  * Engine-side half of the governed-piece adapter.
  *
@@ -22,10 +24,13 @@ import { hubspotContactInput, isHubspotContact } from './hubspot-contact';
  * Imported BY THE ENGINE BUNDLE: keep it pure. `fetch` only, no node built-ins.
  */
 
+import {managedLinearInput, runManagedLinearAction} from './managed-linear';
+import {managedTypeformInput, runManagedTypeformAction} from './managed-typeform';
 import {managedTodoistInput, runManagedTodoistAction} from './managed-todoist';
 import {managedAsanaInput, runManagedAsanaAction} from './managed-asana';
 import {managedDropboxInput, runManagedDropboxAction} from './managed-dropbox';
 import {managedIntercomInput, runManagedIntercomAction} from './managed-intercom';
+import {managedCalendlyInput, runManagedCalendlyAction} from './managed-calendly';
 import { HTTP_PIECE, isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { documentInput, applyDocument, documentFields, type DecisionDocument } from './decision-document';
 import {managedMailchimpInput, managedMailchimpIssue, runManagedMailchimpAction} from './managed-mailchimp';
@@ -106,6 +111,13 @@ export interface AuthorizePieceDispatchParams {
 }
 
 export async function authorizePieceDispatch(params: AuthorizePieceDispatchParams): Promise<PieceAuthorizeResponse> {
+  const airtable = params.piece === '@activepieces/piece-airtable' && managedAirtableInput(params.input);
+  if (airtable) {const issue=managedAirtableIssue(params.action,airtable);if(issue)throw new Error(issue);}
+  const notion = params.piece === '@activepieces/piece-notion' && managedNotionInput(params.input);
+  if (notion) {
+    const issue = managedNotionIssue(params.action, notion);
+    if (issue) throw new Error(issue);
+  }
   const mailchimp = params.piece === '@activepieces/piece-mailchimp' && managedMailchimpInput(params.input);
   if (mailchimp) {
     const issue = managedMailchimpIssue(params.action, mailchimp);
@@ -153,9 +165,9 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
   // must then take the same worst case.
   const tracked = tracksPieceCompletion(params.piece, params.action, governed ? body.input : params.input);
   if (tracked) {
-    const auth = (params.input as { auth?: { access_token?: unknown; type?: unknown } } | null)?.auth;
+    const auth = (params.input as { auth?: { access_token?: unknown; secret_text?: unknown; type?: unknown } } | null)?.auth;
     const token = trello ? JSON.stringify((trello.auth as {username:string;password:string}))
-      : mailchimp ? JSON.stringify((mailchimp.auth as {access_token:string;server_prefix:string})) : auth?.access_token;
+      : mailchimp ? JSON.stringify((mailchimp.auth as {access_token:string;server_prefix:string})) : airtable ? auth?.secret_text : auth?.access_token;
     if (auth?.type !== 'CUSTOM_AUTH' && typeof token === 'string') {
       const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical(token))));
       body.credentialDigest = Array.from(hash).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -216,6 +228,16 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
 export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParams, governance: PieceAuthorizeResponse, execute: () => Promise<unknown>): Promise<unknown> {
   if ('dispatch' in governance && governance.dispatch === 'completed') return governance.result;
   if ('dispatch' in governance && (governance.dispatch === 'held' || governance.dispatch === 'approval_required')) throw new Error('Piece is waiting for authorization');
+  const linear = params.piece === "@activepieces/piece-linear" ? managedLinearInput(params.input) : null;
+  const typeform = params.piece === "@activepieces/piece-typeform" ? managedTypeformInput(params.input) : null;
+  const airtable = params.piece === '@activepieces/piece-airtable' && managedAirtableInput(params.input);
+  if (airtable) {const issue=managedAirtableIssue(params.action,airtable);if(issue)throw new Error(issue);}
+  const calendly = params.piece === "@activepieces/piece-calendly" ? managedCalendlyInput(params.input) : null;
+  const notion = params.piece === '@activepieces/piece-notion' && managedNotionInput(params.input);
+  if (notion) {
+    const issue = managedNotionIssue(params.action, notion);
+    if (issue) throw new Error(issue);
+  }
   const mailchimp = params.piece === '@activepieces/piece-mailchimp' && managedMailchimpInput(params.input);
   if (mailchimp) {
     // Recheck after an approval document has applied edits.
@@ -245,7 +267,13 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
     if (issue) throw new Error(issue);
   }
   let raw: unknown;
-  if (trello) {
+  if (notion) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Notion dispatch was not authorized');
+    raw = await runManagedNotionAction(String(params.action), notion);
+  } else if (airtable) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Airtable dispatch was not authorized');
+    raw = await runManagedAirtableAction(String(params.action), airtable);
+  } else if (trello) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Trello dispatch was not authorized');
     raw = await runManagedTrelloAction(String(params.action), trello);
   } else if (mailchimp) {
@@ -254,6 +282,12 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   } else if (github) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('GitHub dispatch was not authorized');
     raw = await runManagedGitHubAction(String(params.action), github);
+  } else if (linear) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Linear dispatch was not authorized');
+    raw = await runManagedLinearAction(String(params.action), linear);
+  } else if (typeform) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Typeform dispatch was not authorized');
+    raw = await runManagedTypeformAction(String(params.action), typeform);
   } else if (todoist) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Todoist dispatch was not authorized');
     raw = await runManagedTodoistAction(String(params.action), todoist);
@@ -266,6 +300,9 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   } else if (intercom) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Intercom dispatch was not authorized');
     raw = await runManagedIntercomAction(String(params.action), intercom);
+  } else if (calendly) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Calendly dispatch was not authorized');
+    raw = await runManagedCalendlyAction(String(params.action), calendly);
   } else if (slack) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Slack dispatch was not authorized');
     if (params.action === 'slack_post_message' || params.action === 'send_channel_message') raw = await sendManagedSlackMessage(slack);

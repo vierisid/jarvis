@@ -315,7 +315,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "18"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata; v17: Intercom contact, conversation, note and tag output contracts; v18: Todoist task and completion output contracts
+export const CATALOG_SCHEMA_VERSION = "23"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata; v17: Intercom contact, conversation, note and tag output contracts; v18: Calendly meeting and booking-link output contracts; v19: Airtable record output contracts; v20: Typeform form and response output contracts; v21: Notion page output contracts; v22: Linear issue and comment output contracts; v23: Todoist task and completion output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -902,6 +902,148 @@ export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
       entry.actions.mark_task_completed.outputSample = {success:true,task_id:task.id,completed:true,recurrence_advanced:false};
       entry.actions.mark_task_completed.description += ' With the hosted Jarvis connection, completed is false and recurrence_advanced is true for a recurring task. Do not repeat completion for the same occurrence.';
     }
+  }
+  if (entry.name === '@activepieces/piece-linear') {
+    const issue = {id:'11111111-1111-4111-8111-111111111111',identifier:'ENG-123',title:'Fix login timeout',url:'https://linear.app/example/issue/ENG-123',priority:2};
+    const samples:Record<string,unknown> = {
+      linear_get_issue: {...issue,team_id:'22222222-2222-4222-8222-222222222222',team_name:'Engineering',team_key:'ENG'},
+      linear_search_issues:{items:[issue],count:1,total_count:1,has_next_page:false,end_cursor:'cursor'},
+      linear_create_issue:{success:true,lastSyncId:1,issue},
+      linear_update_issue:{success:true,lastSyncId:1,issue},
+      linear_create_comment:{success:true,lastSyncId:1,comment:{id:'33333333-3333-4333-8333-333333333333',body:'Ready for review',url:'https://linear.app/example/issue/ENG-123#comment'}},
+    };
+    for(const [name,sample] of Object.entries(samples))if(entry.actions[name])entry.actions[name]!.outputSample=sample;
+  }
+  if (entry.name === "@activepieces/piece-notion") {
+    const id = "11111111-1111-4111-8111-111111111111";
+    const page = {
+      object: "page",
+      id,
+      url: "https://www.notion.so/" + id.replaceAll("-", ""),
+      created_time: "2026-10-28T10:00:00.000Z",
+      last_edited_time: "2026-10-28T10:00:00.000Z",
+      archived: false,
+      parent: { type: "page_id", page_id: id },
+      properties: {
+        title: {
+          type: "title",
+          title: [
+            {
+              type: "text",
+              plain_text: "Meeting notes",
+              text: { content: "Meeting notes" },
+            },
+          ],
+        },
+      },
+    };
+    const block = {
+      object: "block",
+      id,
+      type: "paragraph",
+      has_children: false,
+      paragraph: {
+        rich_text: [
+          { type: "text", plain_text: "Notes", text: { content: "Notes" } },
+        ],
+      },
+    };
+    const samples: Record<string, unknown> = {
+      createPage: page,
+      append_to_page: {
+        object: "list",
+        results: [block],
+        has_more: false,
+        next_cursor: null,
+      },
+      notion_get_block_children: [block],
+      find_page: {
+        success: true,
+        searchTerm: "Meeting",
+        exactMatch: false,
+        totalFound: 1,
+        returned: 1,
+        pages: [
+          {
+            id: page.id,
+            title: "Meeting notes",
+            url: page.url,
+            created_time: page.created_time,
+            last_edited_time: page.last_edited_time,
+            archived: page.archived,
+            parent: page.parent,
+            properties: page.properties,
+          },
+        ],
+        summary: {
+          searchTerm: "Meeting",
+          matchType: "partial match",
+          totalFound: 1,
+          returned: 1,
+          hasMore: false,
+        },
+        message: "Returned 1 matching pages.",
+      },
+    };
+    for (const [name, sample] of Object.entries(samples)) {
+      const action = entry.actions[name];
+      if (!action) continue;
+      action.outputSample = sample;
+      for (const field of action.inputSchema?.fields ?? []) {
+        if (field.name === "pageId") {
+          field.type = "string";
+          field.placeholder = "Shared page ID or workflow variable";
+          delete field.options;
+        }
+        if (field.name === "content")
+          field.description =
+            "Managed Jarvis connections write plain text (up to 20,000 characters). Markdown syntax is stored literally.";
+        if (field.name === "markdown")
+          field.description =
+            "Managed Jarvis connections return block JSON. Leave Markdown off.";
+        if (field.name === "depth")
+          field.description =
+            "Managed Jarvis connections support depth 1 to 3, with bounded content reads.";
+      }
+    }
+  }
+  if (entry.name === '@activepieces/piece-typeform') {
+    // Accept IDs/expressions without upstream dropdown calls or an editor credential leak.
+    for (const field of entry.actions.list_responses?.inputSchema?.fields ?? []) {
+      if (field.name === 'form_id') {field.type='string';field.placeholder='Form ID or workflow variable';delete field.options;}
+    }
+    const form={id:'form_1',title:'Customer feedback',type:'form',fields:[{id:'field_1',ref:'feedback',title:'Your feedback',type:'short_text'}]};
+    const samples:Record<string,unknown>={
+      get_form:form,
+      list_forms:{total_items:1,page_count:1,items:[{id:form.id,title:form.title,type:'form'}]},
+      list_workspaces:{total_items:1,page_count:1,items:[{id:'workspace_1',name:'Team workspace'}]},
+      list_responses:{total_items:1,page_count:1,items:[{response_id:'response_1',token:'response_1',response_type:'completed',submitted_at:'2026-10-28T10:00:00Z',answers:[{field:{id:'field_1',ref:'feedback',type:'short_text'},type:'text',text:'Useful service'}]}]},
+    };
+    for(const [name,sample] of Object.entries(samples))if(entry.actions[name])entry.actions[name]!.outputSample=sample;
+  }
+  if(entry.name==='@activepieces/piece-airtable') {
+    const record={id:'recAAAAAAAAAAAAAA',createdTime:'2026-10-28T10:00:00.000Z',fields:{Name:'Example record'}};
+    for(const name of ['create_record_ai','update_record_ai','get_record','search_records']) {
+      const action=entry.actions[name];if(!action)continue;
+      action.displayName=({create_record_ai:'Create Record',update_record_ai:'Update Record',get_record:'Get Record',search_records:'Find Records'} as Record<string,string>)[name]!;
+      action.outputSample=name==='search_records'?{records:[record],count:1}:record;
+      for(const field of action.inputSchema?.fields ?? []) {
+        if(field.sourceType==='DROPDOWN'){field.type='string';field.placeholder='ID or workflow variable';delete field.options;}
+        if(field.name==='record_id')field.description='Record ID, or the id output from an earlier Create Record or Find Records step.';
+        if(field.name==='fields'){field.type='json';field.description='Existing field IDs or names and values as a JSON object. Managed connections support text, numbers, checkboxes, dates and existing select choices.';field.placeholder='{"Name":"Example record"}';}
+      }
+    }
+  }
+  if (entry.name === '@activepieces/piece-calendly') {
+    const event={uri:'https://api.calendly.com/scheduled_events/event_1',name:'Introduction',status:'active',start_time:'2026-10-28T10:00:00Z',end_time:'2026-10-28T10:30:00Z',event_type:'https://api.calendly.com/event_types/type_1'};
+    const samples:Record<string,unknown>={
+      get_scheduled_event:event,
+      list_scheduled_events:{items:[event],count:1,next_page_token:'next-page-token'},
+      list_event_invitees:{items:[{uri:'https://api.calendly.com/scheduled_events/event_1/invitees/invitee_1',name:'Alex',email:'alex@example.test',status:'active',event:event.uri}],count:1,next_page_token:'next-page-token'},
+      list_event_types:{items:[{uri:event.event_type,name:'Introduction',active:true,duration:30,scheduling_url:'https://calendly.com/example/introduction'}],count:1,next_page_token:'next-page-token'},
+      create_scheduling_link:{booking_url:'https://calendly.com/d/example/introduction',owner:event.event_type,owner_type:'EventType'},
+    };
+    for(const [name,sample] of Object.entries(samples))if(entry.actions[name])entry.actions[name]!.outputSample=sample;
   }
   if (entry.name === '@activepieces/piece-asana') {
     for (const action of Object.values(entry.actions)) {
