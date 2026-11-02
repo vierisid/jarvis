@@ -85,7 +85,7 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
   return isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
-    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE) && managedPieceChanges(piece, action))
+    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === TYPEFORM_PIECE) && managedPieceChanges(piece, action))
     || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
     || (piece === '@activepieces/piece-google-drive' && ['upload_gdrive_file', 'drive_upload_file', 'drive_upload_from_url'].includes(String(action)))
     || (piece === '@activepieces/piece-google-sheets' && ['insert_row', 'sheets_append_values', 'sheets_add_row'].includes(String(action)))
@@ -99,7 +99,8 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
 const CLICKUP_PIECE = '@activepieces/piece-clickup';
 const MAILCHIMP_PIECE = '@activepieces/piece-mailchimp';
 const ASANA_PIECE = '@activepieces/piece-asana';
-/** Every ClickUp, Mailchimp or Asana action that changes the account (write,
+const TYPEFORM_PIECE = '@activepieces/piece-typeform';
+/** Every ClickUp, Mailchimp, Asana or Typeform action that changes the account (write,
  * send, email, delete or an access change). None parks its flow, so each one
  * can be tracked; a read never is. A category the adapter does not map tracks
  * nothing, so ClickUp (no send_email or modify_settings names) and Mailchimp
@@ -855,6 +856,34 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
       'move_dropbox_file', 'move_dropbox_folder', 'move_dropbox_entry', 'start_dropbox_move_batch'],
   },
 }, {
+  // Typeform, a community piece made governed by the managed `jarvis:typeform`
+  // connection. Every action of the pinned 0.7.1 bundle is named
+  // (`typeform-connection.test.ts` pins the list and the engine test checks it
+  // against the installed package), so a workflow on the user's own Typeform
+  // connection keeps its reads and writes at the default level. The managed
+  // connection itself runs only MANAGED_TYPEFORM_ACTIONS (four reads).
+  catalogId: 'typeform', pieceName: TYPEFORM_PIECE, unknownActionCategory: 'modify_settings',
+  targetProps: ['form_id', 'workspace', 'accountId', 'themeId', 'imageId', 'field', 'responseIds', 'title', 'name',
+    'isPublic', 'search', 'query', 'page', 'pageSize', 'sortBy', 'orderBy', 'since', 'until', 'responseType',
+    'includedResponseIds', 'sort', 'before', 'after'],
+  categories: {
+    read_data: ['get_me', 'list_forms', 'get_form', 'get_form_messages', 'list_responses', 'list_workspaces',
+      'get_workspace', 'list_themes', 'get_theme', 'list_images', 'get_image'],
+    // Account content under the caller's own access: new forms, workspaces,
+    // themes and images, copies, renames and text or option edits.
+    write_data: ['create_form', 'duplicate_form', 'update_choice_options', 'update_form_messages', 'create_workspace',
+      'update_workspace', 'create_theme', 'update_theme', 'upload_image'],
+    // Every delete, and replace_form: a field left out of the definition is
+    // deleted together with its answers (upstream labels it DESTRUCTIVE).
+    // update_form can move the form to another workspace, so blind it is the
+    // move; its input narrows it (`categoryFromInput`).
+    delete_data: ['delete_form', 'delete_responses', 'delete_workspace', 'delete_theme', 'delete_image',
+      'replace_form', 'update_form'],
+  },
+  categoryFromInput: {
+    update_form: { props: ['workspace', 'isPublic'], category: typeformUpdateFormCategory },
+  },
+}, {
   catalogId: 'clickup', pieceName: '@activepieces/piece-clickup', unknownActionCategory: 'modify_settings',
   targetProps: ['workspace_id', 'space_id', 'folder_id', 'list_id', 'task_id', 'task_name', 'name', 'status_id',
     'add_assignee', 'rem_assignee', 'destination_list_id', 'channel_id', 'message_id', 'comment_id',
@@ -970,6 +999,19 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
 function trelloUpdateCardCategory(input: Record<string, unknown>): ActionCategory {
   const closed = input.closed;
   return closed === undefined || closed === false ? 'write_data' : 'delete_data';
+}
+
+/**
+ * A Typeform form update. A `workspace` moves the form to another workspace
+ * (out of where its current members find it), and `isPublic` opens or closes
+ * it to responses (a form setting). Upstream skips a prop that is null,
+ * missing or blank (`isProvided`); only then is it an ordinary write. Any
+ * other value, including a non-string, takes the stricter case.
+ */
+function typeformUpdateFormCategory(input: Record<string, unknown>): ActionCategory {
+  const unset = (v: unknown) => v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
+  if (!unset(input.workspace)) return 'delete_data';
+  return unset(input.isPublic) ? 'write_data' : 'modify_settings';
 }
 
 /**

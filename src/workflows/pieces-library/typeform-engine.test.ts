@@ -211,6 +211,11 @@ test.skipIf(!gate)(
       overallTimeoutMs: 45000,
     });
     expect(failures).toEqual([]);
+    // Every action the installed package declares is in the governed table, so
+    // an upstream addition fails here instead of falling to modify_settings.
+    const declared = Object.keys(catalog.get(piece)!.actions);
+    expect(declared.length).toBeGreaterThan(25);
+    expect(declared.filter((name) => name !== "custom_api_call" && !resolveGovernedPieceAction(piece, name)!.known)).toEqual([]);
     const metadata = catalog.get(piece)!;
     expect(metadata.auth?.type).toBe("OAUTH2");
     if (process.env.TYPEFORM_CATALOG_FIXTURE)

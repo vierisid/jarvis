@@ -15,6 +15,8 @@ import { readTypeformConnection, typeformStatus } from "./typeform-connection";
 import { createManagedRotatingRefresher } from "./managed-rotating-refresh";
 import { JarvisTypeformConnectionSource } from "../workflows/credentials/typeform-source";
 import { managedConnectionMisuse } from "../workflows/credentials/adapter";
+import { MANAGED_PIECE_ADAPTERS, resolveGovernedPieceAction } from "../workflows/runtime/piece-effects";
+import { MANAGED_TYPEFORM_ACTIONS } from "../workflows/runtime/managed-typeform";
 let dir: string, config: any, grant: any;
 const receipt = randomUUID();
 beforeEach(() => {
@@ -222,4 +224,41 @@ test("expired delivery receipt asks for reconnect instead of repeating acknowled
   await fresh().fresh(config,request);
   await expect(fresh().fresh(config,request)).rejects.toThrow("Reconnect");
   expect(typeformStatus(config)).toMatchObject({connected:false,reconnect:true});
+});
+
+test("an unacknowledged rotation keeps serving its valid access token while hosting is unavailable", async () => {
+  let acks = 0, renewals = 0;
+  const down = transport(body => { if (body.ack) { acks++; return Response.json({error:"unavailable"}, {status:503}); } renewals++; return rotated(); });
+  await fresh().fresh(config, down);
+  const second = await fresh().fresh(config, down);
+  expect(second.access_token).toBe("a2");
+  expect(renewals).toBe(1);
+  expect(acks).toBe(2);
+  // The receipt is still pending, so a later call acknowledges it before anything else.
+  const up = transport(body => body.ack ? Response.json({acknowledged:true}) : rotated());
+  expect((await fresh().fresh(config, up)).access_token).toBe("a2");
+  const thrown = transport(() => { throw new Error("offline"); });
+  expect((await fresh().fresh(config, thrown)).access_token).toBe("a2");
+});
+
+/** Every action of the pinned @activepieces/piece-typeform 0.7.1 bundle, read from
+ * its `actions()` (custom_api_call is added by the framework and stays unmapped). */
+const TYPEFORM_071_ACTIONS = [
+  "get_me", "list_forms", "get_form", "create_form", "update_form", "replace_form", "duplicate_form",
+  "update_choice_options", "delete_form", "get_form_messages", "update_form_messages", "list_responses",
+  "delete_responses", "list_workspaces", "get_workspace", "create_workspace", "update_workspace",
+  "delete_workspace", "list_themes", "get_theme", "create_theme", "update_theme", "delete_theme",
+  "list_images", "get_image", "upload_image", "delete_image",
+];
+test("the Typeform adapter names every action of the pinned bundle, and nothing else", () => {
+  const piece = "@activepieces/piece-typeform";
+  const adapter = MANAGED_PIECE_ADAPTERS.find((a) => a.pieceName === piece)!;
+  const mapped = Object.values(adapter.categories).flat() as string[];
+  expect(TYPEFORM_071_ACTIONS).toHaveLength(27);
+  expect([...mapped].sort()).toEqual([...TYPEFORM_071_ACTIONS].sort());
+  expect(resolveGovernedPieceAction(piece, "custom_api_call")).toMatchObject({ category: "modify_settings", known: false });
+  for (const action of MANAGED_TYPEFORM_ACTIONS) {
+    expect(TYPEFORM_071_ACTIONS).toContain(action);
+    expect(resolveGovernedPieceAction(piece, action)).toMatchObject({ category: "read_data", known: true });
+  }
 });

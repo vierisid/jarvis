@@ -190,13 +190,21 @@ export function createManagedRotatingRefresher<
         if (current.receipt) {
           db.exec("COMMIT");
           transaction = false;
-          const ack = await post(
-            config,
-            c,
-            current.refresh_token!,
-            request,
-            current.receipt,
-          );
+          let ack: { response: Response; value: any };
+          try {
+            ack = await post(
+              config,
+              c,
+              current.refresh_token!,
+              request,
+              current.receipt,
+            );
+          } catch (error) {
+            // Hosting unreachable: the stored access token still works, and
+            // no further rotation happens until the receipt is acknowledged.
+            if (usable(current) && same(config, c)) return { ...c, access_token: current.access_token!, refresh_token: current.refresh_token!, expires_at: current.expires_at! };
+            throw error;
+          }
           db.exec("BEGIN IMMEDIATE");
           transaction = true;
           if (
@@ -211,10 +219,18 @@ export function createManagedRotatingRefresher<
             transaction = false;
             throw new Error(`Reconnect ${name} in your account page.`);
           }
-          if (!ack.response.ok || ack.value.acknowledged !== true)
+          if (!ack.response.ok || ack.value.acknowledged !== true) {
+            // A transient refusal (503, 409 without reconnect): keep the
+            // receipt for the next call and use the still-valid token.
+            if (usable(current) && same(config, c)) {
+              db.exec("ROLLBACK");
+              transaction = false;
+              return { ...c, access_token: current.access_token!, refresh_token: current.refresh_token!, expires_at: current.expires_at! };
+            }
             throw new Error(
               `Could not confirm ${name} renewal. Try again shortly.`,
             );
+          }
           const latest = get(db, key);
           if (!same(config, c))
             throw new Error(`${name} connection changed. Try again.`);
