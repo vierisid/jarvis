@@ -176,3 +176,13 @@ test('managed Intercom shows its stored grant and routes setup to its own hosted
   sources.intercom = () => ({configured:false,connected:false,account:null});
   expect(provider.read().rows.some(r=>r.sourceId==='native:intercom')).toBe(false);
 });
+
+test('managed monday.com shows its stored grant, a pending reconnect as disconnected, and routes setup to its own hosted integration', () => {
+  sources.monday = () => ({configured:true, connected:true, account:{id:'12:34',label:'owner@example.test'}});
+  expect(row('native:monday')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'12:34',label:'monday.com: owner@example.test',setupActionId:'setup:monday'});
+  expect(provider.read().setup.find(s => s.id === 'setup:monday')?.target).toEqual({kind:'hosted_integration',provider:'monday'});
+  sources.monday = () => ({configured:true, connected:false, account:{id:'12:34',label:'owner@example.test'}});
+  expect(row('native:monday')).toMatchObject({status:'disconnected',availability:'unavailable',evidence:'none'});
+  sources.monday = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:monday')).toBe(false);
+});

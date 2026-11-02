@@ -8,6 +8,7 @@ import { githubStatus } from '../integrations/github-connection';
 import { trelloStatus } from "../integrations/trello-connection";
 import { asanaStatus } from '../integrations/asana-connection';
 import { intercomStatus } from '../integrations/intercom-connection';
+import { mondayStatus } from '../integrations/monday-connection';
 import { slackStatus } from "../integrations/slack-connection";
 import { clickUpStatus } from '../integrations/clickup-connection';
 import { connectedGoogle } from '../brief/connected-workspace-runtime';
@@ -4768,6 +4769,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       trello: () => trelloStatus(jarvisConfig),
       asana: () => asanaStatus(jarvisConfig),
       intercom: () => intercomStatus(jarvisConfig),
+      monday: () => mondayStatus(jarvisConfig),
       slack: () => slackStatus(jarvisConfig),
       channels: () => {
         const status = channelService.getChannelStatus();

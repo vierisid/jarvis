@@ -12,6 +12,7 @@ export interface ConnectedWorkspaceSources {
   mailchimp?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   asana?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   intercom?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
+  monday?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   slack?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   google?: () => { mode: 'self' | 'managed' | 'none' | 'unavailable'; authenticated: boolean; reconnect: boolean; canSetup: boolean };
   channels?: () => Partial<Record<'telegram' | 'discord', { enabled: boolean; connected: boolean; authentication?: 'verified' | 'rejected' | 'unknown' }>>;
@@ -176,6 +177,22 @@ export class ConnectedWorkspace {
             row.evidence = c.connected ? 'stored_grant' : 'none';
             if (c.configured) offer(row, {id: 'setup:intercom', label: 'Intercom',
               target: {kind: 'hosted_integration', provider: 'intercom'}, verifies: {kind: 'native_service', serviceId: 'intercom'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
+      if (this.sources.monday) {
+        const row = base('native:monday', 'native_service', 'monday', 'monday.com');
+        try {
+          const c = this.sources.monday();
+          if (c.configured || c.connected) {
+            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('monday.com: ' + c.account.label) : 'monday.com';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:monday', label: 'monday.com',
+              target: {kind: 'hosted_integration', provider: 'monday'}, verifies: {kind: 'native_service', serviceId: 'monday'}});
             rows.push(row);
           }
         } catch { row.status = 'unavailable'; rows.push(row); }
