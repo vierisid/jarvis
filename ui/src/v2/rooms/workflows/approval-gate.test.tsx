@@ -83,6 +83,15 @@ test('a verified step, a community trigger, an unconfigured community step and a
   }
 });
 
+test('a partly governed piece badges only the actions the daemon marks', () => {
+  const partial = [{ name: '@activepieces/piece-hubspot', displayName: 'HubSpot', description: '', triggers: [],
+    actions: [{ name: 'create-or-update-contact', displayName: '', description: '', inputSchema: null },
+      { name: 'create-deal', displayName: '', description: '', inputSchema: null, notApprovalGated: true }] }];
+  const step = (actionName: string) => ({ name: 's', type: 'PIECE', settings: { pieceName: '@activepieces/piece-hubspot', actionName } }) as any;
+  expect(gate.stepNotApprovalGated(step('create-deal'), partial)).toBe(true);
+  expect(gate.stepNotApprovalGated(step('create-or-update-contact'), partial)).toBe(false);
+});
+
 test('the Authority room says governed categories do not reach community workflow steps', async () => {
   const config = { default_level: 3, governed_categories: ['send_email'], overrides: [], context_rules: [],
     learning: { enabled: true, suggest_threshold: 5 }, emergency_state: 'normal' };

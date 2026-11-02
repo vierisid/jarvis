@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unsafe"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -45,7 +47,7 @@ func platformDefaultShell() string {
 }
 
 // findChromiumExecutable locates a Chromium-based browser to drive: the
-// configured override, else the OS default browser if it is Chromium-based,
+// configured override, else an installed browser already running, else the OS default,
 // else the first known install (Chrome, Edge -- always present on Win10/11 --
 // Brave, ...).
 func findChromiumExecutable(cfg *SidecarConfig) (string, error) {
@@ -56,18 +58,25 @@ func findChromiumExecutable(cfg *SidecarConfig) (string, error) {
 		return "", fmt.Errorf("configured browser executable not found: %s", p)
 	}
 
-	var candidates []string
-	if def := windowsDefaultBrowserExe(); def != "" {
-		candidates = append(candidates, def)
-	}
-	candidates = append(candidates, windowsChromiumCandidates()...)
-	for _, c := range candidates {
-		if isExecutableFile(c) {
-			return c, nil
-		}
+	if p := pickRunningBrowser(windowsChromiumCandidates(), runningBrowserNames(), windowsDefaultBrowserExe(), isExecutableFile); p != "" {
+		return p, nil
 	}
 	return "", fmt.Errorf("no Chromium-based browser found (install Chrome, Chromium, Edge, Brave, Vivaldi or Opera, " +
 		"or point browser.executable_path at one)")
+}
+
+func runningBrowserNames() map[string]bool {
+	names := map[string]bool{}
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return names
+	}
+	defer windows.CloseHandle(snap)
+	entry := windows.ProcessEntry32{Size: uint32(unsafe.Sizeof(windows.ProcessEntry32{}))}
+	for err = windows.Process32First(snap, &entry); err == nil; err = windows.Process32Next(snap, &entry) {
+		names[strings.ToLower(windows.UTF16ToString(entry.ExeFile[:]))] = true
+	}
+	return names
 }
 
 func isExecutableFile(p string) bool {
@@ -108,15 +117,15 @@ func windowsChromiumCandidates() []string {
 		`Chromium\Application\chrome.exe`,
 	}
 	var out []string
-	for _, base := range []string{
-		os.Getenv("ProgramFiles"),
-		os.Getenv("ProgramFiles(x86)"),
-		os.Getenv("LocalAppData"),
-	} {
-		if base == "" {
-			continue
-		}
-		for _, r := range rel {
+	for _, r := range rel {
+		for _, base := range []string{
+			os.Getenv("ProgramFiles"),
+			os.Getenv("ProgramFiles(x86)"),
+			os.Getenv("LocalAppData"),
+		} {
+			if base == "" {
+				continue
+			}
 			out = append(out, filepath.Join(base, r))
 		}
 	}

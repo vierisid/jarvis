@@ -17,7 +17,11 @@ import { AuditTrail } from '../../authority/audit';
 import { CredentialResolver } from '../credentials/adapter';
 import { WorkflowEventBuffer } from './event-buffer';
 import { buildSandboxServiceBackends } from './service-backends';
-import { createJarvisLlmChatRoute, type LlmChatFn } from '../sandbox-api/routes/jarvis-llm';
+import { createJarvisLlmChatRoute, type LlmChatFn, type PdfRetryPause } from '../sandbox-api/routes/jarvis-llm';
+import { cancelFlowRun } from '../db/repos/run-cancellation';
+import { WorkflowCancellationError } from './cancellation';
+import { createWorkflowFile } from '../db/repos/workflow-file';
+import { ConversationRequestError } from '../../vault/conversation-lifecycle';
 import { SandboxApi } from '../sandbox-api/server';
 import { buildEngineBundle, ENGINE_BUILD_PATHS } from '../runner/engine-runtime/build';
 import { buildAllJarvisPieces, buildPiece } from '../runner/engine-runtime/build-pieces';
@@ -231,6 +235,80 @@ describe('LLM output contract through the route and the durable receipt', () => 
 // like the desktop-outcome suite: this is the headline evidence, and a gate
 // on a cache another test file happens to fill would skip or run depending on
 // the order `bun test` picks up files in.
+describe('PDF extraction failures', () => {
+  // The shared decoder's own refusals: busy (a third concurrent decode) and
+  // a 5s deadline are 409; a document it cannot read is 400.
+  const busy = () => new ConversationRequestError('Attachment processing is busy; retry shortly', 409);
+  const timedOut = () => new ConversationRequestError('Attachment processing timed out', 409);
+  const unreadable = () => new ConversationRequestError('Malformed or unsupported file content; use UTF-8 text, a text PDF, PNG, or JPEG');
+  function pdfCall(decode: () => Promise<string | null>, pause?: PdfRetryPause) {
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: 'PDF', trigger: { name: 'trigger', type: 'EMPTY' } });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' });
+    const file = createWorkflowFile({ projectId: DEFAULT_IDS.project, flowId: flow.id, type: 'FLOW_STEP_FILE', fileName: 'a.pdf', size: 4, data: Buffer.from('%PDF') });
+    const prompts: string[] = []; let decodes = 0; const waits: number[] = [];
+    const pdfRetryPause: PdfRetryPause = pause ?? (async ms => { waits.push(ms); });
+    const llmChat: LlmChatFn = async req => { prompts.push(req.prompt); return { text: 'ok', outcome: { status: 'succeeded' } }; };
+    const call = (body: Record<string, unknown>) => createJarvisLlmChatRoute({ llmChat, pdfRetryPause, decodePdf: async () => { decodes++; return decode(); } })({
+      req: new Request('http://127.0.0.1/v1/jarvis/llm/chat', { method: 'POST',
+        headers: { 'X-Jarvis-Step-Name': 'ask', 'X-Jarvis-Execution-Path': '[]' },
+        body: JSON.stringify({ prompt: 'Extract', pdfFile: '/v1/step-files/' + file.id, ...body }),
+      }), claims: { runId: run.id, projectId: DEFAULT_IDS.project, sandboxId: 'test' } as any, params: {},
+    });
+    return { call, prompts, decodes: () => decodes, waits, run };
+  }
+
+  test('a busy decoder is retried and the extraction goes ahead', async () => {
+    const errors = [busy(), busy()];
+    const f = pdfCall(async () => { const e = errors.shift(); if (e) throw e; return 'Invoice INV-7'; });
+    const res = await f.call({ requireSuccess: false });
+    expect(res.status).toBe(200);
+    expect(f.decodes()).toBe(3);
+    expect(f.prompts).toHaveLength(1);
+    expect(f.prompts[0]).toContain('Invoice INV-7');
+  });
+
+  for (const [name, error, attempts] of [['busy', busy, 6], ['timed out', timedOut, 2]] as const) {
+    test(`a decoder that stays ${name} stops the step, distinct from an unreadable PDF`, async () => {
+      const f = pdfCall(async () => { throw error(); });
+      // Even a handled step is not routed to Needs review as if the PDF were unreadable.
+      const res = await f.call({ requireSuccess: false });
+      expect(res.status).toBe(503);
+      const body = await res.json() as { outcome: { code: string; status: string; effect: string } };
+      expect(body.outcome).toMatchObject({ status: 'error', code: 'PDF_EXTRACTION_UNAVAILABLE', effect: 'not_started' });
+      expect(f.decodes()).toBe(attempts);
+      expect(f.prompts).toHaveLength(0);
+    });
+  }
+
+  test('busy retries wait out a competing decode, which holds its slot for up to 5s', async () => {
+    const f = pdfCall(async () => { throw busy(); });
+    expect((await f.call({ requireSuccess: false })).status).toBe(503);
+    expect(f.waits.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(5_000);
+    expect(f.waits.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(10_000);
+  });
+
+  test('a run stopped while waiting for a busy decoder ends the wait without a PDF verdict', async () => {
+    let f!: ReturnType<typeof pdfCall>;
+    f = pdfCall(async () => { throw busy(); }, async (_ms, signal) => {
+      cancelFlowRun(f.run.id);
+      await new Promise((_, reject) => { if (signal.aborted) reject(signal.reason); else signal.addEventListener('abort', () => reject(signal.reason), { once: true }); });
+    });
+    await expect(f.call({ requireSuccess: false })).rejects.toBeInstanceOf(WorkflowCancellationError);
+    expect(f.decodes()).toBe(1);
+    expect(f.prompts).toHaveLength(0);
+  });
+
+  test('an unreadable PDF is not retried and stays a handled Needs review outcome', async () => {
+    const f = pdfCall(async () => { throw unreadable(); });
+    const res = await f.call({ requireSuccess: false });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { outcome: { code: string } }).outcome.code).toBe('PDF_EXTRACTION_FAILED');
+    expect(f.decodes()).toBe(1);
+    expect(f.prompts).toHaveLength(0);
+  });
+});
+
 describe('LLM output contract through the real engine', () => {
   async function runFlow(f: ReturnType<typeof fixture>, trigger: FlowTriggerNode) {
     updateDraftVersion(f.version.id, { trigger });
@@ -335,6 +413,11 @@ describe('compiled ask piece asserts the outcome', () => {
     for (const outcome of [undefined, null, { status: 'success' }, { status: 'error' }]) {
       await expect(invoke({ text: 'legacy', outcome }, 200, { requireSuccess: false })).rejects.toThrow('lacks an action outcome');
     }
+  }, 60_000);
+
+  test('an unavailable decoder fails even a handled step', async () => {
+    const unavailable = { status: 'error', code: 'PDF_EXTRACTION_UNAVAILABLE', message: 'busy', effect: 'not_started' };
+    await expect(invoke({ text: '', outcome: unavailable }, 503, { requireSuccess: false })).rejects.toThrow('daemon responded 503');
   }, 60_000);
 
   test('a refused request is reported with its status and reason', async () => {

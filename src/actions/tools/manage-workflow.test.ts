@@ -1,3 +1,4 @@
+import { getWorkflowComposition } from '../../workflows/db/repos/workflow-composition';
 import { configureWorkflowReadiness } from '../../workflows/db/repos/flow-readiness';
 import { PieceCatalog } from '../../workflows/runtime/piece-catalog';
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -6,12 +7,12 @@ import { join } from "node:path";
 import { closeWorkflowDb, initWorkflowDb } from "../../workflows/db/index.ts";
 import { findActiveJobForRun, getJob, queueStats } from "../../workflows/db/repos/job-queue.ts";
 import { getFlowRun } from "../../workflows/db/repos/flow-run.ts";
-import { getFlow, updateFlowMetadata } from "../../workflows/db/repos/flow.ts";
+import { createFlow, getFlow, updateFlowMetadata } from "../../workflows/db/repos/flow.ts";
 import { Worker } from "../../workflows/queue/worker.ts";
 import { createRunFlowHandler, FlowExecutionError, RUN_FLOW } from "../../workflows/runner/handler.ts";
 import { asLimit, createManageWorkflowTool } from "./manage-workflow.ts";
 import type { ToolDefinition } from "./registry.ts";
-import { getFlowVersion, getLatestDraft, setSampleDataEntry } from "../../workflows/db/repos/flow-version.ts";
+import { createDraftVersion, getFlowVersion, getLatestDraft, setSampleDataEntry, updateDraftVersion } from "../../workflows/db/repos/flow-version.ts";
 import { updateRun } from "../../workflows/db/repos/flow-run.ts";
 import {
   UNTRUSTED_CLOSE,
@@ -61,7 +62,7 @@ const tool = createManageWorkflowTool();
  */
 const FRAMED_ACTIONS = new Set([
   "get", "list_runs", "get_run",
-  "list", "create", "enable", "disable", "publish", "compose",
+  "list", "create", "enable", "disable", "publish", "compose", "continue_setup", "resolve_effect",
 ]);
 
 /**
@@ -160,6 +161,15 @@ describe("manage_workflow tool", () => {
     const got = await call("get", { flow: "hooked" }) as { latestDraft: { trigger: { settings: { input: { secret: string } } } } };
     expect(JSON.stringify(got)).not.toContain("whsec-s3cret-value");
     expect(got.latestDraft.trigger.settings.input.secret).toBe("[redacted]");
+    for (const view of ['definition', 'validation']) {
+      let text = '', cursor: string | null = null;
+      do {
+        const page = await call('get', { flow: created.id, view, ...(cursor ? { cursor } : {}) }) as { content: string; nextCursor: string | null };
+        text += page.content; cursor = page.nextCursor;
+      } while (cursor);
+      expect(text).not.toContain('whsec-s3cret-value');
+      if (view === 'definition') expect(JSON.parse(text).trigger.settings.input.secret).toBe('[redacted]');
+    }
     // The stored version keeps it: the ingress still checks against it.
     expect((getLatestDraft(created.id)!.trigger as unknown as { settings: { input: { secret: string } } }).settings.input.secret).toBe("whsec-s3cret-value");
   });
@@ -440,6 +450,86 @@ describe("manage_workflow tool", () => {
 
 describe("manage_workflow: compose", () => {
   const makeReg = () => sampleCatalog();
+
+  test("incomplete submission processing returns actionable blockers without saving a notification scaffold", async () => {
+    const registry = sampleCatalog();
+    let turn = 0;
+    const llm: ComposerLlmClient = {
+      chat: async () => { throw new Error("Unexpected fallback"); },
+      chatTools: async () => ({ content: "", tool_calls: ++turn === 1
+        ? [{ id: "submit", name: "submit_flow", arguments: {
+          displayName: "Incomplete form processor",
+          blockers: ["Submission normalization, validation and atomic deduplication are not implemented"],
+          trigger: { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "webhook", input: {} },
+            nextAction: { name: "diagnostic", type: "PIECE", settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: "Configuration blockers", channels: ["dashboard"] } } } },
+        } }]
+        : [{ id: "blocked", name: "report_blocked", arguments: {
+          reason: "Cannot guarantee one row per submission with the discovered actions.",
+          configurationQuestions: ["Provide a sample submission and identify the ID and email fields.", "Choose the Google account, spreadsheet, tab and columns."],
+          capabilityGaps: ["Run-scoped receipts do not deduplicate separate webhook runs."],
+        } }], }),
+    };
+    const t = createManageWorkflowTool({ llm, pieceRegistry: registry });
+    const result = await callFrom(t, "compose", { name: "Form processor", description: "Validate submissions and append once per submission ID." }) as any;
+    expect(result.ok).toBe(false);
+    expect(result.blocked).toBe(true);
+    expect(result.configurationQuestions).toHaveLength(2);
+    expect(result.capabilityGaps).toEqual(["Run-scoped receipts do not deduplicate separate webhook runs."]);
+    expect(result.flow).toBeUndefined();
+    expect((await callFrom(t, "list") as any).flows).toHaveLength(0);
+    expect(getWorkflowComposition(result.compositionRecordId)?.state).toBe("FAILED");
+  });
+
+  test("chat installs a missing connector and saves a disabled draft blocked on account binding", async () => {
+    const registry = sampleCatalog();
+    configureWorkflowReadiness({ pieces: registry });
+    const installed: string[] = [];
+    let turn = 0;
+    const name = "@activepieces/piece-google-calendar";
+    const llm: ComposerLlmClient = {
+      chat: async () => { throw new Error("Unexpected one-shot fallback"); },
+      chatTools: async () => ({ content: "", tool_calls: ++turn === 1
+        ? [{ id: "missing", name: "report_blocked", arguments: { reason: "Calendar connector is not installed", suggestedPieces: [{ id: "google-calendar", reason: "Read events" }] } }]
+        : [{ id: "submit", name: "submit_flow", arguments: { displayName: "Calendar fixture", trigger: {
+          name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "schedule", input: { cron_expression: "0 8 * * 1-5", timezone: "Europe/Rome" } },
+          nextAction: { name: "calendar", type: "PIECE", settings: { pieceName: name, actionName: "events", input: {} } },
+        } } }], }),
+    };
+    const t = createManageWorkflowTool({ llm, pieceRegistry: registry,
+      library: [{ id: "google-calendar", npmPackage: name, displayName: "Google Calendar", description: "Calendar fixture" }],
+      installLibraryPiece: async id => { installed.push(id); registry.upsert({ name, displayName: "Google Calendar", description: "fixture",
+        auth: { type: "OAUTH2" }, actions: { events: { name: "events", displayName: "List events", description: "fixture" } },
+      }); },
+    });
+    // No card until a call names what it installs.
+    expect(t.authorityGate?.({ action: 'compose', name: 'Calendar fixture', install_missing: true })).toBeNull();
+    expect(t.authorityGate?.({ action: 'create', name: 'Calendar fixture', description: 'Build a calendar draft' })).toBeNull();
+    expect(t.authorityGate?.({ action: 'compose', install_missing: false, install: 'google-calendar' })).toBeNull();
+    expect(t.authorityGate?.({ action: 'create', empty: true, install: 'google-calendar' })).toBeNull();
+    const first = await callFrom(t, "compose", { name: "Calendar fixture", description: "Save a disabled calendar draft" }) as {
+      ok: boolean; setup: { status: string; continueWith: Record<string, unknown> };
+    };
+    expect(first.ok).toBe(false);
+    expect(installed).toEqual([]);
+    expect(first.setup.status).toBe("needs_installation");
+    expect(t.authorityGate?.(first.setup.continueWith)).toMatchObject({ actionCategory: 'install_software', confirm: 'above_level',
+      intent: expect.stringContaining('Google Calendar (google-calendar)') });
+    const { action, ...rest } = first.setup.continueWith;
+    const saved = await callFrom(t, String(action), rest) as {
+      ok: boolean; flow: { id: string; status: string }; versionId: string; compositionRecordId: string; readiness: { ready: boolean; issues: { code: string }[] };
+    };
+    expect(saved.ok).toBe(true);
+    expect(installed).toEqual(["google-calendar"]);
+    expect(getWorkflowComposition(saved.compositionRecordId)?.specification.provenance?.installedPieces).toEqual([
+      { id: 'google-calendar', name, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) },
+    ]);
+    expect(saved.flow.status).toBe("DISABLED");
+    expect(saved.readiness.ready).toBe(false);
+    expect(saved.readiness.issues.some(i => i.code === "CONNECTION_BINDING")).toBe(true);
+    expect(getFlow(saved.flow.id)?.published_version_id).toBeNull();
+    await expect(t.execute({ action: "enable", flow: saved.flow.id })).rejects.toThrow();
+    expect(await callFrom(t, "list_runs", { flow: saved.flow.id })).toEqual([]);
+  });
 
   test("compose creates a flow when the LLM returns a valid JSON tree", async () => {
     const llm = new StubLlm(
@@ -748,15 +838,16 @@ describe("#582: captured step output is framed where it reaches the model", () =
     const flow = (await call("get", { flow: "framed" })) as { id: string };
     setSampleDataEntry(getLatestDraft(flow.id)!.id, "grab", { output: huge });
 
-    for (const block of [
-      await raw("get_run", { run_id: runId }),
-      await raw("list_runs", { flow: "framed" }),
-      await raw("get", { flow: "framed" }),
-    ]) {
+    for (const [action, block] of [
+      ["get_run", await raw("get_run", { run_id: runId })],
+      ["list_runs", await raw("list_runs", { flow: "framed" })],
+      ["get", await raw("get", { flow: "framed" })],
+    ] as const) {
       expect(block.length).toBeLessThanOrEqual(cap);
       const { nonce } = unframe(block);
       expect(block.endsWith(untrustedClose(nonce))).toBe(true);
-      expect(block).toContain("... (truncated, was ");
+      if (action === 'get') expect(JSON.parse(unframe(block).payload).detailPaged).toBe(true);
+      else expect(block).toContain("... (truncated, was ");
     }
   });
 });
@@ -1300,4 +1391,57 @@ describe("#844: manage_workflow acts in one project, for reads by id as well as 
     expect(getWorkflowComposition(recordId, OTHER_PROJECT)?.id).toBe(recordId);
     expect(getWorkflowComposition(recordId, DEFAULT_IDS.project)).toBeNull();
   });
+});
+
+
+test('get recomputes saved draft readiness without publishing, enabling or running', async () => {
+  const flow = createFlow();
+  const version = createDraftVersion({ flowId: flow.id, displayName: 'Weekday reminder', trigger: {
+    name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'schedule', input: { cron_expression: '0 9 * * 1-5', timezone: 'Europe/Rome' } },
+    nextAction: { name: 'notify', type: 'PIECE', settings: { pieceName: 'jarvis-notify', actionName: 'notify', input: { message: 'Choose your three priorities for today.', channels: ['dashboard'] } } },
+  } });
+  expect(version.valid).toBe(false); // Stored creation hint is not a readiness assessment.
+  const out = await call('get', { flow: flow.id }) as any;
+  expect(out.latestDraft.valid).toBe(true);
+  expect(out.latestDraft.readiness).toEqual({ ready: true, issues: [], runtimeChecks: [] });
+  expect(getFlow(flow.id)).toMatchObject({ status: 'DISABLED', published_version_id: null });
+  expect(getFlowVersion(version.id)).toEqual(version);
+  expect(queueStats().queued).toBe(0);
+  // Removing a dependency must invalidate the read, even though the graph hasn't changed.
+  configureWorkflowReadiness({ pieces: new PieceCatalog([]) });
+  const unavailable = await call('get', { flow: flow.id }) as any;
+  expect(unavailable.latestDraft.valid).toBe(false);
+  expect(unavailable.latestDraft.readiness.issues).toContainEqual(expect.objectContaining({ code: 'PIECE' }));
+});
+
+
+test('large workflow readback is complete, bounded, paged and version scoped', async () => {
+  const flow = createFlow();
+  const trigger: any = { name: 'trigger', type: 'EMPTY' };
+  let node = trigger;
+  for (let i=0; i<20; i++) node = node.nextAction = { name: 'step_'+i, type: 'PIECE', settings: { pieceName: 'unknown', actionName: 'extract', input: { prompt: ('"\n\t📄').repeat(100) } } };
+  const version = createDraftVersion({ flowId: flow.id, displayName: 'Large invoice graph', trigger });
+  const summary: any = await call('get', { flow: flow.id });
+  expect(summary.detailPaged).toBe(true);
+  expect(summary.validation.structureValid).toBe(false);
+  for (const view of ['definition', 'validation']) {
+    let cursor: string | undefined, text = '', pages = 0;
+    do {
+      const raw = await rawFrom(tool, 'get', { flow: flow.id, version_id: version.id, view, ...(cursor ? {cursor} : {}) });
+      const payload = unframe(raw).payload;
+      expect(payload.length).toBeLessThanOrEqual(4000);
+      const page = JSON.parse(payload);
+      expect(page.offset).toBe(text.length);
+      text += page.content; cursor = page.nextCursor; pages++;
+      expect(pages).toBeLessThan(100);
+    } while(cursor);
+    const document = JSON.parse(text);
+    if (view==='definition') expect(document).toEqual(getFlowVersion(version.id));
+    else { expect(document.readiness.issues.length).toBe(20); expect(document.validation.functionalTesting).toBe('not_performed'); }
+  }
+  const first: any = await call('get', { flow: flow.id, version_id: version.id, view: 'definition' });
+  updateDraftVersion(version.id, { displayName: 'Edited graph' });
+  await expect(call('get', { flow: flow.id, version_id: version.id, view: 'definition', cursor: first.nextCursor })).rejects.toThrow('restart');
+  const other = createFlow();
+  await expect(call('get', { flow: other.id, version_id: version.id, view: 'definition' })).rejects.toThrow('Version not found');
 });

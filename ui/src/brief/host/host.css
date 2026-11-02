@@ -5,3 +5,24 @@
 .brief-host-attention { padding:16px; border:1px solid var(--brief-rule); }
 
 .brief-maintenance { padding:24px; min-height:0; overflow:auto; height:100%; }
+
+.brief-root .brief-host-pending { container-type: inline-size; }
+.brief-root .brief-host-pending:has(.brief-decisions-grid) { min-height: 480px; margin-bottom: 28px; }
+.brief-root .brief-host-pending .brief-decisions-grid { min-height: 480px; }
+.brief-root .brief-host-request-details { margin-top: 24px; color: var(--brief-secondary); overflow-wrap: anywhere; }
+.brief-root .brief-host-request-details summary { cursor: pointer; padding: 12px 0; }
+.brief-root .brief-host-request-details summary:focus-visible { outline: 2px solid var(--brief-focus); }
+.brief-root .brief-attention-feed { margin-top: 28px; }
+.brief-root .brief-attention-feed ul { list-style: none; padding: 0; display: grid; gap: 16px; }
+.brief-root .brief-attention-item { padding: 24px; border: 1px solid var(--brief-card-edge); border-radius: var(--brief-corner-card); background: var(--brief-card); }
+.brief-root .brief-attention-item h3 { margin: 0; font-size: 16px; }
+.brief-root .brief-attention-item p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+.brief-root .brief-attention-item button { min-height: 44px; color: var(--brief-focus); }
+.brief-root.brief-host-toast { position: fixed; bottom: 28px; right: 88px; z-index: 100; width: min(420px, calc(100vw - 40px)); padding: 24px; background: var(--brief-paper); color: var(--brief-ink); border: 1px solid var(--brief-paper-edge); border-radius: var(--brief-corner-card); box-shadow: 0 8px 24px var(--brief-menu-shadow); }
+.brief-host-toast p { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+.brief-host-toast button { padding: 12px; min-height: 44px; cursor: pointer; }
+.brief-host-toast button:focus-visible { outline: 2px solid var(--brief-focus); }
+@media (max-width: 640px) { .brief-host-toast { right: 20px; bottom: 80px; } }
+
+.brief-root .brief-host-pending .brief-decision-document p { margin: 0 0 18px; max-width: 70ch; }
+.brief-root .brief-host-pending .brief-decision-subtitle { margin: 4px 0 0; color: var(--brief-secondary); font-size: 14px; }

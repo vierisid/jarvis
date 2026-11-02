@@ -2,6 +2,7 @@ import type { NotificationItem } from "../../hooks/useNotificationCenter";
 import type { BriefRoute } from "../contracts";
 import { destination, type Resolution, type RoomAvailability } from "./destinations";
 import type { NavigationCompatibility } from "./controller";
+import { isBriefCapabilityEnabled } from "../../../../src/brief/capabilities";
 
 export type AttentionItem = NotificationItem & {
   source: "approval" | "clarifier" | "repeat-back" | "system" | "failure" | "update";
@@ -16,6 +17,26 @@ export const attentionKey = (item: AttentionIdentity) => `${item.source}:${item.
 /** Consume the existing notification owner's rows; no text heuristics or synthetic timestamps. */
 export const fromNotificationCenter = (items: readonly NotificationItem[]): AttentionItem[] =>
   items.map(item => ({ ...item, source: item.kind }));
+
+/**
+ * The rows the dashboard's Notifications list shows. Clarifiers and
+ * repeat-backs always have their own cards beside it. Approvals have theirs
+ * (the pending decisions list) only while the decisions capability is on;
+ * without it they stay in this list, so a pending approval is never hidden.
+ */
+export function dashboardAttentionItems(items: readonly NotificationItem[], decisionsShown: boolean): AttentionItem[] {
+  return fromNotificationCenter(items.filter(item => item.kind !== "clarifier" && item.kind !== "repeat-back"
+    && !(decisionsShown && item.kind === "approval")));
+}
+
+/** The dashboard's Notifications snapshot, given the host's current capabilities. */
+export function dashboardAttentionSnapshot(connected: boolean, items: readonly NotificationItem[], capabilities: unknown): AttentionSnapshot {
+  return connected ? { status: "ready", items: dashboardAttentionItems(items, isBriefCapabilityEnabled(capabilities, "decisions")) } : { status: "unavailable" };
+}
+
+/** The notice the dashboard toasts: the newest unread one Jarvis sent on its own, never a client warning. */
+export const dashboardToastNotice = (items: readonly NotificationItem[]): NotificationItem | undefined =>
+  items.find(item => item.kind === "system" && item.proactive === true && item.unread);
 
 export function notificationTarget(item: AttentionItem, available: RoomAvailability): Resolution {
   const brief = (route: BriefRoute): Resolution => ({ target: { kind: "brief", route }, message: null });

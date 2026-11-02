@@ -158,7 +158,14 @@ export const triggerHelper = {
                 await pieceTrigger.onEnable(context)
                 return {
                     listeners: appListeners,
-                    scheduleOptions: pieceTrigger.type === TriggerStrategy.POLLING ? scheduleOptions : undefined,
+                    // Community polling triggers may rely on the host's default cadence:
+                    // every 5 minutes. Preserve explicit schedules; never leave an enabled
+                    // poller inert.
+                    scheduleOptions: pieceTrigger.type === TriggerStrategy.POLLING ? scheduleOptions ?? {
+                        type: TriggerSourceScheduleType.CRON_EXPRESSION,
+                        cronExpression: '*/5 * * * *',
+                        // timezone intentionally omitted: Jarvis's configured zone applies.
+                    } as ScheduleOptions : undefined,
                 }
             }
             case TriggerHookType.RENEW: {
@@ -268,7 +275,7 @@ async function prepareTriggerExecution({ pieceName, pieceVersion, triggerName, i
         executionState: FlowExecutorContext.empty(),
     })
 
-    const { processedInput, errors } = await propsProcessor.applyProcessorsAndValidators(resolvedInput, pieceTrigger.props, piece.auth, pieceTrigger.requireAuth, propertySettings)
+    const { processedInput, errors } = await propsProcessor.applyProcessorsAndValidators(resolvedInput, pieceTrigger.props, piece.auth, pieceTrigger.requireAuth, propertySettings, { apiUrl, engineToken })
 
     if (Object.keys(errors).length > 0) {
         throw new Error(JSON.stringify(errors, null, 2))

@@ -20,6 +20,7 @@
  * step on a misclick.
  */
 
+import { workflowExpressionReferences } from "../../../../../src/workflows/runtime/safe-expression";
 import type { FlowStepNode } from "./useWorkflowEditor";
 
 export type TriggerKind = "manual" | "schedule" | "webhook" | "event";
@@ -220,4 +221,35 @@ function hasMeaningfulSettings(settings: FlowStepNode["settings"] | undefined): 
 
 function deepClone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;
+}
+
+
+/** A clock/manual trigger needs no sample event unless the graph consumes one.
+ * Keep the input dialog for external events, code and expressions we cannot inspect.
+ * This is a UI convenience only; server readiness and Authority still govern runs.
+ */
+export function needsManualRunInput(trigger: FlowStepNode | null | undefined): boolean {
+  if (!trigger || !['manual', 'schedule'].includes(detectTriggerKind(trigger))) return true;
+  const pending: unknown[] = [trigger], seen = new Set<object>();
+  let visited = 0;
+  while (pending.length) {
+    if (++visited > 20_000) return true;
+    const value = pending.pop();
+    if (typeof value === 'string') {
+      const expressions = [...value.matchAll(/\{\{([\s\S]*?)\}\}/g)];
+      if (value.includes('{{') && !expressions.length) return true;
+      for (const [, expression] of expressions) {
+        try {
+          const refs = workflowExpressionReferences(expression!);
+          if (refs.has(trigger.name) || refs.has('trigger')) return true;
+        } catch { return true; }
+      }
+    } else if (value && typeof value === 'object') {
+      if (seen.has(value)) return true;
+      seen.add(value);
+      if ((value as { type?: string }).type === 'CODE') return true;
+      pending.push(...Object.values(value));
+    }
+  }
+  return false;
 }
